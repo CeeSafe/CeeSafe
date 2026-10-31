@@ -738,6 +738,18 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.Await(operand) => {
+                this.text("(await ")?;
+                this.expr(hir, types, symbols, operand)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
+            HirExpr.RunTask(operand) => {
+                this.text("(run-task ")?;
+                this.expr(hir, types, symbols, operand)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
             HirExpr.IsNull(reference, isNull) => {
                 this.text(if (isNull) "(is-null " else "(is-some ")?;
                 this.expr(hir, types, symbols, reference)?;

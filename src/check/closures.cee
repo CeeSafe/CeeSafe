@@ -576,6 +576,7 @@ fn newClosureFunction(
         typeParameters: emptyRange(),
         regionParameters: emptyRange(),
         isUnsafe: false,
+        isAsync: false,
         hasDoc: false,
         doc: emptyRange(),
         isExtern: false,
@@ -996,6 +997,8 @@ fn walkExpr(
         HirExpr.SliceLength(slice) => { walkExpr(c, slice, e, parent, walk)?; }
         HirExpr.Try(operand) => { walkExpr(c, operand, e, parent, walk)?; }
         HirExpr.Unwrap(operand) => { walkExpr(c, operand, e, parent, walk)?; }
+        HirExpr.Await(operand) => { walkExpr(c, operand, e, parent, walk)?; }
+        HirExpr.RunTask(operand) => { walkExpr(c, operand, e, parent, walk)?; }
         HirExpr.IsNull(reference, _) => { walkExpr(c, reference, e, parent, walk)?; }
         HirExpr.StmtValue(statement) => { walkStmt(c, statement, walk)?; }
         HirExpr.FloatToInt(operand, _) => { walkExpr(c, operand, e, parent, walk)?; }

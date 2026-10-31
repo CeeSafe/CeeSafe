@@ -61,9 +61,6 @@ rvalue    = Use(operand)
                                                  -- A dyn method (IsDynMethod, no body; §37.3) dispatches through
                                                  -- the table of argument 0, a dyn reference; checked as a call of
                                                  -- its signature, so loans and effects need no new rule
-          | StartTask(function, [operand])         -- L1 (type-system.md §40): initialise a Frame local with a task's
-                                                 -- arguments; nothing runs. Checked as a call whose result holds the
-                                                 -- loans of its reference arguments, as a closure environment does
           | Builtin(kind, [operand])               -- Console.write/writeLine; CallFunction(f, args…): a call through a
                                                  -- function value (M11 G8a), result loans from every reference argument;
                                                  -- CallClosure(f, args…) likewise through a closure (G8b), f passed on
@@ -75,21 +72,26 @@ terminator= Goto(bb) | Branch(operand, then_bb, else_bb) | Return(operand?)
           | Exit(operand)                          -- Process.exit
           | Unreachable                            -- after a call of type never
           | Panic(kind)                            -- `e!` on Err (M3a), `o!` on null (M6c); aborts
-          | Await(frame, dest, resume_bb)          -- L1: run the task in Frame local `frame` to completion, store
-                                                 -- its result in place `dest`, continue at resume_bb
-          | Park(resume_bb)                        -- L1: `Async.park()`; suspend until woken, continue at resume_bb
 ```
 
-**Async functions** (L1, ADR 0031 §3.6). An async fn's NIR is an ordinary function body with two more terminators.
-`await f(a…)` lowers to `t = StartTask(f, [a…])` in a new local `t` of type `Frame(f)`, then `Await(t, dest, bb')`,
-and the block ends there. The borrow, move, in-place and drop analyses treat `StartTask` + `Await` exactly as a
-`Call`: loans from the arguments live in `t` until `Await` completes, and `t` is dead after it (its `StorageDead`
-follows in `bb'`). `Park` changes no place. The effect checker gives both `suspend` (type-system.md §32.1).
+**Async functions** (L1, ADR 0031 §3.6 as amended). An async fn's NIR is an ordinary function body: nothing about
+suspension changes its blocks or statements.
+- `await f(a…)` lowers to the call `Call(f, [a…])`, marked as awaited in `NirProgram.rvalueTasks` (`taskAwait`).
+  `Async.run(f(a…))` is the same call, marked `taskRun`. So the borrow, move, in-place and drop analyses see an
+  ordinary call, with its loans, moves and result, and need no rule of their own (`lifetimes.md` §8).
+- `Async.park()` is `Builtin(AsyncPark)`, a builtin numbered after the generated ones (`src/check/async.cee`).
+- The **suspension points** of an async fn are its awaited calls and its `AsyncPark`s, numbered from 1 in block order
+  and statement order (0 is the entry). The C backend (c-backend.md §3a) and the interpreter (§5) act on them.
+- The effect checker gives an awaited call `suspend` and its callee's effects, `AsyncPark` `suspend`, and a `taskRun`
+  call `sleep`, `alloc` and its callee's effects without `suspend` (type-system.md §32.1, §40.4).
 
-The **coroutine pass** (`src/nir/coroutines.cee`) runs after the effect checker, on async fns and async closures only.
-It numbers the suspension points (each `Await` and `Park`, from 1 in block order; 0 is the entry), builds the graph of
-which async fn awaits which, and reports a cycle in it as N0343. It changes no block. Closure specialisation and
-placement (`optimisations.md`) skip async functions.
+The **coroutine pass** (`src/nir/coroutines.cee`) runs after the effect checker. It builds the graph of which async fn
+awaits which and reports each awaited call on a cycle as N0343 (type-system.md §40.1). It changes nothing. Closure
+specialisation and placement (`optimisations.md`) skip async functions.
+
+The **interpreter** runs an awaited call as a call, on the same activation stack. `AsyncPark` waits on the virtual
+clock: it advances the clock to the deadline the task registered (type-system.md §40.8). L1 A2's scheduler gives each
+task its own activation stack.
 
 Lowering rules (HIR → NIR, `NirBuilder`):
 

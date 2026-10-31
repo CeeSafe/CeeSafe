@@ -144,6 +144,8 @@ enum ExprNode {
     Slice(u32, u32, u32),
     Try(u32),
     Unwrap(u32),
+    /// `await e` (type-system.md §40.2): the operand, a task.
+    Await(u32),
 }
 
 struct Closure {
@@ -258,6 +260,7 @@ struct Function {
     typeParameters: Range;
     regionParameters: Range;
     isUnsafe: bool;
+    isAsync: bool; // `async fn` (type-system.md §40.1)
     hasDoc: bool;
     doc: Range;
     isExtern: bool;

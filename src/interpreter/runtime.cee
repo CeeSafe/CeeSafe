@@ -806,6 +806,9 @@ fn builtin(
         }
         _ => {}
     }
+    if (b == bfAsyncPark()) {
+        return asyncPark(it);
+    }
     if (b == bfConsoleWrite() || b == bfConsoleWriteLine()) {
         for (k in 0..arguments.count) {
             let op = n.at(arguments, k);

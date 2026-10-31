@@ -1,0 +1,51 @@
+// Async fns (type-system.md §40, ADR 0031): nested awaits, results and `?`, awaits in loops and branches, borrows of
+// locals across `await`, and a frame's locals dropped as its task returns (the vector below; --check-leaks requires
+// live=0). Nothing parks, so this is also the order a synchronous program would print.
+
+async fn add(a: i32, b: i32) -> i32 => a + b;
+
+async fn checked(x: i32) -> Result<i32, StringView> {
+    let y = await add(x, x);
+    if (y > 100) {
+        return Err("too big");
+    }
+    return Ok(y);
+}
+
+async fn sum(values: Slice<i32>) -> i32 {
+    var total = 0;
+    for (v in values) {
+        total = await add(total, v);
+    }
+    return total;
+}
+
+async fn bump(counter: borrow mut i32) {
+    counter += 1;
+}
+
+async fn chain(x: i32) -> Result<i32, StringView> {
+    var owned = Vector<i32>.create(); // in the frame, dropped as the task returns
+    owned.push(x)!;
+    var local = 10;
+    let kept = 5;
+    let view = borrow kept; // held across the awaits below
+    let doubled = await checked(owned[0])?;
+    await bump(mut local);
+    let values = [1, 2, 3];
+    let s = await sum(values[..]);
+    return Ok(doubled + s + local + view);
+}
+
+fn main() {
+    match (Async.run(chain(20))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(e) => { Console.writeLine(e); }
+    }
+    match (Async.run(chain(60))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(e) => { Console.writeLine(e); }
+    }
+}
+// expect-stdout: 62
+// expect-stdout: too big

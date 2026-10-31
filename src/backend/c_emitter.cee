@@ -54,6 +54,8 @@ struct CEmitter {
     staticStrings: Vector<Vector<u8>>;     // the C strings statics point to, in first-use order
     splitData: Vector<Vector<u8>>;         // C data split mode renames (sorted)
     function: u32;                         // the NIR function being emitted, or none
+    inAsync: bool;                         // it is an async fn's resume function (c-backend.md §3a)
+    asyncState: u32;                       // its suspension points emitted so far
     inPlace: Vector<InPlacePair>;
     cLines: u64;
     mappedFile: u32; // the Nova line the next C line is attributed to by the last #line, or none
@@ -101,6 +103,8 @@ struct CEmitter {
         staticStrings: Vector<Vector<u8>>.create(),
         splitData: Vector<Vector<u8>>.create(),
         function: none(),
+        inAsync: false,
+        asyncState: 0,
         inPlace: Vector<InPlacePair>.create(),
         cLines: 0,
         mappedFile: none(),

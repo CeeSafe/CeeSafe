@@ -62,6 +62,7 @@ fn textMessage(text: StringView) -> Result<Vector<u8>, AllocError> {
 fn isItemStart(kind: TokenKind) -> bool => match (kind) {
     TokenKind.FnKeyword => true,
     TokenKind.UnsafeKeyword => true,
+    TokenKind.AsyncKeyword => true,
     TokenKind.ConstKeyword => true,
     TokenKind.StaticKeyword => true,
     TokenKind.At => true,
@@ -564,9 +565,13 @@ struct Parser {
         return Ok(none());
     }
 
-    /// At `fn` or `unsafe fn` (type-system.md §27.4).
+    /// At `fn`, `unsafe fn` (type-system.md §27.4), `async fn` or `unsafe async fn` (§40.1).
     fn atFunction(borrow this) -> bool =>
-        this.at(TokenKind.FnKeyword) || (this.at(TokenKind.UnsafeKeyword) && this.peekIs(1, TokenKind.FnKeyword));
+        this.at(TokenKind.FnKeyword) ||
+            (this.at(TokenKind.UnsafeKeyword) &&
+                (this.peekIs(1, TokenKind.FnKeyword) ||
+                    (this.peekIs(1, TokenKind.AsyncKeyword) && this.peekIs(2, TokenKind.FnKeyword)))) ||
+            (this.at(TokenKind.AsyncKeyword) && this.peekIs(1, TokenKind.FnKeyword));
 
     /// Splits parsed type parameters into the region ones and the others, in order.
     fn splitTypeParameters(borrow mut this, parameters: Range) -> Result<TypeParameterLists, AllocError> {
@@ -592,6 +597,7 @@ struct Parser {
                 this.previous().start == start && this.current().start != start) this.pos - 1 else this.pos;
         let doc = this.docAt(firstToken)?;
         let isUnsafe = this.eat(TokenKind.UnsafeKeyword);
+        let isAsync = this.eat(TokenKind.AsyncKeyword);
         this.expect(TokenKind.FnKeyword)?;
         let name = this.parseIdentifier()?;
         let typeParameters = this.parseTypeParameters()?;
@@ -667,6 +673,7 @@ struct Parser {
             typeParameters: split.types,
             regionParameters: split.regions,
             isUnsafe: isUnsafe,
+            isAsync: isAsync,
             hasDoc: doc.found,
             doc: doc.text,
             isExtern: false,
@@ -752,7 +759,8 @@ struct Parser {
             let memberAttributes = this.parseAttributes()?; // on methods: @effects, @context (type-system.md §32)
             let methodAhead = this.atFunction() ||
                 (isVisibilityKeyword(this.current().kind) &&
-                    (this.peekIs(1, TokenKind.FnKeyword) || this.peekIs(1, TokenKind.UnsafeKeyword)));
+                    (this.peekIs(1, TokenKind.FnKeyword) || this.peekIs(1, TokenKind.UnsafeKeyword) ||
+                        this.peekIs(1, TokenKind.AsyncKeyword)));
             if (memberAttributes.count > 0 && !methodAhead && !(imported && this.at(TokenKind.Identifier))) {
                 // @cname on an imported struct's field is allowed (type-system.md §31.1).
                 let first = this.front.ast.attributes[this.front.ast.at(memberAttributes, 0) as usize];
@@ -1878,6 +1886,14 @@ struct Parser {
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Move(operand), start, this.endFrom(start));
         }
+        if (this.at(TokenKind.AwaitKeyword)) {
+            // `await e`: the first `?` or `!` ends the operand and applies to the awaited value (grammar.md §2.1).
+            this.advance();
+            var links: u32 = 0;
+            let result = this.parsePostfixChain(mut links, start);
+            this.nesting -= links;
+            return result;
+        }
         if (this.at(TokenKind.Minus) || this.at(TokenKind.Bang)) {
             let op = if (sameKind(this.advance().kind, TokenKind.Minus)) UnaryOp.Negate else UnaryOp.Not;
             let operand = this.parseUnary()?;
@@ -1888,19 +1904,27 @@ struct Parser {
 
     fn parsePostfix(borrow mut this) -> Result<u32, AllocError> {
         var links: u32 = 0; // each call, member, index, `?` or `!` deepens the tree (maxNesting)
-        let result = this.parsePostfixChain(mut links);
+        let result = this.parsePostfixChain(mut links, none());
         this.nesting -= links;
         return result;
     }
 
-    fn parsePostfixChain(borrow mut this, links: borrow mut u32) -> Result<u32, AllocError> {
-        let start = this.current().start;
+    /// A primary and its postfix operators. With `awaitStart` (the `await` keyword's start, else none), the chain is
+    /// `await`'s operand up to its first `?` or `!`, which, like everything after it, applies to the awaited value.
+    fn parsePostfixChain(borrow mut this, links: borrow mut u32, awaitStart: u32) -> Result<u32, AllocError> {
+        var start = this.current().start;
         var expr = this.parsePrimary()?;
+        var awaiting = awaitStart != none();
         loop {
+            if (awaiting && (this.at(TokenKind.Question) || this.at(TokenKind.Bang))) {
+                expr = this.front.ast.addExpr(ExprNode.Await(expr), awaitStart, this.endFrom(awaitStart))?;
+                start = awaitStart;
+                awaiting = false;
+            }
             if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot) || this.at(TokenKind.Question) ||
                 this.at(TokenKind.Bang) || this.at(TokenKind.OpenBracket)) {
                 if (!this.nest()?) {
-                    return Ok(expr);
+                    return this.endAwait(expr, awaiting, awaitStart);
                 }
                 links += 1;
             }
@@ -1951,9 +1975,17 @@ struct Parser {
                     expr = this.front.ast.addExpr(ExprNode.Index(expr, low), start, this.endFrom(start))?;
                 }
             } else {
-                return Ok(expr);
+                return this.endAwait(expr, awaiting, awaitStart);
             }
         }
+    }
+
+    /// `expr` as `await`'s operand, if the chain ended before a `?` or `!` applied the `await`.
+    fn endAwait(borrow mut this, expr: u32, awaiting: bool, awaitStart: u32) -> Result<u32, AllocError> {
+        if (!awaiting) {
+            return Ok(expr);
+        }
+        return this.front.ast.addExpr(ExprNode.Await(expr), awaitStart, this.endFrom(awaitStart));
     }
 
     fn parsePrimary(borrow mut this) -> Result<u32, AllocError> {

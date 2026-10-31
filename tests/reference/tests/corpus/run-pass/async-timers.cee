@@ -1,0 +1,34 @@
+// lib/std's Timer and AsyncConsole (type-system.md §40.4): a task parks until its deadline, and its console output is
+// in order with Console's.
+
+async fn step(name: StringView, ms: u64) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    await AsyncConsole.writeLine(name)?;
+    return Ok(1);
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    var total: u32 = 0;
+    for (i in 0..3) {
+        let name = if (i == 0) "one" else if (i == 1) "two" else "three";
+        total += await step(name, 5)?;
+    }
+    await AsyncConsole.write("no newline, then ")?;
+    return Ok(total);
+}
+
+fn main() {
+    Console.writeLine("before");
+    let start = Timer.now();
+    match (Async.run(work())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => { Console.writeLine("error"); }
+    }
+    Console.writeLine(Timer.now() - start >= 15);
+}
+// expect-stdout: before
+// expect-stdout: one
+// expect-stdout: two
+// expect-stdout: three
+// expect-stdout: no newline, then 3
+// expect-stdout: true

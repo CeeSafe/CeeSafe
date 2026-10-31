@@ -3,7 +3,8 @@
 nothing here runs novac or reads a Nova checkout):
 - the fixed point at HEAD, with ceesafec as stage 0 (tools/fixed_point.py);
 - CeeSafe's corpus (tests/reference/tests/corpus) in every family: annotations, AST/HIR/C snapshots, expected output,
-  the optimisation reports; run-pass, run-fail and ffi again under -Werror, and under ASan+UBSan with leak checks;
+  the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under
+  -Werror, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008);
 - the support library's tests with leak checks, and its allocation-failure sweep;
 - the mutation suite, the fault sweep over the corpus, the collection properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py) and the debugger scripts.
@@ -45,11 +46,18 @@ def main():
     run_families = ["--family", "run-pass", "--family", "run-fail", "--family", "ffi"]
     failed = 0
     with tempfile.TemporaryDirectory(prefix="ceesafe-contract-") as work:
+        # lib/ is CeeSafe's (Decision 0008): an empty program checked with the library's own diagnostics on.
+        empty = os.path.join(work, "empty.cee")
+        with open(empty, "w") as f:
+            f.write("fn main() {}\n")
         steps = [
             ("fixed point", py + [f"{HERE}/fixed_point.py", "--stage0", cee, "--work", os.path.join(work, "fp"),
                                   "--manifest", os.path.join(work, "fixed-point.json")]),
             ("corpus", run_corpus + ["--corpus", corpus, "--check-leaks"]),
             ("run -Werror", run_corpus + ["--corpus", corpus] + run_families + ["--cflag=-Werror"]),
+            ("run interp", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--family", "run-fail",
+                                         "--interp", "--check-leaks"]),
+            ("library", [cee, "check", "--library-diagnostics", empty]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
              ["--cc", "clang", "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
               "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),

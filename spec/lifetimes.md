@@ -174,10 +174,10 @@ reference local used after the statement, the `Dead` access conflicts with the l
   `borrow mut a[2]` may be live together. That is sound because a constant index names one element whatever the
   array's length. Any index that is not a constant still overlaps every element.
 - Moves and drops are 2c. The `StorageDead` points emitted now are where drops will go.
-- **`await` adds no rule** (L1, type-system.md §40.2). `StartTask` holds its arguments' loans in the frame local as a
-  closure environment holds its captures', and `Await` is a use of that local, so the loans last until the task
-  returns, as for a call. A frame never moves, so a loan of a local across an `await` needs nothing more. A scope's
-  child is an element of a scoped collection (§40.5), so its loans last until the scope returns.
+- **`await` adds no rule** (L1, type-system.md §40.2). An awaited call is a call in NIR
+  (`intermediate-representation.md` §3), so its arguments' loans last until the task returns, as for any call. A frame
+  never moves, so a loan of a local across an `await` needs nothing more. A scope's child is an element of a scoped
+  collection (§40.5), so its loans last until the scope returns.
 
 ## 9. Diagnostics
 

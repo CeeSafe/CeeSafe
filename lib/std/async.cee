@@ -1,0 +1,79 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Async operations (type-system.md §40.4, ADR 0031): timers and console output for tasks, over the hosted runtime's
+// ceesafe_async_* (runtime/hosted/ceesafe_rt_async.c). Each one that waits registers what wakes the task, then parks.
+// Hosted only (Decision 0008: lib/ is CeeSafe's).
+
+extern "C" {
+    @effects()
+    fn ceesafe_async_now() -> u64;
+    @effects()
+    fn ceesafe_async_wait_until(deadline: u64);
+    @effects()
+    fn ceesafe_async_wait_writable(fd: i32);
+    @effects()
+    fn ceesafe_async_write(fd: i32, bytes: *u8, length: u64) -> i64;
+}
+
+/// Why an async operation failed (type-system.md §40.4, §40.7).
+public enum AsyncError {
+    Cancelled,
+    TimedOut,
+    Io(IoError),
+}
+
+/// Time for tasks: the monotonic clock in milliseconds.
+public struct Timer {
+    /// Milliseconds on the monotonic clock, from an arbitrary start.
+    /// Safety: ceesafe_async_now only reads the clock.
+    public fn now() -> u64 => unsafe { ceesafe_async_now() };
+
+    /// Waits at least `ms` milliseconds without blocking the thread: other tasks run meanwhile.
+    /// Safety: ceesafe_async_wait_until only records the deadline for the executor.
+    public async fn sleep(ms: u64) -> Result<void, AsyncError> {
+        let start = Timer.now();
+        let deadline = if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
+        while (Timer.now() < deadline) {
+            unsafe { ceesafe_async_wait_until(deadline); }
+            await Async.park();
+        }
+        return Ok();
+    }
+}
+
+/// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
+public struct AsyncConsole {
+    /// Writes `text` to standard output.
+    public async fn write(text: StringView) -> Result<void, AsyncError> => await writeAll(1, text.bytes());
+
+    /// Writes `text` and a newline to standard output.
+    public async fn writeLine(text: StringView) -> Result<void, AsyncError> {
+        await writeAll(1, text.bytes())?;
+        return await writeAll(1, "\n".bytes());
+    }
+
+    /// Writes `text` to standard error.
+    public async fn writeError(text: StringView) -> Result<void, AsyncError> => await writeAll(2, text.bytes());
+}
+
+/// Writes every byte to `fd`, a step of at most PIPE_BUF bytes whenever it is writable, parking until it is.
+/// Safety: the pointer and length are the slice's, read by the runtime during the call only.
+async fn writeAll(fd: i32, bytes: Slice<u8>) -> Result<void, AsyncError> {
+    var done: usize = 0;
+    while (done < bytes.length) {
+        let rest = bytes[done..];
+        let written = unsafe { ceesafe_async_write(fd, rest.ptr, rest.length as u64) };
+        if (written < 0) {
+            return Err(AsyncError.Io(asyncIoError(written)));
+        }
+        if (written == 0) {
+            unsafe { ceesafe_async_wait_writable(fd); }
+            await Async.park();
+        } else {
+            done += truncate<usize>(written); // 0 < written <= PIPE_BUF
+        }
+    }
+    return Ok();
+}
+
+/// The IoError for a negated errno (HostServices.hostError's rule).
+fn asyncIoError(code: i64) -> IoError => HostServices.hostError(code);

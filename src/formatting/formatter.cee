@@ -1033,6 +1033,7 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
             let last = exprLast(l, ast, e);
             l.glueBeforeAt(last);
         }
+        ExprNode.Await(operand) => { fmtWalkExpr(l, ast, operand)?; } // `await` stays spaced from its operand
         _ => {}
     }
     return Ok();

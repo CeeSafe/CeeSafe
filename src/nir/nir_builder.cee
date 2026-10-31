@@ -2055,6 +2055,8 @@ fn lowerRvalueCore(
             return if (value == none()) Ok(none()) else n.rvalue(NirRvalue.FloatToInt(value, kind), typ, span);
         }
         HirExpr.Call(callee, arguments) => { return lowerCall(c, n, b, e, callee, arguments); }
+        HirExpr.Await(call) => { return lowerTaskCall(c, n, b, call, taskAwait()); }
+        HirExpr.RunTask(call) => { return lowerTaskCall(c, n, b, call, taskRun()); }
         HirExpr.BuiltinCall(function, arguments) => { return lowerBuiltinCall(c, n, b, e, function, arguments); }
         _ => {}
     }
@@ -2111,6 +2113,25 @@ fn lowerCall(
     }
     let list = n.list(operands.view())?;
     return n.rvalue(NirRvalue.Call(callee, list), typ, span);
+}
+
+/// `await f(…)` and `Async.run(f(…))` (type-system.md §40): the task's call, lowered as a call and marked with its role,
+/// so the ownership and effect analyses see a call (intermediate-representation.md §3).
+fn lowerTaskCall(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    call: u32,
+    role: u8,
+) -> Result<u32, AllocError> {
+    let r = match (c.hir.exprs[call as usize]) {
+        HirExpr.Call(callee, arguments) => lowerCall(c, n, b, call, callee, arguments)?,
+        _ => none(),
+    };
+    if (r != none()) {
+        n.rvalueTasks[r as usize] = role;
+    }
+    return Ok(r);
 }
 
 fn lowerBuiltinCall(
@@ -2324,6 +2345,8 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.SliceLength(slice) => { return containsCall(c, slice); }
         HirExpr.Try(operand) => { return containsCall(c, operand); }
         HirExpr.Unwrap(operand) => { return containsCall(c, operand); }
+        HirExpr.Await(_) => { return true; }
+        HirExpr.RunTask(_) => { return true; }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }
     }

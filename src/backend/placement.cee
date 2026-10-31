@@ -86,7 +86,8 @@ fn analyzePlacement(
             slots: Vector<u32>.create(),
             boxLocals: Vector<bool>.create(),
         };
-        if (!functionIsGeneric(c, n.functions[k].source)) {
+        // A box on an async fn's C stack would not survive a suspension (c-backend.md §3a).
+        if (!functionIsGeneric(c, n.functions[k].source) && !isAsyncFunction(c, n.functions[k].source)) {
             analyzeFunctionPlacement(c, n, sources, truncate<u32>(k), mut placement, mut analysis.decisions)?;
         }
         analysis.functions.push(placement)?;

@@ -234,6 +234,7 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
         ExprNode.MutArg(_) => { return misplacedMutArgument(c, span); }
         ExprNode.Try(operand) => { return checkTry(c, operand, expected, span); }
         ExprNode.Unwrap(operand) => { return checkUnwrap(c, operand, expected, span); }
+        ExprNode.Await(operand) => { return checkAwait(c, operand, expected, span); }
         ExprNode.If(_, _, _) => { return checkBranching(c, e, none()); }
         ExprNode.Match(_, _) => { return checkBranching(c, e, none()); }
         ExprNode.This => {
@@ -946,6 +947,9 @@ fn synthCall(
                                 if (b == builtinThread()) {
                                     return checkThreadSpawn(c, member, arguments, expected, span);
                                 }
+                                if (b == builtinAsync()) {
+                                    return checkAsyncCall(c, member, arguments, expected, span);
+                                }
                                 if (b == builtinFile() || b == builtinTcpListener() || b == builtinTcpStream()) {
                                     return checkResourceFunction(c, b, member, arguments, span);
                                 }
@@ -1077,6 +1081,7 @@ fn checkUserCallWith(
         return c.errorResult(span.start, span.end);
     }
     let list = c.hir.list(values.view())?;
+    checkTaskCall(c, function, span)?;
     return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
 }
 

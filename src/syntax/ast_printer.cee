@@ -229,7 +229,10 @@ struct AstPrinter {
     fn printFunction(borrow mut this, ast: borrow Ast, symbols: borrow Interner, id: u32) -> Result<void, AllocError> {
         let f = ast.functions[id as usize];
         this.open()?;
-        this.text(if (f.isUnsafe) "(unsafe-fn " else "(fn ")?;
+        this.text(
+            if (f.isUnsafe &&
+                f.isAsync) "(unsafe-async-fn " else if (f.isUnsafe) "(unsafe-fn " else if (f.isAsync) "(async-fn " else "(fn ",
+        )?;
         this.text(visibilityText(f.visibility))?;
         this.text(" ")?;
         this.name(ast, symbols, f.name)?;
@@ -667,6 +670,7 @@ struct AstPrinter {
             }
             ExprNode.Try(operand) => { this.unary(ast, symbols, "(try ", operand)?; }
             ExprNode.Unwrap(operand) => { this.unary(ast, symbols, "(unwrap ", operand)?; }
+            ExprNode.Await(operand) => { this.unary(ast, symbols, "(await ", operand)?; }
             ExprNode.Index(target, index) => {
                 this.text("(index ")?;
                 this.expr(ast, symbols, target)?;

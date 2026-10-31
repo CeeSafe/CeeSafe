@@ -245,8 +245,12 @@ fn emitProgram(
         emitStatics(e, c, false)?; // declarations; nova_instances.c defines them
     }
 
+    emitAsyncDeclarations(e, c, n)?; // frames and their functions (c-backend.md §3a)
     for (k in 0..e.compiled.length) {
         let function = e.compiled[k];
+        if (isAsyncNir(c, n, function)) {
+            continue;
+        }
         e.fnProto()?;
         appendSignature(e, c, n, function, false)?;
         e.t(";")?;

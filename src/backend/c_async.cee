@@ -1,0 +1,383 @@
+// Async fns in C (c-backend.md §3a, ADR 0031 §3.6). An async fn F becomes a frame struct ceeAF_<F> holding its
+// parameters, every local, one frame per await site and its result; ceeAI_<F>, which fills in the arguments; ceeAR_<F>,
+// which runs F until it returns (true) or suspends (false); and ceeAT_<F>, the resume function as the runtime calls it.
+// <F> is F's C function name. The resume function is always flat: inside it, each local's C name is defined as its
+// frame field, so the statement emitter is shared with sync functions.
+
+fn isAsyncNir(c: borrow Checker, n: borrow NirProgram, f: u32) -> bool => isAsyncFunction(c, nirFunctionSource(n, f));
+
+/// `ceeAF_ceeF_name` and so on: an async item's name, from its function's C name.
+fn appendAsyncName(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    prefix: StringView,
+    function: u32,
+) -> Result<void, AllocError> {
+    appendText(out, prefix)?;
+    return appendCFunctionName(c, out, function);
+}
+
+/// The suspension points of a statement: an awaited call, or `Async.park()`.
+fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
+    let r = statementRvalue(n, s);
+    return r != none() && (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark());
+}
+
+/// The awaited callee of statement `s`, or none.
+fn awaitedCallee(n: borrow NirProgram, s: u32) -> u32 {
+    let r = statementRvalue(n, s);
+    if (r == none() || n.rvalueTasks[r as usize] != taskAwait()) {
+        return none();
+    }
+    return match (n.rvalues[r as usize]) {
+        NirRvalue.Call(callee, _) => callee,
+        _ => none(),
+    };
+}
+
+fn emitFrameStruct(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+) -> Result<void, AllocError> {
+    let source = nirFunctionSource(n, f);
+    let function = borrow n.functions[f as usize];
+    e.t("struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(" {")?;
+    e.emit()?;
+    e.line("    uint32_t cee_state;")?;
+    for (k in 0..truncate<u32>(function.locals.length)) {
+        e.t("    ")?;
+        appendCTypeName(c, mut e.buf, function.locals[k as usize].typ)?;
+        e.t(" ")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    var site: u32 = 0;
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            if (!isSuspension(n, s)) {
+                continue;
+            }
+            site += 1;
+            let callee = awaitedCallee(n, s);
+            if (callee != none()) {
+                e.t("    struct ")?;
+                appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+                e.t(" cee_a")?;
+                e.d(site as u64)?;
+                e.t(";")?;
+                e.emit()?;
+            }
+        }
+    }
+    let result = c.hir.functions[source as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        e.t("    ")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t(" cee_result;")?;
+        e.emit()?;
+    }
+    e.line("};")?;
+    return Ok();
+}
+
+/// The frame structs, children before the frames that embed them, and the async prototypes; before the functions.
+fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    var asyncs = Vector<u32>.create();
+    var pending = Vector<u32>.create();
+    for (f in e.compiled.view()) {
+        if (isAsyncNir(c, n, f)) {
+            asyncs.push(f)?;
+            pending.push(f)?;
+        }
+    }
+    if (pending.length == 0) {
+        return Ok();
+    }
+    var done = Vector<u32>.create(); // HIR functions whose frames are defined
+    while (pending.length > 0) {
+        var progressed = false;
+        var k: usize = 0;
+        while (k < pending.length) {
+            let f = pending[k];
+            var ready = true;
+            for (block in n.functions[f as usize].blocks.view()) {
+                for (s in block.statements.view()) {
+                    let callee = awaitedCallee(n, s);
+                    if (callee != none() && !containsU32(done, callee)) {
+                        ready = false;
+                    }
+                }
+            }
+            if (ready) {
+                emitFrameStruct(e, c, n, f)?;
+                done.push(nirFunctionSource(n, f))?;
+                let last = pending.length - 1;
+                pending.swap(k, last); // the order among ready frames does not matter
+                pending.pop();
+                progressed = true;
+            } else {
+                k += 1;
+            }
+        }
+        if (!progressed) {
+            // A cycle cannot reach the backend (N0343); emit the rest in order rather than loop.
+            for (f in pending.view()) {
+                emitFrameStruct(e, c, n, f)?;
+            }
+            pending.clear();
+        }
+    }
+    for (f in asyncs.view()) {
+        let source = nirFunctionSource(n, f);
+        e.fnProto()?;
+        e.t("void ")?;
+        appendAsyncName(c, mut e.buf, "ceeAI_", source)?;
+        e.t("(struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+        e.t(" *")?;
+        let function = borrow n.functions[f as usize];
+        for (k in 0..function.parameterCount) {
+            e.t(", ")?;
+            appendCTypeName(c, mut e.buf, function.locals[k as usize].typ)?;
+        }
+        e.t(");")?;
+        e.emit()?;
+        e.fnProto()?;
+        e.t("bool ")?;
+        appendAsyncName(c, mut e.buf, "ceeAR_", source)?;
+        e.t("(struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+        e.t(" *);")?;
+        e.emit()?;
+        e.fnProto()?;
+        e.t("bool ")?;
+        appendAsyncName(c, mut e.buf, "ceeAT_", source)?;
+        e.t("(void *);")?;
+        e.emit()?;
+    }
+    return Ok();
+}
+
+fn emitAsyncFunction(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+) -> Result<void, AllocError> {
+    e.function = f;
+    e.inPlace.clear();
+    inPlaceSites(c, n, f, mut e.inPlace)?;
+    let source = nirFunctionSource(n, f);
+    let nameStart = functionNameStart(c, source);
+    let syntax = c.front.ast.functions[c.hir.functions[source as usize].syntax as usize];
+    let function = borrow n.functions[f as usize];
+    // The initialiser: a zeroed frame (state 0), then the arguments.
+    mapTo(e, c, n, sources, nameStart, c.front.ast.idents[syntax.name as usize].end);
+    e.fnPrefix()?;
+    e.t("void ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", source)?;
+    e.t("(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(" *cee_frame")?;
+    for (k in 0..function.parameterCount) {
+        e.t(", ")?;
+        appendCTypeName(c, mut e.buf, function.locals[k as usize].typ)?;
+        e.t(" ")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+    }
+    e.t(") {")?;
+    e.emit()?;
+    e.t("    *cee_frame = (struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t("){0};")?;
+    e.emit()?;
+    for (k in 0..function.parameterCount) {
+        e.t("    cee_frame->")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.t(" = ")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    e.line("}")?;
+    // The thunk the runtime calls.
+    e.fnPrefix()?;
+    e.t("bool ")?;
+    appendAsyncName(c, mut e.buf, "ceeAT_", source)?;
+    e.t("(void *frame) { return ")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", source)?;
+    e.t("((struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(" *)frame); }")?;
+    e.emit()?;
+    // The resume function.
+    e.fnPrefix()?;
+    e.t("bool ")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", source)?;
+    e.t("(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(" *cee_frame) {")?;
+    e.emit()?;
+    for (k in 0..truncate<u32>(function.locals.length)) {
+        e.t("#define ")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.t(" (cee_frame->")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.t(")")?;
+        e.emit()?;
+    }
+    var states: u32 = 0;
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            if (isSuspension(n, s)) {
+                states += 1;
+            }
+        }
+    }
+    e.line("    switch (cee_frame->cee_state) {")?;
+    for (k in 1..states + 1) {
+        e.t("    case ")?;
+        e.d(k as u64)?;
+        e.t("u: goto cee_resume_")?;
+        e.d(k as u64)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    e.line("    default: break;")?;
+    e.line("    }")?;
+    e.inAsync = true;
+    e.asyncState = 0;
+    emitFlatBody(e, c, n, sources, f)?;
+    e.inAsync = false;
+    for (k in 0..truncate<u32>(function.locals.length)) {
+        e.t("#undef ")?;
+        appendLocalName(c, mut e.buf, function, k)?;
+        e.emit()?;
+    }
+    e.line("}")?;
+    endMapping(e)?;
+    e.function = none();
+    return Ok();
+}
+
+/// A statement with a task's role (NirProgram.rvalueTasks) or `Async.park()`: false if it is neither.
+fn emitTaskStatement(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    s: u32,
+) -> Result<bool, AllocError> {
+    let r = statementRvalue(n, s);
+    if (r == none()) {
+        return Ok(false);
+    }
+    let target = match (n.statements[s as usize]) {
+        NirStatement.Assign(t, _) => t,
+        _ => none(),
+    };
+    if (builtinOf(n, r) == bfAsyncPark()) {
+        e.asyncState += 1;
+        e.t("    cee_frame->cee_state = ")?;
+        e.d(e.asyncState as u64)?;
+        e.t("u;")?;
+        e.emit()?;
+        e.line("    return false;")?;
+        e.t("cee_resume_")?;
+        e.d(e.asyncState as u64)?;
+        e.t(": ;")?;
+        e.emit()?;
+        return Ok(true);
+    }
+    let role = n.rvalueTasks[r as usize];
+    if (role == 0) {
+        return Ok(false);
+    }
+    var callee = none();
+    var arguments = emptyRange();
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Call(function, list) => {
+            callee = function;
+            arguments = list;
+        }
+        _ => { return Ok(false); }
+    }
+    var args = Vector<u8>.create();
+    appendOperandList(e, c, n, sources, f, mut args, arguments, 0)?;
+    var place = Vector<u8>.create();
+    if (target != none()) {
+        place = appendPlaceIn(e, c, n, sources, f, target)?;
+    }
+    if (role == taskRun()) {
+        // `Async.run(g(…))`: the root frame in this function's storage, run until it returns (§3a).
+        e.line("    {")?;
+        e.t("        struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+        e.t(" cee_root;")?;
+        e.emit()?;
+        e.t("        ")?;
+        appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
+        e.t("(&cee_root")?;
+        if (arguments.count > 0) {
+            e.t(", ")?;
+            e.b(args.view())?;
+        }
+        e.t(");")?;
+        e.emit()?;
+        e.t("        ceesafe_async_run(&cee_root, ")?;
+        appendAsyncName(c, mut e.buf, "ceeAT_", callee)?;
+        e.t(");")?;
+        e.emit()?;
+        if (target != none()) {
+            e.t("        ")?;
+            e.b(place.view())?;
+            e.t(" = cee_root.cee_result;")?;
+            e.emit()?;
+        }
+        e.line("    }")?;
+        return Ok(true);
+    }
+    // `await g(…)`: start the child in its field, then resume it until it returns.
+    e.asyncState += 1;
+    let k = e.asyncState;
+    e.t("    ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
+    e.t("(&cee_frame->cee_a")?;
+    e.d(k as u64)?;
+    if (arguments.count > 0) {
+        e.t(", ")?;
+        e.b(args.view())?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", callee)?;
+    e.t("(&cee_frame->cee_a")?;
+    e.d(k as u64)?;
+    e.t(")) return false;")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("    ")?;
+        e.b(place.view())?;
+        e.t(" = cee_frame->cee_a")?;
+        e.d(k as u64)?;
+        e.t(".cee_result;")?;
+        e.emit()?;
+    }
+    return Ok(true);
+}

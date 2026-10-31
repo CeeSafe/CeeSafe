@@ -1026,4 +1026,14 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
 void ceesafe_write_newline(void);
 _Noreturn void ceesafe_exit(int32_t code);
 
+/* Async tasks (type-system.md §40; runtime/hosted/ceesafe_rt_async.c, c-backend.md §3a). ceesafe_async_run resumes
+ * the root frame until it returns, waiting between resumes for what the parked task registered: a deadline on the
+ * monotonic clock (milliseconds) or a descriptor becoming writable. ceesafe_async_write writes at most PIPE_BUF bytes
+ * if `fd` is writable now: a count, 0 if it is not, or a negated errno. */
+void ceesafe_async_run(void *frame, bool (*resume)(void *));
+uint64_t ceesafe_async_now(void);
+void ceesafe_async_wait_until(uint64_t deadline);
+void ceesafe_async_wait_writable(int32_t fd);
+int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length);
+
 #endif /* CEESAFE_RT_H */

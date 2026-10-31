@@ -157,6 +157,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_thread_") || containsBytes(mainText.view(), "ceesafe_mutex_")) {
             out.push(runtimeFile(5, "")?)?;
         }
+        if (containsBytes(mainText.view(), "ceesafe_async_")) {
+            out.push(runtimeFile(6, "")?)?; // async tasks (c-backend.md §3a)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

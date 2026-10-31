@@ -1,0 +1,22 @@
+(unit
+  (async-fn default one (params) (returns i32)
+    (=> 1)
+  )
+  (unsafe-async-fn default raw (params) (returns i32)
+    (=> 2)
+  )
+  (async-fn default parse (params (text StringView)) (returns (Result Pair Error))
+    (block
+      (let a = (await (call one)))
+      (let b = (. (try (await (call (. table lookup) text))) value))
+      (let c = (unwrap (await (call fetch text))))
+      (expr (try (await (call log (+ a b)))))
+      (return (call Ok (new Pair (first a) (second (+ (await (call one)) c)))))
+    )
+  )
+  (struct default Worker
+    (async-fn public run (params (borrow this)) (returns i32)
+      (=> (try (await (call (. this step) 1))))
+    )
+  )
+)

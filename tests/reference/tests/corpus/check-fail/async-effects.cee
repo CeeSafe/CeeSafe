@@ -1,0 +1,42 @@
+// The `suspend` effect and its contexts (type-system.md §32.3, §40.1, §40.2; ADR 0031 §3.2).
+
+/// Holding one is an atomic context.
+@context(atomic)
+struct Guard {
+    depth: u32;
+}
+
+async fn tick() -> u32 => 1;
+
+async fn blocking() -> u32 {
+    Console.writeLine("blocks the thread"); // error[N0295]
+    return 1;
+}
+
+async fn guarded() -> u32 {
+    let g = Guard { depth: 1 };
+    let t = await tick(); // error[N0295]
+    return g.depth + t;
+}
+
+async fn released() -> u32 {
+    {
+        let g = Guard { depth: 1 };
+        Console.writeError(""); // error[N0295]
+    }
+    return await tick();
+}
+
+@context(irq)
+async fn handler() -> u32 => await tick(); // error[N0295]
+
+@effects()
+async fn bounded() -> u32 => await tick(); // error[N0295]
+
+fn main() {
+    Console.writeLine(Async.run(blocking()));
+    Console.writeLine(Async.run(guarded()));
+    Console.writeLine(Async.run(released()));
+    Console.writeLine(Async.run(handler()));
+    Console.writeLine(Async.run(bounded()));
+}

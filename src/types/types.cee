@@ -85,10 +85,14 @@ enum ResourceKind {
     TcpStream,
 }
 
-/// The effect flags of a function or closure type (Hir.cs `Effects`): sleep is 1, alloc 2.
+/// The effect flags of a function or closure type (Hir.cs `Effects`): sleep is 1, alloc 2, suspend 4 (type-system.md
+/// §32.1). `allEffects` is what a type without an effect list may do, which never includes `suspend` (§36.3);
+/// `maskEffects` is every flag.
 fn allEffects() -> u32 => 3;
 fn sleepEffect() -> u32 => 1;
 fn allocEffect() -> u32 => 2;
+fn suspendEffect() -> u32 => 4;
+fn maskEffects() -> u32 => 7;
 
 /// One type. Which fields mean something depends on `kind`, as for the reference's NovaType properties; an unused
 /// index is none().
@@ -968,6 +972,13 @@ struct TypeTable {
                 appendText(out, ", ")?;
             }
             appendText(out, "alloc")?;
+            first = false;
+        }
+        if (effects & 4 != 0) {
+            if (!first) {
+                appendText(out, ", ")?;
+            }
+            appendText(out, "suspend")?;
         }
         appendText(out, ") ")?;
         return Ok();

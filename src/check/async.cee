@@ -1,0 +1,170 @@
+// Async functions (type-system.md §40, ADR 0031): `await`, `Async.run`, and the rule that a call of an async fn is a
+// task, which must be awaited, run or spawned. L1 A1: scopes, spawn, race, all and shield come in A2.
+
+fn awaitOutsideAsync() -> u32 => 341;
+fn taskNotAwaited() -> u32 => 342;
+fn asyncPrimitiveOutsideLibrary() -> u32 => 345;
+
+/// CeeSafe's own builtin functions, numbered after the generated ones (src/hir/builtins.cee): `Async.park()`, which
+/// suspends the current task until the runtime wakes it (type-system.md §40.4).
+fn bfAsyncPark() -> u32 => 1000;
+
+/// Whether `function` (a HirFunction) is an `async fn`.
+fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
+    if (function == none()) {
+        return false;
+    }
+    let syntax = c.hir.functions[function as usize].syntax;
+    return syntax != none() && (syntax as usize) < c.front.ast.functions.length &&
+        c.front.ast.functions[syntax as usize].isAsync;
+}
+
+/// A call of `function` spanning `span`: a call of an async fn is a task, allowed only as the operand that
+/// `checkAwait` or `Async.run` marked (N0342 elsewhere, §40.1).
+fn checkTaskCall(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    if (!isAsyncFunction(c, function)) {
+        return Ok();
+    }
+    if (c.taskStart == span.start && c.taskEnd == span.end) {
+        c.taskStart = none();
+        c.taskEnd = none();
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "a call of the async fn ")?;
+    appendQuotedName(mut message, c, c.hir.functions[function as usize].name)?;
+    appendText(mut message, " is a task: await it, or pass it to 'Async.run' (type-system.md §40.1)")?;
+    c.error(taskNotAwaited(), span.start, span.end, message)?;
+    return Ok();
+}
+
+/// Checks `operand` as a task: a call of an async fn. Returns the checked call, or none after an error.
+fn checkTaskOperand(c: borrow mut Checker, operand: u32, expected: u32, what: StringView) -> Result<u32, AllocError> {
+    let operandSpan = c.front.ast.exprSpans[operand as usize];
+    let isCall = match (c.front.ast.exprs[operand as usize]) {
+        ExprNode.Call(_, _) => true,
+        _ => false,
+    };
+    let savedStart = c.taskStart;
+    let savedEnd = c.taskEnd;
+    if (isCall) {
+        c.taskStart = operandSpan.start;
+        c.taskEnd = operandSpan.end;
+    }
+    let call = synth(c, operand, expected)?;
+    let consumed = isCall && c.taskStart == none();
+    c.taskStart = savedStart;
+    c.taskEnd = savedEnd;
+    if (consumed) {
+        return Ok(call);
+    }
+    if (c.typeOf(call) != c.types.error) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "the operand of ")?;
+        appendText(mut message, what)?;
+        appendText(mut message, " must be a call of an async fn (type-system.md §40.2)")?;
+        c.error(taskNotAwaited(), operandSpan.start, operandSpan.end, message)?;
+    }
+    return Ok(none());
+}
+
+/// `await e` (§40.2): only in an async fn's body; `e` a task; the value is the task's result.
+fn checkAwait(c: borrow mut Checker, operand: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
+    if (!isAsyncFunction(c, c.function)) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'await' is allowed only in the body of an async fn or async closure (type-system.md §40.2)",
+        )?;
+        c.error(awaitOutsideAsync(), span.start, span.start + 5, message)?;
+    } else if (c.deferDepth > 0) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a deferred statement cannot 'await': it runs as the scope ends (type-system.md §40.2)",
+        )?;
+        c.error(awaitOutsideAsync(), span.start, span.start + 5, message)?;
+    }
+    let call = checkTaskOperand(c, operand, expected, "'await'")?;
+    if (call == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    if (isParkCall(c, call)) {
+        return Ok(call); // a suspension point of its own, not a task's call
+    }
+    let typ = c.typeOf(call);
+    return c.expr(HirExpr.Await(call), typ, span.start, span.end);
+}
+
+/// `Async.member(…)` (§40.4). A1 has `Async.run(task)`.
+fn checkAsyncCall(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    if (sameText(c.name(memberIdent.symbol), "park")) {
+        return checkAsyncPark(c, arguments, span);
+    }
+    if (!sameText(c.name(memberIdent.symbol), "run")) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async' has no function ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, "; use 'Async.run(f(…))' to run a task (type-system.md §40.4)")?;
+        c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.run' takes one task, a call of an async fn")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let task = c.front.ast.at(arguments, 0);
+    let call = checkTaskOperand(c, task, expected, "'Async.run'")?;
+    if (call == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let typ = c.typeOf(call);
+    return c.expr(HirExpr.RunTask(call), typ, span.start, span.end);
+}
+
+/// `await Async.park()` (§40.4): library code only (N0345), and only as `await`'s operand (N0342). The library's waiting
+/// operations register what wakes the task with the runtime first.
+fn checkAsyncPark(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let inLibrary = c.function != none() && c.hir.functions[c.function as usize].library;
+    if (!inLibrary) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.park' is the library's primitive; wait through lib/std's operations (type-system.md §40.4)",
+        )?;
+        c.error(asyncPrimitiveOutsideLibrary(), span.start, span.end, message)?;
+    }
+    if (c.taskStart == span.start && c.taskEnd == span.end) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.park()' suspends the task: write it as 'await Async.park()'")?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.park' takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+    }
+    let voidType = c.types.voidType;
+    return c.expr(HirExpr.BuiltinCall(bfAsyncPark(), emptyRange()), voidType, span.start, span.end);
+}
+
+/// Whether HIR expression `e` is `Async.park()`.
+fn isParkCall(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.BuiltinCall(function, _) => function == bfAsyncPark(),
+    _ => false,
+};

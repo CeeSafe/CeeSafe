@@ -57,6 +57,10 @@ struct Interp {
     capturedError: Vector<u8>;
     truncated: bool;
     inputRead: usize;
+    // Async tasks (type-system.md §40.8): a virtual clock in milliseconds, and what the parked task waits for.
+    asyncClock: u64;
+    asyncDeadline: u64; // or none (u64 max)
+    asyncWritable: bool;
     // nova_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
@@ -1740,6 +1744,9 @@ fn newInterp(
         capturedError: Vector<u8>.create(),
         truncated: false,
         inputRead: 0,
+        asyncClock: 0,
+        asyncDeadline: 0xFFFFFFFFFFFFFFFF,
+        asyncWritable: false,
         emptyVector: 0,
         attempts: 0,
         liveAllocations: 0,

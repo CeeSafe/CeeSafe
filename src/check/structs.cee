@@ -341,6 +341,7 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
             typeParameters: emptyRange(),
             regionParameters: emptyRange(),
             isUnsafe: false,
+            isAsync: false,
             hasDoc: s.hasDropDoc,
             doc: s.dropDoc,
             isExtern: false,

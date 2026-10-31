@@ -1,0 +1,16 @@
+// Recursion through `await` would make a frame contain itself (type-system.md §40.1, N0343).
+
+async fn walk(n: u32) -> u32 {
+    if (n == 0) {
+        return 0;
+    }
+    return await walk(n - 1) + 1; // error[N0343]
+}
+
+async fn ping(n: u32) -> u32 => if (n == 0) 0 else await pong(n - 1); // error[N0343]
+async fn pong(n: u32) -> u32 => if (n == 0) 0 else await ping(n - 1); // error[N0343]
+
+fn main() {
+    Console.writeLine(Async.run(walk(3)));
+    Console.writeLine(Async.run(ping(3)));
+}

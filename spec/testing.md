@@ -21,7 +21,8 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 | CosmoOS (Nova's C1–C9, K3) | `integrations/cosmoos/c*.py`, `k3.py` | ceesafec's C under CosmoOS's own flags, host tests, fuzz targets and module loader rules, and in its QEMU boots; CosmoOS's tree is only read |
 | Same C on another host | `tools/host_c_check.py` | ceesafec built on Windows (MSVC, clang) emits the same C as on macOS and Linux |
 | Specification (§4) | `tools/spec_check.py`, `tools/guide_check.py` | every diagnostic code is explained; the guide's examples do what the pages say; links resolve |
-| Interpreter agreement (L1 A1; planned) | `tools/run_corpus.py --interp` | every run-pass and run-fail program run with `ceesafec run --interp` meets the same annotations as its C build |
+| Interpreter agreement (L1 A1) | `tools/run_corpus.py --interp` | every run-pass and run-fail program run with `ceesafec run --interp` meets the same expectations (output, exit, panic, leak check) as its C build |
+| Library diagnostics (Decision 0008) | `ceesafec check --library-diagnostics` on an empty program | `lib/` reports no diagnostic: since lib/ is CeeSafe's, its errors are no longer assumed to be porting gaps |
 | Cancellation sweep (L1 A2; planned) | `tools/cancel_sweep.py` | every async run-pass program, built with ASan+UBSan, run once per suspension point *k* with `CEESAFE_CANCEL_AT=k`; each run exits cleanly with `live=0` and no sanitizer report |
 
 `tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec. None
@@ -59,7 +60,11 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
 
 At the fork the corpus is Nova's at `v0.6.0` with `.cee` names (`tools/fork_corpus.py`), and its snapshots are still
 Nova's: `run_corpus.py` compares ceesafec's output with them after mapping CeeSafe's names back (§3). A CeeSafe-only
-change to the language adds corpus files with CeeSafe's names and snapshots written by ceesafec.
+change to the language adds corpus files with CeeSafe's names and snapshots written by ceesafec, run from the corpus
+root; a C snapshot whose banner names ceesafec is compared as written, without mapping names back. Adding library code
+(`lib/`, Decision 0008) can renumber closures in `.hir` snapshots and reorder types in `.c` ones, since library items
+are declared first: such an update is a reviewed edit that changes nothing else (L1 A1: `check-pass/effects-of.hir`,
+`emit-c/slice-bulk.c`).
 
 ## 3. No comparison with Nova
 

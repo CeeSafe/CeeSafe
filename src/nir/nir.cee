@@ -99,6 +99,10 @@ struct NirBlock {
     successors: Vector<u32>; // the terminator's targets, in its order (NirTerminator.Successors)
 }
 
+/// A Call rvalue's role (NirProgram.rvalueTasks): the awaited call of `await f(…)`, or the task of `Async.run(f(…))`.
+fn taskAwait() -> u8 => 1;
+fn taskRun() -> u8 => 2;
+
 struct NirFunction {
     source: u32; // the HIR function
     locals: Vector<NirLocal>;
@@ -120,6 +124,7 @@ struct NirProgram {
     rvalueTypes: Vector<u32>;
     rvalueSpans: Vector<Span>;   // a Binary's, Unary's or FloatToInt's span, where it may panic
     rvalueVariants: Vector<u32>; // a Call's callee variant (NirCall.Variant), 0 unless specialisation chose one
+    rvalueTasks: Vector<u8>;     // a Call's task role (type-system.md §40): 0 a call, taskAwait() or taskRun()
     statements: Vector<NirStatement>;
     statementSpans: Vector<Span>;
     terminators: Vector<NirTerminator>;
@@ -138,6 +143,7 @@ struct NirProgram {
         rvalueTypes: Vector<u32>.create(),
         rvalueSpans: Vector<Span>.create(),
         rvalueVariants: Vector<u32>.create(),
+        rvalueTasks: Vector<u8>.create(),
         statements: Vector<NirStatement>.create(),
         statementSpans: Vector<Span>.create(),
         terminators: Vector<NirTerminator>.create(),
@@ -166,6 +172,7 @@ struct NirProgram {
         this.rvalueTypes.push(typ)?;
         this.rvalueSpans.push(span)?;
         this.rvalueVariants.push(0)?;
+        this.rvalueTasks.push(0)?;
         return Ok(truncate<u32>(this.rvalues.length - 1));
     }
 

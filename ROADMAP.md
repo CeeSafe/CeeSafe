@@ -574,7 +574,7 @@ green.
   - `diagnostics.md` rows N0341–N0345.
 
   Gate: `spec_check` and `guide_check` are clean, and the owner accepts ADR 0031. Passed 2026-10-31.
-- [ ] **A1, a single task:**
+- [x] **A1, a single task** (2026-10-31):
   - `async fn`, `await`, `Async.run`;
   - the `suspend` effect and its contexts;
   - frames and flat resume functions;
@@ -582,7 +582,7 @@ green.
   - the interpreter, and `run_corpus.py --interp`.
 
   Gate: async run-pass programs give the same result in C and in the interpreter; ASan, UBSan and leak checks are
-  clean.
+  clean. Passed 2026-10-31.
 - [ ] **A2, scopes and cancellation:**
   - async closures; `scope`/`scopeIn`, `spawn`, `race`, `all`, `shield`, `checkpoint`, `blocking`;
   - channels (ADR 0032);
@@ -718,6 +718,7 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 | 2026-10-31 | CosmoOS's move to CeeSafe, CeeSafe's side: `integrations/cosmoos/ports.py` runs CosmoOS's own `scripts/cee-gen.py` (its `generated`, `refused`) with the ceesafec under test, and with `--pinned` compares every generated file with that compiler's but for the banner's version; `c2cee.py verify` sets `CEESAFEC` and runs `make cee-check` (`--ceesafec`), and refuses a Nova-era tree; `c2cee port`'s `BUILD.md` describes the new layout and its analysis uses the kernel's include path (`out/cee/kernel/include`, `boot/protocol`, `drivers/include`); `spec/tooling.md` §9 and the integration README follow | `ports.py` on CosmoOS's local `ceesafe-migration` (`47964c10`) with ceesafec 0.3.0-dev and `--pinned` 0.2.0: 17 ports, 1 negative source, 28 generated files equal, 0 problems; on `origin/main` (still Nova) refused as intended; `c2cee selftest` PASS; `c2cee port kernel/core/bootinfo.c` drafts (it failed before on `cosmoboot.h`); `verify` refuses a Nova-era tree; spec_check and guide_check 0 problems |
 | 2026-10-31 | L1 async/await, library ownership and A0 drafts: Decision 0008 (`lib/` recovered from `src/library/sources.cee`, equal to `map_forward` of `tests/reference/lib/` for all 13 files; `tools/gen_library.py` reads `lib/`; `spec_check` documents `lib/core`); ADR 0031 proposed; `docs/async-await-proposal.md`; roadmap track L1. `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | regenerated `sources.cee` differs only in its header and one doc comment; all 13 contract steps ok (fixed point, corpus, -Werror, ASan, support, sweeps, mutations, collections, freestanding, spec, guide, debugger); `fmt --check` clean. ADR 0031 awaits the owner |
 | 2026-10-31 | L1 A0: ADR 0031 accepted ("I accept it as written."), then amended (§6: the scope's out-of-memory error is named by the caller, the owner's choice; `checkpoint(cancelled)`; `AsyncError`; `Async.race`/`all`; the `await` operand wording). Spec: `grammar.md`, `type-system.md` §32, §36.3, new §40, `ownership.md` A1–A4, `lifetimes.md` §8, `intermediate-representation.md` §3, `c-backend.md` §2.1, §3a, §6, `diagnostics.md` N0341–N0345 with N0290/N0295, `profiles.md`, `testing.md` §1; `gen_catalog.py`, `gen_docs.py`. `python3 tools/contract_tests.py --ceesafec out/ceesafec` | all 13 steps ok (spec_check: 137 codes explained); `fmt --check` clean. A0 gate passed |
+| 2026-10-31 | L1 A1: `async fn`, prefix `await`, `Async.run`, `Async.park` (src/syntax, src/check/async.cee); the `suspend` effect and its contexts (src/types, src/check/effects.cee, src/nir/effect_check.cee); awaited calls marked in NIR and N0343 (src/nir/coroutines.cee); frames, flat resume functions and `Async.run` in C (src/backend/c_async.cee); runtime/hosted/ceesafe_rt_async.c (poll, timers); lib/std/async.cee (`Timer`, `AsyncConsole`, `AsyncError`); the interpreter on a virtual clock; `run_corpus.py --interp`; contract steps `run interp` and `library`; corpus files parse-pass/async-syntax, run-pass/async-basics, async-timers, check-fail/async-tasks, async-recursion, async-effects, emit-c/async-frame; ADR 0031 §6.5 (lowering); `check-pass/effects-of.hir` and `emit-c/slice-bulk.c` updated by reviewed edit (library ids and type order only). `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | all 15 steps ok: fixed point; corpus incl. the 7 async files; run-pass 161 and run-fail 40 in C (-Werror, ASan+UBSan, leaks) and in the interpreter; lib/ diagnostics clean; `fmt --check` clean. Found and fixed on the way: an `as` cast in lib/ that the suppressed library diagnostics hid (hence the `library` step). A1 gate passed |
 
 **Tests run for the skeleton** (2026-10-30, novac 0.3.1, Apple clang 21.0.0):
 - `novac check` and `novac fmt --check`: clean.

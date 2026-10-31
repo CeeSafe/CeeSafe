@@ -1,0 +1,26 @@
+// Where tasks and `await` may appear (type-system.md §40.1, §40.2, §40.4; ADR 0031).
+
+async fn add(a: i32, b: i32) -> i32 => a + b;
+fn plain() -> i32 => 1;
+fn take(x: i32) -> i32 => x;
+
+fn sync() -> i32 {
+    let t = await add(1, 2); // error[N0341]
+    return t;
+}
+
+async fn misuse() -> i32 {
+    let x = add(1, 2);       // error[N0342]
+    let y = await plain();   // error[N0342]
+    let z = take(add(1, 2)); // error[N0342]
+    defer {
+        await add(3, 4); // error[N0341]
+    }
+    await Async.park(); // error[N0345]
+    return x + y + z;
+}
+
+fn main() {
+    let v = Async.run(plain()); // error[N0342]
+    Console.writeLine(v);
+}

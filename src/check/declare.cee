@@ -56,7 +56,8 @@ fn builtinName(k: u32) -> StringView => match (k) {
     24 => "StringView",
     25 => "Cpu",
     26 => "Target",
-    _ => "Thread",
+    27 => "Thread",
+    _ => "Async",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -118,6 +119,8 @@ fn checkProgram(
         scopes: Vector<ScopeEntry>.create(),
         scopeStarts: Vector<usize>.create(),
         loopDepth: 0,
+        taskStart: none(),
+        taskEnd: none(),
         deferDepth: 0,
         copyKnown: false,
         regions: Vector<u32>.create(),

@@ -105,6 +105,9 @@ fn emitFunction(
     sources: borrow Vector<SourceText>,
     f: u32,
 ) -> Result<void, AllocError> {
+    if (isAsyncNir(c, n, f)) {
+        return emitAsyncFunction(e, c, n, sources, f);
+    }
     e.function = f;
     e.inPlace.clear();
     inPlaceSites(c, n, f, mut e.inPlace)?;
@@ -649,6 +652,9 @@ fn emitStatement(
     s: u32,
 ) -> Result<void, AllocError> {
     let span = n.statementSpans[s as usize];
+    if (emitTaskStatement(e, c, n, sources, f, s)?) {
+        return Ok(); // `await`, `Async.run` or `Async.park()` (§3a)
+    }
     match (n.statements[s as usize]) {
         NirStatement.Assign(target, r) => {
             let builtin = builtinOf(n, r);
@@ -1341,7 +1347,18 @@ fn emitTerminator(
             e.t("    }")?;
         }
         NirTerminator.Return(value) => {
-            if (value == none()) {
+            if (e.inAsync) {
+                // An async fn's frame keeps its result; true: the task has returned (§3a).
+                if (value != none()) {
+                    let operand = operandText(e, c, n, sources, f, value)?;
+                    e.t("    cee_frame->cee_result = ")?;
+                    e.b(operand.view())?;
+                    e.t("; ")?;
+                } else {
+                    e.t("    ")?;
+                }
+                e.t("return true;")?;
+            } else if (value == none()) {
                 e.t("    return;")?;
             } else {
                 let operand = operandText(e, c, n, sources, f, value)?;

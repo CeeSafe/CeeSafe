@@ -171,6 +171,7 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
         ExprNode.Call(_, _) => { ok = true; }
         ExprNode.Try(operand) => { ok = isCallSyntax(c, operand); }
         ExprNode.Unwrap(operand) => { ok = isCallSyntax(c, operand); }
+        ExprNode.Await(_) => { ok = true; } // an awaited call (type-system.md §40.2)
         _ => {}
     }
     if (!ok) {
@@ -184,6 +185,7 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
 
 fn isCallSyntax(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
     ExprNode.Call(_, _) => true,
+    ExprNode.Await(_) => true,
     _ => false,
 };
 
@@ -682,6 +684,8 @@ fn diverges(c: borrow Checker, e: u32, loopExits: borrow mut Vector<bool>) -> Re
         HirExpr.SliceLength(slice) => { return diverges(c, slice, loopExits); }
         HirExpr.Try(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.Unwrap(operand) => { return diverges(c, operand, loopExits); }
+        HirExpr.Await(operand) => { return diverges(c, operand, loopExits); }
+        HirExpr.RunTask(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.IsNull(reference, _) => { return diverges(c, reference, loopExits); }
         _ => { return Ok(false); }
     }

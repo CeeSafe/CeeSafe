@@ -23,6 +23,7 @@ FILES = (
     ("ceesafe_rt_io.c", "hosted/ceesafe_rt_io.c"),
     ("ceesafe_rt_float.c", "hosted/ceesafe_rt_float.c"),
     ("ceesafe_rt_thread.c", "hosted/ceesafe_rt_thread.c"),
+    ("ceesafe_rt_async.c", "hosted/ceesafe_rt_async.c"),
 )
 
 

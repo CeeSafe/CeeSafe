@@ -431,44 +431,46 @@ not run (panic = abort, OD-5).
 
 ## 3a. Async functions (L1; ADR 0031 §3.6, type-system.md §40)
 
-An async fn or async closure `F` lowers to three C items instead of one function:
+An async fn `F` whose C function name would be `<F>` (§2.1) lowers to four C items instead of one function
+(`src/backend/c_async.cee`):
 
 ```c
-typedef struct ceeAF_F {
-    uint32_t state;             /* 0 at entry; k after suspension point k (intermediate-representation.md §3) */
+struct ceeAF_<F> {
+    uint32_t cee_state;         /* 0 at entry; k after suspension point k (intermediate-representation.md §3) */
     /* the parameters, then every local, as fields named like the locals (v_<name>_<n>, t_<n>) */
-    /* one field per await site holding the awaited task's frame: struct ceeAF_G a_<k>; */
-    /* the result, if F's result type is not void: R result; */
-} ceeAF_F;
-static void ceeAI_F(ceeAF_F *f, /* the parameters */);   /* stores the arguments, sets state = 0 */
-static bool ceeAR_F(ceeAF_F *f, ceesafe_task *task);    /* runs F until it returns (true) or suspends (false) */
+    /* one field per awaited call holding the awaited task's frame: struct ceeAF_<G> cee_a<k>; */
+    /* the result, if F's result type is not void: R cee_result; */
+};
+static void ceeAI_<F>(struct ceeAF_<F> *cee_frame, /* the parameters */);  /* zeroes the frame, stores the arguments */
+static bool ceeAR_<F>(struct ceeAF_<F> *cee_frame);  /* runs F until it returns (true) or suspends (false) */
+static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime calls it */
 ```
 
 - **Frames are emitted child-first,** so a frame that embeds another's follows it. A cycle cannot occur (N0343).
-- **Every local is a frame field in v1.** The resume function names a local `f->v_<name>_<n>`, so a pointer to a
-  local stays valid while the frame does, which is until the task returns (type-system.md §40.6). L1 A3 keeps only
-  the locals live across a suspension point.
+- **Every local is a frame field in v1.** Inside the resume function each local's C name is defined as its field
+  (`#define v_x_3 (cee_frame->v_x_3)`, undefined after the function), so statements are emitted as in a sync function,
+  and a pointer to a local stays valid while the frame does, which is until the task returns (type-system.md §40.6).
+  L1 A3 keeps only the locals live across a suspension point.
 - **The resume function is always in flat form** (§3), whatever `--flat-c` says. It opens with
-  `switch (f->state) { case 0: goto bb0; case k: goto resume_k; … }`. Jumping into the middle of loops makes the graph
-  irreducible, so structuring it would fall back to flat form anyway.
-- **`Await(t, dest, bb)`** is
+  `switch (cee_frame->cee_state) { case k: goto cee_resume_k; … default: break; }`. Jumping into the middle of loops
+  makes the graph irreducible, so structuring it would fall back to flat form anyway.
+- **An awaited call** `dest = G(args…)`, suspension point k, is
 
   ```c
-  f->state = k;
-  resume_k:
-      if (!ceeAR_G(&f->a_k, task)) return false;
-      dest = f->a_k.result;
-      goto bb;
+  ceeAI_<G>(&cee_frame->cee_a<k>, args…);
+  cee_frame->cee_state = k;
+  cee_resume_<k>:
+  if (!ceeAR_<G>(&cee_frame->cee_a<k>)) return false;
+  dest = cee_frame->cee_a<k>.cee_result;
   ```
-
-  and `StartTask(G, args)` into `t` is `ceeAI_G(&f->a_k, args…)`.
-- **`Park(bb)`** is `f->state = k; return false; resume_k: goto bb;`.
-- **`return e`** stores `f->result = e` and returns `true`. Drop elaboration has already dropped the locals.
-- **`Async.run(G(args))`** declares the root frame `ceeAF_G root` in the caller's C function, then calls
-  `ceeAI_G(&root, args…)` and `ceesafe_async_run(&task, resume_thunk, &root)`. A `resume_thunk` adapts `ceeAR_G` to
-  the runtime's `bool (*)(void *frame, ceesafe_task *)`, so no function is called through another type.
-- **`#line`:** every `resume_k` label maps to the `await` or `Async.park()` it resumes after (§7).
-- **Placement** (§2.2) is off in async fns: a box's C-stack slot would not survive a suspension.
+- **`Async.park()`** is `cee_frame->cee_state = k; return false; cee_resume_<k>: ;`.
+- **`return e`** stores `cee_frame->cee_result = e` and returns `true`. Drop elaboration has already dropped the
+  locals.
+- **`Async.run(G(args))`** declares the root frame `struct ceeAF_<G> cee_root` in a block of the caller's C function,
+  then calls `ceeAI_<G>(&cee_root, args…)`, `ceesafe_async_run(&cee_root, ceeAT_<G>)`, and reads
+  `cee_root.cee_result`. The thunk adapts `ceeAR_<G>` to the runtime's `bool (*)(void *)`, so no function is called
+  through another type.
+- **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
 `ceesafe_async_*` (§6).
@@ -528,14 +530,15 @@ Heap (M3b):
     another type. A `fn()` argument is passed as the address of a local holding it, which lives until the join.
 - **Async** (L1, type-system.md §40): `runtime/hosted/ceesafe_rt_async.c`, linked only when the generated C calls
   `ceesafe_async_*`.
-  - `ceesafe_task` holds the resume function and root frame, the cancel flag, the shield depth and deadline, the
-    scheduler links and the waker id.
-  - `ceesafe_async_run(task, resume, frame)` resumes the root until it returns.
-    - Between resumes it waits in `poll()` for the earliest timer or a registered descriptor (A1). kqueue (macOS) and
-      epoll (Linux) replace `poll()` in A2, which stays the fallback.
-    - Timers, readiness registrations and child tasks come from `ceesafe_alloc`, so fault injection reaches them.
-  - `ceesafe_async_wake(id)` makes a parked task runnable.
-  - `CEESAFE_CANCEL_AT=k` cancels the root task at its k-th suspension, and `CEESAFE_CANCEL_REPORT` prints
+  - `ceesafe_async_run(frame, resume)` resumes the root frame until it returns. Between resumes it waits, in `poll()`,
+    for what the parked task registered: a deadline on the monotonic clock (`ceesafe_async_wait_until`, from
+    `ceesafe_async_now`) or a descriptor becoming writable (`ceesafe_async_wait_writable`). A task that parks with
+    nothing registered aborts with a message.
+  - `ceesafe_async_write(fd, bytes, length)` writes at most `PIPE_BUF` bytes if `fd` is writable now, after flushing
+    standard output or error: a count, 0 if it is not writable, or a negated errno (ADR 0031 §3.5).
+  - A1 runs one task per `Async.run` and allocates nothing. A2 adds a task header with the cancel flag, shield depth
+    and deadline, scheduler links and waker; `ceesafe_async_wake(id)`; kqueue and epoll beside `poll()`; and
+    `CEESAFE_CANCEL_AT=k`, which cancels the root task at its k-th suspension, with `CEESAFE_CANCEL_REPORT` printing
     `ceesafe cancel: points=N` (`testing.md`).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the

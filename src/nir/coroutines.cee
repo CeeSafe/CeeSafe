@@ -1,0 +1,84 @@
+// The coroutine pass (intermediate-representation.md §3, ADR 0031 §3.6): after the effect checker, over async fns. It
+// finds the awaited calls and reports recursion through `await` (N0343): a frame cannot contain itself (type-system.md
+// §40.1). It changes nothing.
+
+fn awaitRecursion() -> u32 => 343;
+
+/// An awaited call: the NIR function that makes it, the HIR callee, the rvalue.
+struct AwaitEdge {
+    caller: u32; // HIR function
+    callee: u32; // HIR function
+    rvalue: u32;
+}
+
+fn awaitEdges(n: borrow NirProgram, out: borrow mut Vector<AwaitEdge>) -> Result<void, AllocError> {
+    for (f in n.functions.view()) {
+        for (block in f.blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = match (n.statements[s as usize]) {
+                    NirStatement.Assign(_, value) => value,
+                    NirStatement.Eval(value) => value,
+                    _ => none(),
+                };
+                if (r == none() || n.rvalueTasks[r as usize] != taskAwait()) {
+                    continue;
+                }
+                match (n.rvalues[r as usize]) {
+                    NirRvalue.Call(callee, _) => {
+                        out.push(AwaitEdge { caller: f.source, callee: callee, rvalue: r })?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    return Ok();
+}
+
+/// Whether `target` is reachable from `from` along the await edges.
+fn awaitReaches(edges: borrow Vector<AwaitEdge>, from: u32, target: u32) -> Result<bool, AllocError> {
+    var seen = Vector<u32>.create();
+    var work = Vector<u32>.create();
+    work.push(from)?;
+    loop {
+        match (work.pop()) {
+            Some(f) => {
+                if (f == target) {
+                    return Ok(true);
+                }
+                if (containsU32(seen, f)) {
+                    continue;
+                }
+                seen.push(f)?;
+                for (edge in edges.view()) {
+                    if (edge.caller == f) {
+                        work.push(edge.callee)?;
+                    }
+                }
+            }
+            null => { return Ok(false); }
+        }
+    }
+}
+
+fn checkCoroutines(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    var edges = Vector<AwaitEdge>.create();
+    awaitEdges(n, mut edges)?;
+    for (edge in edges.view()) {
+        // An await on a cycle: its callee reaches its caller again.
+        if (!awaitReaches(edges, edge.callee, edge.caller)?) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "this await makes the frame of ")?;
+        appendQuotedName(mut message, c, c.hir.functions[edge.caller as usize].name)?;
+        appendText(
+            mut message,
+            " contain itself: recursion through 'await' needs an explicitly allocated frame (type-system.md §40.1)",
+        )?;
+        let file = c.hir.functions[edge.caller as usize].file;
+        let span = n.rvalueSpans[edge.rvalue as usize];
+        c.front.diagnostics.error(awaitRecursion(), file, span.start, span.end, message)?;
+    }
+    return Ok();
+}

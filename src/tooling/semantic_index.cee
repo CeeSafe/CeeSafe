@@ -443,6 +443,8 @@ fn walkExpression(
         HirExpr.SliceLength(slice) => { walkExpression(index, c, sources, slice)?; }
         HirExpr.Try(operand) => { walkExpression(index, c, sources, operand)?; }
         HirExpr.Unwrap(operand) => { walkExpression(index, c, sources, operand)?; }
+        HirExpr.Await(operand) => { walkExpression(index, c, sources, operand)?; }
+        HirExpr.RunTask(operand) => { walkExpression(index, c, sources, operand)?; }
         HirExpr.IsNull(reference, _) => { walkExpression(index, c, sources, reference)?; }
         HirExpr.StmtValue(statement) => { walkStatement(index, c, sources, statement)?; }
         HirExpr.FloatToInt(operand, _) => { walkExpression(index, c, sources, operand)?; }

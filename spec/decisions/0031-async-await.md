@@ -126,17 +126,15 @@ Facts from the tree that constrain the design:
 
 ### 3.6 Lowering (amending `intermediate-representation.md` and `c-backend.md`)
 
-1. **NIR.**
-   - A `StartTask(callee, args)` rvalue initialises a frame local, which holds the loans of its arguments, as a
-     closure environment does.
-   - An `Await(frame, dest, resume)` terminator ends a block.
-   - A `Park(resume)` terminator implements `Async.park()`.
-   - The borrow, move and drop analyses treat both terminators as a call.
-   - A coroutine pass after the effect checker numbers the states and builds the await graph (N0343).
-2. **Frames.** Async fn `F` becomes three pieces of C:
-   - `struct ceeF_F` holds the parameters, every local, one child-frame field per await site, the result and the state;
-   - `F_init` fills in the arguments;
-   - `F_resume(frame, task)` returns false while the task is pending.
+1. **NIR** (amended, §6.5).
+   - An awaited call is an ordinary `Call`, marked as awaited; `Async.run`'s task call is marked too; `Async.park()` is
+     a builtin. So the borrow, move and drop analyses see calls and need no rule of their own.
+   - A coroutine pass after the effect checker builds the await graph (N0343).
+2. **Frames.** Async fn `F` becomes four pieces of C (`c-backend.md` §3a):
+   - `struct ceeAF_<F>` holds the parameters, every local, one child-frame field per awaited call, the result and the
+     state;
+   - `ceeAI_<F>` fills in the arguments;
+   - `ceeAR_<F>(frame)` returns false while the task is pending, and `ceeAT_<F>` is it as the runtime calls it.
 
    A frame is placed once (on `Async.run`'s caller's stack, in its parent's frame, or from a scope's allocator) and
    never moves, so a borrow of a local across `await` stays valid. In v1 every local lives in the frame; L1 A3 shrinks
@@ -198,6 +196,11 @@ accepted choices did not respect that, and were changed while §40 was written:
    The library's async operations return `AsyncError` instead, which wraps `IoError` (§3.4.2).
 4. **`race` and `all`** are `Async.race(a, b)` and `Async.all(a, b)` rather than scope methods, with two children whose
    frames are embedded. They then need no allocator and no out-of-memory error (§3.3.5).
+5. **Lowering, found while implementing A1.** New NIR terminators (`StartTask`, `Await`, `Park`) would have needed an
+   arm in every analysis and in the interpreter for what is, to all of them, a call. Instead an awaited call stays a
+   `Call` marked in a side table, and the C backend alone turns marked calls into suspension points (§3.6.1). The C
+   names follow the C function name, `ceeAF_<F>` and so on, and the runtime's entry is `ceesafe_async_run(frame,
+   resume)`; the task header arrives with A2's scheduler.
 
 ## 7. Implementation
 

@@ -47,7 +47,7 @@ fn sameBindings(a: borrow Vector<u64>, b: borrow Vector<u64>) -> bool {
 
 /// Functions with a body in NIR that is compiled: not generic versions (§20.3).
 fn isSpecialisable(c: borrow Checker, source: u32) -> bool =>
-    !functionIsGeneric(c, source) && !isExternFunction(c, source);
+    !functionIsGeneric(c, source) && !isExternFunction(c, source) && !isAsyncFunction(c, source); // §40.6: frames
 
 /// The variant of `callee` for these bindings (VariantOf): queued now if new, rewritten later.
 fn variantOf(s: borrow mut Specialiser, callee: u32, bindings: Vector<u64>) -> Result<u32, AllocError> {

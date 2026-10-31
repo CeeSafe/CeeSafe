@@ -124,6 +124,8 @@ fn effectList(c: borrow mut Checker, attribute: u32) -> Result<u32, AllocError> 
                     effect = sleepEffect();
                 } else if (sameText(text, "alloc")) {
                     effect = allocEffect();
+                } else if (sameText(text, "suspend")) {
+                    effect = suspendEffect();
                 }
             }
             _ => {}
@@ -137,7 +139,7 @@ fn effectList(c: borrow mut Checker, attribute: u32) -> Result<u32, AllocError> 
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "'@effects' takes the effects as names, 'sleep' and 'alloc', or none: '@effects(sleep)', '@effects()' (type-system.md §32.2)",
+            "'@effects' takes the effects as names, 'sleep', 'alloc' and 'suspend', or none: '@effects(sleep)', '@effects()' (type-system.md §32.2)",
         )?;
         c.error(invalidAttribute(), a.start, a.end, message)?;
     }
@@ -301,6 +303,13 @@ fn appendEffectNames(out: borrow mut Vector<u8>, effects: u32) -> Result<void, A
             appendText(out, ", ")?;
         }
         appendText(out, "alloc")?;
+        first = false;
+    }
+    if ((effects & suspendEffect()) != 0) {
+        if (!first) {
+            appendText(out, ", ")?;
+        }
+        appendText(out, "suspend")?;
     }
     return Ok();
 }

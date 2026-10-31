@@ -101,6 +101,8 @@ enum HirExpr {
     Closure(u32, Range), // function, captures (Hir.captures)
     FloatConst(f64),
     FloatToInt(u32, FloatToIntMode),
+    Await(u32),   // `await` of a task: a Call of an async fn (type-system.md §40.2)
+    RunTask(u32), // `Async.run(task)`: a Call of an async fn, run to completion (§40.4)
     Error,
 }
 

@@ -37,7 +37,8 @@ fn builtinSliceMut() -> u32 => 23;
 fn builtinCpu() -> u32 => 25;
 fn builtinTarget() -> u32 => 26;
 fn builtinThread() -> u32 => 27;
-fn builtinCount() -> u32 => 28;
+fn builtinAsync() -> u32 => 28; // type-system.md §40.4
+fn builtinCount() -> u32 => 29;
 
 // BuiltinFunction members are in src/hir/builtins.nova (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).
@@ -87,6 +88,8 @@ struct Checker {
     scopes: Vector<ScopeEntry>;
     scopeStarts: Vector<usize>;
     loopDepth: u32;
+    taskStart: u32; // the span of the one call that may be a task here (`await` or `Async.run`'s operand), or none
+    taskEnd: u32;
     deferDepth: u32;
     copyKnown: bool;
     regions: Vector<u32>; // the region names in scope (the reference's _regions)

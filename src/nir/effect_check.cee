@@ -50,6 +50,8 @@ struct InferredEffects {
     sleep: EffectOp;
     hasAlloc: bool;
     alloc: EffectOp;
+    hasSuspend: bool;
+    suspend: EffectOp;
 }
 
 struct DropEffect {
@@ -189,7 +191,7 @@ fn dropEffects(c: borrow Checker, e: borrow mut Effects, typ: u32) -> Result<Dro
         }
     }
     for (part in parts.view()) {
-        if ((part.effects & (allEffects() ^ effects)) != 0 && via == none()) {
+        if ((part.effects & (maskEffects() ^ effects)) != 0 && via == none()) {
             via = part.via;
         }
         effects = effects | part.effects;
@@ -623,7 +625,7 @@ fn builtinOperation(
             var placed = Vector<u32>.create();
             placedMethods(c, c.types.info(box).pointee, mut placed)?;
             for (method in placed.view()) {
-                let extra = effectsOf(c, e, method) & (allEffects() ^ op.effects);
+                let extra = effectsOf(c, e, method) & (maskEffects() ^ op.effects);
                 if (extra != 0) {
                     let effects = op.effects;
                     op = effectOp(effects, opBoxPlaced(), c.types.info(box).pointee, method, method);
@@ -677,6 +679,9 @@ fn builtinOperation(
     if (function == bfThreadBoth()) {
         return Ok(textOp(sleep | alloc, 5));
     }
+    if (function == bfAsyncPark()) {
+        return Ok(textOp(suspendEffect(), 9));
+    }
     if (function == bfCallPointer()) {
         return Ok(textOp(sleep | alloc, 6));
     }
@@ -729,7 +734,23 @@ fn statementOperations(
         return Ok();
     }
     match (n.rvalues[rvalue as usize]) {
-        NirRvalue.Call(callee, arguments) => { callOperations(c, n, e, callee, arguments, out)?; }
+        NirRvalue.Call(callee, arguments) => {
+            let role = n.rvalueTasks[rvalue as usize];
+            if (role == taskRun()) {
+                // `Async.run` blocks this thread until the task returns; the task's suspensions stay inside it (§40.4).
+                let first = out.length;
+                callOperations(c, n, e, callee, arguments, out)?;
+                for (k in first..out.length) {
+                    out[k].effects = out[k].effects & (maskEffects() ^ suspendEffect());
+                }
+                out.push(textOp(sleepEffect() | allocEffect(), 8))?;
+            } else {
+                if (role == taskAwait()) {
+                    out.push(textOp(suspendEffect(), 7))?;
+                }
+                callOperations(c, n, e, callee, arguments, out)?;
+            }
+        }
         NirRvalue.Builtin(function, arguments) => {
             let op = builtinOperation(c, n, e, rvalue, function, arguments)?;
             if (op.effects != 0) {
@@ -840,6 +861,9 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
             3 => "starts a thread (type-system.md §38.2)",
             4 => "waits for a thread (type-system.md §38.2)",
             5 => "runs two closures on two threads (type-system.md §38.6)",
+            7 => "awaits a task (type-system.md §40.2)",
+            8 => "runs a task until it returns (type-system.md §40.4)",
+            9 => "parks the task until the runtime wakes it (type-system.md §40.4)",
             _ => "calls through a C function pointer, which may do anything (type-system.md §32.1)",
         };
         return appendText(out, text);
@@ -889,7 +913,10 @@ fn explainOp(
             break;
         }
         let inferred = borrow e.inferred[next as usize];
-        let has = if (effect == sleepEffect()) inferred.hasSleep else inferred.hasAlloc;
+        let has =
+            if (effect ==
+                sleepEffect()) inferred.hasSleep else if (effect ==
+                allocEffect()) inferred.hasAlloc else inferred.hasSuspend;
         if (!has) {
             break;
         }
@@ -897,7 +924,9 @@ fn explainOp(
             appendText(out, ", …")?;
             break;
         }
-        let step = if (effect == sleepEffect()) inferred.sleep else inferred.alloc;
+        let step =
+            if (effect ==
+                sleepEffect()) inferred.sleep else if (effect == allocEffect()) inferred.alloc else inferred.suspend;
         appendText(out, ", which ")?;
         appendOpDescription(c, step, out)?;
         next = step.next;
@@ -928,7 +957,7 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                     statementOperations(c, n, e, s, mut ops)?;
                     for (op in ops.view()) {
                         let inferred = borrow mut e.inferred[source as usize];
-                        if ((op.effects & (allEffects() ^ inferred.effects)) == 0) {
+                        if ((op.effects & (maskEffects() ^ inferred.effects)) == 0) {
                             continue;
                         }
                         changed = true;
@@ -939,6 +968,10 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                         if ((op.effects & allocEffect()) != 0 && !inferred.hasAlloc) {
                             inferred.hasAlloc = true;
                             inferred.alloc = op;
+                        }
+                        if ((op.effects & suspendEffect()) != 0 && !inferred.hasSuspend) {
+                            inferred.hasSuspend = true;
+                            inferred.suspend = op;
                         }
                         inferred.effects = inferred.effects | op.effects;
                     }
@@ -1162,14 +1195,20 @@ fn reportEffect(
     if (forbidden == 0) {
         return Ok();
     }
-    let effect = if ((forbidden & sleepEffect()) != 0) sleepEffect() else allocEffect();
+    let effect =
+        if ((forbidden &
+            sleepEffect()) != 0) sleepEffect() else if ((forbidden &
+            allocEffect()) != 0) allocEffect() else suspendEffect();
     let source = n.functions[function as usize].source;
     var message = Vector<u8>.create();
     if (context == contextOfFunction()) {
         appendDescribedFunction(c, source, mut message)?;
+        let declaredContext = c.hir.functions[source as usize].context;
         appendText(
             mut message,
-            if (c.hir.functions[source as usize].context == 2) " is @context(irq)" else " is @context(atomic)",
+            if (declaredContext ==
+                2) " is @context(irq)" else if (declaredContext ==
+                1) " is @context(atomic)" else " is an async fn, which must not block its thread (type-system.md §40.1)",
         )?;
     } else if (context == contextLive()) {
         appendText(mut message, "a ")?;
@@ -1197,7 +1236,9 @@ fn reportEffect(
     }
     appendText(
         mut message,
-        if (effect == sleepEffect()) ", but this may sleep: it " else ", but this may allocate: it ",
+        if (effect ==
+            sleepEffect()) ", but this may sleep: it " else if (effect ==
+            allocEffect()) ", but this may allocate: it " else ", but this may suspend: it ",
     )?;
     explainOp(c, e, op, effect, mut message)?;
     let file = c.hir.functions[source as usize].file;
@@ -1221,12 +1262,17 @@ fn checkFunctionEffects(
     originsOf(c, n, e, function)?;
     let source = n.functions[function as usize].source;
     let context = c.hir.functions[source as usize].context;
-    let contextForbids = if (context == 1) sleepEffect() else if (context == 2) allEffects() else 0;
+    // atomic forbids sleep and suspend, irq every effect (§32.3); an async fn's body must not block (§40.1).
+    var contextForbids =
+        if (context == 1) sleepEffect() | suspendEffect() else if (context == 2) maskEffects() else 0;
+    if (isAsyncFunction(c, source)) {
+        contextForbids = contextForbids | sleepEffect();
+    }
     let declared = c.hir.functions[source as usize].declaredEffects;
     let boundForbids = if (isExternFunction(
         c,
         source,
-    ) || declared == none()) 0 else allEffects() & (allEffects() ^ declared);
+    ) || declared == none()) 0 else maskEffects() & (maskEffects() ^ declared);
     let localCount = n.functions[function as usize].locals.length;
     var holders = Vector<bool>.create();
     var anyHolder = false;
@@ -1258,7 +1304,7 @@ fn checkFunctionEffects(
                     }
                 }
             }
-            let guarded = if (firstLive != none()) sleepEffect() else 0;
+            let guarded = if (firstLive != none()) sleepEffect() | suspendEffect() else 0;
             let liveType =
                 if (firstLive != none()) n.functions[function as usize].locals[firstLive as usize].typ else none();
             var ops = Vector<EffectOp>.create();
@@ -1282,7 +1328,7 @@ fn checkFunctionEffects(
                     e,
                     function,
                     s,
-                    op.effects & guarded & (allEffects() ^ contextForbids),
+                    op.effects & guarded & (maskEffects() ^ contextForbids),
                     op,
                     contextLive(),
                     liveType,
@@ -1304,7 +1350,7 @@ fn checkFunctionEffects(
                         if ((c.types.is(typ, TypeKind.Function) || c.types.is(typ, TypeKind.Closure)) &&
                             !c.hir.functions[target as usize].isClosure) {
                             let op = effectOp(0, opNames(), none(), target, target);
-                            let forbidden = effectsAsValue(c, e, target) & (allEffects() ^ c.types.info(typ).effects);
+                            let forbidden = effectsAsValue(c, e, target) & (maskEffects() ^ c.types.info(typ).effects);
                             reportEffect(c, n, e, function, s, forbidden, op, contextValue(), typ, target)?;
                         }
                     }
@@ -1352,7 +1398,9 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
                 hasSleep: false,
                 sleep: blankOp(),
                 hasAlloc: false,
+                hasSuspend: false,
                 alloc: blankOp(),
+                suspend: blankOp(),
             },
         )?;
     }

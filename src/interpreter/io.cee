@@ -818,6 +818,18 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_host_dir_next")) {
         return "PPP:l";
     }
+    if (sameText(name, "ceesafe_async_now")) {
+        return ":s";
+    }
+    if (sameText(name, "ceesafe_async_wait_until")) {
+        return "s:-";
+    }
+    if (sameText(name, "ceesafe_async_wait_writable")) {
+        return "i:-";
+    }
+    if (sameText(name, "ceesafe_async_write")) {
+        return "iPs:l";
+    }
     if (sameText(name, "ceesafe_host_dir_close")) {
         return "P:-";
     }
@@ -1070,6 +1082,9 @@ fn callC(
     if (sameText(n0, "ceesafe_io_kind")) {
         let error = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
         return Ok(valueOf(ioKindOf(error as i64), 4));
+    }
+    if (n0.length > 14 && sameText(n0[0..14], "ceesafe_async_")) {
+        return asyncService(it, n0, arguments);
     }
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_host_")) {
         let result = hostService(it, n0, arguments)?;
@@ -1411,4 +1426,55 @@ fn mutexLock(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, add
     }
     it.runtime.mutexOwners[index] = it.runtime.current;
     return Ok();
+}
+
+/// runtime/hosted/ceesafe_rt_async.c on the interpreter's virtual clock (type-system.md §40.8): time passes only when a
+/// task parks for a deadline, and output is always writable.
+fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_async_now")) {
+        return Ok(valueOf(it.asyncClock, 8));
+    }
+    if (sameText(name, "ceesafe_async_wait_until")) {
+        let deadline = arguments[0].bits(0, 8)?;
+        if (deadline < it.asyncDeadline) {
+            it.asyncDeadline = deadline;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_wait_writable")) {
+        it.asyncWritable = true;
+        return Ok(null);
+    }
+    // ceesafe_async_write: at most PIPE_BUF (512 here, POSIX's minimum) bytes, in order with Console's output.
+    let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+    let start = arguments[1].bits(0, 8)?;
+    let length = arguments[2].bits(0, 8)?;
+    let step = if (length < 512) length else 512;
+    var bytes = Vector<u8>.create();
+    for (k in 0..step) {
+        bytes.push(truncate<u8>(it.memory.loadBits(start + k, 1)?))!;
+    }
+    if (fd == 2) {
+        writeError(it, bytes.view());
+    } else {
+        writeOutput(it, bytes.view());
+    }
+    return Ok(valueOf(step, 8));
+}
+
+/// `Async.park()`: the one task waits for what it registered; on the virtual clock that happens at once (§40.8).
+fn asyncPark(it: borrow mut Interp) -> Result<Value?, Stop> {
+    if (it.asyncDeadline != 0xFFFFFFFFFFFFFFFF) {
+        if (it.asyncDeadline > it.asyncClock) {
+            it.asyncClock = it.asyncDeadline;
+        }
+        it.asyncDeadline = 0xFFFFFFFFFFFFFFFF;
+        it.asyncWritable = false;
+        return Ok(null);
+    }
+    if (it.asyncWritable) {
+        it.asyncWritable = false;
+        return Ok(null);
+    }
+    return Err(fault("a task parked with nothing to wake it"));
 }

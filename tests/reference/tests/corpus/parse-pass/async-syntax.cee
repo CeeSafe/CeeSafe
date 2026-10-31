@@ -1,0 +1,18 @@
+// `async fn`, `unsafe async fn` and prefix `await` (grammar.md §2, §2.1; ADR 0031 §3.1): the first `?` or `!` ends
+// `await`'s operand, and what follows applies to the awaited value.
+
+async fn one() -> i32 => 1;
+
+unsafe async fn raw() -> i32 => 2;
+
+async fn parse(text: StringView) -> Result<Pair, Error> {
+    let a = await one();
+    let b = await table.lookup(text)?.value;
+    let c = await fetch(text)!;
+    await log(a + b)?;
+    return Ok(Pair { first: a, second: await one() + c });
+}
+
+struct Worker {
+    public async fn run(borrow this) -> i32 => await this.step(1)?;
+}

@@ -37,6 +37,7 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
         }
         // Context effects need the drops explicit (type-system.md §32).
         checkEffects(c, n)?;
+        checkCoroutines(c, n)?; // recursion through `await` (type-system.md §40.1)
     }
     return Ok(n);
 }

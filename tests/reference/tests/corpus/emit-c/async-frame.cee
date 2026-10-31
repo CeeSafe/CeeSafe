@@ -1,0 +1,16 @@
+// An async fn's C (c-backend.md §3a): its frame struct, initialiser, resume function and thunk; an awaited call's
+// child frame in a field; `Async.run`'s root frame in the caller.
+
+async fn add(a: i32, b: i32) -> i32 => a + b;
+
+async fn twice(x: i32) -> i32 {
+    var total = 0;
+    for (i in 0..2) {
+        total += await add(x, i);
+    }
+    return total;
+}
+
+fn main() {
+    Console.writeLine(Async.run(twice(20)));
+}

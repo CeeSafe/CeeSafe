@@ -33,10 +33,19 @@ async fn handler() -> u32 => await tick(); // error[N0295]
 @effects()
 async fn bounded() -> u32 => await tick(); // error[N0295]
 
+async fn channelWait(ch: borrow Channel<u32>) -> u32 {
+    match (ch.recv()) { // error[N0295]
+        Some(v) => { return v; }
+        null => { return 0; }
+    }
+}
+
 fn main() {
     Console.writeLine(Async.run(blocking()));
     Console.writeLine(Async.run(guarded()));
     Console.writeLine(Async.run(released()));
     Console.writeLine(Async.run(handler()));
     Console.writeLine(Async.run(bounded()));
+    let ch = Channel<u32>.create(1)!;
+    Console.writeLine(Async.run(channelWait(borrow ch)));
 }

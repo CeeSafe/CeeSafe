@@ -1068,6 +1068,27 @@ typedef struct ceesafe_blocking {
 void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg);
 bool ceesafe_async_blocking_ready(ceesafe_blocking *b);
 void ceesafe_async_blocking_finish(ceesafe_blocking *b);
+/* Channels (ADR 0032; lib/std/channel.cee): a reference-counted bounded ring of `capacity` values of `size` bytes, under
+ * a spin lock whose critical sections are constant steps. lib/std moves each value in or out between begin and end
+ * (begin returns the slot and keeps the lock; status 0 a slot, 1 full or empty, 2 closed), and drops values after end.
+ * Every change advances an epoch: a blocked thread waits on a condition variable for the epoch to move (wait has
+ * `sleep`); a task registers a wait node in its frame (park; false if it should retry at once) and is woken by the
+ * next change, from any thread, then unregisters it (unpark). */
+typedef struct ceesafe_chan_node {
+    void *words[6];
+} ceesafe_chan_node;
+void *ceesafe_chan_create(uint64_t capacity, uint64_t size, uint64_t align);
+void ceesafe_chan_retain(void *c);
+bool ceesafe_chan_release(void *c);
+void ceesafe_chan_free(void *c);
+void *ceesafe_chan_begin_send(void *c, uint32_t *status, uint64_t *epoch);
+void ceesafe_chan_end_send(void *c);
+void *ceesafe_chan_begin_recv(void *c, uint32_t *status, uint64_t *epoch);
+void ceesafe_chan_end_recv(void *c);
+void ceesafe_chan_close(void *c);
+void ceesafe_chan_wait(void *c, uint64_t epoch);
+bool ceesafe_chan_park(void *c, void *node, uint64_t epoch);
+void ceesafe_chan_unpark(void *c, void *node);
 /* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is
  * up. Async.shield brackets its body with enter and leave; inside, cancellation is not reported. */
 uint32_t ceesafe_async_status(void);

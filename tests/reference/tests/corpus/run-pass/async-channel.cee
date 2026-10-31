@@ -1,0 +1,100 @@
+// Channels (ADR 0032): task to task on one executor through a channel smaller than what passes through it, thread
+// to thread with the blocking calls, and a task on one thread to a task on another.
+
+// Task to task on one executor: a producer fills a small channel, so it waits for the consumer.
+async fn pipeline(ch: borrow Channel<u64>) -> Result<u64, AsyncError> {
+    var total: u64 = 0;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            for (i in 1..11u64) {
+                match (await ch.sendAsync(i)) {
+                    Ok() => {}
+                    Err(_) => { return Err(AsyncError.Cancelled); }
+                }
+            }
+            ch.close();
+            return Ok();
+        });
+        s.spawn(async () => {
+            loop {
+                match (await ch.recvAsync()?) {
+                    Some(v) => { total += v; }
+                    null => { return Ok(); }
+                }
+            }
+        });
+    })?;
+    return Ok(total);
+}
+
+// A task waiting on a channel that a task on another thread fills.
+async fn receiveAll(ch: borrow Channel<u64>) -> Result<u64, AsyncError> {
+    var total: u64 = 0;
+    loop {
+        match (await ch.recvAsync()?) {
+            Some(v) => { total += v; }
+            null => { return Ok(total); }
+        }
+    }
+}
+
+async fn sendAll(ch: borrow Channel<u64>, count: u64) -> Result<void, AsyncError> {
+    for (i in 0..count) {
+        match (await ch.sendAsync(i)) {
+            Ok() => {}
+            Err(_) => { return Err(AsyncError.Cancelled); }
+        }
+    }
+    ch.close();
+    return Ok();
+}
+
+fn main() {
+    let small = Channel<u64>.create(2)!;
+    match (Async.run(pipeline(borrow small))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("pipeline failed"); }
+    }
+
+    // Thread to thread, blocking.
+    let plain = Channel<u64>.create(100)!; // the interpreter runs one thread at a time (ADR 0032 §3.7)
+    let sender = plain.clone();
+    let worker = Thread.spawn(move () => {
+        for (i in 0..100u64) {
+            match (sender.send(i)) {
+                Ok() => {}
+                Err(_) => {}
+            }
+        }
+        sender.close();
+        return 0u64;
+    })!;
+    var sum: u64 = 0;
+    loop {
+        match (plain.recv()) {
+            Some(v) => { sum += v; }
+            null => { break; }
+        }
+    }
+    worker.join();
+    Console.writeLine(sum);
+
+    // Task on this thread, task on another.
+    let across = Channel<u64>.create(50)!;
+    let remote = across.clone();
+    let other = Thread.spawn(move () => {
+        match (Async.run(sendAll(borrow remote, 50))) {
+            Ok() => {}
+            Err(_) => {}
+        }
+        return 0u64;
+    })!;
+    match (Async.run(receiveAll(borrow across))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("across failed"); }
+    }
+    other.join();
+}
+// expect-stdout: 55
+// expect-stdout: 4950
+// expect-stdout: 1225

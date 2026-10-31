@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Channels (ADR 0032): a bounded buffer of values between threads and between tasks, over the hosted runtime's
+// ceesafe_chan_* (runtime/hosted/ceesafe_rt_async.c). Values move in and out under the channel's spin lock and are
+// dropped after it is released, so no user code runs under it. Its unsafe code keeps ownership.md T1-T3: only Send
+// values cross, and the buffer is reached only under the lock.
+
+extern "C" {
+    @effects(alloc)
+    fn ceesafe_chan_create(capacity: u64, size: u64, align: u64) -> *mut void;
+    @effects()
+    fn ceesafe_chan_retain(channel: *mut void);
+    @effects()
+    fn ceesafe_chan_release(channel: *mut void) -> bool;
+    @effects()
+    fn ceesafe_chan_free(channel: *mut void);
+    @effects()
+    fn ceesafe_chan_begin_send(channel: *mut void, status: *mut u32, epoch: *mut u64) -> *mut void;
+    @effects()
+    fn ceesafe_chan_end_send(channel: *mut void);
+    @effects()
+    fn ceesafe_chan_begin_recv(channel: *mut void, status: *mut u32, epoch: *mut u64) -> *mut void;
+    @effects()
+    fn ceesafe_chan_end_recv(channel: *mut void);
+    @effects()
+    fn ceesafe_chan_close(channel: *mut void);
+    @effects(sleep)
+    fn ceesafe_chan_wait(channel: *mut void, epoch: u64);
+    @effects()
+    fn ceesafe_chan_park(channel: *mut void, node: *mut void, epoch: u64) -> bool;
+    @effects()
+    fn ceesafe_chan_unpark(channel: *mut void, node: *mut void);
+}
+
+/// A task's place in a channel's queue of waiters: in its frame, which never moves (type-system.md §40.6).
+struct ChannelWait {
+    words: [u64; 6];
+}
+
+/// Why `sendAsync` gave a value back: the channel is closed, or the task was cancelled (ADR 0032 §3.3).
+public enum SendError<T> {
+    Closed(T),
+    Cancelled(T),
+}
+
+/// A bounded channel (ADR 0032): every handle may send and receive; `clone` makes another handle to the same channel,
+/// and the last handle's drop drops the values still in it.
+@threadSafe
+@noncopy
+public struct Channel<T: Send> {
+    private raw: *mut void;
+
+    /// A channel of `capacity` values, its buffer allocated once. A capacity of 0 panics: rendezvous channels are not
+    /// in v1 (ADR 0032 §5).
+    /// Safety: the runtime's channel is reference counted; this handle holds one count until its drop.
+    public fn create(capacity: usize) -> Result<Channel<T>, AllocError> {
+        if (capacity == 0) {
+            let refused: usize? = null;
+            let never = refused!; // panics: a channel needs a capacity of at least 1 (ADR 0032 §3.1)
+        }
+        let layout = layoutOf<T>();
+        let raw = unsafe { ceesafe_chan_create(capacity as u64, layout.size as u64, layout.align as u64) };
+        if (raw.isNull()) {
+            return Err(AllocError.OutOfMemory);
+        }
+        return Ok(Channel { raw: raw });
+    }
+
+    /// Another handle to the same channel.
+    /// Safety: it takes a count of the runtime's channel, given back by its drop.
+    public fn clone(borrow this) -> Channel<T> {
+        unsafe { ceesafe_chan_retain(this.raw); }
+        return Channel { raw: this.raw };
+    }
+
+    /// Every later send fails; receivers take what is buffered, then see the end.
+    /// Safety: the runtime's channel is alive while this handle is.
+    public fn close(borrow this) {
+        unsafe { ceesafe_chan_close(this.raw); }
+    }
+
+    /// Sends `value`, waiting while the channel is full; `Err(value)` if it is closed.
+    /// Safety: a slot from begin_send is the channel's, under its lock until end_send, and holds no value.
+    public fn send(borrow this, value: T) -> Result<void, T> {
+        loop {
+            var status: u32 = 0;
+            var epoch: u64 = 0;
+            let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            if (status == 0) {
+                unsafe {
+                    (slot as *mut T).write(value);
+                    ceesafe_chan_end_send(this.raw);
+                }
+                return Ok();
+            }
+            if (status == 2) {
+                return Err(value);
+            }
+            unsafe { ceesafe_chan_wait(this.raw, epoch); }
+        }
+    }
+
+    /// The next value, waiting while the channel is empty; `null` once it is closed and empty.
+    /// Safety: a slot from begin_recv is the channel's, under its lock until end_recv, and holds a value.
+    public fn recv(borrow this) -> T? {
+        loop {
+            var status: u32 = 0;
+            var epoch: u64 = 0;
+            let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            if (status == 0) {
+                let value = unsafe { (slot as *mut T).read() };
+                unsafe { ceesafe_chan_end_recv(this.raw); }
+                return Some(value);
+            }
+            if (status == 2) {
+                return null;
+            }
+            unsafe { ceesafe_chan_wait(this.raw, epoch); }
+        }
+    }
+
+    /// Sends `value` from a task, parking it while the channel is full: other tasks of its thread run meanwhile. A
+    /// closed channel or a cancelled task gives the value back.
+    /// Safety: as `send`; the wait node is in this task's frame and leaves the queue before the task returns.
+    public async fn sendAsync(borrow this, value: T) -> Result<void, SendError<T>> {
+        var node = ChannelWait { words: [0u64; 6] };
+        loop {
+            if (AsyncControl<u8>.isCancelled()) {
+                return Err(SendError.Cancelled(value));
+            }
+            var status: u32 = 0;
+            var epoch: u64 = 0;
+            let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            if (status == 0) {
+                unsafe {
+                    (slot as *mut T).write(value);
+                    ceesafe_chan_end_send(this.raw);
+                }
+                return Ok();
+            }
+            if (status == 2) {
+                return Err(SendError.Closed(value));
+            }
+            if (unsafe { ceesafe_chan_park(this.raw, borrow mut node as *mut ChannelWait as *mut void, epoch) }) {
+                await Async.park();
+                unsafe { ceesafe_chan_unpark(this.raw, borrow mut node as *mut ChannelWait as *mut void); }
+            }
+        }
+    }
+
+    /// The next value for a task, parking it while the channel is empty; `null` once it is closed and empty;
+    /// `Err(AsyncError.Cancelled)` only while it has taken nothing, so no value is lost.
+    /// Safety: as `recv`; the wait node is in this task's frame and leaves the queue before the task returns.
+    public async fn recvAsync(borrow this) -> Result<T?, AsyncError> {
+        var node = ChannelWait { words: [0u64; 6] };
+        loop {
+            if (AsyncControl<u8>.isCancelled()) {
+                return Err(AsyncError.Cancelled);
+            }
+            var status: u32 = 0;
+            var epoch: u64 = 0;
+            let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+            if (status == 0) {
+                let value = unsafe { (slot as *mut T).read() };
+                unsafe { ceesafe_chan_end_recv(this.raw); }
+                return Ok(Some(value));
+            }
+            if (status == 2) {
+                return Ok(null);
+            }
+            if (unsafe { ceesafe_chan_park(this.raw, borrow mut node as *mut ChannelWait as *mut void, epoch) }) {
+                await Async.park();
+                unsafe { ceesafe_chan_unpark(this.raw, borrow mut node as *mut ChannelWait as *mut void); }
+            }
+        }
+    }
+
+    /// The last handle drops the values still buffered, in order, then frees the channel.
+    /// Safety: after the last release no other handle exists, so the buffer is this drop's alone.
+    drop {
+        if (unsafe { ceesafe_chan_release(this.raw) }) {
+            loop {
+                var status: u32 = 0;
+                var epoch: u64 = 0;
+                let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+                if (status != 0) {
+                    break;
+                }
+                let value = unsafe { (slot as *mut T).read() };
+                unsafe { ceesafe_chan_end_recv(this.raw); }
+                let dropped = value;
+            }
+            unsafe { ceesafe_chan_free(this.raw); }
+        }
+    }
+}

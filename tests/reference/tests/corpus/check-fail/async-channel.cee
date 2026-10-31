@@ -1,0 +1,6 @@
+// Channels (ADR 0032): only Send values cross (N0334).
+
+fn main() {
+    let refs = Channel<*mut u8>.create(1); // error[N0334]
+    let fine = Channel<u32>.create(1);
+}

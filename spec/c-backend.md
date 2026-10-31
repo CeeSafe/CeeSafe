@@ -571,6 +571,8 @@ Heap (M3b):
     then writes a byte to its executor's wake pipe (opened on first need); `poll` watches the pipe while a task waits
     to be woken, and the executor readies every woken task. A task woken between its check and its park is readied at
     once. Programs with async link the thread runtime.
+  - Channels (ADR 0032 §5): `ceesafe_chan_*`, element-blind, under a spin lock; a task's wait node lives in its frame,
+    and every change wakes the queued tasks through their executors.
   - Later: kqueue and epoll beside `poll()` (A2d).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the

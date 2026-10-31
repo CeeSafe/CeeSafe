@@ -19,6 +19,8 @@
 #include <windows.h>
 #else
 #include <poll.h>
+#include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 #endif
 
@@ -40,6 +42,7 @@ typedef struct cee_task {
     uint64_t shield_deadline;
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
+    bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     uint32_t woken;        /* set by any thread (__atomic); the executor readies the task */
 } cee_task;
 
@@ -61,10 +64,7 @@ static _Thread_local cee_executor cee_exec;
 
 /* The cancellation sweep (testing.md §1): CEESAFE_CANCEL_AT=k cancels the running Async.run's root task at the
  * program's k-th suspension; CEESAFE_CANCEL_REPORT=1 prints the count after each Async.run. */
-static uint64_t cee_suspensions;
-static uint64_t cee_cancel_at;
-static bool cee_cancel_report;
-static bool cee_cancel_read;
+static uint64_t cee_suspensions; /* every thread's executor counts here (__atomic) */
 
 /* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
 static bool cee_cancelled(const cee_task *t) {
@@ -136,6 +136,7 @@ static void cee_unpark(cee_task *t) {
     t->on_scope = false;
     if (t->on_wake) {
         t->on_wake = false;
+        t->channel_wait = false;
         cee_exec.wake_count -= 1u;
     }
     cee_ready(t);
@@ -229,6 +230,7 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->shield_deadline = UINT64_MAX;
     t->embedded = false;
     t->on_wake = false;
+    t->channel_wait = false;
     t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
@@ -251,6 +253,7 @@ void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *fr
     t->shield_deadline = UINT64_MAX;
     t->embedded = true;
     t->on_wake = false;
+    t->channel_wait = false;
     t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
@@ -297,7 +300,7 @@ static void cee_wake_waiters(void) {
     cee_task *t = cee_exec.parked;
     while (t != NULL) {
         cee_task *next = t->next;
-        if (!t->on_scope && !t->on_wake) { /* a worker's or channel's wait is not cancelled: it is woken */
+        if (!t->on_scope && (!t->on_wake || t->channel_wait)) { /* a worker's wait is not cancelled */
             cee_unpark(t);
         }
         t = next;
@@ -474,12 +477,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
     cee_exec.wake_pipe[0] = -1;
     cee_exec.wake_pipe[1] = -1;
     cee_exec.wake_count = 0u;
-    if (!cee_cancel_read) {
-        cee_cancel_read = true;
-        cee_cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
-        cee_cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
-    }
-    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false, false, 0u};
+    uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
+    bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
+    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false, false, false, 0u};
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -494,6 +494,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
             if (__atomic_exchange_n(&t->woken, 0u, __ATOMIC_SEQ_CST) != 0u) {
                 if (t->on_wake) {
                     t->on_wake = false;
+                    t->channel_wait = false;
                     cee_exec.wake_count -= 1u;
                 }
                 cee_ready(t); /* woken between its check and its park */
@@ -504,8 +505,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
             }
             t->next = cee_exec.parked;
             cee_exec.parked = t;
-            cee_suspensions += 1u;
-            if (cee_suspensions == cee_cancel_at) {
+            if (__atomic_add_fetch(&cee_suspensions, 1u, __ATOMIC_RELAXED) == cancel_at) {
                 root.cancelled = true; /* the sweep's cancellation (testing.md §1) */
                 cee_wake_waiters();
             }
@@ -535,10 +535,255 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         (void)close(cee_exec.wake_pipe[1]);
     }
 #endif
-    if (cee_cancel_report) {
+    if (cancel_report) {
         char line[64];
-        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n", (unsigned long long)cee_suspensions);
+        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n",
+                              (unsigned long long)__atomic_load_n(&cee_suspensions, __ATOMIC_RELAXED));
         ceesafe_platform_write_stderr((const uint8_t *)line, (size_t)length);
     }
     cee_exec = saved;
+}
+
+/* ---- Channels (ADR 0032) ---- */
+
+typedef struct cee_chan_node {
+    struct cee_chan_node *next;
+    struct cee_chan_node *prev;
+    cee_task *task;
+    cee_executor *executor;
+    uint64_t queued;
+} cee_chan_node;
+
+_Static_assert(sizeof(cee_chan_node) <= sizeof(ceesafe_chan_node), "ceesafe_chan_node holds a wait node");
+
+typedef struct cee_chan {
+    uint32_t lock;
+    uint64_t refs;     /* __atomic */
+    uint64_t epoch;    /* __atomic: advances on every send, receive and close */
+    uint64_t capacity;
+    uint64_t stride;
+    uint64_t head;
+    uint64_t count;
+    bool closed;
+    uint32_t blocked;  /* threads waiting in ceesafe_chan_wait (__atomic) */
+    cee_chan_node *waiters;
+#if defined(_WIN32)
+    SRWLOCK m;
+    CONDITION_VARIABLE cv;
+#else
+    pthread_mutex_t m;
+    pthread_cond_t cv;
+#endif
+    unsigned char *data;
+} cee_chan;
+
+static void cee_chan_lock(cee_chan *c) {
+    while (__atomic_exchange_n(&c->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
+        while (__atomic_load_n(&c->lock, __ATOMIC_RELAXED) != 0u) {
+#if !defined(_WIN32)
+            sched_yield();
+#endif
+        }
+    }
+}
+
+static void cee_chan_unlock(cee_chan *c) {
+    __atomic_store_n(&c->lock, 0u, __ATOMIC_RELEASE);
+}
+
+void *ceesafe_chan_create(uint64_t capacity, uint64_t size, uint64_t align) {
+    uint64_t stride = size == 0u ? 1u : (size + align - 1u) / align * align;
+    uint64_t head = (sizeof(cee_chan) + 15u) / 16u * 16u;
+    if (capacity > (UINT64_MAX - head) / stride) {
+        return NULL;
+    }
+    unsigned char *block = (unsigned char *)ceesafe_alloc((size_t)(head + capacity * stride), CEE_ALLOC_SYSTEM);
+    if (block == NULL) {
+        return NULL;
+    }
+    cee_chan *c = (cee_chan *)(void *)block;
+    c->lock = 0u;
+    c->refs = 1u;
+    c->epoch = 0u;
+    c->capacity = capacity;
+    c->stride = stride;
+    c->head = 0u;
+    c->count = 0u;
+    c->closed = false;
+    c->blocked = 0u;
+    c->waiters = NULL;
+#if defined(_WIN32)
+    InitializeSRWLock(&c->m);
+    InitializeConditionVariable(&c->cv);
+#else
+    (void)pthread_mutex_init(&c->m, NULL);
+    (void)pthread_cond_init(&c->cv, NULL);
+#endif
+    c->data = block + head;
+    return c;
+}
+
+void ceesafe_chan_retain(void *channel) {
+    (void)__atomic_add_fetch(&((cee_chan *)channel)->refs, 1u, __ATOMIC_RELAXED);
+}
+
+bool ceesafe_chan_release(void *channel) {
+    return __atomic_sub_fetch(&((cee_chan *)channel)->refs, 1u, __ATOMIC_ACQ_REL) == 0u;
+}
+
+void ceesafe_chan_free(void *channel) {
+    cee_chan *c = (cee_chan *)channel;
+#if !defined(_WIN32)
+    (void)pthread_cond_destroy(&c->cv);
+    (void)pthread_mutex_destroy(&c->m);
+#endif
+    ceesafe_free(c, CEE_ALLOC_SYSTEM);
+}
+
+/* After a change, under the lock: the epoch moves, every waiting task is woken (each retries), and blocked threads are
+ * signalled. Waking everyone keeps the waits simple; FIFO order among waiters is kept by their order of retrying. */
+static void cee_chan_changed(cee_chan *c) {
+    (void)__atomic_add_fetch(&c->epoch, 1u, __ATOMIC_SEQ_CST);
+    for (cee_chan_node *w = c->waiters; w != NULL; w = w->next) {
+        w->queued = 0u;
+        cee_wake_task(w->executor, w->task);
+    }
+    c->waiters = NULL;
+}
+
+static void cee_chan_signal(cee_chan *c) {
+    if (__atomic_load_n(&c->blocked, __ATOMIC_SEQ_CST) != 0u) {
+#if defined(_WIN32)
+        AcquireSRWLockExclusive(&c->m);
+        WakeAllConditionVariable(&c->cv);
+        ReleaseSRWLockExclusive(&c->m);
+#else
+        (void)pthread_mutex_lock(&c->m);
+        (void)pthread_cond_broadcast(&c->cv);
+        (void)pthread_mutex_unlock(&c->m);
+#endif
+    }
+}
+
+void *ceesafe_chan_begin_send(void *channel, uint32_t *status, uint64_t *epoch) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_lock(c);
+    *epoch = __atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST);
+    if (c->closed) {
+        *status = 2u;
+    } else if (c->count == c->capacity) {
+        *status = 1u;
+    } else {
+        *status = 0u;
+        return c->data + ((c->head + c->count) % c->capacity) * c->stride; /* the lock is kept until end */
+    }
+    cee_chan_unlock(c);
+    return NULL;
+}
+
+void ceesafe_chan_end_send(void *channel) {
+    cee_chan *c = (cee_chan *)channel;
+    c->count += 1u;
+    cee_chan_changed(c);
+    cee_chan_unlock(c);
+    cee_chan_signal(c);
+}
+
+void *ceesafe_chan_begin_recv(void *channel, uint32_t *status, uint64_t *epoch) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_lock(c);
+    *epoch = __atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST);
+    if (c->count > 0u) {
+        *status = 0u;
+        return c->data + c->head * c->stride; /* the lock is kept until end */
+    }
+    *status = c->closed ? 2u : 1u;
+    cee_chan_unlock(c);
+    return NULL;
+}
+
+void ceesafe_chan_end_recv(void *channel) {
+    cee_chan *c = (cee_chan *)channel;
+    c->head = (c->head + 1u) % c->capacity;
+    c->count -= 1u;
+    cee_chan_changed(c);
+    cee_chan_unlock(c);
+    cee_chan_signal(c);
+}
+
+void ceesafe_chan_close(void *channel) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_lock(c);
+    c->closed = true;
+    cee_chan_changed(c);
+    cee_chan_unlock(c);
+    cee_chan_signal(c);
+}
+
+/* A thread's wait (send and recv, `sleep`): until the epoch moves from the one its begin saw. */
+void ceesafe_chan_wait(void *channel, uint64_t epoch) {
+    cee_chan *c = (cee_chan *)channel;
+    (void)__atomic_add_fetch(&c->blocked, 1u, __ATOMIC_SEQ_CST);
+#if defined(_WIN32)
+    AcquireSRWLockExclusive(&c->m);
+    while (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) == epoch) {
+        (void)SleepConditionVariableSRW(&c->cv, &c->m, INFINITE, 0);
+    }
+    ReleaseSRWLockExclusive(&c->m);
+#else
+    (void)pthread_mutex_lock(&c->m);
+    while (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) == epoch) {
+        (void)pthread_cond_wait(&c->cv, &c->m);
+    }
+    (void)pthread_mutex_unlock(&c->m);
+#endif
+    (void)__atomic_sub_fetch(&c->blocked, 1u, __ATOMIC_SEQ_CST);
+}
+
+/* A task's wait: false if the epoch already moved (retry at once); else its node is queued and the task waits to be
+ * woken (or cancelled: a channel's wait is cancellable, type-system.md §40.7). */
+bool ceesafe_chan_park(void *channel, void *wait, uint64_t epoch) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_node *node = (cee_chan_node *)(void *)wait;
+    cee_open_wake_pipe();
+    cee_chan_lock(c);
+    if (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) != epoch) {
+        cee_chan_unlock(c);
+        return false;
+    }
+    node->task = cee_exec.current;
+    node->executor = &cee_exec;
+    node->queued = 1u;
+    node->prev = NULL;
+    node->next = c->waiters;
+    if (c->waiters != NULL) {
+        c->waiters->prev = node;
+    }
+    c->waiters = node;
+    cee_task *t = cee_exec.current;
+    if (!t->on_wake) {
+        t->on_wake = true;
+        t->channel_wait = true;
+        cee_exec.wake_count += 1u;
+    }
+    cee_chan_unlock(c);
+    return true;
+}
+
+void ceesafe_chan_unpark(void *channel, void *wait) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_node *node = (cee_chan_node *)(void *)wait;
+    cee_chan_lock(c);
+    if (node->queued != 0u) {
+        if (node->prev != NULL) {
+            node->prev->next = node->next;
+        } else {
+            c->waiters = node->next;
+        }
+        if (node->next != NULL) {
+            node->next->prev = node->prev;
+        }
+        node->queued = 0u;
+    }
+    cee_chan_unlock(c);
 }

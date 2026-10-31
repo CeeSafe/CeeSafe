@@ -73,7 +73,26 @@ that allocation failure is a value at the place it happens.
   - check-fail: a value that is not `Send` (N0334), and a blocking `recv` in async code (N0295);
   - the fault sweep reaches `create`, the only allocation.
 
-## 5. Questions for the owner
+## 5. Implementation (2026-10-31, L1 A2c)
+
+- **The runtime** (`runtime/hosted/ceesafe_rt_async.c`) keeps the channel element-blind: a reference count, a
+  ring of `capacity` slots of the element's stride, a spin lock, an epoch that every send, receive and close advances,
+  a list of task wait nodes, and a mutex and condition variable for blocked threads.
+  - `begin_send` and `begin_recv` return a slot under the lock, and `end_send` and `end_recv` release it.
+  - `wait` blocks a thread until the epoch moves; it is the one call with `sleep`.
+  - `park` queues a node in the task's frame unless the epoch has moved (then the task retries at once), and every
+    change wakes every queued task through its executor.
+- **The library** (`lib/std/channel.cee`) moves values with `p.write(v)` and `p.read()` between begin and end, and
+  drops them after. A cancelled task leaves the queue before it returns. A capacity of 0 panics through an unwrapped
+  `null`, until the language has a panic with a message.
+- **The interpreter** models it in its memory. A blocking wait is a thread wait, a task's wait parks it until the next
+  change, and when every task waits, a thread that has not started runs. Its threads run one at a time, so a thread
+  that blocks on a full channel cannot be resumed: values that cross threads in the interpreter need a channel large
+  enough for them (ADR 0016 §3.8).
+- **Tests:** run-pass/async-channel, check-fail/async-channel and check-fail/async-effects. The channel test passed 20
+  runs under ThreadSanitizer with small capacities, after one race it found in the cancellation sweep's counter.
+
+## 6. Questions for the owner
 
 1. One handle type rather than a sender/receiver pair? **Yes** (§3.1).
 2. Bounded only, with a capacity of at least 1? **Yes**: unbounded and rendezvous channels can come later.

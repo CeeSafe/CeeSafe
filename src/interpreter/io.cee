@@ -37,7 +37,21 @@ struct InterpRuntime {
     recordAddresses: Vector<u64>; // the runtime's thread records, by thread
     recordThreads: Vector<u32>;
     mutexAddresses: Vector<u64>;
-    mutexOwners: Vector<u32>; // the owning thread, or none
+    mutexOwners: Vector<u32>;        // the owning thread, or none
+    channels: Vector<InterpChannel>; // ADR 0032: a channel's handle is its index + 1
+}
+
+/// A channel in the interpreter (lib/std/channel.cee over runtime/hosted/ceesafe_rt_async.c's model).
+struct InterpChannel {
+    data: u64; // its buffer, from alloc
+    capacity: u64;
+    stride: u64;
+    head: u64;
+    count: u64;
+    closed: bool;
+    refs: u64;
+    epoch: u64;
+    waiters: Vector<u32>; // tasks parked on it (runTasks' global ids)
 }
 
 fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
@@ -54,6 +68,7 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     recordThreads: Vector<u32>.create(),
     mutexAddresses: Vector<u64>.create(),
     mutexOwners: Vector<u32>.create(),
+    channels: Vector<InterpChannel>.create(),
 };
 
 /// nova_rt_args: argv as static memory (never copied by the native runtime either).
@@ -821,6 +836,27 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_now")) {
         return ":s";
     }
+    if (sameText(name, "ceesafe_chan_create")) {
+        return "sss:P";
+    }
+    if (sameText(name, "ceesafe_chan_release")) {
+        return "P:b";
+    }
+    if (sameText(name, "ceesafe_chan_begin_send") || sameText(name, "ceesafe_chan_begin_recv")) {
+        return "PPP:P";
+    }
+    if (sameText(name, "ceesafe_chan_wait")) {
+        return "Ps:-";
+    }
+    if (sameText(name, "ceesafe_chan_park")) {
+        return "PPs:b";
+    }
+    if (sameText(name, "ceesafe_chan_unpark")) {
+        return "PP:-";
+    }
+    if (n0IsChannelHandleCall(name)) {
+        return "P:-";
+    }
     if (sameText(name, "ceesafe_async_wait_until")) {
         return "s:-";
     }
@@ -933,6 +969,9 @@ fn fitsShape(c: borrow Checker, t: u32, shape: u8) -> bool {
     let info = c.types.info(t);
     if (shape == 'P') {
         return c.types.is(t, TypeKind.RawPointer);
+    }
+    if (shape == 'b') {
+        return c.types.is(t, TypeKind.Bool);
     }
     let integer = c.types.is(t, TypeKind.Integer);
     return match (shape) {
@@ -1092,6 +1131,9 @@ fn callC(
         let error = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
         return Ok(valueOf(ioKindOf(error as i64), 4));
     }
+    if (n0.length > 13 && sameText(n0[0..13], "ceesafe_chan_")) {
+        return channelService(it, c, n, n0, arguments);
+    }
     if (n0.length > 14 && sameText(n0[0..14], "ceesafe_async_")) {
         return asyncService(it, n0, arguments);
     }
@@ -1144,6 +1186,11 @@ fn runnable(it: borrow Interp, k: usize) -> bool {
     }
     if (t.waitingKind == 2) {
         return mutexOwner(it, t.waitingOn) == none();
+    }
+    if (t.waitingKind == 3) {
+        // A channel's blocking wait: until its epoch moves (index << 40 | the low 40 bits of the epoch seen).
+        let channel = borrow it.runtime.channels[(t.waitingOn >> 40) as usize];
+        return (channel.epoch & 0xFFFFFFFFFF) != (t.waitingOn & 0xFFFFFFFFFF);
     }
     return true;
 }
@@ -1709,6 +1756,28 @@ fn runTasks(
     ready.push(0)!;
     it.asyncTasks.push(InterpTaskInfo { scope: none(), shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF })!;
     loop {
+        // Tasks a channel woke (§40.8); another run's stay for it.
+        var others = Vector<u32>.create();
+        loop {
+            match (it.asyncWoken.pop()) {
+                Some(id) => {
+                    if (id >= first && ((id - first) as usize) < tasks.length) {
+                        let j = (id - first) as usize;
+                        if (tasks[j].parked && !tasks[j].onScope) {
+                            tasks[j].parked = false;
+                            tasks[j].deadline = 0xFFFFFFFFFFFFFFFF;
+                            ready.push(truncate<u32>(j))!;
+                        }
+                    } else {
+                        others.push(id)!;
+                    }
+                }
+                null => { break; }
+            }
+        }
+        for (id in others.view()) {
+            it.asyncWoken.push(id)!;
+        }
         if (head == ready.length) {
             // No task can run: the earliest deadline comes (§40.8).
             var earliest: u64 = 0xFFFFFFFFFFFFFFFF;
@@ -1723,6 +1792,21 @@ fn runTasks(
                 }
             }
             if (earliest == 0xFFFFFFFFFFFFFFFF) {
+                // Another thread may fill the channel they wait on: one that has not started runs now, to its end
+                // (the interpreter runs one thread at a time, ADR 0016 §3.8).
+                var startable = none();
+                for (t in 0..it.runtime.threads.length) {
+                    if (startable == none() && !it.runtime.threads[t].started && !it.runtime.threads[t].finished) {
+                        startable = truncate<u32>(t);
+                    }
+                }
+                if (startable != none()) {
+                    let me = it.asyncCurrent;
+                    runThread(it, c, n, startable)?;
+                    it.asyncCurrent = me;
+                    continue;
+                }
+                // Nothing can wake a task: one thread, and its tasks all wait (on a channel no one fills, say).
                 endTasks(it, mut stacks);
                 it.asyncCurrent = savedCurrent;
                 it.asyncTasks.truncate(savedTasks);
@@ -1748,6 +1832,7 @@ fn runTasks(
         it.asyncDeadline = 0xFFFFFFFFFFFFFFFF;
         it.asyncWritable = false;
         it.asyncRetry = false;
+        it.asyncOnWake = false;
         let outcome = runActivations(it, c, n, mut stacks[k as usize]);
         // The children this task spawned start after it, in order.
         var spawned = Vector<InterpSpawn>.create();
@@ -1885,6 +1970,8 @@ fn runTasks(
                 } else if (it.asyncDeadline != 0xFFFFFFFFFFFFFFFF) {
                     tasks[k as usize].parked = true;
                     tasks[k as usize].deadline = it.asyncDeadline;
+                } else if (it.asyncOnWake) {
+                    tasks[k as usize].parked = true; // until a channel's change (§40.8)
                 } else if (it.asyncWritable) {
                     ready.push(k)!; // output is always writable here
                 } else {
@@ -1966,4 +2053,130 @@ fn asyncJoinResult(
         it.asyncScopes[scope as usize].active = false;
     }
     return Ok(value);
+}
+
+/// ceesafe_chan_retain, _free, _end_send, _end_recv and _close: a channel handle and nothing else.
+fn n0IsChannelHandleCall(name: Slice<u8>) -> bool =>
+    sameText(name, "ceesafe_chan_retain") || sameText(name, "ceesafe_chan_free") ||
+        sameText(name, "ceesafe_chan_end_send") || sameText(name, "ceesafe_chan_end_recv") ||
+        sameText(name, "ceesafe_chan_close");
+
+/// After a change: the epoch moves and every task parked on the channel runs again (§40.8).
+fn channelChanged(it: borrow mut Interp, k: usize) {
+    it.runtime.channels[k].epoch += 1;
+    loop {
+        match (it.runtime.channels[k].waiters.pop()) {
+            Some(task) => { it.asyncWoken.push(task)!; }
+            null => { break; }
+        }
+    }
+}
+
+/// runtime/hosted/ceesafe_rt_async.c's channels, one thread at a time: no lock; a blocking wait lets the other
+/// threads run (waitHere), and a task's wait parks it until the next change (ADR 0032 §3.7).
+fn channelService(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    name: Slice<u8>,
+    arguments: borrow Vector<Value>,
+) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_chan_create")) {
+        let capacity = arguments[0].bits(0, 8)?;
+        let size = arguments[1].bits(0, 8)?;
+        let align = arguments[2].bits(0, 8)?;
+        let stride = if (size == 0) 1 else (size + align - 1) / align * align;
+        let data = alloc(it, capacity * stride, 0)?;
+        if (data == 0) {
+            return Ok(valueOf(0, 8));
+        }
+        it.runtime.channels.push(
+            InterpChannel {
+                data: data,
+                capacity: capacity,
+                stride: stride,
+                head: 0,
+                count: 0,
+                closed: false,
+                refs: 1,
+                epoch: 0,
+                waiters: Vector<u32>.create(),
+            },
+        )!;
+        return Ok(valueOf(it.runtime.channels.length as u64, 8));
+    }
+    let k = (arguments[0].bits(0, 8)? - 1) as usize;
+    if (sameText(name, "ceesafe_chan_retain")) {
+        it.runtime.channels[k].refs += 1;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_release")) {
+        it.runtime.channels[k].refs -= 1;
+        return Ok(valueOf(if (it.runtime.channels[k].refs == 0) 1 else 0, 1));
+    }
+    if (sameText(name, "ceesafe_chan_free")) {
+        let data = it.runtime.channels[k].data;
+        freeMemory(it, data)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_begin_send") || sameText(name, "ceesafe_chan_begin_recv")) {
+        let sending = sameText(name, "ceesafe_chan_begin_send");
+        let channel = borrow it.runtime.channels[k];
+        var status: u64 = 0;
+        var slot: u64 = 0;
+        if (sending) {
+            if (channel.closed) {
+                status = 2;
+            } else if (channel.count == channel.capacity) {
+                status = 1;
+            } else {
+                slot = channel.data + ((channel.head + channel.count) % channel.capacity) * channel.stride;
+            }
+        } else if (channel.count > 0) {
+            slot = channel.data + channel.head * channel.stride;
+        } else {
+            status = if (channel.closed) 2 else 1;
+        }
+        let epoch = channel.epoch;
+        it.memory.storeBits(arguments[1].bits(0, 8)?, status, 4)?;
+        it.memory.storeBits(arguments[2].bits(0, 8)?, epoch, 8)?;
+        return Ok(valueOf(slot, 8));
+    }
+    if (sameText(name, "ceesafe_chan_end_send")) {
+        it.runtime.channels[k].count += 1;
+        channelChanged(it, k);
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_end_recv")) {
+        let capacity = it.runtime.channels[k].capacity;
+        it.runtime.channels[k].head = (it.runtime.channels[k].head + 1) % capacity;
+        it.runtime.channels[k].count -= 1;
+        channelChanged(it, k);
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_close")) {
+        it.runtime.channels[k].closed = true;
+        channelChanged(it, k);
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_wait")) {
+        let epoch = arguments[1].bits(0, 8)?;
+        if (it.runtime.channels[k].epoch == epoch) {
+            waitHere(it, c, n, 3, ((k as u64) << 40) | (epoch & 0xFFFFFFFFFF))?;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_chan_park")) {
+        let epoch = arguments[2].bits(0, 8)?;
+        if (it.runtime.channels[k].epoch != epoch) {
+            return Ok(valueOf(0, 1));
+        }
+        it.runtime.channels[k].waiters.push(it.asyncCurrent)!;
+        it.asyncOnWake = true;
+        return Ok(valueOf(1, 1));
+    }
+    // ceesafe_chan_unpark: the task leaves the queue if a change has not already taken it out.
+    let me = it.asyncCurrent;
+    it.runtime.channels[k].waiters.retain((task) => task != me);
+    return Ok(null);
 }

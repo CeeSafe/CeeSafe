@@ -36,6 +36,7 @@ typedef struct cee_task {
     struct cee_task *next; /* the ready queue, or the parked list */
     uint64_t deadline;     /* UINT64_MAX for none */
     int32_t fd;            /* -1 for none */
+    short fd_events;       /* POLLIN or POLLOUT */
     bool on_scope;         /* parked until its scope's last child returns */
     bool cancelled;        /* cancelled itself (the sweep's root); see cee_cancelled */
     uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
@@ -43,7 +44,7 @@ typedef struct cee_task {
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
-    uint32_t woken;        /* set by any thread (__atomic); the executor readies the task */
+    uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (__atomic): readied in that order */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -110,8 +111,12 @@ static cee_task *cee_take_ready(void) {
 
 /* Wakes a task of this or another thread's executor: safe from any thread while the task waits (it cannot end before
  * it is woken). */
+static uint64_t cee_wake_sequence; /* __atomic: orders wakes, so woken tasks run first come, first served */
+
 static void cee_wake_task(cee_executor *exec, cee_task *t) {
-    __atomic_store_n(&t->woken, 1u, __ATOMIC_SEQ_CST);
+    uint64_t sequence = __atomic_add_fetch(&cee_wake_sequence, 1u, __ATOMIC_SEQ_CST);
+    uint64_t none = 0u;
+    (void)__atomic_compare_exchange_n(&t->woken, &none, sequence, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
 #if !defined(_WIN32)
     if (exec->wake_pipe[1] >= 0) {
         unsigned char byte = 1u;
@@ -162,7 +167,45 @@ void ceesafe_async_wait_until(uint64_t deadline) {
 void ceesafe_async_wait_writable(int32_t fd) {
     if (cee_exec.current != NULL) {
         cee_exec.current->fd = fd;
+#if !defined(_WIN32)
+        cee_exec.current->fd_events = POLLOUT;
+#endif
     }
+}
+
+void ceesafe_async_wait_readable(int32_t fd) {
+    if (cee_exec.current != NULL) {
+        cee_exec.current->fd = fd;
+#if !defined(_WIN32)
+        cee_exec.current->fd_events = POLLIN;
+#endif
+    }
+}
+
+int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t *ready, uint64_t count, int64_t timeout) {
+#if defined(_WIN32)
+    (void)fds; (void)events; (void)ready; (void)count; (void)timeout;
+    return -(int64_t)ENOSYS;
+#else
+    struct pollfd list[64];
+    if (count > 64u) {
+        count = 64u;
+    }
+    for (uint64_t k = 0; k < count; k++) {
+        list[k].fd = fds[k];
+        list[k].events = (short)(((events[k] & 1u) != 0u ? POLLIN : 0) | ((events[k] & 2u) != 0u ? POLLOUT : 0));
+        list[k].revents = 0;
+    }
+    int n;
+    do {
+        n = poll(list, (nfds_t)count, timeout < 0 ? -1 : (timeout > INT_MAX ? INT_MAX : (int)timeout));
+    } while (n < 0 && errno == EINTR);
+    for (uint64_t k = 0; k < count; k++) {
+        ready[k] = (list[k].revents & (POLLIN | POLLHUP | POLLERR)) != 0 ? 1u : 0u;
+        ready[k] |= (list[k].revents & (POLLOUT | POLLHUP | POLLERR)) != 0 ? 2u : 0u;
+    }
+    return n < 0 ? -(int64_t)errno : (int64_t)n;
+#endif
 }
 
 /* Writes at most PIPE_BUF bytes to `fd` if it is writable now: a count, 0 if it is not, or a negated errno.
@@ -398,8 +441,25 @@ static void cee_wait(void) {
             Sleep((DWORD)timeout);
         }
 #else
-        struct pollfd fds[65];
-        cee_task *owners[65];
+        /* One entry per waiting descriptor, plus the wake pipe: on the stack up to 64, else from the platform's heap
+           (not counted: the executor's own bookkeeping). */
+        struct pollfd small_fds[65];
+        cee_task *small_owners[65];
+        struct pollfd *fds = small_fds;
+        cee_task **owners = small_owners;
+        size_t capacity = 65u;
+        if ((size_t)registered + 1u > capacity) {
+            struct pollfd *big_fds = (struct pollfd *)ceesafe_platform_alloc(((size_t)registered + 1u) * sizeof *big_fds);
+            cee_task **big_owners = (cee_task **)ceesafe_platform_alloc(((size_t)registered + 1u) * sizeof *big_owners);
+            if (big_fds != NULL && big_owners != NULL) {
+                fds = big_fds;
+                owners = big_owners;
+                capacity = (size_t)registered + 1u;
+            } else {
+                ceesafe_platform_free(big_fds);
+                ceesafe_platform_free(big_owners);
+            }
+        }
         nfds_t count = 0;
         if (cee_exec.wake_count > 0u && cee_exec.wake_pipe[0] >= 0) {
             fds[0].fd = cee_exec.wake_pipe[0]; /* another thread's wake */
@@ -408,10 +468,10 @@ static void cee_wait(void) {
             owners[0] = NULL;
             count = 1u;
         }
-        for (cee_task *t = cee_exec.parked; t != NULL && count < 65u; t = t->next) {
+        for (cee_task *t = cee_exec.parked; t != NULL && count < capacity; t = t->next) {
             if (t->fd >= 0) {
                 fds[count].fd = t->fd;
-                fds[count].events = POLLOUT;
+                fds[count].events = t->fd_events;
                 fds[count].revents = 0;
                 owners[count] = t;
                 count += 1u;
@@ -419,6 +479,10 @@ static void cee_wait(void) {
         }
         int ready = poll(count > 0u ? fds : NULL, count, timeout);
         if (ready < 0 && errno == EINTR) {
+            if (fds != small_fds) {
+                ceesafe_platform_free(fds);
+                ceesafe_platform_free(owners);
+            }
             continue;
         }
         for (nfds_t k = 0; ready > 0 && k < count; k++) {
@@ -430,15 +494,27 @@ static void cee_wait(void) {
                 any = true;
             }
         }
-        /* Tasks another thread woke. */
-        cee_task *w = cee_exec.parked;
-        while (w != NULL) {
-            cee_task *next = w->next;
-            if (__atomic_exchange_n(&w->woken, 0u, __ATOMIC_SEQ_CST) != 0u) {
-                cee_unpark(w);
-                any = true;
+        if (fds != small_fds) {
+            ceesafe_platform_free(fds);
+            ceesafe_platform_free(owners);
+        }
+        /* Woken tasks, earliest wake first. */
+        for (;;) {
+            cee_task *first = NULL;
+            uint64_t first_at = UINT64_MAX;
+            for (cee_task *w = cee_exec.parked; w != NULL; w = w->next) {
+                uint64_t at = __atomic_load_n(&w->woken, __ATOMIC_SEQ_CST);
+                if (at != 0u && at < first_at) {
+                    first = w;
+                    first_at = at;
+                }
             }
-            w = next;
+            if (first == NULL) {
+                break;
+            }
+            __atomic_store_n(&first->woken, 0u, __ATOMIC_SEQ_CST);
+            cee_unpark(first);
+            any = true;
         }
 #endif
         now = ceesafe_async_now();
@@ -479,7 +555,12 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
     cee_exec.wake_count = 0u;
     uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
-    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false, false, false, 0u};
+    cee_task root = {0};
+    root.frame = frame;
+    root.resume_root = resume;
+    root.deadline = UINT64_MAX;
+    root.fd = -1;
+    root.shield_deadline = UINT64_MAX;
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -644,7 +725,12 @@ void ceesafe_chan_free(void *channel) {
  * signalled. Waking everyone keeps the waits simple; FIFO order among waiters is kept by their order of retrying. */
 static void cee_chan_changed(cee_chan *c) {
     (void)__atomic_add_fetch(&c->epoch, 1u, __ATOMIC_SEQ_CST);
-    for (cee_chan_node *w = c->waiters; w != NULL; w = w->next) {
+    /* New waiters are at the head: wake from the tail, the oldest first (ADR 0032 §3.4). */
+    cee_chan_node *last = c->waiters;
+    while (last != NULL && last->next != NULL) {
+        last = last->next;
+    }
+    for (cee_chan_node *w = last; w != NULL; w = w->prev) {
         w->queued = 0u;
         cee_wake_task(w->executor, w->task);
     }

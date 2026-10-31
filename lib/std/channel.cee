@@ -99,6 +99,23 @@ public struct Channel<T: Send> {
         }
     }
 
+    /// Sends `value` if there is room now, without waiting: `Err(value)` if the channel is full or closed. It has no
+    /// effect, so a `drop` block may call it.
+    /// Safety: as `send`.
+    public fn trySend(borrow this, value: T) -> Result<void, T> {
+        var status: u32 = 0;
+        var epoch: u64 = 0;
+        let slot = unsafe { ceesafe_chan_begin_send(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+        if (status != 0) {
+            return Err(value);
+        }
+        unsafe {
+            (slot as *mut T).write(value);
+            ceesafe_chan_end_send(this.raw);
+        }
+        return Ok();
+    }
+
     /// The next value, waiting while the channel is empty; `null` once it is closed and empty.
     /// Safety: a slot from begin_recv is the channel's, under its lock until end_recv, and holds a value.
     public fn recv(borrow this) -> T? {
@@ -190,6 +207,51 @@ public struct Channel<T: Send> {
                 let dropped = value;
             }
             unsafe { ceesafe_chan_free(this.raw); }
+        }
+    }
+}
+
+/// Mutual exclusion for tasks (type-system.md §40.4): `await lock()` parks the task while another holds it, and the
+/// guard may be held across `await`. Its token is the one value of a channel of capacity 1: taking it locks, and the
+/// guard's drop puts it back without waiting.
+@threadSafe
+@noncopy
+public struct AsyncMutex<T: Send> {
+    private token: Channel<u8>;
+    private data: T;
+
+    /// A mutex holding `data`, unlocked.
+    public fn create(data: T) -> Result<AsyncMutex<T>, AllocError> {
+        let token = Channel<u8>.create(1)?;
+        match (token.trySend(0)) {
+            Ok() => {}
+            Err(_) => {}
+        }
+        return Ok(AsyncMutex { token: token, data: data });
+    }
+
+    /// Waits for the lock; `Err(AsyncError.Cancelled)` if the task is cancelled first.
+    public async fn lock(borrow this) -> Result<AsyncMutexGuard<T>, AsyncError> {
+        match (await this.token.recvAsync()?) {
+            Some(_) => { return Ok(AsyncMutexGuard { lock: this }); }
+            null => { return Err(AsyncError.Cancelled); } // the token's channel is never closed
+        }
+    }
+}
+
+/// Holding an AsyncMutex: `data()` lends the protected value; dropping the guard unlocks.
+public struct AsyncMutexGuard<region r, T: Send> {
+    private lock: borrow(r) AsyncMutex<T>;
+
+    /// Safety: the guard holds the token, so no other task or thread reaches the data, and the loan ends before the
+    /// guard's drop.
+    public fn data(borrow mut this) -> borrow mut T =>
+        unsafe { Ptr.toBorrowMut(borrow this.lock.data as *T as *mut T) };
+
+    drop {
+        match (this.lock.token.trySend(0)) {
+            Ok() => {}
+            Err(_) => {} // cannot happen: the guard took the only token
         }
     }
 }

@@ -3241,7 +3241,10 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 
 `race`, `all` and `shield` place their children's frames in the caller's frame, so they never allocate. The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
-console and file and socket I/O, `Async.Mutex`, and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
+console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
+regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
+`AsyncSockets`, the same calls on raw descriptors for code with its own wait loop), `AsyncMutex<T>` (a guard that may be
+held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks). Its operations return `Result<T, AsyncError>`,
 where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 

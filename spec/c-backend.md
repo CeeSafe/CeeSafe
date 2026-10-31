@@ -573,7 +573,13 @@ Heap (M3b):
     once. Programs with async link the thread runtime.
   - Channels (ADR 0032 §5): `ceesafe_chan_*`, element-blind, under a spin lock; a task's wait node lives in its frame,
     and every change wakes the queued tasks through their executors.
-  - Later: kqueue and epoll beside `poll()` (A2d).
+  - Readiness (A2d): a task waits for a descriptor to be readable or writable (`ceesafe_async_wait_readable`,
+    `_wait_writable`); `poll()` is the reactor on every POSIX host, with any number of descriptors. Sockets are
+    `ceesafe_async_tcp_*`, `ceesafe_async_read`, `_send`, `_shutdown_write` and `_close` in `ceesafe_rt_io.c`: a value,
+    `CEE_ASYNC_WOULD_BLOCK`, or a negated errno. `ceesafe_async_poll` serves code with its own wait loop (the
+    interpreter). Woken tasks run in the order they were woken.
+  - Later (L1 A4): kqueue and epoll as persistent registrations, measured against `poll()`; Windows' sockets and wake
+    path.
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

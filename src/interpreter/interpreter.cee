@@ -67,6 +67,8 @@ struct Interp {
     asyncScopes: Vector<InterpScope>;
     asyncTasks: Vector<InterpTaskInfo>; // by runTasks' task index: what cancellation needs (§40.7)
     asyncOnWake: bool;                  // the parked task waits on a channel's change (ADR 0032)
+    asyncFd: i32;                       // the parked task waits on this descriptor (a socket), or -1
+    asyncFdEvents: u32;                 // 1 readable, 2 writable
     asyncWoken: Vector<u32>;            // tasks a channel's change woke, for runTasks
     // nova_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
@@ -1774,6 +1776,8 @@ fn newInterp(
         asyncScopes: Vector<InterpScope>.create(),
         asyncTasks: Vector<InterpTaskInfo>.create(),
         asyncOnWake: false,
+        asyncFd: -1,
+        asyncFdEvents: 0,
         asyncWoken: Vector<u32>.create(),
         emptyVector: 0,
         attempts: 0,

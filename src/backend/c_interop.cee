@@ -605,7 +605,8 @@ fn emitFunctionPointerTypedefs(e: borrow mut CEmitter, c: borrow Checker) -> Res
     }
     // Nova function values (§36.1): pointers to the functions' own C signatures, with Nova's C types.
     for (t in c.types.functionList.view()) {
-        if (c.types.isGeneric(t)) {
+        // As for composites (c_program.cee): a type only unused library code made has no C, nor its result type.
+        if (c.types.isGeneric(t) || !(c.types.info(t).usedOutsideHostedLibrary || inSet(e.usedTypes, t))) {
             continue;
         }
         let parameters = c.types.info(t).parameters;
@@ -628,7 +629,7 @@ fn emitFunctionPointerTypedefs(e: borrow mut CEmitter, c: borrow Checker) -> Res
     }
     // Closures' code pointers (§36.2): the environment first, as `const void *`, then the parameters.
     for (t in c.types.closureList.view()) {
-        if (c.types.isGeneric(t)) {
+        if (c.types.isGeneric(t) || !(c.types.info(t).usedOutsideHostedLibrary || inSet(e.usedTypes, t))) {
             continue;
         }
         let parameters = c.types.info(t).parameters;

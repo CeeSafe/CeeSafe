@@ -1,0 +1,29 @@
+// AsyncFiles (type-system.md §40.4): each operation on a worker thread while the task waits.
+
+async fn roundTrip(path: StringView) -> Result<usize, AsyncError> {
+    var out = await AsyncFiles.create(path)?;
+    await AsyncFiles.write(mut out, "written by a task".bytes())?;
+    var back = await AsyncFiles.open(path)?;
+    var buffer = [0u8; 64];
+    var total: usize = 0;
+    loop {
+        let n = await AsyncFiles.read(mut back, mut buffer[..])?;
+        if (n == 0) {
+            return Ok(total);
+        }
+        total += n;
+    }
+}
+
+fn main() {
+    let path = "async-files-test.tmp";
+    match (Async.run(roundTrip(path))) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    match (File.remove(path)) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}
+// expect-stdout: 17

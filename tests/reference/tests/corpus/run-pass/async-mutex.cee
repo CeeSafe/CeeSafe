@@ -1,0 +1,45 @@
+// AsyncMutex (type-system.md §40.4): its guard is held across await, so the three tasks' read-wait-write steps do
+// not interleave; waiters take the lock first come, first served.
+
+struct Counter {
+    value: u32;
+    log: u32;
+}
+
+async fn bump(m: borrow AsyncMutex<Counter>, id: u32) -> Result<void, AsyncError> {
+    var guard = await m.lock()?;
+    let before = guard.data().value;
+    await Timer.sleep(2)?; // the guard is held across await: no other task changes the value meanwhile
+    let data = guard.data();
+    data.value = before + 1;
+    data.log = data.log * 10 + id;
+    return Ok();
+}
+
+async fn work(m: borrow AsyncMutex<Counter>) -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await bump(m, 1));
+        s.spawn(async () => await bump(m, 2));
+        s.spawn(async () => await bump(m, 3));
+    })?;
+    return Ok();
+}
+
+fn main() {
+    let m = AsyncMutex<Counter>.create(Counter { value: 0, log: 0 })!;
+    match (Async.run(work(borrow m))) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    match (Async.run(m.lock())) {
+        Ok(guard) => {
+            var g = guard;
+            let data = g.data();
+            Console.writeLine(data.value);
+            Console.writeLine(data.log);
+        }
+        Err(_) => {}
+    }
+}
+// expect-stdout: 3
+// expect-stdout: 123

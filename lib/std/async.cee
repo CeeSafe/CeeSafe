@@ -18,6 +18,28 @@ extern "C" {
     fn ceesafe_async_shield_enter(ms: u64);
     @effects()
     fn ceesafe_async_shield_leave();
+    @effects()
+    fn ceesafe_async_wait_readable(fd: i32);
+    @effects()
+    fn ceesafe_async_tcp_listen(address: *u8, length: u64, port: u16) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_port(fd: i32) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_accept(fd: i32) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_connect(address: *u8, length: u64, port: u16) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_connected(fd: i32) -> i64;
+    @effects()
+    fn ceesafe_async_read(fd: i32, buffer: *mut u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_send(fd: i32, bytes: *u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_shutdown_write(fd: i32) -> i64;
+    @effects()
+    fn ceesafe_async_close(fd: i32);
+    @effects(sleep)
+    fn ceesafe_async_poll(fds: *i32, events: *u32, ready: *mut u32, count: u64, timeout: i64) -> i64;
 }
 
 /// Why an async operation failed (type-system.md §40.4, §40.7).
@@ -177,6 +199,225 @@ struct AsyncAllJoin<E> {
         match (early) {
             Err(e) => { return Err(e); }
             Ok() => { return late; }
+        }
+    }
+}
+
+/// The runtime's "not ready yet" (CEE_ASYNC_WOULD_BLOCK, rt.h): the task waits for readiness and tries again.
+fn wouldBlock() -> i64 => -9223372036854775807 - 1;
+
+/// A TCP listener for tasks (type-system.md §40.4): `accept` parks the task until a connection arrives. Its socket is
+/// non-blocking; the drop closes it.
+@noncopy
+public struct AsyncTcpListener {
+    private fd: i32;
+
+    /// Listens on `address` (dotted IPv4) and `port` (0: any free port).
+    /// Safety: the runtime reads the address only during the call.
+    public fn bind(address: StringView, port: u16) -> Result<AsyncTcpListener, IoError> {
+        let r = unsafe { ceesafe_async_tcp_listen(address.ptr, address.length as u64, port) };
+        if (r < 0) {
+            return Err(AsyncLeaf.ioError(r));
+        }
+        return Ok(AsyncTcpListener { fd: truncate<i32>(r) });
+    }
+
+    /// The port it listens on.
+    /// Safety: the descriptor is this listener's.
+    public fn port(borrow this) -> Result<u16, IoError> {
+        let r = unsafe { ceesafe_async_tcp_port(this.fd) };
+        if (r < 0) {
+            return Err(AsyncLeaf.ioError(r));
+        }
+        return Ok(truncate<u16>(r));
+    }
+
+    /// The next connection; the task parks until one arrives.
+    /// Safety: the descriptor is this listener's; a new one becomes the stream's.
+    public async fn accept(borrow this) -> Result<AsyncTcpStream, AsyncError> {
+        loop {
+            AsyncLeaf.status()?;
+            let r = unsafe { ceesafe_async_tcp_accept(this.fd) };
+            if (r >= 0) {
+                return Ok(AsyncTcpStream { fd: truncate<i32>(r) });
+            }
+            if (r != wouldBlock()) {
+                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
+            }
+            unsafe { ceesafe_async_wait_readable(this.fd); }
+            await Async.park();
+        }
+    }
+
+    /// Safety: the descriptor is closed once, here.
+    drop {
+        unsafe { ceesafe_async_close(this.fd); }
+    }
+}
+
+/// A TCP stream for tasks (type-system.md §40.4): `read` and `write` park the task until the socket is ready. Its
+/// socket is non-blocking; the drop closes it.
+@noncopy
+public struct AsyncTcpStream {
+    private fd: i32;
+
+    /// Connects to `address` (dotted IPv4) and `port`; the task parks until the connection is made or refused.
+    /// Safety: the runtime reads the address only during the call; the descriptor becomes the stream's at once, so an
+    /// error closes it.
+    public async fn connect(address: StringView, port: u16) -> Result<AsyncTcpStream, AsyncError> {
+        let r = unsafe { ceesafe_async_tcp_connect(address.ptr, address.length as u64, port) };
+        if (r < 0) {
+            return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
+        }
+        let stream = AsyncTcpStream { fd: truncate<i32>(r) };
+        loop {
+            AsyncLeaf.status()?;
+            let done = unsafe { ceesafe_async_tcp_connected(stream.fd) };
+            if (done == 0) {
+                return Ok(stream);
+            }
+            if (done != wouldBlock()) {
+                return Err(AsyncError.Io(AsyncLeaf.ioError(done)));
+            }
+            unsafe { ceesafe_async_wait_writable(stream.fd); }
+            await Async.park();
+        }
+    }
+
+    /// Reads into `buffer`: the count, 0 at the end of the stream; the task parks until there is something to read.
+    /// Safety: the runtime writes at most the buffer's length, during the call only.
+    public async fn read(borrow this, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        loop {
+            AsyncLeaf.status()?;
+            let r = unsafe { ceesafe_async_read(this.fd, buffer.ptr, buffer.length as u64) };
+            if (r >= 0) {
+                return Ok(truncate<usize>(r));
+            }
+            if (r != wouldBlock()) {
+                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
+            }
+            unsafe { ceesafe_async_wait_readable(this.fd); }
+            await Async.park();
+        }
+    }
+
+    /// Writes every byte; the task parks whenever the socket cannot take more.
+    /// Safety: the runtime reads at most the slice's length, during the call only.
+    public async fn write(borrow this, bytes: Slice<u8>) -> Result<void, AsyncError> {
+        var done: usize = 0;
+        while (done < bytes.length) {
+            AsyncLeaf.status()?;
+            let rest = bytes[done..];
+            let r = unsafe { ceesafe_async_send(this.fd, rest.ptr, rest.length as u64) };
+            if (r >= 0) {
+                done += truncate<usize>(r);
+            } else if (r != wouldBlock()) {
+                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
+            } else {
+                unsafe { ceesafe_async_wait_writable(this.fd); }
+                await Async.park();
+            }
+        }
+        return Ok();
+    }
+
+    /// Ends this side's writing, so the peer reads the end of the stream.
+    /// Safety: the descriptor is this stream's.
+    public fn shutdownWrite(borrow this) -> Result<void, IoError> {
+        let r = unsafe { ceesafe_async_shutdown_write(this.fd) };
+        if (r < 0) {
+            return Err(AsyncLeaf.ioError(r));
+        }
+        return Ok();
+    }
+
+    /// Safety: the descriptor is closed once, here.
+    drop {
+        unsafe { ceesafe_async_close(this.fd); }
+    }
+}
+
+/// The non-blocking socket calls under AsyncTcpListener and AsyncTcpStream, one at a time, on descriptors: a value
+/// >= 0, `wouldBlock()`, or a negated errno. For code that runs its own wait loop, as the interpreter does; programs use
+/// the async types, which own their descriptors.
+public struct AsyncSockets {
+    public fn wouldBlock() -> i64 => -9223372036854775807 - 1;
+
+    /// Safety: the runtime reads the address during the call only.
+    public fn listen(address: StringView, port: u16) -> i64 =>
+        unsafe { ceesafe_async_tcp_listen(address.ptr, address.length as u64, port) };
+
+    /// Safety: on a descriptor the runtime only asks the kernel.
+    public fn port(fd: i32) -> i64 => unsafe { ceesafe_async_tcp_port(fd) };
+
+    /// Safety: as port.
+    public fn accept(fd: i32) -> i64 => unsafe { ceesafe_async_tcp_accept(fd) };
+
+    /// Safety: as listen.
+    public fn connect(address: StringView, port: u16) -> i64 =>
+        unsafe { ceesafe_async_tcp_connect(address.ptr, address.length as u64, port) };
+
+    /// Safety: as port.
+    public fn connected(fd: i32) -> i64 => unsafe { ceesafe_async_tcp_connected(fd) };
+
+    /// Safety: the runtime writes at most the buffer's length, during the call only.
+    public fn read(fd: i32, buffer: SliceMut<u8>) -> i64 =>
+        unsafe { ceesafe_async_read(fd, buffer.ptr, buffer.length as u64) };
+
+    /// Safety: the runtime reads at most the slice's length, during the call only.
+    public fn send(fd: i32, bytes: Slice<u8>) -> i64 => unsafe { ceesafe_async_send(fd, bytes.ptr, bytes.length as u64) };
+
+    /// Safety: as port.
+    public fn shutdownWrite(fd: i32) -> i64 => unsafe { ceesafe_async_shutdown_write(fd) };
+
+    /// Safety: as port.
+    public fn close(fd: i32) {
+        unsafe { ceesafe_async_close(fd); }
+    }
+
+    /// Waits up to `timeout` ms (-1: no limit) for any descriptor: `events[k]` 1 readable, 2 writable; `ready[k]`
+    /// receives each one's readiness. The count ready, 0 on timeout, or a negated errno.
+    /// Safety: the three slices have `fds.length` elements (checked), read and written during the call only.
+    public fn poll(fds: Slice<i32>, events: Slice<u32>, ready: SliceMut<u32>, timeout: i64) -> i64 {
+        if (events.length != fds.length || ready.length != fds.length) {
+            return -22; // EINVAL
+        }
+        return unsafe { ceesafe_async_poll(fds.ptr, events.ptr, ready.ptr, fds.length as u64, timeout) };
+    }
+}
+
+/// Files for tasks (type-system.md §40.4): a regular file is always ready to the kernel's readiness calls, so each
+/// operation runs on a worker thread (Async.blocking) while the task waits.
+public struct AsyncFiles {
+    /// Opens `path` for reading.
+    public async fn open(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.open(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Creates or truncates `path` for writing.
+    public async fn create(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.create(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Reads into `buffer`: the count, 0 at the end of the file.
+    public async fn read(file: borrow mut File, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        match (await Async.blocking(() => file.read(mut buffer))) {
+            Ok(n) => { return Ok(n); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Writes every byte.
+    public async fn write(file: borrow mut File, bytes: Slice<u8>) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => file.write(bytes))) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
         }
     }
 }

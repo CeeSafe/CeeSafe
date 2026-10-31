@@ -869,6 +869,22 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_status")) {
         return ":u";
     }
+    if (sameText(name, "ceesafe_async_wait_readable") || sameText(name, "ceesafe_async_close")) {
+        return "i:-";
+    }
+    if (sameText(name, "ceesafe_async_tcp_listen") || sameText(name, "ceesafe_async_tcp_connect")) {
+        return "Psh:l";
+    }
+    if (sameText(name, "ceesafe_async_tcp_port") || sameText(name, "ceesafe_async_tcp_accept") ||
+        sameText(name, "ceesafe_async_tcp_connected") || sameText(name, "ceesafe_async_shutdown_write")) {
+        return "i:l";
+    }
+    if (sameText(name, "ceesafe_async_read") || sameText(name, "ceesafe_async_send")) {
+        return "iPs:l";
+    }
+    if (sameText(name, "ceesafe_async_poll")) {
+        return "PPPsl:l";
+    }
     if (sameText(name, "ceesafe_async_shield_enter")) {
         return "s:-";
     }
@@ -972,6 +988,9 @@ fn fitsShape(c: borrow Checker, t: u32, shape: u8) -> bool {
     }
     if (shape == 'b') {
         return c.types.is(t, TypeKind.Bool);
+    }
+    if (shape == 'h') {
+        return c.types.is(t, TypeKind.Integer) && info.bits == 16 && !info.signed;
     }
     let integer = c.types.is(t, TypeKind.Integer);
     return match (shape) {
@@ -1498,8 +1517,17 @@ fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector
         return Ok(null);
     }
     if (sameText(name, "ceesafe_async_wait_writable")) {
-        it.asyncWritable = true;
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        if (fd == 1 || fd == 2) {
+            it.asyncWritable = true; // the interpreter's own output is always writable
+        } else {
+            it.asyncFd = fd;
+            it.asyncFdEvents = 2;
+        }
         return Ok(null);
+    }
+    if (n0IsAsyncSocketCall(name)) {
+        return asyncSocketService(it, name, arguments);
     }
     if (sameText(name, "ceesafe_async_status")) {
         return Ok(valueOf(asyncStatus(it) as u64, 4));
@@ -1606,6 +1634,8 @@ struct InterpTask {
     deadline: u64;
     onScope: bool;
     joinIndex: u32;
+    fd: i32; // a socket it waits on, or -1
+    fdEvents: u32;
 }
 
 /// The running task's active scope at `site`, made on first use.
@@ -1751,6 +1781,8 @@ fn runTasks(
             deadline: 0xFFFFFFFFFFFFFFFF,
             onScope: false,
             joinIndex: none(),
+            fd: -1,
+            fdEvents: 0,
         },
     )!;
     ready.push(0)!;
@@ -1779,6 +1811,47 @@ fn runTasks(
             it.asyncWoken.push(id)!;
         }
         if (head == ready.length) {
+            // Tasks waiting on sockets: a real poll, which waits only if no timer can come instead (§40.8).
+            var fds = Vector<i32>.create();
+            var events = Vector<u32>.create();
+            var owners = Vector<u32>.create();
+            var anyDeadline = false;
+            for (j in 0..tasks.length) {
+                if (tasks[j].parked && !tasks[j].onScope && tasks[j].fd >= 0) {
+                    fds.push(tasks[j].fd)!;
+                    events.push(tasks[j].fdEvents)!;
+                    owners.push(truncate<u32>(j))!;
+                }
+                if (tasks[j].parked && tasks[j].deadline != 0xFFFFFFFFFFFFFFFF) {
+                    anyDeadline = true;
+                }
+            }
+            if (fds.length > 0) {
+                var readiness = Vector<u32>.create();
+                for (fd in fds.view()) {
+                    readiness.push(0)!;
+                }
+                let woke = AsyncSockets.poll(
+                    fds.view(),
+                    events.view(),
+                    readiness.viewMut(),
+                    if (anyDeadline) 0 else -1,
+                );
+                if (woke > 0) {
+                    for (j in 0..owners.length) {
+                        if (readiness[j] != 0) {
+                            let t = owners[j] as usize;
+                            tasks[t].parked = false;
+                            tasks[t].fd = -1;
+                            ready.push(owners[j])!;
+                        }
+                    }
+                    continue;
+                }
+                if (!anyDeadline) {
+                    continue; // interrupted: wait again
+                }
+            }
             // No task can run: the earliest deadline comes (§40.8).
             var earliest: u64 = 0xFFFFFFFFFFFFFFFF;
             for (j in 0..tasks.length) {
@@ -1833,6 +1906,7 @@ fn runTasks(
         it.asyncWritable = false;
         it.asyncRetry = false;
         it.asyncOnWake = false;
+        it.asyncFd = -1;
         let outcome = runActivations(it, c, n, mut stacks[k as usize]);
         // The children this task spawned start after it, in order.
         var spawned = Vector<InterpSpawn>.create();
@@ -1872,6 +1946,8 @@ fn runTasks(
                     deadline: 0xFFFFFFFFFFFFFFFF,
                     onScope: false,
                     joinIndex: spawn.joinIndex,
+                    fd: -1,
+                    fdEvents: 0,
                 },
             )!;
             ready.push(truncate<u32>(tasks.length - 1))!;
@@ -1970,6 +2046,10 @@ fn runTasks(
                 } else if (it.asyncDeadline != 0xFFFFFFFFFFFFFFFF) {
                     tasks[k as usize].parked = true;
                     tasks[k as usize].deadline = it.asyncDeadline;
+                } else if (it.asyncFd >= 0) {
+                    tasks[k as usize].parked = true; // until its socket is ready
+                    tasks[k as usize].fd = it.asyncFd;
+                    tasks[k as usize].fdEvents = it.asyncFdEvents;
                 } else if (it.asyncOnWake) {
                     tasks[k as usize].parked = true; // until a channel's change (§40.8)
                 } else if (it.asyncWritable) {
@@ -2179,4 +2259,94 @@ fn channelService(
     let me = it.asyncCurrent;
     it.runtime.channels[k].waiters.retain((task) => task != me);
     return Ok(null);
+}
+
+fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
+    sameText(name, "ceesafe_async_wait_readable") || sameText(name, "ceesafe_async_tcp_listen") ||
+        sameText(name, "ceesafe_async_tcp_port") || sameText(name, "ceesafe_async_tcp_accept") ||
+        sameText(name, "ceesafe_async_tcp_connect") || sameText(name, "ceesafe_async_tcp_connected") ||
+        sameText(name, "ceesafe_async_read") || sameText(name, "ceesafe_async_send") ||
+        sameText(name, "ceesafe_async_shutdown_write") || sameText(name, "ceesafe_async_close") ||
+        sameText(name, "ceesafe_async_poll");
+
+fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
+    var bytes = Vector<u8>.create();
+    for (k in 0..length) {
+        bytes.push(truncate<u8>(it.memory.loadBits(address + k, 1)?))!;
+    }
+    return Ok(bytes);
+}
+
+/// lib/std's async sockets on real descriptors, through lib/std's AsyncSockets (the interpreter cannot name the
+/// runtime's functions itself): non-blocking, so a task waits for readiness as in C (§40.8).
+fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_async_wait_readable")) {
+        it.asyncFd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        it.asyncFdEvents = 1;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_tcp_listen") || sameText(name, "ceesafe_async_tcp_connect")) {
+        let text = interpBytes(it, arguments[0].bits(0, 8)?, arguments[1].bits(0, 8)?)?;
+        let port = truncate<u16>(arguments[2].bits(0, 2)?);
+        let address = match (StringView.fromUtf8(text.view())) {
+            Some(v) => v,
+            null => { return Ok(valueOf(0xFFFFFFFFFFFFFFEA, 8)); }, // -EINVAL
+        };
+        let r = if (sameText(
+            name,
+            "ceesafe_async_tcp_listen",
+        )) AsyncSockets.listen(address, port) else AsyncSockets.connect(address, port);
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_read")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        let address = arguments[1].bits(0, 8)?;
+        let length = arguments[2].bits(0, 8)?;
+        var buffer = Vector<u8>.create();
+        for (k in 0..length) {
+            buffer.push(0)!;
+        }
+        let r = AsyncSockets.read(fd, buffer.viewMut());
+        if (r > 0) {
+            for (k in 0..truncate<usize>(r)) {
+                it.memory.storeBits(address + k as u64, buffer[k] as u64, 1)?;
+            }
+        }
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_send")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        let bytes = interpBytes(it, arguments[1].bits(0, 8)?, arguments[2].bits(0, 8)?)?;
+        let r = AsyncSockets.send(fd, bytes.view());
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_close")) {
+        AsyncSockets.close(truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?)));
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_poll")) {
+        let count = arguments[3].bits(0, 8)?;
+        var fds = Vector<i32>.create();
+        var events = Vector<u32>.create();
+        var ready = Vector<u32>.create();
+        for (k in 0..count) {
+            fds.push(truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)? + 4 * k, 4)?)))!;
+            events.push(truncate<u32>(it.memory.loadBits(arguments[1].bits(0, 8)? + 4 * k, 4)?))!;
+            ready.push(0)!;
+        }
+        let r = AsyncSockets.poll(fds.view(), events.view(), ready.viewMut(), truncate<i64>(arguments[4].bits(0, 8)?));
+        for (k in 0..count) {
+            it.memory.storeBits(arguments[2].bits(0, 8)? + 4 * k, ready[k as usize] as u64, 4)?;
+        }
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+    let r = if (sameText(name, "ceesafe_async_tcp_port")) AsyncSockets.port(fd) else if (sameText(
+        name,
+        "ceesafe_async_tcp_accept",
+    )) AsyncSockets.accept(fd) else if (sameText(
+        name,
+        "ceesafe_async_tcp_connected",
+    )) AsyncSockets.connected(fd) else AsyncSockets.shutdownWrite(fd);
+    return Ok(valueOf(truncate<u64>(r), 8));
 }

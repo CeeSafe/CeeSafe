@@ -316,6 +316,149 @@ cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) {
 cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
     return shutdown(fd, SHUT_WR) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
 }
+
+/* ---- Async sockets (type-system.md §40.4; lib/std/async.cee): non-blocking descriptors. Each call is a value >= 0,
+ * CEE_ASYNC_WOULD_BLOCK (the task waits for readiness, then calls again), or a negated errno. ---- */
+
+static int64_t cee_async_errno(void) {
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+}
+
+static bool cee_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
+    cee_str text = {address, length};
+    cee_io_result r = ceesafe_tcp_listen(text, port);
+    if (r.error != 0) {
+        return -(int64_t)r.error;
+    }
+    if (!cee_nonblocking((int)r.value)) {
+        int64_t failed = -(int64_t)errno;
+        (void)close((int)r.value);
+        return failed;
+    }
+    return r.value;
+}
+
+int64_t ceesafe_async_tcp_port(int32_t fd) {
+    cee_io_result r = ceesafe_tcp_port(fd);
+    return r.error == 0 ? r.value : -(int64_t)r.error;
+}
+
+int64_t ceesafe_async_tcp_accept(int32_t fd) {
+    int peer;
+    do {
+        peer = accept(fd, NULL, NULL);
+    } while (peer < 0 && errno == EINTR);
+    if (peer < 0) {
+        return cee_async_errno();
+    }
+#ifdef SO_NOSIGPIPE
+    int one = 1;
+    (void)setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+    if (!cee_nonblocking(peer)) {
+        int64_t failed = -(int64_t)errno;
+        (void)close(peer);
+        return failed;
+    }
+    return peer;
+}
+
+/* Starts a connection: the descriptor, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
+int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
+    cee_str text = {address, length};
+    uint8_t bytes[4];
+    if (!ceesafe_ipv4(text, bytes)) {
+        return -(int64_t)EINVAL;
+    }
+    int fd = ceesafe_tcp_socket();
+    if (fd < 0) {
+        return -(int64_t)errno;
+    }
+    if (!cee_nonblocking(fd)) {
+        int64_t failed = -(int64_t)errno;
+        (void)close(fd);
+        return failed;
+    }
+    ceesafe_address a;
+    ceesafe_address_set(&a, bytes, port);
+    if (connect(fd, (const struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS && errno != EINTR) {
+        int64_t failed = -(int64_t)errno;
+        (void)close(fd);
+        return failed;
+    }
+    return fd;
+}
+
+int64_t ceesafe_async_tcp_connected(int32_t fd) {
+    int error = 0;
+    socklen_t size = sizeof error;
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) < 0) {
+        return -(int64_t)errno;
+    }
+    if (error != 0) {
+        return error == EINPROGRESS || error == EALREADY ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)error;
+    }
+    /* No error yet: connected once it has a peer (SO_ERROR is also 0 while the connection is still in progress). */
+    ceesafe_address peer;
+    socklen_t length = sizeof peer;
+    if (getpeername(fd, (struct sockaddr *)&peer, &length) == 0) {
+        return 0;
+    }
+    return errno == ENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+}
+
+int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length) {
+    ssize_t n;
+    do {
+        n = read(fd, buffer, (size_t)length);
+    } while (n < 0 && errno == EINTR);
+    return n < 0 ? cee_async_errno() : (int64_t)n;
+}
+
+int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
+    ssize_t n;
+    do {
+#ifdef MSG_NOSIGNAL
+        n = send(fd, bytes, (size_t)length, MSG_NOSIGNAL);
+#else
+        n = send(fd, bytes, (size_t)length, 0);
+#endif
+    } while (n < 0 && errno == EINTR);
+    return n < 0 ? cee_async_errno() : (int64_t)n;
+}
+
+int64_t ceesafe_async_shutdown_write(int32_t fd) {
+    return shutdown(fd, SHUT_WR) < 0 ? -(int64_t)errno : 0;
+}
+
+void ceesafe_async_close(int32_t fd) {
+    (void)close(fd);
+}
+#endif /* _WIN32 */
+
+#ifdef _WIN32
+int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
+    (void)address; (void)length; (void)port; return -(int64_t)ENOSYS; /* L1 A4: Windows */
+}
+int64_t ceesafe_async_tcp_port(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+int64_t ceesafe_async_tcp_accept(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
+    (void)address; (void)length; (void)port; return -(int64_t)ENOSYS;
+}
+int64_t ceesafe_async_tcp_connected(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length) {
+    (void)fd; (void)buffer; (void)length; return -(int64_t)ENOSYS;
+}
+int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
+    (void)fd; (void)bytes; (void)length; return -(int64_t)ENOSYS;
+}
+int64_t ceesafe_async_shutdown_write(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+void ceesafe_async_close(int32_t fd) { (void)fd; }
 #endif /* _WIN32 */
 
 /* ---- Processes -------------------------------------------------------------------------- */

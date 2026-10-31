@@ -1,0 +1,65 @@
+// AsyncTcpListener and AsyncTcpStream (type-system.md §40.4): a server task and a client task on one thread, over
+// loopback; neither blocks the other. The interpreter uses real non-blocking sockets.
+async fn serve(listener: borrow AsyncTcpListener) -> Result<void, AsyncError> {
+    let peer = await listener.accept()?;
+    var buffer = [0u8; 64];
+    var total: usize = 0;
+    loop {
+        let n = await peer.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        await peer.write(buffer[0..n])?; // echoes what it read
+        total += n;
+    }
+    match (peer.shutdownWrite()) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    return Ok();
+}
+
+async fn ask(port: u16, echoed: borrow mut u32) -> Result<void, AsyncError> {
+    let stream = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    await stream.write("hello, ".bytes())?;
+    await stream.write("tasks".bytes())?;
+    match (stream.shutdownWrite()) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    var buffer = [0u8; 64];
+    loop {
+        let n = await stream.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok();
+        }
+        echoed += truncate<u32>(n);
+    }
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    var echoed: u32 = 0;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await serve(borrow listener));
+        s.spawn(async () => await ask(port, mut echoed));
+    })?;
+    return Ok(echoed);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(AsyncError.Cancelled) => { Console.writeLine("cancelled"); }
+        Err(AsyncError.TimedOut) => { Console.writeLine("timed out"); }
+    }
+}
+// expect-stdout: 12

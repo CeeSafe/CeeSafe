@@ -1097,6 +1097,23 @@ void ceesafe_async_shield_leave(void);
 uint64_t ceesafe_async_now(void);
 void ceesafe_async_wait_until(uint64_t deadline);
 void ceesafe_async_wait_writable(int32_t fd);
+void ceesafe_async_wait_readable(int32_t fd);
+/* Async sockets (runtime/hosted/ceesafe_rt_io.c): non-blocking descriptors; a value >= 0, CEE_ASYNC_WOULD_BLOCK, or a
+ * negated errno. Windows: L1 A4. */
+#define CEE_ASYNC_WOULD_BLOCK INT64_MIN
+int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port);
+int64_t ceesafe_async_tcp_port(int32_t fd);
+int64_t ceesafe_async_tcp_accept(int32_t fd);
+int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port);
+int64_t ceesafe_async_tcp_connected(int32_t fd);
+int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length);
+int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length);
+int64_t ceesafe_async_shutdown_write(int32_t fd);
+void ceesafe_async_close(int32_t fd);
+/* Waits up to `timeout` ms (-1: no limit) for any of `count` descriptors: `events` 1 readable, 2 writable; `ready`
+ * receives each one's readiness the same way. The count ready, 0 on timeout, or a negated errno. For the interpreter,
+ * which has no executor of its own descriptors (src/host). */
+int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t *ready, uint64_t count, int64_t timeout);
 int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length);
 
 #endif /* CEESAFE_RT_H */

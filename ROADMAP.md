@@ -597,16 +597,20 @@ green.
     - `Async.blocking`;
     - channels (ADR 0032, accepted 2026-10-31);
     - wakes from other threads.
-  - [ ] **A2d, I/O:**
-    - kqueue and epoll beside `poll()`;
-    - async files and sockets;
-    - `Async.Mutex`.
+  - [x] **A2d, I/O** (2026-10-31):
+    - async sockets (`AsyncTcpListener`, `AsyncTcpStream`) on `poll()`, readable and writable;
+    - async files (`AsyncFiles`, through `Async.blocking`);
+    - `AsyncMutex<T>` (lib/std: `Async` is a built-in type, so the library names it `AsyncMutex`);
+    - kqueue and epoll move to A4, as performance work against `poll()`, with the Windows path.
 
-  Gate: the cancellation sweep and the determinism check pass.
+  Gate: the cancellation sweep and the determinism check pass (both on macOS, 2026-10-31: 11 async programs, 76
+  points; C and the interpreter print the same), and Linux and macOS runs (the Linux run is still to do).
 - [ ] **A3, sizes:** frames shrunk by liveness; `--explain-frames`; `Async.boxed` and `Async.scopeIn` (both allocate
   frames from a user allocator, through generated per-allocator adapters); async interface methods; the debugger
   `tasks` command.
-- [ ] **A4, platforms:** io_uring and IOCP; a freestanding executor hook and a CosmoOS boot; `Send` work stealing.
+- [ ] **A4, platforms:** kqueue and epoll (persistent registrations, a benchmark against `poll()`); io_uring and IOCP;
+  Windows' sockets and wake path (no wake pipe yet); a freestanding executor hook and a CosmoOS boot; `Send` work
+  stealing.
 
 ## 5. Bootstrap protocol (planned interfaces; none exist yet)
 
@@ -737,6 +741,7 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 | 2026-10-31 | L1 A2b, race and all as specified (the owner's choice, option 1): `await Async.race(a, b)` -> `Result<Raced<T>, E>` and `await Async.all(a, b)` -> `Result<void, E>`; both children's tasks and frames in the awaiting frame (`ceesafe_async_start`, `ceesafe_task_slot`: nothing allocated); race cancels the other child when the first returns, all on an Err (`ceesafe_async_cancel`); lib/std's `Raced<T>`, `AsyncRaceJoin<T, E>.settle`, `AsyncAllJoin<E>.settle` make the value in completion order; NIR AsyncJoin/AsyncJoinResult; the interpreter mirrors it; N0343 counts embedded children; corpus run-pass/async-race (allocation attempts=0), check-fail additions; effects-of.hir updated by reviewed edit (closure numbers only). `python3 tools/contract_tests.py --ceesafec out/ceesafec` | all 16 steps ok after the snapshot update (corpus re-run: check-pass 27/27); run-pass 165 in C, ASan+UBSan and the interpreter; cancel sweep 6 programs, 41 points, 0 fail. `scopeIn` remains |
 | 2026-10-31 | L1 A2c, first part: `await Async.blocking(() => …)` (a sync closure on a worker thread; captures by Thread.both's rule and a Send result, N0334; the body's effects are the worker's; not cancelled; inline if no thread starts) and waking from another thread (a task's atomic `woken` flag and its executor's wake pipe, watched by `poll`); async programs link the thread runtime; the interpreter runs the body at once; corpus run-pass/async-blocking, check-fail additions. `python3 tools/contract_tests.py --ceesafec out/ceesafec`; the blocking program 5 times under `--cflag -fsanitize=thread` | all 16 steps ok: run-pass 166 in C, ASan+UBSan and the interpreter; fault sweep 55 programs, 809 points (a worker that cannot start runs inline), 0 fail; cancel sweep 7 programs, 47 points, 0 fail; ThreadSanitizer silent. Channels (ADR 0032) remain |
 | 2026-10-31 | L1 A2c, channels (ADR 0032): `Channel<T: Send>` in lib/std/channel.cee (`create`, `clone`, `close`, blocking `send`/`recv`, `await sendAsync`/`recvAsync`, `SendError<T>`), over an element-blind runtime ring (`ceesafe_chan_*`: a spin lock, an epoch, task wait nodes in their frames, a condition variable for threads); the interpreter's model (a blocking wait is a thread wait; a stuck run starts a waiting thread); the cancellation sweep's counter made atomic (a race ThreadSanitizer found); corpus run-pass/async-channel, check-fail/async-channel, async-effects addition; effects-of.hir updated by reviewed edit (closure numbers only). `python3 tools/contract_tests.py --ceesafec out/ceesafec`; the channel program (capacities 2-4) 20 times under `--cflag -fsanitize=thread` and 5 under ASan+UBSan | all 16 steps ok after the snapshot update: run-pass 167 in C, ASan+UBSan and the interpreter; fault sweep 56 programs, 820 points, 0 fail; cancel sweep 8 programs, 58 points, 0 fail; ThreadSanitizer silent after the fix. A2c gate passed |
+| 2026-10-31 | L1 A2d: `AsyncMutex<T>` (a one-token channel; the guard's drop puts the token back with `Channel.trySend`, which has no effect); `AsyncTcpListener`/`AsyncTcpStream` on non-blocking descriptors and readable/writable waits (`ceesafe_async_tcp_*` in ceesafe_rt_io.c); `AsyncFiles` through `Async.blocking`; `AsyncSockets`, the raw calls, which the interpreter uses on real descriptors with `ceesafe_async_poll`; the executor's poll takes any number of descriptors; woken tasks run in wake order and a channel wakes its oldest waiter first (C took the lock 1, 3, 2 where the interpreter took 1, 2, 3); a connect is complete only once it has a peer (SO_ERROR is 0 while it is in progress); function-type typedefs of unused library code are no longer emitted (they named undeclared types); kqueue, epoll and Windows move to A4. Corpus run-pass/async-mutex, async-tcp, async-files; effects-of.hir updated by reviewed edit. `python3 tools/contract_tests.py --ceesafec out/ceesafec` | all 16 steps ok: run-pass 170 in C, ASan+UBSan and the interpreter; fault sweep 58 programs, 826 points, 0 fail; cancel sweep 11 programs, 76 points, 0 fail |
 
 **Tests run for the skeleton** (2026-10-30, novac 0.3.1, Apple clang 21.0.0):
 - `novac check` and `novac fmt --check`: clean.

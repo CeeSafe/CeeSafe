@@ -23,7 +23,7 @@ fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
     return r != none() &&
         (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark() ||
             builtinOf(n, r) == bfAsyncScopeWait() || builtinOf(n, r) == bfAsyncJoin() ||
-            builtinOf(n, r) == bfAsyncBlocking());
+            builtinOf(n, r) == bfAsyncBlocking() || builtinOf(n, r) == bfAsyncBoxed());
 }
 
 fn builtinArguments(n: borrow NirProgram, r: u32) -> Range => match (n.rvalues[r as usize]) {
@@ -263,6 +263,11 @@ fn emitFrameStruct(
                 e.d(scope as u64)?;
                 e.t(";")?;
                 e.emit()?;
+            }
+            if (builtinOf(n, r) == bfAsyncBoxed()) {
+                var member = copyBytes("void *cee_x".bytes())?; // the boxed task's frame, from its allocator (§40.1)
+                appendDecimal(mut member, site as u64)?;
+                members.push(member)?;
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
@@ -568,6 +573,9 @@ fn emitTaskStatement(
     if (builtinOf(n, r) == bfAsyncBlocking()) {
         return emitBlocking(e, c, n, sources, f, r, target);
     }
+    if (builtinOf(n, r) == bfAsyncBoxed()) {
+        return emitBoxed(e, c, n, sources, f, r, target);
+    }
     if (builtinOf(n, r) == bfAsyncJoinResult()) {
         let site = constArgument(n, r, 0);
         let k = constArgument(n, r, 1);
@@ -707,7 +715,16 @@ fn emitSpawn(
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
     e.t("), ")?;
     appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
-    e.t(");")?;
+    let allocator = constArgument(n, r, 3);
+    if (allocator == none()) {
+        e.t(", NULL, NULL);")?; // the system heap
+    } else {
+        e.t(", ")?;
+        appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
+        e.t(", ")?;
+        appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
+        e.t(");")?;
+    }
     e.emit()?;
     e.t("        if (cee_child != NULL) ")?;
     appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
@@ -1244,7 +1261,7 @@ fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
 
 /// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
 fn scopeLayout() -> SizeAlign => SizeAlign { size: 24, align: 8 };
-fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 96, align: 16 };
+fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 128, align: 16 };
 fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
 
 /// What a frame is made of, for --explain-frames.
@@ -1336,6 +1353,9 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
                 let part = layoutEnd(sc);
                 addLayout(mut l, part); // a scope's struct is its own field, in statement order
                 report.scopeBytes += truncate<u64>(part.size);
+            }
+            if (builtinOf(n, r) == bfAsyncBoxed()) {
+                member = SizeAlign { size: 8, align: 8 }; // a pointer to the boxed frame
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
@@ -1451,4 +1471,243 @@ fn explainFrames(
         out.push('\n')?;
     }
     return Ok();
+}
+
+// ---- Frames from an allocator (Async.boxed, Async.scopeIn; L1 A3) ----
+
+fn appendAdapterName(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    prefix: StringView,
+    allocator: u32,
+) -> Result<void, AllocError> {
+    appendText(out, prefix)?;
+    return appendMangle(c, out, allocator);
+}
+
+/// The allocator types async code takes frames from, each once.
+fn frameAllocators(e: borrow CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<Vector<u32>, AllocError> {
+    var found = Vector<u32>.create();
+    for (f in e.compiled.view()) {
+        if (!isAsyncNir(c, n, f)) {
+            continue;
+        }
+        for (block in n.functions[f as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalue(n, s);
+                if (r == none()) {
+                    continue;
+                }
+                var allocator = none();
+                if (builtinOf(n, r) == bfAsyncBoxed()) {
+                    allocator = constArgument(n, r, 0);
+                } else if (builtinOf(n, r) == bfAsyncSpawn()) {
+                    allocator = constArgument(n, r, 3);
+                }
+                if (allocator != none() && !containsU32(found, allocator)) {
+                    found.push(allocator)?;
+                }
+            }
+        }
+    }
+    return Ok(found);
+}
+
+/// `ceeAA_<A>(size, align)` and `ceeAD_<A>(p, size, align)`: a frame's memory from allocator type A and back (§30.3: a
+/// user allocator's allocate and deallocate; else the runtime's heap, counted and fault-injected).
+fn emitFrameAdapters(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    let allocators = frameAllocators(e, c, n)?;
+    for (allocator in allocators.view()) {
+        let user = isUserAllocator(c, allocator);
+        e.helper()?;
+        e.t("CEE_UNUSED void *")?;
+        appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
+        e.t("(size_t size, size_t align) {")?;
+        e.emit()?;
+        if (user) {
+            let definition = borrow c.types.structs[c.types.info(allocator).structDef as usize];
+            let allocate = definition.allocateMethod;
+            let layout = layoutTypeOf(c, allocator);
+            let fields = borrow c.types.structs[c.types.info(layout).structDef as usize].fields;
+            e.t("    ")?;
+            appendCTypeName(c, mut e.buf, allocator)?;
+            e.t(" a = { 0 };")?;
+            e.emit()?;
+            e.t("    ")?;
+            appendCTypeName(c, mut e.buf, c.hir.functions[allocate as usize].returnType)?;
+            e.t(" r = ")?;
+            appendCFunctionName(c, mut e.buf, allocate)?;
+            e.t("(&a, ((")?;
+            appendCTypeName(c, mut e.buf, layout)?;
+            e.t("){ .")?;
+            appendFieldName(c, mut e.buf, fields[0])?;
+            e.t(" = size, .")?;
+            appendFieldName(c, mut e.buf, fields[1])?;
+            e.t(" = align }));")?;
+            e.emit()?;
+            e.line("    return r.tag == 0 ? (void *)(uintptr_t)r.u.v_Ok.f__0 : NULL;")?;
+        } else {
+            e.line("    (void)align; /* the heap gives max_align_t alignment, which a frame's needs fit */")?;
+            e.t("    return ceesafe_alloc(size, ")?;
+            appendAllocatorId(c, mut e.buf, allocator)?;
+            e.t(");")?;
+            e.emit()?;
+        }
+        e.line("}")?;
+        e.helper()?;
+        e.t("CEE_UNUSED void ")?;
+        appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
+        e.t("(void *p, size_t size, size_t align) {")?;
+        e.emit()?;
+        if (user) {
+            let definition = borrow c.types.structs[c.types.info(allocator).structDef as usize];
+            let deallocate = definition.deallocateMethod;
+            let layout = layoutTypeOf(c, allocator);
+            let fields = borrow c.types.structs[c.types.info(layout).structDef as usize].fields;
+            e.t("    ")?;
+            appendCTypeName(c, mut e.buf, allocator)?;
+            e.t(" a = { 0 };")?;
+            e.emit()?;
+            e.t("    ")?;
+            appendCFunctionName(c, mut e.buf, deallocate)?;
+            e.t("(&a, (uint8_t *)p, ((")?;
+            appendCTypeName(c, mut e.buf, layout)?;
+            e.t("){ .")?;
+            appendFieldName(c, mut e.buf, fields[0])?;
+            e.t(" = size, .")?;
+            appendFieldName(c, mut e.buf, fields[1])?;
+            e.t(" = align }));")?;
+            e.emit()?;
+        } else {
+            e.line("    (void)size;")?;
+            e.line("    (void)align;")?;
+            e.t("    ceesafe_free(p, ")?;
+            appendAllocatorId(c, mut e.buf, allocator)?;
+            e.t(");")?;
+            e.emit()?;
+        }
+        e.line("}")?;
+    }
+    return Ok();
+}
+
+/// `await Async.boxed(alloc, g(args))`, suspension point k: g's frame from the allocator (or `Err` at once if it
+/// cannot be had), run as an awaited call, then its result in `Ok` and the frame given back.
+fn emitBoxed(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let allocator = constArgument(n, r, 0);
+    let callee = constArgument(n, r, 1);
+    let list = builtinArguments(n, r);
+    var args = Vector<u8>.create();
+    appendOperandList(e, c, n, sources, f, mut args, list, 2)?;
+    e.asyncState += 1;
+    let k = e.asyncState;
+    var slot = copyBytes("cee_frame->cee_u.cee_x".bytes())?;
+    appendDecimal(mut slot, k as u64)?;
+    var frameType = copyBytes("struct ".bytes())?;
+    appendAsyncName(c, mut frameType, "ceeAF_", callee)?;
+    var place = Vector<u8>.create();
+    if (target != none()) {
+        place = appendPlaceIn(e, c, n, sources, f, target)?;
+    }
+    let result = n.rvalueTypes[r as usize];
+    e.t("    ")?;
+    e.b(slot.view())?;
+    e.t(" = ")?;
+    appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
+    e.t("(sizeof(")?;
+    e.b(frameType.view())?;
+    e.t("), _Alignof(")?;
+    e.b(frameType.view())?;
+    e.t("));")?;
+    e.emit()?;
+    e.t("    if (")?;
+    e.b(slot.view())?;
+    e.t(" == NULL) {")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(" = (")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t("){0};")?;
+        e.emit()?;
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(".tag = 1; /* Err(AllocError.OutOfMemory), the enum's only, zero value */")?;
+        e.emit()?;
+    }
+    e.t("        goto cee_boxed_")?;
+    e.d(k as u64)?;
+    e.t(";")?;
+    e.emit()?;
+    e.line("    }")?;
+    e.t("    ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
+    e.t("((")?;
+    e.b(frameType.view())?;
+    e.t(" *)")?;
+    e.b(slot.view())?;
+    if (list.count > 2) {
+        e.t(", ")?;
+        e.b(args.view())?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", callee)?;
+    e.t("((")?;
+    e.b(frameType.view())?;
+    e.t(" *)")?;
+    e.b(slot.view())?;
+    e.t(")) return false;")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("    ")?;
+        e.b(place.view())?;
+        e.t(" = (")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t("){0}; /* Ok */")?;
+        e.emit()?;
+        if (!c.types.is(c.hir.functions[callee as usize].returnType, TypeKind.Void)) {
+            e.t("    ")?;
+            e.b(place.view())?;
+            e.t(".u.v_Ok.f__0 = ((")?;
+            e.b(frameType.view())?;
+            e.t(" *)")?;
+            e.b(slot.view())?;
+            e.t(")->cee_result;")?;
+            e.emit()?;
+        }
+    }
+    e.t("    ")?;
+    appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
+    e.t("(")?;
+    e.b(slot.view())?;
+    e.t(", sizeof(")?;
+    e.b(frameType.view())?;
+    e.t("), _Alignof(")?;
+    e.b(frameType.view())?;
+    e.t("));")?;
+    e.emit()?;
+    e.t("cee_boxed_")?;
+    e.d(k as u64)?;
+    e.t(": ;")?;
+    e.emit()?;
+    return Ok(true);
 }

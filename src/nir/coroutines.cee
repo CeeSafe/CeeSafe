@@ -88,11 +88,37 @@ fn checkCoroutines(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, 
         appendQuotedName(mut message, c, c.hir.functions[edge.caller as usize].name)?;
         appendText(
             mut message,
-            " contain itself: recursion through 'await' needs an explicitly allocated frame (type-system.md §40.1)",
+            " contain itself: recursion through 'await' needs a frame from an allocator: 'Async.boxed(alloc, …)' (type-system.md §40.1)",
         )?;
         let file = c.hir.functions[edge.caller as usize].file;
         let span = n.rvalueSpans[edge.rvalue as usize];
-        c.front.diagnostics.error(awaitRecursion(), file, span.start, span.end, message)?;
+        let isCall = match (n.rvalues[edge.rvalue as usize]) {
+            NirRvalue.Call(_, _) => true,
+            _ => false,
+        };
+        if (!isCall) {
+            // race or all embedding a child that awaits back: no single call to box.
+            c.front.diagnostics.error(awaitRecursion(), file, span.start, span.end, message)?;
+            continue;
+        }
+        // The sure fix (ADR 0031 §3.1.4): the recursive call's frame from the heap, with `!` on the awaited Result.
+        var title = Vector<u8>.create();
+        appendText(mut title, "box the recursive call: Async.boxed(SystemHeap {}, …)!")?;
+        var text = Vector<u8>.create();
+        appendText(mut text, "Async.boxed(SystemHeap {}, ")?;
+        appendBytes(mut text, c.fileTexts[file as usize][(span.start as usize)..(span.end as usize)])?;
+        appendText(mut text, ")!")?;
+        c.front.diagnostics.errorWithEdit(
+            awaitRecursion(),
+            file,
+            span.start,
+            span.end,
+            message,
+            title,
+            span.start,
+            span.end,
+            text,
+        )?;
     }
     return Ok();
 }

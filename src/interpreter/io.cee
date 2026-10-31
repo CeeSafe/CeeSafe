@@ -1582,6 +1582,9 @@ struct InterpSpawn {
     scope: u32;
     environment: u64; // the child's copy of its environment, or 0
     joinIndex: u32;   // a join's child (race, all): 0 or 1; none for a spawned one
+    release: u32;     // Async.scopeIn's user allocator, or none
+    releaseBlock: u64;
+    releaseSize: u64;
 }
 
 /// A scope of a task: (task, site) while it has children or has not ended.
@@ -1599,6 +1602,7 @@ struct InterpScope {
     started: bool;
     first: u32;
     results: Vector<Value>;
+    oom: bool; // a child could not be allocated (Async.scopeIn)
 }
 
 /// What cancellation needs of a task, beside runTasks' own record (InterpTask).
@@ -1636,6 +1640,9 @@ struct InterpTask {
     joinIndex: u32;
     fd: i32; // a socket it waits on, or -1
     fdEvents: u32;
+    release: u32;
+    releaseBlock: u64;
+    releaseSize: u64;
 }
 
 /// The running task's active scope at `site`, made on first use.
@@ -1661,6 +1668,7 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             started: false,
             first: 2,
             results: Vector<Value>.create(),
+            oom: false,
         },
     )!;
     return truncate<u32>(it.asyncScopes.length - 1);
@@ -1691,6 +1699,33 @@ fn asyncSpawn(
         values.push(valueOf(environment, 8))!;
     }
     let scope = interpScope(it, site);
+    // Async.scopeIn: the child's task and frame from the user allocator, as the runtime asks (its 128-byte task
+    // header, then the frame, aligned to 16).
+    let allocator = if (arguments.count > 3) truncate<u32>(
+        operand(it, c, n, frame, n.at(arguments, 3))?.bits(0, 4)?,
+    ) else none();
+    var release = none();
+    var releaseBlock: u64 = 0;
+    var releaseSize: u64 = 0;
+    if (allocator != none() && isUserAllocator(c, allocator)) {
+        if (it.asyncScopes[scope as usize].oom) {
+            if (environment != 0 && it.memory.isLive(environment)) {
+                it.memory.end(environment);
+            }
+            return Ok(null); // the scope already failed to start a child: it starts no more
+        }
+        releaseSize = 128 + truncate<u64>(frameReport(c, n, function)!.layout.size);
+        releaseBlock = interpAllocate(it, c, n, allocator, releaseSize, 16)?;
+        if (releaseBlock == 0) {
+            it.asyncScopes[scope as usize].oom = true;
+            it.asyncScopes[scope as usize].cancelled = true;
+            if (environment != 0 && it.memory.isLive(environment)) {
+                it.memory.end(environment);
+            }
+            return Ok(null);
+        }
+        release = allocator;
+    }
     it.asyncScopes[scope as usize].live += 1;
     it.asyncSpawns.push(
         InterpSpawn {
@@ -1699,6 +1734,9 @@ fn asyncSpawn(
             scope: scope,
             environment: environment,
             joinIndex: none(),
+            release: release,
+            releaseBlock: releaseBlock,
+            releaseSize: releaseSize,
         },
     )!;
     return Ok(null);
@@ -1720,12 +1758,19 @@ fn asyncScopeWait(
         it.asyncRetry = true;
         return Err(parkStop());
     }
-    operand(it, c, n, frame, n.at(arguments, 1))?; // the oom error: the interpreter's children always start
+    let oom = operand(it, c, n, frame, n.at(arguments, 1))?;
     it.asyncScopes[scope as usize].active = false;
     if (it.asyncScopes[scope as usize].failed) {
         return Ok(copyValue(it.asyncScopes[scope as usize].error));
     }
     let t = n.rvalueTypes[r as usize];
+    if (it.asyncScopes[scope as usize].oom) {
+        // A child could not be allocated (Async.scopeIn): Err(oom), as in C (§40.5).
+        let errVariant = c.types.enums[c.types.info(t).enumDef as usize].variants[1];
+        var payload = Vector<Value>.create();
+        payload.push(oom)!;
+        return Ok(makeEnumValue(c, t, errVariant, payload)?);
+    }
     let ok = c.types.enums[c.types.info(t).enumDef as usize].variants[0];
     let none0 = Vector<Value>.create();
     return Ok(makeEnumValue(c, t, ok, none0)?);
@@ -1770,6 +1815,10 @@ fn runTasks(
             savedHas: it.hasPosition,
             savedFile: it.positionFile,
             savedStart: it.positionStart,
+            wrapOk: none(),
+            release: none(),
+            releaseBlock: 0,
+            releaseSize: 0,
         },
     )!;
     stacks.push(rootStack)!;
@@ -1783,6 +1832,9 @@ fn runTasks(
             joinIndex: none(),
             fd: -1,
             fdEvents: 0,
+            release: none(),
+            releaseBlock: 0,
+            releaseSize: 0,
         },
     )!;
     ready.push(0)!;
@@ -1932,6 +1984,10 @@ fn runTasks(
                     savedHas: it.hasPosition,
                     savedFile: it.positionFile,
                     savedStart: it.positionStart,
+                    wrapOk: none(),
+                    release: none(),
+                    releaseBlock: 0,
+                    releaseSize: 0,
                 },
             )!;
             stacks.push(stack)!;
@@ -1948,6 +2004,9 @@ fn runTasks(
                     joinIndex: spawn.joinIndex,
                     fd: -1,
                     fdEvents: 0,
+                    release: spawn.release,
+                    releaseBlock: spawn.releaseBlock,
+                    releaseSize: spawn.releaseSize,
                 },
             )!;
             ready.push(truncate<u32>(tasks.length - 1))!;
@@ -1961,6 +2020,12 @@ fn runTasks(
                 }
                 let scope = tasks[k as usize].scope;
                 let environment = tasks[k as usize].environment;
+                if (tasks[k as usize].release != none()) {
+                    let allocator = tasks[k as usize].release;
+                    let block = tasks[k as usize].releaseBlock;
+                    let size = tasks[k as usize].releaseSize;
+                    interpDeallocate(it, c, n, allocator, block, size, 16)?;
+                }
                 if (environment != 0 && it.memory.isLive(environment)) {
                     it.memory.end(environment);
                 }
@@ -2105,6 +2170,9 @@ fn asyncJoin(
                     scope: scope,
                     environment: environment,
                     joinIndex: k,
+                    release: none(),
+                    releaseBlock: 0,
+                    releaseSize: 0,
                 },
             )!;
         }
@@ -2349,4 +2417,64 @@ fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow 
         "ceesafe_async_tcp_connected",
     )) AsyncSockets.connected(fd) else AsyncSockets.shutdownWrite(fd);
     return Ok(valueOf(truncate<u64>(r), 8));
+}
+
+/// A user allocator's `allocate` (§30.3) for a frame of `size` bytes: the block's address, or 0 for Err.
+fn interpAllocate(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    allocator: u32,
+    size: u64,
+    align: u64,
+) -> Result<u64, Stop> {
+    let definition = borrow c.types.structs[c.types.info(allocator).structDef as usize];
+    let method = nirFunctionOf(it, definition.allocateMethod, 0)?;
+    var arguments = Vector<Value>.create();
+    let receiver = it.memory.allocate(allocationLocal(), 1, true, "an allocator".bytes())?;
+    arguments.push(valueOf(receiver, 8))!;
+    arguments.push(frameLayoutValue(c, allocator, size, align)?)!;
+    let result = callFunction(it, c, n, method, arguments)?;
+    it.memory.end(receiver);
+    let value = match (result) {
+        Some(v) => v,
+        null => { return Ok(0); },
+    };
+    if (value.bits(0, 1)? != 0) {
+        return Ok(0);
+    }
+    let resultType = c.hir.functions[definition.allocateMethod as usize].returnType;
+    return value.bits(enumUnionOffset(c, resultType) as usize, 8);
+}
+
+/// A user allocator's `deallocate` of a frame's block.
+fn interpDeallocate(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    allocator: u32,
+    block: u64,
+    size: u64,
+    align: u64,
+) -> Result<void, Stop> {
+    let definition = borrow c.types.structs[c.types.info(allocator).structDef as usize];
+    let method = nirFunctionOf(it, definition.deallocateMethod, 0)?;
+    var arguments = Vector<Value>.create();
+    let receiver = it.memory.allocate(allocationLocal(), 1, true, "an allocator".bytes())?;
+    arguments.push(valueOf(receiver, 8))!;
+    arguments.push(valueOf(block, 8))!;
+    arguments.push(frameLayoutValue(c, allocator, size, align)?)!;
+    callFunction(it, c, n, method, arguments)?;
+    it.memory.end(receiver);
+    return Ok();
+}
+
+/// lib/core's `Layout { size, align }` as a value.
+fn frameLayoutValue(c: borrow Checker, allocator: u32, size: u64, align: u64) -> Result<Value, Stop> {
+    let layout = layoutTypeOf(c, allocator);
+    let fields = borrow c.types.structs[c.types.info(layout).structDef as usize].fields;
+    var value = uninitialisedValue(typeSize(c, layout)?);
+    value.put(c.types.fields[fields[0] as usize].offset as usize, valueOf(size, 8));
+    value.put(c.types.fields[fields[1] as usize].offset as usize, valueOf(align, 8));
+    return Ok(value);
 }

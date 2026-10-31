@@ -1012,6 +1012,7 @@ fn walkExpr(
         }
         HirExpr.Spawn(_, closure) => { walkExpr(c, closure, e, parent, walk)?; }
         HirExpr.AsyncBlocking(_, closure) => { walkExpr(c, closure, e, parent, walk)?; }
+        HirExpr.AsyncBoxed(_, call) => { walkExpr(c, call, e, parent, walk)?; }
         HirExpr.AsyncJoin(_, _, first, second, _) => {
             walkExpr(c, first, e, parent, walk)?;
             walkExpr(c, second, e, parent, walk)?;

@@ -83,6 +83,11 @@ suspension changes its blocks or statements.
 - `await Async.scope(oom, body)` lowers to the oom value (a temporary), then the body's statements inline, then
   `Builtin(AsyncScopeWait, [site, oom])`, whose value is the scope's `Result<void, E>`. `s.spawn(child)` is
   `Builtin(AsyncSpawn, [site, the child's HIR function, the child closure])`. `site` numbers the scope program-wide.
+- `await Async.boxed(alloc, g(args))` lowers to `Builtin(AsyncBoxed, [the allocator's type, g, args…])`, of type
+  `Result<T, AllocError>`; it is not an edge of the await graph. `s.spawn` in a `scopeIn` scope carries the
+  allocator's type as a fourth argument. The interpreter runs `AsyncBoxed` as a call on the task's stack, wraps its
+  value in `Ok`, and calls a user allocator's `allocate` and `deallocate` as C does (the frame sizes are the C
+  backend's layouts).
 - `await Async.race(a, b)` and `all` lower to `t = Builtin(AsyncJoin, [site, 1 for race or 0, a's function, a, b's
   function, b])`, the index (0 or 1) of the child that returned first, then `r0 = Builtin(AsyncJoinResult, [site, 0])`
   and `r1 = …[site, 1]`, which move the children's results out, then the call `settle(t, r0, r1)` of lib/std's

@@ -113,6 +113,7 @@ struct Checker {
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
     asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
     asyncSites: u32;                         // scopes numbered so far, program-wide
+    scopeAllocators: Vector<u32>;            // by site: Async.scopeIn's allocator type, or none (§40.5)
     environments: Vector<EnvironmentRecord>;
     implementations: Vector<Implementation>;
     implMethods: Vector<ImplMethod>;

@@ -1,0 +1,77 @@
+// Async.boxed and Async.scopeIn (type-system.md §40.1, §40.5; L1 A3): a frame from an allocator, so recursion
+// through await is allowed; a scope's children from a user allocator, which hands out and takes back each block.
+
+extern "C" {
+    @effects(alloc)
+    fn malloc(size: usize) -> *mut void;
+    @effects()
+    fn free(p: *mut void);
+}
+
+static ALLOCATED: AtomicU32 = AtomicU32.constant(0);
+static FREED: AtomicU32 = AtomicU32.constant(0);
+
+/// Counts what it hands out, over the system heap.
+struct Counting {}
+
+impl Allocator for Counting {
+    /// Safety: malloc returns null or a block of layout.size bytes, aligned for any type.
+    fn allocate(borrow this, layout: Layout) -> Result<*mut u8, AllocError> {
+        ALLOCATED.fetchAdd(1);
+        let p = unsafe { malloc(layout.size) } as *mut u8;
+        if (p.isNull()) {
+            return Err(AllocError.OutOfMemory);
+        }
+        return Ok(p);
+    }
+
+    /// Safety: the frames come back from allocate, once each.
+    unsafe fn deallocate(borrow this, p: *mut u8, layout: Layout) {
+        FREED.fetchAdd(1);
+        free(p as *mut void);
+    }
+}
+
+// Recursion through await, each level's frame from the heap.
+async fn depth(n: u32) -> u32 {
+    if (n == 0) {
+        return 0;
+    }
+    match (await Async.boxed(SystemHeap {}, depth(n - 1))) {
+        Ok(d) => { return d + 1; }
+        Err(_) => { return 0; }
+    }
+}
+
+async fn counted() -> Result<u32, AsyncError> {
+    var a: u32 = 0;
+    var b: u32 = 0;
+    await Async.scopeIn(Counting {}, AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            a = await depth(5);
+            return Ok();
+        });
+        s.spawn(async () => {
+            b = match (await Async.boxed(Counting {}, depth(3))) {
+                Ok(d) => d,
+                Err(_) => 0,
+            };
+            return Ok();
+        });
+    })?;
+    return Ok(a + b);
+}
+
+fn main() {
+    Console.writeLine(Async.run(depth(10)));
+    match (Async.run(counted())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    Console.writeLine(ALLOCATED.load());
+    Console.writeLine(FREED.load());
+}
+// expect-stdout: 10
+// expect-stdout: 8
+// expect-stdout: 3
+// expect-stdout: 3

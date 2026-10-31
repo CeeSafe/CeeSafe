@@ -42,6 +42,8 @@ typedef struct cee_task {
     uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
     uint64_t shield_deadline;
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
+    void (*release)(void *p, size_t size, size_t align); /* Async.scopeIn's allocator; NULL: the system heap */
+    size_t block_size;
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (__atomic): readied in that order */
@@ -248,12 +250,15 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
 #endif
 }
 
-void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope)) {
+void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align)) {
     scope->owner = cee_exec.current;
     if (scope->oom) {
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
-    unsigned char *block = (unsigned char *)ceesafe_alloc(CEE_TASK_HEAD + frame_size, CEE_ALLOC_SYSTEM);
+    size_t block_size = CEE_TASK_HEAD + frame_size;
+    unsigned char *block = allocate != NULL ? (unsigned char *)allocate(block_size, sizeof(max_align_t))
+                                            : (unsigned char *)ceesafe_alloc(block_size, CEE_ALLOC_SYSTEM);
     if (block == NULL) {
         scope->oom = true;
         scope->cancelled = true; /* the children already started stop (type-system.md §40.5) */
@@ -272,6 +277,8 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->shields = 0u;
     t->shield_deadline = UINT64_MAX;
     t->embedded = false;
+    t->release = release;
+    t->block_size = block_size;
     t->on_wake = false;
     t->channel_wait = false;
     t->woken = 0u;
@@ -597,7 +604,11 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         }
         ceesafe_scope *scope = t->scope;
         if (!t->embedded) {
-            ceesafe_free(t, CEE_ALLOC_SYSTEM);
+            if (t->release != NULL) {
+                t->release(t, t->block_size, sizeof(max_align_t));
+            } else {
+                ceesafe_free(t, CEE_ALLOC_SYSTEM);
+            }
         }
         scope->live -= 1u;
         if (scope->failed && !scope->cancelled) {

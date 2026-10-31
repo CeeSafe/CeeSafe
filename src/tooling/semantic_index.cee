@@ -453,6 +453,7 @@ fn walkExpression(
         }
         HirExpr.Spawn(_, closure) => { walkExpression(index, c, sources, closure)?; }
         HirExpr.AsyncBlocking(_, closure) => { walkExpression(index, c, sources, closure)?; }
+        HirExpr.AsyncBoxed(_, call) => { walkExpression(index, c, sources, call)?; }
         HirExpr.AsyncJoin(_, _, first, second, _) => {
             walkExpression(index, c, sources, first)?;
             walkExpression(index, c, sources, second)?;

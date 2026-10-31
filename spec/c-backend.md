@@ -499,6 +499,13 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   (`ceesafe_thread_start`; inline if none can start), which calls the closure through its code pointer, stores the
   result and calls `ceesafe_async_blocking_finish`. The task waits at a suspension point on
   `ceesafe_async_blocking_ready`, which joins the worker once it is done.
+- **Frames from an allocator** (L1 A3). For each allocator type `A` async code takes frames from, `ceeAA_<A>(size,
+  align)` and `ceeAD_<A>(p, size, align)` call its `allocate` and `deallocate` with a `Layout` (§30.3), or the runtime's
+  heap for `SystemHeap` and `FailingAllocator`. `Async.boxed(alloc, g(…))` is a suspension point whose waiting storage
+  is a pointer `cee_x<k>`: the frame from `ceeAA_<A>` (on `NULL` the value is `Err` and `g` does not run), then
+  `ceeAI_<G>` and `ceeAR_<G>` through the pointer, then the result in `Ok` and the frame back through `ceeAD_<A>`. A
+  `scopeIn` scope's spawns pass its adapters to `ceesafe_async_spawn`, which takes the child's block from them and gives
+  it back when the child returns.
 - **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls

@@ -1044,13 +1044,15 @@ typedef struct ceesafe_scope {
     void *waiter;
     void *owner;    /* the task whose scope it is */
 } ceesafe_scope;
-void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope));
+/* `allocate` and `release` (both NULL: the system heap) are Async.scopeIn's allocator's (c-backend.md §3a). */
+void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align));
 bool ceesafe_async_scope_done(ceesafe_scope *scope);
 /* Async.race and Async.all (type-system.md §40.4): a child whose task and frame are the caller's storage, in its frame,
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
  * children and wakes those waiting. */
 typedef struct ceesafe_task_slot {
-    _Alignas(16) unsigned char bytes[96];
+    _Alignas(16) unsigned char bytes[128];
 } ceesafe_task_slot;
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
                          bool (*resume)(void *frame, ceesafe_scope *scope));

@@ -296,6 +296,7 @@ fn emitProgram(
     emitDynTables(e, c)?;
     emitThreadHelpers(e, c, n)?;
     emitForkHelpers(e, c, n)?;
+    emitFrameAdapters(e, c, n)?; // frames from allocators (c-backend.md §3a)
     if (e.split) {
         emitHelpers(e, c, n)?; // in the header, static inline, before the units (ADR 0022 §3.2)
     }

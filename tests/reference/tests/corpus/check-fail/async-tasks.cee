@@ -57,3 +57,11 @@ async fn workers() -> Result<void, AsyncError> {
     await Async.blocking(async () => Ok());              // error[N0209]
     return Ok();
 }
+
+async fn boxes() -> Result<void, AsyncError> {
+    Async.boxed(SystemHeap {}, add(1, 2));                   // error[N0342]
+    let notTask = await Async.boxed(SystemHeap {}, plain()); // error[N0342]
+    let notAllocator = await Async.boxed(7, add(1, 2));      // error[N0263]
+    await Async.scopeIn(7, AsyncError.Cancelled, (s) => {}); // error[N0263]
+    return Ok();
+}

@@ -19,6 +19,8 @@ fn bfAsyncJoin() -> u32 => 1003;
 fn bfAsyncJoinResult() -> u32 => 1004;
 /// `await Async.blocking(body)`: Builtin(AsyncBlocking, [site, body's HIR function, body]), body's result.
 fn bfAsyncBlocking() -> u32 => 1005;
+/// `await Async.boxed(alloc, f(args))`: Builtin(AsyncBoxed, [the allocator's type, f, args…]), a Result<T, AllocError>.
+fn bfAsyncBoxed() -> u32 => 1006;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -123,8 +125,12 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "park")) {
         return checkAsyncPark(c, arguments, span);
     }
-    if (sameText(c.name(memberIdent.symbol), "scope")) {
-        return checkAsyncScope(c, arguments, span);
+    if (sameText(c.name(memberIdent.symbol), "scope") || sameText(c.name(memberIdent.symbol), "scopeIn")) {
+        let withAllocator = sameText(c.name(memberIdent.symbol), "scopeIn");
+        return checkAsyncScope(c, arguments, withAllocator, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "boxed")) {
+        return checkAsyncBoxed(c, arguments, expected, span);
     }
     if (sameText(c.name(memberIdent.symbol), "race") || sameText(c.name(memberIdent.symbol), "all")) {
         let isRace = sameText(c.name(memberIdent.symbol), "race");
@@ -221,7 +227,34 @@ struct AsyncScopeContext {
 }
 
 /// `await Async.scope(oom, (s) => { … })`: the body is checked inline; its children are checked by `checkSpawn`.
-fn checkAsyncScope(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+fn checkAsyncScope(c: borrow mut Checker, all: Range, withAllocator: bool, span: Span) -> Result<u32, AllocError> {
+    // `Async.scopeIn(alloc, oom, body)`: the allocator first, then as `Async.scope` (§40.5).
+    var allocatorType = none();
+    var arguments = all;
+    if (withAllocator) {
+        if (all.count != 3) {
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "'Async.scopeIn' takes an allocator, the error for a child that cannot be allocated, and a body (type-system.md §40.5)",
+            )?;
+            c.error(argumentCount(), span.start, span.end, message)?;
+            checkArgumentsLoosely(c, all)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let allocatorSyntax = c.front.ast.at(all, 0);
+        let allocatorSpan = c.front.ast.exprSpans[allocatorSyntax as usize];
+        let synthesized = synth(c, allocatorSyntax, none())?;
+        let allocatorValue = autoDeref(c, synthesized)?;
+        if (c.isBottom(allocatorValue)) {
+            return c.errorResult(span.start, span.end);
+        }
+        allocatorType = c.typeOf(allocatorValue);
+        if (!checkBoxAllocator(c, allocatorType, allocatorSpan)?) {
+            return c.errorResult(span.start, span.end);
+        }
+        arguments = Range { start: all.start + 1, count: 2 };
+    }
     let awaited = c.taskStart == span.start && c.taskEnd == span.end;
     if (awaited) {
         c.taskStart = none();
@@ -267,6 +300,10 @@ fn checkAsyncScope(c: borrow mut Checker, arguments: Range, span: Span) -> Resul
     let parameter = c.front.ast.closureParameters[c.front.ast.at(literal.parameters, 0) as usize];
     let site = c.asyncSites;
     c.asyncSites += 1;
+    while (c.scopeAllocators.length <= site as usize) {
+        c.scopeAllocators.push(none())?;
+    }
+    c.scopeAllocators[site as usize] = allocatorType;
     c.asyncScopes.push(AsyncScopeContext {
         symbol: c.front.ast.idents[parameter.name as usize].symbol,
         site: site,
@@ -821,4 +858,62 @@ fn checkAsyncBlocking(c: borrow mut Checker, arguments: Range, expected: u32, sp
     let site = c.asyncSites;
     c.asyncSites += 1;
     return c.expr(HirExpr.AsyncBlocking(site, closure), resultType, span.start, span.end);
+}
+
+/// `await Async.boxed(alloc, f(…))` (§40.1): the task's frame comes from `alloc` and is freed when it returns, so the
+/// awaiting frame holds only a pointer and recursion through it is allowed (no N0343). Its value is `Result<T,
+/// AllocError>`: `Err` if the frame cannot be allocated.
+fn checkAsyncBoxed(c: borrow mut Checker, arguments: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.boxed' runs a task: write 'await Async.boxed(alloc, f(…))' (type-system.md §40.1)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    if (arguments.count != 2) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.boxed' takes an allocator and a task: 'Async.boxed(alloc, f(…))' (type-system.md §40.1)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let allocatorSyntax = c.front.ast.at(arguments, 0);
+    let allocatorSpan = c.front.ast.exprSpans[allocatorSyntax as usize];
+    let synthesized = synth(c, allocatorSyntax, none())?;
+    let allocatorValue = autoDeref(c, synthesized)?;
+    if (c.isBottom(allocatorValue)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let allocatorType = c.typeOf(allocatorValue);
+    if (!checkBoxAllocator(c, allocatorType, allocatorSpan)?) {
+        return c.errorResult(span.start, span.end);
+    }
+    let task = c.front.ast.at(arguments, 1);
+    let call = checkTaskOperand(c, task, none(), "'Async.boxed'")?;
+    if (call == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let isCall = match (c.hir.exprs[call as usize]) {
+        HirExpr.Call(_, _) => true,
+        _ => false,
+    };
+    if (!isCall) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.boxed' boxes a call of an async fn (type-system.md §40.1)")?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let allocError = c.allocErrorType;
+    let taskResult = c.typeOf(call);
+    let resultType = resultOf(c, taskResult, allocError)?;
+    return c.expr(HirExpr.AsyncBoxed(allocatorType, call), resultType, span.start, span.end);
 }

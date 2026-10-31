@@ -536,6 +536,10 @@ struct Activation {
     savedHas: bool;
     savedFile: u32;
     savedStart: u32;
+    wrapOk: u32;       // Async.boxed (§40.1): the Result<T, AllocError> its value becomes, as Ok; none for a call
+    release: u32;      // its frame's user allocator to give the block back to, or none
+    releaseBlock: u64; // that block
+    releaseSize: u64;
 }
 
 /// A new frame for `f` with `arguments` in its first locals; a fault while making it is the caller's.
@@ -593,6 +597,10 @@ fn callFunction(
             savedHas: it.hasPosition,
             savedFile: it.positionFile,
             savedStart: it.positionStart,
+            wrapOk: none(),
+            release: none(),
+            releaseBlock: 0,
+            releaseSize: 0,
         },
     )!;
     let result = runActivations(it, c, n, mut stack);
@@ -666,6 +674,7 @@ fn statementCall(n: borrow NirProgram, s: u32) -> u32 {
     }
     return match (n.rvalues[r as usize]) {
         NirRvalue.Call(_, _) => r,
+        NirRvalue.Builtin(b, _) => if (b == bfAsyncBoxed()) r else none(), // a boxed task runs as a call (§40.8)
         _ => none(),
     };
 }
@@ -696,10 +705,21 @@ fn runActivations(
             }
             var callee: u32 = 0;
             var arguments = emptyRange();
+            var wrapOk = none();
             match (n.rvalues[r as usize]) {
                 NirRvalue.Call(function, args) => {
                     callee = function;
                     arguments = args;
+                }
+                NirRvalue.Builtin(_, args) => {
+                    // Async.boxed(alloc, g(…)): g's call, its value wrapped in Ok (the interpreter's frames are its
+                    // own memory, so the allocator is not asked).
+                    callee = match (n.operands[n.at(args, 1) as usize]) {
+                        NirOperand.Const(v) => truncate<u32>(v.magnitude),
+                        _ => none(),
+                    };
+                    arguments = Range { start: args.start + 2, count: args.count - 2 };
+                    wrapOk = n.rvalueTypes[r as usize];
                 }
                 _ => {}
             }
@@ -708,6 +728,40 @@ fn runActivations(
                 _ => none(),
             };
             let prepared = prepareCall(it, c, n, mut stack[top].frame, r, callee, arguments)?;
+            // Async.boxed with a user allocator: its frame's block from it, as in C (frameReport's size).
+            var release = none();
+            var frameBlock: u64 = 0;
+            var frameBlockSize: u64 = 0;
+            if (wrapOk != none()) {
+                let allocator = match (n.operands[n.at(match (n.rvalues[r as usize]) {
+                    NirRvalue.Builtin(_, args) => args,
+                    _ => emptyRange(),
+                }, 0) as usize]) {
+                    NirOperand.Const(v) => truncate<u32>(v.magnitude),
+                    _ => none(),
+                };
+                if (isUserAllocator(c, allocator)) {
+                    let report = frameReport(c, n, prepared.function)!;
+                    frameBlockSize = truncate<u64>(report.layout.size);
+                    frameBlock = interpAllocate(it, c, n, allocator, frameBlockSize, report.layout.align as u64)?;
+                    if (frameBlock == 0) {
+                        // Err(AllocError.OutOfMemory): the task does not run.
+                        let errVariant = c.types.enums[c.types.info(wrapOk).enumDef as usize].variants[1];
+                        let alloc = c.allocErrorType;
+                        let outOfMemory = c.types.enums[c.types.info(alloc).enumDef as usize].variants[0];
+                        let none0 = Vector<Value>.create();
+                        var payload = Vector<Value>.create();
+                        payload.push(makeEnumValue(c, alloc, outOfMemory, none0)?)!;
+                        let value = makeEnumValue(c, wrapOk, errVariant, payload)?;
+                        if (target != none()) {
+                            let addr = address(it, c, n, mut stack[top].frame, target, true)?;
+                            it.memory.store(addr, value)?;
+                        }
+                        continue;
+                    }
+                    release = allocator;
+                }
+            }
             if (n.rvalueTasks[r as usize] == taskRun()) {
                 // `Async.run(g(…))`: the task and the children it spawns, on their own stacks (§40.8).
                 let value = runTasks(it, c, n, prepared.function, prepared.arguments)?;
@@ -745,6 +799,10 @@ fn runActivations(
                     savedHas: it.hasPosition,
                     savedFile: it.positionFile,
                     savedStart: it.positionStart,
+                    wrapOk: wrapOk,
+                    release: release,
+                    releaseBlock: frameBlock,
+                    releaseSize: frameBlockSize,
                 },
             )!;
             continue;
@@ -816,6 +874,19 @@ fn runActivations(
         it.positionStart = finished.savedStart;
         if (stack.length == 0) {
             return Ok(result);
+        }
+        if (finished.release != none()) {
+            let frameAlign = frameReport(c, n, finished.frame.function)!.layout.align as u64;
+            interpDeallocate(it, c, n, finished.release, finished.releaseBlock, finished.releaseSize, frameAlign)?;
+        }
+        if (finished.wrapOk != none()) {
+            let ok = c.types.enums[c.types.info(finished.wrapOk).enumDef as usize].variants[0];
+            var payload = Vector<Value>.create();
+            match (result) {
+                Some(value) => { payload.push(value)!; }
+                null => {}
+            }
+            result = Some(makeEnumValue(c, finished.wrapOk, ok, payload)?);
         }
         if (finished.target != none()) {
             let caller = stack.length - 1;

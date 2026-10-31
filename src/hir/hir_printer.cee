@@ -535,6 +535,12 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.AsyncBoxed(_, call) => {
+                this.text("(async-boxed ")?;
+                this.expr(hir, types, symbols, call)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
             HirExpr.AsyncBlocking(site, closure) => {
                 this.text("(async-blocking ")?;
                 appendDecimal(mut this.out, site as u64)?;

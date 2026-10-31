@@ -764,6 +764,22 @@ fn statementOperations(
             }
         }
         NirRvalue.Builtin(function, arguments) => {
+            if (function == bfAsyncBoxed()) {
+                // A boxed task (type-system.md §40.1): it suspends, runs its callee, and allocates its frame.
+                out.push(textOp(suspendEffect(), 7))?;
+                let callee = constOperandValue(n, n.at(arguments, 1));
+                let rest = Range { start: arguments.start + 2, count: arguments.count - 2 };
+                callOperations(c, n, e, callee, rest, out)?;
+                allocatorOperations(c, e, constOperandValue(n, n.at(arguments, 0)), out)?;
+                return Ok();
+            }
+            if (function == bfAsyncSpawn() && arguments.count > 3) {
+                let allocator = constOperandValue(n, n.at(arguments, 3));
+                if (allocator != none()) {
+                    allocatorOperations(c, e, allocator, out)?; // Async.scopeIn's allocator (§40.5)
+                    return Ok();
+                }
+            }
             let op = builtinOperation(c, n, e, rvalue, function, arguments)?;
             if (op.effects != 0) {
                 out.push(op)?;
@@ -1425,5 +1441,38 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
         let function = e.functions[k];
         checkFunctionEffects(c, n, mut e, function)?;
     }
+    return Ok();
+}
+
+/// A constant operand's value (a builtin's type or function argument), or none.
+fn constOperandValue(n: borrow NirProgram, operand: u32) -> u32 => match (n.operands[operand as usize]) {
+    NirOperand.Const(v) => truncate<u32>(v.magnitude),
+    _ => none(),
+};
+
+/// The effects of taking a frame from `allocator` and giving it back: a user allocator's methods (§30), else the heap's.
+fn allocatorOperations(
+    c: borrow Checker,
+    e: borrow Effects,
+    allocator: u32,
+    out: borrow mut Vector<EffectOp>,
+) -> Result<void, AllocError> {
+    let s = if (allocator == none()) none() else c.types.info(allocator).structDef;
+    if (s != none() && c.types.structs[s as usize].allocateMethod != none()) {
+        let allocate = c.types.structs[s as usize].allocateMethod;
+        let deallocate = c.types.structs[s as usize].deallocateMethod;
+        let allocating = effectsOf(c, e, allocate);
+        if (allocating != 0) {
+            out.push(effectOp(allocating, opCall(), none(), allocate, allocate))?;
+        }
+        if (deallocate != none()) {
+            let freeing = effectsOf(c, e, deallocate);
+            if (freeing != 0) {
+                out.push(effectOp(freeing, opCall(), none(), deallocate, deallocate))?;
+            }
+        }
+        return Ok();
+    }
+    out.push(textOp(allocEffect(), 10))?;
     return Ok();
 }

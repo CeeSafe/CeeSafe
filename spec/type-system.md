@@ -3202,6 +3202,10 @@ fn main() {
   effects (§32.1) are those of its operations, `suspend` among them if it awaits.
 - **Recursion through `await`** (an async fn that awaits itself, directly or through other async fns) would make its
   frame contain itself: **N0343**, naming the cycle. A recursive *sync* call from an async fn is an ordinary call.
+- **`await Async.boxed(alloc, f(…))`** awaits a task whose frame comes from `alloc` (an allocator type, as for
+  `Box.createIn`, §30) and is given back when it returns; the awaiting frame holds only a pointer, so recursion through
+  it is allowed. Its value is `Result<T, AllocError>`: `Err(AllocError.OutOfMemory)` if the frame cannot be had, and
+  then the task does not run. N0343's sure fix is `Async.boxed(SystemHeap {}, f(…))!`.
 - A generic async fn is checked once and instantiated like any generic function (§20.3).
 
 ### 40.2 `await`
@@ -3250,7 +3254,8 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
-  `alloc` effect). `Async.scope` is implemented; `scopeIn` comes with L1 A3, beside `Async.boxed`. `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
+  `alloc` effect). With `scopeIn`, each child's task and frame come from `alloc` and go back to it when the child
+returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
   scope reports if a child's frame cannot be allocated (ADR 0031 §3.3, as amended).
 - **`s.spawn(async () => …)`** starts a child whose result type must be `Result<void, E>`, the same `E` for every child
   of the scope. It returns `void`. The child's frame comes from the scope's allocator. If it cannot be allocated, the

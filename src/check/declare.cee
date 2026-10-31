@@ -144,6 +144,7 @@ fn checkProgram(
         closureContexts: Vector<ClosureContext>.create(),
         asyncScopes: Vector<AsyncScopeContext>.create(),
         asyncSites: 0,
+        scopeAllocators: Vector<u32>.create(),
         environments: Vector<EnvironmentRecord>.create(),
         implementations: Vector<Implementation>.create(),
         implMethods: Vector<ImplMethod>.create(),

@@ -39,6 +39,8 @@ typedef struct cee_task {
     uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
     uint64_t shield_deadline;
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
+    bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
+    uint32_t woken;        /* set by any thread (__atomic); the executor readies the task */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -51,6 +53,8 @@ typedef struct {
     cee_task *ready_tail;
     cee_task *parked;
     cee_task *current;
+    int wake_pipe[2];    /* another thread's wake: a byte written here makes poll return (-1 until first needed) */
+    uint32_t wake_count; /* tasks parked on_wake */
 } cee_executor;
 
 static _Thread_local cee_executor cee_exec;
@@ -104,6 +108,21 @@ static cee_task *cee_take_ready(void) {
     return t;
 }
 
+/* Wakes a task of this or another thread's executor: safe from any thread while the task waits (it cannot end before
+ * it is woken). */
+static void cee_wake_task(cee_executor *exec, cee_task *t) {
+    __atomic_store_n(&t->woken, 1u, __ATOMIC_SEQ_CST);
+#if !defined(_WIN32)
+    if (exec->wake_pipe[1] >= 0) {
+        unsigned char byte = 1u;
+        ssize_t written;
+        do {
+            written = write(exec->wake_pipe[1], &byte, 1u);
+        } while (written < 0 && errno == EINTR);
+    }
+#endif
+}
+
 static void cee_unpark(cee_task *t) {
     cee_task **link = &cee_exec.parked;
     while (*link != NULL && *link != t) {
@@ -115,6 +134,10 @@ static void cee_unpark(cee_task *t) {
     t->deadline = UINT64_MAX;
     t->fd = -1;
     t->on_scope = false;
+    if (t->on_wake) {
+        t->on_wake = false;
+        cee_exec.wake_count -= 1u;
+    }
     cee_ready(t);
 }
 
@@ -205,6 +228,8 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->shields = 0u;
     t->shield_deadline = UINT64_MAX;
     t->embedded = false;
+    t->on_wake = false;
+    t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
     return t->frame;
@@ -225,6 +250,8 @@ void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *fr
     t->shields = 0u;
     t->shield_deadline = UINT64_MAX;
     t->embedded = true;
+    t->on_wake = false;
+    t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
 }
@@ -270,11 +297,55 @@ static void cee_wake_waiters(void) {
     cee_task *t = cee_exec.parked;
     while (t != NULL) {
         cee_task *next = t->next;
-        if (!t->on_scope) {
+        if (!t->on_scope && !t->on_wake) { /* a worker's or channel's wait is not cancelled: it is woken */
             cee_unpark(t);
         }
         t = next;
     }
+}
+
+static void cee_open_wake_pipe(void) {
+#if !defined(_WIN32)
+    if (cee_exec.wake_pipe[0] < 0) {
+        int fds[2];
+        if (pipe(fds) == 0) {
+            cee_exec.wake_pipe[0] = fds[0];
+            cee_exec.wake_pipe[1] = fds[1];
+        }
+    }
+#endif
+}
+
+void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg) {
+    cee_open_wake_pipe();
+    b->task = cee_exec.current;
+    b->executor = &cee_exec;
+    __atomic_store_n(&b->done, 0u, __ATOMIC_SEQ_CST);
+    b->thread = ceesafe_thread_start(body, arg);
+    if (b->thread == NULL) {
+        body(arg); /* no thread: at once, here (as Thread.both, type-system.md §38.6) */
+    }
+}
+
+void ceesafe_async_blocking_finish(ceesafe_blocking *b) {
+    __atomic_store_n(&b->done, 1u, __ATOMIC_SEQ_CST);
+    cee_wake_task((cee_executor *)b->executor, (cee_task *)b->task);
+}
+
+bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
+    if (__atomic_load_n(&b->done, __ATOMIC_SEQ_CST) != 0u) {
+        if (b->thread != NULL) {
+            ceesafe_thread_join((cee_thread *)b->thread);
+            b->thread = NULL;
+        }
+        return true;
+    }
+    cee_task *t = cee_exec.current;
+    if (!t->on_wake) {
+        t->on_wake = true;
+        cee_exec.wake_count += 1u;
+    }
+    return false;
 }
 
 bool ceesafe_async_scope_done(ceesafe_scope *scope) {
@@ -307,7 +378,7 @@ static void cee_wait(void) {
             registered += 1;
         }
     }
-    if (deadline == UINT64_MAX && registered == 0) {
+    if (deadline == UINT64_MAX && registered == 0 && cee_exec.wake_count == 0u) {
         cee_stuck();
     }
     for (;;) {
@@ -324,10 +395,17 @@ static void cee_wait(void) {
             Sleep((DWORD)timeout);
         }
 #else
-        struct pollfd fds[64];
-        cee_task *owners[64];
+        struct pollfd fds[65];
+        cee_task *owners[65];
         nfds_t count = 0;
-        for (cee_task *t = cee_exec.parked; t != NULL && count < 64u; t = t->next) {
+        if (cee_exec.wake_count > 0u && cee_exec.wake_pipe[0] >= 0) {
+            fds[0].fd = cee_exec.wake_pipe[0]; /* another thread's wake */
+            fds[0].events = POLLIN;
+            fds[0].revents = 0;
+            owners[0] = NULL;
+            count = 1u;
+        }
+        for (cee_task *t = cee_exec.parked; t != NULL && count < 65u; t = t->next) {
             if (t->fd >= 0) {
                 fds[count].fd = t->fd;
                 fds[count].events = POLLOUT;
@@ -341,10 +419,23 @@ static void cee_wait(void) {
             continue;
         }
         for (nfds_t k = 0; ready > 0 && k < count; k++) {
-            if (fds[k].revents != 0) {
+            if (fds[k].revents != 0 && owners[k] == NULL) {
+                unsigned char drained[64];
+                (void)read(cee_exec.wake_pipe[0], drained, sizeof drained);
+            } else if (fds[k].revents != 0) {
                 cee_unpark(owners[k]); /* the task retries, and sees an error if there was one */
                 any = true;
             }
+        }
+        /* Tasks another thread woke. */
+        cee_task *w = cee_exec.parked;
+        while (w != NULL) {
+            cee_task *next = w->next;
+            if (__atomic_exchange_n(&w->woken, 0u, __ATOMIC_SEQ_CST) != 0u) {
+                cee_unpark(w);
+                any = true;
+            }
+            w = next;
         }
 #endif
         now = ceesafe_async_now();
@@ -380,12 +471,15 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
     cee_exec.ready_tail = NULL;
     cee_exec.parked = NULL;
     cee_exec.current = NULL;
+    cee_exec.wake_pipe[0] = -1;
+    cee_exec.wake_pipe[1] = -1;
+    cee_exec.wake_count = 0u;
     if (!cee_cancel_read) {
         cee_cancel_read = true;
         cee_cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
         cee_cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
     }
-    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false};
+    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false, false, 0u};
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -397,7 +491,15 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         bool done = t->scope == NULL ? t->resume_root(t->frame) : t->resume_child(t->frame, t->scope);
         cee_exec.current = NULL;
         if (!done) {
-            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !(t->shields > 0u)) {
+            if (__atomic_exchange_n(&t->woken, 0u, __ATOMIC_SEQ_CST) != 0u) {
+                if (t->on_wake) {
+                    t->on_wake = false;
+                    cee_exec.wake_count -= 1u;
+                }
+                cee_ready(t); /* woken between its check and its park */
+                continue;
+            }
+            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !t->on_wake && !(t->shields > 0u)) {
                 cee_stuck(); /* parked without registering anything: nothing can wake it */
             }
             t->next = cee_exec.parked;
@@ -427,6 +529,12 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
             cee_unpark(waiter);
         }
     }
+#if !defined(_WIN32)
+    if (cee_exec.wake_pipe[0] >= 0) {
+        (void)close(cee_exec.wake_pipe[0]);
+        (void)close(cee_exec.wake_pipe[1]);
+    }
+#endif
     if (cee_cancel_report) {
         char line[64];
         int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n", (unsigned long long)cee_suspensions);

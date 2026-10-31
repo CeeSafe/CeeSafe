@@ -485,6 +485,11 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   both frames, starts both with `ceesafe_async_start` (the caller's storage: nothing is allocated, nothing freed), and
   waits like a scope's end. `ceeAJ<site>_<k>` resumes child k and, once it returns, keeps its result, notes it if it
   was first, and calls `ceesafe_async_cancel` on the join: always for race, on an `Err` for all.
+- **Blocking.** `Async.blocking(body)` at `site` is a field `struct ceeAB_<site> cee_b<site>`: the runtime's
+  `ceesafe_blocking`, the closure value and its result. `ceesafe_async_blocking_start` runs `ceeABT_<site>` on a worker
+  (`ceesafe_thread_start`; inline if none can start), which calls the closure through its code pointer, stores the
+  result and calls `ceesafe_async_blocking_finish`. The task waits at a suspension point on
+  `ceesafe_async_blocking_ready`, which joins the worker once it is done.
 - **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
@@ -562,7 +567,11 @@ Heap (M3b):
     `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N` after each `Async.run` (`testing.md`).
   - `ceesafe_async_start(scope, slot, frame, resume)` starts a child in the caller's storage (`race`, `all`), and
     `ceesafe_async_cancel(scope)` cancels a scope's children.
-  - Later: wakers and `ceesafe_async_wake(id)` (A2c); kqueue and epoll beside `poll()` (A2d).
+  - Waking from another thread (A2c): a task parked on a wake has `woken` set atomically by the waking thread, which
+    then writes a byte to its executor's wake pipe (opened on first need); `poll` watches the pipe while a task waits
+    to be woken, and the executor readies every woken task. A task woken between its check and its park is readied at
+    once. Programs with async link the thread runtime.
+  - Later: kqueue and epoll beside `poll()` (A2d).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

@@ -22,7 +22,8 @@ fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
     let r = statementRvalue(n, s);
     return r != none() &&
         (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark() ||
-            builtinOf(n, r) == bfAsyncScopeWait() || builtinOf(n, r) == bfAsyncJoin());
+            builtinOf(n, r) == bfAsyncScopeWait() || builtinOf(n, r) == bfAsyncJoin() ||
+            builtinOf(n, r) == bfAsyncBlocking());
 }
 
 fn builtinArguments(n: borrow NirProgram, r: u32) -> Range => match (n.rvalues[r as usize]) {
@@ -203,6 +204,9 @@ fn emitFrameStruct(
             if (r != none() && builtinOf(n, r) == bfAsyncJoin()) {
                 emitJoinStruct(e, c, n, r)?;
             }
+            if (r != none() && builtinOf(n, r) == bfAsyncBlocking()) {
+                emitBlockingStruct(e, c, n, r)?;
+            }
         }
     }
     let function = borrow n.functions[f as usize];
@@ -227,6 +231,15 @@ fn emitFrameStruct(
             }
             site += 1;
             let r = statementRvalue(n, s);
+            if (builtinOf(n, r) == bfAsyncBlocking()) {
+                let blocking = constArgument(n, r, 0);
+                e.t("    struct ceeAB_")?;
+                e.d(blocking as u64)?;
+                e.t(" cee_b")?;
+                e.d(blocking as u64)?;
+                e.t(";")?;
+                e.emit()?;
+            }
             if (builtinOf(n, r) == bfAsyncJoin()) {
                 let join = constArgument(n, r, 0);
                 e.t("    struct ceeAJ_")?;
@@ -366,6 +379,9 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                 }
                 if (r != none() && builtinOf(n, r) == bfAsyncJoin()) {
                     emitJoinThunks(e, c, n, r)?;
+                }
+                if (r != none() && builtinOf(n, r) == bfAsyncBlocking()) {
+                    emitBlockingThunk(e, c, n, r)?;
                 }
             }
         }
@@ -514,6 +530,9 @@ fn emitTaskStatement(
     }
     if (builtinOf(n, r) == bfAsyncJoin()) {
         return emitJoin(e, c, n, sources, f, r, target);
+    }
+    if (builtinOf(n, r) == bfAsyncBlocking()) {
+        return emitBlocking(e, c, n, sources, f, r, target);
     }
     if (builtinOf(n, r) == bfAsyncJoinResult()) {
         let site = constArgument(n, r, 0);
@@ -876,6 +895,120 @@ fn emitJoin(
         e.t(" = ")?;
         e.b(join.view())?;
         e.t(".first;")?;
+        e.emit()?;
+    }
+    return Ok(true);
+}
+
+/// `Async.blocking` at `site`: the runtime's handle, the body (a closure value) and its result (c-backend.md §3a).
+fn emitBlockingStruct(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    r: u32,
+) -> Result<void, AllocError> {
+    let site = constArgument(n, r, 0);
+    let list = builtinArguments(n, r);
+    e.t("struct ceeAB_")?;
+    e.d(site as u64)?;
+    e.t(" { ceesafe_blocking rt; ")?;
+    appendCTypeName(c, mut e.buf, n.operandTypes[n.at(list, 2) as usize])?;
+    e.t(" body; ")?;
+    let result = n.rvalueTypes[r as usize];
+    if (!c.types.is(result, TypeKind.Void)) {
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t(" result; ")?;
+    }
+    e.t("};")?;
+    return e.emit();
+}
+
+/// The worker thread's body: calls the closure, keeps its result, and wakes the task.
+fn emitBlockingThunk(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    r: u32,
+) -> Result<void, AllocError> {
+    let site = constArgument(n, r, 0);
+    let body = constArgument(n, r, 1);
+    e.t("static void *ceeABT_")?;
+    e.d(site as u64)?;
+    e.t("(void *arg) {")?;
+    e.emit()?;
+    e.t("    struct ceeAB_")?;
+    e.d(site as u64)?;
+    e.t(" *b = (struct ceeAB_")?;
+    e.d(site as u64)?;
+    e.t(" *)arg;")?;
+    e.emit()?;
+    e.t("    ")?;
+    if (!c.types.is(n.rvalueTypes[r as usize], TypeKind.Void)) {
+        e.t("b->result = ")?;
+    }
+    // A closure is called through its environment's code pointer, with the environment first (§36.2).
+    if (c.hir.functions[body as usize].closureEnvironment != none()) {
+        e.t("(*b->body)(b->body);")?;
+    } else {
+        e.t("b->body();")?;
+    }
+    e.emit()?;
+    e.line("    ceesafe_async_blocking_finish(&b->rt);")?;
+    e.line("    return NULL;")?;
+    e.line("}")?;
+    return Ok();
+}
+
+/// `await Async.blocking(body)`, suspension point k: the worker starts, then the task waits until it has finished.
+fn emitBlocking(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let site = constArgument(n, r, 0);
+    let list = builtinArguments(n, r);
+    let value = operandText(e, c, n, sources, f, n.at(list, 2))?;
+    var b = copyBytes("cee_frame->cee_b".bytes())?;
+    appendDecimal(mut b, site as u64)?;
+    e.t("    ")?;
+    e.b(b.view())?;
+    e.t(".body = ")?;
+    e.b(value.view())?;
+    e.t(";")?;
+    e.emit()?;
+    e.t("    ceesafe_async_blocking_start(&")?;
+    e.b(b.view())?;
+    e.t(".rt, ceeABT_")?;
+    e.d(site as u64)?;
+    e.t(", &")?;
+    e.b(b.view())?;
+    e.t(");")?;
+    e.emit()?;
+    e.asyncState += 1;
+    let k = e.asyncState;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!ceesafe_async_blocking_ready(&")?;
+    e.b(b.view())?;
+    e.t(".rt)) return false;")?;
+    e.emit()?;
+    if (target != none() && !c.types.is(n.rvalueTypes[r as usize], TypeKind.Void)) {
+        let place = appendPlaceIn(e, c, n, sources, f, target)?;
+        e.t("    ")?;
+        e.b(place.view())?;
+        e.t(" = ")?;
+        e.b(b.view())?;
+        e.t(".result;")?;
         e.emit()?;
     }
     return Ok(true);

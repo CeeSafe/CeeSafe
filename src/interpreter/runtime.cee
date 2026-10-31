@@ -818,6 +818,17 @@ fn builtin(
     if (b == bfAsyncJoin()) {
         return asyncJoin(it, c, n, frame, arguments);
     }
+    if (b == bfAsyncBlocking()) {
+        // One thread: the body runs at once, as when no worker can start (type-system.md §40.8).
+        let body = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)?);
+        let closure = operand(it, c, n, frame, n.at(arguments, 2))?;
+        var values = Vector<Value>.create();
+        if (c.hir.functions[body as usize].closureEnvironment != none()) {
+            values.push(closure)!;
+        }
+        let function = nirFunctionOf(it, body, 0)?;
+        return callFunction(it, c, n, function, values);
+    }
     if (b == bfAsyncJoinResult()) {
         return asyncJoinResult(it, c, n, frame, arguments);
     }

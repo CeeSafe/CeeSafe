@@ -1,0 +1,45 @@
+// Async.blocking (type-system.md §40.4): a sync closure runs on a worker thread while the task waits, so it may
+// sleep; its captures follow Thread.both's rule and its result comes back to the task.
+
+fn slowSum(limit: u64) -> u64 {
+    var total: u64 = 0;
+    for (i in 0..limit) {
+        total += i;
+    }
+    return total;
+}
+
+async fn work() -> Result<u64, AsyncError> {
+    let limit: u64 = 1000;
+    var counted: u64 = 0;
+    // A worker thread computes; the task waits without blocking its thread.
+    let sum = await Async.blocking(() => slowSum(limit));
+    // A blocking body may sleep: here it writes with Console, which an async fn may not.
+    await Async.blocking(() => { Console.writeLine("from a worker"); });
+    // Changes a captured local, which is Send.
+    await Async.blocking(() => { counted = 3; });
+    // Beside a timer child: both finish.
+    var ticks: u64 = 0;
+    var more: u64 = 0;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            await Timer.sleep(1)?;
+            ticks += 1;
+            return Ok();
+        });
+        s.spawn(async () => {
+            more = await Async.blocking(() => slowSum(10));
+            return Ok();
+        });
+    })?;
+    return Ok(sum + counted + ticks + more);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: from a worker
+// expect-stdout: 499549

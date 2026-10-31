@@ -48,3 +48,12 @@ async fn joins() -> Result<void, AsyncError> {
     await Async.race(1, 2); // error[N0209]
     return Ok();
 }
+
+async fn workers() -> Result<void, AsyncError> {
+    let raw = 0 as *mut u8;
+    await Async.blocking(() => { let r = raw; });        // error[N0334]
+    let back = await Async.blocking(() => 0 as *mut u8); // error[N0334]
+    Async.blocking(() => 1);                             // error[N0342]
+    await Async.blocking(async () => Ok());              // error[N0209]
+    return Ok();
+}

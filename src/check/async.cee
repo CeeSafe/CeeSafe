@@ -17,6 +17,8 @@ fn bfAsyncScopeWait() -> u32 => 1002;
 /// child's result out, and lib/std's settle function makes the value (§40.4).
 fn bfAsyncJoin() -> u32 => 1003;
 fn bfAsyncJoinResult() -> u32 => 1004;
+/// `await Async.blocking(body)`: Builtin(AsyncBlocking, [site, body's HIR function, body]), body's result.
+fn bfAsyncBlocking() -> u32 => 1005;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -130,6 +132,9 @@ fn checkAsyncCall(
     }
     if (sameText(c.name(memberIdent.symbol), "shield")) {
         return checkAsyncShield(c, arguments, expected, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "blocking")) {
+        return checkAsyncBlocking(c, arguments, expected, span);
     }
     if (sameText(c.name(memberIdent.symbol), "isCancelled") || sameText(c.name(memberIdent.symbol), "checkpoint")) {
         return checkCancellationCall(c, memberIdent.symbol, arguments, span);
@@ -727,4 +732,93 @@ fn checkAsyncJoin(
     c.asyncSites += 1;
     let resultType = c.hir.functions[settle as usize].returnType;
     return c.expr(HirExpr.AsyncJoin(site, isRace, first, second, settle), resultType, span.start, span.end);
+}
+
+/// `await Async.blocking(() => …)` (§40.4): a sync closure literal that runs on a worker thread while the task waits.
+/// Its captures follow Thread.both's rule (§38.6) and its result must be Send (N0334). Its effects are the worker's,
+/// so the task gets only `suspend`.
+fn checkAsyncBlocking(c: borrow mut Checker, arguments: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.blocking' waits for its worker: write 'await Async.blocking(() => …)' (type-system.md §40.4)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    let literal = if (arguments.count == 1) match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
+        ExprNode.Closure(closure) => if (!c.front.ast.closures[closure as usize].isAsync &&
+            !c.front.ast.closures[closure as usize].isMove &&
+            c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
+        _ => none(),
+    } else none();
+    if (literal == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.blocking' takes a closure literal with no parameters: 'Async.blocking(() => …)' (type-system.md §40.4)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let syntax = c.front.ast.at(arguments, 0);
+    let syntaxSpan = c.front.ast.exprSpans[syntax as usize];
+    var closureType = none();
+    if (expected != none() && !c.types.isBottom(expected)) {
+        let none0 = Vector<u32>.create();
+        let callable = c.types.closureTo(none0.view(), expected, allEffects())?;
+        closureType = c.types.referenceTo(callable, true)?;
+    }
+    let closure = checkClosure(c, literal, closureType, syntaxSpan)?;
+    var function = none();
+    var captures = emptyRange();
+    match (c.hir.exprs[closure as usize]) {
+        HirExpr.Closure(f, list) => {
+            function = f;
+            captures = list;
+        }
+        _ => {}
+    }
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    var ok = true;
+    for (j in 0..captures.count) {
+        let capture = c.hir.captures[(captures.start + j) as usize];
+        let local = c.hir.locals[capture.local as usize];
+        let t = if (capture.field != none()) c.types.fields[capture.field as usize].typ else local.typ;
+        let mutably = isMutableCapture(capture.mode);
+        if (!c.types.isForkSafe(t, mutably)?) {
+            var message = Vector<u8>.create();
+            appendText(mut message, if (mutably) "this closure changes " else "this closure reads ")?;
+            appendQuotedName(mut message, c, local.name)?;
+            appendText(mut message, ", a ")?;
+            appendQuotedType(mut message, c, t)?;
+            appendText(
+                mut message,
+                if (mutably) ", which is not Send: a worker thread would change it (type-system.md §40.4)" else ", which is not Share: a worker thread would read it (type-system.md §40.4)",
+            )?;
+            c.error(notSend(), syntaxSpan.start, syntaxSpan.end, message)?;
+            ok = false;
+        }
+    }
+    let resultType = c.hir.functions[function as usize].returnType;
+    if (!c.types.is(resultType, TypeKind.Void) && !c.types.isSendType(resultType)?) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "the result of 'Async.blocking', a ")?;
+        appendQuotedType(mut message, c, resultType)?;
+        appendText(mut message, ", is not Send: it comes from a worker thread (type-system.md §40.4)")?;
+        c.error(notSend(), syntaxSpan.start, syntaxSpan.end, message)?;
+        ok = false;
+    }
+    if (!ok) {
+        return c.errorResult(span.start, span.end);
+    }
+    let site = c.asyncSites;
+    c.asyncSites += 1;
+    return c.expr(HirExpr.AsyncBlocking(site, closure), resultType, span.start, span.end);
 }

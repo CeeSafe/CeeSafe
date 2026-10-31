@@ -107,6 +107,7 @@ enum HirExpr {
     Spawn(u32, u32),                     // `s.spawn(async () => …)`: the scope's site, the async closure
     AsyncShield(u32, u32, u32),          // `await Async.shield(ms, body)` (§40.7): enter call, awaited body, leave call
     AsyncJoin(u32, bool, u32, u32, u32), // `await Async.race(a, b)` or `all`: site, is race, the closures, settle fn
+    AsyncBlocking(u32, u32),             // `await Async.blocking(() => …)` (§40.4): site, the sync closure
     Error,
 }
 

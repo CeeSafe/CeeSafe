@@ -154,7 +154,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_format_f")) {
             out.push(runtimeFile(4, "")?)?;
         }
-        if (containsBytes(mainText.view(), "ceesafe_thread_") || containsBytes(mainText.view(), "ceesafe_mutex_")) {
+        if (containsBytes(mainText.view(), "ceesafe_thread_") || containsBytes(mainText.view(), "ceesafe_mutex_") ||
+            containsBytes(mainText.view(), "ceesafe_async_")) {
+            // The async runtime starts Async.blocking's workers with the thread runtime.
             out.push(runtimeFile(5, "")?)?;
         }
         if (containsBytes(mainText.view(), "ceesafe_async_")) {

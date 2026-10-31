@@ -1055,6 +1055,19 @@ typedef struct ceesafe_task_slot {
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
                          bool (*resume)(void *frame, ceesafe_scope *scope));
 void ceesafe_async_cancel(ceesafe_scope *scope);
+/* Async.blocking (type-system.md §40.4): `body(arg)` runs on a worker thread, which calls ceesafe_async_blocking_finish
+ * when it is done; ceesafe_async_blocking_ready is true once it is, and otherwise parks the task until the worker wakes
+ * it through its executor (any thread may wake a task: a flag and the executor's wake pipe). If no thread can be
+ * started, the body runs at once on this one: the result is the same. A blocking body is not cancelled. */
+typedef struct ceesafe_blocking {
+    void *thread;
+    void *task;
+    void *executor;
+    uint32_t done; /* written with __atomic */
+} ceesafe_blocking;
+void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg);
+bool ceesafe_async_blocking_ready(ceesafe_blocking *b);
+void ceesafe_async_blocking_finish(ceesafe_blocking *b);
 /* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is
  * up. Async.shield brackets its body with enter and leave; inside, cancellation is not reported. */
 uint32_t ceesafe_async_status(void);

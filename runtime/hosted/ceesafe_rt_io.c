@@ -3,7 +3,7 @@
  * CeeSafe runtime: program arguments, files and TCP sockets (type-system.md §26) for hosted C
  * environments (Linux, macOS) and CosmoOS userland. Only public C library functions (L1, OD-15).
  * Windows (MSVC, best effort; spec/c-backend.md §1.1): files and processes through its C runtime;
- * TCP is not supported there. Host services (type-system.md §26.7-§26.10, ADR 0028) work on all three.
+ * TCP through Winsock 2, its sockets behind a table of ids. Host services (type-system.md §26.7-§26.10, ADR 0028) work on all three.
  */
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
@@ -21,7 +21,11 @@
 #include <process.h>
 #include <sys/stat.h>
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "ws2_32.lib")
+#endif
 #else
 #include <dirent.h>
 #include <netinet/in.h>
@@ -125,9 +129,16 @@ cee_io_result ceesafe_file_remove(cee_str path) {
 #endif
 }
 
+#ifdef _WIN32
+static cee_io_result cee_socket_read(int32_t id, uint8_t *buffer, size_t chunk);
+static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t length);
+static void cee_socket_close(int32_t id);
+#endif
+
 cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length) {
     size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
 #ifdef _WIN32
+    if (fd >= CEE_SOCKET_BASE) return cee_socket_read(fd, buffer, chunk);
     int n;
     do {
         n = _read(fd, buffer, (unsigned)chunk);
@@ -142,6 +153,9 @@ cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length) {
 }
 
 cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
+#ifdef _WIN32
+    if (fd >= CEE_SOCKET_BASE) return cee_socket_write(fd, bytes, length);
+#endif
     uint64_t done = 0;
     while (done < length) {
         uint64_t rest = length - done;
@@ -165,7 +179,8 @@ cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length
 
 void ceesafe_fd_drop(int32_t *fd) {
 #ifdef _WIN32
-    if (*fd >= 0) (void)_close(*fd);
+    if (*fd >= CEE_SOCKET_BASE) cee_socket_close(*fd);
+    else if (*fd >= 0) (void)_close(*fd);
 #else
     if (*fd >= 0) (void)close(*fd);
 #endif
@@ -195,32 +210,199 @@ static bool ceesafe_ipv4(cee_str text, uint8_t out[4]) {
 }
 
 #ifdef _WIN32
-/* TCP is not supported on Windows (best effort, spec/c-backend.md §1.1): addresses are still checked. */
-cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
-    uint8_t bytes[4];
-    (void)port;
-    return ceesafe_io_fail(ceesafe_ipv4(address, bytes) ? ENOSYS : EINVAL);
+/* ---- Windows: Winsock 2 behind a table of ids (L1 A4a; ceesafe/rt.h's CEE_SOCKET_BASE). The table holds the SOCKET
+ * of each id that is open, INVALID_SOCKET in a free slot; a slim reader-writer lock guards it, since any thread may
+ * open or close a socket. It comes from the platform's heap: the runtime's own bookkeeping, as the executor's. ---- */
+
+static SRWLOCK cee_socket_lock = SRWLOCK_INIT;
+static SOCKET *cee_sockets;
+static uint32_t cee_socket_count;
+static uint32_t cee_socket_capacity;
+static INIT_ONCE cee_wsa_once = INIT_ONCE_STATIC_INIT;
+
+static BOOL CALLBACK cee_wsa_start(PINIT_ONCE once, PVOID parameter, PVOID *context) {
+    WSADATA data;
+    (void)once; (void)parameter; (void)context;
+    return WSAStartup(MAKEWORD(2, 2), &data) == 0;
 }
+
+static bool cee_wsa_ready(void) { return InitOnceExecuteOnce(&cee_wsa_once, cee_wsa_start, NULL, NULL) != 0; }
+
+/* A Winsock error as the C runtime's errno, so ceesafe_io_kind and messages read it as on POSIX. */
+static int32_t cee_wsa_errno(int error) {
+    switch (error) {
+    case WSAEWOULDBLOCK: return EWOULDBLOCK;
+    case WSAEINPROGRESS: return EINPROGRESS;
+    case WSAEALREADY: return EALREADY;
+    case WSAECONNREFUSED: return ECONNREFUSED;
+    case WSAEADDRINUSE: return EADDRINUSE;
+    case WSAEADDRNOTAVAIL: return EADDRNOTAVAIL;
+    case WSAECONNRESET: return ECONNRESET;
+    case WSAECONNABORTED: return ECONNABORTED;
+    case WSAENOTCONN: return ENOTCONN;
+    case WSAEISCONN: return EISCONN;
+    case WSAESHUTDOWN: return EPIPE;
+    case WSAETIMEDOUT: return ETIMEDOUT;
+    case WSAENETUNREACH: case WSAEHOSTUNREACH: return ENETUNREACH;
+    case WSAEACCES: return EACCES;
+    case WSAEINVAL: case WSAEFAULT: return EINVAL;
+    case WSAENOTSOCK: return ENOTSOCK;
+    case WSAEMFILE: return EMFILE;
+    case WSAENOBUFS: case WSA_NOT_ENOUGH_MEMORY: return ENOMEM;
+    case WSAEINTR: return EINTR;
+    default: return EIO;
+    }
+}
+
+static cee_io_result cee_wsa_fail(void) { return ceesafe_io_fail(cee_wsa_errno(WSAGetLastError())); }
+
+uintptr_t ceesafe_socket_handle(int32_t id) {
+    SOCKET s = INVALID_SOCKET;
+    AcquireSRWLockShared(&cee_socket_lock);
+    if (id >= CEE_SOCKET_BASE && (uint32_t)(id - CEE_SOCKET_BASE) < cee_socket_count) {
+        s = cee_sockets[id - CEE_SOCKET_BASE];
+    }
+    ReleaseSRWLockShared(&cee_socket_lock);
+    return (uintptr_t)s;
+}
+
+/* An id for `s`, or -1 if the table cannot grow (then `s` is closed). */
+static int32_t cee_socket_add(SOCKET s) {
+    int32_t id = -1;
+    AcquireSRWLockExclusive(&cee_socket_lock);
+    for (uint32_t k = 0; k < cee_socket_count && id < 0; k++) {
+        if (cee_sockets[k] == INVALID_SOCKET) {
+            cee_sockets[k] = s;
+            id = CEE_SOCKET_BASE + (int32_t)k;
+        }
+    }
+    if (id < 0 && cee_socket_count < (uint32_t)(INT32_MAX - CEE_SOCKET_BASE)) {
+        if (cee_socket_count == cee_socket_capacity) {
+            uint32_t capacity = cee_socket_capacity == 0u ? 16u : cee_socket_capacity * 2u;
+            SOCKET *grown = (SOCKET *)ceesafe_platform_realloc(cee_sockets, (size_t)capacity * sizeof *grown);
+            if (grown != NULL) {
+                cee_sockets = grown;
+                cee_socket_capacity = capacity;
+            }
+        }
+        if (cee_socket_count < cee_socket_capacity) {
+            cee_sockets[cee_socket_count] = s;
+            id = CEE_SOCKET_BASE + (int32_t)cee_socket_count;
+            cee_socket_count += 1u;
+        }
+    }
+    ReleaseSRWLockExclusive(&cee_socket_lock);
+    if (id < 0) {
+        (void)closesocket(s);
+    }
+    return id;
+}
+
+static void cee_socket_close(int32_t id) {
+    SOCKET s = INVALID_SOCKET;
+    AcquireSRWLockExclusive(&cee_socket_lock);
+    if (id >= CEE_SOCKET_BASE && (uint32_t)(id - CEE_SOCKET_BASE) < cee_socket_count) {
+        s = cee_sockets[id - CEE_SOCKET_BASE];
+        cee_sockets[id - CEE_SOCKET_BASE] = INVALID_SOCKET;
+    }
+    ReleaseSRWLockExclusive(&cee_socket_lock);
+    if (s != INVALID_SOCKET) {
+        (void)closesocket(s);
+    }
+}
+
+static cee_io_result cee_socket_read(int32_t id, uint8_t *buffer, size_t chunk) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(id);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    int n = recv(s, (char *)buffer, (int)chunk, 0);
+    return n == SOCKET_ERROR ? cee_wsa_fail() : ceesafe_io_ok(n);
+}
+
+static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t length) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(id);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    uint64_t done = 0;
+    while (done < length) {
+        uint64_t rest = length - done;
+        int chunk = rest > (1u << 30) ? 1 << 30 : (int)rest;
+        int n = send(s, (const char *)(bytes + done), chunk, 0);
+        if (n == SOCKET_ERROR) return cee_wsa_fail();
+        if (n == 0) return ceesafe_io_fail(EIO);
+        done += (uint64_t)n;
+    }
+    return ceesafe_io_ok(0);
+}
+
+static void cee_address_set(struct sockaddr_in *a, const uint8_t bytes[4], uint16_t port) {
+    memset(a, 0, sizeof *a);
+    a->sin_family = AF_INET;
+    a->sin_port = htons(port);
+    memcpy(&a->sin_addr, bytes, 4);
+}
+
+/* A new socket, bound and listening, or connected; nonblocking first if asked. */
+static cee_io_result cee_socket_open(cee_str address, uint16_t port, bool listening, bool nonblocking) {
+    uint8_t bytes[4];
+    if (!ceesafe_ipv4(address, bytes)) return ceesafe_io_fail(EINVAL);
+    if (!cee_wsa_ready()) return ceesafe_io_fail(ENOSYS);
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return cee_wsa_fail();
+    u_long on = 1;
+    if (nonblocking && ioctlsocket(s, FIONBIO, &on) != 0) {
+        cee_io_result failed = cee_wsa_fail();
+        (void)closesocket(s);
+        return failed;
+    }
+    struct sockaddr_in a;
+    cee_address_set(&a, bytes, port);
+    int status = listening ? bind(s, (const struct sockaddr *)&a, (int)sizeof a) : connect(s, (const struct sockaddr *)&a, (int)sizeof a);
+    if (status == 0 && listening) status = listen(s, 16);
+    if (status != 0 && !(nonblocking && !listening && WSAGetLastError() == WSAEWOULDBLOCK)) {
+        cee_io_result failed = cee_wsa_fail();
+        (void)closesocket(s);
+        return failed;
+    }
+    int32_t id = cee_socket_add(s);
+    return id < 0 ? ceesafe_io_fail(ENOMEM) : ceesafe_io_ok(id);
+}
+
+cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) { return cee_socket_open(address, port, true, false); }
 
 cee_io_result ceesafe_tcp_port(int32_t fd) {
-    (void)fd;
-    return ceesafe_io_fail(ENOSYS);
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    struct sockaddr_in a;
+    int length = (int)sizeof a;
+    if (getsockname(s, (struct sockaddr *)&a, &length) != 0) return cee_wsa_fail();
+    return ceesafe_io_ok(ntohs(a.sin_port));
 }
 
-cee_io_result ceesafe_tcp_accept(int32_t fd) {
-    (void)fd;
-    return ceesafe_io_fail(ENOSYS);
+static cee_io_result cee_socket_accept(int32_t fd, bool nonblocking) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    SOCKET peer = accept(s, NULL, NULL);
+    if (peer == INVALID_SOCKET) return cee_wsa_fail();
+    /* An accepted socket has the listener's properties, including WSAEventSelect's (which makes it nonblocking):
+       undo them for a blocking stream. */
+    (void)WSAEventSelect(peer, NULL, 0);
+    u_long mode = nonblocking ? 1u : 0u;
+    if (ioctlsocket(peer, FIONBIO, &mode) != 0) {
+        cee_io_result failed = cee_wsa_fail();
+        (void)closesocket(peer);
+        return failed;
+    }
+    int32_t id = cee_socket_add(peer);
+    return id < 0 ? ceesafe_io_fail(ENOMEM) : ceesafe_io_ok(id);
 }
 
-cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) {
-    uint8_t bytes[4];
-    (void)port;
-    return ceesafe_io_fail(ceesafe_ipv4(address, bytes) ? ENOSYS : EINVAL);
-}
+cee_io_result ceesafe_tcp_accept(int32_t fd) { return cee_socket_accept(fd, false); }
+
+cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) { return cee_socket_open(address, port, false, false); }
 
 cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
-    (void)fd;
-    return ceesafe_io_fail(ENOSYS);
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    return shutdown(s, SD_SEND) != 0 ? cee_wsa_fail() : ceesafe_io_ok(0);
 }
 #else
 #ifdef COSMO_AF_INET
@@ -442,23 +624,68 @@ void ceesafe_async_close(int32_t fd) {
 #endif /* _WIN32 */
 
 #ifdef _WIN32
+/* Async sockets on Windows: the same calls over nonblocking Winsock sockets; the executor waits for them with
+ * WSAEventSelect and WSAPoll (ceesafe_rt_async.c). */
+static int64_t cee_async_result(cee_io_result r) {
+    if (r.error == 0) return r.value;
+    return r.error == EWOULDBLOCK || r.error == EINPROGRESS ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)r.error;
+}
+
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
-    (void)address; (void)length; (void)port; return -(int64_t)ENOSYS; /* L1 A4: Windows */
+    cee_str text = {address, length};
+    return cee_async_result(cee_socket_open(text, port, true, true));
 }
-int64_t ceesafe_async_tcp_port(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
-int64_t ceesafe_async_tcp_accept(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+
+int64_t ceesafe_async_tcp_port(int32_t fd) { return cee_async_result(ceesafe_tcp_port(fd)); }
+
+int64_t ceesafe_async_tcp_accept(int32_t fd) { return cee_async_result(cee_socket_accept(fd, true)); }
+
+/* Starts a connection: the id, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
-    (void)address; (void)length; (void)port; return -(int64_t)ENOSYS;
+    cee_str text = {address, length};
+    return cee_async_result(cee_socket_open(text, port, false, true));
 }
-int64_t ceesafe_async_tcp_connected(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
+
+int64_t ceesafe_async_tcp_connected(int32_t fd) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    int error = 0;
+    int size = (int)sizeof error;
+    if (getsockopt(s, SOL_SOCKET, SO_ERROR, (char *)&error, &size) != 0) return -(int64_t)cee_wsa_errno(WSAGetLastError());
+    if (error != 0) {
+        return error == WSAEINPROGRESS || error == WSAEALREADY || error == WSAEWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK
+                                                                                         : -(int64_t)cee_wsa_errno(error);
+    }
+    struct sockaddr_in peer;
+    int length = (int)sizeof peer;
+    if (getpeername(s, (struct sockaddr *)&peer, &length) == 0) return 0;
+    int failed = WSAGetLastError();
+    return failed == WSAENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)cee_wsa_errno(failed);
+}
+
 int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length) {
-    (void)fd; (void)buffer; (void)length; return -(int64_t)ENOSYS;
+    size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
+    if (fd < CEE_SOCKET_BASE) return cee_async_result(ceesafe_fd_read(fd, buffer, chunk));
+    return cee_async_result(cee_socket_read(fd, buffer, chunk));
 }
+
 int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
-    (void)fd; (void)bytes; (void)length; return -(int64_t)ENOSYS;
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    int chunk = length > (1u << 30) ? 1 << 30 : (int)length;
+    int n = send(s, (const char *)bytes, chunk, 0);
+    return n == SOCKET_ERROR ? cee_async_result(cee_wsa_fail()) : (int64_t)n;
 }
-int64_t ceesafe_async_shutdown_write(int32_t fd) { (void)fd; return -(int64_t)ENOSYS; }
-void ceesafe_async_close(int32_t fd) { (void)fd; }
+
+int64_t ceesafe_async_shutdown_write(int32_t fd) { return cee_async_result(ceesafe_tcp_shutdown_write(fd)); }
+
+void ceesafe_async_close(int32_t fd) {
+    if (fd >= CEE_SOCKET_BASE) {
+        cee_socket_close(fd);
+    } else if (fd >= 0) {
+        (void)_close(fd);
+    }
+}
 #endif /* _WIN32 */
 
 /* ---- Processes -------------------------------------------------------------------------- */

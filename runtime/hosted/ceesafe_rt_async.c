@@ -7,6 +7,11 @@
  * their frames come from ceesafe_alloc, so the fault-injection sweep reaches them. Linked only into programs that call
  * ceesafe_async_* (c-backend.md §6).
  */
+#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
+/* ceesafec compiles with -std=c11, under which glibc hides POSIX's clock_gettime and CLOCK_MONOTONIC. (Not on macOS,
+   where _POSIX_C_SOURCE would hide the BSD interfaces instead.) */
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include "ceesafe/rt.h"
 
 #include <errno.h>
@@ -16,7 +21,11 @@
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h> /* WSAPoll, WSAEventSelect, and POLLIN/POLLOUT for fd_events */
 #include <windows.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "ws2_32.lib")
+#endif
 #else
 #include <poll.h>
 #include <pthread.h>
@@ -47,13 +56,13 @@ typedef struct cee_task {
     const ceesafe_frame_info *info; /* for ceesafe_async_dump */
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
-    uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (__atomic): readied in that order */
+    uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (ceesafe_atomic_*): readied in that order */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
 
 /* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task. */
-#define CEE_TASK_HEAD ((sizeof(cee_task) + sizeof(max_align_t) - 1u) / sizeof(max_align_t) * sizeof(max_align_t))
+#define CEE_TASK_HEAD ((sizeof(cee_task) + sizeof(cee_max_align_t) - 1u) / sizeof(cee_max_align_t) * sizeof(cee_max_align_t))
 
 typedef struct {
     cee_task *ready_head;
@@ -61,6 +70,9 @@ typedef struct {
     cee_task *parked;
     cee_task *current;
     int wake_pipe[2];    /* another thread's wake: a byte written here makes poll return (-1 until first needed) */
+#if defined(_WIN32)
+    HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
+#endif
     uint32_t wake_count; /* tasks parked on_wake */
 } cee_executor;
 
@@ -68,7 +80,7 @@ static _Thread_local cee_executor cee_exec;
 
 /* The cancellation sweep (testing.md §1): CEESAFE_CANCEL_AT=k cancels the running Async.run's root task at the
  * program's k-th suspension; CEESAFE_CANCEL_REPORT=1 prints the count after each Async.run. */
-static uint64_t cee_suspensions; /* every thread's executor counts here (__atomic) */
+static uint64_t cee_suspensions; /* every thread's executor counts here (ceesafe_atomic_*) */
 
 /* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
 static bool cee_cancelled(const cee_task *t) {
@@ -114,13 +126,17 @@ static cee_task *cee_take_ready(void) {
 
 /* Wakes a task of this or another thread's executor: safe from any thread while the task waits (it cannot end before
  * it is woken). */
-static uint64_t cee_wake_sequence; /* __atomic: orders wakes, so woken tasks run first come, first served */
+static uint64_t cee_wake_sequence; /* ceesafe_atomic_*: orders wakes, so woken tasks run first come, first served */
 
 static void cee_wake_task(cee_executor *exec, cee_task *t) {
-    uint64_t sequence = __atomic_add_fetch(&cee_wake_sequence, 1u, __ATOMIC_SEQ_CST);
+    uint64_t sequence = ceesafe_atomic_add_u64(&cee_wake_sequence, 1u) + 1u;
     uint64_t none = 0u;
-    (void)__atomic_compare_exchange_n(&t->woken, &none, sequence, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-#if !defined(_WIN32)
+    (void)ceesafe_atomic_cas_u64(&t->woken, none, sequence);
+#if defined(_WIN32)
+    if (exec->wake_event != NULL) {
+        (void)SetEvent(exec->wake_event);
+    }
+#else
     if (exec->wake_pipe[1] >= 0) {
         unsigned char byte = 1u;
         ssize_t written;
@@ -140,6 +156,14 @@ static void cee_unpark(cee_task *t) {
         *link = t->next;
     }
     t->deadline = UINT64_MAX;
+#if defined(_WIN32)
+    if (t->fd >= CEE_SOCKET_BASE) {
+        SOCKET s = (SOCKET)ceesafe_socket_handle(t->fd);
+        if (s != INVALID_SOCKET) {
+            (void)WSAEventSelect(s, NULL, 0); /* no more signals to this executor's event (the socket stays nonblocking) */
+        }
+    }
+#endif
     t->fd = -1;
     t->on_scope = false;
     if (t->on_wake) {
@@ -170,25 +194,53 @@ void ceesafe_async_wait_until(uint64_t deadline) {
 void ceesafe_async_wait_writable(int32_t fd) {
     if (cee_exec.current != NULL) {
         cee_exec.current->fd = fd;
-#if !defined(_WIN32)
         cee_exec.current->fd_events = POLLOUT;
-#endif
     }
 }
 
 void ceesafe_async_wait_readable(int32_t fd) {
     if (cee_exec.current != NULL) {
         cee_exec.current->fd = fd;
-#if !defined(_WIN32)
         cee_exec.current->fd_events = POLLIN;
-#endif
     }
 }
 
 int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t *ready, uint64_t count, int64_t timeout) {
 #if defined(_WIN32)
-    (void)fds; (void)events; (void)ready; (void)count; (void)timeout;
-    return -(int64_t)ENOSYS;
+    /* Sockets through WSAPoll; any other descriptor counts as ready (as the executor's). */
+    WSAPOLLFD list[64];
+    ULONG polled = 0;
+    uint64_t index[64];
+    int64_t others = 0;
+    if (count > 64u) {
+        count = 64u;
+    }
+    for (uint64_t k = 0; k < count; k++) {
+        ready[k] = 0u;
+        SOCKET s = fds[k] >= CEE_SOCKET_BASE ? (SOCKET)ceesafe_socket_handle(fds[k]) : INVALID_SOCKET;
+        if (s == INVALID_SOCKET) {
+            ready[k] = events[k] & 3u;
+            others += ready[k] != 0u;
+            continue;
+        }
+        list[polled].fd = s;
+        list[polled].events = (SHORT)(((events[k] & 1u) != 0u ? POLLRDNORM : 0) | ((events[k] & 2u) != 0u ? POLLWRNORM : 0));
+        list[polled].revents = 0;
+        index[polled] = k;
+        polled += 1u;
+    }
+    int n = 0;
+    if (polled > 0u) {
+        n = WSAPoll(list, polled, others > 0 ? 0 : (timeout < 0 ? -1 : (timeout > INT_MAX ? INT_MAX : (int)timeout)));
+        for (ULONG j = 0; n > 0 && j < polled; j++) {
+            SHORT r = list[j].revents;
+            ready[index[j]] = ((r & (POLLRDNORM | POLLHUP | POLLERR | POLLNVAL)) != 0 ? 1u : 0u) |
+                              ((r & (POLLWRNORM | POLLHUP | POLLERR | POLLNVAL)) != 0 ? 2u : 0u);
+        }
+    } else if (others == 0 && timeout > 0) {
+        Sleep(timeout > INT_MAX ? INT_MAX : (DWORD)timeout);
+    }
+    return n < 0 ? -(int64_t)EIO : (int64_t)(n + others);
 #else
     struct pollfd list[64];
     if (count > 64u) {
@@ -259,7 +311,7 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
     size_t block_size = CEE_TASK_HEAD + frame_size;
-    unsigned char *block = allocate != NULL ? (unsigned char *)allocate(block_size, sizeof(max_align_t))
+    unsigned char *block = allocate != NULL ? (unsigned char *)allocate(block_size, sizeof(cee_max_align_t))
                                             : (unsigned char *)ceesafe_alloc(block_size, CEE_ALLOC_SYSTEM);
     if (block == NULL) {
         scope->oom = true;
@@ -363,7 +415,11 @@ static void cee_wake_waiters(void) {
 }
 
 static void cee_open_wake_pipe(void) {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    if (cee_exec.wake_event == NULL) {
+        cee_exec.wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    }
+#else
     if (cee_exec.wake_pipe[0] < 0) {
         int fds[2];
         if (pipe(fds) == 0) {
@@ -378,7 +434,7 @@ void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), vo
     cee_open_wake_pipe();
     b->task = cee_exec.current;
     b->executor = &cee_exec;
-    __atomic_store_n(&b->done, 0u, __ATOMIC_SEQ_CST);
+    ceesafe_atomic_store_u32(&b->done, 0u);
     b->thread = ceesafe_thread_start(body, arg);
     if (b->thread == NULL) {
         body(arg); /* no thread: at once, here (as Thread.both, type-system.md §38.6) */
@@ -386,12 +442,12 @@ void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), vo
 }
 
 void ceesafe_async_blocking_finish(ceesafe_blocking *b) {
-    __atomic_store_n(&b->done, 1u, __ATOMIC_SEQ_CST);
+    ceesafe_atomic_store_u32(&b->done, 1u);
     cee_wake_task((cee_executor *)b->executor, (cee_task *)b->task);
 }
 
 bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
-    if (__atomic_load_n(&b->done, __ATOMIC_SEQ_CST) != 0u) {
+    if (ceesafe_atomic_load_u32(&b->done) != 0u) {
         if (b->thread != NULL) {
             ceesafe_thread_join((cee_thread *)b->thread);
             b->thread = NULL;
@@ -421,6 +477,69 @@ static _Noreturn void cee_stuck(void) {
     ceesafe_platform_abort();
 }
 
+#if defined(_WIN32)
+/* The parked tasks whose sockets are ready now (WSAPoll, no wait), unparked: how many. A socket that is closed, or
+   in error, counts as ready, so its task retries and sees the error. */
+static unsigned cee_poll_sockets(void) {
+    WSAPOLLFD small[64];
+    cee_task *small_owners[64];
+    WSAPOLLFD *list = small;
+    cee_task **owners = small_owners;
+    size_t capacity = 64u;
+    size_t waiting = 0;
+    for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
+        waiting += t->fd >= CEE_SOCKET_BASE;
+    }
+    if (waiting > capacity) {
+        WSAPOLLFD *big = (WSAPOLLFD *)ceesafe_platform_alloc(waiting * sizeof *big);
+        cee_task **big_owners = (cee_task **)ceesafe_platform_alloc(waiting * sizeof *big_owners);
+        if (big != NULL && big_owners != NULL) {
+            list = big;
+            owners = big_owners;
+            capacity = waiting;
+        } else {
+            ceesafe_platform_free(big);
+            ceesafe_platform_free(big_owners);
+        }
+    }
+    ULONG count = 0;
+    unsigned readied = 0;
+    for (cee_task *t = cee_exec.parked; t != NULL && count < capacity; t = t->next) {
+        if (t->fd < CEE_SOCKET_BASE) {
+            continue;
+        }
+        SOCKET s = (SOCKET)ceesafe_socket_handle(t->fd);
+        if (s == INVALID_SOCKET) {
+            continue; /* closed while it waited: readied below */
+        }
+        list[count].fd = s;
+        list[count].events = t->fd_events == POLLOUT ? POLLWRNORM : POLLRDNORM;
+        list[count].revents = 0;
+        owners[count] = t;
+        count += 1u;
+    }
+    int n = count > 0u ? WSAPoll(list, count, 0) : 0;
+    for (ULONG k = 0; k < count; k++) {
+        if (n == SOCKET_ERROR || list[k].revents != 0) {
+            cee_unpark(owners[k]);
+            readied += 1u;
+        }
+    }
+    for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
+        next = t->next;
+        if (t->fd >= CEE_SOCKET_BASE && (SOCKET)ceesafe_socket_handle(t->fd) == INVALID_SOCKET) {
+            cee_unpark(t);
+            readied += 1u;
+        }
+    }
+    if (list != small) {
+        ceesafe_platform_free(list);
+        ceesafe_platform_free(owners);
+    }
+    return readied;
+}
+#endif
+
 /* While no task can run: waits for the earliest deadline or a registered descriptor, then readies what is due. */
 static void cee_wait(void) {
     uint64_t deadline = UINT64_MAX;
@@ -447,8 +566,40 @@ static void cee_wait(void) {
         }
         bool any = false;
 #if defined(_WIN32)
-        if (registered > 0) {
-            any = true; /* treated as writable: see ceesafe_async_write */
+        /* A console or file descriptor has no readiness here: its task retries at once (see ceesafe_async_write). */
+        bool sockets = false;
+        for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
+            next = t->next;
+            if (t->fd >= 0 && t->fd < CEE_SOCKET_BASE) {
+                cee_unpark(t);
+                any = true;
+            } else if (t->fd >= CEE_SOCKET_BASE) {
+                sockets = true;
+            }
+        }
+        if (sockets) {
+            cee_open_wake_pipe();
+        }
+        if (sockets && cee_exec.wake_event != NULL) {
+            /* Each socket signals the executor's event, then WSAPoll says which are ready. A socket that becomes ready
+               between the poll and the wait has already been told to signal, so no readiness is lost. */
+            for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
+                SOCKET s = t->fd >= CEE_SOCKET_BASE ? (SOCKET)ceesafe_socket_handle(t->fd) : INVALID_SOCKET;
+                if (s != INVALID_SOCKET) {
+                    long wanted = t->fd_events == POLLOUT ? (FD_WRITE | FD_CONNECT | FD_CLOSE) : (FD_READ | FD_ACCEPT | FD_CLOSE);
+                    (void)WSAEventSelect(s, cee_exec.wake_event, wanted);
+                }
+            }
+            if (!any && cee_poll_sockets() == 0) {
+                (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout);
+                any = cee_poll_sockets() > 0;
+            } else {
+                any = true;
+            }
+        } else if (any) {
+            /* retry the unparked tasks at once */
+        } else if (cee_exec.wake_count > 0u && cee_exec.wake_event != NULL) {
+            (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout); /* or a wake */
         } else if (timeout > 0) {
             Sleep((DWORD)timeout);
         }
@@ -510,12 +661,13 @@ static void cee_wait(void) {
             ceesafe_platform_free(fds);
             ceesafe_platform_free(owners);
         }
+#endif
         /* Woken tasks, earliest wake first. */
         for (;;) {
             cee_task *first = NULL;
             uint64_t first_at = UINT64_MAX;
             for (cee_task *w = cee_exec.parked; w != NULL; w = w->next) {
-                uint64_t at = __atomic_load_n(&w->woken, __ATOMIC_SEQ_CST);
+                uint64_t at = ceesafe_atomic_load_u64(&w->woken);
                 if (at != 0u && at < first_at) {
                     first = w;
                     first_at = at;
@@ -524,11 +676,10 @@ static void cee_wait(void) {
             if (first == NULL) {
                 break;
             }
-            __atomic_store_n(&first->woken, 0u, __ATOMIC_SEQ_CST);
+            ceesafe_atomic_store_u64(&first->woken, 0u);
             cee_unpark(first);
             any = true;
         }
-#endif
         now = ceesafe_async_now();
         /* The tasks whose time has come run earliest deadline first, however late the executor woke. */
         for (;;) {
@@ -564,6 +715,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_exec.current = NULL;
     cee_exec.wake_pipe[0] = -1;
     cee_exec.wake_pipe[1] = -1;
+#if defined(_WIN32)
+    cee_exec.wake_event = NULL;
+#endif
     cee_exec.wake_count = 0u;
     uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
@@ -585,7 +739,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         bool done = t->scope == NULL ? t->resume_root(t->frame) : t->resume_child(t->frame, t->scope);
         cee_exec.current = NULL;
         if (!done) {
-            if (__atomic_exchange_n(&t->woken, 0u, __ATOMIC_SEQ_CST) != 0u) {
+            if (ceesafe_atomic_swap_u64(&t->woken, 0u) != 0u) {
                 if (t->on_wake) {
                     t->on_wake = false;
                     t->channel_wait = false;
@@ -599,7 +753,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
             }
             t->next = cee_exec.parked;
             cee_exec.parked = t;
-            if (__atomic_add_fetch(&cee_suspensions, 1u, __ATOMIC_RELAXED) == cancel_at) {
+            if (ceesafe_atomic_add_ord_u64(&cee_suspensions, 1u, 0) + 1u == cancel_at) {
                 root.cancelled = true; /* the sweep's cancellation (testing.md §1) */
                 cee_wake_waiters();
             }
@@ -611,7 +765,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         ceesafe_scope *scope = t->scope;
         if (!t->embedded) {
             if (t->release != NULL) {
-                t->release(t, t->block_size, sizeof(max_align_t));
+                t->release(t, t->block_size, sizeof(cee_max_align_t));
             } else {
                 ceesafe_free(t, CEE_ALLOC_SYSTEM);
             }
@@ -627,7 +781,11 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
             cee_unpark(waiter);
         }
     }
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    if (cee_exec.wake_event != NULL) {
+        (void)CloseHandle(cee_exec.wake_event);
+    }
+#else
     if (cee_exec.wake_pipe[0] >= 0) {
         (void)close(cee_exec.wake_pipe[0]);
         (void)close(cee_exec.wake_pipe[1]);
@@ -636,7 +794,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     if (cancel_report) {
         char line[64];
         int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n",
-                              (unsigned long long)__atomic_load_n(&cee_suspensions, __ATOMIC_RELAXED));
+                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_suspensions, 0));
         ceesafe_platform_write_stderr((const uint8_t *)line, (size_t)length);
     }
     cee_exec = saved;
@@ -656,14 +814,14 @@ _Static_assert(sizeof(cee_chan_node) <= sizeof(ceesafe_chan_node), "ceesafe_chan
 
 typedef struct cee_chan {
     uint32_t lock;
-    uint64_t refs;     /* __atomic */
-    uint64_t epoch;    /* __atomic: advances on every send, receive and close */
+    uint64_t refs;     /* ceesafe_atomic_* */
+    uint64_t epoch;    /* ceesafe_atomic_*: advances on every send, receive and close */
     uint64_t capacity;
     uint64_t stride;
     uint64_t head;
     uint64_t count;
     bool closed;
-    uint32_t blocked;  /* threads waiting in ceesafe_chan_wait (__atomic) */
+    uint32_t blocked;  /* threads waiting in ceesafe_chan_wait (ceesafe_atomic_*) */
     cee_chan_node *waiters;
 #if defined(_WIN32)
     SRWLOCK m;
@@ -676,8 +834,8 @@ typedef struct cee_chan {
 } cee_chan;
 
 static void cee_chan_lock(cee_chan *c) {
-    while (__atomic_exchange_n(&c->lock, 1u, __ATOMIC_ACQUIRE) != 0u) {
-        while (__atomic_load_n(&c->lock, __ATOMIC_RELAXED) != 0u) {
+    while (ceesafe_atomic_swap_ord_u32(&c->lock, 1u, 1) != 0u) {
+        while (ceesafe_atomic_load_ord_u32(&c->lock, 0) != 0u) {
 #if !defined(_WIN32)
             sched_yield();
 #endif
@@ -686,7 +844,7 @@ static void cee_chan_lock(cee_chan *c) {
 }
 
 static void cee_chan_unlock(cee_chan *c) {
-    __atomic_store_n(&c->lock, 0u, __ATOMIC_RELEASE);
+    ceesafe_atomic_store_ord_u32(&c->lock, 0u, 2);
 }
 
 void *ceesafe_chan_create(uint64_t capacity, uint64_t size, uint64_t align) {
@@ -722,11 +880,11 @@ void *ceesafe_chan_create(uint64_t capacity, uint64_t size, uint64_t align) {
 }
 
 void ceesafe_chan_retain(void *channel) {
-    (void)__atomic_add_fetch(&((cee_chan *)channel)->refs, 1u, __ATOMIC_RELAXED);
+    (void)ceesafe_atomic_add_ord_u64(&((cee_chan *)channel)->refs, 1u, 0);
 }
 
 bool ceesafe_chan_release(void *channel) {
-    return __atomic_sub_fetch(&((cee_chan *)channel)->refs, 1u, __ATOMIC_ACQ_REL) == 0u;
+    return ceesafe_atomic_add_ord_u64(&((cee_chan *)channel)->refs, UINT64_MAX, 3) == 1u;
 }
 
 void ceesafe_chan_free(void *channel) {
@@ -741,7 +899,7 @@ void ceesafe_chan_free(void *channel) {
 /* After a change, under the lock: the epoch moves, every waiting task is woken (each retries), and blocked threads are
  * signalled. Waking everyone keeps the waits simple; FIFO order among waiters is kept by their order of retrying. */
 static void cee_chan_changed(cee_chan *c) {
-    (void)__atomic_add_fetch(&c->epoch, 1u, __ATOMIC_SEQ_CST);
+    (void)ceesafe_atomic_add_u64(&c->epoch, 1u);
     /* New waiters are at the head: wake from the tail, the oldest first (ADR 0032 §3.4). */
     cee_chan_node *last = c->waiters;
     while (last != NULL && last->next != NULL) {
@@ -755,7 +913,7 @@ static void cee_chan_changed(cee_chan *c) {
 }
 
 static void cee_chan_signal(cee_chan *c) {
-    if (__atomic_load_n(&c->blocked, __ATOMIC_SEQ_CST) != 0u) {
+    if (ceesafe_atomic_load_u32(&c->blocked) != 0u) {
 #if defined(_WIN32)
         AcquireSRWLockExclusive(&c->m);
         WakeAllConditionVariable(&c->cv);
@@ -771,7 +929,7 @@ static void cee_chan_signal(cee_chan *c) {
 void *ceesafe_chan_begin_send(void *channel, uint32_t *status, uint64_t *epoch) {
     cee_chan *c = (cee_chan *)channel;
     cee_chan_lock(c);
-    *epoch = __atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST);
+    *epoch = ceesafe_atomic_load_u64(&c->epoch);
     if (c->closed) {
         *status = 2u;
     } else if (c->count == c->capacity) {
@@ -795,7 +953,7 @@ void ceesafe_chan_end_send(void *channel) {
 void *ceesafe_chan_begin_recv(void *channel, uint32_t *status, uint64_t *epoch) {
     cee_chan *c = (cee_chan *)channel;
     cee_chan_lock(c);
-    *epoch = __atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST);
+    *epoch = ceesafe_atomic_load_u64(&c->epoch);
     if (c->count > 0u) {
         *status = 0u;
         return c->data + c->head * c->stride; /* the lock is kept until end */
@@ -826,21 +984,21 @@ void ceesafe_chan_close(void *channel) {
 /* A thread's wait (send and recv, `sleep`): until the epoch moves from the one its begin saw. */
 void ceesafe_chan_wait(void *channel, uint64_t epoch) {
     cee_chan *c = (cee_chan *)channel;
-    (void)__atomic_add_fetch(&c->blocked, 1u, __ATOMIC_SEQ_CST);
+    (void)ceesafe_atomic_add_u32(&c->blocked, 1u);
 #if defined(_WIN32)
     AcquireSRWLockExclusive(&c->m);
-    while (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) == epoch) {
+    while (ceesafe_atomic_load_u64(&c->epoch) == epoch) {
         (void)SleepConditionVariableSRW(&c->cv, &c->m, INFINITE, 0);
     }
     ReleaseSRWLockExclusive(&c->m);
 #else
     (void)pthread_mutex_lock(&c->m);
-    while (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) == epoch) {
+    while (ceesafe_atomic_load_u64(&c->epoch) == epoch) {
         (void)pthread_cond_wait(&c->cv, &c->m);
     }
     (void)pthread_mutex_unlock(&c->m);
 #endif
-    (void)__atomic_sub_fetch(&c->blocked, 1u, __ATOMIC_SEQ_CST);
+    (void)ceesafe_atomic_add_u32(&c->blocked, UINT32_MAX);
 }
 
 /* A task's wait: false if the epoch already moved (retry at once); else its node is queued and the task waits to be
@@ -850,7 +1008,7 @@ bool ceesafe_chan_park(void *channel, void *wait, uint64_t epoch) {
     cee_chan_node *node = (cee_chan_node *)(void *)wait;
     cee_open_wake_pipe();
     cee_chan_lock(c);
-    if (__atomic_load_n(&c->epoch, __ATOMIC_SEQ_CST) != epoch) {
+    if (ceesafe_atomic_load_u64(&c->epoch) != epoch) {
         cee_chan_unlock(c);
         return false;
     }

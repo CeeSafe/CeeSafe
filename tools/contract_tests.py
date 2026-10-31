@@ -22,6 +22,8 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from fault_injection import SANITIZER_CC  # noqa: E402  clang, or GCC where there is none
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 
 # GCC 12 -O2 -Werror rejects this program's C (-Wuninitialized in an enum constructor; ROADMAP §P5).
@@ -60,7 +62,7 @@ def main():
                                          "--interp", "--check-leaks"]),
             ("library", [cee, "check", "--library-diagnostics", empty]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
-             ["--cc", "clang", "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
+             ["--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
               "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),
             ("support", run_corpus + ["--corpus", os.path.join(ROOT, "tests", "support"), "--family", "run-pass",
                                       "--check-leaks"] + [x for f in support for x in ("--with", f)]),
@@ -81,6 +83,10 @@ def main():
             summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
+            if name == "freestanding" and p.returncode == 2:
+                print(f"{name:14} skip {summary}")  # no clang on this host: not a pass
+                sys.stdout.flush()
+                continue
             failures = {line.split()[1] for line in lines if line.startswith("FAIL ")}
             if name == "run -Werror" and not ok and failures and failures <= KNOWN_GCC_RUN_FAILURES and is_gcc():
                 ok = True

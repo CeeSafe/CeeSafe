@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cancellation sweep (spec/testing.md §1; ADR 0031 §3.4): cancellation must destroy nothing and leak nothing.
 
-Every run-pass program of the corpus that calls `Async.run` is built with clang under ASan+UBSan and run once with
+Every run-pass program of the corpus that calls `Async.run` is built with clang (GCC without clang) under ASan+UBSan and run once with
 CEESAFE_CANCEL_REPORT=1 to count its suspensions n (the runtime prints `ceesafe cancel: points=N` after each
 Async.run; the last line counts the whole program). Then once per suspension k <= n (sampled past 200, like
 fault_injection.py) with CEESAFE_CANCEL_AT=k, which cancels the running root task at the program's k-th suspension.
@@ -17,6 +17,9 @@ import re
 import subprocess
 import sys
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fault_injection import SANITIZER_CC  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -60,7 +63,7 @@ def main():
         for name in programs:
             exe = os.path.join(work, name[:-4])
             flags = [x for f in SANITIZERS for x in ("--cflag", f)]
-            build = subprocess.run([compiler, "build", "--cc", "clang"] + flags + ["run-pass/" + name, "-o", exe],
+            build = subprocess.run([compiler, "build", "--cc", SANITIZER_CC] + flags + ["run-pass/" + name, "-o", exe],
                                    cwd=args.corpus, capture_output=True, text=True)
             if build.returncode != 0:
                 failures.append(f"{name}: build failed: {build.stderr.strip()[:300]}")

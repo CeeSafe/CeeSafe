@@ -76,6 +76,9 @@ def main():
     d = dialect(compiler)
     directory = os.path.join(args.corpus, "freestanding")
     files = sorted(f for f in os.listdir(directory) if f.endswith((".nova", ".cee")))
+    if shutil.which("clang") is None:
+        print("freestanding_check: no clang here (the targets are clang's): not run")
+        return 2
     resource = run(["clang", "-print-resource-dir"]).stdout.strip()
     cross = ["-nostdinc", "-isystem", os.path.join(resource, "include"), "-fno-pic", "-fno-pie", "-O2", "-Werror",
              "-mgeneral-regs-only"]

@@ -17,6 +17,7 @@ import argparse
 import concurrent.futures
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,8 @@ ALLOCATION_CALLS = ("nova_alloc(", "nova_alloc_zeroed(", "nova_region_alloc(", "
                     "nova_async_spawn(")  # a scope's child (type-system.md §40.5): its task and frame
 P5_SWITCHES = ["--flat-c", "--no-closure-specialisation", "--no-placement", "--no-bce", "--no-oce"]
 SWITCHES = []  # the default form; --flat sets P5_SWITCHES
+# The sanitizers are clang's, or GCC's where there is no clang (the Linux box: ROADMAP L1 A2's gate).
+SANITIZER_CC = "clang" if shutil.which("clang") else "gcc"
 SANITIZERS = ["-O1", "-Werror", "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
 def report_of(d):
     """The allocation report line of a program built by a compiler of dialect `d`."""
@@ -84,7 +87,7 @@ def build(compiler, corpus, path, out, reference):
     if not any(d.c(call) in source for call in ALLOCATION_CALLS):
         return False, None  # the program never allocates
     flags = [x for f in SANITIZERS for x in ("--cflag", f)]
-    cwd, argv = for_compiler(compiler, corpus, ["build", "--cc", "clang"] + flags + switches + [path, "-o", out])
+    cwd, argv = for_compiler(compiler, corpus, ["build", "--cc", SANITIZER_CC] + flags + switches + [path, "-o", out])
     built = subprocess.run([compiler] + argv, cwd=cwd, capture_output=True)
     if built.returncode != 0:
         return None, "build failed: " + built.stderr.decode("utf-8", "replace")[:500]

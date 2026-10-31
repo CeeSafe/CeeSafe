@@ -1079,7 +1079,7 @@ typedef struct ceesafe_blocking {
     void *thread;
     void *task;
     void *executor;
-    uint32_t done; /* written with __atomic */
+    uint32_t done; /* written with ceesafe_atomic_* */
 } ceesafe_blocking;
 void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg);
 bool ceesafe_async_blocking_ready(ceesafe_blocking *b);
@@ -1117,6 +1117,13 @@ void ceesafe_async_wait_readable(int32_t fd);
 /* Async sockets (runtime/hosted/ceesafe_rt_io.c): non-blocking descriptors; a value >= 0, CEE_ASYNC_WOULD_BLOCK, or a
  * negated errno. Windows: L1 A4. */
 #define CEE_ASYNC_WOULD_BLOCK INT64_MIN
+#if defined(_WIN32)
+/* Windows sockets (L1 A4a): a descriptor from CEE_SOCKET_BASE up names a SOCKET in ceesafe_rt_io.c's table, so
+ * lib/std's i32 descriptors never hold a truncated handle; below it, a C runtime file descriptor.
+ * ceesafe_socket_handle gives the SOCKET, or INVALID_SOCKET (~0) for an id that names none. */
+#define CEE_SOCKET_BASE 0x40000000
+uintptr_t ceesafe_socket_handle(int32_t id);
+#endif
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port);
 int64_t ceesafe_async_tcp_port(int32_t fd);
 int64_t ceesafe_async_tcp_accept(int32_t fd);

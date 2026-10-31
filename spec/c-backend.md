@@ -74,16 +74,20 @@ GCC only. What differs:
   - program arguments work as elsewhere;
   - files use the C runtime's `_open`, `_read`, `_write`, `_close` and `_unlink` in binary mode;
   - `Process.run` uses `_spawnvp(_P_WAIT, …)`;
-  - **TCP is not supported**: after the same address check as elsewhere, every socket call fails
-    with `ENOSYS` (`IoError.Other`).
+  - **TCP** (L1 A4a) is Winsock 2, started once (`InitOnceExecuteOnce`). A socket's descriptor is an id from
+    `CEE_SOCKET_BASE` (`0x40000000`) in a table of `SOCKET`s under a slim reader-writer lock, so lib/std's `i32`
+    descriptors never hold a truncated handle; `ceesafe_fd_read`, `_write` and `_drop` send an id to `recv`, `send`
+    and `closesocket`, anything lower to the C runtime. Winsock errors become the C runtime's `errno` values
+    (`WSAECONNREFUSED` is `ECONNREFUSED`), so `IoError`'s kinds are as elsewhere. Async sockets are nonblocking
+    (`FIONBIO`); the executor's wait is described in §6.
 - **Test.** Nova's `MsvcTests` checks three things (CeeSafe's Windows checks are `tools/host_c_check.py` and the run corpus under `--cc cl`):
   - every run-pass and run-fail program builds with MSVC and gives the corpus expectations;
   - `nwc` reads files and standard input;
-  - a program runs `cmd /c exit 7` with `Process.run`, sees a missing program fail, and sees TCP
-    reported as unsupported.
+  - a program runs `cmd /c exit 7` with `Process.run`, and sees a missing program fail.
 
-  No corpus program needs an exception: `io-errors.cee` passes only invalid addresses, which fail
-  the address check first. The `test-windows` CI job runs the tests on x64. Locally, a Windows 11
+  One corpus program fails under MSVC's `/O2`, through no fault of the C: `run-pass/slice-bulk.cee` prints 3 for
+  70003. Every installed MSVC (19.44 to 19.51, for ARM64 and x64) miscompiles the standalone
+  `tests/c-compilers/msvc-o2-store-through-copy.c` the same way, while `/Od`, clang and GCC are right (2026-11-01). The `test-windows` CI job runs the tests on x64. Locally, a Windows 11
   ARM64 VM (MSVC 19.51) runs them. On other hosts they return early.
 
 ## 1.2 The runtime ABI version
@@ -607,8 +611,18 @@ Heap (M3b):
     `ceesafe_async_tcp_*`, `ceesafe_async_read`, `_send`, `_shutdown_write` and `_close` in `ceesafe_rt_io.c`: a value,
     `CEE_ASYNC_WOULD_BLOCK`, or a negated errno. `ceesafe_async_poll` serves code with its own wait loop (the
     interpreter). Woken tasks run in the order they were woken.
-  - Later (L1 A4): kqueue and epoll as persistent registrations, measured against `poll()`; Windows' sockets and wake
-    path.
+  - Portability (L1 A4a): the runtime's atomics are rt.h's `ceesafe_atomic_*` (§38.3: the `__atomic` builtins, or
+    `_Interlocked*` under MSVC), and a block's alignment is `cee_max_align_t`. On Linux the file defines
+    `_POSIX_C_SOURCE 200809L` before its includes: under `-std=c11` glibc hides `clock_gettime` otherwise. On Windows
+    the wake pipe is an auto-reset event: a wake calls `SetEvent`, and an executor whose tasks wait to be woken waits
+    in `WaitForSingleObject` until the next deadline.
+  - Windows sockets (A4a): a task waiting on a socket has it signal the same event (`WSAEventSelect`, `FD_READ`,
+    `FD_ACCEPT` and `FD_CLOSE`, or `FD_WRITE`, `FD_CONNECT` and `FD_CLOSE`); the executor then asks `WSAPoll` with no
+    wait which are ready, and waits on the event only if none is. A socket that becomes ready between the poll and the
+    wait has already signalled, so no readiness is lost. An unparked task's socket is detached (`WSAEventSelect(s,
+    NULL, 0)`). A console or file descriptor has no readiness there, so its task retries at once.
+    `ceesafe_async_poll` uses `WSAPoll` for sockets, as the interpreter needs.
+  - Later (L1 A4): kqueue and epoll as persistent registrations, measured against `poll()`; Windows' sockets.
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

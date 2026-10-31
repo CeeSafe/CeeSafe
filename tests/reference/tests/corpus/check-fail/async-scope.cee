@@ -1,0 +1,58 @@
+// The scope-loan rule and the scope body's limits (type-system.md §40.5; ADR 0031 §3.3 and §6.6).
+
+enum Failure {
+    OutOfMemory,
+}
+
+async fn tick() -> Result<void, Failure> => Ok();
+
+async fn rules(limit: u32) -> Result<u32, Failure> {
+    var shared: u32 = 0;
+    var counter: u32 = 0;
+    await Async.scope(Failure.OutOfMemory, (s) => {
+        s.spawn(async () => {
+            counter += limit;
+            return Ok();
+        });
+        s.spawn(async () => { // error[N0241]
+            counter += 1;
+            return Ok();
+        });
+        s.spawn(async () => {
+            let x = shared;
+            return Ok();
+        });
+        s.spawn(async () => {
+            let y = shared + 1; // both read 'shared': allowed
+            return Ok();
+        });
+        var mine: u32 = 0;
+        s.spawn(async () => { // error[N0344]
+            mine = 1;
+            return Ok();
+        });
+        counter = 5; // error[N0241]
+    })?;
+    return Ok(counter + shared);
+}
+
+async fn limits() -> Result<u32, Failure> {
+    await Async.scope(Failure.OutOfMemory, (s) => {
+        await tick()?; // error[N0214]
+        return Ok(1);  // error[N0214]
+    })?;
+    Async.scope(Failure.OutOfMemory, (s) => {}); // error[N0342]
+    let stray = async () => Ok();                // error[N0342]
+    return Ok(0);
+}
+
+fn main() {
+    match (Async.run(rules(1))) {
+        Ok(_) => {}
+        Err(_) => {}
+    }
+    match (Async.run(limits())) {
+        Ok(_) => {}
+        Err(_) => {}
+    }
+}

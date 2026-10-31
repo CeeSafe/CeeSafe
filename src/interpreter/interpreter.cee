@@ -61,6 +61,10 @@ struct Interp {
     asyncClock: u64;
     asyncDeadline: u64; // or none (u64 max)
     asyncWritable: bool;
+    asyncCurrent: u32;                // the running task (runTasks), or none
+    asyncRetry: bool;                 // the parked statement runs again when the task resumes (a scope's end)
+    asyncSpawns: Vector<InterpSpawn>; // children spawned by the running task, for runTasks to start
+    asyncScopes: Vector<InterpScope>;
     // nova_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
@@ -699,6 +703,20 @@ fn runActivations(
                 _ => none(),
             };
             let prepared = prepareCall(it, c, n, mut stack[top].frame, r, callee, arguments)?;
+            if (n.rvalueTasks[r as usize] == taskRun()) {
+                // `Async.run(g(…))`: the task and the children it spawns, on their own stacks (§40.8).
+                let value = runTasks(it, c, n, prepared.function, prepared.arguments)?;
+                match (value) {
+                    Some(v) => {
+                        if (target != none()) {
+                            let addr = address(it, c, n, mut stack[top].frame, target, true)?;
+                            it.memory.store(addr, v)?;
+                        }
+                    }
+                    null => {}
+                }
+                continue;
+            }
             if (!prepared.direct) {
                 // A C function's result, stored as an assignment stores any value.
                 match (prepared.result) {
@@ -1747,6 +1765,10 @@ fn newInterp(
         asyncClock: 0,
         asyncDeadline: 0xFFFFFFFFFFFFFFFF,
         asyncWritable: false,
+        asyncCurrent: 0xFFFFFFFF,
+        asyncRetry: false,
+        asyncSpawns: Vector<InterpSpawn>.create(),
+        asyncScopes: Vector<InterpScope>.create(),
         emptyVector: 0,
         attempts: 0,
         liveAllocations: 0,

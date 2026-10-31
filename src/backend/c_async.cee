@@ -17,10 +17,96 @@ fn appendAsyncName(
     return appendCFunctionName(c, out, function);
 }
 
-/// The suspension points of a statement: an awaited call, or `Async.park()`.
+/// The suspension points of a statement: an awaited call, `Async.park()`, or the end of a scope.
 fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
     let r = statementRvalue(n, s);
-    return r != none() && (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark());
+    return r != none() &&
+        (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark() ||
+            builtinOf(n, r) == bfAsyncScopeWait());
+}
+
+fn builtinArguments(n: borrow NirProgram, r: u32) -> Range => match (n.rvalues[r as usize]) {
+    NirRvalue.Builtin(_, list) => list,
+    _ => emptyRange(),
+};
+
+/// The constant argument `k` of a builtin (a site or a function), or none.
+fn constArgument(n: borrow NirProgram, r: u32, k: u32) -> u32 {
+    let list = builtinArguments(n, r);
+    if (k >= list.count) {
+        return none();
+    }
+    return match (n.operands[n.at(list, k) as usize]) {
+        NirOperand.Const(v) => truncate<u32>(v.magnitude),
+        _ => none(),
+    };
+}
+
+/// The NIR function compiling HIR function `source`, or none.
+fn asyncNirFunction(n: borrow NirProgram, source: u32) -> u32 {
+    for (k in 0..n.functions.length) {
+        if (n.functions[k].source == source && n.functions[k].variant == 0) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// The struct of scope `site`: the runtime's scope, then the first error, a Result<void, E> (c-backend.md §3a).
+fn emitScopeStruct(e: borrow mut CEmitter, c: borrow Checker, site: u32, result: u32) -> Result<void, AllocError> {
+    e.t("struct ceeAS_")?;
+    e.d(site as u64)?;
+    e.t(" { ceesafe_scope rt; ")?;
+    appendCTypeName(c, mut e.buf, result)?;
+    e.t(" error; };")?;
+    return e.emit();
+}
+
+/// The child's thunk: runs it, and once it returns records an `Err` as its scope's first error (§40.5).
+fn emitChildThunk(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    site: u32,
+    child: u32,
+) -> Result<void, AllocError> {
+    let result = c.hir.functions[child as usize].returnType;
+    e.t("static bool ")?;
+    appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
+    e.t("(void *frame, ceesafe_scope *scope) {")?;
+    e.emit()?;
+    e.t("    struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t(" *f = (struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t(" *)frame;")?;
+    e.emit()?;
+    e.t("    if (!")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", child)?;
+    e.t("(f)) return false;")?;
+    e.emit()?;
+    e.t("    struct ceeAS_")?;
+    e.d(site as u64)?;
+    e.t(" *s = (struct ceeAS_")?;
+    e.d(site as u64)?;
+    e.t(" *)(void *)scope;")?;
+    e.emit()?;
+    e.line("    if (f->cee_result.tag != 0) {")?;
+    e.line("        if (!s->rt.failed) {")?;
+    e.line("            s->rt.failed = true;")?;
+    e.line("            s->error = f->cee_result;")?;
+    if (c.types.needsDrop(result)) {
+        e.line("        } else {")?;
+        e.t("            ")?;
+        appendDropGlueName(c, mut e.buf, result)?;
+        e.t("(&f->cee_result); /* a later child's error, not the scope's */")?;
+        e.emit()?;
+    }
+    e.line("        }")?;
+    e.line("    }")?;
+    e.line("    return true;")?;
+    e.line("}")?;
+    return Ok();
 }
 
 /// The awaited callee of statement `s`, or none.
@@ -63,6 +149,16 @@ fn emitFrameStruct(
                 continue;
             }
             site += 1;
+            let r = statementRvalue(n, s);
+            if (builtinOf(n, r) == bfAsyncScopeWait()) {
+                let scope = constArgument(n, r, 0);
+                e.t("    struct ceeAS_")?;
+                e.d(scope as u64)?;
+                e.t(" cee_s")?;
+                e.d(scope as u64)?;
+                e.t(";")?;
+                e.emit()?;
+            }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
                 e.t("    struct ")?;
@@ -97,6 +193,16 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
     }
     if (pending.length == 0) {
         return Ok();
+    }
+    for (f in asyncs.view()) {
+        for (block in n.functions[f as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalue(n, s);
+                if (r != none() && builtinOf(n, r) == bfAsyncScopeWait()) {
+                    emitScopeStruct(e, c, constArgument(n, r, 0), n.rvalueTypes[r as usize])?;
+                }
+            }
+        }
     }
     var done = Vector<u32>.create(); // HIR functions whose frames are defined
     while (pending.length > 0) {
@@ -159,6 +265,16 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
         appendAsyncName(c, mut e.buf, "ceeAT_", source)?;
         e.t("(void *);")?;
         e.emit()?;
+    }
+    for (f in asyncs.view()) {
+        for (block in n.functions[f as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalue(n, s);
+                if (r != none() && builtinOf(n, r) == bfAsyncSpawn()) {
+                    emitChildThunk(e, c, n, constArgument(n, r, 0), constArgument(n, r, 1))?;
+                }
+            }
+        }
     }
     return Ok();
 }
@@ -296,6 +412,12 @@ fn emitTaskStatement(
         e.emit()?;
         return Ok(true);
     }
+    if (builtinOf(n, r) == bfAsyncSpawn()) {
+        return emitSpawn(e, c, n, sources, f, r);
+    }
+    if (builtinOf(n, r) == bfAsyncScopeWait()) {
+        return emitScopeWait(e, c, n, sources, f, r, target);
+    }
     let role = n.rvalueTasks[r as usize];
     if (role == 0) {
         return Ok(false);
@@ -379,5 +501,167 @@ fn emitTaskStatement(
         e.t(".cee_result;")?;
         e.emit()?;
     }
+    return Ok(true);
+}
+
+/// `s.spawn(child)`: the child's task and frame from the runtime, then the frame initialised with its environment.
+fn emitSpawn(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+) -> Result<bool, AllocError> {
+    let site = constArgument(n, r, 0);
+    let child = constArgument(n, r, 1);
+    let list = builtinArguments(n, r);
+    let value = operandText(e, c, n, sources, f, n.at(list, 2))?;
+    let childNir = asyncNirFunction(n, child);
+    e.line("    {")?;
+    e.t("        struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t(" *cee_child = ceesafe_async_spawn(&cee_frame->cee_s")?;
+    e.d(site as u64)?;
+    e.t(".rt, sizeof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t("), ")?;
+    appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
+    e.t(");")?;
+    e.emit()?;
+    e.t("        if (cee_child != NULL) ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
+    e.t("(cee_child")?;
+    if (childNir != none() && c.hir.functions[child as usize].closureEnvironment != none()) {
+        // The closure's value is its environment's first member, so its address is the environment's (§36.2).
+        e.t(", (")?;
+        appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
+        e.t(")(uintptr_t)")?;
+        e.b(value.view())?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.line("    }")?;
+    return Ok(true);
+}
+
+/// The end of a scope, suspension point k: wait for the children, then the scope's result (§40.5), then the scope
+/// emptied for its next run.
+fn emitScopeWait(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let site = constArgument(n, r, 0);
+    let list = builtinArguments(n, r);
+    let oom = operandText(e, c, n, sources, f, n.at(list, 1))?;
+    let result = n.rvalueTypes[r as usize];
+    let errorType = n.operandTypes[n.at(list, 1) as usize];
+    var scope = copyBytes("cee_frame->cee_s".bytes())?;
+    appendDecimal(mut scope, site as u64)?;
+    var place = Vector<u8>.create();
+    if (target != none()) {
+        place = appendPlaceIn(e, c, n, sources, f, target)?;
+    }
+    e.asyncState += 1;
+    let k = e.asyncState;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!ceesafe_async_scope_done(&")?;
+    e.b(scope.view())?;
+    e.t(".rt)) return false;")?;
+    e.emit()?;
+    let dropOom = c.types.needsDrop(errorType);
+    // The first child's error; else the oom error if a child could not start; else Ok.
+    e.t("    if (")?;
+    e.b(scope.view())?;
+    e.t(".rt.failed) {")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(" = ")?;
+        e.b(scope.view())?;
+        e.t(".error;")?;
+        e.emit()?;
+    } else if (c.types.needsDrop(result)) {
+        e.t("        ")?;
+        appendDropGlueName(c, mut e.buf, result)?;
+        e.t("(&")?;
+        e.b(scope.view())?;
+        e.t(".error);")?;
+        e.emit()?;
+    }
+    if (dropOom) {
+        e.t("        ")?;
+        appendDropGlueName(c, mut e.buf, errorType)?;
+        e.t("(&")?;
+        e.b(oom.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    e.t("    } else if (")?;
+    e.b(scope.view())?;
+    e.t(".rt.oom) {")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(" = (")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t("){0};")?;
+        e.emit()?;
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(".tag = 1;")?;
+        e.emit()?;
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(".u.v_Err.f__0 = ")?;
+        e.b(oom.view())?;
+        e.t(";")?;
+        e.emit()?;
+    } else if (dropOom) {
+        e.t("        ")?;
+        appendDropGlueName(c, mut e.buf, errorType)?;
+        e.t("(&")?;
+        e.b(oom.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    e.line("    } else {")?;
+    if (target != none()) {
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(" = (")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t("){0}; /* Ok */")?;
+        e.emit()?;
+    }
+    if (dropOom) {
+        e.t("        ")?;
+        appendDropGlueName(c, mut e.buf, errorType)?;
+        e.t("(&")?;
+        e.b(oom.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    e.line("    }")?;
+    e.t("    ")?;
+    e.b(scope.view())?;
+    e.t(" = (struct ceeAS_")?;
+    e.d(site as u64)?;
+    e.t("){0};")?;
+    e.emit()?;
     return Ok(true);
 }

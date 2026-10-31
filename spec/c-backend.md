@@ -470,6 +470,15 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   then calls `ceeAI_<G>(&cee_root, args…)`, `ceesafe_async_run(&cee_root, ceeAT_<G>)`, and reads
   `cee_root.cee_result`. The thunk adapts `ceeAR_<G>` to the runtime's `bool (*)(void *)`, so no function is called
   through another type.
+- **Scopes.** Scope `site` is a field `struct ceeAS_<site> cee_s<site>` of the awaiting frame: the runtime's
+  `ceesafe_scope`, then the first error, a `Result<void, E>`. `s.spawn(child)` calls
+  `ceesafe_async_spawn(&cee_frame->cee_s<site>.rt, sizeof(struct ceeAF_<C>), ceeAC_<C>)` for the child's async fn `C`
+  and initialises the frame it returns with the closure's environment (the closure value, the environment's first
+  member, converted back). `ceeAC_<C>` resumes the child and, once it returns, makes an `Err` the scope's first error,
+  dropping a later one. The scope's end is a suspension point: `ceesafe_async_scope_done` parks the task until the
+  last child returns, then the result is the first error, else `Err(oom)` if a child could not start, else `Ok`, and
+  the scope is zeroed for its next run. An async closure's environment keeps a null code pointer: it runs only through
+  its frame.
 - **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
@@ -536,8 +545,11 @@ Heap (M3b):
     nothing registered aborts with a message.
   - `ceesafe_async_write(fd, bytes, length)` writes at most `PIPE_BUF` bytes if `fd` is writable now, after flushing
     standard output or error: a count, 0 if it is not writable, or a negated errno (ADR 0031 §3.5).
-  - A1 runs one task per `Async.run` and allocates nothing. A2 adds a task header with the cancel flag, shield depth
-    and deadline, scheduler links and waker; `ceesafe_async_wake(id)`; kqueue and epoll beside `poll()`; and
+  - One executor per thread: the root task and the scopes' children run in turn from a queue; a parked task waits on
+    what it registered or on its scope's last child (`ceesafe_async_spawn`, `ceesafe_async_scope_done`). A child's
+    task and frame are one `ceesafe_alloc` block, so fault injection reaches it; `NULL` sets the scope's `oom`. A2b and
+    later add the cancel flag, shield depth and deadline, and wakers; `ceesafe_async_wake(id)`; kqueue and epoll
+    beside `poll()`; and
     `CEESAFE_CANCEL_AT=k`, which cancels the root task at its k-th suspension, with `CEESAFE_CANCEL_REPORT` printing
     `ceesafe cancel: points=N` (`testing.md`).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`

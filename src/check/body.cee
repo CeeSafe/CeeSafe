@@ -522,6 +522,9 @@ fn checkFor(
 }
 
 fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u32, AllocError> {
+    if (c.asyncScopes.length > 0 && inScopeBody(c)) {
+        reportLeavingScopeBody(c, span, "'return'")?;
+    }
     let returnType = c.hir.functions[c.function as usize].returnType;
     let name = c.hir.functions[c.function as usize].name;
     if (valueSyntax == none()) {
@@ -686,6 +689,7 @@ fn diverges(c: borrow Checker, e: u32, loopExits: borrow mut Vector<bool>) -> Re
         HirExpr.Unwrap(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.Await(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.RunTask(operand) => { return diverges(c, operand, loopExits); }
+        HirExpr.AsyncScope(_, oom, _) => { return diverges(c, oom, loopExits); } // its body cannot leave (§40.5)
         HirExpr.IsNull(reference, _) => { return diverges(c, reference, loopExits); }
         _ => { return Ok(false); }
     }

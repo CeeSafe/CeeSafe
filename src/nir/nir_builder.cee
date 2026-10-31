@@ -2057,6 +2057,27 @@ fn lowerRvalueCore(
         HirExpr.Call(callee, arguments) => { return lowerCall(c, n, b, e, callee, arguments); }
         HirExpr.Await(call) => { return lowerTaskCall(c, n, b, call, taskAwait()); }
         HirExpr.RunTask(call) => { return lowerTaskCall(c, n, b, call, taskRun()); }
+        HirExpr.AsyncScope(site, oom, body) => { return lowerAsyncScope(c, n, b, e, site, oom, body); }
+        HirExpr.Spawn(site, closure) => {
+            let u32Type = c.types.lookup("u32".bytes());
+            let siteOperand = constOperand(n, site as i64, u32Type)?;
+            let body = match (c.hir.exprs[closure as usize]) {
+                HirExpr.Closure(function, _) => function,
+                _ => none(),
+            };
+            let bodyOperand = constOperand(n, body as i64, u32Type)?;
+            let child = lowerOperand(c, n, b, closure)?;
+            if (child == none()) {
+                return Ok(none());
+            }
+            var operands = Vector<u32>.create();
+            operands.push(siteOperand)?;
+            operands.push(bodyOperand)?;
+            operands.push(child)?;
+            let list = n.list(operands.view())?;
+            let voidType = c.types.voidType;
+            return n.rvalue(NirRvalue.Builtin(bfAsyncSpawn(), list), voidType, exprSpan(c, e));
+        }
         HirExpr.BuiltinCall(function, arguments) => { return lowerBuiltinCall(c, n, b, e, function, arguments); }
         _ => {}
     }
@@ -2132,6 +2153,34 @@ fn lowerTaskCall(
         n.rvalueTasks[r as usize] = role;
     }
     return Ok(r);
+}
+
+/// `await Async.scope(oom, body)` (type-system.md §40.5): the oom value, then the body inline (ADR 0031 §6.6), then
+/// the wait for the children, whose value is the scope's result.
+fn lowerAsyncScope(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    site: u32,
+    oom: u32,
+    body: u32,
+) -> Result<u32, AllocError> {
+    let oomOperand = lowerOperand(c, n, b, oom)?;
+    if (oomOperand == none()) {
+        return Ok(none());
+    }
+    lowerStmt(c, n, b, body)?;
+    if (b.current == none()) {
+        return Ok(none());
+    }
+    let siteOperand = constOperand(n, site as i64, c.types.lookup("u32".bytes()))?;
+    var operands = Vector<u32>.create();
+    operands.push(siteOperand)?;
+    operands.push(oomOperand)?;
+    let list = n.list(operands.view())?;
+    let typ = c.hir.exprTypes[e as usize];
+    return n.rvalue(NirRvalue.Builtin(bfAsyncScopeWait(), list), typ, exprSpan(c, e));
 }
 
 fn lowerBuiltinCall(
@@ -2347,6 +2396,8 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.Unwrap(operand) => { return containsCall(c, operand); }
         HirExpr.Await(_) => { return true; }
         HirExpr.RunTask(_) => { return true; }
+        HirExpr.AsyncScope(_, _, _) => { return true; }
+        HirExpr.Spawn(_, _) => { return true; }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }
     }

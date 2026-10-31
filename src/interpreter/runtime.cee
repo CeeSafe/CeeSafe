@@ -809,6 +809,12 @@ fn builtin(
     if (b == bfAsyncPark()) {
         return asyncPark(it);
     }
+    if (b == bfAsyncSpawn()) {
+        return asyncSpawn(it, c, n, frame, arguments);
+    }
+    if (b == bfAsyncScopeWait()) {
+        return asyncScopeWait(it, c, n, frame, r, arguments);
+    }
     if (b == bfConsoleWrite() || b == bfConsoleWriteLine()) {
         for (k in 0..arguments.count) {
             let op = n.at(arguments, k);

@@ -3246,22 +3246,22 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
-  `alloc` effect). `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
+  `alloc` effect). L1 A2a implements `Async.scope`; `scopeIn` comes with A2b. `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
   scope reports if a child's frame cannot be allocated (ADR 0031 §3.3, as amended).
 - **`s.spawn(async () => …)`** starts a child whose result type must be `Result<void, E>`, the same `E` for every child
   of the scope. It returns `void`. The child's frame comes from the scope's allocator. If it cannot be allocated, the
   child is not started, the scope's other children are cancelled, and the scope's result is `Err(oom)`.
 - **The scope returns only after every child has returned.** Its result is `Ok()` if every child returned `Ok`;
   otherwise the first `Err` (in the order the children returned), after the first `Err` has cancelled the others.
-- **The scope-loan rule.** `s` is a scoped collection of closures (§25.4) whose region is the body's environment, and
-  `s.spawn(c)` is checked like adding `c` to it. So, by §36.2 and `lifetimes.md`:
-  - every child's loans are live from its `spawn` until the scope returns;
-  - two children whose captures conflict (one changes what the other uses) are **N0241**;
-  - nothing a child captures can be changed, moved or ended by the body or the enclosing function until the scope
-    returns.
-
-  A child that captures one of the body's own locals, which end when the body returns while the child may still run,
-  is **N0344**: a child borrows from the function that awaits the scope, never from the body.
+- **The body is a block** of the awaiting function, not a closure (ADR 0031 §6.6): `s` is not a local, and names the
+  scope only in `s.spawn(…)`. `return`, `?`, `break` and `continue` cannot leave the body (**N0214**).
+- **The scope-loan rule**, on the children's captures (§36.2), local by local:
+  - every child's captures are borrowed from its `spawn` until the scope returns, and the awaiting function is
+    suspended from the body's end until then;
+  - two children capturing one local where either changes it are **N0241**;
+  - a statement of the body that uses a local a child has captured is **N0241**;
+  - a child that captures one of the body's own locals, which end when the body does while the child may still run,
+    is **N0344**: a child borrows from the function that awaits the scope, never from the body.
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 

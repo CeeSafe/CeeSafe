@@ -1462,19 +1462,293 @@ fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector
     return Ok(valueOf(step, 8));
 }
 
-/// `Async.park()`: the one task waits for what it registered; on the virtual clock that happens at once (§40.8).
-fn asyncPark(it: borrow mut Interp) -> Result<Value?, Stop> {
-    if (it.asyncDeadline != 0xFFFFFFFFFFFFFFFF) {
-        if (it.asyncDeadline > it.asyncClock) {
-            it.asyncClock = it.asyncDeadline;
+/// `Async.park()`: back to runTasks, which wakes the task as what it registered comes (§40.8).
+fn asyncPark(it: borrow mut Interp) -> Result<Value?, Stop> => Err(parkStop());
+
+// ---- Tasks (type-system.md §40.8): one thread, a run queue, the virtual clock ----
+
+fn parkStop() -> Stop =>
+    Stop { kind: 3, message: Vector<u8>.create(), location: Vector<u8>.create(), hasLocation: false, code: 0 };
+
+/// A child `spawn` made, for runTasks to start: its NIR function, arguments and scope (InterpScope).
+struct InterpSpawn {
+    function: u32;
+    arguments: Vector<Value>;
+    scope: u32;
+    environment: u64; // the child's copy of its environment, or 0
+}
+
+/// A scope of a task: (task, site) while it has children or has not ended.
+struct InterpScope {
+    task: u32;
+    site: u32;
+    active: bool;
+    live: u32;
+    failed: bool;
+    error: Value;
+    waiting: bool;
+}
+
+struct InterpTask {
+    scope: u32;       // a child's InterpScope, or none for the root
+    environment: u64; // a child's copy of its environment, ended when it returns, or 0
+    parked: bool;
+    deadline: u64;
+    onScope: bool;
+}
+
+/// The running task's active scope at `site`, made on first use.
+fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
+    for (k in 0..it.asyncScopes.length) {
+        let s = borrow it.asyncScopes[k];
+        if (s.active && s.task == it.asyncCurrent && s.site == site) {
+            return truncate<u32>(k);
         }
+    }
+    it.asyncScopes.push(
+        InterpScope {
+            task: it.asyncCurrent,
+            site: site,
+            active: true,
+            live: 0,
+            failed: false,
+            error: uninitialisedValue(0),
+            waiting: false,
+        },
+    )!;
+    return truncate<u32>(it.asyncScopes.length - 1);
+}
+
+/// `s.spawn(child)`: queued for runTasks, which starts it after this task parks or returns.
+fn asyncSpawn(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let site = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let child = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)?);
+    let closure = operand(it, c, n, frame, n.at(arguments, 2))?;
+    let function = nirFunctionOf(it, child, 0)?;
+    var values = Vector<Value>.create();
+    var environment: u64 = 0;
+    if (c.hir.functions[child as usize].closureEnvironment != none()) {
+        // The environment is a temporary of the scope's body, which ends before the child does. In C it is a field of
+        // the awaiting task's frame, which lasts; here the child gets a copy, which ends when it returns.
+        let envType = c.types.info(n.functions[function as usize].locals[0].typ).pointee;
+        let size = typeSize(c, envType)?;
+        environment = it.memory.allocate(allocationLocal(), size, true, "a child's environment".bytes())?;
+        let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
+        it.memory.store(environment, bytes)?;
+        values.push(valueOf(environment, 8))!;
+    }
+    let scope = interpScope(it, site);
+    it.asyncScopes[scope as usize].live += 1;
+    it.asyncSpawns.push(
+        InterpSpawn { function: function, arguments: values, scope: scope, environment: environment },
+    )!;
+    return Ok(null);
+}
+
+/// The end of a scope: parks until the children have returned, then its result (§40.5).
+fn asyncScopeWait(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    r: u32,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let site = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let scope = interpScope(it, site);
+    if (it.asyncScopes[scope as usize].live > 0) {
+        it.asyncScopes[scope as usize].waiting = true;
+        it.asyncRetry = true;
+        return Err(parkStop());
+    }
+    operand(it, c, n, frame, n.at(arguments, 1))?; // the oom error: the interpreter's children always start
+    it.asyncScopes[scope as usize].active = false;
+    if (it.asyncScopes[scope as usize].failed) {
+        return Ok(copyValue(it.asyncScopes[scope as usize].error));
+    }
+    let t = n.rvalueTypes[r as usize];
+    let ok = c.types.enums[c.types.info(t).enumDef as usize].variants[0];
+    let none0 = Vector<Value>.create();
+    return Ok(makeEnumValue(c, t, ok, none0)?);
+}
+
+/// Ends every frame of every task: after a fault, panic or exit.
+fn endTasks(it: borrow mut Interp, stacks: borrow mut Vector<Vector<Activation>>) {
+    for (k in 0..stacks.length) {
+        var j = stacks[k].length;
+        while (j > 0) {
+            j -= 1;
+            endFrame(it, stacks[k][j].frame);
+        }
+        stacks[k].clear();
+    }
+}
+
+/// `Async.run(f(…))`: runs the root task and the children its scopes spawn, one at a time in queue order, on the
+/// virtual clock: time passes only when no task can run (type-system.md §40.8).
+fn runTasks(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+    arguments: Vector<Value>,
+) -> Result<Value?, Stop> {
+    let savedCurrent = it.asyncCurrent;
+    var stacks = Vector<Vector<Activation>>.create();
+    var tasks = Vector<InterpTask>.create();
+    var ready = Vector<u32>.create();
+    var head: usize = 0;
+    let root = newFrame(it, c, n, f, arguments)?;
+    var rootStack = Vector<Activation>.create();
+    rootStack.push(
+        Activation {
+            frame: root,
+            block: 0,
+            next: 0,
+            target: none(),
+            savedHas: it.hasPosition,
+            savedFile: it.positionFile,
+            savedStart: it.positionStart,
+        },
+    )!;
+    stacks.push(rootStack)!;
+    tasks.push(
+        InterpTask { scope: none(), environment: 0, parked: false, deadline: 0xFFFFFFFFFFFFFFFF, onScope: false },
+    )!;
+    ready.push(0)!;
+    loop {
+        if (head == ready.length) {
+            // No task can run: the earliest deadline comes (§40.8).
+            var earliest: u64 = 0xFFFFFFFFFFFFFFFF;
+            for (t in tasks.view()) {
+                if (t.parked && t.deadline < earliest) {
+                    earliest = t.deadline;
+                }
+            }
+            if (earliest == 0xFFFFFFFFFFFFFFFF) {
+                endTasks(it, mut stacks);
+                it.asyncCurrent = savedCurrent;
+                return Err(fault("every task is parked with nothing to wake it"));
+            }
+            if (earliest > it.asyncClock) {
+                it.asyncClock = earliest;
+            }
+            for (k in 0..tasks.length) {
+                if (tasks[k].parked && tasks[k].deadline <= it.asyncClock) {
+                    tasks[k].parked = false;
+                    tasks[k].deadline = 0xFFFFFFFFFFFFFFFF;
+                    ready.push(truncate<u32>(k))!;
+                }
+            }
+            continue;
+        }
+        let k = ready[head];
+        head += 1;
+        it.asyncCurrent = k;
         it.asyncDeadline = 0xFFFFFFFFFFFFFFFF;
         it.asyncWritable = false;
-        return Ok(null);
+        it.asyncRetry = false;
+        let outcome = runActivations(it, c, n, mut stacks[k as usize]);
+        // The children this task spawned start after it, in order.
+        var spawned = Vector<InterpSpawn>.create();
+        loop {
+            match (it.asyncSpawns.pop()) {
+                Some(x) => { spawned.push(x)!; }
+                null => { break; }
+            }
+        }
+        loop {
+            let spawn = match (spawned.pop()) {
+                Some(x) => x,
+                null => { break; },
+            };
+            let frame = newFrame(it, c, n, spawn.function, spawn.arguments)?;
+            var stack = Vector<Activation>.create();
+            stack.push(
+                Activation {
+                    frame: frame,
+                    block: 0,
+                    next: 0,
+                    target: none(),
+                    savedHas: it.hasPosition,
+                    savedFile: it.positionFile,
+                    savedStart: it.positionStart,
+                },
+            )!;
+            stacks.push(stack)!;
+            tasks.push(
+                InterpTask {
+                    scope: spawn.scope,
+                    environment: spawn.environment,
+                    parked: false,
+                    deadline: 0xFFFFFFFFFFFFFFFF,
+                    onScope: false,
+                },
+            )!;
+            ready.push(truncate<u32>(tasks.length - 1))!;
+        }
+        match (outcome) {
+            Ok(value) => {
+                if (k == 0) {
+                    it.asyncCurrent = savedCurrent;
+                    return Ok(value); // the root's scopes have ended, so every child has returned
+                }
+                let scope = tasks[k as usize].scope;
+                let environment = tasks[k as usize].environment;
+                if (environment != 0 && it.memory.isLive(environment)) {
+                    it.memory.end(environment);
+                }
+                match (value) {
+                    Some(result) => {
+                        if (result.bits(0, 1)? != 0 && !it.asyncScopes[scope as usize].failed) {
+                            it.asyncScopes[scope as usize].failed = true;
+                            it.asyncScopes[scope as usize].error = result; // the first child's error
+                        }
+                    }
+                    null => {}
+                }
+                it.asyncScopes[scope as usize].live -= 1;
+                if (it.asyncScopes[scope as usize].live == 0 && it.asyncScopes[scope as usize].waiting) {
+                    it.asyncScopes[scope as usize].waiting = false;
+                    let waiter = it.asyncScopes[scope as usize].task;
+                    tasks[waiter as usize].parked = false;
+                    tasks[waiter as usize].onScope = false;
+                    ready.push(waiter)!;
+                }
+            }
+            Err(stop) => {
+                if (stop.kind != 3) {
+                    var located = stop;
+                    if (located.kind == 0 && !located.hasLocation) {
+                        located.location = here(it);
+                        located.hasLocation = true;
+                    }
+                    endTasks(it, mut stacks);
+                    it.asyncCurrent = savedCurrent;
+                    return Err(located);
+                }
+                if (it.asyncRetry) {
+                    let top = stacks[k as usize].length - 1;
+                    stacks[k as usize][top].next -= 1; // the scope's end runs again on resume
+                    tasks[k as usize].onScope = true;
+                    tasks[k as usize].parked = true;
+                } else if (it.asyncDeadline != 0xFFFFFFFFFFFFFFFF) {
+                    tasks[k as usize].parked = true;
+                    tasks[k as usize].deadline = it.asyncDeadline;
+                } else if (it.asyncWritable) {
+                    ready.push(k)!; // output is always writable here
+                } else {
+                    endTasks(it, mut stacks);
+                    it.asyncCurrent = savedCurrent;
+                    return Err(fault("a task parked with nothing to wake it"));
+                }
+            }
+        }
     }
-    if (it.asyncWritable) {
-        it.asyncWritable = false;
-        return Ok(null);
-    }
-    return Err(fault("a task parked with nothing to wake it"));
 }

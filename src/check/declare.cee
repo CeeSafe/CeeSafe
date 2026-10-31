@@ -142,6 +142,8 @@ fn checkProgram(
         dynAllowed: false,
         dynTables: Vector<DynTable>.create(),
         closureContexts: Vector<ClosureContext>.create(),
+        asyncScopes: Vector<AsyncScopeContext>.create(),
+        asyncSites: 0,
         environments: Vector<EnvironmentRecord>.create(),
         implementations: Vector<Implementation>.create(),
         implMethods: Vector<ImplMethod>.create(),

@@ -583,12 +583,25 @@ green.
 
   Gate: async run-pass programs give the same result in C and in the interpreter; ASan, UBSan and leak checks are
   clean. Passed 2026-10-31.
-- [ ] **A2, scopes and cancellation:**
-  - async closures; `scope`/`scopeIn`, `spawn`, `race`, `all`, `shield`, `checkpoint`, `blocking`;
-  - channels (ADR 0032);
-  - kqueue and epoll; `Async.Mutex`; sockets;
-  - the interpreter scheduler;
-  - `tools/cancel_sweep.py`.
+- [ ] **A2, scopes and cancellation**, in four steps, each closed by the contract suite:
+  - [x] **A2a, many tasks** (2026-10-31):
+    - async closures;
+    - `Async.scope` and `spawn`, with the scope-loan rule (`scopeIn` moves to A2b);
+    - a run queue and wakers in the runtime;
+    - the interpreter scheduler, which gives each task its own activation stack.
+  - [ ] **A2b, cancellation:**
+    - `Async.scopeIn` (a user allocator for children's frames);
+    - the cancel flag, `checkpoint`, `isCancelled`, `shield`;
+    - `race` and `all`;
+    - `CEESAFE_CANCEL_AT` and `tools/cancel_sweep.py`.
+  - [ ] **A2c, threads:**
+    - `Async.blocking`;
+    - channels (ADR 0032, accepted 2026-10-31);
+    - wakes from other threads.
+  - [ ] **A2d, I/O:**
+    - kqueue and epoll beside `poll()`;
+    - async files and sockets;
+    - `Async.Mutex`.
 
   Gate: the cancellation sweep and the determinism check pass.
 - [ ] **A3, sizes:** frames shrunk by liveness; `--explain-frames`; `Async.boxed`; async interface methods; the debugger
@@ -719,6 +732,7 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 | 2026-10-31 | L1 async/await, library ownership and A0 drafts: Decision 0008 (`lib/` recovered from `src/library/sources.cee`, equal to `map_forward` of `tests/reference/lib/` for all 13 files; `tools/gen_library.py` reads `lib/`; `spec_check` documents `lib/core`); ADR 0031 proposed; `docs/async-await-proposal.md`; roadmap track L1. `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | regenerated `sources.cee` differs only in its header and one doc comment; all 13 contract steps ok (fixed point, corpus, -Werror, ASan, support, sweeps, mutations, collections, freestanding, spec, guide, debugger); `fmt --check` clean. ADR 0031 awaits the owner |
 | 2026-10-31 | L1 A0: ADR 0031 accepted ("I accept it as written."), then amended (§6: the scope's out-of-memory error is named by the caller, the owner's choice; `checkpoint(cancelled)`; `AsyncError`; `Async.race`/`all`; the `await` operand wording). Spec: `grammar.md`, `type-system.md` §32, §36.3, new §40, `ownership.md` A1–A4, `lifetimes.md` §8, `intermediate-representation.md` §3, `c-backend.md` §2.1, §3a, §6, `diagnostics.md` N0341–N0345 with N0290/N0295, `profiles.md`, `testing.md` §1; `gen_catalog.py`, `gen_docs.py`. `python3 tools/contract_tests.py --ceesafec out/ceesafec` | all 13 steps ok (spec_check: 137 codes explained); `fmt --check` clean. A0 gate passed |
 | 2026-10-31 | L1 A1: `async fn`, prefix `await`, `Async.run`, `Async.park` (src/syntax, src/check/async.cee); the `suspend` effect and its contexts (src/types, src/check/effects.cee, src/nir/effect_check.cee); awaited calls marked in NIR and N0343 (src/nir/coroutines.cee); frames, flat resume functions and `Async.run` in C (src/backend/c_async.cee); runtime/hosted/ceesafe_rt_async.c (poll, timers); lib/std/async.cee (`Timer`, `AsyncConsole`, `AsyncError`); the interpreter on a virtual clock; `run_corpus.py --interp`; contract steps `run interp` and `library`; corpus files parse-pass/async-syntax, run-pass/async-basics, async-timers, check-fail/async-tasks, async-recursion, async-effects, emit-c/async-frame; ADR 0031 §6.5 (lowering); `check-pass/effects-of.hir` and `emit-c/slice-bulk.c` updated by reviewed edit (library ids and type order only). `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | all 15 steps ok: fixed point; corpus incl. the 7 async files; run-pass 161 and run-fail 40 in C (-Werror, ASan+UBSan, leaks) and in the interpreter; lib/ diagnostics clean; `fmt --check` clean. Found and fixed on the way: an `as` cast in lib/ that the suppressed library diagnostics hid (hence the `library` step). A1 gate passed |
+| 2026-10-31 | L1 A2a: ADR 0032 (channels) accepted; ADR 0031 §6.6 (the scope body is a block, the owner's choice; the scope-loan rule checked on the children's captures). Async closures; `await Async.scope(oom, (s) => …)` and `s.spawn(async () => …)` (src/check/async.cee; N0241, N0344, N0214, N0342); NIR builtins AsyncSpawn and AsyncScopeWait; scope structs, spawn and child thunks in C (src/backend/c_async.cee); a multi-task executor (runtime/hosted/ceesafe_rt_async.c: run queue, parked list, per-task deadlines and descriptors, scopes); the interpreter's scheduler (runTasks: a stack per task, the virtual clock); corpus run-pass/async-scope, check-fail/async-scope; fault_injection.py counts `ceesafe_async_spawn`. `python3 tools/contract_tests.py --ceesafec out/ceesafec`; `python3 tools/fault_injection.py --compiler out/ceesafec --corpus tests/reference/tests/corpus` (macOS arm64, Apple clang 21) | all 15 steps ok (run-pass 162 in C, ASan+UBSan and the interpreter); the fault sweep then 52 allocating programs, 798 failure points, 0 fail, so spawn's out-of-memory path is clean. Found on the way: `await` of a scope was wrapped as an awaited call and dropped in NIR; the interpreter freed a child's environment with its statement (it now copies it) |
 
 **Tests run for the skeleton** (2026-10-30, novac 0.3.1, Apple clang 21.0.0):
 - `novac check` and `novac fmt --check`: clean.

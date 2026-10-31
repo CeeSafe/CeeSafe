@@ -8,6 +8,10 @@ fn asyncPrimitiveOutsideLibrary() -> u32 => 345;
 /// CeeSafe's own builtin functions, numbered after the generated ones (src/hir/builtins.cee): `Async.park()`, which
 /// suspends the current task until the runtime wakes it (type-system.md §40.4).
 fn bfAsyncPark() -> u32 => 1000;
+/// `s.spawn(child)`: Builtin(AsyncSpawn, [site, the child's HIR function, the child closure]) (intermediate-representation.md §3).
+fn bfAsyncSpawn() -> u32 => 1001;
+/// The end of `await Async.scope(oom, body)`: Builtin(AsyncScopeWait, [site, oom]), the scope's Result<void, E>.
+fn bfAsyncScopeWait() -> u32 => 1002;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -89,8 +93,12 @@ fn checkAwait(c: borrow mut Checker, operand: u32, expected: u32, span: Span) ->
     if (call == none()) {
         return c.errorResult(span.start, span.end);
     }
-    if (isParkCall(c, call)) {
-        return Ok(call); // a suspension point of its own, not a task's call
+    let isCall = match (c.hir.exprs[call as usize]) {
+        HirExpr.Call(_, _) => true,
+        _ => false,
+    };
+    if (!isCall) {
+        return Ok(call); // `Async.park()` or a scope: a suspension point of its own, not a task's call
     }
     let typ = c.typeOf(call);
     return c.expr(HirExpr.Await(call), typ, span.start, span.end);
@@ -108,11 +116,17 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "park")) {
         return checkAsyncPark(c, arguments, span);
     }
+    if (sameText(c.name(memberIdent.symbol), "scope")) {
+        return checkAsyncScope(c, arguments, span);
+    }
     if (!sameText(c.name(memberIdent.symbol), "run")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'Async' has no function ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
-        appendText(mut message, "; use 'Async.run(f(…))' to run a task (type-system.md §40.4)")?;
+        appendText(
+            mut message,
+            "; use 'Async.run(f(…))' or 'await Async.scope(oom, (s) => { … })' (type-system.md §40.4)",
+        )?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -168,3 +182,220 @@ fn isParkCall(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usiz
     HirExpr.BuiltinCall(function, _) => function == bfAsyncPark(),
     _ => false,
 };
+
+// ---- Scopes (type-system.md §40.5; ADR 0031 §3.3 and §6.6) ----
+
+fn scopeCaptureConflict() -> u32 => 241;
+fn scopeCapturesBodyLocal() -> u32 => 344;
+
+/// An `Async.scope` body being checked: it is a block of the awaiting function (ADR 0031 §6.6), and `symbol` (its
+/// parameter's name) is not a local: only `symbol.spawn(…)` may name it.
+struct AsyncScopeContext {
+    symbol: u32;
+    site: u32;
+    function: u32;         // the awaiting function
+    errorType: u32;        // E
+    resultType: u32;       // Result<void, E>, every child's and the scope's
+    firstLocal: u32;       // the first HIR local declared in the body
+    captured: Vector<u64>; // (local << 1) | mutable, for every capture of every child so far
+}
+
+/// `await Async.scope(oom, (s) => { … })`: the body is checked inline; its children are checked by `checkSpawn`.
+fn checkAsyncScope(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.scope' waits for its children: write it as 'await Async.scope(…)' (type-system.md §40.5)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    let body = if (arguments.count == 2) match (c.front.ast.exprs[c.front.ast.at(arguments, 1) as usize]) {
+        ExprNode.Closure(closure) => closure,
+        _ => none(),
+    } else none();
+    let literal = if (body != none()) c.front.ast.closures[body as usize] else Closure {
+        parameters: emptyRange(),
+        block: none(),
+        body: none(),
+        isMove: false,
+        isAsync: false,
+    };
+    if (body == none() || literal.parameters.count != 1 || literal.block == none() || literal.isMove ||
+        literal.isAsync) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.scope' takes the error for a child that cannot be allocated and a body '(s) => { … }' (type-system.md §40.5)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let oomSyntax = c.front.ast.at(arguments, 0);
+    let oom = synth(c, oomSyntax, none())?;
+    let errorType = c.typeOf(oom);
+    if (c.types.isBottom(errorType)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let voidType = c.types.voidType;
+    let resultType = resultOf(c, voidType, errorType)?;
+    let parameter = c.front.ast.closureParameters[c.front.ast.at(literal.parameters, 0) as usize];
+    let site = c.asyncSites;
+    c.asyncSites += 1;
+    c.asyncScopes.push(AsyncScopeContext {
+        symbol: c.front.ast.idents[parameter.name as usize].symbol,
+        site: site,
+        function: c.function,
+        errorType: errorType,
+        resultType: resultType,
+        firstLocal: truncate<u32>(c.hir.locals.length), // HIR locals are numbered program-wide
+        captured: Vector<u64>.create(),
+    })?;
+    // `break` and `continue` cannot leave the body (N0214); `return` and `?` neither (checkReturn, checkTry).
+    let savedLoop = c.loopDepth;
+    c.loopDepth = 0;
+    let block = checkBlock(c, literal.block)?;
+    c.loopDepth = savedLoop;
+    c.asyncScopes.pop();
+    return c.expr(HirExpr.AsyncScope(site, oom, block), resultType, span.start, span.end);
+}
+
+/// Whether a `return` or `?` here would leave an `Async.scope` body of the current function (ADR 0031 §6.6).
+fn inScopeBody(c: borrow Checker) -> bool {
+    for (scope in c.asyncScopes.view()) {
+        if (scope.function == c.function) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn reportLeavingScopeBody(c: borrow mut Checker, span: Span, what: StringView) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, what)?;
+    appendText(mut message, " cannot leave an 'Async.scope' body: its children may still run (type-system.md §40.5)")?;
+    return c.error(loopControlOutsideLoop(), span.start, span.end, message);
+}
+
+/// The scope whose parameter `symbol` names, innermost first, if it belongs to the current function.
+fn scopeNamed(c: borrow Checker, symbol: u32) -> u32 {
+    var k = c.asyncScopes.length;
+    while (k > 0) {
+        k -= 1;
+        if (c.asyncScopes[k].symbol == symbol && c.asyncScopes[k].function == c.function) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// `s.spawn(async () => …)` in a scope body: the child must be an async closure literal with result `Result<void, E>`.
+/// Its captures follow the scope-loan rule (§40.5): no capture of the body's own locals (N0344), no two children
+/// capturing one local where either changes it (N0241); `useOfCaptured` refuses the body's later uses.
+fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let literal = if (arguments.count == 1) match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
+        ExprNode.Closure(closure) =>
+            if (c.front.ast.closures[closure as usize].isAsync &&
+                c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
+        _ => none(),
+    } else none();
+    if (literal == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'spawn' takes an async closure literal with no parameters: 's.spawn(async () => …)' (type-system.md §40.5)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let resultType = c.asyncScopes[scope as usize].resultType;
+    let none0 = Vector<u32>.create();
+    let callable = c.types.closureTo(none0.view(), resultType, maskEffects())?;
+    let expected = c.types.referenceTo(callable, true)?; // a `borrow mut fn`: a child may change what it captures
+    let argument = c.front.ast.at(arguments, 0);
+    let argumentSpan = c.front.ast.exprSpans[argument as usize];
+    let closure = checkClosure(c, literal, expected, argumentSpan)?;
+    let captures = match (c.hir.exprs[closure as usize]) {
+        HirExpr.Closure(_, list) => list,
+        _ => emptyRange(),
+    };
+    for (k in 0..captures.count) {
+        let capture = c.hir.captures[captures.start as usize + k as usize];
+        let mutable = match (capture.mode) {
+            CaptureMode.Shared => false,
+            CaptureMode.Copy => { continue; } // the environment holds a copy: no loan
+            _ => true,
+        };
+        let local = capture.local;
+        let name = c.hir.locals[local as usize].name;
+        if (local >= c.asyncScopes[scope as usize].firstLocal) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this child captures ")?;
+            appendQuotedName(mut message, c, name)?;
+            appendText(
+                mut message,
+                ", which ends with the scope's body while the child may still run (type-system.md §40.5)",
+            )?;
+            c.error(scopeCapturesBodyLocal(), argumentSpan.start, argumentSpan.end, message)?;
+            continue;
+        }
+        var conflict = false;
+        for (entry in c.asyncScopes[scope as usize].captured.view()) {
+            if (truncate<u32>(entry >> 1) == local && (mutable || (entry & 1) != 0)) {
+                conflict = true;
+            }
+        }
+        if (conflict) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this child captures ")?;
+            appendQuotedName(mut message, c, name)?;
+            appendText(
+                mut message,
+                if (mutable) " mutably, but an earlier child of this scope captures it too (type-system.md §40.5)" else ", but an earlier child of this scope changes it (type-system.md §40.5)",
+            )?;
+            c.error(scopeCaptureConflict(), argumentSpan.start, argumentSpan.end, message)?;
+        }
+        c.asyncScopes[scope as usize].captured.push(((local as u64) << 1) | (if (mutable) 1u64 else 0u64))?;
+    }
+    let site = c.asyncScopes[scope as usize].site;
+    let voidType = c.types.voidType;
+    return c.expr(HirExpr.Spawn(site, closure), voidType, span.start, span.end);
+}
+
+/// A use of `local` in a scope body after a child captured it (§40.5): the child may run until the scope returns.
+fn checkUseOfCaptured(c: borrow mut Checker, local: u32, span: Span) -> Result<void, AllocError> {
+    for (scope in c.asyncScopes.view()) {
+        if (scope.function != c.function) {
+            continue;
+        }
+        for (entry in scope.captured.view()) {
+            if (truncate<u32>(entry >> 1) == local) {
+                var message = Vector<u8>.create();
+                appendQuotedName(mut message, c, c.hir.locals[local as usize].name)?;
+                appendText(
+                    mut message,
+                    " is captured by a child of this scope, which may run until the scope returns (type-system.md §40.5)",
+                )?;
+                return c.error(scopeCaptureConflict(), span.start, span.end, message);
+            }
+        }
+    }
+    return Ok();
+}
+
+/// An async closure anywhere but as `spawn`'s argument (§40.3).
+fn misplacedAsyncClosure(c: borrow mut Checker, span: Span) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "an async closure is a task: pass it to 's.spawn(…)' in an 'Async.scope' body (type-system.md §40.3)",
+    )?;
+    c.error(taskNotAwaited(), span.start, span.end, message)?;
+    return c.errorResult(span.start, span.end);
+}

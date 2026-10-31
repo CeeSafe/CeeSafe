@@ -330,6 +330,9 @@ fn checkResultOperand(c: borrow mut Checker, operand: u32, text: StringView, exp
 
 /// `e?` (CheckTry, §17.4, §22.1).
 fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
+    if (c.asyncScopes.length > 0 && inScopeBody(c)) {
+        reportLeavingScopeBody(c, span, "'?'")?;
+    }
     let operand = checkResultOperand(c, operandSyntax, "?", expected)?;
     if (operand == none()) {
         return c.errorResult(span.start, span.end);

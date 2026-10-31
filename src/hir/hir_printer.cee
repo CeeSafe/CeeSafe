@@ -505,6 +505,23 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.AsyncScope(site, oom, body) => {
+                this.text("(async-scope ")?;
+                appendDecimal(mut this.out, site as u64)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, oom)?;
+                this.text(" ")?;
+                this.inline(hir, types, symbols, body)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
+            HirExpr.Spawn(site, closure) => {
+                this.text("(spawn ")?;
+                appendDecimal(mut this.out, site as u64)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, closure)?;
+                this.text(")")?;
+            }
             HirExpr.Closure(function, captures) => {
                 let f = borrow hir.functions[function as usize];
                 this.text("(closure ")?;

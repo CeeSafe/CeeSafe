@@ -201,6 +201,17 @@ accepted choices did not respect that, and were changed while §40 was written:
    `Call` marked in a side table, and the C backend alone turns marked calls into suspension points (§3.6.1). The C
    names follow the C function name, `ceeAF_<F>` and so on, and the runtime's entry is `ceesafe_async_run(frame,
    resume)`; the task header arrives with A2's scheduler.
+6. **The scope body is a block, not a closure** (2026-10-31, the owner's choice "Inline block"). Checked as a closure,
+   a spawned child's environment would live in the body's block, which ends while the child still runs. So
+   `Async.scope(oom, (s) => { … })`'s body is checked as a block of the awaiting function; `s` names the scope only in
+   `s.spawn(…)`. The scope-loan rule is then checked on the children's capture lists (`src/check/async.cee`),
+   conservatively, per local:
+   - two children capturing one local where either changes it are N0241;
+   - a body statement that uses a local a child has captured is N0241, since the child may run until the scope
+     returns (the awaiting function itself is suspended until then);
+   - a child that captures one of the body's own locals outlives it, which is N0344.
+
+   `return`, `?`, `break` and `continue` cannot leave the body, the same limit a closure body has (§3.3.2).
 
 ## 7. Implementation
 

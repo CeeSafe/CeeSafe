@@ -78,6 +78,9 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             if (c.front.ast.closures[closure as usize].isMove) {
                 return misplacedMoveLiteral(c, span);
             }
+            if (c.front.ast.closures[closure as usize].isAsync) {
+                return misplacedAsyncClosure(c, span); // only `spawn` takes one in A2a (§40.3)
+            }
             let value = checkClosure(c, closure, expected, span)?;
             return coerce(c, value, expected, span);
         }
@@ -223,6 +226,9 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
             if (c.front.ast.closures[closure as usize].isMove) {
                 return misplacedMoveLiteral(c, span);
             }
+            if (c.front.ast.closures[closure as usize].isAsync) {
+                return misplacedAsyncClosure(c, span); // only `spawn` takes one in A2a (§40.3)
+            }
             return checkClosure(c, closure, none(), span);
         }
         ExprNode.Borrow(mutable, operand) => { return synthBorrow(c, mutable, operand, span); }
@@ -338,6 +344,9 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
     let symbol = c.front.ast.idents[name as usize].symbol;
     match (c.lookup(symbol)?) {
         Entity.Local(local) => {
+            if (c.asyncScopes.length > 0) {
+                checkUseOfCaptured(c, local, span)?;
+            }
             let t = c.hir.locals[local as usize].typ;
             return c.expr(HirExpr.LocalRef(local), t, span.start, span.end);
         }
@@ -868,6 +877,14 @@ fn synthCall(
             match (c.front.ast.exprs[target as usize]) {
                 ExprNode.Name(targetName, typeArguments) => {
                     let targetSymbol = c.front.ast.idents[targetName as usize].symbol;
+                    if (c.asyncScopes.length > 0 && typeArguments.count == 0) {
+                        // `s.spawn(…)` in an `Async.scope` body: `s` is not a local (§40.5).
+                        let scope = scopeNamed(c, targetSymbol);
+                        if (scope != none() &&
+                            sameText(c.name(c.front.ast.idents[member as usize].symbol), "spawn")) {
+                            return checkSpawn(c, scope, arguments, span);
+                        }
+                    }
                     match (c.lookup(targetSymbol)?) {
                         Entity.Builtin(b) => {
                             if (b == builtinVector() || b == builtinString()) {

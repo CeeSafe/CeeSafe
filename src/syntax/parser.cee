@@ -1541,7 +1541,9 @@ struct Parser {
             body = this.parseExpr()?;
         }
         let range = this.list(parameters)?;
-        this.front.ast.closures.push(Closure { parameters: range, block: block, body: body, isMove: false })?;
+        this.front.ast.closures.push(
+            Closure { parameters: range, block: block, body: body, isMove: false, isAsync: false },
+        )?;
         let closure = truncate<u32>(this.front.ast.closures.length - 1);
         return this.front.ast.addExpr(ExprNode.Closure(closure), start, this.endFrom(start));
     }
@@ -1885,6 +1887,21 @@ struct Parser {
             }
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Move(operand), start, this.endFrom(start));
+        }
+        if (this.at(TokenKind.AsyncKeyword) && this.peekIs(1, TokenKind.OpenParen)) {
+            // `async (x) => …`: an async closure (type-system.md §40.3).
+            this.advance();
+            if (this.at(TokenKind.OpenParen) && this.isClosureStart()) {
+                let closure = this.parseClosure()?;
+                match (this.front.ast.exprs[closure as usize]) {
+                    ExprNode.Closure(c) => { this.front.ast.closures[c as usize].isAsync = true; }
+                    _ => {}
+                }
+                this.front.ast.exprSpans[closure as usize] = Span { start: start, end: this.endFrom(start) };
+                return Ok(closure);
+            }
+            this.errorFound(expectedToken(), "expected an async closure '(…) => …' after 'async', found ", "")?;
+            return this.parseUnary();
         }
         if (this.at(TokenKind.AwaitKeyword)) {
             // `await e`: the first `?` or `!` ends the operand and applies to the awaited value (grammar.md §2.1).

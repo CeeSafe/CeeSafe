@@ -80,7 +80,10 @@ suspension changes its blocks or statements.
   `Async.run(f(a…))` is the same call, marked `taskRun`. So the borrow, move, in-place and drop analyses see an
   ordinary call, with its loans, moves and result, and need no rule of their own (`lifetimes.md` §8).
 - `Async.park()` is `Builtin(AsyncPark)`, a builtin numbered after the generated ones (`src/check/async.cee`).
-- The **suspension points** of an async fn are its awaited calls and its `AsyncPark`s, numbered from 1 in block order
+- `await Async.scope(oom, body)` lowers to the oom value (a temporary), then the body's statements inline, then
+  `Builtin(AsyncScopeWait, [site, oom])`, whose value is the scope's `Result<void, E>`. `s.spawn(child)` is
+  `Builtin(AsyncSpawn, [site, the child's HIR function, the child closure])`. `site` numbers the scope program-wide.
+- The **suspension points** of an async fn are its awaited calls, its `AsyncPark`s and its `AsyncScopeWait`s, numbered from 1 in block order
   and statement order (0 is the entry). The C backend (c-backend.md §3a) and the interpreter (§5) act on them.
 - The effect checker gives an awaited call `suspend` and its callee's effects, `AsyncPark` `suspend`, and a `taskRun`
   call `sleep`, `alloc` and its callee's effects without `suspend` (type-system.md §32.1, §40.4).
@@ -89,9 +92,12 @@ The **coroutine pass** (`src/nir/coroutines.cee`) runs after the effect checker.
 awaits which and reports each awaited call on a cycle as N0343 (type-system.md §40.1). It changes nothing. Closure
 specialisation and placement (`optimisations.md`) skip async functions.
 
-The **interpreter** runs an awaited call as a call, on the same activation stack. `AsyncPark` waits on the virtual
-clock: it advances the clock to the deadline the task registered (type-system.md §40.8). L1 A2's scheduler gives each
-task its own activation stack.
+The **interpreter** runs an awaited call as a call, on the same activation stack. `Async.run` runs a scheduler
+(`runTasks`): the root task and each spawned child have their own activation stack, and run one at a time from a
+queue, children in spawn order after their parent parks. `AsyncPark` returns to the scheduler with the stack intact;
+`AsyncScopeWait` does too while children remain, and runs again when the last returns. When no task can run, the
+virtual clock advances to the earliest registered deadline (type-system.md §40.8). A child gets its own copy of its
+closure's environment, which in C is a field of the awaiting frame.
 
 Lowering rules (HIR → NIR, `NirBuilder`):
 

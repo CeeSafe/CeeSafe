@@ -1,0 +1,122 @@
+// Structured concurrency (type-system.md §40.5, ADR 0031 §3.3 and §6.6): a scope's children run while it waits,
+// borrow the awaiting task's locals, and have all returned when the scope does. Their output is ordered by their
+// timers; the first error is the scope's; a scope in a loop starts empty each time; scopes nest through await.
+
+enum Failure {
+    OutOfMemory,
+    Bad,
+}
+
+async fn pause(ms: u64) -> Result<void, Failure> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(Failure.Bad); }
+    }
+}
+
+async fn say(text: StringView) -> Result<void, Failure> {
+    match (await AsyncConsole.writeLine(text)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(Failure.Bad); }
+    }
+}
+
+async fn gather() -> Result<u32, Failure> {
+    var slow: u32 = 0;
+    var fast: u32 = 0;
+    var now: u32 = 0;
+    await Async.scope(Failure.OutOfMemory, (s) => {
+        s.spawn(async () => {
+            await pause(30)?;
+            await say("slow")?;
+            slow = 100;
+            return Ok();
+        });
+        s.spawn(async () => {
+            await pause(10)?;
+            await say("fast")?;
+            fast = 20;
+            return Ok();
+        });
+        s.spawn(async () => {
+            now = 3;
+            return Ok();
+        });
+    })?;
+    return Ok(slow + fast + now);
+}
+
+async fn failing() -> Result<u32, Failure> {
+    var finished: u32 = 0;
+    let outcome = await Async.scope(Failure.OutOfMemory, (s) => {
+        s.spawn(async () => {
+            await pause(5)?;
+            return Err(Failure.Bad);
+        });
+        s.spawn(async () => {
+            await pause(15)?;
+            finished = 1; // runs to the end: cancellation is not in A2a
+            return Ok();
+        });
+    });
+    match (outcome) {
+        Ok() => { await say("no error")?; }
+        Err(Failure.Bad) => { await say("first error: Bad")?; }
+        Err(Failure.OutOfMemory) => { await say("first error: OutOfMemory")?; }
+    }
+    return Ok(finished);
+}
+
+async fn rounds() -> Result<u32, Failure> {
+    var total: u32 = 0;
+    for (i in 0..3) {
+        var round: u32 = 0;
+        await Async.scope(Failure.OutOfMemory, (s) => {
+            s.spawn(async () => {
+                round = 1;
+                return Ok();
+            });
+        })?;
+        total += round;
+    }
+    return Ok(total);
+}
+
+async fn outer() -> Result<u32, Failure> {
+    var a: u32 = 0;
+    var b: u32 = 0;
+    await Async.scope(Failure.OutOfMemory, (s) => {
+        s.spawn(async () => {
+            a = await gather()?; // a scope inside a child
+            return Ok();
+        });
+        s.spawn(async () => {
+            b = await rounds()?;
+            return Ok();
+        });
+    })?;
+    return Ok(a + b);
+}
+
+fn main() {
+    match (Async.run(gather())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("gather failed"); }
+    }
+    match (Async.run(failing())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failing failed"); }
+    }
+    match (Async.run(outer())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("outer failed"); }
+    }
+}
+// expect-stdout: fast
+// expect-stdout: slow
+// expect-stdout: 123
+// expect-stdout: first error: Bad
+// expect-stdout: 1
+// expect-stdout: fast
+// expect-stdout: slow
+// expect-stdout: 126

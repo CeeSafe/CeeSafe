@@ -153,6 +153,7 @@ struct Closure {
     block: u32;        // a block statement, or none
     body: u32;         // an expression, or none
     isMove: bool;
+    isAsync: bool; // `async (…) => …` (type-system.md §40.3)
 }
 
 struct ClosureParameter {

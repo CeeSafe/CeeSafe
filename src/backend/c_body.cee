@@ -1729,6 +1729,9 @@ fn appendRvalue(
         }
         NirRvalue.Builtin(b, arguments) => { return appendBuiltinRvalue(e, c, n, sources, f, out, r, b, arguments, t); }
         NirRvalue.FunctionAddress(function) => {
+            if (isAsyncFunction(c, function)) {
+                return appendText(out, "0"); // an async closure runs only through its frame (c-backend.md §3a)
+            }
             if (c.types.is(t, TypeKind.Function) || c.types.is(t, TypeKind.Closure)) {
                 return appendCFunctionName(c, out, function); // a function value (§36.1) or a closure's code (§36.2)
             }

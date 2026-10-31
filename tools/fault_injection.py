@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from names import dialect, for_compiler, map_back  # noqa: E402
 
 ALLOCATION_CALLS = ("nova_alloc(", "nova_alloc_zeroed(", "nova_region_alloc(", "nova_region_alloc_fast(",
-                    "nova_scratch_enter_root(", "nova_pool_take(", "nova_vec_grow(", "nova_svec_slot(")  # Decision 0007
+                    "nova_scratch_enter_root(", "nova_pool_take(", "nova_vec_grow(", "nova_svec_slot(",  # Decision 0007
+                    "nova_async_spawn(")  # a scope's child (type-system.md §40.5): its task and frame
 P5_SWITCHES = ["--flat-c", "--no-closure-specialisation", "--no-placement", "--no-bce", "--no-oce"]
 SWITCHES = []  # the default form; --flat sets P5_SWITCHES
 SANITIZERS = ["-O1", "-Werror", "-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]

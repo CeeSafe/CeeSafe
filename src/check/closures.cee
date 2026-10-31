@@ -313,6 +313,11 @@ fn checkClosureWith(
         asClosure,
     )?;
     let environment = c.hir.functions[function as usize].closureEnvironment;
+    if (literal.isAsync) {
+        // An async closure's body is an async body (type-system.md §40.3).
+        let syntax = c.hir.functions[function as usize].syntax;
+        c.front.ast.functions[syntax as usize].isAsync = true;
+    }
 
     // The body, as the closure's own function: its locals are its own, `return` is its, loops do not reach out.
     let savedFunction = c.function;
@@ -1001,6 +1006,11 @@ fn walkExpr(
         HirExpr.RunTask(operand) => { walkExpr(c, operand, e, parent, walk)?; }
         HirExpr.IsNull(reference, _) => { walkExpr(c, reference, e, parent, walk)?; }
         HirExpr.StmtValue(statement) => { walkStmt(c, statement, walk)?; }
+        HirExpr.AsyncScope(_, oom, body) => {
+            walkExpr(c, oom, e, parent, walk)?;
+            walkStmt(c, body, walk)?;
+        }
+        HirExpr.Spawn(_, closure) => { walkExpr(c, closure, e, parent, walk)?; }
         HirExpr.FloatToInt(operand, _) => { walkExpr(c, operand, e, parent, walk)?; }
         _ => {} // constants, struct literals (their fields are value tuples to the reference's walk), addresses
     }

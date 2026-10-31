@@ -111,6 +111,8 @@ struct Checker {
     dynAllowed: bool;   // set by resolvePointee for the next type resolved (the reference's _dynAllowed)
     dynTables: Vector<DynTable>;
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
+    asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
+    asyncSites: u32;                         // scopes numbered so far, program-wide
     environments: Vector<EnvironmentRecord>;
     implementations: Vector<Implementation>;
     implMethods: Vector<ImplMethod>;

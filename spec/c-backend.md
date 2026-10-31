@@ -447,10 +447,19 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
 ```
 
 - **Frames are emitted child-first,** so a frame that embeds another's follows it. A cycle cannot occur (N0343).
-- **Every local is a frame field in v1.** Inside the resume function each local's C name is defined as its field
-  (`#define v_x_3 (cee_frame->v_x_3)`, undefined after the function), so statements are emitted as in a sync function,
-  and a pointer to a local stays valid while the frame does, which is until the task returns (type-system.md §40.6).
-  L1 A3 keeps only the locals live across a suspension point.
+- **Which locals are frame fields** (L1 A3): the parameters, every local that is ever borrowed, every local live just
+  after a suspension point (backward liveness over the NIR, where a `StorageDead` reads nothing), and the locals a
+  scope's end mentions (it reads its oom operand after resuming). Inside the resume function such a local's C name is
+  defined as its field (`#define v_x_3 (cee_frame->v_x_3)`, undefined after the function), so statements are emitted
+  as in a sync function, and a pointer to it stays valid while the frame does (type-system.md §40.6). Every other
+  local is a C local of the resume function, zero-initialised as a sync function's.
+- **Waiting storage.** A task waits at one suspension point at a time, so what each needs only while it waits (an
+  awaited child's frame `cee_a<k>`, a join `cee_j<site>`, a worker `cee_b<site>`) shares one union `cee_u`. A scope's
+  struct is its own field: it must be zero when its first child is spawned.
+- **Layout.** ceesafec computes each frame's size and alignment (`frameReport`, from the fields' C layouts and the
+  runtime structs') and asserts them after the struct (`_Static_assert(sizeof(struct ceeAF_<F>) == n, …)`), so the C
+  compiler checks the arithmetic; `ceesafec build --explain-frames` prints the same numbers, the locals kept and the
+  largest ones (the `frames` corpus family's `.frames` snapshots).
 - **The resume function is always in flat form** (§3), whatever `--flat-c` says. It opens with
   `switch (cee_frame->cee_state) { case k: goto cee_resume_k; … default: break; }`. Jumping into the middle of loops
   makes the graph irreducible, so structuring it would fall back to flat form anyway.

@@ -1,0 +1,3 @@
+frames/async-frames.cee:4:10: 'add' has a frame of 16 bytes (align 4): 2 of 4 locals kept, 8 bytes; largest: v_a_0 (4), v_b_1 (4)
+frames/async-frames.cee:6:10: 'twice' has a frame of 44 bytes (align 4): 5 of 10 locals kept, 20 bytes; waiting storage 16 bytes for 1 suspension point(s); largest: v_x_0 (4), v_total_1 (4), t_4 (4)
+frames/async-frames.cee:15:10: 'both' has a frame of 64 bytes (align 4): 3 of 4 locals kept, 12 bytes; waiting storage 44 bytes for 2 suspension point(s); largest: v_x_0 (4), v_first_1 (4), v_second_2 (4)

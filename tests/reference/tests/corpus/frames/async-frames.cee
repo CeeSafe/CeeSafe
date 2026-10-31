@@ -1,0 +1,23 @@
+// --explain-frames (type-system.md §40.6, L1 A3): each async fn's frame, with the locals it keeps (those live across
+// a suspension point, or borrowed), and its waiting storage, one union for its suspension points.
+
+async fn add(a: i32, b: i32) -> i32 => a + b;
+
+async fn twice(x: i32) -> i32 {
+    var total = 0;
+    for (i in 0..2) {
+        let scratch = x * 3 + i; // not live across the await: a C local, not in the frame
+        total += await add(scratch, i);
+    }
+    return total;
+}
+
+async fn both(x: i32) -> i32 {
+    let first = await twice(x);
+    let second = await add(first, 1); // its frame shares storage with twice's
+    return second;
+}
+
+fn main() {
+    Console.writeLine(Async.run(both(5)));
+}

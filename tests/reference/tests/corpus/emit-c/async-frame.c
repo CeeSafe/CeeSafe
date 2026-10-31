@@ -15,23 +15,24 @@ struct ceeAF_ceeF_add {
     uint32_t cee_state;
     int32_t v_a_0;
     int32_t v_b_1;
-    int32_t t_2;
-    int32_t t_3;
     int32_t cee_result;
 };
+_Static_assert(sizeof(struct ceeAF_ceeF_add) == 16, "ceesafec frame layout");
+_Static_assert(_Alignof(struct ceeAF_ceeF_add) == 4, "ceesafec frame layout");
 struct ceeAF_ceeF_twice {
     uint32_t cee_state;
     int32_t v_x_0;
     int32_t v_total_1;
-    int32_t v_i_2;
     int32_t t_3;
     int32_t t_4;
-    bool t_5;
     int32_t t_6;
-    int32_t t_7;
-    struct ceeAF_ceeF_add cee_a1;
+    union {
+        struct ceeAF_ceeF_add cee_a1;
+    } cee_u;
     int32_t cee_result;
 };
+_Static_assert(sizeof(struct ceeAF_ceeF_twice) == 44, "ceesafec frame layout");
+_Static_assert(_Alignof(struct ceeAF_ceeF_twice) == 4, "ceesafec frame layout");
 static CEE_UNUSED void ceeAI_ceeF_add(struct ceeAF_ceeF_add *, int32_t, int32_t);
 static CEE_UNUSED bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *);
 static CEE_UNUSED bool ceeAT_ceeF_add(void *);
@@ -49,8 +50,8 @@ static bool ceeAT_ceeF_add(void *frame) { return ceeAR_ceeF_add((struct ceeAF_ce
 static bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *cee_frame) {
 #define v_a_0 (cee_frame->v_a_0)
 #define v_b_1 (cee_frame->v_b_1)
-#define t_2 (cee_frame->t_2)
-#define t_3 (cee_frame->t_3)
+    CEE_UNUSED int32_t t_2 = 0;
+    CEE_UNUSED int32_t t_3 = 0;
     switch (cee_frame->cee_state) {
     default: break;
     }
@@ -59,8 +60,6 @@ static bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *cee_frame) {
     cee_frame->cee_result = t_3; return true;
 #undef v_a_0
 #undef v_b_1
-#undef t_2
-#undef t_3
 }
 
 static void ceeAI_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame, int32_t v_x_0) {
@@ -71,12 +70,12 @@ static bool ceeAT_ceeF_twice(void *frame) { return ceeAR_ceeF_twice((struct ceeA
 static bool ceeAR_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame) {
 #define v_x_0 (cee_frame->v_x_0)
 #define v_total_1 (cee_frame->v_total_1)
-#define v_i_2 (cee_frame->v_i_2)
+    CEE_UNUSED int32_t v_i_2 = 0;
 #define t_3 (cee_frame->t_3)
 #define t_4 (cee_frame->t_4)
-#define t_5 (cee_frame->t_5)
+    CEE_UNUSED bool t_5 = false;
 #define t_6 (cee_frame->t_6)
-#define t_7 (cee_frame->t_7)
+    CEE_UNUSED int32_t t_7 = 0;
     switch (cee_frame->cee_state) {
     case 1u: goto cee_resume_1;
     default: break;
@@ -90,11 +89,11 @@ bb1:
     if (t_5) goto bb2; else goto bb4;
 bb2:
     v_i_2 = t_3;
-    ceeAI_ceeF_add(&cee_frame->cee_a1, v_x_0, v_i_2);
+    ceeAI_ceeF_add(&cee_frame->cee_u.cee_a1, v_x_0, v_i_2);
     cee_frame->cee_state = 1u;
 cee_resume_1:
-    if (!ceeAR_ceeF_add(&cee_frame->cee_a1)) return false;
-    t_6 = cee_frame->cee_a1.cee_result;
+    if (!ceeAR_ceeF_add(&cee_frame->cee_u.cee_a1)) return false;
+    t_6 = cee_frame->cee_u.cee_a1.cee_result;
     v_total_1 = cee_add_i32(v_total_1, t_6, &ceeL_1);
     goto bb3;
 bb3:
@@ -105,12 +104,9 @@ bb4:
     cee_frame->cee_result = t_7; return true;
 #undef v_x_0
 #undef v_total_1
-#undef v_i_2
 #undef t_3
 #undef t_4
-#undef t_5
 #undef t_6
-#undef t_7
 }
 
 static void ceeF_main(void) {

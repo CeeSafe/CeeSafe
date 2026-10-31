@@ -3270,8 +3270,9 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 
 ### 40.6 Frames
-- Each async fn or async closure has a **frame**: its parameters, its locals, the frames of the tasks it awaits, its
-  result and its resume state. Its size is known at compile time.
+- Each async fn or async closure has a **frame**: its parameters, the locals it needs across a suspension point (or
+  borrows), storage for what it waits on (the awaited task's frame, shared by every await site), its result and its
+  resume state. Its size is known at compile time, and `ceesafec build --explain-frames` reports it (c-backend.md §3a).
 - **A frame is placed once and never moves.** The root frame of `Async.run` is in its caller's storage. An awaited
   task's frame is in its awaiter's frame. A child's frame is from its scope's allocator, and `race`, `all` and `shield`
   embed their children's. So every reference into a frame is valid until its task returns.

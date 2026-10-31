@@ -21,6 +21,7 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 | CosmoOS (Nova's C1–C9, K3) | `integrations/cosmoos/c*.py`, `k3.py` | ceesafec's C under CosmoOS's own flags, host tests, fuzz targets and module loader rules, and in its QEMU boots; CosmoOS's tree is only read |
 | Same C on another host | `tools/host_c_check.py` | ceesafec built on Windows (MSVC, clang) emits the same C as on macOS and Linux |
 | Specification (§4) | `tools/spec_check.py`, `tools/guide_check.py` | every diagnostic code is explained; the guide's examples do what the pages say; links resolve |
+| Frame reports (L1 A3) | `tools/run_corpus.py`, family `frames` | `--explain-frames` against its `.frames` snapshot; every build asserts each frame's size in C |
 | Interpreter agreement (L1 A1) | `tools/run_corpus.py --interp` | every run-pass and run-fail program run with `ceesafec run --interp` meets the same expectations (output, exit, panic, leak check) as its C build |
 | Library diagnostics (Decision 0008) | `ceesafec check --library-diagnostics` on an empty program | `lib/` reports no diagnostic: since lib/ is CeeSafe's, its errors are no longer assumed to be porting gaps |
 | Cancellation sweep (L1 A2b) | `tools/cancel_sweep.py` | every async run-pass program, built with ASan+UBSan, run once per suspension point *k* with `CEESAFE_CANCEL_AT=k`; each run exits cleanly with `live=0` and no sanitizer report |

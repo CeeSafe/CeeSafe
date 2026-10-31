@@ -115,6 +115,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --no-placement    (build, run) keep every box on the heap (placement is on by default, optimisations.md §4)\n",
     )?;
     appendText(out, "  --explain-allocations  (build) print where every allocation site's memory comes from\n")?;
+    appendText(out, "  --explain-frames  (build) print each async fn's frame size and what makes it large\n")?;
     appendText(
         out,
         "  --no-bce          (build, run) keep every index check (no bounds-check elimination, optimisations.md §2)\n",
@@ -186,6 +187,7 @@ struct Options {
     explainClosureCalls: bool;   // --explain-closure-calls
     placement: bool;             // on unless --no-placement (memory-model.md §5)
     explainAllocations: bool;    // --explain-allocations
+    explainFrames: bool;         // --explain-frames (type-system.md §40.6)
     bce: bool;                   // on unless --no-bce (optimisations.md §2)
     explainBoundsChecks: bool;   // --explain-bounds-checks
     oce: bool;                   // on unless --no-oce (optimisations.md §3)
@@ -348,6 +350,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.placement = false;
         } else if (options.building && arg == "--explain-allocations") {
             options.explainAllocations = true;
+        } else if (options.building && arg == "--explain-frames") {
+            options.explainFrames = true;
         } else if ((options.building || options.running) && arg == "--no-bce") {
             options.bce = false;
         } else if (options.building && arg == "--explain-bounds-checks") {
@@ -580,6 +584,7 @@ fn parseCommand() -> i32 {
         explainClosureCalls: false,
         placement: true,
         explainAllocations: false,
+        explainFrames: false,
         bce: true,
         explainBoundsChecks: false,
         oce: true,
@@ -910,6 +915,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     explainClosureCalls: false,
     placement: true,
     explainAllocations: false,
+    explainFrames: false,
     bce: true,
     explainBoundsChecks: false,
     oce: true,
@@ -1160,6 +1166,9 @@ fn compileFiles(
             // The decisions placement acts on unless --no-placement is given (memory-model.md §5, rule 4).
             let placement = analyzePlacement(checker, nir, sources)!;
             explainAllocations(checker, sources, placement, mut printed)!;
+        }
+        if (options.explainFrames) {
+            explainFrames(checker, nir, sources, mut printed)!;
         }
         if (options.explainBoundsChecks) {
             // What the C backend omits unless --no-bce is given (optimisations.md §2.7).

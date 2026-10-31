@@ -215,7 +215,11 @@ fn emitFrameStruct(
     e.t(" {")?;
     e.emit()?;
     e.line("    uint32_t cee_state;")?;
+    let inFrame = frameLocals(n, f)?;
     for (k in 0..truncate<u32>(function.locals.length)) {
+        if (!inFrame[k as usize]) {
+            continue; // a C local of the resume function
+        }
         e.t("    ")?;
         appendCTypeName(c, mut e.buf, function.locals[k as usize].typ)?;
         e.t(" ")?;
@@ -223,6 +227,10 @@ fn emitFrameStruct(
         e.t(";")?;
         e.emit()?;
     }
+    // A task waits at one suspension point at a time, so what each needs only while it waits (an awaited child's
+    // frame, a join, a worker) shares one union (c-backend.md §3a). A scope's struct is its own field: it must be
+    // zero when the scope's first child is spawned.
+    var members = Vector<Vector<u8>>.create();
     var site: u32 = 0;
     for (block in function.blocks.view()) {
         for (s in block.statements.view()) {
@@ -233,21 +241,19 @@ fn emitFrameStruct(
             let r = statementRvalue(n, s);
             if (builtinOf(n, r) == bfAsyncBlocking()) {
                 let blocking = constArgument(n, r, 0);
-                e.t("    struct ceeAB_")?;
-                e.d(blocking as u64)?;
-                e.t(" cee_b")?;
-                e.d(blocking as u64)?;
-                e.t(";")?;
-                e.emit()?;
+                var member = copyBytes("struct ceeAB_".bytes())?;
+                appendDecimal(mut member, blocking as u64)?;
+                appendText(mut member, " cee_b")?;
+                appendDecimal(mut member, blocking as u64)?;
+                members.push(member)?;
             }
             if (builtinOf(n, r) == bfAsyncJoin()) {
                 let join = constArgument(n, r, 0);
-                e.t("    struct ceeAJ_")?;
-                e.d(join as u64)?;
-                e.t(" cee_j")?;
-                e.d(join as u64)?;
-                e.t(";")?;
-                e.emit()?;
+                var member = copyBytes("struct ceeAJ_".bytes())?;
+                appendDecimal(mut member, join as u64)?;
+                appendText(mut member, " cee_j")?;
+                appendDecimal(mut member, join as u64)?;
+                members.push(member)?;
             }
             if (builtinOf(n, r) == bfAsyncScopeWait()) {
                 let scope = constArgument(n, r, 0);
@@ -260,14 +266,23 @@ fn emitFrameStruct(
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
-                e.t("    struct ")?;
-                appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
-                e.t(" cee_a")?;
-                e.d(site as u64)?;
-                e.t(";")?;
-                e.emit()?;
+                var member = copyBytes("struct ".bytes())?;
+                appendAsyncName(c, mut member, "ceeAF_", callee)?;
+                appendText(mut member, " cee_a")?;
+                appendDecimal(mut member, site as u64)?;
+                members.push(member)?;
             }
         }
+    }
+    if (members.length > 0) {
+        e.line("    union {")?;
+        for (member in members.view()) {
+            e.t("        ")?;
+            e.b(member.view())?;
+            e.t(";")?;
+            e.emit()?;
+        }
+        e.line("    } cee_u;")?;
     }
     let result = c.hir.functions[source as usize].returnType;
     if (!c.types.is(result, TypeKind.Void)) {
@@ -325,6 +340,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             }
             if (ready) {
                 emitFrameStruct(e, c, n, f)?;
+                emitFrameAsserts(e, c, n, f)?;
                 done.push(nirFunctionSource(n, f))?;
                 let last = pending.length - 1;
                 pending.swap(k, last); // the order among ready frames does not matter
@@ -338,6 +354,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             // A cycle cannot reach the backend (N0343); emit the rest in order rather than loop.
             for (f in pending.view()) {
                 emitFrameStruct(e, c, n, f)?;
+                emitFrameAsserts(e, c, n, f)?;
             }
             pending.clear();
         }
@@ -450,7 +467,21 @@ fn emitAsyncFunction(
     appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
     e.t(" *cee_frame) {")?;
     e.emit()?;
+    let inFrame = frameLocals(n, f)?;
     for (k in 0..truncate<u32>(function.locals.length)) {
+        if (!inFrame[k as usize]) {
+            // Not live across a suspension point: a C local, zero-initialised as a sync function's (§5).
+            let t = function.locals[k as usize].typ;
+            e.t("    CEE_UNUSED ")?;
+            appendCTypeName(c, mut e.buf, t)?;
+            e.t(" ")?;
+            appendLocalName(c, mut e.buf, function, k)?;
+            e.t(" = ")?;
+            e.t(localZero(c, t))?;
+            e.t(";")?;
+            e.emit()?;
+            continue;
+        }
         e.t("#define ")?;
         appendLocalName(c, mut e.buf, function, k)?;
         e.t(" (cee_frame->")?;
@@ -482,6 +513,9 @@ fn emitAsyncFunction(
     emitFlatBody(e, c, n, sources, f)?;
     e.inAsync = false;
     for (k in 0..truncate<u32>(function.locals.length)) {
+        if (!inFrame[k as usize]) {
+            continue;
+        }
         e.t("#undef ")?;
         appendLocalName(c, mut e.buf, function, k)?;
         e.emit()?;
@@ -541,7 +575,7 @@ fn emitTaskStatement(
             let place = appendPlaceIn(e, c, n, sources, f, target)?;
             e.t("    ")?;
             e.b(place.view())?;
-            e.t(" = cee_frame->cee_j")?;
+            e.t(" = cee_frame->cee_u.cee_j")?;
             e.d(site as u64)?;
             e.t(".r")?;
             e.d(k as u64)?;
@@ -617,7 +651,7 @@ fn emitTaskStatement(
     let k = e.asyncState;
     e.t("    ")?;
     appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
-    e.t("(&cee_frame->cee_a")?;
+    e.t("(&cee_frame->cee_u.cee_a")?;
     e.d(k as u64)?;
     if (arguments.count > 0) {
         e.t(", ")?;
@@ -635,14 +669,14 @@ fn emitTaskStatement(
     e.emit()?;
     e.t("    if (!")?;
     appendAsyncName(c, mut e.buf, "ceeAR_", callee)?;
-    e.t("(&cee_frame->cee_a")?;
+    e.t("(&cee_frame->cee_u.cee_a")?;
     e.d(k as u64)?;
     e.t(")) return false;")?;
     e.emit()?;
     if (target != none()) {
         e.t("    ")?;
         e.b(place.view())?;
-        e.t(" = cee_frame->cee_a")?;
+        e.t(" = cee_frame->cee_u.cee_a")?;
         e.d(k as u64)?;
         e.t(".cee_result;")?;
         e.emit()?;
@@ -825,7 +859,7 @@ fn emitJoin(
 ) -> Result<bool, AllocError> {
     let site = constArgument(n, r, 0);
     let list = builtinArguments(n, r);
-    var join = copyBytes("cee_frame->cee_j".bytes())?;
+    var join = copyBytes("cee_frame->cee_u.cee_j".bytes())?;
     appendDecimal(mut join, site as u64)?;
     e.t("    ")?;
     e.b(join.view())?;
@@ -972,7 +1006,7 @@ fn emitBlocking(
     let site = constArgument(n, r, 0);
     let list = builtinArguments(n, r);
     let value = operandText(e, c, n, sources, f, n.at(list, 2))?;
-    var b = copyBytes("cee_frame->cee_b".bytes())?;
+    var b = copyBytes("cee_frame->cee_u.cee_b".bytes())?;
     appendDecimal(mut b, site as u64)?;
     e.t("    ")?;
     e.b(b.view())?;
@@ -1012,4 +1046,409 @@ fn emitBlocking(
         e.emit()?;
     }
     return Ok(true);
+}
+
+// ---- Which locals live in the frame (L1 A3; c-backend.md §3a) ----
+
+fn markLocal(set: borrow mut Vector<bool>, local: u32) {
+    if (local != none() && (local as usize) < set.length) {
+        set[local as usize] = true;
+    }
+}
+
+/// The locals operand `o` reads, with its place's index operands.
+fn operandLocals(n: borrow NirProgram, o: u32, set: borrow mut Vector<bool>) {
+    if (o == none()) {
+        return;
+    }
+    match (n.operands[o as usize]) {
+        NirOperand.Place(place, _) => { placeLocals(n, place, set); }
+        _ => {}
+    }
+}
+
+/// A place's root local and the locals its index projections read.
+fn placeLocals(n: borrow NirProgram, place: u32, set: borrow mut Vector<bool>) {
+    let p = n.places[place as usize];
+    markLocal(set, p.local);
+    for (k in 0..p.projections.count) {
+        let projection = n.projections[(p.projections.start + k) as usize];
+        if (projection.index != none()) {
+            operandLocals(n, projection.index, set);
+        }
+    }
+}
+
+/// A statement's uses (every local it mentions but a whole-local write) and definitions (whole-local writes), and the
+/// locals it borrows. Conservative: a mention through a projection is a use.
+fn statementUses(
+    n: borrow NirProgram,
+    s: u32,
+    uses: borrow mut Vector<bool>,
+    defs: borrow mut Vector<bool>,
+    borrowed: borrow mut Vector<bool>,
+) -> Result<void, AllocError> {
+    match (n.statements[s as usize]) {
+        NirStatement.StorageDead(_) => { return Ok(); } // the local's end reads nothing (a Drop does, and counts)
+        _ => {}
+    }
+    var accesses = Vector<Access>.create();
+    statementAccesses(n, s, mut accesses)?;
+    for (a in accesses.view()) {
+        if (a.kind == accessWrite() && a.place.projections.count == 0) {
+            markLocal(defs, a.place.local);
+        } else {
+            markLocal(uses, a.place.local);
+        }
+        if (a.kind == accessBorrowShared() || a.kind == accessBorrowMut()) {
+            markLocal(borrowed, a.place.local);
+        }
+        for (k in 0..a.place.projections.count) {
+            let projection = n.projections[(a.place.projections.start + k) as usize];
+            if (projection.index != none()) {
+                operandLocals(n, projection.index, uses);
+            }
+        }
+    }
+    match (n.statements[s as usize]) {
+        NirStatement.Drop(_, flag) => { markLocal(uses, flag); }
+        NirStatement.BoxFree(_, flag) => { markLocal(uses, flag); }
+        _ => {}
+    }
+    return Ok();
+}
+
+/// By local: whether it must be a frame field. A parameter is (the initialiser stores it); a borrowed local is (its
+/// loan may cross a suspension); a local live just after a suspension point is; and so is every local a scope's end
+/// mentions (it reads its oom operand after resuming). Every other local is a C local of the resume function.
+fn frameLocals(n: borrow NirProgram, f: u32) -> Result<Vector<bool>, AllocError> {
+    let function = borrow n.functions[f as usize];
+    let count = function.locals.length;
+    let blockCount = function.blocks.length;
+    var inFrame = Vector<bool>.create();
+    for (k in 0..count) {
+        inFrame.push(truncate<u32>(k) < function.parameterCount)?;
+    }
+    // Per block: uses before definitions (gen) and definitions (kill), statement by statement backwards later.
+    var indexOf = Vector<u32>.create(); // block id -> position
+    for (k in 0..blockCount) {
+        let id = function.blocks[k].id as usize;
+        while (indexOf.length <= id) {
+            indexOf.push(none())?;
+        }
+        indexOf[id] = truncate<u32>(k);
+    }
+    var liveIn = Vector<Vector<bool>>.create();
+    for (k in 0..blockCount) {
+        var empty = Vector<bool>.create();
+        for (j in 0..count) {
+            empty.push(false)?;
+        }
+        liveIn.push(empty)?;
+    }
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var k = blockCount;
+        while (k > 0) {
+            k -= 1;
+            var live = Vector<bool>.create();
+            for (j in 0..count) {
+                live.push(false)?;
+            }
+            for (successor in function.blocks[k].successors.view()) {
+                let position = indexOf[successor as usize];
+                for (j in 0..count) {
+                    if (liveIn[position as usize][j]) {
+                        live[j] = true;
+                    }
+                }
+            }
+            var uses = Vector<bool>.create();
+            var defs = Vector<bool>.create();
+            var borrowed = Vector<bool>.create();
+            for (j in 0..count) {
+                uses.push(false)?;
+                defs.push(false)?;
+                borrowed.push(false)?;
+            }
+            var accesses = Vector<Access>.create();
+            terminatorAccesses(n, function.blocks[k].terminator, mut accesses)?;
+            for (a in accesses.view()) {
+                markLocal(mut live, a.place.local);
+            }
+            var i = function.blocks[k].statements.length;
+            while (i > 0) {
+                i -= 1;
+                let s = function.blocks[k].statements[i];
+                for (j in 0..count) {
+                    uses[j] = false;
+                    defs[j] = false;
+                }
+                statementUses(n, s, mut uses, mut defs, mut borrowed)?;
+                if (isSuspension(n, s)) {
+                    // Live after the suspension. An awaited call's arguments are used before it and its result is
+                    // written after; only a scope's end reads an operand (its oom error) after it resumes.
+                    let readsAfter = builtinOf(n, statementRvalue(n, s)) == bfAsyncScopeWait();
+                    for (j in 0..count) {
+                        if (live[j] || (readsAfter && (uses[j] || defs[j]))) {
+                            inFrame[j] = true;
+                        }
+                    }
+                }
+                for (j in 0..count) {
+                    if (defs[j] && !uses[j]) {
+                        live[j] = false;
+                    }
+                    if (uses[j]) {
+                        live[j] = true;
+                    }
+                }
+            }
+            for (j in 0..count) {
+                if (borrowed[j]) {
+                    inFrame[j] = true;
+                }
+                if (live[j] != liveIn[k][j]) {
+                    liveIn[k][j] = live[j];
+                    changed = true;
+                }
+            }
+        }
+    }
+    return Ok(inFrame);
+}
+
+// ---- Frame layouts (L1 A3: --explain-frames, and a _Static_assert of each frame's size) ----
+
+/// A struct's layout as it is built: its size so far and its alignment.
+struct LayoutBuilder {
+    size: u64;
+    align: u64;
+}
+
+fn layoutAdd(l: borrow mut LayoutBuilder, size: u64, align: u64) {
+    let a = if (align == 0) 1 else align;
+    l.size = (l.size + a - 1) / a * a + size;
+    if (a > l.align) {
+        l.align = a;
+    }
+}
+
+fn layoutEnd(l: borrow LayoutBuilder) -> SizeAlign {
+    let a = if (l.align == 0) 1 else l.align;
+    return SizeAlign { size: truncate<i64>((l.size + a - 1) / a * a), align: truncate<u32>(a) };
+}
+
+fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
+
+/// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
+fn scopeLayout() -> SizeAlign => SizeAlign { size: 24, align: 8 };
+fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 96, align: 16 };
+fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
+
+/// What a frame is made of, for --explain-frames.
+struct FrameReport {
+    layout: SizeAlign;
+    keptLocals: u32;
+    allLocals: u32;
+    localBytes: u64;
+    unionBytes: u64;
+    unionMembers: u32;
+    scopeBytes: u64;
+    largest: Vector<u32>; // the three largest kept locals
+}
+
+fn addLayout(l: borrow mut LayoutBuilder, part: SizeAlign) {
+    layoutAdd(l, truncate<u64>(part.size), part.align as u64);
+}
+
+/// The layout of async fn `f`'s frame, struct ceeAF_<f>, field by field as emitFrameStruct writes it.
+fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameReport, AllocError> {
+    let function = borrow n.functions[f as usize];
+    let source = nirFunctionSource(n, f);
+    let inFrame = frameLocals(n, f)?;
+    var l = LayoutBuilder { size: 0, align: 1 };
+    layoutAdd(mut l, 4, 4); // cee_state
+    var report = FrameReport {
+        layout: SizeAlign { size: 0, align: 1 },
+        keptLocals: 0,
+        allLocals: truncate<u32>(function.locals.length),
+        localBytes: 0,
+        unionBytes: 0,
+        unionMembers: 0,
+        scopeBytes: 0,
+        largest: Vector<u32>.create(),
+    };
+    for (k in 0..truncate<u32>(function.locals.length)) {
+        if (!inFrame[k as usize]) {
+            continue;
+        }
+        let part = typeLayout(c, function.locals[k as usize].typ);
+        addLayout(mut l, part);
+        report.keptLocals += 1;
+        report.localBytes += truncate<u64>(part.size);
+        report.largest.push(k)?;
+    }
+    report.largest.sortBy((a, b) => {
+        let sa = typeLayout(c, function.locals[a as usize].typ).size;
+        let sb = typeLayout(c, function.locals[b as usize].typ).size;
+        return if (sa > sb) -1 else if (sa < sb) 1 else 0;
+    });
+    report.largest.truncate(3);
+    var union = LayoutBuilder { size: 0, align: 1 };
+    var unionSize: u64 = 0;
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            if (!isSuspension(n, s)) {
+                continue;
+            }
+            let r = statementRvalue(n, s);
+            var member = SizeAlign { size: -1, align: 1 };
+            if (builtinOf(n, r) == bfAsyncBlocking()) {
+                var b = LayoutBuilder { size: 0, align: 1 };
+                addLayout(mut b, blockingLayout());
+                addLayout(mut b, typeLayout(c, n.operandTypes[n.at(builtinArguments(n, r), 2) as usize]));
+                if (!c.types.is(n.rvalueTypes[r as usize], TypeKind.Void)) {
+                    addLayout(mut b, typeLayout(c, n.rvalueTypes[r as usize]));
+                }
+                member = layoutEnd(b);
+            }
+            if (builtinOf(n, r) == bfAsyncJoin()) {
+                let first = constArgument(n, r, 2);
+                let second = constArgument(n, r, 4);
+                var j = LayoutBuilder { size: 0, align: 1 };
+                addLayout(mut j, scopeLayout());
+                layoutAdd(mut j, 4, 4);
+                let result = typeLayout(c, c.hir.functions[first as usize].returnType);
+                addLayout(mut j, result);
+                addLayout(mut j, result);
+                addLayout(mut j, taskSlotLayout());
+                addLayout(mut j, taskSlotLayout());
+                addLayout(mut j, frameReport(c, n, asyncNirFunction(n, first))?.layout);
+                addLayout(mut j, frameReport(c, n, asyncNirFunction(n, second))?.layout);
+                member = layoutEnd(j);
+            }
+            if (builtinOf(n, r) == bfAsyncScopeWait()) {
+                var sc = LayoutBuilder { size: 0, align: 1 };
+                addLayout(mut sc, scopeLayout());
+                addLayout(mut sc, typeLayout(c, n.rvalueTypes[r as usize]));
+                let part = layoutEnd(sc);
+                addLayout(mut l, part); // a scope's struct is its own field, in statement order
+                report.scopeBytes += truncate<u64>(part.size);
+            }
+            let callee = awaitedCallee(n, s);
+            if (callee != none()) {
+                member = frameReport(c, n, asyncNirFunction(n, callee))?.layout;
+            }
+            if (member.size >= 0) {
+                report.unionMembers += 1;
+                if (truncate<u64>(member.size) > unionSize) {
+                    unionSize = truncate<u64>(member.size);
+                }
+                if (member.align as u64 > union.align) {
+                    union.align = member.align as u64;
+                }
+            }
+        }
+    }
+    if (report.unionMembers > 0) {
+        union.size = unionSize;
+        let u = layoutEnd(union);
+        addLayout(mut l, u);
+        report.unionBytes = truncate<u64>(u.size);
+    }
+    let result = c.hir.functions[source as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        addLayout(mut l, typeLayout(c, result));
+    }
+    report.layout = layoutEnd(l);
+    return Ok(report);
+}
+
+/// `_Static_assert`s of a frame's size and alignment: the C compiler checks frameReport's arithmetic.
+fn emitFrameAsserts(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    f: u32,
+) -> Result<void, AllocError> {
+    let source = nirFunctionSource(n, f);
+    let layout = frameReport(c, n, f)?.layout;
+    e.t("_Static_assert(sizeof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(") == ")?;
+    e.d(truncate<u64>(layout.size))?;
+    e.t(", \"ceesafec frame layout\");")?;
+    e.emit()?;
+    e.t("_Static_assert(_Alignof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
+    e.t(") == ")?;
+    e.d(layout.align as u64)?;
+    e.t(", \"ceesafec frame layout\");")?;
+    return e.emit();
+}
+
+/// --explain-frames: each async fn of the program, its frame's size and what makes it large (L1 A3).
+fn explainFrames(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    for (f in 0..truncate<u32>(n.functions.length)) {
+        let source = nirFunctionSource(n, f);
+        if (!isAsyncNir(c, n, f) || functionIsGeneric(c, source) || n.functions[f as usize].variant != 0) {
+            continue;
+        }
+        let file = c.hir.functions[source as usize].file;
+        if (c.fileIsLibrary[file as usize]) {
+            continue;
+        }
+        let report = frameReport(c, n, f)?;
+        appendBytes(out, c.filePaths[file as usize].view())?;
+        out.push(':')?;
+        appendWhere(out, sources, file, functionNameStart(c, source))?;
+        appendText(out, ": ")?;
+        appendDescribedFunction(c, source, out)?;
+        appendText(out, " has a frame of ")?;
+        appendDecimal(out, truncate<u64>(report.layout.size))?;
+        appendText(out, " bytes (align ")?;
+        appendDecimal(out, report.layout.align as u64)?;
+        appendText(out, "): ")?;
+        appendDecimal(out, report.keptLocals as u64)?;
+        appendText(out, " of ")?;
+        appendDecimal(out, report.allLocals as u64)?;
+        appendText(out, " locals kept, ")?;
+        appendDecimal(out, report.localBytes)?;
+        appendText(out, " bytes")?;
+        if (report.unionMembers > 0) {
+            appendText(out, "; waiting storage ")?;
+            appendDecimal(out, report.unionBytes)?;
+            appendText(out, " bytes for ")?;
+            appendDecimal(out, report.unionMembers as u64)?;
+            appendText(out, " suspension point(s)")?;
+        }
+        if (report.scopeBytes > 0) {
+            appendText(out, "; scopes ")?;
+            appendDecimal(out, report.scopeBytes)?;
+            appendText(out, " bytes")?;
+        }
+        let function = borrow n.functions[f as usize];
+        if (report.largest.length > 0) {
+            appendText(out, "; largest: ")?;
+            for (k in 0..report.largest.length) {
+                if (k > 0) {
+                    appendText(out, ", ")?;
+                }
+                let local = report.largest[k];
+                appendLocalName(c, out, function, local)?;
+                appendText(out, " (")?;
+                appendDecimal(out, truncate<u64>(typeLayout(c, function.locals[local as usize].typ).size))?;
+                appendText(out, ")")?;
+            }
+        }
+        out.push('\n')?;
+    }
+    return Ok();
 }

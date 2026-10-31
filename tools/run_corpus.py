@@ -47,7 +47,7 @@ NORMALISATIONS = [
 
 FAMILIES = [
     "parse-pass", "parse-fail", "check-pass", "check-fail", "run-pass", "run-fail", "emit-c", "ffi", "freestanding",
-    "bounds-checks", "overflow-checks", "placement", "closure-calls",
+    "bounds-checks", "overflow-checks", "placement", "closure-calls", "frames",
 ]
 
 # Explanation families: the option that prints the report, and the snapshot's extension.
@@ -56,6 +56,7 @@ EXPLAIN = {
     "overflow-checks": ("--explain-overflow-checks", ".oce"),
     "placement": ("--explain-allocations", ".alloc"),
     "closure-calls": ("--explain-closure-calls", ".calls"),
+    "frames": ("--explain-frames", ".frames"),  # L1 A3: each async fn's frame (type-system.md §40.6)
 }
 
 ANNOTATION = re.compile(r"// error\[(N\d{4})\](?:@(\d+))?")
@@ -340,7 +341,8 @@ def run_test(runner, family, path, work):
         if o.status != 0:
             problems.append(f"build failed (status {o.status}): {o.stderr.strip()[:500]}")
         else:
-            compare_snapshot(o.stdout, stem + extension, problems, option, runner.d.cee)
+            # frames is CeeSafe's own family (L1 A3): its snapshots are in CeeSafe's names.
+            compare_snapshot(o.stdout, stem + extension, problems, option, runner.d.cee and family != "frames")
 
     return problems, None, outcomes
 

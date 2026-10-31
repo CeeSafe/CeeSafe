@@ -547,11 +547,14 @@ Heap (M3b):
     standard output or error: a count, 0 if it is not writable, or a negated errno (ADR 0031 §3.5).
   - One executor per thread: the root task and the scopes' children run in turn from a queue; a parked task waits on
     what it registered or on its scope's last child (`ceesafe_async_spawn`, `ceesafe_async_scope_done`). A child's
-    task and frame are one `ceesafe_alloc` block, so fault injection reaches it; `NULL` sets the scope's `oom`. A2b and
-    later add the cancel flag, shield depth and deadline, and wakers; `ceesafe_async_wake(id)`; kqueue and epoll
-    beside `poll()`; and
-    `CEESAFE_CANCEL_AT=k`, which cancels the root task at its k-th suspension, with `CEESAFE_CANCEL_REPORT` printing
-    `ceesafe cancel: points=N` (`testing.md`).
+    task and frame are one `ceesafe_alloc` block, so fault injection reaches it; `NULL` sets the scope's `oom`.
+  - Cancellation (L1 A2b): a task is cancelled if its own flag is set, or its scope's (a child failed or could not
+    start), or the scope's owner is, transitively. `ceesafe_async_status()` is 0, 1 (cancelled) or 2 (inside
+    `ceesafe_async_shield_enter(ms)` … `_leave()`, past its deadline; while shielded, cancellation reads as 0). A
+    cancellation unparks every task waiting on a deadline or descriptor; a shield's deadline wakes its task.
+  - `CEESAFE_CANCEL_AT=k` cancels the running `Async.run`'s root task at the program's k-th suspension, and
+    `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N` after each `Async.run` (`testing.md`).
+  - Later: wakers and `ceesafe_async_wake(id)` (A2c); kqueue and epoll beside `poll()` (A2d).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

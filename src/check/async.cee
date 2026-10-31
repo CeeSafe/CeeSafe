@@ -119,6 +119,12 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "scope")) {
         return checkAsyncScope(c, arguments, span);
     }
+    if (sameText(c.name(memberIdent.symbol), "shield")) {
+        return checkAsyncShield(c, arguments, expected, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "isCancelled") || sameText(c.name(memberIdent.symbol), "checkpoint")) {
+        return checkCancellationCall(c, memberIdent.symbol, arguments, span);
+    }
     if (!sameText(c.name(memberIdent.symbol), "run")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'Async' has no function ")?;
@@ -398,4 +404,134 @@ fn misplacedAsyncClosure(c: borrow mut Checker, span: Span) -> Result<u32, Alloc
     )?;
     c.error(taskNotAwaited(), span.start, span.end, message)?;
     return c.errorResult(span.start, span.end);
+}
+
+/// `Async.isCancelled()` and `Async.checkpoint(cancelled)` (§40.4, §40.7): calls of lib/std's AsyncControl<E>.
+fn checkCancellationCall(c: borrow mut Checker, member: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let isCheckpoint = sameText(c.name(member), "checkpoint");
+    if (arguments.count != (if (isCheckpoint) 1u32 else 0u32)) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            if (isCheckpoint) "'Async.checkpoint' takes the error to return if the task is cancelled" else "'Async.isCancelled' takes no arguments",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var values = Vector<u32>.create();
+    var typeArguments = Vector<u32>.create();
+    if (isCheckpoint) {
+        let argument = c.front.ast.at(arguments, 0);
+        let value = synth(c, argument, none())?;
+        if (c.types.isBottom(c.typeOf(value))) {
+            return c.errorResult(span.start, span.end);
+        }
+        typeArguments.push(c.typeOf(value))?;
+        values.push(value)?;
+    } else {
+        typeArguments.push(c.types.lookup("u8".bytes()))?;
+    }
+    let function = libraryFunction(c, "AsyncControl", typeArguments.view(), member, span)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let list = c.hir.list(values.view())?;
+    let returnType = c.hir.functions[function as usize].returnType;
+    return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
+}
+
+/// `await Async.shield(ms, async () => …)` (§40.7): the body awaited inline between lib/std's AsyncControl.enterShield
+/// and leaveShield, so the library's waits ignore cancellation for at most `ms` milliseconds.
+fn checkAsyncShield(c: borrow mut Checker, arguments: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.shield' runs its body as a task: write 'await Async.shield(ms, async () => …)' (type-system.md §40.7)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    let literal = if (arguments.count == 2) match (c.front.ast.exprs[c.front.ast.at(arguments, 1) as usize]) {
+        ExprNode.Closure(closure) =>
+            if (c.front.ast.closures[closure as usize].isAsync &&
+                c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
+        _ => none(),
+    } else none();
+    if (literal == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.shield' takes the milliseconds and an async closure literal: 'Async.shield(ms, async () => …)' (type-system.md §40.7)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let u64Type = c.types.lookup("u64".bytes());
+    let msSyntax = c.front.ast.at(arguments, 0);
+    let ms = checkExpr(c, msSyntax, u64Type)?;
+    let bodySyntax = c.front.ast.at(arguments, 1);
+    let bodySpan = c.front.ast.exprSpans[bodySyntax as usize];
+    // The body's result: the expected type; else, for a block body, Result<void, AsyncError>, a shield's usual
+    // cleanup (§40.4); an expression body's own type.
+    var result = if (expected != none() && !c.types.isBottom(expected)) expected else none();
+    if (result == none() && c.front.ast.closures[literal as usize].block != none()) {
+        let asyncErrorSymbol = c.intern("AsyncError")?;
+        let asyncError = match (c.item(asyncErrorSymbol)) {
+            Entity.Enum(index) => c.enums[index as usize].typ,
+            _ => none(),
+        };
+        if (asyncError != none()) {
+            let voidType = c.types.voidType;
+            result = resultOf(c, voidType, asyncError)?;
+        }
+    }
+    var closureType = none();
+    if (result != none()) {
+        let none0 = Vector<u32>.create();
+        let callable = c.types.closureTo(none0.view(), result, maskEffects())?;
+        closureType = c.types.referenceTo(callable, true)?;
+    }
+    let closure = checkClosure(c, literal, closureType, bodySpan)?;
+    let function = match (c.hir.exprs[closure as usize]) {
+        HirExpr.Closure(f, _) => f,
+        _ => none(),
+    };
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let resultType = c.hir.functions[function as usize].returnType;
+    var closureArguments = Vector<u32>.create();
+    if (c.hir.functions[function as usize].closureEnvironment != none()) {
+        closureArguments.push(closure)?; // its environment's address (§36.2)
+    }
+    let call = c.expr(HirExpr.Call(function, c.hir.list(closureArguments.view())?), resultType, span.start, span.end)?;
+    let body = c.expr(HirExpr.Await(call), resultType, span.start, span.end)?;
+    let u8Type = c.types.lookup("u8".bytes());
+    let enterName = c.intern("enterShield")?;
+    let leaveName = c.intern("leaveShield")?;
+    var typeArguments = Vector<u32>.create();
+    typeArguments.push(u8Type)?;
+    let enterFunction = libraryFunction(c, "AsyncControl", typeArguments.view(), enterName, span)?;
+    let leaveFunction = libraryFunction(c, "AsyncControl", typeArguments.view(), leaveName, span)?;
+    if (enterFunction == none() || leaveFunction == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    var enterArguments = Vector<u32>.create();
+    enterArguments.push(ms)?;
+    let voidType = c.types.voidType;
+    let enter = c.expr(
+        HirExpr.Call(enterFunction, c.hir.list(enterArguments.view())?),
+        voidType,
+        span.start,
+        span.end,
+    )?;
+    let none1 = Vector<u32>.create();
+    let leave = c.expr(HirExpr.Call(leaveFunction, c.hir.list(none1.view())?), voidType, span.start, span.end)?;
+    return c.expr(HirExpr.AsyncShield(enter, body, leave), resultType, span.start, span.end);
 }

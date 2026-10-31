@@ -1,0 +1,55 @@
+// Async.shield (type-system.md §40.7): inside, waits ignore cancellation; once its time is up they return TimedOut.
+// Async.checkpoint returns the given error to a cancelled task.
+
+async fn cleanup(log: borrow mut u32) -> Result<void, AsyncError> {
+    // Cancelled already, yet the shield lets it wait and write.
+    await Async.shield(50, async () => {
+        await Timer.sleep(5)?;
+        log += 1;
+        return Ok();
+    })?;
+    // A shield that runs out: its wait sees TimedOut.
+    let late: Result<void, AsyncError> = await Async.shield(5, async () => await Timer.sleep(1000));
+    match (late) {
+        Err(AsyncError.TimedOut) => { log += 10; }
+        _ => {}
+    }
+    return Ok();
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    var log: u32 = 0;
+    let outcome = await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            await Timer.sleep(1)?;
+            return Err(AsyncError.TimedOut);
+        });
+        s.spawn(async () => {
+            match (await Timer.sleep(1000)) {
+                Err(AsyncError.Cancelled) => {
+                    if (Async.isCancelled()) {
+                        await cleanup(mut log)?;
+                    }
+                }
+                _ => {}
+            }
+            return Async.checkpoint(AsyncError.Cancelled);
+        });
+    });
+    match (outcome) {
+        Err(AsyncError.TimedOut) => { log += 100; }
+        _ => {}
+    }
+    return Ok(log);
+}
+
+fn main() {
+    let start = Timer.now();
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    Console.writeLine(Timer.now() - start < 500);
+}
+// expect-stdout: 111
+// expect-stdout: true

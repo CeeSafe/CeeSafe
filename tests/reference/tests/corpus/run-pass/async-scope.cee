@@ -55,7 +55,7 @@ async fn failing() -> Result<u32, Failure> {
         });
         s.spawn(async () => {
             await pause(15)?;
-            finished = 1; // runs to the end: cancellation is not in A2a
+            finished = 1; // not reached: the first child's error cancels this one (§40.7)
             return Ok();
         });
     });
@@ -116,7 +116,7 @@ fn main() {
 // expect-stdout: slow
 // expect-stdout: 123
 // expect-stdout: first error: Bad
-// expect-stdout: 1
+// expect-stdout: 0
 // expect-stdout: fast
 // expect-stdout: slow
 // expect-stdout: 126

@@ -1011,6 +1011,11 @@ fn walkExpr(
             walkStmt(c, body, walk)?;
         }
         HirExpr.Spawn(_, closure) => { walkExpr(c, closure, e, parent, walk)?; }
+        HirExpr.AsyncShield(enter, body, leave) => {
+            walkExpr(c, enter, e, parent, walk)?;
+            walkExpr(c, body, e, parent, walk)?;
+            walkExpr(c, leave, e, parent, walk)?;
+        }
         HirExpr.FloatToInt(operand, _) => { walkExpr(c, operand, e, parent, walk)?; }
         _ => {} // constants, struct literals (their fields are value tuples to the reference's walk), addresses
     }

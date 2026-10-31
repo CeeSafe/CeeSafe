@@ -12,8 +12,8 @@ static NV_UNUSED const nv_loc nvL_3 = { nv_file_0, 6u, 30u };
 static NV_UNUSED const nv_loc nvL_4 = { nv_file_0, 16u, 23u };
 
 typedef struct nvT_Point nvT_Point;
-typedef struct nvSl_u8 nvSl_u8;
 typedef struct nvSm_u8 nvSm_u8;
+typedef struct nvSl_u8 nvSl_u8;
 typedef struct nvA8_u8 nvA8_u8;
 typedef struct nvA2_S5Point nvA2_S5Point;
 typedef struct nvSm_S5Point nvSm_S5Point;
@@ -27,13 +27,13 @@ _Static_assert(_Alignof(nvT_Point) == 4, "novac layout: alignof(Point)");
 _Static_assert(offsetof(nvT_Point, f_x) == 0, "novac layout: Point.x");
 _Static_assert(offsetof(nvT_Point, f_y) == 4, "novac layout: Point.y");
 
-struct nvSl_u8 { const uint8_t *ptr; uint64_t len; };
-_Static_assert(sizeof(nvSl_u8) == 16, "novac layout: sizeof(Slice<u8>)");
-_Static_assert(_Alignof(nvSl_u8) == 8, "novac layout: alignof(Slice<u8>)");
-
 struct nvSm_u8 { uint8_t *ptr; uint64_t len; };
 _Static_assert(sizeof(nvSm_u8) == 16, "novac layout: sizeof(SliceMut<u8>)");
 _Static_assert(_Alignof(nvSm_u8) == 8, "novac layout: alignof(SliceMut<u8>)");
+
+struct nvSl_u8 { const uint8_t *ptr; uint64_t len; };
+_Static_assert(sizeof(nvSl_u8) == 16, "novac layout: sizeof(Slice<u8>)");
+_Static_assert(_Alignof(nvSl_u8) == 8, "novac layout: alignof(Slice<u8>)");
 
 struct nvA8_u8 { uint8_t e[8]; };
 _Static_assert(sizeof(nvA8_u8) == 8, "novac layout: sizeof([u8; 8])");

@@ -690,6 +690,7 @@ fn diverges(c: borrow Checker, e: u32, loopExits: borrow mut Vector<bool>) -> Re
         HirExpr.Await(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.RunTask(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.AsyncScope(_, oom, _) => { return diverges(c, oom, loopExits); } // its body cannot leave (§40.5)
+        HirExpr.AsyncShield(enter, _, _) => { return diverges(c, enter, loopExits); }
         HirExpr.IsNull(reference, _) => { return diverges(c, reference, loopExits); }
         _ => { return Ok(false); }
     }

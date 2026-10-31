@@ -515,6 +515,16 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.AsyncShield(enter, body, leave) => {
+                this.text("(async-shield ")?;
+                this.expr(hir, types, symbols, enter)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, body)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, leave)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
             HirExpr.Spawn(site, closure) => {
                 this.text("(spawn ")?;
                 appendDecimal(mut this.out, site as u64)?;

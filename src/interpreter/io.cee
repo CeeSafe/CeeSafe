@@ -830,6 +830,15 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_write")) {
         return "iPs:l";
     }
+    if (sameText(name, "ceesafe_async_status")) {
+        return ":u";
+    }
+    if (sameText(name, "ceesafe_async_shield_enter")) {
+        return "s:-";
+    }
+    if (sameText(name, "ceesafe_async_shield_leave")) {
+        return ":-";
+    }
     if (sameText(name, "ceesafe_host_dir_close")) {
         return "P:-";
     }
@@ -1445,6 +1454,27 @@ fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector
         it.asyncWritable = true;
         return Ok(null);
     }
+    if (sameText(name, "ceesafe_async_status")) {
+        return Ok(valueOf(asyncStatus(it) as u64, 4));
+    }
+    if (sameText(name, "ceesafe_async_shield_enter")) {
+        let ms = arguments[0].bits(0, 8)?;
+        let k = it.asyncCurrent as usize;
+        if (it.asyncTasks[k].shields == 0) {
+            it.asyncTasks[k].shieldDeadline =
+                if (ms > 0xFFFFFFFFFFFFFFFF - it.asyncClock) 0xFFFFFFFFFFFFFFFF else it.asyncClock + ms;
+        }
+        it.asyncTasks[k].shields += 1;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_shield_leave")) {
+        let k = it.asyncCurrent as usize;
+        it.asyncTasks[k].shields -= 1;
+        if (it.asyncTasks[k].shields == 0) {
+            it.asyncTasks[k].shieldDeadline = 0xFFFFFFFFFFFFFFFF;
+        }
+        return Ok(null);
+    }
     // ceesafe_async_write: at most PIPE_BUF (512 here, POSIX's minimum) bytes, in order with Console's output.
     let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
     let start = arguments[1].bits(0, 8)?;
@@ -1485,8 +1515,35 @@ struct InterpScope {
     active: bool;
     live: u32;
     failed: bool;
+    cancelled: bool; // a child failed: the others are cancelled (§40.7)
     error: Value;
     waiting: bool;
+}
+
+/// What cancellation needs of a task, beside runTasks' own record (InterpTask).
+struct InterpTaskInfo {
+    scope: u32; // a child's InterpScope, or none for the root
+    shields: u32;
+    shieldDeadline: u64;
+}
+
+/// ceesafe_async_status: 0 runs on, 1 cancelled (its scope, or the scope's task, transitively), 2 shield's time up.
+fn asyncStatus(it: borrow Interp) -> u32 {
+    if (it.asyncCurrent == none() || (it.asyncCurrent as usize) >= it.asyncTasks.length) {
+        return 0;
+    }
+    let current = borrow it.asyncTasks[it.asyncCurrent as usize];
+    if (current.shields > 0) {
+        return if (it.asyncClock >= current.shieldDeadline) 2 else 0;
+    }
+    var scope = current.scope;
+    while (scope != none()) {
+        if (it.asyncScopes[scope as usize].cancelled) {
+            return 1;
+        }
+        scope = it.asyncTasks[it.asyncScopes[scope as usize].task as usize].scope;
+    }
+    return 0;
 }
 
 struct InterpTask {
@@ -1512,6 +1569,7 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             active: true,
             live: 0,
             failed: false,
+            cancelled: false,
             error: uninitialisedValue(0),
             waiting: false,
         },
@@ -1600,6 +1658,8 @@ fn runTasks(
     arguments: Vector<Value>,
 ) -> Result<Value?, Stop> {
     let savedCurrent = it.asyncCurrent;
+    let savedTasks = it.asyncTasks.length;
+    let first = truncate<u32>(savedTasks); // this run's tasks are it.asyncTasks[first..]
     var stacks = Vector<Vector<Activation>>.create();
     var tasks = Vector<InterpTask>.create();
     var ready = Vector<u32>.create();
@@ -1622,25 +1682,34 @@ fn runTasks(
         InterpTask { scope: none(), environment: 0, parked: false, deadline: 0xFFFFFFFFFFFFFFFF, onScope: false },
     )!;
     ready.push(0)!;
+    it.asyncTasks.push(InterpTaskInfo { scope: none(), shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF })!;
     loop {
         if (head == ready.length) {
             // No task can run: the earliest deadline comes (§40.8).
             var earliest: u64 = 0xFFFFFFFFFFFFFFFF;
-            for (t in tasks.view()) {
+            for (j in 0..tasks.length) {
+                let t = borrow tasks[j];
                 if (t.parked && t.deadline < earliest) {
                     earliest = t.deadline;
+                }
+                let info = borrow it.asyncTasks[first as usize + j];
+                if (t.parked && !t.onScope && info.shields > 0 && info.shieldDeadline < earliest) {
+                    earliest = info.shieldDeadline;
                 }
             }
             if (earliest == 0xFFFFFFFFFFFFFFFF) {
                 endTasks(it, mut stacks);
                 it.asyncCurrent = savedCurrent;
+                it.asyncTasks.truncate(savedTasks);
                 return Err(fault("every task is parked with nothing to wake it"));
             }
             if (earliest > it.asyncClock) {
                 it.asyncClock = earliest;
             }
             for (k in 0..tasks.length) {
-                if (tasks[k].parked && tasks[k].deadline <= it.asyncClock) {
+                let shieldDue = it.asyncTasks[first as usize + k].shields > 0 &&
+                    it.asyncTasks[first as usize + k].shieldDeadline <= it.asyncClock;
+                if (tasks[k].parked && !tasks[k].onScope && (tasks[k].deadline <= it.asyncClock || shieldDue)) {
                     tasks[k].parked = false;
                     tasks[k].deadline = 0xFFFFFFFFFFFFFFFF;
                     ready.push(truncate<u32>(k))!;
@@ -1650,7 +1719,7 @@ fn runTasks(
         }
         let k = ready[head];
         head += 1;
-        it.asyncCurrent = k;
+        it.asyncCurrent = first + k;
         it.asyncDeadline = 0xFFFFFFFFFFFFFFFF;
         it.asyncWritable = false;
         it.asyncRetry = false;
@@ -1682,6 +1751,9 @@ fn runTasks(
                 },
             )!;
             stacks.push(stack)!;
+            it.asyncTasks.push(
+                InterpTaskInfo { scope: spawn.scope, shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF },
+            )!;
             tasks.push(
                 InterpTask {
                     scope: spawn.scope,
@@ -1697,6 +1769,7 @@ fn runTasks(
             Ok(value) => {
                 if (k == 0) {
                     it.asyncCurrent = savedCurrent;
+                    it.asyncTasks.truncate(savedTasks);
                     return Ok(value); // the root's scopes have ended, so every child has returned
                 }
                 let scope = tasks[k as usize].scope;
@@ -1714,9 +1787,20 @@ fn runTasks(
                     null => {}
                 }
                 it.asyncScopes[scope as usize].live -= 1;
+                if (it.asyncScopes[scope as usize].failed && !it.asyncScopes[scope as usize].cancelled) {
+                    // The first error cancels the other children: those waiting run again to see it (§40.7).
+                    it.asyncScopes[scope as usize].cancelled = true;
+                    for (j in 0..tasks.length) {
+                        if (tasks[j].parked && !tasks[j].onScope) {
+                            tasks[j].parked = false;
+                            tasks[j].deadline = 0xFFFFFFFFFFFFFFFF;
+                            ready.push(truncate<u32>(j))!;
+                        }
+                    }
+                }
                 if (it.asyncScopes[scope as usize].live == 0 && it.asyncScopes[scope as usize].waiting) {
                     it.asyncScopes[scope as usize].waiting = false;
-                    let waiter = it.asyncScopes[scope as usize].task;
+                    let waiter = it.asyncScopes[scope as usize].task - first;
                     tasks[waiter as usize].parked = false;
                     tasks[waiter as usize].onScope = false;
                     ready.push(waiter)!;
@@ -1731,6 +1815,7 @@ fn runTasks(
                     }
                     endTasks(it, mut stacks);
                     it.asyncCurrent = savedCurrent;
+                    it.asyncTasks.truncate(savedTasks);
                     return Err(located);
                 }
                 if (it.asyncRetry) {
@@ -1746,6 +1831,7 @@ fn runTasks(
                 } else {
                     endTasks(it, mut stacks);
                     it.asyncCurrent = savedCurrent;
+                    it.asyncTasks.truncate(savedTasks);
                     return Err(fault("a task parked with nothing to wake it"));
                 }
             }

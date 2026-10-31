@@ -101,10 +101,11 @@ enum HirExpr {
     Closure(u32, Range), // function, captures (Hir.captures)
     FloatConst(f64),
     FloatToInt(u32, FloatToIntMode),
-    Await(u32),                // `await` of a task: a Call of an async fn (type-system.md §40.2)
-    RunTask(u32),              // `Async.run(task)`: a Call of an async fn, run to completion (§40.4)
-    AsyncScope(u32, u32, u32), // `await Async.scope(oom, (s) => { … })` (§40.5): site, oom value, the body (a block)
-    Spawn(u32, u32),           // `s.spawn(async () => …)`: the scope's site, the async closure
+    Await(u32),                 // `await` of a task: a Call of an async fn (type-system.md §40.2)
+    RunTask(u32),               // `Async.run(task)`: a Call of an async fn, run to completion (§40.4)
+    AsyncScope(u32, u32, u32),  // `await Async.scope(oom, (s) => { … })` (§40.5): site, oom value, the body (a block)
+    Spawn(u32, u32),            // `s.spawn(async () => …)`: the scope's site, the async closure
+    AsyncShield(u32, u32, u32), // `await Async.shield(ms, body)` (§40.7): enter call, awaited body, leave call
     Error,
 }
 

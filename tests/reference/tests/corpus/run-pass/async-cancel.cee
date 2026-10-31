@@ -1,0 +1,47 @@
+// Cancellation (type-system.md §40.7, ADR 0031 §3.4): a child's error cancels its siblings; a cancelled task's
+// sleep returns Err(Cancelled) at once, and Async.isCancelled sees it; nothing is lost or leaked.
+
+async fn work() -> Result<u32, AsyncError> {
+    var slowSaw: u32 = 0;
+    var spun: u32 = 0;
+    let outcome = await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            await Timer.sleep(5)?;
+            return Err(AsyncError.TimedOut);
+        });
+        s.spawn(async () => {
+            match (await Timer.sleep(1000)) {
+                Ok() => { slowSaw = 1; }
+                Err(AsyncError.Cancelled) => { slowSaw = 2; }
+                Err(_) => { slowSaw = 3; }
+            }
+            return Ok();
+        });
+        s.spawn(async () => {
+            loop {
+                spun += 1;
+                if (Async.isCancelled()) {
+                    return Ok();
+                }
+                await Timer.sleep(1)?;
+            }
+        });
+    });
+    match (outcome) {
+        Err(AsyncError.TimedOut) => { await AsyncConsole.writeLine("first error: TimedOut")?; }
+        _ => { await AsyncConsole.writeLine("unexpected")?; }
+    }
+    return Ok(slowSaw);
+}
+
+fn main() {
+    let start = Timer.now();
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    Console.writeLine(Timer.now() - start < 500);
+}
+// expect-stdout: first error: TimedOut
+// expect-stdout: 2
+// expect-stdout: true

@@ -65,6 +65,7 @@ struct Interp {
     asyncRetry: bool;                 // the parked statement runs again when the task resumes (a scope's end)
     asyncSpawns: Vector<InterpSpawn>; // children spawned by the running task, for runTasks to start
     asyncScopes: Vector<InterpScope>;
+    asyncTasks: Vector<InterpTaskInfo>; // by runTasks' task index: what cancellation needs (§40.7)
     // nova_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
@@ -1769,6 +1770,7 @@ fn newInterp(
         asyncRetry: false,
         asyncSpawns: Vector<InterpSpawn>.create(),
         asyncScopes: Vector<InterpScope>.create(),
+        asyncTasks: Vector<InterpTaskInfo>.create(),
         emptyVector: 0,
         attempts: 0,
         liveAllocations: 0,

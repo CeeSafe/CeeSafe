@@ -6,7 +6,8 @@ nothing here runs novac or reads a Nova checkout):
   the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under
   -Werror, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008);
 - the support library's tests with leak checks, and its allocation-failure sweep;
-- the mutation suite, the fault sweep over the corpus, the collection properties, the freestanding checks;
+- the mutation suite, the fault sweep over the corpus, the cancellation sweep over its async programs, the collection
+  properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py) and the debugger scripts.
 Each step's last line is printed.
 
@@ -67,6 +68,7 @@ def main():
                                     os.path.join(ROOT, "tests", "support", "fault", "alloc-sweep.cee")] + support),
             ("mutations", py + [f"{HERE}/mutation_suite.py", "--compiler", cee]),
             ("fault sweep", py + [f"{HERE}/fault_injection.py", "--compiler", cee, "--corpus", corpus]),
+            ("cancel sweep", py + [f"{HERE}/cancel_sweep.py", "--compiler", cee, "--corpus", corpus]),
             ("collections", py + [f"{HERE}/collection_properties.py", "--compiler", cee, "--sweep"]),
             ("freestanding", py + [f"{HERE}/freestanding_check.py", "--compiler", cee, "--corpus", corpus]),
             ("spec", py + [f"{HERE}/spec_check.py", "--ceesafec", cee]),

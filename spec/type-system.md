@@ -3233,9 +3233,9 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
 | `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of results `Result<T, E>`; the first to return `Ok` wins, the other is cancelled and awaited; an `Err` from either is the result. `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok` |
 | `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`; both run, the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6 |
-| `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds |
-| `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled, else `Ok`: a cancellation point for long computations |
-| `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded |
+| `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds. The body's result type is the expected one; without one, an expression body's own, and a block body's `Result<void, AsyncError>` |
+| `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`: a cancellation point for long computations. A call of lib/std's `AsyncControl<E>.checkpoint` |
+| `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
 | `Async.blocking(closure)` | `T` | Runs a sync closure literal with no parameters on a worker thread and waits for it without blocking other tasks. Its captures follow §38.6's rule and `T` must be `Send` (N0334). If no worker can be started, it runs on the calling thread: the result is the same |
 | `Async.park()`, `Async.waker()` | `void`, `u64` | Library-only primitives (**N0345** elsewhere): suspend the current task until its waker is woken; the current task's waker id |
 
@@ -3277,9 +3277,10 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
   resume functions).
 
 ### 40.7 Cancellation
-- **Cancelling a task sets its flag.** A scope cancels its children when one fails (§40.5), `race` and `all` cancel the
-  other child, and the runtime may cancel a root task (the `CEESAFE_CANCEL_AT` sweep, `testing.md`). The flag is
-  inherited: an awaited task and a scope's children are cancelled with their parent.
+- **Cancelling a task sets its flag.** A scope cancels its children when one fails or one cannot start (§40.5), `race`
+  and `all` cancel the other child, and the runtime may cancel a root task (the `CEESAFE_CANCEL_AT` sweep,
+  `testing.md`). The flag is inherited: an awaited task shares its awaiter's, and a scope's children are cancelled with
+  the task that owns the scope. A cancellation wakes every task waiting on a deadline or a descriptor, so it sees it.
 - **Only the library's waiting operations observe it,** together with `Async.checkpoint` and `Async.isCancelled`: a
   cancelled task's next such operation returns `Err(AsyncError.Cancelled)` at once, or, for an operation already
   waiting, as soon as it can do so safely (a completion-based read first cancels and waits for the kernel's operation).

@@ -35,6 +35,9 @@ typedef struct cee_task {
     uint64_t deadline;     /* UINT64_MAX for none */
     int32_t fd;            /* -1 for none */
     bool on_scope;         /* parked until its scope's last child returns */
+    bool cancelled;        /* cancelled itself (the sweep's root); see cee_cancelled */
+    uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
+    uint64_t shield_deadline;
 } cee_task;
 
 /* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task. */
@@ -48,6 +51,33 @@ typedef struct {
 } cee_executor;
 
 static _Thread_local cee_executor cee_exec;
+
+/* The cancellation sweep (testing.md §1): CEESAFE_CANCEL_AT=k cancels the running Async.run's root task at the
+ * program's k-th suspension; CEESAFE_CANCEL_REPORT=1 prints the count after each Async.run. */
+static uint64_t cee_suspensions;
+static uint64_t cee_cancel_at;
+static bool cee_cancel_report;
+static bool cee_cancel_read;
+
+/* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
+static bool cee_cancelled(const cee_task *t) {
+    while (t != NULL) {
+        if (t->cancelled) {
+            return true;
+        }
+        if (t->scope == NULL) {
+            return false;
+        }
+        if (t->scope->cancelled) {
+            return true;
+        }
+        t = (const cee_task *)t->scope->owner;
+    }
+    return false;
+}
+
+/* After a cancellation: every task parked on a deadline or a descriptor runs again, to see it (its waits retry). */
+static void cee_wake_waiters(void);
 
 static void cee_ready(cee_task *t) {
     t->next = NULL;
@@ -149,12 +179,15 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
 }
 
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope)) {
+    scope->owner = cee_exec.current;
     if (scope->oom) {
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
     unsigned char *block = (unsigned char *)ceesafe_alloc(CEE_TASK_HEAD + frame_size, CEE_ALLOC_SYSTEM);
     if (block == NULL) {
         scope->oom = true;
+        scope->cancelled = true; /* the children already started stop (type-system.md §40.5) */
+        cee_wake_waiters();
         return NULL;
     }
     cee_task *t = (cee_task *)(void *)block;
@@ -165,9 +198,53 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->deadline = UINT64_MAX;
     t->fd = -1;
     t->on_scope = false;
+    t->cancelled = false;
+    t->shields = 0u;
+    t->shield_deadline = UINT64_MAX;
     scope->live += 1u;
     cee_ready(t);
     return t->frame;
+}
+
+/* 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is up (type-system.md §40.7). */
+uint32_t ceesafe_async_status(void) {
+    cee_task *t = cee_exec.current;
+    if (t == NULL) {
+        return 0u;
+    }
+    if (t->shields > 0u) {
+        return ceesafe_async_now() >= t->shield_deadline ? 2u : 0u;
+    }
+    return cee_cancelled(t) ? 1u : 0u;
+}
+
+/* Async.shield(ms, …): cancellation is ignored inside, for at most `ms` milliseconds (type-system.md §40.7). */
+void ceesafe_async_shield_enter(uint64_t ms) {
+    cee_task *t = cee_exec.current;
+    if (t->shields == 0u) {
+        uint64_t now = ceesafe_async_now();
+        t->shield_deadline = ms > UINT64_MAX - now ? UINT64_MAX : now + ms;
+    }
+    t->shields += 1u;
+}
+
+void ceesafe_async_shield_leave(void) {
+    cee_task *t = cee_exec.current;
+    t->shields -= 1u;
+    if (t->shields == 0u) {
+        t->shield_deadline = UINT64_MAX;
+    }
+}
+
+static void cee_wake_waiters(void) {
+    cee_task *t = cee_exec.parked;
+    while (t != NULL) {
+        cee_task *next = t->next;
+        if (!t->on_scope) {
+            cee_unpark(t);
+        }
+        t = next;
+    }
 }
 
 bool ceesafe_async_scope_done(ceesafe_scope *scope) {
@@ -192,6 +269,9 @@ static void cee_wait(void) {
     for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
         if (t->deadline < deadline) {
             deadline = t->deadline;
+        }
+        if (t->shields > 0u && !t->on_scope && t->shield_deadline < deadline) {
+            deadline = t->shield_deadline; /* a shield's end wakes its task, to see TimedOut */
         }
         if (t->fd >= 0) {
             registered += 1;
@@ -238,14 +318,25 @@ static void cee_wait(void) {
         }
 #endif
         now = ceesafe_async_now();
-        cee_task *t = cee_exec.parked;
-        while (t != NULL) {
-            cee_task *next = t->next;
-            if (t->deadline != UINT64_MAX && now >= t->deadline) {
-                cee_unpark(t);
-                any = true;
+        /* The tasks whose time has come run earliest deadline first, however late the executor woke. */
+        for (;;) {
+            cee_task *due = NULL;
+            uint64_t due_at = UINT64_MAX;
+            for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
+                uint64_t at = t->deadline;
+                if (t->shields > 0u && !t->on_scope && t->shield_deadline < at) {
+                    at = t->shield_deadline;
+                }
+                if (at != UINT64_MAX && now >= at && (due == NULL || at < due_at)) {
+                    due = t;
+                    due_at = at;
+                }
             }
-            t = next;
+            if (due == NULL) {
+                break;
+            }
+            cee_unpark(due);
+            any = true;
         }
         if (any) {
             return;
@@ -259,7 +350,12 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
     cee_exec.ready_tail = NULL;
     cee_exec.parked = NULL;
     cee_exec.current = NULL;
-    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false};
+    if (!cee_cancel_read) {
+        cee_cancel_read = true;
+        cee_cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
+        cee_cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
+    }
+    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX};
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -271,11 +367,16 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         bool done = t->scope == NULL ? t->resume_root(t->frame) : t->resume_child(t->frame, t->scope);
         cee_exec.current = NULL;
         if (!done) {
-            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope) {
+            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !(t->shields > 0u)) {
                 cee_stuck(); /* parked without registering anything: nothing can wake it */
             }
             t->next = cee_exec.parked;
             cee_exec.parked = t;
+            cee_suspensions += 1u;
+            if (cee_suspensions == cee_cancel_at) {
+                root.cancelled = true; /* the sweep's cancellation (testing.md §1) */
+                cee_wake_waiters();
+            }
             continue;
         }
         if (t == &root) {
@@ -284,11 +385,20 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         ceesafe_scope *scope = t->scope;
         ceesafe_free(t, CEE_ALLOC_SYSTEM);
         scope->live -= 1u;
+        if (scope->failed && !scope->cancelled) {
+            scope->cancelled = true; /* the first error cancels the other children (type-system.md §40.5) */
+            cee_wake_waiters();
+        }
         if (scope->live == 0u && scope->waiter != NULL) {
             cee_task *waiter = (cee_task *)scope->waiter;
             scope->waiter = NULL;
             cee_unpark(waiter);
         }
+    }
+    if (cee_cancel_report) {
+        char line[64];
+        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n", (unsigned long long)cee_suspensions);
+        ceesafe_platform_write_stderr((const uint8_t *)line, (size_t)length);
     }
     cee_exec = saved;
 }

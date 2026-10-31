@@ -432,7 +432,21 @@ fn emitTaskStatement(
         _ => { return Ok(false); }
     }
     var args = Vector<u8>.create();
-    appendOperandList(e, c, n, sources, f, mut args, arguments, 0)?;
+    let calleeNir = asyncNirFunction(n, callee);
+    if (c.hir.functions[callee as usize].closureEnvironment != none() && calleeNir != none() && arguments.count > 0) {
+        // An awaited async closure (Async.shield): its value is its environment's first member (§36.2).
+        appendText(mut args, "(")?;
+        appendCTypeName(c, mut args, n.functions[calleeNir as usize].locals[0].typ)?;
+        appendText(mut args, ")(uintptr_t)")?;
+        let environment = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        appendBytes(mut args, environment.view())?;
+        if (arguments.count > 1) {
+            appendText(mut args, ", ")?;
+            appendOperandList(e, c, n, sources, f, mut args, arguments, 1)?;
+        }
+    } else {
+        appendOperandList(e, c, n, sources, f, mut args, arguments, 0)?;
+    }
     var place = Vector<u8>.create();
     if (target != none()) {
         place = appendPlaceIn(e, c, n, sources, f, target)?;

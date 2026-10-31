@@ -1040,10 +1040,17 @@ typedef struct ceesafe_scope {
     uint32_t live;
     bool failed;
     bool oom;
+    bool cancelled; /* a child failed or could not start: the others are cancelled (§40.7) */
     void *waiter;
+    void *owner;    /* the task whose scope it is */
 } ceesafe_scope;
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope));
 bool ceesafe_async_scope_done(ceesafe_scope *scope);
+/* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is
+ * up. Async.shield brackets its body with enter and leave; inside, cancellation is not reported. */
+uint32_t ceesafe_async_status(void);
+void ceesafe_async_shield_enter(uint64_t ms);
+void ceesafe_async_shield_leave(void);
 uint64_t ceesafe_async_now(void);
 void ceesafe_async_wait_until(uint64_t deadline);
 void ceesafe_async_wait_writable(int32_t fd);

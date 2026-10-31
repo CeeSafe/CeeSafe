@@ -2058,6 +2058,29 @@ fn lowerRvalueCore(
         HirExpr.Await(call) => { return lowerTaskCall(c, n, b, call, taskAwait()); }
         HirExpr.RunTask(call) => { return lowerTaskCall(c, n, b, call, taskRun()); }
         HirExpr.AsyncScope(site, oom, body) => { return lowerAsyncScope(c, n, b, e, site, oom, body); }
+        HirExpr.AsyncShield(enter, body, leave) => {
+            // Enter, the awaited body into a temporary, leave, then the temporary (type-system.md §40.7).
+            let entering = lowerRvalue(c, n, b, enter)?;
+            if (entering == none()) {
+                return Ok(none());
+            }
+            emit(n, b, NirStatement.Eval(entering))?;
+            let awaited = lowerRvalue(c, n, b, body)?;
+            if (awaited == none()) {
+                return Ok(none());
+            }
+            let resultType = c.hir.exprTypes[e as usize];
+            let temp = newTemp(b, resultType)?;
+            let place = localPlace(n, temp)?;
+            assign(n, b, place, awaited)?;
+            let leaving = lowerRvalue(c, n, b, leave)?;
+            if (leaving == none()) {
+                return Ok(none());
+            }
+            emit(n, b, NirStatement.Eval(leaving))?;
+            let value = readPlace(c, n, b, place)?;
+            return useRvalue(n, value);
+        }
         HirExpr.Spawn(site, closure) => {
             let u32Type = c.types.lookup("u32".bytes());
             let siteOperand = constOperand(n, site as i64, u32Type)?;
@@ -2397,6 +2420,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.Await(_) => { return true; }
         HirExpr.RunTask(_) => { return true; }
         HirExpr.AsyncScope(_, _, _) => { return true; }
+        HirExpr.AsyncShield(_, _, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }

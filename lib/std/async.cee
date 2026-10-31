@@ -12,6 +12,12 @@ extern "C" {
     fn ceesafe_async_wait_writable(fd: i32);
     @effects()
     fn ceesafe_async_write(fd: i32, bytes: *u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_status() -> u32;
+    @effects()
+    fn ceesafe_async_shield_enter(ms: u64);
+    @effects()
+    fn ceesafe_async_shield_leave();
 }
 
 /// Why an async operation failed (type-system.md §40.4, §40.7).
@@ -29,51 +35,100 @@ public struct Timer {
 
     /// Waits at least `ms` milliseconds without blocking the thread: other tasks run meanwhile.
     /// Safety: ceesafe_async_wait_until only records the deadline for the executor.
+    /// A cancelled task's sleep returns `Err(AsyncError.Cancelled)` at once (type-system.md §40.7).
     public async fn sleep(ms: u64) -> Result<void, AsyncError> {
         let start = Timer.now();
         let deadline = if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
-        while (Timer.now() < deadline) {
+        loop {
+            AsyncLeaf.status()?;
+            if (Timer.now() >= deadline) {
+                return Ok();
+            }
             unsafe { ceesafe_async_wait_until(deadline); }
             await Async.park();
         }
-        return Ok();
     }
 }
 
 /// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
 public struct AsyncConsole {
     /// Writes `text` to standard output.
-    public async fn write(text: StringView) -> Result<void, AsyncError> => await writeAll(1, text.bytes());
+    public async fn write(text: StringView) -> Result<void, AsyncError> => await AsyncLeaf.writeAll(1, text.bytes());
 
     /// Writes `text` and a newline to standard output.
     public async fn writeLine(text: StringView) -> Result<void, AsyncError> {
-        await writeAll(1, text.bytes())?;
-        return await writeAll(1, "\n".bytes());
+        await AsyncLeaf.writeAll(1, text.bytes())?;
+        return await AsyncLeaf.writeAll(1, "\n".bytes());
     }
 
     /// Writes `text` to standard error.
-    public async fn writeError(text: StringView) -> Result<void, AsyncError> => await writeAll(2, text.bytes());
+    public async fn writeError(text: StringView) -> Result<void, AsyncError> =>
+        await AsyncLeaf.writeAll(2, text.bytes());
 }
 
-/// Writes every byte to `fd`, a step of at most PIPE_BUF bytes whenever it is writable, parking until it is.
-/// Safety: the pointer and length are the slice's, read by the runtime during the call only.
-async fn writeAll(fd: i32, bytes: Slice<u8>) -> Result<void, AsyncError> {
-    var done: usize = 0;
-    while (done < bytes.length) {
-        let rest = bytes[done..];
-        let written = unsafe { ceesafe_async_write(fd, rest.ptr, rest.length as u64) };
-        if (written < 0) {
-            return Err(AsyncError.Io(asyncIoError(written)));
-        }
-        if (written == 0) {
-            unsafe { ceesafe_async_wait_writable(fd); }
-            await Async.park();
-        } else {
-            done += truncate<usize>(written); // 0 < written <= PIPE_BUF
-        }
+/// What `Async.isCancelled()` and `Async.checkpoint(cancelled)` call (type-system.md §40.4).
+public struct AsyncControl<E> {
+    /// Whether the current task is cancelled and not shielded.
+    /// Safety: ceesafe_async_status only reads the executor's state.
+    public fn isCancelled() -> bool => unsafe { ceesafe_async_status() } == 1;
+
+    /// `Async.shield`'s start (type-system.md §40.7).
+    /// Safety: it only counts the current task's shields.
+    public fn enterShield(ms: u64) {
+        unsafe { ceesafe_async_shield_enter(ms); }
     }
-    return Ok();
+
+    /// `Async.shield`'s end.
+    /// Safety: it only counts the current task's shields, after enterShield.
+    public fn leaveShield() {
+        unsafe { ceesafe_async_shield_leave(); }
+    }
+
+    /// `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`.
+    public fn checkpoint(cancelled: E) -> Result<void, E> {
+        if (AsyncControl<E>.isCancelled()) {
+            return Err(cancelled);
+        }
+        return Ok();
+    }
 }
 
-/// The IoError for a negated errno (HostServices.hostError's rule).
-fn asyncIoError(code: i64) -> IoError => HostServices.hostError(code);
+/// The library's own steps for its waiting operations: not for programs (type-system.md §40.4).
+struct AsyncLeaf {
+    /// Err(Cancelled) if the current task is cancelled, Err(TimedOut) if its shield's time is up (type-system.md §40.7).
+    /// Safety: ceesafe_async_status only reads the executor's state.
+    fn status() -> Result<void, AsyncError> {
+        let status = unsafe { ceesafe_async_status() };
+        if (status == 1) {
+            return Err(AsyncError.Cancelled);
+        }
+        if (status == 2) {
+            return Err(AsyncError.TimedOut);
+        }
+        return Ok();
+    }
+
+    /// Writes every byte to `fd`, a step of at most PIPE_BUF bytes whenever it is writable, parking until it is.
+    /// Safety: the pointer and length are the slice's, read by the runtime during the call only.
+    async fn writeAll(fd: i32, bytes: Slice<u8>) -> Result<void, AsyncError> {
+        var done: usize = 0;
+        while (done < bytes.length) {
+            AsyncLeaf.status()?; // a cancelled task writes no further step (type-system.md §40.7)
+            let rest = bytes[done..];
+            let written = unsafe { ceesafe_async_write(fd, rest.ptr, rest.length as u64) };
+            if (written < 0) {
+                return Err(AsyncError.Io(AsyncLeaf.ioError(written)));
+            }
+            if (written == 0) {
+                unsafe { ceesafe_async_wait_writable(fd); }
+                await Async.park();
+            } else {
+                done += truncate<usize>(written); // 0 < written <= PIPE_BUF
+            }
+        }
+        return Ok();
+    }
+
+    /// The IoError for a negated errno (HostServices.hostError's rule).
+    fn ioError(code: i64) -> IoError => HostServices.hostError(code);
+}

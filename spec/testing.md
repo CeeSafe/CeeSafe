@@ -23,7 +23,7 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 | Specification (§4) | `tools/spec_check.py`, `tools/guide_check.py` | every diagnostic code is explained; the guide's examples do what the pages say; links resolve |
 | Interpreter agreement (L1 A1) | `tools/run_corpus.py --interp` | every run-pass and run-fail program run with `ceesafec run --interp` meets the same expectations (output, exit, panic, leak check) as its C build |
 | Library diagnostics (Decision 0008) | `ceesafec check --library-diagnostics` on an empty program | `lib/` reports no diagnostic: since lib/ is CeeSafe's, its errors are no longer assumed to be porting gaps |
-| Cancellation sweep (L1 A2; planned) | `tools/cancel_sweep.py` | every async run-pass program, built with ASan+UBSan, run once per suspension point *k* with `CEESAFE_CANCEL_AT=k`; each run exits cleanly with `live=0` and no sanitizer report |
+| Cancellation sweep (L1 A2b) | `tools/cancel_sweep.py` | every async run-pass program, built with ASan+UBSan, run once per suspension point *k* with `CEESAFE_CANCEL_AT=k`; each run exits cleanly with `live=0` and no sanitizer report |
 
 `tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec. None
 of them runs novac or reads a Nova checkout (§3).

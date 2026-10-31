@@ -24,3 +24,10 @@ fn main() {
     let v = Async.run(plain()); // error[N0342]
     Console.writeLine(v);
 }
+
+async fn shields() -> Result<void, AsyncError> {
+    Async.shield(5, async () => await Timer.sleep(1)); // error[N0342]
+    await Async.shield(5, () => 1);                    // error[N0209]
+    Async.checkpoint();                                // error[N0209]
+    return Ok();
+}

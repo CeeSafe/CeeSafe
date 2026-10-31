@@ -1,0 +1,20 @@
+// Async interface methods (type-system.md §40.1): an impl matches the interface's async-ness (N0267), and an
+// interface with an async method is not dyn-compatible yet (N0331).
+
+interface Source {
+    async fn next(borrow mut this) -> u32;
+    fn plain(borrow this) -> u32;
+}
+
+struct A {
+    v: u32;
+}
+
+impl Source for A {
+    fn next(borrow mut this) -> u32 => 1;    // error[N0267]
+    async fn plain(borrow this) -> u32 => 2; // error[N0267]
+}
+
+async fn useDyn(s: borrow mut dyn Source) -> u32 => await s.next(); // error[N0331]
+
+fn main() {}

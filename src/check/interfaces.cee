@@ -429,6 +429,10 @@ fn signatureMismatch(
     if (es.isUnsafe != as2.isUnsafe) {
         return appendText(out, if (as2.isUnsafe) "it must not be 'unsafe'" else "it must be 'unsafe'");
     }
+    if (es.isAsync != as2.isAsync) {
+        // A call through the interface is awaited exactly when the method is async (type-system.md §40.1).
+        return appendText(out, if (as2.isAsync) "it must not be 'async'" else "it must be 'async'");
+    }
     if (receiverIndex(es.receiver) != receiverIndex(as2.receiver)) {
         appendText(out, "the receiver must be ")?;
         appendText(out, receiverText(es.receiver))?;

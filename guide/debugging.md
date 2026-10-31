@@ -45,6 +45,8 @@ gdb ./program -ex "source editors/debug/ceesafe_gdb.py"
 - `ceesafe-locals`: the current frame's locals and parameters, without the compiler's temporaries, with struct fields by
   their CeeSafe names: `p = { x: 3, y: 4 }`.
 - `ceesafe-bt`: the backtrace as `Counter.bump at main.cee:6`.
+- `ceesafe-tasks`: in an async program, the thread's tasks and the line each one waits at, with a scope's children
+  indented under the task that awaits the scope.
 
 ```text
 (lldb) b main.cee:12
@@ -71,6 +73,18 @@ cee_add_u8 at rt.h:190
 grow at main.cee:2
 main at main.cee:7
 ```
+
+In an async program, stopped in a child task of a scope:
+
+```text
+(lldb) ceesafe-tasks
+gather at main.cee:18 (waiting for its scope)
+  async closure at main.cee:20 (running)
+  async closure at main.cee:25 (waiting for a deadline)
+```
+
+Each line is the task's own async fn and the line where it last suspended. The running task is at the `await` it
+resumed from, and `ceesafe-bt` shows where it is now.
 
 For memory errors in `unsafe` code, `ceesafec run --interp` is often faster: the interpreter stops at the first invalid
 access and names it.

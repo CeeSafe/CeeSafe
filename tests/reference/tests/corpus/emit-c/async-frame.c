@@ -36,9 +36,11 @@ _Static_assert(_Alignof(struct ceeAF_ceeF_twice) == 4, "ceesafec frame layout");
 static CEE_UNUSED void ceeAI_ceeF_add(struct ceeAF_ceeF_add *, int32_t, int32_t);
 static CEE_UNUSED bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *);
 static CEE_UNUSED bool ceeAT_ceeF_add(void *);
+static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_add;
 static CEE_UNUSED void ceeAI_ceeF_twice(struct ceeAF_ceeF_twice *, int32_t);
 static CEE_UNUSED bool ceeAR_ceeF_twice(struct ceeAF_ceeF_twice *);
 static CEE_UNUSED bool ceeAT_ceeF_twice(void *);
+static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_twice;
 static CEE_UNUSED void ceeF_main(void);
 
 static void ceeAI_ceeF_add(struct ceeAF_ceeF_add *cee_frame, int32_t v_a_0, int32_t v_b_1) {
@@ -61,6 +63,8 @@ static bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *cee_frame) {
 #undef v_a_0
 #undef v_b_1
 }
+static const uint32_t ceeAL_ceeF_add[] = {4};
+static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_add = {"add", "emit-c/async-frame.cee", ceeAL_ceeF_add, 1u};
 
 static void ceeAI_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame, int32_t v_x_0) {
     *cee_frame = (struct ceeAF_ceeF_twice){0};
@@ -108,13 +112,15 @@ bb4:
 #undef t_4
 #undef t_6
 }
+static const uint32_t ceeAL_ceeF_twice[] = {6, 9};
+static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_twice = {"twice", "emit-c/async-frame.cee", ceeAL_ceeF_twice, 2u};
 
 static void ceeF_main(void) {
     CEE_UNUSED int32_t t_0 = 0;
     {
         struct ceeAF_ceeF_twice cee_root;
         ceeAI_ceeF_twice(&cee_root, ((int32_t)20));
-        ceesafe_async_run(&cee_root, ceeAT_ceeF_twice);
+        ceesafe_async_run(&cee_root, ceeAT_ceeF_twice, &ceeAN_ceeF_twice);
         t_0 = cee_root.cee_result;
     }
     ceesafe_write_i64((int64_t)t_0);

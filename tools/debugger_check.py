@@ -3,7 +3,7 @@
 
 Under lldb on macOS, gdb elsewhere (or the one given): breakpoints at source lines, `ceesafe-locals` and `ceesafe-bt`
 showing CeeSafe names, a breakpoint on ceesafe_panic stopping at the failed check, the same through `--split` with
-CEESAFE_PROGRAM, and the name demangling of ceesafe_names.py; a breakpoint on ceesafe_panic stops at the failed check. The assertions are DebuggerTests'.
+CEESAFE_PROGRAM, `ceesafe-tasks` listing an async program's tasks (L1 A3), and the name demangling of ceesafe_names.py; a breakpoint on ceesafe_panic stops at the failed check. The assertions are DebuggerTests'.
 
 usage: python3 tools/debugger_check.py --ceesafec out/ceesafec [--debugger lldb|gdb]
 """
@@ -51,6 +51,46 @@ fn main() {
 }
 """
 
+# Line numbers matter: the breakpoint is in mark (line 7); the scope is on line 18, the children wait on lines 20
+# and 25.
+TASKS = """enum Failure {
+    OutOfMemory,
+    Bad,
+}
+
+fn mark(n: u32) -> u32 {
+    return n + 1;
+}
+
+async fn pause(ms: u64) -> Result<void, Failure> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(Failure.Bad); }
+    }
+}
+
+async fn gather() -> Result<void, Failure> {
+    await Async.scope(Failure.OutOfMemory, (s) => {
+        s.spawn(async () => {
+            await pause(10)?;
+            let m = mark(1);
+            return Ok();
+        });
+        s.spawn(async () => {
+            await pause(500)?;
+            return Ok();
+        });
+    })?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(gather())) {
+        Ok() => { Console.writeLine("done"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+"""
 
 def debug(cee, debugger, work, name, text, commands, extra=(), env=None):
     with open(os.path.join(work, f"{name}.cee"), "w") as f:
@@ -88,7 +128,8 @@ def main():
     sys.path.insert(0, SCRIPTS)
     import ceesafe_names
     for c, name in (("ceeF_length", "length"), ("ceeM_7Counter_bump", "Counter.bump"),
-                    ("ceeM_12SpinLock_u64_create", "SpinLock_u64.create"), ("main", "main")):
+                    ("ceeM_12SpinLock_u64_create", "SpinLock_u64.create"), ("ceeAR_ceeF_twice", "twice"),
+                    ("ceeAR_ceeCB_250", "async closure"), ("main", "main")):
         if ceesafe_names.function(c) != name:
             problems.append(f"demangling: {c} gave {ceesafe_names.function(c)!r}, not {name!r}")
     checked = ["demangling"]
@@ -113,7 +154,13 @@ def main():
             text = debug(cee, debugger, work, "panic", PANICKING,
                          ["b ceesafe_panic" if debugger == "lldb" else "break ceesafe_panic", "run", "ceesafe-bt"])
             expect(problems, "panic", text, ["grow at panic.cee:2", "main at panic.cee:7"])
-            checked += ["breakpoints", "split", "panic"]
+            text = debug(cee, debugger, work, "tasks", TASKS,
+                         [breakAt.format("tasks.cee:7"), "run", "ceesafe-tasks", "ceesafe-bt"])
+            expect(problems, "tasks", text, ["gather at tasks.cee:18 (waiting for its scope)\n"
+                                             "  async closure at tasks.cee:20 (running)\n"
+                                             "  async closure at tasks.cee:25 (waiting for a deadline)",
+                                             "mark at tasks.cee:7\nasync closure at tasks.cee:21"])
+            checked += ["breakpoints", "split", "panic", "tasks"]
         finally:
             shutil.rmtree(work, ignore_errors=True)
     for p in problems:

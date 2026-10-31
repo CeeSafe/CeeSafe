@@ -3190,8 +3190,11 @@ fn main() {
 (`Net`, `Buffer` and `Pair` stand for library or user types.)
 
 ### 40.1 Async functions and tasks
-- **`async fn f(…) -> T`** (grammar.md §2), at package level or as a method. An `extern` function, an interface method
-  (until L1 A3), a `drop` block and a `@constant` function cannot be async (N0290). `async` comes after `unsafe`.
+- **`async fn f(…) -> T`** (grammar.md §2), at package level, as a method, or as an interface method. An `extern`
+  function, a `drop` block and a `@constant` function cannot be async (N0290). `async` comes after `unsafe`.
+- **Interface methods.** An impl's method is async exactly when the interface's is (N0267). Through a type parameter
+  (`T: I`) each instance awaits the concrete method, whose frame is known. An interface with an async method is not
+  dyn-compatible yet (N0331): a call through a table does not know its frame's size (L1 A4).
 - **A call of an async fn is a task**, not a value: it runs nothing until it is awaited (§40.2), run (§40.4) or spawned
   (§40.5). A task call anywhere else (a `let`, an argument of any other call, a field, a return) is **N0342**. There is
   no type of tasks in v1, so a task cannot be stored, returned or passed on.

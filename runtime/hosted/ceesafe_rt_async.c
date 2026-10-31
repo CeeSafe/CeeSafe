@@ -44,6 +44,7 @@ typedef struct cee_task {
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
     void (*release)(void *p, size_t size, size_t align); /* Async.scopeIn's allocator; NULL: the system heap */
     size_t block_size;
+    const ceesafe_frame_info *info; /* for ceesafe_async_dump */
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (__atomic): readied in that order */
@@ -251,7 +252,8 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
 }
 
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
-                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align)) {
+                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
+                          const ceesafe_frame_info *info) {
     scope->owner = cee_exec.current;
     if (scope->oom) {
         return NULL; /* the scope already failed to start a child: it starts no more */
@@ -279,6 +281,7 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->embedded = false;
     t->release = release;
     t->block_size = block_size;
+    t->info = info;
     t->on_wake = false;
     t->channel_wait = false;
     t->woken = 0u;
@@ -288,7 +291,7 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
 }
 
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
-                         bool (*resume)(void *frame, ceesafe_scope *scope)) {
+                         bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info) {
     cee_task *t = (cee_task *)(void *)slot;
     scope->owner = cee_exec.current;
     t->frame = frame;
@@ -302,6 +305,8 @@ void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *fr
     t->shields = 0u;
     t->shield_deadline = UINT64_MAX;
     t->embedded = true;
+    t->release = NULL;
+    t->info = info;
     t->on_wake = false;
     t->channel_wait = false;
     t->woken = 0u;
@@ -551,7 +556,7 @@ static void cee_wait(void) {
     }
 }
 
-void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
+void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_info *info) {
     cee_executor saved = cee_exec;
     cee_exec.ready_head = NULL;
     cee_exec.ready_tail = NULL;
@@ -568,6 +573,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
     root.deadline = UINT64_MAX;
     root.fd = -1;
     root.shield_deadline = UINT64_MAX;
+    root.info = info;
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -883,4 +889,78 @@ void ceesafe_chan_unpark(void *channel, void *wait) {
         node->queued = 0u;
     }
     cee_chan_unlock(c);
+}
+
+/* ---- ceesafe_async_tasks: the current thread's tasks, for a debugger (editors/debug, `ceesafe-tasks`) ---- */
+
+static char cee_tasks_text[8192];
+
+#define CEE_TASKS_SHOWN 256u
+
+typedef struct {
+    const cee_task *task;
+    const char *how;
+} cee_shown_task;
+
+static size_t cee_tasks_line(size_t used, const cee_shown_task *shown, unsigned depth) {
+    const cee_task *t = shown->task;
+    const ceesafe_frame_info *info = t->info;
+    uint32_t state = t->frame != NULL ? *(const uint32_t *)t->frame : 0u; /* every frame starts with cee_state */
+    uint32_t at = info != NULL && state < info->count ? info->lines[state] : 0u;
+    size_t room = sizeof cee_tasks_text - used;
+    int n = snprintf(cee_tasks_text + used, room, "%*s%s at %s:%u (%s)\n", (int)(2u * depth), "",
+                     info != NULL ? info->name : "?", info != NULL ? info->file : "?", (unsigned)at, shown->how);
+    return n < 0 ? used : (size_t)n < room ? used + (size_t)n : sizeof cee_tasks_text - 1u;
+}
+
+/* Task k, then the tasks whose scope it owns, depth first. */
+static size_t cee_tasks_tree(size_t used, const cee_shown_task *shown, size_t count, size_t k, unsigned depth) {
+    used = cee_tasks_line(used, &shown[k], depth);
+    for (size_t j = 0; j < count && depth < 64u; j++) {
+        const ceesafe_scope *scope = shown[j].task->scope;
+        if (scope != NULL && scope->owner == (const void *)shown[k].task) {
+            used = cee_tasks_tree(used, shown, count, j, depth + 1u);
+        }
+    }
+    return used;
+}
+
+const char *ceesafe_async_tasks(void) {
+    cee_shown_task shown[CEE_TASKS_SHOWN];
+    size_t count = 0;
+    if (cee_exec.current != NULL) {
+        shown[count++] = (cee_shown_task){cee_exec.current, "running"};
+    }
+    for (const cee_task *t = cee_exec.ready_head; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
+        shown[count++] = (cee_shown_task){t, "ready"};
+    }
+    for (const cee_task *t = cee_exec.parked; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
+        shown[count++] = (cee_shown_task){t, t->on_scope ? "waiting for its scope" : t->on_wake ? "waiting to be woken" :
+                                                 t->fd >= 0 ? "waiting on a descriptor" : "waiting for a deadline"};
+    }
+    size_t used = 0;
+    cee_tasks_text[0] = '\0';
+    for (size_t k = 0; k < count; k++) {
+        /* A root: no scope, or a scope whose owner is not among the shown tasks. */
+        bool root = true;
+        const ceesafe_scope *scope = shown[k].task->scope;
+        for (size_t j = 0; j < count && scope != NULL; j++) {
+            if (scope->owner == (const void *)shown[j].task) {
+                root = false;
+            }
+        }
+        if (root) {
+            used = cee_tasks_tree(used, shown, count, k, 0u);
+        }
+    }
+    return cee_tasks_text;
+}
+
+void ceesafe_async_dump(void) {
+    const char *text = ceesafe_async_tasks();
+    size_t length = 0;
+    while (text[length] != '\0') {
+        length += 1u;
+    }
+    ceesafe_platform_write_stderr((const uint8_t *)text, length);
 }

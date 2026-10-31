@@ -72,7 +72,7 @@ fn emitChildThunk(
     child: u32,
 ) -> Result<void, AllocError> {
     let result = c.hir.functions[child as usize].returnType;
-    e.t("static bool ")?;
+    e.t(if (e.split) "static CEE_UNUSED bool " else "static bool ")?; // split: in the header every unit includes
     appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
     e.t("(void *frame, ceesafe_scope *scope) {")?;
     e.emit()?;
@@ -152,7 +152,7 @@ fn emitJoinThunks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgra
     let isRace = constArgument(n, r, 1) == 1;
     for (k in 0..2u32) {
         let child = constArgument(n, r, 2 + 2 * k);
-        e.t("static bool ceeAJ")?;
+        e.t(if (e.split) "static CEE_UNUSED bool ceeAJ" else "static bool ceeAJ")?;
         e.d(site as u64)?;
         e.t("_")?;
         e.d(k as u64)?;
@@ -391,6 +391,10 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
         appendAsyncName(c, mut e.buf, "ceeAT_", source)?;
         e.t("(void *);")?;
         e.emit()?;
+        e.t(if (e.split) "extern const ceesafe_frame_info " else "static CEE_UNUSED const ceesafe_frame_info ")?;
+        appendAsyncName(c, mut e.buf, "ceeAN_", source)?;
+        e.t(";")?;
+        e.emit()?;
     }
     for (f in asyncs.view()) {
         for (block in n.functions[f as usize].blocks.view()) {
@@ -515,6 +519,8 @@ fn emitAsyncFunction(
     e.line("    }")?;
     e.inAsync = true;
     e.asyncState = 0;
+    e.asyncStarts.clear();
+    e.statementStart = nameStart;
     emitFlatBody(e, c, n, sources, f)?;
     e.inAsync = false;
     for (k in 0..truncate<u32>(function.locals.length)) {
@@ -527,8 +533,55 @@ fn emitAsyncFunction(
     }
     e.line("}")?;
     endMapping(e)?;
+    emitFrameInfo(e, c, n, sources, f)?;
     e.function = none();
     return Ok();
+}
+
+/// ceeAL_<F> and ceeAN_<F>: the name, file and line of each resume state, for ceesafe_async_dump (§3a).
+fn emitFrameInfo(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+) -> Result<void, AllocError> {
+    let source = nirFunctionSource(n, f);
+    let file = c.hir.functions[source as usize].file;
+    e.t("static const uint32_t ")?;
+    appendAsyncName(c, mut e.buf, "ceeAL_", source)?;
+    e.t("[] = {")?;
+    e.d(sources[file as usize].position(functionNameStart(c, source) as usize).line as u64)?;
+    for (k in 0..e.asyncStarts.length) {
+        let start = e.asyncStarts[k];
+        e.t(", ")?;
+        e.d(sources[file as usize].position(start as usize).line as u64)?;
+    }
+    e.t("};")?;
+    e.emit()?;
+    e.t(if (e.split) "CEE_UNUSED const ceesafe_frame_info " else "static CEE_UNUSED const ceesafe_frame_info ")?;
+    appendAsyncName(c, mut e.buf, "ceeAN_", source)?;
+    e.t(" = {")?;
+    var name = Vector<u8>.create();
+    let hf = borrow c.hir.functions[source as usize];
+    if (hf.closureEnvironment != none()) {
+        appendText(mut name, "async closure")?;
+    } else {
+        if (hf.owner != none()) {
+            appendBytes(mut name, c.typeName(hf.owner))?;
+            name.push('.')?;
+        }
+        appendBytes(mut name, c.name(hf.name))?;
+    }
+    appendCStringLiteral(mut e.buf, name.view())?;
+    e.t(", ")?;
+    appendCStringLiteral(mut e.buf, e.paths[file as usize].view())?;
+    e.t(", ")?;
+    appendAsyncName(c, mut e.buf, "ceeAL_", source)?;
+    e.t(", ")?;
+    e.d(e.asyncStarts.length as u64 + 1)?;
+    e.t("u};")?;
+    return e.emit();
 }
 
 /// A statement with a task's role (NirProgram.rvalueTasks) or `Async.park()`: false if it is neither.
@@ -549,7 +602,7 @@ fn emitTaskStatement(
         _ => none(),
     };
     if (builtinOf(n, r) == bfAsyncPark()) {
-        e.asyncState += 1;
+        e.nextState()?;
         e.t("    cee_frame->cee_state = ")?;
         e.d(e.asyncState as u64)?;
         e.t("u;")?;
@@ -643,6 +696,8 @@ fn emitTaskStatement(
         e.emit()?;
         e.t("        ceesafe_async_run(&cee_root, ")?;
         appendAsyncName(c, mut e.buf, "ceeAT_", callee)?;
+        e.t(", &")?;
+        appendAsyncName(c, mut e.buf, "ceeAN_", callee)?;
         e.t(");")?;
         e.emit()?;
         if (target != none()) {
@@ -655,8 +710,7 @@ fn emitTaskStatement(
         return Ok(true);
     }
     // `await g(…)`: start the child in its field, then resume it until it returns.
-    e.asyncState += 1;
-    let k = e.asyncState;
+    let k = e.nextState()?;
     e.t("    ")?;
     appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
     e.t("(&cee_frame->cee_u.cee_a")?;
@@ -717,14 +771,16 @@ fn emitSpawn(
     appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
     let allocator = constArgument(n, r, 3);
     if (allocator == none()) {
-        e.t(", NULL, NULL);")?; // the system heap
+        e.t(", NULL, NULL")?; // the system heap
     } else {
         e.t(", ")?;
         appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
         e.t(", ")?;
         appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
-        e.t(");")?;
     }
+    e.t(", &")?;
+    appendAsyncName(c, mut e.buf, "ceeAN_", child)?;
+    e.t(");")?;
     e.emit()?;
     e.t("        if (cee_child != NULL) ")?;
     appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
@@ -764,8 +820,7 @@ fn emitScopeWait(
     if (target != none()) {
         place = appendPlaceIn(e, c, n, sources, f, target)?;
     }
-    e.asyncState += 1;
-    let k = e.asyncState;
+    let k = e.nextState()?;
     e.t("    cee_frame->cee_state = ")?;
     e.d(k as u64)?;
     e.t("u;")?;
@@ -908,6 +963,7 @@ fn emitJoin(
         e.emit()?;
     }
     for (k in 0..2u32) {
+        let child = constArgument(n, r, 2 + 2 * k);
         e.t("    ceesafe_async_start(&")?;
         e.b(join.view())?;
         e.t(".rt, &")?;
@@ -922,11 +978,12 @@ fn emitJoin(
         e.d(site as u64)?;
         e.t("_")?;
         e.d(k as u64)?;
+        e.t(", &")?;
+        appendAsyncName(c, mut e.buf, "ceeAN_", child)?;
         e.t(");")?;
         e.emit()?;
     }
-    e.asyncState += 1;
-    let k = e.asyncState;
+    let k = e.nextState()?;
     e.t("    cee_frame->cee_state = ")?;
     e.d(k as u64)?;
     e.t("u;")?;
@@ -983,7 +1040,7 @@ fn emitBlockingThunk(
 ) -> Result<void, AllocError> {
     let site = constArgument(n, r, 0);
     let body = constArgument(n, r, 1);
-    e.t("static void *ceeABT_")?;
+    e.t(if (e.split) "static CEE_UNUSED void *ceeABT_" else "static void *ceeABT_")?;
     e.d(site as u64)?;
     e.t("(void *arg) {")?;
     e.emit()?;
@@ -1039,8 +1096,7 @@ fn emitBlocking(
     e.b(b.view())?;
     e.t(");")?;
     e.emit()?;
-    e.asyncState += 1;
-    let k = e.asyncState;
+    let k = e.nextState()?;
     e.t("    cee_frame->cee_state = ")?;
     e.d(k as u64)?;
     e.t("u;")?;
@@ -1607,8 +1663,7 @@ fn emitBoxed(
     let list = builtinArguments(n, r);
     var args = Vector<u8>.create();
     appendOperandList(e, c, n, sources, f, mut args, list, 2)?;
-    e.asyncState += 1;
-    let k = e.asyncState;
+    let k = e.nextState()?;
     var slot = copyBytes("cee_frame->cee_u.cee_x".bytes())?;
     appendDecimal(mut slot, k as u64)?;
     var frameType = copyBytes("struct ".bytes())?;

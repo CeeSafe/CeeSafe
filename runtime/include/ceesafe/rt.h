@@ -1030,7 +1030,20 @@ _Noreturn void ceesafe_exit(int32_t code);
  * root task and the children its scopes spawn until the root returns, waiting while no task can run for what the parked
  * tasks registered: a deadline on the monotonic clock (milliseconds) or a descriptor becoming writable. ceesafe_async_write writes at most PIPE_BUF bytes
  * if `fd` is writable now: a count, 0 if it is not, or a negated errno. */
-void ceesafe_async_run(void *frame, bool (*resume)(void *));
+/* What a debugger shows of an async fn's task (c-backend.md §3a): its name, file, and the source line of each resume
+ * state (lines[0] the fn's own line; lines[k] suspension point k's). ceesafe_async_tasks describes the current thread's
+ * tasks, one line each: the task's own async fn at the line it last suspended at, children indented under the task
+ * whose scope they are in. The text is in a static buffer, for a debugger to read; ceesafe_async_dump prints it to
+ * standard error. */
+typedef struct ceesafe_frame_info {
+    const char *name;
+    const char *file;
+    const uint32_t *lines;
+    uint32_t count;
+} ceesafe_frame_info;
+void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_info *info);
+const char *ceesafe_async_tasks(void);
+void ceesafe_async_dump(void);
 /* A scope (type-system.md §40.5), the first member of the generated struct in the awaiting task's frame that also holds
  * its first error. Zero is an empty scope. ceesafe_async_spawn allocates a child task with a frame of `frame_size`
  * bytes and queues it, returning the frame for the caller to initialise before the child first runs; NULL if it cannot
@@ -1046,7 +1059,8 @@ typedef struct ceesafe_scope {
 } ceesafe_scope;
 /* `allocate` and `release` (both NULL: the system heap) are Async.scopeIn's allocator's (c-backend.md §3a). */
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
-                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align));
+                          void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
+                          const ceesafe_frame_info *info);
 bool ceesafe_async_scope_done(ceesafe_scope *scope);
 /* Async.race and Async.all (type-system.md §40.4): a child whose task and frame are the caller's storage, in its frame,
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
@@ -1055,7 +1069,7 @@ typedef struct ceesafe_task_slot {
     _Alignas(16) unsigned char bytes[128];
 } ceesafe_task_slot;
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
-                         bool (*resume)(void *frame, ceesafe_scope *scope));
+                         bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info);
 void ceesafe_async_cancel(ceesafe_scope *scope);
 /* Async.blocking (type-system.md §40.4): `body(arg)` runs on a worker thread, which calls ceesafe_async_blocking_finish
  * when it is done; ceesafe_async_blocking_ready is true once it is, and otherwise parks the task until the worker wakes

@@ -56,6 +56,8 @@ struct CEmitter {
     function: u32;                         // the NIR function being emitted, or none
     inAsync: bool;                         // it is an async fn's resume function (c-backend.md §3a)
     asyncState: u32;                       // its suspension points emitted so far
+    statementStart: u32;                   // the source offset of the statement being emitted (mapTo)
+    asyncStarts: Vector<u32>;              // by suspension point: its statement's offset, for ceeAN_ (§3a)
     inPlace: Vector<InPlacePair>;
     cLines: u64;
     mappedFile: u32; // the Nova line the next C line is attributed to by the last #line, or none
@@ -105,6 +107,8 @@ struct CEmitter {
         function: none(),
         inAsync: false,
         asyncState: 0,
+        statementStart: 0,
+        asyncStarts: Vector<u32>.create(),
         inPlace: Vector<InPlacePair>.create(),
         cLines: 0,
         mappedFile: none(),
@@ -154,6 +158,13 @@ struct CEmitter {
     /// The same for a prototype (HelperProto).
     fn helperProto(borrow mut this) -> Result<void, AllocError> =>
         appendText(mut this.buf, if (this.split) "static inline CEE_UNUSED " else "static CEE_UNUSED ");
+
+    /// The next suspension point of the resume function being emitted: its number, its statement recorded.
+    fn nextState(borrow mut this) -> Result<u32, AllocError> {
+        this.asyncState += 1;
+        this.asyncStarts.push(this.statementStart)?;
+        return Ok(this.asyncState);
+    }
 
     /// Appends text to the line being built.
     fn t(borrow mut this, text: StringView) -> Result<void, AllocError> => appendText(mut this.buf, text);

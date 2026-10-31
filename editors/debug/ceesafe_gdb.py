@@ -2,6 +2,8 @@
 
 ceesafe-locals  the current frame's locals and parameters by their CeeSafe names, without the compiler's temporaries
 ceesafe-bt      the backtrace as `name at file:line`
+ceesafe-tasks   the stopped thread's async tasks (c-backend.md §3a): each at the line its async fn waits at, children
+                indented under the task whose scope they are in
 """
 
 import os
@@ -59,5 +61,21 @@ class CeeSafeBacktrace(gdb.Command):
             frame = frame.older()
 
 
+class CeeSafeTasks(gdb.Command):
+    """The stopped thread's async tasks: each at the line its async fn waits at, children under their scope's task."""
+
+    def __init__(self):
+        super().__init__("ceesafe-tasks", gdb.COMMAND_STACK)
+
+    def invoke(self, argument, from_tty):
+        try:
+            text = gdb.parse_and_eval("(const char *)ceesafe_async_tasks()").string()
+        except gdb.error:
+            gdb.write("no async runtime in this program\n")
+            return
+        gdb.write((text.rstrip("\n") if text else "no tasks on this thread") + "\n")
+
+
 CeeSafeLocals()
 CeeSafeBacktrace()
+CeeSafeTasks()

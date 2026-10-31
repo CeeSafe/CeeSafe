@@ -153,10 +153,14 @@ The C names follow `c-backend.md` §2.1, so a CeeSafe name can be found in the d
 
 ### 3.3 CeeSafe names in the debugger
 
-`editors/debug/ceesafe_lldb.py` and `editors/debug/ceesafe_gdb.py` add two commands, which print with CeeSafe names:
+`editors/debug/ceesafe_lldb.py` and `editors/debug/ceesafe_gdb.py` add three commands, which print with CeeSafe names:
 - `ceesafe-locals`: the current frame's locals and parameters, `name = value`, without the compiler's temporaries; struct
   values show their fields by their CeeSafe names;
-- `ceesafe-bt`: the backtrace, one frame a line, `CeeSafe name at file:line` (`Counter.bump at demo.cee:3`).
+- `ceesafe-bt`: the backtrace, one frame a line, `CeeSafe name at file:line` (`Counter.bump at demo.cee:3`); an async
+  fn's resume function shows as the fn (`async closure` for a closure);
+- `ceesafe-tasks`: the stopped thread's async tasks (type-system.md §40), one a line, from the runtime's
+  `ceesafe_async_tasks()` (c-backend.md §6): `gather at demo.cee:18 (waiting for its scope)`, a scope's children
+  indented under it.
 
 Load them with `command script import editors/debug/ceesafe_lldb.py` (lldb) or `source editors/debug/ceesafe_gdb.py` (gdb).
 
@@ -167,7 +171,9 @@ the program's name before starting the debugger, and the helpers read them as be
 
 `tools/debugger_check.py` (Nova's `DebuggerTests`) builds a program with `-g` and runs it under lldb (macOS) or gdb (Linux), in batch mode. A breakpoint
 at a CeeSafe line must stop at that line, `ceesafe-locals` must show the locals by their CeeSafe names, and a breakpoint on
-`ceesafe_panic` must give a backtrace whose frames are CeeSafe functions at CeeSafe lines. On a machine with neither debugger,
+`ceesafe_panic` must give a backtrace whose frames are CeeSafe functions at CeeSafe lines. In an async program stopped
+inside a child task, `ceesafe-tasks` must list the awaiting task, the running child and its waiting sibling at the
+lines they wait at. On a machine with neither debugger,
 the test does nothing, and the run log says which debugger ran.
 
 ## 4. Packages (T6, ADR 0013)

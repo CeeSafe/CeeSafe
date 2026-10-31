@@ -1,0 +1,49 @@
+// Async interface methods (type-system.md §40.1, L1 A3): called through a type parameter, each instance awaits
+// the concrete method, whose frame is known.
+
+interface Source {
+    async fn next(borrow mut this) -> u32;
+}
+
+struct Counter {
+    value: u32;
+}
+
+impl Source for Counter {
+    async fn next(borrow mut this) -> u32 {
+        this.value += 1;
+        return this.value;
+    }
+}
+
+struct Doubler {
+    value: u32;
+}
+
+impl Source for Doubler {
+    async fn next(borrow mut this) -> u32 {
+        match (await Timer.sleep(1)) {
+            Ok() => {}
+            Err(_) => { return 0; } // cancelled (the cancellation sweep): stop without doubling
+        }
+        this.value *= 2;
+        return this.value;
+    }
+}
+
+async fn sum<T: Source>(source: borrow mut T, count: u32) -> u32 {
+    var total: u32 = 0;
+    for (i in 0..count) {
+        total += await source.next();
+    }
+    return total;
+}
+
+fn main() {
+    var c = Counter { value: 0 };
+    var d = Doubler { value: 1 };
+    Console.writeLine(Async.run(sum(mut c, 3)));
+    Console.writeLine(Async.run(sum(mut d, 3)));
+}
+// expect-stdout: 6
+// expect-stdout: 14

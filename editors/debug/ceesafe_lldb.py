@@ -2,6 +2,8 @@
 
 ceesafe-locals  the current frame's locals and parameters by their CeeSafe names, without the compiler's temporaries
 ceesafe-bt      the backtrace as `name at file:line`
+ceesafe-tasks   the stopped thread's async tasks (c-backend.md §3a): each at the line its async fn waits at, children
+                indented under the task whose scope they are in
 """
 
 import os
@@ -44,6 +46,18 @@ def ceesafe_bt(debugger, command, result, internal_dict):
         result.AppendMessage(f"{ceesafe_names.function(frame.GetFunctionName())} at {where}")
 
 
+def ceesafe_tasks(debugger, command, result, internal_dict):
+    value = _frame(debugger).EvaluateExpression("(const char *)ceesafe_async_tasks()")
+    address = value.GetValueAsUnsigned(0)
+    if not value.GetError().Success() or address == 0:
+        result.AppendMessage("no async runtime in this program")
+        return
+    error = lldb.SBError()
+    text = debugger.GetSelectedTarget().GetProcess().ReadCStringFromMemory(address, 8192, error)
+    result.AppendMessage(text.rstrip("\n") if error.Success() and text else "no tasks on this thread")
+
+
 def __lldb_init_module(debugger, internal_dict):
     debugger.HandleCommand("command script add -f ceesafe_lldb.ceesafe_locals ceesafe-locals")
     debugger.HandleCommand("command script add -f ceesafe_lldb.ceesafe_bt ceesafe-bt")
+    debugger.HandleCommand("command script add -f ceesafe_lldb.ceesafe_tasks ceesafe-tasks")

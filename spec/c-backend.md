@@ -476,12 +476,13 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
 - **`return e`** stores `cee_frame->cee_result = e` and returns `true`. Drop elaboration has already dropped the
   locals.
 - **`Async.run(G(args))`** declares the root frame `struct ceeAF_<G> cee_root` in a block of the caller's C function,
-  then calls `ceeAI_<G>(&cee_root, args…)`, `ceesafe_async_run(&cee_root, ceeAT_<G>)`, and reads
+  then calls `ceeAI_<G>(&cee_root, args…)`, `ceesafe_async_run(&cee_root, ceeAT_<G>, &ceeAN_<G>)`, and reads
   `cee_root.cee_result`. The thunk adapts `ceeAR_<G>` to the runtime's `bool (*)(void *)`, so no function is called
   through another type.
 - **Scopes.** Scope `site` is a field `struct ceeAS_<site> cee_s<site>` of the awaiting frame: the runtime's
   `ceesafe_scope`, then the first error, a `Result<void, E>`. `s.spawn(child)` calls
-  `ceesafe_async_spawn(&cee_frame->cee_s<site>.rt, sizeof(struct ceeAF_<C>), ceeAC_<C>)` for the child's async fn `C`
+  `ceesafe_async_spawn(&cee_frame->cee_s<site>.rt, sizeof(struct ceeAF_<C>), ceeAC_<C>, NULL, NULL, &ceeAN_<C>)` for
+  the child's async fn `C`
   and initialises the frame it returns with the closure's environment (the closure value, the environment's first
   member, converted back). `ceeAC_<C>` resumes the child and, once it returns, makes an `Err` the scope's first error,
   dropping a later one. The scope's end is a suspension point: `ceesafe_async_scope_done` parks the task until the
@@ -507,6 +508,13 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   `scopeIn` scope's spawns pass its adapters to `ceesafe_async_spawn`, which takes the child's block from them and gives
   it back when the child returns.
 - **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
+- **Frame information** (L1 A3, for debuggers). After its resume function, each async fn `F` has
+  `static const uint32_t ceeAL_<F>[]`, the source line of each resume state (`[0]` the line of `F`'s name, `[k]` the
+  line of suspension point k's statement), and `const ceesafe_frame_info ceeAN_<F> = {name, file, ceeAL_<F>, count}`:
+  `F`'s name as `ceesafe-bt` shows it (`Counter.next`, or `async closure`), and its path as `#line` names it. Every
+  task carries its fn's record: `ceesafe_async_run`, `_spawn` and `_start` take it. The runtime reads `cee_state`, the
+  frame's first field, to find the line (§6). With `--split` the record has external linkage and an `extern`
+  declaration in the header; the thunks there are `CEE_UNUSED`.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
 `ceesafe_async_*` (§6).
@@ -566,7 +574,7 @@ Heap (M3b):
     another type. A `fn()` argument is passed as the address of a local holding it, which lives until the join.
 - **Async** (L1, type-system.md §40): `runtime/hosted/ceesafe_rt_async.c`, linked only when the generated C calls
   `ceesafe_async_*`.
-  - `ceesafe_async_run(frame, resume)` resumes the root frame until it returns. Between resumes it waits, in `poll()`,
+  - `ceesafe_async_run(frame, resume, info)` resumes the root frame until it returns. Between resumes it waits, in `poll()`,
     for what the parked task registered: a deadline on the monotonic clock (`ceesafe_async_wait_until`, from
     `ceesafe_async_now`) or a descriptor becoming writable (`ceesafe_async_wait_writable`). A task that parks with
     nothing registered aborts with a message.
@@ -581,8 +589,13 @@ Heap (M3b):
     cancellation unparks every task waiting on a deadline or descriptor; a shield's deadline wakes its task.
   - `CEESAFE_CANCEL_AT=k` cancels the running `Async.run`'s root task at the program's k-th suspension, and
     `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N` after each `Async.run` (`testing.md`).
-  - `ceesafe_async_start(scope, slot, frame, resume)` starts a child in the caller's storage (`race`, `all`), and
+  - `ceesafe_async_start(scope, slot, frame, resume, info)` starts a child in the caller's storage (`race`, `all`), and
     `ceesafe_async_cancel(scope)` cancels a scope's children.
+  - For debuggers (L1 A3): `ceesafe_async_tasks()` describes the calling thread's tasks in a static buffer, one line
+    each, `name at file:line (how)`: the running task, the ready ones, then the parked ones with what they wait on
+    (their scope, a wake, a descriptor or a deadline). The line is where the task's own async fn last suspended
+    (`ceeAL_<F>[cee_state]`), and a child is indented two spaces per scope under its owner. `ceesafe_async_dump()`
+    writes the same text to standard error.
   - Waking from another thread (A2c): a task parked on a wake has `woken` set atomically by the waking thread, which
     then writes a byte to its executor's wake pipe (opened on first need); `poll` watches the pipe while a task waits
     to be woken, and the executor readies every woken task. A task woken between its check and its park is readied at

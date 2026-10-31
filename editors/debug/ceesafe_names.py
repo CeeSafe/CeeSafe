@@ -30,8 +30,13 @@ def field(name):
 
 
 def function(name):
-    """The CeeSafe name of a C function: `ceeF_length` is `length`, `ceeM_7Counter_bump` is `Counter.bump`."""
+    """The CeeSafe name of a C function: `ceeF_length` is `length`, `ceeM_7Counter_bump` is `Counter.bump`; an async
+    fn's resume function `ceeAR_ceeF_twice` is `twice`, and an async closure's (`ceeAR_ceeCB_<n>`) `async closure`."""
     name = name or "?"
+    if name.startswith("ceeAR_"):
+        name = name[len("ceeAR_"):]
+        if name.startswith("ceeCB_"):
+            return "async closure"
     if _PROGRAM:
         for family in ("ceeF_", "ceeM_"):
             if name.startswith(family + _PROGRAM + "_"):

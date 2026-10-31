@@ -1506,6 +1506,7 @@ struct InterpSpawn {
     arguments: Vector<Value>;
     scope: u32;
     environment: u64; // the child's copy of its environment, or 0
+    joinIndex: u32;   // a join's child (race, all): 0 or 1; none for a spawned one
 }
 
 /// A scope of a task: (task, site) while it has children or has not ended.
@@ -1518,6 +1519,11 @@ struct InterpScope {
     cancelled: bool; // a child failed: the others are cancelled (§40.7)
     error: Value;
     waiting: bool;
+    isJoin: bool; // race or all (§40.4)
+    isRace: bool;
+    started: bool;
+    first: u32;
+    results: Vector<Value>;
 }
 
 /// What cancellation needs of a task, beside runTasks' own record (InterpTask).
@@ -1552,6 +1558,7 @@ struct InterpTask {
     parked: bool;
     deadline: u64;
     onScope: bool;
+    joinIndex: u32;
 }
 
 /// The running task's active scope at `site`, made on first use.
@@ -1572,6 +1579,11 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             cancelled: false,
             error: uninitialisedValue(0),
             waiting: false,
+            isJoin: false,
+            isRace: false,
+            started: false,
+            first: 2,
+            results: Vector<Value>.create(),
         },
     )!;
     return truncate<u32>(it.asyncScopes.length - 1);
@@ -1604,7 +1616,13 @@ fn asyncSpawn(
     let scope = interpScope(it, site);
     it.asyncScopes[scope as usize].live += 1;
     it.asyncSpawns.push(
-        InterpSpawn { function: function, arguments: values, scope: scope, environment: environment },
+        InterpSpawn {
+            function: function,
+            arguments: values,
+            scope: scope,
+            environment: environment,
+            joinIndex: none(),
+        },
     )!;
     return Ok(null);
 }
@@ -1679,7 +1697,14 @@ fn runTasks(
     )!;
     stacks.push(rootStack)!;
     tasks.push(
-        InterpTask { scope: none(), environment: 0, parked: false, deadline: 0xFFFFFFFFFFFFFFFF, onScope: false },
+        InterpTask {
+            scope: none(),
+            environment: 0,
+            parked: false,
+            deadline: 0xFFFFFFFFFFFFFFFF,
+            onScope: false,
+            joinIndex: none(),
+        },
     )!;
     ready.push(0)!;
     it.asyncTasks.push(InterpTaskInfo { scope: none(), shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF })!;
@@ -1761,6 +1786,7 @@ fn runTasks(
                     parked: false,
                     deadline: 0xFFFFFFFFFFFFFFFF,
                     onScope: false,
+                    joinIndex: spawn.joinIndex,
                 },
             )!;
             ready.push(truncate<u32>(tasks.length - 1))!;
@@ -1776,6 +1802,39 @@ fn runTasks(
                 let environment = tasks[k as usize].environment;
                 if (environment != 0 && it.memory.isLive(environment)) {
                     it.memory.end(environment);
+                }
+                let joinIndex = tasks[k as usize].joinIndex;
+                if (joinIndex != none()) {
+                    // A join's child (§40.4): its result kept; race cancels the other when the first returns, all
+                    // when one returns an Err.
+                    let result = match (value) {
+                        Some(v) => v,
+                        null => uninitialisedValue(0),
+                    };
+                    let isErr = result.data.length > 0 && result.bits(0, 1)? != 0;
+                    it.asyncScopes[scope as usize].results[joinIndex as usize] = result;
+                    if (it.asyncScopes[scope as usize].first == 2) {
+                        it.asyncScopes[scope as usize].first = joinIndex;
+                    }
+                    if ((it.asyncScopes[scope as usize].isRace || isErr) && !it.asyncScopes[scope as usize].cancelled) {
+                        it.asyncScopes[scope as usize].cancelled = true;
+                        for (j in 0..tasks.length) {
+                            if (tasks[j].parked && !tasks[j].onScope) {
+                                tasks[j].parked = false;
+                                tasks[j].deadline = 0xFFFFFFFFFFFFFFFF;
+                                ready.push(truncate<u32>(j))!;
+                            }
+                        }
+                    }
+                    it.asyncScopes[scope as usize].live -= 1;
+                    if (it.asyncScopes[scope as usize].live == 0 && it.asyncScopes[scope as usize].waiting) {
+                        it.asyncScopes[scope as usize].waiting = false;
+                        let waiter = it.asyncScopes[scope as usize].task - first;
+                        tasks[waiter as usize].parked = false;
+                        tasks[waiter as usize].onScope = false;
+                        ready.push(waiter)!;
+                    }
+                    continue;
                 }
                 match (value) {
                     Some(result) => {
@@ -1837,4 +1896,74 @@ fn runTasks(
             }
         }
     }
+}
+
+/// `Async.race` or `Async.all` (§40.4): starts both children once, parks until both have returned (running again
+/// then), and is the index of the one that returned first.
+fn asyncJoin(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let site = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let isRace = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)? == 1;
+    let scope = interpScope(it, site);
+    if (!it.asyncScopes[scope as usize].started) {
+        it.asyncScopes[scope as usize].started = true;
+        it.asyncScopes[scope as usize].isJoin = true;
+        it.asyncScopes[scope as usize].isRace = isRace;
+        it.asyncScopes[scope as usize].results.push(uninitialisedValue(0))!;
+        it.asyncScopes[scope as usize].results.push(uninitialisedValue(0))!;
+        for (k in 0..2u32) {
+            let child = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 2 + 2 * k))?.bits(0, 4)?);
+            let closure = operand(it, c, n, frame, n.at(arguments, 3 + 2 * k))?;
+            let function = nirFunctionOf(it, child, 0)?;
+            var values = Vector<Value>.create();
+            var environment: u64 = 0;
+            if (c.hir.functions[child as usize].closureEnvironment != none()) {
+                let envType = c.types.info(n.functions[function as usize].locals[0].typ).pointee;
+                let size = typeSize(c, envType)?;
+                environment = it.memory.allocate(allocationLocal(), size, true, "a child's environment".bytes())?;
+                let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
+                it.memory.store(environment, bytes)?;
+                values.push(valueOf(environment, 8))!;
+            }
+            it.asyncScopes[scope as usize].live += 1;
+            it.asyncSpawns.push(
+                InterpSpawn {
+                    function: function,
+                    arguments: values,
+                    scope: scope,
+                    environment: environment,
+                    joinIndex: k,
+                },
+            )!;
+        }
+    }
+    if (it.asyncScopes[scope as usize].live > 0) {
+        it.asyncScopes[scope as usize].waiting = true;
+        it.asyncRetry = true;
+        return Err(parkStop());
+    }
+    return Ok(valueOf(it.asyncScopes[scope as usize].first as u64, 4));
+}
+
+/// A join's child result, moved out; the join ends with the second.
+fn asyncJoinResult(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let site = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let k = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)?;
+    let scope = interpScope(it, site);
+    let value = copyValue(it.asyncScopes[scope as usize].results[k as usize]);
+    if (k == 1) {
+        it.asyncScopes[scope as usize].active = false;
+    }
+    return Ok(value);
 }

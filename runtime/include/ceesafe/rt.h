@@ -1046,6 +1046,15 @@ typedef struct ceesafe_scope {
 } ceesafe_scope;
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope));
 bool ceesafe_async_scope_done(ceesafe_scope *scope);
+/* Async.race and Async.all (type-system.md §40.4): a child whose task and frame are the caller's storage, in its frame,
+ * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
+ * children and wakes those waiting. */
+typedef struct ceesafe_task_slot {
+    _Alignas(16) unsigned char bytes[96];
+} ceesafe_task_slot;
+void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
+                         bool (*resume)(void *frame, ceesafe_scope *scope));
+void ceesafe_async_cancel(ceesafe_scope *scope);
 /* Cancellation (type-system.md §40.7): 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is
  * up. Async.shield brackets its body with enter and leave; inside, cancellation is not reported. */
 uint32_t ceesafe_async_status(void);

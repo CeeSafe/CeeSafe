@@ -688,6 +688,9 @@ fn builtinOperation(
     if (function == bfAsyncScopeWait()) {
         return Ok(textOp(suspendEffect(), 11));
     }
+    if (function == bfAsyncJoin()) {
+        return Ok(textOp(suspendEffect(), 12));
+    }
     if (function == bfCallPointer()) {
         return Ok(textOp(sleep | alloc, 6));
     }
@@ -872,6 +875,7 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
             9 => "parks the task until the runtime wakes it (type-system.md §40.4)",
             10 => "starts a child task, whose frame it allocates (type-system.md §40.5)",
             11 => "waits for a scope's children (type-system.md §40.5)",
+            12 => "runs two children and waits for both (type-system.md §40.4)",
             _ => "calls through a C function pointer, which may do anything (type-system.md §32.1)",
         };
         return appendText(out, text);

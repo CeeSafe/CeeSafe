@@ -20,12 +20,26 @@ fn awaitEdges(n: borrow NirProgram, out: borrow mut Vector<AwaitEdge>) -> Result
                     NirStatement.Eval(value) => value,
                     _ => none(),
                 };
-                if (r == none() || n.rvalueTasks[r as usize] != taskAwait()) {
+                if (r == none()) {
                     continue;
                 }
                 match (n.rvalues[r as usize]) {
                     NirRvalue.Call(callee, _) => {
-                        out.push(AwaitEdge { caller: f.source, callee: callee, rvalue: r })?;
+                        if (n.rvalueTasks[r as usize] == taskAwait()) {
+                            out.push(AwaitEdge { caller: f.source, callee: callee, rvalue: r })?;
+                        }
+                    }
+                    NirRvalue.Builtin(function, arguments) => {
+                        if (function == bfAsyncJoin()) {
+                            // race and all embed both children's frames (§40.4).
+                            for (k in [2u32, 4u32]) {
+                                let child = match (n.operands[n.at(arguments, k) as usize]) {
+                                    NirOperand.Const(v) => truncate<u32>(v.magnitude),
+                                    _ => none(),
+                                };
+                                out.push(AwaitEdge { caller: f.source, callee: child, rvalue: r })?;
+                            }
+                        }
                     }
                     _ => {}
                 }

@@ -31,3 +31,20 @@ async fn shields() -> Result<void, AsyncError> {
     Async.checkpoint();                                // error[N0209]
     return Ok();
 }
+
+async fn joins() -> Result<void, AsyncError> {
+    var shared: u32 = 0;
+    Async.all(async () => await Timer.sleep(1), async () => await Timer.sleep(2)); // error[N0342]
+    await Async.all(async () => {
+        shared += 1;
+        return Ok();
+    }, async () => { // error[N0241]
+        shared += 2;
+        return Ok();
+    })?;
+    let unknown = await Async.race(async () => { // error[N0236]
+        return Ok(1);
+    }, async () => Ok(2));
+    await Async.race(1, 2); // error[N0209]
+    return Ok();
+}

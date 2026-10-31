@@ -38,7 +38,10 @@ typedef struct cee_task {
     bool cancelled;        /* cancelled itself (the sweep's root); see cee_cancelled */
     uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
     uint64_t shield_deadline;
+    bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
 } cee_task;
+
+_Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
 
 /* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task. */
 #define CEE_TASK_HEAD ((sizeof(cee_task) + sizeof(max_align_t) - 1u) / sizeof(max_align_t) * sizeof(max_align_t))
@@ -201,9 +204,36 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     t->cancelled = false;
     t->shields = 0u;
     t->shield_deadline = UINT64_MAX;
+    t->embedded = false;
     scope->live += 1u;
     cee_ready(t);
     return t->frame;
+}
+
+void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
+                         bool (*resume)(void *frame, ceesafe_scope *scope)) {
+    cee_task *t = (cee_task *)(void *)slot;
+    scope->owner = cee_exec.current;
+    t->frame = frame;
+    t->resume_root = NULL;
+    t->resume_child = resume;
+    t->scope = scope;
+    t->deadline = UINT64_MAX;
+    t->fd = -1;
+    t->on_scope = false;
+    t->cancelled = false;
+    t->shields = 0u;
+    t->shield_deadline = UINT64_MAX;
+    t->embedded = true;
+    scope->live += 1u;
+    cee_ready(t);
+}
+
+void ceesafe_async_cancel(ceesafe_scope *scope) {
+    if (!scope->cancelled) {
+        scope->cancelled = true;
+        cee_wake_waiters();
+    }
 }
 
 /* 0 if the current task runs on, 1 if it is cancelled, 2 if its shield's time is up (type-system.md §40.7). */
@@ -355,7 +385,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
         cee_cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
         cee_cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
     }
-    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX};
+    cee_task root = {frame, resume, NULL, NULL, NULL, UINT64_MAX, -1, false, false, 0u, UINT64_MAX, false};
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -383,7 +413,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *)) {
             break; /* its scopes have ended, so every child has returned */
         }
         ceesafe_scope *scope = t->scope;
-        ceesafe_free(t, CEE_ALLOC_SYSTEM);
+        if (!t->embedded) {
+            ceesafe_free(t, CEE_ALLOC_SYSTEM);
+        }
         scope->live -= 1u;
         if (scope->failed && !scope->cancelled) {
             scope->cancelled = true; /* the first error cancels the other children (type-system.md §40.5) */

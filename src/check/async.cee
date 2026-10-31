@@ -12,6 +12,11 @@ fn bfAsyncPark() -> u32 => 1000;
 fn bfAsyncSpawn() -> u32 => 1001;
 /// The end of `await Async.scope(oom, body)`: Builtin(AsyncScopeWait, [site, oom]), the scope's Result<void, E>.
 fn bfAsyncScopeWait() -> u32 => 1002;
+/// `await Async.race(a, b)` and `all`: Builtin(AsyncJoin, [site, race (1) or all (0), a's HIR function, a, b's, b]),
+/// which runs both and is the index of the one that returned first; then AsyncJoinResult [site, 0 or 1] moves each
+/// child's result out, and lib/std's settle function makes the value (§40.4).
+fn bfAsyncJoin() -> u32 => 1003;
+fn bfAsyncJoinResult() -> u32 => 1004;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -118,6 +123,10 @@ fn checkAsyncCall(
     }
     if (sameText(c.name(memberIdent.symbol), "scope")) {
         return checkAsyncScope(c, arguments, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "race") || sameText(c.name(memberIdent.symbol), "all")) {
+        let isRace = sameText(c.name(memberIdent.symbol), "race");
+        return checkAsyncJoin(c, isRace, arguments, expected, span);
     }
     if (sameText(c.name(memberIdent.symbol), "shield")) {
         return checkAsyncShield(c, arguments, expected, span);
@@ -534,4 +543,188 @@ fn checkAsyncShield(c: borrow mut Checker, arguments: Range, expected: u32, span
     let none1 = Vector<u32>.create();
     let leave = c.expr(HirExpr.Call(leaveFunction, c.hir.list(none1.view())?), voidType, span.start, span.end)?;
     return c.expr(HirExpr.AsyncShield(enter, body, leave), resultType, span.start, span.end);
+}
+
+/// The (ok, err) types of a Result type, or (none, none).
+fn resultParts(c: borrow Checker, t: u32) -> Vector<u32> {
+    var parts = Vector<u32>.create();
+    if (t != none() && isResultType(c, t)) {
+        let definition = borrow c.types.enums[c.types.info(t).enumDef as usize];
+        parts.push(definition.resultOk)!;
+        parts.push(definition.resultErr)!;
+    }
+    return parts;
+}
+
+/// The async closure literal of argument `k`, with no parameters, or none.
+fn asyncLiteralArgument(c: borrow Checker, arguments: Range, k: u32) -> u32 {
+    if (k >= arguments.count) {
+        return none();
+    }
+    return match (c.front.ast.exprs[c.front.ast.at(arguments, k) as usize]) {
+        ExprNode.Closure(closure) =>
+            if (c.front.ast.closures[closure as usize].isAsync &&
+                c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
+        _ => none(),
+    };
+}
+
+/// A child of race or all checked against `result` (none: inferred, for an expression body).
+fn checkJoinChild(c: borrow mut Checker, arguments: Range, k: u32, result: u32) -> Result<u32, AllocError> {
+    let syntax = c.front.ast.at(arguments, k);
+    let span = c.front.ast.exprSpans[syntax as usize];
+    var closureType = none();
+    if (result != none()) {
+        let none0 = Vector<u32>.create();
+        let callable = c.types.closureTo(none0.view(), result, maskEffects())?;
+        closureType = c.types.referenceTo(callable, true)?;
+    }
+    let literal = asyncLiteralArgument(c, arguments, k);
+    return checkClosure(c, literal, closureType, span);
+}
+
+/// `await Async.race(a, b)` and `await Async.all(a, b)` (§40.4; ADR 0031 §6.4): two children whose frames are the
+/// caller's, so nothing is allocated. Their result type comes from the expected type; else from `a`'s expression body;
+/// else, for `all`, `Result<void, AsyncError>`. They run at once, so they may not capture one local where either
+/// changes it (N0241).
+fn checkAsyncJoin(
+    c: borrow mut Checker,
+    isRace: bool,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let what: StringView = if (isRace) "'Async.race'" else "'Async.all'";
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(mut message, " runs its children as tasks: write it after 'await' (type-system.md §40.4)")?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    if (arguments.count != 2 || asyncLiteralArgument(c, arguments, 0) == none() ||
+        asyncLiteralArgument(c, arguments, 1) == none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(
+            mut message,
+            " takes two async closure literals: '(async () => …, async () => …)' (type-system.md §40.4)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    // The children's result type.
+    var childResult = none();
+    let expectedParts = resultParts(c, if (expected != none() && !c.types.isBottom(expected)) expected else none());
+    if (expectedParts.length == 2) {
+        if (!isRace) {
+            childResult = expected;
+        } else if (c.types.is(expectedParts[0], TypeKind.Struct)) {
+            let definition = c.types.info(expectedParts[0]).structDef;
+            let typeArguments = c.types.structs[definition as usize].typeArguments;
+            if (typeArguments.count == 1) {
+                let value = c.types.listAt(typeArguments, 0);
+                childResult = resultOf(c, value, expectedParts[1])?;
+            }
+        }
+    }
+    let firstLiteral = asyncLiteralArgument(c, arguments, 0);
+    if (childResult == none() && !isRace && c.front.ast.closures[firstLiteral as usize].block != none()) {
+        let asyncErrorSymbol = c.intern("AsyncError")?;
+        let asyncError = match (c.item(asyncErrorSymbol)) {
+            Entity.Enum(index) => c.enums[index as usize].typ,
+            _ => none(),
+        };
+        if (asyncError != none()) {
+            let voidType = c.types.voidType;
+            childResult = resultOf(c, voidType, asyncError)?;
+        }
+    }
+    let first = checkJoinChild(c, arguments, 0, childResult)?;
+    let firstFunction = match (c.hir.exprs[first as usize]) {
+        HirExpr.Closure(f, _) => f,
+        _ => none(),
+    };
+    if (firstFunction == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    if (childResult == none()) {
+        childResult = c.hir.functions[firstFunction as usize].returnType;
+    }
+    let parts = resultParts(c, childResult);
+    if (parts.length != 2 || (!isRace && !c.types.is(parts[0], TypeKind.Void))) {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(
+            mut message,
+            if (isRace) "'s children return a 'Result<T, E>': give the race an expected 'Result<Raced<T>, E>' type, or the first child an expression body (type-system.md §40.4)" else "'s children return a 'Result<void, E>' (type-system.md §40.4)",
+        )?;
+        c.error(closureTypeUnknown(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let second = checkJoinChild(c, arguments, 1, childResult)?;
+    let secondFunction = match (c.hir.exprs[second as usize]) {
+        HirExpr.Closure(f, _) => f,
+        _ => none(),
+    };
+    if (secondFunction == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    // The two run at once: the scope-loan rule between them (§40.5).
+    let firstCaptures = match (c.hir.exprs[first as usize]) {
+        HirExpr.Closure(_, list) => list,
+        _ => emptyRange(),
+    };
+    let secondCaptures = match (c.hir.exprs[second as usize]) {
+        HirExpr.Closure(_, list) => list,
+        _ => emptyRange(),
+    };
+    for (i in 0..firstCaptures.count) {
+        let a = c.hir.captures[firstCaptures.start as usize + i as usize];
+        for (j in 0..secondCaptures.count) {
+            let b = c.hir.captures[secondCaptures.start as usize + j as usize];
+            let aMutable = match (a.mode) {
+                CaptureMode.Shared => false,
+                CaptureMode.Copy => { continue; },
+                _ => true,
+            };
+            let bMutable = match (b.mode) {
+                CaptureMode.Shared => false,
+                CaptureMode.Copy => { continue; },
+                _ => true,
+            };
+            if (a.local == b.local && (aMutable || bMutable)) {
+                let secondSpan = c.front.ast.exprSpans[c.front.ast.at(arguments, 1) as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "both children capture ")?;
+                appendQuotedName(mut message, c, c.hir.locals[a.local as usize].name)?;
+                appendText(mut message, ", and one changes it, but they run at once (type-system.md §40.4)")?;
+                c.error(scopeCaptureConflict(), secondSpan.start, secondSpan.end, message)?;
+            }
+        }
+    }
+    var typeArguments = Vector<u32>.create();
+    if (isRace) {
+        typeArguments.push(parts[0])?;
+    }
+    typeArguments.push(parts[1])?;
+    let settleName = c.intern("settle")?;
+    let settle = libraryFunction(
+        c,
+        if (isRace) "AsyncRaceJoin" else "AsyncAllJoin",
+        typeArguments.view(),
+        settleName,
+        span,
+    )?;
+    if (settle == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let site = c.asyncSites;
+    c.asyncSites += 1;
+    let resultType = c.hir.functions[settle as usize].returnType;
+    return c.expr(HirExpr.AsyncJoin(site, isRace, first, second, settle), resultType, span.start, span.end);
 }

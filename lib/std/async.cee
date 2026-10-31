@@ -132,3 +132,51 @@ struct AsyncLeaf {
     /// The IoError for a negated errno (HostServices.hostError's rule).
     fn ioError(code: i64) -> IoError => HostServices.hostError(code);
 }
+
+/// `Async.race`'s result (type-system.md §40.4): the child that returned `Ok` first (0 or 1), its value, and the
+/// other's value if it also returned `Ok` before it saw its cancellation.
+public struct Raced<T> {
+    public winner: u32;
+    public value: T;
+    public other: T?;
+}
+
+/// What `Async.race` returns once both children have: `first` is the one that returned first, which decides.
+struct AsyncRaceJoin<T, E> {
+    fn settle(first: u32, a: Result<T, E>, b: Result<T, E>) -> Result<Raced<T>, E> {
+        if (first == 0) {
+            return AsyncRaceJoin<T, E>.decide(0, a, b);
+        }
+        return AsyncRaceJoin<T, E>.decide(1, b, a);
+    }
+
+    fn decide(index: u32, early: Result<T, E>, late: Result<T, E>) -> Result<Raced<T>, E> {
+        match (early) {
+            Ok(value) => {
+                let other: T? = match (late) {
+                    Ok(w) => Some(w),
+                    Err(_) => null,
+                };
+                return Ok(Raced { winner: index, value: value, other: other });
+            }
+            Err(e) => { return Err(e); }
+        }
+    }
+}
+
+/// What `Async.all` returns once both children have: the first error in the order they returned, else `Ok`.
+struct AsyncAllJoin<E> {
+    fn settle(first: u32, a: Result<void, E>, b: Result<void, E>) -> Result<void, E> {
+        if (first == 0) {
+            return AsyncAllJoin<E>.decide(a, b);
+        }
+        return AsyncAllJoin<E>.decide(b, a);
+    }
+
+    fn decide(early: Result<void, E>, late: Result<void, E>) -> Result<void, E> {
+        match (early) {
+            Err(e) => { return Err(e); }
+            Ok() => { return late; }
+        }
+    }
+}

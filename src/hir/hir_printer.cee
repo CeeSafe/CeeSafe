@@ -525,6 +525,16 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.AsyncJoin(site, isRace, first, second, _) => {
+                this.text(if (isRace) "(async-race " else "(async-all ")?;
+                appendDecimal(mut this.out, site as u64)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, first)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, second)?;
+                this.text(")")?;
+                this.typed(hir, types, id)?;
+            }
             HirExpr.Spawn(site, closure) => {
                 this.text("(spawn ")?;
                 appendDecimal(mut this.out, site as u64)?;

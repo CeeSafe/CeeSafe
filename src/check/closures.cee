@@ -1011,6 +1011,10 @@ fn walkExpr(
             walkStmt(c, body, walk)?;
         }
         HirExpr.Spawn(_, closure) => { walkExpr(c, closure, e, parent, walk)?; }
+        HirExpr.AsyncJoin(_, _, first, second, _) => {
+            walkExpr(c, first, e, parent, walk)?;
+            walkExpr(c, second, e, parent, walk)?;
+        }
         HirExpr.AsyncShield(enter, body, leave) => {
             walkExpr(c, enter, e, parent, walk)?;
             walkExpr(c, body, e, parent, walk)?;

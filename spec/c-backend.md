@@ -479,6 +479,12 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   last child returns, then the result is the first error, else `Err(oom)` if a child could not start, else `Ok`, and
   the scope is zeroed for its next run. An async closure's environment keeps a null code pointer: it runs only through
   its frame.
+- **Joins.** `race` or `all` at `site` is a field `struct ceeAJ_<site> cee_j<site>` of the awaiting frame: the
+  runtime's `ceesafe_scope`, `first` (the child that returned first, 2 for neither), both results, and both children's
+  task slots (`ceesafe_task_slot`) and frames, defined before the frame that holds it. The join zeroes it, initialises
+  both frames, starts both with `ceesafe_async_start` (the caller's storage: nothing is allocated, nothing freed), and
+  waits like a scope's end. `ceeAJ<site>_<k>` resumes child k and, once it returns, keeps its result, notes it if it
+  was first, and calls `ceesafe_async_cancel` on the join: always for race, on an `Err` for all.
 - **Placement** (§2.2) and closure specialisation skip async fns: a box's C-stack slot would not survive a suspension.
 
 The task header and executor are in `runtime/hosted/ceesafe_rt_async.c`, linked when the generated C calls
@@ -554,6 +560,8 @@ Heap (M3b):
     cancellation unparks every task waiting on a deadline or descriptor; a shield's deadline wakes its task.
   - `CEESAFE_CANCEL_AT=k` cancels the running `Async.run`'s root task at the program's k-th suspension, and
     `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N` after each `Async.run` (`testing.md`).
+  - `ceesafe_async_start(scope, slot, frame, resume)` starts a child in the caller's storage (`race`, `all`), and
+    `ceesafe_async_cancel(scope)` cancels a scope's children.
   - Later: wakers and `ceesafe_async_wake(id)` (A2c); kqueue and epoll beside `poll()` (A2d).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the

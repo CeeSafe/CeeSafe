@@ -3231,8 +3231,8 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 |---|---|---|
 | `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295 |
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
-| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of results `Result<T, E>`; the first to return `Ok` wins, the other is cancelled and awaited; an `Err` from either is the result. `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok` |
-| `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`; both run, the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6 |
+| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body |
+| `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`, run at once; the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6. Without an expected type or an expression body for `a`, `E` is `AsyncError`. The two may not capture one local where either changes it (N0241) |
 | `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds. The body's result type is the expected one; without one, an expression body's own, and a block body's `Result<void, AsyncError>` |
 | `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`: a cancellation point for long computations. A call of lib/std's `AsyncControl<E>.checkpoint` |
 | `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
@@ -3246,7 +3246,7 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
-  `alloc` effect). L1 A2a implements `Async.scope`; `scopeIn` comes with A2b. `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
+  `alloc` effect). `Async.scope` is implemented; `scopeIn` comes with L1 A3, beside `Async.boxed`. `body` is a sync closure literal taking the scope `s` and returning `void`. `oom: E` is the error the
   scope reports if a child's frame cannot be allocated (ADR 0031 §3.3, as amended).
 - **`s.spawn(async () => …)`** starts a child whose result type must be `Result<void, E>`, the same `E` for every child
   of the scope. It returns `void`. The child's frame comes from the scope's allocator. If it cannot be allocated, the

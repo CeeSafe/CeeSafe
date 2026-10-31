@@ -195,7 +195,9 @@ accepted choices did not respect that, and were changed while §40 was written:
 3. **The I/O error type.** Adding `Cancelled` to the built-in `IoError` would break every exhaustive `match` on it.
    The library's async operations return `AsyncError` instead, which wraps `IoError` (§3.4.2).
 4. **`race` and `all`** are `Async.race(a, b)` and `Async.all(a, b)` rather than scope methods, with two children whose
-   frames are embedded. They then need no allocator and no out-of-memory error (§3.3.5).
+   frames are embedded. They then need no allocator and no out-of-memory error (§3.3.5). Implemented as specified in
+   L1 A2b (the owner's choice, "option 1"): lib/std's `AsyncRaceJoin<T, E>.settle` and `AsyncAllJoin<E>.settle` make
+   the value from the two results in the order the children returned.
 5. **Lowering, found while implementing A1.** New NIR terminators (`StartTask`, `Await`, `Park`) would have needed an
    arm in every analysis and in the interpreter for what is, to all of them, a call. Instead an awaited call stays a
    `Call` marked in a side table, and the C backend alone turns marked calls into suspension points (§3.6.1). The C

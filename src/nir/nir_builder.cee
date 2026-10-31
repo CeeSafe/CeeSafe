@@ -2058,6 +2058,9 @@ fn lowerRvalueCore(
         HirExpr.Await(call) => { return lowerTaskCall(c, n, b, call, taskAwait()); }
         HirExpr.RunTask(call) => { return lowerTaskCall(c, n, b, call, taskRun()); }
         HirExpr.AsyncScope(site, oom, body) => { return lowerAsyncScope(c, n, b, e, site, oom, body); }
+        HirExpr.AsyncJoin(site, isRace, first, second, settle) => {
+            return lowerAsyncJoin(c, n, b, e, site, isRace, first, second, settle);
+        }
         HirExpr.AsyncShield(enter, body, leave) => {
             // Enter, the awaited body into a temporary, leave, then the temporary (type-system.md §40.7).
             let entering = lowerRvalue(c, n, b, enter)?;
@@ -2204,6 +2207,68 @@ fn lowerAsyncScope(
     let list = n.list(operands.view())?;
     let typ = c.hir.exprTypes[e as usize];
     return n.rvalue(NirRvalue.Builtin(bfAsyncScopeWait(), list), typ, exprSpan(c, e));
+}
+
+/// `await Async.race(a, b)` or `all` (type-system.md §40.4): the join, which runs both children and is the index of
+/// the one that returned first; their results moved out; then lib/std's settle function of the three.
+fn lowerAsyncJoin(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    site: u32,
+    isRace: bool,
+    first: u32,
+    second: u32,
+    settle: u32,
+) -> Result<u32, AllocError> {
+    let u32Type = c.types.lookup("u32".bytes());
+    let firstFunction = match (c.hir.exprs[first as usize]) {
+        HirExpr.Closure(function, _) => function,
+        _ => none(),
+    };
+    let secondFunction = match (c.hir.exprs[second as usize]) {
+        HirExpr.Closure(function, _) => function,
+        _ => none(),
+    };
+    let childResult = c.hir.functions[firstFunction as usize].returnType;
+    let firstValue = lowerOperand(c, n, b, first)?;
+    if (firstValue == none()) {
+        return Ok(none());
+    }
+    let secondValue = lowerOperand(c, n, b, second)?;
+    if (secondValue == none()) {
+        return Ok(none());
+    }
+    var operands = Vector<u32>.create();
+    operands.push(constOperand(n, site as i64, u32Type)?)?;
+    operands.push(constOperand(n, if (isRace) 1 else 0, u32Type)?)?;
+    operands.push(constOperand(n, firstFunction as i64, u32Type)?)?;
+    operands.push(firstValue)?;
+    operands.push(constOperand(n, secondFunction as i64, u32Type)?)?;
+    operands.push(secondValue)?;
+    let list = n.list(operands.view())?;
+    let span = exprSpan(c, e);
+    let join = n.rvalue(NirRvalue.Builtin(bfAsyncJoin(), list), u32Type, span)?;
+    let order = newTemp(b, u32Type)?;
+    let orderPlace = localPlace(n, order)?;
+    assign(n, b, orderPlace, join)?;
+    var arguments = Vector<u32>.create();
+    arguments.push(readPlace(c, n, b, orderPlace)?)?;
+    for (k in 0..2) {
+        var which = Vector<u32>.create();
+        which.push(constOperand(n, site as i64, u32Type)?)?;
+        which.push(constOperand(n, k as i64, u32Type)?)?;
+        let whichList = n.list(which.view())?;
+        let taken = n.rvalue(NirRvalue.Builtin(bfAsyncJoinResult(), whichList), childResult, span)?;
+        let temp = newTemp(b, childResult)?;
+        let place = localPlace(n, temp)?;
+        assign(n, b, place, taken)?;
+        arguments.push(readPlace(c, n, b, place)?)?;
+    }
+    let argumentList = n.list(arguments.view())?;
+    let typ = c.hir.exprTypes[e as usize];
+    return n.rvalue(NirRvalue.Call(settle, argumentList), typ, span);
 }
 
 fn lowerBuiltinCall(
@@ -2421,6 +2486,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.RunTask(_) => { return true; }
         HirExpr.AsyncScope(_, _, _) => { return true; }
         HirExpr.AsyncShield(_, _, _) => { return true; }
+        HirExpr.AsyncJoin(_, _, _, _, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }

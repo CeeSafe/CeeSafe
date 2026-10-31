@@ -22,7 +22,7 @@ fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
     let r = statementRvalue(n, s);
     return r != none() &&
         (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark() ||
-            builtinOf(n, r) == bfAsyncScopeWait());
+            builtinOf(n, r) == bfAsyncScopeWait() || builtinOf(n, r) == bfAsyncJoin());
 }
 
 fn builtinArguments(n: borrow NirProgram, r: u32) -> Range => match (n.rvalues[r as usize]) {
@@ -121,6 +121,75 @@ fn awaitedCallee(n: borrow NirProgram, s: u32) -> u32 {
     };
 }
 
+/// The join of `race` or `all` at `site`: the runtime's scope, which child returned first (2 for neither yet), both
+/// results, and both children's tasks and frames (c-backend.md §3a).
+fn emitJoinStruct(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram, r: u32) -> Result<void, AllocError> {
+    let site = constArgument(n, r, 0);
+    let first = constArgument(n, r, 2);
+    let second = constArgument(n, r, 4);
+    e.t("struct ceeAJ_")?;
+    e.d(site as u64)?;
+    e.t(" { ceesafe_scope rt; uint32_t first; ")?;
+    for (k in 0..2u32) {
+        appendCTypeName(c, mut e.buf, c.hir.functions[first as usize].returnType)?;
+        e.t(" r")?;
+        e.d(k as u64)?;
+        e.t("; ")?;
+    }
+    e.t("ceesafe_task_slot t0, t1; struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", first)?;
+    e.t(" f0; struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", second)?;
+    e.t(" f1; };")?;
+    return e.emit();
+}
+
+/// The join's two children run here: each result is kept, the first to return is noted, and the other child is
+/// cancelled when the first returns (race) or when one returns an `Err` (all) (type-system.md §40.4).
+fn emitJoinThunks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram, r: u32) -> Result<void, AllocError> {
+    let site = constArgument(n, r, 0);
+    let isRace = constArgument(n, r, 1) == 1;
+    for (k in 0..2u32) {
+        let child = constArgument(n, r, 2 + 2 * k);
+        e.t("static bool ceeAJ")?;
+        e.d(site as u64)?;
+        e.t("_")?;
+        e.d(k as u64)?;
+        e.t("(void *frame, ceesafe_scope *scope) {")?;
+        e.emit()?;
+        e.t("    struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+        e.t(" *f = (struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+        e.t(" *)frame;")?;
+        e.emit()?;
+        e.t("    if (!")?;
+        appendAsyncName(c, mut e.buf, "ceeAR_", child)?;
+        e.t("(f)) return false;")?;
+        e.emit()?;
+        e.t("    struct ceeAJ_")?;
+        e.d(site as u64)?;
+        e.t(" *j = (struct ceeAJ_")?;
+        e.d(site as u64)?;
+        e.t(" *)(void *)scope;")?;
+        e.emit()?;
+        e.t("    j->r")?;
+        e.d(k as u64)?;
+        e.t(" = f->cee_result;")?;
+        e.emit()?;
+        e.t("    if (j->first == 2u) j->first = ")?;
+        e.d(k as u64)?;
+        e.t("u;")?;
+        e.emit()?;
+        e.line(
+            if (isRace) "    ceesafe_async_cancel(scope);" else "    if (f->cee_result.tag != 0) ceesafe_async_cancel(scope);",
+        )?;
+        e.line("    return true;")?;
+        e.line("}")?;
+    }
+    return Ok();
+}
+
 fn emitFrameStruct(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -128,6 +197,14 @@ fn emitFrameStruct(
     f: u32,
 ) -> Result<void, AllocError> {
     let source = nirFunctionSource(n, f);
+    for (block in n.functions[f as usize].blocks.view()) {
+        for (s in block.statements.view()) {
+            let r = statementRvalue(n, s);
+            if (r != none() && builtinOf(n, r) == bfAsyncJoin()) {
+                emitJoinStruct(e, c, n, r)?;
+            }
+        }
+    }
     let function = borrow n.functions[f as usize];
     e.t("struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", source)?;
@@ -150,6 +227,15 @@ fn emitFrameStruct(
             }
             site += 1;
             let r = statementRvalue(n, s);
+            if (builtinOf(n, r) == bfAsyncJoin()) {
+                let join = constArgument(n, r, 0);
+                e.t("    struct ceeAJ_")?;
+                e.d(join as u64)?;
+                e.t(" cee_j")?;
+                e.d(join as u64)?;
+                e.t(";")?;
+                e.emit()?;
+            }
             if (builtinOf(n, r) == bfAsyncScopeWait()) {
                 let scope = constArgument(n, r, 0);
                 e.t("    struct ceeAS_")?;
@@ -217,6 +303,11 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                     if (callee != none() && !containsU32(done, callee)) {
                         ready = false;
                     }
+                    let r = statementRvalue(n, s);
+                    if (r != none() && builtinOf(n, r) == bfAsyncJoin() &&
+                        (!containsU32(done, constArgument(n, r, 2)) || !containsU32(done, constArgument(n, r, 4)))) {
+                        ready = false; // the join embeds both children's frames
+                    }
                 }
             }
             if (ready) {
@@ -272,6 +363,9 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                 let r = statementRvalue(n, s);
                 if (r != none() && builtinOf(n, r) == bfAsyncSpawn()) {
                     emitChildThunk(e, c, n, constArgument(n, r, 0), constArgument(n, r, 1))?;
+                }
+                if (r != none() && builtinOf(n, r) == bfAsyncJoin()) {
+                    emitJoinThunks(e, c, n, r)?;
                 }
             }
         }
@@ -417,6 +511,25 @@ fn emitTaskStatement(
     }
     if (builtinOf(n, r) == bfAsyncScopeWait()) {
         return emitScopeWait(e, c, n, sources, f, r, target);
+    }
+    if (builtinOf(n, r) == bfAsyncJoin()) {
+        return emitJoin(e, c, n, sources, f, r, target);
+    }
+    if (builtinOf(n, r) == bfAsyncJoinResult()) {
+        let site = constArgument(n, r, 0);
+        let k = constArgument(n, r, 1);
+        if (target != none()) {
+            let place = appendPlaceIn(e, c, n, sources, f, target)?;
+            e.t("    ")?;
+            e.b(place.view())?;
+            e.t(" = cee_frame->cee_j")?;
+            e.d(site as u64)?;
+            e.t(".r")?;
+            e.d(k as u64)?;
+            e.t(";")?;
+            e.emit()?;
+        }
+        return Ok(true);
     }
     let role = n.rvalueTasks[r as usize];
     if (role == 0) {
@@ -677,5 +790,93 @@ fn emitScopeWait(
     e.d(site as u64)?;
     e.t("){0};")?;
     e.emit()?;
+    return Ok(true);
+}
+
+/// `Async.race` or `Async.all`, suspension point k: both children start in the join's storage, then the task waits
+/// for both; the value is the index of the one that returned first (§40.4).
+fn emitJoin(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let site = constArgument(n, r, 0);
+    let list = builtinArguments(n, r);
+    var join = copyBytes("cee_frame->cee_j".bytes())?;
+    appendDecimal(mut join, site as u64)?;
+    e.t("    ")?;
+    e.b(join.view())?;
+    e.t(" = (struct ceeAJ_")?;
+    e.d(site as u64)?;
+    e.t("){0};")?;
+    e.emit()?;
+    e.t("    ")?;
+    e.b(join.view())?;
+    e.t(".first = 2u;")?;
+    e.emit()?;
+    for (k in 0..2u32) {
+        let child = constArgument(n, r, 2 + 2 * k);
+        let value = operandText(e, c, n, sources, f, n.at(list, 3 + 2 * k))?;
+        let childNir = asyncNirFunction(n, child);
+        e.t("    ")?;
+        appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
+        e.t("(&")?;
+        e.b(join.view())?;
+        e.t(".f")?;
+        e.d(k as u64)?;
+        if (childNir != none() && c.hir.functions[child as usize].closureEnvironment != none()) {
+            e.t(", (")?;
+            appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
+            e.t(")(uintptr_t)")?;
+            e.b(value.view())?;
+        }
+        e.t(");")?;
+        e.emit()?;
+    }
+    for (k in 0..2u32) {
+        e.t("    ceesafe_async_start(&")?;
+        e.b(join.view())?;
+        e.t(".rt, &")?;
+        e.b(join.view())?;
+        e.t(".t")?;
+        e.d(k as u64)?;
+        e.t(", &")?;
+        e.b(join.view())?;
+        e.t(".f")?;
+        e.d(k as u64)?;
+        e.t(", ceeAJ")?;
+        e.d(site as u64)?;
+        e.t("_")?;
+        e.d(k as u64)?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    e.asyncState += 1;
+    let k = e.asyncState;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!ceesafe_async_scope_done(&")?;
+    e.b(join.view())?;
+    e.t(".rt)) return false;")?;
+    e.emit()?;
+    if (target != none()) {
+        let place = appendPlaceIn(e, c, n, sources, f, target)?;
+        e.t("    ")?;
+        e.b(place.view())?;
+        e.t(" = ")?;
+        e.b(join.view())?;
+        e.t(".first;")?;
+        e.emit()?;
+    }
     return Ok(true);
 }

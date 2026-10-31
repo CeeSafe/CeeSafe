@@ -1,0 +1,69 @@
+// Async.race and Async.all (type-system.md §40.4, ADR 0031 §6.4): two children whose frames are the caller's, so
+// nothing is allocated (attempts=0). race: the first child to return decides, and a loser that also returned Ok is
+// handed back; all: the first error cancels the other and is the result.
+
+async fn after(ms: u64, v: u32) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok(v);
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    var total: u32 = 0;
+    // The faster child wins; the slower one is cancelled.
+    let r: Result<Raced<u32>, AsyncError> = await Async.race(
+        async () => await after(30, 1),
+        async () => await after(5, 2),
+    );
+    match (r) {
+        Ok(raced) => {
+            total += raced.winner * 10 + raced.value;
+            match (raced.other) {
+                Some(_) => { total += 1000; }
+                null => {}
+            }
+        }
+        Err(_) => { total += 5000; }
+    }
+    // Both finish at once: the loser's value is handed back.
+    let bothResult: Result<Raced<u32>, AsyncError> = await Async.race(async () => Ok(7), async () => Ok(8));
+    let both = bothResult?;
+    total += both.value * 100;
+    match (both.other) {
+        Some(v) => { total += v * 1000; }
+        null => {}
+    }
+    // An error first: the race's result.
+    let failed: Result<Raced<u32>, AsyncError> =
+        await Async.race(async () => await after(1000, 3), async () => Err(AsyncError.TimedOut));
+    match (failed) {
+        Err(AsyncError.TimedOut) => { total += 100000; }
+        _ => {}
+    }
+    // all: both run; the first error is the result and cancels the other.
+    var seen: u32 = 0;
+    let all = await Async.all(async () => {
+        await Timer.sleep(2)?;
+        seen += 1;
+        return Ok();
+    }, async () => {
+        await Timer.sleep(1)?;
+        return Err(AsyncError.TimedOut);
+    });
+    match (all) {
+        Err(AsyncError.TimedOut) => { total += 1000000 * (seen + 1); }
+        _ => {}
+    }
+    await Async.all(async () => await Timer.sleep(1), async () => await Timer.sleep(2))?;
+    return Ok(total);
+}
+
+fn main() {
+    let start = Timer.now();
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    Console.writeLine(Timer.now() - start < 500);
+}
+// expect-stdout: 1108712
+// expect-stdout: true

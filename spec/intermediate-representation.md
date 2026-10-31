@@ -83,7 +83,12 @@ suspension changes its blocks or statements.
 - `await Async.scope(oom, body)` lowers to the oom value (a temporary), then the body's statements inline, then
   `Builtin(AsyncScopeWait, [site, oom])`, whose value is the scope's `Result<void, E>`. `s.spawn(child)` is
   `Builtin(AsyncSpawn, [site, the child's HIR function, the child closure])`. `site` numbers the scope program-wide.
-- The **suspension points** of an async fn are its awaited calls, its `AsyncPark`s and its `AsyncScopeWait`s, numbered from 1 in block order
+- `await Async.race(a, b)` and `all` lower to `t = Builtin(AsyncJoin, [site, 1 for race or 0, a's function, a, b's
+  function, b])`, the index (0 or 1) of the child that returned first, then `r0 = Builtin(AsyncJoinResult, [site, 0])`
+  and `r1 = …[site, 1]`, which move the children's results out, then the call `settle(t, r0, r1)` of lib/std's
+  `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used.
+- The **suspension points** of an async fn are its awaited calls, its `AsyncPark`s, `AsyncScopeWait`s and
+  `AsyncJoin`s, numbered from 1 in block order
   and statement order (0 is the entry). The C backend (c-backend.md §3a) and the interpreter (§5) act on them.
 - The effect checker gives an awaited call `suspend` and its callee's effects, `AsyncPark` `suspend`, and a `taskRun`
   call `sleep`, `alloc` and its callee's effects without `suspend` (type-system.md §32.1, §40.4).

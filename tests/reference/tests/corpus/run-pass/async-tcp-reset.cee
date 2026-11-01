@@ -1,0 +1,39 @@
+// ADR 0044 §3.4: a peer that closes with SO_LINGER 0 resets the connection, and the other end's read reports
+// IoError.ConnectionReset (ECONNRESET, WSAECONNRESET), the same kind on every platform.
+fn io<T>(r: Result<T, IoError>) -> Result<T, AsyncError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(AsyncError.Io(e)),
+};
+
+/// The server's end of a connection whose client has gone: set to linger 0, then dropped when this returns, so its
+/// close resets the connection.
+async fn resetPair(listener: borrow AsyncTcpListener) -> Result<AsyncTcpStream, AsyncError> {
+    let client = await AsyncTcpStream.connectTo(io(listener.localAddress())?)?;
+    let server = await listener.accept()?;
+    match (client.setLinger(Some(0))) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    return Ok(server);
+}
+
+async fn run() -> Result<IoError?, AsyncError> {
+    let listener = io(AsyncTcpListener.bindWith(SocketAddresses.v4Loopback(0), ListenOptions.defaults()))?;
+    let server = await resetPair(borrow listener)?;
+    var buffer = [0u8; 16];
+    return match (await server.read(mut buffer[..])) {
+        Ok(_) => Ok(null),
+        Err(AsyncError.Io(e)) => Ok(Some(e)),
+        Err(e) => Err(e),
+    };
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(Some(IoError.ConnectionReset)) => { Console.writeLine("ConnectionReset"); }
+        Ok(Some(e)) => { Console.writeLine(e.message()); }
+        Ok(null) => { Console.writeLine("read succeeded"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: ConnectionReset

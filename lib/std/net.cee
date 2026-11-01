@@ -160,7 +160,7 @@ public struct SocketAddresses {
         return if (v > 65535) null else truncate<u16>(v);
     }
 
-    /// Dotted IPv4: four decimal parts of 1 to 3 digits, each at most 255.
+    /// Dotted IPv4: four decimal parts of 1 to 3 digits without leading zeros, each at most 255.
     fn parseV4(b: Slice<u8>, out: borrow mut [u8; 4]) -> bool {
         var i: usize = 0;
         for (part in 0..4usize) {
@@ -177,8 +177,8 @@ public struct SocketAddresses {
                 i += 1;
                 digits += 1;
             }
-            if (digits == 0 || v > 255) {
-                return false;
+            if (digits == 0 || v > 255 || (digits > 1 && b[i - digits as usize] == 48)) {
+                return false; // no leading zeros: 010 would read as octal elsewhere
             }
             out[part] = truncate<u8>(v);
         }

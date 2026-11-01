@@ -1,0 +1,92 @@
+// ADR 0044: IPv6 for the async sockets. A listener on [::1] and a stream to it, each end's address seen by the other;
+// a dual-stack listener on [::] whose IPv4 client is reported as V4 (not as ::ffff:127.0.0.1); and every stream
+// option set and cleared. What each step found is a line of `main`'s output.
+fn io<T>(r: Result<T, IoError>) -> Result<T, AsyncError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(AsyncError.Io(e)),
+};
+
+fn done(r: Result<void, IoError>) -> Result<void, AsyncError> => match (r) {
+    Ok() => Ok(),
+    Err(e) => Err(AsyncError.Io(e)),
+};
+
+fn same(a: SocketAddress, b: SocketAddress) -> bool => match (a) {
+    SocketAddress.V4(x, p) => match (b) {
+        SocketAddress.V4(y, q) => x[0] == y[0] && x[1] == y[1] && x[2] == y[2] && x[3] == y[3] && p == q,
+        _ => false,
+    },
+    SocketAddress.V6(x, p, _) => match (b) {
+        SocketAddress.V6(y, q, _) => {
+            for (k in 0..16usize) {
+                if (x[k] != y[k]) {
+                    return false;
+                }
+            }
+            return p == q;
+        }
+        _ => false,
+    },
+};
+
+struct Seen {
+    loopback: bool;
+    v6Peer: bool;
+    received: usize;
+    v4Peer: bool;
+    mappedPeer: bool;
+}
+
+async fn run() -> Result<Seen, AsyncError> {
+    let listener = io(AsyncTcpListener.bindWith(SocketAddresses.v6Loopback(0), ListenOptions.defaults()))?;
+    let bound = io(listener.localAddress())?;
+    let client = await AsyncTcpStream.connectTo(bound)?;
+    let server = await listener.accept()?;
+    let v6Peer = same(io(client.localAddress())?, io(server.peerAddress())?);
+    done(client.setNoDelay(true))?;
+    done(client.setKeepAlive(Some(30)))?;
+    done(client.setSendBuffer(65536))?;
+    done(client.setRecvBuffer(65536))?;
+    done(client.setLinger(Some(5)))?;
+    done(client.setLinger(null))?;
+    done(client.setKeepAlive(null))?;
+    done(client.setNoDelay(false))?;
+    await client.write("hello".bytes())?;
+    var buffer = [0u8; 8];
+    let n = await server.read(mut buffer[..])?;
+    let any = io(AsyncTcpListener.bindWith(SocketAddresses.v6Any(0), ListenOptions.defaults()))?;
+    let port = io(any.port())?;
+    let c4 = await AsyncTcpStream.connectTo(SocketAddresses.v4Loopback(port))?;
+    let s4 = await any.accept()?;
+    let peer = io(s4.peerAddress())?;
+    let v4Peer = match (peer) {
+        SocketAddress.V4(_, _) => true,
+        SocketAddress.V6(_, _, _) => false,
+    };
+    return Ok(Seen {
+        loopback: bound.isLoopback(),
+        v6Peer: v6Peer,
+        received: n,
+        v4Peer: v4Peer,
+        mappedPeer: same(peer, io(c4.localAddress())?),
+    });
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(s) => {
+            Console.writeLine(if (s.loopback) "bound to ::1" else "not loopback");
+            Console.writeLine(if (s.v6Peer) "peer = client's local" else "peer differs");
+            Console.writeLine(s.received as u64);
+            Console.writeLine(if (s.v4Peer) "dual stack: V4 peer" else "dual stack: V6 peer");
+            Console.writeLine(if (s.mappedPeer) "peer = client's local" else "peer differs");
+        }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("cancelled"); }
+    }
+}
+// expect-stdout: bound to ::1
+// expect-stdout: peer = client's local
+// expect-stdout: 5
+// expect-stdout: dual stack: V4 peer
+// expect-stdout: peer = client's local

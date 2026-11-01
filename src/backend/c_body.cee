@@ -1058,6 +1058,11 @@ fn emitStatement(
     }
 }
 
+/// TcpStream's option setters (ADR 0044 §3.6).
+fn isTcpOptionBuiltin(b: u32) -> bool =>
+    b == bfTcpSetNoDelay() || b == bfTcpSetKeepAlive() || b == bfTcpSetSendBuffer() || b == bfTcpSetRecvBuffer() ||
+        b == bfTcpSetLinger();
+
 /// Whether a builtin evaluated for its effect is written as its rvalue (EmitBuiltin's first case).
 fn isRvalueBuiltin(b: u32) -> bool =>
     b == bfVectorPush() || b == bfStringAppend() || b == bfStringAppendNumber() || b == bfVectorPop() ||
@@ -1065,7 +1070,9 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfSlotMapGet() || b == bfSlotMapRemove() || b == bfSlotMapContains() || b == bfFileOpen() ||
         b == bfFileCreate() || b == bfFileRemove() || b == bfResourceRead() || b == bfResourceWrite() ||
         b == bfConsoleRead() || b == bfTcpListen() || b == bfTcpConnect() || b == bfTcpPort() || b == bfTcpAccept() ||
-        b == bfTcpShutdownWrite() || b == bfArgument() || b == bfArgumentCount() || b == bfProcessRun() ||
+        b == bfTcpShutdownWrite() || b == bfTcpShutdownRead() || isTcpOptionBuiltin(
+        b,
+    ) || b == bfArgument() || b == bfArgumentCount() || b == bfProcessRun() ||
         b == bfIoErrorMessage() || b == bfPtrAdd() || b == bfPtrSub() || b == bfPtrOffset() || b == bfPtrIsNull() ||
         b == bfSlicePtr() || b == bfSliceFromRaw() || b == bfPtrReadVolatile() || b == bfPtrWriteVolatile() ||
         b == bfPtrPlace() || b == bfSpinHint() || b == bfTargetIsX8664() || b == bfTargetIsAArch64() ||
@@ -2016,6 +2023,39 @@ fn appendBuiltinRvalue(
         )?;
         appendBytes(mut call, resource.view())?;
         call.push(')')?;
+        return appendIoCall(c, out, t, call.view());
+    }
+    if (b == bfTcpShutdownRead()) {
+        let resource = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        var call = Vector<u8>.create();
+        appendText(mut call, "ceesafe_tcp_shutdown_read(*")?;
+        appendBytes(mut call, resource.view())?;
+        call.push(')')?;
+        return appendIoCall(c, out, t, call.view());
+    }
+    if (isTcpOptionBuiltin(b)) {
+        // ADR 0044 §3.6: ceesafe_tcp_option(fd, CEE_SOCKET_OPTION_*, value), an optional's null as -1.
+        let resource = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let value = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        var call = Vector<u8>.create();
+        appendText(mut call, "ceesafe_tcp_option(*")?;
+        appendBytes(mut call, resource.view())?;
+        appendText(
+            mut call,
+            if (b == bfTcpSetNoDelay()) ", 1u, (int64_t)(" else if (b == bfTcpSetKeepAlive()) ", 2u, " else if (b ==
+                bfTcpSetSendBuffer()) ", 3u, (int64_t)(" else if (b ==
+                bfTcpSetRecvBuffer()) ", 4u, (int64_t)(" else ", 5u, ",
+        )?;
+        if (b == bfTcpSetKeepAlive() || b == bfTcpSetLinger()) {
+            appendText(mut call, "(")?;
+            appendBytes(mut call, value.view())?;
+            appendText(mut call, ".tag ? (int64_t)")?;
+            appendBytes(mut call, value.view())?;
+            appendText(mut call, ".u.v_Some.f__0 : (int64_t)-1))")?;
+        } else {
+            appendBytes(mut call, value.view())?;
+            appendText(mut call, "))")?;
+        }
         return appendIoCall(c, out, t, call.view());
     }
     if (b == bfIoErrorMessage()) {

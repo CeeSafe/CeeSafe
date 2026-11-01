@@ -936,6 +936,27 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_op_connect")) {
         return "PPsh:l";
     }
+    if (sameText(name, "ceesafe_async_op_connect_at")) {
+        return "PuPhu:l";
+    }
+    if (sameText(name, "ceesafe_async_tcp_listen_at")) {
+        return "uPhuuu:l";
+    }
+    if (sameText(name, "ceesafe_async_tcp_connect_at")) {
+        return "uPhu:l";
+    }
+    if (sameText(name, "ceesafe_async_socket_name")) {
+        return "iuPP:l";
+    }
+    if (sameText(name, "ceesafe_async_socket_option")) {
+        return "iul:l";
+    }
+    if (sameText(name, "ceesafe_async_shutdown_read")) {
+        return "i:l";
+    }
+    if (sameText(name, "ceesafe_interface_index")) {
+        return "Ps:u";
+    }
     if (sameText(name, "ceesafe_async_op_cancel")) {
         return "P:b";
     }
@@ -2465,7 +2486,11 @@ fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
         sameText(name, "ceesafe_async_shutdown_write") || sameText(name, "ceesafe_async_close") ||
         sameText(name, "ceesafe_async_poll") || sameText(name, "ceesafe_async_op_read") ||
         sameText(name, "ceesafe_async_op_send") || sameText(name, "ceesafe_async_op_accept") ||
-        sameText(name, "ceesafe_async_op_connect") || sameText(name, "ceesafe_async_op_cancel");
+        sameText(name, "ceesafe_async_op_connect") || sameText(name, "ceesafe_async_op_cancel") ||
+        sameText(name, "ceesafe_async_op_connect_at") || sameText(name, "ceesafe_async_tcp_listen_at") ||
+        sameText(name, "ceesafe_async_tcp_connect_at") || sameText(name, "ceesafe_async_socket_name") ||
+        sameText(name, "ceesafe_async_socket_option") || sameText(name, "ceesafe_async_shutdown_read") ||
+        sameText(name, "ceesafe_interface_index");
 
 fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
     var bytes = Vector<u8>.create();
@@ -2480,8 +2505,50 @@ fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8
 fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
     if (sameText(name, "ceesafe_async_op_read") || sameText(name, "ceesafe_async_op_send") ||
         sameText(name, "ceesafe_async_op_accept") || sameText(name, "ceesafe_async_op_connect") ||
-        sameText(name, "ceesafe_async_op_cancel")) {
+        sameText(name, "ceesafe_async_op_connect_at") || sameText(name, "ceesafe_async_op_cancel")) {
         return asyncOpStep(it, name, arguments);
+    }
+    if (sameText(name, "ceesafe_async_tcp_listen_at") || sameText(name, "ceesafe_async_tcp_connect_at")) {
+        // ADR 0044: an address's fields (family, its 16 bytes, port, scope), and for a listener the backlog and flags.
+        let family = truncate<u32>(arguments[0].bits(0, 4)?);
+        let bytes = interpBytes(it, arguments[1].bits(0, 8)?, 16)?;
+        let port = truncate<u16>(arguments[2].bits(0, 2)?);
+        let scope = truncate<u32>(arguments[3].bits(0, 4)?);
+        let r = if (sameText(name, "ceesafe_async_tcp_listen_at")) AsyncSockets.listenAt(
+            family,
+            bytes.view(),
+            port,
+            scope,
+            truncate<u32>(arguments[4].bits(0, 4)?),
+            truncate<u32>(arguments[5].bits(0, 4)?),
+        ) else AsyncSockets.connectAt(family, bytes.view(), port, scope);
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_socket_name")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        var bytes = Vector<u8>.create();
+        for (k in 0..16u32) {
+            bytes.push(0)!;
+        }
+        var scope: u32 = 0;
+        let r = AsyncSockets.name(fd, truncate<u32>(arguments[1].bits(0, 4)?), bytes.viewMut(), mut scope);
+        if (r >= 0) {
+            for (k in 0..16usize) {
+                it.memory.storeBits(arguments[2].bits(0, 8)? + k as u64, bytes[k] as u64, 1)?;
+            }
+            it.memory.storeBits(arguments[3].bits(0, 8)?, scope as u64, 4)?;
+        }
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_socket_option")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        let option = truncate<u32>(arguments[1].bits(0, 4)?);
+        let r = AsyncSockets.setOption(fd, option, truncate<i64>(arguments[2].bits(0, 8)?));
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_interface_index")) {
+        let text = interpBytes(it, arguments[0].bits(0, 8)?, arguments[1].bits(0, 8)?)?;
+        return Ok(valueOf(AsyncSockets.interfaceIndex(text.view()) as u64, 4));
     }
     if (sameText(name, "ceesafe_async_wait_readable")) {
         it.asyncFd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
@@ -2550,7 +2617,10 @@ fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow 
     )) AsyncSockets.accept(fd) else if (sameText(
         name,
         "ceesafe_async_tcp_connected",
-    )) AsyncSockets.connected(fd) else AsyncSockets.shutdownWrite(fd);
+    )) AsyncSockets.connected(fd) else if (sameText(
+        name,
+        "ceesafe_async_shutdown_read",
+    )) AsyncSockets.shutdownRead(fd) else AsyncSockets.shutdownWrite(fd);
     return Ok(valueOf(truncate<u64>(r), 8));
 }
 
@@ -2629,14 +2699,18 @@ fn asyncOpStep(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         }
         return Ok(valueOf(0, 1));
     }
-    if (sameText(name, "ceesafe_async_op_connect")) {
+    if (sameText(name, "ceesafe_async_op_connect") || sameText(name, "ceesafe_async_op_connect_at")) {
         var held = it.memory.loadBits(record, 8)?;
         if (held == 0) {
             var started = Vector<Value>.create();
-            started.push(copyValue(borrow arguments[1]))!;
-            started.push(copyValue(borrow arguments[2]))!;
-            started.push(copyValue(borrow arguments[3]))!;
-            let r = asyncSocketService(it, "ceesafe_async_tcp_connect".bytes(), started)?;
+            for (k in 1..arguments.length) {
+                started.push(copyValue(borrow arguments[k]))!;
+            }
+            let start = if (sameText(
+                name,
+                "ceesafe_async_op_connect",
+            )) "ceesafe_async_tcp_connect" else "ceesafe_async_tcp_connect_at";
+            let r = asyncSocketService(it, start.bytes(), started)?;
             let fd = match (r) {
                 Some(v) => v.bits(0, 8)?,
                 null => 0,

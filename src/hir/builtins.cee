@@ -1,7 +1,7 @@
 // The builtin functions, by declaration index: what HirExpr.BuiltinCall stores. Edited by hand: a new builtin takes
 // the next index and raises builtinFunctionCount.
 
-fn builtinFunctionCount() -> u32 => 97;
+fn builtinFunctionCount() -> u32 => 103;
 
 fn bfConsoleWrite() -> u32 => 0;
 fn bfConsoleWriteLine() -> u32 => 1;
@@ -100,6 +100,13 @@ fn bfThreadSpawn() -> u32 => 93;
 fn bfThreadJoin() -> u32 => 94;
 fn bfThreadSpawnBoxed() -> u32 => 95;
 fn bfThreadBoth() -> u32 => 96;
+/// TcpStream's options and its read side's shutdown (ADR 0044 §3.6).
+fn bfTcpSetNoDelay() -> u32 => 97;
+fn bfTcpSetKeepAlive() -> u32 => 98;
+fn bfTcpSetSendBuffer() -> u32 => 99;
+fn bfTcpSetRecvBuffer() -> u32 => 100;
+fn bfTcpSetLinger() -> u32 => 101;
+fn bfTcpShutdownRead() -> u32 => 102;
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -200,6 +207,12 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     94 => "ThreadJoin",
     95 => "ThreadSpawnBoxed",
     96 => "ThreadBoth",
+    97 => "TcpSetNoDelay",
+    98 => "TcpSetKeepAlive",
+    99 => "TcpSetSendBuffer",
+    100 => "TcpSetRecvBuffer",
+    101 => "TcpSetLinger",
+    102 => "TcpShutdownRead",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

@@ -1,0 +1,33 @@
+// ADR 0044's stream options, read back by the kernel: each AsyncSockets.setOption (the call under AsyncTcpStream's
+// setters) on a connected socket, then getsockopt in C (socket-options.c) as the oracle. Turned on, then off.
+@header("socket-options.types.h")
+extern "C" {
+    fn options_report(fd: i32) -> i32;
+}
+
+fn set(fd: i32, option: u32, value: i64) {
+    if (AsyncSockets.setOption(fd, option, value) != 0) {
+        Console.writeLine("setOption failed");
+    }
+}
+
+/// Safety: options_report only reads the descriptor's options.
+fn main() {
+    let listener = AsyncSockets.listen("127.0.0.1", 0);
+    let port = truncate<u16>(AsyncSockets.port(truncate<i32>(listener)));
+    let fd = truncate<i32>(AsyncSockets.connect("127.0.0.1", port));
+    set(fd, 1, 1);     // TCP_NODELAY
+    set(fd, 2, 30);    // SO_KEEPALIVE, 30 s idle
+    set(fd, 3, 65536); // SO_SNDBUF
+    set(fd, 4, 65536); // SO_RCVBUF
+    set(fd, 5, 5);     // SO_LINGER, 5 s
+    unsafe { options_report(fd); }
+    set(fd, 1, 0);
+    set(fd, 2, -1);
+    set(fd, 5, -1);
+    unsafe { options_report(fd); }
+    AsyncSockets.close(fd);
+    AsyncSockets.close(truncate<i32>(listener));
+}
+// expect-stdout: nodelay 1 keepalive 1 idle 30 sndbuf>=64k 1 rcvbuf>=64k 1 linger 1 5
+// expect-stdout: nodelay 0 keepalive 0 idle 30 sndbuf>=64k 1 rcvbuf>=64k 1 linger 0 0

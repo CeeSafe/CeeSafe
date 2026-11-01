@@ -1,0 +1,32 @@
+// ADR 0044 §3.2: a listener's backlog is the platform's largest (SOMAXCONN) unless asked. A hundred clients connect
+// before anything is accepted, which the old backlog of 16 refused or stalled; then every one is accepted. (A hundred,
+// not more: each connection is two descriptors, and macOS's default limit is 256.)
+fn io<T>(r: Result<T, IoError>) -> Result<T, AsyncError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(AsyncError.Io(e)),
+};
+
+async fn run() -> Result<u32, AsyncError> {
+    let listener = io(AsyncTcpListener.bindWith(SocketAddresses.v4Loopback(0), ListenOptions.defaults()))?;
+    let address = io(listener.localAddress())?;
+    var clients = Vector<AsyncTcpStream>.create();
+    for (i in 0..100u32) {
+        let c = await AsyncTcpStream.connectTo(address)?;
+        clients.push(c)!;
+    }
+    var accepted: u32 = 0;
+    for (i in 0..100u32) {
+        let s = await listener.accept()?;
+        accepted += 1;
+    }
+    return Ok(accepted);
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("cancelled"); }
+    }
+}
+// expect-stdout: 100

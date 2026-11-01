@@ -670,7 +670,8 @@ fn builtinOperation(
     }
     if (function == bfFileOpen() || function == bfFileCreate() || function == bfFileRemove() ||
         function == bfResourceRead() || function == bfResourceWrite() || function == bfTcpListen() ||
-        function == bfTcpAccept() || function == bfTcpConnect() || function == bfTcpShutdownWrite()) {
+        function == bfTcpAccept() || function == bfTcpConnect() || function == bfTcpShutdownWrite() ||
+        function == bfTcpShutdownRead()) {
         return Ok(textOp(sleep, 2));
     }
     if (function == bfThreadSpawn() || function == bfThreadSpawnBoxed()) {

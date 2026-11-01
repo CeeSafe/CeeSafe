@@ -143,6 +143,14 @@ fn checkResourceMethod(
     } else if (isStream && sameText(text, "shutdownWrite")) {
         function = bfTcpShutdownWrite();
         ok = c.types.voidType;
+    } else if (isStream && sameText(text, "shutdownRead")) {
+        function = bfTcpShutdownRead();
+        ok = c.types.voidType;
+    } else if (isStream && tcpOption(text) != none()) {
+        function = tcpOption(text);
+        arity = 1;
+        mutable = false;
+        ok = c.types.voidType;
     } else if (isListener && sameText(text, "accept")) {
         function = bfTcpAccept();
         mutable = false;
@@ -174,9 +182,15 @@ fn checkResourceMethod(
     var argument = none();
     if (arity == 1) {
         let u8Type = c.types.u8;
-        let bytes = c.types.sliceOf(u8Type, function == bfResourceRead())?;
+        let u32Type = c.types.u32;
+        let parameter = if (function == bfTcpSetNoDelay()) c.types.boolType else if (function ==
+            bfTcpSetSendBuffer() || function == bfTcpSetRecvBuffer()) u32Type else if (function ==
+            bfTcpSetKeepAlive() || function == bfTcpSetLinger()) optionOf(c, u32Type)? else c.types.sliceOf(
+            u8Type,
+            function == bfResourceRead(),
+        )?;
         let argumentSyntax = c.front.ast.at(arguments, 0);
-        argument = checkArgument(c, argumentSyntax, bytes)?;
+        argument = checkArgument(c, argumentSyntax, parameter)?;
     }
     let receiver = borrowPlace(c, resource, mutable, targetSpan)?;
     if (c.isBottom(receiver) || (argument != none() && c.isBottom(argument))) {
@@ -189,6 +203,26 @@ fn checkResourceMethod(
     }
     let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
+}
+
+/// TcpStream's option setters (ADR 0044 §3.6), or none.
+fn tcpOption(name: Slice<u8>) -> u32 {
+    if (sameText(name, "setNoDelay")) {
+        return bfTcpSetNoDelay();
+    }
+    if (sameText(name, "setKeepAlive")) {
+        return bfTcpSetKeepAlive();
+    }
+    if (sameText(name, "setSendBuffer")) {
+        return bfTcpSetSendBuffer();
+    }
+    if (sameText(name, "setRecvBuffer")) {
+        return bfTcpSetRecvBuffer();
+    }
+    if (sameText(name, "setLinger")) {
+        return bfTcpSetLinger();
+    }
+    return none();
 }
 
 /// `e.message()` on an IoError (§26.2): static text for the variant.

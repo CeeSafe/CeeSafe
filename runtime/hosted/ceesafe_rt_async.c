@@ -63,6 +63,14 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <unistd.h>
+/* Empties a wake pipe, or reads an eventfd's counter, whose value nothing needs: how many bytes, and a failure
+   (EAGAIN: already empty), change nothing. glibc declares read warn_unused_result under _FORTIFY_SOURCE, which
+   Ubuntu's gcc defines at -O2, and gcc does not take a (void) cast as using a result: the result is kept, then
+   dropped, so -Werror builds pass there too. */
+static inline void cee_drain(int fd, void *buffer, size_t length) {
+    ssize_t got = read(fd, buffer, length);
+    (void)got;
+}
 #endif
 
 #ifndef PIPE_BUF
@@ -472,7 +480,7 @@ static bool cee_kqueue_call(const struct timespec *limit) {
         int32_t fd = (int32_t)events[k].ident;
         if (fd == cee_exec.wake_pipe[0] && (events[k].flags & EV_ERROR) == 0) {
             unsigned char drained[64];
-            (void)read(fd, drained, sizeof drained);
+            cee_drain(fd, drained, sizeof drained);
             continue;
         }
         unsigned d = events[k].filter == EVFILT_WRITE ? 1u : 0u;
@@ -1428,7 +1436,7 @@ static bool cee_wait_poll(int timeout) {
         }
         if (pipe && k == 0u) {
             unsigned char drained[64];
-            (void)read(cee_exec.wake_pipe[0], drained, sizeof drained);
+            cee_drain(cee_exec.wake_pipe[0], drained, sizeof drained);
             continue;
         }
         if ((r & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0 && cee_exec.slots[fds[k].fd].head[0] != NULL) {
@@ -1471,7 +1479,7 @@ static bool cee_wait_reactor(int timeout) {
         int32_t fd = events[k].data.fd;
         if (fd == cee_exec.wake_pipe[0]) {
             unsigned char drained[64];
-            (void)read(fd, drained, sizeof drained);
+            cee_drain(fd, drained, sizeof drained);
             continue;
         }
 #if defined(CEE_URING)
@@ -2637,7 +2645,7 @@ static bool cee_uring_submit(void) {
 static bool cee_uring_drain(void) {
     struct cee_uring *u = cee_exec.uring;
     uint64_t counter = 0;
-    (void)read(u->event, &counter, sizeof counter);
+    cee_drain(u->event, &counter, sizeof counter);
     bool any = false;
     unsigned head = *u->cq_head;
     for (;;) {

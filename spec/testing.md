@@ -54,8 +54,10 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   `overflow-checks/` and `closure-calls/` have snapshots of the `--explain-…` reports (`optimisations.md`).
 - The C configurations: the contract suite builds the run families under the host's `cc` with `-Werror`, and under
   clang `-O1` with ASan+UBSan, `-fno-sanitize-recover=all` and the runtime's allocation report (`--check-leaks`: a
-  program that exits normally with live allocations fails). Every configuration must meet the expectations, so the
-  run corpus is also a differential test.
+  program that exits normally with live allocations fails). On Linux, also under gcc with `-O2 -D_FORTIFY_SOURCE=2
+  -Wall -Werror`, the flags Ubuntu's gcc applies by default: glibc's `warn_unused_result` and gcc's own flow warnings
+  then reach the runtime and the generated C. Every configuration must meet the expectations, so the run corpus is
+  also a differential test.
 
 A change to the language adds corpus files, with snapshots written by ceesafec run from the corpus root. Adding
 library code (`lib/`, Decision 0008) can renumber closures in `.hir` snapshots and reorder types in `.c` ones, since

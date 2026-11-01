@@ -59,6 +59,10 @@ def main():
                                   "--manifest", os.path.join(work, "fixed-point.json")]),
             ("corpus", run_corpus + ["--corpus", corpus, "--check-leaks"]),
             ("run -Werror", run_corpus + ["--corpus", corpus] + run_families + ["--cflag=-Werror"]),
+            # Ubuntu's gcc defines _FORTIFY_SOURCE at -O2, so glibc's warn_unused_result and gcc's flow warnings apply
+            # to every build there: the generated C and the runtime pass -O2 -Wall -Werror with it (Linux only).
+            ("run fortify", run_corpus + ["--corpus", corpus] + run_families +
+             ["--cc", "gcc", "--cflag=-O2", "--cflag=-D_FORTIFY_SOURCE=2", "--cflag=-Wall", "--cflag=-Werror"]),
             ("run interp", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--family", "run-fail",
                                          "--interp", "--check-leaks"]),
             ("library", [cee, "check", "--library-diagnostics", empty]),
@@ -91,6 +95,10 @@ def main():
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":
                 print(f"{name:14} skip io_uring is Linux's (ADR 0035)")
+                sys.stdout.flush()
+                continue
+            if name == "run fortify" and platform.system() != "Linux":
+                print(f"{name:14} skip _FORTIFY_SOURCE and gcc are checked on Linux (glibc)")
                 sys.stdout.flush()
                 continue
             if name == "run tsan" and platform.system() == "Windows":

@@ -1,15 +1,20 @@
-# CeeSafe roadmap: port the reference compiler to the reference, as CeeSafe
+# CeeSafe roadmap: the port of the reference compiler to its own language, as CeeSafe
 
-Date: 2026-10-30 (revises the 2026-10-29 draft). Status: **P0–P7 complete (CeeSafe names since `8941c10`; P7 production C 2026-10-30; stage 0 the reference compiler 0.6.0 via the `3d6ac40` anchor); P8 complete (2026-10-31; the fork point taken at S7, `docs/fork-point.md`)**.
-The probes, `src/support/`, the limits, the fault sweep and the skeleton exist (`docs/p1-probes.md`). No compiler code has been ported.
-Repository: `~/dev/CeeSafe`. Reference: the C#/.NET 10 compiler CeeSafe was ported from (retired; Decision 0010).
+Date: 2026-10-30 (revises the 2026-10-29 draft; reviewed 2026-11-01). Status: **P0–P8 complete** (CeeSafe names since
+`8941c10`; the fork point at P8 S7, `docs/fork-point.md`). **P9 in progress**: ceesafec 0.3.2 is the latest release
+(2026-11-01), bootstrapped from ceesafec 0.2.0 (Decision 0009). **Language track L1 (async/await) complete**
+(2026-11-01, ADRs 0031–0039).
+Repository: `~/dev/CeeSafe`. Reference: the C#/.NET 10 compiler CeeSafe was ported from (retired and private;
+Decision 0010). Sections 1–3 and 8 describe the port as planned on 2026-10-30; §4's checkboxes, §9 and §10 are
+current.
 
 **Identity** (decision 0001):
 - The public language is **CeeSafe**. The compiler is `ceesafec`.
 - Sources use `.cee`. Packages use `ceesafe.toml` and `ceesafe.lock`, and `$CEESAFE_HOME`.
-- The reference remains a living language. It is CeeSafe's stage-0 compiler and its behaviour oracle.
-- **Until `ceesafec` compiles itself, CeeSafe's own sources are `.cee` files with a `ceesafe.toml`**, because the reference compiler reads
-  only those. P6R renames them in one commit.
+- The reference was CeeSafe's stage-0 compiler and behaviour oracle until the fork (P8 S7). It is now retired
+  (Decision 0010), and the release's stage 0 is a CeeSafe release (Decision 0009, `bootstrap/reference.md`).
+- Until `ceesafec` compiled itself, CeeSafe's own sources used the reference's file names; P6R renamed them in one
+  commit (`8941c10`).
 
 **The work resolves the reference's OD-33.** That is "a compiler for the language written in the language", recorded by ADR 0023 as option C.
 The reference ADR 0001 chose C# and expected self-hosting only "for a long time".
@@ -35,7 +40,7 @@ Self-compilation alone does not complete the port. Accepting the compiler's own 
 borrow checker is correct. No reduced language subset will be presented as a replacement.
 
 The C runtime (`runtime/`, 2,898 lines) and the CeeSafe libraries (`lib/core`, `lib/std`, `lib/kernel`) are carried over
-with their provenance and licence (GPLv2). The compiler's algorithms stay in the reference. Invoking the C# compiler to parse,
+with their provenance and licence (GPLv2). The compiler's algorithms stay in CeeSafe. Invoking the C# compiler to parse,
 check, emit or run tooling does not count as a port. The C compiler, linker, debugger and git remain external tools,
 used by the commands that need them.
 
@@ -105,7 +110,7 @@ language core is adequate, but its library and host support are not.
 | Host services | read/write/remove files, stdin bytes, stdout/stderr, argv, `Process.run` (status only), TCP | environment, cwd, directories, stat, mkdir/rename, temp files, clock, **captured child output**, stdin to a child | §26; `runtime/hosted/ceesafe_rt_io.c` |
 | Borrowing | IDs and handles, field-precise and constant-index disjointness, `splitAtMut` | any non-constant index aliases every element, so table-heavy code must copy out or use handles | `docs/lifetimes.md` §4, §8 |
 | FFI | `extern "C"`, `.c` files linked by `build`, `@repr(C)` structs | `run --interp` runs no C | §28; `docs/unsafe.md` |
-| Scale | The reference compiler checks a 202k-line package in 13.1 s | the largest CeeSafe program in the repository is ~360 lines; no parser has been written in the reference | ADR 0022; `lib/core/atomics.cee` |
+| Scale | The reference compiler checks a 202k-line package in 13.1 s | the largest CeeSafe program in the repository is ~360 lines; no parser had been written in the language | ADR 0022; `lib/core/atomics.cee` |
 
 This is the port's largest risk, and the reason for the **N track** (§4) before and alongside P1–P3. P1's probes
 (`docs/p1-probes.md`) narrowed it to three needs:
@@ -145,8 +150,9 @@ The reference compiler 0.3.0 and 0.3.1 are released. M14 is still in progress: K
 
 ### 3.1 Preserve semantics, change storage
 
-- Follow the current grammar, ownership invariants and accepted ADRs. A needed language addition goes through the reference
-  (the N track), never into compiler-only syntax or intrinsics.
+- Follow the current grammar, ownership invariants and accepted ADRs. A needed language addition went through the
+  reference (the N track) until the fork; since then it is a CeeSafe ADR, spec first (Decisions 0006, 0007), never
+  compiler-only syntax or intrinsics.
 - Replace C# class hierarchies with tagged enums and typed IDs into owned tables: AST, HIR, types, definitions,
   functions, blocks, locals. Parent and cross-reference edges are IDs. Lists are ranges into contiguous tables.
 - Keep mutable borrows short: read IDs or `Copy` data, end the borrow, then mutate. The borrow checker's
@@ -162,7 +168,7 @@ The reference compiler 0.3.0 and 0.3.1 are released. M14 is still in progress: K
 
 - Keep source bytes plus a tested conversion to the reference's UTF-16 offsets and columns. Diagnostics, fixes, dumps
   and LSP all depend on it. Test BOMs, line endings, supplementary characters, invalid UTF-8 and EOF.
-- Exact integers: a small signed-magnitude limb integer in the reference, sized to the audited `BigInteger` uses. Never use
+- Exact integers: a small signed-magnitude limb integer in CeeSafe, sized to the audited `BigInteger` uses. Never use
   unchecked `i64` where the reference is exact.
 - Floats: binary32/64 parsing, rounding, NaN, ±0, infinities and decimal formatting must match `FloatSemantics.cs` and
   `runtime/hosted/ceesafe_rt_float.c`. Locale-dependent libc is not an oracle.
@@ -172,11 +178,13 @@ The reference compiler 0.3.0 and 0.3.1 are released. M14 is still in progress: K
 
 ### 3.3 Repository layout
 
+As planned on 2026-10-30; the layout as built is in `AGENTS.md` ("Layout").
+
 ```text
 CeeSafe/
   ROADMAP.md AGENTS.md CLAUDE.md .mcp.json   (agent files from ceesafec new --agent claude)
-  ceesafe.toml                                  -> ceesafe.toml at P6R
-  src/                                        compiler, in the reference (one package; files share one scope)
+  ceesafe.toml                                (the reference's manifest name until P6R)
+  src/                                        compiler, in CeeSafe (one package; files share one scope)
     support/ syntax/ diagnostics/ semantics/ hir/ nir/ analysis/
     backend_c/ interpreter/ packages/ formatting/ documentation/ tooling/ host/  (planned)
   runtime/ lib/ resources/                    carried over at P5 with provenance
@@ -203,7 +211,7 @@ Subdirectories under `src/` are only for organisation, since every `.cee` file u
 | MCP/LSP | server `ceesafec`, tools `ceesafe_*` | `ceesafec`, `ceesafe_*` | done (P8 S5) |
 | Agent files | the reference's markers and rule file | `<!--CEESAFE START/END-->`, `ceesafe.mdc` | done (P8 S3) |
 | Editor | the reference's extension and language id | `ceesafe-language`, language id `ceesafe` | done (P8 S6) |
-| CosmoOS | `.cee`, pinned the reference compiler | stays on the reference (Decision 0003); a migration is the owner's option | — |
+| CosmoOS | pinned the reference compiler | pinned `ceesafec` (`scripts/cee-gen.py`; the owner's migration, P9) | done (2026-10-31) |
 
 The reference's generated-C ABI is kept through the first fixed point. Renaming never changes ownership, lifetime, drop or
 safety semantics, and it is never done by text substitution.
@@ -239,7 +247,7 @@ Dependencies: none. **Complete (2026-10-30)**: the gate passed on the Ryzen box 
   tests, with 0 skipped, in 12 min 24 s. No real GCC was available (`gcc` is Apple clang), and no MSVC (that needs the
   Windows VM). Whether TSan ran is not shown at default verbosity. A configuration the reference's suite cannot find counts as
   missing, not as passed.
-- [x] Gate check (2026-10-30). On the Ryzen box (Debian 12, x86-64): the the reference compiler 0.3.1 release download matched the
+- [x] Gate check (2026-10-30). On the Ryzen box (Debian 12, x86-64): the reference compiler 0.3.1 release download matched the
   release's `SHA256SUMS`; the reference was cloned at `07d561f`, and CeeSafe from a git bundle of `ef3e413`. Results:
   - `tools/inventory.py` regenerated `docs/reference-inventory.md` byte-identical;
   - the runner gave the Mac's results: 454 pass, 0 fail, 3 partial.
@@ -255,10 +263,10 @@ ledger has no unmapped items (inventory: 0 unmapped, 2026-10-30).
 ### N — Upstream the reference: self-hosting prerequisites (the reference milestone M15)
 
 Each item is a reference change approved by the owner and made under the reference's rules: spec and ADR first, then tests, docs,
-`roadmap.md` and `risks.md`. It ships in a the reference compiler release, and CeeSafe re-pins (`bootstrap/reference.md`). P1's probes
+`roadmap.md` and `risks.md`. It ships in a release of the reference compiler, and CeeSafe re-pins (`bootstrap/reference.md`). P1's probes
 (2026-10-30, `docs/p1-probes.md` §4) set this list and its order.
 
-All of N0–N4a shipped in **The reference compiler 0.4.0** (the reference M15, tag `v0.4.0` = `66b6bda`, 2026-10-30), and CeeSafe re-pinned to
+All of N0–N4a shipped in **the reference compiler 0.4.0** (the reference M15, tag `v0.4.0` = `66b6bda`, 2026-10-30), and CeeSafe re-pinned to
 it the same day, then to the point release 0.4.1 (N7; `bootstrap/reference.md`). Each former
 `probes/upstream/` repro is now a regression probe that must keep passing.
 
@@ -285,7 +293,7 @@ it the same day, then to the point release 0.4.1 (N7; `bootstrap/reference.md`).
   - N1c, text ordering, `clone`, `find`/`startsWith` and number parsing (until then, byte-wise functions in
     `src/support/`);
   - N1d, arrays of `StringView` (until then, `match` tables).
-- [x] ~~N2 library maps~~: not needed upstream. A generic insertion-ordered map works in the reference (`generic-map` probe) and
+- [x] ~~N2 library maps~~: not needed upstream. A generic insertion-ordered map works in the language (`generic-map` probe) and
   lives in `src/support/`.
 - [x] ~~N3 `impl<T>`, `Self`, `From`~~: not needed. Use one impl per instantiation, `K: Key<K>`, and lift functions
   (`generic-impls`, `error-layers` probes).
@@ -295,7 +303,7 @@ it the same day, then to the point release 0.4.1 (N7; `bootstrap/reference.md`).
   this list as follows: S1 is N0 (#2), S2 is N0b (#1), S4 and S5 are N0c (#4, #5), S3 is N0d (#3), S6 is N1a and S7
   (ADR 0028) is N4a. All shipped together in 0.4.0; the planned 0.3.2 was not needed.
 
-Gate per item: the the reference compiler release passes the reference's full suite, and CeeSafe's affected probes pass after the re-pin.
+Gate per item: the reference compiler release passes the reference's full suite, and CeeSafe's affected probes pass after the re-pin.
 
 ### P1 — Probes and the support library
 
@@ -335,7 +343,7 @@ Dependencies: P0. Runs alongside the N track.
 Gate: probes and the support library pass under ASan and UBSan with the pinned the reference compiler. Every compiler bug found has a
 reduced reproducer filed upstream. Missing features block; they are never worked around by weakening checks.
 **Passed 2026-10-30 (§10).** The four reproducers in `probes/upstream/` and the nesting crash were filed as the reference #1–#5 (2026-10-30), fixed in
-The reference compiler 0.4.0, and the reproducers became regression probes at the re-pin.
+the reference compiler 0.4.0, and the reproducers became regression probes at the re-pin.
 
 ### P2 — Source frontend
 
@@ -433,7 +441,7 @@ CosmoOS architectures pass. **Passed (2026-10-30, the reference compiler 0.6.0)*
 
 - **C:** byte-identical to the reference compiler's (`--flat-c` and the optimisations off) for all 284 programs the reference compiler builds, in four
   forms each: flat, `--split`, `-g`, `-g --split`. CeeSafe's own C is identical too (394,094 lines; ceesafec 1.4 s,
-  The reference compiler 4.1 s), on macOS and on Linux, and a ceesafec built from it by cc or GCC behaves the same.
+  the reference compiler 4.1 s), on macOS and on Linux, and a ceesafec built from it by cc or GCC behaves the same.
 - **Behaviour:** run-pass 159/159, run-fail 40/40, ffi 8/8 under Apple clang 21 (`-O2`, `-O0`, the overflow fallback,
   `-O1` ASan+UBSan with leak checks, `--split`, `-g`, all `-Werror`), clang 18 and GCC 12 on the Ryzen box; TSan on the
   three thread programs. One recorded divergence, the reference's: GCC 12 `-O2 -Werror` reports `-Wuninitialized` in
@@ -529,10 +537,10 @@ Dependencies: P7. Parser-only tools may start after P2, and semantic tools after
 - [x] Decide whether the command line accepts only `.cee` files (Decision 0005, accepted: only `.cee` and `.c` since
   the fork, S7).
 - [x] With the fork point, switch to the CeeSafe C prefix and ABI version (Decision 0004: `cee_`/`ceesafe_*`,
-  `ceesafe/rt.h`, `CEESAFE_ABI_VERSION`), with a link-collision test: one program linking a the reference compiler-built and a
-  ceesafec-built library (S7; `tools/link_collision.py`).
+  `ceesafe/rt.h`, `CEESAFE_ABI_VERSION`), with a link-collision test: one program linking a library built by the reference compiler and one
+  built by ceesafec (S7; `tools/link_collision.py`).
 - [x] The fork point (Decision 0003 §3): taken at S7 (`docs/fork-point.md`). CeeSafe's corpus starts there
-  (`tests/reference/`), and the the reference compiler comparisons are regression tests against the reference compiler 0.6.0's output with CeeSafe's
+  (`tests/reference/`), and the reference compiler comparisons are regression tests against the reference compiler 0.6.0's output with CeeSafe's
   names mapped back. CeeSafe's own specification followed P8 (Decision 0006, `docs/spec-plan.md`): the reference's `v0.6.0`
   text forked into `spec/` and `guide/`, the inherited ADRs inherited, and ceesafec embeds it.
 
@@ -544,19 +552,28 @@ No C# fallback.
 Dependencies: P8.
 
 - [ ] Run the full acceptance matrix (§6) on both architectures, hosted and freestanding.
-- [ ] Run a recorded 24-hour differential fuzz campaign against the reference compiler, with optimisations off and on, flat and
-  structured C, closures, `dyn`, threads and numeric edges. Port the generator to the reference.
-- [ ] Measure compiler throughput and peak memory against the reference compiler. Run it on the Ryzen host with `nice`.
+- [ ] Run a recorded 24-hour differential fuzz campaign, with optimisations off and on, flat and structured C,
+  closures, `dyn`, threads, async and numeric edges. The reference compiler is retired (Decision 0010), so the
+  differential is ceesafec's C against its interpreter (`run --interp`) and each optimisation switch on against
+  off. Port the random program generator to CeeSafe.
+- [ ] Measure and record compiler throughput and peak memory (`benchmarks/`; the last comparison with the reference
+  compiler is P5's: CeeSafe's own C in 1.4 s against 4.1 s). Run it on the Ryzen host with `nice`.
 - [x] Release `ceesafec` for the six platforms, with checksums, licences, install scripts and macOS notarisation:
   v0.1.0, 2026-10-31, on the owner's word (`docs/release.md`; every platform's binary built from one C seed and
-  checked to emit it).
+  checked to emit it); v0.2.0 (2026-10-31, the first CeeSafe-only release); v0.3.2 (2026-11-01, the first from
+  ceesafec 0.2.0 as stage 0; the tags v0.3.0 and v0.3.1 failed in the workflow and published nothing).
 - [x] Ship a source-release C seed (in the spirit of ADR 0023 option A), verified to build with a C toolchain alone
-  (2026-11-01, from 0.3.0: `ceesafec-<version>-seed.tar.gz`, built by the workflow's seed-check on three systems).
+  (2026-11-01: `ceesafec-<version>-seed.tar.gz`, first published with 0.3.2, built by the workflow's seed-check on
+  Ubuntu gcc, macOS clang and Windows cl).
 - [ ] Build and run `ceesafec` on CosmoOS userland, on both architectures, including self-compilation.
 - [ ] Have the safety passes and `unsafe` adapters reviewed independently when a reviewer is available.
-- [ ] Optional (Decision 0003: CosmoOS stays on the reference): migrate CosmoOS (`.cee` to `.cee`, the pin to `ceesafec`) one
-  component per reviewed, reversible PR, if the owner takes it up.
-- [ ] Document the point at which CeeSafe becomes the supported compiler, and the frozen C# reference.
+- [x] ~~Optional (Decision 0003): migrate CosmoOS to `ceesafec`~~: done by the owner in CosmoOS's tree. Its
+  `scripts/cee-gen.py` generates the kernel's CeeSafe code with a pinned ceesafec (`origin/main` `a3feb689`: 0.3.0-dev;
+  the pin to 0.3.2 is CosmoOS's own uncommitted work, 2026-11-01), checked from here by
+  `integrations/cosmoos/ports.py`; ADR 0039's self-test `cee-async` boots in it on both architectures.
+- [x] Document the point at which CeeSafe becomes the supported compiler, and the frozen C# reference: Decision 0007
+  (CeeSafe's own runtime and expectations; v0.2.0, the first CeeSafe-only release), Decision 0009 (stage 0 a CeeSafe
+  release) and Decision 0010 (the reference retired, named nowhere but the licence).
 
 Gate: parity, fixed point, CLI parity and release evidence are complete. Hosted CosmoOS support, an outside audit and
 publication are reported separately.
@@ -564,8 +581,8 @@ publication are reported separately.
 ### Language track L1 — async/await (ADR 0031)
 
 CeeSafe's own language work after the fork (Decisions 0006, 0007). The design is `docs/async-await-proposal.md`; the
-decision will be ADR 0031. Each phase is spec first, and each must keep the fixed point and `tools/contract_tests.py`
-green.
+decisions are ADR 0031 and ADRs 0032–0039. Each phase is spec first, and each must keep the fixed point and
+`tools/contract_tests.py` green. **Complete (2026-11-01)**: A0–A4 below, released in 0.3.2.
 
 - [x] **Library ownership** (Decision 0008, 2026-10-31): `lib/` is CeeSafe's and `tools/gen_library.py` reads it.
 - [x] **A0, specification** (2026-10-31; ADR 0031 accepted and amended §6):
@@ -605,7 +622,7 @@ green.
     - kqueue and epoll move to A4, as performance work against `poll()`, with the Windows path.
 
   Gate: the cancellation sweep and the determinism check pass (both on macOS, 2026-10-31: 11 async programs, 76
-  points; C and the interpreter print the same), and Linux and macOS runs (the Linux run is still to do).
+  points; C and the interpreter print the same), and Linux and macOS runs (Linux: A4a, 2026-11-01). Passed.
 - [x] **A3, sizes** (2026-11-01):
   - [x] frames shrunk by liveness; `--explain-frames` (2026-10-31);
   - [x] `Async.boxed` and `Async.scopeIn`, frames from an allocator through generated per-allocator adapters; N0343's
@@ -655,14 +672,18 @@ green.
   5. [x] **Freestanding** (A4c; ADR 0039; 2026-11-01): an executor hook for the kernel profile, and a CosmoOS boot
      that runs tasks. Last, since it touches CosmoOS's tree, where the owner's work is in progress.
 
-## 5. Bootstrap protocol (planned interfaces; none exist yet)
+## 5. Bootstrap protocol
+
+The planned interfaces became these tools (`bootstrap/reference.md`, Decision 0009, `docs/p6-fixed-point.md`):
 
 ```text
-gen1: the reference compiler 0.4.1 build              (pinned stage-0, CeeSafe .cee sources)
-gen2: out/gen1/ceesafec build -o out/gen2/ceesafec  --emit c kept in out/gen2/c/
-gen3: out/gen2/ceesafec build -o out/gen3/ceesafec  --emit c kept in out/gen3/c/
-tools/compare-stages out/gen2 out/gen3            (byte equality of C and resources)
-tools/run-fixtures --compiler out/gen2/ceesafec --reference the reference compiler 0.4.1
+sh tools/bootstrap_release.sh STAGE0 [REVISION] [OUTPUT]     stage 0 = a released ceesafec (now 0.2.0), through its
+                                                           recorded chain of commits and bridges to the tree
+python3 tools/fixed_point.py --stage0 out/ceesafec --work <dir> --manifest <file>
+                                                           gen 1, 2, 3: C and resources byte-equal, manifest archived
+                                                           in bootstrap/fixed-point/
+python3 tools/contract_tests.py --ceesafec out/ceesafec     the contract suite on the result
+release seed: ceesafec-<version>-seed.tar.gz              builds with a C compiler alone (bootstrap/seed/README.md)
 ```
 
 The primary artefacts are the generated C and the bundled resources. Binary equality also needs controlled linker,
@@ -678,7 +699,7 @@ proof of correctness or of an uncompromised seed: keep the provenance, the indep
 | Types, generics, HIR | fixtures, constant edges, HIR snapshots, profiles | P3 |
 | Ownership, borrows, effects | every negative, mutations, regions, captures, threads | P4 |
 | Drops | post-drop NIR, early exits, partial moves, allocation failures | P4–P5 |
-| Native semantics | stdout, stderr, status, panic sites against the reference compiler and the interpreter | P5 |
+| Native semantics | stdout, stderr, status, panic sites against the corpus's expectations and the interpreter | P5 |
 | C backend | snapshots, strict C11 warnings, determinism, FFI, source maps | P5–P7 |
 | Self-hosting | gen2 equals gen3, no .NET on `PATH`, CeeSafe names | P6, P6R, P8 |
 | Optimisations | each switch on and off, explanation reports, fuzz | P7 |
@@ -688,10 +709,10 @@ proof of correctness or of an uncompromised seed: keep the provenance, the indep
 | Robustness | sanitizers on the compiler and its programs, OOM sweeps, malformed input, fuzz campaign | ongoing |
 
 Comparison policy:
-- Byte equality where a contract promises it (dumps, JSON, protocol streams, gen2 against gen3), and the reference compiler-equal C
-  where the backend is unchanged.
+- Byte equality where a contract promises it (dumps, JSON, protocol streams, gen2 against gen3), and C equal to the
+  reviewed emit-c snapshots (until the fork: C equal to the reference compiler's where the backend was unchanged).
 - Normalisation is narrow and versioned. It never hides a missing diagnostic, check, drop or panic location.
-- A known reference bug gets a reproducer, a spec citation and a separate expected outcome. Expected results are never
+- A known bug of a toolchain or of a stage 0 gets a reproducer, a spec citation and a separate expected outcome. Expected results are never
   regenerated from CeeSafe to make a comparison pass.
 - A skipped configuration is reported as skipped, not as a pass.
 
@@ -699,12 +720,12 @@ Comparison policy:
 
 | Risk | Mitigation | Blocks |
 |---|---|---|
-| **The reference lacks library and host support for a compiler** (§2.2) | N track upstream; P1 probes decide the order | P1–P5 |
-| N-track throughput: each item is spec, ADR, implementation and release in the reference | batch items per the reference compiler release; start with N1/N2, which the frontend needs first | P2–P3 |
+| ~~The reference lacks library and host support for a compiler~~ (§2.2) | closed: the N track shipped in 0.4.0–0.4.1 | P1–P5 |
+| ~~N-track throughput~~ | closed: the N track has no open item, and since the fork language work is CeeSafe's ADRs | P2–P3 |
 | Index aliasing makes table-heavy code awkward | P1 ID/copy-out prototypes; N5 only with evidence | P2–P4 |
 | No precedent for a large CeeSafe program (~360 lines today) | P1 probes at scale; measure ceesafec check and build time as `src/` grows | P1 on |
-| Stage-0 drift as the reference evolves | pin a release; rebaseline only at gates (`bootstrap/reference.md`) | all |
-| Stage-0 compiler bug exposed by CeeSafe | reduced reproducers, fixed upstream, re-pin | dependent phase |
+| The stage-0 chain breaks: a commit uses library code it adds, or an old compiler stops building on a new host | bridges recorded in `tools/bootstrap_release.sh`; move stage 0 to a newer release (Decision 0009 §5); the C seed builds with a C compiler alone | releases |
+| Stage-0 compiler bug exposed by the tree | reduced reproducer; the fixed point is the check (Decision 0009 §3); move stage 0 past it | releases |
 | Numeric or text differences silently change acceptance | exact integers, UTF-16 tests, independent boundary oracles | P3 |
 | Translation loses safety or drops | invariant-to-test map, mutations, NIR comparison, sanitizers | P4–P9 |
 | Generated C differs without an explanation | deterministic tables and order, reviewed diffs, fixed point | P5–P9 |
@@ -715,7 +736,8 @@ Comparison policy:
 | Scope grows past reviewable changes | port pass by pass; gate each phase | all |
 
 A change to language semantics, memory architecture, public compatibility, supported targets or the bootstrap trust
-policy needs a decision record: in the reference for the language, in CeeSafe for the compiler and its identity.
+policy needs a decision record: `spec/decisions/` for the language, `docs/decisions/` for the project and its
+identity.
 
 ## 8. Order
 
@@ -725,29 +747,39 @@ P0 foundation ──> P1 probes + support lib ──> P2 frontend ──> P3 typ
                     ▼  │                         │               │
                  N track (upstream the reference M15: N1 strings, N2 maps, N3 generics/From, N4 host, N5?)
 P4 ──> P5 flat C ──> P6 fixed point ──> P6R rename ──> P7 optimisations ──> P8 tools ──> P9 release
+                                                                             │
+                                                                             └──> L1 async/await (A0–A4, complete)
 ```
 
 ## 9. Immediate work queue
 
-1. **Pinned to the reference compiler 0.5.0** (2026-10-30; 0.4.1 before it): M15 S1–S7 and the N7 fix shipped, every P1 workaround removed. The N
-   track has no open blocking item.
-2. P2–P5 are done (`docs/p2-frontend.md`, `docs/p3-plan.md`, `docs/p4-plan.md`, `docs/p5-plan.md`), pinned to
-   The reference compiler 0.6.0; the C matrix is complete (P5). P6, the first verified fixed point, holds on macOS and Linux
-   (`docs/p6-fixed-point.md`). P6R is done (Decision 0002): CeeSafe's sources are `.cee` with `ceesafe.toml`,
-   legacy `.cee` packages still build, codes keep N, and `tools/bootstrap.sh` builds from the reference compiler. P7 is done
-   (`docs/p7-plan.md`): ceesafec emits the reference compiler's production C (structured, placement, check elimination, closure
-   specialisation) byte for byte, and reaches the fixed point in that form. P8 is in progress (`docs/p8-plan.md`):
-   `explain`, `fix`, `fmt`, `doc`, the package commands, `run --interp` and the `lsp` and `mcp` servers are identical to
-   The reference compiler's (S0–S5); S6 adds the package-mode fixed point on macOS and Linux, Windows with MSVC and clang (the same
-   C), the debugger scripts and the VS Code extension. S7 took the fork point: CeeSafe's C names and ABI version,
-   `.cee` only, its own corpus, the reference compiler 0.6.0 the frozen baseline (`docs/fork-point.md`). P8 is complete. CeeSafe's
-   own specification is written (Decision 0006: `spec/`, `guide/`, `docs/spec-plan.md`); next, P9.
-4. Upstream (the reference #6, filed 2026-10-30): the reference compiler 0.6.0's `offsetOf<T>(field)` is 0 unless `T`'s layout was computed before (CheckOffsetOf reads
-   `member.Offset` without `TypeTable.LayoutOf(measured)`); ceesafec gives the true offset.
-5. Owner's call: propose upstream that N0110 count `else if` links and `?` suffixes. The reference compiler's `--dump-ast` aborts on a
-   20,000-link `else if` chain (`docs/p2-frontend.md` §6).
+Reviewed 2026-11-01, after the 0.3.2 release. Done: P0–P8, the language track L1 (A0–A4), and P9's release and seed
+items (ceesafec 0.3.2, published by run 41308563209 with all its jobs green). The N track's upstream items (the
+reference #6, `offsetOf`; the owner's N0110 proposal) are closed with the reference's retirement (Decision 0010);
+ceesafec's own behaviour is recorded in P4 and `docs/p2-frontend.md` §6.
 
-Progress is measured in completed contracts and gates. There is no calendar estimate before P1 produces evidence.
+1. **Open `main` for the next version**: `c_program.cee`'s two constants and the extension's `package.json` are still
+   0.3.2; move them to `0.4.0-dev` (as after 0.1.0 and 0.2.0), with the owner's approval of the commit.
+2. **Move stage 0 forward** (Decision 0009 §5; `bootstrap/reference.md`, "Changing stage 0"): ceesafec 0.3.2 is the
+   newest release and likely builds the tree with an empty chain, which retires the 0.2.0 chain's bridge and its
+   `-D_GNU_SOURCE`. Gate: the bootstrap and the fixed point on macOS and Linux, recorded in §10.
+3. **The next tag** is the first run of Open VSX trusted publishing (`ovsx publish --trusted-publishing`, §10
+   2026-11-01): 0.3.2's `stores` job still skipped Open VSX (no `OVSX_PAT`), and the owner published 0.3.2 there by
+   hand.
+4. **P9's open items**, in this order:
+   - the acceptance matrix (§6) on arm64 and x86-64, hosted and freestanding, with the hosts in §10 (macOS arm64,
+     Debian 12 x86-64, Windows 11 arm64; x86-64 Windows and arm64 Linux only in the release workflow so far);
+   - the compiler's throughput and peak memory, recorded under `benchmarks/`;
+   - the 24-hour differential fuzz campaign (C against the interpreter, each optimisation on against off), after
+     porting the generator to CeeSafe;
+   - `ceesafec` built and run on CosmoOS userland on both architectures, including self-compilation;
+   - an independent review of the safety passes and the `unsafe` adapters, when a reviewer is available.
+5. **CosmoOS** (its tree, the owner's and another session's work): the pin moves from 0.3.0-dev to 0.3.2 in
+   `scripts/cee-gen.py` (uncommitted there on 2026-11-01). Later: the kernel glue of ADR 0039 keeps one executor slot
+   (`kernel/ceesafe/async_selftest.c`); a second kernel thread running an executor needs a per-thread slot (a field
+   of `struct thread`) behind `ceesafe_env_slot`.
+
+Progress is measured in completed contracts and gates, with no calendar estimate.
 
 ## 10. Execution record
 
@@ -799,10 +831,12 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 | 2026-11-01 | L1 A4 phase 4, ADR 0038 (accepted as proposed: children that move only before they start, `Async.runWorkers(n, task)`, the name `spawnSend`): `s.spawnSend(child)` checks its captures by `Thread.both`'s rule (a read capture `Share`, a changed one `Send`, references by their target, no closures), a `Send` error type and the system heap (N0334); `Async.runWorkers(n, task)` starts `n − 1` worker threads for the run, joined when it returns. Runtime: the run's queue of published children (taken oldest first by a worker with nothing ready), shared scopes whose count, first error and waiter change under the run's mutex, an atomic cancellation announced to every worker by an epoch, the parent woken across threads by its last child, non-blocking wake pipes; `ceesafe_scope` 24 → 32 bytes, a task 128 → 144. ThreadSanitizer found each `spawnSend` rewriting the scope's shared flag while workers read it; now only the first does. The interpreter has one worker. New run-pass/async-workers, check-fail/async-workers, a contract step "run tsan" (the async programs under ThreadSanitizer, macOS and Linux), `benchmarks/async-parallel`. `python3 tools/contract_tests.py --ceesafec out/ceesafec` on macOS and Debian; on Windows the run families, ffi, check-pass, check-fail, frames, emit-c, and the async programs on IOCP, WSAPoll and the interpreter; the benchmark on all three | macOS: 17 ok, reactor uring skipped; run tsan 21 of 21; cancel sweep 21 programs, 193 points; fault sweep 959 points. Debian: 17 ok, freestanding skipped; run tsan (GCC) 21 of 21; reactor uring 21 of 21; cancel sweep 187 points. Windows: run-pass 181, run-fail 40, ffi 9, check-pass 27, check-fail 151, frames 3, emit-c 25; async 21 on IOCP, WSAPoll and the interpreter. async-parallel, 32 children (ms at 1/2/4/8 workers): macOS 8 cores 412/194/111/70 (5.89x at 8), Debian 12 cores 292/162/87 (3.36x at 4), Windows VM 4 cores 407/203/109 (3.73x at 4) |
 | 2026-11-01 | L1 A4 phase 5, ADR 0039 (accepted as proposed: the executor over environment hooks, freestanding's share of §40 with `AsyncSignal`, CosmoOS on a worktree branch, the pin moved to this tree): `runtime/hosted/ceesafe_rt_async.c` compiled with `CEE_FREESTANDING` keeps the queue, scopes, joins, shields, cancellation and `AsyncSignal` over four hooks (`ceesafe_env_now_ms`, `_idle`, `_wake`, and `_slot`, the fourth because the profile has no TLS), with no global state; lib/core's `async.cee` (AsyncError, Timer, AsyncControl, the joins, AsyncSignal) moved from lib/std; in freestanding `Async.scope`, `blocking`, `runWorkers` and `spawnSend` are N0293 and the `IoError` type is allowed. `AsyncSignal`'s raise only pokes (it may be an interrupt's) and never touches a task that may have returned. Found by the CosmoOS boot test: the executor aligned a child's block to `sizeof(max_align_t)` (32 on x86-64) rather than its alignment (16), which `kmalloc` refuses; now `_Alignof` in every profile. `tools/freestanding_check.py` allows the hooks, Darwin's `bzero`, and a program's own statics. New freestanding/async (+ harness), run-pass/async-signal; check-fail/freestanding-hosted-names updated; check-pass/effects-of.hir closure numbers +8 by reviewed edit. CosmoOS branch `ceesafe-async-boot` (worktree `~/dev/CosmoOS-ceesafe-async`, uncommitted): self-test `cee-async`, its kernel glue, cee-gen and kernel.mk entries, pin 0.3.0-dev. `python3 tools/contract_tests.py --ceesafec out/ceesafec` on macOS and Debian; Windows run families, ffi, check-pass, check-fail, frames, emit-c, async on IOCP, WSAPoll and the interpreter; CosmoOS `gmake test` and `gmake ARCH=aarch64 test` | macOS: 18 ok (freestanding 4 programs, host and 2 triples with ld.lld), reactor uring skipped; cancel sweep 22 programs, 200 points. Debian: 18 ok, freestanding skipped (no clang); cancel sweep 194 points. Windows: run-pass 182, run-fail 40, ffi 9, check-pass 27, check-fail 151, frames 3, emit-c 25; async 22 on IOCP, WSAPoll and the interpreter. CosmoOS: x86_64 `SELFTEST: cee-async ... ok (28 ms)`, `SELFTEST: PASS (525 tests)`, boot-test PASS; aarch64 `cee-async ... ok (26 ms)`, 525 tests, PASS |
 | 2026-11-01 | P9, release 0.3.0 with a C seed (the owner's choice after L1): the version 0.3.0 (`c_program.cee`, the extension's `package.json`); `tools/seed_archive.sh` packs the seed job's C as `ceesafec-<version>-seed.tar.gz` with `bootstrap/seed/README.md` (build with `cc` or `cl` alone; check by emitting the seed from the tag) and the licences; `.github/workflows/release.yml` gains `seed-check` (Ubuntu gcc, macOS clang, Windows cl: the archive alone, its README's commands, `--version`, and the seed emitted again), publishes the archive in `SHA256SUMS`, and builds generation 1 under `cl` with `/Oi-` as ceesafec's driver does. The seed's README commands run by hand on a test archive, before the version change: macOS clang, Debian gcc 12, Windows 11 ARM64 cl, each building from the archive alone and emitting it again from the tree; `python3 tools/contract_tests.py --ceesafec out/ceesafec` on the 0.3.0 commit | seed: macOS reproduces, Debian gcc reproduces, Windows cl no differences (a first macOS-made archive carried AppleDouble files; the script now writes none). macOS contract suite: 18 ok, reactor uring skipped; cancel sweep 22 programs, 203 points |
-| 2026-11-01 | P9, release 0.3.1, Decision 0009 (the owner: "Bootstrap from 0.2.0"): the v0.3.0 tag's run (41302947031) failed in the seed job's first step, the reference compiler 0.6.0's download returning 404 since the reference's repository became private, and published nothing. The release's stage 0 is now ceesafec 0.2.0 from this repository's release (hash from its `SHA256SUMS`); `tools/bootstrap_release.sh` builds the tree through the chain recorded for 0.2.0: 7d2a041 (the newest commit 0.2.0 builds), then 7d2a041 with 291246d's `src/library` (a bridge: 291246d uses the `AsyncSockets` it adds), then the tree, with `-D_GNU_SOURCE` on Linux for the chain's pre-844e755 runtime. `release.yml`, `docs/release.md`, `bootstrap/reference.md` ("Release stage 0") follow; the version is 0.3.1 (`c_program.cee`, the extension's `package.json`), the compiler 0.3.0's otherwise. | From 0.2.0 at 70da046: macOS arm64 and Debian 12 x86-64 reach the fixed point, seed `main.c` `d1ba9faf…`, identical to the C of the the reference compiler-bootstrapped 0.3.0 (`out/ceesafec`). Windows 11 ARM64 (`cl`, the seed README's command): the 0.3.1 seed archive builds `ceesafec 0.3.1`, which emits the seed again from the tree. `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.1 on macOS: 18 ok, reactor uring skipped; fault sweep 964 points, cancel sweep 208 points, 0 fail |
+| 2026-11-01 | P9, release 0.3.1, Decision 0009 (the owner: "Bootstrap from 0.2.0"): the v0.3.0 tag's run (41302947031) failed in the seed job's first step, the reference compiler 0.6.0's download returning 404 since the reference's repository became private, and published nothing. The release's stage 0 is now ceesafec 0.2.0 from this repository's release (hash from its `SHA256SUMS`); `tools/bootstrap_release.sh` builds the tree through the chain recorded for 0.2.0: 7d2a041 (the newest commit 0.2.0 builds), then 7d2a041 with 291246d's `src/library` (a bridge: 291246d uses the `AsyncSockets` it adds), then the tree, with `-D_GNU_SOURCE` on Linux for the chain's pre-844e755 runtime. `release.yml`, `docs/release.md`, `bootstrap/reference.md` ("Release stage 0") follow; the version is 0.3.1 (`c_program.cee`, the extension's `package.json`), the compiler 0.3.0's otherwise. | From 0.2.0 at 70da046: macOS arm64 and Debian 12 x86-64 reach the fixed point, seed `main.c` `d1ba9faf…`, identical to the C of the reference compiler-bootstrapped 0.3.0 (`out/ceesafec`). Windows 11 ARM64 (`cl`, the seed README's command): the 0.3.1 seed archive builds `ceesafec 0.3.1`, which emits the seed again from the tree. `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.1 on macOS: 18 ok, reactor uring skipped; fault sweep 964 points, cancel sweep 208 points, 0 fail |
 | 2026-11-01 | P9, release 0.3.2: v0.3.1's run (41306957697) built the seed, its three checks and all six platforms from ceesafec 0.2.0, then failed in the `extension` job's packaging: `vpx`, which the extension's `package` script ran, comes with Vite+'s standalone installer and not with the npm package the workflow installs, so nothing was published. The script runs `vp dlx @vscode/vsce` instead; the version is 0.3.2. | `vp run package` with no `vpx` on `PATH` writes the `.vsix`; `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.2 on macOS: 18 ok, reactor uring skipped |
 | 2026-11-01 | Decision 0010 (the owner: remove every mention of the retired predecessor, "Everything but licence"): the corpus's 107 snapshots that were compared through the name mapping replaced by ceesafec's own output, each only where the mapped output equalled the snapshot byte for byte, and the mapping (`tools/names.py`) removed from `run_corpus.py`, `fault_injection.py`, `collection_properties.py`, `freestanding_check.py`, `mutation_suite.py` and `gen_docs.py`; the `compare_*` tools, fork generators, inventory, `tools/bootstrap.sh`, the oracles built from its source, `tests/reference/lib` and `tests/reference/integrations` deleted; 132 fixtures renamed to `.cee`, `ceesafe.toml` and `ceesafe.lock`; the compiler's old-manifest message and its identifiers renamed; `AGENTS.md` from `ceesafec agents`, `.mcp.json` serving `out/ceesafec mcp`; the record's mentions rewritten as "the reference" (the inherited ADRs say so in their header), dead links made text; corpus test data spelling the name now spells `safe` (same length), the two expectations computed from the bytes (an FNV-1a hash, a byte sum) recomputed in Python; `tools/spec_check.py`'s names rule now checks every tracked file's path and text, `COPYING.RUNTIME` alone excepted | `run_corpus.py` on the corpus before and after removing the mapping: 519 files, every family as before (freestanding partial as before). `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.2 on macOS: 18 ok, reactor uring skipped (a first run caught a byte sum in `string-views`, then recomputed; then the guard caught this decision's own text) |
 | 2026-11-01 | Open VSX: the namespace `ceesafe`'s ownership claim (EclipseFdn/open-vsx.org#15060) approved; `ceesafe.ceesafe-language` 0.3.2 published there by the owner with an access token (a trusted publisher needs an existing extension), then its trusted publisher registered (GitHub, `vkuttyp/CeeSafe`, `release.yml`, no environment). The `stores` job publishes to Open VSX with `ovsx publish --trusted-publishing` (ovsx 1.3.0) and no secret; `OVSX_PAT` and its skip are gone (`docs/release.md`) | open-vsx.org API: 0.3.2, published by `vkuttyp`, namespace verified; the registration listed on the namespace's settings page. The next tag is the first workflow run to use it |
+| 2026-11-01 | Release v0.3.2: the tag's run (41308563209, 11 min) with stage 0 ceesafec 0.2.0 | every job succeeded: version, seed, seed-check on Ubuntu, macOS and Windows, the six platform builds, extension, publish, stores. Published at github.com/vkuttyp/CeeSafe/releases/tag/v0.3.2 (2026-11-01 13:03 UTC): six archives, `ceesafec-0.3.2-seed.tar.gz`, `ceesafe-language-0.3.2.vsix`, `SHA256SUMS`. The Marketplace published `ceesafe.ceesafe-language` 0.3.2 by OIDC (its first trusted publish); Open VSX skipped (no `OVSX_PAT`; trusted publishing came after the tag) |
+| 2026-11-01 | ROADMAP review after 0.3.2 and Decision 0010: the status and identity notes, §3's rules and layout, §3.4's CosmoOS row, P9 (releases 0.2.0 and 0.3.2, the seed, the fuzz campaign and throughput without the reference compiler, CosmoOS's migration and the supported-compiler point marked done by Decisions 0007, 0009, 0010), L1 marked complete, §5's bootstrap as built, §6's comparison policy, §7's risks after the N track, §8, §9 rewritten; grammar slips of the rename fixed | documentation only; facts checked against `gh run view`, `gh release view`, `bootstrap/reference.md`, Decisions 0009–0010 and CosmoOS's `git log` |
 
 **Tests run for the skeleton** (2026-10-30, the reference compiler 0.3.1, Apple clang 21.0.0):
 - `ceesafec check` and `ceesafec fmt --check`: clean.
@@ -907,4 +941,9 @@ lists it public with its icon. The secret `VSCE_PAT` is an all-organizations tok
 first exercised by the next tag. Open VSX: the namespace `ceesafe` exists, its ownership claim is
 EclipseFdn/open-vsx.org#15060; until then its step skips.
 
-Not yet run: the rest of P9.
+**Release v0.3.2** (2026-11-01; Decision 0009): the first release bootstrapped from ceesafec 0.2.0 and the first with
+a C seed; v0.3.0 (the reference compiler's download refused) and v0.3.1 (the extension's packaging) failed in the
+workflow and published nothing. Six platforms from one seed, the seed checked on three systems, the extension on
+the Marketplace by trusted publishing (§10).
+
+Not yet run: the rest of P9 (§9 item 4).

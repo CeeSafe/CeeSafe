@@ -17,6 +17,18 @@ The `novac` on `PATH` (`~/.local/bin/novac`) wraps the Release build of `~/Nova`
 version: it is **not** the stage-0 compiler. Other hosts download the same release from
 `https://github.com/vkuttyp/Nova/releases/tag/v0.6.0` and record their binary's hash here.
 
+## Release stage 0 (Decision 0009)
+
+Since Nova's repository became private (2026-11-01), the release workflow bootstraps from a CeeSafe release instead
+of novac: `tools/bootstrap_release.sh STAGE0`, with the chain recorded there for the stage 0's version.
+
+| Item | Value |
+|---|---|
+| Compiler | `ceesafec 0.2.0`, `https://github.com/vkuttyp/CeeSafe/releases/download/v0.2.0/ceesafec-linux-x64.tar.gz` |
+| sha256 | `2e898a239f36fb7d0c39262d8ac59c98d8b98219e1fc4f0e4993136aec3e18cd` (v0.2.0's `SHA256SUMS`); osx-arm64 `514ddaaf29289fb6549cc68c5701c5f910c4ae42e8c44f1726f5686040ce039a` |
+| Chain | `7d2a041` (the newest commit 0.2.0 builds), then `7d2a041` with `291246d`'s `src/library` (the bridge: 291246d uses the `AsyncSockets` it adds), then the tree |
+| Checked | 2026-11-01 at `70da046`: macOS arm64 (Apple clang) and Debian 12 x86-64 (gcc 12, `-D_GNU_SOURCE` for the chain), fixed point reached, seed `main.c` `d1ba9faf…`, identical to novac 0.6.0's bootstrap |
+
 ## Reference implementation (what the port must match)
 
 | Item | Value |

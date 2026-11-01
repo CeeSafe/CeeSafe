@@ -8,8 +8,9 @@ as a GitHub release, with `SHA256SUMS`. `site/public/install.sh` and `install.ps
 
 One C seed for every platform, so every binary is built from the same C and checked against it:
 
-1. **seed** (Ubuntu 22.04): downloads novac 0.6.0 (`bootstrap/reference.md`; the archive's SHA-256 is checked),
-   bootstraps ceesafec (`tools/bootstrap.sh`), rebuilds it with itself, and writes ceesafec's own C (`build --emit
+1. **seed** (Ubuntu 22.04): downloads ceesafec 0.2.0 from this repository's release (Decision 0009;
+   `bootstrap/reference.md`, "Release stage 0"; the archive's SHA-256 is checked), bootstraps ceesafec through the
+   chain recorded for it (`tools/bootstrap_release.sh`), rebuilds it with itself, and writes ceesafec's own C (`build --emit
    c`, the default form). The C of the bootstrapped and the rebuilt compiler must be identical: the fixed point.
    `tools/seed_archive.sh` packs it, with `bootstrap/seed/README.md` and the licences, as
    `ceesafec-<version>-seed.tar.gz` (ROADMAP P9).

@@ -1,7 +1,8 @@
 name: release
 
 # A tag v<version> publishes ceesafec's prebuilt binaries as a GitHub release (docs/release.md). One C seed for every
-# platform: a Linux job bootstraps ceesafec from novac 0.6.0 (tools/bootstrap.sh) and writes ceesafec's own C, checking
+# platform: a Linux job bootstraps ceesafec from the released ceesafec 0.2.0 (tools/bootstrap_release.sh, Decision 0009)
+# and writes ceesafec's own C, checking
 # the fixed point; each platform compiles the seed with its C compiler, lets that ceesafec rebuild itself with its own
 # `build`, and checks that the result emits the seed byte for byte. The macOS binaries are signed with the project's
 # Developer ID and notarized; SHA256SUMS covers every archive.
@@ -17,8 +18,9 @@ permissions:
 
 env:
   SIGNING_IDENTITY: "Developer ID Application: Veeran Puthumkara (68PG74DU2D)"
-  NOVAC_URL: https://github.com/vkuttyp/Nova/releases/download/v0.6.0/novac-linux-x64.tar.gz
-  NOVAC_SHA256: 977472da73d96eea4a43230aa083820da6c85872690960960cf8eaf9882c193c # bootstrap/reference.md
+  # The stage-0 compiler (Decision 0009; bootstrap/reference.md, "Release stage 0"): this repository's own release.
+  STAGE0_URL: https://github.com/vkuttyp/CeeSafe/releases/download/v0.2.0/ceesafec-linux-x64.tar.gz
+  STAGE0_SHA256: 2e898a239f36fb7d0c39262d8ac59c98d8b98219e1fc4f0e4993136aec3e18cd # v0.2.0's SHA256SUMS
 
 jobs:
   version:
@@ -48,15 +50,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # tools/bootstrap.sh builds the last legacy-named commit first
-      - name: novac 0.6.0 (the stage-0 compiler)
+          fetch-depth: 0 # tools/bootstrap_release.sh builds earlier commits on the way
+      - name: ceesafec 0.2.0 (the stage-0 compiler)
         run: |
-          curl -fsSL "$NOVAC_URL" -o novac.tar.gz
-          echo "$NOVAC_SHA256  novac.tar.gz" | sha256sum -c -
-          mkdir -p stage0 && tar -xzf novac.tar.gz -C stage0
-          stage0/novac --version
+          curl -fsSL "$STAGE0_URL" -o stage0.tar.gz
+          echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -
+          mkdir -p stage0 && tar -xzf stage0.tar.gz -C stage0
+          stage0/ceesafec --version
       - name: Bootstrap ceesafec
-        run: sh tools/bootstrap.sh "$PWD/stage0/novac" HEAD out/ceesafec
+        run: sh tools/bootstrap_release.sh "$PWD/stage0/ceesafec" HEAD out/ceesafec
       - name: The seed, and the fixed point
         run: |
           out/ceesafec build -o out/gen2

@@ -3,10 +3,10 @@
 
 /// The compiler named in the generated C's banners and by `--version`. Keep the version in step with ceesafeVersion: a
 /// release tag must name it (docs/release.md, .github/workflows/release.yml).
-fn compilerBanner() -> StringView => "ceesafec 0.4.0";
+fn compilerBanner() -> StringView => "ceesafec 0.4.1";
 
 /// The version the servers report (a constant, for reproducible C).
-fn ceesafeVersion() -> StringView => "0.4.0";
+fn ceesafeVersion() -> StringView => "0.4.1";
 
 fn isLibraryFunction(c: borrow Checker, function: u32) -> bool => c.hir.functions[function as usize].library;
 

@@ -885,6 +885,18 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_poll")) {
         return "PPPsl:l";
     }
+    if (sameText(name, "ceesafe_async_op_read") || sameText(name, "ceesafe_async_op_send")) {
+        return "PiPs:l";
+    }
+    if (sameText(name, "ceesafe_async_op_accept")) {
+        return "Pi:l";
+    }
+    if (sameText(name, "ceesafe_async_op_connect")) {
+        return "PPsh:l";
+    }
+    if (sameText(name, "ceesafe_async_op_cancel")) {
+        return "P:b";
+    }
     if (sameText(name, "ceesafe_async_shield_enter")) {
         return "s:-";
     }
@@ -2356,7 +2368,9 @@ fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
         sameText(name, "ceesafe_async_tcp_connect") || sameText(name, "ceesafe_async_tcp_connected") ||
         sameText(name, "ceesafe_async_read") || sameText(name, "ceesafe_async_send") ||
         sameText(name, "ceesafe_async_shutdown_write") || sameText(name, "ceesafe_async_close") ||
-        sameText(name, "ceesafe_async_poll");
+        sameText(name, "ceesafe_async_poll") || sameText(name, "ceesafe_async_op_read") ||
+        sameText(name, "ceesafe_async_op_send") || sameText(name, "ceesafe_async_op_accept") ||
+        sameText(name, "ceesafe_async_op_connect") || sameText(name, "ceesafe_async_op_cancel");
 
 fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
     var bytes = Vector<u8>.create();
@@ -2369,6 +2383,11 @@ fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8
 /// lib/std's async sockets on real descriptors, through lib/std's AsyncSockets (the interpreter cannot name the
 /// runtime's functions itself): non-blocking, so a task waits for readiness as in C (§40.8).
 fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_async_op_read") || sameText(name, "ceesafe_async_op_send") ||
+        sameText(name, "ceesafe_async_op_accept") || sameText(name, "ceesafe_async_op_connect") ||
+        sameText(name, "ceesafe_async_op_cancel")) {
+        return asyncOpStep(it, name, arguments);
+    }
     if (sameText(name, "ceesafe_async_wait_readable")) {
         it.asyncFd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
         it.asyncFdEvents = 1;
@@ -2498,4 +2517,72 @@ fn frameLayoutValue(c: borrow Checker, allocator: u32, size: u64, align: u64) ->
     value.put(c.types.fields[fields[0] as usize].offset as usize, valueOf(size, 8));
     value.put(c.types.fields[fields[1] as usize].offset as usize, valueOf(align, 8));
     return Ok(value);
+}
+
+/// ADR 0035's operation steps, as the C runtime's readiness backend takes them: an attempt; if it would block, the
+/// task's wait and CEE_ASYNC_PENDING. A connect keeps its socket in the record's first word (the descriptor + 1)
+/// between steps; cancelling closes it, and nothing is ever in flight.
+fn asyncOpStep(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    let pending: u64 = 0x8000000000000001; // CEE_ASYNC_PENDING
+    let wouldBlock: u64 = 0x8000000000000000;
+    let record = arguments[0].bits(0, 8)?;
+    if (sameText(name, "ceesafe_async_op_cancel")) {
+        let held = it.memory.loadBits(record, 8)?;
+        if (held != 0) {
+            AsyncSockets.close(truncate<i32>(truncate<u32>(held - 1))); // a connection abandoned half made
+            it.memory.storeBits(record, 0, 8)?;
+        }
+        return Ok(valueOf(0, 1));
+    }
+    if (sameText(name, "ceesafe_async_op_connect")) {
+        var held = it.memory.loadBits(record, 8)?;
+        if (held == 0) {
+            var started = Vector<Value>.create();
+            started.push(copyValue(borrow arguments[1]))!;
+            started.push(copyValue(borrow arguments[2]))!;
+            started.push(copyValue(borrow arguments[3]))!;
+            let r = asyncSocketService(it, "ceesafe_async_tcp_connect".bytes(), started)?;
+            let fd = match (r) {
+                Some(v) => v.bits(0, 8)?,
+                null => 0,
+            };
+            if ((fd >> 63) != 0) {
+                return Ok(valueOf(fd, 8)); // a negated errno
+            }
+            held = fd + 1;
+            it.memory.storeBits(record, held, 8)?;
+        }
+        let fd = truncate<i32>(truncate<u32>(held - 1));
+        let done = truncate<u64>(AsyncSockets.connected(fd));
+        if (done == wouldBlock) {
+            it.asyncFd = fd;
+            it.asyncFdEvents = 2;
+            return Ok(valueOf(pending, 8));
+        }
+        it.memory.storeBits(record, 0, 8)?;
+        if (done != 0) {
+            AsyncSockets.close(fd);
+            return Ok(valueOf(done, 8));
+        }
+        return Ok(valueOf(held - 1, 8));
+    }
+    var rest = Vector<Value>.create();
+    for (k in 1..arguments.length) {
+        rest.push(copyValue(borrow arguments[k]))!;
+    }
+    let plain = if (sameText(name, "ceesafe_async_op_read")) "ceesafe_async_read" else if (sameText(
+        name,
+        "ceesafe_async_op_send",
+    )) "ceesafe_async_send" else "ceesafe_async_tcp_accept";
+    let r = asyncSocketService(it, plain.bytes(), rest)?;
+    let value = match (r) {
+        Some(v) => v.bits(0, 8)?,
+        null => 0,
+    };
+    if (value == wouldBlock) {
+        it.asyncFd = truncate<i32>(truncate<u32>(arguments[1].bits(0, 4)?));
+        it.asyncFdEvents = if (sameText(name, "ceesafe_async_op_send")) 2 else 1;
+        return Ok(valueOf(pending, 8));
+    }
+    return Ok(valueOf(value, 8));
 }

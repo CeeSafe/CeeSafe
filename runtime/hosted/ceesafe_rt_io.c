@@ -209,6 +209,8 @@ static bool ceesafe_ipv4(cee_str text, uint8_t out[4]) {
     return i == text.len;
 }
 
+bool ceesafe_ipv4_address(cee_str text, uint8_t out[4]) { return ceesafe_ipv4(text, out); }
+
 #ifdef _WIN32
 /* ---- Windows: Winsock 2 behind a table of ids (L1 A4a; ceesafe/rt.h's CEE_SOCKET_BASE). The table holds the SOCKET
  * of each id that is open, INVALID_SOCKET in a free slot; a slim reader-writer lock guards it, since any thread may
@@ -217,6 +219,8 @@ static bool ceesafe_ipv4(cee_str text, uint8_t out[4]) {
 static SRWLOCK cee_socket_lock = SRWLOCK_INIT;
 static SOCKET *cee_sockets;
 static HANDLE *cee_socket_events; /* by slot: the event the socket signals (ceesafe_socket_select), or NULL */
+static HANDLE *cee_socket_ports;  /* by slot: the completion port it is tied to (ceesafe_socket_associate), or NULL */
+static int32_t cee_socket_add(SOCKET s);
 static uint32_t cee_socket_count;
 static uint32_t cee_socket_capacity;
 static INIT_ONCE cee_wsa_once = INIT_ONCE_STATIC_INIT;
@@ -279,6 +283,38 @@ void ceesafe_socket_select(int32_t id, void *event) {
     ReleaseSRWLockExclusive(&cee_socket_lock);
 }
 
+int32_t ceesafe_socket_associate(int32_t id, void *port) {
+    int32_t status = -1;
+    AcquireSRWLockExclusive(&cee_socket_lock);
+    if (id >= CEE_SOCKET_BASE && (uint32_t)(id - CEE_SOCKET_BASE) < cee_socket_count) {
+        uint32_t k = (uint32_t)(id - CEE_SOCKET_BASE);
+        if (cee_sockets[k] == INVALID_SOCKET) {
+            status = -1;
+        } else if (cee_socket_ports[k] == (HANDLE)port) {
+            status = 1;
+        } else if (cee_socket_ports[k] != NULL) {
+            status = 0; /* tied to another thread's port for life */
+        } else if (CreateIoCompletionPort((HANDLE)cee_sockets[k], (HANDLE)port, 0, 0) != NULL) {
+            cee_socket_ports[k] = (HANDLE)port;
+            status = 1;
+        }
+    }
+    ReleaseSRWLockExclusive(&cee_socket_lock);
+    return status;
+}
+
+int32_t ceesafe_socket_adopt(uintptr_t s, void *port) {
+    int32_t id = cee_socket_add((SOCKET)s);
+    if (id >= 0 && port != NULL) {
+        AcquireSRWLockExclusive(&cee_socket_lock);
+        cee_socket_ports[id - CEE_SOCKET_BASE] = (HANDLE)port; /* tied already (ConnectEx's socket): never again */
+        ReleaseSRWLockExclusive(&cee_socket_lock);
+    }
+    return id;
+}
+
+int32_t ceesafe_socket_errno(int error) { return cee_wsa_errno(error); }
+
 void ceesafe_socket_unselect(void *event) {
     AcquireSRWLockExclusive(&cee_socket_lock);
     for (uint32_t k = 0; k < cee_socket_count; k++) {
@@ -298,6 +334,7 @@ static int32_t cee_socket_add(SOCKET s) {
         if (cee_sockets[k] == INVALID_SOCKET) {
             cee_sockets[k] = s;
             cee_socket_events[k] = NULL;
+            cee_socket_ports[k] = NULL;
             id = CEE_SOCKET_BASE + (int32_t)k;
         }
     }
@@ -310,13 +347,18 @@ static int32_t cee_socket_add(SOCKET s) {
                 HANDLE *events = (HANDLE *)ceesafe_platform_realloc(cee_socket_events, (size_t)capacity * sizeof *events);
                 if (events != NULL) {
                     cee_socket_events = events;
-                    cee_socket_capacity = capacity;
+                    HANDLE *ports = (HANDLE *)ceesafe_platform_realloc(cee_socket_ports, (size_t)capacity * sizeof *ports);
+                    if (ports != NULL) {
+                        cee_socket_ports = ports;
+                        cee_socket_capacity = capacity;
+                    }
                 }
             }
         }
         if (cee_socket_count < cee_socket_capacity) {
             cee_sockets[cee_socket_count] = s;
             cee_socket_events[cee_socket_count] = NULL;
+            cee_socket_ports[cee_socket_count] = NULL;
             id = CEE_SOCKET_BASE + (int32_t)cee_socket_count;
             cee_socket_count += 1u;
         }
@@ -335,6 +377,7 @@ static void cee_socket_close(int32_t id) {
         s = cee_sockets[id - CEE_SOCKET_BASE];
         cee_sockets[id - CEE_SOCKET_BASE] = INVALID_SOCKET;
         cee_socket_events[id - CEE_SOCKET_BASE] = NULL;
+        cee_socket_ports[id - CEE_SOCKET_BASE] = NULL;
     }
     ReleaseSRWLockExclusive(&cee_socket_lock);
     if (s != INVALID_SOCKET) {

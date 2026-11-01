@@ -645,7 +645,30 @@ Heap (M3b):
   - Measured by `benchmarks/async-reactor/run.py` (idle connections whose both ends wait, and one-byte round trips on
     another; ROADMAP §10): the time per round trip stays flat with kqueue and epoll as the idle connections grow, and
     grows with them with `poll()` and on Windows.
-  - Later (L1 A4): IOCP on Windows and io_uring on Linux (the buffer-lifetime invariant, ADR 0031 §3.4).
+  - **Operations** (ADR 0035): lib/std's socket operations (accept, connect, read, send) are steps over an
+    `AsyncOp` record in the awaiting frame (`ceesafe_async_op`, 192 bytes): `ceesafe_async_op_read`, `_send`,
+    `_accept` and `_connect` return the result once the operation is complete, or `CEE_ASYNC_PENDING` (park and
+    step again). On a readiness backend a step is an attempt that registers the wait if it would block. On a
+    completion backend the first step submits, and the task waits on the operation (`on_op`, counted apart from
+    wakes, so no wait scans for it) until its completion readies it. `ceesafe_async_op_cancel` cancels an operation
+    in flight (`CancelIoEx`, `IORING_OP_ASYNC_CANCEL`) and returns true: the task then waits, not cancellable, for
+    the completion, so a lent buffer outlives the kernel's use (type-system.md §40.7). A value completed meanwhile is
+    kept: the operation returns it, and the next one sees the cancellation. Otherwise it releases what the record
+    holds (a half-made connection) and returns false.
+  - **IOCP** (Windows' default): each thread has one completion port for its life, because a socket can be tied to
+    only one port. A socket is tied to its thread's port at its first operation (`ceesafe_socket_associate`).
+    Operations are `WSARecv`, `WSASend`, `AcceptEx` (a new overlapped socket, given an id when it completes) and
+    `ConnectEx` (bound, tied, then connected). The executor waits in `GetQueuedCompletionStatusEx`, and another
+    thread's wake posts to the port. A socket tied to another thread's port is used by readiness steps, polled
+    between slices of 1 ms. `CEESAFE_REACTOR_POLL=1` keeps `WSAPoll` and the event.
+  - **io_uring** (Linux, opt-in with `CEESAFE_REACTOR_URING=1`): a ring set up through the raw system calls (no
+    liburing), with a completion queue of 16384, signalling an eventfd in the epoll set, so the executor waits in
+    epoll as always and drains the ring when the eventfd fires. `IORING_OP_RECV`, `_SEND` (`MSG_NOSIGNAL`), `_ACCEPT`
+    (nonblocking) and `_CONNECT` (a new nonblocking socket, the address in the record). A submission refused with
+    `EBUSY` (completions overflowed) is retried after a drain, and a drain that leaves `IORING_SQ_CQ_OVERFLOW` set
+    flushes with `IORING_ENTER_GETEVENTS`. Deadlines, consoles and the wake pipe stay on epoll. A kernel that refuses
+    the ring leaves epoll alone.
+  - The interpreter's steps are readiness ones over its real sockets.
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

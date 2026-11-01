@@ -1117,6 +1117,23 @@ void ceesafe_async_wait_readable(int32_t fd);
 /* Async sockets (runtime/hosted/ceesafe_rt_io.c): non-blocking descriptors; a value >= 0, CEE_ASYNC_WOULD_BLOCK, or a
  * negated errno. Windows: L1 A4. */
 #define CEE_ASYNC_WOULD_BLOCK INT64_MIN
+/* Operations (ADR 0035): a socket operation is steps over a record in the awaiting task's frame, lib/std's AsyncOp.
+ * Each step returns the result (a value >= 0 or a negated errno) once the operation is complete, or
+ * CEE_ASYNC_PENDING when the task must park and step again. On a readiness backend a step is an attempt that
+ * registers the wait if it would block; on a completion backend (IOCP, io_uring) the first step submits the
+ * operation, which the kernel completes into the caller's buffer. ceesafe_async_op_cancel abandons the operation:
+ * it cancels one in flight in the kernel and returns true while it still is (the task then waits, uncancellable,
+ * stepping until the completion), else releases what the record holds (a connecting socket) and returns false. The
+ * record is lib/std's AsyncOp's first field, passed as `void *` (as the channels' wait nodes are). */
+#define CEE_ASYNC_PENDING (INT64_MIN + 1)
+typedef struct ceesafe_async_op {
+    uint64_t words[24];
+} ceesafe_async_op;
+int64_t ceesafe_async_op_read(void *op, int32_t fd, uint8_t *buffer, uint64_t length);
+int64_t ceesafe_async_op_send(void *op, int32_t fd, const uint8_t *bytes, uint64_t length);
+int64_t ceesafe_async_op_accept(void *op, int32_t fd);
+int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port);
+bool ceesafe_async_op_cancel(void *op);
 #if defined(_WIN32)
 /* Windows sockets (L1 A4a): a descriptor from CEE_SOCKET_BASE up names a SOCKET in ceesafe_rt_io.c's table, so
  * lib/std's i32 descriptors never hold a truncated handle; below it, a C runtime file descriptor.
@@ -1128,7 +1145,16 @@ uintptr_t ceesafe_socket_handle(int32_t id);
  * `event`, before the executor closes it. */
 void ceesafe_socket_select(int32_t id, void *event);
 void ceesafe_socket_unselect(void *event);
+/* IOCP (ADR 0035): ceesafe_socket_associate ties the socket to `port` once, for life: 1 if it is (now or before),
+ * 0 if it is another port's (it is then used by readiness), -1 on failure. ceesafe_socket_adopt gives a new SOCKET
+ * an id (closing it if the table cannot grow: -1), recording `port` if it is already tied to one (else NULL);
+ * ceesafe_socket_errno is a Winsock error as an errno. */
+int32_t ceesafe_socket_associate(int32_t id, void *port);
+int32_t ceesafe_socket_adopt(uintptr_t s, void *port);
+int32_t ceesafe_socket_errno(int error);
 #endif
+/* Dotted IPv4 text to its four bytes; false if malformed (the TCP calls' own check, for completion-based connects). */
+bool ceesafe_ipv4_address(cee_str text, uint8_t out[4]);
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port);
 int64_t ceesafe_async_tcp_port(int32_t fd);
 int64_t ceesafe_async_tcp_accept(int32_t fd);

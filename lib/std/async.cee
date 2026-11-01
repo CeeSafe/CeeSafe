@@ -40,6 +40,16 @@ extern "C" {
     fn ceesafe_async_close(fd: i32);
     @effects(sleep)
     fn ceesafe_async_poll(fds: *i32, events: *u32, ready: *mut u32, count: u64, timeout: i64) -> i64;
+    @effects()
+    fn ceesafe_async_op_read(op: *mut void, fd: i32, buffer: *mut u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_op_send(op: *mut void, fd: i32, bytes: *u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_op_accept(op: *mut void, fd: i32) -> i64;
+    @effects()
+    fn ceesafe_async_op_connect(op: *mut void, address: *u8, length: u64, port: u16) -> i64;
+    @effects()
+    fn ceesafe_async_op_cancel(op: *mut void) -> bool;
 }
 
 /// Why an async operation failed (type-system.md §40.4, §40.7).
@@ -206,6 +216,52 @@ struct AsyncAllJoin<E> {
 /// The runtime's "not ready yet" (CEE_ASYNC_WOULD_BLOCK, rt.h): the task waits for readiness and tries again.
 fn wouldBlock() -> i64 => -9223372036854775807 - 1;
 
+/// One socket operation of a task (ADR 0035): the runtime's record (`ceesafe_async_op`), in the task's frame, which
+/// never moves, so a buffer lent to the kernel outlives its use; and, once the task is cancelled with the operation in
+/// flight, why it is leaving, while it waits for the kernel to finish.
+struct AsyncOp {
+    words: [u64; 24];
+    leaving: AsyncError?;
+
+    fn create() -> AsyncOp => AsyncOp { words: [0u64; 24], leaving: null };
+
+    /// The record, for the runtime.
+    fn raw(borrow mut this) -> *mut void => borrow mut this.words as *mut [u64; 24] as *mut void;
+
+    /// Before each step: Err if the task is cancelled (or its shield's time is up) and nothing is in flight, so it
+    /// may leave now; Ok to step on, also while the kernel finishes an operation the task abandoned.
+    /// Safety: the record is this operation's; ceesafe_async_op_cancel only asks the kernel to stop it.
+    fn check(borrow mut this) -> Result<void, AsyncError> {
+        if (this.leaving != null) {
+            return Ok();
+        }
+        match (AsyncLeaf.status()) {
+            Ok() => { return Ok(); }
+            Err(e) => {
+                if (unsafe { ceesafe_async_op_cancel(this.raw()) }) {
+                    this.leaving = Some(e); // in flight: wait for the kernel, then leave (type-system.md §40.7)
+                    return Ok();
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    /// A completed step's result as the operation's: a value, kept even if the task was cancelled meanwhile (no
+    /// value is lost, §40.7); an error is the cancellation's if the task was leaving, else the I/O error.
+    fn result(borrow this, r: i64) -> Result<i64, AsyncError> {
+        if (r >= 0) {
+            return Ok(r);
+        }
+        return match (this.leaving) {
+            Some(e) => Err(e),
+            null => Err(AsyncError.Io(AsyncLeaf.ioError(r))),
+        };
+    }
+
+    fn pending() -> i64 => -9223372036854775807; // CEE_ASYNC_PENDING
+}
+
 /// A TCP listener for tasks (type-system.md §40.4): `accept` parks the task until a connection arrives. Its socket is
 /// non-blocking; the drop closes it.
 @noncopy
@@ -235,16 +291,13 @@ public struct AsyncTcpListener {
     /// The next connection; the task parks until one arrives.
     /// Safety: the descriptor is this listener's; a new one becomes the stream's.
     public async fn accept(borrow this) -> Result<AsyncTcpStream, AsyncError> {
+        var op = AsyncOp.create();
         loop {
-            AsyncLeaf.status()?;
-            let r = unsafe { ceesafe_async_tcp_accept(this.fd) };
-            if (r >= 0) {
-                return Ok(AsyncTcpStream { fd: truncate<i32>(r) });
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_accept(op.raw(), this.fd) };
+            if (r != AsyncOp.pending()) {
+                return Ok(AsyncTcpStream { fd: truncate<i32>(op.result(r)?) });
             }
-            if (r != wouldBlock()) {
-                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
-            }
-            unsafe { ceesafe_async_wait_readable(this.fd); }
             await Async.park();
         }
     }
@@ -265,21 +318,13 @@ public struct AsyncTcpStream {
     /// Safety: the runtime reads the address only during the call; the descriptor becomes the stream's at once, so an
     /// error closes it.
     public async fn connect(address: StringView, port: u16) -> Result<AsyncTcpStream, AsyncError> {
-        let r = unsafe { ceesafe_async_tcp_connect(address.ptr, address.length as u64, port) };
-        if (r < 0) {
-            return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
-        }
-        let stream = AsyncTcpStream { fd: truncate<i32>(r) };
+        var op = AsyncOp.create();
         loop {
-            AsyncLeaf.status()?;
-            let done = unsafe { ceesafe_async_tcp_connected(stream.fd) };
-            if (done == 0) {
-                return Ok(stream);
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_connect(op.raw(), address.ptr, address.length as u64, port) };
+            if (r != AsyncOp.pending()) {
+                return Ok(AsyncTcpStream { fd: truncate<i32>(op.result(r)?) }); // the record held the socket till now
             }
-            if (done != wouldBlock()) {
-                return Err(AsyncError.Io(AsyncLeaf.ioError(done)));
-            }
-            unsafe { ceesafe_async_wait_writable(stream.fd); }
             await Async.park();
         }
     }
@@ -287,16 +332,13 @@ public struct AsyncTcpStream {
     /// Reads into `buffer`: the count, 0 at the end of the stream; the task parks until there is something to read.
     /// Safety: the runtime writes at most the buffer's length, during the call only.
     public async fn read(borrow this, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        var op = AsyncOp.create();
         loop {
-            AsyncLeaf.status()?;
-            let r = unsafe { ceesafe_async_read(this.fd, buffer.ptr, buffer.length as u64) };
-            if (r >= 0) {
-                return Ok(truncate<usize>(r));
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_read(op.raw(), this.fd, buffer.ptr, buffer.length as u64) };
+            if (r != AsyncOp.pending()) {
+                return Ok(truncate<usize>(op.result(r)?));
             }
-            if (r != wouldBlock()) {
-                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
-            }
-            unsafe { ceesafe_async_wait_readable(this.fd); }
             await Async.park();
         }
     }
@@ -306,15 +348,15 @@ public struct AsyncTcpStream {
     public async fn write(borrow this, bytes: Slice<u8>) -> Result<void, AsyncError> {
         var done: usize = 0;
         while (done < bytes.length) {
-            AsyncLeaf.status()?;
-            let rest = bytes[done..];
-            let r = unsafe { ceesafe_async_send(this.fd, rest.ptr, rest.length as u64) };
-            if (r >= 0) {
-                done += truncate<usize>(r);
-            } else if (r != wouldBlock()) {
-                return Err(AsyncError.Io(AsyncLeaf.ioError(r)));
-            } else {
-                unsafe { ceesafe_async_wait_writable(this.fd); }
+            var op = AsyncOp.create();
+            loop {
+                op.check()?;
+                let rest = bytes[done..];
+                let r = unsafe { ceesafe_async_op_send(op.raw(), this.fd, rest.ptr, rest.length as u64) };
+                if (r != AsyncOp.pending()) {
+                    done += truncate<usize>(op.result(r)?);
+                    break;
+                }
                 await Async.park();
             }
         }
@@ -365,7 +407,8 @@ public struct AsyncSockets {
         unsafe { ceesafe_async_read(fd, buffer.ptr, buffer.length as u64) };
 
     /// Safety: the runtime reads at most the slice's length, during the call only.
-    public fn send(fd: i32, bytes: Slice<u8>) -> i64 => unsafe { ceesafe_async_send(fd, bytes.ptr, bytes.length as u64) };
+    public fn send(fd: i32, bytes: Slice<u8>) -> i64 =>
+        unsafe { ceesafe_async_send(fd, bytes.ptr, bytes.length as u64) };
 
     /// Safety: as port.
     public fn shutdownWrite(fd: i32) -> i64 => unsafe { ceesafe_async_shutdown_write(fd) };

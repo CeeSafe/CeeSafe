@@ -1,0 +1,52 @@
+// A read cancelled while the kernel holds its buffer (type-system.md §40.7, ADR 0035 §3.3): the reader is a scope's
+// child, its buffer in its own frame, a block freed when it returns. A sibling's error cancels it with the read in
+// flight (IOCP, io_uring) or registered (epoll, kqueue, poll()). Its task returns only once the kernel has given the
+// buffer back, so when the peer writes afterwards no freed frame is written to (ASan would say so), and the bytes go
+// to the next read: the cancelled one took none.
+
+async fn reader(stream: borrow AsyncTcpStream) -> Result<void, AsyncError> {
+    var buffer = [0u8; 64]; // in this child's frame
+    let n = await stream.read(mut buffer[..])?;
+    return if (n == 0) Ok() else Err(AsyncError.TimedOut); // it must not get the bytes sent after the scope
+}
+
+async fn breaker() -> Result<void, AsyncError> {
+    await Timer.sleep(20)?;
+    return Err(AsyncError.Cancelled); // the scope's first error: it cancels the reader
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let client = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    let server = await listener.accept()?;
+    var outcome: u32 = 0;
+    match (await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await reader(borrow client));
+        s.spawn(async () => await breaker());
+    })) {
+        Ok() => { outcome = 1; }
+        Err(AsyncError.Cancelled) => { outcome = 2; } // the breaker's error, as expected
+        Err(_) => { outcome = 3; }
+    }
+    await Timer.sleep(10)?; // the old read, if the kernel still had it, would complete now
+    await server.write("late bytes".bytes())?;
+    var buffer = [0u8; 64];
+    let n = await client.read(mut buffer[..])?;
+    return Ok(outcome * 100 + truncate<u32>(n));
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 210

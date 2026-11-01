@@ -7,10 +7,10 @@
  * their frames come from ceesafe_alloc, so the fault-injection sweep reaches them. Linked only into programs that call
  * ceesafe_async_* (c-backend.md §6).
  */
-#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
-/* ceesafec compiles with -std=c11, under which glibc hides POSIX's clock_gettime and CLOCK_MONOTONIC. (Not on macOS,
-   where _POSIX_C_SOURCE would hide the BSD interfaces instead.) */
-#define _POSIX_C_SOURCE 200809L
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* ceesafec compiles with -std=c11, under which glibc hides POSIX's clock_gettime and CLOCK_MONOTONIC, and syscall(),
+   which io_uring needs (ADR 0035). (Not on macOS, where such a macro would hide the BSD interfaces instead.) */
+#define _GNU_SOURCE
 #endif
 #include "ceesafe/rt.h"
 
@@ -36,6 +36,17 @@
 #elif defined(__linux__)
 #define CEE_EPOLL 1
 #include <sys/epoll.h>
+#if defined(__has_include)
+#if __has_include(<linux/io_uring.h>)
+#define CEE_URING 1
+#include <linux/io_uring.h>
+#include <netinet/in.h>
+#include <sys/eventfd.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#endif
+#endif
 #endif
 #include <sched.h>
 #include <unistd.h>
@@ -72,6 +83,7 @@ typedef struct cee_task {
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     bool parked;           /* on the parked list */
+    bool on_op;            /* waiting for an IOCP completion (ADR 0035): readied by it, cancellable while channel_wait */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -101,10 +113,12 @@ typedef struct {
     int wake_pipe[2];    /* another thread's wake: a byte written here ends the wait (-1 until first needed) */
 #if defined(_WIN32)
     HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
+    HANDLE port;         /* Windows: the thread's completion port (IOCP, ADR 0035), or NULL with CEESAFE_REACTOR_POLL */
 #endif
     uint32_t wake_count; /* tasks parked on_wake */
     uint32_t fd_count;   /* tasks parked on a descriptor */
     uint32_t file_count; /* Windows: those on a console or file descriptor, which count as ready */
+    uint32_t op_count;   /* tasks waiting for an operation's completion (IOCP) */
     cee_task *wake_list; /* the tasks parked on_wake, linked by link_next */
     cee_task **heap;     /* the parked tasks with a deadline: a binary min-heap on cee_task_key */
     uint32_t heap_count;
@@ -120,6 +134,10 @@ typedef struct {
 #if defined(CEE_KQUEUE)
     struct kevent changes[64]; /* kqueue: arming and disarming not yet sent, sent with the next wait */
     int change_count;
+#endif
+#if defined(CEE_URING)
+    struct cee_uring *uring;   /* io_uring for socket operations (CEESAFE_REACTOR_URING=1, ADR 0035), or NULL */
+    bool want_uring;           /* asked for, not yet set up */
 #endif
 } cee_executor;
 
@@ -256,6 +274,14 @@ static void cee_heap_remove(cee_task *t) {
 
 static void cee_unpark(cee_task *t);
 static void cee_open_wake_pipe(void);
+#if defined(CEE_URING)
+static void cee_uring_close(void);
+static int cee_uring_eventfd(void);
+static bool cee_uring_drain(void);
+#endif
+#if defined(_WIN32)
+static HANDLE cee_iocp_port(void);
+#endif
 
 #if !defined(_WIN32)
 /* ---- Descriptor waiters (POSIX) and the reactor. ---- */
@@ -510,7 +536,9 @@ static void cee_wake_task(cee_executor *exec, cee_task *t) {
     uint64_t none = 0u;
     (void)ceesafe_atomic_cas_u64(&t->woken, none, sequence);
 #if defined(_WIN32)
-    if (exec->wake_event != NULL) {
+    if (exec->port != NULL) {
+        (void)PostQueuedCompletionStatus(exec->port, 0, 0, NULL); /* ends its wait in the port */
+    } else if (exec->wake_event != NULL) {
         (void)SetEvent(exec->wake_event);
     }
 #else
@@ -565,6 +593,11 @@ static void cee_unpark(cee_task *t) {
     t->deadline = UINT64_MAX;
     t->fd = -1;
     t->on_scope = false;
+    if (t->on_op) {
+        t->on_op = false;
+        t->channel_wait = false;
+        cee_exec.op_count -= 1u;
+    }
     if (t->on_wake) {
         t->on_wake = false;
         t->channel_wait = false;
@@ -790,7 +823,8 @@ static void cee_wake_waiters(void) {
     cee_task *t = cee_exec.parked;
     while (t != NULL) {
         cee_task *next = t->next;
-        if (!t->on_scope && (!t->on_wake || t->channel_wait)) { /* a worker's wait is not cancelled */
+        bool cancellable = t->on_op ? t->channel_wait : (!t->on_wake || t->channel_wait);
+        if (!t->on_scope && cancellable) { /* a worker's wait, and an operation being cancelled, are not */
             cee_unpark(t);
         }
         t = next;
@@ -926,8 +960,38 @@ static unsigned cee_poll_sockets(void) {
 #if defined(_WIN32)
 /* Windows: consoles and files count as ready; sockets signal the executor's event (WSAEventSelect), and WSAPoll
    says which are ready. True if a task was readied. */
+static bool cee_iocp_drain(int timeout);
+
 static bool cee_wait_windows(int timeout) {
     bool any = false;
+    if (cee_exec.port != NULL) {
+        /* IOCP (ADR 0035): completions and other threads' wakes come to the thread's port. Consoles and files count
+           as ready; a socket tied to another thread's port waits by readiness, polled between slices of 1 ms. */
+        if (cee_exec.file_count > 0u) {
+            for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
+                next = t->next;
+                if (t->fd >= 0 && t->fd < CEE_SOCKET_BASE) {
+                    cee_unpark(t);
+                    any = true;
+                }
+            }
+        }
+        bool sockets = cee_exec.fd_count > cee_exec.file_count;
+        if (sockets && cee_poll_sockets() > 0) {
+            any = true;
+        }
+        int slice = any ? 0 : timeout;
+        if (sockets && (slice < 0 || slice > 1)) {
+            slice = 1;
+        }
+        if (cee_iocp_drain(slice)) {
+            any = true;
+        }
+        if (sockets && cee_poll_sockets() > 0) {
+            any = true;
+        }
+        return any;
+    }
     /* A console or file descriptor has no readiness here: its task retries at once (see ceesafe_async_write). */
     if (cee_exec.file_count > 0u) {
         for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
@@ -1040,6 +1104,14 @@ static bool cee_wait_reactor(int timeout) {
             (void)read(fd, drained, sizeof drained);
             continue;
         }
+#if defined(CEE_URING)
+        if (cee_exec.uring != NULL && fd == cee_uring_eventfd()) {
+            if (cee_uring_drain()) {
+                any = true; /* completions: their tasks are readied */
+            }
+            continue;
+        }
+#endif
         if ((uint32_t)fd >= cee_exec.slot_count) {
             continue;
         }
@@ -1068,7 +1140,7 @@ static bool cee_wait_reactor(int timeout) {
    here walks the parked list: deadlines are a heap, descriptors a table, wakes a list. */
 static void cee_wait(void) {
     for (;;) {
-        if (cee_exec.heap_count == 0u && cee_exec.fd_count == 0u && cee_exec.wake_count == 0u) {
+        if (cee_exec.heap_count == 0u && cee_exec.fd_count == 0u && cee_exec.wake_count == 0u && cee_exec.op_count == 0u) {
             cee_stuck();
         }
         uint64_t now = ceesafe_async_now();
@@ -1081,7 +1153,7 @@ static void cee_wait(void) {
 #if defined(_WIN32)
         any = cee_wait_windows(timeout);
 #else
-        if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || timeout != 0) {
+        if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || cee_exec.op_count > 0u || timeout != 0) {
             any = cee_reactor_open() ? cee_wait_reactor(timeout) : cee_wait_poll(timeout);
         }
 #endif
@@ -1125,10 +1197,12 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_exec.wake_pipe[1] = -1;
 #if defined(_WIN32)
     cee_exec.wake_event = NULL;
+    cee_exec.port = NULL;
 #endif
     cee_exec.wake_count = 0u;
     cee_exec.fd_count = 0u;
     cee_exec.file_count = 0u;
+    cee_exec.op_count = 0u;
     cee_exec.wake_list = NULL;
     cee_exec.heap = NULL;
     cee_exec.heap_count = 0u;
@@ -1140,9 +1214,18 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_exec.active_capacity = 0u;
     cee_exec.reactor = -1;
     cee_exec.use_poll = ceesafe_platform_config("CEESAFE_REACTOR_POLL") != 0u;
+#if defined(_WIN32)
+    if (!cee_exec.use_poll) {
+        cee_exec.port = cee_iocp_port(); /* IOCP by default on Windows (ADR 0035) */
+    }
+#endif
     cee_exec.pipe_watched = false;
 #if defined(CEE_KQUEUE)
     cee_exec.change_count = 0;
+#endif
+#if defined(CEE_URING)
+    cee_exec.uring = NULL;
+    cee_exec.want_uring = !cee_exec.use_poll && ceesafe_platform_config("CEESAFE_REACTOR_URING") != 0u;
 #endif
     uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
@@ -1169,7 +1252,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
                 cee_ready(t); /* woken between its check and its park */
                 continue;
             }
-            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !t->on_wake && !(t->shields > 0u)) {
+            if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !t->on_wake && !t->on_op && !(t->shields > 0u)) {
                 cee_stuck(); /* parked without registering anything: nothing can wake it */
             }
             cee_park(t);
@@ -1211,6 +1294,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         (void)close(cee_exec.wake_pipe[0]);
         (void)close(cee_exec.wake_pipe[1]);
     }
+#if defined(CEE_URING)
+    cee_uring_close();
+#endif
     if (cee_exec.reactor >= 0) {
         (void)close(cee_exec.reactor);
     }
@@ -1520,7 +1606,7 @@ const char *ceesafe_async_tasks(void) {
         shown[count++] = (cee_shown_task){t, "ready"};
     }
     for (const cee_task *t = cee_exec.parked; t != NULL && count < CEE_TASKS_SHOWN; t = t->next) {
-        shown[count++] = (cee_shown_task){t, t->on_scope ? "waiting for its scope" : t->on_wake ? "waiting to be woken" :
+        shown[count++] = (cee_shown_task){t, t->on_scope ? "waiting for its scope" : t->on_op ? "waiting for an operation" : t->on_wake ? "waiting to be woken" :
                                                  t->fd >= 0 ? "waiting on a descriptor" : "waiting for a deadline"};
     }
     size_t used = 0;
@@ -1548,4 +1634,727 @@ void ceesafe_async_dump(void) {
         length += 1u;
     }
     ceesafe_platform_write_stderr((const uint8_t *)text, length);
+}
+
+/* ---- Operations (ADR 0035): lib/std's AsyncOp record, and the steps of each backend. ---- */
+
+/* The record. On a readiness backend it holds only a connecting socket between a connect's steps; on IOCP, the
+   operation in flight, with the OVERLAPPED the kernel completes. */
+typedef struct {
+    uint32_t backend;    /* 0: holds nothing; 1: a readiness connect in progress (fd); 2: an IOCP operation */
+    uint32_t state;      /* IOCP: 0 idle, 1 in flight, 2 complete (result) */
+    int32_t fd;          /* a readiness connect's socket */
+    uint32_t cancelling; /* IOCP: CancelIoEx was asked; the task waits uncancellable for the completion */
+    int64_t result;
+    cee_task *task;      /* IOCP: the task waiting for the completion */
+#if defined(_WIN32)
+    uint32_t kind;       /* 1 read, 2 send, 3 accept, 4 connect */
+    SOCKET socket;       /* the socket the operation is on */
+    SOCKET accepted;     /* AcceptEx's and ConnectEx's new socket, until it has an id */
+    SOCKET listener;
+    WSABUF buffer;
+    DWORD flags;
+    OVERLAPPED overlapped;
+    uint8_t addresses[2 * (sizeof(struct sockaddr_in) + 16)]; /* AcceptEx's */
+#endif
+} cee_op;
+
+_Static_assert(sizeof(cee_op) <= sizeof(ceesafe_async_op), "ceesafe_async_op holds an operation");
+
+#if defined(_WIN32) || defined(CEE_URING)
+/* The current task waits for `o`'s completion (IOCP, io_uring): readied by it, not by a wake, and cancellable until
+   it asks the kernel to cancel. */
+static void cee_op_wait(cee_op *o) {
+    cee_task *t = cee_exec.current;
+    o->task = t;
+    if (t != NULL) {
+        if (!t->on_op) {
+            t->on_op = true;
+            cee_exec.op_count += 1u;
+        }
+        t->channel_wait = o->cancelling == 0u;
+    }
+}
+
+/* A step of a submitted operation: its result once complete, else still pending. */
+static int64_t cee_op_poll(cee_op *o) {
+    if (o->state == 2u) {
+        o->state = 0u;
+        o->backend = 0u;
+        o->cancelling = 0u;
+        return o->result;
+    }
+    cee_op_wait(o);
+    return CEE_ASYNC_PENDING;
+}
+
+/* A completion: the operation's result, and its task readied. */
+static void cee_op_done(cee_op *o, int64_t result) {
+    o->result = result;
+    o->state = 2u;
+    if (o->task != NULL && o->task->parked) {
+        cee_unpark(o->task);
+    }
+}
+#endif
+
+static int64_t cee_ready_read(int32_t fd, uint8_t *buffer, uint64_t length) {
+    int64_t r = ceesafe_async_read(fd, buffer, length);
+    if (r == CEE_ASYNC_WOULD_BLOCK) {
+        ceesafe_async_wait_readable(fd);
+        return CEE_ASYNC_PENDING;
+    }
+    return r;
+}
+
+static int64_t cee_ready_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
+    int64_t r = ceesafe_async_send(fd, bytes, length);
+    if (r == CEE_ASYNC_WOULD_BLOCK) {
+        ceesafe_async_wait_writable(fd);
+        return CEE_ASYNC_PENDING;
+    }
+    return r;
+}
+
+static int64_t cee_ready_accept(int32_t fd) {
+    int64_t r = ceesafe_async_tcp_accept(fd);
+    if (r == CEE_ASYNC_WOULD_BLOCK) {
+        ceesafe_async_wait_readable(fd);
+        return CEE_ASYNC_PENDING;
+    }
+    return r;
+}
+
+static int64_t cee_ready_connect(cee_op *o, const uint8_t *address, uint64_t length, uint16_t port) {
+    if (o->backend != 1u) {
+        int64_t fd = ceesafe_async_tcp_connect(address, length, port);
+        if (fd < 0) {
+            return fd;
+        }
+        o->backend = 1u;
+        o->fd = (int32_t)fd;
+    }
+    int64_t done = ceesafe_async_tcp_connected(o->fd);
+    if (done == CEE_ASYNC_WOULD_BLOCK) {
+        ceesafe_async_wait_writable(o->fd);
+        return CEE_ASYNC_PENDING;
+    }
+    int32_t fd = o->fd;
+    o->backend = 0u;
+    if (done != 0) {
+        ceesafe_async_close(fd);
+        return done;
+    }
+    return fd; /* the stream's from now on */
+}
+
+#if defined(_WIN32)
+#include <mswsock.h>
+
+/* The thread's completion port, for the life of the thread: a socket is tied to one port for ever. */
+static _Thread_local HANDLE cee_thread_port;
+
+static HANDLE cee_iocp_port(void) {
+    if (cee_thread_port == NULL) {
+        cee_thread_port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+    }
+    return cee_thread_port;
+}
+
+/* The socket of id `fd`, tied to the executor's port, or INVALID_SOCKET (then readiness steps are used). */
+static SOCKET cee_iocp_socket(int32_t fd) {
+    if (cee_exec.port == NULL || fd < CEE_SOCKET_BASE || ceesafe_socket_associate(fd, cee_exec.port) != 1) {
+        return INVALID_SOCKET;
+    }
+    return (SOCKET)ceesafe_socket_handle(fd);
+}
+
+static int64_t cee_wsa_failure(void) { return -(int64_t)ceesafe_socket_errno(WSAGetLastError()); }
+
+/* After an operation was submitted: in flight (the kernel completes it to the port), or failed at once. */
+static int64_t cee_iocp_submitted(cee_op *o, int status, bool failed) {
+    if (failed && WSAGetLastError() != WSA_IO_PENDING) {
+        (void)status;
+        int64_t r = cee_wsa_failure();
+        if (o->accepted != INVALID_SOCKET) {
+            (void)closesocket(o->accepted);
+            o->accepted = INVALID_SOCKET;
+        }
+        o->backend = 0u;
+        return r;
+    }
+    o->state = 1u;
+    cee_op_wait(o);
+    return CEE_ASYNC_PENDING;
+}
+
+static void cee_iocp_begin(cee_op *o, uint32_t kind, SOCKET s) {
+    memset(&o->overlapped, 0, sizeof o->overlapped);
+    o->backend = 2u;
+    o->state = 0u;
+    o->cancelling = 0u;
+    o->kind = kind;
+    o->socket = s;
+    o->accepted = INVALID_SOCKET;
+    o->flags = 0;
+}
+
+static LPFN_ACCEPTEX cee_accept_ex;
+static LPFN_CONNECTEX cee_connect_ex;
+
+static void *cee_extension(SOCKET s, GUID id) {
+    void *function = NULL;
+    DWORD bytes = 0;
+    if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof id, &function, sizeof function, &bytes, NULL,
+                 NULL) != 0) {
+        return NULL;
+    }
+    return function;
+}
+
+/* A completion from the port: the operation's result, and its task readied. */
+static void cee_iocp_complete(cee_op *o) {
+    DWORD bytes = 0;
+    DWORD flags = 0;
+    if (!WSAGetOverlappedResult(o->socket, &o->overlapped, &bytes, FALSE, &flags)) {
+        o->result = cee_wsa_failure();
+        if (o->accepted != INVALID_SOCKET) {
+            (void)closesocket(o->accepted);
+            o->accepted = INVALID_SOCKET;
+        }
+    } else if (o->kind == 3u || o->kind == 4u) {
+        SOCKET made = o->accepted;
+        o->accepted = INVALID_SOCKET;
+        if (o->kind == 3u) {
+            (void)setsockopt(made, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, (const char *)&o->listener, sizeof o->listener);
+        } else {
+            (void)setsockopt(made, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
+        }
+        u_long on = 1;
+        (void)ioctlsocket(made, FIONBIO, &on);
+        /* ConnectEx's socket was tied to the port before it connected; AcceptEx's is not tied yet. */
+        int32_t id = ceesafe_socket_adopt((uintptr_t)made, o->kind == 4u ? cee_exec.port : NULL);
+        o->result = id < 0 ? -(int64_t)ENOMEM : (int64_t)id;
+    } else {
+        o->result = (int64_t)bytes;
+    }
+    cee_op_done(o, o->result);
+}
+
+/* Waits up to `timeout` ms for completions and takes every one there is. True if a task was readied. */
+static bool cee_iocp_drain(int timeout) {
+    OVERLAPPED_ENTRY entries[64];
+    ULONG removed = 0;
+    bool any = false;
+    DWORD limit = timeout < 0 ? INFINITE : (DWORD)timeout;
+    while (GetQueuedCompletionStatusEx(cee_exec.port, entries, 64, &removed, limit, FALSE) && removed > 0u) {
+        for (ULONG k = 0; k < removed; k++) {
+            if (entries[k].lpOverlapped == NULL) {
+                continue; /* another thread's wake: the woken tasks are found by their flag */
+            }
+            cee_op *o = (cee_op *)(void *)((char *)entries[k].lpOverlapped - offsetof(cee_op, overlapped));
+            cee_iocp_complete(o);
+            any = true;
+        }
+        limit = 0; /* then whatever else is already there */
+    }
+    return any;
+}
+#endif
+
+#if defined(CEE_URING)
+/* ---- io_uring (ADR 0035; opt-in, CEESAFE_REACTOR_URING=1): socket operations submitted to a ring set up with the raw
+   system calls (no liburing). Completions signal an eventfd in the epoll set, so the executor waits in epoll as
+   always and drains the ring when it fires. Deadlines, consoles and the wake pipe stay epoll's. ---- */
+
+struct cee_uring {
+    int fd;
+    int event;          /* the eventfd the ring signals */
+    unsigned *sq_head;
+    unsigned *sq_tail;
+    unsigned *sq_mask;
+    unsigned *sq_array;
+    unsigned *sq_flags; /* IORING_SQ_CQ_OVERFLOW: completions wait in the kernel until an enter flushes them */
+    struct io_uring_sqe *sqes;
+    unsigned *cq_head;
+    unsigned *cq_tail;
+    unsigned *cq_mask;
+    struct io_uring_cqe *cqes;
+    void *sq_ring;
+    void *cq_ring;
+    size_t sq_size;
+    size_t cq_size;
+    size_t sqes_size;
+    unsigned entries;
+};
+
+#define CEE_URING_CANCEL_TAG 1u /* the user data of a cancellation's own completion: an op's address | 1 */
+
+static void cee_uring_close(void) {
+    struct cee_uring *u = cee_exec.uring;
+    if (u == NULL) {
+        return;
+    }
+    if (u->sqes != NULL) {
+        (void)munmap(u->sqes, u->sqes_size);
+    }
+    if (u->cq_ring != NULL && u->cq_ring != u->sq_ring) {
+        (void)munmap(u->cq_ring, u->cq_size);
+    }
+    if (u->sq_ring != NULL) {
+        (void)munmap(u->sq_ring, u->sq_size);
+    }
+    if (u->event >= 0) {
+        (void)close(u->event);
+    }
+    (void)close(u->fd);
+    ceesafe_platform_free(u);
+    cee_exec.uring = NULL;
+}
+
+static int cee_uring_eventfd(void) { return cee_exec.uring != NULL ? cee_exec.uring->event : -1; }
+
+/* Sets the ring up at the first operation; false (and epoll stays) if the kernel refuses it. */
+static bool cee_uring_open(void) {
+    if (cee_exec.uring != NULL) {
+        return true;
+    }
+    if (!cee_exec.want_uring || !cee_reactor_open()) {
+        return false;
+    }
+    cee_exec.want_uring = false; /* one try */
+    struct io_uring_params p;
+    memset(&p, 0, sizeof p);
+    p.flags = IORING_SETUP_CQSIZE;
+    p.cq_entries = 16384u; /* room for every waiting operation's completion, and a cancellation's of each */
+    int fd = (int)syscall(__NR_io_uring_setup, 256u, &p);
+    if (fd < 0) {
+        return false;
+    }
+    struct cee_uring *u = (struct cee_uring *)ceesafe_platform_alloc(sizeof *u);
+    if (u == NULL) {
+        (void)close(fd);
+        return false;
+    }
+    memset(u, 0, sizeof *u);
+    u->fd = fd;
+    u->event = -1;
+    u->entries = p.sq_entries;
+    u->sq_size = p.sq_off.array + p.sq_entries * sizeof(unsigned);
+    u->cq_size = p.cq_off.cqes + p.cq_entries * sizeof(struct io_uring_cqe);
+    bool single = (p.features & IORING_FEAT_SINGLE_MMAP) != 0u;
+    if (single && u->cq_size > u->sq_size) {
+        u->sq_size = u->cq_size;
+    }
+    u->sq_ring = mmap(NULL, u->sq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQ_RING);
+    u->cq_ring = single ? u->sq_ring
+                        : mmap(NULL, u->cq_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_CQ_RING);
+    u->sqes_size = p.sq_entries * sizeof(struct io_uring_sqe);
+    void *sqes = mmap(NULL, u->sqes_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE, fd, IORING_OFF_SQES);
+    cee_exec.uring = u;
+    if (u->sq_ring == MAP_FAILED || u->cq_ring == MAP_FAILED || sqes == MAP_FAILED) {
+        if (u->sq_ring == MAP_FAILED) u->sq_ring = NULL;
+        if (u->cq_ring == MAP_FAILED) u->cq_ring = NULL;
+        u->sqes = sqes == MAP_FAILED ? NULL : (struct io_uring_sqe *)sqes;
+        cee_uring_close();
+        return false;
+    }
+    u->sqes = (struct io_uring_sqe *)sqes;
+    char *sq = (char *)u->sq_ring;
+    char *cq = (char *)u->cq_ring;
+    u->sq_head = (unsigned *)(void *)(sq + p.sq_off.head);
+    u->sq_tail = (unsigned *)(void *)(sq + p.sq_off.tail);
+    u->sq_mask = (unsigned *)(void *)(sq + p.sq_off.ring_mask);
+    u->sq_array = (unsigned *)(void *)(sq + p.sq_off.array);
+    u->sq_flags = (unsigned *)(void *)(sq + p.sq_off.flags);
+    u->cq_head = (unsigned *)(void *)(cq + p.cq_off.head);
+    u->cq_tail = (unsigned *)(void *)(cq + p.cq_off.tail);
+    u->cq_mask = (unsigned *)(void *)(cq + p.cq_off.ring_mask);
+    u->cqes = (struct io_uring_cqe *)(void *)(cq + p.cq_off.cqes);
+    u->event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    struct epoll_event change;
+    memset(&change, 0, sizeof change);
+    change.events = EPOLLIN;
+    change.data.fd = u->event;
+    if (u->event < 0 || syscall(__NR_io_uring_register, fd, IORING_REGISTER_EVENTFD, &u->event, 1) < 0 ||
+        epoll_ctl(cee_exec.reactor, EPOLL_CTL_ADD, u->event, &change) < 0) {
+        cee_uring_close();
+        return false;
+    }
+    return true;
+}
+
+/* A submission entry, zeroed; submitted (with every one before it) by cee_uring_submit. NULL if the ring is full. */
+static struct io_uring_sqe *cee_uring_entry(void) {
+    struct cee_uring *u = cee_exec.uring;
+    unsigned tail = *u->sq_tail;
+    unsigned head = __atomic_load_n(u->sq_head, __ATOMIC_ACQUIRE);
+    if (tail - head >= u->entries) {
+        return NULL;
+    }
+    unsigned index = tail & *u->sq_mask;
+    struct io_uring_sqe *e = &u->sqes[index];
+    memset(e, 0, sizeof *e);
+    u->sq_array[index] = index;
+    __atomic_store_n(u->sq_tail, tail + 1u, __ATOMIC_RELEASE);
+    return e;
+}
+
+static bool cee_uring_drain(void);
+
+/* Submits the entry just made. EBUSY means completions overflowed in the kernel: they are taken (flushed by the
+   drain), then the submission is tried again, so a cancellation is never dropped. */
+static bool cee_uring_submit(void) {
+    for (int attempt = 0; attempt < 64; attempt++) {
+        long r = syscall(__NR_io_uring_enter, cee_exec.uring->fd, 1u, 0u, 0u, NULL, 0);
+        if (r >= 0) {
+            return true;
+        }
+        if (errno != EBUSY && errno != EINTR) {
+            return false;
+        }
+        (void)cee_uring_drain();
+    }
+    return false;
+}
+
+/* Takes every completion there is. True if a task was readied. */
+static bool cee_uring_drain(void) {
+    struct cee_uring *u = cee_exec.uring;
+    uint64_t counter = 0;
+    (void)read(u->event, &counter, sizeof counter);
+    bool any = false;
+    unsigned head = *u->cq_head;
+    for (;;) {
+        unsigned tail = __atomic_load_n(u->cq_tail, __ATOMIC_ACQUIRE);
+        if (head == tail) {
+            break;
+        }
+        struct io_uring_cqe *e = &u->cqes[head & *u->cq_mask];
+        uintptr_t data = (uintptr_t)e->user_data;
+        int32_t res = e->res;
+        head += 1u;
+        if ((data & CEE_URING_CANCEL_TAG) != 0u) {
+            continue; /* a cancellation's own completion: the operation's comes by itself */
+        }
+        cee_op *o = (cee_op *)data;
+        int64_t result = res;
+        if (o->fd >= 0 && o->state == 1u && o->backend == 3u && o->result == 4) {
+            /* a connect: its socket is the stream's once connected */
+            if (res == 0) {
+                result = o->fd;
+            } else {
+                (void)close(o->fd);
+            }
+            o->fd = -1;
+        }
+        cee_op_done(o, result);
+        any = true;
+        if (head == __atomic_load_n(u->cq_tail, __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(u->cq_head, head, __ATOMIC_RELEASE);
+            if ((__atomic_load_n(u->sq_flags, __ATOMIC_ACQUIRE) & IORING_SQ_CQ_OVERFLOW) != 0u) {
+                /* the kernel kept completions back: an enter with GETEVENTS moves them into the ring */
+                (void)syscall(__NR_io_uring_enter, u->fd, 0u, 0u, IORING_ENTER_GETEVENTS, NULL, 0);
+            }
+        }
+    }
+    __atomic_store_n(u->cq_head, head, __ATOMIC_RELEASE);
+    return any;
+}
+
+/* Submits `e` for `o` (kind: 1 read, 2 send, 3 accept, 4 connect); pending, or the error if it could not be. */
+static int64_t cee_uring_go(cee_op *o, struct io_uring_sqe *e) {
+    e->user_data = (uint64_t)(uintptr_t)o;
+    o->state = 1u;
+    if (!cee_uring_submit()) {
+        o->state = 0u;
+        o->backend = 0u;
+        return -(int64_t)errno;
+    }
+    cee_op_wait(o);
+    return CEE_ASYNC_PENDING;
+}
+
+static void cee_uring_begin(cee_op *o, uint32_t kind) {
+    o->backend = 3u;
+    o->state = 0u;
+    o->cancelling = 0u;
+    o->result = kind; /* the kind, until the completion (cee_uring_drain reads it for a connect) */
+    o->fd = -1;
+}
+
+static int64_t cee_uring_read(cee_op *o, int32_t fd, uint8_t *buffer, uint64_t length) {
+    struct io_uring_sqe *e = cee_uring_entry();
+    if (e == NULL) {
+        return CEE_ASYNC_WOULD_BLOCK; /* the ring is full: a readiness step instead */
+    }
+    cee_uring_begin(o, 1u);
+    e->opcode = IORING_OP_RECV;
+    e->fd = fd;
+    e->addr = (uint64_t)(uintptr_t)buffer;
+    e->len = length > (1u << 30) ? 1u << 30 : (unsigned)length;
+    return cee_uring_go(o, e);
+}
+
+static int64_t cee_uring_send(cee_op *o, int32_t fd, const uint8_t *bytes, uint64_t length) {
+    struct io_uring_sqe *e = cee_uring_entry();
+    if (e == NULL) {
+        return CEE_ASYNC_WOULD_BLOCK;
+    }
+    cee_uring_begin(o, 2u);
+    e->opcode = IORING_OP_SEND;
+    e->fd = fd;
+    e->addr = (uint64_t)(uintptr_t)bytes;
+    e->len = length > (1u << 30) ? 1u << 30 : (unsigned)length;
+    e->msg_flags = MSG_NOSIGNAL;
+    return cee_uring_go(o, e);
+}
+
+static int64_t cee_uring_accept(cee_op *o, int32_t fd) {
+    struct io_uring_sqe *e = cee_uring_entry();
+    if (e == NULL) {
+        return CEE_ASYNC_WOULD_BLOCK;
+    }
+    cee_uring_begin(o, 3u);
+    e->opcode = IORING_OP_ACCEPT;
+    e->fd = fd;
+    e->accept_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
+    return cee_uring_go(o, e);
+}
+
+/* The connect's address, in the record after its fields (the kernel reads it while the operation is in flight). */
+typedef struct {
+    cee_op op;
+    struct sockaddr_in address;
+} cee_uring_connect_op;
+
+_Static_assert(sizeof(cee_uring_connect_op) <= sizeof(ceesafe_async_op), "ceesafe_async_op holds a connect");
+
+static int64_t cee_uring_connect(cee_op *o, const uint8_t *address, uint64_t length, uint16_t port) {
+    uint8_t bytes[4];
+    cee_str text = {address, length};
+    if (!ceesafe_ipv4_address(text, bytes)) {
+        return -(int64_t)EINVAL;
+    }
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return -(int64_t)errno;
+    }
+    struct io_uring_sqe *e = cee_uring_entry();
+    if (e == NULL) {
+        (void)close(fd);
+        return CEE_ASYNC_WOULD_BLOCK;
+    }
+    cee_uring_connect_op *c = (cee_uring_connect_op *)(void *)o;
+    memset(&c->address, 0, sizeof c->address);
+    c->address.sin_family = AF_INET;
+    c->address.sin_port = htons(port);
+    memcpy(&c->address.sin_addr, bytes, 4);
+    cee_uring_begin(o, 4u);
+    o->fd = fd;
+    e->opcode = IORING_OP_CONNECT;
+    e->fd = fd;
+    e->addr = (uint64_t)(uintptr_t)&c->address;
+    e->off = sizeof c->address;
+    return cee_uring_go(o, e);
+}
+
+static void cee_uring_cancel(cee_op *o) {
+    struct io_uring_sqe *e = cee_uring_entry();
+    if (e == NULL) {
+        return; /* the ring is full: the operation completes by itself (it waits for its socket) */
+    }
+    e->opcode = IORING_OP_ASYNC_CANCEL;
+    e->addr = (uint64_t)(uintptr_t)o;
+    e->user_data = (uint64_t)(uintptr_t)o | CEE_URING_CANCEL_TAG;
+    (void)cee_uring_submit();
+}
+#endif
+
+int64_t ceesafe_async_op_read(void *op, int32_t fd, uint8_t *buffer, uint64_t length) {
+    cee_op *o = (cee_op *)op;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET) {
+        cee_iocp_begin(o, 1u, s);
+        o->buffer.buf = (char *)buffer;
+        o->buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
+        int status = WSARecv(s, &o->buffer, 1, NULL, &o->flags, &o->overlapped, NULL);
+        return cee_iocp_submitted(o, status, status != 0);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+    if (cee_uring_open()) {
+        int64_t r = cee_uring_read(o, fd, buffer, length);
+        if (r != CEE_ASYNC_WOULD_BLOCK) {
+            return r;
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_read(fd, buffer, length);
+}
+
+int64_t ceesafe_async_op_send(void *op, int32_t fd, const uint8_t *bytes, uint64_t length) {
+    cee_op *o = (cee_op *)op;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET) {
+        cee_iocp_begin(o, 2u, s);
+        o->buffer.buf = (char *)(uintptr_t)bytes;
+        o->buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
+        int status = WSASend(s, &o->buffer, 1, NULL, 0, &o->overlapped, NULL);
+        return cee_iocp_submitted(o, status, status != 0);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+    if (cee_uring_open()) {
+        int64_t r = cee_uring_send(o, fd, bytes, length);
+        if (r != CEE_ASYNC_WOULD_BLOCK) {
+            return r;
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_send(fd, bytes, length);
+}
+
+int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
+    cee_op *o = (cee_op *)op;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET) {
+        if (cee_accept_ex == NULL) {
+            GUID id = WSAID_ACCEPTEX;
+            cee_accept_ex = (LPFN_ACCEPTEX)cee_extension(s, id);
+        }
+        if (cee_accept_ex != NULL) {
+            cee_iocp_begin(o, 3u, s);
+            o->listener = s;
+            o->accepted = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+            if (o->accepted == INVALID_SOCKET) {
+                o->backend = 0u;
+                return cee_wsa_failure();
+            }
+            DWORD received = 0;
+            BOOL done = cee_accept_ex(s, o->accepted, o->addresses, 0, sizeof(struct sockaddr_in) + 16,
+                                      sizeof(struct sockaddr_in) + 16, &received, &o->overlapped);
+            return cee_iocp_submitted(o, 0, !done);
+        }
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+    if (cee_uring_open()) {
+        int64_t r = cee_uring_accept(o, fd);
+        if (r != CEE_ASYNC_WOULD_BLOCK) {
+            return r;
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_accept(fd);
+}
+
+int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port) {
+    cee_op *o = (cee_op *)op;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    if (o->backend == 0u && cee_exec.port != NULL) {
+        /* ConnectEx: a new overlapped socket, bound, tied to the port, then connected. */
+        uint8_t bytes[4];
+        cee_str text = {address, length};
+        if (!ceesafe_ipv4_address(text, bytes)) {
+            return -(int64_t)EINVAL;
+        }
+        SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+        if (s == INVALID_SOCKET) {
+            return cee_wsa_failure();
+        }
+        struct sockaddr_in local;
+        memset(&local, 0, sizeof local);
+        local.sin_family = AF_INET;
+        if (cee_connect_ex == NULL) {
+            GUID id = WSAID_CONNECTEX;
+            cee_connect_ex = (LPFN_CONNECTEX)cee_extension(s, id);
+        }
+        if (cee_connect_ex == NULL || bind(s, (const struct sockaddr *)&local, (int)sizeof local) != 0 ||
+            CreateIoCompletionPort((HANDLE)s, cee_exec.port, 0, 0) == NULL) {
+            int64_t failed = cee_wsa_failure();
+            (void)closesocket(s);
+            return failed;
+        }
+        struct sockaddr_in remote;
+        memset(&remote, 0, sizeof remote);
+        remote.sin_family = AF_INET;
+        remote.sin_port = htons(port);
+        memcpy(&remote.sin_addr, bytes, 4);
+        cee_iocp_begin(o, 4u, s);
+        o->accepted = s; /* the new socket, given an id when it connects */
+        BOOL done = cee_connect_ex(s, (const struct sockaddr *)&remote, (int)sizeof remote, NULL, 0, NULL, &o->overlapped);
+        return cee_iocp_submitted(o, 0, !done);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+    if (o->backend == 0u && cee_uring_open()) {
+        int64_t r = cee_uring_connect(o, address, length, port);
+        if (r != CEE_ASYNC_WOULD_BLOCK) {
+            return r;
+        }
+    }
+#endif
+    return cee_ready_connect(o, address, length, port);
+}
+
+bool ceesafe_async_op_cancel(void *op) {
+    cee_op *o = (cee_op *)op;
+#if defined(_WIN32)
+    if (o->backend == 2u && o->state == 1u) {
+        /* In flight: the kernel stops it, and its completion (aborted, or done meanwhile) still comes. Until then the
+           task waits uncancellable, so its frame and the buffer outlive the kernel's use (type-system.md §40.7). */
+        o->cancelling = 1u;
+        (void)CancelIoEx((HANDLE)o->socket, &o->overlapped);
+        if (cee_exec.current != NULL) {
+            cee_exec.current->channel_wait = false;
+        }
+        return true;
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u && o->state == 1u) {
+        o->cancelling = 1u; /* as IOCP's: the completion still comes, and the task waits for it */
+        cee_uring_cancel(o);
+        if (cee_exec.current != NULL) {
+            cee_exec.current->channel_wait = false;
+        }
+        return true;
+    }
+#endif
+    if (o->backend == 1u) {
+        ceesafe_async_close(o->fd); /* a connection abandoned half made */
+        o->backend = 0u;
+    }
+    return false;
 }

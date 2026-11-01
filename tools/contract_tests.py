@@ -17,6 +17,7 @@ usage: python3 tools/contract_tests.py --ceesafec PATH
 
 import argparse
 import glob
+import platform
 import os
 import subprocess
 import sys
@@ -65,6 +66,10 @@ def main():
             # The executor's poll() fallback (L1 A4b): the async programs with CEESAFE_REACTOR_POLL=1.
             ("reactor poll", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "async",
                                            "--check-leaks"]),
+            # io_uring (ADR 0035, opt-in on Linux): the async programs on it, under the sanitizers.
+            ("reactor uring", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "async",
+                                            "--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-fsanitize=address,undefined",
+                                            "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
              ["--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
               "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),
@@ -82,11 +87,17 @@ def main():
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
         ]
         for name, argv in steps:
+            if name == "reactor uring" and platform.system() != "Linux":
+                print(f"{name:14} skip io_uring is Linux's (ADR 0035)")
+                sys.stdout.flush()
+                continue
             env = dict(os.environ, CEESAFE_REACTOR_POLL="1") if name == "reactor poll" else None
+            if name == "reactor uring":
+                env = dict(os.environ, CEESAFE_REACTOR_URING="1")
             p = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, env=env)
             lines = [line for line in (p.stdout + p.stderr).splitlines() if line.strip()]
             summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support",
-                                                         "reactor poll") else (
+                                                         "reactor poll", "reactor uring") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
             if name == "freestanding" and p.returncode == 2:

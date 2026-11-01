@@ -17,6 +17,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #if defined(_WIN32)
@@ -29,6 +30,13 @@
 #else
 #include <poll.h>
 #include <pthread.h>
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#define CEE_KQUEUE 1
+#include <sys/event.h>
+#elif defined(__linux__)
+#define CEE_EPOLL 1
+#include <sys/epoll.h>
+#endif
 #include <sched.h>
 #include <unistd.h>
 #endif
@@ -39,24 +47,31 @@
 
 typedef struct cee_task {
     void *frame;
-    bool (*resume_root)(void *);
-    bool (*resume_child)(void *, ceesafe_scope *);
-    ceesafe_scope *scope; /* the child's scope; NULL for the root */
+    union {
+        bool (*root)(void *);
+        bool (*child)(void *, ceesafe_scope *);
+    } resume;              /* root when scope is NULL, else child */
+    ceesafe_scope *scope;  /* the child's scope; NULL for the root */
     struct cee_task *next; /* the ready queue, or the parked list */
+    struct cee_task *prev; /* the parked list */
+    struct cee_task *link_next; /* the tasks waiting on its descriptor in its direction, or waiting to be woken */
+    struct cee_task *link_prev;
+    void (*release)(void *p, size_t size, size_t align); /* Async.scopeIn's allocator; NULL: the system heap */
+    const ceesafe_frame_info *info; /* for ceesafe_async_tasks */
+    size_t block_size;
     uint64_t deadline;     /* UINT64_MAX for none */
+    uint64_t shield_deadline;
+    uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (ceesafe_atomic_*): readied in that order */
     int32_t fd;            /* -1 for none */
+    uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
+    uint32_t heap_index;   /* 1 + its place in the timer heap; 0 if it is not there */
     short fd_events;       /* POLLIN or POLLOUT */
     bool on_scope;         /* parked until its scope's last child returns */
     bool cancelled;        /* cancelled itself (the sweep's root); see cee_cancelled */
-    uint32_t shields;      /* Async.shield depth (type-system.md §40.7) */
-    uint64_t shield_deadline;
     bool embedded;         /* in its caller's frame (Async.race, Async.all): never freed */
-    void (*release)(void *p, size_t size, size_t align); /* Async.scopeIn's allocator; NULL: the system heap */
-    size_t block_size;
-    const ceesafe_frame_info *info; /* for ceesafe_async_dump */
     bool on_wake;          /* parked until another thread wakes it (Async.blocking, channels) */
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
-    uint64_t woken;        /* 0, or the wake's sequence number, set by any thread (ceesafe_atomic_*): readied in that order */
+    bool parked;           /* on the parked list */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -64,16 +79,48 @@ _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot
 /* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task. */
 #define CEE_TASK_HEAD ((sizeof(cee_task) + sizeof(cee_max_align_t) - 1u) / sizeof(cee_max_align_t) * sizeof(cee_max_align_t))
 
+/* The tasks waiting on one descriptor (POSIX): readers and writers, each in the order they parked. */
+typedef struct {
+    cee_task *head[2]; /* [0] reading, [1] writing */
+    cee_task *tail[2];
+    uint32_t active;   /* 1 + its place in active_fds; 0 if no task waits on it */
+    uint8_t armed;     /* the directions the reactor is armed for (bit 0 reading, bit 1 writing) */
+    bool added;        /* epoll: the descriptor was added (it may still be, disabled, after a one-shot event) */
+} cee_fd_slot;
+
+/* An executor (L1 A4b): the ready queue; the parked list, which only cancellation and the debugger walk; and what
+ * wakes parked tasks, each reached without walking the parked list: a heap of deadlines, a table of descriptor
+ * waiters, and the tasks waiting to be woken. Descriptors wait in kqueue or epoll, armed one-shot at each park, or in
+ * poll() (CEESAFE_REACTOR_POLL=1, or a host with neither). Its arrays are the runtime's own bookkeeping, from the
+ * platform's heap. */
 typedef struct {
     cee_task *ready_head;
     cee_task *ready_tail;
     cee_task *parked;
     cee_task *current;
-    int wake_pipe[2];    /* another thread's wake: a byte written here makes poll return (-1 until first needed) */
+    int wake_pipe[2];    /* another thread's wake: a byte written here ends the wait (-1 until first needed) */
 #if defined(_WIN32)
     HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
 #endif
     uint32_t wake_count; /* tasks parked on_wake */
+    uint32_t fd_count;   /* tasks parked on a descriptor */
+    uint32_t file_count; /* Windows: those on a console or file descriptor, which count as ready */
+    cee_task *wake_list; /* the tasks parked on_wake, linked by link_next */
+    cee_task **heap;     /* the parked tasks with a deadline: a binary min-heap on cee_task_key */
+    uint32_t heap_count;
+    uint32_t heap_capacity;
+    cee_fd_slot *slots;  /* by descriptor (POSIX) */
+    uint32_t slot_count;
+    int32_t *active_fds; /* the descriptors some task waits on */
+    uint32_t active_count;
+    uint32_t active_capacity;
+    int reactor;         /* the kqueue or epoll descriptor; -1 until first needed */
+    bool use_poll;       /* poll() for descriptors */
+    bool pipe_watched;   /* the wake pipe is registered with the reactor */
+#if defined(CEE_KQUEUE)
+    struct kevent changes[64]; /* kqueue: arming and disarming not yet sent, sent with the next wait */
+    int change_count;
+#endif
 } cee_executor;
 
 static _Thread_local cee_executor cee_exec;
@@ -124,6 +171,336 @@ static cee_task *cee_take_ready(void) {
     return t;
 }
 
+static _Noreturn void cee_out_of_memory(void) {
+    static const char message[] = "ceesafe: out of memory for the executor's own bookkeeping\n";
+    ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
+    ceesafe_platform_abort();
+}
+
+/* ---- The timer heap: the earliest deadline first, a shield's end counting as one (type-system.md §40.7). ---- */
+
+static uint64_t cee_task_key(const cee_task *t) {
+    uint64_t at = t->deadline;
+    if (t->shields > 0u && !t->on_scope && t->shield_deadline < at) {
+        at = t->shield_deadline; /* a shield's end wakes its task, to see TimedOut */
+    }
+    return at;
+}
+
+static void cee_heap_set(uint32_t k, cee_task *t) {
+    cee_exec.heap[k] = t;
+    t->heap_index = k + 1u;
+}
+
+static void cee_heap_up(uint32_t k) {
+    cee_task *t = cee_exec.heap[k];
+    uint64_t key = cee_task_key(t);
+    while (k > 0u) {
+        uint32_t parent = (k - 1u) / 2u;
+        if (cee_task_key(cee_exec.heap[parent]) <= key) {
+            break;
+        }
+        cee_heap_set(k, cee_exec.heap[parent]);
+        k = parent;
+    }
+    cee_heap_set(k, t);
+}
+
+static void cee_heap_down(uint32_t k) {
+    cee_task *t = cee_exec.heap[k];
+    uint64_t key = cee_task_key(t);
+    for (;;) {
+        uint32_t left = 2u * k + 1u;
+        if (left >= cee_exec.heap_count) {
+            break;
+        }
+        uint32_t child = left;
+        if (left + 1u < cee_exec.heap_count && cee_task_key(cee_exec.heap[left + 1u]) < cee_task_key(cee_exec.heap[left])) {
+            child = left + 1u;
+        }
+        if (cee_task_key(cee_exec.heap[child]) >= key) {
+            break;
+        }
+        cee_heap_set(k, cee_exec.heap[child]);
+        k = child;
+    }
+    cee_heap_set(k, t);
+}
+
+static void cee_heap_push(cee_task *t) {
+    if (cee_exec.heap_count == cee_exec.heap_capacity) {
+        uint32_t capacity = cee_exec.heap_capacity == 0u ? 64u : cee_exec.heap_capacity * 2u;
+        cee_task **grown = (cee_task **)ceesafe_platform_realloc(cee_exec.heap, (size_t)capacity * sizeof *grown);
+        if (grown == NULL) {
+            cee_out_of_memory();
+        }
+        cee_exec.heap = grown;
+        cee_exec.heap_capacity = capacity;
+    }
+    cee_heap_set(cee_exec.heap_count, t);
+    cee_exec.heap_count += 1u;
+    cee_heap_up(cee_exec.heap_count - 1u);
+}
+
+static void cee_heap_remove(cee_task *t) {
+    uint32_t k = t->heap_index - 1u;
+    t->heap_index = 0u;
+    cee_exec.heap_count -= 1u;
+    if (k < cee_exec.heap_count) {
+        cee_task *moved = cee_exec.heap[cee_exec.heap_count]; /* the last entry fills the hole, then settles */
+        cee_heap_set(k, moved);
+        cee_heap_up(k);
+        cee_heap_down(moved->heap_index - 1u);
+    }
+}
+
+static void cee_unpark(cee_task *t);
+static void cee_open_wake_pipe(void);
+
+#if !defined(_WIN32)
+/* ---- Descriptor waiters (POSIX) and the reactor. ---- */
+
+static unsigned cee_direction(const cee_task *t) { return t->fd_events == POLLOUT ? 1u : 0u; }
+
+/* Every task waiting on `fd` in `direction` runs again: it retries, and sees an error if there was one. */
+static void cee_fd_ready(int32_t fd, unsigned direction) {
+    while ((uint32_t)fd < cee_exec.slot_count && cee_exec.slots[fd].head[direction] != NULL) {
+        cee_unpark(cee_exec.slots[fd].head[direction]);
+    }
+}
+
+static bool cee_reactor_open(void) {
+    if (cee_exec.reactor >= 0 || cee_exec.use_poll) {
+        return !cee_exec.use_poll;
+    }
+#if defined(CEE_KQUEUE)
+    cee_exec.reactor = kqueue();
+#elif defined(CEE_EPOLL)
+    cee_exec.reactor = epoll_create1(EPOLL_CLOEXEC);
+#endif
+    if (cee_exec.reactor < 0) {
+        cee_exec.use_poll = true; /* no kqueue or epoll: poll() */
+    }
+    return !cee_exec.use_poll;
+}
+
+#if defined(CEE_KQUEUE)
+/* Sends the queued changes and takes the events kqueue has, waiting at most `limit` (NULL: until one comes). A change
+   that failed comes back as an EV_ERROR event, which readies its direction's tasks: their retry sees the error (a
+   failed EV_DELETE readies none, or retries one at worst). True if a task was readied. */
+static bool cee_kqueue_call(const struct timespec *limit) {
+    struct kevent events[64];
+    int n = kevent(cee_exec.reactor, cee_exec.changes, cee_exec.change_count, events, 64, limit);
+    cee_exec.change_count = 0;
+    bool any = false;
+    for (int k = 0; k < n; k++) {
+        int32_t fd = (int32_t)events[k].ident;
+        if (fd == cee_exec.wake_pipe[0] && (events[k].flags & EV_ERROR) == 0) {
+            unsigned char drained[64];
+            (void)read(fd, drained, sizeof drained);
+            continue;
+        }
+        unsigned d = events[k].filter == EVFILT_WRITE ? 1u : 0u;
+        if ((uint32_t)fd < cee_exec.slot_count) {
+            cee_exec.slots[fd].armed &= (uint8_t)~(1u << d); /* one-shot, or failed: no longer armed */
+            any = any || cee_exec.slots[fd].head[d] != NULL;
+            cee_fd_ready(fd, d);
+        }
+    }
+    return any;
+}
+
+static void cee_kqueue_change(int32_t fd, int16_t filter, uint16_t flags) {
+    if (cee_exec.change_count == 64) {
+        static const struct timespec now = {0, 0};
+        (void)cee_kqueue_call(&now); /* full: send them, taking what is ready (those tasks run after the wait) */
+    }
+    EV_SET(&cee_exec.changes[cee_exec.change_count], (uintptr_t)fd, filter, flags, 0, 0, NULL);
+    cee_exec.change_count += 1;
+}
+#endif
+
+/* Arms the reactor for the directions `fd`'s tasks wait in, one-shot. A failure readies them: their retry sees it. */
+static void cee_reactor_arm(int32_t fd) {
+    cee_fd_slot *slot = &cee_exec.slots[fd];
+    uint8_t wanted = (uint8_t)((slot->head[0] != NULL ? 1u : 0u) | (slot->head[1] != NULL ? 2u : 0u));
+    if (wanted == slot->armed || !cee_reactor_open()) {
+        return;
+    }
+#if defined(CEE_KQUEUE)
+    for (unsigned d = 0; d < 2u; d++) {
+        uint8_t bit = (uint8_t)(1u << d);
+        if ((wanted & bit) != 0u && (slot->armed & bit) == 0u) {
+            cee_kqueue_change(fd, d == 1u ? EVFILT_WRITE : EVFILT_READ, EV_ADD | EV_ONESHOT);
+            slot->armed |= bit;
+        }
+    }
+#elif defined(CEE_EPOLL)
+    struct epoll_event change;
+    memset(&change, 0, sizeof change);
+    change.events = ((wanted & 1u) != 0u ? (uint32_t)EPOLLIN : 0u) | ((wanted & 2u) != 0u ? (uint32_t)EPOLLOUT : 0u) |
+                    (uint32_t)EPOLLONESHOT;
+    change.data.fd = fd;
+    int status = epoll_ctl(cee_exec.reactor, slot->added ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, fd, &change);
+    if (status < 0 && errno == ENOENT) {
+        status = epoll_ctl(cee_exec.reactor, EPOLL_CTL_ADD, fd, &change); /* closed and reopened since */
+    } else if (status < 0 && errno == EEXIST) {
+        status = epoll_ctl(cee_exec.reactor, EPOLL_CTL_MOD, fd, &change);
+    }
+    if (status < 0) {
+        /* EPERM: a regular file, always ready; anything else, the retry sees it. */
+        slot->added = false;
+        slot->armed = 0u;
+        cee_fd_ready(fd, 0u);
+        cee_fd_ready(fd, 1u);
+        return;
+    }
+    slot->added = true;
+    slot->armed = wanted;
+#endif
+}
+
+/* Takes back what the reactor is armed for and no task waits for any more (a task left early: cancelled, or due). */
+static void cee_reactor_disarm(int32_t fd) {
+    cee_fd_slot *slot = &cee_exec.slots[fd];
+    uint8_t wanted = (uint8_t)((slot->head[0] != NULL ? 1u : 0u) | (slot->head[1] != NULL ? 2u : 0u));
+    if ((slot->armed & ~wanted) == 0u || cee_exec.reactor < 0) {
+        return;
+    }
+#if defined(CEE_KQUEUE)
+    for (unsigned d = 0; d < 2u; d++) {
+        uint8_t bit = (uint8_t)(1u << d);
+        if ((slot->armed & bit) != 0u && (wanted & bit) == 0u) {
+            cee_kqueue_change(fd, d == 1u ? EVFILT_WRITE : EVFILT_READ, EV_DELETE);
+            slot->armed &= (uint8_t)~bit;
+        }
+    }
+#elif defined(CEE_EPOLL)
+    if (wanted == 0u) {
+        (void)epoll_ctl(cee_exec.reactor, EPOLL_CTL_DEL, fd, NULL);
+        slot->added = false;
+        slot->armed = 0u;
+    } else {
+        slot->armed = 0u; /* re-armed for what is still wanted */
+        cee_reactor_arm(fd);
+    }
+#endif
+}
+
+static void cee_fd_attach(cee_task *t) {
+    int32_t fd = t->fd;
+    if ((uint32_t)fd >= cee_exec.slot_count) {
+        uint32_t count = cee_exec.slot_count == 0u ? 64u : cee_exec.slot_count;
+        while (count <= (uint32_t)fd) {
+            count *= 2u;
+        }
+        cee_fd_slot *grown = (cee_fd_slot *)ceesafe_platform_realloc(cee_exec.slots, (size_t)count * sizeof *grown);
+        if (grown == NULL) {
+            cee_out_of_memory();
+        }
+        memset(grown + cee_exec.slot_count, 0, (size_t)(count - cee_exec.slot_count) * sizeof *grown);
+        cee_exec.slots = grown;
+        cee_exec.slot_count = count;
+    }
+    cee_fd_slot *slot = &cee_exec.slots[fd];
+    unsigned d = cee_direction(t);
+    t->link_next = NULL;
+    t->link_prev = slot->tail[d];
+    if (slot->tail[d] != NULL) {
+        slot->tail[d]->link_next = t;
+    } else {
+        slot->head[d] = t;
+    }
+    slot->tail[d] = t;
+    if (slot->active == 0u) {
+        if (cee_exec.active_count == cee_exec.active_capacity) {
+            uint32_t capacity = cee_exec.active_capacity == 0u ? 64u : cee_exec.active_capacity * 2u;
+            int32_t *grown = (int32_t *)ceesafe_platform_realloc(cee_exec.active_fds, (size_t)capacity * sizeof *grown);
+            if (grown == NULL) {
+                cee_out_of_memory();
+            }
+            cee_exec.active_fds = grown;
+            cee_exec.active_capacity = capacity;
+        }
+        cee_exec.active_fds[cee_exec.active_count] = fd;
+        cee_exec.active_count += 1u;
+        slot->active = cee_exec.active_count;
+    }
+    if (!cee_exec.use_poll) {
+        cee_reactor_arm(fd); /* last: a failure unparks the task */
+    }
+}
+
+static void cee_fd_detach(cee_task *t) {
+    int32_t fd = t->fd;
+    cee_fd_slot *slot = &cee_exec.slots[fd];
+    unsigned d = cee_direction(t);
+    if (t->link_prev != NULL) {
+        t->link_prev->link_next = t->link_next;
+    } else {
+        slot->head[d] = t->link_next;
+    }
+    if (t->link_next != NULL) {
+        t->link_next->link_prev = t->link_prev;
+    } else {
+        slot->tail[d] = t->link_prev;
+    }
+    t->link_next = NULL;
+    t->link_prev = NULL;
+    if (slot->head[0] == NULL && slot->head[1] == NULL && slot->active != 0u) {
+        uint32_t k = slot->active - 1u;
+        int32_t last = cee_exec.active_fds[cee_exec.active_count - 1u];
+        cee_exec.active_fds[k] = last;
+        cee_exec.slots[last].active = k + 1u;
+        cee_exec.active_count -= 1u;
+        slot->active = 0u;
+    }
+    cee_reactor_disarm(fd);
+}
+#endif
+
+/* Parks the task that just suspended: on the parked list, and with what wakes it. */
+static void cee_park(cee_task *t) {
+    t->parked = true;
+    t->prev = NULL;
+    t->next = cee_exec.parked;
+    if (cee_exec.parked != NULL) {
+        cee_exec.parked->prev = t;
+    }
+    cee_exec.parked = t;
+    if (cee_task_key(t) != UINT64_MAX) {
+        cee_heap_push(t);
+    }
+    if (t->on_wake) {
+        if (t->fd >= 0) {
+            static const char message[] = "ceesafe: a task waits on a descriptor and a wake at once\n";
+            ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
+            ceesafe_platform_abort();
+        }
+        t->link_prev = NULL;
+        t->link_next = cee_exec.wake_list;
+        if (cee_exec.wake_list != NULL) {
+            cee_exec.wake_list->link_prev = t;
+        }
+        cee_exec.wake_list = t;
+    }
+    if (t->fd >= 0) {
+        cee_exec.fd_count += 1u;
+#if defined(_WIN32)
+        if (t->fd >= CEE_SOCKET_BASE) {
+            cee_open_wake_pipe();
+            if (cee_exec.wake_event != NULL) {
+                ceesafe_socket_select(t->fd, cee_exec.wake_event); /* every direction: another task may wait on it too */
+            }
+        } else {
+            cee_exec.file_count += 1u; /* no readiness for consoles and files: readied by the next wait */
+        }
+#else
+        cee_fd_attach(t); /* last: it may ready the task at once */
+#endif
+    }
+}
+
 /* Wakes a task of this or another thread's executor: safe from any thread while the task waits (it cannot end before
  * it is woken). */
 static uint64_t cee_wake_sequence; /* ceesafe_atomic_*: orders wakes, so woken tasks run first come, first served */
@@ -148,22 +525,44 @@ static void cee_wake_task(cee_executor *exec, cee_task *t) {
 }
 
 static void cee_unpark(cee_task *t) {
-    cee_task **link = &cee_exec.parked;
-    while (*link != NULL && *link != t) {
-        link = &(*link)->next;
-    }
-    if (*link == t) {
-        *link = t->next;
-    }
-    t->deadline = UINT64_MAX;
+    if (t->parked) {
+        t->parked = false;
+        if (t->prev != NULL) {
+            t->prev->next = t->next;
+        } else {
+            cee_exec.parked = t->next;
+        }
+        if (t->next != NULL) {
+            t->next->prev = t->prev;
+        }
+        t->prev = NULL;
+        if (t->heap_index != 0u) {
+            cee_heap_remove(t);
+        }
+        if (t->fd >= 0) {
+            cee_exec.fd_count -= 1u;
 #if defined(_WIN32)
-    if (t->fd >= CEE_SOCKET_BASE) {
-        SOCKET s = (SOCKET)ceesafe_socket_handle(t->fd);
-        if (s != INVALID_SOCKET) {
-            (void)WSAEventSelect(s, NULL, 0); /* no more signals to this executor's event (the socket stays nonblocking) */
+            if (t->fd < CEE_SOCKET_BASE) {
+                cee_exec.file_count -= 1u; /* a socket stays selected until the run ends: another task may wait on it */
+            }
+#else
+            cee_fd_detach(t);
+#endif
+        }
+        if (t->on_wake) {
+            if (t->link_prev != NULL) {
+                t->link_prev->link_next = t->link_next;
+            } else {
+                cee_exec.wake_list = t->link_next;
+            }
+            if (t->link_next != NULL) {
+                t->link_next->link_prev = t->link_prev;
+            }
+            t->link_next = NULL;
+            t->link_prev = NULL;
         }
     }
-#endif
+    t->deadline = UINT64_MAX;
     t->fd = -1;
     t->on_scope = false;
     if (t->on_wake) {
@@ -303,6 +702,16 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
 #endif
 }
 
+static void cee_task_init(cee_task *t, void *frame, ceesafe_scope *scope, const ceesafe_frame_info *info) {
+    memset(t, 0, sizeof *t);
+    t->frame = frame;
+    t->scope = scope;
+    t->deadline = UINT64_MAX;
+    t->shield_deadline = UINT64_MAX;
+    t->fd = -1;
+    t->info = info;
+}
+
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                           void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
                           const ceesafe_frame_info *info) {
@@ -320,23 +729,10 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
         return NULL;
     }
     cee_task *t = (cee_task *)(void *)block;
-    t->frame = block + CEE_TASK_HEAD;
-    t->resume_root = NULL;
-    t->resume_child = resume;
-    t->scope = scope;
-    t->deadline = UINT64_MAX;
-    t->fd = -1;
-    t->on_scope = false;
-    t->cancelled = false;
-    t->shields = 0u;
-    t->shield_deadline = UINT64_MAX;
-    t->embedded = false;
+    cee_task_init(t, block + CEE_TASK_HEAD, scope, info);
+    t->resume.child = resume;
     t->release = release;
     t->block_size = block_size;
-    t->info = info;
-    t->on_wake = false;
-    t->channel_wait = false;
-    t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
     return t->frame;
@@ -346,22 +742,9 @@ void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *fr
                          bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info) {
     cee_task *t = (cee_task *)(void *)slot;
     scope->owner = cee_exec.current;
-    t->frame = frame;
-    t->resume_root = NULL;
-    t->resume_child = resume;
-    t->scope = scope;
-    t->deadline = UINT64_MAX;
-    t->fd = -1;
-    t->on_scope = false;
-    t->cancelled = false;
-    t->shields = 0u;
-    t->shield_deadline = UINT64_MAX;
+    cee_task_init(t, frame, scope, info);
+    t->resume.child = resume;
     t->embedded = true;
-    t->release = NULL;
-    t->info = info;
-    t->on_wake = false;
-    t->channel_wait = false;
-    t->woken = 0u;
     scope->live += 1u;
     cee_ready(t);
 }
@@ -540,133 +923,173 @@ static unsigned cee_poll_sockets(void) {
 }
 #endif
 
-/* While no task can run: waits for the earliest deadline or a registered descriptor, then readies what is due. */
-static void cee_wait(void) {
-    uint64_t deadline = UINT64_MAX;
-    int registered = 0;
-    for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
-        if (t->deadline < deadline) {
-            deadline = t->deadline;
-        }
-        if (t->shields > 0u && !t->on_scope && t->shield_deadline < deadline) {
-            deadline = t->shield_deadline; /* a shield's end wakes its task, to see TimedOut */
-        }
-        if (t->fd >= 0) {
-            registered += 1;
-        }
-    }
-    if (deadline == UINT64_MAX && registered == 0 && cee_exec.wake_count == 0u) {
-        cee_stuck();
-    }
-    for (;;) {
-        uint64_t now = ceesafe_async_now();
-        int timeout = -1;
-        if (deadline != UINT64_MAX) {
-            timeout = now >= deadline ? 0 : (deadline - now > (uint64_t)INT_MAX ? INT_MAX : (int)(deadline - now));
-        }
-        bool any = false;
 #if defined(_WIN32)
-        /* A console or file descriptor has no readiness here: its task retries at once (see ceesafe_async_write). */
-        bool sockets = false;
+/* Windows: consoles and files count as ready; sockets signal the executor's event (WSAEventSelect), and WSAPoll
+   says which are ready. True if a task was readied. */
+static bool cee_wait_windows(int timeout) {
+    bool any = false;
+    /* A console or file descriptor has no readiness here: its task retries at once (see ceesafe_async_write). */
+    if (cee_exec.file_count > 0u) {
         for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
             next = t->next;
             if (t->fd >= 0 && t->fd < CEE_SOCKET_BASE) {
                 cee_unpark(t);
                 any = true;
-            } else if (t->fd >= CEE_SOCKET_BASE) {
-                sockets = true;
             }
         }
-        if (sockets) {
-            cee_open_wake_pipe();
+    }
+    bool sockets = cee_exec.fd_count > cee_exec.file_count;
+    if (sockets && cee_exec.wake_event != NULL) {
+        /* Each socket was selected for the executor's event when its task parked; WSAPoll says which are ready. A
+           socket that becomes ready between the poll and the wait signals the event, so no readiness is lost. */
+        if (!any && cee_poll_sockets() == 0) {
+            (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout);
+            any = cee_poll_sockets() > 0;
+        } else {
+            any = true;
         }
-        if (sockets && cee_exec.wake_event != NULL) {
-            /* Each socket signals the executor's event, then WSAPoll says which are ready. A socket that becomes ready
-               between the poll and the wait has already been told to signal, so no readiness is lost. */
-            for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
-                SOCKET s = t->fd >= CEE_SOCKET_BASE ? (SOCKET)ceesafe_socket_handle(t->fd) : INVALID_SOCKET;
-                if (s != INVALID_SOCKET) {
-                    long wanted = t->fd_events == POLLOUT ? (FD_WRITE | FD_CONNECT | FD_CLOSE) : (FD_READ | FD_ACCEPT | FD_CLOSE);
-                    (void)WSAEventSelect(s, cee_exec.wake_event, wanted);
-                }
-            }
-            if (!any && cee_poll_sockets() == 0) {
-                (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout);
-                any = cee_poll_sockets() > 0;
-            } else {
-                any = true;
-            }
-        } else if (any) {
-            /* retry the unparked tasks at once */
-        } else if (cee_exec.wake_count > 0u && cee_exec.wake_event != NULL) {
-            (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout); /* or a wake */
-        } else if (timeout > 0) {
-            Sleep((DWORD)timeout);
-        }
+    } else if (any) {
+        /* retry the unparked tasks at once */
+    } else if (cee_exec.wake_count > 0u && cee_exec.wake_event != NULL) {
+        (void)WaitForSingleObject(cee_exec.wake_event, timeout < 0 ? INFINITE : (DWORD)timeout); /* or a wake */
+    } else if (timeout > 0) {
+        Sleep((DWORD)timeout);
+    }
+    return any;
+}
 #else
-        /* One entry per waiting descriptor, plus the wake pipe: on the stack up to 64, else from the platform's heap
-           (not counted: the executor's own bookkeeping). */
-        struct pollfd small_fds[65];
-        cee_task *small_owners[65];
-        struct pollfd *fds = small_fds;
-        cee_task **owners = small_owners;
-        size_t capacity = 65u;
-        if ((size_t)registered + 1u > capacity) {
-            struct pollfd *big_fds = (struct pollfd *)ceesafe_platform_alloc(((size_t)registered + 1u) * sizeof *big_fds);
-            cee_task **big_owners = (cee_task **)ceesafe_platform_alloc(((size_t)registered + 1u) * sizeof *big_owners);
-            if (big_fds != NULL && big_owners != NULL) {
-                fds = big_fds;
-                owners = big_owners;
-                capacity = (size_t)registered + 1u;
-            } else {
-                ceesafe_platform_free(big_fds);
-                ceesafe_platform_free(big_owners);
-            }
+/* poll(): one entry per descriptor a task waits on, plus the wake pipe while a task waits to be woken. */
+static bool cee_wait_poll(int timeout) {
+    struct pollfd small[65];
+    struct pollfd *fds = small;
+    size_t needed = (size_t)cee_exec.active_count + 1u;
+    if (needed > sizeof small / sizeof small[0]) {
+        fds = (struct pollfd *)ceesafe_platform_alloc(needed * sizeof *fds);
+        if (fds == NULL) {
+            cee_out_of_memory();
         }
-        nfds_t count = 0;
-        if (cee_exec.wake_count > 0u && cee_exec.wake_pipe[0] >= 0) {
-            fds[0].fd = cee_exec.wake_pipe[0]; /* another thread's wake */
-            fds[0].events = POLLIN;
-            fds[0].revents = 0;
-            owners[0] = NULL;
-            count = 1u;
-        }
-        for (cee_task *t = cee_exec.parked; t != NULL && count < capacity; t = t->next) {
-            if (t->fd >= 0) {
-                fds[count].fd = t->fd;
-                fds[count].events = t->fd_events;
-                fds[count].revents = 0;
-                owners[count] = t;
-                count += 1u;
-            }
-        }
-        int ready = poll(count > 0u ? fds : NULL, count, timeout);
-        if (ready < 0 && errno == EINTR) {
-            if (fds != small_fds) {
-                ceesafe_platform_free(fds);
-                ceesafe_platform_free(owners);
-            }
+    }
+    nfds_t count = 0;
+    bool pipe = cee_exec.wake_count > 0u && cee_exec.wake_pipe[0] >= 0;
+    if (pipe) {
+        fds[0].fd = cee_exec.wake_pipe[0]; /* another thread's wake */
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        count = 1u;
+    }
+    for (uint32_t k = 0; k < cee_exec.active_count; k++) {
+        int32_t fd = cee_exec.active_fds[k];
+        const cee_fd_slot *slot = &cee_exec.slots[fd];
+        fds[count].fd = fd;
+        fds[count].events = (short)((slot->head[0] != NULL ? POLLIN : 0) | (slot->head[1] != NULL ? POLLOUT : 0));
+        fds[count].revents = 0;
+        count += 1u;
+    }
+    int ready = poll(count > 0u ? fds : NULL, count, timeout);
+    bool any = false;
+    for (nfds_t k = 0; ready > 0 && k < count; k++) {
+        short r = fds[k].revents;
+        if (r == 0) {
             continue;
         }
-        for (nfds_t k = 0; ready > 0 && k < count; k++) {
-            if (fds[k].revents != 0 && owners[k] == NULL) {
-                unsigned char drained[64];
-                (void)read(cee_exec.wake_pipe[0], drained, sizeof drained);
-            } else if (fds[k].revents != 0) {
-                cee_unpark(owners[k]); /* the task retries, and sees an error if there was one */
-                any = true;
-            }
+        if (pipe && k == 0u) {
+            unsigned char drained[64];
+            (void)read(cee_exec.wake_pipe[0], drained, sizeof drained);
+            continue;
         }
-        if (fds != small_fds) {
-            ceesafe_platform_free(fds);
-            ceesafe_platform_free(owners);
+        if ((r & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0 && cee_exec.slots[fds[k].fd].head[0] != NULL) {
+            cee_fd_ready(fds[k].fd, 0u);
+            any = true;
+        }
+        if ((r & (POLLOUT | POLLHUP | POLLERR | POLLNVAL)) != 0 && cee_exec.slots[fds[k].fd].head[1] != NULL) {
+            cee_fd_ready(fds[k].fd, 1u);
+            any = true;
+        }
+    }
+    if (fds != small) {
+        ceesafe_platform_free(fds);
+    }
+    return any;
+}
+
+/* kqueue or epoll: the descriptors were armed when their tasks parked, and the wake pipe stays registered. */
+static bool cee_wait_reactor(int timeout) {
+    if (cee_exec.wake_pipe[0] >= 0 && !cee_exec.pipe_watched) {
+#if defined(CEE_KQUEUE)
+        cee_kqueue_change(cee_exec.wake_pipe[0], EVFILT_READ, EV_ADD); /* level-triggered, kept */
+        cee_exec.pipe_watched = true;
+#elif defined(CEE_EPOLL)
+        struct epoll_event change;
+        memset(&change, 0, sizeof change);
+        change.events = EPOLLIN;
+        change.data.fd = cee_exec.wake_pipe[0];
+        cee_exec.pipe_watched = epoll_ctl(cee_exec.reactor, EPOLL_CTL_ADD, cee_exec.wake_pipe[0], &change) == 0;
+#endif
+    }
+    bool any = false;
+#if defined(CEE_KQUEUE)
+    struct timespec limit = {timeout / 1000, (long)(timeout % 1000) * 1000000L};
+    any = cee_kqueue_call(timeout < 0 ? NULL : &limit);
+#elif defined(CEE_EPOLL)
+    struct epoll_event events[64];
+    int n = epoll_wait(cee_exec.reactor, events, 64, timeout);
+    for (int k = 0; k < n; k++) {
+        int32_t fd = events[k].data.fd;
+        if (fd == cee_exec.wake_pipe[0]) {
+            unsigned char drained[64];
+            (void)read(fd, drained, sizeof drained);
+            continue;
+        }
+        if ((uint32_t)fd >= cee_exec.slot_count) {
+            continue;
+        }
+        uint32_t r = events[k].events;
+        cee_exec.slots[fd].armed = 0u; /* one-shot: the descriptor is disabled until armed again */
+        if ((r & (uint32_t)(EPOLLIN | EPOLLHUP | EPOLLERR)) != 0u && cee_exec.slots[fd].head[0] != NULL) {
+            cee_fd_ready(fd, 0u);
+            any = true;
+        }
+        if ((r & (uint32_t)(EPOLLOUT | EPOLLHUP | EPOLLERR)) != 0u && cee_exec.slots[fd].head[1] != NULL) {
+            cee_fd_ready(fd, 1u);
+            any = true;
+        }
+        if (cee_exec.slots[fd].head[0] != NULL || cee_exec.slots[fd].head[1] != NULL) {
+            cee_reactor_arm(fd); /* the direction that did not fire still waits */
+        }
+    }
+#else
+    (void)timeout;
+#endif
+    return any;
+}
+#endif
+
+/* While no task can run: waits for the earliest deadline, a descriptor or a wake, then readies what is due. Nothing
+   here walks the parked list: deadlines are a heap, descriptors a table, wakes a list. */
+static void cee_wait(void) {
+    for (;;) {
+        if (cee_exec.heap_count == 0u && cee_exec.fd_count == 0u && cee_exec.wake_count == 0u) {
+            cee_stuck();
+        }
+        uint64_t now = ceesafe_async_now();
+        int timeout = -1;
+        if (cee_exec.heap_count > 0u) {
+            uint64_t deadline = cee_task_key(cee_exec.heap[0]);
+            timeout = now >= deadline ? 0 : (deadline - now > (uint64_t)INT_MAX ? INT_MAX : (int)(deadline - now));
+        }
+        bool any = false;
+#if defined(_WIN32)
+        any = cee_wait_windows(timeout);
+#else
+        if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || timeout != 0) {
+            any = cee_reactor_open() ? cee_wait_reactor(timeout) : cee_wait_poll(timeout);
         }
 #endif
         /* Woken tasks, earliest wake first. */
         for (;;) {
             cee_task *first = NULL;
             uint64_t first_at = UINT64_MAX;
-            for (cee_task *w = cee_exec.parked; w != NULL; w = w->next) {
+            for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
                 uint64_t at = ceesafe_atomic_load_u64(&w->woken);
                 if (at != 0u && at < first_at) {
                     first = w;
@@ -680,25 +1103,10 @@ static void cee_wait(void) {
             cee_unpark(first);
             any = true;
         }
-        now = ceesafe_async_now();
         /* The tasks whose time has come run earliest deadline first, however late the executor woke. */
-        for (;;) {
-            cee_task *due = NULL;
-            uint64_t due_at = UINT64_MAX;
-            for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
-                uint64_t at = t->deadline;
-                if (t->shields > 0u && !t->on_scope && t->shield_deadline < at) {
-                    at = t->shield_deadline;
-                }
-                if (at != UINT64_MAX && now >= at && (due == NULL || at < due_at)) {
-                    due = t;
-                    due_at = at;
-                }
-            }
-            if (due == NULL) {
-                break;
-            }
-            cee_unpark(due);
+        now = ceesafe_async_now();
+        while (cee_exec.heap_count > 0u && cee_task_key(cee_exec.heap[0]) <= now) {
+            cee_unpark(cee_exec.heap[0]);
             any = true;
         }
         if (any) {
@@ -719,15 +1127,28 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_exec.wake_event = NULL;
 #endif
     cee_exec.wake_count = 0u;
+    cee_exec.fd_count = 0u;
+    cee_exec.file_count = 0u;
+    cee_exec.wake_list = NULL;
+    cee_exec.heap = NULL;
+    cee_exec.heap_count = 0u;
+    cee_exec.heap_capacity = 0u;
+    cee_exec.slots = NULL;
+    cee_exec.slot_count = 0u;
+    cee_exec.active_fds = NULL;
+    cee_exec.active_count = 0u;
+    cee_exec.active_capacity = 0u;
+    cee_exec.reactor = -1;
+    cee_exec.use_poll = ceesafe_platform_config("CEESAFE_REACTOR_POLL") != 0u;
+    cee_exec.pipe_watched = false;
+#if defined(CEE_KQUEUE)
+    cee_exec.change_count = 0;
+#endif
     uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
-    cee_task root = {0};
-    root.frame = frame;
-    root.resume_root = resume;
-    root.deadline = UINT64_MAX;
-    root.fd = -1;
-    root.shield_deadline = UINT64_MAX;
-    root.info = info;
+    cee_task root;
+    cee_task_init(&root, frame, NULL, info);
+    root.resume.root = resume;
     cee_ready(&root);
     for (;;) {
         cee_task *t = cee_take_ready();
@@ -736,7 +1157,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
             continue;
         }
         cee_exec.current = t;
-        bool done = t->scope == NULL ? t->resume_root(t->frame) : t->resume_child(t->frame, t->scope);
+        bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
         if (!done) {
             if (ceesafe_atomic_swap_u64(&t->woken, 0u) != 0u) {
@@ -751,8 +1172,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
             if (t->deadline == UINT64_MAX && t->fd < 0 && !t->on_scope && !t->on_wake && !(t->shields > 0u)) {
                 cee_stuck(); /* parked without registering anything: nothing can wake it */
             }
-            t->next = cee_exec.parked;
-            cee_exec.parked = t;
+            cee_park(t);
             if (ceesafe_atomic_add_ord_u64(&cee_suspensions, 1u, 0) + 1u == cancel_at) {
                 root.cancelled = true; /* the sweep's cancellation (testing.md §1) */
                 cee_wake_waiters();
@@ -783,6 +1203,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     }
 #if defined(_WIN32)
     if (cee_exec.wake_event != NULL) {
+        ceesafe_socket_unselect(cee_exec.wake_event); /* before the handle can name anything else */
         (void)CloseHandle(cee_exec.wake_event);
     }
 #else
@@ -790,7 +1211,13 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         (void)close(cee_exec.wake_pipe[0]);
         (void)close(cee_exec.wake_pipe[1]);
     }
+    if (cee_exec.reactor >= 0) {
+        (void)close(cee_exec.reactor);
+    }
 #endif
+    ceesafe_platform_free(cee_exec.heap);
+    ceesafe_platform_free(cee_exec.slots);
+    ceesafe_platform_free(cee_exec.active_fds);
     if (cancel_report) {
         char line[64];
         int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n",

@@ -151,6 +151,7 @@ fn namesInExpr(c: borrow Checker, e: u32, parameters: borrow Vector<u32>) -> boo
         }
         ExprNode.Try(operand) => { return namesInExpr(c, operand, parameters); }
         ExprNode.Unwrap(operand) => { return namesInExpr(c, operand, parameters); }
+        ExprNode.Await(operand) => { return namesInExpr(c, operand, parameters); } // `async () => await g(x)` captures x
         _ => { return false; }
     }
 }

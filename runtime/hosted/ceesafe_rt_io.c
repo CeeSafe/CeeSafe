@@ -216,6 +216,7 @@ static bool ceesafe_ipv4(cee_str text, uint8_t out[4]) {
 
 static SRWLOCK cee_socket_lock = SRWLOCK_INIT;
 static SOCKET *cee_sockets;
+static HANDLE *cee_socket_events; /* by slot: the event the socket signals (ceesafe_socket_select), or NULL */
 static uint32_t cee_socket_count;
 static uint32_t cee_socket_capacity;
 static INIT_ONCE cee_wsa_once = INIT_ONCE_STATIC_INIT;
@@ -266,6 +267,29 @@ uintptr_t ceesafe_socket_handle(int32_t id) {
     return (uintptr_t)s;
 }
 
+void ceesafe_socket_select(int32_t id, void *event) {
+    AcquireSRWLockExclusive(&cee_socket_lock);
+    if (id >= CEE_SOCKET_BASE && (uint32_t)(id - CEE_SOCKET_BASE) < cee_socket_count) {
+        uint32_t k = (uint32_t)(id - CEE_SOCKET_BASE);
+        if (cee_sockets[k] != INVALID_SOCKET && cee_socket_events[k] != (HANDLE)event &&
+            WSAEventSelect(cee_sockets[k], (HANDLE)event, FD_READ | FD_WRITE | FD_ACCEPT | FD_CONNECT | FD_CLOSE) == 0) {
+            cee_socket_events[k] = (HANDLE)event;
+        }
+    }
+    ReleaseSRWLockExclusive(&cee_socket_lock);
+}
+
+void ceesafe_socket_unselect(void *event) {
+    AcquireSRWLockExclusive(&cee_socket_lock);
+    for (uint32_t k = 0; k < cee_socket_count; k++) {
+        if (cee_sockets[k] != INVALID_SOCKET && cee_socket_events[k] == (HANDLE)event) {
+            (void)WSAEventSelect(cee_sockets[k], NULL, 0); /* the socket stays nonblocking */
+            cee_socket_events[k] = NULL;
+        }
+    }
+    ReleaseSRWLockExclusive(&cee_socket_lock);
+}
+
 /* An id for `s`, or -1 if the table cannot grow (then `s` is closed). */
 static int32_t cee_socket_add(SOCKET s) {
     int32_t id = -1;
@@ -273,6 +297,7 @@ static int32_t cee_socket_add(SOCKET s) {
     for (uint32_t k = 0; k < cee_socket_count && id < 0; k++) {
         if (cee_sockets[k] == INVALID_SOCKET) {
             cee_sockets[k] = s;
+            cee_socket_events[k] = NULL;
             id = CEE_SOCKET_BASE + (int32_t)k;
         }
     }
@@ -282,11 +307,16 @@ static int32_t cee_socket_add(SOCKET s) {
             SOCKET *grown = (SOCKET *)ceesafe_platform_realloc(cee_sockets, (size_t)capacity * sizeof *grown);
             if (grown != NULL) {
                 cee_sockets = grown;
-                cee_socket_capacity = capacity;
+                HANDLE *events = (HANDLE *)ceesafe_platform_realloc(cee_socket_events, (size_t)capacity * sizeof *events);
+                if (events != NULL) {
+                    cee_socket_events = events;
+                    cee_socket_capacity = capacity;
+                }
             }
         }
         if (cee_socket_count < cee_socket_capacity) {
             cee_sockets[cee_socket_count] = s;
+            cee_socket_events[cee_socket_count] = NULL;
             id = CEE_SOCKET_BASE + (int32_t)cee_socket_count;
             cee_socket_count += 1u;
         }
@@ -304,6 +334,7 @@ static void cee_socket_close(int32_t id) {
     if (id >= CEE_SOCKET_BASE && (uint32_t)(id - CEE_SOCKET_BASE) < cee_socket_count) {
         s = cee_sockets[id - CEE_SOCKET_BASE];
         cee_sockets[id - CEE_SOCKET_BASE] = INVALID_SOCKET;
+        cee_socket_events[id - CEE_SOCKET_BASE] = NULL;
     }
     ReleaseSRWLockExclusive(&cee_socket_lock);
     if (s != INVALID_SOCKET) {

@@ -622,7 +622,26 @@ Heap (M3b):
     wait has already signalled, so no readiness is lost. An unparked task's socket is detached (`WSAEventSelect(s,
     NULL, 0)`). A console or file descriptor has no readiness there, so its task retries at once.
     `ceesafe_async_poll` uses `WSAPoll` for sockets, as the interpreter needs.
-  - Later (L1 A4): kqueue and epoll as persistent registrations, measured against `poll()`; Windows' sockets.
+  - The executor's structures (L1 A4b). Nothing a wait does walks the parked list, which only cancellation and
+    `ceesafe_async_tasks` walk; it is doubly linked, so a task leaves it in constant time:
+    - deadlines (a shield's end counting as one) are a binary min-heap, so due tasks run earliest first;
+    - descriptor waiters are a table by descriptor, readers and writers each in the order they parked;
+    - the tasks waiting to be woken are a list of their own.
+  - The reactor (A4b): kqueue on macOS and the BSDs, epoll on Linux, created at the first wait. A parking task arms
+    its descriptor and direction one-shot (kqueue `EV_ONESHOT`, queued and sent with the next `kevent` wait; epoll
+    `EPOLLONESHOT` through `EPOLL_CTL_MOD`, or `ADD` for a descriptor it does not have). A readiness event readies every
+    task waiting in that direction; each retries. A task that leaves early (cancelled, or due) disarms what no task
+    waits for any more. One-shot arming is one call per park, and no state outlives the waits, so a descriptor closed
+    and reopened under the same number needs nothing. epoll refuses regular files (`EPERM`): their tasks count as
+    ready. A failed arming readies its tasks, whose retry sees the error. The wake pipe stays registered.
+    `CEESAFE_REACTOR_POLL=1`, or a host with neither, uses `poll()` over the waited descriptors.
+  - Windows (A4b): a waiting socket is selected for the executor's event for every network event once, when its task
+    parks (`ceesafe_socket_select`; a call only when that changes), since two tasks may wait on one socket in opposite
+    directions; the end of `Async.run` deselects them (`ceesafe_socket_unselect`) before closing the event.
+  - Measured by `benchmarks/async-reactor/run.py` (idle connections whose both ends wait, and one-byte round trips on
+    another; ROADMAP §10): the time per round trip stays flat with kqueue and epoll as the idle connections grow, and
+    grows with them with `poll()` and on Windows.
+  - Later (L1 A4): IOCP on Windows and io_uring on Linux (the buffer-lifetime invariant, ADR 0031 §3.4).
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.

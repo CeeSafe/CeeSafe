@@ -1,0 +1,36 @@
+// Children of Async.race and Async.all with expression bodies that capture (type-system.md §40.4): `async () =>
+// await g(x)` names x only under `await`, and still gets an environment. Found by the reactor benchmark (L1 A4b): the
+// closure was taken for one without captures, and lowering it read the awaiting function's local.
+
+async fn after(ms: u64, v: u32) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok(v);
+}
+
+async fn wait(ms: u64) -> Result<void, AsyncError> => await Timer.sleep(ms);
+
+async fn hold(x: borrow u32, total: borrow mut u32) -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    total += x;
+    return Ok();
+}
+
+async fn work(fast: u64, values: borrow Vector<u32>) -> Result<u32, AsyncError> {
+    let slow = fast * 20;
+    let r = await Async.race(async () => await after(slow, 1), async () => await after(fast, 2));
+    var total = r?.value;
+    await Async.all(async () => await wait(fast), async () => await wait(slow))?;
+    var sum: u32 = 0;
+    await Async.all(async () => await hold(borrow values[0], mut sum), async () => await wait(fast))?;
+    return Ok(total * 100 + sum);
+}
+
+fn main() {
+    var values = Vector<u32>.create();
+    values.push(7)!;
+    match (Async.run(work(2, borrow values))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 207

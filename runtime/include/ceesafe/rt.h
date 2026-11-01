@@ -1123,6 +1123,11 @@ void ceesafe_async_wait_readable(int32_t fd);
  * ceesafe_socket_handle gives the SOCKET, or INVALID_SOCKET (~0) for an id that names none. */
 #define CEE_SOCKET_BASE 0x40000000
 uintptr_t ceesafe_socket_handle(int32_t id);
+/* The executor's readiness (L1 A4b): ceesafe_socket_select has the socket signal `event` for every network event
+ * (WSAEventSelect; a call only when that changes), and ceesafe_socket_unselect detaches every socket that signals
+ * `event`, before the executor closes it. */
+void ceesafe_socket_select(int32_t id, void *event);
+void ceesafe_socket_unselect(void *event);
 #endif
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port);
 int64_t ceesafe_async_tcp_port(int32_t fd);

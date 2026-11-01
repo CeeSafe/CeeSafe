@@ -1,0 +1,71 @@
+// One stream, two tasks waiting on it at once in opposite directions (c-backend.md §6, L1 A4b): the client writes
+// 1 MiB while another task reads the echo, so both directions fill and each task parks while the other runs. With one
+// direction lost (a reactor or a Windows event selection that keeps only one), it hangs.
+
+async fn echo(listener: borrow AsyncTcpListener) -> Result<void, AsyncError> {
+    let peer = await listener.accept()?;
+    var buffer = [0u8; 4096];
+    loop {
+        let n = await peer.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        await peer.write(buffer[0..n])?;
+    }
+    return match (peer.shutdownWrite()) {
+        Ok() => Ok(),
+        Err(e) => Err(AsyncError.Io(e)),
+    };
+}
+
+async fn send(stream: borrow AsyncTcpStream) -> Result<void, AsyncError> {
+    var chunk = [0u8; 4096];
+    for (i in 0..256) {
+        chunk[0] = truncate<u8>(i);
+        await stream.write(chunk[..])?;
+    }
+    return match (stream.shutdownWrite()) {
+        Ok() => Ok(),
+        Err(e) => Err(AsyncError.Io(e)),
+    };
+}
+
+async fn receive(stream: borrow AsyncTcpStream, total: borrow mut u64) -> Result<void, AsyncError> {
+    var buffer = [0u8; 1000];
+    loop {
+        let n = await stream.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok();
+        }
+        total += n as u64;
+    }
+}
+
+async fn client(port: u16, total: borrow mut u64) -> Result<void, AsyncError> {
+    let stream = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    await Async.all(async () => await send(borrow stream), async () => await receive(borrow stream, mut total))?;
+    return Ok();
+}
+
+async fn work() -> Result<u64, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    var total: u64 = 0;
+    await Async.all(async () => await echo(borrow listener), async () => await client(port, mut total))?;
+    return Ok(total);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 1048576

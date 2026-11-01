@@ -4,7 +4,8 @@ nothing here runs novac or reads a Nova checkout):
 - the fixed point at HEAD, with ceesafec as stage 0 (tools/fixed_point.py);
 - CeeSafe's corpus (tests/reference/tests/corpus) in every family: annotations, AST/HIR/C snapshots, expected output,
   the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under
-  -Werror, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008);
+  -Werror, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008); the async programs again
+  on the executor's poll() fallback (CEESAFE_REACTOR_POLL=1);
 - the support library's tests with leak checks, and its allocation-failure sweep;
 - the mutation suite, the fault sweep over the corpus, the cancellation sweep over its async programs, the collection
   properties, the freestanding checks;
@@ -61,6 +62,9 @@ def main():
             ("run interp", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--family", "run-fail",
                                          "--interp", "--check-leaks"]),
             ("library", [cee, "check", "--library-diagnostics", empty]),
+            # The executor's poll() fallback (L1 A4b): the async programs with CEESAFE_REACTOR_POLL=1.
+            ("reactor poll", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "async",
+                                           "--check-leaks"]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
              ["--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
               "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),
@@ -78,9 +82,11 @@ def main():
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
         ]
         for name, argv in steps:
-            p = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True)
+            env = dict(os.environ, CEESAFE_REACTOR_POLL="1") if name == "reactor poll" else None
+            p = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, env=env)
             lines = [line for line in (p.stdout + p.stderr).splitlines() if line.strip()]
-            summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support") else (
+            summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support",
+                                                         "reactor poll") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
             if name == "freestanding" and p.returncode == 2:

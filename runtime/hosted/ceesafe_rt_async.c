@@ -31,6 +31,14 @@
 #if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
 #endif
+#elif defined(CEE_COSMOOS)
+/* CosmoOS userland (ADR 0040): no poll, pthreads, sched_yield or fcntl. The executor waits on its own condition
+   variable (cee_wait_cosmoos) and descriptors count as ready, so there is no reactor. */
+#include <cosmo/thread.h>
+#include <unistd.h>
+#define CEE_NO_REACTOR 1
+#define POLLIN 0x001 /* fd_events' two directions, numbered as poll.h numbers them */
+#define POLLOUT 0x004
 #else
 #include <poll.h>
 #include <pthread.h>
@@ -120,6 +128,11 @@ typedef struct {
     cee_task *parked;
     cee_task *current;
     int wake_pipe[2];    /* another thread's wake: a byte written here ends the wait (-1 until first needed) */
+#if defined(CEE_COSMOOS)
+    cosmo_mutex_t wake_lock; /* CosmoOS (ADR 0040): what replaces the wake pipe. A wake sets wake_pending and */
+    cosmo_cond_t wake_cond;  /* signals wake_cond under wake_lock, so one that comes before the wait is kept */
+    uint32_t wake_pending;
+#endif
 #if defined(_WIN32)
     HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
     HANDLE port;         /* Windows: the thread's completion port (IOCP, ADR 0035), or NULL with CEESAFE_REACTOR_POLL */
@@ -419,7 +432,7 @@ static bool cee_uring_drain(void);
 static HANDLE cee_iocp_port(void);
 #endif
 
-#if !defined(_WIN32) && !defined(CEE_FREESTANDING)
+#if !defined(_WIN32) && !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
 /* ---- Descriptor waiters (POSIX) and the reactor. ---- */
 
 static unsigned cee_direction(const cee_task *t) { return t->fd_events == POLLOUT ? 1u : 0u; }
@@ -659,7 +672,7 @@ static void cee_park(cee_task *t) {
         } else {
             cee_exec.file_count += 1u; /* no readiness for consoles and files: readied by the next wait */
         }
-#elif !defined(CEE_FREESTANDING)
+#elif !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
         cee_fd_attach(t); /* last: it may ready the task at once */
 #endif
     }
@@ -685,6 +698,11 @@ static void cee_wake_task(cee_executor *exec, cee_task *t) {
 static void cee_poke(cee_executor *exec) {
 #if defined(CEE_FREESTANDING)
     ceesafe_env_wake(exec);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_lock(&exec->wake_lock);
+    exec->wake_pending = 1u;
+    cosmo_cond_signal(&exec->wake_cond);
+    cosmo_mutex_unlock(&exec->wake_lock);
 #elif defined(_WIN32)
     if (exec->port != NULL) {
         (void)PostQueuedCompletionStatus(exec->port, 0, 0, NULL); /* ends its wait in the port */
@@ -723,7 +741,7 @@ static void cee_unpark(cee_task *t) {
             if (t->fd < CEE_SOCKET_BASE) {
                 cee_exec.file_count -= 1u; /* a socket stays selected until the run ends: another task may wait on it */
             }
-#elif !defined(CEE_FREESTANDING)
+#elif !defined(CEE_FREESTANDING) && !defined(CEE_NO_REACTOR)
             cee_fd_detach(t);
 #endif
         }
@@ -826,6 +844,20 @@ int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t 
         Sleep(timeout > INT_MAX ? INT_MAX : (DWORD)timeout);
     }
     return n < 0 ? -(int64_t)EIO : (int64_t)(n + others);
+#elif defined(CEE_COSMOOS)
+    /* No readiness on CosmoOS (ADR 0040): every descriptor is ready in the directions asked; with none, the timeout
+       is slept. */
+    (void)fds;
+    int64_t n = 0;
+    for (uint64_t k = 0; k < count; k++) {
+        ready[k] = events[k] & 3u;
+        n += ready[k] != 0u;
+    }
+    if (n == 0 && timeout > 0) {
+        struct timespec pause = {(time_t)(timeout / 1000), (long)(timeout % 1000) * 1000000L};
+        (void)nanosleep(&pause, NULL);
+    }
+    return n;
 #else
     struct pollfd list[64];
     if (count > 64u) {
@@ -864,6 +896,14 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
     size_t written = fwrite(bytes, 1u, (size_t)step, stream);
     (void)fflush(stream);
     return written == step ? (int64_t)step : -(int64_t)EIO;
+#elif defined(CEE_COSMOOS)
+    /* No readiness on CosmoOS (ADR 0040): the write is a step of at most PIPE_BUF bytes, which may block a moment. */
+    uint64_t step = length < PIPE_BUF ? length : PIPE_BUF;
+    ssize_t written;
+    do {
+        written = write(fd, bytes, (size_t)step);
+    } while (written < 0 && errno == EINTR);
+    return written < 0 ? -(int64_t)errno : (int64_t)written;
 #else
     struct pollfd p = {fd, POLLOUT, 0};
     int ready;
@@ -1108,6 +1148,8 @@ static void cee_wake_waiters(void) {
 static void cee_open_wake_pipe(void) {
 #if defined(CEE_FREESTANDING)
     /* the environment's ceesafe_env_wake needs nothing opened */
+#elif defined(CEE_COSMOOS)
+    /* the executor's wake_lock and wake_cond are ready from cee_exec_begin */
 #elif defined(_WIN32)
     if (cee_exec.wake_event == NULL) {
         cee_exec.wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -1321,6 +1363,34 @@ static bool cee_wait_windows(int timeout) {
     }
     return any;
 }
+#elif defined(CEE_COSMOOS)
+/* CosmoOS userland (ADR 0040): descriptors have no readiness, so a task parked on one is ready now, as consoles and
+   files are on Windows; with none, the executor waits on its condition variable until the earliest deadline
+   (`timeout` ms, -1 for none) or a wake. The woken tasks and the due deadlines are cee_wait's to ready. */
+static bool cee_wait_cosmoos(int timeout) {
+    bool any = false;
+    if (cee_exec.fd_count > 0u) {
+        for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
+            next = t->next;
+            if (t->fd >= 0) {
+                cee_unpark(t);
+                any = true;
+            }
+        }
+        return any;
+    }
+    cosmo_mutex_lock(&cee_exec.wake_lock);
+    if (cee_exec.wake_pending == 0u && timeout != 0) {
+        if (timeout < 0) {
+            cosmo_cond_wait(&cee_exec.wake_cond, &cee_exec.wake_lock);
+        } else {
+            (void)cosmo_cond_timedwait(&cee_exec.wake_cond, &cee_exec.wake_lock, (unsigned long long)timeout * 1000000ull);
+        }
+    }
+    cee_exec.wake_pending = 0u;
+    cosmo_mutex_unlock(&cee_exec.wake_lock);
+    return any;
+}
 #else
 /* poll(): one entry per descriptor a task waits on, plus the wake pipe while a task waits to be woken. */
 static bool cee_wait_poll(int timeout) {
@@ -1501,6 +1571,8 @@ static void cee_wait(void) {
         bool any = false;
 #if defined(_WIN32)
         any = cee_wait_windows(timeout);
+#elif defined(CEE_COSMOOS)
+        any = cee_wait_cosmoos(timeout);
 #else
         if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || cee_exec.op_count > 0u || timeout != 0) {
             any = cee_reactor_open() ? cee_wait_reactor(timeout) : cee_wait_poll(timeout);
@@ -1572,6 +1644,11 @@ static void cee_exec_begin(cee_run *run) {
 #if defined(_WIN32)
     cee_exec.wake_event = NULL;
     cee_exec.port = NULL;
+#endif
+#if defined(CEE_COSMOOS)
+    cee_exec.wake_lock = (cosmo_mutex_t)COSMO_MUTEX_INIT;
+    cee_exec.wake_cond = (cosmo_cond_t)COSMO_COND_INIT;
+    cee_exec.wake_pending = 0u;
 #endif
     cee_exec.wake_count = 0u;
     cee_exec.fd_count = 0u;
@@ -1861,6 +1938,9 @@ typedef struct cee_chan {
 #if defined(_WIN32)
     SRWLOCK m;
     CONDITION_VARIABLE cv;
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_t m; /* ADR 0040 */
+    cosmo_cond_t cv;
 #else
     pthread_mutex_t m;
     pthread_cond_t cv;
@@ -1871,8 +1951,8 @@ typedef struct cee_chan {
 static void cee_chan_lock(cee_chan *c) {
     while (ceesafe_atomic_swap_ord_u32(&c->lock, 1u, 1) != 0u) {
         while (ceesafe_atomic_load_ord_u32(&c->lock, 0) != 0u) {
-#if !defined(_WIN32)
-            sched_yield();
+#if !defined(_WIN32) && !defined(CEE_COSMOOS)
+            sched_yield(); /* CosmoOS has none in its libc: the loop retries (ADR 0040) */
 #endif
         }
     }
@@ -1906,6 +1986,9 @@ void *ceesafe_chan_create(uint64_t capacity, uint64_t size, uint64_t align) {
 #if defined(_WIN32)
     InitializeSRWLock(&c->m);
     InitializeConditionVariable(&c->cv);
+#elif defined(CEE_COSMOOS)
+    c->m = (cosmo_mutex_t)COSMO_MUTEX_INIT;
+    c->cv = (cosmo_cond_t)COSMO_COND_INIT;
 #else
     (void)pthread_mutex_init(&c->m, NULL);
     (void)pthread_cond_init(&c->cv, NULL);
@@ -1924,7 +2007,7 @@ bool ceesafe_chan_release(void *channel) {
 
 void ceesafe_chan_free(void *channel) {
     cee_chan *c = (cee_chan *)channel;
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(CEE_COSMOOS)
     (void)pthread_cond_destroy(&c->cv);
     (void)pthread_mutex_destroy(&c->m);
 #endif
@@ -1953,6 +2036,10 @@ static void cee_chan_signal(cee_chan *c) {
         AcquireSRWLockExclusive(&c->m);
         WakeAllConditionVariable(&c->cv);
         ReleaseSRWLockExclusive(&c->m);
+#elif defined(CEE_COSMOOS)
+        cosmo_mutex_lock(&c->m);
+        cosmo_cond_broadcast(&c->cv);
+        cosmo_mutex_unlock(&c->m);
 #else
         (void)pthread_mutex_lock(&c->m);
         (void)pthread_cond_broadcast(&c->cv);
@@ -2026,6 +2113,12 @@ void ceesafe_chan_wait(void *channel, uint64_t epoch) {
         (void)SleepConditionVariableSRW(&c->cv, &c->m, INFINITE, 0);
     }
     ReleaseSRWLockExclusive(&c->m);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_lock(&c->m);
+    while (ceesafe_atomic_load_u64(&c->epoch) == epoch) {
+        cosmo_cond_wait(&c->cv, &c->m);
+    }
+    cosmo_mutex_unlock(&c->m);
 #else
     (void)pthread_mutex_lock(&c->m);
     while (ceesafe_atomic_load_u64(&c->epoch) == epoch) {

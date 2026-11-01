@@ -63,12 +63,14 @@ allowed or not, and the list below is normative.
   (monotonic + realtime). Sockets: CosmoOS-shaped socket API. Absent in libc:
   math, poll/select, DNS, `setjmp`, sigaltstack [PA impl 2]. CeeSafe's std
   omits them in v0.
-- **Async** (type-system.md §40): not yet. The hosted executor waits in `poll()` and uses threads, pipes and the
-  host's readiness or completion interface; CosmoOS's libc has none of them, and CosmoOS has no `fcntl` to make a
-  descriptor non-blocking (it waits or not per call, `MSG_DONTWAIT`, or through its own asynchronous I/O). An
-  executor over CosmoOS's own interfaces is open work. Meanwhile the I/O runtime builds there (`CEE_COSMOOS`), and
-  opening an async socket (listen, accept, connect) fails with `ENOSYS`, which the library reports as
-  `AsyncError.Io`. `integrations/cosmoos/c1.py --corpus` runs every other run-pass and run-fail program in the guest.
+- **Async** (type-system.md §40; ADR 0040): the hosted executor, with no reactor. With no task ready it waits on its
+  own `cosmo_cond_t`, timed to the earliest deadline, and another thread's wake signals it; channels use
+  `cosmo_mutex_t` and `cosmo_cond_t`. CosmoOS has no `poll` and no `fcntl` to make a descriptor non-blocking (it
+  waits or not per call, `MSG_DONTWAIT`, or through its own asynchronous I/O), so a descriptor counts as ready, as
+  consoles and files do on Windows: a console write or an `AsyncConsole` read may block its worker for as long as it
+  takes. Opening an async socket (listen, accept, connect) fails with `ENOSYS`, which the library reports as
+  `AsyncError.Io`. `integrations/cosmoos/c1.py --corpus` runs every run-pass and run-fail program in the guest but the
+  three that use async sockets.
 - **L1 policy** (OD-15): the CeeSafe runtime calls **only public libc functions**, never
   raw syscalls, until the CosmoOS owner rules on whether CeeSafe's runtime counts as "library".
 

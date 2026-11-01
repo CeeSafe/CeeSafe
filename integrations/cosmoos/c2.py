@@ -192,10 +192,15 @@ def main():
     cflags, ldflags = shlex.split(cosmo.var("USER_CFLAGS")), shlex.split(cosmo.var("USER_LDFLAGS"))
     c1.require_compiler()
 
-    programs = []
+    programs, skipped = [], []
     for kind in ("run-pass", "run-fail"):
         for source in sorted((c1.CORPUS_DIR / kind).glob("*.cee")):
+            if c1.SOCKETS.search(source.read_text(encoding="utf-8")):
+                skipped.append(f"{kind}/{source.name}")   # async sockets are ENOSYS in CosmoOS userland (ADR 0040)
+                continue
             programs.append(c1.Program(f"cee-{source.stem}", c1.CORPUS_DIR, f"{kind}/{source.name}"))
+    if skipped:
+        log(f"skipped, async sockets (ENOSYS in CosmoOS userland): {len(skipped)}: {' '.join(skipped)}")
 
     attempts = {}
     for program in programs:

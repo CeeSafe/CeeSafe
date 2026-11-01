@@ -19,8 +19,8 @@ Steps, for one architecture:
      then `exit 0`.
 
 With --corpus, every program in CeeSafe's corpus (tests/reference/tests/corpus) run-pass and run-fail is also built (as
-cee-<name>) and run in the guest, but the async ones (ASYNC): CosmoOS userland has no executor yet (the hosted one waits
-in poll() and runs threads; CosmoOS's libc has neither), so they are listed as skipped, not built. Its stdout, exit status (from the kernel's "exited with status" log line)
+cee-<name>) and run in the guest, but those that use async sockets (SOCKETS): CosmoOS cannot make a descriptor
+non-blocking, so opening one is ENOSYS there (spec/profiles.md §2.2; ADR 0040), and they are listed as skipped. Its stdout, exit status (from the kernel's "exited with status" log line)
 and panic location are checked against the same `// expect-*` directives as the host tests.
 
 Usage:
@@ -43,8 +43,8 @@ from pathlib import Path
 CEESAFE_ROOT = Path(__file__).resolve().parents[2]
 C1_DIR = Path(__file__).resolve().parent / "c1"
 CORPUS_DIR = CEESAFE_ROOT / "tests" / "reference" / "tests" / "corpus"  # CeeSafe's corpus
-# A program that uses async (type-system.md §40): an async function, an await, or the Async API.
-ASYNC = re.compile(r"\basync fn\b|\bawait\b|\bAsync\.")
+# A program that uses async sockets (lib/std/async.cee), which CosmoOS userland does not have (ADR 0040).
+SOCKETS = re.compile(r"\bAsyncTcp|\bAsyncSockets\b")
 # The compiler under test: $CEESAFEC, else the tree's out/ceesafec (built by tools/bootstrap_release.sh or by itself).
 CEESAFEC = Path(os.environ.get("CEESAFEC", CEESAFE_ROOT / "out" / "ceesafec")).resolve()
 PROMPT = b"\ncosmo$ "
@@ -69,6 +69,17 @@ class Program:
             else:
                 self.panic = f"ceesafe panic: {value} at {relative}:{number}:"
                 self.exit_code = 134
+
+
+def object_sources(root, work):
+    """CosmoOS's kernel objects for a host test: kernel/object/object.cee's C, made as CosmoOS's scripts/cee-gen.py
+    makes it, by the compiler under test, and its hand-written floor object_floor.c. CosmoOS ported object.c to
+    CeeSafe; the runtime the generated C needs is the caller's. Raises CalledProcessError if the port does not
+    compile."""
+    out = Path(work) / "object"
+    run([CEESAFEC, "build", "--profile", "freestanding", "--no-float", "--emit", "c", "-o", out,
+         "kernel/object/object.cee"], cwd=root)
+    return [out / "main.c", Path(root) / "kernel" / "object" / "object_floor.c"]
 
 
 def require_compiler():
@@ -322,12 +333,12 @@ def main():
     if args.corpus:
         for kind in ("run-pass", "run-fail"):
             for source in sorted((CORPUS_DIR / kind).glob("*.cee")):
-                if ASYNC.search(source.read_text(encoding="utf-8")):
+                if SOCKETS.search(source.read_text(encoding="utf-8")):
                     skipped.append(f"{kind}/{source.name}")
                     continue
                 programs.append(Program(f"cee-{source.stem}", CORPUS_DIR, f"{kind}/{source.name}"))
         if skipped:
-            log(f"skipped, async (no executor in CosmoOS userland yet): {len(skipped)}: {' '.join(skipped)}")
+            log(f"skipped, async sockets (ENOSYS in CosmoOS userland): {len(skipped)}: {' '.join(skipped)}")
 
     elves = [build_program(cosmo, program, work, cc, cflags, ld, ldflags) for program in programs]
     for elf in elves:

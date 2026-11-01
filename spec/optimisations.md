@@ -269,6 +269,10 @@ closure's body, so the calls through it inside are direct too.
   value depends on a branch, and a `Thread.both` argument (called through the runtime, c-backend §2).
 - A variant is the same NIR with call targets fixed: the same statements, checks and frame. Borrow and effect
   checking run before the pass and are not repeated.
+- **Async instances are not variants** (type-system.md §32.5, ADR 0037). A call with an async closure for an
+  `@effectsOf` parameter needs its callee's instance, which awaits the closure, so it is made always, after drop
+  elaboration and before the effect checker, whatever `--no-closure-specialisation` says. Async functions, instances
+  among them, are not specialised (their frames are laid out once).
 
 ### 5.2 What a program can observe
 Nothing: output, exit status, panics and allocations are unchanged. Only the C function a call goes to changes, and the

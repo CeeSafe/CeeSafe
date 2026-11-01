@@ -448,6 +448,13 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
 fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: u32) -> Result<void, AllocError> {
     let f = borrow c.hir.functions[function as usize];
     let name = c.name(f.name);
+    if (f.asyncInstanceOf != none()) {
+        // An async instance (ADR 0037 §3.8): its number, then its original's name.
+        appendText(out, "ceeAS")?;
+        appendDecimal(out, function as u64)?;
+        out.push('_')?;
+        return appendCFunctionName(c, out, f.asyncInstanceOf);
+    }
     if (f.isClosure) {
         appendText(out, "ceeCB_")?;
         return appendDecimal(out, f.id as u64);

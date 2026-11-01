@@ -1169,13 +1169,30 @@ fn adapterClosure(c: borrow mut Checker, value: u32, expected: u32, span: Span) 
         types.push(c.types.listAt(parameterList, k))?;
         spans.push(span)?;
     }
-    let function = newClosureFunction(c, span, names.view(), types.view(), spans.view(), result, true)?;
-    let environment = c.hir.functions[function as usize].closureEnvironment;
-    let isVoid = c.types.is(result, TypeKind.Void);
     let named = match (c.hir.exprs[value as usize]) {
         HirExpr.FunctionAddress(f) => f,
         _ => none(),
     };
+    let asyncNamed = named != none() && isAsyncFunction(c, named);
+    if (asyncNamed && !c.asyncAdapter) {
+        // Its call is a task (§40.1): a closure made of it would be called without an await.
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, c.hir.functions[named as usize].name)?;
+        appendText(
+            mut message,
+            " is an async fn, so its call is a task: it can be a closure only as the argument of an '@effectsOf' parameter (type-system.md §32.5, §40.1)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let function = newClosureFunction(c, span, names.view(), types.view(), spans.view(), result, true)?;
+    if (asyncNamed) {
+        // The adapter of an async fn is an async closure awaiting it (ADR 0037 §3.1).
+        let syntax = c.hir.functions[function as usize].syntax;
+        c.front.ast.functions[syntax as usize].isAsync = true;
+    }
+    let environment = c.hir.functions[function as usize].closureEnvironment;
+    let isVoid = c.types.is(result, TypeKind.Void);
     var arguments = Vector<u32>.create();
     var captures = Vector<HirCapture>.create();
     if (named == none()) {
@@ -1193,12 +1210,15 @@ fn adapterClosure(c: borrow mut Checker, value: u32, expected: u32, span: Span) 
         arguments.push(c.expr(HirExpr.LocalRef(p), parameterType, span.start, span.end)?)?;
     }
     let list = c.hir.list(arguments.view())?;
-    let call = if (named != none()) c.expr(HirExpr.Call(named, list), result, span.start, span.end)? else c.expr(
+    var call = if (named != none()) c.expr(HirExpr.Call(named, list), result, span.start, span.end)? else c.expr(
         HirExpr.BuiltinCall(bfCallFunction(), list),
         result,
         span.start,
         span.end,
     )?;
+    if (asyncNamed) {
+        call = c.expr(HirExpr.Await(call), result, span.start, span.end)?;
+    }
     let statement = c.hir.addStmt(
         if (isVoid) HirStmt.Expression(call) else HirStmt.Return(call),
         span.start,

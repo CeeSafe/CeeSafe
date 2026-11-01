@@ -1,0 +1,396 @@
+// Async instances (ADR 0037 §3.3, type-system.md §32.5): a call that passes async closures to an `@effectsOf`
+// function's parameters runs a copy of that function, its async instance, in which each call through such a
+// parameter awaits the closure, and passing it on to another function's `@effectsOf` parameter awaits that
+// function's instance. They are made after drop elaboration and before the effect checker, from a worklist in the
+// program's order, so their numbers are deterministic. Unlike closure-call variants (optimisations.md §5), they are
+// semantics: they are always made.
+
+/// An instance made: its original, its bindings and its HIR function.
+struct AsyncInstanceEntry {
+    original: u32;         // HIR function
+    bindings: Vector<u64>; // (index << 32) | the async closure's HIR function, by index
+    function: u32;         // the instance's HIR function
+}
+
+/// What the pass keeps while it runs.
+struct AsyncInstancer {
+    originals: Vector<u32>; // by HIR function: its NIR function (variant 0), or none
+    instances: Vector<AsyncInstanceEntry>;
+}
+
+fn makeAsyncInstances(c: borrow mut Checker, n: borrow mut NirProgram) -> Result<void, AllocError> {
+    var a = AsyncInstancer { originals: Vector<u32>.create(), instances: Vector<AsyncInstanceEntry>.create() };
+    for (k in 0..c.hir.functions.length) {
+        a.originals.push(none())?;
+    }
+    for (k in 0..n.functions.length) {
+        if (n.functions[k].variant == 0) {
+            a.originals[n.functions[k].source as usize] = truncate<u32>(k);
+        }
+    }
+    var k: usize = 0;
+    while (k < n.functions.length) {
+        let source = n.functions[k].source;
+        if (!functionIsGeneric(c, source)) {
+            var bindings = Vector<u64>.create();
+            for (entry in a.instances.view()) {
+                if (entry.function == source) {
+                    for (b in entry.bindings.view()) {
+                        bindings.push(b)?;
+                    }
+                }
+            }
+            rewriteForInstances(c, n, mut a, truncate<u32>(k), bindings)?;
+        }
+        k += 1;
+    }
+    return Ok();
+}
+
+/// Whether `function` is an async closure or an async fn: an argument that makes an instance.
+fn isAsyncArgument(c: borrow Checker, function: u32) -> bool => function != none() && isAsyncFunction(c, function);
+
+/// The bindings a call makes: each argument at a closure-typed `@effectsOf` parameter of `callee` that holds an async
+/// closure.
+fn asyncBindings(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    known: borrow Vector<u32>,
+    callee: u32,
+    arguments: Range,
+) -> Result<Vector<u64>, AllocError> {
+    var bindings = Vector<u64>.create();
+    for (k in 0..arguments.count) {
+        let local = localOperand(n, n.at(arguments, k));
+        let body = if (local == none()) none() else knownOf(known, local);
+        if (isAsyncArgument(c, body) && containsU32(c.hir.functions[callee as usize].effectsOfParameters, k)) {
+            bindings.push(((k as u64) << 32) | body as u64)?;
+        }
+    }
+    return Ok(bindings);
+}
+
+/// The instance of `original` for `bindings` (made now if new, rewritten when the worklist reaches it), made for the
+/// call at `siteFile`/`siteSpan`.
+fn asyncInstanceOf(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    a: borrow mut AsyncInstancer,
+    original: u32,
+    bindings: Vector<u64>,
+    siteFile: u32,
+    siteSpan: Span,
+) -> Result<u32, AllocError> {
+    for (entry in a.instances.view()) {
+        if (entry.original == original && sameBindings(entry.bindings, bindings)) {
+            return Ok(entry.function);
+        }
+    }
+    let nir = a.originals[original as usize];
+    let f = borrow c.hir.functions[original as usize];
+    let name = f.name;
+    let owner = f.owner;
+    let returnType = f.returnType;
+    let file = f.file;
+    let syntax = f.syntax;
+    let library = f.library;
+    let registered = f.registered;
+    let function = c.hir.addFunction(name, owner, returnType, file, syntax, library, registered)?;
+    {
+        let o = copyHirFunctionFacts(c, original)?;
+        let g = borrow mut c.hir.functions[function as usize];
+        g.parameters = o.parameters;
+        g.locals = o.locals;
+        g.returnSources = o.returnSources;
+        g.mutableFlows = o.mutableFlows;
+        g.effectsOfParameters = o.effectsOfParameters;
+        g.body = o.body;
+        g.typeArguments = o.typeArguments;
+        g.environment = o.environment;
+        g.context = o.context;
+        // Its own effects include the awaits of its argument (§32.5 counts them as the argument's).
+        g.declaredEffects = if (o.declaredEffects == none()) none() else o.declaredEffects | suspendEffect();
+        g.usesCallerAddress = o.usesCallerAddress;
+        g.siteFile = siteFile;
+        g.siteStart = siteSpan.start;
+        g.siteEnd = siteSpan.end;
+        g.asyncInstanceOf = original;
+    }
+    var remaining = Vector<u32>.create();
+    for (index in c.hir.functions[function as usize].effectsOfParameters.view()) {
+        var bound = false;
+        for (b in bindings.view()) {
+            if ((b >> 32) == index as u64) {
+                bound = true;
+            }
+        }
+        if (!bound) {
+            remaining.push(index)?;
+        }
+    }
+    c.hir.functions[function as usize].effectsOfParameters = remaining;
+    a.originals.push(none())?;
+    // Its NIR: the original's blocks, with their own statement lists (rewritten statements are new).
+    let source = borrow n.functions[nir as usize];
+    var locals = Vector<NirLocal>.create();
+    for (l in source.locals.view()) {
+        locals.push(l)?;
+    }
+    var blocks = Vector<NirBlock>.create();
+    for (block in source.blocks.view()) {
+        var statements = Vector<u32>.create();
+        for (s in block.statements.view()) {
+            statements.push(s)?;
+        }
+        var successors = Vector<u32>.create();
+        for (t in block.successors.view()) {
+            successors.push(t)?;
+        }
+        blocks.push(
+            NirBlock { id: block.id, statements: statements, terminator: block.terminator, successors: successors },
+        )?;
+    }
+    let parameterCount = source.parameterCount;
+    n.functions.push(NirFunction {
+        source: function,
+        locals: locals,
+        parameterCount: parameterCount,
+        blocks: blocks,
+        variant: 0,
+        bindings: Vector<u64>.create(),
+    })?;
+    a.originals[function as usize] = truncate<u32>(n.functions.length - 1);
+    a.instances.push(AsyncInstanceEntry { original: original, bindings: bindings, function: function })?;
+    return Ok(function);
+}
+
+/// The facts of a HIR function that an instance shares, copied.
+struct HirFunctionFacts {
+    parameters: Vector<u32>;
+    locals: Vector<u32>;
+    returnSources: Vector<u32>;
+    mutableFlows: Vector<u64>;
+    effectsOfParameters: Vector<u32>;
+    body: u32;
+    typeArguments: Range;
+    environment: Range;
+    context: u32;
+    declaredEffects: u32;
+    usesCallerAddress: bool;
+}
+
+fn copyHirFunctionFacts(c: borrow Checker, function: u32) -> Result<HirFunctionFacts, AllocError> {
+    let f = borrow c.hir.functions[function as usize];
+    var flows = Vector<u64>.create();
+    for (v in f.mutableFlows.view()) {
+        flows.push(v)?;
+    }
+    return Ok(HirFunctionFacts {
+        parameters: copyU32s(f.parameters.view())?,
+        locals: copyU32s(f.locals.view())?,
+        returnSources: copyU32s(f.returnSources.view())?,
+        mutableFlows: flows,
+        effectsOfParameters: copyU32s(f.effectsOfParameters.view())?,
+        body: f.body,
+        typeArguments: f.typeArguments,
+        environment: f.environment,
+        context: f.context,
+        declaredEffects: f.declaredEffects,
+        usesCallerAddress: f.usesCallerAddress,
+    });
+}
+
+/// Where an instance's errors are reported: the call that made it (or, for an instance it made, the first call).
+fn instanceSite(c: borrow Checker, function: u32, file: u32, span: Span) -> Span =>
+    if (c.hir.functions[function as usize].asyncInstanceOf != none()) Span {
+        start: c.hir.functions[function as usize].siteStart,
+        end: c.hir.functions[function as usize].siteEnd,
+    } else span;
+
+fn instanceSiteFile(c: borrow Checker, function: u32, file: u32) -> u32 =>
+    if (c.hir.functions[function as usize].asyncInstanceOf !=
+        none()) c.hir.functions[function as usize].siteFile else file;
+
+/// Rewrites NIR function `f`: a task call (awaited, run) of a sync callee with async closures for `@effectsOf`
+/// parameters goes to the callee's instance. In an instance (`bindings` not empty), a call through a bound closure
+/// awaits it, a sync call passing one on to an `@effectsOf` parameter awaits that callee's instance, and any other
+/// use of one is N0342: the closure would be called without an await.
+fn rewriteForInstances(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    a: borrow mut AsyncInstancer,
+    f: u32,
+    bindings: Vector<u64>,
+) -> Result<void, AllocError> {
+    let known = specialisedClosures(c, n, n.functions[f as usize], bindings)?;
+    let inInstance = bindings.length > 0;
+    let source = n.functions[f as usize].source;
+    let file = c.hir.functions[source as usize].file;
+    var held = Vector<bool>.create(); // locals holding an async closure
+    for (k in 0..n.functions[f as usize].locals.length) {
+        held.push(k < known.length && isAsyncArgument(c, known[k]))?;
+    }
+    var escaped = false;
+    for (b in 0..n.functions[f as usize].blocks.length) {
+        for (i in 0..n.functions[f as usize].blocks[b].statements.length) {
+            let s = n.functions[f as usize].blocks[b].statements[i];
+            var target = none();
+            var r = none();
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(t, value) => {
+                    target = t;
+                    r = value;
+                }
+                NirStatement.Eval(value) => { r = value; }
+                _ => {}
+            }
+            if (r == none()) {
+                continue;
+            }
+            let span = n.statementSpans[s as usize];
+            let t = n.rvalueTypes[r as usize];
+            let rspan = n.rvalueSpans[r as usize];
+            let role = n.rvalueTasks[r as usize];
+            var replacement = none();
+            var newRole: u8 = role;
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Builtin(builtin, arguments) => {
+                    if (builtin == bfAsyncBoxed() && arguments.count >= 2) {
+                        // `Async.boxed(alloc, f(…, async (…) => …))`: f's instance, from the allocator.
+                        let callee = match (n.operands[n.at(arguments, 1) as usize]) {
+                            NirOperand.Const(v) => truncate<u32>(v.magnitude),
+                            _ => none(),
+                        };
+                        if (callee != none() && !isAsyncFunction(c, callee) && a.originals[callee as usize] != none()) {
+                            let callArguments = Range { start: arguments.start + 2, count: arguments.count - 2 };
+                            let bound = asyncBindings(c, n, known, callee, callArguments)?;
+                            if (bound.length > 0) {
+                                let siteFile = instanceSiteFile(c, source, file);
+                                let callSpan = if (rspan.end > rspan.start) rspan else span;
+                                let site = instanceSite(c, source, file, callSpan);
+                                let instance = asyncInstanceOf(c, n, mut a, callee, bound, siteFile, site)?;
+                                var operands = Vector<u32>.create();
+                                for (k in 0..arguments.count) {
+                                    operands.push(n.at(arguments, k))?;
+                                }
+                                let u32Type = n.operandTypes[operands[1] as usize];
+                                operands[1] = constOperand(n, instance as i64, u32Type)?;
+                                let list = n.list(operands.view())?;
+                                replacement = n.rvalue(NirRvalue.Builtin(builtin, list), t, span)?;
+                            }
+                        }
+                    }
+                    if (inInstance && builtin == bfCallClosure()) {
+                        let local = localOperand(n, n.at(arguments, 0));
+                        let body = if (local == none()) none() else knownOf(known, local);
+                        if (isAsyncArgument(c, body)) {
+                            replacement = n.rvalue(NirRvalue.Call(body, arguments), t, span)?;
+                            newRole = taskAwait();
+                        }
+                    }
+                }
+                NirRvalue.Call(callee, arguments) => {
+                    if (!isAsyncFunction(c, callee) && !c.hir.functions[callee as usize].isDynMethod &&
+                        a.originals[callee as usize] != none() && (role != 0 || inInstance)) {
+                        let bound = asyncBindings(c, n, known, callee, arguments)?;
+                        if (bound.length > 0) {
+                            let siteFile = instanceSiteFile(c, source, file);
+                            let callSpan = if (rspan.end > rspan.start) rspan else span;
+                            let site = instanceSite(c, source, file, callSpan);
+                            let instance = asyncInstanceOf(c, n, mut a, callee, bound, siteFile, site)?;
+                            replacement = n.rvalue(NirRvalue.Call(instance, arguments), t, span)?;
+                            newRole = if (role == 0) taskAwait() else role;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if (replacement != none()) {
+                n.rvalueSpans[replacement as usize] = rspan;
+                n.rvalueTasks[replacement as usize] = newRole;
+                n.statements.push(
+                    if (target == none()) NirStatement.Eval(replacement) else NirStatement.Assign(target, replacement),
+                )?;
+                n.statementSpans.push(span)?;
+                n.functions[f as usize].blocks[b].statements[i] = truncate<u32>(n.statements.length - 1);
+                continue;
+            }
+            if (!inInstance || escaped) {
+                continue;
+            }
+            // Copies, casts and reborrows into another local that holds it are how a closure is passed around.
+            let copiesHeld = target != none() && n.places[target as usize].projections.count == 0 &&
+                held[n.places[target as usize].local as usize];
+            if (!copiesHeld && rvalueReadsHeld(n, r, held)) {
+                escaped = true;
+            }
+        }
+        if (inInstance && !escaped) {
+            let term = n.functions[f as usize].blocks[b].terminator;
+            if (term != none()) {
+                match (n.terminators[term as usize]) {
+                    NirTerminator.Return(o) => {
+                        if (o != none() && operandReadsHeld(n, o, held)) {
+                            escaped = true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if (escaped) {
+        let original = c.hir.functions[source as usize].asyncInstanceOf;
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, c.hir.functions[original as usize].name)?;
+        appendText(
+            mut message,
+            " cannot run with an async closure: it uses the closure other than by calling it or passing it to an '@effectsOf' parameter, so it would call it without awaiting it (type-system.md §32.5, ADR 0037)",
+        )?;
+        let siteFile = c.hir.functions[source as usize].siteFile;
+        let siteStart = c.hir.functions[source as usize].siteStart;
+        let siteEnd = c.hir.functions[source as usize].siteEnd;
+        c.front.diagnostics.error(taskNotAwaited(), siteFile, siteStart, siteEnd, message)?;
+    }
+    return Ok();
+}
+
+fn operandReadsHeld(n: borrow NirProgram, o: u32, held: borrow Vector<bool>) -> bool => match (n.operands[o as usize]) {
+    NirOperand.Place(place, _) => placeReadsHeld(n, place, held),
+    _ => false,
+};
+
+fn placeReadsHeld(n: borrow NirProgram, place: u32, held: borrow Vector<bool>) -> bool {
+    let local = n.places[place as usize].local;
+    return (local as usize) < held.length && held[local as usize];
+}
+
+fn listReadsHeld(n: borrow NirProgram, list: Range, held: borrow Vector<bool>) -> bool {
+    for (k in 0..list.count) {
+        if (operandReadsHeld(n, n.at(list, k), held)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether rvalue `r` reads a local that holds an async closure.
+fn rvalueReadsHeld(n: borrow NirProgram, r: u32, held: borrow Vector<bool>) -> bool => match (n.rvalues[r as usize]) {
+    NirRvalue.Use(o) => operandReadsHeld(n, o, held),
+    NirRvalue.Binary(_, x, y) => operandReadsHeld(n, x, held) || operandReadsHeld(n, y, held),
+    NirRvalue.Unary(_, o) => operandReadsHeld(n, o, held),
+    NirRvalue.Cast(o) => operandReadsHeld(n, o, held),
+    NirRvalue.Truncate(o) => operandReadsHeld(n, o, held),
+    NirRvalue.FloatToInt(o, _) => operandReadsHeld(n, o, held),
+    NirRvalue.Ref(_, place) => placeReadsHeld(n, place, held),
+    NirRvalue.Discriminant(place) => placeReadsHeld(n, place, held),
+    NirRvalue.EnumAggregate(_, list) => listReadsHeld(n, list, held),
+    NirRvalue.Aggregate(list) => listReadsHeld(n, list, held),
+    NirRvalue.Array(list) => listReadsHeld(n, list, held),
+    NirRvalue.ArrayRepeat(o) => operandReadsHeld(n, o, held),
+    NirRvalue.Slice(_, place, _, _) => placeReadsHeld(n, place, held),
+    NirRvalue.Length(place) => placeReadsHeld(n, place, held),
+    NirRvalue.Call(_, list) => listReadsHeld(n, list, held),
+    NirRvalue.Builtin(_, list) => listReadsHeld(n, list, held),
+    _ => false,
+};

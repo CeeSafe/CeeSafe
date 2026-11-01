@@ -112,6 +112,21 @@ fn checkCoroutines(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, 
             mut message,
             ": recursion through 'await' needs a frame from an allocator: 'Async.boxed(alloc, …)' (type-system.md §40.1)",
         )?;
+        let original = c.hir.functions[edge.caller as usize].asyncInstanceOf;
+        if (original != none()) {
+            // An async instance calling itself with its closure (ADR 0037 §3.4): at the call that made it.
+            var recursion = Vector<u8>.create();
+            appendQuotedName(mut recursion, c, c.hir.functions[original as usize].name)?;
+            appendText(
+                mut recursion,
+                " is called with an async closure, so it runs as a task, but it calls itself with that closure: its frame would contain itself (type-system.md §32.5, §40.1)",
+            )?;
+            let siteFile = c.hir.functions[edge.caller as usize].siteFile;
+            let siteStart = c.hir.functions[edge.caller as usize].siteStart;
+            let siteEnd = c.hir.functions[edge.caller as usize].siteEnd;
+            c.front.diagnostics.error(awaitRecursion(), siteFile, siteStart, siteEnd, recursion)?;
+            continue;
+        }
         let file = c.hir.functions[edge.caller as usize].file;
         let span = n.rvalueSpans[edge.rvalue as usize];
         let isCall = match (n.rvalues[edge.rvalue as usize]) {

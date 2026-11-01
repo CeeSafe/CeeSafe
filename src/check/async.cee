@@ -30,6 +30,9 @@ fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
     if (function == none()) {
         return false;
     }
+    if (c.hir.functions[function as usize].asyncInstanceOf != none()) {
+        return true; // an async instance of an @effectsOf function (ADR 0037 §3.3)
+    }
     let syntax = c.hir.functions[function as usize].syntax;
     return syntax != none() && (syntax as usize) < c.front.ast.functions.length &&
         c.front.ast.functions[syntax as usize].isAsync;
@@ -50,6 +53,24 @@ fn checkTaskCall(c: borrow mut Checker, function: u32, span: Span) -> Result<voi
     appendText(mut message, "a call of the async fn ")?;
     appendQuotedName(mut message, c, c.hir.functions[function as usize].name)?;
     appendText(mut message, " is a task: await it, or pass it to 'Async.run' (type-system.md §40.1)")?;
+    c.error(taskNotAwaited(), span.start, span.end, message)?;
+    return Ok();
+}
+
+/// A call passing an async closure to an `@effectsOf` parameter (ADR 0037 §3.2): a task, as a call of an async fn.
+fn checkSuspendingCall(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    if (c.taskStart == span.start && c.taskEnd == span.end) {
+        c.taskStart = none();
+        c.taskEnd = none();
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "a call of ")?;
+    appendQuotedName(mut message, c, c.hir.functions[function as usize].name)?;
+    appendText(
+        mut message,
+        " with an async closure is a task: await it, or pass it to 'Async.run' (type-system.md §32.5, §40.1)",
+    )?;
     c.error(taskNotAwaited(), span.start, span.end, message)?;
     return Ok();
 }

@@ -1,0 +1,19 @@
+// An `@effectsOf` function called with an async closure (type-system.md §32.5, §40.1; ADR 0037): the call is a task
+// (N0342 unless awaited or run), and an async fn is a closure or function value only for such a parameter (N0298).
+
+async fn later(v: u32) -> u32 => v;
+
+@effectsOf(op)
+fn once(op: borrow fn(u32) -> u32, x: u32) -> u32 => op(x);
+
+fn plain(op: borrow fn(u32) -> u32) -> u32 => op(1);
+
+async fn work() -> u32 {
+    let t = once(async (v) => await later(v), 1); // error[N0342]
+    let g: fn(u32) -> u32 = later;                // error[N0298]
+    return plain(later);                          // error[N0298]
+}
+
+fn main() {
+    Console.writeLine(Async.run(work()));
+}

@@ -1,0 +1,132 @@
+// Higher-order functions that suspend when their closure does (type-system.md §32.5, §40.1; ADR 0037): an
+// `@effectsOf` function called with an async closure, or a named async fn, is a task that runs its async instance,
+// where each call through the closure awaits it. lib/core's forEach, any, all, retain and sortBy; a user's functions,
+// one passing its closure on to another; Async.boxed; an instance in a spawned child, cancelled midway.
+
+/// A sleep whose error is ignored: the cancel sweep (tools/cancel_sweep.py) cancels at each suspension point.
+async fn pause(ms: u64) {
+    match (await Timer.sleep(ms)) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}
+
+async fn later(v: u32) -> u32 {
+    await pause(1);
+    return v;
+}
+
+async fn plusOne(v: u32) -> u32 {
+    await pause(1);
+    return v + 1;
+}
+
+async fn compare(a: u32, b: u32) -> i32 {
+    await pause(0);
+    return if (a < b) -1 else if (a > b) 1 else 0;
+}
+
+async fn tick(v: u32) -> Result<u32, AsyncError> {
+    await Timer.sleep(5)?;
+    return Ok(v);
+}
+
+@effectsOf(op)
+fn twice(op: borrow fn(u32) -> u32, x: u32) -> u32 => op(op(x));
+
+@effectsOf(op)
+fn twiceTwice(op: borrow fn(u32) -> u32, x: u32) -> u32 => twice(op, twice(op, x)); // op passed on
+
+@effectsOf(op)
+fn sumAll(values: borrow Vector<u32>, op: borrow fn(u32) -> Result<u32, AsyncError>) -> Result<u32, AsyncError> {
+    var total: u32 = 0;
+    for (v in values.view()) {
+        total += op(v)?; // stops at the first error: a cancelled sum stops at once
+    }
+    return Ok(total);
+}
+
+async fn breaker() -> Result<void, AsyncError> {
+    await Timer.sleep(12)?;
+    return Err(AsyncError.Cancelled);
+}
+
+async fn library() -> u32 {
+    var values = Vector<u32>.create();
+    values.push(3)!;
+    values.push(8)!;
+    values.push(5)!;
+    var sum: u32 = 0;
+    await values.forEach(async (v) => { sum += await later(v); });
+    let big = await values.any(async (v) => await later(v) > 7);
+    let small = await values.all(async (v) => await later(v) < 7);
+    await values.retain(async (v) => await later(v) % 2 == 1);
+    return sum * 1000 + (if (big) 100u32 else 0u32) + (if (small) 50u32 else 0u32) + truncate<u32>(values.length);
+}
+
+async fn sorting() -> bool {
+    var values = Vector<u32>.create();
+    var x: u32 = 12345;
+    for (i in 0..300) {
+        x = (x * 75 + 74) % 65537;
+        values.push(x % 1000)!;
+    }
+    var copy = Vector<u32>.create();
+    for (v in values.view()) {
+        copy.push(v)!;
+    }
+    await values.sortBy(async (a, b) => await compare(a, b));
+    copy.sortBy((a, b) => if (a < b) -1 else if (a > b) 1 else 0);
+    for (i in 0..values.length) {
+        if (values[i] != copy[i] || (i > 0 && values[i - 1] > values[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+async fn cancelling() -> Result<u32, AsyncError> {
+    var values = Vector<u32>.create();
+    for (i in 0..10u32) {
+        values.push(i)!;
+    }
+    let boxed = match (await Async.boxed(SystemHeap {}, sumAll(borrow values, async (v) => await tick(v)))) {
+        Ok(r) => r?,
+        Err(_) => 0,
+    };
+    var partial: u32 = 0;
+    let outcome = await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            partial = await sumAll(borrow values, async (v) => await tick(v))?;
+            return Ok();
+        });
+        s.spawn(async () => await breaker());
+    });
+    let cancelled: u32 = match (outcome) {
+        Ok() => 0,
+        Err(_) => 1,
+    };
+    return Ok(boxed * 100 + cancelled * 10 + partial);
+}
+
+async fn users() -> u32 {
+    let k: u32 = 10;
+    let a = await twice(async (v) => await later(v) * k, 2);
+    let b = await twiceTwice(async (x) => await later(x) + 1, 0);
+    let c = await twice(plusOne, 3); // a named async fn
+    return a * 100 + b * 10 + c;
+}
+
+fn main() {
+    Console.writeLine(Async.run(library()));
+    Console.writeLine(Async.run(sorting()));
+    Console.writeLine(Async.run(users()));
+    match (Async.run(cancelling())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 16102
+// expect-stdout: true
+// expect-stdout: 20045
+// expect-stdout: 4510

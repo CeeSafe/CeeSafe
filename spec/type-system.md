@@ -2297,6 +2297,22 @@ fn underLock(values: Slice<i32>, limit: i32) -> i32 {
   counted. Anything made from `p` other than a copy or reborrow is counted by its type, where it is called.
 - lib/core's `sortBy`, `forEach`, `any`, `all` and `retain` (§36.4) are `@effectsOf` their closure, and so are
   `sortBy`'s helpers.
+- **Async arguments** (ADR 0037). An `@effectsOf` parameter of closure type also takes an async closure literal
+  (§40.3) whose task's result is the closure type's, or a named async fn of that signature (§36.1), unless the type's
+  effect list lacks `suspend` (N0295). The call is then a task (§40.1): `await f(…)`, `Async.run(f(…))`,
+  `Async.boxed(alloc, f(…))` or a spawn's body; N0342 elsewhere. It runs `f`'s **async instance** for those arguments,
+  one per (`f`, the closures bound to its parameters): a copy of `f` in which each call through such a parameter, or a
+  local holding it, awaits the closure, and passing it on to another function's `@effectsOf` parameter awaits that
+  function's instance.
+  - The instance is checked as an async fn (§40.1), and its errors are reported at the call that made it, since its
+    code may be the library's: a blocking call is N0295, and an instance that calls itself with its closure is N0343.
+    Any other use of the closure (stored, captured, passed to a parameter without `@effectsOf`) is N0342: it would
+    be called without an await.
+  - The call's effects are `f`'s own, the closure's (`suspend` among them) and the instance's. Cancellation is the
+    closure's (§40.7): `f` sees only what its awaits return.
+  - `f` sees only values, so lib/core's functions work as they are: `await v.forEach(async (x) => …)`,
+    `await v.retain(async (x) => …)`, `await s.sortBy(async (a, b) => …)` (its introsort is iterative, so its
+    instance's frame has a size).
 
 ## 33. C state embedded by value (C7b; ADR 0009 §2)
 
@@ -2713,7 +2729,8 @@ fn demo(lock: *mut spinlock_t, values: Slice<i32>) {
 - **The type.** The effect list is part of a function or closure type: `@effects() fn(i32)` and `fn(i32)` are different
   types. A type without a list may have `sleep` and `alloc`, so `fn(i32)` is the same type as
   `@effects(sleep, alloc) fn(i32)`. It never has `suspend`: only an async closure's call suspends, and that is a task
-  (§40.3), not an effect of a sync call.
+  (§40.3), not an effect of a sync call. A list may name `suspend`: an `@effectsOf` parameter of such a type takes an
+  async closure (§32.5).
   Everything else (Copy, scoped, loans, C representation) is as in §36.1 and §36.2.
 - **Calls** through a value of such a type have the type's effects (§32.1). Without a list, that is `sleep` and `alloc`.
 - **Values.** Every value of a type with an effect list has at most those effects:
@@ -3236,8 +3253,10 @@ fn main() {
 ### 40.3 Async closures
 - **`async (x, …) => body`** (grammar.md §2.1) is a closure literal (§36.2) whose call is a task. Its captures, their
   modes and their loans are §36.2's. `return` and `?` in the body return from the closure's task.
-- It is accepted only as the argument of `spawn`, `race`, `all` and `shield` (§40.4, §40.5), the way §38.6 accepts
-  only literals: its captures must be visible where it is used (N0342 elsewhere).
+- It is accepted only as the argument of `spawn`, `race`, `all` and `shield` (§40.4, §40.5), or of an `@effectsOf`
+  parameter (§32.5, ADR 0037), the way §38.6 accepts only literals: its captures must be visible where it is used
+  (N0342 elsewhere). A named async fn becomes such a closure only for an `@effectsOf` parameter. It is never a
+  function or closure value otherwise (N0298).
 - Its body is an async body: it may await and forbids `sleep`.
 
 ### 40.4 The `Async` operations

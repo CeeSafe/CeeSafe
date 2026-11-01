@@ -216,6 +216,7 @@ struct HirFunction {
     exported: bool;                   // `@export`: exportName is its C symbol (§28.4)
     usesCallerAddress: bool;          // its body calls callerAddress() (ADR 0030): a hidden last parameter in C
     exportName: Range;                // Hir.text
+    asyncInstanceOf: u32;             // an async instance's original (ADR 0037 §3.3), or none
 }
 
 struct HirConstant {
@@ -414,6 +415,7 @@ struct HirProgram {
             exported: false,
             usesCallerAddress: false,
             exportName: Range { start: 0, count: 0 },
+            asyncInstanceOf: 0xFFFFFFFF,
         })?;
         return Ok(truncate<u32>(this.functions.length - 1));
     }

@@ -35,6 +35,8 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
                 elaborateDrops(c, mut n, truncate<u32>(k))?;
             }
         }
+        // Async instances of @effectsOf functions called with async closures (ADR 0037): checked below as async fns.
+        makeAsyncInstances(c, mut n)?;
         // Context effects need the drops explicit (type-system.md §32).
         checkEffects(c, n)?;
         checkCoroutines(c, n)?; // recursion through `await` (type-system.md §40.1)

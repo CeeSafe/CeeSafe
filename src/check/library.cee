@@ -117,7 +117,23 @@ fn checkVectorRetain(
     }
     let keepType = c.hir.locals[c.hir.functions[retain as usize].parameters[1] as usize].typ;
     let argument = c.front.ast.at(arguments, 0);
-    let keep = checkArgument(c, argument, keepType)?;
+    let asyncLiteral = match (c.front.ast.exprs[argument as usize]) {
+        ExprNode.Closure(closure) => c.front.ast.closures[closure as usize].isAsync,
+        _ => false,
+    };
+    var keep = none();
+    if (asyncLiteral) {
+        // An async `keep`: lib/core's retain is @effectsOf it, so this is a task (ADR 0037 §3.2).
+        let closure = match (c.front.ast.exprs[argument as usize]) {
+            ExprNode.Closure(x) => x,
+            _ => none(),
+        };
+        let argumentSpan = c.front.ast.exprSpans[argument as usize];
+        keep = checkClosure(c, closure, keepType, argumentSpan)?;
+        checkSuspendingCall(c, retain, span)?;
+    } else {
+        keep = checkArgument(c, argument, keepType)?;
+    }
     if (c.isBottom(place) || c.isBottom(keep)) {
         return c.errorResult(span.start, span.end);
     }

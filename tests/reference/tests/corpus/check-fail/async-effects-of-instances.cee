@@ -1,0 +1,34 @@
+// Async instances are checked as async fns at the call that made them (type-system.md §32.5, §40.1; ADR 0037 §3.4):
+// a blocking call (N0295), a closure type whose list lacks `suspend` (N0295), a recursive instance (N0343), and a
+// closure used other than by a call or an `@effectsOf` argument (N0342).
+
+async fn later(v: u32) -> u32 => v;
+
+@effectsOf(op)
+fn noisy(op: borrow fn(u32) -> u32, x: u32) -> u32 {
+    Console.writeLine(x); // blocks
+    return op(x);
+}
+
+@effectsOf(op)
+fn quiet(op: borrow @effects() fn(u32) -> u32, x: u32) -> u32 => op(x);
+
+@effectsOf(op)
+fn countDown(op: borrow fn(u32) -> u32, x: u32) -> u32 => if (x == 0) 0 else op(countDown(op, x - 1));
+
+fn keep(op: borrow @effects(suspend) fn(u32) -> u32) -> u32 => op(1);
+
+@effectsOf(op)
+fn leaks(op: borrow @effects(suspend) fn(u32) -> u32) -> u32 => keep(op);
+
+async fn work() -> u32 {
+    let a = await noisy(async (v) => await later(v), 1);     // error[N0295]
+    let b = await quiet(async (v) => await later(v), 2);     // error[N0295]
+    let c = await countDown(async (v) => await later(v), 3); // error[N0343]
+    let d = await leaks(async (v) => await later(v));        // error[N0342]
+    return a + b + c + d;
+}
+
+fn main() {
+    Console.writeLine(Async.run(work()));
+}

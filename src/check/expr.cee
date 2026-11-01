@@ -1086,19 +1086,56 @@ fn checkUserCallWith(
     if (receiver != none()) {
         values.push(receiver)?;
     }
+    var suspending = false;
     for (k in 0..arguments.count) {
         let parameterType =
             if ((k as usize) <
                 parameterCount) c.hir.locals[c.hir.functions[function as usize].parameters[k as usize +
                 skip] as usize].typ else none();
         let argument = c.front.ast.at(arguments, k);
-        values.push(checkArgument(c, argument, parameterType)?)?;
+        let asyncLiteral = match (c.front.ast.exprs[argument as usize]) {
+            ExprNode.Closure(closure) => c.front.ast.closures[closure as usize].isAsync,
+            _ => false,
+        };
+        if (asyncLiteral && parameterType != none() && c.types.isClosure(parameterType) &&
+            namesEffectsOf(c, function, k as usize + skip)) {
+            // An async closure for an @effectsOf parameter: the call is a task, run by f's async instance (ADR 0037).
+            let closure = match (c.front.ast.exprs[argument as usize]) {
+                ExprNode.Closure(x) => x,
+                _ => none(),
+            };
+            let argumentSpan = c.front.ast.exprSpans[argument as usize];
+            values.push(checkClosure(c, closure, parameterType, argumentSpan)?)?;
+            suspending = true;
+            continue;
+        }
+        let effectsOf = parameterType != none() && c.types.isClosure(parameterType) &&
+            namesEffectsOf(c, function, k as usize + skip);
+        let savedAdapter = c.asyncAdapter;
+        c.asyncAdapter = effectsOf;
+        let value = checkArgument(c, argument, parameterType)?;
+        c.asyncAdapter = savedAdapter;
+        if (effectsOf) {
+            match (c.hir.exprs[value as usize]) {
+                HirExpr.Closure(adapter, _) => {
+                    if (isAsyncFunction(c, adapter)) {
+                        suspending = true; // a named async fn's adapter (ADR 0037 §3.1)
+                    }
+                }
+                _ => {}
+            }
+        }
+        values.push(value)?;
     }
     if (arguments.count as usize != parameterCount) {
         return c.errorResult(span.start, span.end);
     }
     let list = c.hir.list(values.view())?;
-    checkTaskCall(c, function, span)?;
+    if (suspending) {
+        checkSuspendingCall(c, function, span)?;
+    } else {
+        checkTaskCall(c, function, span)?;
+    }
     return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
 }
 

@@ -40,8 +40,8 @@ public struct SliceSplitting<region r, T> {
 public struct SliceAlgorithms<T> {
     /// Orders `s` so that `cmp` of each element and the next is at most zero, for a consistent `cmp`. Not stable.
     /// An introsort: quicksort with a median-of-three pivot, insertion sort for short runs, and heapsort past a
-    /// depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. Allocates nothing; the recursion is on
-    /// the shorter side, so the stack is O(log n). An inconsistent `cmp` leaves some permutation of `s`.
+    /// depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. Allocates nothing; the shorter side is
+    /// sorted first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
     @effectsOf(cmp)
     public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
         var depth: u32 = 0;
@@ -54,29 +54,49 @@ public struct SliceAlgorithms<T> {
         SliceAlgorithms<T>.introsort(s, 0, length, depth, cmp);
     }
 
-    /// Sorts `s[lo..hi]`, with `depth` partitions left before heapsort takes over.
+    /// Sorts `s[lo..hi]`, with `depth` partitions left before heapsort takes over. Iterative, so that an async
+    /// instance's frame has a size (ADR 0037 §3.7): the longer side of each partition waits while the shorter is
+    /// sorted, the order the recursion had, so at most log₂ n ranges wait at once (64 for any length).
     @effectsOf(cmp)
     fn introsort(s: SliceMut<T>, lo: usize, hi: usize, depth: u32, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
+        var lows = [0usize; 64];
+        var highs = [0usize; 64];
+        var depths = [0u32; 64];
+        var waiting: usize = 0;
         var low = lo;
         var high = hi;
         var left = depth;
-        while (high - low > 16) {
-            if (left == 0) {
-                SliceAlgorithms<T>.heapsort(s, low, high, cmp);
+        loop {
+            while (high - low > 16) {
+                if (left == 0) {
+                    SliceAlgorithms<T>.heapsort(s, low, high, cmp);
+                    low = high;
+                    break;
+                }
+                left -= 1;
+                let p = SliceAlgorithms<T>.partition(s, low, high, cmp);
+                if (p - low < high - p) {
+                    lows[waiting] = p + 1;
+                    highs[waiting] = high;
+                    depths[waiting] = left;
+                    high = p;
+                } else {
+                    lows[waiting] = low;
+                    highs[waiting] = p;
+                    depths[waiting] = left;
+                    low = p + 1;
+                }
+                waiting += 1;
+            }
+            SliceAlgorithms<T>.insertion(s, low, high, cmp);
+            if (waiting == 0) {
                 return;
             }
-            left -= 1;
-            let p = SliceAlgorithms<T>.partition(s, low, high, cmp);
-            // Recurse into the shorter side and loop on the longer one: at most log₂ n frames.
-            if (p - low < high - p) {
-                SliceAlgorithms<T>.introsort(s, low, p, left, cmp);
-                low = p + 1;
-            } else {
-                SliceAlgorithms<T>.introsort(s, p + 1, high, left, cmp);
-                high = p;
-            }
+            waiting -= 1;
+            low = lows[waiting];
+            high = highs[waiting];
+            left = depths[waiting];
         }
-        SliceAlgorithms<T>.insertion(s, low, high, cmp);
     }
 
     /// Partitions `s[lo..hi]` (at least 3 elements) around a median-of-three pivot; returns the pivot's index.

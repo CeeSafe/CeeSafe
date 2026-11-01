@@ -1235,8 +1235,19 @@ fn reportEffect(
             sleepEffect()) != 0) sleepEffect() else if ((forbidden &
             allocEffect()) != 0) allocEffect() else suspendEffect();
     let source = n.functions[function as usize].source;
+    if (context == contextOfFunction() && op.function != none() &&
+        c.hir.functions[op.function as usize].asyncInstanceOf != none()) {
+        return Ok(); // an async instance reports what it does itself, at the call that made it (ADR 0037 §3.4)
+    }
+    let instance = c.hir.functions[source as usize].asyncInstanceOf != none();
     var message = Vector<u8>.create();
-    if (context == contextOfFunction()) {
+    if (context == contextOfFunction() && instance && c.hir.functions[source as usize].context == 0) {
+        appendDescribedFunction(c, source, mut message)?;
+        appendText(
+            mut message,
+            " is called with an async closure, so it runs as a task, which must not block its thread (type-system.md §32.5, §40.1)",
+        )?;
+    } else if (context == contextOfFunction()) {
         appendDescribedFunction(c, source, mut message)?;
         let declaredContext = c.hir.functions[source as usize].context;
         appendText(
@@ -1276,8 +1287,16 @@ fn reportEffect(
             allocEffect()) ", but this may allocate: it " else ", but this may suspend: it ",
     )?;
     explainOp(c, e, op, effect, mut message)?;
-    let file = c.hir.functions[source as usize].file;
-    let span = n.statementSpans[s as usize];
+    var file = c.hir.functions[source as usize].file;
+    var span = n.statementSpans[s as usize];
+    if (instance) {
+        // At the call that made the instance: its code may be the library's (ADR 0037 §3.4).
+        file = c.hir.functions[source as usize].siteFile;
+        span = Span {
+            start: c.hir.functions[source as usize].siteStart,
+            end: c.hir.functions[source as usize].siteEnd,
+        };
+    }
     for (r in e.reported.view()) {
         if (r.file == file && r.start == span.start && sameBytes(r.message.view(), message.view())) {
             return Ok();

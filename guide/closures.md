@@ -158,6 +158,11 @@ true
 `sortBy` is an introsort: it allocates nothing and runs in O(n log n), but it is not stable. Its comparator returns a
 negative number, zero or a positive number. These methods are written in CeeSafe, in `lib/core/slices.cee`.
 
+In an async fn, they take async closures too: `await readings.forEach(async (r) => await upload(r))` calls the
+closure on each element and waits for each call. Such a call is a task, so it needs its `await`. The same holds for
+your own functions: a function marked `@effectsOf(f)` for its closure parameter `f` waits for an async `f`. It must
+then only call `f`, or pass it on to another such function. It must not store it.
+
 ## Effect lists
 
 In kernel code, a callback may run where sleeping or allocating is forbidden. A function type can say what its

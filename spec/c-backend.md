@@ -497,6 +497,9 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   last child returns, then the result is the first error, else `Err(oom)` if a child could not start, else `Ok`, and
   the scope is zeroed for its next run. An async closure's environment keeps a null code pointer: it runs only through
   its frame.
+- **Async instances** (ADR 0037, type-system.md §32.5) are async fns like any other, named `ceeAS<n>_<f>` after the
+  function they copy (`<n>` the instance's HIR number). The caller awaits the instance; inside it, a call through a
+  bound closure is an awaited call of the async closure's body, its frame a member of the instance's union.
 - **Calls through `dyn`** (ADR 0036). An async method `m` in slot `k` of a dyn type `D…` has its own frame,
   `struct ceeAF_dyn_<D…>_m<k>`: `cee_state` (always 0, for the debugger), `cee_resume`, the resume adapter of the
   receiver's method, `cee_size`, the result, then the union `cee_impl` with one member `i_<T.m>` for the method of

@@ -2421,6 +2421,14 @@ fn lowerBuiltinCall(
             let callValues = [sliceRead, operands[1]];
             let callList = n.list(callValues[..])?;
             let call = n.rvalue(NirRvalue.Call(retain, callList), usize, span)?;
+            let keepExpr = c.hir.at(arguments, 1);
+            let asyncKeep = match (c.hir.exprs[keepExpr as usize]) {
+                HirExpr.Closure(keepFunction, _) => isAsyncFunction(c, keepFunction),
+                _ => false,
+            };
+            if (asyncKeep) {
+                n.rvalueTasks[call as usize] = taskAwait(); // an async `keep`: retain's async instance (ADR 0037)
+            }
             assign(n, b, keptPlace, call)?;
             let keptRead = readPlace(c, n, b, keptPlace)?;
             let values = [operands[0], keptRead];

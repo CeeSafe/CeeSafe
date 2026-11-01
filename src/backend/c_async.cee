@@ -1776,16 +1776,26 @@ fn explainFrames(
         if (!isAsyncNir(c, n, f) || functionIsGeneric(c, source) || n.functions[f as usize].variant != 0) {
             continue;
         }
-        let file = c.hir.functions[source as usize].file;
+        let instance = c.hir.functions[source as usize].asyncInstanceOf != none();
+        // An async instance (ADR 0037) is reported at the call that made it: its code may be the library's.
+        let file = if (instance) c.hir.functions[source as usize].siteFile else c.hir.functions[source as usize].file;
         if (c.fileIsLibrary[file as usize]) {
             continue;
         }
         let report = frameReport(c, n, f)?;
         appendBytes(out, c.filePaths[file as usize].view())?;
         out.push(':')?;
-        appendWhere(out, sources, file, functionNameStart(c, source))?;
-        appendText(out, ": ")?;
+        appendWhere(
+            out,
+            sources,
+            file,
+            if (instance) c.hir.functions[source as usize].siteStart else functionNameStart(c, source),
+        )?;
+        appendText(out, if (instance) ": the async instance of " else ": ")?;
         appendDescribedFunction(c, source, out)?;
+        if (instance) {
+            appendText(out, " for this call")?;
+        }
         appendText(out, " has a frame of ")?;
         appendDecimal(out, truncate<u64>(report.layout.size))?;
         appendText(out, " bytes (align ")?;

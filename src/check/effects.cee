@@ -582,6 +582,36 @@ fn effectsOfParameters(
     return Ok();
 }
 
+/// Whether parameter `index` of `function` is one its `@effectsOf(…)` names, before finishFunctionFacts resolves them:
+/// such a parameter takes an async argument (ADR 0037 §3.1).
+fn namesEffectsOf(c: borrow Checker, function: u32, index: usize) -> bool {
+    let syntax = c.hir.functions[function as usize].syntax;
+    if (syntax == none() || index >= c.hir.functions[function as usize].parameters.length) {
+        return false;
+    }
+    let parameter = c.hir.functions[function as usize].parameters[index];
+    for (entry in c.effectsOfAttributes.view()) {
+        if (entry.syntax != syntax) {
+            continue;
+        }
+        let a = c.front.ast.attributes[entry.attribute as usize];
+        for (k in 0..a.arguments.count) {
+            let argument = c.front.ast.at(a.arguments, k);
+            let nameIdent = match (c.front.ast.exprs[argument as usize]) {
+                ExprNode.Name(n, _) => n,
+                _ => none(),
+            };
+            if (nameIdent != none() && sameBytes(
+                c.name(c.hir.locals[parameter as usize].name),
+                c.name(c.front.ast.idents[nameIdent as usize].symbol),
+            )) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /// The end of Check(): each function's callback, effect and constant facts, and `@effectsOf` resolved.
 fn finishFunctionFacts(c: borrow mut Checker) -> Result<void, AllocError> {
     var reported = Vector<u32>.create();

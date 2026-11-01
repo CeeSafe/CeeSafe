@@ -134,7 +134,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `private` field named outside the source file that declares its struct: read, assigned, borrowed or given in a literal (type-system.md §12)",
     297 => "A float type, literal or `fromBits` in a build with `--no-float` (type-system.md §35.9)",
     298 =>
-        "A function that cannot be a function value: an `extern` or `unsafe` function, one with region parameters, or `main` (type-system.md §36.1)",
+        "A function that cannot be a function value: an `extern` or `unsafe` function, one with region parameters, `main`, or an async fn other than as the argument of an `@effectsOf` parameter (type-system.md §36.1, §32.5)",
     299 =>
         "A closure of the wrong kind: a `borrow mut fn` where a `borrow fn` is expected, or a capturing closure where a plain `fn` is expected (type-system.md §36.2); a function or closure value whose type's effects are not in the expected type's effect list (§36.3)",
     300 => "`ceesafec build --emit exe` without a `main` function",
@@ -178,9 +178,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     341 =>
         "`await` outside the body of an async fn or async closure: in a sync function or closure, a `drop` block or a deferred statement (`type-system.md` §40.2, ADR 0031)",
     342 =>
-        "A task that is not awaited, run or spawned: a call of an async fn, or an async closure, anywhere else; or an `await` whose operand is not a task (`type-system.md` §40.1, §40.3)",
+        "A task that is not awaited, run or spawned: a call of an async fn, an async closure, or a call with an async closure for an `@effectsOf` parameter, anywhere else; an `await` whose operand is not a task; or an `@effectsOf` function that uses such a closure other than by calling it or passing it on to an `@effectsOf` parameter (`type-system.md` §40.1, §40.3, §32.5)",
     343 =>
-        "Recursion through `await`: an async fn whose frame would contain itself, directly or through a call through `dyn` that may reach it (`type-system.md` §40.1, ADR 0036)",
+        "Recursion through `await`: an async fn whose frame would contain itself, directly, through a call through `dyn` that may reach it, or as an `@effectsOf` function's async instance calling itself with its closure (`type-system.md` §40.1, §32.5, ADRs 0036, 0037)",
     344 =>
         "A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value it only reads, which it copies, or what an `async move` child moves (`type-system.md` §40.5, ADR 0033)",
     345 => "`Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4)",

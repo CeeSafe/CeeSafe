@@ -1,6 +1,6 @@
 // A child per loop iteration (type-system.md §40.5, ADR 0033): a child holds its own copy of each Copy value it reads
-// and does not change, taken when it is spawned, so the loop variable and the body's locals can be captured; what
-// the awaiting function owns is still captured by reference, here a vector indexed by the copied loop variable.
+// and does not change, taken when it is spawned, so the loop variable and the body's locals can be captured. A copied
+// borrow (`r`, into the awaiting function's vector) keeps its loan until the scope returns (§3.2).
 
 async fn hold(x: borrow u32, ms: u64) -> Result<u32, AsyncError> {
     await Timer.sleep(ms)?;
@@ -15,9 +15,10 @@ async fn work(values: borrow Vector<u32>) -> Result<u32, AsyncError> {
     await Async.scope(AsyncError.Cancelled, (s) => {
         for (i in 0..values.length) {
             let weight = truncate<u32>(i) + 1;
+            let r = borrow values[i];
             s.spawn(async () => {
-                // the later children finish first: each still sees its own i and weight
-                let v = await hold(borrow values[i], (values.length - i) as u64 * 5)?;
+                // the later children finish first: each still sees its own i, weight and r
+                let v = await hold(r, (values.length - i) as u64 * 5)?;
                 match (await ch.sendAsync(v * weight)) {
                     Ok() => { return Ok(); }
                     Err(_) => { return Err(AsyncError.Cancelled); }

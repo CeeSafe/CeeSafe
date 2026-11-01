@@ -1,0 +1,20 @@
+// A local moved into an `async move` child cannot be used afterwards (type-system.md §40.5, ADR 0033 §3.3): the move
+// checker sees the spawn as a move of the child's environment (N0250).
+
+async fn use(v: borrow Vector<u32>) -> Result<void, AsyncError> => Ok();
+
+async fn moved() -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        var items = Vector<u32>.create();
+        s.spawn(async move () => await use(borrow items));
+        let n = items.length; // error[N0250]
+    })?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(moved())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

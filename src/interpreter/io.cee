@@ -1580,9 +1580,10 @@ struct InterpSpawn {
     function: u32;
     arguments: Vector<Value>;
     scope: u32;
-    environment: u64; // the child's copy of its environment, or 0
-    joinIndex: u32;   // a join's child (race, all): 0 or 1; none for a spawned one
-    release: u32;     // Async.scopeIn's user allocator, or none
+    environment: u64;     // the child's copy of its environment, or 0
+    environmentDrop: u32; // an `async move` child's environment type, destroyed when it returns (ADR 0033), or none
+    joinIndex: u32;       // a join's child (race, all): 0 or 1; none for a spawned one
+    release: u32;         // Async.scopeIn's user allocator, or none
     releaseBlock: u64;
     releaseSize: u64;
 }
@@ -1632,8 +1633,9 @@ fn asyncStatus(it: borrow Interp) -> u32 {
 }
 
 struct InterpTask {
-    scope: u32;       // a child's InterpScope, or none for the root
-    environment: u64; // a child's copy of its environment, ended when it returns, or 0
+    scope: u32;           // a child's InterpScope, or none for the root
+    environment: u64;     // a child's copy of its environment, ended when it returns, or 0
+    environmentDrop: u32; // its type, if the child owns what it holds (ADR 0033 §3.3), or none
     parked: bool;
     deadline: u64;
     onScope: bool;
@@ -1688,14 +1690,19 @@ fn asyncSpawn(
     let function = nirFunctionOf(it, child, 0)?;
     var values = Vector<Value>.create();
     var environment: u64 = 0;
+    let environmentDrop = if (ownsEnvironment(c, child)) c.hir.functions[child as usize].closureEnvironment else none();
     if (c.hir.functions[child as usize].closureEnvironment != none()) {
-        // The environment is a temporary of the scope's body, which ends before the child does. In C it is a field of
-        // the awaiting task's frame, which lasts; here the child gets a copy, which ends when it returns.
+        // The child's own copy of its environment, as in C (c-backend.md §3a): the closure value may be made again by
+        // a loop's next iteration while the child runs. An `async move` child's value is the environment itself.
         let envType = c.types.info(n.functions[function as usize].locals[0].typ).pointee;
         let size = typeSize(c, envType)?;
         environment = it.memory.allocate(allocationLocal(), size, true, "a child's environment".bytes())?;
-        let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
-        it.memory.store(environment, bytes)?;
+        if (c.types.is(n.operandTypes[n.at(arguments, 2) as usize], TypeKind.Reference)) {
+            let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
+            it.memory.store(environment, bytes)?;
+        } else {
+            it.memory.store(environment, closure)?;
+        }
         values.push(valueOf(environment, 8))!;
     }
     let scope = interpScope(it, site);
@@ -1710,6 +1717,9 @@ fn asyncSpawn(
     if (allocator != none() && isUserAllocator(c, allocator)) {
         if (it.asyncScopes[scope as usize].oom) {
             if (environment != 0 && it.memory.isLive(environment)) {
+                if (environmentDrop != none()) {
+                    destroy(it, c, n, environmentDrop, environment)?; // not started: what it was to own is dropped
+                }
                 it.memory.end(environment);
             }
             return Ok(null); // the scope already failed to start a child: it starts no more
@@ -1720,6 +1730,9 @@ fn asyncSpawn(
             it.asyncScopes[scope as usize].oom = true;
             it.asyncScopes[scope as usize].cancelled = true;
             if (environment != 0 && it.memory.isLive(environment)) {
+                if (environmentDrop != none()) {
+                    destroy(it, c, n, environmentDrop, environment)?;
+                }
                 it.memory.end(environment);
             }
             return Ok(null);
@@ -1733,6 +1746,7 @@ fn asyncSpawn(
             arguments: values,
             scope: scope,
             environment: environment,
+            environmentDrop: environmentDrop,
             joinIndex: none(),
             release: release,
             releaseBlock: releaseBlock,
@@ -1826,6 +1840,7 @@ fn runTasks(
         InterpTask {
             scope: none(),
             environment: 0,
+            environmentDrop: none(),
             parked: false,
             deadline: 0xFFFFFFFFFFFFFFFF,
             onScope: false,
@@ -1998,6 +2013,7 @@ fn runTasks(
                 InterpTask {
                     scope: spawn.scope,
                     environment: spawn.environment,
+                    environmentDrop: spawn.environmentDrop,
                     parked: false,
                     deadline: 0xFFFFFFFFFFFFFFFF,
                     onScope: false,
@@ -2020,6 +2036,7 @@ fn runTasks(
                 }
                 let scope = tasks[k as usize].scope;
                 let environment = tasks[k as usize].environment;
+                let environmentDrop = tasks[k as usize].environmentDrop;
                 if (tasks[k as usize].release != none()) {
                     let allocator = tasks[k as usize].release;
                     let block = tasks[k as usize].releaseBlock;
@@ -2027,6 +2044,9 @@ fn runTasks(
                     interpDeallocate(it, c, n, allocator, block, size, 16)?;
                 }
                 if (environment != 0 && it.memory.isLive(environment)) {
+                    if (environmentDrop != none()) {
+                        destroy(it, c, n, environmentDrop, environment)?; // an `async move` child's (ADR 0033)
+                    }
                     it.memory.end(environment);
                 }
                 let joinIndex = tasks[k as usize].joinIndex;
@@ -2169,6 +2189,7 @@ fn asyncJoin(
                     arguments: values,
                     scope: scope,
                     environment: environment,
+                    environmentDrop: none(),
                     joinIndex: k,
                     release: none(),
                     releaseBlock: 0,

@@ -2239,6 +2239,11 @@ fn lowerAsyncScope(
     if (oomOperand == none()) {
         return Ok(none());
     }
+    var start = Vector<u32>.create();
+    start.push(constOperand(n, site as i64, c.types.lookup("u32".bytes()))?)?;
+    let startList = n.list(start.view())?;
+    let marker = n.rvalue(NirRvalue.Builtin(bfAsyncScopeStart(), startList), c.types.voidType, exprSpan(c, e))?;
+    emit(n, b, NirStatement.Eval(marker))?;
     lowerStmt(c, n, b, body)?;
     if (b.current == none()) {
         return Ok(none());

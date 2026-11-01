@@ -141,6 +141,100 @@ struct Borrows {
     throughWrites: Vector<ThroughWrite>;
     blockOf: Vector<u32>;          // block id to position
     reached: Vector<Vector<bool>>; // by loan: the blocks reachable from where it is made, once asked
+    holders: Vector<u64>;          // (scope site << 32) | local: a spawned child's environment (ADR 0033 §3.2)
+}
+
+/// A scope's children hold what their environments captured until the scope returns (type-system.md §40.5, ADR 0033
+/// §3.2): each spawn's environment is a holder, used by its scope's wait and never ended by being made again, so its
+/// loans (every iteration's: points-to sets only grow) stay live from the spawn until the wait. A child copies its
+/// environment when it starts, so the environment's own storage needs to outlive only the spawn.
+fn collectHolders(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) -> Result<void, AllocError> {
+    let function = borrow n.functions[b.function as usize];
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            let r = statementRvalue(n, s);
+            if (r == none() || builtinOf(n, r) != bfAsyncSpawn()) {
+                continue;
+            }
+            let site = constArgument(n, r, 0);
+            let child = operandPlace(n, n.at(builtinArguments(n, r), 2));
+            if (site == none() || child == none()) {
+                continue;
+            }
+            // The child operand is a reference to the environment (`t = &env.code`): the environment holds the loans.
+            let childLocal = n.places[child as usize].local;
+            var holder = childLocal;
+            for (other in function.blocks.view()) {
+                for (d in other.statements.view()) {
+                    match (n.statements[d as usize]) {
+                        NirStatement.Assign(target, value) => {
+                            if (n.places[target as usize].local == childLocal &&
+                                n.places[target as usize].projections.count == 0) {
+                                match (n.rvalues[value as usize]) {
+                                    NirRvalue.Ref(_, place) => { holder = n.places[place as usize].local; }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if (holdsLoans(c, n, b, holder)) {
+                b.holders.push(((site as u64) << 32) | (holder as u64))?;
+            }
+        }
+    }
+    return Ok();
+}
+
+fn isHolder(b: borrow Borrows, local: u32) -> bool {
+    for (h in b.holders.view()) {
+        if (truncate<u32>(h & 0xFFFFFFFF) == local) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The holders a scope's start ends: those of its own children.
+fn holdersStartedBy(
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    s: u32,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
+    let r = statementRvalue(n, s);
+    if (r == none() || builtinOf(n, r) != bfAsyncScopeStart()) {
+        return Ok();
+    }
+    let site = constArgument(n, r, 0);
+    for (h in b.holders.view()) {
+        if (truncate<u32>(h >> 32) == site) {
+            out.push(truncate<u32>(h & 0xFFFFFFFF))?;
+        }
+    }
+    return Ok();
+}
+
+/// The holders a statement uses: those of the scope it waits for, if it is a scope's wait.
+fn holdersUsedBy(
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    s: u32,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
+    let r = statementRvalue(n, s);
+    if (r == none() || builtinOf(n, r) != bfAsyncScopeWait()) {
+        return Ok();
+    }
+    let site = constArgument(n, r, 0);
+    for (h in b.holders.view()) {
+        if (truncate<u32>(h >> 32) == site) {
+            out.push(truncate<u32>(h & 0xFFFFFFFF))?;
+        }
+    }
+    return Ok();
 }
 
 fn toPlaceRef(n: borrow NirProgram, place: u32) -> PlaceRef =>
@@ -949,12 +1043,20 @@ fn computeLiveness(
                 var defined = Vector<u32>.create();
                 definitions(c, n, b, s, mut defined)?;
                 for (local in defined.view()) {
-                    live.remove(local)?;
+                    if (!isHolder(b, local)) {
+                        live.remove(local)?; // a holder's earlier loans stay live when it is made again
+                    }
+                }
+                var started = Vector<u32>.create();
+                holdersStartedBy(n, b, s, mut started)?;
+                for (local in started.view()) {
+                    live.remove(local)?; // before its scope's body, no child holds anything
                 }
                 var statementAccesses = Vector<Access>.create();
                 accessesAt(n, b, position, i, mut statementAccesses)?;
                 var used = Vector<u32>.create();
                 accessUses(c, n, b, statementAccesses, mut used)?;
+                holdersUsedBy(n, b, s, mut used)?;
                 for (local in used.view()) {
                     live.add(local)?;
                 }
@@ -1381,6 +1483,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         throughWrites: Vector<ThroughWrite>.create(),
         blockOf: Vector<u32>.create(),
         reached: Vector<Vector<bool>>.create(),
+        holders: Vector<u64>.create(),
     };
     for (k in 0..localCount) {
         b.pointsTo.push(Vector<u32>.create())?;
@@ -1405,6 +1508,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         b.blockOf[n.functions[function as usize].blocks[position].id as usize] = truncate<u32>(position);
     }
     computeLoans(c, n, mut b)?;
+    collectHolders(c, n, mut b)?;
     for (k in 0..b.loans.length) {
         b.reached.push(Vector<bool>.create())?;
     }

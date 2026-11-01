@@ -1,0 +1,64 @@
+// A copied borrow keeps its loan until the scope returns (type-system.md §40.5, ADR 0033 §3.2): the borrow checker
+// holds each child's environment until the scope's wait. A borrow of a local of one iteration of the body is refused
+// (N0240 when the next iteration makes the local again, N0243 when it ends), and so is changing what children borrow
+// while they may run (N0241), for a borrow copied or moved (`async move`) into a child. A borrow of what the
+// awaiting function owns is allowed: run-pass/async-spawn-loop, run-pass/async-spawn-move.
+
+async fn use(x: borrow u32) -> Result<void, AsyncError> => Ok();
+
+async fn perIteration(values: borrow Vector<u32>) -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (i in 0..values.length) {
+            let x = values[i] * 2; // error[N0240]
+            let r = borrow x;
+            s.spawn(async () => await use(r));
+        } // error[N0243]
+    })?;
+    return Ok();
+}
+
+async fn changed() -> Result<void, AsyncError> {
+    var values = Vector<u32>.create();
+    match (values.push(1)) {
+        Ok() => {}
+        Err(_) => {}
+    }
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (k in 0..values.length) {
+            let r = borrow values[k];
+            s.spawn(async () => await use(r));
+        }
+        match (values.push(2)) { // error[N0241]
+            Ok() => {}
+            Err(_) => {}
+        }
+    })?;
+    return Ok();
+}
+
+async fn movedBorrow(values: borrow Vector<u32>) -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (i in 0..values.length) {
+            let x = values[i] + 1; // error[N0240]
+            let r = borrow x;
+            s.spawn(async move () => await use(r)); // a borrow moved in is held as a copied one is
+        }                                           // error[N0243]
+    })?;
+    return Ok();
+}
+
+fn main() {
+    var values = Vector<u32>.create();
+    match (Async.run(perIteration(borrow values))) {
+        Ok() => {}
+        Err(_) => {}
+    }
+    match (Async.run(changed())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+    match (Async.run(movedBorrow(borrow values))) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

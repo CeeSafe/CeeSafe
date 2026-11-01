@@ -815,6 +815,9 @@ fn builtin(
     if (b == bfAsyncScopeWait()) {
         return asyncScopeWait(it, c, n, frame, r, arguments);
     }
+    if (b == bfAsyncScopeStart()) {
+        return Ok(null); // the borrow checker's marker (ADR 0033 §3.2)
+    }
     if (b == bfAsyncJoin()) {
         return asyncJoin(it, c, n, frame, arguments);
     }

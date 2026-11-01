@@ -1,7 +1,7 @@
 # ADR 0033 — L1 A4d: a scope child per loop iteration, with its own values
 
-- Status: **Accepted** by the owner, 2026-11-01 ("A now, B later"): §3.1–3.2 and 3.4–3.5 now, §3.3 (`async move`)
-  as a later step.
+- Status: **Accepted** by the owner, 2026-11-01 ("A now, B later"); implemented: §3.1 first, then §3.2–3.3 (the
+  owner's "Go with ADR 0033 §3.2–3.3").
 - Scope: what a child spawned in an `Async.scope` body may capture (type-system.md §40.5; ADR 0031 §3.3 and §6.6).
   Found by the reactor benchmark (L1 A4b, ROADMAP §10).
 
@@ -83,12 +83,20 @@ because it adds syntax and drop obligations to frames.
   `ceeAI_` copies from the closure value (`src/backend/c_async.cee`; the frame report counts it). The closure value is
   one temporary per literal in the awaiting frame, made again by each iteration of a loop, so without the copy every
   child of a loop would read the last iteration's environment. N0344's message now says what a child can copy.
-- **§3.2, not yet: a copied borrow.** A capture of a scoped type (`borrow T`, `for (c in v.view())`'s `c`) is still
-  by reference, so a body local of that type is N0344. Following its loan until the scope returns needs the borrow
-  checker's help: the environment temporary is overwritten by the next iteration, which ends the earlier children's
-  loans as the borrow checker sees them, though those children still run. A rule in the type checker alone would not
-  be sound. Indexing with a copied loop variable (`borrow v[k]`) covers the case meanwhile. §3.2 goes with §3.3, which
-  needs the same tracking of what a child holds until the scope returns.
-- **Tests:** run-pass/async-spawn-loop (the loop variable and a body local copied, in C and the interpreter, under
-  ASan+UBSan); check-fail/async-spawn-copies (a borrow-holding, a non-Copy and a changed body local: N0344);
-  `benchmarks/async-reactor/reactor.cee` spawns its holders in a loop.
+- **§3.2, done (2026-11-01).** A copied capture may be scoped (`borrow T`). The borrow checker
+  (`src/nir/borrow.cee`, `collectHolders`) makes each spawn's environment a holder: the scope's wait uses it, and
+  making it again does not end it (its points-to set already has every iteration's loans), so its loans live from
+  each spawn until the wait. A new `Builtin(AsyncScopeStart, [site])` (1007), evaluated where the body starts, ends
+  them there: without it, a scope inside a loop held the previous run's loans across the loop's back edge
+  (run-pass/async-scope's `rounds` found it). It does nothing in C or the interpreter.
+- **§3.3, done (2026-11-01).** `async move () => …` parses as an async closure with `isMove`; `s.spawn` checks it as
+  a move literal whose result is the scope's (`dynFunctionOf`, mutable). Its environment is the closure's value, moved
+  into the spawn; `ceeAI_` copies it into the child's frame, the child thunk drops the copy when the child returns
+  (`ownsEnvironment`), and a failed spawn drops the original. An `async move` child may move a borrow in, unlike a
+  boxed move literal (§36.5): its environment is then scoped (`capturesLoans`), so the holders follow its loans. The
+  interpreter does the same (`environmentDrop`). Race and all children may not be `async move` (N0209).
+- **Tests:** run-pass/async-spawn-loop (the loop variable, a body local and a copied borrow), run-pass/async-spawn-move
+  (vectors moved into children, a borrow moved in; live=0 at every injected allocation failure), in C, the
+  interpreter and ASan+UBSan; check-fail/async-spawn-copies (N0344), async-spawn-loans (N0240, N0241, N0243 for
+  copied and moved borrows), async-spawn-moved (N0250), async-spawn-moves (N0209); parse-pass/async-syntax
+  (`async move`); `benchmarks/async-reactor/reactor.cee` spawns its holders in a loop.

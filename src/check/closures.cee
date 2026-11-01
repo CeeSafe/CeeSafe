@@ -469,8 +469,9 @@ fn checkClosureWith(
     var refined = Vector<HirCapture>.create();
     fieldPrecise(c, body, captures.view(), mut refined)?;
     if (c.copyCaptures && literal.isAsync) {
-        // A spawned child holds what it reads of a Copy, unscoped local by value, copied when it is spawned (ADR
-        // 0033 §3.1): it outlives the body's locals, and no one changes the local while the child may run (N0241).
+        // A spawned child holds what it reads of a Copy local by value, copied when it is spawned (ADR 0033 §3.1):
+        // it outlives the body's locals. A copied borrow's loans last until the scope returns: the borrow checker
+        // holds the child's environment until the scope's wait (§3.2, src/nir/borrow.cee's holders).
         for (k in 0..refined.length) {
             let capture = refined[k];
             let isShared = match (capture.mode) {
@@ -478,7 +479,7 @@ fn checkClosureWith(
                 _ => false,
             };
             let t = c.hir.locals[capture.local as usize].typ;
-            if (isShared && capture.field == none() && c.types.isCopy(t) && !c.types.isScoped(t)) {
+            if (isShared && capture.field == none() && c.types.isCopy(t)) {
                 let l = c.hir.locals[capture.local as usize];
                 let value = c.expr(HirExpr.LocalRef(capture.local), t, l.start, l.end)?;
                 refined[k] = HirCapture {
@@ -709,9 +710,17 @@ fn finishMoveLiteral(
     effects: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
+    // An `async move` child may move a borrow in: it cannot outlive its scope, and the borrow checker holds what it
+    // holds until the scope returns (ADR 0033 §3.2–3.3). A boxed move literal could outlive the loan (§36.5).
+    let isAsync = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize].isAsync;
+    var holdsLoan = false;
     for (capture in captures) {
         let local = c.hir.locals[capture.local as usize];
         if (c.types.isScoped(local.typ)) {
+            if (isAsync) {
+                holdsLoan = true;
+                continue;
+            }
             var message = Vector<u8>.create();
             appendText(mut message, "this 'move' closure captures ")?;
             appendQuotedName(mut message, c, local.name)?;
@@ -752,6 +761,7 @@ fn finishMoveLiteral(
     }
     let definition = c.types.info(environment).structDef;
     c.types.structs[definition as usize].isMoveEnvironment = true;
+    c.types.structs[definition as usize].capturesLoans = holdsLoan;
     let range = finishEnvironment(c, function, environment, moved.view(), effects, span)?;
     // It owns its captures (§36.5): it needs drop if one does, made after ComputeCopyAndDrop has run.
     var needsDrop = false;

@@ -3277,10 +3277,20 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   - a child that captures one of the body's own locals, which end when the body does while the child may still run,
     is **N0344**: a child borrows from the function that awaits the scope, never from the body.
   - **Copies** (ADR 0033): a child holds its own copy of each local it reads and does not change whose type is
-    `Copy` and holds no borrow (not scoped, §25), whoever owns it, taken when it is spawned. Such a capture is no
-    loan: the body may use and change the local afterwards, and a body local may be captured so, which is how a loop
-    spawns a child per iteration (`for (k in 0..v.length) s.spawn(async () => await f(borrow v[k]))`). A child's
-    frame holds its own copy of its closure's environment, made when it starts.
+    `Copy`, whoever owns it, taken when it is spawned. A body local may be captured so, which is how a loop spawns a
+    child per iteration (`for (k in 0..v.length) { let r = borrow v[k]; s.spawn(async () => await f(r)); }`). A
+    child's frame holds its own copy of its closure's environment, made when it starts.
+  - **What a child holds lasts until the scope returns** (§3.2): every loan a child's environment carries, from a
+    copied borrow or a borrow moved in, is live from its spawn until the scope's wait, in every iteration of a loop
+    that spawns. So the body cannot change what a child borrows (N0240, N0241), and a child cannot borrow a local of
+    one iteration of the body (N0243 when it ends, N0240 when the next iteration makes it again). The borrow checker
+    holds each spawn's environment until its scope's wait, and `Builtin(AsyncScopeStart, [site])` at the body's start
+    ends what the scope's previous run held (intermediate-representation.md).
+  - **`async move () => …`** (§3.3) moves every capture into the child's frame, as a `move` literal moves into its
+    environment (§36.5): the body cannot use what it moved (N0250), and the child drops what it owns when it returns
+    (a cancelled child returns early). A child that cannot be started (no frame) drops it at once. A borrow may be
+    moved in, and is held until the scope returns as a copied one is; it makes the environment scoped (§25). Only
+    `s.spawn` takes `async move`: a race or all child is the caller's (N0209).
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 

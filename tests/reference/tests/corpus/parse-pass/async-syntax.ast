@@ -19,4 +19,10 @@
       (=> (try (await (call (. this step) 1))))
     )
   )
+  (fn default children (params)
+    (block
+      (let a = (async-closure () (await (call one))))
+      (let b = (async-move-closure () (block (return (await (call one))))))
+    )
+  )
 )

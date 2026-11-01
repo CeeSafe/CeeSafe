@@ -202,7 +202,9 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | IfExpr | MatchExpr                                 (* M11 (G5): type-system.md §15.3 *)
         | '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)   (* M11 (G8b): a closure, §36.2 *)
         | 'move' '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)   (* M13 G3: a move literal, §36.5 *)
-        | 'async' '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)  (* L1: an async closure, §40.3 *)
+        | 'async' 'move'? '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)
+                                                     (* L1: an async closure, §40.3; `move`: a child that owns what it
+                                                        captures, §40.5, ADR 0033 *)
         | Identifier GenericArgs? '{' FieldInits? '}'       (* struct literal, M2a; GenericArgs M6a *)
         | '[' Expr (',' Expr)* ','? ']' | '[' Expr ';' IntLiteral ']'   (* array literals, M2d *)
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)

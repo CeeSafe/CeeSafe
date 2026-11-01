@@ -72,6 +72,17 @@ fn emitChildThunk(
     child: u32,
 ) -> Result<void, AllocError> {
     let result = c.hir.functions[child as usize].returnType;
+    if (ownsEnvironment(c, child)) {
+        // The environment's drop glue, declared here: the thunks come before the helpers (c-backend.md §3a).
+        let environment = c.hir.functions[child as usize].closureEnvironment;
+        e.helperProto()?;
+        e.t("void ")?;
+        appendDropGlueName(c, mut e.buf, environment)?;
+        e.t("(")?;
+        appendCTypeName(c, mut e.buf, environment)?;
+        e.t(" *);")?;
+        e.emit()?;
+    }
     e.t(if (e.split) "static CEE_UNUSED bool " else "static bool ")?; // split: in the header every unit includes
     appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
     e.t("(void *frame, ceesafe_scope *scope) {")?;
@@ -86,6 +97,14 @@ fn emitChildThunk(
     appendAsyncName(c, mut e.buf, "ceeAR_", child)?;
     e.t("(f)) return false;")?;
     e.emit()?;
+    let environment = c.hir.functions[child as usize].closureEnvironment;
+    if (ownsEnvironment(c, child)) {
+        // An `async move` child owns its environment's copy (ADR 0033 §3.3): dropped when it returns.
+        e.t("    ")?;
+        appendDropGlueName(c, mut e.buf, environment)?;
+        e.t("(&f->cee_env);")?;
+        e.emit()?;
+    }
     e.t("    struct ceeAS_")?;
     e.d(site as u64)?;
     e.t(" *s = (struct ceeAS_")?;
@@ -108,6 +127,17 @@ fn emitChildThunk(
     e.line("    return true;")?;
     e.line("}")?;
     return Ok();
+}
+
+/// Whether async closure `child` owns what its environment holds (`async move`, ADR 0033 §3.3) and must drop it.
+fn ownsEnvironment(c: borrow Checker, child: u32) -> bool {
+    let environment = c.hir.functions[child as usize].closureEnvironment;
+    if (environment == none()) {
+        return false;
+    }
+    let definition = c.types.info(environment).structDef;
+    return definition != none() && c.types.structs[definition as usize].isMoveEnvironment &&
+        c.types.needsDrop(environment);
 }
 
 /// The awaited callee of statement `s`, or none.
@@ -638,6 +668,9 @@ fn emitTaskStatement(
     if (builtinOf(n, r) == bfAsyncSpawn()) {
         return emitSpawn(e, c, n, sources, f, r);
     }
+    if (builtinOf(n, r) == bfAsyncScopeStart()) {
+        return Ok(true); // the borrow checker's marker: no C (ADR 0033 §3.2)
+    }
     if (builtinOf(n, r) == bfAsyncScopeWait()) {
         return emitScopeWait(e, c, n, sources, f, r, target);
     }
@@ -806,15 +839,29 @@ fn emitSpawn(
     e.t("        if (cee_child != NULL) ")?;
     appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
     e.t("(cee_child")?;
+    let byValue = !c.types.is(n.operandTypes[n.at(list, 2) as usize], TypeKind.Reference);
     if (childNir != none() && c.hir.functions[child as usize].closureEnvironment != none()) {
-        // The closure's value is its environment's first member, so its address is the environment's (§36.2).
+        // The closure's value is its environment's first member, so its address is the environment's (§36.2). An
+        // `async move` child's value is the environment itself, moved into the spawn (ADR 0033 §3.3).
         e.t(", (")?;
         appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
         e.t(")(uintptr_t)")?;
+        if (byValue) {
+            e.t("&")?;
+        }
         e.b(value.view())?;
     }
     e.t(");")?;
     e.emit()?;
+    if (byValue && ownsEnvironment(c, child)) {
+        // Not started (no frame): what it was to own is dropped here.
+        e.t("        else ")?;
+        appendDropGlueName(c, mut e.buf, c.hir.functions[child as usize].closureEnvironment)?;
+        e.t("(&")?;
+        e.b(value.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
     e.line("    }")?;
     return Ok(true);
 }

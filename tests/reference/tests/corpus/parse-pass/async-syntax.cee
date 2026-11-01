@@ -1,5 +1,5 @@
 // `async fn`, `unsafe async fn` and prefix `await` (grammar.md §2, §2.1; ADR 0031 §3.1): the first `?` or `!` ends
-// `await`'s operand, and what follows applies to the awaited value.
+// `await`'s operand, and what follows applies to the awaited value. Async closures, and `async move` ones (ADR 0033).
 
 async fn one() -> i32 => 1;
 
@@ -15,4 +15,11 @@ async fn parse(text: StringView) -> Result<Pair, Error> {
 
 struct Worker {
     public async fn run(borrow this) -> i32 => await this.step(1)?;
+}
+
+fn children() {
+    let a = async () => await one();
+    let b = async move () => {
+        return await one();
+    };
 }

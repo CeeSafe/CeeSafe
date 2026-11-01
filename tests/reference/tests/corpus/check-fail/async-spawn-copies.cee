@@ -1,15 +1,10 @@
-// What a child cannot hold its own copy of (type-system.md §40.5, ADR 0033): a body local holding a borrow, a body
-// local that is not Copy, and a body local the child changes, are still captured by reference, and still end with
-// the body (N0344).
+// What a child cannot copy (type-system.md §40.5, ADR 0033): a body local that is not Copy, or that the child
+// changes, is captured by reference and ends with the body (N0344). Copied borrows: check-fail/async-spawn-loans.
 
 async fn use(x: borrow u32) -> Result<void, AsyncError> => Ok();
 
 async fn work(values: borrow Vector<u32>) -> Result<void, AsyncError> {
     await Async.scope(AsyncError.Cancelled, (s) => {
-        for (i in 0..values.length) {
-            let r = borrow values[i];
-            s.spawn(async () => await use(r)); // error[N0344]
-        }
         var names = Vector<u32>.create();
         s.spawn(async () => { // error[N0344]
             let n = names.length;

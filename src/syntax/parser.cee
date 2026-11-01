@@ -1888,13 +1888,19 @@ struct Parser {
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Move(operand), start, this.endFrom(start));
         }
-        if (this.at(TokenKind.AsyncKeyword) && this.peekIs(1, TokenKind.OpenParen)) {
-            // `async (x) => …`: an async closure (type-system.md §40.3).
+        if (this.at(TokenKind.AsyncKeyword) &&
+            (this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.MoveKeyword))) {
+            // `async (x) => …`: an async closure (type-system.md §40.3); `async move (…) => …` owns what it captures
+            // (§40.5, ADR 0033 §3.3).
             this.advance();
+            let isMove = this.eat(TokenKind.MoveKeyword);
             if (this.at(TokenKind.OpenParen) && this.isClosureStart()) {
                 let closure = this.parseClosure()?;
                 match (this.front.ast.exprs[closure as usize]) {
-                    ExprNode.Closure(c) => { this.front.ast.closures[c as usize].isAsync = true; }
+                    ExprNode.Closure(c) => {
+                        this.front.ast.closures[c as usize].isAsync = true;
+                        this.front.ast.closures[c as usize].isMove = isMove;
+                    }
                     _ => {}
                 }
                 this.front.ast.exprSpans[closure as usize] = Span { start: start, end: this.endFrom(start) };

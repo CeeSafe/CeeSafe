@@ -21,6 +21,9 @@ fn bfAsyncJoinResult() -> u32 => 1004;
 fn bfAsyncBlocking() -> u32 => 1005;
 /// `await Async.boxed(alloc, f(args))`: Builtin(AsyncBoxed, [the allocator's type, f, args…]), a Result<T, AllocError>.
 fn bfAsyncBoxed() -> u32 => 1006;
+/// The start of an `Async.scope` body: Eval(Builtin(AsyncScopeStart, [site])). It does nothing at run time; the
+/// borrow checker ends what the scope's children held in the scope's previous run there (ADR 0033 §3.2).
+fn bfAsyncScopeStart() -> u32 => 1007;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -379,7 +382,14 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -
     let argumentSpan = c.front.ast.exprSpans[argument as usize];
     let savedCopy = c.copyCaptures;
     c.copyCaptures = true;
-    let closure = checkClosure(c, literal, expected, argumentSpan)?;
+    var closure = none();
+    if (c.front.ast.closures[literal as usize].isMove) {
+        // `async move`: the child owns what it captures, moved into its frame (ADR 0033 §3.3).
+        let into = c.types.dynFunctionOf(none0.view(), resultType, maskEffects(), true, false)?;
+        closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
+    } else {
+        closure = checkClosure(c, literal, expected, argumentSpan)?;
+    }
     c.copyCaptures = savedCopy;
     let captures = match (c.hir.exprs[closure as usize]) {
         HirExpr.Closure(_, list) => list,
@@ -390,6 +400,7 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -
         let mutable = match (capture.mode) {
             CaptureMode.Shared => false,
             CaptureMode.Copy => { continue; } // the environment holds a copy: no loan
+            CaptureMode.Move => { continue; } // moved into the child: the move checker sees later uses
             _ => true,
         };
         let local = capture.local;
@@ -625,6 +636,15 @@ fn checkJoinChild(c: borrow mut Checker, arguments: Range, k: u32, result: u32) 
         closureType = c.types.referenceTo(callable, true)?;
     }
     let literal = asyncLiteralArgument(c, arguments, k);
+    if (c.front.ast.closures[literal as usize].isMove) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a race or all child is the caller's: write 'async () => …'; 'async move' is for 's.spawn' (type-system.md §40.5)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     return checkClosure(c, literal, closureType, span);
 }
 

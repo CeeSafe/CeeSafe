@@ -1,0 +1,17 @@
+// Where `async move` is refused (type-system.md §40.5, ADR 0033 §3.3): race and all children are the caller's, never
+// moved into (N0209). A local moved into a child: check-fail/async-spawn-moved (N0250).
+
+async fn use(v: borrow Vector<u32>) -> Result<void, AsyncError> => Ok();
+
+async fn joined() -> Result<void, AsyncError> {
+    var items = Vector<u32>.create();
+    await Async.all(async move () => await use(borrow items), async () => Ok())?; // error[N0209]
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(joined())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

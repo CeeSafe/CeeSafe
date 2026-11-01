@@ -166,6 +166,7 @@ struct StructDefinition {
     isThreadSafe: bool;
     isClosureEnvironment: bool;
     isMoveEnvironment: bool;
+    capturesLoans: bool; // an `async move` environment that holds a borrow: scoped (ADR 0033 §3.3)
     closureId: u32;
     allocateMethod: u32;
     deallocateMethod: u32;
@@ -1406,7 +1407,7 @@ struct TypeTable {
         }
         if (t.structDef != none()) {
             let s = borrow this.structs[t.structDef as usize];
-            if (s.isClosureEnvironment && !s.isMoveEnvironment) {
+            if (s.isClosureEnvironment && (!s.isMoveEnvironment || s.capturesLoans)) {
                 return true;
             }
             if (s.hasRegionParameters || this.anyScoped(s.typeArguments)) {
@@ -1788,6 +1789,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     isThreadSafe: false,
     isClosureEnvironment: false,
     isMoveEnvironment: false,
+    capturesLoans: false,
     closureId: 0,
     allocateMethod: none(),
     deallocateMethod: none(),

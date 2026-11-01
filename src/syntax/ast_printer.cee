@@ -562,7 +562,8 @@ struct AstPrinter {
             ExprNode.Closure(index) => {
                 let closure = ast.closures[index as usize];
                 this.text(
-                    if (closure.isMove) "(move-closure (" else if (closure.isAsync) "(async-closure (" else "(closure (",
+                    if (closure.isMove &&
+                        closure.isAsync) "(async-move-closure (" else if (closure.isMove) "(move-closure (" else if (closure.isAsync) "(async-closure (" else "(closure (",
                 )?;
                 for (k in 0..closure.parameters.count) {
                     if (k > 0) {

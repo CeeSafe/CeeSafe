@@ -1,0 +1,47 @@
+// `async move` children (type-system.md §40.5, ADR 0033 §3.3): each child owns what it captures, moved into its
+// frame: here a vector built by one iteration of the body. A borrow moved in (`out`, of the awaiting function's
+// channel) keeps its loan until the scope returns. A child drops what it owns when it returns; with
+// CEESAFE_FAIL_ALLOC_AT a child that cannot start drops it at once (the fault sweep checks live=0 at every point).
+
+async fn total(v: borrow Vector<u32>, ms: u64) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    var t: u32 = 0;
+    for (x in v.view()) {
+        t += x;
+    }
+    return Ok(t);
+}
+async fn work() -> Result<u32, AsyncError> {
+    let ch = match (Channel<u32>.create(8)) {
+        Ok(c) => c,
+        Err(_) => { return Err(AsyncError.Cancelled); },
+    };
+    let out = borrow ch;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (k in 0..3u32) {
+            var items = Vector<u32>.create();
+            for (j in 0..k + 1) {
+                match (items.push(j + 1)) { Ok() => {} Err(_) => {} }
+            }
+            s.spawn(async move () => {
+                let t = await total(borrow items, (3 - k) as u64 * 5)?;
+                match (await out.sendAsync(t)) {
+                    Ok() => { return Ok(); }
+                    Err(_) => { return Err(AsyncError.Cancelled); }
+                }
+            });
+        }
+    })?;
+    var digits: u32 = 0;
+    for (k in 0..3) {
+        match (await ch.recvAsync()?) {
+            Some(v) => { digits = digits * 100 + v; }
+            null => {}
+        }
+    }
+    return Ok(digits);
+}
+fn main() {
+    match (Async.run(work())) { Ok(t) => { Console.writeLine(t); } Err(_) => { Console.writeLine("failed"); } }
+}
+// expect-stdout: 60301

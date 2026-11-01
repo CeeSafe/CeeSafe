@@ -20,7 +20,8 @@ time, by tracking ownership.
 | `ref`, `out` | `borrow mut T` parameters, `mut x` at the call | |
 | `List<T>`, `string` | `Vector<T>`, `String` / `StringView` | |
 | LINQ, lambdas | `sortBy`, `forEach`, `any`, `all`, `retain`; `(x) => x > 2` | lambdas borrow and cannot escape |
-| `async` / `await`, threads | not yet | |
+| `async` / `await`, `Task.WhenAll`, `Task.WhenAny` | `async fn`, `await`; `Async.scope`, `Async.all`, `Async.race` | a task is awaited where it starts, never stored; see [Async tasks](../async.md) |
+| threads | `Thread.spawn`, `Thread.both`, `Arc`, `Mutex`, atomics | see [Threads](../threads.md) |
 | NuGet, Maven, npm | `ceesafe.toml`, path and git dependencies | |
 
 ## The same program
@@ -84,4 +85,4 @@ enum.
 ## Things you will miss
 
 Classes and inheritance, interfaces as types, reflection, attributes on everything, properties, events, LINQ's query
-syntax, string interpolation, exceptions, `async`, threads, and a large standard library.
+syntax, string interpolation, exceptions, a task you can store and await later, and a large standard library.

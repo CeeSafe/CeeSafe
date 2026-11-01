@@ -18,7 +18,7 @@ has neither, and tracks ownership at compile time instead, which is what lets it
 | `nil` | `null`, only for optionals (`T?`) | |
 | interfaces, satisfied implicitly | interfaces, implemented explicitly with `impl` | generic bounds, resolved at compile time |
 | generics `[T any]` | `<T>` | |
-| goroutines, channels | not yet | |
+| goroutines, channels | async tasks in a scope, `Channel<T>` (`sendAsync`, `recvAsync`; `send`, `recv` between threads) | a task never outlives its scope; see [Async tasks](../async.md) |
 | `gofmt` | `ceesafec fmt` | one canonical style, no options |
 | `go.mod`, `go.sum` | `ceesafe.toml`, `ceesafe.lock` | path and git dependencies, pinned by commit and hash |
 | `go vet`, the race detector | the compiler: ownership, borrows, context effects | |
@@ -112,5 +112,5 @@ as generic bounds, resolved at compile time. There is no interface value holding
 
 ## Things you will miss
 
-Goroutines, channels and `select`, maps, interface values and type switches, struct embedding, the standard library,
+Goroutines that outlive their caller, `select` over many channels (`Async.race` takes two tasks), maps, interface values and type switches, struct embedding, the standard library,
 and Go's fast tooling for large codebases.

@@ -98,5 +98,5 @@ removes those it proves cannot fail.
 ## Things you will miss
 
 `comptime`, `@cImport` of whole headers, packed structs and arbitrary-width integers (`u3`), SIMD vectors, inline
-assembly, async, the cross-compiling toolchain in one binary, and Zig's build system. CeeSafe relies on a C compiler for
+assembly, the cross-compiling toolchain in one binary, and Zig's build system. CeeSafe relies on a C compiler for
 code generation and cross compilation.

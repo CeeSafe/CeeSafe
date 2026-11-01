@@ -39,6 +39,7 @@ const guide = [
       { text: "Generics and interfaces", link: "/guide/generics" },
       { text: "Functions and closures", link: "/guide/closures" },
       { text: "Threads", link: "/guide/threads" },
+      { text: "Async tasks", link: "/guide/async" },
       { text: "Unsafe code and C", link: "/guide/unsafe-and-c" },
       { text: "Kernel code", link: "/guide/kernel" },
     ],

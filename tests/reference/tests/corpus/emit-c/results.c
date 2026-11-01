@@ -37,10 +37,7 @@ _Static_assert(sizeof(ceeR_S3ResE4Code) == 8, "ceesafec layout: sizeof(Result<Re
 _Static_assert(_Alignof(ceeR_S3ResE4Code) == 4, "ceesafec layout: alignof(Result<Res, Code>)");
 _Static_assert(offsetof(ceeR_S3ResE4Code, u) == 4, "ceesafec layout: Result<Res, Code> payload offset");
 static inline CEE_UNUSED ceeR_S3ResE4Code ceeMk_ceeR_S3ResE4Code_v_Ok(ceeT_Res a0) {
-    ceeR_S3ResE4Code r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_S3ResE4Code){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeR_vE4Code {

@@ -43,10 +43,7 @@ _Static_assert(sizeof(ceeR_Hi32E10AllocError) == 12, "ceesafec layout: sizeof(Re
 _Static_assert(_Alignof(ceeR_Hi32E10AllocError) == 4, "ceesafec layout: alignof(Result<Handle<i32>, AllocError>)");
 _Static_assert(offsetof(ceeR_Hi32E10AllocError, u) == 4, "ceesafec layout: Result<Handle<i32>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_Hi32E10AllocError ceeMk_ceeR_Hi32E10AllocError_v_Ok(cee_handle a0) {
-    ceeR_Hi32E10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_Hi32E10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeO_Pi32 { const int32_t * f__0; };

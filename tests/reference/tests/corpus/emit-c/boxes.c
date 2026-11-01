@@ -52,11 +52,7 @@ _Static_assert(sizeof(ceeE_List) == 24, "ceesafec layout: sizeof(List)");
 _Static_assert(_Alignof(ceeE_List) == 8, "ceesafec layout: alignof(List)");
 _Static_assert(offsetof(ceeE_List, u) == 8, "ceesafec layout: List payload offset");
 static inline CEE_UNUSED ceeE_List ceeMk_ceeE_List_v_Cons(ceeT_Res a0, ceeE_List * a1) {
-    ceeE_List r = { 0 };
-    r.tag = (uint8_t)1;
-    r.u.v_Cons.f__0 = a0;
-    r.u.v_Cons.f__1 = a1;
-    return r;
+    return (ceeE_List){ .tag = (uint8_t)1, .u.v_Cons = { .f__0 = a0, .f__1 = a1 } };
 }
 
 struct ceeR_E4ListE10AllocError {
@@ -70,10 +66,7 @@ _Static_assert(sizeof(ceeR_E4ListE10AllocError) == 32, "ceesafec layout: sizeof(
 _Static_assert(_Alignof(ceeR_E4ListE10AllocError) == 8, "ceesafec layout: alignof(Result<List, AllocError>)");
 _Static_assert(offsetof(ceeR_E4ListE10AllocError, u) == 8, "ceesafec layout: Result<List, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_E4ListE10AllocError ceeMk_ceeR_E4ListE10AllocError_v_Ok(ceeE_List a0) {
-    ceeR_E4ListE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_E4ListE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeR_XE4ListS10SystemHeapE10AllocError {
@@ -87,10 +80,7 @@ _Static_assert(sizeof(ceeR_XE4ListS10SystemHeapE10AllocError) == 16, "ceesafec l
 _Static_assert(_Alignof(ceeR_XE4ListS10SystemHeapE10AllocError) == 8, "ceesafec layout: alignof(Result<Box<List>, AllocError>)");
 _Static_assert(offsetof(ceeR_XE4ListS10SystemHeapE10AllocError, u) == 8, "ceesafec layout: Result<Box<List>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_XE4ListS10SystemHeapE10AllocError ceeMk_ceeR_XE4ListS10SystemHeapE10AllocError_v_Ok(ceeE_List * a0) {
-    ceeR_XE4ListS10SystemHeapE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_XE4ListS10SystemHeapE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeR_Xi32S16FailingAllocatorE10AllocError {
@@ -104,10 +94,7 @@ _Static_assert(sizeof(ceeR_Xi32S16FailingAllocatorE10AllocError) == 16, "ceesafe
 _Static_assert(_Alignof(ceeR_Xi32S16FailingAllocatorE10AllocError) == 8, "ceesafec layout: alignof(Result<Box<i32, FailingAllocator>, AllocError>)");
 _Static_assert(offsetof(ceeR_Xi32S16FailingAllocatorE10AllocError, u) == 8, "ceesafec layout: Result<Box<i32, FailingAllocator>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_Xi32S16FailingAllocatorE10AllocError ceeMk_ceeR_Xi32S16FailingAllocatorE10AllocError_v_Ok(int32_t * a0) {
-    ceeR_Xi32S16FailingAllocatorE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_Xi32S16FailingAllocatorE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 static CEE_UNUSED ceeR_E4ListE10AllocError ceeF_cons(ceeT_Res, ceeE_List);

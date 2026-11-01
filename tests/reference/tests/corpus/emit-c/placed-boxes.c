@@ -48,10 +48,7 @@ _Static_assert(sizeof(ceeR_XS4PairS10SystemHeapE10AllocError) == 16, "ceesafec l
 _Static_assert(_Alignof(ceeR_XS4PairS10SystemHeapE10AllocError) == 8, "ceesafec layout: alignof(Result<Box<Pair>, AllocError>)");
 _Static_assert(offsetof(ceeR_XS4PairS10SystemHeapE10AllocError, u) == 8, "ceesafec layout: Result<Box<Pair>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_XS4PairS10SystemHeapE10AllocError ceeMk_ceeR_XS4PairS10SystemHeapE10AllocError_v_Ok(ceeT_Pair * a0) {
-    ceeR_XS4PairS10SystemHeapE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_XS4PairS10SystemHeapE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 static CEE_UNUSED uint64_t ceeF_sum(uint64_t);

@@ -42,10 +42,7 @@ _Static_assert(sizeof(ceeE_Holder) == 8, "ceesafec layout: sizeof(Holder)");
 _Static_assert(_Alignof(ceeE_Holder) == 4, "ceesafec layout: alignof(Holder)");
 _Static_assert(offsetof(ceeE_Holder, u) == 4, "ceesafec layout: Holder payload offset");
 static inline CEE_UNUSED ceeE_Holder ceeMk_ceeE_Holder_v_One(ceeT_Res a0) {
-    ceeE_Holder r = { 0 };
-    r.tag = (uint8_t)1;
-    r.u.v_One.f__0 = a0;
-    return r;
+    return (ceeE_Holder){ .tag = (uint8_t)1, .u.v_One = { .f__0 = a0 } };
 }
 
 static CEE_UNUSED int64_t ceeF_area(ceeE_Shape);

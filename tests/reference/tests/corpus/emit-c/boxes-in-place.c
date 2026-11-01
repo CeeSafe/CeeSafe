@@ -51,10 +51,7 @@ _Static_assert(sizeof(ceeR_XA64_u8S10SystemHeapE10AllocError) == 16, "ceesafec l
 _Static_assert(_Alignof(ceeR_XA64_u8S10SystemHeapE10AllocError) == 8, "ceesafec layout: alignof(Result<Box<[u8; 64]>, AllocError>)");
 _Static_assert(offsetof(ceeR_XA64_u8S10SystemHeapE10AllocError, u) == 8, "ceesafec layout: Result<Box<[u8; 64]>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_XA64_u8S10SystemHeapE10AllocError ceeMk_ceeR_XA64_u8S10SystemHeapE10AllocError_v_Ok(ceeA64_u8 * a0) {
-    ceeR_XA64_u8S10SystemHeapE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_XA64_u8S10SystemHeapE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeR_XS3ResS10SystemHeapE10AllocError {
@@ -68,10 +65,7 @@ _Static_assert(sizeof(ceeR_XS3ResS10SystemHeapE10AllocError) == 16, "ceesafec la
 _Static_assert(_Alignof(ceeR_XS3ResS10SystemHeapE10AllocError) == 8, "ceesafec layout: alignof(Result<Box<Res>, AllocError>)");
 _Static_assert(offsetof(ceeR_XS3ResS10SystemHeapE10AllocError, u) == 8, "ceesafec layout: Result<Box<Res>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_XS3ResS10SystemHeapE10AllocError ceeMk_ceeR_XS3ResS10SystemHeapE10AllocError_v_Ok(ceeT_Res * a0) {
-    ceeR_XS3ResS10SystemHeapE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_XS3ResS10SystemHeapE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 static CEE_UNUSED ceeR_XA64_u8S10SystemHeapE10AllocError ceeF_table(void);

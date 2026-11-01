@@ -1096,27 +1096,33 @@ fn emitEnum(
         }
         e.t(") {")?;
         e.emit()?;
-        e.t("    ")?;
+        // One compound literal: the tag and the variant's members, the rest zero as C's initialisers leave it. Not
+        // `r = { 0 }` and then stores: inlined into a caller whose argument has an enum payload, gcc 12 reports `r`
+        // uninitialised (-Wuninitialized, -Wmaybe-uninitialized at -O2 -Wall), which fails a -Werror build; this
+        // form it reads right (measured on the compiler's own C and the corpus).
+        e.t("    return (")?;
         e.b(name.view())?;
-        e.t(" r = { 0 };")?;
-        e.emit()?;
-        e.t("    r.tag = (uint")?;
+        e.t("){ .tag = (uint")?;
         e.d((definition.tagSize * 8) as u64)?;
         e.t("_t)")?;
         e.d(c.types.variants[v as usize].index as u64)?;
-        e.t(";")?;
-        e.emit()?;
-        for (k in 0..payload.length) {
-            e.t("    r.u.")?;
+        if (payload.length > 0) {
+            e.t(", .u.")?;
             e.b(variantName.view())?;
-            e.t(".")?;
-            appendFieldName(c, mut e.buf, payload[k])?;
-            e.t(" = a")?;
-            e.d(k as u64)?;
-            e.t(";")?;
-            e.emit()?;
+            e.t(" = { ")?;
+            for (k in 0..payload.length) {
+                if (k > 0) {
+                    e.t(", ")?;
+                }
+                e.t(".")?;
+                appendFieldName(c, mut e.buf, payload[k])?;
+                e.t(" = a")?;
+                e.d(k as u64)?;
+            }
+            e.t(" }")?;
         }
-        e.line("    return r;")?;
+        e.t(" };")?;
+        e.emit()?;
         e.line("}")?;
     }
     return e.line("");

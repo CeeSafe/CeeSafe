@@ -50,10 +50,7 @@ _Static_assert(sizeof(ceeR_QS5PointE10AllocError) == 16, "ceesafec layout: sizeo
 _Static_assert(_Alignof(ceeR_QS5PointE10AllocError) == 8, "ceesafec layout: alignof(Result<borrow mut Point, AllocError>)");
 _Static_assert(offsetof(ceeR_QS5PointE10AllocError, u) == 8, "ceesafec layout: Result<borrow mut Point, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_QS5PointE10AllocError ceeMk_ceeR_QS5PointE10AllocError_v_Ok(ceeT_Point * a0) {
-    ceeR_QS5PointE10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_QS5PointE10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 struct ceeSm_u16 { uint16_t *ptr; uint64_t len; };
@@ -71,10 +68,7 @@ _Static_assert(sizeof(ceeR_QUu16E10AllocError) == 24, "ceesafec layout: sizeof(R
 _Static_assert(_Alignof(ceeR_QUu16E10AllocError) == 8, "ceesafec layout: alignof(Result<SliceMut<u16>, AllocError>)");
 _Static_assert(offsetof(ceeR_QUu16E10AllocError, u) == 8, "ceesafec layout: Result<SliceMut<u16>, AllocError> payload offset");
 static inline CEE_UNUSED ceeR_QUu16E10AllocError ceeMk_ceeR_QUu16E10AllocError_v_Ok(ceeSm_u16 a0) {
-    ceeR_QUu16E10AllocError r = { 0 };
-    r.tag = (uint8_t)0;
-    r.u.v_Ok.f__0 = a0;
-    return r;
+    return (ceeR_QUu16E10AllocError){ .tag = (uint8_t)0, .u.v_Ok = { .f__0 = a0 } };
 }
 
 static CEE_UNUSED int32_t ceeF_main(void);

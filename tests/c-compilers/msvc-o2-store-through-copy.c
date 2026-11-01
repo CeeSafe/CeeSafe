@@ -3,7 +3,9 @@
  * The loop stores 70000 into words.e[0..3] through t3.ptr, a copy of a pointer into `words` returned by a function;
  * then memmove overwrites words.e[0..1]. The sum must be 1 + 2 + 70000 = 70003. MSVC 19.44, 19.50 and 19.51
  * (VS 18, toolsets 14.44, 14.50, 14.51), targeting ARM64 and x64, print 3 at /O2 and 70003 at /Od; clang and GCC
- * print 70003. Without the memmove MSVC is right.
+ * print 70003. Without the memmove MSVC is right, and so are /O1, /Ob0 (no inlining) and /Oi- (no intrinsics). ceesafec
+ * builds with /O2 /Oi- (src/host/compilers.cee; spec/c-backend.md §1.1): when this prints 70003 under plain /O2 on
+ * every MSVC ceesafec supports, the workaround can go.
  *
  *   cl /nologo /O2 /std:c11 msvc-o2-store-through-copy.c && msvc-o2-store-through-copy.exe
  */

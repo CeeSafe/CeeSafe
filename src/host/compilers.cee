@@ -271,6 +271,10 @@ fn msvcArguments(
         pushText(mut arguments, "/Od")?;
     } else {
         pushText(mut arguments, "/O2")?;
+        // MSVC 19.44 to 19.51 at /O2 miscompile a store loop through a slice copy followed by a memmove into the same
+        // array (tests/c-compilers/msvc-o2-store-through-copy.c, found by run-pass/slice-bulk.cee): /Oi- makes
+        // memcpy and memmove calls, not intrinsics the optimiser reasons about (c-backend.md §1.1).
+        pushText(mut arguments, "/Oi-")?;
     }
     for (flag in userFlags.view()) {
         pushBytes(mut arguments, flag.view())?;

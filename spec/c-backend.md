@@ -85,9 +85,13 @@ GCC only. What differs:
   - `nwc` reads files and standard input;
   - a program runs `cmd /c exit 7` with `Process.run`, and sees a missing program fail.
 
-  One corpus program fails under MSVC's `/O2`, through no fault of the C: `run-pass/slice-bulk.cee` prints 3 for
-  70003. Every installed MSVC (19.44 to 19.51, for ARM64 and x64) miscompiles the standalone
-  `tests/c-compilers/msvc-o2-store-through-copy.c` the same way, while `/Od`, clang and GCC are right (2026-11-01). The `test-windows` CI job runs the tests on x64. Locally, a Windows 11
+  **A workaround for MSVC's optimiser:** ceesafec builds with `/O2 /Oi-`. At plain `/O2`, MSVC 19.44 to 19.51 (for
+  ARM64 and x64) miscompile a loop that stores through the pointer of a slice copy, followed by a `memmove` into the
+  same array: `run-pass/slice-bulk.cee` printed 3 for 70003, and the standalone
+  `tests/c-compilers/msvc-o2-store-through-copy.c` (valid C11) fails the same way. clang, GCC, `/Od`, `/O1`, inlining
+  off (`/Ob0`) and intrinsics off (`/Oi-`) are right. `/Oi-` makes `memcpy` and `memmove` calls the optimiser does
+  not see through, and keeps every other optimisation (2026-11-01). With it every run-pass and run-fail program
+  passes. The `test-windows` CI job runs the tests on x64. Locally, a Windows 11
   ARM64 VM (MSVC 19.51) runs them. On other hosts they return early.
 
 ## 1.2 The runtime ABI version

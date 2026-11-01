@@ -168,7 +168,7 @@ def main():
     host_cflags, host_ldflags = shlex.split(cosmo.var("HOST_CFLAGS")), shlex.split(cosmo.var("HOST_LDFLAGS"))
     # HOST_COMMON_SRCS: the harness, the spinlock shim, and what the harness needs (tests/host/host.mk).
     host_srcs = [gen / "main.c", gen / "ceesafe_rt_core.c", c4.C4_DIR / "ceesafe_rt_kernel.c", C7_DIR / "host_kernel.c",
-                 C7_DIR / "host_test.c", root / "kernel" / "object" / "object.c",  # CosmoOS's own kobjects
+                 C7_DIR / "host_test.c", *c1.object_sources(root, work),  # CosmoOS's own kobjects
                  *[root / s for s in shlex.split(cosmo.var("HOST_COMMON_SRCS"))]]
     exe = work / "host_test"
     built = run([cc, *host_cflags, *ceesafe_flags, "-I", root / "tests" / "host", *host_srcs, *host_ldflags, "-o", exe])

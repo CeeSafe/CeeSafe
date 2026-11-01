@@ -35,8 +35,6 @@ PROGRAMS = [("module", "integrations/cosmoos/k3/module.cee", False),
             ("atomics", "integrations/cosmoos/k3/atomics.cee", False),
             # A static Mutex (`here`, MUTEX_INIT_AT) and a static ObjectCache (ADR 0027).
             ("statics", "integrations/cosmoos/k3/statics.cee", False)]
-# MUTEX_INIT_AT, until CosmoOS's mutex.h defines it (ADR 0027 §3.1).
-MUTEX_INIT_AT = Path(__file__).resolve().parent / "k3" / "mutex_init_at.h"
 # What IrqGuard's arch_irq_save/restore inline to: defined in the kernel, not exported to modules.
 KERNEL_INTERNAL = {"arch_irq_save_hw", "arch_irq_restore_hw"}
 
@@ -58,8 +56,8 @@ def check_arch(root, arch, split, name, program, built_in, checks):
     for source in [*sorted(gen.glob("*.c")), c4.C4_DIR / "ceesafe_rt_kernel.c"]:
         obj = work / f"{source.stem}.o"
         # The freestanding profile's flags (profiles.md §4.3), as the build of a CeeSafe package passes them.
-        compiled = c4.compile_c(cosmo.var("CC"), cflags, source, obj, gen, ["-fstack-usage", "-ffreestanding", "-fno-stack-protector",
-                                                                                     "-include", str(MUTEX_INIT_AT)])
+        compiled = c4.compile_c(cosmo.var("CC"), cflags, source, obj, gen, ["-fstack-usage", "-ffreestanding", "-fno-stack-protector"])
+        # MUTEX_INIT_AT is CosmoOS's own (kernel/include/kernel/mutex.h, ADR 0027 §3.1).
         if compiled.returncode != 0:
             errors.append(compiled.stderr.strip())
         objects.append(obj)

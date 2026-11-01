@@ -48,6 +48,28 @@ def run(cmd, **kwargs):
     return subprocess.run([str(c) for c in cmd], capture_output=True, text=True, **kwargs)
 
 
+# CosmoOS's own CeeSafe runtime files, which a host test of a port lists and the build generates (build/cee.mk).
+IN_TREE_RUNTIME = ["kernel/ceesafe/ceesafe_rt_core.c", "tests/host/ceesafe_panic.c"]
+GENERATED = "GENERATED: do not edit"
+
+
+def c_original(root, path, milestone):
+    """The C original of a component CosmoOS has since ported to CeeSafe: None while the tree still has it as C;
+    otherwise the newest version in its history that is not generated, written under CeeSafe's out/, and its commit."""
+    tree = Path(root) / path
+    if tree.exists() and GENERATED not in tree.read_text():
+        return None, None
+    log = subprocess.run(["git", "-C", root, "log", "--format=%H", "--", path], check=True, capture_output=True, text=True)
+    for commit in log.stdout.split():
+        shown = subprocess.run(["git", "-C", root, "show", f"{commit}:{path}"], capture_output=True, text=True)
+        if shown.returncode == 0 and GENERATED not in shown.stdout:
+            out = c1.CEESAFE_ROOT / "out" / "cosmoos" / milestone / f"{Path(path).stem}_original.c"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(shown.stdout)
+            return out, commit[:8]
+    sys.exit(f"[{milestone}] no version of {path} in CosmoOS's history is hand-written C")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cosmoos", default=str(Path.home() / "dev" / "CosmoOS"))
@@ -63,7 +85,11 @@ def main():
     c1.require_compiler()
     checks = {}
     for name in COMPONENTS if args.component == "all" else [args.component]:
-        check_component(name, cosmo, root, args, checks)
+        original_file, commit = c_original(root, COMPONENTS[name][1], "c6")
+        if original_file is not None:
+            checks[f"{name}: C original from CosmoOS {commit} (the tree builds the CeeSafe port)"] = (True, [])
+        check_component(name, cosmo, root, args, checks, original_file=original_file,
+                        in_tree_runtime=IN_TREE_RUNTIME if original_file is not None else ())
     checks["CosmoOS working tree unchanged"] = (c1.git_status(root) == status_before, [])
     for name, (ok, details) in checks.items():
         print(f"[c6] {'PASS' if ok else 'FAIL'}  {name}")

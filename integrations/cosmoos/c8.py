@@ -122,16 +122,13 @@ def negative_cases(checks):
 def host_test(cosmo, root, gen, work, checks):
     cc = cosmo.var("HOST_CC")
     cflags, ldflags = shlex.split(cosmo.var("HOST_CFLAGS")), shlex.split(cosmo.var("HOST_LDFLAGS"))
-    # CosmoOS's object code is a CeeSafe port (kernel/object/object.cee and its floor object_floor.c): its C, made as
-    # CosmoOS's scripts/cee-gen.py makes it, by the compiler under test. The runtime is the module's (gen).
-    object_c = work / "object"
-    made = run([c1.CEESAFEC, "build", "--profile", "freestanding", "--no-float", "--emit", "c", "-o", object_c,
-                "kernel/object/object.cee"], cwd=root)
-    if made.returncode != 0:
-        checks["host test builds with CosmoOS's HOST_CFLAGS"] = (False, made.stderr.strip().splitlines()[:10])
+    try:
+        objects = c1.object_sources(root, work)   # CosmoOS's kobjects (object.cee's C); the runtime is the module's
+    except subprocess.CalledProcessError as e:
+        checks["host test builds with CosmoOS's HOST_CFLAGS"] = (False, [f"kernel/object/object.cee: {e}"])
         return
     sources = [gen / "main.c", gen / "ceesafe_rt_core.c", c4.C4_DIR / "ceesafe_rt_kernel.c", COSMOOS_DIR / "c7" / "host_kernel.c",
-               C8_DIR / "host_shims.c", C8_DIR / "host_test.c", object_c / "main.c", root / "kernel" / "object" / "object_floor.c",
+               C8_DIR / "host_shims.c", C8_DIR / "host_test.c", *objects,
                *[root / s for s in shlex.split(cosmo.var("HOST_COMMON_SRCS"))]]
     exe = work / "host_test"
     built = run([cc, *cflags, "-I", gen, "-ffreestanding", "-fno-stack-protector", "-I", root / "tests" / "host", *sources, *ldflags, "-o", exe])

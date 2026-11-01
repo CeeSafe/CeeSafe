@@ -27,11 +27,8 @@ import c6  # noqa: E402
 
 C9_DIR = Path(__file__).resolve().parent / "c9"
 
-# C9b: CosmoOS builds the CeeSafe port itself: kernel/block/gpt.cee, beside the gpt.c that `make cee` generates from
-# it. Its C original is then the file at the last commit that had it, and the runtime files the tree adds are not
-# taken from the tree.
-ORIGINAL_COMMIT = "dc1d5166"
-IN_TREE_RUNTIME = ["kernel/ceesafe/ceesafe_rt_core.c", "tests/host/ceesafe_panic.c"]  # CosmoOS's runtime files
+# C9b: CosmoOS builds the CeeSafe port itself (kernel/block/gpt.cee): its C original is the newest hand-written
+# gpt.c in CosmoOS's history (c6.c_original), and the runtime files the tree's build generates are not taken from it.
 
 # As c6.COMPONENTS: the CeeSafe package (here relative to the CosmoOS tree, made absolute in main), the C original, the Make variables of the host test and fuzz sources, the C
 # symbols renamed for the differential test, the differential test, and the host test's extra flags.
@@ -56,14 +53,10 @@ def main():
     cosmo = c1.Cosmo(root, args.arch, c1.CEESAFE_ROOT / "out" / "cosmoos" / f"{args.arch}-release")
     c1.require_compiler()
     checks = {}
-    original_file, in_tree = None, ()
-    if "GENERATED: do not edit" in (root / "kernel/block/gpt.c").read_text():
-        original_file = c1.CEESAFE_ROOT / "out" / "cosmoos" / "c9" / "gpt_original.c"
-        original_file.parent.mkdir(parents=True, exist_ok=True)
-        original_file.write_text(subprocess.run(["git", "-C", root, "show", f"{ORIGINAL_COMMIT}:kernel/block/gpt.c"],
-                                                check=True, capture_output=True, text=True).stdout)
-        in_tree = IN_TREE_RUNTIME
-        checks[f"C original from CosmoOS {ORIGINAL_COMMIT} (the tree builds the CeeSafe port)"] = (True, [])
+    original_file, commit = c6.c_original(root, "kernel/block/gpt.c", "c9")
+    in_tree = c6.IN_TREE_RUNTIME if original_file is not None else ()
+    if original_file is not None:
+        checks[f"C original from CosmoOS {commit} (the tree builds the CeeSafe port)"] = (True, [])
     components = {name: (str(root / package), *rest) for name, (package, *rest) in COMPONENTS.items()}
     for name, (package, *_) in components.items():
         if not Path(package).exists():

@@ -1,14 +1,18 @@
 /*
  * host_kernel.c - C7's host stand-ins for the kernel functions the bindings call that CosmoOS's host harness does
  * not provide: kmalloc/kfree (over malloc, counting live blocks), the mutex API (single-threaded, keeping the kernel's
- * rule that sleeping with a spinlock held panics, as might_sleep() does), the module hooks kernel/object/object.c
- * calls (no modules on the host), quiescence on one CPU (a grace period is a synchronize call; callbacks run then, in
- * order), and the demo's counters. Spinlocks are CosmoOS's own host shim (tests/host/shim_spinlock.c), kobjects its
- * own kernel/object/object.c, and panic() its harness's.
+ * rule that sleeping with a spinlock held panics, as might_sleep() does), the module hooks CosmoOS's kernel objects
+ * (kernel/object/object.cee) call (no modules on the host), quiescence on one CPU (a grace period is a synchronize
+ * call; callbacks run then, in order), and the demo's counters. Spinlocks are CosmoOS's own host shim (tests/host/shim_spinlock.c), kobjects its
+ * own (object.cee's C and object_floor.c), and panic() its harness's.
  */
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
+/* malloc and free, declared here rather than by <stdlib.h>: on macOS that header brings the host's signal.h, whose
+ * SIGBUS and the rest CosmoOS's kernel/signal.h (through mutex.h's generated types) defines again. */
+void *malloc(size_t size);
+void free(void *p);
 
 #include <kernel/module.h>
 #include <kernel/mutex.h>
@@ -83,7 +87,7 @@ void call_quiesce(struct quiesce_head *h, void (*fn)(struct quiesce_head *h))
     if (h->pending)
         panic("call_quiesce: head %p submitted twice", (void *)h);
     h->pending = true;
-    h->fn = fn;
+    h->callback = fn;
     h->next = NULL;
     struct quiesce_head **tail = &g_pending;
     while (*tail != NULL)
@@ -99,7 +103,7 @@ void synchronize_quiesce(void)
         struct quiesce_head *h = g_pending;
         g_pending = h->next;
         h->pending = false;
-        h->fn(h); /* may free h */
+        h->callback(h); /* may free h */
     }
 }
 
@@ -122,7 +126,7 @@ long c7_live_blocks(void)
 void mutex_init(struct mutex *m, const char *name)
 {
     memset(m, 0, sizeof(*m));
-    m->name = name;
+    m->name = (char *)name; /* the generated struct mutex (mutex.cee) keeps a char *; nothing writes through it */
     list_init(&m->pi_link); /* as the kernel's: the mutex now points into itself */
 }
 

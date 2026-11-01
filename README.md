@@ -59,13 +59,22 @@ In safe code (everything outside an `unsafe` block), CeeSafe rules out:
 
 And beyond safety:
 
+- **Structured async and threads.** `async fn` and `await` run many waits on one thread (timers, sockets, files,
+  channels) with no garbage collector and no task that outlives its caller: `Async.scope` starts children that may
+  borrow the caller's locals and have all returned when it does, `Async.race` and `Async.all` take two, and a failure
+  cancels the rest. Each task's frame has a size known at compile time and never moves. `Async.runWorkers` spreads
+  tasks over threads; `Thread.spawn`, `Thread.both`, `Arc`, `Mutex` and atomics share data, with `Send` and `Share`
+  checked.
 - **Explicit, pluggable allocation.** Each allocation chooses its allocator: the system heap, an arena, a pool, a fixed
   buffer, a scratch frame, or your own. Allocation failure is a value, `Result<T, AllocError>`, handled or propagated
   with `?`. A box that cannot escape its function is placed on the stack.
 - **C you can read.** Structured, warning-clean C11 for clang, gcc and MSVC, with `#line` maps back to CeeSafe source
   for lldb and gdb, and a reference interpreter that runs the same programs.
 - **Ready for kernels.** A freestanding profile with no C library, context effects that reject sleeping under a spin
-  lock, imported C structs, lock guards and kernel objects.
+  lock, lock guards and kernel objects, and an async executor over the kernel's own hooks. CeeSafe states C's own
+  shapes: imported structs and unions, members C and CeeSafe both change atomically, variadic C calls, and static C
+  objects with their ops tables, so a kernel subsystem can move to CeeSafe one file at a time
+  ([CosmoOS](integrations/cosmoos/) does).
 - **The compiler shows its work.** `--explain-allocations`, `--explain-bounds-checks` and `--explain-overflow-checks`
   say which boxes went on the stack and which checks were removed, and why.
 - **Tools included.** A formatter, a documentation generator, packages with git dependencies, a language server and
@@ -117,7 +126,7 @@ Other commands: `ceesafec fix` applies the compiler's sure fixes, `ceesafec expl
 
 | | |
 |---|---|
-| [The guide](guide/) | the language from basics to ownership, memory, collections, generics, closures, threads, `unsafe` and kernel code; [coming from Rust, Zig, C, C#, Go](guide/coming-from/) |
+| [The guide](guide/) | the language from basics to ownership, memory, collections, generics, closures, threads, [async tasks](guide/async.md), `unsafe` and kernel code; [coming from Rust, Zig, C, C#, Go](guide/coming-from/) |
 | [The specification](spec/) | the normative rules: grammar, type system, ownership, lifetimes, memory model, the C backend, diagnostics, tooling |
 | [For AI agents](guide/for-agents.md) | how an agent should write and check CeeSafe; `ceesafec new --agent claude` sets one up |
 | [Editors](guide/editors.md), [debugging](guide/debugging.md) | the [VS Code extension](https://marketplace.visualstudio.com/items?itemName=ceesafe.ceesafe-language) (`code --install-extension ceesafe.ceesafe-language`) and the language server; lldb and gdb |
@@ -134,8 +143,9 @@ sh tools/bootstrap_release.sh ~/.ceesafe/bin/ceesafec HEAD out/ceesafec
 out/ceesafec build -o out/ceesafec.new && mv out/ceesafec.new out/ceesafec   # it rebuilds itself from then on
 ```
 
-Check a change with the contract suite (the fixed point, the corpus under `-Werror` and ASan+UBSan with leak checks,
-the allocation-failure sweeps, the mutation suite, the specification and guide):
+Check a change with the contract suite (the fixed point, the corpus under `-Werror`, ASan+UBSan with leak checks and,
+on Linux, gcc with `-O2 -D_FORTIFY_SOURCE=2`; the async programs under ThreadSanitizer, the allocation-failure and
+cancellation sweeps, the mutation suite, the specification and guide):
 
 ```sh
 python3 tools/contract_tests.py --ceesafec out/ceesafec

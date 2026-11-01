@@ -1047,6 +1047,9 @@ cee_io_result ceesafe_tcp_port(int32_t fd);
 cee_io_result ceesafe_tcp_accept(int32_t fd);
 cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port);
 cee_io_result ceesafe_tcp_shutdown_write(int32_t fd);
+/* ADR 0044: the blocking stream's options (CEE_SOCKET_OPTION_*, below) and its read side's shutdown. */
+cee_io_result ceesafe_tcp_option(int32_t fd, uint32_t option, int64_t value);
+cee_io_result ceesafe_tcp_shutdown_read(int32_t fd);
 
 /* Process.run: starts `program` (searched on PATH) with `arguments`, waits, and returns its exit status
    (128 + the signal number if a signal ended it). Standard output is flushed first. */
@@ -1215,6 +1218,47 @@ int32_t ceesafe_socket_errno(int error);
 #endif
 /* Dotted IPv4 text to its four bytes; false if malformed (the TCP calls' own check, for completion-based connects). */
 bool ceesafe_ipv4_address(cee_str text, uint8_t out[4]);
+/* ADR 0044: a socket address as the runtime passes it between its files: family 4 or 6, the port, an IPv6 scope id,
+ * and the address bytes in network order (4 or 16 of them). lib/std's SocketAddress crosses as these fields. */
+typedef struct ceesafe_endpoint {
+    uint32_t family;
+    uint16_t port;
+    uint32_t scope;
+    uint8_t bytes[16];
+} ceesafe_endpoint;
+/* An IPv4 or IPv6 address's text (no port, no zone) and a port as an endpoint; false if malformed. */
+bool ceesafe_endpoint_parse(cee_str text, uint16_t port, ceesafe_endpoint *out);
+/* The fields as an endpoint; false unless the family is 4 or 6. */
+bool ceesafe_endpoint_make(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope, ceesafe_endpoint *out);
+/* The endpoint as the platform's sockaddr in `out` (`room` bytes: a sockaddr_in6 fits): its length, 0 if it does not
+ * fit or the platform has no such family. */
+uint32_t ceesafe_endpoint_sockaddr(const ceesafe_endpoint *e, void *out, uint32_t room);
+/* A new socket of the endpoint's family for TCP (macOS: SO_NOSIGPIPE), or a negated errno. POSIX only; Windows makes
+ * its overlapped sockets itself. */
+int64_t ceesafe_tcp_socket_for(const ceesafe_endpoint *e);
+/* Listen options (ListenOptions): the flags' bits; a backlog of 0 is SOMAXCONN. */
+#define CEE_LISTEN_REUSE_ADDRESS 1u
+#define CEE_LISTEN_REUSE_PORT 2u
+#define CEE_LISTEN_V6_ONLY 4u
+/* Stream options (AsyncTcpStream's setters): the value is 0/1 for NO_DELAY, the idle seconds or -1 (off) for
+ * KEEP_ALIVE (0: on, the system's idle time), the size for the buffers, and the seconds or -1 (the default) for LINGER. */
+#define CEE_SOCKET_OPTION_NO_DELAY 1u
+#define CEE_SOCKET_OPTION_KEEP_ALIVE 2u
+#define CEE_SOCKET_OPTION_SEND_BUFFER 3u
+#define CEE_SOCKET_OPTION_RECEIVE_BUFFER 4u
+#define CEE_SOCKET_OPTION_LINGER 5u
+int64_t ceesafe_async_tcp_listen_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope,
+                                    uint32_t backlog, uint32_t flags);
+int64_t ceesafe_async_tcp_connect_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope);
+int64_t ceesafe_async_tcp_connect_endpoint(const ceesafe_endpoint *e);
+int64_t ceesafe_async_op_connect_at(void *op, uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope);
+/* A socket's own (peer 0) or its peer's (peer 1) address: its 16 bytes and scope written, the result
+ * (family << 16) | port, or a negated errno. IPv4-mapped IPv6 addresses are reported as IPv4. */
+int64_t ceesafe_async_socket_name(int32_t fd, uint32_t peer, uint8_t *bytes, uint32_t *scope);
+int64_t ceesafe_async_socket_option(int32_t fd, uint32_t option, int64_t value);
+int64_t ceesafe_async_shutdown_read(int32_t fd);
+/* An interface's index by name (an IPv6 zone), 0 if there is none or the platform cannot say. */
+uint32_t ceesafe_interface_index(const uint8_t *name, uint64_t length);
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port);
 int64_t ceesafe_async_tcp_port(int32_t fd);
 int64_t ceesafe_async_tcp_accept(int32_t fd);

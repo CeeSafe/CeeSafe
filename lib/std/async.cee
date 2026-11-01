@@ -39,6 +39,18 @@ extern "C" {
     @effects()
     fn ceesafe_async_op_connect(op: *mut void, address: *u8, length: u64, port: u16) -> i64;
     @effects()
+    fn ceesafe_async_op_connect_at(op: *mut void, family: u32, bytes: *u8, port: u16, scope: u32) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_listen_at(family: u32, bytes: *u8, port: u16, scope: u32, backlog: u32, flags: u32) -> i64;
+    @effects()
+    fn ceesafe_async_tcp_connect_at(family: u32, bytes: *u8, port: u16, scope: u32) -> i64;
+    @effects()
+    fn ceesafe_async_socket_name(fd: i32, peer: u32, bytes: *mut u8, scope: *mut u32) -> i64;
+    @effects()
+    fn ceesafe_async_socket_option(fd: i32, option: u32, value: i64) -> i64;
+    @effects()
+    fn ceesafe_async_shutdown_read(fd: i32) -> i64;
+    @effects()
     fn ceesafe_async_op_cancel(op: *mut void) -> bool;
 }
 
@@ -140,7 +152,8 @@ struct AsyncOp {
 public struct AsyncTcpListener {
     private fd: i32;
 
-    /// Listens on `address` (dotted IPv4) and `port` (0: any free port).
+    /// Listens on `address` (IPv4 or IPv6 text, without a zone) and `port` (0: any free port), with
+    /// `ListenOptions.defaults()`.
     /// Safety: the runtime reads the address only during the call.
     public fn bind(address: StringView, port: u16) -> Result<AsyncTcpListener, IoError> {
         let r = unsafe { ceesafe_async_tcp_listen(address.ptr, address.length as u64, port) };
@@ -149,6 +162,27 @@ public struct AsyncTcpListener {
         }
         return Ok(AsyncTcpListener { fd: truncate<i32>(r) });
     }
+
+    /// Listens on `address` with `options` (ADR 0044 §3.2).
+    /// Safety: the runtime reads the address only during the call.
+    public fn bindWith(address: SocketAddress, options: ListenOptions) -> Result<AsyncTcpListener, IoError> {
+        let raw = RawAddress.of(address);
+        let r = unsafe { ceesafe_async_tcp_listen_at(
+            raw.family,
+            borrow raw.bytes as *[u8; 16] as *u8,
+            raw.port,
+            raw.scope,
+            options.backlog,
+            options.flags(),
+        ) };
+        if (r < 0) {
+            return Err(AsyncIo.ioError(r));
+        }
+        return Ok(AsyncTcpListener { fd: truncate<i32>(r) });
+    }
+
+    /// The address it listens on.
+    public fn localAddress(borrow this) -> Result<SocketAddress, IoError> => RawAddress.name(this.fd, 0);
 
     /// The port it listens on.
     /// Safety: the descriptor is this listener's.
@@ -186,7 +220,8 @@ public struct AsyncTcpListener {
 public struct AsyncTcpStream {
     private fd: i32;
 
-    /// Connects to `address` (dotted IPv4) and `port`; the task parks until the connection is made or refused.
+    /// Connects to `address` (IPv4 or IPv6 text, without a zone) and `port`; the task parks until the connection is
+    /// made or refused.
     /// Safety: the runtime reads the address only during the call; the descriptor becomes the stream's at once, so an
     /// error closes it.
     public async fn connect(address: StringView, port: u16) -> Result<AsyncTcpStream, AsyncError> {
@@ -199,6 +234,68 @@ public struct AsyncTcpStream {
             }
             await Async.park();
         }
+    }
+
+    /// Connects to `address` (ADR 0044 §3.3); the task parks until the connection is made or refused.
+    /// Safety: the runtime reads the address only during each step; the descriptor becomes the stream's at once.
+    public async fn connectTo(address: SocketAddress) -> Result<AsyncTcpStream, AsyncError> {
+        let raw = RawAddress.of(address);
+        var op = AsyncOp.create();
+        loop {
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_connect_at(
+                op.raw(),
+                raw.family,
+                borrow raw.bytes as *[u8; 16] as *u8,
+                raw.port,
+                raw.scope,
+            ) };
+            if (r != AsyncOp.pending()) {
+                return Ok(AsyncTcpStream { fd: truncate<i32>(op.result(r)?) });
+            }
+            await Async.park();
+        }
+    }
+
+    /// TCP_NODELAY: send small writes at once instead of gathering them (Nagle's algorithm off).
+    public fn setNoDelay(borrow this, on: bool) -> Result<void, IoError> =>
+        RawAddress.option(this.fd, 1, if (on) 1 else 0);
+
+    /// SO_KEEPALIVE: probe an idle connection, after `idleSeconds` of quiet (0: the system's time); null: off.
+    public fn setKeepAlive(borrow this, idleSeconds: u32?) -> Result<void, IoError> => match (idleSeconds) {
+        Some(s) => RawAddress.option(this.fd, 2, s as i64),
+        null => RawAddress.option(this.fd, 2, -1),
+    };
+
+    /// SO_SNDBUF: the kernel's send buffer, in bytes (it may round the size, and Linux doubles it).
+    public fn setSendBuffer(borrow this, bytes: u32) -> Result<void, IoError> =>
+        RawAddress.option(this.fd, 3, bytes as i64);
+
+    /// SO_RCVBUF: the kernel's receive buffer, in bytes (as setSendBuffer).
+    public fn setRecvBuffer(borrow this, bytes: u32) -> Result<void, IoError> =>
+        RawAddress.option(this.fd, 4, bytes as i64);
+
+    /// SO_LINGER: how long the close waits for unsent data, in seconds; 0 makes the close reset the connection;
+    /// null restores the default (the close returns at once and the kernel sends the rest).
+    public fn setLinger(borrow this, seconds: u32?) -> Result<void, IoError> => match (seconds) {
+        Some(s) => RawAddress.option(this.fd, 5, s as i64),
+        null => RawAddress.option(this.fd, 5, -1),
+    };
+
+    /// The peer's address (an IPv4 peer of a dual-stack listener as V4).
+    public fn peerAddress(borrow this) -> Result<SocketAddress, IoError> => RawAddress.name(this.fd, 1);
+
+    /// This end's address.
+    public fn localAddress(borrow this) -> Result<SocketAddress, IoError> => RawAddress.name(this.fd, 0);
+
+    /// Ends this side's reading: what arrives afterwards is discarded, and a read returns 0.
+    /// Safety: the descriptor is this stream's.
+    public fn shutdownRead(borrow this) -> Result<void, IoError> {
+        let r = unsafe { ceesafe_async_shutdown_read(this.fd) };
+        if (r < 0) {
+            return Err(AsyncIo.ioError(r));
+        }
+        return Ok();
     }
 
     /// Reads into `buffer`: the count, 0 at the end of the stream; the task parks until there is something to read.
@@ -285,6 +382,48 @@ public struct AsyncSockets {
     /// Safety: as port.
     public fn shutdownWrite(fd: i32) -> i64 => unsafe { ceesafe_async_shutdown_write(fd) };
 
+    /// ADR 0044's calls on descriptors, for the interpreter's models: a listener at an address's fields (`bytes`
+    /// has 16, of which IPv4 uses 4), with a backlog and rt.h's CEE_LISTEN_* flags.
+    /// Safety: the runtime reads the 16 bytes during the call only (checked: fewer is -EINVAL).
+    public fn listenAt(family: u32, bytes: Slice<u8>, port: u16, scope: u32, backlog: u32, flags: u32) -> i64 {
+        if (bytes.length < 16) {
+            return -22;
+        }
+        return unsafe { ceesafe_async_tcp_listen_at(family, bytes.ptr, port, scope, backlog, flags) };
+    }
+
+    /// A connection started to an address's fields, as `connect`.
+    /// Safety: as listenAt.
+    public fn connectAt(family: u32, bytes: Slice<u8>, port: u16, scope: u32) -> i64 {
+        if (bytes.length < 16) {
+            return -22;
+        }
+        return unsafe { ceesafe_async_tcp_connect_at(family, bytes.ptr, port, scope) };
+    }
+
+    /// The socket's own (`peer` 0) or its peer's (1) address: its 16 bytes and scope written; (family << 16) | port,
+    /// or a negated errno.
+    /// Safety: the runtime writes 16 bytes (checked) and the scope during the call only.
+    public fn name(fd: i32, peer: u32, bytes: SliceMut<u8>, scope: borrow mut u32) -> i64 {
+        if (bytes.length < 16) {
+            return -22;
+        }
+        return unsafe { ceesafe_async_socket_name(fd, peer, bytes.ptr, scope as *mut u32) };
+    }
+
+    /// Sets rt.h's CEE_SOCKET_OPTION_* `option` to `value`: 0 or a negated errno.
+    /// Safety: as port.
+    public fn setOption(fd: i32, option: u32, value: i64) -> i64 =>
+        unsafe { ceesafe_async_socket_option(fd, option, value) };
+
+    /// Safety: as port.
+    public fn shutdownRead(fd: i32) -> i64 => unsafe { ceesafe_async_shutdown_read(fd) };
+
+    /// An interface's index by name (an IPv6 zone), 0 if there is none (lib/std's net.cee declares the call).
+    /// Safety: the runtime reads the name during the call only.
+    public fn interfaceIndex(name: Slice<u8>) -> u32 =>
+        unsafe { ceesafe_interface_index(name.ptr, name.length as u64) };
+
     /// Safety: as port.
     public fn close(fd: i32) {
         unsafe { ceesafe_async_close(fd); }
@@ -334,5 +473,56 @@ public struct AsyncFiles {
             Ok() => { return Ok(); }
             Err(e) => { return Err(AsyncError.Io(e)); }
         }
+    }
+}
+
+/// A SocketAddress's fields as the runtime takes them (ADR 0044 §3.1: rt.h's ceesafe_endpoint), and the calls that
+/// read an address or set an option on a descriptor.
+struct RawAddress {
+    family: u32;
+    bytes: [u8; 16];
+    port: u16;
+    scope: u32;
+
+    fn of(a: SocketAddress) -> RawAddress => match (a) {
+        SocketAddress.V4(v4, p) => {
+            var bytes = [0u8; 16];
+            for (k in 0..4usize) {
+                bytes[k] = v4[k];
+            }
+            return RawAddress { family: 4, bytes: bytes, port: p, scope: 0 };
+        }
+        SocketAddress.V6(v6, p, s) => RawAddress { family: 6, bytes: v6, port: p, scope: s },
+    };
+
+    /// The descriptor's own (`peer` 0) or its peer's address.
+    /// Safety: the runtime writes the 16 bytes and the scope during the call only.
+    fn name(fd: i32, peer: u32) -> Result<SocketAddress, IoError> {
+        var bytes = [0u8; 16];
+        var scope: u32 = 0;
+        let r = unsafe { ceesafe_async_socket_name(
+            fd,
+            peer,
+            borrow mut bytes as *mut [u8; 16] as *mut u8,
+            borrow mut scope as *mut u32,
+        ) };
+        if (r < 0) {
+            return Err(AsyncIo.ioError(r));
+        }
+        let packed = truncate<u64>(r); // r >= 0 here
+        let port = truncate<u16>(packed & 65535);
+        if ((packed >> 16) == 4) {
+            return Ok(SocketAddress.V4([bytes[0], bytes[1], bytes[2], bytes[3]], port));
+        }
+        return Ok(SocketAddress.V6(bytes, port, scope));
+    }
+
+    /// Safety: the runtime only sets the option on the descriptor.
+    fn option(fd: i32, option: u32, value: i64) -> Result<void, IoError> {
+        let r = unsafe { ceesafe_async_socket_option(fd, option, value) };
+        if (r < 0) {
+            return Err(AsyncIo.ioError(r));
+        }
+        return Ok();
     }
 }

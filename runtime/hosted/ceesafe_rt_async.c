@@ -27,6 +27,7 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h> /* WSAPoll, WSAEventSelect, and POLLIN/POLLOUT for fd_events */
+#include <ws2tcpip.h> /* sockaddr_in6 (ADR 0044) */
 #include <windows.h>
 #if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
@@ -2275,10 +2276,14 @@ typedef struct {
     SOCKET socket;       /* the socket the operation is on */
     SOCKET accepted;     /* AcceptEx's and ConnectEx's new socket, until it has an id */
     SOCKET listener;
-    WSABUF buffer;
-    DWORD flags;
     OVERLAPPED overlapped;
-    uint8_t addresses[2 * (sizeof(struct sockaddr_in) + 16)]; /* AcceptEx's */
+    union {
+        struct {
+            WSABUF buffer; /* a read's or a send's */
+            DWORD flags;
+        } io;
+        uint8_t addresses[2 * (sizeof(struct sockaddr_in6) + 16)]; /* AcceptEx's, for either family (ADR 0044) */
+    } u;
 #endif
 } cee_op;
 
@@ -2348,9 +2353,9 @@ static int64_t cee_ready_accept(int32_t fd) {
     return r;
 }
 
-static int64_t cee_ready_connect(cee_op *o, const uint8_t *address, uint64_t length, uint16_t port) {
+static int64_t cee_ready_connect(cee_op *o, const ceesafe_endpoint *e) {
     if (o->backend != 1u) {
-        int64_t fd = ceesafe_async_tcp_connect(address, length, port);
+        int64_t fd = ceesafe_async_tcp_connect_endpoint(e);
         if (fd < 0) {
             return fd;
         }
@@ -2419,7 +2424,7 @@ static void cee_iocp_begin(cee_op *o, uint32_t kind, SOCKET s) {
     o->kind = kind;
     o->socket = s;
     o->accepted = INVALID_SOCKET;
-    o->flags = 0;
+    o->u.io.flags = 0;
 }
 
 static LPFN_ACCEPTEX cee_accept_ex;
@@ -2748,18 +2753,21 @@ static int64_t cee_uring_accept(cee_op *o, int32_t fd) {
 /* The connect's address, in the record after its fields (the kernel reads it while the operation is in flight). */
 typedef struct {
     cee_op op;
-    struct sockaddr_in address;
+    union {
+        struct sockaddr_in v4;
+        struct sockaddr_in6 v6;
+    } address;
 } cee_uring_connect_op;
 
 _Static_assert(sizeof(cee_uring_connect_op) <= sizeof(ceesafe_async_op), "ceesafe_async_op holds a connect");
 
-static int64_t cee_uring_connect(cee_op *o, const uint8_t *address, uint64_t length, uint16_t port) {
-    uint8_t bytes[4];
-    cee_str text = {address, length};
-    if (!ceesafe_ipv4_address(text, bytes)) {
-        return -(int64_t)EINVAL;
+static int64_t cee_uring_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
+    cee_uring_connect_op *c = (cee_uring_connect_op *)(void *)o;
+    uint32_t length = ceesafe_endpoint_sockaddr(endpoint, &c->address, (uint32_t)sizeof c->address);
+    if (length == 0) {
+        return -(int64_t)EAFNOSUPPORT;
     }
-    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    int fd = socket(endpoint->family == 6u ? AF_INET6 : AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         return -(int64_t)errno;
     }
@@ -2768,17 +2776,12 @@ static int64_t cee_uring_connect(cee_op *o, const uint8_t *address, uint64_t len
         (void)close(fd);
         return CEE_ASYNC_WOULD_BLOCK;
     }
-    cee_uring_connect_op *c = (cee_uring_connect_op *)(void *)o;
-    ceesafe_mem_set(&c->address, 0, sizeof c->address);
-    c->address.sin_family = AF_INET;
-    c->address.sin_port = htons(port);
-    memcpy(&c->address.sin_addr, bytes, 4);
     cee_uring_begin(o, 4u);
     o->fd = fd;
     e->opcode = IORING_OP_CONNECT;
     e->fd = fd;
     e->addr = (uint64_t)(uintptr_t)&c->address;
-    e->off = sizeof c->address;
+    e->off = length;
     return cee_uring_go(o, e);
 }
 
@@ -2803,9 +2806,9 @@ int64_t ceesafe_async_op_read(void *op, int32_t fd, uint8_t *buffer, uint64_t le
     SOCKET s = cee_iocp_socket(fd);
     if (s != INVALID_SOCKET) {
         cee_iocp_begin(o, 1u, s);
-        o->buffer.buf = (char *)buffer;
-        o->buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
-        int status = WSARecv(s, &o->buffer, 1, NULL, &o->flags, &o->overlapped, NULL);
+        o->u.io.buffer.buf = (char *)buffer;
+        o->u.io.buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
+        int status = WSARecv(s, &o->u.io.buffer, 1, NULL, &o->u.io.flags, &o->overlapped, NULL);
         return cee_iocp_submitted(o, status, status != 0);
     }
 #endif
@@ -2833,9 +2836,9 @@ int64_t ceesafe_async_op_send(void *op, int32_t fd, const uint8_t *bytes, uint64
     SOCKET s = cee_iocp_socket(fd);
     if (s != INVALID_SOCKET) {
         cee_iocp_begin(o, 2u, s);
-        o->buffer.buf = (char *)(uintptr_t)bytes;
-        o->buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
-        int status = WSASend(s, &o->buffer, 1, NULL, 0, &o->overlapped, NULL);
+        o->u.io.buffer.buf = (char *)(uintptr_t)bytes;
+        o->u.io.buffer.len = length > (1u << 30) ? (ULONG)1u << 30 : (ULONG)length;
+        int status = WSASend(s, &o->u.io.buffer, 1, NULL, 0, &o->overlapped, NULL);
         return cee_iocp_submitted(o, status, status != 0);
     }
 #endif
@@ -2869,14 +2872,18 @@ int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
         if (cee_accept_ex != NULL) {
             cee_iocp_begin(o, 3u, s);
             o->listener = s;
-            o->accepted = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+            /* The new socket has the listener's family (ADR 0044). */
+            struct sockaddr_in6 own;
+            int ownLength = (int)sizeof own;
+            int family = getsockname(s, (struct sockaddr *)&own, &ownLength) == 0 ? own.sin6_family : AF_INET;
+            o->accepted = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
             if (o->accepted == INVALID_SOCKET) {
                 o->backend = 0u;
                 return cee_wsa_failure();
             }
             DWORD received = 0;
-            BOOL done = cee_accept_ex(s, o->accepted, o->addresses, 0, sizeof(struct sockaddr_in) + 16,
-                                      sizeof(struct sockaddr_in) + 16, &received, &o->overlapped);
+            BOOL done = cee_accept_ex(s, o->accepted, o->u.addresses, 0, sizeof(struct sockaddr_in6) + 16,
+                                      sizeof(struct sockaddr_in6) + 16, &received, &o->overlapped);
             return cee_iocp_submitted(o, 0, !done);
         }
     }
@@ -2896,44 +2903,46 @@ int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
     return cee_ready_accept(fd);
 }
 
-int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port) {
-    cee_op *o = (cee_op *)op;
+/* A connect's step to `e` on the backend in use: ConnectEx (IOCP), IORING_OP_CONNECT, or readiness. Every step gets
+   the same endpoint; only the first uses it. */
+static int64_t cee_op_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
 #if defined(_WIN32)
     if (o->backend == 2u) {
         return cee_op_poll(o);
     }
     if (o->backend == 0u && cee_exec.port != NULL) {
-        /* ConnectEx: a new overlapped socket, bound, tied to the port, then connected. */
-        uint8_t bytes[4];
-        cee_str text = {address, length};
-        if (!ceesafe_ipv4_address(text, bytes)) {
-            return -(int64_t)EINVAL;
+        /* ConnectEx: a new overlapped socket of the endpoint's family, bound to its any-address, tied to the port,
+           then connected. */
+        union {
+            struct sockaddr sa;
+            struct sockaddr_in v4;
+            struct sockaddr_in6 v6;
+        } remote, local;
+        int remoteLength = (int)ceesafe_endpoint_sockaddr(endpoint, &remote, (uint32_t)sizeof remote);
+        if (remoteLength == 0) {
+            return -(int64_t)EAFNOSUPPORT;
         }
-        SOCKET s = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+        int family = endpoint->family == 6u ? AF_INET6 : AF_INET;
+        SOCKET s = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
         if (s == INVALID_SOCKET) {
             return cee_wsa_failure();
         }
-        struct sockaddr_in local;
         ceesafe_mem_set(&local, 0, sizeof local);
-        local.sin_family = AF_INET;
+        local.sa.sa_family = (ADDRESS_FAMILY)family; /* the any-address of its family, any port */
+        int localLength = family == AF_INET6 ? (int)sizeof local.v6 : (int)sizeof local.v4;
         if (cee_connect_ex == NULL) {
             GUID id = WSAID_CONNECTEX;
             cee_connect_ex = (LPFN_CONNECTEX)cee_extension(s, id);
         }
-        if (cee_connect_ex == NULL || bind(s, (const struct sockaddr *)&local, (int)sizeof local) != 0 ||
+        if (cee_connect_ex == NULL || bind(s, &local.sa, localLength) != 0 ||
             CreateIoCompletionPort((HANDLE)s, cee_exec.port, 0, 0) == NULL) {
             int64_t failed = cee_wsa_failure();
             (void)closesocket(s);
             return failed;
         }
-        struct sockaddr_in remote;
-        ceesafe_mem_set(&remote, 0, sizeof remote);
-        remote.sin_family = AF_INET;
-        remote.sin_port = htons(port);
-        memcpy(&remote.sin_addr, bytes, 4);
         cee_iocp_begin(o, 4u, s);
         o->accepted = s; /* the new socket, given an id when it connects */
-        BOOL done = cee_connect_ex(s, (const struct sockaddr *)&remote, (int)sizeof remote, NULL, 0, NULL, &o->overlapped);
+        BOOL done = cee_connect_ex(s, &remote.sa, remoteLength, NULL, 0, NULL, &o->overlapped);
         return cee_iocp_submitted(o, 0, !done);
     }
 #endif
@@ -2942,13 +2951,30 @@ int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t leng
         return cee_op_poll(o);
     }
     if (o->backend == 0u && cee_uring_open()) {
-        int64_t r = cee_uring_connect(o, address, length, port);
+        int64_t r = cee_uring_connect(o, endpoint);
         if (r != CEE_ASYNC_WOULD_BLOCK) {
             return r;
         }
     }
 #endif
-    return cee_ready_connect(o, address, length, port);
+    return cee_ready_connect(o, endpoint);
+}
+
+int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port) {
+    cee_str text = {address, length};
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(text, port, &e)) {
+        return -(int64_t)EINVAL;
+    }
+    return cee_op_connect((cee_op *)op, &e);
+}
+
+int64_t ceesafe_async_op_connect_at(void *op, uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) {
+        return -(int64_t)EINVAL;
+    }
+    return cee_op_connect((cee_op *)op, &e);
 }
 
 bool ceesafe_async_op_cancel(void *op) {

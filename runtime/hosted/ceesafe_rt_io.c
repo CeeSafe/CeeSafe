@@ -22,6 +22,8 @@
 #include <sys/stat.h>
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mstcpip.h>
 #include <windows.h>
 #if defined(_MSC_VER)
 #pragma comment(lib, "ws2_32.lib")
@@ -34,6 +36,14 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__has_include)
+#if __has_include(<netinet/tcp.h>)
+#include <netinet/tcp.h>
+#endif
+#if __has_include(<net/if.h>)
+#include <net/if.h>
+#endif
+#endif
 #endif
 
 #if !defined(COSMO_AF_INET) && !defined(_WIN32)
@@ -221,6 +231,99 @@ static bool ceesafe_ipv4(cee_str text, uint8_t out[4]) {
 }
 
 bool ceesafe_ipv4_address(cee_str text, uint8_t out[4]) { return ceesafe_ipv4(text, out); }
+
+/* ---- Socket addresses (ADR 0044): IPv4 and IPv6 endpoints, in one form for every platform ------------------- */
+
+static int cee_hex_value(uint8_t c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+/* IPv6 text (RFC 4291 §2.2: eight groups of up to four hex digits, at most one "::", an embedded dotted IPv4 last)
+   to its sixteen bytes; false if malformed. No zone: lib/std's SocketAddress.parse reads those. */
+static bool cee_ipv6(cee_str text, uint8_t out[16]) {
+    uint16_t groups[8];
+    int count = 0;
+    int gap = -1; /* the group index "::" stands before */
+    uint64_t i = 0;
+    if (text.len >= 2u && text.ptr[0] == ':' && text.ptr[1] == ':') {
+        gap = 0;
+        i = 2;
+    } else if (text.len == 0u || text.ptr[0] == ':') {
+        return false;
+    }
+    while (i < text.len) {
+        uint64_t start = i;
+        uint32_t value = 0;
+        int digits = 0;
+        while (i < text.len && cee_hex_value(text.ptr[i]) >= 0 && digits < 5) {
+            value = value * 16u + (uint32_t)cee_hex_value(text.ptr[i]);
+            i++;
+            digits++;
+        }
+        if (i < text.len && text.ptr[i] == '.') {
+            /* The last 32 bits as dotted IPv4. */
+            uint8_t v4[4];
+            cee_str rest = {text.ptr + start, text.len - start};
+            if (count > 6 || !ceesafe_ipv4(rest, v4)) return false;
+            groups[count++] = (uint16_t)((v4[0] << 8) | v4[1]);
+            groups[count++] = (uint16_t)((v4[2] << 8) | v4[3]);
+            i = text.len;
+            break;
+        }
+        if (digits == 0 || digits > 4 || count == 8) return false;
+        groups[count++] = (uint16_t)value;
+        if (i == text.len) break;
+        if (text.ptr[i] != ':') return false;
+        i++;
+        if (i < text.len && text.ptr[i] == ':') {
+            if (gap >= 0) return false;
+            gap = count;
+            i++;
+        } else if (i == text.len) {
+            return false; /* a single trailing colon */
+        }
+    }
+    if (gap < 0 ? count != 8 : count > 7) return false;
+    int at = 0;
+    for (int k = 0; k < 8; k++) {
+        uint16_t g = 0;
+        if (gap < 0 || k < gap) {
+            g = groups[at++];
+        } else if (k >= gap + (8 - count)) {
+            g = groups[at++];
+        }
+        out[2 * k] = (uint8_t)(g >> 8);
+        out[2 * k + 1] = (uint8_t)g;
+    }
+    return true;
+}
+
+bool ceesafe_endpoint_make(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope, ceesafe_endpoint *out) {
+    ceesafe_mem_set(out, 0, sizeof *out);
+    if (family != 4u && family != 6u) return false;
+    out->family = family;
+    out->port = port;
+    out->scope = family == 6u ? scope : 0u;
+    for (uint32_t k = 0; k < (family == 6u ? 16u : 4u); k++) out->bytes[k] = bytes[k];
+    return true;
+}
+
+bool ceesafe_endpoint_parse(cee_str text, uint16_t port, ceesafe_endpoint *out) {
+    ceesafe_mem_set(out, 0, sizeof *out);
+    out->port = port;
+    if (ceesafe_ipv4(text, out->bytes)) {
+        out->family = 4u;
+        return true;
+    }
+    if (cee_ipv6(text, out->bytes)) {
+        out->family = 6u;
+        return true;
+    }
+    return false;
+}
 
 #ifdef _WIN32
 /* ---- Windows: Winsock 2 behind a table of ids (L1 A4a; ceesafe/rt.h's CEE_SOCKET_BASE). The table holds the SOCKET
@@ -423,19 +526,68 @@ static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t
     return ceesafe_io_ok(0);
 }
 
-static void cee_address_set(struct sockaddr_in *a, const uint8_t bytes[4], uint16_t port) {
-    memset(a, 0, sizeof *a);
-    a->sin_family = AF_INET;
-    a->sin_port = htons(port);
-    memcpy(&a->sin_addr, bytes, 4);
+typedef union {
+    struct sockaddr sa;
+    struct sockaddr_in v4;
+    struct sockaddr_in6 v6;
+} cee_sockaddr;
+
+uint32_t ceesafe_endpoint_sockaddr(const ceesafe_endpoint *e, void *out, uint32_t room) {
+    if (room < sizeof(cee_sockaddr)) return 0;
+    cee_sockaddr *a = (cee_sockaddr *)out;
+    ceesafe_mem_set(a, 0, sizeof *a);
+    if (e->family == 4u) {
+        a->v4.sin_family = AF_INET;
+        a->v4.sin_port = htons(e->port);
+        memcpy(&a->v4.sin_addr, e->bytes, 4);
+        return (uint32_t)sizeof a->v4;
+    }
+    if (e->family == 6u) {
+        a->v6.sin6_family = AF_INET6;
+        a->v6.sin6_port = htons(e->port);
+        a->v6.sin6_scope_id = e->scope;
+        memcpy(&a->v6.sin6_addr, e->bytes, 16);
+        return (uint32_t)sizeof a->v6;
+    }
+    return 0;
 }
 
-/* A new socket, bound and listening, or connected; nonblocking first if asked. */
-static cee_io_result cee_socket_open(cee_str address, uint16_t port, bool listening, bool nonblocking) {
-    uint8_t bytes[4];
-    if (!ceesafe_ipv4(address, bytes)) return ceesafe_io_fail(EINVAL);
+/* A sockaddr as an endpoint; an IPv4-mapped IPv6 address (::ffff:a.b.c.d) as IPv4 (ADR 0044 §3.2). */
+static bool cee_endpoint_from(const cee_sockaddr *a, ceesafe_endpoint *e) {
+    ceesafe_mem_set(e, 0, sizeof *e);
+    if (a->sa.sa_family == AF_INET) {
+        e->family = 4u;
+        e->port = ntohs(a->v4.sin_port);
+        memcpy(e->bytes, &a->v4.sin_addr, 4);
+        return true;
+    }
+    if (a->sa.sa_family != AF_INET6) return false;
+    const uint8_t *b = (const uint8_t *)&a->v6.sin6_addr;
+    e->port = ntohs(a->v6.sin6_port);
+    bool mapped = b[10] == 0xffu && b[11] == 0xffu;
+    for (int k = 0; k < 10 && mapped; k++) mapped = b[k] == 0u;
+    if (mapped) {
+        e->family = 4u;
+        memcpy(e->bytes, b + 12, 4);
+        return true;
+    }
+    e->family = 6u;
+    e->scope = (uint32_t)a->v6.sin6_scope_id;
+    memcpy(e->bytes, b, 16);
+    return true;
+}
+
+/* A new socket, bound and listening (with `backlog` and the CEE_LISTEN_* `flags`), or connected; nonblocking first
+   if asked. Winsock's SO_REUSEADDR lets another socket take a bound port over, unlike POSIX's, so reuseAddress is
+   not applied (ADR 0044 §3.2); SO_REUSEPORT does not exist: refused. */
+static cee_io_result cee_socket_open(const ceesafe_endpoint *e, uint32_t backlog, uint32_t flags, bool listening,
+                                     bool nonblocking) {
+    cee_sockaddr a;
+    int length = (int)ceesafe_endpoint_sockaddr(e, &a, (uint32_t)sizeof a);
+    if (length == 0) return ceesafe_io_fail(EAFNOSUPPORT);
+    if (listening && (flags & CEE_LISTEN_REUSE_PORT) != 0u) return ceesafe_io_fail(EOPNOTSUPP);
     if (!cee_wsa_ready()) return ceesafe_io_fail(ENOSYS);
-    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    SOCKET s = socket(e->family == 6u ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) return cee_wsa_fail();
     u_long on = 1;
     if (nonblocking && ioctlsocket(s, FIONBIO, &on) != 0) {
@@ -443,10 +595,16 @@ static cee_io_result cee_socket_open(cee_str address, uint16_t port, bool listen
         (void)closesocket(s);
         return failed;
     }
-    struct sockaddr_in a;
-    cee_address_set(&a, bytes, port);
-    int status = listening ? bind(s, (const struct sockaddr *)&a, (int)sizeof a) : connect(s, (const struct sockaddr *)&a, (int)sizeof a);
-    if (status == 0 && listening) status = listen(s, 16);
+    if (listening && e->family == 6u) {
+        DWORD only = (flags & CEE_LISTEN_V6_ONLY) != 0u ? 1u : 0u;
+        if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&only, (int)sizeof only) != 0) {
+            cee_io_result failed = cee_wsa_fail();
+            (void)closesocket(s);
+            return failed;
+        }
+    }
+    int status = listening ? bind(s, &a.sa, length) : connect(s, &a.sa, length);
+    if (status == 0 && listening) status = listen(s, backlog == 0u || backlog > (uint32_t)INT32_MAX ? SOMAXCONN : (int)backlog);
     if (status != 0 && !(nonblocking && !listening && WSAGetLastError() == WSAEWOULDBLOCK)) {
         cee_io_result failed = cee_wsa_fail();
         (void)closesocket(s);
@@ -456,15 +614,22 @@ static cee_io_result cee_socket_open(cee_str address, uint16_t port, bool listen
     return id < 0 ? ceesafe_io_fail(ENOMEM) : ceesafe_io_ok(id);
 }
 
-cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) { return cee_socket_open(address, port, true, false); }
+static cee_io_result cee_socket_open_text(cee_str address, uint16_t port, bool listening, bool nonblocking) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(address, port, &e)) return ceesafe_io_fail(EINVAL);
+    return cee_socket_open(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, listening, nonblocking);
+}
+
+cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) { return cee_socket_open_text(address, port, true, false); }
 
 cee_io_result ceesafe_tcp_port(int32_t fd) {
     SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
     if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
-    struct sockaddr_in a;
+    cee_sockaddr a;
     int length = (int)sizeof a;
-    if (getsockname(s, (struct sockaddr *)&a, &length) != 0) return cee_wsa_fail();
-    return ceesafe_io_ok(ntohs(a.sin_port));
+    ceesafe_endpoint e;
+    if (getsockname(s, &a.sa, &length) != 0) return cee_wsa_fail();
+    return cee_endpoint_from(&a, &e) ? ceesafe_io_ok(e.port) : ceesafe_io_fail(EAFNOSUPPORT);
 }
 
 static cee_io_result cee_socket_accept(int32_t fd, bool nonblocking) {
@@ -487,7 +652,59 @@ static cee_io_result cee_socket_accept(int32_t fd, bool nonblocking) {
 
 cee_io_result ceesafe_tcp_accept(int32_t fd) { return cee_socket_accept(fd, false); }
 
-cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) { return cee_socket_open(address, port, false, false); }
+cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) { return cee_socket_open_text(address, port, false, false); }
+
+/* ADR 0044's options: setsockopt, and WSAIoctl for the keep-alive's idle time. */
+static int32_t cee_option_set(SOCKET s, uint32_t option, int64_t value) {
+    switch (option) {
+    case CEE_SOCKET_OPTION_NO_DELAY: {
+        BOOL on = value != 0;
+        return setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char *)&on, (int)sizeof on) != 0 ? cee_wsa_errno(WSAGetLastError()) : 0;
+    }
+    case CEE_SOCKET_OPTION_KEEP_ALIVE: {
+        if (value > (int64_t)(UINT32_MAX / 1000u)) return EINVAL;
+        BOOL on = value >= 0;
+        if (setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (const char *)&on, (int)sizeof on) != 0) return cee_wsa_errno(WSAGetLastError());
+        if (value > 0) {
+            struct tcp_keepalive k = {1u, (ULONG)value * 1000u, 1000u};
+            DWORD returned = 0;
+            if (WSAIoctl(s, SIO_KEEPALIVE_VALS, &k, sizeof k, NULL, 0, &returned, NULL, NULL) != 0) {
+                return cee_wsa_errno(WSAGetLastError());
+            }
+        }
+        return 0;
+    }
+    case CEE_SOCKET_OPTION_SEND_BUFFER:
+    case CEE_SOCKET_OPTION_RECEIVE_BUFFER: {
+        if (value < 0 || value > INT32_MAX) return EINVAL;
+        int size = (int)value;
+        int name = option == CEE_SOCKET_OPTION_SEND_BUFFER ? SO_SNDBUF : SO_RCVBUF;
+        return setsockopt(s, SOL_SOCKET, name, (const char *)&size, (int)sizeof size) != 0 ? cee_wsa_errno(WSAGetLastError()) : 0;
+    }
+    case CEE_SOCKET_OPTION_LINGER: {
+        if (value > 65535) return EINVAL; /* Winsock's l_linger is a u_short */
+        struct linger l;
+        l.l_onoff = value >= 0 ? 1 : 0;
+        l.l_linger = (u_short)(value >= 0 ? value : 0);
+        return setsockopt(s, SOL_SOCKET, SO_LINGER, (const char *)&l, (int)sizeof l) != 0 ? cee_wsa_errno(WSAGetLastError()) : 0;
+    }
+    default:
+        return EINVAL;
+    }
+}
+
+cee_io_result ceesafe_tcp_option(int32_t fd, uint32_t option, int64_t value) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    int32_t error = cee_option_set(s, option, value);
+    return error != 0 ? ceesafe_io_fail(error) : ceesafe_io_ok(0);
+}
+
+cee_io_result ceesafe_tcp_shutdown_read(int32_t fd) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
+    return shutdown(s, SD_RECEIVE) != 0 ? cee_wsa_fail() : ceesafe_io_ok(0);
+}
 
 cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
     SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
@@ -496,65 +713,181 @@ cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
 }
 #else
 #ifdef COSMO_AF_INET
-/* CosmoOS's own address layout: host-order port, address bytes in network order (sys/socket.h). */
-typedef struct sockaddr ceesafe_address;
-static void ceesafe_address_set(ceesafe_address *a, const uint8_t bytes[4], uint16_t port) {
-    memset(a, 0, sizeof *a);
-    a->sa_family = AF_INET;
-    a->sa_port = port;
-    memcpy(a->sa_addr, bytes, 4);
+/* CosmoOS's own address layout: host-order port, address bytes in network order (sys/socket.h), 16 of them for
+   AF_INET6. It has no setsockopt or getpeername: the options and the peer's address are EOPNOTSUPP there. */
+typedef union {
+    struct sockaddr sa;
+} cee_sockaddr;
+
+uint32_t ceesafe_endpoint_sockaddr(const ceesafe_endpoint *e, void *out, uint32_t room) {
+    if (room < sizeof(cee_sockaddr) || (e->family != 4u && e->family != 6u)) return 0;
+    cee_sockaddr *a = (cee_sockaddr *)out;
+    ceesafe_mem_set(a, 0, sizeof *a);
+    a->sa.sa_family = e->family == 6u ? AF_INET6 : AF_INET;
+    a->sa.sa_port = e->port;
+    memcpy(a->sa.sa_addr, e->bytes, e->family == 6u ? 16u : 4u);
+    return (uint32_t)sizeof a->sa;
 }
-static uint16_t ceesafe_address_port(const ceesafe_address *a) { return a->sa_port; }
-#else
-typedef struct sockaddr_in ceesafe_address;
-static void ceesafe_address_set(ceesafe_address *a, const uint8_t bytes[4], uint16_t port) {
-    memset(a, 0, sizeof *a);
-#ifdef __APPLE__
-    a->sin_len = (uint8_t)sizeof *a;
+
+static bool cee_endpoint_from(const cee_sockaddr *a, ceesafe_endpoint *e) {
+    ceesafe_mem_set(e, 0, sizeof *e);
+    if (a->sa.sa_family != AF_INET && a->sa.sa_family != AF_INET6) return false;
+    e->family = a->sa.sa_family == AF_INET6 ? 6u : 4u;
+    e->port = a->sa.sa_port;
+    memcpy(e->bytes, a->sa.sa_addr, e->family == 6u ? 16u : 4u);
+    return true;
+}
+#define CEE_NO_SETSOCKOPT 1
+#ifndef SOMAXCONN
+#define SOMAXCONN 128
 #endif
-    a->sin_family = AF_INET;
-    a->sin_port = htons(port);
-    memcpy(&a->sin_addr, bytes, 4);
+#else
+typedef union {
+    struct sockaddr sa;
+    struct sockaddr_in v4;
+    struct sockaddr_in6 v6;
+} cee_sockaddr;
+
+uint32_t ceesafe_endpoint_sockaddr(const ceesafe_endpoint *e, void *out, uint32_t room) {
+    if (room < sizeof(cee_sockaddr)) return 0;
+    cee_sockaddr *a = (cee_sockaddr *)out;
+    ceesafe_mem_set(a, 0, sizeof *a);
+    if (e->family == 4u) {
+#ifdef __APPLE__
+        a->v4.sin_len = (uint8_t)sizeof a->v4;
+#endif
+        a->v4.sin_family = AF_INET;
+        a->v4.sin_port = htons(e->port);
+        memcpy(&a->v4.sin_addr, e->bytes, 4);
+        return (uint32_t)sizeof a->v4;
+    }
+    if (e->family == 6u) {
+#ifdef __APPLE__
+        a->v6.sin6_len = (uint8_t)sizeof a->v6;
+#endif
+        a->v6.sin6_family = AF_INET6;
+        a->v6.sin6_port = htons(e->port);
+        a->v6.sin6_scope_id = e->scope;
+        memcpy(&a->v6.sin6_addr, e->bytes, 16);
+        return (uint32_t)sizeof a->v6;
+    }
+    return 0;
 }
-static uint16_t ceesafe_address_port(const ceesafe_address *a) { return ntohs(a->sin_port); }
+
+/* A sockaddr as an endpoint; an IPv4-mapped IPv6 address (::ffff:a.b.c.d) as IPv4 (ADR 0044 §3.2). */
+static bool cee_endpoint_from(const cee_sockaddr *a, ceesafe_endpoint *e) {
+    ceesafe_mem_set(e, 0, sizeof *e);
+    if (a->sa.sa_family == AF_INET) {
+        e->family = 4u;
+        e->port = ntohs(a->v4.sin_port);
+        memcpy(e->bytes, &a->v4.sin_addr, 4);
+        return true;
+    }
+    if (a->sa.sa_family != AF_INET6) return false;
+    const uint8_t *b = (const uint8_t *)&a->v6.sin6_addr;
+    e->port = ntohs(a->v6.sin6_port);
+    bool mapped = b[10] == 0xffu && b[11] == 0xffu;
+    for (int k = 0; k < 10 && mapped; k++) mapped = b[k] == 0u;
+    if (mapped) {
+        e->family = 4u;
+        memcpy(e->bytes, b + 12, 4);
+        return true;
+    }
+    e->family = 6u;
+    e->scope = (uint32_t)a->v6.sin6_scope_id;
+    memcpy(e->bytes, b, 16);
+    return true;
+}
 #endif
 
-/* A new TCP socket; on macOS, writes to a closed peer report EPIPE instead of raising SIGPIPE. */
-static int ceesafe_tcp_socket(void) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+/* A new TCP socket of the endpoint's family; on macOS, writes to a closed peer report EPIPE instead of raising
+   SIGPIPE. */
+int64_t ceesafe_tcp_socket_for(const ceesafe_endpoint *e) {
+    int fd = socket(e->family == 6u ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -(int64_t)errno;
 #ifdef SO_NOSIGPIPE
-    if (fd >= 0) {
-        int one = 1;
-        (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
-    }
+    int one = 1;
+    (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
     return fd;
 }
 
-cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
-    uint8_t bytes[4];
-    if (!ceesafe_ipv4(address, bytes)) return ceesafe_io_fail(EINVAL);
-    int fd = ceesafe_tcp_socket();
-    if (fd < 0) return ceesafe_io_errno();
-#ifdef SO_REUSEADDR
-    int one = 1;
-    (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+static bool cee_nonblocking(int fd);
+
+/* A socket bound to `e` and listening (`backlog`, 0: SOMAXCONN; the CEE_LISTEN_* `flags`), nonblocking if asked: the
+   descriptor, or a negated errno. V6 sockets always get IPV6_V6ONLY set explicitly, so a program behaves alike where
+   the system's default differs (ADR 0044 §3.2). */
+static int64_t cee_listen_endpoint(const ceesafe_endpoint *e, uint32_t backlog, uint32_t flags, bool nonblocking) {
+    cee_sockaddr a;
+    uint32_t length = ceesafe_endpoint_sockaddr(e, &a, (uint32_t)sizeof a);
+    if (length == 0) return -(int64_t)EAFNOSUPPORT;
+#if defined(CEE_NO_SETSOCKOPT) || !defined(SO_REUSEPORT)
+    if ((flags & CEE_LISTEN_REUSE_PORT) != 0u) return -(int64_t)EOPNOTSUPP;
 #endif
-    ceesafe_address a;
-    ceesafe_address_set(&a, bytes, port);
-    if (bind(fd, (const struct sockaddr *)&a, sizeof a) < 0 || listen(fd, 16) < 0) {
-        cee_io_result failed = ceesafe_io_errno();
+#if defined(CEE_NO_SETSOCKOPT) || !defined(IPV6_V6ONLY)
+    if (e->family == 6u && (flags & CEE_LISTEN_V6_ONLY) != 0u) return -(int64_t)EOPNOTSUPP;
+#endif
+    int64_t made = ceesafe_tcp_socket_for(e);
+    if (made < 0) return made;
+    int fd = (int)made;
+    int failure = 0;
+#if !defined(CEE_NO_SETSOCKOPT)
+    int one = 1;
+    if ((flags & CEE_LISTEN_REUSE_ADDRESS) != 0u) (void)setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+#ifdef SO_REUSEPORT
+    if ((flags & CEE_LISTEN_REUSE_PORT) != 0u && setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one) < 0) failure = errno;
+#endif
+#ifdef IPV6_V6ONLY
+    int only = (flags & CEE_LISTEN_V6_ONLY) != 0u ? 1 : 0;
+    if (failure == 0 && e->family == 6u && setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, sizeof only) < 0) failure = errno;
+#endif
+#endif
+    if (failure == 0 && nonblocking && !cee_nonblocking(fd)) failure = errno;
+    int depth = backlog == 0u || backlog > (uint32_t)SOMAXCONN ? SOMAXCONN : (int)backlog;
+    if (failure == 0 && (bind(fd, &a.sa, (socklen_t)length) < 0 || listen(fd, depth) < 0)) failure = errno;
+    if (failure != 0) {
+        (void)close(fd);
+        return -(int64_t)failure;
+    }
+    return fd;
+}
+
+/* A socket connecting to `e`: the descriptor once connected (blocking), or at once with the connection in progress
+   (nonblocking; ceesafe_async_tcp_connected says when it is made); or a negated errno. */
+static int64_t cee_connect_endpoint(const ceesafe_endpoint *e, bool nonblocking) {
+    cee_sockaddr a;
+    uint32_t length = ceesafe_endpoint_sockaddr(e, &a, (uint32_t)sizeof a);
+    if (length == 0) return -(int64_t)EAFNOSUPPORT;
+    int64_t made = ceesafe_tcp_socket_for(e);
+    if (made < 0) return made;
+    int fd = (int)made;
+    if (nonblocking && !cee_nonblocking(fd)) {
+        int64_t failed = -(int64_t)errno;
         (void)close(fd);
         return failed;
     }
-    return ceesafe_io_ok(fd);
+    if (connect(fd, &a.sa, (socklen_t)length) < 0 && !(nonblocking && (errno == EINPROGRESS || errno == EINTR))) {
+        int64_t failed = -(int64_t)errno;
+        (void)close(fd);
+        return failed;
+    }
+    return fd;
+}
+
+static cee_io_result cee_io_of(int64_t r) { return r < 0 ? ceesafe_io_fail((int32_t)-r) : ceesafe_io_ok(r); }
+
+cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(address, port, &e)) return ceesafe_io_fail(EINVAL);
+    return cee_io_of(cee_listen_endpoint(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, false));
 }
 
 cee_io_result ceesafe_tcp_port(int32_t fd) {
-    ceesafe_address a;
+    cee_sockaddr a;
     socklen_t length = sizeof a;
-    if (getsockname(fd, (struct sockaddr *)&a, &length) < 0) return ceesafe_io_errno();
-    return ceesafe_io_ok(ceesafe_address_port(&a));
+    ceesafe_endpoint e;
+    if (getsockname(fd, &a.sa, &length) < 0) return ceesafe_io_errno();
+    return cee_endpoint_from(&a, &e) ? ceesafe_io_ok(e.port) : ceesafe_io_fail(EAFNOSUPPORT);
 }
 
 cee_io_result ceesafe_tcp_accept(int32_t fd) {
@@ -571,22 +904,81 @@ cee_io_result ceesafe_tcp_accept(int32_t fd) {
 }
 
 cee_io_result ceesafe_tcp_connect(cee_str address, uint16_t port) {
-    uint8_t bytes[4];
-    if (!ceesafe_ipv4(address, bytes)) return ceesafe_io_fail(EINVAL);
-    int fd = ceesafe_tcp_socket();
-    if (fd < 0) return ceesafe_io_errno();
-    ceesafe_address a;
-    ceesafe_address_set(&a, bytes, port);
-    if (connect(fd, (const struct sockaddr *)&a, sizeof a) < 0) {
-        cee_io_result failed = ceesafe_io_errno();
-        (void)close(fd);
-        return failed;
-    }
-    return ceesafe_io_ok(fd);
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(address, port, &e)) return ceesafe_io_fail(EINVAL);
+    return cee_io_of(cee_connect_endpoint(&e, false));
 }
 
 cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
     return shutdown(fd, SHUT_WR) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+}
+
+cee_io_result ceesafe_tcp_shutdown_read(int32_t fd) {
+    return shutdown(fd, SHUT_RD) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+}
+
+/* ADR 0044's options: 0, or an errno. */
+static int32_t cee_option_set(int fd, uint32_t option, int64_t value) {
+#if defined(CEE_NO_SETSOCKOPT)
+    (void)fd;
+    (void)option;
+    (void)value;
+    return EOPNOTSUPP;
+#else
+    switch (option) {
+    case CEE_SOCKET_OPTION_NO_DELAY: {
+#ifdef TCP_NODELAY
+        int on = value != 0 ? 1 : 0;
+        return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on) < 0 ? errno : 0;
+#else
+        return EOPNOTSUPP;
+#endif
+    }
+    case CEE_SOCKET_OPTION_KEEP_ALIVE: {
+        if (value > INT32_MAX) return EINVAL;
+        int on = value >= 0 ? 1 : 0;
+        if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof on) < 0) return errno;
+        if (value > 0) {
+            int idle = (int)value;
+#if defined(TCP_KEEPIDLE)
+            if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof idle) < 0) return errno;
+#elif defined(TCP_KEEPALIVE)
+            if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof idle) < 0) return errno; /* macOS: seconds */
+#else
+            (void)idle;
+            return EOPNOTSUPP;
+#endif
+        }
+        return 0;
+    }
+    case CEE_SOCKET_OPTION_SEND_BUFFER:
+    case CEE_SOCKET_OPTION_RECEIVE_BUFFER: {
+        if (value < 0 || value > INT32_MAX) return EINVAL;
+        int size = (int)value;
+        int name = option == CEE_SOCKET_OPTION_SEND_BUFFER ? SO_SNDBUF : SO_RCVBUF;
+        return setsockopt(fd, SOL_SOCKET, name, &size, sizeof size) < 0 ? errno : 0;
+    }
+    case CEE_SOCKET_OPTION_LINGER: {
+        if (value > INT32_MAX) return EINVAL;
+        struct linger l;
+        l.l_onoff = value >= 0 ? 1 : 0;
+        l.l_linger = value >= 0 ? (int)value : 0;
+#ifdef SO_LINGER_SEC
+        int name = SO_LINGER_SEC; /* macOS: SO_LINGER counts clock ticks */
+#else
+        int name = SO_LINGER;
+#endif
+        return setsockopt(fd, SOL_SOCKET, name, &l, sizeof l) < 0 ? errno : 0;
+    }
+    default:
+        return EINVAL;
+    }
+#endif
+}
+
+cee_io_result ceesafe_tcp_option(int32_t fd, uint32_t option, int64_t value) {
+    int32_t error = cee_option_set(fd, option, value);
+    return error != 0 ? ceesafe_io_fail(error) : ceesafe_io_ok(0);
 }
 
 /* ---- Async sockets (type-system.md §40.4; lib/std/async.cee): non-blocking descriptors. Each call is a value >= 0,
@@ -617,16 +1009,20 @@ static bool cee_nonblocking(int fd) {
 
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
     cee_str text = {address, length};
-    cee_io_result r = ceesafe_tcp_listen(text, port);
-    if (r.error != 0) {
-        return -(int64_t)r.error;
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(text, port, &e)) {
+        return -(int64_t)EINVAL;
     }
-    if (!cee_nonblocking((int)r.value)) {
-        int64_t failed = -(int64_t)errno;
-        (void)close((int)r.value);
-        return failed;
+    return cee_listen_endpoint(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, true);
+}
+
+int64_t ceesafe_async_tcp_listen_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope,
+                                    uint32_t backlog, uint32_t flags) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) {
+        return -(int64_t)EINVAL;
     }
-    return r.value;
+    return cee_listen_endpoint(&e, backlog, flags, true);
 }
 
 int64_t ceesafe_async_tcp_port(int32_t fd) {
@@ -657,27 +1053,21 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) {
 /* Starts a connection: the descriptor, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
     cee_str text = {address, length};
-    uint8_t bytes[4];
-    if (!ceesafe_ipv4(text, bytes)) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_parse(text, port, &e)) {
         return -(int64_t)EINVAL;
     }
-    int fd = ceesafe_tcp_socket();
-    if (fd < 0) {
-        return -(int64_t)errno;
+    return cee_connect_endpoint(&e, true);
+}
+
+int64_t ceesafe_async_tcp_connect_endpoint(const ceesafe_endpoint *e) { return cee_connect_endpoint(e, true); }
+
+int64_t ceesafe_async_tcp_connect_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) {
+        return -(int64_t)EINVAL;
     }
-    if (!cee_nonblocking(fd)) {
-        int64_t failed = -(int64_t)errno;
-        (void)close(fd);
-        return failed;
-    }
-    ceesafe_address a;
-    ceesafe_address_set(&a, bytes, port);
-    if (connect(fd, (const struct sockaddr *)&a, sizeof a) < 0 && errno != EINPROGRESS && errno != EINTR) {
-        int64_t failed = -(int64_t)errno;
-        (void)close(fd);
-        return failed;
-    }
-    return fd;
+    return cee_connect_endpoint(&e, true);
 }
 
 int64_t ceesafe_async_tcp_connected(int32_t fd) {
@@ -694,9 +1084,9 @@ int64_t ceesafe_async_tcp_connected(int32_t fd) {
         return error == EINPROGRESS || error == EALREADY ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)error;
     }
     /* No error yet: connected once it has a peer (SO_ERROR is also 0 while the connection is still in progress). */
-    ceesafe_address peer;
+    cee_sockaddr peer;
     socklen_t length = sizeof peer;
-    if (getpeername(fd, (struct sockaddr *)&peer, &length) == 0) {
+    if (getpeername(fd, &peer.sa, &length) == 0) {
         return 0;
     }
     return errno == ENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
@@ -727,6 +1117,57 @@ int64_t ceesafe_async_shutdown_write(int32_t fd) {
     return shutdown(fd, SHUT_WR) < 0 ? -(int64_t)errno : 0;
 }
 
+int64_t ceesafe_async_shutdown_read(int32_t fd) {
+    return shutdown(fd, SHUT_RD) < 0 ? -(int64_t)errno : 0;
+}
+
+int64_t ceesafe_async_socket_option(int32_t fd, uint32_t option, int64_t value) {
+    int32_t error = cee_option_set(fd, option, value);
+    return error != 0 ? -(int64_t)error : 0;
+}
+
+int64_t ceesafe_async_socket_name(int32_t fd, uint32_t peer, uint8_t *bytes, uint32_t *scope) {
+    cee_sockaddr a;
+    socklen_t length = sizeof a;
+    ceesafe_mem_set(&a, 0, sizeof a);
+#if defined(CEE_COSMOOS) || defined(COSMO_AF_INET)
+    if (peer != 0u) {
+        return -(int64_t)EOPNOTSUPP; /* CosmoOS has no getpeername */
+    }
+    if (getsockname(fd, &a.sa, &length) < 0) {
+        return -(int64_t)errno;
+    }
+#else
+    if ((peer != 0u ? getpeername(fd, &a.sa, &length) : getsockname(fd, &a.sa, &length)) < 0) {
+        return -(int64_t)errno;
+    }
+#endif
+    ceesafe_endpoint e;
+    if (!cee_endpoint_from(&a, &e)) {
+        return -(int64_t)EAFNOSUPPORT;
+    }
+    for (int k = 0; k < 16; k++) bytes[k] = e.bytes[k];
+    *scope = e.scope;
+    return ((int64_t)e.family << 16) | (int64_t)e.port;
+}
+
+uint32_t ceesafe_interface_index(const uint8_t *name, uint64_t length) {
+#if defined(IF_NAMESIZE) && !defined(COSMO_AF_INET)
+    char text[IF_NAMESIZE];
+    if (length == 0u || length >= IF_NAMESIZE) return 0;
+    for (uint64_t k = 0; k < length; k++) {
+        if (name[k] == 0) return 0;
+        text[k] = (char)name[k];
+    }
+    text[length] = 0;
+    return (uint32_t)if_nametoindex(text);
+#else
+    (void)name;
+    (void)length;
+    return 0;
+#endif
+}
+
 void ceesafe_async_close(int32_t fd) {
     (void)close(fd);
 }
@@ -742,7 +1183,14 @@ static int64_t cee_async_result(cee_io_result r) {
 
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
     cee_str text = {address, length};
-    return cee_async_result(cee_socket_open(text, port, true, true));
+    return cee_async_result(cee_socket_open_text(text, port, true, true));
+}
+
+int64_t ceesafe_async_tcp_listen_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope,
+                                    uint32_t backlog, uint32_t flags) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) return -(int64_t)EINVAL;
+    return cee_async_result(cee_socket_open(&e, backlog, flags, true, true));
 }
 
 int64_t ceesafe_async_tcp_port(int32_t fd) { return cee_async_result(ceesafe_tcp_port(fd)); }
@@ -752,7 +1200,17 @@ int64_t ceesafe_async_tcp_accept(int32_t fd) { return cee_async_result(cee_socke
 /* Starts a connection: the id, which is connected once it is writable and ceesafe_async_tcp_connected is 0. */
 int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint16_t port) {
     cee_str text = {address, length};
-    return cee_async_result(cee_socket_open(text, port, false, true));
+    return cee_async_result(cee_socket_open_text(text, port, false, true));
+}
+
+int64_t ceesafe_async_tcp_connect_endpoint(const ceesafe_endpoint *e) {
+    return cee_async_result(cee_socket_open(e, 0u, 0u, false, true));
+}
+
+int64_t ceesafe_async_tcp_connect_at(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) return -(int64_t)EINVAL;
+    return cee_async_result(cee_socket_open(&e, 0u, 0u, false, true));
 }
 
 int64_t ceesafe_async_tcp_connected(int32_t fd) {
@@ -765,9 +1223,9 @@ int64_t ceesafe_async_tcp_connected(int32_t fd) {
         return error == WSAEINPROGRESS || error == WSAEALREADY || error == WSAEWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK
                                                                                          : -(int64_t)cee_wsa_errno(error);
     }
-    struct sockaddr_in peer;
+    cee_sockaddr peer;
     int length = (int)sizeof peer;
-    if (getpeername(s, (struct sockaddr *)&peer, &length) == 0) return 0;
+    if (getpeername(s, &peer.sa, &length) == 0) return 0;
     int failed = WSAGetLastError();
     return failed == WSAENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)cee_wsa_errno(failed);
 }
@@ -787,6 +1245,35 @@ int64_t ceesafe_async_send(int32_t fd, const uint8_t *bytes, uint64_t length) {
 }
 
 int64_t ceesafe_async_shutdown_write(int32_t fd) { return cee_async_result(ceesafe_tcp_shutdown_write(fd)); }
+
+int64_t ceesafe_async_shutdown_read(int32_t fd) { return cee_async_result(ceesafe_tcp_shutdown_read(fd)); }
+
+int64_t ceesafe_async_socket_option(int32_t fd, uint32_t option, int64_t value) {
+    return cee_async_result(ceesafe_tcp_option(fd, option, value));
+}
+
+int64_t ceesafe_async_socket_name(int32_t fd, uint32_t peer, uint8_t *bytes, uint32_t *scope) {
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    cee_sockaddr a;
+    int length = (int)sizeof a;
+    ceesafe_mem_set(&a, 0, sizeof a);
+    if ((peer != 0u ? getpeername(s, &a.sa, &length) : getsockname(s, &a.sa, &length)) != 0) {
+        return -(int64_t)cee_wsa_errno(WSAGetLastError());
+    }
+    ceesafe_endpoint e;
+    if (!cee_endpoint_from(&a, &e)) return -(int64_t)EAFNOSUPPORT;
+    for (int k = 0; k < 16; k++) bytes[k] = e.bytes[k];
+    *scope = e.scope;
+    return ((int64_t)e.family << 16) | (int64_t)e.port;
+}
+
+/* Windows' zones are numbers in practice; a name would need iphlpapi, which no program links today (ADR 0044). */
+uint32_t ceesafe_interface_index(const uint8_t *name, uint64_t length) {
+    (void)name;
+    (void)length;
+    return 0;
+}
 
 void ceesafe_async_close(int32_t fd) {
     if (fd >= CEE_SOCKET_BASE) {

@@ -1,0 +1,385 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Socket addresses (type-system.md §40.4, ADR 0044): IPv4 and IPv6 endpoints, their text, and a listener's options.
+// Parsing and writing are pure CeeSafe; only an IPv6 zone given by an interface's name asks the runtime.
+
+extern "C" {
+    @effects()
+    fn ceesafe_interface_index(name: *u8, length: u64) -> u32;
+}
+
+/// An IPv4 or IPv6 endpoint: the address bytes in network order and the port; an IPv6 address also has its scope id
+/// (0: none), which a link-local address needs to say which interface it is on.
+public enum SocketAddress {
+    V4([u8; 4], u16),
+    V6([u8; 16], u16, u32),
+}
+
+/// What every SocketAddress answers (ADR 0044 §3.1).
+public interface SocketEndpoint {
+    /// The port.
+    fn port(borrow this) -> u16;
+    /// The same address with port `p`.
+    fn withPort(borrow this, p: u16) -> SocketAddress;
+    /// 127.0.0.0/8, or ::1.
+    fn isLoopback(borrow this) -> bool;
+    /// 0.0.0.0, or ::.
+    fn isUnspecified(borrow this) -> bool;
+    /// The text: `127.0.0.1:8080`, `[::1]:8080`, `[fe80::1%2]:8080`; IPv6 in RFC 5952's canonical form.
+    fn write(borrow this, w: borrow mut TextWriter);
+}
+
+impl SocketEndpoint for SocketAddress {
+    fn port(borrow this) -> u16 => match (this) {
+        SocketAddress.V4(_, p) => p,
+        SocketAddress.V6(_, p, _) => p,
+    };
+
+    fn withPort(borrow this, p: u16) -> SocketAddress => match (this) {
+        SocketAddress.V4(a, _) => SocketAddress.V4(a, p),
+        SocketAddress.V6(a, _, s) => SocketAddress.V6(a, p, s),
+    };
+
+    fn isLoopback(borrow this) -> bool => match (this) {
+        SocketAddress.V4(a, _) => a[0] == 127,
+        SocketAddress.V6(a, _, _) => SocketAddresses.allZero(a[..15]) && a[15] == 1,
+    };
+
+    fn isUnspecified(borrow this) -> bool => match (this) {
+        SocketAddress.V4(a, _) => SocketAddresses.allZero(a[..]),
+        SocketAddress.V6(a, _, _) => SocketAddresses.allZero(a[..]),
+    };
+
+    fn write(borrow this, w: borrow mut TextWriter) {
+        match (this) {
+            SocketAddress.V4(a, p) => {
+                SocketAddresses.writeV4(w, a);
+                w.byte(58);
+                w.decimal(p as u64);
+            }
+            SocketAddress.V6(a, p, s) => {
+                w.byte(91);
+                SocketAddresses.writeV6(w, a);
+                if (s != 0) {
+                    w.byte(37);
+                    w.decimal(s as u64);
+                }
+                w.text("]:");
+                w.decimal(p as u64);
+            }
+        }
+    }
+}
+
+/// The ways to make a SocketAddress: from text, and the well-known ones. (An enum has no functions of its own,
+/// type-system.md §15.1, so they are here.)
+public struct SocketAddresses {
+    /// `a.b.c.d:port`, `[v6]:port` or `[v6%zone]:port`, where the zone is a number or an interface's name; null if
+    /// the text is not one.
+    public fn parse(text: StringView) -> SocketAddress? {
+        let b = text.bytes();
+        if (b.length > 0 && b[0] == 91) {
+            var close: usize = 0;
+            while (close < b.length && b[close] != 93) {
+                close += 1;
+            }
+            if (close >= b.length || close + 1 >= b.length || b[close + 1] != 58) {
+                return null;
+            }
+            let inner = b[1..close];
+            return match (SocketAddresses.parsePort(b[close + 2..])) {
+                Some(port) => SocketAddresses.parseV6Zoned(inner, port),
+                null => null,
+            };
+        }
+        var colon = b.length;
+        for (i in 0..b.length) {
+            if (b[i] == 58) {
+                if (colon != b.length) {
+                    return null; // IPv6 needs its brackets when a port follows
+                }
+                colon = i;
+            }
+        }
+        if (colon == b.length) {
+            return null;
+        }
+        var v4 = [0u8; 4];
+        if (!SocketAddresses.parseV4(b[..colon], mut v4)) {
+            return null;
+        }
+        return match (SocketAddresses.parsePort(b[colon + 1..])) {
+            Some(port) => SocketAddress.V4(v4, port),
+            null => null,
+        };
+    }
+
+    /// An address without a port (`127.0.0.1`, `::1`, `fe80::1%2`, `fe80::1%en0`) and `port`; null if the text is not
+    /// one.
+    public fn parseIp(text: StringView, port: u16) -> SocketAddress? {
+        let b = text.bytes();
+        var v4 = [0u8; 4];
+        if (SocketAddresses.parseV4(b, mut v4)) {
+            return SocketAddress.V4(v4, port);
+        }
+        return SocketAddresses.parseV6Zoned(b, port);
+    }
+
+    public fn v4Any(port: u16) -> SocketAddress => SocketAddress.V4([0u8; 4], port);
+
+    public fn v6Any(port: u16) -> SocketAddress => SocketAddress.V6([0u8; 16], port, 0);
+
+    public fn v4Loopback(port: u16) -> SocketAddress => SocketAddress.V4([127u8, 0, 0, 1], port);
+
+    public fn v6Loopback(port: u16) -> SocketAddress {
+        var a = [0u8; 16];
+        a[15] = 1;
+        return SocketAddress.V6(a, port, 0);
+    }
+
+    fn allZero(b: Slice<u8>) -> bool {
+        for (x in b) {
+            if (x != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// 1 to 5 decimal digits, at most 65535.
+    fn parsePort(b: Slice<u8>) -> u16? {
+        if (b.length == 0 || b.length > 5) {
+            return null;
+        }
+        var v: u32 = 0;
+        for (c in b) {
+            if (c < 48 || c > 57) {
+                return null;
+            }
+            v = v * 10 + (c - 48) as u32;
+        }
+        return if (v > 65535) null else truncate<u16>(v);
+    }
+
+    /// Dotted IPv4: four decimal parts of 1 to 3 digits, each at most 255.
+    fn parseV4(b: Slice<u8>, out: borrow mut [u8; 4]) -> bool {
+        var i: usize = 0;
+        for (part in 0..4usize) {
+            if (part > 0) {
+                if (i >= b.length || b[i] != 46) {
+                    return false;
+                }
+                i += 1;
+            }
+            var v: u32 = 0;
+            var digits: u32 = 0;
+            while (i < b.length && b[i] >= 48 && b[i] <= 57 && digits < 3) {
+                v = v * 10 + (b[i] - 48) as u32;
+                i += 1;
+                digits += 1;
+            }
+            if (digits == 0 || v > 255) {
+                return false;
+            }
+            out[part] = truncate<u8>(v);
+        }
+        return i == b.length;
+    }
+
+    fn hexValue(c: u8) -> i32 {
+        if (c >= 48 && c <= 57) {
+            return (c - 48) as i32;
+        }
+        if (c >= 97 && c <= 102) {
+            return (c - 87) as i32;
+        }
+        if (c >= 65 && c <= 70) {
+            return (c - 55) as i32;
+        }
+        return -1;
+    }
+
+    /// IPv6 text (RFC 4291 §2.2): eight groups of up to four hex digits, at most one `::`, a dotted IPv4 last.
+    fn parseV6(b: Slice<u8>, out: borrow mut [u8; 16]) -> bool {
+        var groups = [0u16; 8];
+        var count: usize = 0;
+        var gap: usize = 9; // where `::` stands, 9 if there is none
+        var i: usize = 0;
+        if (b.length >= 2 && b[0] == 58 && b[1] == 58) {
+            gap = 0;
+            i = 2;
+        } else if (b.length == 0 || b[0] == 58) {
+            return false;
+        }
+        while (i < b.length) {
+            let start = i;
+            var v: u32 = 0;
+            var digits: u32 = 0;
+            while (i < b.length && SocketAddresses.hexValue(b[i]) >= 0 && digits < 5) {
+                v = v * 16 + truncate<u32>(SocketAddresses.hexValue(b[i])); // 0 to 15 here
+                i += 1;
+                digits += 1;
+            }
+            if (i < b.length && b[i] == 46) {
+                var v4 = [0u8; 4];
+                if (count > 6 || !SocketAddresses.parseV4(b[start..], mut v4)) {
+                    return false;
+                }
+                groups[count] = ((v4[0] as u16) << 8) | v4[1] as u16;
+                groups[count + 1] = ((v4[2] as u16) << 8) | v4[3] as u16;
+                count += 2;
+                i = b.length;
+                break;
+            }
+            if (digits == 0 || digits > 4 || count == 8) {
+                return false;
+            }
+            groups[count] = truncate<u16>(v);
+            count += 1;
+            if (i == b.length) {
+                break;
+            }
+            if (b[i] != 58) {
+                return false;
+            }
+            i += 1;
+            if (i < b.length && b[i] == 58) {
+                if (gap != 9) {
+                    return false;
+                }
+                gap = count;
+                i += 1;
+            } else if (i == b.length) {
+                return false; // one trailing colon
+            }
+        }
+        if (if (gap == 9) count != 8 else count > 7) {
+            return false;
+        }
+        var at: usize = 0;
+        for (k in 0..8usize) {
+            var g: u16 = 0;
+            if (gap == 9 || k < gap || k >= gap + (8 - count)) {
+                g = groups[at];
+                at += 1;
+            }
+            out[2 * k] = truncate<u8>(g >> 8);
+            out[2 * k + 1] = truncate<u8>(g);
+        }
+        return true;
+    }
+
+    /// IPv6 with an optional `%zone`: a number, or an interface's name the runtime knows.
+    /// Safety: the runtime reads the name during the call only.
+    fn parseV6Zoned(b: Slice<u8>, port: u16) -> SocketAddress? {
+        var end = b.length;
+        for (i in 0..b.length) {
+            if (b[i] == 37) {
+                end = i;
+                break;
+            }
+        }
+        var a = [0u8; 16];
+        if (!SocketAddresses.parseV6(b[..end], mut a)) {
+            return null;
+        }
+        if (end == b.length) {
+            return SocketAddress.V6(a, port, 0);
+        }
+        let zone = b[end + 1..];
+        if (zone.length == 0) {
+            return null;
+        }
+        var number: u64 = 0;
+        var numeric = true;
+        for (c in zone) {
+            if (c < 48 || c > 57 || number > 429496729) {
+                numeric = false;
+                break;
+            }
+            number = number * 10 + (c - 48) as u64;
+        }
+        if (numeric && number <= 4294967295) {
+            return SocketAddress.V6(a, port, truncate<u32>(number));
+        }
+        let index = unsafe { ceesafe_interface_index(zone.ptr, zone.length as u64) };
+        return if (index == 0) null else SocketAddress.V6(a, port, index);
+    }
+
+    fn writeV4(w: borrow mut TextWriter, a: [u8; 4]) {
+        for (k in 0..4usize) {
+            if (k > 0) {
+                w.byte(46);
+            }
+            w.decimal(a[k] as u64);
+        }
+    }
+
+    /// RFC 5952 §4: lowercase hex without leading zeros, the longest run of two or more zero groups (the first of
+    /// equal runs) as `::`; an IPv4-mapped address (::ffff:0:0/96) with its last 32 bits dotted (§5).
+    fn writeV6(w: borrow mut TextWriter, a: [u8; 16]) {
+        if (SocketAddresses.allZero(a[..10]) && a[10] == 255 && a[11] == 255) {
+            w.text("::ffff:");
+            var v4 = [0u8; 4];
+            for (k in 0..4usize) {
+                v4[k] = a[12 + k];
+            }
+            SocketAddresses.writeV4(w, v4);
+            return;
+        }
+        var groups = [0u16; 8];
+        for (k in 0..8usize) {
+            groups[k] = ((a[2 * k] as u16) << 8) | a[2 * k + 1] as u16;
+        }
+        var bestStart: usize = 8;
+        var bestLength: usize = 1; // a run must be at least two groups
+        var k: usize = 0;
+        while (k < 8) {
+            if (groups[k] != 0) {
+                k += 1;
+                continue;
+            }
+            let start = k;
+            while (k < 8 && groups[k] == 0) {
+                k += 1;
+            }
+            if (k - start > bestLength) {
+                bestStart = start;
+                bestLength = k - start;
+            }
+        }
+        var g: usize = 0;
+        while (g < 8) {
+            if (g == bestStart) {
+                w.text("::");
+                g += bestLength;
+                continue;
+            }
+            if (g > 0 && g != bestStart + bestLength) {
+                w.byte(58);
+            }
+            w.hex(groups[g] as u64, 0);
+            g += 1;
+        }
+    }
+}
+
+/// How a listener is made (ADR 0044 §3.2). `defaults()`: the platform's largest backlog, the address reusable (as
+/// the runtime always did), no port sharing, and dual stack for an IPv6 address.
+public struct ListenOptions {
+    /// The queue of connections not yet accepted; 0: the platform's largest (SOMAXCONN).
+    public backlog: u32;
+    /// SO_REUSEADDR: listen again at once on a port whose connections are still closing (POSIX; Windows: ignored).
+    public reuseAddress: bool;
+    /// SO_REUSEPORT: several listeners on one port, the kernel spreading the connections; refused where the platform
+    /// has no such option (Windows: IoError.Unsupported).
+    public reusePort: bool;
+    /// IPV6_V6ONLY for an IPv6 address: false (dual stack) also accepts IPv4 peers, reported as V4.
+    public v6Only: bool;
+
+    public fn defaults() -> ListenOptions =>
+        ListenOptions { backlog: 0, reuseAddress: true, reusePort: false, v6Only: false };
+
+    /// The runtime's flags (rt.h's CEE_LISTEN_*).
+    fn flags(borrow this) -> u32 =>
+        (if (this.reuseAddress) 1u32 else 0) | (if (this.reusePort) 2u32 else 0) | (if (this.v6Only) 4u32 else 0);
+}

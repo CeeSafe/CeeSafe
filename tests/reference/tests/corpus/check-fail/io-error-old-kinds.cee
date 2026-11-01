@@ -1,0 +1,19 @@
+// A match naming only IoError's first eleven variants does not cover ADR 0044's kinds, which follow Other: it needs
+// their arms or a '_' arm (N0256). This is the change 0.7.0's notes name.
+fn kindNumber(e: IoError) -> i32 => match (e) { // error[N0256]
+    IoError.NotFound => 1,
+    IoError.PermissionDenied => 2,
+    IoError.AlreadyExists => 3,
+    IoError.IsDirectory => 4,
+    IoError.NotDirectory => 5,
+    IoError.InvalidInput => 6,
+    IoError.BrokenPipe => 7,
+    IoError.ConnectionRefused => 8,
+    IoError.AddressInUse => 9,
+    IoError.OutOfMemory => 10,
+    IoError.Other(n) => n,
+};
+
+fn main() {
+    Console.writeLine(kindNumber(IoError.NotFound));
+}

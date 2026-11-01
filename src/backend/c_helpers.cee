@@ -1287,7 +1287,7 @@ fn emitIoHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, Allo
         let error = resultErrOf(c, result);
         let name = cTypeName(c, result)?;
         let variants = borrow c.types.enums[c.types.info(error).enumDef as usize].variants;
-        let other = variants[variants.length - 1];
+        let other = variants[10]; // IoError.Other: ADR 0044's kinds follow it
         e.helper()?;
         e.b(name.view())?;
         e.t(" ")?;

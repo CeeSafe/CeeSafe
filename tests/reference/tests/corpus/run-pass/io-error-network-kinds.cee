@@ -1,0 +1,51 @@
+// ADR 0044's IoError kinds, which follow Other (so the eleven before it keep their tags), and their messages: the C
+// library's wording as glibc's strerror gives it (type-system.md §26.2), the oracle being Python's os.strerror on
+// Linux.
+fn name(e: IoError) -> StringView => match (e) {
+    IoError.ConnectionReset => "ConnectionReset",
+    IoError.ConnectionAborted => "ConnectionAborted",
+    IoError.NotConnected => "NotConnected",
+    IoError.TimedOut => "TimedOut",
+    IoError.HostUnreachable => "HostUnreachable",
+    IoError.NetworkUnreachable => "NetworkUnreachable",
+    IoError.AddressNotAvailable => "AddressNotAvailable",
+    IoError.Unsupported => "Unsupported",
+    IoError.Other(_) => "Other",
+    _ => "earlier",
+};
+
+fn main() {
+    let errors = [
+        IoError.ConnectionReset,
+        IoError.ConnectionAborted,
+        IoError.NotConnected,
+        IoError.TimedOut,
+        IoError.HostUnreachable,
+        IoError.NetworkUnreachable,
+        IoError.AddressNotAvailable,
+        IoError.Unsupported,
+        IoError.Other(5),
+        IoError.AddressInUse,
+    ];
+    for (e in errors[..]) {
+        Console.write(name(e));
+        Console.write(": ");
+        Console.writeLine(e.message());
+    }
+    // A refused connection is still ConnectionRefused (port 1 on loopback has no listener).
+    match (TcpStream.connect("127.0.0.1", 1)) {
+        Ok(_) => { Console.writeLine("connected"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+}
+// expect-stdout: ConnectionReset: Connection reset by peer
+// expect-stdout: ConnectionAborted: Software caused connection abort
+// expect-stdout: NotConnected: Transport endpoint is not connected
+// expect-stdout: TimedOut: Connection timed out
+// expect-stdout: HostUnreachable: No route to host
+// expect-stdout: NetworkUnreachable: Network is unreachable
+// expect-stdout: AddressNotAvailable: Cannot assign requested address
+// expect-stdout: Unsupported: Operation not supported
+// expect-stdout: Other: Input/output error
+// expect-stdout: earlier: Address already in use
+// expect-stdout: Connection refused

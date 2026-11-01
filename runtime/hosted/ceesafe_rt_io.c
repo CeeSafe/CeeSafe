@@ -78,6 +78,17 @@ uint32_t ceesafe_io_kind(int32_t error) {
     case ECONNREFUSED: return CEE_IO_CONNECTION_REFUSED;
     case EADDRINUSE: return CEE_IO_ADDRESS_IN_USE;
     case ENOMEM: return CEE_IO_OUT_OF_MEMORY;
+    case ECONNRESET: return CEE_IO_CONNECTION_RESET;
+    case ECONNABORTED: return CEE_IO_CONNECTION_ABORTED;
+    case ENOTCONN: return CEE_IO_NOT_CONNECTED;
+    case ETIMEDOUT: return CEE_IO_TIMED_OUT;
+    case EHOSTUNREACH: return CEE_IO_HOST_UNREACHABLE;
+    case ENETUNREACH: return CEE_IO_NETWORK_UNREACHABLE;
+    case EADDRNOTAVAIL: return CEE_IO_ADDRESS_NOT_AVAILABLE;
+    case EOPNOTSUPP: case ENOPROTOOPT: case EAFNOSUPPORT: case EPROTONOSUPPORT: return CEE_IO_UNSUPPORTED;
+#if defined(ENOTSUP) && ENOTSUP != EOPNOTSUPP
+    case ENOTSUP: return CEE_IO_UNSUPPORTED;
+#endif
     default: return CEE_IO_OTHER;
     }
 }
@@ -248,7 +259,12 @@ static int32_t cee_wsa_errno(int error) {
     case WSAEISCONN: return EISCONN;
     case WSAESHUTDOWN: return EPIPE;
     case WSAETIMEDOUT: return ETIMEDOUT;
-    case WSAENETUNREACH: case WSAEHOSTUNREACH: return ENETUNREACH;
+    case WSAENETUNREACH: return ENETUNREACH;
+    case WSAEHOSTUNREACH: return EHOSTUNREACH;
+    case WSAEOPNOTSUPP: return EOPNOTSUPP;
+    case WSAENOPROTOOPT: return ENOPROTOOPT;
+    case WSAEAFNOSUPPORT: return EAFNOSUPPORT;
+    case WSAEPROTONOSUPPORT: return EPROTONOSUPPORT;
     case WSAEACCES: return EACCES;
     case WSAEINVAL: case WSAEFAULT: return EINVAL;
     case WSAENOTSOCK: return ENOTSOCK;

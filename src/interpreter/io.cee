@@ -126,6 +126,31 @@ fn errnoOf(error: IoError) -> i64 => match (error) {
     IoError.AddressInUse => if (isLinuxHost()) 98i64 else 48i64,
     IoError.OutOfMemory => 12,
     IoError.Other(code) => code as i64,
+    // ADR 0044's kinds, which stage 0 (ceesafec 0.3.2, Decision 0009) cannot name: each has its own fixed message.
+    _ => errnoOfMessage(error.message()),
+};
+
+/// The errno of one of ADR 0044's kinds (Linux's numbers, else macOS's), from its message (§26.2's wording).
+fn errnoOfMessage(text: StringView) -> i64 {
+    let linux = isLinuxHost();
+    for (k in 11..19u64) {
+        if (sameText(text.bytes(), ioMessage(k))) {
+            return networkErrno(k, linux);
+        }
+    }
+    return 5; // EIO: not reached, every kind has a message
+}
+
+/// The errno each of ADR 0044's kinds stands for, on Linux or macOS.
+fn networkErrno(kind: u64, linux: bool) -> i64 => match (kind) {
+    11 => if (linux) 104i64 else 54i64, // ECONNRESET
+    12 => if (linux) 103i64 else 53i64, // ECONNABORTED
+    13 => if (linux) 107i64 else 57i64, // ENOTCONN
+    14 => if (linux) 110i64 else 60i64, // ETIMEDOUT
+    15 => if (linux) 113i64 else 65i64, // EHOSTUNREACH
+    16 => if (linux) 101i64 else 51i64, // ENETUNREACH
+    17 => if (linux) 99i64 else 49i64,  // EADDRNOTAVAIL
+    _ => if (linux) 95i64 else 102i64,  // EOPNOTSUPP
 };
 
 /// HostIo.Kind: the IoError variant (by declaration order) for an errno.
@@ -161,7 +186,16 @@ fn ioKindOf(error: i64) -> u64 {
     if (error == 12) {
         return 9;
     }
-    return 10;
+    for (k in 11..19u64) {
+        if (error == networkErrno(k, linux)) {
+            return k;
+        }
+    }
+    // The other spellings of Unsupported: ENOTSUP (macOS's differs from EOPNOTSUPP), ENOPROTOOPT, EAFNOSUPPORT,
+    // EPROTONOSUPPORT.
+    let unsupported = if (linux) error == 92 || error == 97 || error == 93 else error == 45 || error == 42 ||
+        error == 47 || error == 43;
+    return if (unsupported) 18 else 10;
 }
 
 /// ceeIOR_: Err with the IoError variant for the errno (its number kept for Other), or Ok with the value.
@@ -276,6 +310,14 @@ fn ioMessage(kind: u64) -> StringView => match (kind) {
     7 => "Connection refused",
     8 => "Address already in use",
     9 => "Out of memory",
+    11 => "Connection reset by peer",
+    12 => "Software caused connection abort",
+    13 => "Transport endpoint is not connected",
+    14 => "Connection timed out",
+    15 => "No route to host",
+    16 => "Network is unreachable",
+    17 => "Cannot assign requested address",
+    18 => "Operation not supported",
     _ => "Input/output error",
 };
 
@@ -304,7 +346,7 @@ fn ioBuiltin(
         let errorType = builtinArgumentType(n, arguments, 0);
         let value = argument(it, c, n, frame, arguments, 0)?;
         var kind = value.bits(0, enumTagSize(c, errorType))?;
-        if (kind > 10) {
+        if (kind > 18) {
             kind = 10;
         }
         let text = ioMessage(kind);

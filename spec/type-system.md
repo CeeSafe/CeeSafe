@@ -1584,9 +1584,30 @@ fn main() -> i32 {
 ### 26.2 `IoError`
 A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDenied`,
 `AlreadyExists`, `IsDirectory`, `NotDirectory`, `InvalidInput`, `BrokenPipe`,
-`ConnectionRefused`, `AddressInUse`, `OutOfMemory` and `Other(i32)` (the platform's error number).
-`e.message()` is a `StringView` of static text describing it (the C library's wording for the
-common cases: "No such file or directory", "Permission denied", …).
+`ConnectionRefused`, `AddressInUse`, `OutOfMemory`, `Other(i32)` (the platform's error number), and
+after it (ADR 0044, so the earlier variants keep their tags) the network kinds `ConnectionReset`,
+`ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
+`AddressNotAvailable` and `Unsupported`.
+`e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
+platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
+"Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
+"No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
+supported"; `Other`'s is "Input/output error".
+
+| Variant | POSIX | Winsock |
+|---|---|---|
+| `ConnectionReset` | `ECONNRESET` | `WSAECONNRESET` |
+| `ConnectionAborted` | `ECONNABORTED` | `WSAECONNABORTED` |
+| `NotConnected` | `ENOTCONN` | `WSAENOTCONN` |
+| `TimedOut` | `ETIMEDOUT` | `WSAETIMEDOUT` |
+| `HostUnreachable` | `EHOSTUNREACH` | `WSAEHOSTUNREACH` |
+| `NetworkUnreachable` | `ENETUNREACH` | `WSAENETUNREACH` |
+| `AddressNotAvailable` | `EADDRNOTAVAIL` | `WSAEADDRNOTAVAIL` |
+| `Unsupported` | `EOPNOTSUPP`, `ENOTSUP`, `ENOPROTOOPT`, `EAFNOSUPPORT`, `EPROTONOSUPPORT` | their `WSAE` forms |
+
+`IoError.TimedOut` is the kernel's (a connect or keep-alive gave up); `AsyncError.TimedOut` is a
+deadline of the program's. A `match` that names the first eleven variants and has no `_` arm does
+not cover the network kinds (N0256): a source change of 0.7.0.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file

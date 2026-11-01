@@ -341,6 +341,14 @@ public struct HostServices {
             7 => IoError.ConnectionRefused,
             8 => IoError.AddressInUse,
             9 => IoError.OutOfMemory,
+            11 => IoError.ConnectionReset,
+            12 => IoError.ConnectionAborted,
+            13 => IoError.NotConnected,
+            14 => IoError.TimedOut,
+            15 => IoError.HostUnreachable,
+            16 => IoError.NetworkUnreachable,
+            17 => IoError.AddressNotAvailable,
+            18 => IoError.Unsupported,
             _ => IoError.Other(error),
         };
     }

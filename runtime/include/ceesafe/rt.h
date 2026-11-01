@@ -997,6 +997,15 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 #define CEE_IO_ADDRESS_IN_USE 8u
 #define CEE_IO_OUT_OF_MEMORY 9u
 #define CEE_IO_OTHER 10u
+/* ADR 0044: appended after Other, so the kinds above keep their numbers. */
+#define CEE_IO_CONNECTION_RESET 11u
+#define CEE_IO_CONNECTION_ABORTED 12u
+#define CEE_IO_NOT_CONNECTED 13u
+#define CEE_IO_TIMED_OUT 14u
+#define CEE_IO_HOST_UNREACHABLE 15u
+#define CEE_IO_NETWORK_UNREACHABLE 16u
+#define CEE_IO_ADDRESS_NOT_AVAILABLE 17u
+#define CEE_IO_UNSUPPORTED 18u
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);

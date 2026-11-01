@@ -7,6 +7,10 @@
  * their frames come from ceesafe_alloc, so the fault-injection sweep reaches them. Linked only into programs that call
  * ceesafe_async_* (c-backend.md §6).
  */
+#if defined(CEE_FREESTANDING)
+/* The freestanding executor (ADR 0039): only the portable part below, over the environment's ceesafe_env_* hooks. */
+#include "ceesafe/rt.h"
+#else
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 /* ceesafec compiles with -std=c11, under which glibc hides POSIX's clock_gettime and CLOCK_MONOTONIC, and syscall(),
    which io_uring needs (ADR 0035). (Not on macOS, where such a macro would hide the BSD interfaces instead.) */
@@ -56,6 +60,7 @@
 #ifndef PIPE_BUF
 #define PIPE_BUF 512 /* POSIX's minimum (_POSIX_PIPE_BUF) */
 #endif
+#endif /* CEE_FREESTANDING */
 
 typedef struct cee_task {
     void *frame;
@@ -91,8 +96,9 @@ typedef struct cee_task {
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
 
-/* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task. */
-#define CEE_TASK_HEAD ((sizeof(cee_task) + sizeof(cee_max_align_t) - 1u) / sizeof(cee_max_align_t) * sizeof(cee_max_align_t))
+/* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task (its
+   alignment, not its size: x86-64's max_align_t is 32 bytes aligned to 16, and a kernel heap gives 16). */
+#define CEE_TASK_HEAD ((sizeof(cee_task) + _Alignof(cee_max_align_t) - 1u) / _Alignof(cee_max_align_t) * _Alignof(cee_max_align_t))
 
 /* The tasks waiting on one descriptor (POSIX): readers and writers, each in the order they parked. */
 typedef struct {
@@ -143,10 +149,17 @@ typedef struct {
     bool want_uring;           /* asked for, not yet set up */
 #endif
     struct cee_run *run;       /* the run it is a worker of when it has more than one (ADR 0038), else NULL */
+    struct cee_task *root;     /* freestanding: the run's root (the hosted runtime's cee_cancel_root) */
+    uint64_t wake_sequence;    /* freestanding: the hosted runtime's global cee_wake_sequence */
     uint64_t cancel_seen;      /* the run's cancel_epoch when this executor last rechecked its parked tasks */
 } cee_executor;
 
+#if defined(CEE_FREESTANDING)
+/* No thread-local storage or mutable globals (profiles.md §4.4): the environment keeps each thread's executor. */
+#define cee_exec (*(cee_executor *)*ceesafe_env_slot())
+#else
 static _Thread_local cee_executor cee_exec;
+#endif
 
 /* ---- Work stealing (ADR 0038) ----
  * Async.runWorkers(n, task) runs with n workers, the caller among them: each is an executor as above, on its own
@@ -169,15 +182,21 @@ typedef struct cee_run {
     uint32_t workers;         /* asked for, the caller included */
 } cee_run;
 
+#if !defined(CEE_FREESTANDING)
 static _Thread_local uint32_t cee_next_workers; /* Async.runWorkers: the next run's workers, read and reset by it */
 
 void ceesafe_async_workers(uint32_t n) { cee_next_workers = n; }
+#endif
 
 /* Ends another executor's wait, from any thread (its wake pipe, event or port). */
 static void cee_poke(cee_executor *exec);
 
 /* Pokes every other worker of the run: new work, a cancellation, or the run's end. */
 static void cee_run_poke(cee_run *run) {
+#if defined(CEE_FREESTANDING)
+    (void)run; /* one worker */
+    return;
+#else
     ceesafe_mutex_lock(run->lock);
     for (uint32_t k = 0; k < run->executor_count; k++) {
         if (run->executors[k] != &cee_exec) {
@@ -185,18 +204,27 @@ static void cee_run_poke(cee_run *run) {
         }
     }
     ceesafe_mutex_unlock(run->lock);
+#endif
 }
 
 static void cee_scope_lock(ceesafe_scope *scope) {
+#if !defined(CEE_FREESTANDING)
     if (scope->shared) {
         ceesafe_mutex_lock(cee_exec.run->lock);
     }
+#else
+    (void)scope;
+#endif
 }
 
 static void cee_scope_unlock(ceesafe_scope *scope) {
+#if !defined(CEE_FREESTANDING)
     if (scope->shared) {
         ceesafe_mutex_unlock(cee_exec.run->lock);
     }
+#else
+    (void)scope;
+#endif
 }
 
 /* Cancels a scope's children (type-system.md §40.5): every worker rechecks its parked tasks if the scope is shared. */
@@ -213,6 +241,9 @@ static void cee_cancel_scope(ceesafe_scope *scope) {
 
 /* The oldest unstarted spawnSend child, taken by this worker; NULL if there is none. */
 static cee_task *cee_steal(void) {
+#if defined(CEE_FREESTANDING)
+    return NULL;
+#else
     cee_run *run = cee_exec.run;
     if (run == NULL || ceesafe_atomic_load_u32(&run->queued) == 0u) {
         return NULL;
@@ -229,12 +260,17 @@ static cee_task *cee_steal(void) {
     }
     ceesafe_mutex_unlock(run->lock);
     return t;
+#endif
 }
 
 /* The cancellation sweep (testing.md §1): CEESAFE_CANCEL_AT=k cancels the running Async.run's root task at the
  * program's k-th suspension; CEESAFE_CANCEL_REPORT=1 prints the count after each Async.run. */
+#if defined(CEE_FREESTANDING)
+#define cee_cancel_root (cee_exec.root)
+#else
 static uint64_t cee_suspensions; /* every thread's executor counts here (ceesafe_atomic_*) */
 static _Thread_local cee_task *cee_cancel_root; /* the running Async.run's root, which the sweep cancels */
+#endif
 
 /* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
 static bool cee_cancelled(cee_task *t) {
@@ -279,9 +315,13 @@ static cee_task *cee_take_ready(void) {
 }
 
 static _Noreturn void cee_out_of_memory(void) {
+#if defined(CEE_FREESTANDING)
+    ceesafe_panic(CEE_PANIC_ASYNC, CEE_LOC("ceesafe_rt_async.c", 0u, 0u));
+#else
     static const char message[] = "ceesafe: out of memory for the executor's own bookkeeping\n";
     ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
     ceesafe_platform_abort();
+#endif
 }
 
 /* ---- The timer heap: the earliest deadline first, a shield's end counting as one (type-system.md §40.7). ---- */
@@ -294,6 +334,7 @@ static uint64_t cee_task_key(const cee_task *t) {
     return at;
 }
 
+#if !defined(CEE_FREESTANDING)
 static void cee_heap_set(uint32_t k, cee_task *t) {
     cee_exec.heap[k] = t;
     t->heap_index = k + 1u;
@@ -360,6 +401,12 @@ static void cee_heap_remove(cee_task *t) {
         cee_heap_down(moved->heap_index - 1u);
     }
 }
+#else
+/* Freestanding: no heap for the executor's arrays, so the deadlines are found by walking the parked tasks, which a
+   kernel's handful of tasks keeps short (ADR 0039). */
+static void cee_heap_push(cee_task *t) { (void)t; }
+static void cee_heap_remove(cee_task *t) { (void)t; }
+#endif
 
 static void cee_unpark(cee_task *t);
 static void cee_open_wake_pipe(void);
@@ -372,7 +419,7 @@ static bool cee_uring_drain(void);
 static HANDLE cee_iocp_port(void);
 #endif
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(CEE_FREESTANDING)
 /* ---- Descriptor waiters (POSIX) and the reactor. ---- */
 
 static unsigned cee_direction(const cee_task *t) { return t->fd_events == POLLOUT ? 1u : 0u; }
@@ -452,7 +499,7 @@ static void cee_reactor_arm(int32_t fd) {
     }
 #elif defined(CEE_EPOLL)
     struct epoll_event change;
-    memset(&change, 0, sizeof change);
+    ceesafe_mem_set(&change, 0, sizeof change);
     change.events = ((wanted & 1u) != 0u ? (uint32_t)EPOLLIN : 0u) | ((wanted & 2u) != 0u ? (uint32_t)EPOLLOUT : 0u) |
                     (uint32_t)EPOLLONESHOT;
     change.data.fd = fd;
@@ -513,7 +560,7 @@ static void cee_fd_attach(cee_task *t) {
         if (grown == NULL) {
             cee_out_of_memory();
         }
-        memset(grown + cee_exec.slot_count, 0, (size_t)(count - cee_exec.slot_count) * sizeof *grown);
+        ceesafe_mem_set(grown + cee_exec.slot_count, 0, (size_t)(count - cee_exec.slot_count) * sizeof *grown);
         cee_exec.slots = grown;
         cee_exec.slot_count = count;
     }
@@ -587,11 +634,13 @@ static void cee_park(cee_task *t) {
         cee_heap_push(t);
     }
     if (t->on_wake) {
+#if !defined(CEE_FREESTANDING)
         if (t->fd >= 0) {
             static const char message[] = "ceesafe: a task waits on a descriptor and a wake at once\n";
             ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
             ceesafe_platform_abort();
         }
+#endif
         t->link_prev = NULL;
         t->link_next = cee_exec.wake_list;
         if (cee_exec.wake_list != NULL) {
@@ -610,7 +659,7 @@ static void cee_park(cee_task *t) {
         } else {
             cee_exec.file_count += 1u; /* no readiness for consoles and files: readied by the next wait */
         }
-#else
+#elif !defined(CEE_FREESTANDING)
         cee_fd_attach(t); /* last: it may ready the task at once */
 #endif
     }
@@ -618,17 +667,25 @@ static void cee_park(cee_task *t) {
 
 /* Wakes a task of this or another thread's executor: safe from any thread while the task waits (it cannot end before
  * it is woken). */
+#if !defined(CEE_FREESTANDING)
 static uint64_t cee_wake_sequence; /* ceesafe_atomic_*: orders wakes, so woken tasks run first come, first served */
+#endif
 
 static void cee_wake_task(cee_executor *exec, cee_task *t) {
+#if defined(CEE_FREESTANDING)
+    uint64_t sequence = ceesafe_atomic_add_u64(&exec->wake_sequence, 1u) + 1u;
+#else
     uint64_t sequence = ceesafe_atomic_add_u64(&cee_wake_sequence, 1u) + 1u;
+#endif
     uint64_t none = 0u;
     (void)ceesafe_atomic_cas_u64(&t->woken, none, sequence);
     cee_poke(exec);
 }
 
 static void cee_poke(cee_executor *exec) {
-#if defined(_WIN32)
+#if defined(CEE_FREESTANDING)
+    ceesafe_env_wake(exec);
+#elif defined(_WIN32)
     if (exec->port != NULL) {
         (void)PostQueuedCompletionStatus(exec->port, 0, 0, NULL); /* ends its wait in the port */
     } else if (exec->wake_event != NULL) {
@@ -666,7 +723,7 @@ static void cee_unpark(cee_task *t) {
             if (t->fd < CEE_SOCKET_BASE) {
                 cee_exec.file_count -= 1u; /* a socket stays selected until the run ends: another task may wait on it */
             }
-#else
+#elif !defined(CEE_FREESTANDING)
             cee_fd_detach(t);
 #endif
         }
@@ -700,7 +757,9 @@ static void cee_unpark(cee_task *t) {
 }
 
 uint64_t ceesafe_async_now(void) {
-#if defined(_WIN32)
+#if defined(CEE_FREESTANDING)
+    return ceesafe_env_now_ms();
+#elif defined(_WIN32)
     return (uint64_t)GetTickCount64();
 #else
     struct timespec now;
@@ -716,6 +775,7 @@ void ceesafe_async_wait_until(uint64_t deadline) {
     }
 }
 
+#if !defined(CEE_FREESTANDING)
 void ceesafe_async_wait_writable(int32_t fd) {
     if (cee_exec.current != NULL) {
         cee_exec.current->fd = fd;
@@ -827,9 +887,10 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
     return written < 0 ? -(int64_t)errno : (int64_t)written;
 #endif
 }
+#endif /* the console and descriptors */
 
 static void cee_task_init(cee_task *t, void *frame, ceesafe_scope *scope, const ceesafe_frame_info *info) {
-    memset(t, 0, sizeof *t);
+    ceesafe_mem_set(t, 0, sizeof *t);
     t->frame = frame;
     t->scope = scope;
     t->deadline = UINT64_MAX;
@@ -848,8 +909,15 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
     size_t block_size = CEE_TASK_HEAD + frame_size;
-    unsigned char *block = allocate != NULL ? (unsigned char *)allocate(block_size, sizeof(cee_max_align_t))
+#if defined(CEE_FREESTANDING)
+    if (allocate == NULL) {
+        cee_out_of_memory(); /* no system heap: the checker allows only Async.scopeIn here (ADR 0039) */
+    }
+    unsigned char *block = (unsigned char *)allocate(block_size, _Alignof(cee_max_align_t));
+#else
+    unsigned char *block = allocate != NULL ? (unsigned char *)allocate(block_size, _Alignof(cee_max_align_t))
                                             : (unsigned char *)ceesafe_alloc(block_size, CEE_ALLOC_SYSTEM);
+#endif
     if (block == NULL) {
         scope->oom = true;
         cee_cancel_scope(scope); /* the children already started stop (type-system.md §40.5) */
@@ -880,6 +948,7 @@ void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume
     return cee_spawn(scope, frame_size, resume, allocate, release, info, false);
 }
 
+#if !defined(CEE_FREESTANDING)
 void *ceesafe_async_spawn_send(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                                void *(*allocate)(size_t size, size_t align),
                                void (*release)(void *p, size_t size, size_t align), const ceesafe_frame_info *info) {
@@ -905,6 +974,68 @@ void ceesafe_async_publish(void *frame) {
     (void)ceesafe_atomic_add_u32(&run->queued, 1u);
     ceesafe_mutex_unlock(run->lock);
     cee_run_poke(run); /* an idle worker takes it; this one does too, when it has nothing ready */
+}
+#endif /* work stealing */
+
+/* ---- AsyncSignal (ADR 0039): raised from anywhere, waited on by one task. ----
+ * raise sets `raised`, then takes the waiting task (swapping `task` to 0) and wakes it, `busy` while it does, so
+ * that a task which lost the race to take itself back waits until the raise no longer touches it before it returns
+ * (its frame, and the task, may end once it does). */
+typedef struct {
+    uint64_t raised;
+    uint64_t task;
+    uint64_t executor;
+    uint64_t busy;
+} cee_signal;
+
+/* Waits until no raise is waking this task: a few instructions, on another processor or in an interrupt. */
+static void cee_signal_settle(cee_signal *s) {
+    while (ceesafe_atomic_load_u64(&s->busy) != 0u) {
+    }
+}
+
+bool ceesafe_async_signal_take(void *signal) {
+    cee_signal *s = (cee_signal *)signal;
+    if (ceesafe_atomic_swap_u64(&s->raised, 0u) != 0u) {
+        return true;
+    }
+    cee_task *t = cee_exec.current;
+    uint64_t me = (uint64_t)(uintptr_t)t;
+    cee_open_wake_pipe(); /* a raise only pokes: it never touches the queues, as it may be an interrupt's */
+    ceesafe_atomic_store_u64(&s->executor, (uint64_t)(uintptr_t)&cee_exec);
+    ceesafe_atomic_store_u64(&s->task, me);
+    if (ceesafe_atomic_swap_u64(&s->raised, 0u) != 0u) {
+        if (ceesafe_atomic_swap_u64(&s->task, 0u) == me) {
+            return true; /* raised meanwhile, and no raise holds this task */
+        }
+        cee_signal_settle(s); /* a raise holds it and wakes it: run again, then take */
+        ceesafe_atomic_store_u64(&s->raised, 1u); /* the raise this took, for that take */
+    }
+    if (!t->on_wake) {
+        t->on_wake = true;
+        t->channel_wait = true; /* a cancellation wakes it too (type-system.md §40.7) */
+        cee_exec.wake_count += 1u;
+    }
+    return false;
+}
+
+void ceesafe_async_signal_forget(void *signal) {
+    cee_signal *s = (cee_signal *)signal;
+    uint64_t me = (uint64_t)(uintptr_t)cee_exec.current;
+    if (ceesafe_atomic_cas_u64(&s->task, me, 0u) != me) {
+        cee_signal_settle(s); /* a raise took it (and stays raised), or it was not waiting */
+    }
+}
+
+void ceesafe_async_signal_raise(void *signal) {
+    cee_signal *s = (cee_signal *)signal;
+    ceesafe_atomic_store_u64(&s->busy, 1u);
+    ceesafe_atomic_store_u64(&s->raised, 1u);
+    cee_task *t = (cee_task *)(uintptr_t)ceesafe_atomic_swap_u64(&s->task, 0u);
+    if (t != NULL) {
+        cee_wake_task((cee_executor *)(uintptr_t)ceesafe_atomic_load_u64(&s->executor), t);
+    }
+    ceesafe_atomic_store_u64(&s->busy, 0u);
 }
 
 bool ceesafe_async_claim_failure(ceesafe_scope *scope) {
@@ -975,7 +1106,9 @@ static void cee_wake_waiters(void) {
 }
 
 static void cee_open_wake_pipe(void) {
-#if defined(_WIN32)
+#if defined(CEE_FREESTANDING)
+    /* the environment's ceesafe_env_wake needs nothing opened */
+#elif defined(_WIN32)
     if (cee_exec.wake_event == NULL) {
         cee_exec.wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     }
@@ -993,6 +1126,7 @@ static void cee_open_wake_pipe(void) {
 #endif
 }
 
+#if !defined(CEE_FREESTANDING)
 void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg) {
     cee_open_wake_pipe();
     b->task = cee_exec.current;
@@ -1024,8 +1158,10 @@ bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
     }
     return false;
 }
+#endif /* Async.blocking */
 
 bool ceesafe_async_scope_done(ceesafe_scope *scope) {
+#if !defined(CEE_FREESTANDING)
     if (scope->shared) {
         /* Its last child may return on another worker, which wakes this task through its executor (ADR 0038). */
         ceesafe_mutex_lock(cee_exec.run->lock);
@@ -1038,6 +1174,7 @@ bool ceesafe_async_scope_done(ceesafe_scope *scope) {
         ceesafe_mutex_unlock(cee_exec.run->lock);
         return done;
     }
+#endif
     if (scope->live == 0u) {
         return true;
     }
@@ -1047,11 +1184,16 @@ bool ceesafe_async_scope_done(ceesafe_scope *scope) {
 }
 
 static _Noreturn void cee_stuck(void) {
+#if defined(CEE_FREESTANDING)
+    ceesafe_panic(CEE_PANIC_ASYNC, CEE_LOC("ceesafe_rt_async.c", 0u, 0u));
+#else
     static const char message[] = "ceesafe: every task is parked with nothing to wake it\n";
     ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
     ceesafe_platform_abort();
+#endif
 }
 
+#if !defined(CEE_FREESTANDING)
 #if defined(_WIN32)
 /* The parked tasks whose sockets are ready now (WSAPoll, no wait), unparked: how many. A socket that is closed, or
    in error, counts as ready, so its task retries and sees the error. */
@@ -1242,7 +1384,7 @@ static bool cee_wait_reactor(int timeout) {
         cee_exec.pipe_watched = true;
 #elif defined(CEE_EPOLL)
         struct epoll_event change;
-        memset(&change, 0, sizeof change);
+        ceesafe_mem_set(&change, 0, sizeof change);
         change.events = EPOLLIN;
         change.data.fd = cee_exec.wake_pipe[0];
         cee_exec.pipe_watched = epoll_ctl(cee_exec.reactor, EPOLL_CTL_ADD, cee_exec.wake_pipe[0], &change) == 0;
@@ -1293,9 +1435,58 @@ static bool cee_wait_reactor(int timeout) {
     return any;
 }
 #endif
+#endif /* the platforms' waits */
 
 /* While no task can run: waits for the earliest deadline, a descriptor or a wake, then readies what is due. Nothing
    here walks the parked list: deadlines are a heap, descriptors a table, wakes a list. */
+#if defined(CEE_FREESTANDING)
+/* Freestanding (ADR 0039): the earliest deadline among the parked tasks, then the environment's idle until it or a
+   wake; then woken tasks, earliest wake first, and those whose time has come. */
+static void cee_wait(void) {
+    for (;;) {
+        uint64_t deadline = UINT64_MAX;
+        for (cee_task *t = cee_exec.parked; t != NULL; t = t->next) {
+            uint64_t key = cee_task_key(t);
+            if (key < deadline) {
+                deadline = key;
+            }
+        }
+        if (deadline == UINT64_MAX && cee_exec.wake_count == 0u) {
+            cee_stuck();
+        }
+        bool any = false;
+        for (;;) {
+            cee_task *first = NULL;
+            uint64_t first_at = UINT64_MAX;
+            for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
+                uint64_t at = ceesafe_atomic_load_u64(&w->woken);
+                if (at != 0u && at < first_at) {
+                    first = w;
+                    first_at = at;
+                }
+            }
+            if (first == NULL) {
+                break;
+            }
+            ceesafe_atomic_store_u64(&first->woken, 0u);
+            cee_unpark(first);
+            any = true;
+        }
+        uint64_t now = ceesafe_async_now();
+        for (cee_task *t = cee_exec.parked, *next = NULL; t != NULL; t = next) {
+            next = t->next;
+            if (cee_task_key(t) <= now) {
+                cee_unpark(t);
+                any = true;
+            }
+        }
+        if (any) {
+            return;
+        }
+        ceesafe_env_idle(&cee_exec, deadline);
+    }
+}
+#else
 static void cee_wait(void) {
     for (;;) {
         if (cee_exec.heap_count == 0u && cee_exec.fd_count == 0u && cee_exec.wake_count == 0u && cee_exec.op_count == 0u) {
@@ -1356,7 +1547,20 @@ static void cee_wait(void) {
         }
     }
 }
+#endif
 
+#if defined(CEE_FREESTANDING)
+static void cee_exec_begin(cee_run *run) {
+    (void)run; /* one worker */
+    ceesafe_mem_set(&cee_exec, 0, sizeof cee_exec);
+    cee_exec.wake_pipe[0] = -1;
+    cee_exec.wake_pipe[1] = -1;
+    cee_exec.reactor = -1;
+}
+
+static void cee_exec_end(void) {
+}
+#else
 /* A fresh executor for this thread, a worker of `run` (NULL for a run with one worker). */
 static void cee_exec_begin(cee_run *run) {
     cee_exec.ready_head = NULL;
@@ -1444,6 +1648,7 @@ static void cee_exec_end(void) {
     ceesafe_platform_free(cee_exec.slots);
     ceesafe_platform_free(cee_exec.active_fds);
 }
+#endif
 
 /* A child that returned: its block freed, its scope told; the scope's first error cancels its siblings, and its last
    child wakes the task waiting for it, on whichever worker that task runs (ADR 0038). */
@@ -1451,9 +1656,11 @@ static void cee_child_done(cee_task *t) {
     ceesafe_scope *scope = t->scope;
     if (!t->embedded) {
         if (t->release != NULL) {
-            t->release(t, t->block_size, sizeof(cee_max_align_t));
+            t->release(t, t->block_size, _Alignof(cee_max_align_t));
         } else {
-            ceesafe_free(t, CEE_ALLOC_SYSTEM);
+#if !defined(CEE_FREESTANDING)
+            ceesafe_free(t, CEE_ALLOC_SYSTEM); /* freestanding: every child is from Async.scopeIn's allocator */
+#endif
         }
     }
     cee_scope_lock(scope);
@@ -1509,6 +1716,9 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
                 cee_stuck(); /* parked without registering anything: nothing can wake it */
             }
             cee_park(t);
+#if defined(CEE_FREESTANDING)
+            (void)cancel_at; /* the cancellation sweep is the hosted runtime's (testing.md §1) */
+#else
             if (ceesafe_atomic_add_ord_u64(&cee_suspensions, 1u, 0) + 1u == cancel_at && cee_cancel_root != NULL) {
                 ceesafe_atomic_store_u32(&cee_cancel_root->cancelled, 1u); /* the sweep's cancellation (testing.md §1) */
                 cee_wake_waiters();
@@ -1517,6 +1727,7 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
                     cee_run_poke(cee_exec.run);
                 }
             }
+#endif
             continue;
         }
         if (t == root) {
@@ -1526,6 +1737,24 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
     }
 }
 
+#if defined(CEE_FREESTANDING)
+/* Freestanding (ADR 0039): one worker; the executor lives in this frame, named by the environment's slot. */
+void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_info *info) {
+    cee_executor executor;
+    void **slot = ceesafe_env_slot();
+    void *saved = *slot;
+    *slot = &executor;
+    cee_exec_begin(NULL);
+    cee_task root;
+    cee_task_init(&root, frame, NULL, info);
+    root.resume.root = resume;
+    cee_exec.root = &root;
+    cee_ready(&root);
+    cee_exec_loop(&root, 0u);
+    cee_exec_end();
+    *slot = saved;
+}
+#else
 typedef struct {
     cee_run *run;
     cee_task *root;
@@ -1556,7 +1785,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_run run;
     cee_run *shared = NULL;
     if (workers > 1u) {
-        memset(&run, 0, sizeof run);
+        ceesafe_mem_set(&run, 0, sizeof run);
         run.lock = ceesafe_mutex_create();
         run.workers = workers;
         if (run.lock != NULL) {
@@ -1603,7 +1832,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     cee_cancel_root = saved_root;
     cee_exec = saved;
 }
+#endif
 
+#if !defined(CEE_FREESTANDING)
 /* ---- Channels (ADR 0032) ---- */
 
 typedef struct cee_chan_node {
@@ -2080,7 +2311,7 @@ static int64_t cee_iocp_submitted(cee_op *o, int status, bool failed) {
 }
 
 static void cee_iocp_begin(cee_op *o, uint32_t kind, SOCKET s) {
-    memset(&o->overlapped, 0, sizeof o->overlapped);
+    ceesafe_mem_set(&o->overlapped, 0, sizeof o->overlapped);
     o->backend = 2u;
     o->state = 0u;
     o->cancelling = 0u;
@@ -2215,7 +2446,7 @@ static bool cee_uring_open(void) {
     }
     cee_exec.want_uring = false; /* one try */
     struct io_uring_params p;
-    memset(&p, 0, sizeof p);
+    ceesafe_mem_set(&p, 0, sizeof p);
     p.flags = IORING_SETUP_CQSIZE;
     p.cq_entries = 16384u; /* room for every waiting operation's completion, and a cancellation's of each */
     int fd = (int)syscall(__NR_io_uring_setup, 256u, &p);
@@ -2227,7 +2458,7 @@ static bool cee_uring_open(void) {
         (void)close(fd);
         return false;
     }
-    memset(u, 0, sizeof *u);
+    ceesafe_mem_set(u, 0, sizeof *u);
     u->fd = fd;
     u->event = -1;
     u->entries = p.sq_entries;
@@ -2264,7 +2495,7 @@ static bool cee_uring_open(void) {
     u->cqes = (struct io_uring_cqe *)(void *)(cq + p.cq_off.cqes);
     u->event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     struct epoll_event change;
-    memset(&change, 0, sizeof change);
+    ceesafe_mem_set(&change, 0, sizeof change);
     change.events = EPOLLIN;
     change.data.fd = u->event;
     if (u->event < 0 || syscall(__NR_io_uring_register, fd, IORING_REGISTER_EVENTFD, &u->event, 1) < 0 ||
@@ -2285,7 +2516,7 @@ static struct io_uring_sqe *cee_uring_entry(void) {
     }
     unsigned index = tail & *u->sq_mask;
     struct io_uring_sqe *e = &u->sqes[index];
-    memset(e, 0, sizeof *e);
+    ceesafe_mem_set(e, 0, sizeof *e);
     u->sq_array[index] = index;
     __atomic_store_n(u->sq_tail, tail + 1u, __ATOMIC_RELEASE);
     return e;
@@ -2437,7 +2668,7 @@ static int64_t cee_uring_connect(cee_op *o, const uint8_t *address, uint64_t len
         return CEE_ASYNC_WOULD_BLOCK;
     }
     cee_uring_connect_op *c = (cee_uring_connect_op *)(void *)o;
-    memset(&c->address, 0, sizeof c->address);
+    ceesafe_mem_set(&c->address, 0, sizeof c->address);
     c->address.sin_family = AF_INET;
     c->address.sin_port = htons(port);
     memcpy(&c->address.sin_addr, bytes, 4);
@@ -2582,7 +2813,7 @@ int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t leng
             return cee_wsa_failure();
         }
         struct sockaddr_in local;
-        memset(&local, 0, sizeof local);
+        ceesafe_mem_set(&local, 0, sizeof local);
         local.sin_family = AF_INET;
         if (cee_connect_ex == NULL) {
             GUID id = WSAID_CONNECTEX;
@@ -2595,7 +2826,7 @@ int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t leng
             return failed;
         }
         struct sockaddr_in remote;
-        memset(&remote, 0, sizeof remote);
+        ceesafe_mem_set(&remote, 0, sizeof remote);
         remote.sin_family = AF_INET;
         remote.sin_port = htons(port);
         memcpy(&remote.sin_addr, bytes, 4);
@@ -2649,3 +2880,4 @@ bool ceesafe_async_op_cancel(void *op) {
     }
     return false;
 }
+#endif /* !CEE_FREESTANDING: channels, the debugger's tasks, operations */

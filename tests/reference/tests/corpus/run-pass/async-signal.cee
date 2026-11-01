@@ -1,0 +1,60 @@
+// AsyncSignal (ADR 0039): a task waits until another task, another thread or an interrupt handler raises the signal.
+// A raise before the wait is kept; a cancelled wait stops waiting (type-system.md §40.7).
+
+static READY: AsyncSignal = AsyncSignal.constant();
+
+async fn waiter(signal: borrow AsyncSignal, got: borrow mut u32) -> Result<void, AsyncError> {
+    await signal.wait()?;
+    got += 1;
+    return Ok();
+}
+
+async fn raiser(signal: borrow AsyncSignal) -> Result<void, AsyncError> {
+    await Timer.sleep(5)?;
+    signal.raise();
+    return Ok();
+}
+
+async fn breaker() -> Result<void, AsyncError> {
+    await Timer.sleep(5)?;
+    return Err(AsyncError.TimedOut);
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let signal = AsyncSignal.create();
+    var got: u32 = 0;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await waiter(signal, mut got));
+        s.spawn(async () => await raiser(signal));
+    })?;
+    signal.raise(); // before the wait: kept
+    await signal.wait()?;
+    got += 10;
+    // From another thread: Async.blocking's body raises the static signal.
+    let fromThread: u32 = await Async.blocking(() => {
+        READY.raise();
+        return 1u32;
+    });
+    await READY.wait()?;
+    got += 100 * fromThread;
+    // A wait cancelled by a sibling's error.
+    let lonely = AsyncSignal.create();
+    var never: u32 = 0;
+    let cancelled = await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await waiter(lonely, mut never));
+        s.spawn(async () => await breaker());
+    });
+    match (cancelled) {
+        Err(AsyncError.TimedOut) => { got += 1000; }
+        _ => {}
+    }
+    return Ok(got + never * 10000);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 1111

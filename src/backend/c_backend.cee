@@ -146,6 +146,15 @@ fn generateC(
                 "/* The core runtime for the freestanding profile (profiles.md §4.2). */\n#define CEE_FREESTANDING 1\n",
             )?,
         )?;
+        if (containsBytes(mainText.view(), "ceesafe_async_")) {
+            // The executor over the environment's hooks (ADR 0039).
+            out.push(
+                runtimeFile(
+                    6,
+                    "/* The async executor for the freestanding profile (ADR 0039). */\n#define CEE_FREESTANDING 1\n",
+                )?,
+            )?;
+        }
     } else {
         out.push(runtimeFile(1, "")?)?;
         out.push(runtimeFile(2, "")?)?;

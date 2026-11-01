@@ -24,6 +24,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_FFI_ENUM: return "invalid enum value from C";
     case CEE_PANIC_LENGTH: return "slice lengths differ";
     case CEE_PANIC_FLOAT_RANGE: return "float out of range";
+    case CEE_PANIC_ASYNC: return "async executor: every task waits with nothing to wake it";
     default: return "unknown panic";
     }
 }

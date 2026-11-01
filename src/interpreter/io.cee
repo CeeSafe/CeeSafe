@@ -903,6 +903,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_shield_leave")) {
         return ":-";
     }
+    if (sameText(name, "ceesafe_async_signal_take")) {
+        return "P:b";
+    }
+    if (sameText(name, "ceesafe_async_signal_forget") || sameText(name, "ceesafe_async_signal_raise")) {
+        return "P:-";
+    }
     if (sameText(name, "ceesafe_host_dir_close")) {
         return "P:-";
     }
@@ -1515,6 +1521,32 @@ fn mutexLock(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, add
     return Ok();
 }
 
+/// AsyncSignal's record (ADR 0039) on one thread: word 0 is raised, word 1 the waiting task plus one (0: none).
+fn asyncSignal(it: borrow mut Interp, name: Slice<u8>, record: u64) -> Result<Value?, Stop> {
+    let raised = it.memory.loadBits(record, 8)?;
+    let waiting = it.memory.loadBits(record + 8, 8)?;
+    if (sameText(name, "ceesafe_async_signal_take")) {
+        if (raised != 0) {
+            it.memory.storeBits(record, 0, 8)?;
+            it.memory.storeBits(record + 8, 0, 8)?;
+            return Ok(valueOf(1, 1));
+        }
+        it.memory.storeBits(record + 8, it.asyncCurrent as u64 + 1, 8)?;
+        it.asyncOnWake = true; // parks until the raise, or a cancellation
+        return Ok(valueOf(0, 1));
+    }
+    if (sameText(name, "ceesafe_async_signal_forget")) {
+        it.memory.storeBits(record + 8, 0, 8)?;
+        return Ok(null);
+    }
+    it.memory.storeBits(record, 1, 8)?;
+    if (waiting != 0) {
+        it.memory.storeBits(record + 8, 0, 8)?;
+        it.asyncWoken.push(truncate<u32>(waiting - 1))!;
+    }
+    return Ok(null);
+}
+
 /// runtime/hosted/ceesafe_rt_async.c on the interpreter's virtual clock (type-system.md §40.8): time passes only when a
 /// task parks for a deadline, and output is always writable.
 fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
@@ -1543,6 +1575,10 @@ fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector
     }
     if (sameText(name, "ceesafe_async_status")) {
         return Ok(valueOf(asyncStatus(it) as u64, 4));
+    }
+    if (sameText(name, "ceesafe_async_signal_take") || sameText(name, "ceesafe_async_signal_forget") ||
+        sameText(name, "ceesafe_async_signal_raise")) {
+        return asyncSignal(it, name, arguments[0].bits(0, 8)?);
     }
     if (sameText(name, "ceesafe_async_shield_enter")) {
         let ms = arguments[0].bits(0, 8)?;

@@ -150,6 +150,24 @@ fn checkAsyncCall(
     span: Span,
 ) -> Result<u32, AllocError> {
     let memberIdent = c.front.ast.idents[member as usize];
+    if (c.freestanding && (sameText(c.name(memberIdent.symbol), "scope") ||
+        sameText(c.name(memberIdent.symbol), "blocking") || sameText(c.name(memberIdent.symbol), "runWorkers"))) {
+        // The freestanding executor (ADR 0039): no system heap for a scope's children, no threads.
+        var what = Vector<u8>.create();
+        appendText(mut what, "'Async.")?;
+        appendBytes(mut what, c.name(memberIdent.symbol))?;
+        appendText(mut what, "'")?;
+        if (sameText(c.name(memberIdent.symbol), "scope")) {
+            appendText(mut what, " (its children come from the system heap: use 'Async.scopeIn')")?;
+        }
+        hostedOnly(c, Span { start: memberIdent.start, end: memberIdent.end }, what.view())?;
+        if (sameText(c.name(memberIdent.symbol), "runWorkers")) {
+            checkRunWorkers(c, arguments, expected, span)?; // its task is still a task: no N0342 besides
+        } else {
+            checkArgumentsLoosely(c, arguments)?;
+        }
+        return c.errorResult(span.start, span.end);
+    }
     if (sameText(c.name(memberIdent.symbol), "park")) {
         return checkAsyncPark(c, arguments, span);
     }
@@ -487,6 +505,10 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, send: bool, s
         c.asyncScopes[scope as usize].captured.push(((local as u64) << 1) | (if (mutable) 1u64 else 0u64))?;
     }
     let site = c.asyncScopes[scope as usize].site;
+    if (send && c.freestanding) {
+        hostedOnly(c, span, "'spawnSend' (the freestanding executor has one worker)".bytes())?;
+        return c.errorResult(span.start, span.end);
+    }
     if (send && !checkSendChild(c, scope, site, captures, argumentSpan)?) {
         return c.errorResult(span.start, span.end);
     }

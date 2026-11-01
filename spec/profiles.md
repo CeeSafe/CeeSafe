@@ -19,7 +19,7 @@ allowed or not, and the list below is normative.
 | Panicking allocation helpers (`!` on `AllocError`, `create().orPanic`) | allowed | allowed | **lint error** | lint error |
 | `f32`/`f64` | yes | yes (no `<math.h>` in libc: the math methods are portable C in `rt.h`, type-system §35.8) | **forbidden** (`-mgeneral-regs-only`) [KA §7–8]; enforced by `ceesafec --no-float` (N0297, §35.9) | target-defined |
 | Threads, `Send`/`Sync` | later | via `cosmo_thread_*` only [PA impl 4] | kernel threads via KThread wrapper (C7) | no |
-| Async (`async fn`, `Async`; type-system.md §40) | yes (L1 A1–A2; `Async.runWorkers`, ADR 0038) | planned (L1 A4) | planned: the environment's executor (L1 A4) | the frame ABI only (L1 A4) |
+| Async (`async fn`, `Async`; type-system.md §40) | yes (L1 A1–A2; `Async.runWorkers`, ADR 0038) | planned (L1 A4) | the freestanding executor over the kernel's hooks (ADR 0039) | the executor over the environment's hooks, §4.2 (ADR 0039) |
 | Native stack value limit | 64 KiB | 64 KiB | **512 B** per value; **2 KiB per frame** (CosmoOS `-Wframe-larger-than=2048`, error) [KA impl 21] | configurable |
 | Whole-call-chain stack budget | — | — | report + error against **16 KiB** (shared with IRQs) [KA §8] | configurable |
 | Scratch regions | reserved VM | reserved VM via `mmap` | fixed per-thread buffer, explicit checks | fixed buffer |
@@ -155,6 +155,11 @@ named (a type, a call, a struct literal):
 | `File`, `TcpListener`, `TcpStream`, `IoError` | files and sockets |
 | `SystemHeap`, `FailingAllocator` | there is no system heap; `FailingAllocator` wraps it |
 | `Box`, `PoolBox`, `Pool`, `Arena`, `Scratch`, `Vector`, `String`, `SlotMap`, `StableVector` | each allocates from one of the two allocators above (`Scratch` from the runtime's heap-backed stack) |
+| `Async.scope`, `Async.blocking`, `Async.runWorkers`, `s.spawnSend`; lib/std's async I/O | a scope's children come from the system heap (use `Async.scopeIn`), and there are no threads or descriptors (ADR 0039) |
+
+Async tasks run (ADR 0039): `Async.run`, `await`, `Async.scopeIn` with a user allocator, `spawn`, `race`, `all`,
+`shield`, cancellation, `Async.boxed` with a user allocator, lib/core's `Timer` and `AsyncSignal`. The `IoError` type
+may be named, since `AsyncError` carries it, but no value of it can be made.
 
 Exempt, since they need no runtime: `Box.createIn` with a user allocator (C5, type-system §30) and `Box.intoRaw` / `Box.fromRaw`
 (C7d, type-system §34.2).
@@ -178,7 +183,22 @@ environment provides (CosmoOS's `KernelHeap`, C5) will come with user-defined al
   prints ("integer overflow", …). CosmoOS's kernel binding is `integrations/cosmoos/c4/ceesafe_rt_kernel.c` (C4).
 - The C compiler may itself emit calls to `memcpy`, `memmove`, `memset` and `memcmp` (struct copies,
   zeroing), as it may in any freestanding C (C11 §4 and the compilers' documentation); the
-  environment provides them.
+  environment provides them. (On a Darwin host, LLVM makes a zeroing `memset` a call of `bzero`; the CosmoOS
+  triples do not.)
+- **The async executor's hooks** (ADR 0039). A program that uses async also gets `ceesafe_rt_async.c`, compiled with
+  `CEE_FREESTANDING`: the hosted executor's portable part, which has no global state. The environment defines four
+  functions, declared in `ceesafe/rt.h`:
+  - `uint64_t ceesafe_env_now_ms(void)`: a monotonic clock in milliseconds;
+  - `void ceesafe_env_idle(void *executor, uint64_t deadline_ms)`: block until the deadline (`UINT64_MAX`: none) or a
+    wake;
+  - `void ceesafe_env_wake(void *executor)`: end that idling, from any thread or an interrupt handler, keeping a wake
+    that comes before the idle;
+  - `void **ceesafe_env_slot(void)`: the calling thread's slot for its executor, since the profile has no
+    thread-local storage. `Async.run` keeps its executor in its own frame and names it there.
+  A child's frame comes from `Async.scopeIn`'s allocator. With no task able to run and nothing to wait for,
+  the executor panics with `CEE_PANIC_ASYNC`. It finds deadlines by walking its parked tasks, since it has no heap of
+  its own. `tools/freestanding_check.py`'s `freestanding/async` runs it over a host harness of the four hooks, and
+  CosmoOS's self-test `cee-async` runs it in the kernel.
 
 ### 4.3 `--emit obj`
 `ceesafec build --emit obj -o out.o` compiles each C file with `-c` (and the flags given with
@@ -192,8 +212,8 @@ Freestanding builds always add `-ffreestanding -fno-stack-protector -fno-asynchr
 
 ### 4.4 The symbol allowlist (acceptance, M8 criterion 1)
 The undefined symbols of a freestanding object (`llvm-nm -u`) are only:
-`ceesafe_panic`, `memcpy`, `memmove`, `memset`, `memcmp`, and the functions the package declares in
-`extern "C"` blocks. Checked by `tools/freestanding_check.py` (Nova's `FreestandingTests`) for the host and for both CosmoOS triples
+`ceesafe_panic`, `memcpy`, `memmove`, `memset`, `memcmp`, the functions the package declares in
+`extern "C"` blocks, and, for a program that uses async, the four `ceesafe_env_*` hooks (§4.2). Checked by `tools/freestanding_check.py` (Nova's `FreestandingTests`) for the host and for both CosmoOS triples
 (`x86_64-unknown-none-elf`, `aarch64-unknown-none-elf`).
 
 On the CosmoOS triples the objects also have (Nova's `FreestandingTests`, M8e): no constructor or destructor

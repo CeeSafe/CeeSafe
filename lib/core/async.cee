@@ -1,0 +1,190 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Async tasks in every profile (type-system.md §40.4, ADR 0031, ADR 0039): errors, timers, cancellation, the joins of
+// Async.race and Async.all, and AsyncSignal, over the executor's ceesafe_async_* (runtime/hosted/ceesafe_rt_async.c).
+// In the freestanding profile the executor runs over its environment's hooks (ceesafe_env_*, profiles.md §4.2), so
+// what waits here waits there too. I/O for tasks is lib/std's (hosted only).
+
+extern "C" {
+    @effects()
+    fn ceesafe_async_now() -> u64;
+    @effects()
+    fn ceesafe_async_wait_until(deadline: u64);
+    @effects()
+    fn ceesafe_async_status() -> u32;
+    @effects()
+    fn ceesafe_async_shield_enter(ms: u64);
+    @effects()
+    fn ceesafe_async_shield_leave();
+    @effects()
+    fn ceesafe_async_signal_take(signal: *mut void) -> bool;
+    @effects()
+    fn ceesafe_async_signal_forget(signal: *mut void);
+    @effects()
+    fn ceesafe_async_signal_raise(signal: *mut void);
+}
+
+/// Why an async operation failed (type-system.md §40.4, §40.7).
+public enum AsyncError {
+    Cancelled,
+    TimedOut,
+    Io(IoError),
+}
+
+/// Time for tasks: the monotonic clock in milliseconds.
+public struct Timer {
+    /// Milliseconds on the monotonic clock, from an arbitrary start.
+    /// Safety: ceesafe_async_now only reads the clock.
+    public fn now() -> u64 => unsafe { ceesafe_async_now() };
+
+    /// Waits at least `ms` milliseconds without blocking the thread: other tasks run meanwhile.
+    /// Safety: ceesafe_async_wait_until only records the deadline for the executor.
+    /// A cancelled task's sleep returns `Err(AsyncError.Cancelled)` at once (type-system.md §40.7).
+    public async fn sleep(ms: u64) -> Result<void, AsyncError> {
+        let start = Timer.now();
+        let deadline = if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
+        loop {
+            AsyncLeaf.status()?;
+            if (Timer.now() >= deadline) {
+                return Ok();
+            }
+            unsafe { ceesafe_async_wait_until(deadline); }
+            await Async.park();
+        }
+    }
+}
+
+/// What `Async.isCancelled()` and `Async.checkpoint(cancelled)` call (type-system.md §40.4).
+public struct AsyncControl<E> {
+    /// Whether the current task is cancelled and not shielded.
+    /// Safety: ceesafe_async_status only reads the executor's state.
+    public fn isCancelled() -> bool => unsafe { ceesafe_async_status() } == 1;
+
+    /// `Async.shield`'s start (type-system.md §40.7).
+    /// Safety: it only counts the current task's shields.
+    public fn enterShield(ms: u64) {
+        unsafe { ceesafe_async_shield_enter(ms); }
+    }
+
+    /// `Async.shield`'s end.
+    /// Safety: it only counts the current task's shields, after enterShield.
+    public fn leaveShield() {
+        unsafe { ceesafe_async_shield_leave(); }
+    }
+
+    /// `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`.
+    public fn checkpoint(cancelled: E) -> Result<void, E> {
+        if (AsyncControl<E>.isCancelled()) {
+            return Err(cancelled);
+        }
+        return Ok();
+    }
+}
+
+/// The library's own steps for its waiting operations: not for programs (type-system.md §40.4).
+public struct AsyncLeaf {
+    /// Err(Cancelled) if the current task is cancelled, Err(TimedOut) if its shield's time is up (type-system.md §40.7).
+    /// Safety: ceesafe_async_status only reads the executor's state.
+    public fn status() -> Result<void, AsyncError> {
+        let status = unsafe { ceesafe_async_status() };
+        if (status == 1) {
+            return Err(AsyncError.Cancelled);
+        }
+        if (status == 2) {
+            return Err(AsyncError.TimedOut);
+        }
+        return Ok();
+    }
+}
+
+/// `Async.race`'s result (type-system.md §40.4): the child that returned `Ok` first (0 or 1), its value, and the
+/// other's value if it also returned `Ok` before it saw its cancellation.
+public struct Raced<T> {
+    public winner: u32;
+    public value: T;
+    public other: T?;
+}
+
+/// What `Async.race` returns once both children have: `first` is the one that returned first, which decides.
+struct AsyncRaceJoin<T, E> {
+    fn settle(first: u32, a: Result<T, E>, b: Result<T, E>) -> Result<Raced<T>, E> {
+        if (first == 0) {
+            return AsyncRaceJoin<T, E>.decide(0, a, b);
+        }
+        return AsyncRaceJoin<T, E>.decide(1, b, a);
+    }
+
+    fn decide(index: u32, early: Result<T, E>, late: Result<T, E>) -> Result<Raced<T>, E> {
+        match (early) {
+            Ok(value) => {
+                let other: T? = match (late) {
+                    Ok(w) => Some(w),
+                    Err(_) => null,
+                };
+                return Ok(Raced { winner: index, value: value, other: other });
+            }
+            Err(e) => { return Err(e); }
+        }
+    }
+}
+
+/// What `Async.all` returns once both children have: the first error in the order they returned, else `Ok`.
+struct AsyncAllJoin<E> {
+    fn settle(first: u32, a: Result<void, E>, b: Result<void, E>) -> Result<void, E> {
+        if (first == 0) {
+            return AsyncAllJoin<E>.decide(a, b);
+        }
+        return AsyncAllJoin<E>.decide(b, a);
+    }
+
+    fn decide(early: Result<void, E>, late: Result<void, E>) -> Result<void, E> {
+        match (early) {
+            Err(e) => { return Err(e); }
+            Ok() => { return late; }
+        }
+    }
+}
+
+/// A one-shot wake-up from anywhere, to a task (ADR 0039): `await signal.wait()` parks the task until `signal.raise()`.
+/// `raise` has no effects, so an interrupt handler (`@context(irq)`) or another thread may call it, the way a driver
+/// tells the task waiting for its device. A raise before the wait is kept: the wait then returns at once. One task
+/// waits on a signal at a time.
+@noncopy // one signal, shared: a copy would never be raised
+public struct AsyncSignal {
+    private words: [u64; 4]; // the runtime's record: raised, the waiting task, its executor, a raise in progress
+
+    /// A signal not raised.
+    public fn create() -> AsyncSignal => AsyncSignal { words: [0u64; 4] };
+
+    /// The same as create, in a static's initialiser (type-system.md §39.4): `static READY: AsyncSignal =
+    /// AsyncSignal.constant();`, which an interrupt handler can raise.
+    @constant
+    public fn constant() -> AsyncSignal => AsyncSignal { words: [0u64; 4] };
+
+    /// Raises the signal: the task waiting on it, if any, runs again.
+    /// Safety: the runtime changes the record atomically, and only wakes the task it names.
+    @effects()
+    public fn raise(borrow this) {
+        unsafe { ceesafe_async_signal_raise(this.record()); }
+    }
+
+    /// Waits until the signal is raised, then lowers it. A cancelled task returns `Err(AsyncError.Cancelled)` and no
+    /// longer waits (type-system.md §40.7).
+    /// Safety: the record names this task only while it waits here; ceesafe_async_signal_forget takes it out.
+    public async fn wait(borrow this) -> Result<void, AsyncError> {
+        loop {
+            match (AsyncLeaf.status()) {
+                Ok() => {}
+                Err(e) => {
+                    unsafe { ceesafe_async_signal_forget(this.record()); }
+                    return Err(e);
+                }
+            }
+            if (unsafe { ceesafe_async_signal_take(this.record()) }) {
+                return Ok();
+            }
+            await Async.park();
+        }
+    }
+
+    fn record(borrow this) -> *mut void => borrow this.words as *[u64; 4] as *mut [u64; 4] as *mut void;
+}

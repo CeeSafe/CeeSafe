@@ -4,6 +4,12 @@
 - [struct VirtAddr](#struct-virtaddr)
 - [struct Layout](#struct-layout)
 - [interface Allocator](#interface-allocator)
+- [enum AsyncError](#enum-asyncerror)
+- [struct Timer](#struct-timer)
+- [struct AsyncControl](#struct-asynccontrol)
+- [struct AsyncLeaf](#struct-asyncleaf)
+- [struct Raced](#struct-raced)
+- [struct AsyncSignal](#struct-asyncsignal)
 - [enum LoadOrdering](#enum-loadordering)
 - [enum StoreOrdering](#enum-storeordering)
 - [enum Ordering](#enum-ordering)
@@ -100,6 +106,168 @@ public interface Allocator {
 ```
 
 An allocator a `Box<T, A>` can use: a struct without fields that implements this (type-system.md §30.2).
+
+## enum AsyncError
+
+```ceesafe
+public enum AsyncError {
+    Cancelled,
+    TimedOut,
+    Io(IoError),
+}
+```
+
+Why an async operation failed (type-system.md §40.4, §40.7).
+
+## struct Timer
+
+```ceesafe
+public struct Timer
+```
+
+Time for tasks: the monotonic clock in milliseconds.
+
+### Timer.now
+
+```ceesafe
+public fn now() -> u64
+```
+
+Milliseconds on the monotonic clock, from an arbitrary start.
+Safety: ceesafe_async_now only reads the clock.
+
+### Timer.sleep
+
+```ceesafe
+public async fn sleep(ms: u64) -> Result<void, AsyncError>
+```
+
+Waits at least `ms` milliseconds without blocking the thread: other tasks run meanwhile.
+Safety: ceesafe_async_wait_until only records the deadline for the executor.
+A cancelled task's sleep returns `Err(AsyncError.Cancelled)` at once (type-system.md §40.7).
+
+## struct AsyncControl
+
+```ceesafe
+public struct AsyncControl<E>
+```
+
+What `Async.isCancelled()` and `Async.checkpoint(cancelled)` call (type-system.md §40.4).
+
+### AsyncControl.isCancelled
+
+```ceesafe
+public fn isCancelled() -> bool
+```
+
+Whether the current task is cancelled and not shielded.
+Safety: ceesafe_async_status only reads the executor's state.
+
+### AsyncControl.enterShield
+
+```ceesafe
+public fn enterShield(ms: u64)
+```
+
+`Async.shield`'s start (type-system.md §40.7).
+Safety: it only counts the current task's shields.
+
+### AsyncControl.leaveShield
+
+```ceesafe
+public fn leaveShield()
+```
+
+`Async.shield`'s end.
+Safety: it only counts the current task's shields, after enterShield.
+
+### AsyncControl.checkpoint
+
+```ceesafe
+public fn checkpoint(cancelled: E) -> Result<void, E>
+```
+
+`Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`.
+
+## struct AsyncLeaf
+
+```ceesafe
+public struct AsyncLeaf
+```
+
+The library's own steps for its waiting operations: not for programs (type-system.md §40.4).
+
+### AsyncLeaf.status
+
+```ceesafe
+public fn status() -> Result<void, AsyncError>
+```
+
+Err(Cancelled) if the current task is cancelled, Err(TimedOut) if its shield's time is up (type-system.md §40.7).
+Safety: ceesafe_async_status only reads the executor's state.
+
+## struct Raced
+
+```ceesafe
+public struct Raced<T> {
+    public winner: u32;
+    public value: T;
+    public other: T?;
+}
+```
+
+`Async.race`'s result (type-system.md §40.4): the child that returned `Ok` first (0 or 1), its value, and the
+other's value if it also returned `Ok` before it saw its cancellation.
+
+## struct AsyncSignal
+
+```ceesafe
+@noncopy // one signal, shared: a copy would never be raised
+public struct AsyncSignal
+```
+
+A one-shot wake-up from anywhere, to a task (ADR 0039): `await signal.wait()` parks the task until `signal.raise()`.
+`raise` has no effects, so an interrupt handler (`@context(irq)`) or another thread may call it, the way a driver
+tells the task waiting for its device. A raise before the wait is kept: the wait then returns at once. One task
+waits on a signal at a time.
+
+### AsyncSignal.create
+
+```ceesafe
+public fn create() -> AsyncSignal
+```
+
+A signal not raised.
+
+### AsyncSignal.constant
+
+```ceesafe
+@constant
+public fn constant() -> AsyncSignal
+```
+
+The same as create, in a static's initialiser (type-system.md §39.4): `static READY: AsyncSignal =
+AsyncSignal.constant();`, which an interrupt handler can raise.
+
+### AsyncSignal.raise
+
+```ceesafe
+@effects()
+public fn raise(borrow this)
+```
+
+Raises the signal: the task waiting on it, if any, runs again.
+Safety: the runtime changes the record atomically, and only wakes the task it names.
+
+### AsyncSignal.wait
+
+```ceesafe
+public async fn wait(borrow this) -> Result<void, AsyncError>
+```
+
+Waits until the signal is raised, then lowers it. A cancelled task returns `Err(AsyncError.Cancelled)` and no
+longer waits (type-system.md §40.7).
+Safety: the record names this task only while it waits here; ceesafe_async_signal_forget takes it out.
 
 ## enum LoadOrdering
 

@@ -74,7 +74,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_STR_BOUNDARY = 10,
     CEE_PANIC_FFI_ENUM = 11,
     CEE_PANIC_LENGTH = 12,
-    CEE_PANIC_FLOAT_RANGE = 13
+    CEE_PANIC_FLOAT_RANGE = 13,
+    CEE_PANIC_ASYNC = 14 /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -1075,6 +1076,25 @@ void *ceesafe_async_spawn_send(ceesafe_scope *scope, size_t frame_size, bool (*r
 void ceesafe_async_publish(void *frame);
 bool ceesafe_async_claim_failure(ceesafe_scope *scope);
 void ceesafe_async_workers(uint32_t n);
+/* AsyncSignal (ADR 0039), four words of lib/core's struct: raised, the waiting task, its executor, and a raise in
+ * progress. ceesafe_async_signal_raise may be called from anywhere, an interrupt handler included: it marks the record
+ * raised and wakes the task waiting on it. ceesafe_async_signal_take, in the waiting task, lowers a raised record and
+ * is true, or registers the task and is false (it parks). ceesafe_async_signal_forget takes the task out (cancelled);
+ * a raise it races with stays raised. */
+bool ceesafe_async_signal_take(void *signal);
+/* The freestanding executor's environment (ADR 0039; profiles.md §4.2), defined by it as ceesafe_panic is (declared
+ * in every profile, so the environment's own C sees the prototypes):
+ * - ceesafe_env_now_ms: a monotonic clock in milliseconds;
+ * - ceesafe_env_idle: block the calling thread until `deadline_ms` (UINT64_MAX: none) or ceesafe_env_wake(executor);
+ * - ceesafe_env_wake: end that idling, from any thread or an interrupt handler; a wake before the idle is not lost;
+ * - ceesafe_env_slot: the calling thread's slot for its executor (a pointer it keeps, NULL at first), since the
+ *   profile has no thread-local storage. Async.run stores its executor there and restores the old value. */
+uint64_t ceesafe_env_now_ms(void);
+void ceesafe_env_idle(void *executor, uint64_t deadline_ms);
+void ceesafe_env_wake(void *executor);
+void **ceesafe_env_slot(void);
+void ceesafe_async_signal_forget(void *signal);
+void ceesafe_async_signal_raise(void *signal);
 /* Async.race and Async.all (type-system.md §40.4): a child whose task and frame are the caller's storage, in its frame,
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
  * children and wakes those waiting. */

@@ -1,23 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
-// Async operations (type-system.md §40.4, ADR 0031): timers and console output for tasks, over the hosted runtime's
+// Async I/O (type-system.md §40.4, ADR 0031): console output, sockets and files for tasks, over the hosted runtime's
 // ceesafe_async_* (runtime/hosted/ceesafe_rt_async.c). Each one that waits registers what wakes the task, then parks.
-// Hosted only (Decision 0008: lib/ is CeeSafe's).
+// Hosted only. Timers, cancellation, the joins and AsyncSignal are lib/core's async.cee, in every profile (ADR 0039).
 
 extern "C" {
-    @effects()
-    fn ceesafe_async_now() -> u64;
-    @effects()
-    fn ceesafe_async_wait_until(deadline: u64);
     @effects()
     fn ceesafe_async_wait_writable(fd: i32);
     @effects()
     fn ceesafe_async_write(fd: i32, bytes: *u8, length: u64) -> i64;
-    @effects()
-    fn ceesafe_async_status() -> u32;
-    @effects()
-    fn ceesafe_async_shield_enter(ms: u64);
-    @effects()
-    fn ceesafe_async_shield_leave();
     @effects()
     fn ceesafe_async_wait_readable(fd: i32);
     @effects()
@@ -52,94 +42,24 @@ extern "C" {
     fn ceesafe_async_op_cancel(op: *mut void) -> bool;
 }
 
-/// Why an async operation failed (type-system.md §40.4, §40.7).
-public enum AsyncError {
-    Cancelled,
-    TimedOut,
-    Io(IoError),
-}
-
-/// Time for tasks: the monotonic clock in milliseconds.
-public struct Timer {
-    /// Milliseconds on the monotonic clock, from an arbitrary start.
-    /// Safety: ceesafe_async_now only reads the clock.
-    public fn now() -> u64 => unsafe { ceesafe_async_now() };
-
-    /// Waits at least `ms` milliseconds without blocking the thread: other tasks run meanwhile.
-    /// Safety: ceesafe_async_wait_until only records the deadline for the executor.
-    /// A cancelled task's sleep returns `Err(AsyncError.Cancelled)` at once (type-system.md §40.7).
-    public async fn sleep(ms: u64) -> Result<void, AsyncError> {
-        let start = Timer.now();
-        let deadline = if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
-        loop {
-            AsyncLeaf.status()?;
-            if (Timer.now() >= deadline) {
-                return Ok();
-            }
-            unsafe { ceesafe_async_wait_until(deadline); }
-            await Async.park();
-        }
-    }
-}
-
 /// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
 public struct AsyncConsole {
     /// Writes `text` to standard output.
-    public async fn write(text: StringView) -> Result<void, AsyncError> => await AsyncLeaf.writeAll(1, text.bytes());
+    public async fn write(text: StringView) -> Result<void, AsyncError> => await AsyncIo.writeAll(1, text.bytes());
 
     /// Writes `text` and a newline to standard output.
     public async fn writeLine(text: StringView) -> Result<void, AsyncError> {
-        await AsyncLeaf.writeAll(1, text.bytes())?;
-        return await AsyncLeaf.writeAll(1, "\n".bytes());
+        await AsyncIo.writeAll(1, text.bytes())?;
+        return await AsyncIo.writeAll(1, "\n".bytes());
     }
 
     /// Writes `text` to standard error.
     public async fn writeError(text: StringView) -> Result<void, AsyncError> =>
-        await AsyncLeaf.writeAll(2, text.bytes());
+        await AsyncIo.writeAll(2, text.bytes());
 }
 
-/// What `Async.isCancelled()` and `Async.checkpoint(cancelled)` call (type-system.md §40.4).
-public struct AsyncControl<E> {
-    /// Whether the current task is cancelled and not shielded.
-    /// Safety: ceesafe_async_status only reads the executor's state.
-    public fn isCancelled() -> bool => unsafe { ceesafe_async_status() } == 1;
-
-    /// `Async.shield`'s start (type-system.md §40.7).
-    /// Safety: it only counts the current task's shields.
-    public fn enterShield(ms: u64) {
-        unsafe { ceesafe_async_shield_enter(ms); }
-    }
-
-    /// `Async.shield`'s end.
-    /// Safety: it only counts the current task's shields, after enterShield.
-    public fn leaveShield() {
-        unsafe { ceesafe_async_shield_leave(); }
-    }
-
-    /// `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`.
-    public fn checkpoint(cancelled: E) -> Result<void, E> {
-        if (AsyncControl<E>.isCancelled()) {
-            return Err(cancelled);
-        }
-        return Ok();
-    }
-}
-
-/// The library's own steps for its waiting operations: not for programs (type-system.md §40.4).
-struct AsyncLeaf {
-    /// Err(Cancelled) if the current task is cancelled, Err(TimedOut) if its shield's time is up (type-system.md §40.7).
-    /// Safety: ceesafe_async_status only reads the executor's state.
-    fn status() -> Result<void, AsyncError> {
-        let status = unsafe { ceesafe_async_status() };
-        if (status == 1) {
-            return Err(AsyncError.Cancelled);
-        }
-        if (status == 2) {
-            return Err(AsyncError.TimedOut);
-        }
-        return Ok();
-    }
-
+/// lib/std's own steps for its waiting I/O: not for programs (type-system.md §40.4).
+struct AsyncIo {
     /// Writes every byte to `fd`, a step of at most PIPE_BUF bytes whenever it is writable, parking until it is.
     /// Safety: the pointer and length are the slice's, read by the runtime during the call only.
     async fn writeAll(fd: i32, bytes: Slice<u8>) -> Result<void, AsyncError> {
@@ -149,7 +69,7 @@ struct AsyncLeaf {
             let rest = bytes[done..];
             let written = unsafe { ceesafe_async_write(fd, rest.ptr, rest.length as u64) };
             if (written < 0) {
-                return Err(AsyncError.Io(AsyncLeaf.ioError(written)));
+                return Err(AsyncError.Io(AsyncIo.ioError(written)));
             }
             if (written == 0) {
                 unsafe { ceesafe_async_wait_writable(fd); }
@@ -163,54 +83,6 @@ struct AsyncLeaf {
 
     /// The IoError for a negated errno (HostServices.hostError's rule).
     fn ioError(code: i64) -> IoError => HostServices.hostError(code);
-}
-
-/// `Async.race`'s result (type-system.md §40.4): the child that returned `Ok` first (0 or 1), its value, and the
-/// other's value if it also returned `Ok` before it saw its cancellation.
-public struct Raced<T> {
-    public winner: u32;
-    public value: T;
-    public other: T?;
-}
-
-/// What `Async.race` returns once both children have: `first` is the one that returned first, which decides.
-struct AsyncRaceJoin<T, E> {
-    fn settle(first: u32, a: Result<T, E>, b: Result<T, E>) -> Result<Raced<T>, E> {
-        if (first == 0) {
-            return AsyncRaceJoin<T, E>.decide(0, a, b);
-        }
-        return AsyncRaceJoin<T, E>.decide(1, b, a);
-    }
-
-    fn decide(index: u32, early: Result<T, E>, late: Result<T, E>) -> Result<Raced<T>, E> {
-        match (early) {
-            Ok(value) => {
-                let other: T? = match (late) {
-                    Ok(w) => Some(w),
-                    Err(_) => null,
-                };
-                return Ok(Raced { winner: index, value: value, other: other });
-            }
-            Err(e) => { return Err(e); }
-        }
-    }
-}
-
-/// What `Async.all` returns once both children have: the first error in the order they returned, else `Ok`.
-struct AsyncAllJoin<E> {
-    fn settle(first: u32, a: Result<void, E>, b: Result<void, E>) -> Result<void, E> {
-        if (first == 0) {
-            return AsyncAllJoin<E>.decide(a, b);
-        }
-        return AsyncAllJoin<E>.decide(b, a);
-    }
-
-    fn decide(early: Result<void, E>, late: Result<void, E>) -> Result<void, E> {
-        match (early) {
-            Err(e) => { return Err(e); }
-            Ok() => { return late; }
-        }
-    }
 }
 
 /// The runtime's "not ready yet" (CEE_ASYNC_WOULD_BLOCK, rt.h): the task waits for readiness and tries again.
@@ -255,7 +127,7 @@ struct AsyncOp {
         }
         return match (this.leaving) {
             Some(e) => Err(e),
-            null => Err(AsyncError.Io(AsyncLeaf.ioError(r))),
+            null => Err(AsyncError.Io(AsyncIo.ioError(r))),
         };
     }
 
@@ -273,7 +145,7 @@ public struct AsyncTcpListener {
     public fn bind(address: StringView, port: u16) -> Result<AsyncTcpListener, IoError> {
         let r = unsafe { ceesafe_async_tcp_listen(address.ptr, address.length as u64, port) };
         if (r < 0) {
-            return Err(AsyncLeaf.ioError(r));
+            return Err(AsyncIo.ioError(r));
         }
         return Ok(AsyncTcpListener { fd: truncate<i32>(r) });
     }
@@ -283,7 +155,7 @@ public struct AsyncTcpListener {
     public fn port(borrow this) -> Result<u16, IoError> {
         let r = unsafe { ceesafe_async_tcp_port(this.fd) };
         if (r < 0) {
-            return Err(AsyncLeaf.ioError(r));
+            return Err(AsyncIo.ioError(r));
         }
         return Ok(truncate<u16>(r));
     }
@@ -368,7 +240,7 @@ public struct AsyncTcpStream {
     public fn shutdownWrite(borrow this) -> Result<void, IoError> {
         let r = unsafe { ceesafe_async_shutdown_write(this.fd) };
         if (r < 0) {
-            return Err(AsyncLeaf.ioError(r));
+            return Err(AsyncIo.ioError(r));
         }
         return Ok();
     }

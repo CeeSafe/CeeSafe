@@ -608,6 +608,14 @@ Heap (M3b):
   - One executor per thread: the root task and the scopes' children run in turn from a queue; a parked task waits on
     what it registered or on its scope's last child (`ceesafe_async_spawn`, `ceesafe_async_scope_done`). A child's
     task and frame are one `ceesafe_alloc` block, so fault injection reaches it; `NULL` sets the scope's `oom`.
+  - Freestanding (ADR 0039): the same file, compiled with `CEE_FREESTANDING`, keeps the queue, scopes, joins,
+    shields, cancellation and `AsyncSignal`, and leaves out descriptors, reactors, operations, channels, workers and
+    `Async.blocking`. Time, idling and waking are the environment's `ceesafe_env_*` hooks (profiles.md §4.2). The
+    executor is reached through `ceesafe_env_slot()`, the wake order and the sweep's root are its fields, and there is
+    no global state. Deadlines are found by walking the parked tasks.
+  - `AsyncSignal` (ADR 0039): `ceesafe_async_signal_raise` sets `raised`, takes the waiting task and wakes it, `busy`
+    meanwhile. A task that loses that race waits until the raise is done before it goes on, so no raise touches a
+    task that has returned.
   - Work stealing (ADR 0038): with `ceesafe_async_workers(n)`, n > 1, the run starts `n − 1` threads, each with its own
     executor (reactor, timers, wake pipe), and joins them when the root returns. The run shares a queue of published
     `spawnSend` children, which a worker with nothing ready takes, oldest first. A started task stays on its worker. A

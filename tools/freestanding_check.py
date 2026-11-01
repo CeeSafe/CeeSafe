@@ -25,11 +25,16 @@ from run_corpus import expectations, read  # noqa: E402
 from names import dialect  # noqa: E402
 
 ALLOWLIST = {"nova_panic", "memcpy", "memmove", "memset", "memcmp"}
+# The async executor's environment (ADR 0039; profiles.md §4.2), which a freestanding program using async needs.
+ENVIRONMENT = {"ceesafe_env_now_ms", "ceesafe_env_idle", "ceesafe_env_wake", "ceesafe_env_slot"}
+# Darwin's LLVM lowers a zeroing memset to bzero whatever the flags; the CosmoOS triples keep memset.
+HOST_ONLY = {"bzero"} if sys.platform == "darwin" else set()
 FORBIDDEN = (".ctors", ".dtors", ".init_array", ".fini_array", ".preinit_array", ".tdata", ".tbss", ".eh_frame",
              ".eh_frame_hdr", ".gcc_except_table")
 TRIPLES = ("x86_64-unknown-none-elf", "aarch64-unknown-none-elf")
 EXTERN_BLOCK = re.compile(r'extern\s+"C"\s*\{(.*?)\n\}', re.S)
 FN = re.compile(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")
+STATIC_ITEM = re.compile(r"^static\s", re.M)
 
 
 def run(argv, **kw):
@@ -86,7 +91,7 @@ def main():
     for name in files:
         relative = "freestanding/" + name
         text = read(os.path.join(directory, name))
-        allowed = {d.c(n) for n in ALLOWLIST} | externs_of(text)
+        allowed = {d.c(n) for n in ALLOWLIST} | ENVIRONMENT | externs_of(text)
         with tempfile.TemporaryDirectory() as work:
             obj = os.path.join(work, "package.o")
             built = run([compiler, "build", "--profile", "freestanding", "--emit", "obj", "--cc", "clang",
@@ -94,14 +99,14 @@ def main():
             if built.returncode != 0:
                 problems.append(f"{relative} (host): {built.stderr.strip()[:500]}")
                 continue
-            extra = undefined(args.nm, [obj]) - allowed
+            extra = undefined(args.nm, [obj]) - allowed - HOST_ONLY
             if extra:
                 problems.append(f"{relative} (host) leaves undefined: {', '.join(sorted(extra))}")
             harness = os.path.join(directory, os.path.splitext(name)[0] + ".c")
             exe = os.path.join(work, "environment")
             host_c = os.path.join(work, "host-c")  # the harness includes the generated rt.h
             run([compiler, "build", "--profile", "freestanding", "--emit", "c", "-o", host_c, relative], cwd=args.corpus)
-            linked = run(["clang", "-std=c11", "-Wall", "-Werror", "-I", host_c, harness, obj, "-o", exe])
+            linked = run(["clang", "-std=c11", "-Wall", "-Werror", "-I", host_c, harness, obj, "-o", exe, "-lpthread"])
             if linked.returncode != 0:
                 problems.append(f"{relative} (harness): {linked.stderr.strip()[:500]}")
                 continue
@@ -143,6 +148,8 @@ def main():
                     bad = [n for n, _ in found if any(n == f or n.startswith(f + ".") for f in FORBIDDEN)]
                     state = [n for n, size in found if size > 0 and (n in (".data", ".bss") or
                                                                     n.startswith(".data.") or n.startswith(".bss."))]
+                    if state and os.path.basename(o) == "main.c.o" and STATIC_ITEM.search(text):
+                        state = []  # the program's own static items (profiles.md §4.4); the runtime may have none
                     if bad or state:
                         problems.append(f"{relative} ({triple}) {os.path.basename(o)}: {bad + state}")
                     for line in run([args.nm, o]).stdout.splitlines():

@@ -132,6 +132,22 @@ The CosmoOS integration (the repository's `integrations/cosmoos/`) builds the re
 How these were built and tested inside CosmoOS, including a stress test under lockdep, is in the
 [CosmoOS reports](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/cosmoos/c7-report.md) and the [profiles](../spec/profiles.md).
 
+## Async tasks in kernel code
+
+Async tasks run in the freestanding profile too. The environment gives the executor four functions:
+- the time;
+- a way to idle until a deadline;
+- a wake that is safe in an interrupt;
+- a slot for each thread's executor.
+
+A scope's children come from an allocator you name, `await Async.scopeIn(KernelHeap {}, oom, (s) => { … })`, since
+there is no system heap. Timers, `race`, `all`, `shield` and cancellation work as in a hosted program.
+
+An interrupt handler resumes a task through an `AsyncSignal`. The task waits with `await signal.wait()`. The handler,
+an `@context(irq)` function, calls `signal.raise()`, which has no effects. A raise that comes before the wait is kept.
+`Async.blocking`, `Async.runWorkers`, `spawnSend` and async I/O need threads or descriptors, so they stay hosted.
+CosmoOS's boot self-test `cee-async` runs these over the kernel's clock, a wait queue and a timer's interrupt.
+
 ## Next
 
 [The ceesafec command](ceesafec.md).

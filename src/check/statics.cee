@@ -844,14 +844,16 @@ fn isHostedOnlyType(c: borrow Checker, typ: u32) -> bool {
         return true;
     }
     let region = regionIndex(t.region);
-    return region == 1 || region == 4 || region == 3 || isAllocatorType(c, typ) || typ == c.ioErrorType;
+    // IoError is a plain enum with a static message (the core runtime's): AsyncError names it in every profile (ADR
+    // 0039). Making one is still hosted only (`checkEnumValue`).
+    return region == 1 || region == 4 || region == 3 || isAllocatorType(c, typ);
 }
 
 /// Built-in names whose every use needs the hosted runtime (IsHostedOnly(Builtin)).
 fn isHostedOnlyBuiltin(b: u32) -> bool =>
     !(b == builtinTruncate() ||
         b == builtinFixedBufferAllocator() || b == builtinPtr() || b == builtinSlice() || b == builtinSliceMut() ||
-        b == builtinStringView() || b == builtinCpu() || b == builtinTarget());
+        b == builtinStringView() || b == builtinCpu() || b == builtinTarget() || b == builtinAsync());
 
 /// N0293 once per place (HostedOnly): `what` is not available in the freestanding profile.
 fn hostedOnly(c: borrow mut Checker, span: Span, what: Slice<u8>) -> Result<void, AllocError> {

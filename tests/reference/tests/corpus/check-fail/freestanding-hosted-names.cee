@@ -3,29 +3,41 @@
 
 fn output() {
     Console.writeLine(1); // error[N0293]
-    Process.exit(1); // error[N0293]
+    Process.exit(1);      // error[N0293]
 }
 
 fn heap() -> i32 {
-    let b = Box.create(5); // error[N0293]
+    let b = Box.create(5);        // error[N0293]
     var v = Vector<i32>.create(); // error[N0293]
-    let s = String.create(); // error[N0293]
-    let a = SystemHeap {}; // error[N0293]
+    let s = String.create();      // error[N0293]
+    let a = SystemHeap {};        // error[N0293]
     return 0;
 }
 
-fn types(b: Box<i32>) {} // error[N0293]
-fn vectors(v: borrow Vector<u8>) {} // error[N0293]
-fn files(f: File) {} // error[N0293]
-fn errors(e: IoError) {} // error[N0293]
+fn types(b: Box<i32>) {}              // error[N0293]
+fn vectors(v: borrow Vector<u8>) {}   // error[N0293]
+fn files(f: File) {}                  // error[N0293]
+fn errors(e: IoError) {}              // the type is fine (AsyncError names it, ADR 0039); making one is not
 fn allocators(a: FailingAllocator) {} // error[N0293]
-fn arenas(a: borrow Arena) {} // error[N0293]
+fn arenas(a: borrow Arena) {}         // error[N0293]
 
 struct Holder { items: SlotMap<i32>; } // error[N0293]
 
 fn ioValue() {
     let e = IoError.NotFound; // error[N0293]
 }
+
+// Async (ADR 0039): the executor runs over the environment's hooks, but a scope's children need a user allocator
+// (`Async.scopeIn`), and there are no threads for Async.blocking, Async.runWorkers or spawnSend.
+async fn tasks() -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {}); // error[N0293]
+    let n = await Async.blocking(() => 1u32);           // error[N0293]
+    return Ok();
+}
+
+fn workers() -> u32 => Async.runWorkers(2, count()); // error[N0293]
+
+async fn count() -> u32 => 1;
 
 // What needs no runtime is fine: views, optionals, results, generics, fixed buffers, pointers, unsafe, FFI.
 fn fine(text: StringView, p: *u8) -> usize? {

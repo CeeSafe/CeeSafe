@@ -3275,6 +3275,7 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
 | `Async.blocking(closure)` | `T` | Runs a sync closure literal with no parameters on a worker thread and waits for it without blocking other tasks. Its captures follow §38.6's rule and `T` must be `Send` (N0334). If no worker can be started, it runs on the calling thread: the result is the same. The body's effects are the worker's (the task has `suspend`), and the wait is not cancelled: a cancelled task still waits for its worker |
 | `Async.park()`, `Async.waker()` | `void`, `u64` | Library-only primitives (**N0345** elsewhere): suspend the current task until its waker is woken; the current task's waker id |
+| `AsyncSignal.create()`, `s.raise()`, `await s.wait()` | `AsyncSignal`, `void`, `Result<void, AsyncError>` | lib/core (ADR 0039): `raise` is `@effects()`, so another thread or an `@context(irq)` handler may call it; `wait` parks the task until a raise, which a raise before the wait satisfies. One task waits at a time; a cancelled wait returns `Err(Cancelled)` |
 
 `race`, `all` and `shield` place their children's frames in the caller's frame, so they never allocate. The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
@@ -3360,6 +3361,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   run order fixed by a seed. A program whose output does not depend on timing prints the same in C and in the
   interpreter. It has one worker: `Async.runWorkers(n, …)` is `Async.run`, and `spawnSend` is `spawn` (ADR 0038). A
   program's output must not depend on which worker ran what.
+- **Profiles** (profiles.md §4, ADR 0039): in the freestanding profile the executor runs over its environment's hooks.
+  Children need `Async.scopeIn`, and threads and I/O stay hosted.
 
 Diagnostics: N0341 (`await` outside an async fn or async closure), N0342 (a task that is not awaited, run or spawned,
 or an operand of `await` that is not a task), N0343 (recursion through `await`), N0344 (a spawned child that captures

@@ -112,12 +112,15 @@ fn synthStructLiteral(
         hostedOnly(c, nameSpan, what.view())?;
         return c.errorResult(span.start, span.end);
     }
-    if (c.types.structs[declared as usize].isImported) {
+    // In a static initialiser, an imported struct's literal is C's designated initialiser for the static's C object
+    // (ADR 0042 §3.2); anywhere else no value of it exists.
+    let importedLiteral = c.types.structs[declared as usize].isImported && c.inStaticInitializer;
+    if (c.types.structs[declared as usize].isImported && !importedLiteral) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, nameIdent.symbol)?;
         appendText(
             mut message,
-            " is a C type imported from a header: CeeSafe cannot make one, only point to one (type-system.md §31.2)",
+            " is a C type imported from a header: CeeSafe makes one only as a 'static mut' item's initialiser, and otherwise only points to one (type-system.md §31.2, §39.4)",
         )?;
         c.error(importedTypeByValue(), nameSpan.start, nameSpan.end, message)?;
         for (k in 0..fields.count) {
@@ -227,7 +230,8 @@ fn synthStructLiteral(
             ok = false;
             continue;
         }
-        let value = checkExpr(c, init.value, fieldType)?;
+        let bytes = if (importedLiteral) byteStringMember(c, init.value, fieldType)? else none();
+        let value = if (bytes != none()) bytes else checkExpr(c, init.value, fieldType)?;
         values.push(HirFieldValue { field: field, value: value })?;
     }
     var missing = Vector<u8>.create();
@@ -235,7 +239,7 @@ fn synthStructLiteral(
     for (f in c.types.structs[definition as usize].fields.view()) {
         let missingDef = c.types.info(c.types.fields[f as usize].typ).structDef;
         let cState = missingDef != none() && c.types.structs[missingDef as usize].isImported; // zero-filled (§33.2)
-        if (!containsSymbol(seen, f) && !cState) {
+        if (!containsSymbol(seen, f) && !cState && !importedLiteral) {                        // C zeroes an imported literal's others
             if (missingCount > 0) {
                 appendText(mut missing, ", ")?;
             }
@@ -620,3 +624,31 @@ fn isSliceMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "copyFrom") || sameText(name, "fill") || sameText(name, "swap") || sameText(name, "sortBy") ||
         sameText(name, "forEach") || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
         sameText(name, "splitAtMut");
+
+/// A string literal for a `[u8; N]` member of an imported struct's literal (ADR 0042 §3.4): its bytes, which C's
+/// initialiser zero-pads to N, as a constant of the array type; none if `value` is not a string literal or the member
+/// not such an array. Longer than N is N0338.
+fn byteStringMember(c: borrow mut Checker, value: u32, fieldType: u32) -> Result<u32, AllocError> {
+    let text = match (c.front.ast.exprs[value as usize]) {
+        ExprNode.StringLiteral(t) => t,
+        _ => { return Ok(none()); }
+    };
+    let info = c.types.info(fieldType);
+    if (!c.types.is(fieldType, TypeKind.Array) || info.element != c.types.u8) {
+        return Ok(none());
+    }
+    let span = c.front.ast.exprSpans[value as usize];
+    let length = c.front.ast.textOf(text).length;
+    if (info.arrayLength < 0 || length > truncate<usize>(info.arrayLength)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a string of ")?;
+        appendDecimal(mut message, length as u64)?;
+        appendText(mut message, " bytes does not fit a ")?;
+        appendQuotedType(mut message, c, fieldType)?;
+        appendText(mut message, " member (ADR 0042 §3.4)")?;
+        c.error(notStaticInitializer(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let stored = c.hir.addText(c.front.ast.textOf(text))?;
+    return c.expr(HirExpr.StringConst(stored), fieldType, span.start, span.end);
+}

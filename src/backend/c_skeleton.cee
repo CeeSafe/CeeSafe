@@ -404,6 +404,32 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             e.emit()?;
         }
     }
+    if (definitions) {
+        // A callback whose address a static holds is declared with the others (emittedCallbacks reads the statics too,
+        // ADR 0042 §3.3), before this.
+        // Each static is declared before any is defined, so one may hold another's address, in any order (C11
+        // §6.9.2: a tentative definition).
+        for (k in 0..c.hir.statics.length) {
+            if (!staticHoldsAddress(c, c.hir.statics[k].value)) {
+                continue;
+            }
+            for (j in 0..c.hir.statics.length) {
+                if (!e.split) {
+                    e.t("static CEE_UNUSED ")?;
+                } else {
+                    e.t("extern ")?;
+                }
+                appendCTypeName(c, mut e.buf, c.hir.statics[j].typ)?;
+                e.t(" ")?;
+                var declared = Vector<u8>.create();
+                appendStaticName(c, mut declared, truncate<u32>(j))?;
+                e.b(declared.view())?;
+                e.t(";")?;
+                e.emit()?;
+            }
+            break;
+        }
+    }
     for (k in 0..c.hir.statics.length) {
         let item = c.hir.statics[k];
         var name = Vector<u8>.create();
@@ -496,6 +522,10 @@ fn appendStaticInitializer(
         }
         HirExpr.StringConst(text) => {
             let bytes = c.hir.textOf(text);
+            if (c.types.is(t, TypeKind.Array)) {
+                // A C char array member's bytes, which C zero-pads (ADR 0042 §3.4).
+                return appendCStringLiteral(out, bytes);
+            }
             appendText(out, "{ .ptr = (const uint8_t *)")?;
             appendCStringLiteral(out, bytes)?;
             appendText(out, ", .len = ")?;
@@ -609,6 +639,38 @@ fn appendStaticInitializer(
             appendBytes(out, place)?;
             appendText(out, ")")?;
         }
+        HirExpr.FunctionAddress(function) => {
+            // A C function's address (ADR 0042 §3.3): the extern's own name, the export's symbol or the callback's.
+            if (isExternFunction(c, function)) {
+                appendBytes(out, c.name(c.hir.functions[function as usize].name))?;
+            } else if (c.hir.functions[function as usize].exported) {
+                appendBytes(out, c.hir.textOf(c.hir.functions[function as usize].exportName))?;
+            } else {
+                appendCallbackName(c, out, function)?;
+            }
+        }
+        HirExpr.Cast(operand) => {
+            // A static's address as a raw pointer (ADR 0042 §3.3), or a constant.
+            let borrowed = match (c.hir.exprs[operand as usize]) {
+                HirExpr.Borrow(_, p) => p,
+                HirExpr.BorrowTemp(_, p) => p,
+                HirExpr.BorrowPath(_, p) => p,
+                _ => none(),
+            };
+            if (borrowed != none()) {
+                appendText(out, "((")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")&")?;
+                appendStaticPlace(c, out, borrowed)?;
+                appendText(out, ")")?;
+            } else {
+                appendText(out, "((")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")")?;
+                appendStaticInitializer(e, c, out, operand, c.hir.exprTypes[operand as usize], place, false)?;
+                appendText(out, ")")?;
+            }
+        }
         HirExpr.Call(callee, arguments) => {
             appendBytes(out, c.name(c.hir.functions[callee as usize].name))?;
             appendText(out, "(")?;
@@ -625,6 +687,63 @@ fn appendStaticInitializer(
         _ => { appendText(out, "?")?; } // not evaluated: the reference throws
     }
     return Ok();
+}
+
+/// Whether a static initialiser holds another static's address (ADR 0042 §3.3).
+fn staticHoldsAddress(c: borrow Checker, value: u32) -> bool {
+    if (value == none()) {
+        return false;
+    }
+    return match (c.hir.exprs[value as usize]) {
+        HirExpr.Cast(operand) => match (c.hir.exprs[operand as usize]) {
+            HirExpr.Borrow(_, _) => true,
+            HirExpr.BorrowTemp(_, _) => true,
+            HirExpr.BorrowPath(_, _) => true,
+            _ => false,
+        },
+        HirExpr.StructLiteral(fields) => anyFieldHoldsAddress(c, fields),
+        _ => false,
+    };
+}
+
+fn anyFieldHoldsAddress(c: borrow Checker, fields: Range) -> bool {
+    for (k in 0..fields.count) {
+        if (staticHoldsAddress(c, c.hir.fieldValues[(fields.start + k) as usize].value)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// A place in a static as C (ADR 0042 §3.3): its object, then members and elements (a C array member's directly).
+fn appendStaticPlace(c: borrow Checker, out: borrow mut Vector<u8>, e: u32) -> Result<void, AllocError> {
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Deref(inner) => {
+            match (c.hir.exprs[inner as usize]) {
+                HirExpr.StaticAddress(item) => { return appendStaticName(c, out, item); }
+                _ => { return appendText(out, "?"); }
+            }
+        }
+        HirExpr.FieldAccess(target, field) => {
+            appendStaticPlace(c, out, target)?;
+            out.push('.')?;
+            return appendFieldName(c, out, field);
+        }
+        HirExpr.Index(target, index) => {
+            appendStaticPlace(c, out, target)?;
+            let cArray = match (c.hir.exprs[target as usize]) {
+                HirExpr.FieldAccess(owner, field) => isCArrayMember(c, c.hir.exprTypes[owner as usize], field),
+                _ => false,
+            };
+            appendText(out, if (cArray) "[" else ".e[")?;
+            match (c.hir.exprs[index as usize]) {
+                HirExpr.IntConst(v) => { appendDecimal(out, v.magnitude)?; }
+                _ => { out.push('0')?; }
+            }
+            return out.push(']');
+        }
+        _ => { return appendText(out, "?"); }
+    }
 }
 
 fn elementPlace(place: Slice<u8>, index: u32, cArray: bool) -> Result<Vector<u8>, AllocError> {

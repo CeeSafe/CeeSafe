@@ -62,6 +62,12 @@ fn staticUse(c: borrow mut Checker, entry: u32, span: Span) -> Result<u32, Alloc
     var name = Vector<u8>.create();
     appendBytes(mut name, c.name(c.front.ast.idents[declaredIdent as usize].symbol))?;
     let function = c.function;
+    if (function == none() && c.inStaticInitializer) {
+        // Its place, for its address (ADR 0042 §3.3): StaticFold accepts `borrow S as *T` and refuses its value. Taking
+        // a `static mut`'s address is not an unsafe use; using it is.
+        let address = c.expr(HirExpr.StaticAddress(hir), c.types.referenceTo(s.typ, s.mutable)?, span.start, span.end)?;
+        return c.expr(HirExpr.Deref(address), s.typ, span.start, span.end);
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         appendText(mut message, "static '")?;
@@ -179,7 +185,12 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
             var message = Vector<u8>.create();
             appendText(mut message, "a static is shared by every thread, so its type must be 'Share', and ")?;
             appendQuotedType(mut message, c, typ)?;
-            appendText(mut message, " is not (type-system.md §39.2; §38.1)")?;
+            let def = c.types.info(typ).structDef;
+            let imported = def != none() && c.types.structs[def as usize].isImported;
+            appendText(
+                mut message,
+                if (imported) " is not: C writes a C object, so declare it 'static mut' (type-system.md §39.3; ADR 0042 §3.1)" else " is not (type-system.md §39.2; §38.1)",
+            )?;
             c.error(staticNotAllowed(), typeSpan.start, typeSpan.end, message)?;
         } else if (c.types.isScoped(typ) && !c.types.isStringView(typ)) {
             var message = Vector<u8>.create();
@@ -381,6 +392,10 @@ fn staticFold(
             return operators(c, node);
         }
         HirExpr.Cast(operand) => {
+            // A static's address, or a field's or an element's of it, as a raw pointer (ADR 0042 §3.3).
+            if (isStaticAddress(c, operand) && c.types.is(c.hir.exprTypes[e as usize], TypeKind.RawPointer)) {
+                return Ok(e);
+            }
             // A string literal's address as a C string (§39.4).
             match (c.hir.exprs[operand as usize]) {
                 HirExpr.BuiltinCall(function, arguments) => {
@@ -537,13 +552,45 @@ fn staticFold(
             // When checking a @constant body, its parameters stay symbolic.
             return staticFold(c, body, bound.view(), true, depth + 1);
         }
+        // A C function's address where an `extern "C" fn` is expected (§29.5; ADR 0042 §3.3).
+        HirExpr.FunctionAddress(_) => { return Ok(e); }
         HirExpr.Here => { return staticFail(c, e, "'here' is only a C constant macro's argument"); }
         HirExpr.EnumValue(_, _) => { return staticFail(c, e, "an enum value"); }
         HirExpr.Closure(_, _) => { return staticFail(c, e, "a closure"); }
-        HirExpr.Deref(_) => { return staticFail(c, e, "a variable"); }
+        HirExpr.Deref(_) => {
+            if (isStaticPlace(c, e)) {
+                return staticFail(c, e, "another static's value (only its address, 'borrow S as *T')");
+            }
+            return staticFail(c, e, "a variable");
+        }
+        HirExpr.FieldAccess(_, _) => {
+            if (isStaticPlace(c, e)) {
+                return staticFail(c, e, "another static's value (only its address, 'borrow S as *T')");
+            }
+            return staticFail(c, e, "this expression");
+        }
         _ => { return staticFail(c, e, "this expression"); }
     }
 }
+
+/// `borrow P` of a place P inside a static, `S`, `S.f` or `S[k]` with a constant `k` (IsStaticAddress, ADR 0042 §3.3):
+/// an address constant (C11 §6.6p9).
+fn isStaticAddress(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Borrow(_, place) => isStaticPlace(c, place),
+    HirExpr.BorrowTemp(_, place) => isStaticPlace(c, place),
+    HirExpr.BorrowPath(_, place) => isStaticPlace(c, place),
+    _ => false,
+};
+
+fn isStaticPlace(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Deref(inner) => match (c.hir.exprs[inner as usize]) {
+        HirExpr.StaticAddress(_) => true,
+        _ => false,
+    },
+    HirExpr.FieldAccess(target, _) => isStaticPlace(c, target),
+    HirExpr.Index(target, index) => isStaticPlace(c, target) && isConstantValue(c, index),
+    _ => false,
+};
 
 /// An operator applied to folded operands (Operators, §39.4): folded too when every operand is a constant, else left
 /// as it is, its operands being a `@constant` function's parameters while its body is checked.

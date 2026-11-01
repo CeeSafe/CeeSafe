@@ -387,6 +387,37 @@ fn emittedCallbacks(
             }
         }
     }
+    // A static's initialiser may hold a callback's address too: an ops table (ADR 0042 §3.3).
+    for (item in c.hir.statics.view()) {
+        staticCallbacks(c, item.value, out)?;
+    }
+    return Ok();
+}
+
+/// The `@callback` functions whose address a static initialiser holds (ADR 0042 §3.3), in order, each once.
+fn staticCallbacks(c: borrow Checker, value: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    if (value == none()) {
+        return Ok();
+    }
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.FunctionAddress(f) => {
+            if (c.hir.functions[f as usize].isCallback && !containsU32(out, f)) {
+                out.push(f)?;
+            }
+        }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                staticCallbacks(c, c.hir.fieldValues[(fields.start + k) as usize].value, out)?;
+            }
+        }
+        HirExpr.ArrayLiteral(elements) => {
+            for (k in 0..elements.count) {
+                staticCallbacks(c, c.hir.at(elements, k), out)?;
+            }
+        }
+        HirExpr.ArrayRepeat(repeated) => { staticCallbacks(c, repeated, out)?; }
+        _ => {}
+    }
     return Ok();
 }
 

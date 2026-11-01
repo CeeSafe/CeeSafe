@@ -1,0 +1,74 @@
+// Statics that are C state (ADR 0042): a device and its ops table, defined in CeeSafe as a kernel defines them in C,
+// with C's designated initialisers: the members CeeSafe leaves out are zero, a name is a string, an ops table holds a
+// @callback's address and an extern's, the device holds the table's address, and a hook starts as a null C function
+// pointer. The C half, c-statics.c, registers the device and calls through the table.
+
+@header("c-statics.types.h")
+extern "C" {
+    struct cs_ops {
+        transmit: extern "C" fn(*mut cs_dev, i32) -> i32;
+        release: extern "C" fn(*mut cs_dev);
+    }
+    struct cs_stats {
+        packets: u64;
+        bytes: u64;
+    }
+    struct cs_dev {
+        name: [u8; 8];
+        mtu: u32;
+        flags: u32;
+        ops: *cs_ops;
+        stats: cs_stats;
+        mac: [u8; 6];
+    }
+    fn cs_release_static(dev: *mut cs_dev);
+    fn cs_register(dev: *mut cs_dev) -> i32;
+    fn c_main() -> i32;
+}
+
+/// The device's transmit: counts the packet. C calls it through the ops table.
+/// Safety: C passes the device it registered, which nothing else uses during the call.
+@callback
+unsafe fn transmit(dev: *mut cs_dev, length: i32) -> i32 {
+    let d = Ptr.toBorrowMut(dev);
+    d.stats.packets += 1;
+    d.stats.bytes += truncate<u64>(length);
+    return length;
+}
+
+// Declared before the table it points to: each static is declared before any is defined.
+static mut LO: cs_dev = cs_dev { name: "lo", mtu: 65535, flags: 5, ops: borrow LO_OPS as *cs_ops };
+static mut LO_OPS: cs_ops = cs_ops { transmit: transmit, release: cs_release_static };
+static mut SECOND: cs_dev = cs_dev { name: "lo1234", ops: borrow LO_OPS as *cs_ops, mac: [1, 2, 3, 4, 5, 6] };
+static mut NAMES: [*mut cs_dev; 2] = [borrow mut LO as *mut cs_dev, borrow mut SECOND as *mut cs_dev];
+static mut HOOK: extern "C" fn(*mut cs_dev, i32) -> i32 = 0 as extern "C" fn(*mut cs_dev, i32) -> i32;
+
+/// Safety: only the static's address is taken.
+@export("cs_loopback")
+fn loopback() -> *mut cs_dev => unsafe { borrow mut LO as *mut cs_dev };
+
+/// Finishes the device and registers it, as an init function does.
+/// Safety: init runs once, before anything else uses the device.
+@export("cs_init")
+fn init() -> i32 {
+    unsafe {
+        LO.mac = [0x02, 0, 0, 0, 0, 1];
+        return cs_register(borrow mut LO as *mut cs_dev);
+    }
+}
+
+/// Whether the hook is set: it starts null.
+/// Safety: only read.
+@export("cs_hook_set")
+fn hookSet() -> i32 => unsafe { if (HOOK.isNull()) 0 else 1 };
+
+/// The devices, through a static array of their addresses.
+/// Safety: only the array's address is taken.
+@export("cs_names")
+fn names() -> *mut *mut cs_dev => unsafe { borrow mut NAMES as *mut [*mut cs_dev; 2] as *mut *mut cs_dev };
+
+/// Safety: c_main only calls the exports above.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: lo 65535 5 2 1
+// expect-stdout: 100 1 100 1 1 0
+// expect-stdout: lo lo1234

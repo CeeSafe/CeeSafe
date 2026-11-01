@@ -1,0 +1,29 @@
+// Statics that are C state (ADR 0042): an imported type's static is a `static mut` (N0337 for a plain one), its literal
+// exists only in a static initialiser (N0294 elsewhere), a name member takes a string that fits (N0338), and an
+// initialiser may take another static's address but not its value (N0338).
+@header("static-c-state.h")
+extern "C" {
+    struct sc_ops {
+        run: extern "C" fn(*mut sc_dev);
+    }
+    struct sc_dev {
+        name: [u8; 8];
+        mtu: u32;
+        ops: *sc_ops;
+    }
+    fn sc_run(dev: *mut sc_dev);
+}
+
+static mut OPS: sc_ops = sc_ops { run: sc_run };
+static mut GOOD: sc_dev = sc_dev { name: "eth0", ops: borrow OPS as *sc_ops };
+static PLAIN: sc_dev = sc_dev { mtu: 1 }; // error[N0337]
+static mut LONG: sc_dev = sc_dev { name: "much-too-long" }; // error[N0338]
+static mut COPY: sc_dev = sc_dev { mtu: GOOD.mtu }; // error[N0338]
+static mut EXACT: sc_dev = sc_dev { name: "eight-ch" };
+
+fn make() -> u32 {
+    let d = sc_dev { mtu: 1 }; // error[N0294]
+    return 0;
+}
+
+fn main() {}

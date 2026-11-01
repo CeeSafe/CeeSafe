@@ -2016,7 +2016,7 @@ alignment to at least `n` (its size is rounded up to it). In C, the first member
   type where such a type is expected (a typed `let`, an argument, a field, a return value) and the
   signatures are equal. Only those functions have a C address; naming another function there is
   N0291. `0 as extern "C" fn(…) -> R` is the null pointer, `f.isNull()` tests for it, and `f as usize`
-  is its address.
+  is its address. Both are static initialisers too (§39.4, ADR 0042): an ops table's entries.
 - **Calls.** `f(args)`, with `f` a local, parameter or field of such a type, calls through the
   pointer. It is unsafe (N0280): the pointer may be null or point to anything.
 - CeeSafe functions that are neither exported nor `@callback` (§34.1, C7d) have no C address. CeeSafe-level function
@@ -2177,7 +2177,8 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   `*T`, `*mut T`, `borrow T`, `borrow mut T`, and (since C7b, §33) by value as a struct field or a box's
   contents. As the type of a local, parameter, result, array element, optional, or type argument, it is
   N0294. No value of it exists in CeeSafe: it is
-  neither Copy nor movable, and has no struct literal (N0294) and no drop.
+  neither Copy nor movable, and has no struct literal (N0294) and no drop. The one exception is a `static mut` item's
+  initialiser (§39.4, ADR 0042), which is C's designated initialiser for the static's C object, not a value.
 - **Field places.** Through a reference, `r.f` is a place of the declared field type, as for any
   struct (§12): read it, assign it through `borrow mut`, or borrow it. The borrow checker treats
   it like any field place. A field of raw pointer type, `usize` or `isize` can be read and assigned
@@ -3178,6 +3179,9 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - **Every use is an unsafe operation** (§27.3), N0280 outside an unsafe context. The unsafe code's `/// Safety:`
   comment must argue what the checker cannot. Two uses give two references that may alias, and two threads may race
   on it (`unsafe.md` U3).
+- **C objects** (ADR 0042). `T` may be an imported C type (§31), or hold one: a device, a protocol's ops table. C
+  code reaches it through the addresses CeeSafe gives it and writes it, which is why it is a `static mut`: a plain
+  `static` of an imported type is N0337, since CeeSafe would read it as unchanging. Its initialiser is C's (§39.4).
 
 ### 39.4 Static initialisers
 `e` is evaluated at compile time to a C constant initialiser. It must be a **static initialiser** (N0338 otherwise):
@@ -3190,6 +3194,17 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - a call of a `@constant` function whose arguments are static initialisers;
 - a call of a C constant macro whose arguments are static initialisers or `here` (below);
 - `layoutOf<T>()` (§30.1).
+
+- **For C objects** (ADR 0042), where the expected type is an imported C type, an `extern "C" fn` or a raw pointer:
+  - a struct literal of an imported type (§31.2's one exception), naming any of its declared fields: the members it
+    does not name are zero, as C's designated initialisers leave them (C11 §6.7.9p21), whether CeeSafe declares them
+    or not. A `[u8; N]` member (a C `char` array, ADR 0034) may be given a string literal of at most `N` bytes, which
+    C zero-pads (longer: N0338);
+  - the name of an `extern "C"`, `@export` or `@callback` function: its C address (§29.5);
+  - `borrow S as *T`, `borrow mut S as *mut T`, and the same of a field of `S` or an element at a constant index, for
+    a static `S` (any static, declared before or after): its address, an address constant (C11 §6.6p9). Taking a
+    `static mut`'s address is not an unsafe use. `S`'s value, or a field's, is N0338;
+  - `0 as extern "C" fn(…) -> R` and `0 as *T`: null.
 
 Not in v1: enum values (including optionals), references other than the static string data above, closures, and
 `dyn`. Each of these is N0338.
@@ -3238,6 +3253,11 @@ and other `@constant` bodies, called anywhere else is N0338, and it is never com
   view literal for a `StringView`. `here` is `(&ceeS_<name>.<field>…)`, an address constant (C11 §6.6p9), and
   `layoutOf<T>()` of a C-laid-out `T` is `{ .f_size = sizeof(…), .f_align = _Alignof(…) }`.
 - `S` is `&ceeS_<name>`.
+- **C objects** (ADR 0042): an imported type's literal is a designated initialiser over its C member names
+  (`{ .name = "lo", .mtu = 65535, .ops = ((struct netif_ops *)&ceeS_LO_OPS) }`); a function's address is its C symbol
+  (the extern's name, the export's, or a callback's `ceeW_` function, declared before the statics); a static's address
+  is `((T)&ceeS_<name>.<member>…)`. When an initialiser holds a static's address, every static is first declared by a
+  tentative definition (C11 §6.9.2), so the order of the items does not matter.
 - The interpreter evaluates every initialiser before `main` into its memory. A C constant macro has no value it can
   compute, so a program whose statics use one cannot be interpreted (a fault at start).
 

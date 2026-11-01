@@ -13,7 +13,7 @@ impl TimerHandler for Sleepy {
 }
 
 fn make(table: Box<Mutex<u64>, KernelHeap>) -> bool {
-    match (Timer<Sleepy>.create(Sleepy { table: table })) {
+    match (KernelTimer<Sleepy>.create(Sleepy { table: table })) {
         Ok(timer) => { return true; }
         Err(e) => { return false; }
     }

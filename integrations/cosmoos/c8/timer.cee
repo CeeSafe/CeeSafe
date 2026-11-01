@@ -1,7 +1,7 @@
 // profile: freestanding
-// C8: timers a module owns (kernel/include/kernel/timer.h). A Timer holds CosmoOS's struct timer first and its handler
+// C8: timers a module owns (kernel/include/kernel/timer.h). A KernelTimer holds CosmoOS's struct timer first and its handler
 // after it; the kernel calls the handler in interrupt context, so `fire` is @context(irq): a handler that could sleep
-// or allocate does not compile (type-system.md §32). Dropping a Timer is timer_cancel_sync: when it returns, the
+// or allocate does not compile (type-system.md §32). Dropping a KernelTimer is timer_cancel_sync: when it returns, the
 // callback is not running anywhere, so the timer and its handler can go (docs/cosmoos/c8-report.md).
 
 @header("kernel/timer.h")
@@ -22,7 +22,7 @@ public interface TimerHandler {
 }
 
 /// An armable timer and its handler: made in place in a KernelHeap box, never moved (type-system.md §33).
-public struct Timer<T: TimerHandler> {
+public struct KernelTimer<T: TimerHandler> {
     private raw: timer;
     private handler: T;
 
@@ -33,8 +33,8 @@ public struct Timer<T: TimerHandler> {
         unsafe { timer_setup(borrow mut this.raw as *mut timer, fire<T>, 0 as *mut void); }
     }
 
-    public fn create(handler: T) -> Result<Box<Timer<T>, KernelHeap>, AllocError> =>
-        Box.createIn(KernelHeap {}, Timer { handler: handler });
+    public fn create(handler: T) -> Result<Box<KernelTimer<T>, KernelHeap>, AllocError> =>
+        Box.createIn(KernelHeap {}, KernelTimer { handler: handler });
 
     /// Arms the timer on this CPU: `fire` runs after `delay_ns`.
     /// Safety: the timer was set up by `init`; timer_start re-arms a pending timer.
@@ -53,13 +53,13 @@ public struct Timer<T: TimerHandler> {
     }
 }
 
-/// The C callback of every Timer<T>: calls the handler and re-arms if it asks to.
-/// Safety: `t` is the first field of the Timer<T> that `init` registered, which lives until its drop has cancelled it
+/// The C callback of every KernelTimer<T>: calls the handler and re-arms if it asks to.
+/// Safety: `t` is the first field of the KernelTimer<T> that `init` registered, which lives until its drop has cancelled it
 /// synchronously.
 @callback
 @context(irq)
 unsafe fn fire<T: TimerHandler>(t: *mut timer, arg: *mut void) {
-    let timer = Ptr.toBorrow(t as *Timer<T>);
+    let timer = Ptr.toBorrow(t as *KernelTimer<T>);
     let next = timer.handler.fire();
     if (next != 0) { timer.start(next); }
 }

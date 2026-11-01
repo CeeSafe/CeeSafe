@@ -14,7 +14,7 @@ impl TimerHandler for Greedy {
 }
 
 fn make() -> bool {
-    match (Timer<Greedy>.create(Greedy {})) {
+    match (KernelTimer<Greedy>.create(Greedy {})) {
         Ok(timer) => { return true; }
         Err(e) => { return false; }
     }

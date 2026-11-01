@@ -9,7 +9,7 @@ generated here (generate_glue): metadata, init and shutdown wrappers that keep t
 
 Steps:
   1. negative cases: each c8/negative/*.cee, compiled with the bindings, gives exactly its annotated diagnostics;
-  2. host test (c8/host_test.c) with CosmoOS's HOST_CFLAGS, its harness, spinlock shim and kernel/object/object.c:
+  2. host test (c8/host_test.c) with CosmoOS's HOST_CFLAGS, its harness, spinlock shim and kernel/object (object.cee's C and object_floor.c):
      the lifecycle and its teardown order, and an allocation-failure sweep over init;
   3. C8a in the kernel: the module built with CosmoOS's debug MODULE_CFLAGS, signed, checked (check-module-elf.py and
      C4's checks), loaded at boot from modules/ceesafe_c8.ko in QEMU (4 CPUs, lockdep on): init runs, the timer fires
@@ -122,8 +122,16 @@ def negative_cases(checks):
 def host_test(cosmo, root, gen, work, checks):
     cc = cosmo.var("HOST_CC")
     cflags, ldflags = shlex.split(cosmo.var("HOST_CFLAGS")), shlex.split(cosmo.var("HOST_LDFLAGS"))
+    # CosmoOS's object code is a CeeSafe port (kernel/object/object.cee and its floor object_floor.c): its C, made as
+    # CosmoOS's scripts/cee-gen.py makes it, by the compiler under test. The runtime is the module's (gen).
+    object_c = work / "object"
+    made = run([c1.CEESAFEC, "build", "--profile", "freestanding", "--no-float", "--emit", "c", "-o", object_c,
+                "kernel/object/object.cee"], cwd=root)
+    if made.returncode != 0:
+        checks["host test builds with CosmoOS's HOST_CFLAGS"] = (False, made.stderr.strip().splitlines()[:10])
+        return
     sources = [gen / "main.c", gen / "ceesafe_rt_core.c", c4.C4_DIR / "ceesafe_rt_kernel.c", COSMOOS_DIR / "c7" / "host_kernel.c",
-               C8_DIR / "host_shims.c", C8_DIR / "host_test.c", root / "kernel" / "object" / "object.c",
+               C8_DIR / "host_shims.c", C8_DIR / "host_test.c", object_c / "main.c", root / "kernel" / "object" / "object_floor.c",
                *[root / s for s in shlex.split(cosmo.var("HOST_COMMON_SRCS"))]]
     exe = work / "host_test"
     built = run([cc, *cflags, "-I", gen, "-ffreestanding", "-fno-stack-protector", "-I", root / "tests" / "host", *sources, *ldflags, "-o", exe])

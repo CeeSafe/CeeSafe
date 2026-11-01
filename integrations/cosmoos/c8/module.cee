@@ -96,7 +96,7 @@ impl Task for Watcher {
 
 /// The module's state, torn down in declaration order when dropped.
 struct State {
-    timer: Box<Timer<Ticker>, KernelHeap>;
+    timer: Box<KernelTimer<Ticker>, KernelHeap>;
     watcher: KThread<Watcher>;
     ticks: KRef<Ticks>;
 }
@@ -108,7 +108,7 @@ fn makeState() -> Result<Box<State, KernelHeap>, AllocError> {
     let ticks = KRef<Ticks>.create("ceesafe.c8.ticks\0".ptr as *CChar, Ticks { count: count })?;
     let steps = SpinLock<u64>.create("ceesafe.c8.steps\0".ptr as *CChar, 0)?;
     let late = SpinLock<bool>.create("ceesafe.c8.late\0".ptr as *CChar, false)?;
-    let timer = Timer<Ticker>.create(Ticker { ticks: ticks.clone() })?;
+    let timer = KernelTimer<Ticker>.create(Ticker { ticks: ticks.clone() })?;
     let watcher = KThread<Watcher>.start(
         "ceesafe.c8.watcher\0".ptr as *CChar,
         Watcher { ticks: ticks.clone(), steps: steps, late: late },

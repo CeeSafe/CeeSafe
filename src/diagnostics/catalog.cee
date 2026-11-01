@@ -181,7 +181,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A task that is not awaited, run or spawned: a call of an async fn, or an async closure, anywhere else; or an `await` whose operand is not a task (`type-system.md` §40.1, §40.3)",
     343 => "Recursion through `await`: an async fn whose frame would contain itself (`type-system.md` §40.1)",
     344 =>
-        "A scope's child that captures one of the scope body's own locals, which end before the child does (`type-system.md` §40.5)",
+        "A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value without borrows that it only reads, which it copies (`type-system.md` §40.5, ADR 0033)",
     345 => "`Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4)",
     _ => "",
 };

@@ -1,0 +1,48 @@
+// A child per loop iteration (type-system.md §40.5, ADR 0033): a child holds its own copy of each Copy value it reads
+// and does not change, taken when it is spawned, so the loop variable and the body's locals can be captured; what
+// the awaiting function owns is still captured by reference, here a vector indexed by the copied loop variable.
+
+async fn hold(x: borrow u32, ms: u64) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok(x);
+}
+
+async fn work(values: borrow Vector<u32>) -> Result<u32, AsyncError> {
+    let ch = match (Channel<u32>.create(8)) {
+        Ok(c) => c,
+        Err(_) => { return Err(AsyncError.Cancelled); },
+    };
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (i in 0..values.length) {
+            let weight = truncate<u32>(i) + 1;
+            s.spawn(async () => {
+                // the later children finish first: each still sees its own i and weight
+                let v = await hold(borrow values[i], (values.length - i) as u64 * 5)?;
+                match (await ch.sendAsync(v * weight)) {
+                    Ok() => { return Ok(); }
+                    Err(_) => { return Err(AsyncError.Cancelled); }
+                }
+            });
+        }
+    })?;
+    var digits: u32 = 0;
+    for (k in 0..values.length) {
+        match (await ch.recvAsync()?) {
+            Some(v) => { digits = digits * 100 + v; }
+            null => {}
+        }
+    }
+    return Ok(digits);
+}
+
+fn main() {
+    var values = Vector<u32>.create();
+    values.push(4)!;
+    values.push(5)!;
+    values.push(6)!;
+    match (Async.run(work(borrow values))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 181004

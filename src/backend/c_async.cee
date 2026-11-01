@@ -215,6 +215,15 @@ fn emitFrameStruct(
     e.t(" {")?;
     e.emit()?;
     e.line("    uint32_t cee_state;")?;
+    let environment = c.hir.functions[source as usize].closureEnvironment;
+    if (environment != none()) {
+        // An async closure's own copy of its environment, taken when it starts (ADR 0033): the closure value it was
+        // made from may be made again, by the next iteration of a loop, while this task runs.
+        e.t("    ")?;
+        appendCTypeName(c, mut e.buf, environment)?;
+        e.t(" cee_env;")?;
+        e.emit()?;
+    }
     let inFrame = frameLocals(n, f)?;
     for (k in 0..truncate<u32>(function.locals.length)) {
         if (!inFrame[k as usize]) {
@@ -455,6 +464,18 @@ fn emitAsyncFunction(
         e.t(" = ")?;
         appendLocalName(c, mut e.buf, function, k)?;
         e.t(";")?;
+        e.emit()?;
+    }
+    if (c.hir.functions[source as usize].closureEnvironment != none() && function.parameterCount > 0) {
+        // Its own copy of the environment (ADR 0033): captures by value are this child's, and the closure value
+        // it came from may be made again while it runs.
+        e.t("    cee_frame->cee_env = *")?;
+        appendLocalName(c, mut e.buf, function, 0)?;
+        e.t(";")?;
+        e.emit()?;
+        e.t("    cee_frame->")?;
+        appendLocalName(c, mut e.buf, function, 0)?;
+        e.t(" = &cee_frame->cee_env;")?;
         e.emit()?;
     }
     e.line("}")?;
@@ -1343,6 +1364,10 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
     let inFrame = frameLocals(n, f)?;
     var l = LayoutBuilder { size: 0, align: 1 };
     layoutAdd(mut l, 4, 4); // cee_state
+    let environment = c.hir.functions[source as usize].closureEnvironment;
+    if (environment != none()) {
+        addLayout(mut l, typeLayout(c, environment)); // cee_env (ADR 0033)
+    }
     var report = FrameReport {
         layout: SizeAlign { size: 0, align: 1 },
         keptLocals: 0,

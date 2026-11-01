@@ -468,6 +468,29 @@ fn checkClosureWith(
     }
     var refined = Vector<HirCapture>.create();
     fieldPrecise(c, body, captures.view(), mut refined)?;
+    if (c.copyCaptures && literal.isAsync) {
+        // A spawned child holds what it reads of a Copy, unscoped local by value, copied when it is spawned (ADR
+        // 0033 §3.1): it outlives the body's locals, and no one changes the local while the child may run (N0241).
+        for (k in 0..refined.length) {
+            let capture = refined[k];
+            let isShared = match (capture.mode) {
+                CaptureMode.Shared => true,
+                _ => false,
+            };
+            let t = c.hir.locals[capture.local as usize].typ;
+            if (isShared && capture.field == none() && c.types.isCopy(t) && !c.types.isScoped(t)) {
+                let l = c.hir.locals[capture.local as usize];
+                let value = c.expr(HirExpr.LocalRef(capture.local), t, l.start, l.end)?;
+                refined[k] = HirCapture {
+                    local: capture.local,
+                    mode: CaptureMode.Copy,
+                    value: value,
+                    field: none(),
+                    throughReference: false,
+                };
+            }
+        }
+    }
     let captureRange = finishEnvironment(c, function, environment, refined.view(), effects, span)?;
     let closureType = c.types.closureTo(parameterTypes.view(), returnType, effects)?;
     let typ = c.types.referenceTo(closureType, mutable || (expectsClosure && c.types.info(expected).mutableReference))?;

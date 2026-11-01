@@ -274,5 +274,5 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0341 | `await` outside the body of an async fn or async closure: in a sync function or closure, a `drop` block or a deferred statement (`type-system.md` §40.2, ADR 0031) | `fn f() { await g(); }` |
 | N0342 | A task that is not awaited, run or spawned: a call of an async fn, or an async closure, anywhere else; or an `await` whose operand is not a task (`type-system.md` §40.1, §40.3) | `let t = fetch(url);` |
 | N0343 | Recursion through `await`: an async fn whose frame would contain itself (`type-system.md` §40.1) | `async fn walk(n: u32) { if (n > 0) { await walk(n - 1); } }` |
-| N0344 | A scope's child that captures one of the scope body's own locals, which end before the child does (`type-system.md` §40.5) | `Async.scope(E.Oom, (s) => { var n = 0; s.spawn(async () => { n += 1; return Ok(); }); })` |
+| N0344 | A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value without borrows that it only reads, which it copies (`type-system.md` §40.5, ADR 0033) | `Async.scope(E.Oom, (s) => { var n = 0; s.spawn(async () => { n += 1; return Ok(); }); })` |
 | N0345 | `Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4) | `await Async.park();` in a program |

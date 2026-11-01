@@ -1059,7 +1059,21 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
                 e.b(element.view())?;
                 e.t(" (*)[")?;
                 e.d(length)?;
-                e.t("]: 1, default: 0), ")?;
+                if (elementType == c.types.u8) {
+                    // `[u8; N]` is also C's `char[N]`, read as bytes (ADR 0034). The character types are a nested
+                    // _Generic: uint8_t is usually unsigned char, and one _Generic may not name a type twice.
+                    e.t("]: 1, default: _Generic(&")?;
+                    e.b(member.view())?;
+                    e.t(", char (*)[")?;
+                    e.d(length)?;
+                    e.t("]: 1, signed char (*)[")?;
+                    e.d(length)?;
+                    e.t("]: 1, unsigned char (*)[")?;
+                    e.d(length)?;
+                    e.t("]: 1, default: 0)), ")?;
+                } else {
+                    e.t("]: 1, default: 0), ")?;
+                }
                 var message = Vector<u8>.create();
                 appendText(mut message, "ceesafec import: ")?;
                 appendBytes(mut message, name.view())?;
@@ -1102,7 +1116,13 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
             e.b(member.view())?;
             e.t(", ")?;
             e.b(cType.view())?;
-            e.t(": 1, default: 0), ")?;
+            if (field.typ == c.types.u8) {
+                e.t(": 1, default: _Generic(")?; // a `u8` field is also C's `char` (ADR 0034)
+                e.b(member.view())?;
+                e.t(", char: 1, signed char: 1, unsigned char: 1, default: 0)), ")?;
+            } else {
+                e.t(": 1, default: 0), ")?;
+            }
             var message = Vector<u8>.create();
             appendText(mut message, "ceesafec import: ")?;
             appendBytes(mut message, name.view())?;

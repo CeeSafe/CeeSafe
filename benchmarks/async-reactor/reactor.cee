@@ -10,21 +10,6 @@ async fn hold(stream: borrow AsyncTcpStream) -> Result<void, AsyncError> {
     return Ok();
 }
 
-// One task parked on each of streams[k..]: each level holds one and recurses through a boxed frame (a scope child
-// cannot capture a per-iteration value, type-system.md §40.5).
-async fn holdAll(streams: borrow Vector<AsyncTcpStream>, k: usize) -> Result<void, AsyncError> {
-    if (k == streams.length) {
-        return Ok();
-    }
-    await Async.all(async () => await hold(borrow streams[k]), async () => {
-        match (await Async.boxed(SystemHeap {}, holdAll(streams, k + 1))) {
-            Ok(r) => { return r; }
-            Err(_) => { return Err(AsyncError.Cancelled); }
-        }
-    })?;
-    return Ok();
-}
-
 async fn echo(listener: borrow AsyncTcpListener) -> Result<u32, AsyncError> {
     let peer = await listener.accept()?;
     var byte = [0u8; 1];
@@ -102,7 +87,11 @@ async fn work() -> Result<u32, AsyncError> {
         })?;
         return Ok(ms);
     }, async () => {
-        await holdAll(borrow streams, 0)?;
+        await Async.scope(AsyncError.Cancelled, (s) => {
+            for (k in 0..streams.length) {
+                s.spawn(async () => await hold(borrow streams[k])); // k is each child's own (ADR 0033)
+            }
+        })?;
         return Ok(0);
     });
     return Ok(r?.value);

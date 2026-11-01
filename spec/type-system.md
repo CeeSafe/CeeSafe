@@ -2116,8 +2116,10 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   `bool` or imported types, for C array members `CE name[N]`; otherwise N0291. An embedded member is checked
   with `_Generic` only, since CeeSafe has no size for it. A field's declared type must be exactly the member's C type, under §28.3's mapping (`u32`
   is `uint32_t`, `usize` is `size_t`, `*CChar` is `const char *`, `*mut T` is `T *`, `[u8; 16]` is `uint8_t[16]`).
-  This is checked when the C is compiled (§31.3), not by ceesafec. (A plain `char` array cannot be declared:
-  `CChar` is only a pointee.)
+  This is checked when the C is compiled (§31.3), not by ceesafec. A C `char`, `signed char` or `unsigned char`
+  member is declared `u8`, and an array of them `[u8; N]` (ADR 0034): C lets any object be read and written as
+  bytes, and a byte's value does not depend on `char`'s signedness. `CChar` itself stays a pointee only (§28.3). The
+  address of a `u8` member, when it is borrowed, converts to `uint8_t *` in the C.
 - **`@cname("name")`** on a field (C9) gives its C member name when that is a CeeSafe keyword (`type`, `in`,
   `match`, …); CeeSafe code uses the declared name. The C name must be a valid, unreserved C identifier (N0292),
   and no two fields may have the same C name (N0228). `@cname` anywhere else is N0290.
@@ -3274,6 +3276,11 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   - a statement of the body that uses a local a child has captured is **N0241**;
   - a child that captures one of the body's own locals, which end when the body does while the child may still run,
     is **N0344**: a child borrows from the function that awaits the scope, never from the body.
+  - **Copies** (ADR 0033): a child holds its own copy of each local it reads and does not change whose type is
+    `Copy` and holds no borrow (not scoped, §25), whoever owns it, taken when it is spawned. Such a capture is no
+    loan: the body may use and change the local afterwards, and a body local may be captured so, which is how a loop
+    spawns a child per iteration (`for (k in 0..v.length) s.spawn(async () => await f(borrow v[k]))`). A child's
+    frame holds its own copy of its closure's environment, made when it starts.
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 

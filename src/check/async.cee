@@ -377,7 +377,10 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -
     let expected = c.types.referenceTo(callable, true)?; // a `borrow mut fn`: a child may change what it captures
     let argument = c.front.ast.at(arguments, 0);
     let argumentSpan = c.front.ast.exprSpans[argument as usize];
+    let savedCopy = c.copyCaptures;
+    c.copyCaptures = true;
     let closure = checkClosure(c, literal, expected, argumentSpan)?;
+    c.copyCaptures = savedCopy;
     let captures = match (c.hir.exprs[closure as usize]) {
         HirExpr.Closure(_, list) => list,
         _ => emptyRange(),
@@ -397,7 +400,7 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -
             appendQuotedName(mut message, c, name)?;
             appendText(
                 mut message,
-                ", which ends with the scope's body while the child may still run (type-system.md §40.5)",
+                ", which ends with the scope's body while the child may still run; a child holds its own copy only of a Copy value it does not change and that holds no borrow (type-system.md §40.5)",
             )?;
             c.error(scopeCapturesBodyLocal(), argumentSpan.start, argumentSpan.end, message)?;
             continue;

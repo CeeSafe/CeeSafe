@@ -1707,6 +1707,13 @@ fn appendRvalue(
                 let p = n.places[place as usize];
                 return appendPlaceParts(e, c, n, sources, f, out, p.local, p.projections, p.projections.count - 1);
             }
+            if (isImportedByteMember(c, n, f, place)) {
+                // A `u8` member of an imported struct may be C's `char` (ADR 0034): its address converts, as a
+                // character-type access.
+                appendText(out, "(")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")(uintptr_t)")?;
+            }
             out.push('&')?;
             return appendPlace(e, c, n, sources, f, out, place);
         }
@@ -2704,3 +2711,24 @@ fn placedSlot(e: borrow CEmitter, f: u32, statement: u32) -> u32 =>
 fn isPlacedBox(e: borrow CEmitter, n: borrow NirProgram, f: u32, place: u32) -> bool =>
     placeIsLocal(n, place) && (f as usize) < e.placements.length &&
         isPlacedBoxLocal(e.placements[f as usize], placeLocal(n, place));
+
+/// Whether `place` is a `u8` field of an imported C struct, which may be C's `char` (ADR 0034).
+fn isImportedByteMember(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
+    let p = n.places[place as usize];
+    if (p.projections.count == 0 || placeTypeIn(c, n, f, place) != c.types.u8) {
+        return false;
+    }
+    let last = n.projections[(p.projections.start + p.projections.count - 1) as usize];
+    let isField = match (last.kind) {
+        ProjectionKind.Field => true,
+        _ => false,
+    };
+    if (!isField) {
+        return false;
+    }
+    var owner = n.functions[f as usize].locals[p.local as usize].typ;
+    for (k in 0..(p.projections.count - 1)) {
+        owner = applyNirProjection(c, owner, n.projections[(p.projections.start + k) as usize]);
+    }
+    return c.types.is(owner, TypeKind.Struct) && c.types.structs[c.types.info(owner).structDef as usize].isImported;
+}

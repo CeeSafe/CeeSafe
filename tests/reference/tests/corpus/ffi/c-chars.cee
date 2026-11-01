@@ -1,0 +1,75 @@
+// C `char` members of an imported struct (ADR 0034): `char name[16]` is `[u8; 16]` and `char tag` is `u8`, read and
+// written as bytes whatever `char`'s signedness; the name passed back to C as `*CChar`; a `char` member borrowed.
+// The C half, c-chars.c, owns the pool and prints what CeeSafe did.
+
+@header("c-chars.types.h")
+extern "C" {
+    struct cc_pool {
+        id: u32;
+        name: [u8; 16];
+        tag: u8;
+        level: [u8; 4];
+        key: [u8; 2];
+    }
+}
+
+@header("c-chars.types.h")
+extern "C" {
+    fn cc_length(text: *CChar) -> usize;
+    fn c_main() -> i32;
+}
+
+/// The name's bytes up to its terminator, summed, plus the first level and key as bytes.
+/// Safety: `p` points to a pool the caller owns.
+@export("cc_name_sum")
+unsafe fn nameSum(p: *cc_pool) -> u32 {
+    let pool = Ptr.toBorrow(p);
+    var sum: u32 = 0;
+    for (b in pool.name[..]) {
+        if (b == 0) {
+            break;
+        }
+        sum += b as u32;
+    }
+    return sum + pool.level[0] as u32 + pool.key[0] as u32;
+}
+
+/// Upper-cases the name in place and sets the tag.
+/// Safety: `p` points to a pool the caller owns, not otherwise borrowed.
+@export("cc_shout")
+unsafe fn shout(p: *mut cc_pool) {
+    let pool = Ptr.toBorrowMut(p);
+    for (k in 0..pool.name.length) {
+        let b = pool.name[k];
+        if (b >= 97 && b <= 122) {
+            pool.name[k] = b - 32;
+        }
+    }
+    pool.tag = 81; // 'Q'
+}
+
+/// The name's length, from C's strlen through `*CChar`.
+/// Safety: `p` points to a pool whose name is terminated.
+@export("cc_name_length")
+unsafe fn nameLength(p: *cc_pool) -> u32 {
+    let pool = Ptr.toBorrow(p);
+    return truncate<u32>(cc_length(borrow pool.name as *[u8; 16] as *u8 as *CChar));
+}
+
+fn next(b: borrow mut u8) {
+    b += 1;
+}
+
+/// Moves the tag to the next letter through a borrow of the member.
+/// Safety: `p` points to a pool the caller owns, not otherwise borrowed.
+@export("cc_bump_tag")
+unsafe fn bumpTag(p: *mut cc_pool) {
+    let pool = Ptr.toBorrowMut(p);
+    next(mut pool.tag);
+}
+
+/// Safety: c_main only calls the exports above, with a pool it owns.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: 885
+// expect-stdout: TANK Q 4
+// expect-stdout: R -1 200

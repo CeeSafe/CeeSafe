@@ -21,13 +21,25 @@ REVISION=${2:-HEAD}
 OUTPUT=${3:-out/ceesafec}
 
 version=$("$STAGE0" --version)
+CHAIN_FLAGS=""
 case "$version" in
+"ceesafec 0.3.2")
+    # The release's stage 0 since 2026-11-01: it builds the tree at once (checked at 8cccac0, macOS and Debian).
+    CHAIN=""
+    ;;
 "ceesafec 0.2.0")
     # 7d2a041: the newest commit 0.2.0 builds (ADR 0032, channels). 291246d (L1 A2d) adds AsyncSockets to lib/std
     # and uses it in the interpreter, so 7d2a041 is built again with 291246d's library; that compiler builds the tree
     # (checked 2026-11-01 up to 70da046: the same C as the compiler it was released from).
     CHAIN="7d2a041bc276da110253e32731176129e018e12d
 7d2a041bc276da110253e32731176129e018e12d+291246db19892ed2c20c8bb2376b16fb6a35d658"
+    # Before 844e755 (L1 A4a) the hosted async runtime used CLOCK_MONOTONIC without asking glibc for POSIX, which
+    # gcc's -std=c11 hides; the chain's compilers predate it (and so the runtime they build REVISION with), so on
+    # Linux every build here defines _GNU_SOURCE, as the runtime now does itself. The flag changes how the C compiler
+    # builds a compiler, not the C it emits: the fixed point and the release's binaries come from the seed.
+    if [ "$(uname -s)" = Linux ]; then
+        CHAIN_FLAGS="--cflag -D_GNU_SOURCE"
+    fi
     ;;
 *)
     echo "bootstrap_release: no chain recorded for '$version' (bootstrap/reference.md, \"Release stage 0\")" >&2
@@ -38,15 +50,6 @@ esac
 repo=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-
-# Before 844e755 (L1 A4a) the hosted async runtime used CLOCK_MONOTONIC without asking glibc for POSIX, which gcc's
-# -std=c11 hides; the chain's compilers predate it (and so the runtime they build REVISION with), so on Linux every
-# build here defines _GNU_SOURCE, as the runtime now does itself. The flag changes how the C compiler builds a
-# compiler, not the C it emits: the fixed point and the release's binaries come from the seed, built without it.
-CHAIN_FLAGS=""
-if [ "$(uname -s)" = Linux ]; then
-    CHAIN_FLAGS="--cflag -D_GNU_SOURCE"
-fi
 
 compiler=$STAGE0
 n=0

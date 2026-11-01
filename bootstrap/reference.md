@@ -9,10 +9,10 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 
 | Item | Value |
 |---|---|
-| Compiler | `ceesafec 0.2.0`, `https://github.com/vkuttyp/CeeSafe/releases/download/v0.2.0/ceesafec-linux-x64.tar.gz` |
-| sha256 | `2e898a239f36fb7d0c39262d8ac59c98d8b98219e1fc4f0e4993136aec3e18cd` (v0.2.0's `SHA256SUMS`); osx-arm64 `514ddaaf29289fb6549cc68c5701c5f910c4ae42e8c44f1726f5686040ce039a` |
-| Chain | `7d2a041` (the newest commit 0.2.0 builds), then `7d2a041` with `291246d`'s `src/library` (the bridge: 291246d uses the `AsyncSockets` it adds), then the tree |
-| Checked | 2026-11-01 at `70da046`: macOS arm64 (Apple clang) and Debian 12 x86-64 (gcc 12, `-D_GNU_SOURCE` for the chain), fixed point reached, seed `main.c` `d1ba9faf…`, identical to the C of the compiler 0.3.0 was built with; the v0.3.1 workflow's seed and builds on six platforms |
+| Compiler | `ceesafec 0.3.2`, `https://github.com/vkuttyp/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz` |
+| sha256 | `59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22` (v0.3.2's `SHA256SUMS`) |
+| Chain | none: 0.3.2 builds the tree at once |
+| Checked | 2026-11-01 at `ef7820d`: macOS arm64 (the released, notarized binary) and Debian 12 x86-64 (its linux-x64 archive), fixed point reached on both, seed `main.c` `fc5ce1d4…` on both |
 
 A platform with no release builds a first `ceesafec` from a release's C seed (`ceesafec-<version>-seed.tar.gz`,
 `bootstrap/seed/README.md`) with a C compiler alone.
@@ -32,6 +32,7 @@ A platform with no release builds a first `ceesafec` from a release's C seed (`c
 |---|---|---|
 | 2026-10-30 | the reference compiler 0.3.1 to 0.6.0 | the port: CeeSafe was built by the compiler it was ported from until it built itself (P6) |
 | 2026-11-01 | ceesafec 0.2.0 (Decision 0009) | the reference compiler's releases are no longer public |
+| 2026-11-01 | ceesafec 0.3.2 | the first release built from a CeeSafe release; it builds the tree with no chain (`tools/bootstrap_release.sh` keeps 0.2.0's) |
 
 ## Fixed points
 

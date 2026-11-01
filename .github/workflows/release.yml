@@ -1,7 +1,7 @@
 name: release
 
 # A tag v<version> publishes ceesafec's prebuilt binaries as a GitHub release (docs/release.md). One C seed for every
-# platform: a Linux job bootstraps ceesafec from the released ceesafec 0.2.0 (tools/bootstrap_release.sh, Decision 0009)
+# platform: a Linux job bootstraps ceesafec from the released ceesafec 0.3.2 (tools/bootstrap_release.sh, Decision 0009)
 # and writes ceesafec's own C, checking
 # the fixed point; each platform compiles the seed with its C compiler, lets that ceesafec rebuild itself with its own
 # `build`, and checks that the result emits the seed byte for byte. The macOS binaries are signed with the project's
@@ -19,8 +19,8 @@ permissions:
 env:
   SIGNING_IDENTITY: "Developer ID Application: Veeran Puthumkara (68PG74DU2D)"
   # The stage-0 compiler (Decision 0009; bootstrap/reference.md, "Release stage 0"): this repository's own release.
-  STAGE0_URL: https://github.com/vkuttyp/CeeSafe/releases/download/v0.2.0/ceesafec-linux-x64.tar.gz
-  STAGE0_SHA256: 2e898a239f36fb7d0c39262d8ac59c98d8b98219e1fc4f0e4993136aec3e18cd # v0.2.0's SHA256SUMS
+  STAGE0_URL: https://github.com/vkuttyp/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz
+  STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
 
 jobs:
   version:
@@ -50,8 +50,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # tools/bootstrap_release.sh builds earlier commits on the way
-      - name: ceesafec 0.2.0 (the stage-0 compiler)
+          fetch-depth: 0 # a stage 0's chain (tools/bootstrap_release.sh) may build earlier commits
+      - name: ceesafec 0.3.2 (the stage-0 compiler)
         run: |
           curl -fsSL "$STAGE0_URL" -o stage0.tar.gz
           echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -

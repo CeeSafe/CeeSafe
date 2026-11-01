@@ -1,5 +1,5 @@
-// Interned names with first-seen IDs (Nova's Syntax/SymbolTable.cs:3: "Ids are assigned in first-seen order, so they
-// are deterministic per input"). The text of every name lives in one buffer. Promoted from probes/run-pass/lexer.nova.
+// Interned names with first-seen IDs (the reference's Syntax/SymbolTable.cs:3: "Ids are assigned in first-seen order, so they
+// are deterministic per input"). The text of every name lives in one buffer. Promoted from probes/run-pass/lexer.cee.
 
 struct Symbol {
     id: u32;

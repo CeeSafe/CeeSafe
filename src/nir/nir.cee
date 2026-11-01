@@ -1,6 +1,6 @@
 // The NIR (the reference's Nir/Nir.cs): a control-flow graph per function (intermediate-representation.md §3). The
 // reference's records refer to each other by identity; here every node lives in an arena of the program and is named
-// by its index, as in the HIR (src/hir/hir.nova). A block's statements are its own vector, since blocks are filled in
+// by its index, as in the HIR (src/hir/hir.cee). A block's statements are its own vector, since blocks are filled in
 // any order, and drop elaboration inserts into them.
 
 /// A local of one function: HIR locals keep their ids, temporaries and drop flags follow.

@@ -126,7 +126,7 @@ writeFileSync(
   [
     "# Decisions",
     "",
-    "ADRs 0001–0030 are Nova's, inherited by CeeSafe at the fork with their text unchanged; CeeSafe's own language",
+    "ADRs 0001–0030 come from the earlier compiler CeeSafe began as a port of, with their text unchanged; CeeSafe's own language",
     "decisions continue the series from ADR 0031 ([the specification](../index.md) §2).",
     "",
     ...decisions.map((page) => `- [${titleOf(textOf(page), page)}](${posix.basename(page)})`),
@@ -159,7 +159,7 @@ const summary = [
   "",
   "> CeeSafe is a memory-safe systems programming language with C#- and TypeScript-style syntax, compiled ahead of",
   "> time to portable C11. Ownership and borrowing are checked at compile time; there is no garbage collector. Its",
-  "> compiler, ceesafec, is written in CeeSafe. It forked from Nova 0.6.0.",
+  "> compiler, ceesafec, is written in CeeSafe.",
   "",
   "Agents writing CeeSafe: read the agent guide first, and use `ceesafec mcp` (an MCP server with a checker, fixes, a",
   "sandboxed interpreter and this documentation) or `ceesafec check --diagnostics-format=json` and `ceesafec fix`.",

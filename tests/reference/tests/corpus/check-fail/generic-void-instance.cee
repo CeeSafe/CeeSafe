@@ -1,6 +1,6 @@
 // M15 S1 (#2): a generic body that binds and rebuilds `Ok(v)` checks for every type argument but `void`, whose
 // `Result<void, E>.Ok` has no payload. The use with `void` is N0222 at the call (type-system §20.4); it used to crash
-// novac ("cannot lower HirError").
+// The reference compiler ("cannot lower HirError").
 fn same<T>(r: Result<T, u8>) -> Result<T, u8> => match (r) {
     Ok(v) => Ok(v),
     Err(e) => Err(e),

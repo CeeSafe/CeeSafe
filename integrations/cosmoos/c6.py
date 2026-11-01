@@ -73,11 +73,11 @@ def main():
 
 
 def check_component(component, cosmo, root, args, checks, components=None, milestone="c6", diff_dir=C6_DIR,
-                    original_file=None, in_tree_nova=()):
+                    original_file=None, in_tree_runtime=()):
     """
     One component's checks; C9 (c9.py) passes its own component table, milestone name and directory. Once CosmoOS
     builds the CeeSafe port itself (C9b), the tree's file is generated: `original_file` is then the C original (from
-    git history) and `in_tree_nova` the tree's CeeSafe runtime files, which neither comparison build takes from the tree.
+    git history) and `in_tree_runtime` the tree's CeeSafe runtime files, which neither comparison build takes from the tree.
     """
     # An optional seventh entry: flags CosmoOS's rule for the host test adds to HOST_CFLAGS.
     package, original_path, host_var, fuzz_var, symbols, diff_source, *rest = (components or COMPONENTS)[component]
@@ -93,11 +93,11 @@ def check_component(component, cosmo, root, args, checks, components=None, miles
     fuzz_srcs = [root / s for s in shlex.split(cosmo.var(fuzz_var))]
     original = root / original_path
     c_source = Path(original_file) if original_file else original
-    in_tree = {root / path for path in in_tree_nova}
+    in_tree = {root / path for path in in_tree_runtime}
 
-    if package.endswith(".nova"):
-        # A port in CosmoOS's tree (C9b) is Nova source, and ceesafec reads only .cee files (Decision 0005): it compiles
-        # a copy, which is the same language at the fork. The copy keeps the file's name, which panics report.
+    if package.endswith(".cee"):
+        # A port in CosmoOS's tree (C9b) is CeeSafe source, and ceesafec reads only .cee files (Decision 0005): it compiles
+        # a .cee copy. The copy keeps the file's name, which panics report.
         copy = work / "source" / (Path(package).stem + ".cee")
         copy.parent.mkdir(parents=True, exist_ok=True)
         copy.write_bytes(Path(package).read_bytes())

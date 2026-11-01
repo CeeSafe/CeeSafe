@@ -1,5 +1,5 @@
 {
   "mcpServers": {
-    "nova": { "command": "novac", "args": ["mcp"] }
+    "ceesafe": { "command": "out/ceesafec", "args": ["mcp"] }
   }
 }

@@ -1,9 +1,8 @@
 # ADR 0012 — M11 G8: function values and scoped closures
 
-> **Inherited from Nova.** This is Nova's ADR 0012, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0012 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-25, taking every recommendation in §5; OD-9a and OD-9b record the
   deferred options). The wording is the agent's; the owner may revise it. Not yet implemented: the decisions are
@@ -14,9 +13,9 @@
 
 ## 1. Context
 
-- **No Nova function values today.** A callee must be a package function or a built-in (`type-system.md` §8). The
+- **No CeeSafe function values today.** A callee must be a package function or a built-in (`type-system.md` §8). The
   only function-typed values are C function pointers, `extern "C" fn(…) -> R` (§29.5). Calls through them are
-  unsafe and limited to FFI-safe types. `@callback` gives a Nova function a C address, with the same limits (§34.1).
+  unsafe and limited to FFI-safe types. `@callback` gives a CeeSafe function a C address, with the same limits (§34.1).
   Probing `fn` in an argument position gives `expected ')', found ':'` (N0100) (`milestone-11.md`, G8).
 - **No dynamic dispatch.** Interfaces are bounds, not types (§21; `dyn` is OD-10). Generics are monomorphised and
   "checked once, generically" (§20).
@@ -63,7 +62,7 @@ and A does not block them.
    `borrow(r) fn(…) -> R` names the region.
 3. **Literals.** TypeScript-style arrow functions:
 
-   ```nova
+   ```ceesafe
    (x: i32, y: i32) => x + y
    (x) => x > limit
    (item) => { total += item; }
@@ -101,14 +100,14 @@ and A does not block them.
    loans need no new analysis, only the closure value's loan set. The interpreter executes closure bodies as NIR
    functions with an environment argument.
 9. **Library.** With closures in place, these may follow in a separate increment, each spec-first:
-   - `Slice.sortBy(cmp: borrow fn(borrow T, borrow T) -> i32)`, implemented in Nova over the slice;
+   - `Slice.sortBy(cmp: borrow fn(borrow T, borrow T) -> i32)`, implemented in the reference over the slice;
    - `forEach`, `any` and `all` on slices and vectors;
    - `Vector.retain(keep: borrow mut fn(borrow T) -> bool)`.
 
 ## 4. Consequences
 
 - Callbacks, comparators and small visitors are written directly, with checked captures, and without `unsafe` or
-  `@callback` plumbing. The C-callback pattern (`fn` plus `void *`) also gets a safe Nova form: a later binding may
+  `@callback` plumbing. The C-callback pattern (`fn` plus `void *`) also gets a safe the reference form: a later binding may
   pass a closure's `code` and `env` to C APIs that take exactly that pair (to be designed with the kernel bindings).
 - A closure cannot be returned to a caller unless its captures come from the caller (named regions), nor stored past
   its captures, nor sent to another thread. Those need owning captures (B or C).
@@ -122,10 +121,10 @@ and A does not block them.
 
 1. **Approach A**, scoped closures with one type per signature, now? Recommended: yes.
 2. **Literal syntax:** TypeScript/C# arrows `(x) => x + 1`, or a keyword form `fn(x) => x + 1`? Recommended: arrows,
-   matching the language's TypeScript/C# style. `=>` already marks expression bodies in Nova (`fn f() => e`) and in
+   matching the language's TypeScript/C# style. `=>` already marks expression bodies in the reference (`fn f() => e`) and in
    match arms.
 3. **Capture mode inference:** shared or mutable per variable, inferred from the body, as Swift and Rust do? Or
-   explicit capture lists (`[mut total](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/decisions/x) => …`, C++-style)? Recommended: inferred. The borrow checker reports any
+   explicit capture lists (`mut total => …`, C++-style)? Recommended: inferred. The borrow checker reports any
    conflict at the use that causes it, and both kinds of closure type are visible in signatures.
 4. **Effects on function types** (§3.7) in G8, or calls through closures always assumed to `sleep` and `alloc` until
    later? Recommended: in G8. Without it, kernel code in atomic contexts cannot call closures at all.

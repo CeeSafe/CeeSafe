@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The reference's FreestandingTests (cosmoos/profiles.md §4.4), run against any compiler.
+"""The freestanding profile's checks (spec/profiles.md §4.4), run against a ceesafec.
 
 For each freestanding corpus program:
-- host: `build --profile freestanding --emit obj`; its undefined symbols are only the allowlist (nova_panic, memcpy,
+- host: `build --profile freestanding --emit obj`; its undefined symbols are only the allowlist (ceesafe_panic, memcpy,
   memmove, memset, memcmp) and its own extern "C" functions; linked with the program's C harness it runs with the
   expected output, status and panic;
 - each CosmoOS triple (x86_64-unknown-none-elf, aarch64-unknown-none-elf), cross-compiled with CosmoOS's flags: the
@@ -22,9 +22,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from run_corpus import expectations, read  # noqa: E402
-from names import dialect  # noqa: E402
 
-ALLOWLIST = {"nova_panic", "memcpy", "memmove", "memset", "memcmp"}
+ALLOWLIST = {"ceesafe_panic", "memcpy", "memmove", "memset", "memcmp"}
 # The async executor's environment (ADR 0039; profiles.md §4.2), which a freestanding program using async needs.
 ENVIRONMENT = {"ceesafe_env_now_ms", "ceesafe_env_idle", "ceesafe_env_wake", "ceesafe_env_slot"}
 # Darwin's LLVM lowers a zeroing memset to bzero whatever the flags; the CosmoOS triples keep memset.
@@ -72,15 +71,15 @@ def sections(objdump, obj):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
-    parser.add_argument("--corpus", default=os.path.expanduser("~/Nova/tests/corpus"))
+    parser.add_argument("--corpus", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests",
+                                                         "reference", "tests", "corpus"))
     parser.add_argument("--nm", default=shutil.which("llvm-nm") or "nm")
     parser.add_argument("--objdump", default=shutil.which("llvm-objdump") or "objdump")
     parser.add_argument("--lld", default=shutil.which("ld.lld"))
     args = parser.parse_args()
     compiler = os.path.abspath(os.path.expanduser(args.compiler))
-    d = dialect(compiler)
     directory = os.path.join(args.corpus, "freestanding")
-    files = sorted(f for f in os.listdir(directory) if f.endswith((".nova", ".cee")))
+    files = sorted(f for f in os.listdir(directory) if f.endswith(".cee"))
     if shutil.which("clang") is None:
         print("freestanding_check: no clang here (the targets are clang's): not run")
         return 2
@@ -91,7 +90,7 @@ def main():
     for name in files:
         relative = "freestanding/" + name
         text = read(os.path.join(directory, name))
-        allowed = {d.c(n) for n in ALLOWLIST} | ENVIRONMENT | externs_of(text)
+        allowed = ALLOWLIST | ENVIRONMENT | externs_of(text)
         with tempfile.TemporaryDirectory() as work:
             obj = os.path.join(work, "package.o")
             built = run([compiler, "build", "--profile", "freestanding", "--emit", "obj", "--cc", "clang",
@@ -114,7 +113,7 @@ def main():
             stdout, status, panic, panic_line = expectations(text)
             if ran.stdout != stdout or ran.returncode != status:
                 problems.append(f"{relative}: stdout {ran.stdout!r} status {ran.returncode}, expected {stdout!r} {status}")
-            if panic is not None and not ran.stderr.startswith(f"{d.panic}{panic} at {relative}:{panic_line}:"):
+            if panic is not None and not ran.stderr.startswith(f"ceesafe panic: {panic} at {relative}:{panic_line}:"):
                 problems.append(f"{relative}: panic {ran.stderr.strip()!r}")
             for triple in TRIPLES:
                 flags = [f"--target={triple}"] + cross

@@ -1,6 +1,6 @@
 // profile: freestanding
 // A user-defined allocator in a freestanding package (type-system.md §30.3): the environment (allocator.c) owns the
-// memory; Nova boxes it. Only Box.createIn with a user allocator is allowed here: Box.create needs SystemHeap.
+// memory; the reference boxes it. Only Box.createIn with a user allocator is allowed here: Box.create needs SystemHeap.
 
 extern "C" {
     fn env_alloc(size: usize, align: usize) -> *mut void;

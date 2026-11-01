@@ -18,7 +18,7 @@ c = ["src/shim.c"]           # C files built with an executable
 
 [dependencies]
 geometry = { path = "../geometry" }
-lz4 = { git = "https://example.org/lz4-nova.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
+lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
 ```
 
 Only `name` is required. A dependency's key must be the name its own manifest gives it, and a dependency must be a

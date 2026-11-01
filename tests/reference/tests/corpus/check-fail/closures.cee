@@ -1,5 +1,5 @@
 // Closures (type-system.md §36.2, M11 G8b): the kind a literal must have, types it cannot infer, and what its body
-// cannot do. Captures and loans: closure-loans.nova.
+// cannot do. Captures and loans: closure-loans.cee.
 fn run(f: borrow fn(i32) -> bool) -> bool => f(1);
 fn runMut(f: borrow mut fn(i32)) { f(1); }
 fn plain(f: fn(i32) -> i32) -> i32 => f(1);

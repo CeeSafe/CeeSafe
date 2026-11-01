@@ -1,6 +1,6 @@
 // I/O and the number methods (the reference's CheckResourceFunction, CheckResourceMethod, `e.message()`, the I/O cases
 // of CheckBuiltinMemberCall, IntegerMethod, CheckIntegerMethod, FloatMethod and CheckFloatMethod): P3 S3e (§6, §26,
-// §35). `File.kind` and `Process.capture` call lib/std's HostServices (src/check/library.nova).
+// §35). `File.kind` and `Process.capture` call lib/std's HostServices (src/check/library.cee).
 
 fn builtinFile() -> u32 => 18;
 fn builtinTcpListener() -> u32 => 19;

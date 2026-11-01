@@ -1,9 +1,9 @@
 # Kernel code
 
 CeeSafe is designed to run inside an operating system kernel as well as in user programs. Its kernel support was
-developed, before the fork, by Nova against [CosmoOS](https://github.com/vkuttyp/CosmoOS), a kernel written in C,
-where the language runs as kernel components and as loadable modules on x86-64 and AArch64 (CosmoOS builds those with
-novac). Nothing in it is specific to CosmoOS: the same mechanisms fit any C kernel or firmware.
+developed against [CosmoOS](https://github.com/vkuttyp/CosmoOS), a kernel written in C, where the language runs as
+kernel components and as loadable modules on x86-64 and AArch64 (CosmoOS builds those with the ceesafec it pins).
+Nothing in it is specific to CosmoOS: the same mechanisms fit any C kernel or firmware.
 
 ## The freestanding profile
 
@@ -130,7 +130,7 @@ The CosmoOS integration (the repository's `integrations/cosmoos/`) builds the re
 - a loadable module whose state, `init` and teardown are CeeSafe.
 
 How these were built and tested inside CosmoOS, including a stress test under lockdep, is in the
-[CosmoOS reports](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/cosmoos/c7-report.md) and the [profiles](../spec/profiles.md).
+CosmoOS reports and the [profiles](../spec/profiles.md).
 
 ## Async tasks in kernel code
 

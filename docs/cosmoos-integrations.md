@@ -1,48 +1,48 @@
 # The CosmoOS integrations in CeeSafe
 
-`integrations/cosmoos/` holds Nova's CosmoOS checks (C1–C9, K3) at Nova `v0.6.0`, forked by
-`tools/fork_integrations.py` (run once) and adapted to `ceesafec`. CosmoOS keeps its own Nova code and builds it with
-novac (Decision 0003); these checks only read its tree and hold ceesafec's C to the same build, tests and boots.
+`integrations/cosmoos/` holds the reference's CosmoOS checks (C1–C9, K3) at the reference `v0.6.0`, forked by
+`tools/fork_integrations.py` (run once) and adapted to `ceesafec`. CosmoOS keeps its own CeeSafe code and builds it with
+The reference compiler (Decision 0003); these checks only read its tree and hold ceesafec's C to the same build, tests and boots.
 
 ## What was adapted
 
 | Change | Why |
 |---|---|
 | Programs, harness C and scripts renamed by `tools/names.py`'s forward map (`.cee`, `ceesafe_panic`, `ceesafe_c5/c7/c8` modules, `CEESAFE_FAIL_ALLOC_AT`, …); the proposal patch copied as it is | they meet ceesafec's C names; the patch is a change to CosmoOS's tree |
-| The compiler is `$CEESAFEC` or `out/ceesafec`; `require_compiler()` replaces the `dotnet build` of novac | ceesafec is built beforehand |
+| The compiler is `$CEESAFEC` or `out/ceesafec`; `require_compiler()` replaces the `dotnet build` of the reference compiler | ceesafec is built beforehand |
 | `-DCEE_COSMOOS` for the userland threads runtime | the runtime's macro under CeeSafe's names |
 | The corpus, `nwc` and `kernel-library.cee` from `tests/reference/` | CeeSafe's copies |
-| C9: CosmoOS's own names restored (`kernel/block/gpt.nova`, `kernel/nova/nova_rt_core.c`, `tests/host/nova_panic.c`, `make nova`); `c6.check_component` compiles a `.cee` copy of a `.nova` port | CosmoOS's files are Nova's; ceesafec reads only `.cee` (Decision 0005) |
-| C2: a panic is found anywhere in a serial line | standard error shares the console line with a partial line of output (`run-pass/host-services`, which joined Nova's corpus after C2's last run) |
+| C9: CosmoOS's own names restored (`kernel/block/gpt.cee`, `kernel/ceesafe/ceesafe_rt_core.c`, `tests/host/ceesafe_panic.c`, `make cee`); `c6.check_component` compiles a `.cee` copy of a `.cee` port | CosmoOS's files are the reference's; ceesafec reads only `.cee` (Decision 0005) |
+| C2: a panic is found anywhere in a serial line | standard error shares the console line with a partial line of output (`run-pass/host-services`, which joined the reference's corpus after C2's last run) |
 
 ## c2cee
 
-`c2cee.py`, `c2cee_port.py` and `c2cee/` are Nova's `c2nova` tool (on Nova's main after the fork, `3ba382b`), renamed
-(`c2nova` → `c2cee` first, then `tools/names.py`'s forward map). Kept as Nova's: CosmoOS's own names (`make nova`,
-`nova-check`, `scripts/nova-gen.py`, `kernel/nova/nova_rt_core.c`, `tests/host/nova_panic.c`) and `verify`'s `--novac`,
-since a port lands in CosmoOS as Nova, built by its pinned novac. Changed: the keywords come from CeeSafe's lexer
+`c2cee.py`, `c2cee_port.py` and `c2cee/` are the reference's `c2cee` tool (on the reference's main after the fork, `3ba382b`), renamed
+(`c2cee` → `c2cee` first, then `tools/names.py`'s forward map). Kept as the reference's: CosmoOS's own names (`make cee`,
+`cee-check`, `scripts/cee-gen.py`, `kernel/ceesafe/ceesafe_rt_core.c`, `tests/host/ceesafe_panic.c`) and `verify`'s `--the reference compiler`,
+since a port lands in CosmoOS as the reference, built by its pinned the reference compiler. Changed: the keywords come from CeeSafe's lexer
 (`src/syntax/token.cee`); a draft's `BUILD.md` first checks the port with ceesafec and copies it into the tree as
-`.nova`. Documented in `spec/tooling.md` §9.
+`.cee`. Documented in `spec/tooling.md` §9.
 
-Run 2026-10-31: `selftest` passes (the fixture's drafts identical to Nova's snapshots under CeeSafe's names, the
+Run 2026-10-31: `selftest` passes (the fixture's drafts identical to the reference's snapshots under CeeSafe's names, the
 analysis equal as data; its JSON re-blessed for the key order `"ceesafe"` takes); `port` of CosmoOS's
-`kernel/scheduler/semaphore.c` and `kernel/ipc/pipe.c` gives `.cee` and floor files byte-identical to `c2nova`'s
-mapped forward, `BUILD.md` differing only as intended. `verify` ran on CosmoOS `f17a90f3` (main, #506; 17 Nova ports, novac 0.6.0 pinned) in a worktree: 14 of 14 steps pass
-(`nova-check`; `host-test` with the handles trace `0xfd5772457a0ad4a1` and the sync trace `0xc4ef20be17b35afa`;
+`kernel/scheduler/semaphore.c` and `kernel/ipc/pipe.c` gives `.cee` and floor files byte-identical to `c2cee`'s
+mapped forward, `BUILD.md` differing only as intended. `verify` ran on CosmoOS `f17a90f3` (main, #506; 17 CeeSafe ports, the reference compiler 0.6.0 pinned) in a worktree: 14 of 14 steps pass
+(`cee-check`; `host-test` with the handles trace `0xfd5772457a0ad4a1` and the sync trace `0xc4ef20be17b35afa`;
 `check-docs`; the debug and release builds and `analyze` on x86_64 and aarch64; `fuzz-build`; the debug and release
 boots on both arches, `boot-test: PASS`).
 
-`ports.py` is the CeeSafe side: at `f17a90f3`, ceesafec compiles the 16 ports nova-gen.py generates from `.cee` copies,
+`ports.py` is the CeeSafe side: at `f17a90f3`, ceesafec compiles the 16 ports cee-gen.py generates from `.cee` copies,
 and all 27 generated files (16 ports' C, 9 exports headers, the runtime's two files) equal the checked-in ones after
 mapping CeeSafe's names back, the banner's version aside; the one negative source gives exactly its errors.
 
 ## A compiler bug it found
 
-C9 compiles CosmoOS's `gpt.nova`, which has a closure whose body is an `unsafe { e }` expression. ceesafec crashed
+C9 compiles CosmoOS's `gpt.cee`, which has a closure whose body is an `unsafe { e }` expression. ceesafec crashed
 (`index out of bounds at src/check/closures.cee:175`): the walker that decides whether a closure captures
 (NamesOuterLocal) read `ExprNode.Unsafe`'s operand, an expression, as a statement. When the index existed it scanned
-the wrong statement, so a closure's capture decision could silently be wrong. Nova's corpus has no such closure.
-Fixed in `src/check/closures.cee`; `tests/check/check-pass/closure-unsafe.nova` keeps it (HIR identical to novac
+the wrong statement, so a closure's capture decision could silently be wrong. The reference's corpus has no such closure.
+Fixed in `src/check/closures.cee`; `tests/check/check-pass/closure-unsafe.cee` keeps it (HIR identical to the reference compiler
 0.6.0's; the old ceesafec aborts on it).
 
 ## Runs (2026-10-31, macOS arm64, Apple clang 21, QEMU; CosmoOS `9c0d0f84`, its tree unchanged by every run)

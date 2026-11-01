@@ -1,9 +1,8 @@
 # ADR 0002 — Milestone 0 decision set
 
-> **Inherited from Nova.** This is Nova's ADR 0002, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0002 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-22: "approve all the open decisions")
 - Scope: every proposal listed in `docs/open-decisions.md` at the end of M0/C0.
@@ -26,7 +25,7 @@ supersedes the relevant item.
 | OD-8 | v0 arena contents must have no `drop` (R2); drop lists later | `memory-model.md` §3.3 |
 | OD-9 | No closures in v0 (non-capturing `fn` pointers only); scoped closures M6+ | `language-spec.md` §6 |
 | OD-10 | Static generics only in v0; `dyn Interface` future | `language-spec.md` Ex12 |
-| OD-11 | Package manifest **`nova.toml`** (name, version, profile, path-only dependencies in v0); exact schema specified in M1 | `milestone-1.md` |
+| OD-11 | Package manifest **`ceesafe.toml`** (name, version, profile, path-only dependencies in v0); exact schema specified in M1 | `milestone-1.md` |
 | OD-12 | No growable scratch arrays in v0 | `memory-model.md` §3.4 |
 | OD-13 | `Rc<T>`/`Weak<T>` post-M6, explicit, single-threaded | `memory-model.md` §6 |
 | OD-14 | `@flat` layouts: post-M9 research only | `memory-model.md` §7 |
@@ -37,29 +36,29 @@ supersedes the relevant item.
 
 | ID | Decision | Reference |
 |---|---|---|
-| OD-15 | Nova userland runtime uses **public libc functions only** (no raw `cosmo_*` syscall wrappers) | `profiles.md` §2.2 |
+| OD-15 | The reference userland runtime uses **public libc functions only** (no raw `cosmo_*` syscall wrappers) | `profiles.md` §2.2 |
 | OD-16 | Native personality is the default; musl/Linux personality profile later, opt-in | `profiles.md` §2.3 |
 | OD-19 | In-tree route S1 uses **checked-in, deterministic generated C** with a provenance header (no .NET in CosmoOS CI) | `cosmoos/build-integration.md` §3 |
-| OD-20 | Prove C1 out of tree (S0) first, then propose a Nova unit for CosmoOS | `cosmoos/feasibility.md` |
-| OD-21 | Missing libc pieces are proposed as CosmoOS libc units; Nova works around them meanwhile | `profiles.md` §2.2 |
+| OD-20 | Prove C1 out of tree (S0) first, then propose a reference unit for CosmoOS | `cosmoos/feasibility.md` |
+| OD-21 | Missing libc pieces are proposed as CosmoOS libc units; the reference works around them meanwhile | `profiles.md` §2.2 |
 
 ## Kernel questions (KQ)
 
-Accepted where the answer is a **Nova-side policy**:
+Accepted where the answer is a **The reference-side policy**:
 
 | ID | Decision |
 |---|---|
-| KQ-1 | IRQ-context Nova code is `@noalloc` (follow the `interrupt.h` policy) |
+| KQ-1 | IRQ-context CeeSafe code is `@noalloc` (follow the `interrupt.h` policy) |
 | KQ-4 | `@nosleep` scopes may allocate via `kmalloc`; the permission lives in the kmalloc binding and is revisited if kmalloc gains `might_sleep` |
-| KQ-8 | Address typing stays Nova-side; no CosmoOS header changes requested |
+| KQ-8 | Address typing stays the reference-side; no CosmoOS header changes requested |
 
-**Not decidable from Nova alone.** Each needs a CosmoOS code change or a CosmoOS policy
-ruling made as an owner-chosen unit. Until then, Nova adopts the conservative default shown:
+**Not decidable from the reference alone.** Each needs a CosmoOS code change or a CosmoOS policy
+ruling made as an owner-chosen unit. Until then, the reference adopts the conservative default shown:
 
-| ID | Question | Nova default until resolved |
+| ID | Question | The reference default until resolved |
 |---|---|---|
 | KQ-2 | Export `preempt_enable` / out-of-line quiesce read lock for modules | Modules may not use `Quiesce.read()` |
 | KQ-3 | `call_quiesce` barrier at module unload | Modules may not `deferDrop` into module text |
-| KQ-5 | Built-in Nova code calling non-exported internals | Only exported symbols, even for built-in code, until ruled |
+| KQ-5 | Built-in CeeSafe code calling non-exported internals | Only exported symbols, even for built-in code, until ruled |
 | KQ-6 | `kobject_put` from IRQ context for non-blocking releases | Forbidden |
-| KQ-7 | FP-register check for `.ko` files | Nova's C4 acceptance runs the disassembly check itself |
+| KQ-7 | FP-register check for `.ko` files | The reference's C4 acceptance runs the disassembly check itself |

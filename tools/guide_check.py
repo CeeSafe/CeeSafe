@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every example of the guide does what its page says (spec/testing.md §4; Nova's SiteTests, Decision 0006).
+"""Every example of the guide does what its page says (spec/testing.md §4, Decision 0006).
 
 A `ceesafe` code block in guide/ is a whole file, compiled as `main.cee`. It must type-check; with a `main`, it is also run
 in the interpreter (no arguments, empty standard input), and a `text` block right after it is its exact output. An HTML

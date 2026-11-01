@@ -1,5 +1,5 @@
 // Fixed-size bitsets for dataflow (the safety passes' loan and move-path sets). Promoted from
-// probes/run-pass/dataflow.nova.
+// probes/run-pass/dataflow.cee.
 
 struct Bits {
     words: Vector<u64>;
@@ -22,7 +22,7 @@ struct Bits {
         return Ok(Bits { words: words, size: this.size });
     }
 
-    // A bit is checked only against the words (an index panic past the last one): Nova has no explicit panic, so a bit
+    // A bit is checked only against the words (an index panic past the last one): the reference has no explicit panic, so a bit
     // between `size` and the next multiple of 64 is not caught. Callers index by IDs below `size`.
     fn set(borrow mut this, bit: usize) {
         this.words[bit / 64] |= 1u64 << truncate<u32>(bit % 64);

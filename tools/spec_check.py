@@ -2,12 +2,13 @@
 """CeeSafe's specification against the compiler that embeds it (spec/testing.md §4, Decision 0006).
 
 - explain: every diagnostic code in the catalog (src/diagnostics/catalog.cee) has an entry `ceesafec explain` finds
-  (Nova's FixTests rule), and the embedded documents are the tree's (src/library/documents.cee is up to date);
+  , and the embedded documents are the tree's (src/library/documents.cee is up to date);
 - links: every relative link in spec/, guide/ and templates/ names a file that exists;
 - api: spec/api/core.md is what `ceesafec doc lib/core --title "lib/core"` writes for lib/core, the source
   tools/gen_library.py embeds (Decision 0008);
-- names: no Nova C name, `.nova` file, `nova.toml` or `NOVA_HOME` outside URLs, the inherited ADRs and the places that
-  name Nova's on purpose (ALLOWED).
+- names: no tracked file names the retired predecessor language or its compiler, in any case or as a C prefix, but
+  COPYING.RUNTIME, whose notice says where CeeSafe came from (Decision 0010). The word is spelled in two pieces here
+  so that this file passes its own check.
 
 usage: python3 tools/spec_check.py --ceesafec out/ceesafec
 """
@@ -22,17 +23,13 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
 
-NOVA_NAMES = re.compile(r"(?<![A-Za-z0-9])nv(?=[A-Z_])|nova_|(?<![A-Za-z0-9])NV_|NOVA_|nova/rt\.h|\.nova\b|nova\.toml|"
-                        r"nova\.lock")
-URL = re.compile(r"https?://[^\s)>`\"']+")
-
-# (file, text on the line) where a Nova name is meant: the documents that say how CeeSafe relates to Nova.
-ALLOWED = (("spec/c-backend.md", "Nova's runtime and generated names"),
-           ("spec/c-backend.md", "In Nova before M7d, top-level functions were `nv_<name>`"),
-           ("spec/c-backend.md", "the runtime's `nv_add_i32`"),
-           ("guide/installation.md", "~/.nova/0.6.0/bin/novac"),
-           ("spec/tooling.md", "`.nova` file, the same language at the fork"),  # §9: CosmoOS keeps its ports as Nova
-           ("spec/tooling.md", "(default `~/.nova/bin/novac`"))
+# The predecessor's name, alone or starting a word, in any case (its compiler's, its C prefixes, its file extension,
+# names built on it), after a C escape ("\\n") too; capitalised or in capitals, anywhere (camelCase). Not inside a
+# lower-case word ("innovation").
+_WORD = "no" + "va"
+RETIRED = re.compile(r"(?i:(?:(?<![A-Za-z])|(?<=\\[nrt]))" + _WORD + r")|" + _WORD.capitalize() + "|" + _WORD.upper())
+# The one file that keeps the name: the licence notice (Decision 0010).
+KEEPS_NAME = ("COPYING.RUNTIME",)
 
 
 def documents():
@@ -89,17 +86,28 @@ def check_api(cee, problems):
 
 
 def check_names(problems):
+    """Every tracked file's path and text but KEEPS_NAME's."""
     count = 0
-    for path in documents():
-        relative = os.path.relpath(path, ROOT).replace(os.sep, "/")
-        if relative.startswith("spec/decisions/"):
-            continue  # Nova's records, inherited unchanged (spec/README.md §2)
-        with open(path, encoding="utf-8") as f:
-            for number, line in enumerate(f, 1):
-                bare = URL.sub("", line)
-                if NOVA_NAMES.search(bare) and not any(relative == p and text in line for p, text in ALLOWED):
-                    count += 1
-                    problems.append(f"names: {relative}:{number}: {line.strip()[:120]}")
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "-z"], capture_output=True, check=True).stdout
+    for relative in tracked.decode("utf-8").split("\0"):
+        if not relative or relative in KEEPS_NAME:
+            continue
+        if RETIRED.search(relative):
+            count += 1
+            problems.append(f"names: {relative}: the path")
+        path = os.path.join(ROOT, relative)
+        if not os.path.isfile(path):
+            continue
+        with open(path, "rb") as f:
+            data = f.read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue  # binary: an image
+        for number, line in enumerate(text.splitlines(), 1):
+            if RETIRED.search(line):
+                count += 1
+                problems.append(f"names: {relative}:{number}: {line.strip()[:120]}")
     return count
 
 

@@ -1,0 +1,10 @@
+// Regression probe for the reference #4 (fixed in the reference compiler 0.4.0, M15 S4): `truncate`'s argument may read the vector, as for
+// `push` (two-phase, type-system §23.1); src/support/bigint.cee relies on it.
+// expect-stdout: 0
+
+fn main() {
+    var v = Vector<u32>.create();
+    v.push(1)!;
+    v.truncate(v.length - 1);
+    Console.writeLine(v.length);
+}

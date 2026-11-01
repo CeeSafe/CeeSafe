@@ -1,6 +1,6 @@
 // profile: freestanding
 // language-spec Ex18 as a freestanding object: a UART driver over memory-mapped registers (type-system.md §29).
-// uart.c is the environment: its "registers" are ordinary memory, and it supplies nova_panic.
+// uart.c is the environment: its "registers" are ordinary memory, and it supplies ceesafe_panic.
 
 @repr(C)
 struct UartRegs { data: Volatile<u32>; status: Volatile<u32>; }

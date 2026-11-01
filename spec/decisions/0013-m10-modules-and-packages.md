@@ -1,9 +1,8 @@
 # ADR 0013 — M10 T5–T6: modules and packages
 
-> **Inherited from Nova.** This is Nova's ADR 0013, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0013 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-26). The owner took every recommendation of §4: package-level names
   (option A) with `namespace` retired, `src/` as the default sources, git `rev`, `tag` or `branch` pinned in the lock,
@@ -11,7 +10,7 @@
   Not yet implemented: the decisions go into `language-spec.md` §5, `type-system.md` §1 (scopes), `grammar.md`,
   `c-backend.md` §2.1 and `tooling.md` (a new §4) before any code.
 - Scope: M10 T5 (modules) and T6 (packages and building), `milestone-10.md`. It settles OD-11 (`open-decisions.md`:
-  "`nova.toml` with name, version, profile, dependencies (path-only in v0)"). The owner has already chosen git
+  "`ceesafe.toml` with name, version, profile, dependencies (path-only in v0)"). The owner has already chosen git
   dependencies as well as path ones, with a lock file (2026-10-26).
 
 ## 1. Context
@@ -24,20 +23,20 @@
 - **`lib/core`** is part of every package: its items are in scope unqualified, with no import (§29.2).
 - **The compiler is whole-program.** Generics are monomorphised (§20), and the ownership analyses, placement and the
   optimisations (`optimisations.md`) run over the whole NIR. The C backend writes one `main.c` per program, with
-  names such as `nvF_area` and `nvT_Point` (`c-backend.md` §2.1), unique only within one package.
+  names such as `ceeF_area` and `ceeT_Point` (`c-backend.md` §2.1), unique only within one package.
 - **Programs that would use packages:** CosmoOS integration code that today shares bindings by copying files
-  (`integrations/cosmoos/c5/kernel.nova` into c7 and c8), the benchmark programs, `nwc`, and code outside this
-  repository (ADR 0008: Nova also serves Linux and other C codebases, not only CosmoOS).
-- **The kernel profile** needs nothing to run at build time that is not Nova source or C, and builds must be
+  (`integrations/cosmoos/c5/kernel.cee` into c7 and c8), the benchmark programs, `nwc`, and code outside this
+  repository (ADR 0008: the reference also serves Linux and other C codebases, not only CosmoOS).
+- **The kernel profile** needs nothing to run at build time that is not CeeSafe source or C, and builds must be
   reproducible.
 
 ## 2. Decisions proposed
 
 ### D1. A package is a directory with a manifest
 
-`nova.toml` at the package's root; its sources are every `.nova` file under the directory `src/` (or the
+`ceesafe.toml` at the package's root; its sources are every `.cee` file under the directory `src/` (or the
 directories the manifest's `sources` lists), in ordinal path order. The manifest is a small subset of TOML: tables,
-strings, booleans, arrays of strings and inline tables. `novac` parses it itself, with no new dependency.
+strings, booleans, arrays of strings and inline tables. `ceesafec` parses it itself, with no new dependency.
 
 ```toml
 [package]
@@ -50,8 +49,8 @@ c = ["src/shim.c"]           # C sources built with it (type-system.md §28.6)
 
 [dependencies]
 shapes = { path = "../shapes" }
-lz4 = { git = "https://example.org/lz4-nova.git", rev = "3f2a9c0d…" }    # a full commit id
-util = { git = "https://example.org/util.git", tag = "v1.2.0" }          # resolved to a commit in nova.lock
+lz4 = { git = "https://example.org/lz4-cee.git", rev = "3f2a9c0d…" }    # a full commit id
+util = { git = "https://example.org/util.git", tag = "v1.2.0" }          # resolved to a commit in ceesafe.lock
 ```
 
 ### D2. Names: one scope per package, qualified across packages
@@ -76,27 +75,27 @@ Recommended (option **A** in §3):
 
 ### D4. Building stays whole-program
 
-`novac build` (no file arguments, in a package directory) checks and compiles the package with all its
+`ceesafec build` (no file arguments, in a package directory) checks and compiles the package with all its
 dependencies, as one program, as today. Generated C names of items from a package other than the one being built
-gain the package's name (`nvF_geometry_area`, `nvT_geometry_Point`), so two packages may declare the same name. No
+gain the package's name (`ceeF_geometry_area`, `ceeT_geometry_Point`), so two packages may declare the same name. No
 separate compilation and no cache in this ADR: they would need generic code checked once per package and a stable
 interface format, and would be decided after measuring build times (the M10 plan's "cache of generated C per
 package" is deferred until then).
 
 ### D5. Sources: path and git dependencies
 
-- `path` is relative to the manifest. `git` takes `rev` (a full commit id), or `tag` or `branch`, which `novac fetch`
+- `path` is relative to the manifest. `git` takes `rev` (a full commit id), or `tag` or `branch`, which `ceesafec fetch`
   resolves to a commit and records.
-- Git sources are fetched with the `git` executable into a cache (`$NOVA_HOME/git`, default `~/.nova/git`), one
+- Git sources are fetched with the `git` executable into a cache (`$CEESAFE_HOME/git`, default `the reference's install directory/git`), one
   checkout per commit.
 - **Nothing runs at fetch or build time** but `git` and the C compiler: a package has no build scripts.
 
 ### D6. The lock file
 
-- `nova.lock`, written by `novac fetch` and committed with the package. Each dependency, transitively: its name,
+- `ceesafe.lock`, written by `ceesafec fetch` and committed with the package. Each dependency, transitively: its name,
   source, commit for git, and a SHA-256 of its manifest and sources.
-- `novac build` uses the lock and fails if a package's sources no longer match their hash, or if `nova.toml` names a
-  dependency the lock lacks (run `novac fetch`). `--offline` never runs `git`.
+- `ceesafec build` uses the lock and fails if a package's sources no longer match their hash, or if `ceesafe.toml` names a
+  dependency the lock lacks (run `ceesafec fetch`). `--offline` never runs `git`.
 - **No version solving.** Two packages that depend on a package of the same name must agree on its source and commit;
   otherwise it is an error that names both. `version` is recorded but not compared. *Amended by
   [ADR 0017](0017-m13-package-registry.md) (2026-10-28): registry dependencies are version requirements solved
@@ -105,8 +104,8 @@ package" is deferred until then).
 ### D7. Tools follow the package
 
 `check`, `build`, `run`, `doc` and `fmt` without file arguments act on the package of the current directory. The
-language server checks a document with its package when there is one (`tooling.md` §2.1). `novac new <name>`
-writes a manifest and `src/main.nova`.
+language server checks a document with its package when there is one (`tooling.md` §2.1). `ceesafec new <name>`
+writes a manifest and `src/main.cee`.
 
 ## 3. Options for names (D2)
 
@@ -124,10 +123,10 @@ adding namespaces later.
 ## 4. Questions for the owner
 
 1. Names: A (recommended), B or C (§3)? And under A, retire `namespace` (recommended) or keep it as a comment?
-2. Sources: `src/` by default (recommended), or every `.nova` file under the package directory?
+2. Sources: `src/` by default (recommended), or every `.cee` file under the package directory?
 3. Git references: `rev`, `tag` and `branch`, each resolved to a commit in the lock (recommended), or `rev` only?
 4. C names: prefix items of dependencies with the package name (recommended, D4)?
-5. `novac new`: wanted now, or later?
+5. `ceesafec new`: wanted now, or later?
 
 ## 5. Consequences
 

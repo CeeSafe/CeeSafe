@@ -151,7 +151,7 @@ fn emitFunction(
             continue;
         }
         let t = function.locals[k as usize].typ;
-        // Zero-initialised: Nova's definite assignment already forbids reading it first (§5).
+        // Zero-initialised: the reference's definite assignment already forbids reading it first (§5).
         let zero = localZero(c, t);
         var text = copyBytes("CEE_UNUSED ".bytes())?;
         appendCTypeName(c, mut text, t)?;
@@ -563,7 +563,7 @@ fn emitConstruction(
     e.emit()?;
     match (n.rvalues[r as usize]) {
         NirRvalue.Aggregate(fields) => {
-            // A C array member cannot be initialised from Nova's array struct: it is assigned as one (ADR 0029).
+            // A C array member cannot be initialised from the reference's array struct: it is assigned as one (ADR 0029).
             let t = n.rvalueTypes[r as usize];
             let declared = borrow c.types.structs[c.types.info(t).structDef as usize].fields;
             for (k in 0..fields.count) {
@@ -855,7 +855,7 @@ fn emitStatement(
             } else {
                 value = rvalue;
             }
-            // `x = x;` is a no-op in Nova; in C it trips -Wself-assign (c-backend.md §5).
+            // `x = x;` is a no-op in the reference; in C it trips -Wself-assign (c-backend.md §5).
             if (!sameBytes(value.view(), place.view())) {
                 e.t("    ")?;
                 e.b(place.view())?;
@@ -1442,7 +1442,7 @@ fn appendArithmeticCall(
     return out.push(')');
 }
 
-/// A location a checked helper may panic with (Site, c-backend.md §6): `&nvL_<n>`, collected by the trial emission.
+/// A location a checked helper may panic with (Site, c-backend.md §6): `&ceeL_<n>`, collected by the trial emission.
 fn appendSite(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -1529,7 +1529,7 @@ fn appendBuiltinCall(
     return out.push(')');
 }
 
-/// `nvX_<mangled pointee of argument 0>(args)`.
+/// `ceeX_<mangled pointee of argument 0>(args)`.
 fn appendHelperCall(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -1546,7 +1546,7 @@ fn appendHelperCall(
     return appendBuiltinCall(e, c, n, sources, f, out, name.view(), arguments);
 }
 
-/// An I/O helper applied to a runtime call: `nvIOR_…(call)`.
+/// An I/O helper applied to a runtime call: `ceeIOR_…(call)`.
 fn appendIoCall(
     c: borrow Checker,
     out: borrow mut Vector<u8>,
@@ -2486,7 +2486,7 @@ fn appendOperand(
     }
 }
 
-/// A field of an imported C type whose C type differs from Nova's C for it (IsBoundaryField, §31.3).
+/// A field of an imported C type whose C type differs from the reference's C for it (IsBoundaryField, §31.3).
 fn isBoundaryField(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
     let p = n.places[place as usize];
     if (p.projections.count == 0) {
@@ -2557,7 +2557,7 @@ fn appendPlaceParts(
                 if (c.types.fields[field as usize].isRegionPart) {
                     next = text; // the frame itself (§19.5)
                 } else if (isCArrayMember(c, t, field)) {
-                    // A C array member seen as Nova's array struct (§31.3), through uintptr_t.
+                    // A C array member seen as the reference's array struct (§31.3), through uintptr_t.
                     appendText(mut next, "(*(")?;
                     appendCTypeName(c, mut next, c.types.fields[field as usize].typ)?;
                     appendText(mut next, " *)(uintptr_t)&")?;

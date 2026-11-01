@@ -1,18 +1,18 @@
-# CeeSafe roadmap: port the Nova compiler to Nova, as CeeSafe
+# CeeSafe roadmap: port the reference compiler to the reference, as CeeSafe
 
-Date: 2026-10-30 (revises the 2026-10-29 draft). Status: **P0–P7 complete (CeeSafe names since `8941c10`; P7 production C 2026-10-30; stage 0 novac 0.6.0 via the `3d6ac40` anchor); P8 complete (2026-10-31; the fork point taken at S7, `docs/fork-point.md`)**.
+Date: 2026-10-30 (revises the 2026-10-29 draft). Status: **P0–P7 complete (CeeSafe names since `8941c10`; P7 production C 2026-10-30; stage 0 the reference compiler 0.6.0 via the `3d6ac40` anchor); P8 complete (2026-10-31; the fork point taken at S7, `docs/fork-point.md`)**.
 The probes, `src/support/`, the limits, the fault sweep and the skeleton exist (`docs/p1-probes.md`). No compiler code has been ported.
-Repository: `~/dev/CeeSafe`. Reference: `vkuttyp/Nova` (C#/.NET 10), pinned in `bootstrap/reference.md`.
+Repository: `~/dev/CeeSafe`. Reference: the C#/.NET 10 compiler CeeSafe was ported from (retired; Decision 0010).
 
 **Identity** (decision 0001):
 - The public language is **CeeSafe**. The compiler is `ceesafec`.
 - Sources use `.cee`. Packages use `ceesafe.toml` and `ceesafe.lock`, and `$CEESAFE_HOME`.
-- Nova remains a living language. It is CeeSafe's stage-0 compiler and its behaviour oracle.
-- **Until `ceesafec` compiles itself, CeeSafe's own sources are `.nova` files with a `nova.toml`**, because novac reads
+- The reference remains a living language. It is CeeSafe's stage-0 compiler and its behaviour oracle.
+- **Until `ceesafec` compiles itself, CeeSafe's own sources are `.cee` files with a `ceesafe.toml`**, because the reference compiler reads
   only those. P6R renames them in one commit.
 
-**The work resolves Nova's OD-33.** That is "a Nova compiler written in Nova", recorded by Nova ADR 0023 as option C.
-Nova ADR 0001 chose C# and expected self-hosting only "for a long time".
+**The work resolves the reference's OD-33.** That is "a compiler for the language written in the language", recorded by ADR 0023 as option C.
+The reference ADR 0001 chose C# and expected self-hosting only "for a long time".
 
 ## 1. Scope and completion criteria
 
@@ -25,7 +25,7 @@ There are three deliverables:
    - ownership, borrowing, effects and destruction;
    - every optimisation;
    - portable C emission.
-2. **Verified self-hosting.** novac builds `ceesafec` (generation 1). Generation 1 builds generation 2, and generation 2
+2. **Verified self-hosting.** the reference compiler builds `ceesafec` (generation 1). Generation 1 builds generation 2, and generation 2
    builds generation 3. Generations 2 and 3 must emit byte-identical C and pass the compiler tests.
 3. **Product parity and handover.** The complete CLI, interpreter, package manager, formatter and doc generator, the
    LSP and MCP servers, fixes and JSON diagnostics, debugger scripts, runtime bundling and release/install all work
@@ -34,15 +34,15 @@ There are three deliverables:
 Self-compilation alone does not complete the port. Accepting the compiler's own sources says nothing about whether the
 borrow checker is correct. No reduced language subset will be presented as a replacement.
 
-The C runtime (`runtime/`, 2,898 lines) and the Nova libraries (`lib/core`, `lib/std`, `lib/kernel`) are carried over
-with their provenance and licence (GPLv2). The compiler's algorithms stay in Nova. Invoking the C# compiler to parse,
+The C runtime (`runtime/`, 2,898 lines) and the CeeSafe libraries (`lib/core`, `lib/std`, `lib/kernel`) are carried over
+with their provenance and licence (GPLv2). The compiler's algorithms stay in the reference. Invoking the C# compiler to parse,
 check, emit or run tooling does not count as a port. The C compiler, linker, debugger and git remain external tools,
 used by the commands that need them.
 
 ## 2. Reference audit (2026-10-30)
 
-The audit read Nova `main` at `07d561f` (0.4.0-dev, clean tree) and the released novac 0.3.1 (`v0.3.1` = `4481e12`).
-Paths below are relative to `~/Nova`.
+The audit read the reference `main` at `07d561f` (0.4.0-dev, clean tree) and the released the reference compiler 0.3.1 (`v0.3.1` = `4481e12`).
+Paths below are relative to `the reference checkout`.
 
 ### 2.1 Size
 
@@ -50,10 +50,10 @@ Physical lines of `.cs`, excluding `bin/` and `obj/`. These measure scope, not e
 
 | Component | Files | Lines | Notes |
 |---|---:|---:|---|
-| `src/Nova.Compiler` | 58 | 36,559 | |
-| `src/Nova.Cli` | 1 | 1,211 | 18 commands |
-| `tests/Nova.Compiler.Tests` | 41 | 6,673 | 39 test classes |
-| `tests/Nova.Fuzz` | 3 | 1,919 | random program generator |
+| `src/Reference.Compiler` | 58 | 36,559 | |
+| `src/Reference.Cli` | 1 | 1,211 | 18 commands |
+| `tests/Reference.Compiler.Tests` | 41 | 6,673 | 39 test classes |
+| `tests/Reference.Fuzz` | 3 | 1,919 | random program generator |
 | `tests/corpus` | 573 files | — | 13 families |
 
 Compiler size by directory:
@@ -74,7 +74,7 @@ Compiler size by directory:
 | `Diagnostics/` | 242 | |
 | root | 205 | |
 
-Corpus `.nova` counts:
+Corpus `.cee` counts:
 
 | Family | Count |
 |---|---:|
@@ -92,7 +92,7 @@ Corpus `.nova` counts:
 | overflow-checks | 2 |
 | closure-calls | 1 |
 
-### 2.2 Can Nova host a compiler today? Not yet
+### 2.2 Can the reference host a compiler today? Not yet
 
 The 2026-10-29 draft assumed CeeSafe could be written "within the pinned stage-0 language". The audit shows the
 language core is adequate, but its library and host support are not.
@@ -100,12 +100,12 @@ language core is adequate, but its library and host support are not.
 | Area | Present | Missing | Evidence |
 |---|---|---|---|
 | Core language | enums with payloads and `match`, recursive `Box`, generics with interface bounds, `dyn`, closures, `T?`/`Result` with `?`, statics, threads, multi-file packages | `From` conversion for `?`; `impl<T> I for G<T>` and `Self`; `i128` | `docs/type-system.md` §15, §17.4, §20–§21.1, §36–§39 |
-| Collections | `Vector`, `String`, `SlotMap`/`Handle`, `StableVector`; `sortBy` | **hash map, set and ordered map**; slice search | §23–§24, §16.5; `lib/core/slices.nova` |
+| Collections | `Vector`, `String`, `SlotMap`/`Handle`, `StableVector`; `sortBy` | **hash map, set and ordered map**; slice search | §23–§24, §16.5; `lib/core/slices.cee` |
 | Strings | `append`, `appendNumber`, boundary-checked slicing, `==` | hashing, ordering, clone, char/UTF-8 iteration, integer and float parsing, `find`/`startsWith`; growing only from a `StringView` | §22.2, §23.2 |
-| Host services | read/write/remove files, stdin bytes, stdout/stderr, argv, `Process.run` (status only), TCP | environment, cwd, directories, stat, mkdir/rename, temp files, clock, **captured child output**, stdin to a child | §26; `runtime/hosted/nova_rt_io.c` |
+| Host services | read/write/remove files, stdin bytes, stdout/stderr, argv, `Process.run` (status only), TCP | environment, cwd, directories, stat, mkdir/rename, temp files, clock, **captured child output**, stdin to a child | §26; `runtime/hosted/ceesafe_rt_io.c` |
 | Borrowing | IDs and handles, field-precise and constant-index disjointness, `splitAtMut` | any non-constant index aliases every element, so table-heavy code must copy out or use handles | `docs/lifetimes.md` §4, §8 |
 | FFI | `extern "C"`, `.c` files linked by `build`, `@repr(C)` structs | `run --interp` runs no C | §28; `docs/unsafe.md` |
-| Scale | novac checks a 202k-line package in 13.1 s | the largest Nova program in the repository is ~360 lines; no parser has been written in Nova | ADR 0022; `lib/core/atomics.nova` |
+| Scale | The reference compiler checks a 202k-line package in 13.1 s | the largest CeeSafe program in the repository is ~360 lines; no parser has been written in the reference | ADR 0022; `lib/core/atomics.cee` |
 
 This is the port's largest risk, and the reason for the **N track** (§4) before and alongside P1–P3. P1's probes
 (`docs/p1-probes.md`) narrowed it to three needs:
@@ -113,13 +113,13 @@ This is the port's largest risk, and the reason for the **N track** (§4) before
 - **N1a**, turning bytes into text;
 - **N4**, host services.
 
-Maps, generic impls, `From` and borrow precision have accepted Nova-side patterns.
+Maps, generic impls, `From` and borrow precision have accepted the reference-side patterns.
 
 ### 2.3 C# surfaces that need a native design
 
 | Finding | Evidence |
 |---|---|
-| The pipeline order is fixed | `src/Nova.Compiler/Compilation.cs:76-129`. The order: core libraries, parse, `PackageNames.Rewrite`, `TypeChecker`, `NirBuilder`, then per function `InPlaceChecker`, `MoveChecker`, `BorrowChecker`, then `DropElaborator`, then `EffectChecker` |
+| The pipeline order is fixed | `src/Reference.Compiler/Compilation.cs:76-129`. The order: core libraries, parse, `PackageNames.Rewrite`, `TypeChecker`, `NirBuilder`, then per function `InPlaceChecker`, `MoveChecker`, `BorrowChecker`, then `DropElaborator`, then `EffectChecker` |
 | Spans are UTF-16 code units over UTF-8 input | `Syntax/SourceText.cs:3`; `docs/grammar.md` §1.1 |
 | Interned names get deterministic first-seen IDs | `Syntax/SymbolTable.cs:3` |
 | Layout comes from the target, not the host | `Semantics/Types.cs:22` (`TargetInfo`); `docs/c-backend.md` |
@@ -129,23 +129,23 @@ Maps, generic impls, `From` and borrow precision have accepted Nova-side pattern
 | JSON through `System.Text.Json` | `McpServer.cs`, `LanguageServer.cs`, `DiagnosticJson.cs` |
 | Hash collections whose order may reach output | `TypeChecker.cs` (58 `Dictionary`, 40 `HashSet`), `CEmitter.cs` (12, 17), `CheckElimination.cs`, `BorrowChecker.cs`; explicit sorts at `Fixer.cs:35`, `CheckElimination.cs:156` |
 | Embedded resources: libraries, runtime, docs, templates | `CoreLibrary.cs`, `Backend.C/CBackend.cs:54-63`, `Documentation/EmbeddedDocs.cs`, `Packages/AgentFiles.cs` |
-| The CLI is broad | `src/Nova.Cli/Program.cs:225-335`. Commands: `parse check build run fmt doc new agents fetch publish index-check fix explain mcp lsp` |
+| The CLI is broad | `src/Reference.Cli/Program.cs:225-335`. Commands: `parse check build run fmt doc new agents fetch publish index-check fix explain mcp lsp` |
 | Tests cover mutations, allocation failures and several C configurations | `docs/testing.md` §3–§5; `MutationTests.cs`, `FaultInjectionTests.cs`, `MsvcTests.cs` |
 
-### 2.4 Nova changes since the 2026-10-29 draft
+### 2.4 the reference changes since the 2026-10-29 draft
 
 The draft's baseline was `06fd7cd`. The current ADR range is **0001–0027**. Both of these are new:
 - **0026**, inline atomics: the atomic types moved to `lib/core`, in every profile.
 - **0027**: `here` in static initialisers, `Mutex.constant`, `layoutOf<T>()`, raw `read`/`write` for any `T`, and
   `ObjectCache<T>`.
 
-novac 0.3.0 and 0.3.1 are released. M14 is still in progress: K2 (typed calls across units) and K6 are open.
+The reference compiler 0.3.0 and 0.3.1 are released. M14 is still in progress: K2 (typed calls across units) and K6 are open.
 
 ## 3. Architecture and porting rules
 
 ### 3.1 Preserve semantics, change storage
 
-- Follow the current grammar, ownership invariants and accepted ADRs. A needed language addition goes through Nova
+- Follow the current grammar, ownership invariants and accepted ADRs. A needed language addition goes through the reference
   (the N track), never into compiler-only syntax or intrinsics.
 - Replace C# class hierarchies with tagged enums and typed IDs into owned tables: AST, HIR, types, definitions,
   functions, blocks, locals. Parent and cross-reference edges are IDs. Lists are ranges into contiguous tables.
@@ -162,10 +162,10 @@ novac 0.3.0 and 0.3.1 are released. M14 is still in progress: K2 (typed calls ac
 
 - Keep source bytes plus a tested conversion to the reference's UTF-16 offsets and columns. Diagnostics, fixes, dumps
   and LSP all depend on it. Test BOMs, line endings, supplementary characters, invalid UTF-8 and EOF.
-- Exact integers: a small signed-magnitude limb integer in Nova, sized to the audited `BigInteger` uses. Never use
+- Exact integers: a small signed-magnitude limb integer in the reference, sized to the audited `BigInteger` uses. Never use
   unchecked `i64` where the reference is exact.
 - Floats: binary32/64 parsing, rounding, NaN, ±0, infinities and decimal formatting must match `FloatSemantics.cs` and
-  `runtime/hosted/nova_rt_float.c`. Locale-dependent libc is not an oracle.
+  `runtime/hosted/ceesafe_rt_float.c`. Locale-dependent libc is not an oracle.
 - Host services (files, paths, environment, processes, clocks, temp files, tool discovery) sit behind one small layer.
   Ideally it is N-track library API. A C adapter is allowed only with a written contract covering ownership, lengths,
   encoding, errors and cleanup. Processes take argument arrays and never shell strings.
@@ -174,9 +174,9 @@ novac 0.3.0 and 0.3.1 are released. M14 is still in progress: K2 (typed calls ac
 
 ```text
 CeeSafe/
-  ROADMAP.md AGENTS.md CLAUDE.md .mcp.json   (agent files from novac new --agent claude)
-  nova.toml                                  -> ceesafe.toml at P6R
-  src/                                        compiler, in Nova (one package; files share one scope)
+  ROADMAP.md AGENTS.md CLAUDE.md .mcp.json   (agent files from ceesafec new --agent claude)
+  ceesafe.toml                                  -> ceesafe.toml at P6R
+  src/                                        compiler, in the reference (one package; files share one scope)
     support/ syntax/ diagnostics/ semantics/ hir/ nir/ analysis/
     backend_c/ interpreter/ packages/ formatting/ documentation/ tooling/ host/  (planned)
   runtime/ lib/ resources/                    carried over at P5 with provenance
@@ -186,26 +186,26 @@ CeeSafe/
   out/                                        ignored
 ```
 
-The package compiles as one whole program, as novac does today; Nova has no separate compilation (ADR 0013 D4).
-Subdirectories under `src/` are only for organisation, since every `.nova` file under `src/` shares one scope.
+The package compiles as one whole program, as the reference compiler does today; the reference has no separate compilation (ADR 0013 D4).
+Subdirectories under `src/` are only for organisation, since every `.cee` file under `src/` shares one scope.
 
 ### 3.4 Rename contract
 
-| Surface | Nova today | CeeSafe | When |
+| Surface | The reference today | CeeSafe | When |
 |---|---|---|---|
-| Compiler | `novac` | `ceesafec` | skeleton now; parity P8 |
-| Source extension | `.nova` (`Packages/Manifest.cs:271`, `Program.cs:697`) | `.cee` | P6R |
-| Manifest and lock | `nova.toml`, `nova.lock` (`Manifest.cs:32`, `Workspace.cs:28`) | `ceesafe.toml`, `ceesafe.lock` | P6R; conversion in P8 |
-| Home | `$NOVA_HOME`, `~/.nova` (`Workspace.cs:111`) | `$CEESAFE_HOME`, `~/.ceesafe` | done (P8 S3) |
-| Generated C | `nv_`, `nvMk_`, `NOVA_PROGRAM_*_H`, `nova_exports.h` | `cee_`, `cee<X>_`, `ceesafe_exports.h` (Decision 0004) | done (P8 S7) |
-| Runtime | `nova_*` (~374), `nv*` (~424), `NOVA_*` (10), `runtime/include/nova/rt.h` | `ceesafe_*`, `CEE_*`, `ceesafe/rt.h`, ABI version (Decision 0004) | done (P8 S7) |
+| Compiler | `ceesafec` | `ceesafec` | skeleton now; parity P8 |
+| Source extension | `.cee` (`Packages/Manifest.cs:271`, `Program.cs:697`) | `.cee` | P6R |
+| Manifest and lock | `ceesafe.toml`, `ceesafe.lock` (`Manifest.cs:32`, `Workspace.cs:28`) | `ceesafe.toml`, `ceesafe.lock` | P6R; conversion in P8 |
+| Home | `$CEESAFE_HOME`, `the reference's install directory` (`Workspace.cs:111`) | `$CEESAFE_HOME`, `~/.ceesafe` | done (P8 S3) |
+| Generated C | `cee_`, `ceeMk_`, `CEESAFE_PROGRAM_*_H`, `ceesafe_exports.h` | `cee_`, `cee<X>_`, `ceesafe_exports.h` (Decision 0004) | done (P8 S7) |
+| Runtime | `ceesafe_*` (~374), `nv*` (~424), `CEESAFE_*` (10), `runtime/include/ceesafe/rt.h` | `ceesafe_*`, `CEE_*`, `ceesafe/rt.h`, ABI version (Decision 0004) | done (P8 S7) |
 | Diagnostics | 126 `N####` codes (`Diagnostics/Diagnostic.cs:14`), used by 159 corpus files | letter open, with a mapping | P6R |
-| MCP/LSP | server `novac`, tools `nova_*` | `ceesafec`, `ceesafe_*` | done (P8 S5) |
-| Agent files | `<!--NOVA START/END-->`, `nova.mdc` | `<!--CEESAFE START/END-->`, `ceesafe.mdc` | done (P8 S3) |
-| Editor | `nova-language`, language id `nova` | `ceesafe-language`, language id `ceesafe` | done (P8 S6) |
-| CosmoOS | `.nova`, pinned novac | stays on Nova (Decision 0003); a migration is the owner's option | — |
+| MCP/LSP | server `ceesafec`, tools `ceesafe_*` | `ceesafec`, `ceesafe_*` | done (P8 S5) |
+| Agent files | the reference's markers and rule file | `<!--CEESAFE START/END-->`, `ceesafe.mdc` | done (P8 S3) |
+| Editor | the reference's extension and language id | `ceesafe-language`, language id `ceesafe` | done (P8 S6) |
+| CosmoOS | `.cee`, pinned the reference compiler | stays on the reference (Decision 0003); a migration is the owner's option | — |
 
-Nova's generated-C ABI is kept through the first fixed point. Renaming never changes ownership, lifetime, drop or
+The reference's generated-C ABI is kept through the first fixed point. Renaming never changes ownership, lifetime, drop or
 safety semantics, and it is never done by text substitution.
 
 ## 4. Phases and gates
@@ -217,10 +217,10 @@ entry in §10. An unchecked item is planned, not done.
 
 Dependencies: none. **Complete (2026-10-30)**: the gate passed on the Ryzen box (§10).
 
-- [x] Scaffold the package with the pinned novac (`novac new ceesafe --agent claude`), and write a `ceesafec` skeleton
+- [x] Scaffold the package with the pinned the reference compiler (`ceesafec new ceesafe --agent claude`), and write a `ceesafec` skeleton
   that handles `--version` and `--help` (2026-10-30).
-- [x] Decision 0001 covers identity, the bootstrap route, the upstream N track and Nova continuing. Pin novac 0.3.1 and
-  the Nova reference in `bootstrap/reference.md` (2026-10-30).
+- [x] Decision 0001 covers identity, the bootstrap route, the upstream N track and the reference continuing. Pin the reference compiler 0.3.1 and
+  The reference reference in `bootstrap/reference.md` (2026-10-30).
 - [x] Inventory and ledger (2026-10-30). `tools/inventory.py` generates `docs/reference-inventory.md`
   deterministically. It lists 59 C# files, 15 commands, 26 options and 126 diagnostic codes (with their emitting files
   and corpus coverage), plus runtime, library and resource files and the 39 test classes, each with a phase.
@@ -235,12 +235,12 @@ Dependencies: none. **Complete (2026-10-30)**: the gate passed on the Ryzen box 
   ASan+UBSan. The rest of the matrix moved to P5 (below).
 - [x] Reference dumps (2026-10-30). The corpus's AST (40) and HIR (27) snapshots are the reference, and the runner
   reproduces them with 0.3.1. Exporting token and NIR dumps is deferred to P2 and P4, which decide how to compare them.
-- [x] Run the reference suite (2026-10-30). `dotnet test Nova.slnx` at `07d561f` on macOS arm64 passed 3,589 of 3,589
+- [x] Run the reference suite (2026-10-30). `dotnet test the reference.slnx` at `07d561f` on macOS arm64 passed 3,589 of 3,589
   tests, with 0 skipped, in 12 min 24 s. No real GCC was available (`gcc` is Apple clang), and no MSVC (that needs the
-  Windows VM). Whether TSan ran is not shown at default verbosity. A configuration Nova's suite cannot find counts as
+  Windows VM). Whether TSan ran is not shown at default verbosity. A configuration the reference's suite cannot find counts as
   missing, not as passed.
-- [x] Gate check (2026-10-30). On the Ryzen box (Debian 12, x86-64): the novac 0.3.1 release download matched the
-  release's `SHA256SUMS`; Nova was cloned at `07d561f`, and CeeSafe from a git bundle of `ef3e413`. Results:
+- [x] Gate check (2026-10-30). On the Ryzen box (Debian 12, x86-64): the the reference compiler 0.3.1 release download matched the
+  release's `SHA256SUMS`; the reference was cloned at `07d561f`, and CeeSafe from a git bundle of `ef3e413`. Results:
   - `tools/inventory.py` regenerated `docs/reference-inventory.md` byte-identical;
   - the runner gave the Mac's results: 454 pass, 0 fail, 3 partial.
 
@@ -252,50 +252,50 @@ Carried into later phases (`docs/parity.md` §3):
 Gate: another checkout reconstructs the pin and runs a representative fixture set with identical results, and the
 ledger has no unmapped items (inventory: 0 unmapped, 2026-10-30).
 
-### N — Upstream Nova: self-hosting prerequisites (Nova milestone M15)
+### N — Upstream the reference: self-hosting prerequisites (the reference milestone M15)
 
-Each item is a Nova change approved by the owner and made under Nova's rules: spec and ADR first, then tests, docs,
-`roadmap.md` and `risks.md`. It ships in a novac release, and CeeSafe re-pins (`bootstrap/reference.md`). P1's probes
+Each item is a reference change approved by the owner and made under the reference's rules: spec and ADR first, then tests, docs,
+`roadmap.md` and `risks.md`. It ships in a the reference compiler release, and CeeSafe re-pins (`bootstrap/reference.md`). P1's probes
 (2026-10-30, `docs/p1-probes.md` §4) set this list and its order.
 
-All of N0–N4a shipped in **novac 0.4.0** (Nova M15, tag `v0.4.0` = `66b6bda`, 2026-10-30), and CeeSafe re-pinned to
+All of N0–N4a shipped in **The reference compiler 0.4.0** (the reference M15, tag `v0.4.0` = `66b6bda`, 2026-10-30), and CeeSafe re-pinned to
 it the same day, then to the point release 0.4.1 (N7; `bootstrap/reference.md`). Each former
 `probes/upstream/` repro is now a regression probe that must keep passing.
 
-- [x] **N0. The compiler crash** ([Nova #2](https://github.com/vkuttyp/Nova/issues/2)) on a generic `Result` rebuild
-  with `T = void` is now N0222, an error (`probes/check-fail/void-result-rebuild.nova`). The instance still does not
+- [x] **N0. The compiler crash** (the reference #2) on a generic `Result` rebuild
+  with `T = void` is now N0222, an error (`probes/check-fail/void-result-rebuild.cee`). The instance still does not
   check, so `void` results keep their non-generic lifts.
-- [x] **N0b. The missing drop** ([Nova #1](https://github.com/vkuttyp/Nova/issues/1)) of a condition temporary is
-  fixed, and Nova's run corpus now requires `live=0` (`probes/run-pass/condition-temporaries.nova`).
-- [x] N0c. The two false rejections ([Nova #4](https://github.com/vkuttyp/Nova/issues/4),
-  [#5](https://github.com/vkuttyp/Nova/issues/5)) are fixed (`probes/run-pass/truncate-two-phase.nova`,
-  `probes/run-pass/generic-param-borrow.nova`); their workarounds in `src/support/` and `tests/support/` are gone.
-- [x] **N0d. A nesting limit** ([Nova #3](https://github.com/vkuttyp/Nova/issues/3)): 1,000 levels, N0110, with the
+- [x] **N0b. The missing drop** (the reference #1) of a condition temporary is
+  fixed, and the reference's run corpus now requires `live=0` (`probes/run-pass/condition-temporaries.cee`).
+- [x] N0c. The two false rejections (the reference #4,
+  #5) are fixed (`probes/run-pass/truncate-two-phase.cee`,
+  `probes/run-pass/generic-param-borrow.cee`); their workarounds in `src/support/` and `tests/support/` are gone.
+- [x] **N0d. A nesting limit** (the reference #3): 1,000 levels, N0110, with the
   passes on a 256 MiB stack. CeeSafe's parser must reproduce N0110 at the same depth (P2).
 - [x] **N1a. Bytes to text**: `StringView.fromUtf8` (type-system §22.2), then `String.append`.
 - [x] **N4a. Host services** (ADR 0028, type-system §26.7–§26.10): `Process.capture` (stdout, stderr, stdin input),
   `Environment.variable`, `Directory.create`/`list`/`remove`/`temporary`/`current` and
-  `File.kind`. `probes/run-pass/host-process.nova` uses them to drive `cc`.
+  `File.kind`. `probes/run-pass/host-process.cee` uses them to drive `cc`.
 - [x] ~~N4b. Stdin by line or length~~: dropped; LSP/MCP framing can be buffered over `Console.read`.
-- [x] **N7. lib/std's helper names** (found by the 0.4.0 re-pin): 0.4.0's `lib/std/host.nova` declared top-level
-  helpers (`pathIn`, `fromAlloc`, `textOf` and others) that a program could not redeclare (N0201). Fixed in novac
+- [x] **N7. lib/std's helper names** (found by the 0.4.0 re-pin): 0.4.0's `lib/std/host.cee` declared top-level
+  helpers (`pathIn`, `fromAlloc`, `textOf` and others) that a program could not redeclare (N0201). Fixed in the reference compiler
   **0.4.1** (point release from `release-0.4`, 2026-10-30), CeeSafe's pin since; the probes use those names again.
 - [ ] Optional ergonomics, none blocking:
   - N1b, `Vector` bulk append from a slice (performance);
   - N1c, text ordering, `clone`, `find`/`startsWith` and number parsing (until then, byte-wise functions in
     `src/support/`);
   - N1d, arrays of `StringView` (until then, `match` tables).
-- [x] ~~N2 library maps~~: not needed upstream. A generic insertion-ordered map works in Nova (`generic-map` probe) and
+- [x] ~~N2 library maps~~: not needed upstream. A generic insertion-ordered map works in the reference (`generic-map` probe) and
   lives in `src/support/`.
 - [x] ~~N3 `impl<T>`, `Self`, `From`~~: not needed. Use one impl per instantiation, `K: Key<K>`, and lift functions
   (`generic-impls`, `error-layers` probes).
 - [x] ~~N5 borrow precision~~: not needed. `splitAtMut`, copy-out and separate tables are accepted
   (`aliasing-workarounds` probe).
-- [x] N6. Nova `docs/milestone-15.md` (drafted at `34ce40a`, implemented 2026-10-30), citing OD-33. Its items map to
+- [x] N6. The reference `docs/milestone-15.md` (drafted at `34ce40a`, implemented 2026-10-30), citing OD-33. Its items map to
   this list as follows: S1 is N0 (#2), S2 is N0b (#1), S4 and S5 are N0c (#4, #5), S3 is N0d (#3), S6 is N1a and S7
   (ADR 0028) is N4a. All shipped together in 0.4.0; the planned 0.3.2 was not needed.
 
-Gate per item: the novac release passes Nova's full suite, and CeeSafe's affected probes pass after the re-pin.
+Gate per item: the the reference compiler release passes the reference's full suite, and CeeSafe's affected probes pass after the re-pin.
 
 ### P1 — Probes and the support library
 
@@ -306,7 +306,7 @@ Dependencies: P0. Runs alongside the N track.
   - owning enums;
   - index aliasing, and the accepted workarounds;
   - a generic map;
-  - a lexer and interner over all 525 Nova source files;
+  - a lexer and interner over all 525 CeeSafe source files;
   - error layers;
   - dataflow bitsets and worklists;
   - gaps in generic impls and text.
@@ -329,13 +329,13 @@ Dependencies: P0. Runs alongside the N track.
 - [x] Limits and allocation failure (`docs/limits.md`). Each limit is recorded with the phase that enforces it.
   `tools/fault_sweep.py` fails each of 573 allocations in turn: every failure comes back as an error, with the
   structures intact and nothing leaked.
-- [x] Grow the skeleton (2026-10-30). `ceesafec` knows novac's 15 commands, loads the files they name into
-  `SourceText` (`src/host/files.nova`), reports unreadable files, and names the phase that implements each command.
+- [x] Grow the skeleton (2026-10-30). `ceesafec` knows the reference compiler's 15 commands, loads the files they name into
+  `SourceText` (`src/host/files.cee`), reports unreadable files, and names the phase that implements each command.
 
-Gate: probes and the support library pass under ASan and UBSan with the pinned novac. Every compiler bug found has a
+Gate: probes and the support library pass under ASan and UBSan with the pinned the reference compiler. Every compiler bug found has a
 reduced reproducer filed upstream. Missing features block; they are never worked around by weakening checks.
-**Passed 2026-10-30 (§10).** The four reproducers in `probes/upstream/` and the nesting crash were filed as Nova #1–#5 (2026-10-30), fixed in
-novac 0.4.0, and the reproducers became regression probes at the re-pin.
+**Passed 2026-10-30 (§10).** The four reproducers in `probes/upstream/` and the nesting crash were filed as the reference #1–#5 (2026-10-30), fixed in
+The reference compiler 0.4.0, and the reproducers became regression probes at the re-pin.
 
 ### P2 — Source frontend
 
@@ -343,7 +343,7 @@ Dependencies: P1's text and storage, N1.
 
 - [x] Port `SourceText`, the line index, interning, token kinds, the keyword table (`Keywords.Table`), literals,
   trivia and doc comments, and the lexer (2026-10-30; `docs/p2-frontend.md`). Checked by a token-dump oracle built
-  from the reference's own `Lexer`: byte-identical over all 540 `.nova` files of Nova `v0.4.1`, 21 edge cases and
+  from the reference's own `Lexer`: byte-identical over all 540 `.cee` files of the reference `v0.4.1`, 21 edge cases and
   3,000 random inputs. One documented difference: an invalid escape of a character above U+FFFF.
 - [x] Diagnostics, their text rendering and the JSON document (`--diagnostics-format=json`), with summaries generated
   from the reference's documents (`tools/gen_catalog.py`).
@@ -353,11 +353,11 @@ Dependencies: P1's text and storage, N1.
   the stack where the reference does (§6).
 - [x] Add `parse` and `--dump-ast` with byte-identical dumps.
 
-Gate: all 40 parse-pass and 28 parse-fail fixtures match, including AST snapshots and exact diagnostics. Every `.nova`
-file in Nova's repository and CeeSafe's own sources parse. Fuzzed malformed input ends with a controlled error.
+Gate: all 40 parse-pass and 28 parse-fail fixtures match, including AST snapshots and exact diagnostics. Every `.cee`
+file in the reference's repository and CeeSafe's own sources parse. Fuzzed malformed input ends with a controlled error.
 **Passed 2026-10-30** on macOS and the Ryzen box (`docs/p2-frontend.md` §4):
-- the parse families match novac 0.4.1 with no difference in exit status, stdout or stderr;
-- all 540 `.nova` files of Nova `v0.4.1` give identical trees and diagnostics;
+- the parse families match the reference compiler 0.4.1 with no difference in exit status, stdout or stderr;
+- all 540 `.cee` files of the reference `v0.4.1` give identical trees and diagnostics;
 - so do CeeSafe's own files, except the documented escape span;
 - 5,000 mutated and 3,000 random inputs are identical to the reference;
 - the deep inputs end normally;
@@ -379,7 +379,7 @@ Dependencies: P2, N2–N3, P1's exact integers.
   diagnostic order.
 
 Gate: check-pass and type-focused check-fail fixtures and HIR snapshots match exactly. Ownership negatives are tracked
-as pending P4. This is not yet a full `check`. **Passed (2026-10-30, novac 0.5.0)**: `docs/p3-plan.md` (slices S0–S8,
+as pending P4. This is not yet a full `check`. **Passed (2026-10-30, the reference compiler 0.5.0)**: `docs/p3-plan.md` (slices S0–S8,
 `src/check/` as the split of `TypeChecker.cs`).
 
 ### P4 — NIR and every safety pass
@@ -396,21 +396,21 @@ Dependencies: P3.
   - captures and `dyn`;
   - threads and `Thread.both`;
   - kernel guards;
-  - the sticky shared-deref soundness fix (N0248, Nova `3a99b4a`).
+  - the sticky shared-deref soundness fix (N0248, the reference `3a99b4a`).
 - [x] Port the mutation expectations (`MutationTests.cs` as `tools/mutation_suite.py`). The fault-injection sweep
   (`FaultInjectionTests.cs`) builds and runs programs, so it moved to P5's gate.
 
 Gate: all 128 check-fail and 27 check-pass fixtures and the mutation expectations pass. NIR before and after drops
 agrees with the reference. Every invariant in `docs/ownership.md` has mapped positive and negative evidence. `check`
-now means the full pipeline. **Passed (2026-10-30, novac 0.6.0)**: `docs/p4-plan.md` (slices S0–S6) and
+now means the full pipeline. **Passed (2026-10-30, the reference compiler 0.6.0)**: `docs/p4-plan.md` (slices S0–S6) and
 `docs/p4-evidence.md`. The results:
 
 - **Fixtures:** all 136 check-fail and 27 check-pass fixtures give the reference's diagnostics. Of the 322 check
   programs, 318 are identical in text, JSON and `--dump-hir`. The other four are recorded divergences:
-  - `enums`, `optionals` and `results`: novac's `--dump-hir` crashes on them;
-  - `offset-of`: Nova #6.
+  - `enums`, `optionals` and `results`: the reference compiler's `--dump-hir` crashes on them;
+  - `offset-of`: the reference #6.
 - **Mutations:** all 1,152 mutants match the oracle.
-- **NIR:** the 284 programs novac builds have identical NIR after drop elaboration. novac prints NIR only after
+- **NIR:** the 284 programs the reference compiler builds have identical NIR after drop elaboration. The reference compiler prints NIR only after
   elaboration, so the comparison is made there.
 
 ### P5 — Flat C backend and the native build
@@ -421,7 +421,7 @@ Dependencies: P4, N4 (process capture).
   helpers, constants, drops, source maps, panic sites, FFI and imported structs, callbacks, exports and object mode
   (`src/backend/`, 2026-10-30).
 - [x] Bundle `runtime/` (`tools/gen_runtime.py`) and `lib/` with deterministic tables. Construct `cc` and linker
-  arguments, and publish output files (`src/host/toolchain.nova`, `src/host/build.nova`).
+  arguments, and publish output files (`src/host/toolchain.cee`, `src/host/build.cee`).
 - [x] Add `build --emit c|exe|obj` with flat C, `-g`, `--line-directives`, `--split`, `--cc`, `--cflag`, `--ld`,
   `--program` and `.c` inputs. The switches of P7's forms (`--flat-c`, `--no-placement`, `--no-bce`, `--no-oce`,
   `--no-closure-specialisation`) are accepted: ceesafec always emits that form.
@@ -429,38 +429,38 @@ Dependencies: P4, N4 (process capture).
 Gate: run-pass (153), run-fail (40), ffi and freestanding pass under clang -O0/-O2, the overflow fallback and
 ASan+UBSan, with GCC where available. The M3 fault-injection sweep (`FaultInjectionTests.cs`, moved from P4) passes on
 every run-pass program that allocates, which shows O4 at run time. `emit-c` snapshots match, or each difference is reviewed. Objects for both
-CosmoOS architectures pass. **Passed (2026-10-30, novac 0.6.0)**: `docs/p5-plan.md` (S0–S3). The results:
+CosmoOS architectures pass. **Passed (2026-10-30, the reference compiler 0.6.0)**: `docs/p5-plan.md` (S0–S3). The results:
 
-- **C:** byte-identical to novac's (`--flat-c` and the optimisations off) for all 284 programs novac builds, in four
+- **C:** byte-identical to the reference compiler's (`--flat-c` and the optimisations off) for all 284 programs the reference compiler builds, in four
   forms each: flat, `--split`, `-g`, `-g --split`. CeeSafe's own C is identical too (394,094 lines; ceesafec 1.4 s,
-  novac 4.1 s), on macOS and on Linux, and a ceesafec built from it by cc or GCC behaves the same.
+  The reference compiler 4.1 s), on macOS and on Linux, and a ceesafec built from it by cc or GCC behaves the same.
 - **Behaviour:** run-pass 159/159, run-fail 40/40, ffi 8/8 under Apple clang 21 (`-O2`, `-O0`, the overflow fallback,
   `-O1` ASan+UBSan with leak checks, `--split`, `-g`, all `-Werror`), clang 18 and GCC 12 on the Ryzen box; TSan on the
   three thread programs. One recorded divergence, the reference's: GCC 12 `-O2 -Werror` reports `-Wuninitialized` in
-  an enum constructor of `run-pass/nested-patterns`, for novac's C too, flat and default.
+  an enum constructor of `run-pass/nested-patterns`, for the reference compiler's C too, flat and default.
 - **Fault sweep:** 50 run-pass programs allocate; all 789 failure points end as accepted, on macOS and Linux, and each
-  run equals the run of novac's build.
+  run equals the run of the reference compiler's build.
 - **Collections:** the 30 programs of `CollectionPropertyTests` (`tools/collection_properties.py`) print their models'
-  output under every configuration, their C equals novac's, and their 156 failure points pass the sweep.
+  output under every configuration, their C equals the reference compiler's, and their 156 failure points pass the sweep.
 - **Freestanding:** 3/3 host objects run under their harnesses with only allowlisted undefined symbols; both CosmoOS
   triples have no forbidden sections, mutable state or COMMON symbols, also joined by `ld.lld`
-  (`tools/freestanding_check.py`), as for novac.
-- **emit-c snapshots:** 7 of 24 match. The 17 others are novac's default form (structured, placement, check
-  elimination, closure specialisation: P7). Reviewed: novac in the flat, unoptimised form fails the same 17.
+  (`tools/freestanding_check.py`), as for the reference compiler.
+- **emit-c snapshots:** 7 of 24 match. The 17 others are the reference compiler's default form (structured, placement, check
+  elimination, closure specialisation: P7). Reviewed: the reference compiler in the flat, unoptimised form fails the same 17.
 
 ### P6 — First verified fixed point
 
 Dependencies: P5 and every feature CeeSafe uses.
 
-- [x] Gen 1 is built by the pinned novac from CeeSafe's `.nova` sources.
+- [x] Gen 1 is built by the pinned the reference compiler from CeeSafe's `.cee` sources.
 - [x] Gen 1 builds gen 2, and gen 2 builds gen 3, with identical inputs, flags and toolchain.
 - [x] Gen 2 and gen 3 emitted C and resources are byte-equal. Both pass the compiler contract tests
   (`tools/contract_tests.py`).
 - [x] Repeat from clean directories under different absolute paths. Check that no timestamp or path leaks into output.
-- [x] Gen 2 onward builds with no `dotnet` or novac on `PATH`, and the subprocess logs are audited.
+- [x] Gen 2 onward builds with no `dotnet` or the reference compiler on `PATH`, and the subprocess logs are audited.
 
 Gate: a reproducible fixed point with archived manifests. This is a checkpoint, not release readiness. **Passed
-(2026-10-30, CeeSafe `1b1aae4`, stage 0 novac 0.6.0)**: `docs/p6-fixed-point.md`, manifests in
+(2026-10-30, CeeSafe `1b1aae4`, stage 0 the reference compiler 0.6.0)**: `docs/p6-fixed-point.md`, manifests in
 `bootstrap/fixed-point/`. On macOS (Apple clang 21) and Linux (GCC 12): C2 = C3 = C4 and gen 2 = gen 3 bit for bit,
 in two directories each; the C is the same on both hosts; from gen 1 on only the C compiler runs; every contract test
 passes on gen 2 but the recorded divergences.
@@ -470,20 +470,20 @@ passes on gen 2 but the recorded divergences.
 Dependencies: P6.
 
 - [x] `ceesafec` accepts `.cee`, `ceesafe.toml` (and `ceesafe.lock`). `$CEESAFE_HOME` is named (Decision 0002); nothing
-  reads a home directory until P8's git and registry dependencies. `.nova` and `nova.toml` are kept as an explicit
-  legacy mode (Decision 0002), then dropped the same day by Decision 0003: Nova and CeeSafe exist in parallel, so
+  reads a home directory until P8's git and registry dependencies. `.cee` and `ceesafe.toml` are kept as an explicit
+  legacy mode (Decision 0002), then dropped the same day by Decision 0003: the reference and CeeSafe exist in parallel, so
   ceesafec reads only `ceesafe.toml` packages; files named on the command line may have any extension.
 - [x] The diagnostic code letter stays **N** (Decision 0002: `C` would collide with MSVC's codes), so no mapping and
   no corpus conversion is needed.
-- [x] One commit (`8941c10`) renames CeeSafe's own sources and manifest; `3d6ac40` is the bootstrap anchor that novac
-  still builds (`tools/bootstrap.sh`). The P6 fixed point reruns with ceesafec alone; novac is no longer needed for
+- [x] One commit (`8941c10`) renames CeeSafe's own sources and manifest; `3d6ac40` is the bootstrap anchor that the reference compiler
+  still builds (`tools/bootstrap.sh`). The P6 fixed point reruns with ceesafec alone; the reference compiler is no longer needed for
   routine builds (formatting waits for P8's `fmt`).
 
 Gate: the fixed point holds on CeeSafe names, and the legacy mode (if kept) is tested. **Passed (2026-10-30,
-`8941c10`)**: from `tools/bootstrap.sh` (novac 0.6.0 → `3d6ac40` → this tree), the fixed point with that ceesafec as
+`8941c10`)**: from `tools/bootstrap.sh` (the reference compiler 0.6.0 → `3d6ac40` → this tree), the fixed point with that ceesafec as
 stage 0 holds on macOS (Apple clang 21) and Linux (GCC 12): gen 1 = gen 2 = gen 3 = stage 0, the same C on both hosts,
 which differs from the legacy-named commit's only in the 80 `src/` file names; only the C compiler runs. Legacy mode:
-`compare_packages.py` passes the seven fixtures as they are (`nova.toml`), renamed (`ceesafe.toml`, `--renamed all`)
+`compare_packages.py` passes the seven fixtures as they are (`ceesafe.toml`), renamed (`ceesafe.toml`, `--renamed all`)
 and mixed (a CeeSafe root over legacy dependencies, `--renamed root`); a directory with both manifests is an error,
 and a legacy package ignores `.cee` files. `tools/contract_tests.py` passes on both hosts.
 
@@ -495,7 +495,7 @@ Dependencies: P6R. Ownership and drop schedules do not change.
   specialisation, and every `--explain-*` report (S0–S2).
 - [x] Port `CStructurer` (structured C), `--flat-c`, `--split` and `--program`, with deterministic unit names (S3).
 - [x] ~~Switch to the approved CeeSafe C prefix and ABI version~~: moved to P8 by Decision 0004 (accepted 2026-10-30),
-  so the C stays byte-identical to novac's while CeeSafe tracks Nova.
+  so the C stays byte-identical to the reference compiler's while CeeSafe tracks the reference.
 - [x] Run each switch on and off (`--no-placement`, `--no-bce`, `--no-oce`, `--no-closure-specialisation`) against the
   optimisation snapshots.
 - [x] Rerun the fixed point with production defaults and `--split` (S4).
@@ -511,8 +511,8 @@ Dependencies: P7. Parser-only tools may start after P2, and semantic tools after
   - manifest/TOML, path and git dependencies, the lock file and cache;
   - the registry index and version solving, `fetch`/`publish`/`index-check`;
   - `$CEESAFE_HOME`;
-  - a one-way conversion of a Nova package to a CeeSafe package (`nova.toml`, `nova.lock`, `.nova`), if wanted:
-    ceesafec does not read Nova packages (Decision 0003).
+  - a one-way conversion of a CeeSafe package to a CeeSafe package (`ceesafe.toml`, `ceesafe.lock`, `.cee`), if wanted:
+    ceesafec does not read CeeSafe packages (Decision 0003).
 
   Local fixture repositories, no network.
 - [x] Interpreter: values, memory, numerics, builtins, deterministic threads (`Interpreter/Threads.cs`) and the sandbox (S4; threads cooperative, docs/p8-plan.md).
@@ -529,12 +529,12 @@ Dependencies: P7. Parser-only tools may start after P2, and semantic tools after
 - [x] Decide whether the command line accepts only `.cee` files (Decision 0005, accepted: only `.cee` and `.c` since
   the fork, S7).
 - [x] With the fork point, switch to the CeeSafe C prefix and ABI version (Decision 0004: `cee_`/`ceesafe_*`,
-  `ceesafe/rt.h`, `CEESAFE_ABI_VERSION`), with a link-collision test: one program linking a novac-built and a
+  `ceesafe/rt.h`, `CEESAFE_ABI_VERSION`), with a link-collision test: one program linking a the reference compiler-built and a
   ceesafec-built library (S7; `tools/link_collision.py`).
 - [x] The fork point (Decision 0003 §3): taken at S7 (`docs/fork-point.md`). CeeSafe's corpus starts there
-  (`tests/reference/`), and the novac comparisons are regression tests against novac 0.6.0's output with CeeSafe's
-  names mapped back. CeeSafe's own specification followed P8 (Decision 0006, `docs/spec-plan.md`): Nova's `v0.6.0`
-  text forked into `spec/` and `guide/`, Nova's ADRs inherited, and ceesafec embeds it.
+  (`tests/reference/`), and the the reference compiler comparisons are regression tests against the reference compiler 0.6.0's output with CeeSafe's
+  names mapped back. CeeSafe's own specification followed P8 (Decision 0006, `docs/spec-plan.md`): the reference's `v0.6.0`
+  text forked into `spec/` and `guide/`, the inherited ADRs inherited, and ceesafec embeds it.
 
 Gate: every command and flag in the P0 ledger is implemented, or has an accepted decision. The contract suites pass.
 No C# fallback.
@@ -544,9 +544,9 @@ No C# fallback.
 Dependencies: P8.
 
 - [ ] Run the full acceptance matrix (§6) on both architectures, hosted and freestanding.
-- [ ] Run a recorded 24-hour differential fuzz campaign against novac, with optimisations off and on, flat and
-  structured C, closures, `dyn`, threads and numeric edges. Port the generator to Nova.
-- [ ] Measure compiler throughput and peak memory against novac. Run it on the Ryzen host with `nice`.
+- [ ] Run a recorded 24-hour differential fuzz campaign against the reference compiler, with optimisations off and on, flat and
+  structured C, closures, `dyn`, threads and numeric edges. Port the generator to the reference.
+- [ ] Measure compiler throughput and peak memory against the reference compiler. Run it on the Ryzen host with `nice`.
 - [x] Release `ceesafec` for the six platforms, with checksums, licences, install scripts and macOS notarisation:
   v0.1.0, 2026-10-31, on the owner's word (`docs/release.md`; every platform's binary built from one C seed and
   checked to emit it).
@@ -554,7 +554,7 @@ Dependencies: P8.
   (2026-11-01, from 0.3.0: `ceesafec-<version>-seed.tar.gz`, built by the workflow's seed-check on three systems).
 - [ ] Build and run `ceesafec` on CosmoOS userland, on both architectures, including self-compilation.
 - [ ] Have the safety passes and `unsafe` adapters reviewed independently when a reviewer is available.
-- [ ] Optional (Decision 0003: CosmoOS stays on Nova): migrate CosmoOS (`.nova` to `.cee`, the pin to `ceesafec`) one
+- [ ] Optional (Decision 0003: CosmoOS stays on the reference): migrate CosmoOS (`.cee` to `.cee`, the pin to `ceesafec`) one
   component per reviewed, reversible PR, if the owner takes it up.
 - [ ] Document the point at which CeeSafe becomes the supported compiler, and the frozen C# reference.
 
@@ -658,11 +658,11 @@ green.
 ## 5. Bootstrap protocol (planned interfaces; none exist yet)
 
 ```text
-gen1: ~/.nova/0.4.1/bin/novac build              (pinned stage-0, CeeSafe .nova sources)
+gen1: the reference compiler 0.4.1 build              (pinned stage-0, CeeSafe .cee sources)
 gen2: out/gen1/ceesafec build -o out/gen2/ceesafec  --emit c kept in out/gen2/c/
 gen3: out/gen2/ceesafec build -o out/gen3/ceesafec  --emit c kept in out/gen3/c/
 tools/compare-stages out/gen2 out/gen3            (byte equality of C and resources)
-tools/run-fixtures --compiler out/gen2/ceesafec --reference ~/.nova/0.4.1/bin/novac
+tools/run-fixtures --compiler out/gen2/ceesafec --reference the reference compiler 0.4.1
 ```
 
 The primary artefacts are the generated C and the bundled resources. Binary equality also needs controlled linker,
@@ -678,7 +678,7 @@ proof of correctness or of an uncompromised seed: keep the provenance, the indep
 | Types, generics, HIR | fixtures, constant edges, HIR snapshots, profiles | P3 |
 | Ownership, borrows, effects | every negative, mutations, regions, captures, threads | P4 |
 | Drops | post-drop NIR, early exits, partial moves, allocation failures | P4–P5 |
-| Native semantics | stdout, stderr, status, panic sites against novac and the interpreter | P5 |
+| Native semantics | stdout, stderr, status, panic sites against the reference compiler and the interpreter | P5 |
 | C backend | snapshots, strict C11 warnings, determinism, FFI, source maps | P5–P7 |
 | Self-hosting | gen2 equals gen3, no .NET on `PATH`, CeeSafe names | P6, P6R, P8 |
 | Optimisations | each switch on and off, explanation reports, fuzz | P7 |
@@ -688,7 +688,7 @@ proof of correctness or of an uncompromised seed: keep the provenance, the indep
 | Robustness | sanitizers on the compiler and its programs, OOM sweeps, malformed input, fuzz campaign | ongoing |
 
 Comparison policy:
-- Byte equality where a contract promises it (dumps, JSON, protocol streams, gen2 against gen3), and novac-equal C
+- Byte equality where a contract promises it (dumps, JSON, protocol streams, gen2 against gen3), and the reference compiler-equal C
   where the backend is unchanged.
 - Normalisation is narrow and versioned. It never hides a missing diagnostic, check, drop or panic location.
 - A known reference bug gets a reproducer, a spec citation and a separate expected outcome. Expected results are never
@@ -699,11 +699,11 @@ Comparison policy:
 
 | Risk | Mitigation | Blocks |
 |---|---|---|
-| **Nova lacks library and host support for a compiler** (§2.2) | N track upstream; P1 probes decide the order | P1–P5 |
-| N-track throughput: each item is spec, ADR, implementation and release in Nova | batch items per novac release; start with N1/N2, which the frontend needs first | P2–P3 |
+| **The reference lacks library and host support for a compiler** (§2.2) | N track upstream; P1 probes decide the order | P1–P5 |
+| N-track throughput: each item is spec, ADR, implementation and release in the reference | batch items per the reference compiler release; start with N1/N2, which the frontend needs first | P2–P3 |
 | Index aliasing makes table-heavy code awkward | P1 ID/copy-out prototypes; N5 only with evidence | P2–P4 |
-| No precedent for a large Nova program (~360 lines today) | P1 probes at scale; measure novac check and build time as `src/` grows | P1 on |
-| Stage-0 drift as Nova evolves | pin a release; rebaseline only at gates (`bootstrap/reference.md`) | all |
+| No precedent for a large CeeSafe program (~360 lines today) | P1 probes at scale; measure ceesafec check and build time as `src/` grows | P1 on |
+| Stage-0 drift as the reference evolves | pin a release; rebaseline only at gates (`bootstrap/reference.md`) | all |
 | Stage-0 compiler bug exposed by CeeSafe | reduced reproducers, fixed upstream, re-pin | dependent phase |
 | Numeric or text differences silently change acceptance | exact integers, UTF-16 tests, independent boundary oracles | P3 |
 | Translation loses safety or drops | invariant-to-test map, mutations, NIR comparison, sanitizers | P4–P9 |
@@ -715,7 +715,7 @@ Comparison policy:
 | Scope grows past reviewable changes | port pass by pass; gate each phase | all |
 
 A change to language semantics, memory architecture, public compatibility, supported targets or the bootstrap trust
-policy needs a decision record: in Nova for the language, in CeeSafe for the compiler and its identity.
+policy needs a decision record: in the reference for the language, in CeeSafe for the compiler and its identity.
 
 ## 8. Order
 
@@ -723,28 +723,28 @@ policy needs a decision record: in Nova for the language, in CeeSafe for the com
 P0 foundation ──> P1 probes + support lib ──> P2 frontend ──> P3 types/HIR ──> P4 NIR + safety
                     │  ▲                         ▲               ▲
                     ▼  │                         │               │
-                 N track (upstream Nova M15: N1 strings, N2 maps, N3 generics/From, N4 host, N5?)
+                 N track (upstream the reference M15: N1 strings, N2 maps, N3 generics/From, N4 host, N5?)
 P4 ──> P5 flat C ──> P6 fixed point ──> P6R rename ──> P7 optimisations ──> P8 tools ──> P9 release
 ```
 
 ## 9. Immediate work queue
 
-1. **Pinned to novac 0.5.0** (2026-10-30; 0.4.1 before it): M15 S1–S7 and the N7 fix shipped, every P1 workaround removed. The N
+1. **Pinned to the reference compiler 0.5.0** (2026-10-30; 0.4.1 before it): M15 S1–S7 and the N7 fix shipped, every P1 workaround removed. The N
    track has no open blocking item.
 2. P2–P5 are done (`docs/p2-frontend.md`, `docs/p3-plan.md`, `docs/p4-plan.md`, `docs/p5-plan.md`), pinned to
-   novac 0.6.0; the C matrix is complete (P5). P6, the first verified fixed point, holds on macOS and Linux
+   The reference compiler 0.6.0; the C matrix is complete (P5). P6, the first verified fixed point, holds on macOS and Linux
    (`docs/p6-fixed-point.md`). P6R is done (Decision 0002): CeeSafe's sources are `.cee` with `ceesafe.toml`,
-   legacy `.nova` packages still build, codes keep N, and `tools/bootstrap.sh` builds from novac. P7 is done
-   (`docs/p7-plan.md`): ceesafec emits novac's production C (structured, placement, check elimination, closure
+   legacy `.cee` packages still build, codes keep N, and `tools/bootstrap.sh` builds from the reference compiler. P7 is done
+   (`docs/p7-plan.md`): ceesafec emits the reference compiler's production C (structured, placement, check elimination, closure
    specialisation) byte for byte, and reaches the fixed point in that form. P8 is in progress (`docs/p8-plan.md`):
    `explain`, `fix`, `fmt`, `doc`, the package commands, `run --interp` and the `lsp` and `mcp` servers are identical to
-   novac's (S0–S5); S6 adds the package-mode fixed point on macOS and Linux, Windows with MSVC and clang (the same
+   The reference compiler's (S0–S5); S6 adds the package-mode fixed point on macOS and Linux, Windows with MSVC and clang (the same
    C), the debugger scripts and the VS Code extension. S7 took the fork point: CeeSafe's C names and ABI version,
-   `.cee` only, its own corpus, novac 0.6.0 the frozen baseline (`docs/fork-point.md`). P8 is complete. CeeSafe's
+   `.cee` only, its own corpus, the reference compiler 0.6.0 the frozen baseline (`docs/fork-point.md`). P8 is complete. CeeSafe's
    own specification is written (Decision 0006: `spec/`, `guide/`, `docs/spec-plan.md`); next, P9.
-4. Upstream (Nova #6, filed 2026-10-30): novac 0.6.0's `offsetOf<T>(field)` is 0 unless `T`'s layout was computed before (CheckOffsetOf reads
+4. Upstream (the reference #6, filed 2026-10-30): the reference compiler 0.6.0's `offsetOf<T>(field)` is 0 unless `T`'s layout was computed before (CheckOffsetOf reads
    `member.Offset` without `TypeTable.LayoutOf(measured)`); ceesafec gives the true offset.
-5. Owner's call: propose upstream that N0110 count `else if` links and `?` suffixes. novac's `--dump-ast` aborts on a
+5. Owner's call: propose upstream that N0110 count `else if` links and `?` suffixes. The reference compiler's `--dump-ast` aborts on a
    20,000-link `else if` chain (`docs/p2-frontend.md` §6).
 
 Progress is measured in completed contracts and gates. There is no calendar estimate before P1 produces evidence.
@@ -753,29 +753,29 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 
 | Date | Work actually performed | Result |
 |---|---|---|
-| 2026-10-29 | Read-only inspection of Nova and an empty CeeSafe; first roadmap draft; owner chose a full rename | planning only |
-| 2026-10-30 | Cross-checked the draft against Nova `07d561f` and the `docs/` specs. Owner decisions recorded as decision 0001. Roadmap rewritten. | Draft found stale: baseline, ADRs to 0027, counts, pipeline citation, and Nova's missing self-hosting prerequisites (§2.2) |
-| 2026-10-30 | `~/.nova/bin/novac new ceesafe --agent claude` (0.3.1) in a scratch directory, copied into `~/dev/CeeSafe`; `git init`; skeleton `src/main.nova`; `bootstrap/reference.md` | done |
-| 2026-10-30 | P0 inventory, ledger and runner: `tools/inventory.py`, `docs/reference-inventory.md`, `docs/parity.md`, `tools/run_corpus.py`; novac built from `07d561f` into a scratch directory for comparison | done; findings in `docs/parity.md` §3 |
+| 2026-10-29 | Read-only inspection of the reference and an empty CeeSafe; first roadmap draft; owner chose a full rename | planning only |
+| 2026-10-30 | Cross-checked the draft against the reference `07d561f` and the `docs/` specs. Owner decisions recorded as decision 0001. Roadmap rewritten. | Draft found stale: baseline, ADRs to 0027, counts, pipeline citation, and the reference's missing self-hosting prerequisites (§2.2) |
+| 2026-10-30 | `the reference compiler new ceesafe --agent claude` (0.3.1) in a scratch directory, copied into `~/dev/CeeSafe`; `git init`; skeleton `src/main.cee`; `bootstrap/reference.md` | done |
+| 2026-10-30 | P0 inventory, ledger and runner: `tools/inventory.py`, `docs/reference-inventory.md`, `docs/parity.md`, `tools/run_corpus.py`; the reference compiler built from `07d561f` into a scratch directory for comparison | done; findings in `docs/parity.md` §3 |
 | 2026-10-30 | P0 gate on the Ryzen box | passed; P0 complete |
 | 2026-10-30 | P1 probes (`probes/`), the report (`docs/p1-probes.md`), and an upstream crash reproducer (`probes/upstream/`) | 12/12 pass; N list revised |
 | 2026-10-30 | P1 support library, oracles (`tools/oracles/`), fault sweep, limits, skeleton loading; `run_corpus.py --with` and `--check-leaks`; 4 more upstream reproducers | all pass; P1 gate passed |
-| 2026-10-30 | Filed Nova issues #1–#5 (the P1 upstream defects; each reproduced again on `origin/main` 07d561f first) | filed |
-| 2026-10-30 | Drafted Nova M15 (`docs/milestone-15.md`, Nova `34ce40a`, pushed) | proposed; awaiting the owner |
-| 2026-10-30 | Nova M15 S1–S6 implemented and pushed (Nova `4126457`, CI green); issues #1–#5 closed; ADR 0028 (S7) proposed. Checked against this repository with novac at `4126457`: probes 11/12 (the 12th, `text-gaps`, expects `StringView.fromUtf8` to be missing), support tests 6/6, fault sweep 573/573 | awaiting a release (0.3.2 / 0.4.0) to re-pin |
-| 2026-10-30 | Nova M15 S7 implemented (ADR 0028 accepted; Nova `61cb665`, `1d1f091`, CI green on Linux and Windows; `c3.py` passes in a CosmoOS aarch64 guest): `Process.capture`, `File.kind`, `Environment.variable`, `Directory` | M15 complete; re-pin waits for a release |
-| 2026-10-30 | Re-pinned to novac 0.4.0, then 0.4.1 (`80d8d8c`). 0.4.0 reserved its lib/std helper names (N7), fixed in Nova `24106b0` and released as the point release 0.4.1. All P1 workarounds removed; the four upstream reproducers became regression probes. Gates rerun with 0.4.1: macOS (Apple clang 21) and the Ryzen box (GCC 12; clang 18.1.8 -O2; clang 18.1.8 ASan+UBSan+LSan) | reference corpus at `v0.4.1` 467 pass, 3 partial, no leaks, on both; probes 16/16; support 6/6; fault sweep 573/573; skeleton builds; inventory regenerated, 0 unmapped |
-| 2026-10-30 | Re-pinned to novac 0.5.0 (`af071d4`, ADR 0029) at P3 S2b, before any S2b code. lib/ unchanged, the checker change is S7's (FFI). Gates rerun on macOS (Apple clang 21) only; the Ryzen box keeps 0.4.1 until its next gate run | probes 16/16; support 8/8; type table 1/1 with no leaks; reference corpus at `v0.5.0` 468 pass, 3 partial; parse 483/483 identical; check 99/320 identical (as with 0.4.1); fault sweep 573/573 |
+| 2026-10-30 | Filed the reference issues #1–#5 (the P1 upstream defects; each reproduced again on `origin/main` 07d561f first) | filed |
+| 2026-10-30 | Drafted the reference M15 (`docs/milestone-15.md`, the reference `34ce40a`, pushed) | proposed; awaiting the owner |
+| 2026-10-30 | The reference M15 S1–S6 implemented and pushed (the reference `4126457`, CI green); issues #1–#5 closed; ADR 0028 (S7) proposed. Checked against this repository with the reference compiler at `4126457`: probes 11/12 (the 12th, `text-gaps`, expects `StringView.fromUtf8` to be missing), support tests 6/6, fault sweep 573/573 | awaiting a release (0.3.2 / 0.4.0) to re-pin |
+| 2026-10-30 | The reference M15 S7 implemented (ADR 0028 accepted; the reference `61cb665`, `1d1f091`, CI green on Linux and Windows; `c3.py` passes in a CosmoOS aarch64 guest): `Process.capture`, `File.kind`, `Environment.variable`, `Directory` | M15 complete; re-pin waits for a release |
+| 2026-10-30 | Re-pinned to the reference compiler 0.4.0, then 0.4.1 (`80d8d8c`). 0.4.0 reserved its lib/std helper names (N7), fixed in the reference `24106b0` and released as the point release 0.4.1. All P1 workarounds removed; the four upstream reproducers became regression probes. Gates rerun with 0.4.1: macOS (Apple clang 21) and the Ryzen box (GCC 12; clang 18.1.8 -O2; clang 18.1.8 ASan+UBSan+LSan) | reference corpus at `v0.4.1` 467 pass, 3 partial, no leaks, on both; probes 16/16; support 6/6; fault sweep 573/573; skeleton builds; inventory regenerated, 0 unmapped |
+| 2026-10-30 | Re-pinned to the reference compiler 0.5.0 (`af071d4`, ADR 0029) at P3 S2b, before any S2b code. lib/ unchanged, the checker change is S7's (FFI). Gates rerun on macOS (Apple clang 21) only; the Ryzen box keeps 0.4.1 until its next gate run | probes 16/16; support 8/8; type table 1/1 with no leaks; reference corpus at `v0.5.0` 468 pass, 3 partial; parse 483/483 identical; check 99/320 identical (as with 0.4.1); fault sweep 573/573 |
 | 2026-10-30 | P2: lexer, diagnostics and JSON, AST tables, parser and `--dump-ast` (`src/syntax/`, `src/diagnostics/`); token-dump oracle from the reference's `Lexer`; `compare_tokens.py`, `compare_parse.py`, `lexer_fuzz.py`, `parser_fuzz.py`, `gen_catalog.py` | gate passed on macOS and Linux (`docs/p2-frontend.md` §4): parse families 68/68 with no reference difference, 540/540 reference files identical, 5,000 mutated and 3,000 random inputs identical, sanitizers clean, `live=0` |
-| 2026-10-30 | P3: the type checker (`src/check/`, `src/hir/`), slices S0–S8 (`docs/p3-plan.md`), and package mode for `check` (`src/host/packages.nova`, path dependencies) | P3 gate passed: check-pass 27/27 and the 27 HIR snapshots identical; check programs 265/320, the other 55 differ only by P4's diagnostics or novac's printer crashes; `ffi`, `freestanding`, `emit-c`, `placement`, `bounds-checks`, `overflow-checks`, `closure-calls`, `run-fail` 83/83; package fixtures 7/7; `ceesafec check` of CeeSafe itself identical to novac (HIR dump, 35,150 lines); ASan+UBSan clean |
-| 2026-10-30 | Re-pinned to novac 0.6.0 (`93e0a46`, ADR 0030) after P3; `offsetOf`/`callerAddress` ported; every completed gate rerun (`bootstrap/reference.md`) | all pass; one upstream bug found (`offsetOf` before layout is 0) |
-| 2026-10-30 | P4: NIR (`src/nir/`: model, printer, builder, move paths, drop elaboration, move/in-place/borrow/effect checkers, `passes.nova`), `build --dump-nir`, diagnostic notes, `tools/compare_nir.py`, `tools/mutation_suite.py`, `docs/p4-evidence.md`; P3 gaps found and fixed (type-parameter flow names, `Box.create`'s `@placed` methods, HIR's dead `isGeneric`) | P4 gate passed: check programs 318/322, the 4 recorded divergences; other families 84/84; NIR 284/284 and CeeSafe's own package identical; mutations 1,152/1,152 against the oracle, as with novac; `check --dump-hir` identical on 186/186 check-pass and run-pass programs; packages 7/7; `ceesafec check` of CeeSafe clean (0.77 s); ceesafec under ASan+UBSan over 295 check-fail and run-pass programs (`build --dump-nir`) and its own package: no report, `live=0` |
-| 2026-10-30 | P5: the flat C backend (`src/backend/`), the runtime embedded (`tools/gen_runtime.py`), the toolchain and `build --emit c|exe|obj` with `-g`, `--split`, `--cc`, `--cflag`, `--ld` (`src/host/toolchain.nova`, `src/host/build.nova`); `tools/compare_c.py`, `tools/fault_injection.py`, `tools/collection_properties.py`, `tools/freestanding_check.py`; P3 gaps fixed (built-in items' `Used` marks, HirProgram's Structs and DynSignatures, InHostedLibrary), one NIR span fixed (an exhaustive match's Unreachable) | P5 gate passed: C identical for 284/284 programs in four forms (flat, split, `-g`, both) and for CeeSafe itself; run-pass 159/159, run-fail 40/40, ffi 8/8 under Apple clang 21, clang 18 and GCC 12 (`-O2`, `-O0`, overflow fallback, ASan+UBSan with leak checks, split, `-g`, `-Werror`) but one GCC report that novac's C shares; TSan 3/3; fault sweep 789 points on macOS and Linux, equal to novac's runs; collection properties 30/30 with 156 swept points; freestanding host and both triples clean; emit-c differences reviewed (P7's form); ceesafec built from its own C by GCC emits the same C on Linux |
+| 2026-10-30 | P3: the type checker (`src/check/`, `src/hir/`), slices S0–S8 (`docs/p3-plan.md`), and package mode for `check` (`src/host/packages.cee`, path dependencies) | P3 gate passed: check-pass 27/27 and the 27 HIR snapshots identical; check programs 265/320, the other 55 differ only by P4's diagnostics or the reference compiler's printer crashes; `ffi`, `freestanding`, `emit-c`, `placement`, `bounds-checks`, `overflow-checks`, `closure-calls`, `run-fail` 83/83; package fixtures 7/7; `ceesafec check` of CeeSafe itself identical to the reference compiler (HIR dump, 35,150 lines); ASan+UBSan clean |
+| 2026-10-30 | Re-pinned to the reference compiler 0.6.0 (`93e0a46`, ADR 0030) after P3; `offsetOf`/`callerAddress` ported; every completed gate rerun (`bootstrap/reference.md`) | all pass; one upstream bug found (`offsetOf` before layout is 0) |
+| 2026-10-30 | P4: NIR (`src/nir/`: model, printer, builder, move paths, drop elaboration, move/in-place/borrow/effect checkers, `passes.cee`), `build --dump-nir`, diagnostic notes, `tools/compare_nir.py`, `tools/mutation_suite.py`, `docs/p4-evidence.md`; P3 gaps found and fixed (type-parameter flow names, `Box.create`'s `@placed` methods, HIR's dead `isGeneric`) | P4 gate passed: check programs 318/322, the 4 recorded divergences; other families 84/84; NIR 284/284 and CeeSafe's own package identical; mutations 1,152/1,152 against the oracle, as with the reference compiler; `check --dump-hir` identical on 186/186 check-pass and run-pass programs; packages 7/7; `ceesafec check` of CeeSafe clean (0.77 s); ceesafec under ASan+UBSan over 295 check-fail and run-pass programs (`build --dump-nir`) and its own package: no report, `live=0` |
+| 2026-10-30 | P5: the flat C backend (`src/backend/`), the runtime embedded (`tools/gen_runtime.py`), the toolchain and `build --emit c|exe|obj` with `-g`, `--split`, `--cc`, `--cflag`, `--ld` (`src/host/toolchain.cee`, `src/host/build.cee`); `tools/compare_c.py`, `tools/fault_injection.py`, `tools/collection_properties.py`, `tools/freestanding_check.py`; P3 gaps fixed (built-in items' `Used` marks, HirProgram's Structs and DynSignatures, InHostedLibrary), one NIR span fixed (an exhaustive match's Unreachable) | P5 gate passed: C identical for 284/284 programs in four forms (flat, split, `-g`, both) and for CeeSafe itself; run-pass 159/159, run-fail 40/40, ffi 8/8 under Apple clang 21, clang 18 and GCC 12 (`-O2`, `-O0`, overflow fallback, ASan+UBSan with leak checks, split, `-g`, `-Werror`) but one GCC report that the reference compiler's C shares; TSan 3/3; fault sweep 789 points on macOS and Linux, equal to the reference compiler's runs; collection properties 30/30 with 156 swept points; freestanding host and both triples clean; emit-c differences reviewed (P7's form); ceesafec built from its own C by GCC emits the same C on Linux |
 | 2026-10-30 | P6: `tools/fixed_point.py`, `tools/contract_tests.py`, `bootstrap/fixed-point/` | fixed point on macOS and Linux: C2 = C3 = C4, gen 2 = gen 3 bit for bit, in two directories, the same C on both hosts, only `cc` (and GCC's `as`, `ld`) started from gen 1 on; all contract tests pass on gen 2 but the recorded divergences |
-| 2026-10-30 | P6R: Decision 0002 (legacy `nova.toml`/`.nova` kept; codes keep N), `ceesafe.toml`/`.cee`/`ceesafe.lock` packages (`3d6ac40`), CeeSafe's own sources renamed (`8941c10`), `tools/bootstrap.sh`, `compare_packages.py --renamed` | gate passed: fixed point on CeeSafe names from a bootstrapped ceesafec on macOS and Linux, same C on both, only `src/` file names differ from the anchor's C; package fixtures legacy, renamed and mixed 7/7 each; contract tests pass on both hosts |
-| 2026-10-30 | P7: closure specialisation (`src/nir/closure_specialisation.cee`), placement (`src/nir/control_flow.cee`, `src/backend/placement.cee`), check elimination (`src/backend/check_elimination.cee`), structured C (`src/backend/c_structurer.cee`), all default on with their switches and `--explain-*` reports; `tools/compare_reports.py`, `tools/compare_self.py`, the contract suite and fixed point in the default form; Decision 0004 (C prefix at P8) | P7 gate passed: C identical to novac's default form over 308 programs (flat, `--split`, `-g`, both) and for CeeSafe itself; the four reports identical; emit-c 24/24; run corpus under Apple clang 21, clang 18 and GCC 12 (the recorded GCC report aside) and ASan+UBSan; fault sweep 783 points and collections 30/30 on both hosts; fixed point with production defaults and `--split` on macOS and Linux, the same C on both |
+| 2026-10-30 | P6R: Decision 0002 (legacy `ceesafe.toml`/`.cee` kept; codes keep N), `ceesafe.toml`/`.cee`/`ceesafe.lock` packages (`3d6ac40`), CeeSafe's own sources renamed (`8941c10`), `tools/bootstrap.sh`, `compare_packages.py --renamed` | gate passed: fixed point on CeeSafe names from a bootstrapped ceesafec on macOS and Linux, same C on both, only `src/` file names differ from the anchor's C; package fixtures legacy, renamed and mixed 7/7 each; contract tests pass on both hosts |
+| 2026-10-30 | P7: closure specialisation (`src/nir/closure_specialisation.cee`), placement (`src/nir/control_flow.cee`, `src/backend/placement.cee`), check elimination (`src/backend/check_elimination.cee`), structured C (`src/backend/c_structurer.cee`), all default on with their switches and `--explain-*` reports; `tools/compare_reports.py`, `tools/compare_self.py`, the contract suite and fixed point in the default form; Decision 0004 (C prefix at P8) | P7 gate passed: C identical to the reference compiler's default form over 308 programs (flat, `--split`, `-g`, both) and for CeeSafe itself; the four reports identical; emit-c 24/24; run corpus under Apple clang 21, clang 18 and GCC 12 (the recorded GCC report aside) and ASan+UBSan; fault sweep 783 points and collections 30/30 on both hosts; fixed point with production defaults and `--split` on macOS and Linux, the same C on both |
 | 2026-10-31 | Benchmarks and the first CeeSafe-only C (Decision 0007): `benchmarks/` (16 workloads against Rust, Rust with overflow checks and C; `run.py`), an ablation of ceesafec's C finding the costs; `runtime/` CeeSafe's own (`tools/gen_runtime.py` reads it; the regenerated embedding identical but its header); arena bump allocation inline (`ceesafe_region_alloc_fast`); zeroed boxes through `ceesafe_alloc_zeroed` (`ceeBZ_`, `calloc`); `emit-c` snapshots CeeSafe's own; `src/support/` standalone again (`none()` in `src/support/none.cee`), `tests/support` as `.cee`, `tools/fault_sweep.py` with the `CEESAFE_` variables; `guide/performance.md` | macOS arm64, Apple clang 21, rustc 1.99.1, 5 runs: CeeSafe 0.96× Rust's time (geometric mean; 1.01× before), 0.88× Rust with overflow checks; `arena` 1.37× → 0.95×, `large-objects` 1.26× → 1.02×. Fixed point holds; reference corpus all families pass with leak checks (emit-c 24/24 after the reviewed `arena.c` edit); `tests/support` 8/8 with leak checks; fault sweep 573/573; guide_check 92 examples and spec_check 76 documents, 0 problems; `fmt --check` clean |
-| 2026-10-31 | CosmoOS's move to CeeSafe, CeeSafe's side: `integrations/cosmoos/ports.py` runs CosmoOS's own `scripts/cee-gen.py` (its `generated`, `refused`) with the ceesafec under test, and with `--pinned` compares every generated file with that compiler's but for the banner's version; `c2cee.py verify` sets `CEESAFEC` and runs `make cee-check` (`--ceesafec`), and refuses a Nova-era tree; `c2cee port`'s `BUILD.md` describes the new layout and its analysis uses the kernel's include path (`out/cee/kernel/include`, `boot/protocol`, `drivers/include`); `spec/tooling.md` §9 and the integration README follow | `ports.py` on CosmoOS's local `ceesafe-migration` (`47964c10`) with ceesafec 0.3.0-dev and `--pinned` 0.2.0: 17 ports, 1 negative source, 28 generated files equal, 0 problems; on `origin/main` (still Nova) refused as intended; `c2cee selftest` PASS; `c2cee port kernel/core/bootinfo.c` drafts (it failed before on `cosmoboot.h`); `verify` refuses a Nova-era tree; spec_check and guide_check 0 problems |
+| 2026-10-31 | CosmoOS's move to CeeSafe, CeeSafe's side: `integrations/cosmoos/ports.py` runs CosmoOS's own `scripts/cee-gen.py` (its `generated`, `refused`) with the ceesafec under test, and with `--pinned` compares every generated file with that compiler's but for the banner's version; `c2cee.py verify` sets `CEESAFEC` and runs `make cee-check` (`--ceesafec`), and refuses a reference-era tree; `c2cee port`'s `BUILD.md` describes the new layout and its analysis uses the kernel's include path (`out/cee/kernel/include`, `boot/protocol`, `drivers/include`); `spec/tooling.md` §9 and the integration README follow | `ports.py` on CosmoOS's local `ceesafe-migration` (`47964c10`) with ceesafec 0.3.0-dev and `--pinned` 0.2.0: 17 ports, 1 negative source, 28 generated files equal, 0 problems; on `origin/main` (still the reference) refused as intended; `c2cee selftest` PASS; `c2cee port kernel/core/bootinfo.c` drafts (it failed before on `cosmoboot.h`); `verify` refuses a reference-era tree; spec_check and guide_check 0 problems |
 | 2026-10-31 | L1 async/await, library ownership and A0 drafts: Decision 0008 (`lib/` recovered from `src/library/sources.cee`, equal to `map_forward` of `tests/reference/lib/` for all 13 files; `tools/gen_library.py` reads `lib/`; `spec_check` documents `lib/core`); ADR 0031 proposed; `docs/async-await-proposal.md`; roadmap track L1. `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | regenerated `sources.cee` differs only in its header and one doc comment; all 13 contract steps ok (fixed point, corpus, -Werror, ASan, support, sweeps, mutations, collections, freestanding, spec, guide, debugger); `fmt --check` clean. ADR 0031 awaits the owner |
 | 2026-10-31 | L1 A0: ADR 0031 accepted ("I accept it as written."), then amended (§6: the scope's out-of-memory error is named by the caller, the owner's choice; `checkpoint(cancelled)`; `AsyncError`; `Async.race`/`all`; the `await` operand wording). Spec: `grammar.md`, `type-system.md` §32, §36.3, new §40, `ownership.md` A1–A4, `lifetimes.md` §8, `intermediate-representation.md` §3, `c-backend.md` §2.1, §3a, §6, `diagnostics.md` N0341–N0345 with N0290/N0295, `profiles.md`, `testing.md` §1; `gen_catalog.py`, `gen_docs.py`. `python3 tools/contract_tests.py --ceesafec out/ceesafec` | all 13 steps ok (spec_check: 137 codes explained); `fmt --check` clean. A0 gate passed |
 | 2026-10-31 | L1 A1: `async fn`, prefix `await`, `Async.run`, `Async.park` (src/syntax, src/check/async.cee); the `suspend` effect and its contexts (src/types, src/check/effects.cee, src/nir/effect_check.cee); awaited calls marked in NIR and N0343 (src/nir/coroutines.cee); frames, flat resume functions and `Async.run` in C (src/backend/c_async.cee); runtime/hosted/ceesafe_rt_async.c (poll, timers); lib/std/async.cee (`Timer`, `AsyncConsole`, `AsyncError`); the interpreter on a virtual clock; `run_corpus.py --interp`; contract steps `run interp` and `library`; corpus files parse-pass/async-syntax, run-pass/async-basics, async-timers, check-fail/async-tasks, async-recursion, async-effects, emit-c/async-frame; ADR 0031 §6.5 (lowering); `check-pass/effects-of.hir` and `emit-c/slice-bulk.c` updated by reviewed edit (library ids and type order only). `python3 tools/contract_tests.py --ceesafec out/ceesafec` (macOS arm64, Apple clang 21) | all 15 steps ok: fixed point; corpus incl. the 7 async files; run-pass 161 and run-fail 40 in C (-Werror, ASan+UBSan, leaks) and in the interpreter; lib/ diagnostics clean; `fmt --check` clean. Found and fixed on the way: an `as` cast in lib/ that the suppressed library diagnostics hid (hence the `library` step). A1 gate passed |
@@ -799,25 +799,26 @@ Progress is measured in completed contracts and gates. There is no calendar esti
 | 2026-11-01 | L1 A4 phase 4, ADR 0038 (accepted as proposed: children that move only before they start, `Async.runWorkers(n, task)`, the name `spawnSend`): `s.spawnSend(child)` checks its captures by `Thread.both`'s rule (a read capture `Share`, a changed one `Send`, references by their target, no closures), a `Send` error type and the system heap (N0334); `Async.runWorkers(n, task)` starts `n − 1` worker threads for the run, joined when it returns. Runtime: the run's queue of published children (taken oldest first by a worker with nothing ready), shared scopes whose count, first error and waiter change under the run's mutex, an atomic cancellation announced to every worker by an epoch, the parent woken across threads by its last child, non-blocking wake pipes; `ceesafe_scope` 24 → 32 bytes, a task 128 → 144. ThreadSanitizer found each `spawnSend` rewriting the scope's shared flag while workers read it; now only the first does. The interpreter has one worker. New run-pass/async-workers, check-fail/async-workers, a contract step "run tsan" (the async programs under ThreadSanitizer, macOS and Linux), `benchmarks/async-parallel`. `python3 tools/contract_tests.py --ceesafec out/ceesafec` on macOS and Debian; on Windows the run families, ffi, check-pass, check-fail, frames, emit-c, and the async programs on IOCP, WSAPoll and the interpreter; the benchmark on all three | macOS: 17 ok, reactor uring skipped; run tsan 21 of 21; cancel sweep 21 programs, 193 points; fault sweep 959 points. Debian: 17 ok, freestanding skipped; run tsan (GCC) 21 of 21; reactor uring 21 of 21; cancel sweep 187 points. Windows: run-pass 181, run-fail 40, ffi 9, check-pass 27, check-fail 151, frames 3, emit-c 25; async 21 on IOCP, WSAPoll and the interpreter. async-parallel, 32 children (ms at 1/2/4/8 workers): macOS 8 cores 412/194/111/70 (5.89x at 8), Debian 12 cores 292/162/87 (3.36x at 4), Windows VM 4 cores 407/203/109 (3.73x at 4) |
 | 2026-11-01 | L1 A4 phase 5, ADR 0039 (accepted as proposed: the executor over environment hooks, freestanding's share of §40 with `AsyncSignal`, CosmoOS on a worktree branch, the pin moved to this tree): `runtime/hosted/ceesafe_rt_async.c` compiled with `CEE_FREESTANDING` keeps the queue, scopes, joins, shields, cancellation and `AsyncSignal` over four hooks (`ceesafe_env_now_ms`, `_idle`, `_wake`, and `_slot`, the fourth because the profile has no TLS), with no global state; lib/core's `async.cee` (AsyncError, Timer, AsyncControl, the joins, AsyncSignal) moved from lib/std; in freestanding `Async.scope`, `blocking`, `runWorkers` and `spawnSend` are N0293 and the `IoError` type is allowed. `AsyncSignal`'s raise only pokes (it may be an interrupt's) and never touches a task that may have returned. Found by the CosmoOS boot test: the executor aligned a child's block to `sizeof(max_align_t)` (32 on x86-64) rather than its alignment (16), which `kmalloc` refuses; now `_Alignof` in every profile. `tools/freestanding_check.py` allows the hooks, Darwin's `bzero`, and a program's own statics. New freestanding/async (+ harness), run-pass/async-signal; check-fail/freestanding-hosted-names updated; check-pass/effects-of.hir closure numbers +8 by reviewed edit. CosmoOS branch `ceesafe-async-boot` (worktree `~/dev/CosmoOS-ceesafe-async`, uncommitted): self-test `cee-async`, its kernel glue, cee-gen and kernel.mk entries, pin 0.3.0-dev. `python3 tools/contract_tests.py --ceesafec out/ceesafec` on macOS and Debian; Windows run families, ffi, check-pass, check-fail, frames, emit-c, async on IOCP, WSAPoll and the interpreter; CosmoOS `gmake test` and `gmake ARCH=aarch64 test` | macOS: 18 ok (freestanding 4 programs, host and 2 triples with ld.lld), reactor uring skipped; cancel sweep 22 programs, 200 points. Debian: 18 ok, freestanding skipped (no clang); cancel sweep 194 points. Windows: run-pass 182, run-fail 40, ffi 9, check-pass 27, check-fail 151, frames 3, emit-c 25; async 22 on IOCP, WSAPoll and the interpreter. CosmoOS: x86_64 `SELFTEST: cee-async ... ok (28 ms)`, `SELFTEST: PASS (525 tests)`, boot-test PASS; aarch64 `cee-async ... ok (26 ms)`, 525 tests, PASS |
 | 2026-11-01 | P9, release 0.3.0 with a C seed (the owner's choice after L1): the version 0.3.0 (`c_program.cee`, the extension's `package.json`); `tools/seed_archive.sh` packs the seed job's C as `ceesafec-<version>-seed.tar.gz` with `bootstrap/seed/README.md` (build with `cc` or `cl` alone; check by emitting the seed from the tag) and the licences; `.github/workflows/release.yml` gains `seed-check` (Ubuntu gcc, macOS clang, Windows cl: the archive alone, its README's commands, `--version`, and the seed emitted again), publishes the archive in `SHA256SUMS`, and builds generation 1 under `cl` with `/Oi-` as ceesafec's driver does. The seed's README commands run by hand on a test archive, before the version change: macOS clang, Debian gcc 12, Windows 11 ARM64 cl, each building from the archive alone and emitting it again from the tree; `python3 tools/contract_tests.py --ceesafec out/ceesafec` on the 0.3.0 commit | seed: macOS reproduces, Debian gcc reproduces, Windows cl no differences (a first macOS-made archive carried AppleDouble files; the script now writes none). macOS contract suite: 18 ok, reactor uring skipped; cancel sweep 22 programs, 203 points |
-| 2026-11-01 | P9, release 0.3.1, Decision 0009 (the owner: "Bootstrap from 0.2.0"): the v0.3.0 tag's run (41302947031) failed in the seed job's first step, novac 0.6.0's download returning 404 since Nova's repository became private, and published nothing. The release's stage 0 is now ceesafec 0.2.0 from this repository's release (hash from its `SHA256SUMS`); `tools/bootstrap_release.sh` builds the tree through the chain recorded for 0.2.0: 7d2a041 (the newest commit 0.2.0 builds), then 7d2a041 with 291246d's `src/library` (a bridge: 291246d uses the `AsyncSockets` it adds), then the tree, with `-D_GNU_SOURCE` on Linux for the chain's pre-844e755 runtime. `release.yml`, `docs/release.md`, `bootstrap/reference.md` ("Release stage 0") follow; the version is 0.3.1 (`c_program.cee`, the extension's `package.json`), the compiler 0.3.0's otherwise. | From 0.2.0 at 70da046: macOS arm64 and Debian 12 x86-64 reach the fixed point, seed `main.c` `d1ba9faf…`, identical to the C of the novac-bootstrapped 0.3.0 (`out/ceesafec`). Windows 11 ARM64 (`cl`, the seed README's command): the 0.3.1 seed archive builds `ceesafec 0.3.1`, which emits the seed again from the tree. `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.1 on macOS: 18 ok, reactor uring skipped; fault sweep 964 points, cancel sweep 208 points, 0 fail |
+| 2026-11-01 | P9, release 0.3.1, Decision 0009 (the owner: "Bootstrap from 0.2.0"): the v0.3.0 tag's run (41302947031) failed in the seed job's first step, the reference compiler 0.6.0's download returning 404 since the reference's repository became private, and published nothing. The release's stage 0 is now ceesafec 0.2.0 from this repository's release (hash from its `SHA256SUMS`); `tools/bootstrap_release.sh` builds the tree through the chain recorded for 0.2.0: 7d2a041 (the newest commit 0.2.0 builds), then 7d2a041 with 291246d's `src/library` (a bridge: 291246d uses the `AsyncSockets` it adds), then the tree, with `-D_GNU_SOURCE` on Linux for the chain's pre-844e755 runtime. `release.yml`, `docs/release.md`, `bootstrap/reference.md` ("Release stage 0") follow; the version is 0.3.1 (`c_program.cee`, the extension's `package.json`), the compiler 0.3.0's otherwise. | From 0.2.0 at 70da046: macOS arm64 and Debian 12 x86-64 reach the fixed point, seed `main.c` `d1ba9faf…`, identical to the C of the the reference compiler-bootstrapped 0.3.0 (`out/ceesafec`). Windows 11 ARM64 (`cl`, the seed README's command): the 0.3.1 seed archive builds `ceesafec 0.3.1`, which emits the seed again from the tree. `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.1 on macOS: 18 ok, reactor uring skipped; fault sweep 964 points, cancel sweep 208 points, 0 fail |
 | 2026-11-01 | P9, release 0.3.2: v0.3.1's run (41306957697) built the seed, its three checks and all six platforms from ceesafec 0.2.0, then failed in the `extension` job's packaging: `vpx`, which the extension's `package` script ran, comes with Vite+'s standalone installer and not with the npm package the workflow installs, so nothing was published. The script runs `vp dlx @vscode/vsce` instead; the version is 0.3.2. | `vp run package` with no `vpx` on `PATH` writes the `.vsix`; `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.2 on macOS: 18 ok, reactor uring skipped |
+| 2026-11-01 | Decision 0010 (the owner: remove every mention of the retired predecessor, "Everything but licence"): the corpus's 107 snapshots that were compared through the name mapping replaced by ceesafec's own output, each only where the mapped output equalled the snapshot byte for byte, and the mapping (`tools/names.py`) removed from `run_corpus.py`, `fault_injection.py`, `collection_properties.py`, `freestanding_check.py`, `mutation_suite.py` and `gen_docs.py`; the `compare_*` tools, fork generators, inventory, `tools/bootstrap.sh`, the oracles built from its source, `tests/reference/lib` and `tests/reference/integrations` deleted; 132 fixtures renamed to `.cee`, `ceesafe.toml` and `ceesafe.lock`; the compiler's old-manifest message and its identifiers renamed; `AGENTS.md` from `ceesafec agents`, `.mcp.json` serving `out/ceesafec mcp`; the record's mentions rewritten as "the reference" (the inherited ADRs say so in their header), dead links made text; corpus test data spelling the name now spells `safe` (same length), the two expectations computed from the bytes (an FNV-1a hash, a byte sum) recomputed in Python; `tools/spec_check.py`'s names rule now checks every tracked file's path and text, `COPYING.RUNTIME` alone excepted | `run_corpus.py` on the corpus before and after removing the mapping: 519 files, every family as before (freestanding partial as before). `python3 tools/contract_tests.py --ceesafec out/ceesafec` at 0.3.2 on macOS: 18 ok, reactor uring skipped (a first run caught a byte sum in `string-views`, then recomputed; then the guard caught this decision's own text) |
 
-**Tests run for the skeleton** (2026-10-30, novac 0.3.1, Apple clang 21.0.0):
-- `novac check` and `novac fmt --check`: clean.
-- `novac build`, then `./out/ceesafe --version`: printed `ceesafec 0.0.0-dev`, exit 0.
+**Tests run for the skeleton** (2026-10-30, the reference compiler 0.3.1, Apple clang 21.0.0):
+- `ceesafec check` and `ceesafec fmt --check`: clean.
+- `ceesafec build`, then `./out/ceesafe --version`: printed `ceesafec 0.0.0-dev`, exit 0.
 - No arguments: exit 2. An unknown command: exit 2.
-- `novac run --interp -- --version` printed the same version.
+- `ceesafec run --interp -- --version` printed the same version.
 
 **Tests run for P0** (2026-10-30, macOS arm64, Apple clang 21.0.0, Python 3.9.6):
-- `tools/run_corpus.py --compiler ~/.nova/bin/novac` (0.3.1), all 457 files: 454 passed, 0 failed, 3 partial
+- `tools/run_corpus.py --compiler the reference compiler` (0.3.1), all 457 files: 454 passed, 0 failed, 3 partial
   (freestanding: object builds only).
-- The same run with novac `07d561f` against `--reference` 0.3.1: 0 differences.
+- The same run with the reference compiler `07d561f` against `--reference` 0.3.1: 0 differences.
 - Against a deliberately wrong compiler: every affected file failed, as expected.
 - `tools/inventory.py` run twice gave byte-identical output, with no host paths.
-- Nova's `dotnet test Nova.slnx` at `07d561f`: 3,589 passed, 0 failed, 0 skipped.
+- The reference's `dotnet test the reference.slnx` at `07d561f`: 3,589 passed, 0 failed, 0 skipped.
 
-**P0 gate on the Ryzen box** (2026-10-30, Debian 12 x86-64, Python 3.11.2; novac 0.3.1 linux-x64, sha256
-`8bd8d81b…d973`; Nova `07d561f`; CeeSafe `ef3e413`). Each run used `nice -n 15` and 6 jobs:
+**P0 gate on the Ryzen box** (2026-10-30, Debian 12 x86-64, Python 3.11.2; the reference compiler 0.3.1 linux-x64, sha256
+`8bd8d81b…d973`; the reference `07d561f`; CeeSafe `ef3e413`). Each run used `nice -n 15` and 6 jobs:
 
 | Run | Result |
 |---|---|
@@ -841,16 +842,16 @@ under GCC 12, clang 18 and Apple clang, with and without ASan+UBSan. All passed.
 - Ryzen box (Debian 12, CeeSafe `28fdb5b`), all with `--check-leaks`:
   - the support tests under GCC 12 and under clang 18 with ASan+UBSan+LSan: 6/6 each;
   - the probes under both: 8/8 each;
-  - Nova's run-pass, run-fail and ffi corpus: 199/199 with no leak;
+  - The reference's run-pass, run-fail and ffi corpus: 199/199 with no leak;
   - the fault sweep under clang ASan+LSan: 573/573.
 - The earlier gate run found the missing-drop bug as a LeakSanitizer report.
 
-**P5 flat C backend** (2026-10-30; `docs/p5-plan.md`): C identical to novac's for 284/284 programs in four forms and
+**P5 flat C backend** (2026-10-30; `docs/p5-plan.md`): C identical to the reference compiler's for 284/284 programs in four forms and
 for CeeSafe itself; run-pass, run-fail and ffi pass under Apple clang 21, clang 18 and GCC 12 in every configuration
-(one GCC report that novac's C shares); the fault sweep (789 points), the collection properties and the freestanding
+(one GCC report that the reference compiler's C shares); the fault sweep (789 points), the collection properties and the freestanding
 checks pass on macOS and Linux.
 
-**P6 fixed point** (2026-10-30; `docs/p6-fixed-point.md`): gen 1 by novac 0.6.0, gen 2 and gen 3 by CeeSafe; C2 = C3
+**P6 fixed point** (2026-10-30; `docs/p6-fixed-point.md`): gen 1 by the reference compiler 0.6.0, gen 2 and gen 3 by CeeSafe; C2 = C3
 and gen 2 = gen 3 on macOS (Apple clang 21) and Linux (GCC 12), in two directories each, with the same C on both
 hosts; only the C compiler runs from gen 1 on; `tools/contract_tests.py` passes on gen 2 on both hosts.
 
@@ -859,7 +860,7 @@ fixed point on CeeSafe names with a bootstrapped ceesafec as stage 0 on macOS an
 renamed and mixed package fixtures pass; contract tests pass on both hosts.
 
 **P7 production C** (2026-10-30; `docs/p7-plan.md`): closure specialisation, placement, check elimination and the
-structured form, on by default; C identical to novac 0.6.0's default form over 308 programs in four shapes and for
+structured form, on by default; C identical to the reference compiler 0.6.0's default form over 308 programs in four shapes and for
 CeeSafe itself, the four reports identical; the contract suite in the default form on macOS and Linux; the fixed
 point in the default form and with `--split` on both hosts, the same C on both. Decision 0004: the C prefix switches
 at P8.
@@ -874,7 +875,7 @@ CeeSafe's own C identical after mapping back, 535,154 lines and 623,749 with `--
 bootstrapped stage 0 in the default form and with `--split` (`bootstrap/fixed-point/2026-10-31-spec-*`). Linux and
 Windows not rerun for this commit.
 
-**CosmoOS integrations** (2026-10-31; `docs/cosmoos-integrations.md`, macOS arm64, QEMU, CosmoOS `9c0d0f84`): Nova's
+**CosmoOS integrations** (2026-10-31; `docs/cosmoos-integrations.md`, macOS arm64, QEMU, CosmoOS `9c0d0f84`): the reference's
 C1–C9 and K3 checks forked into `integrations/cosmoos/` and run with ceesafec: C1 (with the 199-program corpus in the
 guest), C2 (412 sweep runs), C3, C5, C7 and C8 booted on x86_64; C4 on both arches; C6, C9 and K3. All pass. C9 found
 a ceesafec bug (a closure with an `unsafe { e }` body crashed the capture scan), fixed with a regression program in

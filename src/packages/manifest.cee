@@ -118,19 +118,13 @@ struct Manifest {
     dependencies: Vector<DependencySpec>;
 }
 
-/// The manifest's file name. Nova's `nova.toml` packages are not read (Decision 0003).
+/// The manifest's file name.
 fn manifestName() -> StringView => "ceesafe.toml";
 
 fn lockName() -> StringView => "ceesafe.lock";
 
 fn hasManifest(directory: Slice<u8>) -> Result<bool, AllocError> {
     let path = joinPath(directory, manifestName().bytes())?;
-    return Ok(fileExists(path.view()));
-}
-
-/// Whether a directory holds a Nova package (`nova.toml`), which CeeSafe does not read: its messages say so.
-fn hasNovaManifest(directory: Slice<u8>) -> Result<bool, AllocError> {
-    let path = joinPath(directory, "nova.toml".bytes())?;
     return Ok(fileExists(path.view()));
 }
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Writes tests/support/run-pass/bigint-cases.cee from Python's arbitrary-precision integers.
 
-The oracle is Python's int, which is independent of src/support/bigint.cee. Semantics follow the reference's
-System.Numerics.BigInteger as used by IntegerSemantics.cs: truncating division (the quotient rounds toward zero, the
-remainder has the dividend's sign), Wrap (reduce modulo 2^bits, then read as signed or unsigned) and NovaType.Fits.
+The oracle is Python's int, which is independent of src/support/bigint.cee. Semantics:
+truncating division (the quotient rounds toward zero, the
+remainder has the dividend's sign), Wrap (reduce modulo 2^bits, then read as signed or unsigned) and the type table's Fits (src/types).
 
 usage: python3 tools/oracles/gen_bigint_cases.py   (rewrites the test and formats it with $CEESAFEC, default out/ceesafec;
        review the diff)
@@ -188,8 +188,8 @@ fn main() {{
                                          "bigint-cases.cee"))
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(source)
-    novac = os.environ.get("CEESAFEC", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "out", "ceesafec"))
-    subprocess.run([novac, "fmt", path], check=True)
+    formatter = os.environ.get("CEESAFEC", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "out", "ceesafec"))
+    subprocess.run([formatter, "fmt", path], check=True)
     print(f"wrote {path} ({len(pairs)} pairs, {len(EDGES)} wrap values)")
 
 

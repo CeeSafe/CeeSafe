@@ -4,9 +4,9 @@ The latest results and what they mean: [`guide/performance.md`](../guide/perform
 
 Sixteen workloads, each written in CeeSafe (`main.cee`), Rust (`main.rs`) and C (`main.c`, the baseline). Every
 version implements the **same algorithm with the same data structures** and prints one checksum line, which must be
-identical across languages (`run.py` checks it). The programs come from Nova's M9 suite at
-`v0.6.0`; the CeeSafe ones are built from the reference corpus, `tests/reference/benchmarks/suite/<workload>/main.cee`,
-and the Rust and C ones are here, `benchmarks/<workload>/main.rs` and `main.c`.
+identical across languages (`run.py` checks it). The CeeSafe programs are built from the corpus,
+`tests/reference/benchmarks/suite/<workload>/main.cee`, and the Rust and C ones are here,
+`benchmarks/<workload>/main.rs` and `main.c`.
 
 ```sh
 python3 benchmarks/run.py                                   # every workload: cee, rust, rust-checked, c; 5 runs

@@ -1,6 +1,6 @@
 // Enums, `match` and branching (the reference's CheckEnumValue, CheckMatch, CheckNestedMatch, CheckPattern,
 // CheckVariantPattern, DeclareBinding, ResolvePatternVariant, VariantText, CheckBranching, CheckBranch and
-// FinishBranches): P3 S2b. Pattern usefulness is in src/check/usefulness.nova.
+// FinishBranches): P3 S2b. Pattern usefulness is in src/check/usefulness.cee.
 
 fn branchCompletes() -> u32 => 235;
 fn nonExhaustiveMatch() -> u32 => 256;

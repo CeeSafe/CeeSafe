@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Debugging a `ceesafec build -g` program with editors/debug (docs/p8-plan.md S6; Nova's DebuggerTests).
+"""Debugging a `ceesafec build -g` program with editors/debug (docs/p8-plan.md S6).
 
 Under lldb on macOS, gdb elsewhere (or the one given): breakpoints at source lines, `ceesafe-locals` and `ceesafe-bt`
 showing CeeSafe names, a breakpoint on ceesafe_panic stopping at the failed check, the same through `--split` with

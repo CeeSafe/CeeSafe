@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The same C from ceesafec on another host (docs/p8-plan.md S6): the gate "ceesafec built by MSVC emits the same C".
 
-`run` makes, for every source file under the corpus root's tests/corpus, benchmarks and programs (since the fork,
-CeeSafe's copy: --root tests/reference), the C of
+`run` makes, for every source file under the corpus root's tests/corpus, benchmarks and programs
+(--root tests/reference), the C of
 `ceesafec build --emit c` in the default form, with `--split` and with `-g` (the paths relative, as the comparison
 tools give them), and records each build's exit status, standard output and standard error. `compare` then checks two
 such trees byte for byte: every C file, and every status and output.
@@ -24,7 +24,7 @@ def inputs(root):
     for top in ("tests/corpus", "benchmarks", "programs"):
         for directory, _, names in os.walk(os.path.join(root, top)):
             for name in names:
-                if name.endswith((".nova", ".cee")):
+                if name.endswith(".cee"):
                     found.append(os.path.relpath(os.path.join(directory, name), root).replace(os.sep, "/"))
     return sorted(found)
 

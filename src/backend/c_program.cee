@@ -5,7 +5,7 @@
 /// release tag must name it (docs/release.md, .github/workflows/release.yml).
 fn compilerBanner() -> StringView => "ceesafec 0.3.2";
 
-/// The version the servers report (NovaVersion.Text).
+/// The version the servers report (a constant, for reproducible C).
 fn ceesafeVersion() -> StringView => "0.3.2";
 
 fn isLibraryFunction(c: borrow Checker, function: u32) -> bool => c.hir.functions[function as usize].library;
@@ -442,7 +442,7 @@ fn setUpEmitter(
             e.fileIds.push(none())?;
         }
     }
-    // Composites: `nv_str` is the runtime's; `dyn I` and `dyn I + Send` share a C type, so each is emitted once.
+    // Composites: `cee_str` is the runtime's; `dyn I` and `dyn I + Send` share a C type, so each is emitted once.
     var names = Vector<Vector<u8>>.create();
     for (t in c.types.composites.view()) {
         if (c.types.isGeneric(t) || c.types.isStringView(t) ||

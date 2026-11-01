@@ -70,7 +70,7 @@ struct Interp {
     asyncFd: i32;                       // the parked task waits on this descriptor (a socket), or -1
     asyncFdEvents: u32;                 // 1 readable, 2 writable
     asyncWoken: Vector<u32>;            // tasks a channel's change woke, for runTasks
-    // nova_rt_core.c: allocation accounting, fault injection, the scratch stack.
+    // ceesafe_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
     liveAllocations: u64;
@@ -119,7 +119,7 @@ fn writeOutput(it: borrow mut Interp, bytes: Slice<u8>) {
     }
 }
 
-/// nova_platform_write_stderr: standard output is flushed first.
+/// ceesafe_platform_write_stderr: standard output is flushed first.
 fn writeError(it: borrow mut Interp, bytes: Slice<u8>) {
     if (it.options.capture) {
         capOutput(mut it.capturedError, mut it.truncated, it.options.outputLimit, bytes);
@@ -578,7 +578,7 @@ fn newFrame(
 }
 
 /// Calls `f` and runs until it returns (NirInterpreter.Call). Calls from its statements (`x = g(…)` and `g(…);`) run on
-/// an explicit stack of activations, not on the host's, so deep Nova recursion needs no deep native stack (§5.3).
+/// an explicit stack of activations, not on the host's, so deep the reference recursion needs no deep native stack (§5.3).
 fn callFunction(
     it: borrow mut Interp,
     c: borrow Checker,
@@ -1260,7 +1260,7 @@ fn rvalue(
             let s = c.types.info(t).structDef;
             let count = c.types.structs[s as usize].fields.length;
             if (count == 0) {
-                return Ok(valueOf(0, 1)); // `nv_empty`
+                return Ok(valueOf(0, 1)); // `cee_empty`
             }
             var value = uninitialisedValue(typeSize(c, t)?);
             for (k in 0..count) {
@@ -1727,7 +1727,7 @@ fn staticValue(it: borrow mut Interp, c: borrow Checker, e: u32, t: u32) -> Resu
         }
         HirExpr.StructLiteral(fields) => {
             if (fields.count == 0) {
-                return Ok(valueOf(0, 1)); // `nv_empty`
+                return Ok(valueOf(0, 1)); // `cee_empty`
             }
             var result = uninitialisedValue(typeSize(c, t)?);
             for (k in 0..fields.count) {

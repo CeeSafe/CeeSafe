@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Model-based property tests of the built-in collections (the reference's CollectionPropertyTests, milestone-6.md
-criterion 2).
+"""Model-based property tests of the built-in collections (ROADMAP, the collections' properties).
 
-For each collection (vector, string, slotmap, stablevector, views) and seed 1..6, a generator writes a Nova program of
+For each collection (vector, string, slotmap, stablevector, views) and seed 1..6, a generator writes a CeeSafe program of
 80 random operations while a model computes what it must print: values, lengths, capacities (§23.1 growth), stale
 handles, slices and the order of every drop. The generator draws from .NET's System.Random(seed), reproduced in
-mutation_suite.py, so the programs are the reference's own. Each program is built and run under the given C flags,
-and must print exactly the model's output and exit 0; with --sweep, it also passes the fault-injection sweep; with
---reference, ceesafec's C must equal the reference's in the flat, unoptimised form.
+mutation_suite.py, so the programs are fixed by their seeds. Each program is built and run under the given C flags,
+and must print exactly the model's output and exit 0; with --sweep, it also passes the fault-injection sweep.
 
-usage: python3 tools/collection_properties.py --compiler out/ceesafec [--reference NOVAC] [--sweep]
+usage: python3 tools/collection_properties.py --compiler out/ceesafec [--sweep]
            [--cflag=FLAG]... [--keep DIR]
 """
 import argparse
@@ -21,7 +19,6 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mutation_suite import DotNetRandom  # noqa: E402
 import fault_injection  # noqa: E402
-from names import cee_path, for_compiler, map_back  # noqa: E402
 
 OPERATIONS = 80
 KINDS = ("vector", "string", "slotmap", "stablevector", "views")
@@ -298,13 +295,11 @@ def generate(kind, seed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
-    parser.add_argument("--reference")
     parser.add_argument("--sweep", action="store_true")
     parser.add_argument("--cflag", action="append", default=[])
     parser.add_argument("--keep", help="write the programs into this directory and keep them")
     args = parser.parse_args()
     compiler = os.path.abspath(os.path.expanduser(args.compiler))
-    reference = os.path.abspath(os.path.expanduser(args.reference)) if args.reference else None
     problems, points = [], 0
     with tempfile.TemporaryDirectory() as temporary:
         directory = os.path.abspath(args.keep) if args.keep else temporary
@@ -312,32 +307,21 @@ def main():
         for kind in KINDS:
             for seed in range(1, 7):
                 program, stdout = generate(kind, seed)
-                relative = f"run-pass/property-{kind}-{seed}.nova"
-                for name in (relative, cee_path(relative)):  # novac's and ceesafec's (Decision 0005)
-                    with open(os.path.join(directory, name), "w", encoding="utf-8") as f:
-                        f.write(program)
+                relative = f"run-pass/property-{kind}-{seed}.cee"
+                with open(os.path.join(directory, relative), "w", encoding="utf-8") as f:
+                    f.write(program)
                 exe = os.path.join(temporary, f"property-{kind}-{seed}")
                 flags = [x for flag in args.cflag for x in ("--cflag", flag)]
-                cwd, argv = for_compiler(compiler, directory, ["build"] + flags + [relative, "-o", exe])
-                built = subprocess.run([compiler] + argv, cwd=cwd, capture_output=True, text=True)
+                built = subprocess.run([compiler, "build"] + flags + [relative, "-o", exe], cwd=directory,
+                                       capture_output=True, text=True)
                 if built.returncode != 0:
                     problems.append(f"{relative}: build failed: {built.stderr[:800]}")
                     continue
                 ran = subprocess.run([exe], capture_output=True, timeout=60)
                 if ran.returncode != 0 or ran.stdout.decode("utf-8") != stdout:
                     problems.append(f"{relative}: status {ran.returncode}, output differs from the model")
-                if reference:
-                    c_ours, c_ref = os.path.join(temporary, "ours"), os.path.join(temporary, "ref")
-                    cwd, argv = for_compiler(compiler, directory, ["build", "--emit", "c", "-o", c_ours, relative])
-                    subprocess.run([compiler] + argv, cwd=cwd, capture_output=True)
-                    subprocess.run([reference, "build", "--emit", "c", "-o", c_ref] + fault_injection.SWITCHES +
-                                   [relative], cwd=directory, capture_output=True)
-                    with open(os.path.join(c_ours, "main.c"), "rb") as a, open(os.path.join(c_ref, "main.c"), "rb") as b:
-                        if map_back(a.read()).split(b"\n", 1)[1] != b.read().split(b"\n", 1)[1]:
-                            problems.append(f"{relative}: C differs from the reference's")
-                    subprocess.run(["rm", "-rf", c_ours, c_ref])
                 if args.sweep:
-                    _, attempts, failures = fault_injection.sweep((compiler, reference, directory, relative))
+                    _, attempts, failures = fault_injection.sweep((compiler, None, directory, relative))
                     points += len(fault_injection.failure_points(attempts)) if attempts else 0
                     problems += [f"{relative}: {f}" for f in failures]
     for p in problems:

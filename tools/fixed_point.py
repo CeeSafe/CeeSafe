@@ -3,7 +3,7 @@
 
 From CeeSafe's sources at a commit (`git archive`, so nothing outside the tree leaks in):
 
-  gen 1 = stage 0's build of CeeSafe (the pinned novac, or since P6R a ceesafec from tools/bootstrap.sh)
+  gen 1 = stage 0's build of CeeSafe (a ceesafec: a release, or one from tools/bootstrap_release.sh)
   gen 2 = gen 1's build of CeeSafe, and C2 the C gen 1 emits for it
   gen 3 = gen 2's build of CeeSafe, and C3 the C gen 2 emits for it
 
@@ -12,14 +12,14 @@ executables (same C, flags and toolchain). The chain runs twice, from clean dire
 paths, and the C of both runs must be equal; no output may contain a work directory's path.
 
 Gen 1 onward runs with PATH holding only a directory of logging shims for the tools a build may start (cc and the
-tools cc itself runs), so no novac or dotnet is reachable; the shims' log is the subprocess audit.
+tools cc itself runs), so no other compiler is reachable; the shims' log is the subprocess audit.
 
 A manifest (inputs, toolchain versions, sha256 of every output, the audit) is written to --manifest.
 
-Every build is in the compiler's default form (since P7, novac's production defaults); --extra adds a switch to every
+Every build is in the compiler's default form (since P7, the production defaults); --extra adds a switch to every
 build, e.g. --extra=--split.
 
-usage: python3 tools/fixed_point.py --novac ~/.nova/0.6.0/bin/novac [--commit HEAD] [--cc cc] [--extra=--split]
+usage: python3 tools/fixed_point.py --stage0 CEESAFEC [--commit HEAD] [--cc cc] [--extra=--split]
            --work DIR --manifest FILE
 """
 import argparse
@@ -81,10 +81,7 @@ def chain(args, root, log):
         shutil.rmtree(root)
     source = os.path.join(root, "ceesafe")
     os.makedirs(source)
-    # CeeSafe's names since P6R (ceesafe.toml), Nova's before (nova.toml).
-    manifest = "ceesafe.toml" if subprocess.run(["git", "-C", args.repo, "cat-file", "-e", f"{args.commit}:ceesafe.toml"],
-                                                capture_output=True).returncode == 0 else "nova.toml"
-    archive = subprocess.run(["git", "-C", args.repo, "archive", args.commit, manifest, "src"], capture_output=True,
+    archive = subprocess.run(["git", "-C", args.repo, "archive", args.commit, "ceesafe.toml", "src"], capture_output=True,
                              check=True).stdout
     subprocess.run(["tar", "-x", "-C", source], input=archive, check=True)
     audit = os.path.join(root, "subprocesses.log")
@@ -95,13 +92,13 @@ def chain(args, root, log):
     os.makedirs(env["TMPDIR"])
     gen = os.path.join(root, "gen")
     os.makedirs(gen)
-    # Stage 0 (novac, or a ceesafec), with the full environment (novac is .NET); its output is gen 1.
+    # Stage 0, with the full environment; its output is gen 1.
     stage0_env = dict(os.environ)
     # Each generation is gen/<n>/ceesafec: one file name, since macOS's ad-hoc signature records it.
     def exe(n):
         return os.path.join(gen, str(n), "ceesafec")
 
-    run([args.novac, "build", "--cc", args.cc, "-o", exe(1)] + args.extra, source, stage0_env, log)
+    run([args.stage0, "build", "--cc", args.cc, "-o", exe(1)] + args.extra, source, stage0_env, log)
     hashes = {"gen1": sha256(exe(1))}
     with open(audit, "w"):
         pass  # the audit starts with gen 1
@@ -129,8 +126,8 @@ def chain(args, root, log):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--novac", "--stage0", dest="novac", required=True,
-                        help="the stage-0 compiler: the pinned novac, or since P6R a ceesafec (tools/bootstrap.sh)")
+    parser.add_argument("--stage0", required=True,
+                        help="the stage-0 compiler: a ceesafec (a release, or tools/bootstrap_release.sh's)")
     parser.add_argument("--repo", default=os.path.normpath(os.path.join(os.path.dirname(__file__), "..")))
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--cc", default="cc")
@@ -138,7 +135,7 @@ def main():
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--extra", action="append", default=[], help="another switch for every build")
     args = parser.parse_args()
-    args.novac = os.path.abspath(os.path.expanduser(args.novac))
+    args.stage0 = os.path.abspath(os.path.expanduser(args.stage0))
     commit = subprocess.run(["git", "-C", args.repo, "rev-parse", args.commit], capture_output=True, text=True,
                             check=True).stdout.strip()
     work = os.path.abspath(args.work)
@@ -157,14 +154,14 @@ def main():
         problems.append("the two runs' C differs")
     if first[0]["gen3"] != second[0]["gen3"]:
         problems.append("the two runs' gen 3 executables differ")
-    novac_version = subprocess.run([args.novac, "--version"], capture_output=True, text=True).stdout.strip()
+    stage0_version = subprocess.run([args.stage0, "--version"], capture_output=True, text=True).stdout.strip()
     cc_version = subprocess.run([args.cc, "--version"], capture_output=True, text=True).stdout.splitlines()[0]
     lines = [
         "# CeeSafe fixed point (ROADMAP P6)",
         "",
         f"commit: {commit}",
         f"host: {platform.system()} {platform.machine()} {platform.release()}",
-        f"stage 0: {novac_version} ({args.novac}, sha256 {sha256(args.novac)})",
+        f"stage 0: {stage0_version} ({args.stage0}, sha256 {sha256(args.stage0)})",
         f"cc: {args.cc}: {cc_version}",
         f"switches: {' '.join(args.extra) or '(none: the default form)'}",
         f"runs: {os.path.join(work, 'a')} and {os.path.join(work, 'deeper', 'second-run', 'b')}",

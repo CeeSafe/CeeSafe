@@ -1,5 +1,5 @@
 // Prints the BMP code points that System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping (as used by
-// Nova's DiagnosticJson through Utf8JsonWriter) writes escaped, as inclusive ranges "lo hi" in hex.
+// the diagnostics' JSON through Utf8JsonWriter) writes escaped, as inclusive ranges "lo hi" in hex.
 using System.Text.Encodings.Web;
 using System.Text.Json;
 var options = new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };

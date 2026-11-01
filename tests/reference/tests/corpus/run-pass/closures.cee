@@ -88,7 +88,7 @@ fn main() {
         sum += addI(10);
     }
     Console.writeLine(sum);                                         // 33
-    let prefix = "nova";
+    let prefix = "safe";
     let describe = (n: borrow i32) => {
         var s = String.create();
         s.append(prefix)!;
@@ -96,7 +96,7 @@ fn main() {
         s.appendNumber(n)!;
         Console.writeLine(s);
     };
-    describe(borrow total);                                         // nova-25
+    describe(borrow total);                                         // safe-25
     let a = P { x: 3 };
     var b = P { x: 4 };
     let n = 5;
@@ -112,5 +112,5 @@ fn main() {
 // expect-stdout: ok
 // expect-stdout: 6
 // expect-stdout: 33
-// expect-stdout: nova-25
+// expect-stdout: safe-25
 // expect-stdout: 23

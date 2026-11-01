@@ -7,8 +7,8 @@ fn greet(name: StringView) -> Result<String, AllocError> {
 }
 
 fn main() -> i32 {
-    let msg = greet("Nova")!;
+    let msg = greet("CeeSafe")!;
     Console.writeLine(msg.view());         // StringView borrowed from msg
     return 0;
 }
-// expect-stdout: Hello, Nova
+// expect-stdout: Hello, CeeSafe

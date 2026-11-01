@@ -1,5 +1,5 @@
 // M15 S6: `StringView.fromUtf8(bytes)` is a view of the same bytes if they are well-formed UTF-8 (the Unicode
-// Standard's Table 3-7), otherwise null (type-system.md §22.2). Native code uses the runtime's nova_utf8_valid, and the
+// Standard's Table 3-7), otherwise null (type-system.md §22.2). Native code uses the runtime's ceesafe_utf8_valid, and the
 // interpreter uses .NET's validator, so this run compares the two.
 // expect-stdout: ascii: name
 // expect-stdout: two-byte: é

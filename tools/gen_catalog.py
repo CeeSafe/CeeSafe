@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Writes src/diagnostics/catalog.cee: each diagnostic code's one-line meaning, the JSON format's "summary".
 
-It replicates the reference's DiagnosticCatalog.Load (Documentation/EmbeddedDocs.cs) over CeeSafe's specification
-(Decision 0006): rows `| N0123 | meaning | ... |` of spec/diagnostics.md first, then of the other documents of spec/
+It reads CeeSafe's specification (Decision 0006) by the catalog's rule (spec/tooling.md §5.1): rows `| N0123 | meaning | ... |` of spec/diagnostics.md first, then of the other documents of spec/
 in ordinal path order (spec/*.md, spec/api/*.md, spec/decisions/*.md); the first row for a code wins.
 
 usage: python3 tools/gen_catalog.py   (formats with $CEESAFEC, default out/ceesafec; review the diff)

@@ -40,7 +40,7 @@ fn builtinThread() -> u32 => 27;
 fn builtinAsync() -> u32 => 28; // type-system.md §40.4
 fn builtinCount() -> u32 => 29;
 
-// BuiltinFunction members are in src/hir/builtins.nova (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
+// BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).
 
 struct ScopeEntry {

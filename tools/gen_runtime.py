@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Writes src/library/runtime.cee: the C runtime ceesafec embeds, from CeeSafe's runtime/ sources.
 
-The runtime came from Nova v0.6.0 (the reference's CBackend: HostedRuntime, FloatRuntime, ThreadRuntime), renamed to
-CeeSafe's names (Decision 0004); since Nova is no longer developed, runtime/ is the source of truth and is edited here.
+runtime/ is the source of truth and is edited there (Decision 0007).
 Line endings are made "\\n". Each file is split into string literals of at most 4,000 bytes (C11 §5.2.4.1).
 
 usage: python3 tools/gen_runtime.py   (formats with $CEESAFEC, default out/ceesafec)

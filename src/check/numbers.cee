@@ -148,7 +148,7 @@ fn functionValue(c: borrow mut Checker, function: u32, span: Span) -> Result<u32
     return c.expr(HirExpr.FunctionAddress(function), typ, span.start, span.end);
 }
 
-/// A call through a Nova function value (CheckFunctionValueCall): the callee is the first argument.
+/// A call through a CeeSafe function value (CheckFunctionValueCall): the callee is the first argument.
 fn checkFunctionValueCall(c: borrow mut Checker, callee: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
     let t = c.typeOf(callee);
     let info = c.types.info(t);

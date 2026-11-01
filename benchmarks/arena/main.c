@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* A bump allocator over 64 KiB chunks, as Nova's Arena is (runtime/core: chunks from the heap, freed on reset). */
+/* A bump allocator over 64 KiB chunks, as the CeeSafe runtime's Arena is (runtime/core: chunks from the heap, freed on reset). */
 typedef struct Chunk { struct Chunk *next; size_t used; unsigned char data[65536 - 2 * sizeof(void *)]; } Chunk;
 typedef struct { Chunk *head; } Arena;
 

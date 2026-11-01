@@ -132,7 +132,7 @@ fn requireNamedSources(paths: borrow Vector<Vector<u8>>) -> i32 {
     return 0;
 }
 
-/// The source files named, or under a directory named, in ordinal order (Program.NovaFiles).
+/// The source files named, or under a directory named, in ordinal order (the command line's files).
 fn namedSourceFiles(paths: borrow Vector<Vector<u8>>, out: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> {
     for (path in paths.view()) {
         if (isDirectory(path.view())) {

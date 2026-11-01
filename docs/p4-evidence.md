@@ -6,7 +6,7 @@ Must-fail / Near-miss"); the others are chosen here from the corpus by their cod
 
 All evidence in this file was run on 2026-10-30 against ceesafec at P4 S6. Nothing in it is only proposed.
 
-"Identical" means that `ceesafec check` and novac 0.6.0 give the same output for a file, under `tools/compare_parse.py
+"Identical" means that `ceesafec check` and the reference compiler 0.6.0 give the same output for a file, under `tools/compare_parse.py
 --command check`. That comparison covers the text diagnostics, the JSON diagnostics and `--dump-hir`. For a run-pass
 program it also means `tools/compare_nir.py`: the same NIR after drop elaboration.
 
@@ -14,8 +14,8 @@ Results:
 
 - **Check comparison:** 318 of 322 check-pass, check-fail and run-pass programs are identical.
 - **The four that differ:** these are recorded divergences, and each one's plain `check` output is still identical:
-  - `check-fail/enums`, `optionals` and `results`: novac's `check --dump-hir` printer crashes on them;
-  - `check-fail/offset-of`: Nova issue #6.
+  - `check-fail/enums`, `optionals` and `results`: the reference compiler's `check --dump-hir` printer crashes on them;
+  - `check-fail/offset-of`: the reference issue #6.
 - **Other families:** 84 of 84 identical.
 - **NIR:** 284 of 284 identical.
 
@@ -39,7 +39,7 @@ Results:
 
 The M2 mutation suite (`tools/mutation_suite.py`) gives O2, O3, B1–B3 and R3-free straight-line code a second,
 independent check. It reproduces the reference's 1,152 mutants of its 5 seeds: 120 per seed resolve their names, and
-between 54 and 83 per seed are rejected. Its oracle shares no code with either compiler. Both ceesafec and novac
+between 54 and 83 per seed are rejected. Its oracle shares no code with either compiler. Both ceesafec and the reference compiler
 match the oracle on every mutant. The suite's seeded .NET `System.Random` was checked against .NET 10 itself: 120
 draws over 3 seeds were identical.
 
@@ -72,7 +72,7 @@ draws over 3 seeds were identical.
 | U2 contract (`/// Safety:`) | `unsafe-safety-comments` (N0283) | run-pass `raw-moves` |
 | U3 raw pointers are inert | `c-state-moves` (N0294), `raw-moves-c-state` (N0282: `p.read()` of C state) | run-pass `raw-moves`, `raw-pointers` |
 
-The sticky shared deref (N0248, Nova `3a99b4a`) is in `check-fail/shared-path-mutation` (6 cases), which is identical.
+The sticky shared deref (N0248, the reference `3a99b4a`) is in `check-fail/shared-path-mutation` (6 cases), which is identical.
 
 ## What P4 does not show
 
@@ -85,4 +85,4 @@ The sticky shared deref (N0248, Nova `3a99b4a`) is in `check-fail/shared-path-mu
   - the M3 fault-injection sweep (`FaultInjectionTests.cs`);
   - the interpreter's agreement with native runs, which is P8's.
 - **Soundness beyond the reference.** Matching the reference is not proof of the invariants. `docs/safety-audit.md`,
-  the reference's audit pack, names where holes are most likely. A hole there is a hole here too.
+  The reference's audit pack, names where holes are most likely. A hole there is a hole here too.

@@ -1,9 +1,8 @@
 # ADR 0005 — M6: user generics and interfaces; built-in collections; floats deferred
 
-> **Inherited from Nova.** This is Nova's ADR 0005, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0005 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-22, when starting M6: "Built-in types" for collections,
   "Adapt Ex13" for floats)
@@ -23,9 +22,9 @@
 3. **Collections are built-in generic types**, like `Box` (ADR 0003) and the regions (ADR 0004):
    `Vector<T, A>`, `String<A>`, `StringView`, `SlotMap<T>` with `Handle<T>`, and
    `StableVector<T>`. Their memory is managed by the C runtime. The user-visible API is the one
-   `memory-model.md` §4 describes. A Nova core library implementation waits for `unsafe` (M8).
+   `memory-model.md` §4 describes. A reference core library implementation waits for `unsafe` (M8).
 4. **Library conversion is deferred to M8.** `Result`, `Box`, the regions and the collections
-   become Nova library types once raw pointers and `unsafe` exist. The surface syntax stays.
+   become CeeSafe library types once raw pointers and `unsafe` exist. The surface syntax stays.
 5. **Floats stay out.** Ex13 runs with integer geometry. Floats (`f32`/`f64` arithmetic,
    formatting, the kernel-profile ban) are an open item to schedule separately (OD-23 in `open-decisions.md`).
 

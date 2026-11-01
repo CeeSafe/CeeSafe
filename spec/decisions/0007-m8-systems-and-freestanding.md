@@ -1,9 +1,8 @@
 # ADR 0007 — M8: hybrid core library, raw pointers, unsafe contexts
 
-> **Inherited from Nova.** This is Nova's ADR 0007, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0007 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-24, when starting M8: "Hybrid" for the core
   library). Decisions 2–5 are the agent's defaults under that instruction, following the pattern of
@@ -16,7 +15,7 @@
 Master prompt Milestone 8 asks for a core library, freestanding compilation, a C FFI, raw-pointer
 unsafe operations, custom entry points and target capabilities. Every library type today (Option,
 Result, Box, Vector, Console, File, …) is built into the compiler and the C runtime (ADR 0003,
-0005); Nova has no library source files. The grammar reserves `unsafe` and `extern`, and
+0005); the reference has no library source files. The grammar reserves `unsafe` and `extern`, and
 `ownership.md` U1–U3 sketch the rules, but nothing is specified or implemented.
 
 ## Decision
@@ -24,15 +23,15 @@ Result, Box, Vector, Console, File, …) is built into the compiler and the C ru
 1. **Core library: hybrid** (owner). The existing built-in types stay built in. The "split" is
    a per-profile capability table (hosted-only names such as `Console`, `File` and `SystemHeap` are
    rejected in freestanding code) plus the runtime split into a freestanding core and a hosted part.
-   New systems types that unsafe Nova can express (`Volatile<T>`, `MmioPtr<T>`, `PhysAddr`, memory
-   helpers) are written in Nova, in a `lib/core` bundled with the compiler (8c, 8d).
+   New systems types that unsafe the reference can express (`Volatile<T>`, `MmioPtr<T>`, `PhysAddr`, memory
+   helpers) are written in the reference, in a `lib/core` bundled with the compiler (8c, 8d).
    *Rejected:* everything built in (`lib/core` would stay empty, and safe wrappers over unsafe code
-   would be exercised only by tests); porting the M3–M6 built-ins to Nova (a large rewrite with
+   would be exercised only by tests); porting the M3–M6 built-ins to the reference (a large rewrite with
    regression risk, not needed for C4).
 2. **Raw pointers are `*T` and `*mut T`**, Copy, with no loans (U3). Making and converting them is
    safe; using them is unsafe. Conversions use `as`, so no new operator is needed; the operations
    are methods (`p.read()`, `p.write(v)`, `p.add(n)`) and `Ptr.*` / `Slice.fromRaw` built-ins.
-   There is no `*p` dereference operator, since Nova has no prefix dereference at all (references
+   There is no `*p` dereference operator, since the reference has no prefix dereference at all (references
    and boxes auto-dereference). *Rejected:* a `*p` place operator (new syntax, and `*` is already
    multiplication); `null` as a pointer literal (`null` is the optional's empty value, §22.1); the null pointer is
    `0 as *T`.
@@ -40,8 +39,8 @@ Result, Box, Vector, Console, File, …) is built into the compiler and the C ru
    would need the drop elaborator to track raw places. It can come later, with the allocator
    interface.
 4. **Unsafe contexts** are `unsafe { }` blocks, `unsafe { e }` expressions (Ex17: `let n =
-   unsafe { write(…) };`, since Nova has no block expressions) and `unsafe fn` bodies. The `Safety:`
-   doc comment (U2) is an **error** when missing, not a warning: Nova has no warnings, and the rule
+   unsafe { write(…) };`, since the reference has no block expressions) and `unsafe fn` bodies. The `Safety:`
+   doc comment (U2) is an **error** when missing, not a warning: the reference has no warnings, and the rule
    is cheap to satisfy.
 5. **Generated C has no undefined pointer arithmetic**: raw pointers are plain `T *` (no `const`),
    and arithmetic and casts go through `uintptr_t` (`unsafe.md` §4).
@@ -54,19 +53,19 @@ Result, Box, Vector, Console, File, …) is built into the compiler and the C ru
    - `@export` alone makes a function C-callable. Ex17's `public extern "C" fn` spelling is not
      used: the attribute already says everything, and an `extern` definition would read like a
      declaration.
-   - `@repr(C)` structs keep their Nova names in C, so C code using `nova_exports.h` has the same
+   - `@repr(C)` structs keep their CeeSafe names in C, so C code using `ceesafe_exports.h` has the same
      struct type. Arrays and other non-FFI-safe types are not allowed in them yet.
    - The interpreter models a few C library functions and faults on any other C call.
    - Function pointers move to 8d: a C callback needs a C-typed wrapper, which exports provide.
 7. **Systems capabilities (8d)**:
-   - `lib/core` is Nova source embedded in `novac` and part of every package; unused parts are
+   - `lib/core` is CeeSafe source embedded in `ceesafec` and part of every package; unused parts are
      not emitted, so programs that do not use it compile to the same C as before.
    - `Volatile<T>` is a cell written through `borrow mut this`, not an interior-mutable cell: writing a
      register needs exclusive access to the register block, which `MmioPtr<T>.getMut()` gives.
    - Only C function pointers exist (`extern "C" fn(…)`); their values are extern and exported
      functions, whose C addresses already exist. Calling one is unsafe.
    - `Target.isX86_64()` and friends are decided by the C compiler, because one generated C file
-     serves every LP64 target; there is no conditional compilation in Nova yet.
+     serves every LP64 target; there is no conditional compilation in the reference yet.
 
 ## Consequences
 

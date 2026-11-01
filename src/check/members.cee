@@ -584,7 +584,7 @@ fn checkNonStructMethod(
         TypeKind.Reference,
     )) c.types.info(receiverType).pointee else receiverType;
     let isParameter = c.types.is(structType, TypeKind.TypeParameter);
-    // A `dyn fn` has no methods (§36.5): the general message below. The reference crashes here (novac 0.5.0's
+    // A `dyn fn` has no methods (§36.5): the general message below. The reference crashes here (the reference compiler 0.5.0's
     // DynMethod dereferences the absent interface); docs/p3-plan.md records the divergence.
     if (c.types.is(structType, TypeKind.Dyn) && c.types.info(structType).dynInterface != none()) {
         let bound = c.types.info(structType).dynInterface;

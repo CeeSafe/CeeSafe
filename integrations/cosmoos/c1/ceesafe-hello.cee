@@ -16,6 +16,6 @@ fn main() -> i32 {
     Console.writeLine(gcd(1071, 462));
     Console.write("i64 min = ");
     Console.writeLine(-9223372036854775808i64);
-    Console.writeLine("NOVATEST: PASS");
+    Console.writeLine("CEETEST: PASS");
     return 0;
 }

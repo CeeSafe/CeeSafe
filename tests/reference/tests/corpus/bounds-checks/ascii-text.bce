@@ -1,6 +1,6 @@
-bounds-checks/ascii-text.nova:5:45: boundary kept
-bounds-checks/ascii-text.nova:12:23: boundary removed
-bounds-checks/ascii-text.nova:15:23: boundary removed
-bounds-checks/ascii-text.nova:18:23: boundary kept
-bounds-checks/ascii-text.nova:23:23: boundary removed
-bounds-checks/ascii-text.nova:26:23: boundary kept
+bounds-checks/ascii-text.cee:5:45: boundary kept
+bounds-checks/ascii-text.cee:12:23: boundary removed
+bounds-checks/ascii-text.cee:15:23: boundary removed
+bounds-checks/ascii-text.cee:18:23: boundary kept
+bounds-checks/ascii-text.cee:23:23: boundary removed
+bounds-checks/ascii-text.cee:26:23: boundary kept

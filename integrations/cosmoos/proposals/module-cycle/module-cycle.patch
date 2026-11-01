@@ -46,7 +46,7 @@ diff -ruN a/kernel/module/modcycle.c b/kernel/module/modcycle.c
 + * and check that nothing is left behind.
 + *
 + * With `module.cycle=<archive entry>:<count>[:<hold ms>]` on the kernel
-+ * command line (e.g. module.cycle=tests/nova_c8.ko:1000), module_cycle_boot,
++ * command line (e.g. module.cycle=tests/ceesafe_c8.ko:1000), module_cycle_boot,
 + * called after module_load_boot, runs <count> cycles, holding the module
 + * loaded for <hold ms> (default 0) between its load and its unload. Each load must return 0 and
 + * each unload must return 0 (not -EBUSY: no zombie). Before and after, it
@@ -55,7 +55,7 @@ diff -ruN a/kernel/module/modcycle.c b/kernel/module/modcycle.c
 + * equal (the first load may create what later loads reuse). lockdep's
 + * class count is reported too, not judged (see below). One line:
 + *
-+ *   modcycle: tests/nova_c8.ko: 1000 cycles: PASS (...)
++ *   modcycle: tests/ceesafe_c8.ko: 1000 cycles: PASS (...)
 + *
 + * The loader API stays unexported: this is built-in code, compiled into
 + * CONFIG_DEBUG builds only (AGENTS.md: test seams under CONFIG_DEBUG).

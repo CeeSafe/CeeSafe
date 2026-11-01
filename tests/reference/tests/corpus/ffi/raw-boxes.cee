@@ -1,4 +1,4 @@
-// Callbacks into Nova and raw boxes (type-system.md §34): a box handed to C with Box.intoRaw, and given back by a
+// Callbacks into the reference and raw boxes (type-system.md §34): a box handed to C with Box.intoRaw, and given back by a
 // generic @callback (one C function per instance) that rebuilds it with Box.fromRaw and drops it.
 
 extern "C" {

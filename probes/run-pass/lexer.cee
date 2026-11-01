@@ -1,0 +1,382 @@
+// P1 probe: a byte-level lexer and identifier interner over real CeeSafe source, with the shapes the port needs: a
+// token table with spans, a keyword lookup, interned names with first-seen IDs (SymbolTable.cs:3), and a lossless
+// check that tokens and trivia cover every byte. It is a probe of the language, not the port's lexer: literal
+// suffixes, escapes and diagnostics are left to P2.
+//
+// Without arguments it lexes a known line and its own source. With file arguments it lexes each file and prints its
+// counts (for runs over the reference's libraries and corpus; see docs/p1-probes.md).
+//
+// Source text stays bytes throughout, and names are printed with `Console.writeBytes`. (When this probe was written,
+// The reference compiler 0.3.1 had no way to turn bytes into text; 0.4.0 has `StringView.fromUtf8`, type-system §22.2.)
+// expect-stdout: line: 18 tokens (keyword 1, name 8, number 0, string 0, char 0, punct 9, unknown 0), 1 comments, 11 spaces, 4 names
+// expect-stdout: line: first-seen ids add=0 a=1 i32=2 b=3
+// expect-stdout: self: lossless
+
+enum Kind {
+    Name,
+    Keyword,
+    Number,
+    Str,
+    Char,
+    Punct,
+    Comment,
+    Space,
+    Unknown,
+}
+
+fn kindIndex(kind: Kind) -> usize => match (kind) {
+    Kind.Keyword => 0,
+    Kind.Name => 1,
+    Kind.Number => 2,
+    Kind.Str => 3,
+    Kind.Char => 4,
+    Kind.Punct => 5,
+    Kind.Unknown => 6,
+    Kind.Comment => 7,
+    Kind.Space => 8,
+};
+
+struct Token {
+    kind: Kind;
+    start: u32;
+    length: u32;
+    symbol: u32; // the interned name, for names; otherwise 0
+}
+
+// Interned names: their bytes in one buffer, an entry per name, and an open-addressing index of entry numbers.
+struct Interner {
+    text: Vector<u8>;
+    starts: Vector<u32>;
+    lengths: Vector<u32>;
+    slots: Vector<u32>; // 0: empty; otherwise the entry plus one
+
+    fn create() -> Interner => Interner {
+        text: Vector<u8>.create(),
+        starts: Vector<u32>.create(),
+        lengths: Vector<u32>.create(),
+        slots: Vector<u32>.create(),
+    };
+
+    fn count(borrow this) -> usize => this.starts.length;
+
+    fn same(borrow this, entry: usize, name: Slice<u8>) -> bool {
+        if (this.lengths[entry] as usize != name.length) {
+            return false;
+        }
+        let start = this.starts[entry] as usize;
+        for (i in 0..name.length) {
+            if (this.text[start + i] != name[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    fn intern(borrow mut this, name: Slice<u8>) -> Result<u32, AllocError> {
+        if ((this.starts.length + 1) * 4 > this.slots.length * 3) {
+            this.grow()?;
+        }
+        let mask = this.slots.length - 1;
+        var i = truncate<usize>(hashBytes(name)) & mask;
+        loop {
+            let slot = this.slots[i];
+            if (slot == 0) {
+                break;
+            }
+            if (this.same((slot - 1) as usize, name)) {
+                return Ok(slot - 1);
+            }
+            i = (i + 1) & mask;
+        }
+        let entry = truncate<u32>(this.starts.length);
+        this.starts.push(truncate<u32>(this.text.length))?;
+        this.lengths.push(truncate<u32>(name.length))?;
+        for (b in name) {
+            this.text.push(b)?;
+        }
+        this.slots[i] = entry + 1;
+        return Ok(entry);
+    }
+
+    fn grow(borrow mut this) -> Result<void, AllocError> {
+        let size: usize = if (this.slots.length == 0) 64 else this.slots.length * 2;
+        this.slots.clear();
+        for (i in 0..size) {
+            this.slots.push(0)?;
+        }
+        let mask = size - 1;
+        for (entry in 0..this.starts.length) {
+            let start = this.starts[entry] as usize;
+            let end = start + this.lengths[entry] as usize;
+            var i = truncate<usize>(hashBytes(this.text[start..end])) & mask;
+            while (this.slots[i] != 0) {
+                i = (i + 1) & mask;
+            }
+            this.slots[i] = truncate<u32>(entry + 1);
+        }
+        return Ok();
+    }
+
+    fn print(borrow this, entry: u32) {
+        let start = this.starts[entry as usize] as usize;
+        Console.writeBytes(this.text[start..(start + this.lengths[entry as usize] as usize)]);
+    }
+}
+
+// FNV-1a.
+fn hashBytes(bytes: Slice<u8>) -> u64 {
+    var h: u64 = 0xcbf29ce484222325;
+    for (b in bytes) {
+        h = (h ^ b as u64).wrappingMul(0x100000001b3);
+    }
+    return h;
+}
+
+fn same(a: Slice<u8>, b: StringView) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (i in 0..a.length) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Keywords.Table (Syntax/Token.cs). Arrays cannot hold `StringView`s (N0246), so the table is a match on length.
+fn isKeyword(w: Slice<u8>) -> bool => match (w.length) {
+    2 => same(w, "as") || same(w, "fn") || same(w, "if") || same(w, "in"),
+    3 => same(w, "for") || same(w, "let") || same(w, "mut") || same(w, "own") || same(w, "var"),
+    4 => same(
+        w,
+        "drop",
+    ) || same(w, "else") || same(w, "enum") || same(w, "impl") || same(w, "loop") || same(w, "move") ||
+        same(w, "null") || same(w, "Self") || same(w, "this") || same(w, "true") || same(w, "type"),
+    5 => same(w, "async") || same(w, "await") || same(w, "break") || same(w, "class") || same(w, "const") ||
+        same(w, "defer") || same(w, "false") || same(w, "macro") || same(w, "match") || same(w, "using") ||
+        same(w, "where") || same(w, "while") || same(w, "yield"),
+    6 => same(w, "borrow") || same(w, "extern") || same(w, "import") || same(w, "public") || same(w, "return") ||
+        same(w, "static") || same(w, "struct") || same(w, "unsafe"),
+    7 => same(w, "private"),
+    8 => same(w, "continue") || same(w, "internal"),
+    9 => same(w, "interface") || same(w, "namespace"),
+    _ => false,
+};
+
+fn isNameStart(c: u8) -> bool => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+
+fn isDigit(c: u8) -> bool => c >= '0' && c <= '9';
+
+fn isNamePart(c: u8) -> bool => isNameStart(c) || isDigit(c);
+
+// The two-byte operators; everything else is one byte.
+fn isPair(a: u8, b: u8) -> bool {
+    if (b == '=') {
+        return a == '=' || a == '!' || a == '<' || a == '>' || a == '+' || a == '-' || a == '*' || a == '/' ||
+            a == '%' || a == '^' || a == '&' || a == '|';
+    }
+    return (a == '-' && b == '>') || (a == '=' && b == '>') || (a == '&' && b == '&') || (a == '|' && b == '|') ||
+        (a == '.' && b == '.') || (a == '<' && b == '<');
+}
+
+// Scans a quoted literal from `start` (the quote) to the closing quote, a newline or the end; escapes skip a byte.
+fn quoted(src: Slice<u8>, start: usize, quote: u8) -> usize {
+    var i = start + 1;
+    while (i < src.length && src[i] != quote && src[i] != '\n') {
+        i += if (src[i] == '\\' && i + 1 < src.length) 2 else 1;
+    }
+    return if (i < src.length && src[i] == quote) i + 1 else i;
+}
+
+fn lex(src: Slice<u8>, tokens: borrow mut Vector<Token>, names: borrow mut Interner) -> Result<void, AllocError> {
+    var i: usize = 0;
+    while (i < src.length) {
+        let c = src[i];
+        let next: u8 = if (i + 1 < src.length) src[i + 1] else 0;
+        var end = i + 1;
+        var kind = Kind.Unknown;
+        var symbol: u32 = 0;
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            while (end < src.length && (src[end] == ' ' || src[end] == '\t' || src[end] == '\r' || src[end] == '\n')) {
+                end += 1;
+            }
+            kind = Kind.Space;
+        } else if (c == '/' && next == '/') {
+            while (end < src.length && src[end] != '\n') {
+                end += 1;
+            }
+            kind = Kind.Comment;
+        } else if (c == '/' && next == '*') {
+            end = i + 2;
+            while (end < src.length && !(src[end] == '*' && end + 1 < src.length && src[end + 1] == '/')) {
+                end += 1;
+            }
+            end = if (end < src.length) end + 2 else end;
+            kind = Kind.Comment;
+        } else if (isNameStart(c)) {
+            while (end < src.length && isNamePart(src[end])) {
+                end += 1;
+            }
+            if (isKeyword(src[i..end])) {
+                kind = Kind.Keyword;
+            } else {
+                kind = Kind.Name;
+                symbol = names.intern(src[i..end])?;
+            }
+        } else if (isDigit(c)) {
+            // Digits, letters and `_` (radix prefixes, suffixes, separators), and a `.` followed by a digit.
+            while (end < src.length && (isNamePart(src[end]) ||
+                (src[end] == '.' && end + 1 < src.length && isDigit(src[end + 1])))) {
+                end += 1;
+            }
+            kind = Kind.Number;
+        } else if (c == '"') {
+            end = quoted(src, i, '"');
+            kind = Kind.Str;
+        } else if (c == '\'') {
+            end = quoted(src, i, '\'');
+            kind = Kind.Char;
+        } else if (c < 128) {
+            end = if (isPair(c, next)) i + 2 else i + 1;
+            kind = Kind.Punct;
+        } else {
+            // Non-ASCII outside literals and comments (N0001): one token per UTF-8 sequence's bytes.
+            while (end < src.length && src[end] >= 0x80 && src[end] < 0xC0) {
+                end += 1;
+            }
+        }
+        tokens.push(Token { kind: kind, start: truncate<u32>(i), length: truncate<u32>(end - i), symbol: symbol })?;
+        i = end;
+    }
+    return Ok();
+}
+
+// Tokens are contiguous from 0 to the end, so together they hold every byte exactly once.
+fn lossless(tokens: Slice<Token>, size: usize) -> bool {
+    var at: usize = 0;
+    for (t in tokens) {
+        if (t.start as usize != at || t.length == 0) {
+            return false;
+        }
+        at += t.length as usize;
+    }
+    return at == size;
+}
+
+fn report(label: StringView, tokens: Slice<Token>, names: borrow Interner) {
+    var counts = [0u32; 9];
+    for (t in tokens) {
+        counts[kindIndex(t.kind)] += 1;
+    }
+    let significant = counts[0] + counts[1] + counts[2] + counts[3] + counts[4] + counts[5] + counts[6];
+    Console.write(label);
+    Console.write(": ");
+    Console.write(significant);
+    Console.write(" tokens (keyword ");
+    Console.write(counts[0]);
+    Console.write(", name ");
+    Console.write(counts[1]);
+    Console.write(", number ");
+    Console.write(counts[2]);
+    Console.write(", string ");
+    Console.write(counts[3]);
+    Console.write(", char ");
+    Console.write(counts[4]);
+    Console.write(", punct ");
+    Console.write(counts[5]);
+    Console.write(", unknown ");
+    Console.write(counts[6]);
+    Console.write("), ");
+    Console.write(counts[7]);
+    Console.write(" comments, ");
+    Console.write(counts[8]);
+    Console.write(" spaces, ");
+    Console.write(names.count());
+    Console.writeLine(" names");
+}
+
+enum ReadError {
+    Io(IoError),
+    Memory,
+}
+
+fn readFile(path: StringView) -> Result<Vector<u8>, ReadError> {
+    var file = match (File.open(path)) {
+        Ok(f) => f,
+        Err(e) => { return Err(ReadError.Io(e)); }
+    };
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 16384];
+    loop {
+        let n = match (file.read(mut buffer[..])) {
+            Ok(n) => n,
+            Err(e) => { return Err(ReadError.Io(e)); }
+        };
+        if (n == 0) {
+            break;
+        }
+        for (i in 0..n) {
+            match (bytes.push(buffer[i])) {
+                Ok() => {}
+                Err(_) => { return Err(ReadError.Memory); }
+            }
+        }
+    }
+    return Ok(bytes);
+}
+
+fn lexFile(path: StringView, label: StringView, counts: bool) -> bool {
+    let source = match (readFile(path)) {
+        Ok(bytes) => bytes,
+        Err(ReadError.Io(e)) => {
+            Console.writeError(path);
+            Console.writeError(": ");
+            Console.writeErrorLine(e.message());
+            return false;
+        }
+        Err(ReadError.Memory) => {
+            Console.writeErrorLine("out of memory");
+            return false;
+        }
+    };
+    var tokens = Vector<Token>.create();
+    var names = Interner.create();
+    lex(source.view(), mut tokens, mut names)!;
+    let ok = lossless(tokens.view(), source.length);
+    if (counts) {
+        report(label, tokens.view(), names);
+    }
+    Console.write(label);
+    Console.writeLine(if (ok) ": lossless" else ": NOT LOSSLESS");
+    return ok;
+}
+
+fn main() -> i32 {
+    if (Process.argumentCount() > 1) {
+        var failures: u32 = 0;
+        for (a in 1..Process.argumentCount()) {
+            let path = Process.argument(a)!;
+            if (!lexFile(path, path, true)) {
+                failures += 1;
+            }
+        }
+        return if (failures == 0) 0 else 1;
+    }
+
+    let line: StringView = "fn add(a: i32, b: i32) -> i32 => a + b; // sum";
+    var tokens = Vector<Token>.create();
+    var names = Interner.create();
+    lex(line.bytes(), mut tokens, mut names)!;
+    report("line", tokens.view(), names);
+    Console.write("line: first-seen ids");
+    for (entry in 0..names.count()) {
+        Console.write(" ");
+        names.print(truncate<u32>(entry));
+        Console.write("=");
+        Console.write(entry);
+    }
+    Console.writeLine("");
+
+    return if (lexFile("run-pass/lexer.cee", "self", false)) 0 else 1;
+}

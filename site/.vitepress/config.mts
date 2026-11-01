@@ -108,7 +108,7 @@ export default defineConfig({
   lastUpdated: true,
   head: [["link", { rel: "icon", type: "image/svg+xml", href: "/CeeSafe/logo.svg" }]],
   markdown: {
-    languages: [{ ...ceesafe, name: "ceesafe", aliases: ["CeeSafe", "cee", "nova"] }],
+    languages: [{ ...ceesafe, name: "ceesafe", aliases: ["CeeSafe", "cee"] }],
   },
   themeConfig: {
     logo: "/logo.svg",
@@ -131,7 +131,7 @@ export default defineConfig({
       text: "Edit this page on GitHub",
     },
     footer: {
-      message: "Pre-1.0: the language and its tools are still changing. CeeSafe forked from Nova 0.6.0.",
+      message: "Pre-1.0: the language and its tools are still changing.",
       copyright: "GPL-2.0-only, with a runtime exception for the code CeeSafe puts into the programs it compiles. Copyright © 2026 Veeran Puthumkara.",
     },
   },

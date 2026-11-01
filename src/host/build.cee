@@ -25,7 +25,7 @@ fn directoryOf(path: Slice<u8>) -> Slice<u8> {
 
 fn failBytes(message: Slice<u8>) -> i32 => fail(StringView.fromUtf8(message)!);
 
-/// Writes a tool's output to standard error, as novac does: its standard output, then its standard error.
+/// Writes a tool's output to standard error, as the reference compiler does: its standard output, then its standard error.
 fn relayTool(outcome: borrow ToolOutcome) {
     Console.writeError(StringView.fromUtf8(outcome.stdout.view())!);
     Console.writeError(StringView.fromUtf8(outcome.stderr.view())!);
@@ -34,7 +34,7 @@ fn relayTool(outcome: borrow ToolOutcome) {
 fn buildFiles(
     options: borrow Options,
     files: borrow Vector<CFile>,
-    firstNova: Slice<u8>,
+    firstSource: Slice<u8>,
 ) -> i32 {
     var defaultName = Vector<u8>.create();
     if (options.defaultOutput.length > 0) {
@@ -46,7 +46,7 @@ fn buildFiles(
             }
         }
     } else {
-        appendStem(mut defaultName, firstNova)!;
+        appendStem(mut defaultName, firstSource)!;
     }
     if (sameText(options.emit.view(), "c")) {
         var directory = copyBytes(options.output.view())!;

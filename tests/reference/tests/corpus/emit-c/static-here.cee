@@ -2,12 +2,12 @@
 // option: kernel cosmoos
 // option: no-float
 // `here` (type-system.md §39.4, ADR 0027): a static Mutex is built at compile time by MUTEX_INIT_AT, given the address
-// of the field it initialises, `&nvS_TABLE.f_raw`, an address constant; a static ObjectCache starts empty.
+// of the field it initialises, `&ceeS_TABLE.f_raw`, an address constant; a static ObjectCache starts empty.
 struct Table {
     count: u64;
 }
 
-static TABLE: Mutex<Table> = Mutex<Table>.constant("nova.table\0".ptr as *CChar, Table { count: 0 });
+static TABLE: Mutex<Table> = Mutex<Table>.constant("safe.table\0".ptr as *CChar, Table { count: 0 });
 static CACHE: ObjectCache<Table> = ObjectCache<Table>.constant();
 
 @export("sh_bump")

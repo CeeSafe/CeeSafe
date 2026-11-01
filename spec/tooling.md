@@ -49,8 +49,7 @@ there is any. It is a lint for a package's public surface; nothing requires it t
 ### 1.4 In the repository
 
 `spec/api/core.md` is generated from `lib/core` with `ceesafec doc lib/core -o spec/api/core.md --title "lib/core"`, run
-on the embedded `lib/core` (its sources under CeeSafe's names). `tools/spec_check.py` fails if it is out of date
-(Nova's `DocTests`).
+on the embedded `lib/core` (its sources under CeeSafe's names). `tools/spec_check.py` fails if it is out of date.
 
 ## 2. Language server (T3)
 
@@ -101,7 +100,7 @@ answered with `ParseError` when it has an id.
 
 `editors/vscode` holds:
 - a TextMate grammar for `.cee` files (keywords, literals, comments, attributes), whose keyword list is the
-  compiler's (`editors/vscode/test/keywords.test.mjs` compares them; Nova's `LspTests`);
+  compiler's (`editors/vscode/test/keywords.test.mjs` compares them);
 - a language configuration (comments, brackets, auto-closing pairs);
 - the client, which starts `ceesafec lsp` (the `ceesafe.server.path` setting, default `ceesafec` on the `PATH`) through the
   `vscode-languageclient` library, bundled with it into `dist/extension.cjs`.
@@ -169,7 +168,7 @@ the program's name before starting the debugger, and the helpers read them as be
 
 ### 3.4 What is checked
 
-`tools/debugger_check.py` (Nova's `DebuggerTests`) builds a program with `-g` and runs it under lldb (macOS) or gdb (Linux), in batch mode. A breakpoint
+`tools/debugger_check.py` builds a program with `-g` and runs it under lldb (macOS) or gdb (Linux), in batch mode. A breakpoint
 at a CeeSafe line must stop at that line, `ceesafe-locals` must show the locals by their CeeSafe names, and a breakpoint on
 `ceesafe_panic` must give a backtrace whose frames are CeeSafe functions at CeeSafe lines. In an async program stopped
 inside a child task, `ceesafe-tasks` must list the awaiting task, the running child and its waiting sibling at the
@@ -198,7 +197,7 @@ c = ["src/shim.c"]           # C files compiled and linked with an executable (t
 
 [dependencies]
 geometry = { path = "../geometry" }
-lz4 = { git = "https://example.org/lz4-nova.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
+lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
 shapes = "2.1"               # from the registry (§4.6): a version requirement
 json = { version = "0.9", index = "https://example.org/my-index.git" }   # from another index
 ```
@@ -227,7 +226,7 @@ Nothing runs during resolution except `git` (ADR 0013 D5).
 # Written by ceesafec fetch. Commit it with ceesafe.toml.
 [[package]]
 name = "lz4"
-source = "git+https://example.org/lz4-nova.git"
+source = "git+https://example.org/lz4-cee.git"
 commit = "3f2a9c0d…"         # the full commit id
 hash = "sha256:…"            # of the checkout's manifest and sources
 
@@ -393,8 +392,7 @@ errors; the program's own output then precedes the document. The exit status is 
 
 A fix is a list of edits that the compiler is sure resolves the diagnostic. It is offered only where the
 intent is unambiguous; a diagnostic with several plausible repairs offers none. Applying a fix removes that
-diagnostic and introduces none at the edited place (checked by Nova's `FixTests` for every kind below, and in CeeSafe by applying every corpus fix as novac 0.6.0 does, `tools/compare_cli.py`, on every corpus
-case that offers it). The kinds:
+diagnostic and introduces none at the edited place. The kinds:
 
 | Code | When | Edit |
 |---|---|---|
@@ -585,12 +583,11 @@ The executable is `out/<name>` in a package, or `-o <path>`. On Windows, a path 
 
 ## 9. Porting C to CeeSafe: `c2cee`
 
-CosmoOS's roadmap 2.0 moves kernel C into Nova, the language CeeSafe forked from, one file at a time (SA2, SA3), and
+CosmoOS's roadmap 2.0 moves kernel C into CeeSafe one file at a time (SA2, SA3), and
 every port repeats the same mechanical steps: map the C types, declare each function the file calls, choose `@header`s
 that do not include the port's own header back, find what must stay in a C floor, rename members that are keywords,
 wire the build, and run the same checks. `integrations/cosmoos/c2cee.py` does the analysis and the checks, and drafts
-the `.cee` file, the floor and the build lines (§9.4). It is Nova's `c2nova` (written after the fork, at Nova
-`3ba382b`) for CeeSafe: its drafts equal `c2nova`'s under CeeSafe's names. Since 2026-10-31 CosmoOS's kernel language
+the `.cee` file, the floor and the build lines (§9.4). Since 2026-10-31 CosmoOS's kernel language
 is CeeSafe: a finished port lands in its tree as a `.cee` file, and its build generates the C with the ceesafec it pins
 (its `scripts/cee-gen.py` and `build/cee.mk`; the C is not committed). It reads C through clang's own front end (`-Xclang -ast-dump=json`), so
 it needs nothing but clang and Python 3, and never edits a file. It parses with the kernel's include path (CosmoOS's `KERNEL_CFLAGS`), the headers the build generates

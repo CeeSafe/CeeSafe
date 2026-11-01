@@ -1,6 +1,6 @@
 // Owning closure errors (type-system.md §36.5): a move literal outside Box.create (N0333), a scoped capture (N0332),
 // a changing body where a dyn fn is expected (N0299), a dyn mut fn called through a shared place (N0248), and dyn fn
-// by value (N0330). Moves: move-closures-moves.nova.
+// by value (N0330). Moves: move-closures-moves.cee.
 
 fn byValue(f: dyn fn(u64) -> u64) {} // error[N0330]
 

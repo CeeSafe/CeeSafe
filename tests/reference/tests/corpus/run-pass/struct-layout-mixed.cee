@@ -1,4 +1,4 @@
-// Mixed field sizes exercise padding; the generated C asserts Nova's layout.
+// Mixed field sizes exercise padding; the generated C asserts the reference's layout.
 struct Mixed { a: u8; b: u64; c: u16; d: bool; e: i32; f: i8; }
 struct Outer { tag: u8; inner: Mixed; tail: u8; }
 struct Empty { }

@@ -1,9 +1,8 @@
 # ADR 0020 — OD-9c: functions whose effects are their closure arguments'
 
-> **Inherited from Nova.** This is Nova's ADR 0020, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0020 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-29, taking every recommendation in §5). The wording is the agent's.
 - Scope: OD-9c (`open-decisions.md`), deferred by M11 G8c (type-system §36.4): a function whose effects are its own plus
@@ -20,8 +19,8 @@
   (`borrow mut @effects() fn(…)`) would forbid every comparator that allocates, everywhere. What is wanted is Swift's
   `rethrows`: the method has the effects of what it is given.
 - **Who needs it.** CosmoOS kernel code holds spinlocks (atomic context) and runs interrupt handlers. Sorting or
-  scanning a small table under a lock, with `sortBy` or `any`, is today impossible in safe Nova. It must be written out by
-  hand (inferred: no CosmoOS port does this yet; `kernel/block/gpt.nova` and the A5 ports have no closures).
+  scanning a small table under a lock, with `sortBy` or `any`, is today impossible in safe the reference. It must be written out by
+  hand (inferred: no CosmoOS port does this yet; `kernel/block/gpt.cee` and the A5 ports have no closures).
 - **What compiles the same either way.** Nothing in C or the interpreter changes. Effects are only checked.
 
 ## 2. Options
@@ -42,7 +41,7 @@ of generics. A covers the library methods and any user function of the same shap
 
 ### 3.1 The attribute
 
-```nova
+```ceesafe
 @effectsOf(cmp)
 public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32) { … }
 
@@ -140,8 +139,8 @@ what it decides. Each follows from the same argument (§3.3: a parameter is neve
   The adapter now calls the function directly. Its effects are the function's own, and the C has one indirect call
   fewer.
 
-The diagnostic code is N0336: N0335 was already `novac publish`'s. `EffectChecker.CallEffects` computes a call's
-effects, and `OriginsOf` finds what each local holds. Tests: `check-pass/effects-of.nova`, `check-fail/effects-of.nova`
+The diagnostic code is N0336: N0335 was already `ceesafec publish`'s. `EffectChecker.CallEffects` computes a call's
+effects, and `OriginsOf` finds what each local holds. Tests: `check-pass/effects-of.cee`, `check-fail/effects-of.cee`
 (N0295 for a sleeping literal, a sleeping named function, an argument without an effect list, a parameter handed to a
-function without the attribute, and the function as a value), `check-fail/effects-of-attribute.nova` (N0336), and
-`check-fail/closure-method-effects.nova` (lib/core's methods with a comparator that does I/O).
+function without the attribute, and the function as a value), `check-fail/effects-of-attribute.cee` (N0336), and
+`check-fail/closure-method-effects.cee` (lib/core's methods with a comparator that does I/O).

@@ -1,0 +1,98 @@
+// P1 probe: accepted ways to read element i of a table while changing element j (see
+// probes/check-fail/index-aliasing.cee for the direct form, which is rejected).
+//  1. split the table at run time (`splitAtMut`, type-system §16.5), so the two elements come from two halves;
+//  2. copy the source out first (costs an allocation and a copy);
+//  3. keep the data in separate tables indexed by ID, so the two accesses are to different variables.
+// expect-stdout: split: [] [1 2 3 4 5]
+// expect-stdout: split backwards: [1 2 3 4 5] [1 2 3 4 5]
+// expect-stdout: copied: [1 2 3 4 5] [1 2 3 4 5 1 2 3 4 5]
+// expect-stdout: separate tables: 15 into slot 1
+
+struct List {
+    items: Vector<u32>;
+}
+
+// 1. Two disjoint mutable halves; `from != into` is checked at run time.
+fn mergeSplit(lists: borrow mut Vector<List>, from: usize, into: usize) -> Result<void, AllocError> {
+    if (from == into) {
+        return Ok();
+    }
+    if (from < into) {
+        let halves = lists.splitAtMut(into);
+        let source = borrow halves.left[from];
+        let target = borrow mut halves.right[0];
+        for (x in source.items) {
+            target.items.push(x)?;
+        }
+    } else {
+        let halves = lists.splitAtMut(from);
+        let source = borrow halves.right[0];
+        let target = borrow mut halves.left[into];
+        for (x in source.items) {
+            target.items.push(x)?;
+        }
+    }
+    return Ok();
+}
+
+// 2. Copy the source out, then write.
+fn mergeCopy(lists: borrow mut Vector<List>, from: usize, into: usize) -> Result<void, AllocError> {
+    var copy = Vector<u32>.create();
+    for (x in lists[from].items) {
+        copy.push(x)?;
+    }
+    for (x in copy) {
+        lists[into].items.push(x)?;
+    }
+    return Ok();
+}
+
+fn show(list: borrow List) {
+    Console.write("[");
+    for (i in 0..list.items.length) {
+        if (i > 0) { Console.write(" "); }
+        Console.write(list.items[i]);
+    }
+    Console.write("]");
+}
+
+fn main() {
+    var lists = Vector<List>.create();
+    lists.push(List { items: Vector<u32>.create() })!;
+    lists.push(List { items: Vector<u32>.create() })!;
+    for (i in 1..6u32) {
+        lists[1].items.push(i)!;
+    }
+
+    // The starting state, then list 1 merged into list 0 (from > into), then list 0 into list 1 (a copy).
+    Console.write("split: ");
+    show(lists[0]);
+    Console.write(" ");
+    show(lists[1]);
+    Console.writeLine("");
+
+    mergeSplit(mut lists, 1, 0)!;
+    Console.write("split backwards: ");
+    show(lists[0]);
+    Console.write(" ");
+    show(lists[1]);
+    Console.writeLine("");
+
+    mergeCopy(mut lists, 0, 1)!;
+    Console.write("copied: ");
+    show(lists[0]);
+    Console.write(" ");
+    show(lists[1]);
+    Console.writeLine("");
+
+    // 3. Values in one table, results in another: no aliasing question arises.
+    var sums = Vector<u32>.create();
+    sums.push(0)!;
+    sums.push(0)!;
+    for (x in lists[0].items) {
+        sums[1] += x;
+    }
+    Console.write("separate tables: ");
+    Console.write(sums[1]);
+    Console.writeLine(" into slot 1");
+}

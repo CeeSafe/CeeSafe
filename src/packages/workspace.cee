@@ -81,7 +81,7 @@ fn defaultHome() -> Result<Vector<u8>, AllocError> {
     return joinPath(user.view(), ".ceesafe".bytes());
 }
 
-/// The default index, or `$CEESAFE_INDEX` (PackageIndex.DefaultUrl): CeeSafe's own, since a Nova index lists Nova
+/// The default index, or `$CEESAFE_INDEX` (PackageIndex.DefaultUrl): CeeSafe's own, since a reference index lists the reference
 /// packages, which ceesafec does not read (Decision 0003).
 fn defaultIndexUrl() -> Result<Vector<u8>, AllocError> {
     match (Environment.variable("CEESAFE_INDEX")) {

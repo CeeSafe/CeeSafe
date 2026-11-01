@@ -692,7 +692,7 @@ fn checkLayoutOf(c: borrow mut Checker, typeArguments: Range, arguments: Range, 
 
 /// `offsetOf<T>(field)` (CheckOffsetOf, §30.1; ADR 0030): a field's offset in bytes, as `usize`; for a C-laid-out `T`
 /// a built-in C writes as `offsetof`. One deliberate divergence: the reference reads the field's offset without laying
-/// the struct out first, so it is 0 unless something had already asked for the layout (novac 0.6.0); ceesafec lays it
+/// the struct out first, so it is 0 unless something had already asked for the layout (the reference compiler 0.6.0); ceesafec lays it
 /// out and gives the true offset (docs/p3-plan.md).
 fn checkOffsetOf(c: borrow mut Checker, typeArguments: Range, arguments: Range, span: Span) -> Result<u32, AllocError> {
     var fieldName = none();

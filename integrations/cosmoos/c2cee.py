@@ -474,7 +474,7 @@ def verify(tree: Path, archs: list[str], boot: bool, max_load: float, ceesafec: 
     # scripts/cee-gen.py, build/cee.mk): these are the tree's own checks, run with that compiler.
     if not (tree / "scripts" / "cee-gen.py").is_file():
         sys.exit(f"c2cee verify: {tree} has no scripts/cee-gen.py: a CosmoOS tree from before its move to CeeSafe "
-                 "(it built with novac); verify a tree at or after that change")
+                 "(it built with the reference compiler); verify a tree at or after that change")
     env = dict(os.environ, CEESAFEC=ceesafec)
     make = "gmake" if subprocess.run(["which", "gmake"], capture_output=True).returncode == 0 else "make"
     results = []

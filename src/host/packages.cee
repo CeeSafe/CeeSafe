@@ -17,7 +17,7 @@ fn rootLength(path: Slice<u8>) -> usize {
 fn isRooted(path: Slice<u8>) -> bool => rootLength(path) > 0;
 
 /// A path the host gave, with `/` separators: on Windows (a path with a drive) each `\` becomes `/`, as ceesafec's paths
-/// use `/` throughout (and novac's output does on every host).
+/// use `/` throughout (and the reference compiler's output does on every host).
 fn slashedPath(path: Slice<u8>) -> Result<Vector<u8>, AllocError> {
     var out = copyBytes(path)?;
     if (hasDrive(path)) {

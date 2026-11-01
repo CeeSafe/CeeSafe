@@ -1,22 +1,21 @@
 # ADR 0028 — M15 S7: the host services a compiler needs
 
-> **Inherited from Nova.** This is Nova's ADR 0028, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0028 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-30), every question as recommended (§5). The wording is the agent's. Implemented the same day (§6).
-- Scope: M15 S7 (OD-35). These are the operating-system services `novac build` and its package commands use, which
-  Nova's hosted library (type-system §26) lacks: a compiler written in Nova (OD-33) cannot do without them.
+- Scope: M15 S7 (OD-35). These are the operating-system services `ceesafec build` and its package commands use, which
+  The reference's hosted library (type-system §26) lacks: a compiler written in the reference (OD-33) cannot do without them.
 
 ## 1. Context
 
-The services novac itself uses (an audit of `src/`, 2026-10-30):
+The services the reference compiler itself uses (an audit of `src/`, 2026-10-30):
 
-| Service | Where novac uses it | Nova today (§26) |
+| Service | Where the reference compiler uses it | The reference today (§26) |
 |---|---|---|
 | Run a program and capture its stdout and stderr, optionally with stdin | the C compiler and linker (`Backend.C/CBackend.cs:252-290`); tool discovery (`CCompilers.cs:165`) | `Process.run`: inherited stdio, exit status only |
-| Read an environment variable | `CC`, `PATH`, `NOVA_HOME`, `NOVA_INDEX`, `INCLUDE` | none |
+| Read an environment variable | `CC`, `PATH`, `CEESAFE_HOME`, `CEESAFE_INDEX`, `INCLUDE` | none |
 | Create and list directories | `-o DIR` for `--emit c` (`Program.cs:586`, `:603`, `CBackend.cs:42`); `src/` of a package (`Manifest.cs:271`) | none |
 | Whether a path exists, and what it is | manifests, the cache, `fmt` on a directory | none (`File.open` and look at the error) |
 | A fresh temporary directory, removed afterwards | every `build` (`Program.cs:614`) | none |
@@ -46,7 +45,7 @@ Hosted-only functions (N0293 in freestanding code), blocking, with errors as `Io
     child that fills one pipe cannot deadlock it.
   - Failures: allocation is `OutOfMemory`; the program not found is `NotFound`; arguments as for `Process.run`.
 - `Environment.variable(name: StringView) -> StringView?`: the value as static text, like `Process.argument` (§26.1).
-  It is `null` if absent or not valid UTF-8. Nova has no way to set a variable, so the text never changes under the
+  It is `null` if absent or not valid UTF-8. The reference has no way to set a variable, so the text never changes under the
   program.
 - `Directory.create(path) -> Result<void, IoError>` (one level; `AlreadyExists` if it exists) and
   `Directory.remove(path)` (an empty directory).
@@ -59,12 +58,12 @@ Hosted-only functions (N0293 in freestanding code), blocking, with errors as `Io
 - `Directory.current() -> Result<String, IoError>`.
 
 Paths are `StringView`s, under the same rules as `File.open`: zero bytes and paths over 4,095 bytes are `InvalidInput`.
-The interpreter models these with .NET's APIs on macOS and Linux, and the sandbox (`novac mcp`, `nova_run`) refuses
+The interpreter models these with .NET's APIs on macOS and Linux, and the sandbox (`ceesafec mcp`, `ceesafe_run`) refuses
 them all, as it refuses processes today.
 
 ## 4. Consequences
 
-- Spec: type-system §26.7–§26.10, diagnostics (none new expected), and the runtime in `runtime/hosted/nova_rt_io.c`
+- Spec: type-system §26.7–§26.10, diagnostics (none new expected), and the runtime in `runtime/hosted/ceesafe_rt_io.c`
   (POSIX and Windows) with CosmoOS's variants selected at compile time.
 - Tests:
   - run-pass and run-fail programs for each function (a child writing more than a pipe's buffer to both streams;
@@ -72,7 +71,7 @@ them all, as it refuses processes today.
   - `InterpreterTests` and `McpTests` for the sandbox;
   - the MSVC configuration for Windows;
   - `c3.py` in a CosmoOS guest for the spawn path.
-- A compiler written in Nova (the CeeSafe port) can then implement `build` and package mode without C adapters.
+- A compiler written in the reference (the CeeSafe port) can then implement `build` and package mode without C adapters.
 
 ## 5. Questions for the owner
 
@@ -83,7 +82,7 @@ them all, as it refuses processes today.
    (Recommended: fail. Skipping could make a compiler silently miss a source file.)
 4. CosmoOS: implement `Process.capture` there in 0.4.0 (its spawn API needs pipe redirection; to be audited in
    CosmoOS's code), or report `Other` until a later release? (Recommended: audit first, and decide with the evidence.)
-5. Windows: full parity in the same release? (Recommended: yes. novac's own Windows builds depend on these services.)
+5. Windows: full parity in the same release? (Recommended: yes. The reference compiler's own Windows builds depend on these services.)
 
 ## 6. Implementation (2026-10-30)
 
@@ -94,20 +93,20 @@ them all, as it refuses processes today.
   nothing needs `poll` or threads to avoid a deadlock. The temporary directory is made by trying names until `mkdir`
   succeeds, which is atomic on every platform.
 - **One name changed.** `Path.kind` is `File.kind`. A lib/std `Path` would break programs that declare their own:
-  lib/std names cannot be redeclared in a hosted package (§38.5), and the corpus's `run-pass/struct-nested.nova` has
+  lib/std names cannot be redeclared in a hosted package (§38.5), and the corpus's `run-pass/struct-nested.cee` has
   one. `Environment`, `Directory`, `PathKind`, `ProcessOutput` and `HostServices` matched nothing in the repository,
   CeeSafe or the site's guide.
 - **Where it lives:**
-  - `lib/std/host.nova`, with its unsafe code behind documented contracts;
-  - ten `nova_host_*` functions in `runtime/hosted/nova_rt_io.c`, for POSIX, CosmoOS and Windows, declared in `rt.h`;
+  - `lib/std/host.cee`, with its unsafe code behind documented contracts;
+  - ten `ceesafe_host_*` functions in `runtime/hosted/ceesafe_rt_io.c`, for POSIX, CosmoOS and Windows, declared in `rt.h`;
   - two checker hooks, so `Process.capture` and `File.kind` call lib/std's `HostServices`;
   - the interpreter's models in `Interpreter/HostServices.cs`.
 - **Tests:**
-  - `run-pass/host-services.nova`, run in every C configuration and in the interpreter;
-  - `check-fail/host-services.nova`;
+  - `run-pass/host-services.cee`, run in every C configuration and in the interpreter;
+  - `check-fail/host-services.cee`;
   - `HostServicesTests`, where capture runs natively and in the interpreter with a child writing 300,000 bytes to
     each stream, and the sandbox refuses.
-- **CosmoOS, in a guest.** `c3.py --ssh` builds `integrations/cosmoos/c3/c3-host.nova` for CosmoOS and runs it.
+- **CosmoOS, in a guest.** `c3.py --ssh` builds `integrations/cosmoos/c3/c3-host.cee` for CosmoOS and runs it.
   The first run found that CosmoOS's `S_ISDIR`/`S_ISREG` test the stat record's `st_type` (a `DT_*` value), not
   `st_mode` (its `sys/stat.h`). The runtime selects `st_type` there.
 - **Not yet run:** the Windows `CreateProcess` path. The CI's Windows job builds and runs the run corpus with MSVC,

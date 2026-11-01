@@ -75,7 +75,7 @@ fn wideToBig(a: Wide) -> Result<BigInt, AllocError> {
     return Ok(BigInt.of(negative && !(m.hi == 0 && m.lo == 0), BigNat.add(shifted, lo)?));
 }
 
-/// An integer type's minimum and maximum (NovaType.Min, Max).
+/// An integer type's minimum and maximum.
 fn integerRangeOf(c: borrow Checker, t: u32) -> WideRange {
     let info = c.types.info(t);
     if (info.signed) {

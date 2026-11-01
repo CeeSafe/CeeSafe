@@ -1,6 +1,6 @@
 // Expressions and calls (the reference's CheckExpr, Synth, Coerce, CheckIntLiteral, SynthName, SynthUnary,
 // SynthBinary, CheckOperatorApplies, CheckShiftAmount, SynthCall, CheckUserCall, CheckArgument and
-// CheckBuiltinMemberCall), for what S1a supports; every other form is N0216 "not ported yet" (src/check/checker.nova).
+// CheckBuiltinMemberCall), for what S1a supports; every other form is N0216 "not ported yet" (src/check/checker.cee).
 
 fn appendQuotedType(message: borrow mut Vector<u8>, c: borrow Checker, typ: u32) -> Result<void, AllocError> {
     appendText(message, "'")?;

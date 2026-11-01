@@ -7,7 +7,7 @@ struct Table {
     count: u64;
 }
 
-static TABLE: SpinLock<Table> = SpinLock<Table>.constant("nova.table\0".ptr as *CChar, Table { count: 0 });
+static TABLE: SpinLock<Table> = SpinLock<Table>.constant("safe.table\0".ptr as *CChar, Table { count: 0 });
 static TICKS: PerCpu<u64> = PerCpu<u64>.constant(0);
 
 @export("kl_bump")
@@ -28,7 +28,7 @@ fn tick() -> u64 {
 
 @export("kl_boxed")
 fn boxed() -> u64 {
-    match (SpinLock<u64>.create("nova.boxed\0".ptr as *CChar, 7)) {
+    match (SpinLock<u64>.create("safe.boxed\0".ptr as *CChar, 7)) {
         Ok(lock) => {
             var guard = lock.lock();
             return guard.data();
@@ -39,7 +39,7 @@ fn boxed() -> u64 {
 
 @export("kl_object")
 fn object() -> u32 {
-    match (KRef<u64>.create("nova.object\0".ptr as *CChar, 9)) {
+    match (KRef<u64>.create("safe.object\0".ptr as *CChar, 9)) {
         Ok(first) => {
             let second = first.clone();
             return second.count();

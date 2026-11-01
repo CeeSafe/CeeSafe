@@ -1,5 +1,0 @@
-# Written by novac fetch (docs/tooling.md §4.3). Commit it with nova.toml.
-
-[[package]]
-name = "geo"
-source = "path+../geo"

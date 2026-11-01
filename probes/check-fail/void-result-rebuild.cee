@@ -1,0 +1,12 @@
+// Regression probe for the reference #2 (fixed in the reference compiler 0.4.0, M15 S1): a generic copy that does not check for its type
+// arguments is N0222 at its use, not a crash (type-system §20.4). With T = void, `Result<void, E>.Ok` has no payload,
+// so `Ok(v) => Ok(v)` does not check; probes/run-pass/error-layers.cee uses non-generic lifts for void results.
+fn same<T>(r: Result<T, u8>) -> Result<T, u8> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(e),
+};
+
+fn main() {
+    let a: Result<void, u8> = Ok();
+    let r = same(a); // error[N0222]
+}

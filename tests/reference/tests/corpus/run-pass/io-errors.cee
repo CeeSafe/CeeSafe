@@ -3,7 +3,7 @@ fn main() {
     Console.writeLine(Process.argumentCount() == 1);
     Console.writeLine(Process.argument(1) == null);
     Console.writeLine(Process.argument(0) != null);
-    match (File.open("/nonexistent-nova-dir/file")) {
+    match (File.open("/nonexistent-cee-dir/file")) {
         Ok(f) => { Console.writeLine("unexpected"); }
         Err(e) => {
             match (e) {

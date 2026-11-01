@@ -19,5 +19,5 @@ trip you up.
 | C#, Java or TypeScript | [CeeSafe for C#, Java and TypeScript programmers](csharp-java-typescript.md) | no garbage collector, no classes or inheritance, no exceptions, no null references |
 | Go | [CeeSafe for Go programmers](go.md) | no garbage collector; errors propagate with `?`; interfaces are explicit and static; no goroutines yet |
 
-A comparison of the languages as a whole, in one table, is on the repository's
-[README](https://github.com/vkuttyp/Nova/blob/v0.6.0/README.md#how-nova-compares) (Nova's, the same language at the fork).
+Why CeeSafe is built the way it is, against those languages, is on the repository's
+[README](https://github.com/vkuttyp/CeeSafe#why-ceesafe).

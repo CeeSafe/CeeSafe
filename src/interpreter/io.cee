@@ -71,7 +71,7 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     channels: Vector<InterpChannel>.create(),
 };
 
-/// nova_rt_args: argv as static memory (never copied by the native runtime either).
+/// ceesafe_rt_args: argv as static memory (never copied by the native runtime either).
 fn startRuntime(it: borrow mut Interp) -> Result<void, Stop> {
     for (k in 0..it.options.arguments.length) {
         let bytes = copyBytes(it.options.arguments[k].view())!;
@@ -113,7 +113,7 @@ fn isLinuxHost() -> bool => match (File.kind("/proc/self")) {
     Err(_) => false,
 };
 
-/// The errno a lib/core IoError stands for (HostIo's numbers), so the program's nova_io_kind maps it back.
+/// The errno a lib/core IoError stands for (HostIo's numbers), so the program's ceesafe_io_kind maps it back.
 fn errnoOf(error: IoError) -> i64 => match (error) {
     IoError.NotFound => 2,
     IoError.PermissionDenied => 13,
@@ -164,7 +164,7 @@ fn ioKindOf(error: i64) -> u64 {
     return 10;
 }
 
-/// nvIOR_: Err with the IoError variant for the errno (its number kept for Other), or Ok with the value.
+/// ceeIOR_: Err with the IoError variant for the errno (its number kept for Other), or Ok with the value.
 fn interpIoResult(c: borrow Checker, result: u32, value: i64, error: i64) -> Result<Value, Stop> {
     let ok = resultOkOf(c, result);
     let errorType = resultErrOf(c, result);
@@ -502,7 +502,7 @@ fn hostOk(value: i64) -> HostOutcome => HostOutcome { value: value, error: 0 };
 
 fn hostError(error: i64) -> HostOutcome => HostOutcome { value: 0, error: error };
 
-/// nova_process_run: the argument copies are counted allocations (argv, then each string, stopping at the first
+/// ceesafe_process_run: the argument copies are counted allocations (argv, then each string, stopping at the first
 /// failure); standard output is flushed; the child's exit status, or 128 + its signal.
 fn processRun(it: borrow mut Interp, program: borrow Value, vector: u64) -> Result<HostOutcome, Stop> {
     let count = it.memory.loadBits(vector + 8, 8)?;
@@ -557,7 +557,7 @@ fn processRun(it: borrow mut Interp, program: borrow Value, vector: u64) -> Resu
     return Ok(result);
 }
 
-// ---- Host services (HostServices.cs; lib/std/host.nova's extern functions) ----
+// ---- Host services (HostServices.cs; lib/std/host.cee's extern functions) ----
 
 fn hostResult(value: i64) -> Value => valueOf(truncate<u64>(value), 8);
 
@@ -578,7 +578,7 @@ fn hostBytes(
     return Ok(value.data);
 }
 
-/// nova_c_path: no zero byte, at most 4,095 bytes, valid text; null otherwise.
+/// ceesafe_c_path: no zero byte, at most 4,095 bytes, valid text; null otherwise.
 fn hostPath(
     it: borrow Interp,
     arguments: borrow Vector<Value>,
@@ -736,7 +736,7 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
             Err(e) => Ok(hostFailure(errnoOf(e))),
         };
     }
-    // nova_host_spawn: argv as views, then the paths of standard input, output and error.
+    // ceesafe_host_spawn: argv as views, then the paths of standard input, output and error.
     let count = arguments[1].bits(0, 8)?;
     if (count == 0 || count > 4097) {
         return Ok(hostFailure(errnoInvalid()));
@@ -1115,7 +1115,7 @@ fn callC(
         return Ok(valueOf(to, 8));
     }
     if (sameText(n0, "malloc")) {
-        // A heap allocation of the interpreter's memory (not counted as Nova's own: it is C's).
+        // A heap allocation of the interpreter's memory (not counted as the reference's own: it is C's).
         let size = arguments[0].bits(0, 8)?;
         if (size == 0) {
             return Ok(valueOf(0, 8));
@@ -1349,7 +1349,7 @@ fn threadBuiltin(
 ) -> Result<Value?, Stop> {
     let resultType = n.rvalueTypes[r as usize];
     if (b == bfThreadSpawn()) {
-        // nvTS_: the environment into the heap, and a thread running it; the same three allocations as the C runtime.
+        // ceeTS_: the environment into the heap, and a thread running it; the same three allocations as the C runtime.
         let environment = argument(it, c, n, frame, arguments, 0)?;
         let environmentType = builtinArgumentType(n, arguments, 0);
         let thread = resultOkOf(c, resultType);
@@ -1386,7 +1386,7 @@ fn threadBuiltin(
         return Ok(okValue(c, resultType, valueOf(block, 8))?);
     }
     if (b == bfThreadSpawnBoxed()) {
-        // nvTSB_: a thread running a boxed closure: the record and the runtime's thread record, as in C.
+        // ceeTSB_: a thread running a boxed closure: the record and the runtime's thread record, as in C.
         let closure = argument(it, c, n, frame, arguments, 0)?;
         let box = builtinArgumentType(n, arguments, 0);
         let result = elementOf(c, resultOkOf(c, resultType));
@@ -1431,7 +1431,7 @@ fn threadBuiltin(
         freeMemory(it, record)?;
         return Ok(null);
     }
-    // nvTJ_: waits for the thread, takes its result, and frees its record and closure.
+    // ceeTJ_: waits for the thread, takes its result, and frees its record and closure.
     let referenceType = builtinArgumentType(n, arguments, 0);
     let threadType = if (c.types.is(referenceType, TypeKind.Thread)) referenceType else pointeeOf(c, referenceType);
     let block = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;

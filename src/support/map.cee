@@ -1,8 +1,8 @@
 // A hash map with deterministic iteration (ROADMAP §3.1): entries are kept in insertion order, and an open-addressing
 // index of entry numbers finds them, so output never depends on hash values. There is no removal; the compiler's
-// tables only grow. Promoted from probes/run-pass/generic-map.nova.
+// tables only grow. Promoted from probes/run-pass/generic-map.cee.
 
-/// A key type: `K: Key<K>`, since Nova has no `Self` (type-system §21.1).
+/// A key type: `K: Key<K>`, since the reference has no `Self` (type-system §21.1).
 interface Key<T> {
     fn hashCode(borrow this) -> u64;
     fn sameAs(borrow this, other: borrow T) -> bool;

@@ -1,7 +1,7 @@
 // M6 acceptance criterion 1 (milestone-6.md): every operation that can move or free a collection's
 // storage is rejected while an element borrow or view of it is live. This file adds destruction
 // (a temporary collection ending while borrowed), String, and StableVector writes and moves;
-// vector-invalidation.nova and slot-map-invalidation.nova cover the rest.
+// vector-invalidation.cee and slot-map-invalidation.cee cover the rest.
 fn look(r: borrow i32) { }
 fn show(s: StringView) { }
 fn first(v: borrow Vector<i32>) -> borrow i32 { return borrow v[0]; }

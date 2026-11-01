@@ -1,0 +1,77 @@
+extern "Rust" {
+    fn rusty();
+}
+extern "C" {
+    struct missing_header { x: u32; }
+}
+@header("", "ok.h", 5)
+extern "C" {
+    struct generic_c<T> { x: T; }
+    struct with_methods {
+        x: u32;
+        fn get(borrow this) -> u32 => this.x;
+    }
+    @ctype(5)
+    struct bad_ctype { x: u32; }
+    @ctype("__reserved")
+    struct reserved_ctype { x: u32; }
+    struct c_fields {
+        @cname(1)
+        a: u32;
+        @cname("b")
+        b2: u32;
+        b: u32;
+        name: StringView;
+        @frob
+        z: u32;
+    }
+    @context(atomic)
+    fn has_body() -> u32 => 1;
+    fn generic_c_fn<T>(x: T);
+    unsafe fn unsafe_c_fn();
+    fn takes_view(s: StringView) -> StringView;
+    fn by_value(p: Plain);
+    fn int(x: u32);
+    fn ceesafe_runtime(x: u32);
+    fn ok_c_fn(x: u32) -> u32;
+    fn ok_c_fn(x: u32) -> u32;
+}
+
+struct Plain { x: u32; }
+@repr(C)
+struct Bad {
+    view: StringView;
+    plain: Plain;
+    __hidden: u32;
+}
+@repr(u8)
+enum switch { A, B }
+@repr(u8)
+enum Big { A, B, C }
+
+fn plain(x: u32) -> u32 => x;
+@export("ok_c_fn")
+fn clash(x: u32) -> u32 => x;
+@export
+fn exportsView(s: StringView) {}
+@callback
+fn callsBack(s: StringView) -> StringView => s;
+@callback
+fn generic<T>(x: T) {}
+@export
+const NAME: StringView = "x";
+@export("double")
+const TWICE: u32 = 2;
+
+fn main() {
+    let f: extern "C" fn(u32) -> u32 = plain;
+    let g: extern "C" fn(u32) -> u64 = ok_c_fn;
+    let h: extern "Rust" fn() = plain;
+    let e: extern "C" fn(Big) = plain;
+    let v: extern "C" fn(StringView) = plain;
+    let x = f(1);
+    let w = unsafe { f(1, 2) };
+    let y = ok_c_fn(1);
+    let s: missing_header = missing_header {};
+    let n = f.frob();
+}

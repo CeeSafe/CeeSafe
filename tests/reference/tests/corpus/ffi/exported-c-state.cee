@@ -1,7 +1,7 @@
-// @repr(C) structs that hold C state and arrays (ADR 0029, type-system.md §28.5): Nova defines `xs_table`, a lock, a
+// @repr(C) structs that hold C state and arrays (ADR 0029, type-system.md §28.5): the reference defines `xs_table`, a lock, a
 // self-pointing list head and an array of entries; C embeds it by value in its own struct, in a static and on the
-// stack (exported-c-state.c), and Nova's exports work on it through pointers. `Grid` is a plain @repr(C) struct with
-// arrays, made as a value in Nova and in a static.
+// stack (exported-c-state.c), and the reference's exports work on it through pointers. `Grid` is a plain @repr(C) struct with
+// arrays, made as a value in the reference and in a static.
 
 @header("exported-c-state.types.h")
 extern "C" {
@@ -78,7 +78,7 @@ unsafe fn install(t: *mut xs_table, obj: *mut void, rights: u32) -> i32 {
     return -1;
 }
 
-/// Field offsets, as C's offsetof gives them (ADR 0030): a Nova-laid-out struct's (a constant), a C-laid-out one's,
+/// Field offsets, as C's offsetof gives them (ADR 0030): a reference-laid-out struct's (a constant), a C-laid-out one's,
 /// an imported one's, and one from a static initialiser.
 /// Safety: `out` has four writable words.
 @export("xs_offsets")

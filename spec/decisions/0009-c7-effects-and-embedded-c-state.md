@@ -1,9 +1,8 @@
 # ADR 0009 — C7: context effects, and C state embedded by value
 
-> **Inherited from Nova.** This is Nova's ADR 0009, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0009 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-24, choosing "embed by value" for kernel locks and objects
   over out-of-line C state). The rest is the agent's design under that choice, following
@@ -32,30 +31,30 @@ the code decide the design:
   everything it calls and every value it drops, inferred over the whole package. Built-in operations
   declare theirs (heap allocation is `alloc`; hosted I/O is `sleep`).
 - `@effects(sleep, alloc)` (any subset; `@effects()` for none) **declares** them: on an `extern` function it
-  is what Nova assumes, and on a Nova function it is an upper bound that the inferred set must fit. An extern
+  is what the reference assumes, and on a CeeSafe function it is an upper bound that the inferred set must fit. An extern
   function without `@effects` is assumed to have both, the most conservative choice. A call through a C
   function pointer has both.
-- `@context(atomic)` (no `sleep`) and `@context(irq)` (no `sleep`, no `alloc`; KQ-1's Nova default) on a
+- `@context(atomic)` (no `sleep`) and `@context(irq)` (no `sleep`, no `alloc`; KQ-1's the reference default) on a
   function forbid effects in its body. On a **struct**, `@context(atomic)` makes every point where a value
   of it is live (maybe initialised and not yet dropped) atomic: holding a spin-lock guard is an atomic
   context, with no annotation at the use.
 - Effects are checked in **every profile**. They create obligations only where a context or an `@effects`
   bound is declared, so hosted programs without them are unaffected.
-- The checker proves only that Nova code respects the declared effects of what it calls. CosmoOS's runtime
-  checks (`might_sleep`, lockdep) stay the backstop. Nova generates no `might_sleep()` calls: the debug half of
+- The checker proves only that CeeSafe code respects the declared effects of what it calls. CosmoOS's runtime
+  checks (`might_sleep`, lockdep) stay the backstop. The reference generates no `might_sleep()` calls: the debug half of
   the macro calls `lockdep_might_sleep`, which modules cannot link to (it is not exported), and every sleeping
-  primitive Nova calls has its own.
+  primitive the reference calls has its own.
 
 ### 2. C state embedded by value (C7b)
-- A Nova struct may hold an imported C type by value, and so may an imported struct (an embedded member).
+- A CeeSafe struct may hold an imported C type by value, and so may an imported struct (an embedded member).
   Such a type, and every type that contains one by value, is **C-laid-out**. Like an imported type, it has no
-  Nova layout. Generated C defines it with the real C member types, so the C compiler lays it out, and it
+  The reference layout. Generated C defines it with the real C member types, so the C compiler lays it out, and it
   gets no layout assertions. The interpreter faults on it.
 - C-laid-out values are **immovable**. They are made **in place** and never moved:
   - the only way to make one is a struct literal given directly to `Box.createIn` (or nested in such a
     literal);
   - imported fields are left out of the literal and **zero-filled** (C's `{0}`), which is the only imported
-    value Nova can make;
+    value the reference can make;
   - the contents of such a box are never moved out;
   - a C-laid-out type cannot be a local, parameter, result, array element, enum payload, optional or
     type argument (a reference to one can be).
@@ -73,7 +72,7 @@ the code decide the design:
 - `SpinLock<T>`, `IrqSpinLock<T>` and `Mutex<T>` hold their C lock and their data. `lock()` returns a guard
   that borrows the lock and gives `borrow mut T` access. Spin guards are `@context(atomic)`. `Mutex.lock` is
   `sleep`. Dropping a guard unlocks. Data is reachable only through a guard.
-- `KRef<T>`, a counted reference to a Nova-defined kernel object (it embeds `kobject`). Its drop is
+- `KRef<T>`, a counted reference to a reference-defined kernel object (it embeds `kobject`). Its drop is
   `kobject_put`, with the `sleep` effect unless the type is `@nonblockingRelease`. A final put under a spin
   guard is then a compile error, the hole of fact 3.
 - `Quiesce.synchronize()` (`sleep`). `Quiesce.deferDrop(box)` uses `call_quiesce` with an embedded

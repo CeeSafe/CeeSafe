@@ -1,48 +1,48 @@
-closure-calls/known.nova:7: in twice: indirect: the closure is not known here
-closure-calls/known.nova:8: in twice: indirect: the closure is not known here
-closure-calls/known.nova:15: in apply: indirect: the closure is not known here
-closure-calls/known.nova:40: in main: indirect: the closure is not known here
-closure-calls/known.nova:15: in apply#1: direct call to the closure at closure-calls/known.nova:31
-closure-calls/known.nova:15: in apply#2: direct call to the closure at closure-calls/known.nova:32
-closure-calls/known.nova:15: in apply#3: direct call to the closure at closure-calls/known.nova:33
-closure-calls/known.nova:7: in twice#1: direct call to the closure at closure-calls/known.nova:44
-closure-calls/known.nova:8: in twice#1: direct call to the closure at closure-calls/known.nova:44
-closure-calls/known.nova:7: in twice#2: direct call to the closure at closure-calls/known.nova:31
-closure-calls/known.nova:8: in twice#2: direct call to the closure at closure-calls/known.nova:31
-closure-calls/known.nova:7: in twice#3: direct call to the closure at closure-calls/known.nova:32
-closure-calls/known.nova:8: in twice#3: direct call to the closure at closure-calls/known.nova:32
-closure-calls/known.nova:7: in twice#4: direct call to the closure at closure-calls/known.nova:33
-closure-calls/known.nova:8: in twice#4: direct call to the closure at closure-calls/known.nova:33
-lib/core/slices.nova:131: in SliceAlgorithms<i32>.insertion#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:109: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:110: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:112: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:117: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:131: in SliceAlgorithms<i32>.insertion#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:109: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:110: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:112: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:117: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:161: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:164: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.nova:26
-lib/core/slices.nova:161: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.nova:28
-lib/core/slices.nova:164: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.nova:28
-variant SliceAlgorithms<i32>.sortBy#1: parameter 1 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.sortBy#2: parameter 1 = the closure at closure-calls/known.nova:28
-variant apply#1: parameter 0 = the closure at closure-calls/known.nova:31
-variant apply#2: parameter 0 = the closure at closure-calls/known.nova:32
-variant apply#3: parameter 0 = the closure at closure-calls/known.nova:33
-variant twice#1: parameter 0 = the closure at closure-calls/known.nova:44
-variant SliceAlgorithms<i32>.introsort#1: parameter 4 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.introsort#2: parameter 4 = the closure at closure-calls/known.nova:28
-variant twice#2: parameter 0 = the closure at closure-calls/known.nova:31
-variant twice#3: parameter 0 = the closure at closure-calls/known.nova:32
-variant twice#4: parameter 0 = the closure at closure-calls/known.nova:33
-variant SliceAlgorithms<i32>.insertion#1: parameter 3 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.heapsort#1: parameter 3 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.partition#1: parameter 3 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.insertion#2: parameter 3 = the closure at closure-calls/known.nova:28
-variant SliceAlgorithms<i32>.heapsort#2: parameter 3 = the closure at closure-calls/known.nova:28
-variant SliceAlgorithms<i32>.partition#2: parameter 3 = the closure at closure-calls/known.nova:28
-variant SliceAlgorithms<i32>.siftDown#1: parameter 4 = the closure at closure-calls/known.nova:26
-variant SliceAlgorithms<i32>.siftDown#2: parameter 4 = the closure at closure-calls/known.nova:28
+closure-calls/known.cee:7: in twice: indirect: the closure is not known here
+closure-calls/known.cee:8: in twice: indirect: the closure is not known here
+closure-calls/known.cee:15: in apply: indirect: the closure is not known here
+closure-calls/known.cee:40: in main: indirect: the closure is not known here
+closure-calls/known.cee:15: in apply#1: direct call to the closure at closure-calls/known.cee:31
+closure-calls/known.cee:15: in apply#2: direct call to the closure at closure-calls/known.cee:32
+closure-calls/known.cee:15: in apply#3: direct call to the closure at closure-calls/known.cee:33
+closure-calls/known.cee:7: in twice#1: direct call to the closure at closure-calls/known.cee:44
+closure-calls/known.cee:8: in twice#1: direct call to the closure at closure-calls/known.cee:44
+closure-calls/known.cee:7: in twice#2: direct call to the closure at closure-calls/known.cee:31
+closure-calls/known.cee:8: in twice#2: direct call to the closure at closure-calls/known.cee:31
+closure-calls/known.cee:7: in twice#3: direct call to the closure at closure-calls/known.cee:32
+closure-calls/known.cee:8: in twice#3: direct call to the closure at closure-calls/known.cee:32
+closure-calls/known.cee:7: in twice#4: direct call to the closure at closure-calls/known.cee:33
+closure-calls/known.cee:8: in twice#4: direct call to the closure at closure-calls/known.cee:33
+lib/core/slices.cee:131: in SliceAlgorithms<i32>.insertion#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:109: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:110: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:112: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:117: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:131: in SliceAlgorithms<i32>.insertion#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:109: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:110: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:112: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:117: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:161: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:164: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:161: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:164: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.sortBy#1: parameter 1 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.sortBy#2: parameter 1 = the closure at closure-calls/known.cee:28
+variant apply#1: parameter 0 = the closure at closure-calls/known.cee:31
+variant apply#2: parameter 0 = the closure at closure-calls/known.cee:32
+variant apply#3: parameter 0 = the closure at closure-calls/known.cee:33
+variant twice#1: parameter 0 = the closure at closure-calls/known.cee:44
+variant SliceAlgorithms<i32>.introsort#1: parameter 4 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.introsort#2: parameter 4 = the closure at closure-calls/known.cee:28
+variant twice#2: parameter 0 = the closure at closure-calls/known.cee:31
+variant twice#3: parameter 0 = the closure at closure-calls/known.cee:32
+variant twice#4: parameter 0 = the closure at closure-calls/known.cee:33
+variant SliceAlgorithms<i32>.insertion#1: parameter 3 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.heapsort#1: parameter 3 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.partition#1: parameter 3 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.insertion#2: parameter 3 = the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.heapsort#2: parameter 3 = the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.partition#2: parameter 3 = the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.siftDown#1: parameter 4 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.siftDown#2: parameter 4 = the closure at closure-calls/known.cee:28

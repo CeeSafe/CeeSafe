@@ -1823,7 +1823,7 @@ fn getPrompt(doc: borrow JsonDoc, parameters: u32) -> Result<McpAnswer, McpFailu
         }
         appendText(
             mut text,
-            " exactly, by the method of\nNova's C6 and C9 ports (docs/cosmoos/c9-report.md in Nova's repository):\n\n",
+            " exactly, the way CosmoOS's components were ported\n(integrations/cosmoos, c2cee.py):\n\n",
         )!;
         appendText(
             mut text,

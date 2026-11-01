@@ -1,5 +1,5 @@
-// Bulk slice operations (type-system.md §16.5; c-backend.md §2): a length check and nv_slice_copy, a byte fill
-// as nv_slice_fill_byte, and a wider fill as an element loop.
+// Bulk slice operations (type-system.md §16.5; c-backend.md §2): a length check and cee_slice_copy, a byte fill
+// as cee_slice_fill_byte, and a wider fill as an element loop.
 struct Point { x: i32; y: i32; }
 
 fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {

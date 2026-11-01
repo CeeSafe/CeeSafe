@@ -1,4 +1,4 @@
-// Printing a float as the runtime's nova_format_f64/f32 does (the reference's FloatSemantics.Format;
+// Printing a float as the runtime's ceesafe_format_f64/f32 does (the reference's FloatSemantics.Format;
 // type-system.md §35.7): the shortest decimal that rounds back to the value, laid out by ECMA-262 §6.1.6.1.20.
 
 /// The shortest digits and the exponent n of 0.d1…dk × 10^n for a positive finite value of `bits` bits.

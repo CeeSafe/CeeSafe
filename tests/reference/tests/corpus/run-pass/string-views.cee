@@ -27,12 +27,12 @@ fn label(l: borrow Labeled) -> StringView {
 }
 
 fn main() {
-    let s: StringView = "Nova language";
+    let s: StringView = "safe language";
     Console.writeLine(s);
     Console.writeLine(s.length);
     let first = s[0..4];
-    Console.writeLine(first == "Nova");
-    Console.writeLine(first != "Nova");
+    Console.writeLine(first == "safe");
+    Console.writeLine(first != "safe");
     Console.writeLine(firstWord(s));
     Console.writeLine(firstWord("single"));
     Console.write(greeting(true));
@@ -60,18 +60,18 @@ fn main() {
     Console.writeLine("");
     Console.writeLine("".length);
 }
-// expect-stdout: Nova language
+// expect-stdout: safe language
 // expect-stdout: 13
 // expect-stdout: true
 // expect-stdout: false
-// expect-stdout: Nova
+// expect-stdout: safe
 // expect-stdout: single
 // expect-stdout: HELLO hello
 // expect-stdout: 108
 // expect-stdout: 3
 // expect-stdout: 5
 // expect-stdout: true
-// expect-stdout: 1272
+// expect-stdout: 1283
 // expect-stdout: 6
 // expect-stdout: h
 // expect-stdout: llo

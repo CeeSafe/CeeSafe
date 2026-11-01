@@ -1,7 +1,7 @@
 // C arrays (C9, ADR 0014): array members of imported C structs, read and written whole, indexed and sliced; a
-// member whose C name is a Nova keyword (`@cname`); an array of imported structs, indexed in place; pointer
+// member whose C name is a CeeSafe keyword (`@cname`); an array of imported structs, indexed in place; pointer
 // arithmetic over a C array of structs; constant arrays; and constants exported as C data. The C half,
-// c-arrays.c, owns the objects and prints what Nova did to them.
+// c-arrays.c, owns the objects and prints what the reference did to them.
 
 @header("c-arrays.types.h")
 extern "C" {

@@ -405,7 +405,7 @@ fn emitDestroyComponent(
     return e.emit();
 }
 
-/// `void nvD_…(T *p) {` with the given parameter name.
+/// `void ceeD_…(T *p) {` with the given parameter name.
 fn emitDropGlueHead(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -1067,7 +1067,7 @@ fn visitPlacedType(c: borrow Checker, t: u32, out: borrow mut Vector<u32>) -> Re
     return out.push(t);
 }
 
-/// `nvPL_<T>(T *p)`: the fields' placement initialisers, in field order, then the type's own (EmitPlacedHelpers, §33.3).
+/// `ceePL_<T>(T *p)`: the fields' placement initialisers, in field order, then the type's own (EmitPlacedHelpers, §33.3).
 fn emitPlacedHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var types = Vector<u32>.create();
     placedTypes(e, c, n, mut types)?;
@@ -1276,7 +1276,7 @@ fn emitIoHelperPrototypes(e: borrow mut CEmitter, c: borrow Checker) -> Result<v
     return Ok();
 }
 
-/// The conversions from the runtime's `nv_io_result` to Nova results (EmitIoHelpers, §26).
+/// The conversions from the runtime's `cee_io_result` to the reference results (EmitIoHelpers, §26).
 fn emitIoHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
     for (k in 0..e.composites.length) {
         let result = e.composites[k];
@@ -1734,7 +1734,7 @@ fn emitVectorHelperPrototypes(e: borrow mut CEmitter, c: borrow Checker) -> Resu
     return Ok();
 }
 
-/// The vector and string operations (EmitVectorHelpers, §23): grow with `nova_vec_grow` only when the buffer is full.
+/// The vector and string operations (EmitVectorHelpers, §23): grow with `ceesafe_vec_grow` only when the buffer is full.
 fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
     let voidResult = voidAllocResult(e, c);
     for (k in 0..e.composites.length) {

@@ -41,8 +41,8 @@ from pathlib import Path
 
 CEESAFE_ROOT = Path(__file__).resolve().parents[2]
 C1_DIR = Path(__file__).resolve().parent / "c1"
-CORPUS_DIR = CEESAFE_ROOT / "tests" / "reference" / "tests" / "corpus"  # CeeSafe's corpus (tools/fork_corpus.py)
-# The compiler under test: $CEESAFEC, else the tree's out/ceesafec (built by tools/bootstrap.sh or by itself).
+CORPUS_DIR = CEESAFE_ROOT / "tests" / "reference" / "tests" / "corpus"  # CeeSafe's corpus
+# The compiler under test: $CEESAFEC, else the tree's out/ceesafec (built by tools/bootstrap_release.sh or by itself).
 CEESAFEC = Path(os.environ.get("CEESAFEC", CEESAFE_ROOT / "out" / "ceesafec")).resolve()
 PROMPT = b"\ncosmo$ "
 DIRECTIVE = re.compile(r"// expect-(stdout|exit|panic):(?: (.*))?$")
@@ -69,9 +69,9 @@ class Program:
 
 
 def require_compiler():
-    """Stops unless the compiler under test exists (Nova's scripts built novac here; ceesafec is built beforehand)."""
+    """Stops unless the compiler under test exists (ceesafec is built beforehand, not here)."""
     if not CEESAFEC.is_file():
-        raise SystemExit(f"{CEESAFEC} is missing: build ceesafec (tools/bootstrap.sh, or out/ceesafec build) or set CEESAFEC")
+        raise SystemExit(f"{CEESAFEC} is missing: build ceesafec (tools/bootstrap_release.sh, or out/ceesafec build) or set CEESAFEC")
     log(f"compiler: {CEESAFEC}")
 
 
@@ -327,10 +327,10 @@ def main():
     serial, qemu_status = boot(cosmo, work, image, programs, args.timeout)
 
     checks = {
-        "ceesafe-hello printed NOVATEST: PASS": "NOVATEST: PASS" in serial,
+        "ceesafe-hello printed CEETEST: PASS": "CEETEST: PASS" in serial,
         "ceesafe-hello computed gcd": "gcd(1071, 462) = 21" in serial,
         "ceesafe-hello printed i64 min": "i64 min = -9223372036854775808" in serial,
-        "ceesafe-panic printed before panicking": "NOVAPANIC: before" in serial,
+        "ceesafe-panic printed before panicking": "CEEPANIC: before" in serial,
         "ceesafe-panic reported overflow with location": re.search(r"ceesafe panic: integer overflow at \S*ceesafe-panic\.cee:5:23", serial) is not None,
     }
     corpus = [p for p in programs if p.base == CORPUS_DIR]

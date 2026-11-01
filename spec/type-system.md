@@ -2551,9 +2551,7 @@ fn main() {
   digits on, and gives `4.9e-324`.
 
   The file is linked only into programs that print a float. The interpreter finds the same digits by an exact search
-  over rationals instead (`src/interpreter/float_format.cee`). Nova's C# interpreter could not use .NET's own shortest
-  formatting: .NET 10 prints 2^-25 as `2.980232238769531E-08`, which reads back as a different double (found in G7b;
-  Python's `repr` and Schubfach give `2.9802322387695312e-8`).
+  over rationals instead (`src/interpreter/float_format.cee`).
 
 ### 35.8 Math methods (M11 G7c; ADR 0011 §5 Q5)
 | Method | Result | Behaviour |

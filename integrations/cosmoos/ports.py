@@ -2,7 +2,7 @@
 """
 ports.py -- CosmoOS's CeeSafe ports through a ceesafec: the CeeSafe side of `c2cee.py verify` (spec/tooling.md §9).
 
-CosmoOS writes its kernel ports in CeeSafe (since its move from Nova, 2026-10-31), and its build generates their C
+CosmoOS writes its kernel ports in CeeSafe (since 2026-10-31), and its build generates their C
 with the ceesafec it pins (its scripts/cee-gen.py; build/cee.mk); the generated C is not committed. This check runs
 CosmoOS's own cee-gen.py, at a commit, with the ceesafec under test ($CEESAFEC, else the tree's out/ceesafec):
 
@@ -63,7 +63,7 @@ def main():
         script = tree / "scripts" / "cee-gen.py"
         if not script.is_file():
             sys.exit(f"ports: CosmoOS {commit} has no scripts/cee-gen.py: it predates its move to CeeSafe (it built "
-                     "with novac)")
+                     "with the reference compiler)")
         spec = importlib.util.spec_from_file_location("cee_gen", script)
         gen = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gen)   # its ROOT is the scratch tree, so its compiler runs there

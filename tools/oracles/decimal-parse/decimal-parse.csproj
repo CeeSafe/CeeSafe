@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- .NET's double.Parse and float.Parse as an oracle for src/support/decimal_float.nova (tools/oracles/gen_decimal_cases.py). -->
+  <!-- .NET's double.Parse and float.Parse as an oracle for src/support/decimal_float.cee (tools/oracles/gen_decimal_cases.py). -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>

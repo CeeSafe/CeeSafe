@@ -94,7 +94,7 @@ fn allocEffect() -> u32 => 2;
 fn suspendEffect() -> u32 => 4;
 fn maskEffects() -> u32 => 7;
 
-/// One type. Which fields mean something depends on `kind`, as for the reference's NovaType properties; an unused
+/// One type. Which fields mean something depends on `kind`; an unused
 /// index is none().
 struct TypeInfo {
     kind: TypeKind;
@@ -145,7 +145,7 @@ struct StructField {
     start: u32;
     end: u32;
     offset: u32;
-    hasNovaCName: bool;
+    hasCeeSafeCName: bool;
     hasCName: bool;
     cName: Range; // in TypeTable.names
     isPrivate: bool;
@@ -343,7 +343,7 @@ struct TypeTable {
         return id;
     }
 
-    // ---- Queries (NovaType's properties) ----
+    // ---- Queries (the type's properties) ----
 
     fn kindOf(borrow this, id: u32) -> TypeKind => this.types[id as usize].kind;
 
@@ -718,7 +718,7 @@ struct TypeTable {
                 start: 0,
                 end: 0,
                 offset: 0,
-                hasNovaCName: false,
+                hasCeeSafeCName: false,
                 hasCName: false,
                 cName: emptyRange(),
                 isPrivate: false,

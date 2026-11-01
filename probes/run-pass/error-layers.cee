@@ -1,0 +1,99 @@
+// P1 probe: errors from different layers (I/O, allocation, the compiler's own) reaching one error type. `?` needs
+// the same error type on both sides and the reference has no `From` conversion (type-system §17.4), so each layer's errors are
+// lifted by a small generic function, keeping `?` at the call site (compare probes/check-fail/error-mismatch.cee).
+// `void` results go through non-generic copies: a generic copy with T = void does not check (`Result<void, E>.Ok` has
+// no payload), which the reference compiler 0.4.0 reports as N0222 (0.3.1 crashed; probes/check-fail/void-result-rebuild.cee).
+// expect-stdout: missing.cee: cannot read: No such file or directory
+// expect-stdout: ok: 3 lines
+// expect-stdout: empty.cee: empty source
+
+enum CompileError {
+    Read(IoError),
+    Memory,
+    EmptySource,
+}
+
+fn fromIo<T>(r: Result<T, IoError>) -> Result<T, CompileError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(CompileError.Read(e)),
+};
+
+fn fromAlloc<T>(r: Result<T, AllocError>) -> Result<T, CompileError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(_) => Err(CompileError.Memory),
+};
+
+fn fromIoVoid(r: Result<void, IoError>) -> Result<void, CompileError> => match (r) {
+    Ok() => Ok(),
+    Err(e) => Err(CompileError.Read(e)),
+};
+
+fn fromAllocVoid(r: Result<void, AllocError>) -> Result<void, CompileError> => match (r) {
+    Ok() => Ok(),
+    Err(_) => Err(CompileError.Memory),
+};
+
+fn countLines(path: StringView) -> Result<u32, CompileError> {
+    var file = fromIo(File.open(path))?;
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 4096];
+    loop {
+        let n = fromIo(file.read(mut buffer[..]))?;
+        if (n == 0) {
+            break;
+        }
+        for (i in 0..n) {
+            fromAllocVoid(bytes.push(buffer[i]))?;
+        }
+    }
+    if (bytes.length == 0) {
+        return Err(CompileError.EmptySource);
+    }
+    var lines: u32 = 0;
+    for (b in bytes) {
+        if (b == '\n') {
+            lines += 1;
+        }
+    }
+    return Ok(lines);
+}
+
+fn writeFile(path: StringView, text: StringView) -> Result<void, CompileError> {
+    var file = fromIo(File.create(path))?;
+    fromIoVoid(file.write(text.bytes()))?;
+    return Ok();
+}
+
+fn report(path: StringView) {
+    match (countLines(path)) {
+        Ok(n) => {
+            Console.write("ok: ");
+            Console.write(n);
+            Console.writeLine(" lines");
+        }
+        Err(CompileError.Read(e)) => {
+            Console.write(path);
+            Console.write(": cannot read: ");
+            Console.writeLine(e.message());
+        }
+        Err(CompileError.Memory) => { Console.writeLine("out of memory"); }
+        Err(CompileError.EmptySource) => {
+            Console.write(path);
+            Console.writeLine(": empty source");
+        }
+    }
+}
+
+fn main() {
+    report("missing.cee");
+    writeFile("probe-lines.tmp", "a\nb\nc\n")!;
+    report("probe-lines.tmp");
+    File.remove("probe-lines.tmp")!;
+    writeFile("probe-empty.tmp", "")!;
+    Console.write("empty.cee");
+    match (countLines("probe-empty.tmp")) {
+        Err(CompileError.EmptySource) => { Console.writeLine(": empty source"); }
+        _ => { Console.writeLine(": unexpected"); }
+    }
+    File.remove("probe-empty.tmp")!;
+}

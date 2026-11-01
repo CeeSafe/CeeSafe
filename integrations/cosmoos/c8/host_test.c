@@ -8,8 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 
-int32_t novamod_init(void **out);
-void novamod_shutdown(void *state);
+int32_t ceemod_init(void **out);
+void ceemod_shutdown(void *state);
 void c8_host_fire_timers(void);
 unsigned c8_host_armed(void);
 unsigned c8_host_threads(void);
@@ -25,14 +25,14 @@ static void test_lifecycle(void)
 {
     void *state = NULL;
     c8_host_reset();
-    EXPECT(novamod_init(&state) == 0 && state != NULL);
+    EXPECT(ceemod_init(&state) == 0 && state != NULL);
     EXPECT(c8_host_armed() == 1);
     EXPECT(c8_host_threads() == 1);
     for (int i = 0; i < 5; i++)
         c8_host_fire_timers();
     EXPECT(c8_host_armed() == 1);   /* re-armed by its handler */
     c8_host_reset();
-    novamod_shutdown(state);
+    ceemod_shutdown(state);
     EXPECT(strcmp(c8_host_trace(), "shutdown timer_cancel_sync thread_join ") == 0);
     EXPECT(c8_host_armed() == 0);
     EXPECT(c8_host_threads() == 0);
@@ -45,14 +45,14 @@ static void test_init_failure_sweep(void)
 {
     void *state = NULL;
     c7_fail_kmalloc_at(0);
-    EXPECT(novamod_init(&state) == 0);
+    EXPECT(ceemod_init(&state) == 0);
     unsigned long allocations = c7_kmalloc_calls();
-    novamod_shutdown(state);
+    ceemod_shutdown(state);
     EXPECT(allocations > 0);
     for (unsigned long k = 1; k <= allocations; k++) {
         state = NULL;
         c7_fail_kmalloc_at(k);
-        EXPECT(novamod_init(&state) == -12);
+        EXPECT(ceemod_init(&state) == -12);
         EXPECT(state == NULL);
         EXPECT(c8_host_armed() == 0);
         EXPECT(c8_host_threads() == 0);

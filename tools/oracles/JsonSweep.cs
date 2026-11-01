@@ -1,4 +1,4 @@
-// The sweep that tests/support/run-pass/json-writer.nova repeats: an array holding one string per BMP scalar value
+// The sweep that tests/support/run-pass/json-writer.cee repeats: an array holding one string per BMP scalar value
 // (surrogates skipped), then every 997th astral scalar, then the fixed strings below. Prints the length and FNV-1a 64
 // of the UTF-8 output.
 using System.Text.Encodings.Web;

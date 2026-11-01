@@ -1,7 +1,7 @@
 # ceesafec @VERSION@: the C seed
 
 This is the C that ceesafec @VERSION@ generates of itself (`ceesafec build --emit c`), with its runtime. It builds
-ceesafec with a C11 compiler alone: no ceesafec, novac or other CeeSafe tool is needed (ROADMAP P9; CeeSafe's ADR 0023,
+ceesafec with a C11 compiler alone: no ceesafec or other CeeSafe tool is needed (ROADMAP P9; CeeSafe's ADR 0023,
 option A). Every prebuilt binary of this release was built from this archive, and each rebuilt itself from source and
 emitted these files again, byte for byte.
 

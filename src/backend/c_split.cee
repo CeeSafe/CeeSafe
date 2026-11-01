@@ -1,5 +1,5 @@
 // Split mode (the reference's CEmitter: NameUnits, UnitOf, SplitFiles; ADR 0022, c-backend.md §2.4): the C as
-// nova_program.h, one unit per Nova file and nova_instances.c, with external names carrying the program's name.
+// ceesafe_program.h, one unit per CeeSafe file and ceesafe_instances.c, with external names carrying the program's name.
 
 /// Inserts a name into a sorted list (ordinal order), once.
 fn insertSorted(list: borrow mut Vector<Vector<u8>>, name: Vector<u8>) -> Result<void, AllocError> {
@@ -99,7 +99,7 @@ fn nameUnits(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocErr
     }
 }
 
-/// The unit a function is defined in (UnitOf): its Nova file's, or nova_instances.c for the libraries and instances.
+/// The unit a function is defined in (UnitOf): its CeeSafe file's, or ceesafe_instances.c for the libraries and instances.
 fn unitOf(e: borrow CEmitter, c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<Vector<u8>, AllocError> {
     let source = n.functions[f as usize].source;
     let file = c.hir.functions[source as usize].file;
@@ -158,7 +158,7 @@ fn definedNameRange(line: Slice<u8>) -> Range {
     return Range { start: truncate<u32>(start), count: truncate<u32>(open - start) };
 }
 
-/// The split files (SplitFiles): every function a unit or nova_instances.c defines is renamed with the program's name
+/// The split files (SplitFiles): every function a unit or ceesafe_instances.c defines is renamed with the program's name
 /// by a `#define` in the header, so two programs linked into one image never collide.
 fn splitFiles(e: borrow CEmitter, out: borrow mut Vector<CFile>) -> Result<void, AllocError> {
     var defined = Vector<Vector<u8>>.create();

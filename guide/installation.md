@@ -35,26 +35,33 @@ ceesafec --version
 | | For | Notes |
 |---|---|---|
 | A C compiler: clang, gcc or MSVC | `ceesafec build`, and building `ceesafec` from source | clang and gcc are fully supported; MSVC is best-effort (`/std:c11`). `check`, `run --interp`, `fmt`, `lsp` and `mcp` need none |
-| novac 0.6.0 | the first build of a source checkout | not needed to install or use a release |
 | git | dependencies from git repositories | only for [packages](packages.md) that use them |
 | Node.js and [Vite+](https://viteplus.dev/) | the VS Code extension | optional |
 
 ## Build from source
 
 To work on CeeSafe itself, or on a platform without a release, build `ceesafec` from the repository. It is written in
-CeeSafe and builds itself; the first build of a checkout starts from novac 0.6.0, the Nova release CeeSafe forked from,
-which you download from [Nova's releases](https://github.com/vkuttyp/Nova/releases/tag/v0.6.0) into
-`~/.nova/0.6.0/bin/novac`.
+CeeSafe and builds itself, so the first build of a checkout needs a `ceesafec`: a release's, or one built from a
+release's C seed with a C compiler alone.
+
+With a released `ceesafec` (any platform's archive from the
+[releases](https://github.com/vkuttyp/CeeSafe/releases), or the one `install.sh` put in `~/.ceesafe/bin`):
 
 ```sh
 git clone https://github.com/vkuttyp/CeeSafe.git
 cd CeeSafe
-sh tools/bootstrap.sh ~/.nova/0.6.0/bin/novac HEAD out/ceesafec
+sh tools/bootstrap_release.sh ~/.ceesafe/bin/ceesafec HEAD out/ceesafec
 out/ceesafec --version
 ```
 
-`tools/bootstrap.sh` has novac build the last commit that novac can read, and the `ceesafec` that makes build the tree
-you checked out. After that, `ceesafec` rebuilds itself:
+`tools/bootstrap_release.sh` builds, with the release, the commits recorded for it in the script (a compiler cannot
+always build a tree whose own sources use library code added after it), then the tree you checked out.
+
+On a platform with no release, build a `ceesafec` from `ceesafec-<version>-seed.tar.gz`, attached to every release:
+it is ceesafec's own C, and its `README.md` gives the one `cc` (or `cl`) command. That `ceesafec` builds the tree of
+its release's tag directly.
+
+After that, `ceesafec` rebuilds itself:
 
 ```sh
 out/ceesafec build -o out/ceesafec.new && mv out/ceesafec.new out/ceesafec

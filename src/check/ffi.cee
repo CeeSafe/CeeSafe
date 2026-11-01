@@ -5,7 +5,7 @@
 fn notFfiSafe() -> u32 => 291;
 fn invalidCName() -> u32 => 292;
 
-/// A struct or array type written where a value of it needs a Nova layout, checked once fields are known (§33.1).
+/// A struct or array type written where a value of it needs a reference layout, checked once fields are known (§33.1).
 struct LayoutUse {
     typ: u32;
     start: u32;
@@ -57,7 +57,7 @@ fn isAsciiDigit(b: u8) -> bool => b >= '0' && b <= '9';
 fn startsWithText(name: Slice<u8>, prefix: StringView) -> bool =>
     name.length >= prefix.length && sameText(name[..prefix.length], prefix);
 
-/// A C name Nova may define or declare (CheckCName, §28.2): an identifier, no keyword, not reserved by C or by Nova's C
+/// A C name the reference may define or declare (CheckCName, §28.2): an identifier, no keyword, not reserved by C or by the reference's C
 /// (c-backend §2.1). N0292 otherwise.
 fn checkCName(c: borrow mut Checker, name: Slice<u8>, span: Span, what: StringView) -> Result<bool, AllocError> {
     var valid = name.length > 0 && (isAsciiLetter(name[0]) || name[0] == '_');
@@ -435,7 +435,7 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
     return Ok();
 }
 
-/// A struct in an `extern "C"` block (DeclareImportedStruct, §31.1): a C type imported from a header, with no Nova
+/// A struct in an `extern "C"` block (DeclareImportedStruct, §31.1): a C type imported from a header, with no the reference
 /// layout.
 fn declareImportedStruct(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
@@ -477,7 +477,7 @@ fn declareImportedStruct(c: borrow mut Checker, item: u32) -> Result<void, Alloc
     }
     let definition = c.types.info(c.structs[index as usize].typ).structDef;
     c.types.structs[definition as usize].isImported = true;
-    c.types.structs[definition as usize].isNonCopy = true; // no value of it exists in Nova (§31.2)
+    c.types.structs[definition as usize].isNonCopy = true; // no value of it exists in the reference (§31.2)
     var spelling = Vector<u8>.create();
     appendText(mut spelling, "struct ")?;
     appendBytes(mut spelling, c.name(id.symbol))?;
@@ -627,7 +627,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             }
             let field = c.types.structs[definition as usize].fields[j];
             let syntax = c.front.ast.fields[c.front.ast.at(s.fields, truncate<u32>(j)) as usize];
-            c.types.fields[field as usize].hasNovaCName = true;
+            c.types.fields[field as usize].hasCeeSafeCName = true;
             var fieldName = Vector<u8>.create();
             appendBytes(mut fieldName, c.name(c.types.fields[field as usize].name))?;
             let memberSpan = identSpan(c, syntax.name);
@@ -703,7 +703,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             }
             let field = c.types.structs[definition as usize].fields[j];
             let syntax = c.front.ast.fields[c.front.ast.at(s.fields, truncate<u32>(j)) as usize];
-            c.types.fields[field as usize].hasNovaCName = true;
+            c.types.fields[field as usize].hasCeeSafeCName = true;
             var cName = Vector<u8>.create();
             appendBytes(mut cName, c.name(c.types.fields[field as usize].name))?;
             var cNameSpan = identSpan(c, syntax.name);

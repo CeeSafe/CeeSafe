@@ -1,5 +1,5 @@
-// Byte-string operations the compiler needs and Nova's library lacks (docs/p1-probes.md §4, N1c). Source text and
-// names are bytes; StringView.fromUtf8 (novac 0.4.0) turns checked bytes into text where a String needs them.
+// Byte-string operations the compiler needs and the reference's library lacks (docs/p1-probes.md §4, N1c). Source text and
+// names are bytes; StringView.fromUtf8 (the reference compiler 0.4.0) turns checked bytes into text where a String needs them.
 
 /// FNV-1a, 64-bit. Used only to find entries, never to order output.
 fn hashBytes(bytes: Slice<u8>) -> u64 {

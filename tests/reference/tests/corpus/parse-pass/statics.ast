@@ -1,6 +1,6 @@
 (unit
   (static default LIMIT u64 8)
-  (static public NAME StringView "nova")
+  (static public NAME StringView "safe")
   (static mut default COUNT u32 0)
   (static mut private TABLE [u8; 2] (array 1 2))
   (fn default main (params)

@@ -2,9 +2,8 @@
 """Writes src/library/sources.cee: the libraries ceesafec embeds, from CeeSafe's lib/ sources (Decision 0008).
 
 lib/core, lib/std and lib/kernel, each in ordinal path order, with line endings made "\\n". Each file is a run of
-string literals; its path is "lib/core/NAME.cee" and so on, which marks it as library code. The libraries came from
-Nova v0.6.0 (the reference's CoreLibrary.cs) under CeeSafe's names; since Nova is no longer developed, lib/ is the
-source of truth and is edited here.
+string literals; its path is "lib/core/NAME.cee" and so on, which marks it as library code. lib/ is the source of
+truth and is edited there.
 
 usage: python3 tools/gen_library.py   (formats with $CEESAFEC, default out/ceesafec)
 """
@@ -48,7 +47,7 @@ def main():
     paths = "\n".join(f"    {k} => \"{p}\"," for k, (p, _, _) in enumerate(files[:-1]))
     groups = "\n".join(f"    {k} => {g}," for k, (_, g, _) in enumerate(files[:-1]))
     last = files[-1]
-    # C requires compilers to accept string literals of only 4,095 bytes (C11 §5.2.4.1; novac's -pedantic warns past
+    # C requires compilers to accept string literals of only 4,095 bytes (C11 §5.2.4.1; -pedantic warns past
     # that), so each file is split into chunks of at most 4,000 bytes of UTF-8, at character boundaries.
     chunks = []
     for k, (_, _, t) in enumerate(files):

@@ -1,6 +1,6 @@
 // `if` and `match` expressions (type-system.md §15.3, M11 G5): branch types, conditions, block branches, and the
 // rules of `match` they share, and a `break` in a branch that leaves its loop. Moves and loans:
-// branch-expression-ownership.nova.
+// branch-expression-ownership.cee.
 enum E { A, B(i32), C }
 
 fn exits(c: bool) -> i32 { // error[N0213]

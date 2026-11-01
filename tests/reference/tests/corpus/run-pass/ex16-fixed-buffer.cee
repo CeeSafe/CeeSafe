@@ -1,5 +1,5 @@
 // language-spec.md Ex16, adapted (ADR 0004). Region memory cannot hold borrowed slices
-// (allocArray of Slice<u8> is N0264: check-fail/arena-types.nova), so fields are (offset, length).
+// (allocArray of Slice<u8> is N0264: check-fail/arena-types.cee), so fields are (offset, length).
 struct Span { start: u32; len: u32; }
 
 fn parseHeaders(raw: Slice<u8>) -> Result<usize, AllocError> {

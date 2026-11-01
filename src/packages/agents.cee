@@ -1,6 +1,6 @@
 // A package's agent instructions (the reference's Packages/AgentFiles.cs; tooling.md §7): AGENTS.md's CeeSafe
 // section between markers, the files other agents read, and their MCP configurations. Written by `new`, refreshed by
-// `agents`. The section is Nova's template with CeeSafe's names (tools/gen_docs.py).
+// `agents`. The section is the reference's template with CeeSafe's names (tools/gen_docs.py).
 
 fn agentStartMarker() -> StringView => "<!--CEESAFE START-->";
 

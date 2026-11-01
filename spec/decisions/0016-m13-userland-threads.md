@@ -1,9 +1,8 @@
 # ADR 0016 — M13 G4: userland threads and data-race freedom
 
-> **Inherited from Nova.** This is Nova's ADR 0016, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0016 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-28, taking every recommendation in §5; OD-24 and OD-25 record the
   deferred options). The wording is the agent's; the owner may revise it. Not yet implemented: the decisions go into
@@ -14,19 +13,19 @@
 
 ## 1. Context
 
-- **No threads.** Probe at `b9fa451`: `Thread.spawn(…)` is `cannot find 'Thread' in this scope` (N0200). Nova has
+- **No threads.** Probe at `b9fa451`: `Thread.spawn(…)` is `cannot find 'Thread' in this scope` (N0200). The reference has
   no mutable globals: the only top-level data are `const` items (grammar.md §2, `ConstDecl`). So today a program's
   state is reachable only from its one thread, apart from C state reached through `unsafe` code.
 - **Owning closures exist** (G3, type-system §36.5). A `move` literal owns its captures, which is what a thread body
   needs: it must not borrow its spawner's stack, which may be gone.
 - **The platforms have what is needed.** CosmoOS userland libc has `cosmo_thread_start`/`join`, `cosmo_mutex_*` and
   `cosmo_cond_*` over futexes (`libc/include/cosmo/thread.h`). POSIX hosts have pthreads, and Windows has
-  `CreateThread` and SRW locks. C11 `<stdatomic.h>` gives atomics on every compiler Nova supports except MSVC
+  `CreateThread` and SRW locks. C11 `<stdatomic.h>` gives atomics on every compiler the reference supports except MSVC
   before 17.5. There, the `Interlocked*` intrinsics are used (inferred; to check on the Windows VM).
 - **The kernel already has a model.** C7's lock guards, `KRef<T>` and context effects are kernel-only (§32–§34). A
   userland design should look the same where it can: a lock returns a guard that lends the data.
 - **What a guarantee needs.** A data race needs two threads reaching the same memory, at least one writing, without
-  synchronisation. Safe Nova already gives one writer or many readers per value, within a thread (B1–B5). Across
+  synchronisation. Safe the reference already gives one writer or many readers per value, within a thread (B1–B5). Across
   threads, what remains is controlling **what may cross** to another thread, and **what may be shared** between
   threads.
 
@@ -56,7 +55,7 @@ without copying. C contradicts the master prompt's safety rules.
      - `Box<dyn I>` and `Box<dyn fn…>` are `Send` only when written `dyn I + Send` or `dyn fn(…) + Send`. Coercing to
        one requires `T: Send`.
    - **`Share`**: shared references to it may be used from several threads at once. It holds for every `Send` type
-     with no interior mutability (all of them in v1: Nova has no `Cell`), and for `Mutex<T>` and the atomics.
+     with no interior mutability (all of them in v1: the reference has no `Cell`), and for `Mutex<T>` and the atomics.
 2. **Spawning.** `Thread.spawn(move () => body)` starts a thread running the move literal's body. It returns
    `Result<Thread<T>, SpawnError>`, where `T` is the body's result type.
    - The literal's captures must be `Send` (new code). Since they are moved in, the spawner keeps nothing it could
@@ -85,9 +84,9 @@ without copying. C contradicts the master prompt's safety rules.
 7. **Effects** (§32). `spawn`, `join`, `lock` and a `Thread` drop have `sleep`. Atomic operations have none.
 8. **The interpreter** runs threads deterministically: one at a time, switching only when a thread blocks (`join`,
    a contended `lock`) or ends, in spawn order. A deadlock, where every thread is blocked, is an interpreter fault.
-   This keeps `novac run --interp` reproducible. It means the interpreter cannot find races, but safe code has none.
+   This keeps `ceesafec run --interp` reproducible. It means the interpreter cannot find races, but safe code has none.
 9. **C.**
-   - The runtime gains `nova_thread_start`, `nova_thread_join`, `nova_mutex_*` and atomics over `<stdatomic.h>`, in
+   - The runtime gains `ceesafe_thread_start`, `ceesafe_thread_join`, `ceesafe_mutex_*` and atomics over `<stdatomic.h>`, in
      `runtime/hosted` and as platform hooks for CosmoOS.
    - A thread's body is the boxed closure, called through its table as for `dyn fn` (§37.4).
    - `Arc<T>` is `struct { atomic count; T value; } *`. `Mutex<T>` embeds the platform mutex and `T`.

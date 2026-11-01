@@ -1,4 +1,4 @@
-// The TextMate grammar (Nova's docs/tooling.md §2.4), run by vscode-textmate as VS Code runs it: each sample token must get
+// The TextMate grammar (spec/tooling.md §2.4), run by vscode-textmate as VS Code runs it: each sample token must get
 // the scope a theme colours it by.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";

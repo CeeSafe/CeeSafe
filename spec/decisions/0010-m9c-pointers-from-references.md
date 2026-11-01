@@ -1,9 +1,8 @@
 # ADR 0010 — M9c: writes through pointers made from references end with the loan
 
-> **Inherited from Nova.** This is Nova's ADR 0010, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0010 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-25, choosing to add the rule so that bounds checks on vectors can be
   eliminated, over limiting M9c to arrays and slices). The wording is the agent's; the owner may revise it.

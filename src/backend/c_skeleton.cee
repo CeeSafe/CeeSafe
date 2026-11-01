@@ -100,7 +100,7 @@ fn isCAggregate(c: borrow Checker, t: u32) -> bool {
         (c.types.isSlice(t) && !c.types.isStringView(t)) || c.types.isPoolBox(t);
 }
 
-/// The C tag of a struct type (StructTag): its Nova name for `@repr(C)` (§28.5), else its C type name.
+/// The C tag of a struct type (StructTag): its CeeSafe name for `@repr(C)` (§28.5), else its C type name.
 fn appendStructTag(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> =>
     if (isReprCStruct(c, t)) appendBytes(out, c.types.name(t)) else appendCTypeName(c, out, t);
 
@@ -123,7 +123,7 @@ fn isCArrayMember(c: borrow Checker, owner: u32, field: u32) -> bool {
         c.types.is(c.types.fields[field as usize].typ, TypeKind.Array);
 }
 
-/// `novac layout: <what>` as a `_Static_assert` message.
+/// `ceesafec layout: <what>` as a `_Static_assert` message.
 fn appendLayoutMessage(
     c: borrow Checker,
     out: borrow mut Vector<u8>,
@@ -242,7 +242,7 @@ fn emitProgram(
         emitExportedConstants(e, c)?;
         emitStatics(e, c, true)?;
     } else {
-        emitStatics(e, c, false)?; // declarations; nova_instances.c defines them
+        emitStatics(e, c, false)?; // declarations; ceesafe_instances.c defines them
     }
 
     emitAsyncDeclarations(e, c, n)?; // frames and their functions (c-backend.md §3a)
@@ -378,7 +378,7 @@ fn isFloatConstant(c: borrow Checker, n: borrow NirProgram, operand: u32) -> boo
 
 // ---- Statics (type-system.md §39.5) ----
 
-/// A static item's C object (StaticName): `nvS_` and its name, other characters as `_`.
+/// A static item's C object (StaticName): `ceeS_` and its name, other characters as `_`.
 fn appendStaticName(c: borrow Checker, out: borrow mut Vector<u8>, item: u32) -> Result<void, AllocError> {
     appendText(out, "ceeS_")?;
     for (b in c.name(c.hir.statics[item as usize].name)) {
@@ -637,7 +637,7 @@ fn appendMeasuredLayout(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -
 // ---- Structs, composites and enums ----
 
 /// Struct definitions, each after the structs it contains by value, with static assertions that the C compiler's
-/// layout matches Nova's (EmitStructs, type-system.md §12).
+/// layout matches the reference's (EmitStructs, type-system.md §12).
 fn emitStructs(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     emitDynTypedefs(e, c)?;
     // A box is a pointer, not a C struct; a pool box is a struct of two pointers.
@@ -723,7 +723,7 @@ fn emitStructType(
             if (!c.types.is(fieldType, TypeKind.Array)) {
                 continue;
             }
-            // The C array member is used as Nova's array struct, so the two must have one layout (ADR 0029).
+            // The C array member is used as the reference's array struct, so the two must have one layout (ADR 0029).
             e.t("_Static_assert(sizeof(((struct ")?;
             e.b(tag.view())?;
             e.t(" *)0)->")?;
@@ -1009,7 +1009,7 @@ fn isPlainPayload(c: borrow Checker, t: u32) -> bool {
     return true;
 }
 
-/// The constructor of one variant of an enum with a payload (EnumConstructor): `nvMk_<enum>_<variant>`.
+/// The constructor of one variant of an enum with a payload (EnumConstructor): `ceeMk_<enum>_<variant>`.
 fn appendEnumConstructor(
     out: borrow mut Vector<u8>,
     enumName: Slice<u8>,

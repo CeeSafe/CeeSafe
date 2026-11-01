@@ -1,6 +1,6 @@
 // An example from the repository's README.md: keep its code identical to the README's (test annotations aside).
 
 fn main() {
-    Console.writeLine("Hello, Nova");
+    Console.writeLine("Hello, CeeSafe");
 }
-// expect-stdout: Hello, Nova
+// expect-stdout: Hello, CeeSafe

@@ -372,7 +372,8 @@ are performed like other accesses (the interpreter does every access once, in or
 
 ### 5.5 Agreement tests
 
-- Nova's `InterpreterTests` run every run-pass and run-fail program (in CeeSafe, `tools/compare_interp.py` compares `ceesafec run --interp` with novac's on them). Standard output, standard error
+- `tools/run_corpus.py --interp` runs every run-pass and run-fail program with `ceesafec run --interp` (`testing.md`
+  §1). Standard output, standard error
   and exit status must equal the corpus expectations. The native runs check the same
   expectations under every C configuration.
 - The allocation-failure sweep runs the interpreter beside the native ASan build, for the

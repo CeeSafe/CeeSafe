@@ -1,4 +1,4 @@
-// NIR as text (the reference's NirPrinter, `novac build --dump-nir`): a MIR-like form for debugging and review, and
+// NIR as text (the reference's NirPrinter, `ceesafec build --dump-nir`): a MIR-like form for debugging and review, and
 // the contract the comparison with the reference checks. Library functions are left out (§29.2).
 
 fn printNir(c: borrow Checker, n: borrow NirProgram, out: borrow mut Vector<u8>) -> Result<void, AllocError> {

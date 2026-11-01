@@ -1,4 +1,4 @@
-// Valid Nova that C compilers warn about; the generated C must still be warning-free (c-backend.md §5).
+// Valid the reference that C compilers warn about; the generated C must still be warning-free (c-backend.md §5).
 // Found by the M7d random program generator.
 fn main() -> i32 {
     var x = 5i32;

@@ -124,13 +124,13 @@ Other commands: `ceesafec fix` applies the compiler's sure fixes, `ceesafec expl
 
 ## Building from source
 
-`ceesafec` is written in CeeSafe. The first build of a checkout starts from novac 0.6.0, the release of Nova that
-CeeSafe forked from (see [installation](guide/installation.md#build-from-source)):
+`ceesafec` is written in CeeSafe, so the first build of a checkout starts from a released `ceesafec` (see
+[installation](guide/installation.md#build-from-source), which also covers building one from a release's C seed):
 
 ```sh
 git clone https://github.com/vkuttyp/CeeSafe.git
 cd CeeSafe
-sh tools/bootstrap.sh ~/.nova/0.6.0/bin/novac HEAD out/ceesafec
+sh tools/bootstrap_release.sh ~/.ceesafe/bin/ceesafec HEAD out/ceesafec
 out/ceesafec build -o out/ceesafec.new && mv out/ceesafec.new out/ceesafec   # it rebuilds itself from then on
 ```
 
@@ -161,11 +161,11 @@ Contributors and AI agents: read [AGENTS.md](AGENTS.md) first.
 
 ## History
 
-CeeSafe began as a port of [Nova](https://github.com/vkuttyp/Nova)'s C# compiler to Nova itself, under a new name.
-The port reached a verified fixed point and byte-for-byte parity with novac 0.6.0, then forked
-([docs/fork-point.md](docs/fork-point.md)). Since [Decision 0007](docs/decisions/0007-runtime-and-first-c-divergence.md)
-CeeSafe is developed on its own: its runtime, specification and tests are its own, and nothing is compared with Nova
-any more.
+CeeSafe began as the port of an earlier compiler, written in C#, to the language itself. The port reached a verified
+fixed point and byte-for-byte parity with that compiler, then forked; since
+[Decision 0007](docs/decisions/0007-runtime-and-first-c-divergence.md) CeeSafe is developed on its own, and its
+runtime, specification, libraries and tests are its own. Its releases are built from CeeSafe's own releases
+([Decision 0009](docs/decisions/0009-release-stage-zero.md)).
 
 ## License
 

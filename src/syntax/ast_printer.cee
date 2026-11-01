@@ -1,5 +1,5 @@
 // `parse --dump-ast`: the tree as indented S-expressions (the reference's Syntax/AstPrinter.cs). The format is the
-// reference's byte for byte: Nova's tests/corpus/parse-pass/*.ast snapshots are the check (tools/run_corpus.py).
+// reference's byte for byte: the reference's tests/corpus/parse-pass/*.ast snapshots are the check (tools/run_corpus.py).
 
 struct AstPrinter {
     out: Vector<u8>;
@@ -990,7 +990,7 @@ fn assignOpText(op: AssignOp) -> StringView => match (op) {
     AssignOp.ShiftRight => ">>=",
 };
 
-/// Quotes UTF-8 text with Nova escapes (AstPrinter.Quote): \n \r \t \\ \0 and the quote are escaped, printable ASCII is
+/// Quotes UTF-8 text with the reference escapes (AstPrinter.Quote): \n \r \t \\ \0 and the quote are escaped, printable ASCII is
 /// itself, and every other scalar is \u{X} in uppercase hex.
 fn quote(out: borrow mut Vector<u8>, text: Slice<u8>, mark: u8) -> Result<void, AllocError> {
     out.push(mark)?;

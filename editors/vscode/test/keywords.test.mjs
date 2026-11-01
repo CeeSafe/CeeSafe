@@ -1,4 +1,4 @@
-// The grammar names exactly the compiler's keywords (Nova's LspTests, tooling.md §2.4): the words of
+// The grammar names exactly the compiler's keywords (spec/tooling.md §2.4): the words of
 // src/syntax/token.cee's keywordAt, spelled by its keywordText.
 import { readFileSync } from "node:fs";
 import { expect, test } from "vitest";

@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = ROOT / "benchmarks"
-# The CeeSafe programs are the reference corpus's (tools/fork_corpus.py, Nova v0.6.0); the Rust and C ones are here.
+# The CeeSafe programs are the corpus's (tests/reference/benchmarks/suite); the Rust and C ones are here.
 CEE_SUITE = ROOT / "tests" / "reference" / "benchmarks" / "suite"
 
 CHECKSUMS = {

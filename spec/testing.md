@@ -1,8 +1,7 @@
 # Testing
 
-Status: describes CeeSafe's tests at the fork (CeeSafe's Decision 0006). Tests that were run are recorded, with dates
-and results, in the repository's `ROADMAP.md` §10 and the plans under `docs/`; they are never mixed with proposals.
-Nova's own test history up to the fork is in [Nova's testing.md](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/testing.md).
+Status: describes CeeSafe's tests. Tests that were run are recorded, with dates and results, in the repository's
+`ROADMAP.md` §10 and the plans under `docs/`; they are never mixed with proposals.
 
 Sanitizer results are supporting evidence, never proof of the language's safety.
 
@@ -13,12 +12,12 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 | Corpus (§2) | `tests/reference/tests/corpus/*`, `tools/run_corpus.py` | the files' own annotations and snapshots |
 | Support library | `tests/support`, `tools/fault_sweep.py` | independent oracles (Python, .NET) for each structure, and an allocation-failure sweep |
 | Fixed point | `tools/fixed_point.py`, `bootstrap/fixed-point/` | ceesafec built by itself emits byte-identical C, generation after generation |
-| Mutation suite (Nova M2) | `tools/mutation_suite.py` | mutants of seed programs; the expected (code, line) diagnostics come from an independent oracle, not from the checker |
-| Fault-injection sweep (Nova M3) | `tools/fault_injection.py` | every run-pass program that allocates, built with ASan+UBSan, run once per allocation attempt *k* with attempt *k* failing; each run returns from `main` with `live=0` or panics with "unwrapped an Err value", with no sanitizer report |
-| Collection properties (Nova M6) | `tools/collection_properties.py` | a model of each built-in collection predicts the exact output of random operation programs (values, lengths, the growth rule of `type-system.md` §23.1, stale handles, drop order), also under the fault sweep |
+| Mutation suite (M2) | `tools/mutation_suite.py` | mutants of seed programs; the expected (code, line) diagnostics come from an independent oracle, not from the checker |
+| Fault-injection sweep (M3) | `tools/fault_injection.py` | every run-pass program that allocates, built with ASan+UBSan, run once per allocation attempt *k* with attempt *k* failing; each run returns from `main` with `live=0` or panics with "unwrapped an Err value", with no sanitizer report |
+| Collection properties (M6) | `tools/collection_properties.py` | a model of each built-in collection predicts the exact output of random operation programs (values, lengths, the growth rule of `type-system.md` §23.1, stale handles, drop order), also under the fault sweep |
 | Freestanding | `tools/freestanding_check.py` | the freestanding programs build with `-ffreestanding -nostdinc` for `x86_64-` and `aarch64-unknown-none-elf` and run against their C harnesses |
 | Debugging | `tools/debugger_check.py` | a `-g` build under lldb or gdb with `editors/debug`'s commands (`tooling.md` §3) |
-| CosmoOS (Nova's C1–C9, K3) | `integrations/cosmoos/c*.py`, `k3.py` | ceesafec's C under CosmoOS's own flags, host tests, fuzz targets and module loader rules, and in its QEMU boots; CosmoOS's tree is only read |
+| CosmoOS (C1–C9, K3) | `integrations/cosmoos/c*.py`, `k3.py` | ceesafec's C under CosmoOS's own flags, host tests, fuzz targets and module loader rules, and in its QEMU boots; CosmoOS's tree is only read |
 | Same C on another host | `tools/host_c_check.py` | ceesafec built on Windows (MSVC, clang) emits the same C as on macOS and Linux |
 | Specification (§4) | `tools/spec_check.py`, `tools/guide_check.py` | every diagnostic code is explained; the guide's examples do what the pages say; links resolve |
 | Frame reports (L1 A3) | `tools/run_corpus.py`, family `frames` | `--explain-frames` against its `.frames` snapshot; every build asserts each frame's size in C |
@@ -26,8 +25,7 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 | Library diagnostics (Decision 0008) | `ceesafec check --library-diagnostics` on an empty program | `lib/` reports no diagnostic: since lib/ is CeeSafe's, its errors are no longer assumed to be porting gaps |
 | Cancellation sweep (L1 A2b) | `tools/cancel_sweep.py` | every async run-pass program, built with ASan+UBSan, run once per suspension point *k* with `CEESAFE_CANCEL_AT=k`; each run exits cleanly with `live=0` and no sanitizer report |
 
-`tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec. None
-of them runs novac or reads a Nova checkout (§3).
+`tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec.
 
 ## 2. Corpus format
 
@@ -59,27 +57,22 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   program that exits normally with live allocations fails). Every configuration must meet the expectations, so the
   run corpus is also a differential test.
 
-At the fork the corpus is Nova's at `v0.6.0` with `.cee` names (`tools/fork_corpus.py`), and its snapshots are still
-Nova's: `run_corpus.py` compares ceesafec's output with them after mapping CeeSafe's names back (§3). A CeeSafe-only
-change to the language adds corpus files with CeeSafe's names and snapshots written by ceesafec, run from the corpus
-root; a C snapshot whose banner names ceesafec is compared as written, without mapping names back. Adding library code
-(`lib/`, Decision 0008) can renumber closures in `.hir` snapshots and reorder types in `.c` ones, since library items
-are declared first: such an update is a reviewed edit that changes nothing else (L1 A1: `check-pass/effects-of.hir`,
+A change to the language adds corpus files, with snapshots written by ceesafec run from the corpus root. Adding
+library code (`lib/`, Decision 0008) can renumber closures in `.hir` snapshots and reorder types in `.c` ones, since
+library items are declared first: such an update is a reviewed edit that changes nothing else (L1 A1: `check-pass/effects-of.hir`,
 `emit-c/slice-bulk.c`).
 
-## 3. No comparison with Nova
+## 3. Snapshots
 
-At the fork ceesafec's output equalled novac 0.6.0's, and the port was checked by comparing the two (the repository's
-`docs/fork-point.md`). Since CeeSafe's Decision 0007 CeeSafe has left Nova: its C differs from novac's on purpose, and
-no test runs novac or reads a Nova checkout. The corpus's snapshots are CeeSafe's own; an intended change to what
-ceesafec emits updates them by a reviewed edit, recorded with the change. The `tools/compare_*.py` scripts and
-`tools/run_corpus.py --reference` remain only as the record of that parity.
+The corpus's snapshots are CeeSafe's own: an intended change to what ceesafec emits updates them by a reviewed edit,
+recorded with the change, and never by regenerating them to make a run pass. `tools/run_corpus.py --reference PATH`
+also requires a second compiler to give identical observable outcomes.
 
 ## 4. The specification's own checks
 
 - `tools/spec_check.py`: every diagnostic code `ceesafec` reports has a row that `ceesafec explain` finds; every
   relative link in `spec/` and `guide/` resolves; `spec/api/core.md` is what `ceesafec doc` writes for `lib/core`; no
-  Nova name is left outside the inherited ADRs and the places that name Nova on purpose.
+  tracked file uses a retired name.
 - `tools/guide_check.py`: every `ceesafe` code block of `guide/` is compiled as a file named `main.cee`:
   - a block must type-check; with a `main`, it is also run in the interpreter, and a `text` block right after it must be
     exactly its output;
@@ -91,10 +84,7 @@ ceesafec emits updates them by a reviewed edit, recorded with the change. The `t
     - `<!-- ceesafe: panics -->`, `<!-- ceesafe: exits 1 -->`: the run's exit status;
     - `<!-- ceesafe: skip -->`: not checked, for a block that cannot stand alone (a second package's file, a fragment).
       Use it sparingly, and check the example some other way.
-- The algorithms that find and rank sections for `explain` and the MCP server are compared with novac's on Nova's
-  documents, through a ceesafec built with them (`tools/reference_docs.py`).
 
-## 5. Not yet ported
+## 5. Not yet done
 
-Nova's random program generator (`tests/Nova.Fuzz`, Nova M7d and K7) and its 24-hour differential campaign are
-ROADMAP P9 items; until then the fuzz evidence is Nova's, for the language as it was at the fork.
+A random program generator (M7d, K7) and a 24-hour differential campaign with it are ROADMAP P9 items.

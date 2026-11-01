@@ -1,6 +1,6 @@
 // Calls into the libraries (the reference's LibraryFunction, CheckLibraryCall, CheckSliceAlgorithm, CheckHostService and
 // the `retain` case of CheckVectorMethod): P3 S5 (type-system.md §36.4, §26.7, §26.8). Methods of built-in types that
-// are written in Nova are static functions of a lib/core or lib/std struct, instantiated with the element type.
+// are written in the reference are static functions of a lib/core or lib/std struct, instantiated with the element type.
 
 /// The static function `name` of the library struct `holder`, instantiated with `arguments` (LibraryFunction); none if
 /// the libraries have no such struct (the reference throws: it cannot happen with its libraries).

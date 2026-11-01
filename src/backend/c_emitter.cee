@@ -1,7 +1,7 @@
 // The C emitter (the reference's Backend.C/CEmitter.cs): every operation that can be undefined in C a call of a
-// checked helper from nova/rt.h (c-backend.md), function bodies structured by c_structurer.cee or, with --flat-c or an
+// checked helper from ceesafe/rt.h (c-backend.md), function bodies structured by c_structurer.cee or, with --flat-c or an
 // irreducible graph, flat (one label per NIR block, terminators as goto, switch and return). Closure variants,
-// placement and check elimination are on by default, as in novac.
+// placement and check elimination are on by default, as in the reference compiler.
 //
 // The program is emitted twice, as by the reference: the first (trial) emission collects the helpers' location
 // constants and the boxes built in place, which the second writes before the code that uses them.
@@ -12,7 +12,7 @@ struct CFile {
     text: Vector<u8>;
 }
 
-/// A location a checked helper may panic with (`nvL_<n>`): its file id, line and column.
+/// A location a checked helper may panic with (`ceeL_<n>`): its file id, line and column.
 struct CSite {
     file: u32;
     line: u32;
@@ -34,7 +34,7 @@ struct CEmitter {
     files: Vector<CFile>;
     current: usize;                        // the file being written
     buf: Vector<u8>;                       // the line being built
-    fileIds: Vector<u32>;                  // by source: its `nv_file_<id>`, or none
+    fileIds: Vector<u32>;                  // by source: its `cee_file_<id>`, or none
     fileOrder: Vector<u32>;                // the sources named, in id order
     sites: Map<PairKey, u32>;              // (file << 32 | line, column) → id
     siteList: Vector<CSite>;               // by id
@@ -45,7 +45,7 @@ struct CEmitter {
     bce: bool;                             // off: --no-bce
     oce: bool;                             // off: --no-oce
     usedTypes: Vector<bool>;               // by type: mentioned by emitted code
-    inPlaceResults: Vector<bool>;          // by type: Box.create results some site builds in place (nvBA_)
+    inPlaceResults: Vector<bool>;          // by type: Box.create results some site builds in place (ceeBA_)
     zeroedResults: Vector<bool>;           // by type: Box.create results some site builds from all-zero bytes (ceeBZ_)
     headerStructs: Vector<u32>;            // defined by the exports header (ADR 0030)
     compiled: Vector<u32>;                 // the NIR functions compiled to C (CompiledFunctions)
@@ -60,7 +60,7 @@ struct CEmitter {
     asyncStarts: Vector<u32>;              // by suspension point: its statement's offset, for ceeAN_ (§3a)
     inPlace: Vector<InPlacePair>;
     cLines: u64;
-    mappedFile: u32; // the Nova line the next C line is attributed to by the last #line, or none
+    mappedFile: u32; // the reference line the next C line is attributed to by the last #line, or none
     mappedLine: u32;
     wantedFile: u32; // the line the current statement wants, or none
     wantedLine: u32;
@@ -143,7 +143,7 @@ struct CEmitter {
         return Ok();
     }
 
-    /// The linkage of a function defined in a unit or in nova_instances.c (Fn): external when split.
+    /// The linkage of a function defined in a unit or in ceesafe_instances.c (Fn): external when split.
     fn fnPrefix(borrow mut this) -> Result<void, AllocError> =>
         if (this.split) Ok() else appendText(mut this.buf, "static ");
 
@@ -174,7 +174,7 @@ struct CEmitter {
     fn d(borrow mut this, value: u64) -> Result<void, AllocError> => appendDecimal(mut this.buf, value);
 
     /// Writes the line built (Line): with directives on, inside a function each code line is attributed to the wanted
-    /// Nova line, a `#line` first whenever it would otherwise map elsewhere.
+    /// The reference line, a `#line` first whenever it would otherwise map elsewhere.
     fn emit(borrow mut this) -> Result<void, AllocError> => this.emitLine(true);
 
     /// The same for a line that generates no code (a brace, `else`): it needs no directive of its own.

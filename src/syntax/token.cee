@@ -1,5 +1,5 @@
 // Tokens (the reference's Syntax/Token.cs; grammar.md §1). Spans are byte offsets into the source text; positions in
-// dumps and diagnostics are converted to the reference's UTF-16 columns by SourceText (src/support/source.nova).
+// dumps and diagnostics are converted to the reference's UTF-16 columns by SourceText (src/support/source.cee).
 
 enum TokenKind {
     EndOfFile,

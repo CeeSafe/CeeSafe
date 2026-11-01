@@ -1,5 +1,5 @@
 // The interpreter's runtime (the reference's Interpreter/Runtime.cs; intermediate-representation.md §5.1):
-// nova_rt_core.c and the emitter's helpers (c-backend.md §2), step for step, on the interpreter's memory.
+// ceesafe_rt_core.c and the emitter's helpers (c-backend.md §2), step for step, on the interpreter's memory.
 
 fn allocSystem() -> u64 => 0;
 fn allocFailing() -> u64 => 1;
@@ -7,7 +7,7 @@ fn arenaHeader() -> u64 => 16;
 fn scratchChunkSize() -> u64 => 65536;
 fn stableVectorChunks() -> u64 => 32;
 
-/// nova_rt_finish: the NOVA_ALLOC_REPORT line.
+/// ceesafe_rt_finish: the CEESAFE_ALLOC_REPORT line.
 fn finishRuntime(it: borrow mut Interp) {
     if (it.options.allocationReport) {
         var m = copyBytes("ceesafe alloc: attempts=".bytes())!;
@@ -24,7 +24,7 @@ fn finishRuntime(it: borrow mut Interp) {
 fn allocatorId(c: borrow Checker, allocator: u32) -> u64 =>
     if (sameText(c.types.name(allocator), "FailingAllocator")) allocFailing() else allocSystem();
 
-/// nova_alloc: 0 on failure.
+/// ceesafe_alloc: 0 on failure.
 fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> {
     it.attempts += 1;
     if (allocator == allocFailing() && it.failingArmed) {
@@ -138,7 +138,7 @@ fn layoutValue(c: borrow Checker, layout: u32, contents: u32) -> Result<Value, S
     return Ok(value);
 }
 
-/// The string at `target` with `text` appended (nvVA_): Ok, or OutOfMemory with nothing changed.
+/// The string at `target` with `text` appended (ceeVA_): Ok, or OutOfMemory with nothing changed.
 fn appendTextAt(
     it: borrow mut Interp,
     c: borrow Checker,
@@ -169,7 +169,7 @@ fn appendTextAt(
     return okValue(c, resultType, null);
 }
 
-/// nova_vec_grow: the buffer with room for `extra` more elements, or 0 with nothing changed.
+/// ceesafe_vec_grow: the buffer with room for `extra` more elements, or 0 with nothing changed.
 fn vectorGrow(
     it: borrow mut Interp,
     pointer: u64,
@@ -225,7 +225,7 @@ fn chunkOf(j: u64) -> u64 {
     return k;
 }
 
-/// nova_svec_at.
+/// ceesafe_svec_at.
 fn stableVectorAt(it: borrow Interp, vector: u64, index: u64, size: u64) -> Result<u64, Stop> {
     let j = index + 8;
     let k = chunkOf(j);
@@ -233,7 +233,7 @@ fn stableVectorAt(it: borrow Interp, vector: u64, index: u64, size: u64) -> Resu
     return Ok(chunk.wrappingAdd((j - ((8u64) << k)).wrappingMul(size)));
 }
 
-/// nova_svec_slot: the slot for element `length`; 0 if full or out of memory.
+/// ceesafe_svec_slot: the slot for element `length`; 0 if full or out of memory.
 fn stableVectorSlot(it: borrow mut Interp, chunks: u64, length: u64, size: u64, allocator: u64) -> Result<u64, Stop> {
     if (length > 0xFFFFFFFFFFFFFFFF - 8) {
         return Ok(0);
@@ -258,11 +258,11 @@ fn stableVectorSlot(it: borrow mut Interp, chunks: u64, length: u64, size: u64, 
     return Ok(pointerAt(it, chunkAddress)? + (j - ((8u64) << k)) * size);
 }
 
-// ---- Regions (nova_rt_core.c) ----
+// ---- Regions (ceesafe_rt_core.c) ----
 
 fn alignUp(address: u64, align: u64) -> u64 => (address + (align - 1)) & ((align - 1) ^ 0xFFFFFFFFFFFFFFFF);
 
-/// nova_arena_alloc on the nv_arena at `arena` (chunks, cur, end, chunk_size, allocator).
+/// ceesafe_arena_alloc on the cee_arena at `arena` (chunks, cur, end, chunk_size, allocator).
 fn arenaAlloc(it: borrow mut Interp, arena: u64, size: u64, align: u64) -> Result<u64, Stop> {
     let cur = pointerAt(it, arena + 8)?;
     let end = pointerAt(it, arena + 16)?;
@@ -291,7 +291,7 @@ fn arenaAlloc(it: borrow mut Interp, arena: u64, size: u64, align: u64) -> Resul
     return Ok(data);
 }
 
-/// nova_arena_reset (also its drop).
+/// ceesafe_arena_reset (also its drop).
 fn arenaReset(it: borrow mut Interp, arena: u64) -> Result<void, Stop> {
     var chunk = pointerAt(it, arena)?;
     while (chunk != 0) {
@@ -305,7 +305,7 @@ fn arenaReset(it: borrow mut Interp, arena: u64) -> Result<void, Stop> {
     return Ok();
 }
 
-/// fba_alloc on the nv_fba at `fba` (base, capacity, used).
+/// fba_alloc on the cee_fba at `fba` (base, capacity, used).
 fn fixedBufferAlloc(it: borrow mut Interp, fba: u64, size: u64, align: u64) -> Result<u64, Stop> {
     let base = pointerAt(it, fba)?;
     let start = base + it.memory.loadBits(fba + 16, 8)?;
@@ -319,7 +319,7 @@ fn fixedBufferAlloc(it: borrow mut Interp, fba: u64, size: u64, align: u64) -> R
     return Ok(aligned);
 }
 
-/// nova_scratch_enter_root: an nv_scratch (chunk, cur, end, depth).
+/// ceesafe_scratch_enter_root: an cee_scratch (chunk, cur, end, depth).
 fn scratchEnterRoot(it: borrow mut Interp, location: Vector<u8>) -> Result<Value, Stop> {
     if (it.scratchDepth != 0) {
         return Err(panicAt("a scratch frame is already active; nest with frame.enter()", location));
@@ -337,7 +337,7 @@ fn scratchFrame(it: borrow Interp, depth: u64) -> Value {
     return frame;
 }
 
-/// nova_scratch_drop.
+/// ceesafe_scratch_drop.
 fn scratchDrop(it: borrow mut Interp, frame: u64) -> Result<void, Stop> {
     let entry = pointerAt(it, frame)?;
     while (it.scratchChunk != entry) {
@@ -375,7 +375,7 @@ fn scratchAlloc(it: borrow mut Interp, size: u64, align: u64) -> Result<u64, Sto
     return Ok(chunk + arenaHeader());
 }
 
-/// nova_region_alloc, dispatching on the region a reference names.
+/// ceesafe_region_alloc, dispatching on the region a reference names.
 fn regionAlloc(
     it: borrow mut Interp,
     c: borrow Checker,
@@ -393,7 +393,7 @@ fn regionAlloc(
     };
 }
 
-/// nova_pool_take on the nv_pool at `pool` (slots, free, capacity, used, slot_size, allocator).
+/// ceesafe_pool_take on the cee_pool at `pool` (slots, free, capacity, used, slot_size, allocator).
 fn poolTake(it: borrow mut Interp, pool: u64, size: u64) -> Result<u64, Stop> {
     if (pointerAt(it, pool)? == 0) {
         var slot = if (size > 8) size else 8;
@@ -433,7 +433,7 @@ fn poolRelease(it: borrow mut Interp, pool: u64, slot: u64) -> Result<void, Stop
     return Ok();
 }
 
-// ---- Drop glue (c-backend.md §2: the order of the emitted nvD_ functions) ----
+// ---- Drop glue (c-backend.md §2: the order of the emitted ceeD_ functions) ----
 
 /// Destroys a value that is not in memory (a parameter of a C helper that drops it).
 fn destroyValue(
@@ -678,7 +678,7 @@ fn vectorValue(pointer: u64, length: u64, capacity: u64) -> Value {
     return vector;
 }
 
-/// nvKV_: the handle's index is in range and its generation matches.
+/// ceeKV_: the handle's index is in range and its generation matches.
 fn slotMapValid(
     it: borrow Interp,
     c: borrow Checker,
@@ -694,7 +694,7 @@ fn slotMapValid(
     return Ok(it.memory.loadBits(pointerAt(it, map)? + index * layout.size, 4)? == handle.bits(4, 4)?);
 }
 
-/// nvKI_: a free slot or a new one (at most UINT32_MAX - 1); its generation becomes odd.
+/// ceeKI_: a free slot or a new one (at most UINT32_MAX - 1); its generation becomes odd.
 fn slotMapInsert(
     it: borrow mut Interp,
     c: borrow Checker,
@@ -775,7 +775,7 @@ fn argumentInteger(
     return integerOf(c, v, builtinArgumentType(n, arguments, k));
 }
 
-/// A number as Console.write prints it: integers in decimal, floats as nova_format_f64/f32 does.
+/// A number as Console.write prints it: integers in decimal, floats as ceesafe_format_f64/f32 does.
 fn appendNumber(c: borrow Checker, out: borrow mut Vector<u8>, value: borrow Value, t: u32) -> Result<void, Stop> {
     if (isFloatValueType(c, t)) {
         appendFloatText(out, toDouble(c, value, t)?, c.types.info(t).bits)!;
@@ -1307,7 +1307,7 @@ fn builtin(
         return callThrough(it, c, n, code, values);
     }
     if (b == bfCallPointer() || b == bfCallFunction()) {
-        // The C types of the pointer's signature have the same bits as Nova's (§28.3); a Nova function value is an
+        // The C types of the pointer's signature have the same bits as the reference's (§28.3); a CeeSafe function value is an
         // address of the same kind (§36.1).
         let target = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
         var values = Vector<Value>.create();

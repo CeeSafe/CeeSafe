@@ -5,7 +5,7 @@
 static OPENED: AtomicU64 = AtomicU64.constant(5);
 static LIMIT: u32 = 3 * 4;
 static FLAG: AtomicBool = AtomicBool.constant(true);
-static NAME: StringView = "nova";
+static NAME: StringView = "safe";
 
 struct Point {
     x: i32;
@@ -77,7 +77,7 @@ fn main() {
 // expect-stdout: 12
 // expect-stdout: true
 // expect-stdout: false
-// expect-stdout: nova
+// expect-stdout: safe
 // expect-stdout: -1
 // expect-stdout: 3
 // expect-stdout: 12

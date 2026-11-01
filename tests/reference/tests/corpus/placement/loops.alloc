@@ -1,6 +1,6 @@
-placement/loops.nova:11:17: Box<[u64; 8]> placed on stack (does not escape; SystemHeap is placement-transparent)
-placement/loops.nova:22:17: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
-placement/loops.nova:34:21: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
-placement/loops.nova:36:25: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
-placement/loops.nova:47:17: Box<Name> placed on stack (does not escape; SystemHeap is placement-transparent)
-placement/loops.nova:59:16: Box<Pair> stays on heap: may outlive its loop iteration: 'last' is not ended before the site runs again
+placement/loops.cee:11:17: Box<[u64; 8]> placed on stack (does not escape; SystemHeap is placement-transparent)
+placement/loops.cee:22:17: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
+placement/loops.cee:34:21: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
+placement/loops.cee:36:25: Box<Pair> placed on stack (does not escape; SystemHeap is placement-transparent)
+placement/loops.cee:47:17: Box<Name> placed on stack (does not escape; SystemHeap is placement-transparent)
+placement/loops.cee:59:16: Box<Pair> stays on heap: may outlive its loop iteration: 'last' is not ended before the site runs again

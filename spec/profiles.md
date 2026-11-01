@@ -213,10 +213,10 @@ Freestanding builds always add `-ffreestanding -fno-stack-protector -fno-asynchr
 ### 4.4 The symbol allowlist (acceptance, M8 criterion 1)
 The undefined symbols of a freestanding object (`llvm-nm -u`) are only:
 `ceesafe_panic`, `memcpy`, `memmove`, `memset`, `memcmp`, the functions the package declares in
-`extern "C"` blocks, and, for a program that uses async, the four `ceesafe_env_*` hooks (§4.2). Checked by `tools/freestanding_check.py` (Nova's `FreestandingTests`) for the host and for both CosmoOS triples
+`extern "C"` blocks, and, for a program that uses async, the four `ceesafe_env_*` hooks (§4.2). Checked by `tools/freestanding_check.py` for the host and for both CosmoOS triples
 (`x86_64-unknown-none-elf`, `aarch64-unknown-none-elf`).
 
-On the CosmoOS triples the objects also have (Nova's `FreestandingTests`, M8e): no constructor or destructor
+On the CosmoOS triples the objects also have (M8e): no constructor or destructor
 sections (`.init_array`, `.fini_array`, `.ctors`, `.dtors`), which CosmoOS never runs; no TLS
 (`.tdata`, `.tbss`), which the kernel lacks; no unwind tables (`.eh_frame`); no COMMON symbols; and no
 mutable global state (`.data` and `.bss` empty) except the program's static items (type-system §39, ADR 0024),

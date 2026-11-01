@@ -1,5 +1,5 @@
 // The checker's driver and declarations (the reference's TypeChecker constructor, Check(), DeclareAllocError,
-// Declare, DeclareFunction and CheckMain). See src/check/checker.nova for what S1a covers.
+// Declare, DeclareFunction and CheckMain). See src/check/checker.cee for what S1a covers.
 
 /// The reference's s_reservedNames: names no item may take (N0201).
 fn reservedNameCount() -> usize => 20;

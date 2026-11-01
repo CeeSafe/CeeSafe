@@ -37,7 +37,7 @@ fn main() {
     Console.write("PATH is set: ");
     Console.writeLine(Environment.variable("PATH") != null);
     Console.write("unset variable: ");
-    Console.writeLine(if (Environment.variable("NOVA_TEST_SURELY_UNSET_VARIABLE") == null) "null" else "set");
+    Console.writeLine(if (Environment.variable("CEESAFE_TEST_SURELY_UNSET_VARIABLE") == null) "null" else "set");
 
     let root = Directory.temporary()!;
     Console.write("temporary: a ");

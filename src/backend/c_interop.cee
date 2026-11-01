@@ -74,7 +74,7 @@ fn appendHeaderMemberType(c: borrow Checker, out: borrow mut Vector<u8>, t: u32)
     }
 }
 
-/// A Nova value as the C type of §28.3 (ToBoundary).
+/// A CeeSafe value as the C type of §28.3 (ToBoundary).
 fn appendToBoundary(
     c: borrow Checker,
     out: borrow mut Vector<u8>,
@@ -104,7 +104,7 @@ fn appendToBoundary(
     return appendBytes(out, value);
 }
 
-/// A C value of the type of §28.3 as Nova's (FromBoundary); an enum must have been checked.
+/// A C value of the type of §28.3 as the reference's (FromBoundary); an enum must have been checked.
 fn appendFromBoundary(
     c: borrow Checker,
     out: borrow mut Vector<u8>,
@@ -129,7 +129,7 @@ fn appendFromBoundary(
     return appendBytes(out, value);
 }
 
-/// `NV_LOC(nv_file_<id>, line, column)` (Location).
+/// `CEE_LOC(cee_file_<id>, line, column)` (Location).
 fn appendLocation(
     e: borrow CEmitter,
     out: borrow mut Vector<u8>,
@@ -233,7 +233,7 @@ fn appendBoundaryParameters(
     return Ok();
 }
 
-/// Each extern function's C prototype, and a static wrapper with Nova's types that converts (EmitExterns).
+/// Each extern function's C prototype, and a static wrapper with the reference's types that converts (EmitExterns).
 fn emitExterns(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -397,7 +397,7 @@ fn appendExportSignature(
     return out.push(')');
 }
 
-/// A call of a Nova function from its C-typed wrapper: the arguments from the boundary, and the caller's address
+/// A call of a CeeSafe function from its C-typed wrapper: the arguments from the boundary, and the caller's address
 /// last for a function that uses `callerAddress()` (ADR 0030).
 fn appendWrapperCall(
     c: borrow Checker,
@@ -445,7 +445,7 @@ fn emitWrapperBody(
     return e.emit();
 }
 
-/// Each callback in use: a C function with the C types that converts and calls the Nova function (EmitCallbacks).
+/// Each callback in use: a C function with the C types that converts and calls the CeeSafe function (EmitCallbacks).
 fn emitCallbacks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var callbacks = Vector<u32>.create();
     emittedCallbacks(e, c, n, mut callbacks)?;
@@ -587,7 +587,7 @@ fn appendFunctionPointerParameters(
     return Ok();
 }
 
-/// `typedef R (*nvP_…)(A, …);` for each C function pointer type, Nova function value type and closure code pointer
+/// `typedef R (*ceeP_…)(A, …);` for each C function pointer type, CeeSafe function value type and closure code pointer
 /// (EmitFunctionPointerTypedefs).
 fn emitFunctionPointerTypedefs(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
     for (t in c.types.functionPointerList.view()) {
@@ -603,7 +603,7 @@ fn emitFunctionPointerTypedefs(e: borrow mut CEmitter, c: borrow Checker) -> Res
         e.t(");")?;
         e.emit()?;
     }
-    // Nova function values (§36.1): pointers to the functions' own C signatures, with Nova's C types.
+    // CeeSafe function values (§36.1): pointers to the functions' own C signatures, with the reference's C types.
     for (t in c.types.functionList.view()) {
         // As for composites (c_program.cee): a type only unused library code made has no C, nor its result type.
         if (c.types.isGeneric(t) || !(c.types.info(t).usedOutsideHostedLibrary || inSet(e.usedTypes, t))) {
@@ -677,7 +677,7 @@ fn emitExports(
     return Ok();
 }
 
-/// `int main` calling the Nova `main` (EmitMainWrapper): C's signature is the one place plain `char` appears.
+/// `int main` calling the reference `main` (EmitMainWrapper): C's signature is the one place plain `char` appears.
 fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var main = none();
     for (function in n.functions.view()) {
@@ -700,7 +700,7 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
     return e.line("}");
 }
 
-/// `nova_exports.h` (ExportsHeader, c-backend §2.3): the `@repr(C)` structs and `@repr` enums, and the exports'
+/// `ceesafe_exports.h` (ExportsHeader, c-backend §2.3): the `@repr(C)` structs and `@repr` enums, and the exports'
 /// prototypes; none when the program has none.
 fn exportsHeader(
     c: borrow Checker,
@@ -779,7 +779,7 @@ fn exportsHeader(
             appendText(out, "    ")?;
             appendAlignPrefix(c, out, t, field.index)?;
             var member = Vector<u8>.create();
-            if (!field.hasNovaCName) {
+            if (!field.hasCeeSafeCName) {
                 appendText(mut member, "f_")?;
             }
             appendBytes(mut member, c.name(field.name))?;

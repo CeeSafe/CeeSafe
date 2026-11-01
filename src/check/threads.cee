@@ -1,5 +1,5 @@
 // Threads (the reference's CheckThreadSpawn, CheckThreadBoth and CheckThreadMethod): P3 S6d (type-system.md §38).
-// `Thread<T>` is resolved with the other built-in generic types (options.nova); Arc, Mutex and the atomics are lib/std
+// `Thread<T>` is resolved with the other built-in generic types (options.cee); Arc, Mutex and the atomics are lib/std
 // and lib/core code, checked like user code since S5.
 
 /// `Thread.spawn(move () => body)` (CheckThreadSpawn, §38.2): the body's result type comes from an expected `Thread<T>`

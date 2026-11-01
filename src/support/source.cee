@@ -1,7 +1,7 @@
-// Source text as bytes, with the reference's positions (ROADMAP §3.2). Nova's SourceText (Syntax/SourceText.cs) holds
+// Source text as bytes, with the reference's positions (ROADMAP §3.2). The reference's SourceText (Syntax/SourceText.cs) holds
 // .NET's decoding of the file: File.ReadAllText drops a leading UTF-8 BOM and SourceText drops one more (so up to two
-// go, checked against novac 0.3.1), ill-formed UTF-8 becomes U+FFFD per maximal subpart (checked
-// against novac 0.3.1's columns, docs/p1-probes.md §6), lines end at "\r\n", "\r" or "\n", and lines and columns are
+// go, checked against the reference compiler 0.3.1), ill-formed UTF-8 becomes U+FFFD per maximal subpart (checked
+// against the reference compiler 0.3.1's columns, docs/p1-probes.md §6), lines end at "\r\n", "\r" or "\n", and lines and columns are
 // 1-based with columns in UTF-16 code units (grammar.md §1.1). Here offsets are bytes; positions are computed as the
 // reference computes them. Not handled yet: ReadAllText also decodes files that start with a UTF-16 or UTF-32 BOM as
 // UTF-16 or UTF-32; here they are bytes like any other.

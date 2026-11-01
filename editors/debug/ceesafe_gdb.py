@@ -1,4 +1,4 @@
-"""CeeSafe names in gdb (Nova's docs/tooling.md section 3.3): `source editors/debug/ceesafe_gdb.py`.
+"""CeeSafe names in gdb (spec/tooling.md section 3.3): `source editors/debug/ceesafe_gdb.py`.
 
 ceesafe-locals  the current frame's locals and parameters by their CeeSafe names, without the compiler's temporaries
 ceesafe-bt      the backtrace as `name at file:line`

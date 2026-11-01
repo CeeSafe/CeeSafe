@@ -1,0 +1,17 @@
+// A closure whose body is an `unsafe { e }` expression (type-system.md §27.4, §36.2): the names inside it count when
+// deciding whether the closure captures (NamesOuterLocal). CosmoOS's kernel/block/gpt.cee has one; ceesafec's walker
+// read the inner expression as a statement until 2026-10-31.
+
+/// Safety: `p` points to a readable u32 for the whole call.
+unsafe fn readThrough(p: *u32, bias: u32) -> bool {
+    let captures = (offset: u32) => unsafe { p.read() } + offset == bias;
+    let plain = (value: u32) => unsafe { value + 1 } == 2;
+    return captures(1) && plain(1);
+}
+
+/// Safety: the pointer is made from a live local just before the call, which only reads through it.
+fn main() {
+    let value: u32 = 41;
+    let ok = unsafe { readThrough(borrow value as *u32, 42) };
+    Console.writeLine(ok);
+}

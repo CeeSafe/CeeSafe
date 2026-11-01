@@ -487,7 +487,7 @@ fn threadForks(c: borrow Checker, n: borrow NirProgram, out: borrow mut Vector<P
     return Ok();
 }
 
-/// `Thread.both(a, b)` (EmitForkHelpers, §38.6): `nvTF_` runs a closure on the thread, `nvBOTH_` starts it, calls
+/// `Thread.both(a, b)` (EmitForkHelpers, §38.6): `ceeTF_` runs a closure on the thread, `ceeBOTH_` starts it, calls
 /// `b` and joins, or runs `a` then `b` here when the thread cannot start.
 fn emitForkHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var forks = Vector<PairKey>.create();
@@ -577,7 +577,7 @@ fn emitThreadError(e: borrow mut CEmitter, error: Slice<u8>, indent: StringView)
     return e.emit();
 }
 
-/// Per thread type: the trampoline, the join and the drop glue; per spawn: `nvTS_` and `nvTSB_`
+/// Per thread type: the trampoline, the join and the drop glue; per spawn: `ceeTS_` and `ceeTSB_`
 /// (EmitThreadHelpers, §38.2).
 fn emitThreadHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     for (thread in c.types.threadList.view()) {
@@ -674,7 +674,7 @@ fn emitThreadHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirPro
     var boxed = Vector<u32>.create();
     boxedSpawns(c, n, mut boxed)?;
     for (resultType in boxed.view()) {
-        // nvTSB_: a boxed closure, already a (data, table) pair; on failure its box is dropped.
+        // ceeTSB_: a boxed closure, already a (data, table) pair; on failure its box is dropped.
         let thread = resultOkOf(c, resultType);
         let element = c.types.info(thread).element;
         let m = mangled(c, element)?;

@@ -1,9 +1,8 @@
 # ADR 0015 — M13 G2–G3: dynamic dispatch and owning closures
 
-> **Inherited from Nova.** This is Nova's ADR 0015, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0015 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-28, taking every recommendation in §5). The wording is the agent's;
   the owner may revise it. Not yet implemented: the decisions go into `type-system.md` (§21, §36, and a new §37),
@@ -41,7 +40,7 @@
 | A `dyn` value is | `{ data, vtable }` behind a reference or box | a thin pointer to an object whose first field is its vtable | no `dyn`: users write a closed `enum` and `match` |
 | Works for existing types | yes (any `T` that implements `I`) | only types declared to carry a header | yes, but the set of types is closed |
 | Cost | two words per pointer; one indirect call | one word; a header in every object | a branch per call |
-| Precedent | Rust, Go's interface values | C++ | — (what Nova has today) |
+| Precedent | Rust, Go's interface values | C++ | — (what the reference has today) |
 
 A works with today's types and values, needs no layout change, and keeps `borrow dyn I` free (no allocation). B
 changes object layouts. C is the status quo. **A is proposed.**
@@ -53,10 +52,10 @@ changes object layouts. C is the status quo. **A is proposed.**
 | Storage | one explicit, fallible `Box` allocation | none: the closure is a value of an anonymous type | implicit heap |
 | Can be returned or stored in a field | yes | only through generics | yes |
 | Call | indirect | direct, inlinable | indirect |
-| Needs | A (`dyn`), a `move` literal | anonymous types, `Fn` interfaces, bound syntax | a runtime Nova does not have |
+| Needs | A (`dyn`), a `move` literal | anonymous types, `Fn` interfaces, bound syntax | a runtime the reference does not have |
 
 D follows from A with little new: a `move` literal's environment is an ordinary value, and the box holds it behind a
-`dyn` function type. E stays open as OD-9a, the faster path for generic code. F conflicts with Nova's memory model.
+`dyn` function type. E stays open as OD-9a, the faster path for generic code. F conflicts with the reference's memory model.
 **D is proposed.**
 
 ## 3. Proposed decision
@@ -100,11 +99,11 @@ D follows from A with little new: a `move` literal's environment is an ordinary 
      Allocation stays explicit and fallible, and the kernel profile can use it with `KernelHeap`.
    - **Captures.** v1 allows only non-scoped captures, by the same rule as 5. Capturing a reference is a new error.
 7. **C representation.**
-   - `borrow dyn I` is `struct { void *data; const nvT_<T,I> *vt; }`, two words.
+   - `borrow dyn I` is `struct { void *data; const ceeT_<T,I> *vt; }`, two words.
    - `Box<dyn I, A>` is the same pair with an owning `data`.
    - The table is a `static const` struct per (`T`, `I`). It holds the drop glue, the size and alignment (for a user
      allocator's `deallocate` layout), then one entry per method in declaration order.
-   - Each entry is a generated adapter `R nvTA_…(void *self, A…)`, which converts `self` to `T *` and calls `T`'s
+   - Each entry is a generated adapter `R ceeTA_…(void *self, A…)`, which converts `self` to `T *` and calls `T`'s
      method. So no function pointer is ever called through a different type.
    - A call is `x.vt->m(x.data, args…)`. Dropping a `Box<dyn I, A>` calls `vt->drop(data)`, then frees `data` with `A`
      and the table's size and alignment.
@@ -133,7 +132,7 @@ D follows from A with little new: a `move` literal's environment is an ordinary 
 1. **Fat pointers (A) for `dyn I`, behind references and `Box` only?** Recommended: yes.
 2. **Owning closures as boxed `move` literals (D), `Box<dyn fn(…) -> R>`?** Or wait for monomorphised closures
    (OD-9a)? Recommended: D now. It is what returning or storing a closure needs. OD-9a can follow for speed.
-3. **Syntax.** `dyn I` and `move (x) => …`, as in Rust? Or a Nova-specific spelling, such as `any Shape` (Swift)
+3. **Syntax.** `dyn I` and `move (x) => …`, as in Rust? Or a reference-specific spelling, such as `any Shape` (Swift)
    or `interface Shape`? Recommended: `dyn` and `move`. They are short, widely known, and say what they mean.
 4. **v1 limits:** no scoped `T` behind `dyn`, and no scoped captures in move literals (§3.5, §3.6). Recommended: yes.
    They keep the borrow checker unchanged, and `dyn(r) I` can follow once a use needs it.

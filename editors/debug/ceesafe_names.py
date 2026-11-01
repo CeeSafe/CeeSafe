@@ -1,13 +1,13 @@
-"""CeeSafe names for the C names ceesafec generates (Nova's docs/c-backend.md section 2.1, docs/tooling.md section 3.2).
+"""CeeSafe names for the C names ceesafec generates (spec/c-backend.md section 2.1, spec/tooling.md section 3.2).
 
-Shared by ceesafe_lldb.py and ceesafe_gdb.py; plain Python, no debugger API. The C names are CeeSafe's since the fork
-point (Decision 0004): functions `ceeF_`, methods `ceeM_`, locals `v_`, fields `f_`.
+Shared by ceesafe_lldb.py and ceesafe_gdb.py; plain Python, no debugger API. The C names are CeeSafe's
+(Decision 0004): functions `ceeF_`, methods `ceeM_`, locals `v_`, fields `f_`.
 """
 
 import os
 import re
 
-# Split C (Nova's ADR 0022): external names carry the program's name, `ceeF_<program>_main`. Set CEESAFE_PROGRAM to
+# Split C (ADR 0022): external names carry the program's name, `ceeF_<program>_main`. Set CEESAFE_PROGRAM to
 # that name (ceesafec's --program, or the package's) to read them.
 _PROGRAM = os.environ.get("CEESAFE_PROGRAM", "")
 

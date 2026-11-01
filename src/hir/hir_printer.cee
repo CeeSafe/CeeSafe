@@ -4,7 +4,7 @@
 //   builtin, with no type suffix;
 // - bool constants and casts have no type suffix;
 // - strings escape only `\`, `"` and newline;
-// - floats use .NET's "R" format (src/support/dotnet_double.nova).
+// - floats use .NET's "R" format (src/support/dotnet_double.cee).
 // Library functions are left out; every constant is printed.
 
 struct HirPrinter {

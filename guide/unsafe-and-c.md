@@ -169,7 +169,7 @@ fn isEsp(table: borrow gpt_table, i: usize) -> bool {
 }
 ```
 
-This is how CosmoOS's GPT parser is written in Nova, the language CeeSafe forked from ([the C9 report](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/cosmoos/c9-report.md); the rules are
+This is how CosmoOS's GPT parser is written (`integrations/cosmoos/c9.py` checks it; the rules are
 [ADR 0014](../spec/decisions/0014-c9-c-arrays-and-exported-constants.md)).
 
 ## Next

@@ -164,9 +164,9 @@ fn checkPointerMethod(
     let unsafeOk = requireUnsafe(c, span, what.view())?;
     let cLaidOut = c.types.isCLaidOut(pointee, 0);
     let structDef = c.types.info(pointee).structDef;
-    let novaStruct = structDef != none() && !c.types.structs[structDef as usize].isImported;
+    let ceeStruct = structDef != none() && !c.types.structs[structDef as usize].isImported;
     // `add`, `sub` and `offset` are C's pointer arithmetic, scaled by C's own size (C9, §31.2).
-    if (function == bfPtrRead() && cLaidOut && novaStruct) {
+    if (function == bfPtrRead() && cLaidOut && ceeStruct) {
         var message = Vector<u8>.create();
         appendText(mut message, "'read' would move a ")?;
         appendQuotedType(mut message, c, pointee)?;
@@ -178,9 +178,9 @@ fn checkPointerMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    // `write` of a Nova struct holding C state is a placement: the store, then its @placed init (§27.3, §33.3).
+    // `write` of a CeeSafe struct holding C state is a placement: the store, then its @placed init (§27.3, §33.3).
     let arithmetic = function == bfPtrAdd() || function == bfPtrSub() || function == bfPtrOffset();
-    if (cLaidOut && !arithmetic && !(function == bfPtrWrite() && novaStruct)) {
+    if (cLaidOut && !arithmetic && !(function == bfPtrWrite() && ceeStruct)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, name)?;

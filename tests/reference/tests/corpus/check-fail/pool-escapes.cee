@@ -1,4 +1,4 @@
-// Pool and pool-box types (type-system.md §19.6); the borrow errors are in pool-borrows.nova.
+// Pool and pool-box types (type-system.md §19.6); the borrow errors are in pool-borrows.cee.
 struct Res { id: i32; drop { } }
 struct Holder { b: PoolBox<i32>; } // error[N0246]
 struct Pool { x: i32; } // error[N0201]

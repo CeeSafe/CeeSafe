@@ -1,4 +1,4 @@
-"""CeeSafe names in lldb (Nova's docs/tooling.md section 3.3): `command script import editors/debug/ceesafe_lldb.py`.
+"""CeeSafe names in lldb (spec/tooling.md section 3.3): `command script import editors/debug/ceesafe_lldb.py`.
 
 ceesafe-locals  the current frame's locals and parameters by their CeeSafe names, without the compiler's temporaries
 ceesafe-bt      the backtrace as `name at file:line`

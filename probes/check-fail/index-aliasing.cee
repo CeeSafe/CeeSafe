@@ -1,0 +1,24 @@
+// P1 probe: two elements of one vector reached by indexes known only at run time. The borrow checker treats every
+// non-constant index as the same element (lifetimes.md §4, §8), so reading element i while changing element j is
+// rejected even when i != j. probes/run-pass/aliasing-workarounds.cee shows the patterns that are accepted.
+
+struct List {
+    items: Vector<u32>;
+}
+
+// Unifying two type variables, merging two scopes, appending one block's statements to another: each reads one
+// element of a table while it changes another.
+fn mergeInto(lists: borrow mut Vector<List>, from: usize, into: usize) -> Result<void, AllocError> {
+    let source = borrow lists[from];
+    for (x in source.items) {
+        lists[into].items.push(x)?; // error[N0241]
+    }
+    return Ok();
+}
+
+fn main() {
+    var lists = Vector<List>.create();
+    lists.push(List { items: Vector<u32>.create() })!;
+    lists.push(List { items: Vector<u32>.create() })!;
+    mergeInto(mut lists, 0, 1)!;
+}

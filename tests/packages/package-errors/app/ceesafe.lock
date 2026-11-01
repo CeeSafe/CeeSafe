@@ -1,0 +1,9 @@
+# Written by ceesafec fetch (docs/tooling.md §4.3). Commit it with ceesafe.toml.
+
+[[package]]
+name = "lib1"
+source = "path+../lib1"
+
+[[package]]
+name = "lib2"
+source = "path+../lib2"

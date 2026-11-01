@@ -2,7 +2,7 @@
 // Constant, CStringLiteral, CMessageLiteral). Every function appends to `out`; a name the emitter compares or reuses is
 // built in a vector of its own.
 
-/// `Id`: a Nova name as part of a C identifier, `geometry.Point` written `geometry_Point` (c-backend.md §2.1).
+/// `Id`: a CeeSafe name as part of a C identifier, `geometry.Point` written `geometry_Point` (c-backend.md §2.1).
 fn appendId(out: borrow mut Vector<u8>, name: Slice<u8>) -> Result<void, AllocError> {
     for (b in name) {
         out.push(if (b == '.') '_' else b)?;
@@ -417,8 +417,8 @@ fn appendSuffix(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
     return appendDecimal(out, info.bits as u64);
 }
 
-/// The drop glue of a type that needs drop (DropGlueName): `nvD_<length><Name>` for user structs and enums,
-/// `nvD_<mangled>` for built-in instantiations.
+/// The drop glue of a type that needs drop (DropGlueName): `ceeD_<length><Name>` for user structs and enums,
+/// `ceeD_<mangled>` for built-in instantiations.
 fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
     let info = c.types.info(t);
     if (c.types.is(t, TypeKind.Resource)) {
@@ -443,8 +443,8 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
     return appendId(out, name);
 }
 
-/// A function's C name (FunctionName): `nvF_name`, members `nvM_<length><Struct>_name`, instances of generic
-/// functions `nvG_<length><name><mangled arguments>`, closure bodies `nvCB_<id>`, externs' wrappers `nvC_name`.
+/// A function's C name (FunctionName): `ceeF_name`, members `ceeM_<length><Struct>_name`, instances of generic
+/// functions `ceeG_<length><name><mangled arguments>`, closure bodies `ceeCB_<id>`, externs' wrappers `ceeC_name`.
 fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: u32) -> Result<void, AllocError> {
     let f = borrow c.hir.functions[function as usize];
     let name = c.name(f.name);
@@ -503,13 +503,13 @@ fn appendLocalName(
     return appendDecimal(out, local as u64);
 }
 
-/// A field's C member (FieldName): its C name, or `f_` and its Nova name (none with a Nova C name).
+/// A field's C member (FieldName): its C name, or `f_` and its CeeSafe name (none with a reference C name).
 fn appendFieldName(c: borrow Checker, out: borrow mut Vector<u8>, field: u32) -> Result<void, AllocError> {
     let f = c.types.fields[field as usize];
     if (f.hasCName) {
         return appendBytes(out, c.types.rangeText(f.cName));
     }
-    if (!f.hasNovaCName) {
+    if (!f.hasCeeSafeCName) {
         appendText(out, "f_")?;
     }
     return appendBytes(out, c.name(f.name));
@@ -617,7 +617,7 @@ fn appendCMessageLiteral(out: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result
     return out.push('"');
 }
 
-/// A variant's prefix (VariantName, c-backend §2.1): `nvXS<n>_` before its original's name; none for the original.
+/// A variant's prefix (VariantName, c-backend §2.1): `ceeXS<n>_` before its original's name; none for the original.
 fn appendVariantPrefix(out: borrow mut Vector<u8>, variant: u32) -> Result<void, AllocError> {
     if (variant == 0) {
         return Ok();

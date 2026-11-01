@@ -1,5 +1,5 @@
 // Floats in C (type-system.md §35.6; c-backend.md §2): literals by their bits, plain IEEE operators, f64 to f32
-// through nv_f64_to_f32, and float to integer through the range-checked helpers.
+// through cee_f64_to_f32, and float to integer through the range-checked helpers.
 fn convert(x: f64, n: i64) -> i32 {
     let narrow = round<f32>(x * 2.0 + 0.5);
     let wide = round<f64>(n);

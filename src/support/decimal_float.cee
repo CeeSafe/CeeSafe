@@ -1,6 +1,6 @@
 // Decimal text to the nearest f64 or f32, exactly: the reference parses float literals with .NET's correctly rounded
 // double.Parse and float.Parse (TypeChecker.CheckFloatLiteral), round to nearest, ties to even, directly in each type.
-// Nova has no float parsing, so this works on exact integers (src/support/bigint.nova). The literal is the fraction
+// The reference has no float parsing, so this works on exact integers (src/support/bigint.cee). The literal is the fraction
 // N / D (digits × 10^e), and the result is m × 2^q with m of `precision` bits (fewer below the normal range): q is
 // found from bit lengths and corrected, m is the quotient, and twice the remainder against the divisor rounds it. An
 // f32 result is returned as the f64 of the same value, as the reference's `(double)float.Parse(…)` holds it.

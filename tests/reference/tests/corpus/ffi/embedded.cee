@@ -1,6 +1,6 @@
-// C state embedded by value (type-system.md §33): Nova structs that hold C structs, made in place in boxes,
+// C state embedded by value (type-system.md §33): CeeSafe structs that hold C structs, made in place in boxes,
 // initialised at their final address by `@placed` methods, and never moved. A list head points to itself once
-// initialised, so if Nova moved it, or initialised it anywhere but in its box, the C checks in embedded.c fail.
+// initialised, so if the reference moved it, or initialised it anywhere but in its box, the C checks in embedded.c fail.
 
 @header("embedded.types.h")
 extern "C" {
@@ -22,7 +22,7 @@ extern "C" {
     fn emb_dev_get() -> *mut emb_dev;
 }
 
-/// A queue head and its lock, with Nova data beside them.
+/// A queue head and its lock, with the reference data beside them.
 struct Queue<T> {
     head: emb_list;
     lock: emb_lock;

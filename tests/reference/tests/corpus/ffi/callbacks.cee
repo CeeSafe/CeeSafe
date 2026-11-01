@@ -1,4 +1,4 @@
-// Callbacks across the C boundary (type-system.md §29.5): C calls Nova through a function pointer, and Nova calls
+// Callbacks across the C boundary (type-system.md §29.5): C calls the reference through a function pointer, and the reference calls
 // C through one. The C half is callbacks.c.
 
 extern "C" {

@@ -1,4 +1,4 @@
-// Bulk slice operations (type-system.md §16.5): receivers, element types and sources. Loans: slice-bulk-loans.nova.
+// Bulk slice operations (type-system.md §16.5): receivers, element types and sources. Loans: slice-bulk-loans.cee.
 
 struct Res { id: i32; drop { } }
 

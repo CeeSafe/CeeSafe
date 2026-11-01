@@ -2,10 +2,10 @@
 
 commit: 6ad8ba6bd065d634078b750a50ba8615b105bcba
 host: Linux x86_64 6.1.0-44-amd64
-stage 0: ceesafec 0.0.0-dev (/root/nova-ci/ceesafe-p5/s6-stage0, sha256 01fd211db7214fa40b9dffe36f7c939066061d472fd9ea6b0cd67b74c15cb796)
+stage 0: ceesafec 0.0.0-dev (/root/reference-ci/ceesafe-p5/s6-stage0, sha256 01fd211db7214fa40b9dffe36f7c939066061d472fd9ea6b0cd67b74c15cb796)
 cc: gcc: gcc (Debian 12.2.0-14+deb12u1) 12.2.0
 switches: --split
-runs: /root/nova-ci/ceesafe-p5/s6-fps/a and /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b
+runs: /root/reference-ci/ceesafe-p5/s6-fps/a and /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b
 result: FIXED POINT
 
 ## Executables (sha256)
@@ -90,14 +90,14 @@ result: FIXED POINT
 - nir_nir_builder.c: 3a3abf3e9830b475fa5154dbf2d92edb9bb8bf9b079d7ca377adb506b491cb30 (c2 = c3 = c4)
 - nir_nir_printer.c: 704edc6f1f41595c802078458cad617e8c6dba8c7f937296f40eafcee3cc9721 (c2 = c3 = c4)
 - nir_passes.c: e325eb3546f58d3d4758b1e1879aa8f0c3ea7086525cad2b13e1bfb2b6e5df1b (c2 = c3 = c4)
-- nova/rt.h: 8060867c71f39c1e037f06d7ce6707df82e79e039a89e8c7d7ab95384e38429d (c2 = c3 = c4)
-- nova_instances.c: 6699fdd7185528a800fa74bccac55e7beffe2382b9fad19093c011422d312f2c (c2 = c3 = c4)
-- nova_program.h: 74c2594682b2678848bf8b57647972874c5cc791f1cbe2b46259325075505661 (c2 = c3 = c4)
-- nova_rt_core.c: 5bae77d011fa23a6376a78eec808e2599f4ad928fa748f29b1f7a362acf90576 (c2 = c3 = c4)
-- nova_rt_float.c: 5ae2f3959ae2cd2ade6778755d268b402c271193d6e56b62fe445469849ef111 (c2 = c3 = c4)
-- nova_rt_hosted.c: 4144279bbafef77b1736ed057ecdb7d1cb4c61fd70366432e6fde4fc7fac0cde (c2 = c3 = c4)
-- nova_rt_io.c: abeb42d14b260bbf00369fcbf9d61cfafc8bed82062f20fb795874a2906effb3 (c2 = c3 = c4)
-- nova_rt_thread.c: cad74d3b8ba440feb1b9efe01bce1a467bd392e6772411274338b6dbe7bb39fb (c2 = c3 = c4)
+- ceesafe/rt.h: 8060867c71f39c1e037f06d7ce6707df82e79e039a89e8c7d7ab95384e38429d (c2 = c3 = c4)
+- ceesafe_instances.c: 6699fdd7185528a800fa74bccac55e7beffe2382b9fad19093c011422d312f2c (c2 = c3 = c4)
+- ceesafe_program.h: 74c2594682b2678848bf8b57647972874c5cc791f1cbe2b46259325075505661 (c2 = c3 = c4)
+- ceesafe_rt_core.c: 5bae77d011fa23a6376a78eec808e2599f4ad928fa748f29b1f7a362acf90576 (c2 = c3 = c4)
+- ceesafe_rt_float.c: 5ae2f3959ae2cd2ade6778755d268b402c271193d6e56b62fe445469849ef111 (c2 = c3 = c4)
+- ceesafe_rt_hosted.c: 4144279bbafef77b1736ed057ecdb7d1cb4c61fd70366432e6fde4fc7fac0cde (c2 = c3 = c4)
+- ceesafe_rt_io.c: abeb42d14b260bbf00369fcbf9d61cfafc8bed82062f20fb795874a2906effb3 (c2 = c3 = c4)
+- ceesafe_rt_thread.c: cad74d3b8ba440feb1b9efe01bce1a467bd392e6772411274338b6dbe7bb39fb (c2 = c3 = c4)
 - packages_agents.c: 4d6824ce951919a5f9186cdd7524597d9bacaf756e36b1b8f75c605149948f45 (c2 = c3 = c4)
 - packages_commands.c: c62212975169994852f4241a66723ac3216513b852cc4c63a1dabb562a04d2c5 (c2 = c3 = c4)
 - packages_manifest.c: c8b3864b77f562f1435aaebf17f9cf90a6e1842ba3736be03eed9acd662707b5 (c2 = c3 = c4)
@@ -140,15 +140,15 @@ result: FIXED POINT
 
 ## Commands
 
-    $ /root/nova-ci/ceesafe-p5/s6-stage0 build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/c2 --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/c3 --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/3/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/a/gen/3/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/a/gen/c4 --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-stage0 build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c2 --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c3 --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec build --cc gcc -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/3/ceesafec --split   (in ceesafe)
-    $ /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/3/ceesafec build --emit c -o /root/nova-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c4 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-stage0 build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/c2 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/a/gen/1/ceesafec build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/c3 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/a/gen/2/ceesafec build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/3/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/a/gen/3/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/a/gen/c4 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-stage0 build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c2 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/1/ceesafec build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c3 --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/2/ceesafec build --cc gcc -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/3/ceesafec --split   (in ceesafe)
+    $ /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/3/ceesafec build --emit c -o /root/reference-ci/ceesafe-p5/s6-fps/deeper/second-run/b/gen/c4 --split   (in ceesafe)

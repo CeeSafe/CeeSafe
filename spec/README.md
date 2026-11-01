@@ -4,11 +4,6 @@ CeeSafe is a memory-safe systems programming language with C#/TypeScript-style s
 portable C. This directory is its specification. `ceesafec` embeds it: `ceesafec explain` and the MCP server
 (`ceesafe_spec_search`, `ceesafe_spec_section`, the `ceesafe://docs/…` resources) serve this text.
 
-CeeSafe forked from Nova at Nova `v0.6.0`, when the two were the same language (CeeSafe's Decisions 0003 and 0006 in
-the repository's `docs/decisions/`). This text began as Nova's specification at that tag, renamed and changed where the
-fork changed something (§3). From the fork on it is CeeSafe's own: Nova's later changes do not apply to it, and its
-changes do not apply to Nova.
-
 ## 1. Documents
 
 Normative, in order of authority after the ADRs:
@@ -40,14 +35,14 @@ Both are published at [vkuttyp.github.io/CeeSafe](https://vkuttyp.github.io/CeeS
 
 ## 2. Decisions
 
-`decisions/0001`–`0030` are Nova's ADRs, inherited at the fork. Their text is Nova's record, unchanged, under a header
-that says so. CeeSafe's own language decisions continue the series from ADR 0031 in the same directory. The port's
-decisions (how CeeSafe was made from Nova: names, bootstrap, the fork point) are "Decisions" in the repository's
-`docs/decisions/`, a separate series.
+CeeSafe began as a port of an earlier compiler. `decisions/0001`–`0030` are that compiler's ADRs, inherited with their
+text unchanged, under a header that says so. CeeSafe's own language decisions continue the series from ADR 0031 in the
+same directory. The repository's own decisions (names, bootstrap, releases) are "Decisions" in its `docs/decisions/`,
+a separate series.
 
-## 3. What the fork changed
+## 3. Names
 
-At the fork the language is Nova `v0.6.0`'s; what differs is how it is named and built:
+The compiler, its files and the C it generates use CeeSafe's names:
 
 - the compiler is `ceesafec`; source files are `.cee`; packages are `ceesafe.toml` and `ceesafe.lock`, the cache is
   `$CEESAFE_HOME` (default `~/.ceesafe`), and the default registry index is `github.com/vkuttyp/CeeSafe-index`;
@@ -60,21 +55,16 @@ At the fork the language is Nova `v0.6.0`'s; what differs is how it is named and
 
 ## 4. Reading this text
 
-- **Milestone tags** (M1–M15, C0–C9, K1–K7, G7b, …) name the Nova milestone that introduced a rule. They are kept so a
-  rule can be traced to Nova's history; they say nothing about CeeSafe's plan.
-- **Links to Nova.** A document CeeSafe did not fork (Nova's milestones, roadmap, open decisions, reports, research)
-  is linked in Nova's repository at `v0.6.0`.
-- **CosmoOS.** The kernel profile, `lib/kernel` and the CosmoOS bindings were developed by Nova inside CosmoOS, and
-  CosmoOS builds its Nova code with novac. Where this text reports what was run in CosmoOS, it was run with Nova.
+- **Milestone tags** (M1–M15, C0–C9, K1–K7, G7b, …) name the milestone that introduced a rule. They are kept so a
+  rule can be traced to its history; they say nothing about CeeSafe's plan, which is the repository's `ROADMAP.md`.
+- **CosmoOS.** The kernel profile, `lib/kernel` and the CosmoOS bindings were developed inside CosmoOS, which builds
+  its CeeSafe code with the ceesafec it pins.
 - **Paths.** `src/…` is `ceesafec`'s source. `lib/…` and `runtime/…` name the library and runtime sources ceesafec
-  embeds, CeeSafe's own since Decisions 0007 and 0008 (`architecture.md` §6). `tests/corpus/…`, `benchmarks/…` and `programs/…`
-  are CeeSafe's copies under `tests/reference/` (Nova's at the fork, as `.cee` files). `integrations/cosmoos/…` is
-  CeeSafe's own adaptation of Nova's CosmoOS checks (`testing.md` §1).
-- **Tests.** A test named like a C# class (`FixTests`, `PlacementTests`) is Nova's; where CeeSafe has its own check,
-  the text names its tool (`testing.md`).
+  embeds (`architecture.md` §6). `tests/corpus/…`, `benchmarks/…` and `programs/…` are under `tests/reference/`.
+  `integrations/cosmoos/…` holds the CosmoOS checks (`testing.md` §1).
+- **Tests.** Where a rule is checked by a test, the text names its tool (`testing.md`).
 
 ## 5. Changing it
 
 Spec before code: a change to the language changes this specification first, with an ADR when it is a decision, and
-then the compiler, its tests and the guide. Each change that makes CeeSafe differ from novac 0.6.0 is recorded as an
-exception in the comparisons (`testing.md` §3).
+then the compiler, its tests and the guide.

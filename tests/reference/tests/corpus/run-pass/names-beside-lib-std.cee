@@ -1,5 +1,5 @@
-// A program may use any name lib/std's helpers use (M15 S7's lib/std/host.nova kept them as top-level functions in
-// novac 0.4.0, so these were N0201 "already defined" there; they are HostServices's own since). Only lib/std's public
+// A program may use any name lib/std's helpers use (M15 S7's lib/std/host.cee kept them as top-level functions in
+// The reference compiler 0.4.0, so these were N0201 "already defined" there; they are HostServices's own since). Only lib/std's public
 // names are reserved (type-system.md §38.5).
 // expect-stdout: 8
 

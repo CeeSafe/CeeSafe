@@ -1,18 +1,18 @@
-<!--NOVA START-->
+<!--CEESAFE START-->
 
-# Using Nova
+# Using CeeSafe
 
-This package is written in Nova, a memory-safe systems programming language with C#/TypeScript-style syntax that
-`novac` compiles ahead of time to C. Ownership and borrowing are checked at compile time; there is no garbage
-collector. Nova is new: code that looks right from C#, TypeScript or Rust often is not Nova. Check every edit with the
-compiler, and read the guide for agents: https://vkuttyp.github.io/Nova/guide/for-agents (the whole guide and
-specification for a model's context: https://vkuttyp.github.io/Nova/llms-full.txt).
+This package is written in CeeSafe, a memory-safe systems programming language with C#/TypeScript-style syntax that
+`ceesafec` compiles ahead of time to C. Ownership and borrowing are checked at compile time; there is no garbage
+collector. CeeSafe is new: code that looks right from C#, TypeScript or Rust often is not CeeSafe. Check every edit with the
+compiler, and read the guide for agents: https://vkuttyp.github.io/CeeSafe/guide/for-agents (the whole guide and
+specification for a model's context: https://vkuttyp.github.io/CeeSafe/llms-full.txt).
 
 ## The package
 
-- `nova.toml` names the package, its kind (`executable` or `library`) and its dependencies; `nova.lock` pins them.
-- The sources are the `.nova` files under `src/`. A program starts at `fn main()`.
-- `novac build` writes to `out/`, which is not committed.
+- `ceesafe.toml` names the package, its kind (`executable` or `library`) and its dependencies; `ceesafe.lock` pins them.
+- The sources are the `.cee` files under `src/`. A program starts at `fn main()`.
+- `ceesafec build` writes to `out/`, which is not committed.
 
 ## Commands
 
@@ -20,28 +20,28 @@ Run them in the package's directory; without file arguments they use the package
 
 | Command | What it does |
 |---|---|
-| `novac check` | parse, type-check and borrow-check; the fastest way to find errors |
-| `novac fix` | apply the fixes the compiler is sure of, then check again |
-| `novac explain N0249` | what a diagnostic code means |
-| `novac run --interp` | run the program in the interpreter |
-| `novac build` | compile through C to `out/<name>` |
-| `novac fmt` | format in the one canonical style; `novac fmt --check` lists files that would change |
-| `novac fetch` | resolve the dependencies and write `nova.lock` |
+| `ceesafec check` | parse, type-check and borrow-check; the fastest way to find errors |
+| `ceesafec fix` | apply the fixes the compiler is sure of, then check again |
+| `ceesafec explain N0249` | what a diagnostic code means |
+| `ceesafec run --interp` | run the program in the interpreter |
+| `ceesafec build` | compile through C to `out/<name>` |
+| `ceesafec fmt` | format in the one canonical style; `ceesafec fmt --check` lists files that would change |
+| `ceesafec fetch` | resolve the dependencies and write `ceesafe.lock` |
 
 Add `--diagnostics-format=json` to `check`, `build`, `run` or `fix` for one JSON document with every diagnostic, its
 position and its fixes.
 
 ## The MCP server
 
-If you have the `nova` MCP server (`novac mcp`), use its tools: `nova_check` after every edit, `nova_fix` for the
-fixes it offers, `nova_explain` for a code, `nova_spec_search` and `nova_spec_section` for the rules, `nova_run` to
-run code in a sandbox. The specification is embedded in `novac`, so its answers match the compiler.
+If you have the `ceesafe` MCP server (`ceesafec mcp`), use its tools: `ceesafe_check` after every edit, `ceesafe_fix` for the
+fixes it offers, `ceesafe_explain` for a code, `ceesafe_spec_search` and `ceesafe_spec_section` for the rules, `ceesafe_run` to
+run code in a sandbox. The specification is embedded in `ceesafec`, so its answers match the compiler.
 
 ## Before you finish
 
-- [ ] `novac check` reports no errors (run `novac fix` first).
-- [ ] `novac fmt --check` lists no file.
-- [ ] The program does what was asked: `novac run --interp`, or `novac build` and run it.
+- [ ] `ceesafec check` reports no errors (run `ceesafec fix` first).
+- [ ] `ceesafec fmt --check` lists no file.
+- [ ] The program does what was asked: `ceesafec run --interp`, or `ceesafec build` and run it.
 
 ## Common mistakes
 
@@ -55,46 +55,40 @@ run code in a sandbox. The specification is embedded in `novac`, so its answers 
 - A `StringView` inside an enum or struct needs a region parameter; for fixed messages, use an enum of reasons.
 - A method cannot have the name of a field.
 
-<!--NOVA END-->
+<!--CEESAFE END-->
 
 # CeeSafe project rules
 
-CeeSafe is the port of Nova's C# compiler (`novac`, `~/Nova`) to Nova itself, under the new name CeeSafe. The section
-above, between the `NOVA` markers, is written by `novac agents` and is refreshed by it: put project rules here, below
-the markers, and never edit between them.
+CeeSafe is a memory-safe systems language, and `ceesafec`, its compiler, is written in CeeSafe. The section above,
+between the `CEESAFE` markers, is written by `ceesafec agents` and is refreshed by it: put project rules here, below
+the markers, and never edit between them. While working on this repository, "ceesafec" means `out/ceesafec`, the
+compiler built from the tree (`ceesafec` is not on `PATH` here).
 
 ## Governing documents (in order of authority)
 
-1. `ROADMAP.md`: scope, phases P0–P9, the N track (upstream Nova M15), gates and the execution record.
-2. `docs/decisions/*.md`: CeeSafe's accepted decisions (0001: identity and bootstrap; 0002: the rename cut-over;
-   0003: Nova and CeeSafe in parallel).
-3. Nova's specifications in `~/Nova/docs/` (type system, ownership, C backend) and its ADRs: the port preserves their
-   semantics. Nova's `AGENTS.md` rules (spec before code, safety first, determinism, target layout from `TargetInfo`
-   only) apply here too.
-4. `bootstrap/reference.md`: the pinned stage-0 compiler and the Nova reference commit.
+1. `ROADMAP.md`: scope, phases, gates and the execution record (§10).
+2. `docs/decisions/*.md`: CeeSafe's project decisions.
+3. `spec/`: the specification (type system, ownership, C backend, tooling) and its ADRs (`spec/decisions/`). Spec
+   before code, safety first, determinism, target layout from `TargetInfo` only.
+4. `bootstrap/reference.md`: the release stage 0 and the recorded fixed points.
 
-## Bootstrap rules
+## Building ceesafec
 
-- Since P6R (Decision 0002) CeeSafe's sources are `.cee` files and its manifest is `ceesafe.toml`; ceesafec builds
-  them (`out/ceesafec check`, `out/ceesafec build -o out/ceesafec`). novac cannot read these names.
-- Get a ceesafec from a fresh checkout with `tools/bootstrap.sh`: the pinned novac named in `bootstrap/reference.md`
-  (today `~/.nova/0.6.0/bin/novac`) builds the last legacy-named commit, whose ceesafec builds the tree. Keep a known
-  good `out/ceesafec` before changing the compiler, so a broken build can be rebuilt by the previous one.
-  `~/.nova/bin/novac` is 0.3.1, which CosmoOS's `make nova` still pins: leave it there. The `novac` on `PATH` may be a
-  development wrapper around `~/Nova`'s working tree and is not reproducible.
-- Format with ceesafec (P8 S1, identical to novac's formatter): `out/ceesafec fmt` formats the package's `.cee`
-  sources, `out/ceesafec fmt --check` lists the ones that would change. The generators (`tools/gen_*.py`) format their
-  output with it too ($CEESAFEC).
-- Nova and CeeSafe exist in parallel (Decision 0003): ceesafec reads only `ceesafe.toml` packages, but files named on
-  the command line may have any extension, so Nova's corpus stays `.nova`, compared with novac; CeeSafe's own tests
-  (`tests/support`, `tests/reference`) are `.cee`. Since Decision 0007 ceesafec's C is CeeSafe's own, not novac's. CeeSafe
-  tracks Nova (its specifications, releases and corpus) until P8. Diagnostic codes keep the letter N.
-- A missing language or library feature is CeeSafe's own work since Nova stopped (Decisions 0006, 0007): spec and ADR
-  first (`spec/decisions/0031-…` onward), then the compiler, tests and guide. The libraries are `lib/` (Decision 0008;
-  `tools/gen_library.py` embeds them), the runtime `runtime/`. Never work around a gap with `unsafe`, C, or a weaker
-  check where a safe design exists.
+- Sources are `.cee` files under `src/`, the manifest is `ceesafe.toml`: `out/ceesafec check`,
+  `out/ceesafec build -o out/ceesafec`.
+- From a fresh checkout, get a first ceesafec with `tools/bootstrap_release.sh STAGE0`, where STAGE0 is a released
+  ceesafec (`bootstrap/reference.md`, "Release stage 0"; Decision 0009). Keep a known good `out/ceesafec` before
+  changing the compiler, so a broken build can be rebuilt by the previous one.
+- Format with ceesafec: `out/ceesafec fmt` formats the package's `.cee` sources, `out/ceesafec fmt --check` lists the
+  ones that would change. The generators (`tools/gen_*.py`) format their output with it too ($CEESAFEC).
+- A missing language or library feature is designed here: spec and ADR first (`spec/decisions/0031-…` onward), then
+  the compiler, tests and guide. The libraries are `lib/` (Decision 0008; `tools/gen_library.py` embeds them), the
+  runtime `runtime/` (`tools/gen_runtime.py`). Never work around a gap with `unsafe`, C, or a weaker check where a
+  safe design exists.
 - Small C adapters for host services are allowed only behind a documented contract (ownership, lengths, encoding,
-  errors); compiler algorithms stay in Nova.
+  errors); compiler algorithms stay in CeeSafe.
+- CeeSafe has no predecessor to consult or compare with: `tools/spec_check.py` (in the contract suite) fails on any
+  mention of the retired language it began from, outside the licence notice (Decision 0010).
 
 ## Tools
 
@@ -107,44 +101,45 @@ python3 tools/fault_sweep.py --compiler out/ceesafec tests/support/fault/alloc-s
 python3 tools/oracles/support_models.py                                  # oracle summaries for tests/support
 python3 tools/fixed_point.py --stage0 out/ceesafec --work <dir> --manifest <file>
                                                                         # the fixed point (docs/p6-fixed-point.md)
+sh tools/bootstrap_release.sh STAGE0 [REVISION] [OUTPUT]                 # a ceesafec from a released one (Decision 0009)
 python3 benchmarks/run.py                                                # CeeSafe against Rust and C (guide/performance.md)
 python3 tools/gen_runtime.py                                             # regenerate src/library/runtime.cee from runtime/
+python3 tools/gen_library.py                                             # regenerate src/library/sources.cee from lib/
 python3 tools/gen_docs.py                                                # regenerate src/library/documents.cee
 ```
 
-No test runs novac or reads a Nova checkout (Decision 0007; `spec/testing.md` §3). The `tools/compare_*.py` scripts
-remain only as the record of the port's parity with novac 0.6.0.
-
-Generated files say so in their first line (`tools/oracles/gen_*.py` writes them); edit the generator, never the
-output. Expected values in `tests/support` come from oracles outside the code under test (Python, .NET).
-Use `--check-leaks` for anything new: novac 0.3.1 skipped drops, and the probes keep a regression for it.
+Generated files say so in their first line; edit the generator, never the output. Expected values in `tests/support`
+come from oracles outside the code under test (Python, .NET). Use `--check-leaks` for anything new.
 
 `run_corpus.py` checks the corpus's own expectations (annotations, snapshots, expected output); `--reference`
-also requires identical observable outcomes. Its normalisations are listed in the script: never widen one to make a
-comparison pass. `docs/parity.md` is the ledger; `docs/reference-inventory.md` is generated, never edited by hand.
+also requires identical observable outcomes from a second ceesafec. Its normalisations are listed in the script: never
+widen one to make a comparison pass.
 
 ## Evidence discipline
 
-- Cite sources: `file:line` for code (`~/Nova/src/...` for the reference), sections for docs.
+- Cite sources: `file:line` for code, sections for docs.
 - Keep tests that were run (date, command, result) apart from tests that are only proposed. Record work in ROADMAP §10.
-- Never regenerate expected results from CeeSafe to make a comparison pass.
+- Never regenerate expected results from CeeSafe to make a comparison pass; an intended change to an expectation is a
+  reviewed edit, recorded where the change is.
 
 ## Layout
 
 ```text
-ROADMAP.md  AGENTS.md  nova.toml       (ceesafe.toml after P6R)
-src/                                    the compiler, in Nova
+ROADMAP.md  AGENTS.md  ceesafe.toml
+src/                                    the compiler, in CeeSafe
 docs/decisions/                         CeeSafe decisions
-bootstrap/                              stage-0 pin and reference manifest
-tools/                                  run_corpus.py (corpus runner), inventory.py (reference inventory)
-probes/                                 P1 capability probes in corpus format, and regression probes for fixed novac bugs
+bootstrap/                              the release stage 0, the seed's README, the recorded fixed points
+tools/                                  run_corpus.py (corpus runner), contract_tests.py, the generators and checks
+probes/                                 P1 capability probes in corpus format
 src/support/ src/host/                  the support library (P1) and host services
 src/syntax/ src/diagnostics/            the frontend (P2): tokens, lexer, AST, parser, dumps; diagnostics and their JSON
-tests/syntax/                           lexer edge cases (tools/lexer_fuzz.py --cases), and known differences
+tests/reference/                        CeeSafe's corpus (tests/corpus), benchmarks and programs
 tests/support/                          support-library tests (run-pass, fault/)
 tools/oracles/                          independent oracles and generators for tests
 runtime/                                the C runtime ceesafec embeds (tools/gen_runtime.py; Decision 0007)
 lib/                                    the libraries ceesafec embeds: core, std, kernel (tools/gen_library.py; Decision 0008)
+spec/                                   the specification and its ADRs
+guide/                                  the guide (site/ publishes it)
 benchmarks/                             CeeSafe against Rust and C (run.py; results in guide/performance.md)
 out/                                    build output, never committed
 ```

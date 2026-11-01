@@ -33,7 +33,7 @@ fn main() {
     map(values[..], double, mut out[..]);
     Console.writeLine(out[2]);
     let f = first;
-    Console.writeLine(f("nova"));
+    Console.writeLine(f("safe"));
     var count = 0;
     let inc: fn(borrow mut i32) = bump;
     inc(mut count);
@@ -47,5 +47,5 @@ fn main() {
 // expect-stdout: 1 13
 // expect-stdout: 2 42
 // expect-stdout: 6
-// expect-stdout: n
+// expect-stdout: s
 // expect-stdout: report 2

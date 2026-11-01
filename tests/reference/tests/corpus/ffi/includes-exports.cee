@@ -1,5 +1,5 @@
 // A @header that includes the program's own exports header (ADR 0030), as a kernel header includes the generated
-// definition of a type Nova owns: the generated C includes nova_exports.h instead of defining `ie_box` itself, so the
+// definition of a type the reference owns: the generated C includes ceesafe_exports.h instead of defining `ie_box` itself, so the
 // struct is defined once however many headers bring it in.
 
 @header("includes-exports.types.h")
@@ -31,7 +31,7 @@ unsafe fn fill(b: *mut ie_box, start: u32) {
 @export("ie_total")
 unsafe fn total(b: *ie_box) -> u32 => ie_sum(b) * 2;
 
-/// Where its C caller's call returns to (ADR 0030); 0 when Nova calls it.
+/// Where its C caller's call returns to (ADR 0030); 0 when the reference calls it.
 @export("ie_where")
 fn callSite() -> usize => callerAddress();
 

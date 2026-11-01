@@ -1,9 +1,8 @@
 # ADR 0011 — M11 G7: floating-point types
 
-> **Inherited from Nova.** This is Nova's ADR 0011, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0011 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-25, taking every recommendation in §5). The wording is the agent's;
   the owner may revise it. Not yet implemented: the decisions are written into `type-system.md` (a new §35),
@@ -22,17 +21,17 @@ Facts this design rests on, from the code and the docs as they are today:
 - **Profiles.** `profiles.md` §1: floats are *yes* in hosted and CosmoOS user programs, **forbidden** in the
   CosmoOS kernel, and *target-defined* in the generic freestanding profile. CosmoOS builds its kernel and loader with
   `-mgeneral-regs-only` on both arches (CosmoOS `build/arch/x86_64.mk:6,14`, `aarch64.mk:19,28`), and
-  `scripts/check-fpregs.sh` rejects objects that touch FP registers. Nova runs that script in `c4.py` and `c5.py`
+  `scripts/check-fpregs.sh` rejects objects that touch FP registers. The reference runs that script in `c4.py` and `c5.py`
   (`c4.py:204-206`, `c5.py:104`); `c6.py` and `c7.py` reuse C4's other checks but not this one.
 - **No libm, no exact libc formatting.** CosmoOS's libc has no `<math.h>` (`libc/include/`), and its `printf`
   float conversions are "deliberately small … not exactly rounded in the last digit for every input"
   (`libc/src/printf.c:9-14`). Formatting therefore cannot go through libc if output is to be deterministic and equal
   to the interpreter's.
-- **No compiler-rt** (`c-backend.md` §1). On the two 64-bit targets Nova supports, float arithmetic and
+- **No compiler-rt** (`c-backend.md` §1). On the two 64-bit targets the reference supports, float arithmetic and
   `int64 ↔ double` conversions compile to instructions. `fmod`, `sqrt` and the like are libm calls unless they become
   builtins that lower to an instruction.
 - **The interpreter is an oracle** (M7c). Every program must print the same output compiled and interpreted, and the
-  fuzzer compares them (`tests/Nova.Fuzz`). .NET's `double` and `float` are IEEE binary64/binary32 with
+  fuzzer compares them (`tests/Reference.Fuzz`). .NET's `double` and `float` are IEEE binary64/binary32 with
   round-to-nearest-even. The JIT does not fuse `a * b + c` into an FMA unless asked (`Math.FusedMultiplyAdd`)
   (inferred, to verify in G7).
 - **C compilers may contract.** clang contracts `a * b + c` into an FMA within an expression by default
@@ -48,7 +47,7 @@ Facts this design rests on, from the code and the docs as they are today:
 |---|---|---|---|
 | Semantics | IEEE 754 binary32/64, round-to-nearest-even, no contraction, no traps; same result compiled and interpreted | whatever the C compiler does (contraction, `-ffast-math` allowed) | integers only |
 | Float → int | checked: panics on NaN and out of range | C's cast (UB out of range) | — |
-| Printing | Nova's own shortest round-trip formatter | libc `printf("%g")` | — |
+| Printing | The reference's own shortest round-trip formatter | libc `printf("%g")` | — |
 | Cost | a formatter in the runtime (~1–2k lines with tables, inferred) | small | a library |
 | Safety | no UB; deterministic | UB on conversion; results vary by compiler | — |
 
@@ -59,12 +58,12 @@ proposed.**
 
 1. **Types.** `f32` and `f64` are IEEE 754 binary32 and binary64, laid out per `TargetInfo` (4/4 and 8/8 on both
    targets). They are Copy, need no drop, hold no loans, and are FFI-safe (C `float`/`double`). The FP environment is
-   the default one, never changed by Nova code: round to nearest even, no traps, and no flags read.
+   the default one, never changed by CeeSafe code: round to nearest even, no traps, and no flags read.
 2. **Literals.** `1.5`, `1e9`, `2.5e-3`, with an optional `f32`/`f64` suffix. An unsuffixed float literal is
    *flexible* like an integer one (§5): it takes an expected `f32` or `f64`, and defaults to `f64`. The literal's
    value is the decimal rounded to nearest (even) in its type, exactly once: `0.1f32` is the `f32` nearest 0.1, not the
    `f64` nearest 0.1 rounded again. An integer literal is not a float (`let x: f64 = 1;` is N0205; write `1.0`), as
-   Nova has no implicit conversions. A literal that rounds to infinity is an error (N0206).
+   The reference has no implicit conversions. A literal that rounds to infinity is an error (N0206).
 3. **Operators.** `+ - * /` and unary `-` on two operands of the same float type give that type. They **never
    panic**: overflow gives ±infinity, `0.0 / 0.0` gives NaN, as IEEE says. This is the one exception to "arithmetic
    panics on failure" (OD-6), and the spec states it. `%` is not defined on floats in G7 (N0207), since C's `fmod`
@@ -73,7 +72,7 @@ proposed.**
 4. **No contraction, no excess precision.** Each operation rounds to its type. The generated C enforces this:
    - `rt.h` checks `FLT_EVAL_METHOD == 0` (`<float.h>` is a freestanding header) and emits
      `#pragma STDC FP_CONTRACT OFF`;
-   - novac's builds pass `-ffp-contract=off`, and `c-backend.md`'s checklist requires it of integrations, since
+   - The reference compiler's builds pass `-ffp-contract=off`, and `c-backend.md`'s checklist requires it of integrations, since
      gcc ignores the pragma;
    - `-ffast-math` and its parts are unsupported, as `-fwrapv` already is not relied on.
 
@@ -113,7 +112,7 @@ proposed.**
 
 ## 4. Consequences
 
-- Ex2 and Ex13 of `language-spec.md` become runnable, and numeric code can be written. The README's "What Nova does
+- Ex2 and Ex13 of `language-spec.md` become runnable, and numeric code can be written. The README's "What the reference does
   not have yet" loses "floating-point types".
 - A float result is the same compiled with clang, gcc or MSVC and interpreted, so the fuzzer can generate float code
   and compare outputs. The cost is the forbidden contraction: FMA-heavy kernels are slower than C compiled with
@@ -139,18 +138,18 @@ proposed.**
    Schubfach, tested against .NET's shortest output on several million random and boundary values.
 5. **Math library scope after G7.** Recommended: next, `sqrt`, `abs`, `floor`, `ceil`, `min` and `max`, which lower
    to single instructions on both targets (`__builtin_sqrt` with `-fno-math-errno`, `__builtin_floor`, …). Without
-   libm, everything else would be a Nova implementation with its own accuracy tests.
+   libm, everything else would be a reference implementation with its own accuracy tests.
 6. **`--no-float`** as an option rather than a separate profile? Recommended: an option. Profiles stay as
    `profiles.md` defines them, and a Linux kernel build would use the same option.
 
 ## 5a. Amendments during implementation (2026-10-25)
 
 - **G7a.** `rt.h`'s IEEE checks, contraction pragmas and float helpers apply only in programs that use floats
-  (`NV_FLOATS`).
+  (`CEE_FLOATS`).
   - Without that guard, the check `FLT_EVAL_METHOD == 0` broke every CosmoOS kernel object on x86-64.
   - CosmoOS builds those objects with `-mgeneral-regs-only`, which leaves no SSE there (`c4.py`).
 - **G7b.**
-  - **Exponent sign.** §3.6's examples wrote `1e21`. ECMAScript writes `1e+21`, and Nova follows ECMAScript exactly,
+  - **Exponent sign.** §3.6's examples wrote `1e21`. ECMAScript writes `1e+21`, and the reference follows ECMAScript exactly,
     so its test vectors apply (type-system.md §35.7).
   - **The interpreter's digits** come from an exact search over rationals, not from .NET's `ToString("R")`. .NET 10
     prints 2^-25 as `2.980232238769531E-08`, which does not read back as 2^-25.

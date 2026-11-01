@@ -178,7 +178,7 @@ fn reprInteger(c: borrow Checker, name: Slice<u8>) -> u32 {
     return if (integer) c.types.lookup(name) else none();
 }
 
-/// Does integer type `t` hold `value` (NovaType.Fits)?
+/// Does integer type `t` hold `value`?
 fn integerFits(c: borrow Checker, t: u32, value: u64) -> bool {
     let name = c.types.name(t);
     let bits: u64 = if (sameText(name, "u8") || sameText(name, "i8")) 8 else if (sameText(name, "u16") || sameText(

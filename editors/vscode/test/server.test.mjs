@@ -1,4 +1,4 @@
-// `ceesafec lsp` (Nova's docs/tooling.md §2) driven by vscode-jsonrpc, the library under VS Code's language client: the
+// `ceesafec lsp` (spec/tooling.md §2) driven by vscode-jsonrpc, the library under VS Code's language client: the
 // server's framing and messages must work with it. Needs a built ceesafec: CEESAFEC, or the repository's out/ceesafec.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";

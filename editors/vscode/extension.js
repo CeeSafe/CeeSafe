@@ -1,4 +1,4 @@
-// The CeeSafe extension's client (Nova's docs/tooling.md §2.4): starts `ceesafec lsp` for .cee documents.
+// The CeeSafe extension's client (spec/tooling.md §2.4): starts `ceesafec lsp` for .cee documents.
 const vscode = require("vscode");
 const { LanguageClient } = require("vscode-languageclient/node");
 

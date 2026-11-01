@@ -1,5 +1,5 @@
-// C calls Nova and Nova calls C (type-system.md §28): exports, @repr(C) structs and @repr enums, with
-// the C side in exports.c, which includes the generated nova_exports.h.
+// C calls the reference and the reference calls C (type-system.md §28): exports, @repr(C) structs and @repr enums, with
+// the C side in exports.c, which includes the generated ceesafe_exports.h.
 
 extern "C" {
     fn c_entry(seed: i32) -> i32;

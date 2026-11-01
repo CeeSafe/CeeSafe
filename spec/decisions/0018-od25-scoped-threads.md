@@ -1,9 +1,8 @@
 # ADR 0018 — OD-25: scoped threads by fork-join
 
-> **Inherited from Nova.** This is Nova's ADR 0018, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0018 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-28, taking every recommendation in §5). The wording is the agent's. The
   decisions are in `type-system.md` §38.6 and `ownership.md` T4. §38.6 makes one point precise: the arguments must be
@@ -21,7 +20,7 @@
   value that can be stored, returned or dropped later. A reference it carried could then outlive its referent.
 - **What the borrow checker already does.** A closure is a reference to an environment in its maker's block, and it
   carries its captures' loans (§36.2). Two closures passed to one call are both live for the whole call, so their
-  captures must not conflict. Probes, run 2026-10-28 with novac 0.2.0-dev:
+  captures must not conflict. Probes, run 2026-10-28 with the reference compiler 0.2.0-dev:
   - two closure arguments that capture the same local mutably are refused (**N0241**, "cannot borrow 'x' as mutable
     while 'x' is mutably borrowed");
   - one that captures it shared and one mutably are refused too (**N0241**).
@@ -51,7 +50,7 @@ written over A in the library later.
    no parameters and a `void` result, `borrow fn()` or `borrow mut fn()` (§36.2). It runs `a` on a new thread and
    `b` on the calling thread, waits for both, and returns. Results travel through the closures' captures:
 
-   ```nova
+   ```ceesafe
    fn sum(values: Slice<u64>) -> u64 { ... }
 
    fn parallelSum(values: Slice<u64>) -> u64 {
@@ -63,7 +62,7 @@ written over A in the library later.
    }
    ```
 
-   Nova has no tuples, so a pair-returning form would need a library struct; it is left out of v1 (question 3).
+   The reference has no tuples, so a pair-returning form would need a library struct; it is left out of v1 (question 3).
    The example checks and runs today (2026-10-28) with a plain two-closure function in place of `Thread.both`: the
    two closures' captures (`halves` shared by both, `low` and `high` each changed by one) are already accepted.
 2. **What may be captured.** Inside the call, `a` runs on another thread while `b` runs here, so each capture of
@@ -87,10 +86,10 @@ written over A in the library later.
 5. **Panics.** A panic in either closure aborts the process (OD-5), as in any thread.
 6. **Effects** (§32): `sleep` and `alloc`, those of `spawn` and `join` together.
 7. **The interpreter** runs `a` as a thread under its baton (`Interpreter/Threads.cs`), then `b`, then waits, so
-   `novac run --interp` stays deterministic.
+   `ceesafec run --interp` stays deterministic.
 8. **C.** A scoped closure is a pointer to an environment whose first member is its code (c-backend §2). `both`
-   starts a thread on a runtime helper that calls `a`'s code with `a`'s environment (`nova_thread_start`), calls `b`
-   directly, then `nova_thread_join`s. No allocation beyond the runtime's thread record.
+   starts a thread on a runtime helper that calls `a`'s code with `a`'s environment (`ceesafe_thread_start`), calls `b`
+   directly, then `ceesafe_thread_join`s. No allocation beyond the runtime's thread record.
 9. **More than two.** Recursion: split, `both`, split again. A data-parallel helper (option C) may follow in
    `lib/std` over `both`, spec first.
 
@@ -111,7 +110,7 @@ written over A in the library later.
 1. **Fork-join (A)**, rather than Rust-style scopes (B) or a slice helper only (C)? Recommended: A.
 2. **The name.** `Thread.both(a, b)`, or `Thread.join(a, b)` (Rayon's name, but `t.join()` already means joining one
    thread), or `Thread.parallel(a, b)`? Recommended: `both`.
-3. **Results through captures only in v1**, with no pair-returning form until Nova has tuples or a library pair?
+3. **Results through captures only in v1**, with no pair-returning form until the reference has tuples or a library pair?
    Recommended: yes.
 4. **No captured closures in v1** (a closure captured by `a` or `b`)? Recommended: yes. Allowing them needs the
    capture rule applied through a closure's own captures, which can follow when a use needs it.
@@ -124,31 +123,31 @@ Spec first (type-system §38.6, ownership.md T1–T3, c-backend §2, the runtime
 - the capture rule (N0334 cases) with check-fail tests: each kind of capture, shared and mutable, accepted and refused;
 - `Thread.both` in the checker, C and the interpreter; run-pass tests, including the sequential fallback under fault
   injection;
-- the guide's threads page (`guide/threads.md`) and `novac explain` text;
+- the guide's threads page (`guide/threads.md`) and `ceesafec explain` text;
 - the fuzzer generating `both` calls;
 - the `benchmarks/parallel` variant on the Ryzen box;
 - a CosmoOS userland run in QEMU on both arches (`c2.py`, as for M13 G4).
 
 ## 7. Implementation and results (2026-10-28)
 
-- Spec: type-system §38.6, ownership T4, c-backend (`nvTF_`, `nvBOTH_`), N0334's row (`4e4576d`).
+- Spec: type-system §38.6, ownership T4, c-backend (`ceeTF_`, `ceeBOTH_`), N0334's row (`4e4576d`).
 - Code (`ab9c95c`): `CheckThreadBoth` and `TypeTable.IsForkSafe` in the checker; `BuiltinFunction.ThreadBoth` through NIR
   and the effect checker (`sleep`, `alloc`); the C helpers; the interpreter's `ThreadBoth` under its baton, mirroring
-  `nova_thread_start`'s one allocation, so the fault-injection sweep exercises the sequential fallback. No new borrow
-  rule: the probes of §1 hold for `Thread.both` too (`check-fail/thread-both-borrows.nova`).
+  `ceesafe_thread_start`'s one allocation, so the fault-injection sweep exercises the sequential fallback. No new borrow
+  rule: the probes of §1 hold for `Thread.both` too (`check-fail/thread-both-borrows.cee`).
 - Found on the way, and fixed first (`e6b1a67`): a `SliceMut` field (`halves.left` of `splitAtMut`) was moved by a
   use instead of reborrowed (type-system §13.3), so a closure could not pass it on (N0251), and a second use outside
   one was N0250.
-- Tests: `run-pass/thread-both.nova` (halves read and changed in parallel, recursion to four threads, a `Mutex`, an
-  `fn()` value), `check-fail/thread-both.nova` (each refused capture, a closure variable, a move literal) and
-  `thread-both-borrows.nova`; the guide's threads page; the fuzzer (26 of the first 200 seeds). Run 2026-10-28: the
+- Tests: `run-pass/thread-both.cee` (halves read and changed in parallel, recursion to four threads, a `Mutex`, an
+  `fn()` value), `check-fail/thread-both.cee` (each refused capture, a closure variable, a move literal) and
+  `thread-both-borrows.cee`; the guide's threads page; the fuzzer (26 of the first 200 seeds). Run 2026-10-28: the
   full suite (3,424) passes; the fuzzer's seeds 1–300 give no finding; `c2.py` runs the corpus, `thread-both`
   included, in CosmoOS on x86-64 (188 programs, the fault sweep 43 programs and 381 runs) and AArch64 (the same: 188, and 43 and 381).
 - Benchmark (`benchmarks/parallel`, the `both` pair; the Ryzen box, a Ryzen 5 PRO 3600 with 6 cores, clang 18.1.8 -O2, 7 runs
   interleaved, at normal priority, load average
   about 1.2 on the shared box): 16 million values in a vector the program owns, split in halves.
 
-  | Threads | Nova `Thread.both` | C, recursive pthreads | Nova/C | Speed-up Nova / C |
+  | Threads | The reference `Thread.both` | C, recursive pthreads | The reference/C | Speed-up the reference / C |
   |---|---|---|---|---|
   | 1 | 277.5 ms | 268.8 ms | 1.03 | 1.00 / 1.00 |
   | 2 | 155.1 ms | 149.2 ms | 1.04 | 1.79 / 1.80 |

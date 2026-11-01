@@ -134,5 +134,4 @@ calls, at compile time. Rust has no equivalent in the language.
 
 `Rc`/`Arc` and interior mutability (`Cell`, `RefCell`), threads and `Send`/`Sync` (there are no user threads yet),
 `dyn Trait`, iterators, pattern guards (`if` in a match arm), slice patterns, `impl` blocks on generic types, the
-standard library's breadth, and crates.io. Several were on Nova's [roadmap](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/roadmap.md) or
-[open decisions](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/open-decisions.md) at the fork.
+standard library's breadth, and crates.io. Several are planned or recorded as open decisions.

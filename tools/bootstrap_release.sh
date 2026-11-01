@@ -1,7 +1,6 @@
 #!/bin/sh
-# Builds ceesafec from a checkout with only a released ceesafec (Decision 0009): the release workflow's stage 0 since
-# Nova's repository, and with it novac's release, became private (2026-11-01). tools/bootstrap.sh, from novac 0.6.0,
-# stays for a machine that has it.
+# Builds ceesafec from a checkout with only a released ceesafec (Decision 0009): the release workflow's stage 0, and
+# the way to a first ceesafec from a fresh checkout.
 #
 # A released compiler cannot always build the tree at once: a commit that adds library code (lib/, embedded in
 # src/library) and uses it in the compiler's own sources needs a compiler that already embeds it. The chain below
@@ -26,7 +25,7 @@ case "$version" in
 "ceesafec 0.2.0")
     # 7d2a041: the newest commit 0.2.0 builds (ADR 0032, channels). 291246d (L1 A2d) adds AsyncSockets to lib/std
     # and uses it in the interpreter, so 7d2a041 is built again with 291246d's library; that compiler builds the tree
-    # (checked 2026-11-01 up to 70da046, the C equal to novac 0.6.0's bootstrap).
+    # (checked 2026-11-01 up to 70da046: the same C as the compiler it was released from).
     CHAIN="7d2a041bc276da110253e32731176129e018e12d
 7d2a041bc276da110253e32731176129e018e12d+291246db19892ed2c20c8bb2376b16fb6a35d658"
     ;;

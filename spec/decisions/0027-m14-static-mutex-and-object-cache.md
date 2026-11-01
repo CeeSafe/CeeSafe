@@ -1,9 +1,8 @@
 # ADR 0027 — M14: a static `Mutex`, and `ObjectCache<T>`
 
-> **Inherited from Nova.** This is Nova's ADR 0027, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0027 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-29), both questions as recommended (§5). The wording is the agent's.
 - Scope: the two parts of ADR 0025's v1 API (§3.3) that §7 left open: a `Mutex<T>` in a `static` item, and
@@ -21,7 +20,7 @@
 - **CosmoOS's own static initialisers** for such state take the object's own name: `LIST_HEAD_INIT(name)` is
   `{ &(name), &(name) }` and `WAITQUEUE_INIT(name)` uses `(name).waiters` (`list.h:21`, `wait.h:58`). There is no
   `MUTEX_INIT`.
-- **Nova's statics** (type-system §39.4) build C state only through a C constant macro whose arguments are static
+- **The reference's statics** (type-system §39.4) build C state only through a C constant macro whose arguments are static
   initialisers. None of those can name the static being defined, so a self-pointing list cannot be written. Static
   spin locks work because `SPINLOCK_INIT` has no self-pointers (ADR 0025 §7).
 - **SA3 needs more of the same:** wait queues, completions and list heads in statics all point to themselves.
@@ -31,12 +30,12 @@
 - **The C.** `kmem_cache_create(name, object_size, align)` allocates and returns a cache, or NULL;
   `kmem_cache_alloc(cache, flags)` and `kmem_cache_free(cache, obj)` (`kernel/include/kernel/kmalloc.h:47-53`).
   CosmoOS creates its caches at start-up into globals (`kernel-services/network/mbuf.c:26-27`, `kmalloc.c:43`).
-- **What Nova lacks:**
+- **What the reference lacks:**
   - **Moving a value into raw memory.** `p.write(v)` and `p.read()` are defined only for `Copy` types (§27.3, N0282).
     A cache's objects are generally not `Copy` (they own boxes, or have a `drop`), so a cache box cannot be filled
     or emptied.
   - **A type's size and alignment as a value.** `kmem_cache_create` needs them. The compiler knows them
-    (`TargetInfo`), and `Box` passes them to an allocator as a `Layout`, but Nova code cannot ask for one.
+    (`TargetInfo`), and `Box` passes them to an allocator as a `Layout`, but CeeSafe code cannot ask for one.
 - **Why not `Box<T, A>`:** a box's allocator is stateless (C5, §30), and a cache is state. A stateful allocator would
   make every box carry its allocator: two pointers instead of one, through placement, niche optionals and drop glue.
 
@@ -65,12 +64,12 @@
 
 - **`here`** is a static initialiser (§39.4) valid only as an argument of a C constant macro whose result
   initialises a place. Its value is that place's address, and its type is `*mut T` for the place's type `T`. In
-  ```nova
+  ```ceesafe
   @constant
   public fn constant(name: *CChar, data: T) -> Mutex<T> => Mutex { raw: MUTEX_INIT_AT(here, name), data: data };
   ```
   `here` is the address of the field `raw` in whichever static the constructor builds. Through nested `@constant`
-  constructors the place is the full path (`&nvS_TABLE.f_lock.f_raw`).
+  constructors the place is the full path (`&ceeS_TABLE.f_lock.f_raw`).
 - **C.** It lowers to an address constant (C11 §6.6p9: `&`, `.`, `->` and `*` may form one, and no object is read),
   so the macro may build self-pointers from it: `LIST_HEAD_INIT((p)->wq.waiters)` expands to
   `{ &((p)->wq.waiters), &((p)->wq.waiters) }`.
@@ -116,7 +115,7 @@
 - Diagnostics: no new codes. `here` misused is N0338, and `read` of C state is N0282.
 - Tests: corpus check-fail for `here` outside a macro argument, a run-time call of a function using it, and `read`
   of C state; run-pass for `read`/`write` of a type with a drop (each dropped once, under ASan and the interpreter);
-  `k3.py` for a static `Mutex` and an `ObjectCache`; CosmoOS self-tests `nova-kcore` extended (in a later pin bump).
+  `k3.py` for a static `Mutex` and an `ObjectCache`; CosmoOS self-tests `cee-kcore` extended (in a later pin bump).
 
 ## 4. Consequences
 
@@ -134,32 +133,32 @@
 - **Moves through raw pointers** (type-system §27.3, `unsafe.md` U2): `p.read()` and `p.write(v)` take any `T`; the
   volatile forms still copy. The NIR move checker lets a value leave `*p` for a raw `p` (`NirPlace.IsRawDeref`), the
   drop elaborator does not drop the old contents of `*p`, and a write of a type with `@placed` methods is followed
-  by `PtrPlace`, emitted as its `nvPL_` helper (the in-place checker accepts the literal there, as for `Box.create`).
-  `p.read()` of a Nova struct holding C state is N0282.
-- **`layoutOf<T>()`** (§30.1), not `Layout.of<T>()`: Nova has no type arguments on a member call, so it is a function,
+  by `PtrPlace`, emitted as its `ceePL_` helper (the in-place checker accepts the literal there, as for `Box.create`).
+  `p.read()` of a CeeSafe struct holding C state is N0282.
+- **`layoutOf<T>()`** (§30.1), not `Layout.of<T>()`: the reference has no type arguments on a member call, so it is a function,
   like `truncate<T>`. Folded from `TargetInfo` to a `Layout` literal; for a C-laid-out `T`, C's `sizeof`/`_Alignof`.
 - **`here`** (§39.4–§39.5): typed by the macro parameter it is given to, checked against the macro's result type,
   emitted as the address of the place being initialised. lib/kernel's `Mutex<T>.constant` uses CosmoOS's
   `MUTEX_INIT_AT`, which `integrations/cosmoos/k3/mutex_init_at.h` supplies to `k3.py` until CosmoOS's `mutex.h`
   defines it.
-- **`ObjectCache<T>`** and **`CacheBox<T>`** (`lib/kernel/cache.nova`) as §3.2 says, with two differences found in
+- **`ObjectCache<T>`** and **`CacheBox<T>`** (`lib/kernel/cache.cee`) as §3.2 says, with two differences found in
   the implementation:
   - `T` holds no C state in v1: a cache box moves its value out to drop it, and C state never moves. A drop in place
     would lift this.
   - `CacheBox<T>` is not `Send`, like a `KernelHeap` box: raw pointers are not `Send` (§38.1), and a `@threadSafe`
     declaration would claim `Share` for any `T`.
 - **Tests:**
-  - run-pass `raw-moves.nova` and `layout-of.nova`, every C configuration and the interpreter;
-  - check-fail `raw-moves-c-state.nova`, `layout-of.nova` and `static-here.nova`; the changed
-    `raw-pointer-types.nova`, whose non-`Copy` `read`/`write` are now valid;
-  - emit-c `static-here.nova`: `MUTEX_INIT_AT((&nvS_TABLE.f_raw), …)`;
-  - `k3.py` (`k3/statics.nova`: a static `Mutex` and an `ObjectCache`), both architectures, one file and split.
-- **Found in a boot** (2026-10-29, novac 0.3.0, CosmoOS branch `novac-0.3.0`): `MUTEX_INIT_AT` matches `mutex_init`
+  - run-pass `raw-moves.cee` and `layout-of.cee`, every C configuration and the interpreter;
+  - check-fail `raw-moves-c-state.cee`, `layout-of.cee` and `static-here.cee`; the changed
+    `raw-pointer-types.cee`, whose non-`Copy` `read`/`write` are now valid;
+  - emit-c `static-here.cee`: `MUTEX_INIT_AT((&ceeS_TABLE.f_raw), …)`;
+  - `k3.py` (`k3/statics.cee`: a static `Mutex` and an `ObjectCache`), both architectures, one file and split.
+- **Found in a boot** (2026-10-29, the reference compiler 0.3.0, CosmoOS branch `ceesafec-0.3.0`): `MUTEX_INIT_AT` matches `mutex_init`
   member by member, but `ObjectCache.setUp` failed for `T` aligned below 16: CosmoOS's `kmem_cache_create` refuses an
   alignment below `KMALLOC_MIN_ALIGN` (`slab.c`, `cache_setup`), and asks for that minimum with 0. lib/kernel now
-  passes 0 for alignments up to 16; `nova-kcore` then passes. `k3.py` only compiles, so it could not see this.
+  passes 0 for alignments up to 16; `cee-kcore` then passes. `k3.py` only compiles, so it could not see this.
 - **Not yet run (superseded by the above):** a static mutex compared with `mutex_init`'s, and the cache, in a booted kernel. That is CosmoOS's
-  side, once a novac release carries this: `MUTEX_INIT_AT` in `mutex.h` and `nova-kcore` extended.
+  side, once a the reference compiler release carries this: `MUTEX_INIT_AT` in `mutex.h` and `cee-kcore` extended.
 
 ## 5. Questions for the owner
 

@@ -16,11 +16,11 @@ fn cLength(text: StringView) -> usize? {
 }
 
 fn main() {
-    match (cLength("nova\0")) {
+    match (cLength("safe\0")) {
         Some(n) => { Console.writeLine(n); }
         null => { Console.writeLine("not terminated"); }
     }
-    match (cLength("nova")) {
+    match (cLength("safe")) {
         Some(n) => { Console.writeLine(n); }
         null => { Console.writeLine("not terminated"); }
     }

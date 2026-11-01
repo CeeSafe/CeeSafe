@@ -1,5 +1,5 @@
-// Nova functions named like the runtime's C helpers (c-backend.md §2.1). Their C names used to be
-// `nv_<name>`, which collided with `nv_add_i32`, `nv_check_index`, ... in nova/rt.h (found by M7d).
+// CeeSafe functions named like the runtime's C helpers (c-backend.md §2.1). Their C names used to be
+// `cee_<name>`, which collided with `cee_add_i32`, `cee_check_index`, ... in ceesafe/rt.h (found by M7d).
 fn add_i32(a: i32, b: i32) -> i32 { return a - b; }
 fn div_u64(a: u64, b: u64) -> u64 { return a * b; }
 fn check_index(i: usize, n: usize) -> bool { return i < n; }

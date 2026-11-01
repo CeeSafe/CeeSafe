@@ -110,7 +110,7 @@ fn saturating() {
 
 fn main() {
     wrapping();
-    Console.writeLine(hash("nova".bytes()));
+    Console.writeLine(hash("safe".bytes()));
     checked();
     saturating();
 }
@@ -125,7 +125,7 @@ fn main() {
 // expect-stdout: 18446744073709551615
 // expect-stdout: -9223372036854775808
 // expect-stdout: 3705032704
-// expect-stdout: 2173952735
+// expect-stdout: 2905075288
 // expect-stdout: 255
 // expect-stdout: null
 // expect-stdout: null

@@ -2,10 +2,10 @@
 // - the sweep: one JSON string per BMP scalar value, every 997th astral one, and fixed strings (escapes, ill-formed
 //   UTF-8), compared by length and FNV-1a with .NET 10.0.12's Utf8JsonWriter on the same strings
 //   (tools/oracles/JsonSweep.cs, run 2026-10-30: 418506 bytes, fnv 10205824560866192387);
-// - two diagnostics documents written by novac 0.3.1 --diagnostics-format=json (a fix; notes), rebuilt byte for byte.
+// - two diagnostics documents written by the reference compiler 0.3.1 --diagnostics-format=json (a fix; notes), rebuilt byte for byte.
 // expect-stdout: json sweep: 418506 bytes, fnv 10205824560866192387
-// expect-stdout: {"version":1,"errors":1,"warnings":0,"diagnostics":[{"code":"N0211","severity":"error","file":"doc.nova","start":{"line":3,"column":5},"end":{"line":3,"column":6},"message":"cannot assign to 'x': 'x' was declared with 'let'; use 'var' for a mutable variable","summary":"Assignment to an immutable binding (`let`, parameter, constant, function)","notes":[],"fixes":[{"title":"declare 'x' with 'var'","edits":[{"file":"doc.nova","start":{"line":2,"column":5},"end":{"line":2,"column":8},"newText":"var"}]}]}]}
-// expect-stdout: {"version":1,"errors":1,"warnings":0,"diagnostics":[{"code":"N0241","severity":"error","file":"notes.nova","start":{"line":4,"column":5},"end":{"line":4,"column":6},"message":"cannot borrow 'v' as mutable while 'v' is borrowed","summary":"Borrow conflicting with a live borrow","notes":[{"file":"notes.nova","start":{"line":3,"column":5},"end":{"line":3,"column":22},"message":"'v' is borrowed here"},{"file":"notes.nova","start":{"line":5,"column":5},"end":{"line":5,"column":22},"message":"the borrow is used later here"}],"fixes":[]}]}
+// expect-stdout: {"version":1,"errors":1,"warnings":0,"diagnostics":[{"code":"N0211","severity":"error","file":"doc.cee","start":{"line":3,"column":5},"end":{"line":3,"column":6},"message":"cannot assign to 'x': 'x' was declared with 'let'; use 'var' for a mutable variable","summary":"Assignment to an immutable binding (`let`, parameter, constant, function)","notes":[],"fixes":[{"title":"declare 'x' with 'var'","edits":[{"file":"doc.cee","start":{"line":2,"column":5},"end":{"line":2,"column":8},"newText":"var"}]}]}]}
+// expect-stdout: {"version":1,"errors":1,"warnings":0,"diagnostics":[{"code":"N0241","severity":"error","file":"notes.cee","start":{"line":4,"column":5},"end":{"line":4,"column":6},"message":"cannot borrow 'v' as mutable while 'v' is borrowed","summary":"Borrow conflicting with a live borrow","notes":[{"file":"notes.cee","start":{"line":3,"column":5},"end":{"line":3,"column":22},"message":"'v' is borrowed here"},{"file":"notes.cee","start":{"line":5,"column":5},"end":{"line":5,"column":22},"message":"the borrow is used later here"}],"fixes":[]}]}
 
 fn encodeUtf8(out: borrow mut Vector<u8>, c: u32) {
     if (c < 0x80) {
@@ -102,7 +102,7 @@ fn documentWithFix() {
     w.string("N0211")!;
     w.name("severity")!;
     w.string("error")!;
-    range(mut w, "doc.nova", 3, 5, 3, 6);
+    range(mut w, "doc.cee", 3, 5, 3, 6);
     w.name("message")!;
     w.string("cannot assign to 'x': 'x' was declared with 'let'; use 'var' for a mutable variable")!;
     w.name("summary")!;
@@ -118,7 +118,7 @@ fn documentWithFix() {
     w.name("edits")!;
     w.startArray()!;
     w.startObject()!;
-    range(mut w, "doc.nova", 2, 5, 2, 8);
+    range(mut w, "doc.cee", 2, 5, 2, 8);
     w.name("newText")!;
     w.string("var")!;
     w.endObject()!;
@@ -135,7 +135,7 @@ fn documentWithNotes() {
     w.string("N0241")!;
     w.name("severity")!;
     w.string("error")!;
-    range(mut w, "notes.nova", 4, 5, 4, 6);
+    range(mut w, "notes.cee", 4, 5, 4, 6);
     w.name("message")!;
     w.string("cannot borrow 'v' as mutable while 'v' is borrowed")!;
     w.name("summary")!;
@@ -143,12 +143,12 @@ fn documentWithNotes() {
     w.name("notes")!;
     w.startArray()!;
     w.startObject()!;
-    range(mut w, "notes.nova", 3, 5, 3, 22);
+    range(mut w, "notes.cee", 3, 5, 3, 22);
     w.name("message")!;
     w.string("'v' is borrowed here")!;
     w.endObject()!;
     w.startObject()!;
-    range(mut w, "notes.nova", 5, 5, 5, 22);
+    range(mut w, "notes.cee", 5, 5, 5, 22);
     w.name("message")!;
     w.string("the borrow is used later here")!;
     w.endObject()!;

@@ -1,0 +1,62 @@
+// Closure-call specialisation (optimisations.md §5): variants of variants, mutual recursion, closures stored in
+// a variable assigned twice (unknown), copies and reborrows of known closures, generic callees, and lib/core's slice
+// methods. The reference compiler is the oracle (tools/compare_c.py --on closure-specialisation, tools/compare_reports.py).
+
+fn inner(f: borrow mut fn(i32) -> i32, x: i32) -> i32 => f(x) + f(x + 1);
+
+fn middle(f: borrow mut fn(i32) -> i32, x: i32) -> i32 => inner(f, x) * 2;
+
+fn outer(f: borrow mut fn(i32) -> i32, g: borrow mut fn(i32) -> i32, x: i32) -> i32 => middle(f, x) + middle(g, x);
+
+fn even(f: borrow mut fn(i32) -> i32, n: i32) -> i32 {
+    if (n <= 0) {
+        return f(0);
+    }
+    return odd(f, n - 1);
+}
+
+fn odd(f: borrow mut fn(i32) -> i32, n: i32) -> i32 {
+    if (n <= 0) {
+        return f(1);
+    }
+    return even(f, n - 1);
+}
+
+fn pick<T>(f: borrow mut fn(T) -> T, x: T) -> T => f(x);
+
+fn reassigned(x: i32) -> i32 {
+    let a = (y: i32) => y + 1;
+    let b = (y: i32) => y + 2;
+    var f = a;
+    if (x > 3) {
+        f = b;
+    }
+    return f(x);
+}
+
+fn copies(x: i32) -> i32 {
+    let f = (y: i32) => y * 3;
+    let g = f;
+    return g(x) + inner(g, x);
+}
+
+fn main() {
+    Console.writeLine(outer((x) => x + 1, (x) => x * 10, 2));
+    Console.writeLine(outer((x) => x - 1, (x) => x * 10, 3));
+    Console.writeLine(even((x) => x + 100, 7));
+    Console.writeLine(pick((x: i32) => x * x, 9));
+    Console.writeLine(copies(4));
+    Console.writeLine(reassigned(6));
+    var values: [i32; 6] = [4, 8, 15, 16, 23, 42];
+    var total = 0;
+    values[..].forEach((v) => { total += v; });
+    Console.writeLine(total);
+    Console.writeLine(values[..].any((v) => v > 40));
+    Console.writeLine(values[..].all((v) => v > 3));
+    var v = Vector<i32>.create();
+    for (k in 0..10) {
+        v.push(k)!;
+    }
+    v.retain((x) => x % 3 == 0);
+    Console.writeLine(v.length);
+}

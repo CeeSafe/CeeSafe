@@ -1,5 +1,5 @@
-# BMP code points that .NET 10.0.12's JavaScriptEncoder.UnsafeRelaxedJsonEscaping writes escaped (Nova's
-# DiagnosticJson), as inclusive hex ranges. Produced by tools/oracles/JsonEscapes.cs (dotnet new console, replace
+# BMP code points that .NET 10.0.12's JavaScriptEncoder.UnsafeRelaxedJsonEscaping writes escaped (the
+# diagnostics' JSON), as inclusive hex ranges. Produced by tools/oracles/JsonEscapes.cs (dotnet new console, replace
 # Program.cs, dotnet run -c Release). Surrogates D800-DFFF are listed for completeness; UTF-8 input never has them.
 0000 001F
 0022 0022

@@ -1,6 +1,6 @@
 // profile: freestanding
 // A freestanding package (cosmoos/profiles.md §4): no C library, no heap, entered through exports. demo.c is
-// the host's stand-in for an environment: it defines nova_panic, calls the exports, and ends with a panic.
+// the host's stand-in for an environment: it defines ceesafe_panic, calls the exports, and ends with a panic.
 
 extern "C" {
     fn demo_log(value: u64);
@@ -22,7 +22,7 @@ unsafe fn stats(data: *u8, n: usize) -> Stats {
     return s;
 }
 
-/// Checked arithmetic panics through the environment's nova_panic.
+/// Checked arithmetic panics through the environment's ceesafe_panic.
 @export("demo_add")
 fn add(a: u32, b: u32) -> u32 => a + b; // expect-panic: integer overflow
 

@@ -1,6 +1,5 @@
-/// ceesafec: the CeeSafe compiler, ported from Nova's C# novac (ROADMAP.md). The commands and options are novac's
-/// (docs/reference-inventory.md §2), under CeeSafe's names; a command not yet ported says which phase brings it.
-/// novac's usage text (Program.Usage) under CeeSafe's names (ROADMAP §3.4).
+/// ceesafec: the CeeSafe compiler (ROADMAP.md, spec/tooling.md). A command not yet implemented names its phase.
+/// The usage text: every command and option, as `ceesafec --help` prints it.
 fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "usage: ceesafec <command> [options] <file.cee>... [<file.c>...] [-- <program arguments>]\n")?;
     appendText(out, "\n")?;
@@ -150,7 +149,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     return Ok();
 }
 
-/// The roadmap phase that brings a command to parity, or null if novac has no such command.
+/// The roadmap phase that brings a command to parity, or null if the reference compiler has no such command.
 fn phaseOf(command: StringView) -> StringView? {
     if (command == "parse") {
         return "P2";
@@ -177,7 +176,7 @@ struct Options {
     dumpAst: bool;
     dumpHir: bool;
     noFloat: bool;
-    libraryDiagnostics: bool;    // report diagnostics in the libraries' files too (porting gaps there; novac has none)
+    libraryDiagnostics: bool;    // report diagnostics in the libraries' files too (porting gaps there; the reference compiler has none)
     freestanding: bool;          // --profile freestanding (profiles.md §4)
     kernel: bool;                // --kernel cosmoos: lib/kernel, in the freestanding profile (ADR 0025)
     profileGiven: bool;          // --profile was given: package mode keeps it over the manifest's
@@ -708,12 +707,6 @@ fn loadPackage(
     let directory = match (findManifestDirectory(cwd.view())!) {
         Some(d) => d,
         null => {
-            if (hasNovaManifest(cwd.view())!) {
-                fail(
-                    "no Nova input files, and no ceesafe.toml here or above; this is a Nova package (nova.toml), which CeeSafe does not read (Decision 0003)",
-                );
-                return 1;
-            }
             fail("no CeeSafe input files, and no ceesafe.toml here or above");
             return 1;
         }
@@ -850,7 +843,7 @@ fn interpretChecked(
     return interpretProgram(checker, nir, sources, interpreterOptions)!;
 }
 
-/// A number from the environment, as nova_platform_config reads it: leading digits, else 0.
+/// A number from the environment, as ceesafe_platform_config reads it: leading digits, else 0.
 fn environmentNumber(name: StringView) -> u64 {
     var value: u64 = 0;
     match (Environment.variable(name)) {
@@ -894,7 +887,7 @@ fn fixCommand() -> i32 {
     return 0;
 }
 
-/// `build --dump-nir` (P4): the checks, then the NIR after drop elaboration, printed as novac prints it with the
+/// `build --dump-nir` (P4): the checks, then the NIR after drop elaboration, printed as the reference compiler prints it with the
 /// optimisations turned off. Building C is P5.
 fn buildCommand() -> i32 => fileCommand(true, false, 0);
 
@@ -966,7 +959,7 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
         return fail("'run' needs --interp (the only way to run without building is the interpreter)");
     }
     // C sources go to the C compiler with the generated code (type-system.md §28.6).
-    var novaFiles = Vector<String>.create();
+    var sourceFiles = Vector<String>.create();
     for (k in 0..options.files.length) {
         let file = copyText(options.files[k].view());
         let bytes = file.view().bytes();
@@ -976,10 +969,10 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
                 return added;
             }
         } else {
-            novaFiles.push(file)!;
+            sourceFiles.push(file)!;
         }
     }
-    if (options.files.length > 0 && novaFiles.length == 0) {
+    if (options.files.length > 0 && sourceFiles.length == 0) {
         return fail("no CeeSafe input files");
     }
     var packages = Vector<PackageInfo>.create();
@@ -995,7 +988,7 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
             PackageInfo { name: Vector<u8>.create(), dependencies: Vector<Vector<u8>>.create(), trusted: false },
         )!;
     }
-    return compileFiles(options, building, novaFiles, packages, packageFiles);
+    return compileFiles(options, building, sourceFiles, packages, packageFiles);
 }
 
 /// The type checking (and with `building`, the C) of the files named, or of the packages and their files (package
@@ -1003,7 +996,7 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
 fn compileFiles(
     given: Options,
     building: bool,
-    novaFiles: borrow Vector<String>,
+    sourceFiles: borrow Vector<String>,
     packages: Vector<PackageInfo>,
     packageFiles: Vector<Vector<Vector<u8>>>,
 ) -> i32 {
@@ -1032,7 +1025,7 @@ fn compileFiles(
         filePackage.push(0xFFFFFFFF)!;
     }
     if (options.files.length > 0) {
-        let loaded = loadFiles(novaFiles, mut sources);
+        let loaded = loadFiles(sourceFiles, mut sources);
         if (loaded != 0) {
             return loaded;
         }

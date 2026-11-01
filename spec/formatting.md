@@ -134,7 +134,7 @@ The author's breaks of the same kinds (§3.1) are laid out by the same rules.
 ## 6. Guarantees and their tests
 
 - **Same tree:** for every file of the repository that parses (the corpus included), the formatted text parses
-  without error to an AST equal to the original's, spans aside (Nova's `FormatterTests`; in CeeSafe, `tools/compare_fmt.py` compares `ceesafec fmt` with novac's).
+  without error to an AST equal to the original's, spans aside.
 - **Comments:** the comments of the formatted text are those of the original, in order.
 - **Fixed point:** formatting the formatted text changes nothing.
 - **The repository's own code** (`lib/`, `programs/`, `benchmarks/`, `integrations/`, the README's examples) is kept

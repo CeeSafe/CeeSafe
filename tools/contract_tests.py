@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Every contract test of ceesafec, against CeeSafe's own expectations only (Decision 0007: CeeSafe has left Nova, and
-nothing here runs novac or reads a Nova checkout):
+"""Every contract test of ceesafec, against CeeSafe's own expectations only (Decision 0007):
 - the fixed point at HEAD, with ceesafec as stage 0 (tools/fixed_point.py);
 - CeeSafe's corpus (tests/reference/tests/corpus) in every family: annotations, AST/HIR/C snapshots, expected output,
   the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under

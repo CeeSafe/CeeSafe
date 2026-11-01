@@ -1,19 +1,18 @@
 # ADR 0024 — M14 K1: static items (global state)
 
-> **Inherited from Nova.** This is Nova's ADR 0024, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0024 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-29), with `static mut` added at the owner's request (§3.7). The
   wording is the agent's.
-- Scope: M14 K1, OD-28. Global state for a kernel written in Nova (CosmoOS roadmap 2.0's SA2 and SA3), and for hosted
+- Scope: M14 K1, OD-28. Global state for a kernel written in the reference (CosmoOS roadmap 2.0's SA2 and SA3), and for hosted
   programs.
 
 ## 1. Context
 
-- **Today** Nova has only compile-time `const` items (type-system §10). `static var count: u64 = 0;` and
-  `var count: u64 = 0;` at top level are N0101. CosmoOS's four Nova ports keep all their state in C, and C7's kernel
+- **Today** the reference has only compile-time `const` items (type-system §10). `static var count: u64 = 0;` and
+  `var count: u64 = 0;` at top level are N0101. CosmoOS's four CeeSafe ports keep all their state in C, and C7's kernel
   demonstrations (`integrations/cosmoos/c7`) get every lock from a function argument or a `KernelHeap` box made at run
   time.
 - **A kernel needs** tables and singletons protected by locks (the handle table, the module list, lockdep's graph),
@@ -36,14 +35,14 @@
 | Kernel fit | yes: a `SpinLock<Table>` in a static, built with `SPINLOCK_INIT` | yes, unsafely | no: a once-guard in interrupt context needs a lock of its own |
 
 A is Rust's `static` with interior mutability, and Linux's `DEFINE_SPINLOCK`. The owner chose A and B together: B
-as `static mut`, every use of which is `unsafe` (§3.7), for the floor and for state whose synchronisation Nova cannot
+as `static mut`, every use of which is `unsafe` (§3.7), for the floor and for state whose synchronisation the reference cannot
 express. C is not taken.
 
 ## 3. Proposed decision: A
 
 ### 3.1 The item
 
-```nova
+```ceesafe
 static TABLE: SpinLock<HandleTable> = SpinLock.constant("handles", HandleTable.empty());
 static OPENED: AtomicU64 = AtomicU64.constant(0);
 
@@ -73,7 +72,7 @@ fn openOne() -> u64 => OPENED.fetchAdd(1) + 1;
   parameters, the parameters being static initialisers at each call. `@constant` functions are checked as ordinary
   functions too, so they can be called at run time;
 - a call of a **C constant macro**: an `extern "C"` function declared `@constant`, whose name is a C macro that expands
-  to a constant initialiser (`@constant fn SPINLOCK_INIT(name: *CChar) -> spinlock_t;`). Nova trusts the declaration,
+  to a constant initialiser (`@constant fn SPINLOCK_INIT(name: *CChar) -> spinlock_t;`). The reference trusts the declaration,
   as it trusts `@effects` on an extern (R-2).
 
 A type whose values are made at their final address (`@placed init`, §33.3) may be in a static only through a
@@ -87,7 +86,7 @@ There is no `@percpu` in the language. The kernel library (K3) provides `PerCpu<
 preemption (or interrupts, for data an interrupt handler shares) is borrowed. Its `unsafe` core argues the rest: the
 guard pins the CPU, so only this CPU's code, and not its interrupts when the guard masks them, uses the element. So:
 
-```nova
+```ceesafe
 static TICKS: PerCpu<u64> = PerCpu.constant(0);
 
 @context(atomic)
@@ -99,7 +98,7 @@ That keeps the language change to statics, and puts the CPU model where CosmoOS'
 ### 3.4 C
 
 A static is a C object definition with internal linkage, or external with `@export` (or across ADR 0022's units),
-named `nvS_<name>`. Its initialiser is the evaluated C initialiser: the `@constant` calls are expanded, and the C macros
+named `ceeS_<name>`. Its initialiser is the evaluated C initialiser: the `@constant` calls are expanded, and the C macros
 are written as calls. It is `const` in C only when `T` contains no C state, no atomic and no lock, so that its methods
 can write through the pointers they derive, in their own `unsafe` code.
 
@@ -110,7 +109,7 @@ the library types implement their synchronisation. It is not a `static mut`.
 
 ### 3.7 `static mut`
 
-```nova
+```ceesafe
 static mut BOOT_INFO: BootInfo = BootInfo.empty();
 
 /// Safety: runs once on the boot CPU, before any other CPU or interrupt can read BOOT_INFO.
@@ -124,7 +123,7 @@ unsafe fn recordBoot(info: BootInfo) { BOOT_INFO = info; }
 - A borrow of a `static mut` has the static region, as for a `static`. Nothing checks that two such borrows do not
   alias, or that two threads do not race: that is the `/// Safety:` argument (U3's rule for references made from
   pointers).
-- In C it is a non-`const` object (`nvS_<name>`), like a static whose type holds C state.
+- In C it is a non-`const` object (`ceeS_<name>`), like a static whose type holds C state.
 - The interpreter checks accesses through it as it checks raw pointers: an access out of bounds or after the end of a
   value is a fault (`UnsafeTests`).
 
@@ -145,10 +144,10 @@ is a later library change: `PTHREAD_MUTEX_INITIALIZER` and `SRWLOCK_INIT` are C 
   - run-pass: atomics and a lock in statics, from two threads (`Thread.both`) under TSan;
   - check-fail: each N0337/N0338 case;
   - a CosmoOS kernel object table in a static `SpinLock`, as M14 K1's acceptance says.
-- **`@threadSafe` outside Nova's libraries.** A static's type must be `Share`, and kernel lock types are `Share` only
-  by `@threadSafe`, which today is accepted only in Nova's own library files (N0290). The kernel library (K3, OD-30)
+- **`@threadSafe` outside the reference's libraries.** A static's type must be `Share`, and kernel lock types are `Share` only
+  by `@threadSafe`, which today is accepted only in the reference's own library files (N0290). The kernel library (K3, OD-30)
   needs the same permission. ADR 0025 decides it with the library's home: for example, a package that declares itself
-  a trusted library in its `nova.toml`.
+  a trusted library in its `ceesafe.toml`.
 - **Not decided here:** lazily initialised statics, generic statics.
 
 ## 5. Questions for the owner
@@ -172,19 +171,19 @@ Specified in type-system §39, grammar `StaticDecl`, diagnostics N0337 and N0338
 - **Initialisers** are type-checked before the function bodies, so the instances their `@constant` calls create are
   checked with them. They are folded after the bodies, by substituting arguments into `@constant` bodies
   (`TypeChecker.StaticFold`). A `@constant` body is checked once with its parameters symbolic.
-- **C** (`CEmitter.EmitStatics`): `static NV_UNUSED T nvS_NAME = { … };`. With `--split`, it is `extern` in the
-  header, defined in `nova_instances.c` and renamed like the functions. A C constant macro gets no prototype and no
+- **C** (`CEmitter.EmitStatics`): `static CEE_UNUSED T ceeS_NAME = { … };`. With `--split`, it is `extern` in the
+  header, defined in `ceesafe_instances.c` and renamed like the functions. A C constant macro gets no prototype and no
   wrapper. A run-time call of one, in a `@constant` function called at run time, is a compound literal
   `((T)MACRO(args))`.
 - **Interpreter**: each static is a writable allocation, filled before `main` and not counted as a heap allocation; a
   C macro in an initialiser is a fault.
 - lib/std's atomics have `@constant` constructors (`AtomicU64.constant`, …).
 - **Tests:**
-  - `run-pass/statics.nova`, in every C configuration (split and TSan included) and the interpreter: atomics changed
+  - `run-pass/statics.cee`, in every C configuration (split and TSan included) and the interpreter: atomics changed
     from two threads, constants, struct, array and `StringView` statics, a `@constant` constructor setting private
     fields, `static mut`, and references returned as `borrow(static)`;
-  - check-fail `statics.nova`, `static-moves.nova` and `static-initializers.nova`;
-  - `parse-pass/statics.nova`.
+  - check-fail `statics.cee`, `static-moves.cee` and `static-initializers.cee`;
+  - `parse-pass/statics.cee`.
 - **Not yet:** `@export` statics, enum values in initialisers, and a C constant macro compiled natively. The macro path
   is checked and emitted, but its C needs a header defining the macro: M14 K3's kernel library, with CosmoOS's
   `SPINLOCK_INIT`, is its first real use and test. Per-CPU data (`PerCpu<T>`) is K3 too.

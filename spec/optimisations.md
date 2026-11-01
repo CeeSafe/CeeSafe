@@ -116,7 +116,7 @@ is deterministic.
 A proof considers at most **128 facts** (M15 S3); where more hold, the check stays. The cost of saturation grows with
 the number of facts, cubically, and a long straight-line function adds one at each step, so a sum of 300 terms took
 17 s to compile before the budget. That covers both this section's index checks and §3's overflow checks. The most
-facts any proof needs in the repository's programs, benchmarks and libraries, or in CosmoOS's Nova sources, is 44
+facts any proof needs in the repository's programs, benchmarks and libraries, or in CosmoOS's CeeSafe sources, is 44
 (measured 2026-10-30). Their generated C was byte-identical with and without the budget.
 
 ### 2.6 Unsafe code
@@ -136,7 +136,7 @@ made from a reference after its target was used directly (2026-10-25): none, as 
   this: the corpus agreement tests, the fault-injection sweep, the property tests and the fuzzer's oracle.
 - **The run corpus** builds every program with the analysis (every configuration) and without it (`clang -O2 no-elim`),
   so output and panics are compared both ways. So does the fuzzer's oracle.
-- **Nova's `CheckEliminationTests`** and `tests/corpus/bounds-checks/*.cee`: snapshots of `--explain-bounds-checks`
+- **`tests/corpus/bounds-checks/*.cee`**: snapshots of `--explain-bounds-checks`
   (`.bce`) for loops that must be proved, and for near misses that must keep their check (a reassigned index, a
   mutated vector, a borrowed index, `<=` bounds, a loop bounded by another slice's length, a stable vector, whose
 `push` takes only `borrow this`).
@@ -212,7 +212,7 @@ the same.
   checks this.
 - **The run corpus and the fuzzer** build every program without either elimination (`clang -O2 no-elim`) as well as
   with both, and compare.
-- **Nova's `CheckEliminationTests`** and `tests/corpus/overflow-checks/*.cee`: snapshots of `--explain-overflow-checks`
+- **`tests/corpus/overflow-checks/*.cee`**: snapshots of `--explain-overflow-checks`
   (`.oce`) for operations that must be proved (counters, constant bounds, `b ≤ a` subtractions, offsets below a
   length, widened operands) and near misses that must keep their check (a counter bounded by `<=` the type's
   maximum, a sum of two unbounded values, a subtraction tested the wrong way, a signed negation that may be `MIN`).
@@ -244,7 +244,7 @@ A test that needs every `SystemHeap` attempt counted builds with `--no-placement
   stack-placed box's slot is reused while its previous box is alive"), since natively the site has one slot.
 - **The run corpus and the fuzzer** build every program with placement (every configuration) and without it
   (`clang -O2 no-placement`), and compare.
-- **Nova's `PlacementTests`**: the same output, panics and drop trace with and without placement, never more allocation
+- **What must hold**: the same output, panics and drop trace with and without placement, never more allocation
   attempts, and native code that agrees with the interpreter on everything, the allocation report included.
   `tests/corpus/placement/*.alloc` are reviewed snapshots of `--explain-allocations`.
 
@@ -289,6 +289,6 @@ generated C has one more function per variant (`ceeXS<n>_<name>`, c-backend §2.
   native output covers it.
 - **The run corpus and the fuzzer** build every program with the pass (every configuration) and without it
   (`clang -O2 no-closure-specialisation`), and compare.
-- **Nova's `ClosureSpecialisationTests`**: the C of `benchmarks/sort` has no indirect comparator call left, and the run corpus
+- **What must hold**: the C of `benchmarks/sort` has no indirect comparator call left, and the run corpus
   gives the same output with and without the pass. `tests/corpus/closure-calls/*.calls` are reviewed snapshots of
   `--explain-closure-calls`.

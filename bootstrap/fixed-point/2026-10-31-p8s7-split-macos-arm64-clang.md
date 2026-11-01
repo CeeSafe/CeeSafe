@@ -2,10 +2,10 @@
 
 commit: f9f6d6f94446d74d085a4f83710f6faa835bbe20
 host: Darwin arm64 27.0.0
-stage 0: ceesafec 0.0.0-dev (/private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec, sha256 b21bfe555492b687ca6a0bf7bd95f968e23cd4f9089a712a8a1194ea250c2dba)
+stage 0: ceesafec 0.0.0-dev (/private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec, sha256 b21bfe555492b687ca6a0bf7bd95f968e23cd4f9089a712a8a1194ea250c2dba)
 cc: cc: Apple clang version 21.0.0 (clang-2100.3.34.2)
 switches: --split
-runs: /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a and /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b
+runs: /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a and /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b
 result: FIXED POINT
 
 ## Executables (sha256)
@@ -141,15 +141,15 @@ result: FIXED POINT
 
 ## Commands
 
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c2 --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c3 --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/3/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/3/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c4 --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c2 --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c3 --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/3/ceesafec --split   (in ceesafe)
-    $ /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/3/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-Nova/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c4 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c2 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/1/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c3 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/2/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/3/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/3/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/a/gen/c4 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/stage0-ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c2 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/1/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c3 --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/2/ceesafec build --cc cc -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/3/ceesafec --split   (in ceesafe)
+    $ /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/3/ceesafec build --emit c -o /private/tmp/claude-501/-Users-kutty-reference/e35a115e-626e-4067-923d-96dc1b8520fb/scratchpad/s7/fps/deeper/second-run/b/gen/c4 --split   (in ceesafe)

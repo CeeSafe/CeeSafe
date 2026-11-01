@@ -1,0 +1,9 @@
+# Written by ceesafec fetch (docs/tooling.md §4.3). Commit it with ceesafe.toml.
+
+[[package]]
+name = "leaf"
+source = "path+../leaf"
+
+[[package]]
+name = "mid"
+source = "path+../mid"

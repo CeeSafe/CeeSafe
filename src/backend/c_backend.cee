@@ -159,7 +159,7 @@ fn generateC(
         out.push(runtimeFile(1, "")?)?;
         out.push(runtimeFile(2, "")?)?;
         out.push(runtimeFile(3, "")?)?;
-        // The formatter's only callers are the generated calls of nova_format_f32/f64 (printing is hosted-only).
+        // The formatter's only callers are the generated calls of ceesafe_format_f32/f64 (printing is hosted-only).
         if (containsBytes(mainText.view(), "ceesafe_format_f")) {
             out.push(runtimeFile(4, "")?)?;
         }

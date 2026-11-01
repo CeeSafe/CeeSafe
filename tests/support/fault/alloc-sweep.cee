@@ -1,6 +1,6 @@
 // Allocation-failure behaviour of src/support (ROADMAP §3.1: "Failure during compilation must terminate with a
-// controlled diagnostic"). tools/fault_sweep.py runs this once to count allocation attempts (NOVA_ALLOC_REPORT),
-// then once per attempt with that attempt failing (NOVA_FAIL_ALLOC_AT). Every failure must come back as an
+// controlled diagnostic"). tools/fault_sweep.py runs this once to count allocation attempts (CEESAFE_ALLOC_REPORT),
+// then once per attempt with that attempt failing (CEESAFE_FAIL_ALLOC_AT). Every failure must come back as an
 // AllocError, with no panic, and leave the structure it hit consistent: everything added before is still there, and
 // nothing half-added is visible. The program prints "consistent" and the step it stopped at, or "complete".
 
@@ -145,7 +145,7 @@ fn bigintStep() -> Stop? {
 
 fn sourceStep() -> Stop? {
     let text: StringView = "fn main() {\r\n    é = 1;\n    😀\r}\n";
-    match (SourceText.create("a.nova".bytes(), text.bytes())) {
+    match (SourceText.create("a.cee".bytes(), text.bytes())) {
         Ok(s) => {
             let p = s.position(text.length);
             if (p.line != 5 || p.column != 1) {

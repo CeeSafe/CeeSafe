@@ -12,7 +12,7 @@ struct CCompiler {
     vcvars: Vector<u8>;
 }
 
-/// Whether ceesafec runs on Windows: its working directory has a drive (Nova 0.6.0 has no query for the host system).
+/// Whether ceesafec runs on Windows: its working directory has a drive (the reference 0.6.0 has no query for the host system).
 fn hostIsWindows() -> bool {
     return match (currentDirectory()) {
         Ok(cwd) => hasDrive(cwd.view()),
@@ -354,7 +354,7 @@ fn appendGnuQuoted(out: borrow mut Vector<u8>, argument: Slice<u8>) -> Result<vo
     return Ok();
 }
 
-/// `argument` quoted as the C runtime parses it (CommandLineToArgvW; the runtime's nova_host_quote): backslashes are
+/// `argument` quoted as the C runtime parses it (CommandLineToArgvW; the runtime's ceesafe_host_quote): backslashes are
 /// literal except before a quote, where they are doubled, and a quote is escaped.
 fn appendCrtQuoted(out: borrow mut Vector<u8>, argument: Slice<u8>) -> Result<void, AllocError> {
     out.push('"')?;

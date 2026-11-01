@@ -1,7 +1,7 @@
-// A JSON writer producing the reference's bytes (Nova's Tooling/DiagnosticJson.cs: Utf8JsonWriter with
+// A JSON writer producing the reference's bytes (the reference's Tooling/DiagnosticJson.cs: Utf8JsonWriter with
 // JavaScriptEncoder.UnsafeRelaxedJsonEscaping, compact, keys in the order written). Strings are UTF-8 bytes:
 // - `"` and `\` are escaped, and \b \f \n \r \t use their short forms;
-// - other code points .NET escapes (json_escapes.nova) become \uXXXX with uppercase hex;
+// - other code points .NET escapes (json_escapes.cee) become \uXXXX with uppercase hex;
 // - code points above the BMP become an escaped surrogate pair;
 // - ill-formed UTF-8 is written as U+FFFD, raw, as .NET's decoded text holds it.
 // With `strict`, strings follow JavaScriptEncoder.Default instead (JsonNode.ToJsonString without options, the LSP's):

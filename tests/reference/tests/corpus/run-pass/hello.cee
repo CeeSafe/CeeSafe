@@ -1,4 +1,4 @@
 fn main() {
-    Console.writeLine("Hello, Nova!");
+    Console.writeLine("Hello, CeeSafe!");
 }
-// expect-stdout: Hello, Nova!
+// expect-stdout: Hello, CeeSafe!

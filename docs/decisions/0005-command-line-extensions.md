@@ -8,24 +8,24 @@
 ## Context
 
 Package mode reads only `ceesafe.toml` packages and their `*.cee` sources (Decision 0003 §1). Files named on the
-command line are read whatever their extension, and `.c` files go to the C compiler, as with novac.
+command line are read whatever their extension, and `.c` files go to the C compiler, as with the reference compiler.
 
-Every comparison with novac depends on that. The tools hand both compilers the same files: Nova's corpus (545 `.nova`
+Every comparison with the reference compiler depends on that. The tools hand both compilers the same files: the reference's corpus (545 `.cee`
 files at `v0.6.0`), its benchmarks and programs, the reference's test programs. Most of the 32 contract steps (all but
-the self-build and package steps) read `.nova` files through ceesafec's command line, and S0–S5 added the CLI, fmt,
+the self-build and package steps) read `.cee` files through ceesafec's command line, and S0–S5 added the CLI, fmt,
 doc, interpreter and server comparisons on the same footing. Copying the corpus to `.cee` names would work for most
 steps, but the diagnostics, dumps, C (`#line`, `-g`) and server transcripts all name the file, so every comparison
-would need one more mapping on top of `tools/names.py`'s, which maps ceesafec's own `.cee` back to `.nova`.
+would need one more mapping on top of `tools/names.py`'s, which maps ceesafec's own `.cee` back to `.cee`.
 
 ## Options
 
 1. **Only `.cee` (and `.c`) now.** A clean surface at once; every comparison tool copies inputs to `.cee` names and
    maps the names back. Work across the tools, for no change to what users see before the fork point.
-2. **Any extension until the fork point, then only `.cee` and `.c`.** Nothing changes while novac is the reference.
+2. **Any extension until the fork point, then only `.cee` and `.c`.** Nothing changes while the reference compiler is the reference.
    At S7, when the comparisons become regression tests against the fork point's output and CeeSafe takes its own
    corpus (Decision 0003 §3), ceesafec refuses other files with a usage error naming the extension, and the corpus is
    renamed once.
-3. **Any extension, always.** No rule to keep; but a `.nova` file on the command line then looks like Nova support,
+3. **Any extension, always.** No rule to keep; but a `.cee` file on the command line then looks like the reference support,
    which Decision 0003 rules out.
 
 ## Recommendation

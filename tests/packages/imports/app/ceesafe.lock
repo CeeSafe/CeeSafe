@@ -1,0 +1,13 @@
+# Written by ceesafec fetch (docs/tooling.md §4.3). Commit it with ceesafe.toml.
+
+[[package]]
+name = "base"
+source = "path+../base"
+
+[[package]]
+name = "colors"
+source = "path+../colors"
+
+[[package]]
+name = "shapes"
+source = "path+../shapes"

@@ -120,7 +120,7 @@ fn makeState() -> Result<Box<State, KernelHeap>, AllocError> {
 /// The module's init: makes the state and hands it to the glue, which keeps it until shutdown. On failure, whatever
 /// was made is dropped again before this returns (a thread started is stopped, a timer armed is cancelled).
 /// Safety: the glue passes a valid place for one pointer.
-@export("novamod_init")
+@export("ceemod_init")
 fn moduleInit(out: *mut *mut void) -> i32 {
     match (makeState()) {
         Err(e) => {
@@ -151,7 +151,7 @@ fn waitForLate(watcher: borrow KThread<Watcher>) {
 /// The module's shutdown: takes the state back and drops it, which ends the timer and the thread and puts the
 /// kernel object's last reference.
 /// Safety: `state` is what moduleInit handed out, given back once.
-@export("novamod_shutdown")
+@export("ceemod_shutdown")
 unsafe fn moduleShutdown(state: *mut void) {
     {
         let owned: Box<State, KernelHeap> = Box.fromRaw(state as *mut State);

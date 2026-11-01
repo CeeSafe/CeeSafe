@@ -380,7 +380,7 @@ struct BigInt {
         return Ok(BigInt.of(false, r));
     }
 
-    /// Whether the value fits a `bits`-bit integer type (NovaType.Fits).
+    /// Whether the value fits a `bits`-bit integer type.
     fn fits(borrow this, bits: usize, signed: bool) -> bool {
         let n = this.magnitude.bitLength();
         if (!signed) {

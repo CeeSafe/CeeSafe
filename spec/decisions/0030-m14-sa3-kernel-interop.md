@@ -1,31 +1,30 @@
-# ADR 0030 — M14: what SA3 needs from Nova (one definition, `offsetOf`, the caller's address)
+# ADR 0030 — M14: what SA3 needs from the reference (one definition, `offsetOf`, the caller's address)
 
-> **Inherited from Nova.** This is Nova's ADR 0030, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0030 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-30), every question as recommended (§5): A, A, A. The wording is the agent's.
 - Scope: what CosmoOS's roadmap 2.0 SA3 needs to rewrite `wait.c`, `completion.c`, `semaphore.c`, `mutex.c` and
-  `quiesce.c` in Nova with Nova-owned types (the owner's choice, 2026-10-30). SA3's host test, `tests/host/test_sync.c`
-  (CosmoOS #496), records the behaviour the Nova versions must reproduce.
+  `quiesce.c` in the reference with the reference-owned types (the owner's choice, 2026-10-30). SA3's host test, `tests/host/test_sync.c`
+  (CosmoOS #496), records the behaviour the reference versions must reproduce.
 
 ## 1. Context
 
-What the C uses, and where Nova stands. Each item was checked against novac 0.5.0 on 2026-10-30.
+What the C uses, and where the reference stands. Each item was checked against the reference compiler 0.5.0 on 2026-10-30.
 
 ### 1.1 The same struct, defined twice in one translation unit (blocks SA3)
 
 - **The include graph.** `thread.h` includes `completion.h`, which includes `wait.h`; `mutex.h`, `completion.h` and
-  `semaphore.h` include `wait.h`. Once `struct waitqueue` is Nova's (ADR 0029), `wait.h` gets it by including the
+  `semaphore.h` include `wait.h`. Once `struct waitqueue` is the reference's (ADR 0029), `wait.h` gets it by including the
   generated header, as `handle.h` does since SA2 (CosmoOS #494).
-- **The collision.** A Nova port that reads a thread's fields (`wait.nova` sets `thread->waiting_on`; the mutex reads
+- **The collision.** A CeeSafe port that reads a thread's fields (`wait.cee` sets `thread->waiting_on`; the mutex reads
   priorities) names `kernel/thread.h` in its `@header`. Its `main.c` then sees `struct waitqueue` twice: once through
   `thread.h` → `completion.h` → `wait.h` → the generated header, and once in its own definition (c-backend §2.3:
   `main.c` defines every `@repr(C)` struct). A second definition of a struct in one translation unit is an error
   (C11 §6.7.2.3p1).
-- **Why SA2 did not meet it.** `handle.nova` names `spinlock.h` and `object.h`, and neither includes `handle.h`.
-- **The guard.** CosmoOS's `nova-gen.py` renames each generated header's guard `NOVA_EXPORTS_H` after the file's path,
+- **Why SA2 did not meet it.** `handle.cee` names `spinlock.h` and `object.h`, and neither includes `handle.h`.
+- **The guard.** CosmoOS's `cee-gen.py` renames each generated header's guard `CEESAFE_EXPORTS_H` after the file's path,
   so that two generated headers in one file do not hide each other. The guard is not the problem; the second
   definition in `main.c` is.
 
@@ -34,7 +33,7 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 - **The C.** `list_for_each_entry(e, head, link)` and `container_of` recover a struct from its embedded `list_node`:
   a wait entry from its `link`, and a mutex from its `pi_link` in the owner's `pi_held` list. The second member is not
   at offset 0.
-- **Nova.** ADR 0009 §2 proposed `Ptr.containerOf` (unsafe). Its implementation note moved it to C7d, and C7d's
+- **The reference.** ADR 0009 §2 proposed `Ptr.containerOf` (unsafe). Its implementation note moved it to C7d, and C7d's
   generated callbacks never needed it, so **it does not exist** (no match in `src/` or `lib/`). Nothing gives a field's
   offset as a value either. `layoutOf<T>()` (ADR 0027) gives only size and alignment.
 
@@ -43,7 +42,7 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 - **The C.** `mutex_lock`, `mutex_trylock`, `mutex_unlock`, `complete` and the completion waits pass
   `(uintptr_t)__builtin_return_address(0)` to lockdep, which names the acquiring and releasing call sites in its
   reports (`docs/kernel/lockdep/`, CosmoOS L21).
-- **Nova.** Nothing gives it. A Nova function's C is `static`, and the C compiler may inline it into its exported
+- **The reference.** Nothing gives it. A CeeSafe function's C is `static`, and the C compiler may inline it into its exported
   wrapper, so even a raw `__builtin_return_address` in its body would name different frames depending on the
   optimiser.
 
@@ -57,7 +56,7 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 - **Function pointers in a `@repr(C)` struct** (`wait_entry.fn`) and calls through them: type-system §29.5. The
   generated typedef and C's `wait_callback_fn` name compatible types.
 - **Macros that are code** (`might_sleep`, `list_for_each_entry`, `wait_event`): `might_sleep` is three lines over
-  `raw_this_cpu()` and `lockdep_might_sleep`, which a port writes in Nova. A list walk is a loop over `next` once
+  `raw_this_cpu()` and `lockdep_might_sleep`, which a port writes in the reference. A list walk is a loop over `next` once
   §1.2 is solved. `wait_event` stays a C macro for C callers, over the exported functions.
 - **`panic`'s format** stays in a floor, as in SA2.
 
@@ -65,12 +64,12 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 
 ### 2.1 One definition (§1.1)
 
-| | A. `main.c` includes its exports header | B. `@cdefined` structs | C. No Nova-owned types where the graph loops |
+| | A. `main.c` includes its exports header | B. `@cdefined` structs | C. No the reference-owned types where the graph loops |
 |---|---|---|---|
 | What changes | a `@repr(C)` struct is defined only in the exports header, which `main.c` includes; `--exports-header <path>` names the header (the `#include` and the guard) | an attribute marks a struct whose definition a `@header` brings, and `main.c` asserts its members instead of defining it | the type stays C's, imported (§31) |
-| The definition | one, generated, used by both | Nova's, but written in C's header by hand or by a script | C's |
-| `nova-gen.py` | passes `--exports-header kernel/include/kernel/wait_types.h`; no guard renaming | unchanged | unchanged |
-| SA3's choice of Nova-owned types | kept | kept, with two copies to keep in step | given up for waitqueue, completion and mutex |
+| The definition | one, generated, used by both | The reference's, but written in C's header by hand or by a script | C's |
+| `cee-gen.py` | passes `--exports-header kernel/include/kernel/wait_types.h`; no guard renaming | unchanged | unchanged |
+| SA3's choice of the reference-owned types | kept | kept, with two copies to keep in step | given up for waitqueue, completion and mutex |
 
 ### 2.2 `container_of` (§1.2)
 
@@ -83,7 +82,7 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 
 | | A. `callerAddress()` in an export | B. Floor wrappers | C. Report no address |
 |---|---|---|---|
-| Form | a built-in, valid only in an `@export` function: the exported symbol's return address | each exported lock function is C that captures the address and calls a Nova function with it | lockdep gets 0 |
+| Form | a built-in, valid only in an `@export` function: the exported symbol's return address | each exported lock function is C that captures the address and calls a CeeSafe function with it | lockdep gets 0 |
 | Lockdep reports | as today | as today | lose the call sites |
 | C per primitive | none | one wrapper per entry point (about a dozen) | none |
 
@@ -91,13 +90,13 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 
 ### 3.1 One definition
 
-- `novac build --exports-header <path>` names the exports header: `<path>` is the name C code includes, and the
+- `ceesafec build --exports-header <path>` names the exports header: `<path>` is the name C code includes, and the
   guard is derived from it (`kernel/include/kernel/wait_types.h` → `KERNEL_INCLUDE_KERNEL_WAIT_TYPES_H`). Without it
-  the header is `nova_exports.h`, as today.
+  the header is `ceesafe_exports.h`, as today.
 - `main.c` (and, with `--split`, every unit) includes the exports header, after the `@header`s, and does not define
   the `@repr(C)` structs itself. Their layout assertions follow the include, in `main.c`. A `@repr(C)` struct is then
   defined once in every translation unit that sees it, however many headers bring it in, so a kernel header may
-  include the generated header and a Nova port may include that kernel header.
+  include the generated header and a CeeSafe port may include that kernel header.
 - The header's `@header` includes come before its own definitions, as today (c-backend §2.3).
 
 ### 3.2 `offsetOf(T, field)`
@@ -116,7 +115,7 @@ What the C uses, and where Nova stands. Each item was checked against novac 0.5.
 - `callerAddress()` is a built-in of type `usize`, valid only in the body of an `@export` function (N0340 elsewhere,
   new). Its value is the address the exported symbol's call returns to: C's `__builtin_return_address(0)` taken in
   the export's wrapper, which passes it to the function's body as a hidden argument. So it does not depend on
-  inlining. Nova calls of the same function get 0, since no C frame called them.
+  inlining. The reference calls of the same function get 0, since no C frame called them.
 - MSVC: `_ReturnAddress()` (c-backend §1.1); the interpreter gives 0.
 - It is not `unsafe`: it is a number, not a pointer one may follow.
 
@@ -127,25 +126,25 @@ declared and called. The generated prototype takes the definition's internal lin
 
 ### 3.5 lib/kernel
 
-`lib/kernel/list.nova` binds CosmoOS's `struct list_node` and its inline helpers (`list_init`, `list_push_back`,
+`lib/kernel/list.cee` binds CosmoOS's `struct list_node` and its inline helpers (`list_init`, `list_push_back`,
 `list_remove`, `list_empty`) and adds `containerOf` over `offsetOf`, with unsafe iteration that may remove the
 current entry, as `list_for_each_entry_safe` does. `integrations/cosmoos/k3.py` checks it against CosmoOS's headers
 with the rest.
 
 ## 4. Consequences
 
-- SA3's ports can be written with Nova-owned types and only the format of `panic` in C. Each primitive's exported
+- SA3's ports can be written with the reference-owned types and only the format of `panic` in C. Each primitive's exported
   functions keep their C names and types, so the 669 call sites and the `*_INIT` macros are unchanged.
 - **`main.c` no longer defines `@repr(C)` structs.** A build with `--emit c` must keep the exports header beside
   `main.c`, as it already writes it. FFI tests check that every C configuration still compiles.
 - **Tests.**
   - The run corpus gets a program whose `@header` includes its own exports header, which used to be a redefinition
     error.
-  - `offsetOf` gets tests on a Nova struct, a C-laid-out one and an imported one, against C's `offsetof`.
+  - `offsetOf` gets tests on a CeeSafe struct, a C-laid-out one and an imported one, against C's `offsetof`.
   - `callerAddress()` gets a test in an export called from C, comparing against the C caller's own
     `__builtin_return_address`.
   - Check-fail tests cover N0339 and N0340.
-- **Release.** It needs a novac release (0.6.0) before SA3's conversion PRs. The host test (#496) does not wait.
+- **Release.** It needs a the reference compiler release (0.6.0) before SA3's conversion PRs. The host test (#496) does not wait.
 
 ## 5. Questions for the owner
 
@@ -156,28 +155,28 @@ with the rest.
 ## 6. Implementation (2026-10-30)
 
 Two forms differ from §3, for the reason `layoutOf<T>()` differs from ADR 0027's `Layout.of<T>()`:
-- **`offsetOf<T>(field)`**, not `offsetOf(T, field)`: a type is no expression in Nova, so `T` is a type argument.
+- **`offsetOf<T>(field)`**, not `offsetOf(T, field)`: a type is no expression in the reference, so `T` is a type argument.
 - **`containerOf(node, offset)` returns `*mut void`**, which the caller casts, and is not generic: the struct that
   embeds a node is usually C-laid-out, and no type argument may be (type-system §33.1). It is a top-level function of
-  lib/kernel, since Nova has no type arguments on a member call.
+  lib/kernel, since the reference has no type arguments on a member call.
 
 What changed:
 - **One definition** (`CEmitter`): `HeaderStructs` is the set the exports header defines (the `@repr(C)` structs and the
-  Nova structs they hold); `main.c` includes the header after the `@header`s and skips their definitions, keeping the
+  CeeSafe structs they hold); `main.c` includes the header after the `@header`s and skips their definitions, keeping the
   layout assertions; `--exports-header` (`CEmitOptions.ExportsHeader`) names the header and its guard.
-- **`offsetOf`**: `TypeChecker.CheckOffsetOf`, a literal for a Nova layout, `BuiltinFunction.OffsetOf` (C's
+- **`offsetOf`**: `TypeChecker.CheckOffsetOf`, a literal for a reference layout, `BuiltinFunction.OffsetOf` (C's
   `offsetof`) for a C-laid-out or imported type, in static initialisers too; an interpreter fault for the latter.
 - **`callerAddress()`**: `TypeChecker.CheckCallerAddress` marks the export (`HirFunction.UsesCallerAddress`); its C
-  gets a hidden last parameter `nv_caller`, which the export's wrapper fills with `nv_return_address()` (rt.h) and
-  Nova's calls and callback wrappers with 0. The interpreter gives 0.
-- **lib/kernel/list.nova**: `list_node`, `List.init`/`isEmpty`/`pushBack`/`pushFront`/`remove`/`first`/`next` over
+  gets a hidden last parameter `cee_caller`, which the export's wrapper fills with `cee_return_address()` (rt.h) and
+  The reference's calls and callback wrappers with 0. The interpreter gives 0.
+- **lib/kernel/list.cee**: `list_node`, `List.init`/`isEmpty`/`pushBack`/`pushFront`/`remove`/`first`/`next` over
   list.h's inline helpers, and `containerOf`.
 - **Tests:**
-  - `ffi/includes-exports.nova` (a `@header` that includes the program's own exports header; `callerAddress()` from
-    two C call sites at `-O0` and `-O2`, and 0 from Nova);
-  - `ffi/exported-c-state.nova` (`offsetOf` on a Nova layout, a C-laid-out struct, an imported one and in a static,
+  - `ffi/includes-exports.cee` (a `@header` that includes the program's own exports header; `callerAddress()` from
+    two C call sites at `-O0` and `-O2`, and 0 from the reference);
+  - `ffi/exported-c-state.cee` (`offsetOf` on a reference layout, a C-laid-out struct, an imported one and in a static,
     each equal to C's `offsetof`);
-  - `check-fail/offset-of.nova` and `check-fail/caller-address.nova`.
+  - `check-fail/offset-of.cee` and `check-fail/caller-address.cee`.
 
   A walk over a list with removals was checked against CosmoOS's `list.h` on the host (2026-10-30: sum 15, the odd
   nodes unlinked).

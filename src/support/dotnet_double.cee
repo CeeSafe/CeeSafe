@@ -1,14 +1,14 @@
 // .NET's `double.ToString("R", CultureInfo.InvariantCulture)`, which the reference's HIR dump uses for float constants
-// (HirPrinter.cs:203). The digits are the shortest that read back, taken from Nova's own formatting (exact, Schubfach in
+// (HirPrinter.cs:203). The digits are the shortest that read back, taken from the reference's own formatting (exact, Schubfach in
 // the runtime; type-system §35.7), and re-laid out as .NET does: plain digits for decimal exponents -4 to 16 (.NET formats "R" like "G17"), else
 // `d.dddE+XX` with at least two exponent digits; `NaN`, `Infinity`, `-Infinity`, `-0`.
 // .NET's shortest search differs from the exact one in two places: of all 2,098 powers of two, 2^-25 and 2^-958 get a
 // 16-digit text that does not read back (FloatSemantics.cs notes 2^-25); every other value checked agrees
-// (tests/support/run-pass/dotnet-double.nova, against .NET 10). Those two are spelled as .NET spells them.
+// (tests/support/run-pass/dotnet-double.cee, against .NET 10). Those two are spelled as .NET spells them.
 
 fn appendDotNetDouble(out: borrow mut Vector<u8>, value: f64) -> Result<void, AllocError> {
     if (value.bits() == 0x8000000000000000) {
-        return appendText(out, "-0"); // Nova's text drops the sign of zero; .NET keeps it
+        return appendText(out, "-0"); // the reference's text drops the sign of zero; .NET keeps it
     }
     let magnitude = value.bits() & 0x7FFFFFFFFFFFFFFF;
     if (magnitude == 0x3E60000000000000 || magnitude == 0x0410000000000000) {
@@ -23,7 +23,7 @@ fn appendDotNetDouble(out: borrow mut Vector<u8>, value: f64) -> Result<void, Al
     var text = String.create();
     text.appendNumber(value)?;
     let t = text.view().bytes();
-    // Nova's text: [-]digits[.digits][e(+|-)digits], "NaN", "Infinity" or "-Infinity" (ECMAScript layout).
+    // The reference's text: [-]digits[.digits][e(+|-)digits], "NaN", "Infinity" or "-Infinity" (ECMAScript layout).
     if (sameText(t, "NaN") || sameText(t, "Infinity") || sameText(t, "-Infinity")) {
         return appendBytes(out, t);
     }

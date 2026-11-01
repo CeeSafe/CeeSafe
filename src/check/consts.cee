@@ -1,5 +1,5 @@
 // Constants (the reference's EvaluateConstant, Fold, FoldBinary and IntegerSemantics). A constant is checked against
-// its type, then folded to a literal. Integer folding is exact: + - * / % through BigInt (src/support/bigint.nova),
+// its type, then folded to a literal. Integer folding is exact: + - * / % through BigInt (src/support/bigint.cee),
 // bitwise operators and shifts on u64, since their operands are unsigned and fit their type (type-system.md §6).
 // Float folding comes with floats (S1b).
 

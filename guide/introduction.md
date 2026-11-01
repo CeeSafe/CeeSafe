@@ -63,19 +63,18 @@ at the end of its scope, or when its owner is, in an order the language defines.
   which makes it a second implementation to test the compiler against.
 - **Built for kernels too.** A freestanding profile without a C library, context effects that reject sleeping while a
   spin lock is held, C structs imported from the C codebase's own headers, and lock guards and reference-counted
-  kernel objects. All of this was exercised, as Nova, inside [CosmoOS](https://github.com/vkuttyp/CosmoOS), an
-  operating system written in C.
+  kernel objects. All of this is exercised inside [CosmoOS](https://github.com/vkuttyp/CosmoOS), an operating system
+  written in C.
 
 ## Status
 
-CeeSafe is **pre-1.0**. It forked from Nova 0.6.0, an equal language at the fork, and its compiler, `ceesafec`, is
-written in CeeSafe and compiles itself. The language and its tools work end to end, and are tested against Nova's
-corpus of about 550 programs and against novac 0.6.0's output. But nobody has used it in production. What is done and
-what is next are in the repository's `ROADMAP.md`.
+CeeSafe is **pre-1.0**. Its compiler, `ceesafec`, is written in CeeSafe and compiles itself. The language and its tools
+work end to end, and are tested against a corpus of about 550 programs. But nobody has used it in production. What is
+done and what is next are in the repository's `ROADMAP.md`.
 
 Some things it does not have yet: trigonometry and logarithms, iterators
 beyond `for` over arrays, slices and vectors. Each is
-planned, or recorded as an open decision in [Nova's list at the fork](https://github.com/vkuttyp/Nova/blob/v0.6.0/docs/open-decisions.md).
+planned, or recorded as an open decision.
 
 ## Where to go next
 

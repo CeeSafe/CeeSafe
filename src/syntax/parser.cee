@@ -1,7 +1,7 @@
 // The parser (the reference's Syntax/Parser.cs; grammar.md §2-§3): recursive descent with Pratt-style binary
 // expressions, and grammar.md §3's recovery: after the first error the parser stays silent until it re-synchronises at a
 // statement, member or item boundary. Functions follow the reference's one for one, under the same names, so its
-// diagnostics come in the same order. The tree goes into `Ast`'s tables (src/syntax/ast.nova).
+// diagnostics come in the same order. The tree goes into `Ast`'s tables (src/syntax/ast.cee).
 
 fn comparisonPrecedence() -> u32 => 3;
 

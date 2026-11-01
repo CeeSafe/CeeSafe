@@ -1,9 +1,8 @@
 # ADR 0019 — OD-9a: direct closure calls by specialisation
 
-> **Inherited from Nova.** This is Nova's ADR 0019, which CeeSafe inherited at the fork (Nova `v0.6.0`; CeeSafe's
-> Decision 0006). Its text is Nova's record and is not changed: read Nova and `novac` as the language and compiler
-> CeeSafe forked from, `.nova` as `.cee`, and Nova's C names as CeeSafe's (`spec/c-backend.md`). Links to documents
-> CeeSafe did not fork go to Nova's repository.
+> **Inherited.** ADR 0019 was accepted before CeeSafe's fork (Decision 0006), when the language had its
+> earlier name. In this record, "the reference" is that language and project and "the reference compiler" its compiler:
+> read them as CeeSafe and `ceesafec`. Links to documents CeeSafe did not keep are given as text.
 
 - Status: **Accepted** (project owner, 2026-10-28, taking every recommendation in §5). The wording is the agent's. The
   decision is in `optimisations.md` §5, `intermediate-representation.md` §3 and `c-backend.md` §2.1. A remains open
@@ -19,20 +18,20 @@
   know which function it calls. The C compiler does not specialise lib/core's introsort for the one comparator either.
 - **The need, measured** (2026-10-28, the Ryzen box: Ryzen 5 PRO 3600, Debian 12; `benchmarks/sort`, 10 rounds of
   sorting 1,000,000 values; sort time with the data generation subtracted; median of 7 runs, interleaved; load average
-  1.0–2.1 on the shared box). "Direct" is novac's C for the benchmark with the seven calls through the comparator
-  replaced by direct calls to its function, `nvCB_92(t, a, b)`, by hand: what a specialisation would produce. Every
+  1.0–2.1 on the shared box). "Direct" is the reference compiler's C for the benchmark with the seven calls through the comparator
+  replaced by direct calls to its function, `ceeCB_92(t, a, b)`, by hand: what a specialisation would produce. Every
   program printed the same checksum.
 
-  | Compiler | Nova today | Nova, direct calls | C `qsort` | the same introsort in C | the same, comparator opaque |
+  | Compiler | The reference today | The reference, direct calls | C `qsort` | the same introsort in C | the same, comparator opaque |
   |---|---|---|---|---|---|
   | clang 18.1.8 -O2 | 1.062 s | **0.671 s** | 1.171 s | 0.617 s | 0.907 s |
   | gcc 12.2.0 -O2 | 1.076 s | **0.797 s** | 1.195 s | 0.659 s | 0.941 s |
 
-  Direct calls take 37% (clang) and 26% (gcc) off the sort, bringing Nova from 1.72× the C introsort to 1.09× under
-  clang. The rest is Nova's checks (M11 G8c found the same split).
+  Direct calls take 37% (clang) and 26% (gcc) off the sort, bringing the reference from 1.72× the C introsort to 1.09× under
+  clang. The rest is the reference's checks (M11 G8c found the same split).
 - **Where the closures come from.** Every call of lib/core's closure-taking methods (`sortBy`, `retain`, `forEach`,
   `any`, `all`) in the corpus, the benchmarks and the guide passes a closure literal written at the call, or a named
-  function adapted to a closure (§36.2: `sortBy(compare)` in `closure-methods.nova`), and the methods pass it on
+  function adapted to a closure (§36.2: `sortBy(compare)` in `closure-methods.cee`), and the methods pass it on
   unchanged to their helpers (checked 2026-10-28 by searching for the calls). So at those calls the code that will
   run is known. User functions with closure parameters were not surveyed.
 
@@ -80,7 +79,7 @@ not as a performance one.
   the clones.
 - A remains open, as a language question.
 - **Not in this decision:** closure types or `Fn` bounds (A); specialising `dyn` calls (devirtualisation); inlining
-  in novac itself (the C compiler does it once the call is direct).
+  in the reference compiler itself (the C compiler does it once the call is direct).
 - Benchmarks: `benchmarks/sort` is measured again on the Ryzen box after the pass, with clang and gcc, before any
   claim, and `benchmarks/suite`'s closure workload (`nbody`) with it.
 
@@ -107,29 +106,29 @@ Spec first (`optimisations.md` §5, `intermediate-representation.md`, `c-backend
 
 - Spec: `optimisations.md` §5, `intermediate-representation.md` §3, `c-backend.md` §2.1 (`5bae3d6`).
 - Code (`9ec6aa1`): `Nir/ClosureSpecialisation.cs`; `NirFunction.Variant` and `NirCall.Variant`; the C names
-  `nvXS<n>_<name>`; the emitter's reachability now follows variants, so a library function that only its variants
+  `ceeXS<n>_<name>`; the emitter's reachability now follows variants, so a library function that only its variants
   replace is not emitted; the interpreter runs the specialised NIR; `--no-closure-specialisation` and
   `--explain-closure-calls`.
 - In `benchmarks/sort` every one of the seven calls through the comparator is direct, through six variants of lib/core's
   introsort (`sortBy`, `introsort`, `insertion`, `heapsort`, `partition`, `siftDown`).
-- Found on the way: `novac run` gave the interpreter the C backend's NIR, so with the pass on it was specialised twice,
+- Found on the way: `ceesafec run` gave the interpreter the C backend's NIR, so with the pass on it was specialised twice,
   which replaced originals by variants (an interpreter fault on the first variant call). The pass now leaves a
   specialised program unchanged, and `run` passes its switch to the backend.
 - Tests, run 2026-10-28: the full suite passes (3,431), with the run corpus built in one more C configuration
   (`clang -O2 no-closure-specialisation`); `ClosureSpecialisationTests` (the `--explain-closure-calls` snapshot of
-  `closure-calls/known.nova`, whose closure chosen by a branch stays indirect; its output with and without the pass;
+  `closure-calls/known.cee`, whose closure chosen by a branch stays indirect; its output with and without the pass;
   no indirect comparator call in `benchmarks/sort`'s C, seven without the pass); the fuzzer's seeds 1–300 give no
   finding in six configurations and the interpreter; `c2.py` runs the corpus in CosmoOS on x86-64 and AArch64 (188 programs each; the fault sweep 43 programs and 381 runs each).
 - Measured on the Ryzen box (clang 18.1.8 and gcc 12.2.0, -O2, 7 runs, the same session; load average 1.3–2.8 on the
   shared box, normal priority). `benchmarks/sort`, sort time:
 
-  | Compiler | Nova, pass on | Nova, `--no-closure-specialisation` | the same introsort in C | C `qsort` |
+  | Compiler | The reference, pass on | The reference, `--no-closure-specialisation` | the same introsort in C | C `qsort` |
   |---|---|---|---|---|
   | clang | **0.691 s** | 1.048 s | 0.610 s | 1.162 s |
   | gcc | **0.791 s** | 1.100 s | 0.657 s | 1.188 s |
 
   The pass takes 34% (clang) and 28% (gcc) off the sort, which is what §1's hand edit showed (0.671 s and 0.797 s).
-  Nova goes from 1.72× and 1.68× the C introsort to 1.13× and 1.20×.
+  The reference goes from 1.72× and 1.68× the C introsort to 1.13× and 1.20×.
 - `benchmarks/suite` with the pass on and off: `nbody`, `parsing` and `data-oriented` move within ±8% in both
   directions, which is noise on that box. None of them calls through a closure: `nbody` has no closure literal any
   more, so §4's reference to it as the suite's closure workload was out of date. The sort is the measured case.

@@ -692,7 +692,7 @@ fn addRegionPart(c: borrow mut Checker, name: u32, typ: u32, index: u32) -> Resu
         start: 0,
         end: 0,
         offset: 0,
-        hasNovaCName: false,
+        hasCeeSafeCName: false,
         hasCName: false,
         cName: emptyRange(),
         isPrivate: false,

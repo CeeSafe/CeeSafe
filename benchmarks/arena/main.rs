@@ -1,4 +1,4 @@
-// The same bump allocator over 64 KiB chunks as main.c (and Nova's Arena), with references into it: safe Rust.
+// The same bump allocator over 64 KiB chunks as main.c (and the CeeSafe runtime's Arena), with references into it: safe Rust.
 use std::cell::{Cell, RefCell};
 
 struct Node<'a> { value: u64, previous: Option<&'a Node<'a>> }

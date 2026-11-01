@@ -13,7 +13,7 @@ struct Table {
     count: u64;
 }
 
-static TABLE: SpinLock<Table> = SpinLock<Table>.constant("nova.table\0".ptr as *CChar, Table { count: 0 });
+static TABLE: SpinLock<Table> = SpinLock<Table>.constant("safe.table\0".ptr as *CChar, Table { count: 0 });
 
 /// Safety: thread_sleep_ns only sleeps.
 fn sleepLocked() {

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Allocation-failure sweep (ROADMAP P1; Nova's FaultInjectionTests use the same runtime hooks).
+"""Allocation-failure sweep (ROADMAP P1; tools/fault_injection.py uses the same runtime hooks).
 
 Builds a program with the given compiler, runs it once with CEESAFE_ALLOC_REPORT=1 to count allocation attempts, then
-once per attempt k with CEESAFE_FAIL_ALLOC_AT=k (and the NOVA_ names, for a novac-built program). Each run must exit 0, print a line starting with "consistent" (the
+once per attempt k with CEESAFE_FAIL_ALLOC_AT=k. Each run must exit 0, print a line starting with "consistent" (the
 program's own check that the failure came back as an error and left its structure intact), and end with no live
 allocations (the runtime's report: live=0). A panic, a crash, an inconsistency or a leak is a failure.
 
@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 
-REPORT = re.compile(r"(?:ceesafe|nova) alloc: attempts=(\d+) live=(\d+)")
+REPORT = re.compile(r"ceesafe alloc: attempts=(\d+) live=(\d+)")
 
 
 def run(exe, env_extra):
@@ -42,7 +42,7 @@ def main():
                                capture_output=True, text=True)
         if build.returncode != 0:
             sys.exit(f"fault_sweep: build failed:\n{build.stderr}")
-        status, out, err = run(exe, {"CEESAFE_ALLOC_REPORT": "1", "NOVA_ALLOC_REPORT": "1"})
+        status, out, err = run(exe, {"CEESAFE_ALLOC_REPORT": "1"})
         m = REPORT.search(err)
         if status != 0 or not m:
             sys.exit(f"fault_sweep: the unfailed run failed (status {status}):\n{out}{err}")
@@ -50,8 +50,7 @@ def main():
         print(f"fault_sweep: unfailed run: {out.strip()}; {attempts} allocation attempts, live={live}")
         failures, stops = [], collections.Counter()
         for k in range(1, attempts + 1):
-            status, out, err = run(exe, {"CEESAFE_ALLOC_REPORT": "1", "NOVA_ALLOC_REPORT": "1", "CEESAFE_FAIL_ALLOC_AT": str(k),
-                                              "NOVA_FAIL_ALLOC_AT": str(k)})
+            status, out, err = run(exe, {"CEESAFE_ALLOC_REPORT": "1", "CEESAFE_FAIL_ALLOC_AT": str(k)})
             m = REPORT.search(err)
             line = out.strip()
             if status != 0 or not line.startswith("consistent") or not m or m.group(2) != "0":

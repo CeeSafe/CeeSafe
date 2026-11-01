@@ -1,9 +1,7 @@
 # CeeSafe Compiler Architecture
 
-Status: describes `ceesafec` as it is at the fork (CeeSafe's Decision 0006). Normative semantics: `ownership.md`,
-`language-spec.md`, `type-system.md`. `ceesafec` is written in CeeSafe (about 70,600 lines in `src/`); it was ported
-from Nova's C# compiler (novac 0.6.0) pass by pass, and at the fork it emits the same C as novac 0.6.0 with CeeSafe's
-names (the repository's `docs/fork-point.md`).
+Status: describes `ceesafec` as it is. Normative semantics: `ownership.md`, `language-spec.md`, `type-system.md`.
+`ceesafec` is written in CeeSafe (about 70,600 lines in `src/`) and compiles itself.
 
 ## 1. Pipeline
 
@@ -104,15 +102,13 @@ CeeSafe/
   templates/AGENTS.md          # what `ceesafec new` and `ceesafec agents` write
   editors/                     # the VS Code extension; lldb and gdb scripts
   integrations/cosmoos/        # ceesafec's C held to CosmoOS's build, tests and boots (C1–C9, K3)
-  tests/reference/             # CeeSafe's corpus, benchmarks, programs and libraries at the fork
-  tools/                       # generators, comparisons with the novac 0.6.0 baseline, the contract suite
+  tests/reference/             # CeeSafe's corpus, benchmarks and programs
+  tools/                       # generators, the corpus runner, the contract suite
   bootstrap/                   # the stage-0 pin and the fixed-point records
   docs/                        # the port's plans, evidence and decisions
 ```
 
 The compiler, the runtime C and the libraries are versioned together: the runtime ABI between them is internal, and
 `CEESAFE_ABI_VERSION` names it (`c-backend.md` §2). The libraries (`lib/core`, `lib/std`, `lib/kernel`) and the runtime
-(`runtime/`) are CeeSafe's sources, written at the fork from Nova `v0.6.0` under CeeSafe's names and edited here since
-(Decisions 0007, 0008); `tools/gen_library.py` and `tools/gen_runtime.py` embed them into `src/library/`.
-`tests/reference/lib/` keeps Nova's libraries as they were at the fork. A path `lib/…` or `runtime/…` in this
-specification names one of CeeSafe's sources.
+(`runtime/`) are CeeSafe's sources (Decisions 0007, 0008); `tools/gen_library.py` and `tools/gen_runtime.py` embed
+them into `src/library/`. A path `lib/…` or `runtime/…` in this specification names one of these sources.

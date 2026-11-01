@@ -5,46 +5,46 @@
 
 ## Context
 
-Nova's compiler is C# on .NET 10 (Nova ADR 0001), which records self-hosting as a long-term goal. Nova's
-`open-decisions.md` keeps "a Nova compiler written in Nova" open as **OD-33** (recorded by Nova ADR 0023, option C).
-The owner wants that compiler built, under a new public name, because "Nova" is used by other programming languages.
+The reference's compiler is C# on .NET 10 (the reference ADR 0001), which records self-hosting as a long-term goal. The reference's
+`open-decisions.md` keeps "a compiler for the language written in the language" open as **OD-33** (recorded by the reference ADR 0023, option C).
+The owner wants that compiler built, under a new public name, because the earlier name is used by other programming languages.
 
-A 2026-10-30 audit of Nova at `07d561f` found that the language cannot yet host a compiler of this size without new
+A 2026-10-30 audit of the reference at `07d561f` found that the language cannot yet host a compiler of this size without new
 library and runtime support (ROADMAP §2.2): no hash map or set, a thin string API, no `From` conversion for `?`, no
 generic interface implementations, and missing host services (environment, directories, captured process output).
 
 ## Decisions
 
-1. **Prerequisites go upstream.** Language, runtime and standard-library gaps are fixed in Nova: an ADR and spec text in
-   `~/Nova`, implementation and tests there, then a novac release that CeeSafe pins (ROADMAP's N track, proposed as Nova
+1. **Prerequisites go upstream.** Language, runtime and standard-library gaps are fixed in the reference: an ADR and spec text in
+   `the reference checkout`, implementation and tests there, then a the reference compiler release that CeeSafe pins (ROADMAP's N track, proposed as the reference
    milestone M15). Pure-library code that only the compiler needs (ID tables, interner, bitsets, exact integers,
-   UTF-16 offsets, JSON) is written in Nova inside CeeSafe. *Why:* Nova's rule is spec before code; workarounds in C
-   or `unsafe` would weaken the safety the port is meant to demonstrate, and Nova's users benefit from the same gaps
+   UTF-16 offsets, JSON) is written in the reference inside CeeSafe. *Why:* the reference's rule is spec before code; workarounds in C
+   or `unsafe` would weaken the safety the port is meant to demonstrate, and the reference's users benefit from the same gaps
    closing.
-2. **Nova names until self-hosting.** While novac builds CeeSafe, sources are `.nova` files with a `nova.toml` manifest,
-   because novac accepts only those. Once `ceesafec` reads CeeSafe names, one commit renames CeeSafe's own sources and
-   the fixed point is re-verified (ROADMAP P6R). *Why:* this removes the draft's `.ceesafe`→`.nova` staging adapter and
+2. **CeeSafe names until self-hosting.** While the reference compiler builds CeeSafe, sources are `.cee` files with a `ceesafe.toml` manifest,
+   because the reference compiler accepts only those. Once `ceesafec` reads CeeSafe names, one commit renames CeeSafe's own sources and
+   the fixed point is re-verified (ROADMAP P6R). *Why:* this removes the draft's `.ceesafe`→`.cee` staging adapter and
    its diagnostic path mapping, which would be bootstrap-only code with its own bugs.
 3. **Names.** The language is **CeeSafe**; the compiler is `ceesafec`; sources use **`.cee`**; packages use
    `ceesafe.toml` and `ceesafe.lock`; the home directory is `$CEESAFE_HOME`, default `~/.ceesafe`. *Why:* a short
    extension, distinct from `.cs` (C#) and `.c`.
-4. **Nova continues.** Nova keeps its own roadmap (M14, CosmoOS) and remains the stage-0 compiler and behaviour oracle.
-   CeeSafe pins a novac release (`bootstrap/reference.md`) and rebaselines only at phase gates, as an explicit change.
-   *Why:* freezing Nova would stall CosmoOS work; an explicit pin keeps the porting target still.
+4. **The reference continues.** the reference keeps its own roadmap (M14, CosmoOS) and remains the stage-0 compiler and behaviour oracle.
+   CeeSafe pins a the reference compiler release (`bootstrap/reference.md`) and rebaselines only at phase gates, as an explicit change.
+   *Why:* freezing the reference would stall CosmoOS work; an explicit pin keeps the porting target still.
 
 ## Left open (later decisions, before the phase that needs them)
 
 | Question | Needed by |
 |---|---|
-| Generated-C symbol prefix and ABI version (`nv_`, `nova_*`, `NOVA_*` today) | P7 |
+| Generated-C symbol prefix and ABI version (`cee_`, `ceesafe_*`, `CEESAFE_*` today) | P7 |
 | Diagnostic code letter and legacy `N####` mapping | P6R |
-| Whether `ceesafec` keeps an explicit legacy mode for `.nova`/`nova.toml` input | P6R |
+| Whether `ceesafec` keeps an explicit legacy mode for `.cee`/`ceesafe.toml` input | P6R |
 | A separate user-facing `ceesafe` executable, or `ceesafec` commands only | P8 |
 | Registry namespace and index repository | P8 |
 | Public name-conflict check for "CeeSafe" and `.cee` | before any public release (P9) |
 
 ## Consequences
 
-- Before P6R, this repository has `nova.toml` and `.nova` sources, and its `AGENTS.md` is generated by `novac agents`.
-- Every N-track item is a change to `~/Nova` that the owner approves separately, as Nova's own rules require.
-- CosmoOS stays on novac and `.nova` sources until P9's reviewed migration.
+- Before P6R, this repository has `ceesafe.toml` and `.cee` sources, and its `AGENTS.md` is generated by `ceesafec agents`.
+- Every N-track item is a change to `the reference checkout` that the owner approves separately, as the reference's own rules require.
+- CosmoOS stays on the reference compiler and `.cee` sources until P9's reviewed migration.

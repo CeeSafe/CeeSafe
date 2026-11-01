@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""The reference's M2 mutation suite (Nova tests/Nova.Compiler.Tests/MutationTests.cs) against any compiler.
+"""The M2 mutation suite against a ceesafec.
 
 Seed programs that compile are mutated structurally: adjacent statements swapped, statements moved or removed, scopes
 added or removed, moves duplicated. Each mutant's expected diagnostics, as (code, line) pairs, come from an oracle: a
 separate model of the rules in ownership.md and lifetimes.md for straight-line code, sharing no code with either
 compiler. The compiler must report exactly those diagnostics.
 
-The mutants are the reference's own: .NET's seeded System.Random (the legacy subtractive generator that `new
-Random(seed)` uses) is reproduced here, with the same seeds (1000 + seed) and the same draws in the same order.
+The mutants are fixed by their seeds: .NET's seeded System.Random (the legacy subtractive generator that `new
+Random(seed)` uses) is reproduced here, with the seeds 1000 + seed and its draws in a fixed order.
 
-usage: python3 tools/mutation_suite.py --compiler out/ceesafe [--compiler ~/.nova/0.6.0/bin/novac] [--jobs N]
+usage: python3 tools/mutation_suite.py --compiler out/ceesafec [--compiler ANOTHER_CEESAFEC] [--jobs N]
 """
 import argparse
 import concurrent.futures
@@ -20,7 +20,6 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from names import dialect  # noqa: E402
 
 MUTANTS_PER_SEED = 120
 INT_MAX = 2147483647
@@ -77,7 +76,7 @@ class DotNetRandom:
         return int(self._sample() * (1.0 / INT_MAX) * max_value)
 
 
-# ---- Statements: instances are identified by identity, as the reference's records are by reference ----
+# ---- Statements: instances are identified by identity, not by value ----
 
 class Stmt:
     def __init__(self, kind, name=None, reference=None, mutable=False, body=None):
@@ -289,7 +288,7 @@ def expect(program, lines):
 # ---- Running ----
 
 def mutants(seed):
-    """The reference's mutants of one seed, in order: (source, expected, applied mutations, counts toward the target)."""
+    """The mutants of one seed, in order: (source, expected, applied mutations, counts toward the target)."""
     random = DotNetRandom(1000 + seed)
     seen = set()
     result = []
@@ -315,7 +314,7 @@ def mutants(seed):
 
 def diagnostics(compiler, source):
     with tempfile.TemporaryDirectory() as directory:
-        path = os.path.join(directory, "mutant" + dialect(compiler).ext)  # ceesafec reads only .cee (Decision 0005)
+        path = os.path.join(directory, "mutant.cee")
         with open(path, "w", encoding="utf-8") as f:
             f.write(source)
         run = subprocess.run([compiler, "check", "--diagnostics-format=json", path], capture_output=True, cwd=directory)

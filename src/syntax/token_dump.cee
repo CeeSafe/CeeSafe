@@ -1,6 +1,5 @@
-// `ceesafec parse --dump-tokens`: the lexer's whole output as text, in a format tools/oracles/token-dump prints from
-// the reference's Lexer, so the two can be compared byte for byte (docs/p2-frontend.md §3). The reference has no token
-// dump of its own. Offsets are the reference's: UTF-16 code units from the start of the text.
+// `ceesafec parse --dump-tokens`: the lexer's whole output as text (docs/p2-frontend.md §3). Offsets are UTF-16 code
+// units from the start of the text.
 //
 //   file <path>
 //   <Kind> <start> <end> [Identifier: <id> <name> | IntLiteral: <value> <suffix> | FloatLiteral: <digits> <suffix>

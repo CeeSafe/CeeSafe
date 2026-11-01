@@ -206,3 +206,26 @@ contract suite exercises.
      (IOCP and `WSAPoll`) on the Windows 11 ARM64 test host;
    - ASan/UBSan, the allocation-failure sweep with `--check-leaks`, and `tools/cancel_sweep.py` over the new tests.
 6. The guide (`guide/async.md`, "Waiting for the outside world", and the sockets section), ROADMAP §10, a release.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Errors (U2).** The eight kinds follow `Other` (`CEE_IO_*` 11–18). The interpreter's `errnoOf` cannot name them
+  while stage 0 (0.3.2) builds it, so its `_` arm maps a kind by its message, each kind's being fixed (§26.2).
+- **Constructors.** An enum has no functions of its own (type-system.md §15.1), so `SocketAddress`'s instance
+  methods come through the interface `SocketEndpoint`, and the constructors and parsers are `SocketAddresses`'
+  (`SocketAddresses.parse`, `parseIp`, `v4Any`, …) rather than `SocketAddress.parse` as §3.1 wrote them.
+- **Names.** `setRecvBuffer`, as requested (§3.3 had briefly proposed `setReceiveBuffer`); CeeSafe already says
+  `recv` for channels.
+- **Parsing.** IPv4 parts may not have leading zeros (`01.2.3.4` is refused), as Python's `ipaddress`, the tests'
+  oracle; the runtime's own text parser for `bind(text, port)` keeps accepting them, as before. A zone given by an
+  interface's name is resolved with `if_nametoindex` on POSIX; Windows resolves no names (numeric zones only), since
+  that would link iphlpapi into every program.
+- **The record.** On Windows the AcceptEx address buffer, now sized for IPv6, shares a union with the WSABUF and
+  flags of a read or send, so `ceesafe_async_op` stays 192 bytes; elsewhere the record had room.
+- **CosmoOS** has no `setsockopt` or `getpeername`: the options and `peerAddress` are `Unsupported` there.
+- **The bootstrap chain.** `f7a7d57` (runtime and lib/std) is built by 0.3.2; `93c433f` (the compiler's built-ins
+  and the interpreter's models of the async calls) by that; the next commit (the interpreter's models of the blocking
+  setters, which call the host's built-ins) by that. Recorded in `tools/bootstrap_release.sh` and
+  `bootstrap/reference.md`.
+- **The backlog test** connects 100 clients before any accept, not 1000: each connection is two descriptors, and
+  macOS's default limit is 256.

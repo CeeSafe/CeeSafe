@@ -232,12 +232,16 @@ The library's waiting operations are async functions, in the hosted profile:
 | Time | `Timer.sleep(ms)`; `Timer.now()` (not async) |
 | Console | `AsyncConsole.write(text)`, `writeLine(text)`, `writeError(text)` |
 | Files | `AsyncFiles.open`, `create`, `read`, `write` (each on a worker thread while the task waits) |
-| Sockets | `AsyncTcpListener.bind` (not async), `accept`; `AsyncTcpStream.connect`, `read`, `write` |
+| Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
 | Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
 | Blocking calls | `Async.blocking(() => …)`: any sync code on a worker thread while the task waits |
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |
 
-Each returns `Result<T, AsyncError>`, whose cases are `Cancelled`, `TimedOut` and `Io(IoError)`. A blocking call made
+Each returns `Result<T, AsyncError>`, whose cases are `Cancelled`, `TimedOut` and `Io(IoError)`. A socket's address is
+a `SocketAddress`, `V4` or `V6`, made from text by `SocketAddresses.parse("[::1]:8080")` or
+`SocketAddresses.parseIp("::1", 8080)`, and written back with `a.write(mut w)`. A listener on `SocketAddresses.v6Any(port)`
+also accepts IPv4 clients, whose `peerAddress()` is `V4`. Network failures have their own `IoError` kinds,
+`ConnectionReset`, `TimedOut`, `HostUnreachable` and the rest, the same on every platform. A blocking call made
 directly in async code would stop every task of the thread, so it is a compile error (N0295): a `File` read or a
 `Mutex` lock belongs in `Async.blocking`.
 

@@ -1624,13 +1624,23 @@ not cover the network kinds (N0256): a source change of 0.7.0.
   standard error; standard output is flushed first, so the two keep their relative order.
 
 ### 26.4 TCP sockets
-- `TcpListener.bind(address, port)` (`address: StringView`, dotted IPv4 such as `"127.0.0.1"` or
-  `"0.0.0.0"`; `port: u16`, `0` for any free port): `Result<TcpListener, IoError>`, listening.
+- `TcpListener.bind(address, port)` (`address: StringView`, IPv4 or IPv6 text without a zone such as
+  `"127.0.0.1"`, `"0.0.0.0"`, `"::1"` or `"::"`, ADR 0044; `port: u16`, `0` for any free port):
+  `Result<TcpListener, IoError>`, listening, with the platform's largest backlog (`SOMAXCONN`),
+  `SO_REUSEADDR` on POSIX, and an IPv6 socket dual stack (`IPV6_V6ONLY` off).
   `listener.port()`: `Result<u16, IoError>`, the port it is bound to. `listener.accept()`:
   `Result<TcpStream, IoError>`.
 - `TcpStream.connect(address, port)`: `Result<TcpStream, IoError>`. `s.read(mut buffer)` and
   `s.write(bytes)` as for files; `s.shutdownWrite()`: `Result<void, IoError>`, so the peer reads
-  the end of the stream.
+  the end of the stream; `s.shutdownRead()` likewise ends this side's reading.
+- The stream's options (ADR 0044 §3.3), each `Result<void, IoError>` and not blocking:
+  `s.setNoDelay(on: bool)` (`TCP_NODELAY`), `s.setKeepAlive(idleSeconds: u32?)` (`SO_KEEPALIVE`
+  and the idle time, `0` the system's; null turns it off), `s.setSendBuffer(bytes: u32)` and
+  `s.setRecvBuffer(bytes: u32)` (`SO_SNDBUF`, `SO_RCVBUF`; the kernel may round, and Linux doubles),
+  `s.setLinger(seconds: u32?)` (`SO_LINGER`: `0` makes the close reset the connection; null
+  restores the default). Where the platform has no such option (CosmoOS): `Unsupported`.
+- The typed addresses (`SocketAddress`, `bindWith`, `connectTo`, `peerAddress`, `localAddress`)
+  are the async types' (§40.4): a built-in cannot name a library type.
 - Both are move types that need drop; destroying one closes the socket.
 
 ### 26.5 Processes
@@ -3383,10 +3393,31 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
 console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
-`AsyncSockets`, the same calls on raw descriptors for code with its own wait loop), `AsyncMutex<T>` (a guard that may be
+`AsyncSockets`, the same calls on raw descriptors for code with its own wait loop; their addresses below), `AsyncMutex<T>` (a guard that may be
 held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks). Its operations return `Result<T, AsyncError>`,
 where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
+
+**Socket addresses** (lib/std's `net.cee`, ADR 0044):
+
+- `SocketAddress` is an enum: `V4([u8; 4], u16)` and `V6([u8; 16], u16, u32)`, the address bytes in network order,
+  the port, and an IPv6 scope id (0: none). Through the interface `SocketEndpoint` it has `port()`, `withPort(p)`,
+  `isLoopback()`, `isUnspecified()` and `write(w: borrow mut TextWriter)`: `127.0.0.1:8080`, `[::1]:8080`,
+  `[fe80::1%2]:8080`, IPv6 in RFC 5952's canonical form (lowercase, the first longest run of two or more zero groups
+  as `::`, an IPv4-mapped address's last 32 bits dotted), the scope as its number.
+- An enum has no functions of its own (§15.1), so the constructors are `SocketAddresses`': `parse(text)` (`a.b.c.d:port`,
+  `[v6]:port`, `[v6%zone]:port`; the zone a number or an interface's name, which the runtime resolves where it can,
+  not on Windows), `parseIp(text, port)` (without the port), each `SocketAddress?`; and `v4Any(port)`, `v6Any(port)`,
+  `v4Loopback(port)`, `v6Loopback(port)`. IPv4 parts are 1 to 3 digits without leading zeros, at most 255; IPv6 text
+  is RFC 4291 §2.2's.
+- `ListenOptions` has `backlog: u32` (0: `SOMAXCONN`), `reuseAddress` (`SO_REUSEADDR`; ignored on Windows, whose
+  option lets another socket take the port), `reusePort` (`SO_REUSEPORT`; `Unsupported` where the platform has none,
+  Windows), and `v6Only` (`IPV6_V6ONLY`, always set explicitly on an IPv6 socket); `ListenOptions.defaults()` is
+  `{ backlog: 0, reuseAddress: true, reusePort: false, v6Only: false }`.
+- `AsyncTcpListener.bindWith(address, options)` and `listener.localAddress()`, both `Result<_, IoError>`;
+  `bind(text, port)` takes IPv4 or IPv6 text and the defaults. `await AsyncTcpStream.connectTo(address)`; on a stream,
+  `peerAddress()`, `localAddress()`, `shutdownRead()` and the setters of §26.4, none async. A dual-stack listener's
+  IPv4 peer is `V4`, not `::ffff:a.b.c.d`.
 
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the

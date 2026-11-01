@@ -523,6 +523,47 @@ fn ioBuiltin(
             Err(e) => Ok(interpIoResult(c, resultType, 0, errnoOf(e))?),
         };
     }
+    if (b == bfTcpShutdownRead() || b == bfTcpSetNoDelay() || b == bfTcpSetKeepAlive() || b == bfTcpSetSendBuffer() ||
+        b == bfTcpSetRecvBuffer() || b == bfTcpSetLinger()) {
+        // ADR 0044 §3.6: the host's own TcpStream does each, on the stream the descriptor names.
+        requireHostIo(it)?;
+        let fd = descriptorArgument(it, c, n, frame, arguments, 0)?;
+        var value: u64 = 0;
+        var present = true;
+        if (b != bfTcpShutdownRead()) {
+            let argumentType = builtinArgumentType(n, arguments, 1);
+            let v = argument(it, c, n, frame, arguments, 1)?;
+            if (b == bfTcpSetKeepAlive() || b == bfTcpSetLinger()) {
+                present = v.bits(0, enumTagSize(c, argumentType))? != 0;
+                value = if (present) v.bits(enumUnionOffset(c, argumentType) as usize, 4)? else 0;
+            } else {
+                value = v.bits(0, if (b == bfTcpSetNoDelay()) 1 else 4)?;
+            }
+        }
+        var done: Result<void, IoError> = Err(IoError.Other(9));
+        match (handleIndex(it, fd)) {
+            Some(k) => {
+                match (borrow mut it.runtime.handles[k]) {
+                    HostHandle.Stream(stream) => {
+                        let seconds: u32? = if (present) Some(truncate<u32>(value)) else null;
+                        done = if (b == bfTcpShutdownRead()) stream.shutdownRead() else if (b ==
+                            bfTcpSetNoDelay()) stream.setNoDelay(value != 0) else if (b ==
+                            bfTcpSetKeepAlive()) stream.setKeepAlive(seconds) else if (b ==
+                            bfTcpSetSendBuffer()) stream.setSendBuffer(truncate<u32>(value)) else if (b ==
+                            bfTcpSetRecvBuffer()) stream.setRecvBuffer(
+                            truncate<u32>(value),
+                        ) else stream.setLinger(seconds);
+                    }
+                    _ => {}
+                }
+            }
+            null => {}
+        }
+        return match (done) {
+            Ok() => Ok(interpIoResult(c, resultType, 0, 0)?),
+            Err(e) => Ok(interpIoResult(c, resultType, 0, errnoOf(e))?),
+        };
+    }
     if (b == bfProcessRun()) {
         requireHostIo(it)?;
         let program = argument(it, c, n, frame, arguments, 0)?;

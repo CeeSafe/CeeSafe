@@ -1,0 +1,57 @@
+// ADR 0044 §3.6: the blocking TcpListener and TcpStream take IPv6 text and have the stream's options and
+// shutdownRead. A listener on ::1, a client that sets every option and then clears the ones that can be cleared,
+// one message across, and each end's read side shut.
+fn ok(r: Result<void, IoError>) -> u32 => match (r) {
+    Ok() => 1,
+    Err(_) => 0,
+};
+
+fn main() {
+    let listener = match (TcpListener.bind("::1", 0)) {
+        Ok(l) => l,
+        Err(e) => {
+            Console.writeLine(e.message());
+            return;
+        }
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(_) => 0,
+    };
+    var client = match (TcpStream.connect("::1", port)) {
+        Ok(s) => s,
+        Err(e) => {
+            Console.writeLine(e.message());
+            return;
+        }
+    };
+    var server = match (listener.accept()) {
+        Ok(s) => s,
+        Err(e) => {
+            Console.writeLine(e.message());
+            return;
+        }
+    };
+    var set: u32 = 0;
+    set += ok(client.setNoDelay(true));
+    set += ok(client.setKeepAlive(Some(30)));
+    set += ok(client.setSendBuffer(65536));
+    set += ok(client.setRecvBuffer(65536));
+    set += ok(client.setLinger(Some(5)));
+    set += ok(client.setLinger(null));
+    set += ok(client.setKeepAlive(null));
+    Console.writeLine(set);
+    match (client.write("ping".bytes())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    var buffer = [0u8; 8];
+    match (server.read(mut buffer[..])) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    Console.writeLine(ok(server.shutdownRead()) + ok(client.shutdownRead()));
+}
+// expect-stdout: 7
+// expect-stdout: 4
+// expect-stdout: 2

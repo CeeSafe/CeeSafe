@@ -643,7 +643,14 @@ Heap (M3b):
   - Readiness (A2d): a task waits for a descriptor to be readable or writable (`ceesafe_async_wait_readable`,
     `_wait_writable`); `poll()` is the reactor on every POSIX host, with any number of descriptors. Sockets are
     `ceesafe_async_tcp_*`, `ceesafe_async_read`, `_send`, `_shutdown_write` and `_close` in `ceesafe_rt_io.c`: a value,
-    `CEE_ASYNC_WOULD_BLOCK`, or a negated errno. `ceesafe_async_poll` serves code with its own wait loop (the
+    `CEE_ASYNC_WOULD_BLOCK`, or a negated errno. ADR 0044's addresses cross as rt.h's `ceesafe_endpoint` (family 4
+    or 6, port, scope, 16 bytes; lib/std passes its fields): `ceesafe_async_tcp_listen_at` (with a backlog and the
+    `CEE_LISTEN_*` flags), `_connect_at`, `ceesafe_async_op_connect_at`, `ceesafe_async_socket_name` (the result
+    `(family << 16) | port`), `ceesafe_async_socket_option` (`CEE_SOCKET_OPTION_*`), `ceesafe_async_shutdown_read`
+    and `ceesafe_interface_index`; the blocking `TcpStream`'s setters are `ceesafe_tcp_option` and
+    `ceesafe_tcp_shutdown_read`. The text calls parse IPv4 or IPv6 (`ceesafe_endpoint_parse`). IOCP's AcceptEx
+    address buffer, sized for IPv6, shares the operation record with a read's WSABUF, so the record stays 192
+    bytes. `ceesafe_async_poll` serves code with its own wait loop (the
     interpreter). Woken tasks run in the order they were woken.
   - Portability (L1 A4a): the runtime's atomics are rt.h's `ceesafe_atomic_*` (§38.3: the `__atomic` builtins, or
     `_Interlocked*` under MSVC), and a block's alignment is `cee_max_align_t`. On Linux the file defines

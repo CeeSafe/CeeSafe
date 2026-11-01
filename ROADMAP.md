@@ -758,8 +758,8 @@ items (ceesafec 0.3.2, published by run 41308563209 with all its jobs green). Th
 reference #6, `offsetOf`; the owner's N0110 proposal) are closed with the reference's retirement (Decision 0010);
 ceesafec's own behaviour is recorded in P4 and `docs/p2-frontend.md` §6.
 
-1. **Open `main` for the next version**: `c_program.cee`'s two constants and the extension's `package.json` are still
-   0.3.2; move them to `0.4.0-dev` (as after 0.1.0 and 0.2.0), with the owner's approval of the commit.
+1. ~~Open `main` for the next version~~: done 2026-11-01, `c_program.cee`'s two constants are `0.4.0-dev` (as after
+   0.1.0 and 0.2.0, the extension's `package.json` moves at the release).
 2. **Move stage 0 forward** (Decision 0009 §5; `bootstrap/reference.md`, "Changing stage 0"): ceesafec 0.3.2 is the
    newest release and likely builds the tree with an empty chain, which retires the 0.2.0 chain's bridge and its
    `-D_GNU_SOURCE`. Gate: the bootstrap and the fixed point on macOS and Linux, recorded in §10.
@@ -945,5 +945,7 @@ EclipseFdn/open-vsx.org#15060; until then its step skips.
 a C seed; v0.3.0 (the reference compiler's download refused) and v0.3.1 (the extension's packaging) failed in the
 workflow and published nothing. Six platforms from one seed, the seed checked on three systems, the extension on
 the Marketplace by trusted publishing (§10).
+
+`main` is 0.4.0-dev.
 
 Not yet run: the rest of P9 (§9 item 4).

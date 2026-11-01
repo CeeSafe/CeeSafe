@@ -1826,6 +1826,7 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@callback` | a top-level function | a C address without a symbol, for C callbacks (§34.1) |
 | `@align(n)` | a non-generic struct | at least `n`-byte alignment (M8d, §29.4) |
 | `@noncopy` | a struct | a move type even if every field is Copy (OD-7; M8d) |
+| `@cfg("NAME")` | an `@export` function | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043), §28.4 |
 
 An unknown attribute, a known one in the wrong place or with the wrong arguments, or the same
 attribute twice is N0290.
@@ -1895,6 +1896,13 @@ declarations of C library functions match the C library's own prototypes exactly
   C name (N0292) and unique (N0201).
 - The function stays an ordinary CeeSafe function too. Its body is checked like any other; an
   exported function is not unsafe to call from CeeSafe.
+- **Configured exports** (ADR 0043). `@cfg("NAME")` on an `@export` function puts its C definition, its prototype and
+  its line in `ceesafe_exports.h` inside `#if NAME` … `#endif`: the symbol exists in the builds where the C macro `NAME`
+  is non-zero, as C's `#if NAME` around a definition would have it, and a header may define a stub of that name in the
+  others. The CeeSafe function is compiled and checked in every build, and CeeSafe code may call it in any. `NAME` is
+  the macro's name as a string, a valid C identifier (N0292); `@cfg` without it, or on anything but an `@export`
+  function, is N0290. Code that differs between builds inside a function reads the switch through a C constant macro
+  instead (§39.4): `static DEBUG: bool = CONFIG_DEBUG_ON();`, which the C compiler folds.
 - **`callerAddress()`** (ADR 0030), valid only in an `@export` function's own body (N0340; not in a closure inside it),
   is a `usize`: the address the exported symbol's call returns to, as C's `__builtin_return_address(0)` in the
   export's wrapper (MSVC: `_ReturnAddress()`), passed to the body as a hidden argument so that inlining cannot change
@@ -2017,6 +2025,9 @@ alignment to at least `n` (its size is rounded up to it). In C, the first member
   signatures are equal. Only those functions have a C address; naming another function there is
   N0291. `0 as extern "C" fn(…) -> R` is the null pointer, `f.isNull()` tests for it, and `f as usize`
   is its address. Both are static initialisers too (§39.4, ADR 0042): an ops table's entries.
+- **From an address** (ADR 0043): `n as extern "C" fn(…) -> R` for `n: usize` is the function pointer to that address,
+  as `n as *T` is a raw pointer (§27.2), so a hook can be published in an `AtomicUSize` and read back. Making it is safe;
+  calling through it is unsafe, as for any C function pointer, and a wrong address is that call's obligation.
 - **Calls.** `f(args)`, with `f` a local, parameter or field of such a type, calls through the
   pointer. It is unsafe (N0280): the pointer may be null or point to anything.
 - CeeSafe functions that are neither exported nor `@callback` (§34.1, C7d) have no C address. CeeSafe-level function

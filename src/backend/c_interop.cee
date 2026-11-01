@@ -618,9 +618,11 @@ fn emitExportPrototypes(e: borrow mut CEmitter, c: borrow Checker, n: borrow Nir
     var exports = Vector<u32>.create();
     emittedExports(e, c, n, mut exports)?;
     for (function in exports.view()) {
+        emitCfgOpen(e, c, function)?;
         appendExportSignature(c, mut e.buf, function, false)?;
         e.t(";")?;
         e.emit()?;
+        emitCfgClose(e, c, function)?;
     }
     var callbacks = Vector<u32>.create();
     emittedCallbacks(e, c, n, mut callbacks)?;
@@ -722,6 +724,7 @@ fn emitExports(
     var exports = Vector<u32>.create();
     emittedExports(e, c, n, mut exports)?;
     for (function in exports.view()) {
+        emitCfgOpen(e, c, function)?;
         appendExportSignature(c, mut e.buf, function, false)?;
         e.t(" {")?;
         e.emit()?;
@@ -736,9 +739,28 @@ fn emitExports(
         appendWrapperCall(c, mut call, function, "cee_return_address()")?;
         emitWrapperBody(e, c, function, call.view())?;
         e.line("}")?;
+        emitCfgClose(e, c, function)?;
         e.line("")?;
     }
     return Ok();
+}
+
+/// `#if NAME` before an `@cfg("NAME")` export's C (ADR 0043): its symbol is in the builds where the macro is non-zero.
+fn emitCfgOpen(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Result<void, AllocError> {
+    let cfg = c.hir.functions[function as usize].cfgName;
+    if (cfg.count == 0) {
+        return Ok();
+    }
+    e.t("#if ")?;
+    e.b(c.hir.textOf(cfg))?;
+    return e.emit();
+}
+
+fn emitCfgClose(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Result<void, AllocError> {
+    if (c.hir.functions[function as usize].cfgName.count == 0) {
+        return Ok();
+    }
+    return e.line("#endif");
 }
 
 /// `int main` calling the reference `main` (EmitMainWrapper): C's signature is the one place plain `char` appears.
@@ -873,8 +895,17 @@ fn exportsHeader(
         appendText(out, " };\n\n")?;
     }
     for (function in exports.view()) {
+        let cfg = c.hir.functions[function as usize].cfgName;
+        if (cfg.count != 0) {
+            appendText(out, "#if ")?;
+            appendBytes(out, c.hir.textOf(cfg))?;
+            appendText(out, "\n")?;
+        }
         appendExportSignature(c, out, function, true)?;
         appendText(out, ";\n")?;
+        if (cfg.count != 0) {
+            appendText(out, "#endif\n")?;
+        }
     }
     for (k in constants.view()) {
         appendExportedConstantDeclarator(c, out, k)?;

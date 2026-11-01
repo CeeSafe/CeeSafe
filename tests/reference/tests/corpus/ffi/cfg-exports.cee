@@ -1,0 +1,26 @@
+// Exports that exist only in some builds (ADR 0043): `@cfg("NAME")` puts an exported function's C symbol inside
+// `#if NAME`, so a build where the macro is zero has no such symbol, and a header's stub of that name compiles there.
+// The CeeSafe function exists, and is checked, in every build: CeeSafe code may call it either way.
+
+@header("cfg-exports.types.h")
+extern "C" {
+    fn c_main() -> i32;
+}
+
+/// In builds with CFG_ON: here, so C calls it.
+@export("cfg_on_fn")
+@cfg("CFG_ON")
+fn on() -> i32 => 40;
+
+/// In builds with CFG_OFF only: not here, so C calls the header's stub.
+@export("cfg_off_fn")
+@cfg("CFG_OFF")
+fn off() -> i32 => 99;
+
+/// In every build, and calls the function whose symbol this build leaves out.
+@export("cfg_inner")
+fn inner() -> i32 => off();
+
+/// Safety: c_main only calls the exports above and the header's stub.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: 40 7 99

@@ -55,7 +55,11 @@ fn isAttributeWord(name: Slice<u8>) -> bool =>
             name,
             "constant",
         ) || sameText(name, "context") || sameText(name, "header") || sameText(name, "ctype") ||
-        sameText(name, "align") || sameText(name, "noncopy") || sameText(name, "placed") || sameText(name, "callback");
+        sameText(
+            name,
+            "align",
+        ) || sameText(name, "noncopy") || sameText(name, "placed") || sameText(name, "callback") ||
+        sameText(name, "cfg");
 
 /// Reports repeated attributes and unknown ones (N0290), and returns those named in `known` (KnownAttributes).
 fn knownAttributes(
@@ -350,7 +354,7 @@ fn processFunctionAttributes(c: borrow mut Checker) -> Result<void, AllocError> 
 }
 
 fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, AllocError> {
-    let words = "export effects effectsOf context callback constant";
+    let words = "export effects effectsOf context callback constant cfg";
     var known = Vector<u32>.create();
     let attributes = c.front.ast.functions[f as usize].attributes;
     knownAttributes(c, attributes, "a function", words, mut known)?;
@@ -408,6 +412,45 @@ fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, Al
         } else if (kind == 2) {
             c.hir.functions[exported as usize].exported = true;
             c.hir.functions[exported as usize].exportName = symbol;
+        }
+    }
+    // `@cfg("NAME")` (ADR 0043): the exported symbol exists only in the builds where the C macro NAME is non-zero.
+    for (attribute in known.view()) {
+        if (!sameText(attributeName(c, attribute), "cfg")) {
+            continue;
+        }
+        let a = c.front.ast.attributes[attribute as usize];
+        var text = Range { start: 0, count: 0xFFFFFFFF };
+        if (a.arguments.count == 1) {
+            match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                ExprNode.StringLiteral(t) => { text = t; }
+                _ => {}
+            }
+        }
+        if (text.count == 0xFFFFFFFF) {
+            attributeError(c, attribute, "'@cfg' takes the C macro's name as a string: '@cfg(\"CONFIG_DEBUG\")'")?;
+            continue;
+        }
+        if (!hasExport) {
+            attributeError(
+                c,
+                attribute,
+                "'@cfg' leaves an exported function's C symbol out of some builds: put it on an '@export' function (ADR 0043)",
+            )?;
+            continue;
+        }
+        var switchName = Vector<u8>.create();
+        appendBytes(mut switchName, c.front.ast.textOf(text))?;
+        if (!checkCName(c, switchName.view(), Span { start: a.start, end: a.end }, "the configuration macro")?) {
+            continue;
+        }
+        match (ownEntity(c, name)) {
+            Entity.Function(function) => {
+                if (c.hir.functions[function as usize].syntax == f) {
+                    c.hir.functions[function as usize].cfgName = c.hir.addText(switchName.view())?;
+                }
+            }
+            _ => {}
         }
     }
     return Ok();

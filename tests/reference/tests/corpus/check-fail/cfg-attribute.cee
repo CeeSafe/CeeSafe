@@ -1,0 +1,27 @@
+// `@cfg("NAME")` (ADR 0043) is for an `@export` function, whose C symbol it puts inside `#if NAME`: anywhere else, or
+// without the macro's name as a string, it is N0290; a name that is not a C identifier is N0292.
+@export("good")
+@cfg("CONFIG_DEBUG")
+fn good() -> i32 => 1;
+
+@cfg("CONFIG_DEBUG") // error[N0290]
+fn notExported() -> i32 => 2;
+
+@export("missing")
+@cfg // error[N0290]
+fn missing() -> i32 => 3;
+
+@export("number")
+@cfg(4) // error[N0290]
+fn number() -> i32 => 4;
+
+@export("badName")
+@cfg("not a macro") // error[N0292]
+fn badName() -> i32 => 5;
+
+@cfg("CONFIG_DEBUG") // error[N0290]
+struct Holder {
+    x: i32;
+}
+
+fn main() {}

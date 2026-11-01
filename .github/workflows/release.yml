@@ -65,11 +65,64 @@ jobs:
           diff -r c1 seed
           out/gen2 --version | grep -Fx "ceesafec ${{ needs.version.outputs.version }}"
           (cd seed && sha256sum *) | tee seed.sha256
+      - name: The seed archive (ROADMAP P9)
+        run: sh tools/seed_archive.sh seed "${{ needs.version.outputs.version }}" seed-dist
       - uses: actions/upload-artifact@v4
         with:
           name: seed
           path: seed
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seed-archive
+          path: seed-dist/*
+          if-no-files-found: error
+
+  seed-check:
+    # The published seed builds ceesafec with a C compiler alone, by its README's commands, and that ceesafec emits the
+    # seed again from the tag's sources (bootstrap/seed/README.md).
+    needs: [version, seed]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: macos-14
+          - os: windows-2022
+            msvc: x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed-archive
+          path: seed-dist
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.msvc
+        with:
+          arch: ${{ matrix.msvc }}
+      - name: Extract
+        shell: bash
+        run: tar -xzf "seed-dist/ceesafec-${{ needs.version.outputs.version }}-seed.tar.gz"
+      - name: Build from the seed alone (cl)
+        if: matrix.msvc
+        shell: cmd
+        run: |
+          cd ceesafec-${{ needs.version.outputs.version }}-seed
+          cl /nologo /std:c11 /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
+      - name: Build from the seed alone (cc)
+        if: ${{ !matrix.msvc }}
+        run: |
+          cd "ceesafec-${{ needs.version.outputs.version }}-seed"
+          cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I . *.c -o ceesafec -lm -lpthread
+      - name: It is ceesafec, and it emits the seed
+        shell: bash
+        run: |
+          seed="ceesafec-${{ needs.version.outputs.version }}-seed"
+          exe="$seed/ceesafec"; [ -f "$exe.exe" ] && exe="$exe.exe"
+          "$exe" --version | tr -d '\r' | grep -Fx "ceesafec ${{ needs.version.outputs.version }}"
+          "$exe" build --emit c -o c
+          diff -r -x README.md -x COPYING -x COPYING.RUNTIME -x 'ceesafec*' -x '*.obj' -x '*.o' c "$seed"
 
   build:
     needs: [version, seed]
@@ -105,7 +158,7 @@ jobs:
         shell: cmd
         run: |
           mkdir objects
-          cl /nologo /std:c11 /O2 /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
+          cl /nologo /std:c11 /O2 /Oi- /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
       - name: Generation 1 from the seed (cc)
         if: ${{ !matrix.msvc }}
         run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1
@@ -262,7 +315,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [version, build, extension]
+    needs: [version, build, extension, seed-check]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -276,6 +329,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ceesafe-language
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed-archive
           path: dist
       - name: Checksums
         run: cd dist && sha256sum ceesafec-* ceesafe-language-*.vsix > SHA256SUMS && cat SHA256SUMS

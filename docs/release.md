@@ -11,16 +11,20 @@ One C seed for every platform, so every binary is built from the same C and chec
 1. **seed** (Ubuntu 22.04): downloads novac 0.6.0 (`bootstrap/reference.md`; the archive's SHA-256 is checked),
    bootstraps ceesafec (`tools/bootstrap.sh`), rebuilds it with itself, and writes ceesafec's own C (`build --emit
    c`, the default form). The C of the bootstrapped and the rebuilt compiler must be identical: the fixed point.
-2. **build**, per platform: generation 1 is the seed compiled by the platform's C compiler (`cc`, or `cl` on Windows);
+   `tools/seed_archive.sh` packs it, with `bootstrap/seed/README.md` and the licences, as
+   `ceesafec-<version>-seed.tar.gz` (ROADMAP P9).
+2. **seed-check**, on Ubuntu with gcc, macOS with clang and Windows with `cl`: the archive alone, built by its README's
+   commands, gives a ceesafec that reports the version and emits the seed again from the tag's sources.
+3. **build**, per platform: generation 1 is the seed compiled by the platform's C compiler (`cc`, or `cl` on Windows);
    generation 1 rebuilds ceesafec with its own `build` (the platform's clang, gcc or `cl`, as `ceesafec build` finds
    them); generation 1 and generation 2 must both emit the seed byte for byte. The macOS binaries are then signed with
    the Developer ID and notarized. A smoke test runs `--version`, the interpreter, a native build and the MCP server.
    `osx-x64` is built on an arm64 runner by ceesafec's own driver (`--cflag -arch --cflag x86_64`) and run under
    Rosetta when the runner has it.
-3. **extension**: the VS Code extension's tests (the language server's run against the linux-x64 `ceesafec` just
+4. **extension**: the VS Code extension's tests (the language server's run against the linux-x64 `ceesafec` just
    built) and its `.vsix`, `ceesafe-language-<version>.vsix`.
-4. **publish**: `SHA256SUMS` (the archives and the `.vsix`) and the GitHub release.
-5. **stores**: the same `.vsix` on the VS Code Marketplace and on Open VSX, publisher (namespace) `ceesafe`. It runs
+5. **publish**: `SHA256SUMS` (the archives, the seed and the `.vsix`) and the GitHub release.
+6. **stores**: the same `.vsix` on the VS Code Marketplace and on Open VSX, publisher (namespace) `ceesafe`. It runs
    after the GitHub release, so a store's failure never holds a release back, and `--skip-duplicate` makes a rerun
    harmless.
 
@@ -30,6 +34,7 @@ One C seed for every platform, so every binary is built from the same C and chec
 | `ceesafec-osx-arm64.tar.gz`, `ceesafec-osx-x64.tar.gz` | macOS (arm64), signed and notarized | the same |
 | `ceesafec-win-x64.zip`, `ceesafec-win-arm64.zip` | Windows | `ceesafec.exe`, `COPYING`, `COPYING.RUNTIME` |
 | `ceesafe-language-<version>.vsix` | Ubuntu | the VS Code extension (`guide/editors.md`) |
+| `ceesafec-<version>-seed.tar.gz` | Ubuntu, checked on all three systems | ceesafec's C and runtime, `README.md` (how to build it with `cc` or `cl` alone), `COPYING`, `COPYING.RUNTIME` |
 
 ## Making a release
 

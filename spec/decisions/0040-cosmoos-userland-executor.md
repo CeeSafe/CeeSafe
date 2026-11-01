@@ -1,7 +1,7 @@
 # ADR 0040 — The hosted executor in CosmoOS userland
 
-- Status: **Accepted** by the owner, 2026-11-01 ("tackle the open works", of which this was one). The options in §2
-  and the choices in §3 are the agent's, taken as recommended; §5 lists them for the owner's review.
+- Status: **Accepted** by the owner, 2026-11-01 ("tackle the open works", of which this was one); after review, the
+  three choices of §5 accepted as proposed ("I accept ADR 0040's choices as proposed").
 - Scope: running async programs (type-system.md §40) as CosmoOS user programs, the target `integrations/cosmoos/c1.py`
   builds for (`CEE_COSMOOS`; profiles.md §2).
 
@@ -61,7 +61,7 @@ the executor's tested bookkeeping unchanged. C is the way to sockets later, once
   other tasks meanwhile. Programs that need both wait in `Async.blocking`.
 - Linux, macOS, Windows and freestanding builds are unchanged.
 
-## 5. For the owner's review
+## 5. Choices the owner reviewed (accepted as proposed)
 
 1. A rather than C: sockets wait for OD-15's ruling on raw syscalls (the ring has no libc wrapper).
 2. Descriptors count as ready, as on Windows, rather than being refused.

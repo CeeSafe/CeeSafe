@@ -57,8 +57,12 @@ base64), `APPLE_CERTIFICATE_PASSWORD`, and for `notarytool` `ASC_P8` (the App St
 The `stores` job publishes to the Marketplace with no secret, by Trusted Publishing: the publisher `ceesafe`
 (marketplace.visualstudio.com/manage/publishers/ceesafe, **Trusted Publishing**) has the policy "Release workflow" for
 repository owner `vkuttyp`, repository `CeeSafe`, workflow `release.yml`, no environment, and the job, with
-`id-token: write`, runs `vsce publish --oidc`. Renaming the workflow file needs the policy changed too. For Open VSX it
-needs `OVSX_PAT`, an access token of the
-open-vsx.org account that owns the namespace `ceesafe`. The namespace exists (2026-10-31) and its ownership claim is
-EclipseFdn/open-vsx.org#15060; once it is approved, a trusted publisher for this workflow will replace the token. Until
-then `OVSX_PAT` is not set and the Open VSX step skips with a warning.
+`id-token: write`, runs `vsce publish --oidc`. Renaming the workflow file needs the policy changed too.
+
+Open VSX is the same, with no secret: the namespace `ceesafe` (owned by `vkuttyp`, its claim
+EclipseFdn/open-vsx.org#15060 approved) has a trusted publisher for owner `vkuttyp`, repository `CeeSafe`, workflow
+`release.yml`, no environment (open-vsx.org, Settings, Trusted Publishers), and the job runs
+`ovsx publish --trusted-publishing`, which exchanges the job's OIDC token for a five-minute token scoped to the
+extension. Open VSX registers a trusted publisher only for an extension that exists, so 0.3.2, the first version there,
+was published by the owner with an access token (2026-11-01). A registration cannot be edited: renaming the workflow
+file means deleting it and registering again.

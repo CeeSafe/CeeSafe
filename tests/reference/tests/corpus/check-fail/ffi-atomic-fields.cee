@@ -1,0 +1,25 @@
+// Atomic fields shared with C (ADR 0041 §3.1): AtomicU32, AtomicU64 and AtomicUSize may be members of an imported or
+// @repr(C) struct, laid out as their integer; AtomicBool may not (it is a u32, C's bool a byte), and no atomic crosses
+// to C by value or as a pointee.
+@header("ffi-atomic-fields.h")
+extern "C" {
+    struct shared {
+        a: AtomicU64;
+        b: AtomicU32;
+        c: AtomicUSize;
+        d: AtomicBool; // error[N0291]
+    }
+    fn byValue(x: AtomicU32);  // error[N0291]
+    fn returns() -> AtomicU64; // error[N0291]
+    fn pointer(p: *AtomicU64); // error[N0291]
+    fn sharedPointer(p: *mut shared);
+}
+
+@repr(C)
+struct Mine {
+    a: AtomicU32;
+    b: AtomicBool; // error[N0291]
+    c: AtomicUSize;
+}
+
+fn main() {}

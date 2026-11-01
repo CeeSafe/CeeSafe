@@ -151,6 +151,9 @@ struct StructField {
     isPrivate: bool;
     isPublic: bool;
     isRegionPart: bool;
+    /// An imported struct's or union's union member (ADR 0041 §3.2): the first member of its union, which every
+    /// member shares, so that the borrow checker treats them as one place. Otherwise none.
+    unionGroup: u32;
 }
 
 struct StructDefinition {
@@ -171,6 +174,7 @@ struct StructDefinition {
     allocateMethod: u32;
     deallocateMethod: u32;
     isImported: bool;
+    isUnion: bool; // an imported C union (ADR 0041 §3.2)
     placedMethod: u32;
     hasCSpelling: bool;
     cSpelling: Range;
@@ -724,6 +728,7 @@ struct TypeTable {
                 isPrivate: false,
                 isPublic: false,
                 isRegionPart: false,
+                unionGroup: none(),
             })?;
             fields.push(truncate<u32>(this.fields.length - 1))?;
         }
@@ -1794,6 +1799,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     allocateMethod: none(),
     deallocateMethod: none(),
     isImported: false,
+    isUnion: false,
     placedMethod: none(),
     hasCSpelling: false,
     cSpelling: emptyRange(),

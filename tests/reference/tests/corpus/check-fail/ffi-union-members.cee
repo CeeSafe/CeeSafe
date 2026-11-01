@@ -1,0 +1,33 @@
+// Imported union members (ADR 0041 §3.2): every member shares the storage, so each must be a type every bit pattern
+// is a value of (N0346): integers, raw pointers, arrays of these, and imported types whose fields are.
+@header("ffi-union-members.h")
+extern "C" {
+    struct in6 {
+        bytes: [u8; 16];
+    }
+    union fine {
+        n: u32;
+        p: *mut u8;
+        words: [u16; 2];
+        addr: in6;
+    }
+    union flagged {
+        on: bool; // error[N0346]
+        n: u32;
+    }
+    union nested {
+        inner: in6;
+        f: flagged; // error[N0346]
+    }
+    struct callbacks {
+        tag: u8;
+        flag: bool; // outside a union, a bool member is C's bool
+        union {
+            p: *mut u8;
+            call: fn(i32) -> i32; // error[N0346]
+            count: AtomicU32; // error[N0346]
+        }
+    }
+}
+
+fn main() {}

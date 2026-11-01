@@ -92,7 +92,8 @@ fn main() {
 ```
 
 For a counter or a flag, an atomic is simpler: `AtomicU64`, `AtomicU32`, `AtomicUSize` and `AtomicBool` change
-through a shared reference with `load`, `store`, `swap`, `compareExchange`, `fetchAdd` and `fetchSub`.
+through a shared reference with `load`, `store`, `swap`, `compareExchange`, `fetchAdd` and `fetchSub`, and the
+integer ones with `fetchOr` and `fetchAnd`.
 
 Those are sequentially consistent: every thread sees every atomic operation in one order. That is the simple rule,
 and on x86-64 it costs a full barrier on each store. When one thread publishes data and another reads it, release

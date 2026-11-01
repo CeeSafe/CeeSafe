@@ -54,7 +54,7 @@ diagnostics, so any cascade fails the test.
 | N0104 | Invalid assignment target | `1 = 2;`, `f() = 3;` |
 | N0105 | Expected a type | `fn f(x: ) {}` |
 | N0106 | Namespace declaration not first in the file | `fn a() {}` then `namespace X;` |
-| N0107 | Expected a field or `fn` inside a struct body | `struct A { 42; }` |
+| N0107 | Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2) | `struct A { 42; }` |
 | N0108 | Expected a `match` pattern (`_`, a literal, or `E.V(…)`) | `match (n) { + => { } }` |
 | N0109 | An `import` declaration after an item | `fn a() {}` then `import geometry;` |
 | N0110 | Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed | 1,000 nested parentheses; a sum of 1,001 terms |
@@ -276,3 +276,5 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0343 | Recursion through `await`: an async fn whose frame would contain itself, directly, through a call through `dyn` that may reach it, or as an `@effectsOf` function's async instance calling itself with its closure (`type-system.md` §40.1, §32.5, ADRs 0036, 0037) | `async fn walk(n: u32) { if (n > 0) { await walk(n - 1); } }` |
 | N0344 | A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value it only reads, which it copies, or what an `async move` child moves (`type-system.md` §40.5, ADR 0033) | `Async.scope(E.Oom, (s) => { var n = 0; s.spawn(async () => { n += 1; return Ok(); }); })` |
 | N0345 | `Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4) | `await Async.park();` in a program |
+| N0346 | A member of an imported union whose type has bit patterns that are not values: anything but an integer, a raw pointer, an array of these, or an imported type whose fields are such (`type-system.md` §31.1, ADR 0041 §3.2) | `union u { on: bool; n: u32; }` in `extern "C"` |
+| N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |

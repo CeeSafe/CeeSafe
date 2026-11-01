@@ -130,6 +130,7 @@ struct Parser {
     front: Frontend;
     pos: usize;
     parsingSignatures: bool; // inside an interface or extern block: functions end with ';' instead of a body
+    parsingExtern: bool;     // inside an extern block: a function may end its parameters with `...` (ADR 0041 §3.3)
     recovering: bool;
     nesting: u32;
     tooDeep: bool;
@@ -150,6 +151,10 @@ struct Parser {
     fn at(borrow this, kind: TokenKind) -> bool => sameKind(this.current().kind, kind);
 
     fn peekIs(borrow this, offset: usize, kind: TokenKind) -> bool => sameKind(this.peek(offset).kind, kind);
+
+    /// At `...`, which the lexer gives as `..` and `.` with nothing between (ADR 0041 §3.3).
+    fn atEllipsis(borrow this) -> bool =>
+        this.at(TokenKind.DotDot) && this.peekIs(1, TokenKind.Dot) && this.peek(1).start == this.current().end;
 
     fn advance(borrow mut this) -> Token {
         let token = this.current();
@@ -489,15 +494,20 @@ struct Parser {
         var functions = Vector<u32>.create();
         var structs = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
-        while (this.atFunction() || this.at(TokenKind.StructKeyword) || this.at(TokenKind.At) ||
-            isVisibilityKeyword(this.current().kind)) {
+        while (this.atFunction() || this.at(TokenKind.StructKeyword) || this.atUnion(TokenKind.Identifier) ||
+            this.at(TokenKind.At) || isVisibilityKeyword(this.current().kind)) {
             let memberStart = this.current().start;
             let memberDocPos = this.pos;
             let memberDoc = this.docAt(memberDocPos)?; // before the attributes, if any (grammar.md §1.2)
             let attributes = this.parseAttributes()?;
             let memberVisibility = this.parseVisibility();
-            if (this.at(TokenKind.StructKeyword)) {
-                let s = this.parseStruct(memberVisibility, memberStart, true)?;
+            if (this.at(TokenKind.StructKeyword) || this.atUnion(TokenKind.Identifier)) {
+                let s = this.parseStructOrUnion(
+                    memberVisibility,
+                    memberStart,
+                    true,
+                    !this.at(TokenKind.StructKeyword),
+                )?;
                 this.front.ast.items[s as usize].attributes = attributes;
                 structs.push(s)?;
                 continue;
@@ -507,7 +517,9 @@ struct Parser {
                 break;
             }
             this.parsingSignatures = true;
+            this.parsingExtern = true;
             let f = this.parseFunction(memberVisibility, memberStart)?;
+            this.parsingExtern = false;
             let function = borrow mut this.front.ast.functions[f as usize];
             function.attributes = attributes;
             function.isExtern = true;
@@ -622,8 +634,27 @@ struct Parser {
             moreParameters = this.eat(TokenKind.Comma);
         }
         var parameters = Vector<u32>.create();
+        var variadicStart = none();
         while (moreParameters && !this.at(TokenKind.CloseParen) && !this.at(TokenKind.EndOfFile) &&
             !this.at(TokenKind.OpenBrace)) {
+            if (this.atEllipsis()) {
+                // `...`: C's further arguments (ADR 0041 §3.3), last, and only for a function C defines.
+                let dots = this.advance();
+                this.advance();
+                if (this.parsingExtern) {
+                    variadicStart = dots.start;
+                } else {
+                    this.error(
+                        expectedToken(),
+                        dots.start,
+                        dots.end + 1,
+                        textMessage(
+                            "only a C function, declared in an 'extern \"C\"' block, can take '...' (ADR 0041 §3.3)",
+                        )?,
+                    )?;
+                }
+                break;
+            }
             let paramStart = this.current().start;
             let paramName = this.parseIdentifier()?;
             this.expect(TokenKind.Colon)?;
@@ -677,6 +708,7 @@ struct Parser {
             hasDoc: doc.found,
             doc: doc.text,
             isExtern: false,
+            variadicStart: variadicStart,
             attributes: emptyRange(),
             start: start,
             end: this.endFrom(start),
@@ -709,8 +741,95 @@ struct Parser {
         return this.addItem(ItemKind.Struct(index), visibility, name, start);
     }
 
-    fn parseStruct(borrow mut this, visibility: Visibility, start: u32, imported: bool) -> Result<u32, AllocError> {
-        this.expect(TokenKind.StructKeyword)?;
+    fn parseStruct(borrow mut this, visibility: Visibility, start: u32, imported: bool) -> Result<u32, AllocError> =>
+        this.parseStructOrUnion(visibility, start, imported, false);
+
+    /// At `union` followed by `follow`: a word only there (ADR 0041 §3.2), so `union` stays a valid name elsewhere.
+    fn atUnion(borrow this, follow: TokenKind) -> bool =>
+        this.at(TokenKind.Identifier) && this.nameIs(this.current(), "union") && this.peekIs(1, follow);
+
+    /// The members of an anonymous union of an imported struct, `union { a: T; b: U; }`, or of an imported union
+    /// type's body, from its `{` to its `}`; each gets the first member's index as its union group.
+    fn parseUnionMembers(
+        borrow mut this,
+        fields: borrow mut Vector<u32>,
+        unionStart: u32,
+        anonymous: bool,
+    ) -> Result<void, AllocError> {
+        this.expect(TokenKind.OpenBrace)?;
+        let group = truncate<u32>(this.front.ast.fields.length);
+        let first = fields.length;
+        while (!this.at(TokenKind.CloseBrace) && !this.at(TokenKind.EndOfFile)) {
+            let startPos = this.pos;
+            let memberStart = this.current().start;
+            let memberAttributes = this.parseAttributes()?;
+            let memberVisibility = this.parseVisibility();
+            if (anonymous && this.atUnion(TokenKind.OpenBrace)) {
+                let at = this.advance();
+                this.error(
+                    expectedMember(),
+                    at.start,
+                    at.end,
+                    textMessage(
+                        "a union's members share its storage already; a union inside one is not imported (ADR 0041 §3.2)",
+                    )?,
+                )?;
+            } else if (this.at(TokenKind.Identifier)) {
+                let fieldName = this.parseIdentifier()?;
+                this.expect(TokenKind.Colon)?;
+                let typ = this.parseType()?;
+                this.expect(TokenKind.Semicolon)?;
+                this.front.ast.fields.push(Field {
+                    visibility: memberVisibility,
+                    name: fieldName,
+                    typ: typ,
+                    attributes: memberAttributes,
+                    start: memberStart,
+                    end: this.endFrom(memberStart),
+                    unionGroup: group,
+                    unionStart: if (anonymous) unionStart else none(),
+                    unionEnd: 0,
+                })?;
+                fields.push(truncate<u32>(this.front.ast.fields.length - 1))?;
+            } else {
+                this.errorFound(expectedMember(), "expected a field in a union, found ", "")?;
+                this.advance();
+            }
+            this.synchronizeMember();
+            if (this.pos == startPos) {
+                this.advance();
+            }
+        }
+        let close = this.current();
+        this.expect(TokenKind.CloseBrace)?;
+        if (fields.length == first) {
+            this.error(
+                expectedMember(),
+                unionStart,
+                close.end,
+                textMessage("a union needs a member (ADR 0041 §3.2)")?,
+            )?;
+        }
+        if (anonymous) {
+            for (k in first..fields.length) {
+                this.front.ast.fields[fields[k] as usize].unionEnd = close.end;
+            }
+        }
+        return Ok();
+    }
+
+    fn parseStructOrUnion(
+        borrow mut this,
+        visibility: Visibility,
+        start: u32,
+        imported: bool,
+        isUnion: bool,
+    ) -> Result<u32, AllocError> {
+        if (isUnion) {
+            this.advance(); // `union`
+        } else {
+            this.expect(TokenKind.StructKeyword)?;
+        }
         let name = this.parseIdentifier()?;
         let typeParameters = this.parseTypeParameters()?;
         if (imported && this.at(TokenKind.Semicolon)) {
@@ -725,6 +844,7 @@ struct Parser {
                 dropDoc: emptyRange(),
                 isImported: true,
                 isOpaque: true,
+                isUnion: isUnion,
                 typeParameters: split.types,
                 regionParameters: split.regions,
             });
@@ -745,8 +865,29 @@ struct Parser {
                 dropDoc: emptyRange(),
                 isImported: false,
                 isOpaque: false,
+                isUnion: false,
                 typeParameters: emptyRange(),
                 regionParameters: emptyRange(),
+            });
+        }
+        if (isUnion) {
+            // An imported union's body: every member shares the storage (ADR 0041 §3.2).
+            let unionStart = this.current().start;
+            this.parseUnionMembers(mut fields, unionStart, false)?;
+            let split = this.splitTypeParameters(typeParameters)?;
+            let fieldRange = this.list(fields)?;
+            return this.addStruct(visibility, name, start, Struct {
+                fields: fieldRange,
+                functions: emptyRange(),
+                dropBlock: none(),
+                dropStart: 0,
+                hasDropDoc: false,
+                dropDoc: emptyRange(),
+                isImported: true,
+                isOpaque: false,
+                isUnion: true,
+                typeParameters: split.types,
+                regionParameters: split.regions,
             });
         }
         this.advance();
@@ -796,6 +937,10 @@ struct Parser {
                     function.doc = memberDoc.text;
                 }
                 functions.push(f)?;
+            } else if (imported && this.atUnion(TokenKind.OpenBrace)) {
+                // An anonymous union member of an imported struct (ADR 0041 §3.2).
+                this.advance();
+                this.parseUnionMembers(mut fields, memberStart, true)?;
             } else if (this.at(TokenKind.Identifier)) {
                 let fieldName = this.parseIdentifier()?;
                 this.expect(TokenKind.Colon)?;
@@ -808,6 +953,9 @@ struct Parser {
                     attributes: if (imported) memberAttributes else emptyRange(),
                     start: memberStart,
                     end: this.endFrom(memberStart),
+                    unionGroup: none(),
+                    unionStart: none(),
+                    unionEnd: 0,
                 })?;
                 fields.push(truncate<u32>(this.front.ast.fields.length - 1))?;
             } else {
@@ -832,6 +980,7 @@ struct Parser {
             dropDoc: dropDoc.text,
             isImported: imported,
             isOpaque: false,
+            isUnion: false,
             typeParameters: split.types,
             regionParameters: split.regions,
         });
@@ -2351,6 +2500,7 @@ fn parseFile(file: u32, lexed: Lexed, front: Frontend) -> Result<Frontend, Alloc
         front: front,
         pos: 0,
         parsingSignatures: false,
+        parsingExtern: false,
         recovering: false,
         nesting: 0,
         tooDeep: false,

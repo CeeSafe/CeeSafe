@@ -710,6 +710,11 @@ static inline uint32_t ceesafe_atomic_cas_u32(uint32_t *p, uint32_t expected, ui
     return (uint32_t)_InterlockedCompareExchange((volatile long *)p, (long)desired, (long)expected);
 }
 static inline uint32_t ceesafe_atomic_add_u32(uint32_t *p, uint32_t v) { return (uint32_t)_InterlockedExchangeAdd((volatile long *)p, (long)v); }
+/* fetchOr and fetchAnd (ADR 0041). */
+static inline uint64_t ceesafe_atomic_or_u64(uint64_t *p, uint64_t v) { return (uint64_t)_InterlockedOr64((volatile __int64 *)p, (__int64)v); }
+static inline uint64_t ceesafe_atomic_and_u64(uint64_t *p, uint64_t v) { return (uint64_t)_InterlockedAnd64((volatile __int64 *)p, (__int64)v); }
+static inline uint32_t ceesafe_atomic_or_u32(uint32_t *p, uint32_t v) { return (uint32_t)_InterlockedOr((volatile long *)p, (long)v); }
+static inline uint32_t ceesafe_atomic_and_u32(uint32_t *p, uint32_t v) { return (uint32_t)_InterlockedAnd((volatile long *)p, (long)v); }
 /* Every _Interlocked intrinsic is a full barrier: a correct, stronger, implementation of each ordering. */
 static inline uint64_t ceesafe_atomic_load_ord_u64(uint64_t *p, int32_t o) { (void)o; return ceesafe_atomic_load_u64(p); }
 static inline void ceesafe_atomic_store_ord_u64(uint64_t *p, uint64_t v, int32_t o) { (void)o; ceesafe_atomic_store_u64(p, v); }
@@ -721,6 +726,10 @@ static inline void ceesafe_atomic_store_ord_u32(uint32_t *p, uint32_t v, int32_t
 static inline uint32_t ceesafe_atomic_swap_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_swap_u32(p, v); }
 static inline uint32_t ceesafe_atomic_cas_ord_u32(uint32_t *p, uint32_t e, uint32_t d, int32_t o) { (void)o; return ceesafe_atomic_cas_u32(p, e, d); }
 static inline uint32_t ceesafe_atomic_add_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_add_u32(p, v); }
+static inline uint64_t ceesafe_atomic_or_ord_u64(uint64_t *p, uint64_t v, int32_t o) { (void)o; return ceesafe_atomic_or_u64(p, v); }
+static inline uint64_t ceesafe_atomic_and_ord_u64(uint64_t *p, uint64_t v, int32_t o) { (void)o; return ceesafe_atomic_and_u64(p, v); }
+static inline uint32_t ceesafe_atomic_or_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_or_u32(p, v); }
+static inline uint32_t ceesafe_atomic_and_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_and_u32(p, v); }
 #else
 static inline uint64_t ceesafe_atomic_load_u64(uint64_t *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
 static inline void ceesafe_atomic_store_u64(uint64_t *p, uint64_t v) { __atomic_store_n(p, v, __ATOMIC_SEQ_CST); }
@@ -738,6 +747,11 @@ static inline uint32_t ceesafe_atomic_cas_u32(uint32_t *p, uint32_t expected, ui
     return expected;
 }
 static inline uint32_t ceesafe_atomic_add_u32(uint32_t *p, uint32_t v) { return __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST); }
+/* fetchOr and fetchAnd (ADR 0041). */
+static inline uint64_t ceesafe_atomic_or_u64(uint64_t *p, uint64_t v) { return __atomic_fetch_or(p, v, __ATOMIC_SEQ_CST); }
+static inline uint64_t ceesafe_atomic_and_u64(uint64_t *p, uint64_t v) { return __atomic_fetch_and(p, v, __ATOMIC_SEQ_CST); }
+static inline uint32_t ceesafe_atomic_or_u32(uint32_t *p, uint32_t v) { return __atomic_fetch_or(p, v, __ATOMIC_SEQ_CST); }
+static inline uint32_t ceesafe_atomic_and_u32(uint32_t *p, uint32_t v) { return __atomic_fetch_and(p, v, __ATOMIC_SEQ_CST); }
 
 /* A builtin's ordering must be a constant for the compiler to choose its instructions (a variable one is treated as
  * sequentially consistent), so each entry point switches. A compare-exchange fails with the ordering C11 allows for
@@ -783,11 +797,15 @@ CEE_LOAD_ORD(uint64_t, u64)
 CEE_STORE_ORD(uint64_t, u64)
 CEE_RMW_ORD(uint64_t, u64, swap, __atomic_exchange_n)
 CEE_RMW_ORD(uint64_t, u64, add, __atomic_fetch_add)
+CEE_RMW_ORD(uint64_t, u64, or, __atomic_fetch_or)
+CEE_RMW_ORD(uint64_t, u64, and, __atomic_fetch_and)
 CEE_CAS_ORD(uint64_t, u64)
 CEE_LOAD_ORD(uint32_t, u32)
 CEE_STORE_ORD(uint32_t, u32)
 CEE_RMW_ORD(uint32_t, u32, swap, __atomic_exchange_n)
 CEE_RMW_ORD(uint32_t, u32, add, __atomic_fetch_add)
+CEE_RMW_ORD(uint32_t, u32, or, __atomic_fetch_or)
+CEE_RMW_ORD(uint32_t, u32, and, __atomic_fetch_and)
 CEE_CAS_ORD(uint32_t, u32)
 #undef CEE_LOAD_ORD
 #undef CEE_STORE_ORD

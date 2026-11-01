@@ -1672,6 +1672,31 @@ fn appendRvalue(
                 appendBuiltinCall(e, c, n, sources, f, out, c.name(function.name), arguments)?;
                 return out.push(')');
             }
+            if (isVariadicFunction(c, callee)) {
+                // A C variadic function (ADR 0041 §3.3): called directly, each argument converted to its C type,
+                // the parameters' as the wrapper of another C function would, and a further one's as its own.
+                var call = copyBytes(c.name(function.name))?;
+                call.push('(')?;
+                let count = function.parameters.length;
+                for (k in 0..arguments.count) {
+                    if (k > 0) {
+                        appendText(mut call, ", ")?;
+                    }
+                    let operand = n.at(arguments, k);
+                    let text = operandText(e, c, n, sources, f, operand)?;
+                    let typ = if ((k as usize) < count) parameterType(
+                        c,
+                        callee,
+                        k as usize,
+                    ) else n.operandTypes[operand as usize];
+                    appendToBoundary(c, mut call, typ, text.view())?;
+                }
+                call.push(')')?;
+                if (c.types.is(function.returnType, TypeKind.Void)) {
+                    return appendBytes(out, call.view());
+                }
+                return appendFromBoundary(c, out, function.returnType, call.view());
+            }
             appendVariantPrefix(out, n.rvalueVariants[r as usize])?;
             appendCFunctionName(c, out, callee)?;
             out.push('(')?;
@@ -1708,9 +1733,10 @@ fn appendRvalue(
                 let p = n.places[place as usize];
                 return appendPlaceParts(e, c, n, sources, f, out, p.local, p.projections, p.projections.count - 1);
             }
-            if (isImportedByteMember(c, n, f, place)) {
+            if (isImportedByteMember(c, n, f, place) || isAtomicMember(c, n, f, place)) {
                 // A `u8` member of an imported struct may be C's `char` (ADR 0034): its address converts, as a
-                // character-type access.
+                // character-type access. An atomic member is its integer in C (ADR 0041 §3.1), laid out exactly as
+                // the atomic type, whose methods then reach it atomically.
                 appendText(out, "(")?;
                 appendCTypeName(c, out, t)?;
                 appendText(out, ")(uintptr_t)")?;
@@ -2702,6 +2728,14 @@ fn appendAggregate(
         appendText(out, " = ")?;
         let value = operandText(e, c, n, sources, f, o)?;
         appendBytes(out, value.view())?;
+        let atomicInteger = if (isReprCStruct(c, t)) atomicFieldInteger(
+            c,
+            c.types.fields[fields[k] as usize].typ,
+        ) else none();
+        if (atomicInteger != none()) {
+            // The member is its integer (ADR 0041 §3.1): the atomic's one field, AtomicUSize's inside an AtomicU64.
+            appendText(out, if (atomicInteger == c.types.usize) ".f_inner.f_value" else ".f_value")?;
+        }
     }
     if (!any) {
         out.push('.')?;
@@ -2719,6 +2753,32 @@ fn placedSlot(e: borrow CEmitter, f: u32, statement: u32) -> u32 =>
 fn isPlacedBox(e: borrow CEmitter, n: borrow NirProgram, f: u32, place: u32) -> bool =>
     placeIsLocal(n, place) && (f as usize) < e.placements.length &&
         isPlacedBoxLocal(e.placements[f as usize], placeLocal(n, place));
+
+/// Whether `place` is an atomic field (AtomicU32, AtomicU64, AtomicUSize) of a struct C lays out with the integer
+/// instead: an imported struct, or a @repr(C) struct CeeSafe shares with C (ADR 0041 §3.1).
+fn isAtomicMember(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {
+    let p = n.places[place as usize];
+    if (p.projections.count == 0 || atomicFieldInteger(c, placeTypeIn(c, n, f, place)) == none()) {
+        return false;
+    }
+    let last = n.projections[(p.projections.start + p.projections.count - 1) as usize];
+    let isField = match (last.kind) {
+        ProjectionKind.Field => true,
+        _ => false,
+    };
+    if (!isField) {
+        return false;
+    }
+    var owner = n.functions[f as usize].locals[p.local as usize].typ;
+    for (k in 0..(p.projections.count - 1)) {
+        owner = applyNirProjection(c, owner, n.projections[(p.projections.start + k) as usize]);
+    }
+    if (!c.types.is(owner, TypeKind.Struct)) {
+        return false;
+    }
+    let def = c.types.info(owner).structDef as usize;
+    return c.types.structs[def].isImported || c.types.structs[def].isReprC;
+}
 
 /// Whether `place` is a `u8` field of an imported C struct, which may be C's `char` (ADR 0034).
 fn isImportedByteMember(c: borrow Checker, n: borrow NirProgram, f: u32, place: u32) -> bool {

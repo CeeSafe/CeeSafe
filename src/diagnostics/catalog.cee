@@ -20,7 +20,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     104 => "Invalid assignment target",
     105 => "Expected a type",
     106 => "Namespace declaration not first in the file",
-    107 => "Expected a field or `fn` inside a struct body",
+    107 =>
+        "Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2)",
     108 => "Expected a `match` pattern (`_`, a literal, or `E.V(…)`)",
     109 => "An `import` declaration after an item",
     110 =>
@@ -184,5 +185,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     344 =>
         "A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value it only reads, which it copies, or what an `async move` child moves (`type-system.md` §40.5, ADR 0033)",
     345 => "`Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4)",
+    346 =>
+        "A member of an imported union whose type has bit patterns that are not values: anything but an integer, a raw pointer, an array of these, or an imported type whose fields are such (`type-system.md` §31.1, ADR 0041 §3.2)",
+    347 =>
+        "A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3)",
     _ => "",
 };

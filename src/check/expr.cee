@@ -1004,6 +1004,37 @@ fn synthCall(
     return c.errorResult(span.start, span.end);
 }
 
+/// A further argument of a C variadic function (ADR 0041 §3.3): one of the types C's default argument promotions leave
+/// unchanged, so the C callee reads what CeeSafe passed: `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` or a raw
+/// pointer. A narrower integer, `bool`, `f32` and anything else is N0347.
+fn checkVariadicArgument(c: borrow mut Checker, value: u32) -> Result<void, AllocError> {
+    let t = c.hir.exprTypes[value as usize];
+    let info = c.types.info(t);
+    let promoted = (c.types.is(t, TypeKind.Integer) && info.bits >= 32) ||
+        (c.types.is(t, TypeKind.Float) && info.bits == 64) || c.types.is(t, TypeKind.RawPointer) ||
+        c.types.is(t, TypeKind.Error);
+    if (promoted) {
+        return Ok();
+    }
+    let span = c.hir.exprSpans[value as usize];
+    var message = Vector<u8>.create();
+    appendText(mut message, "a further argument of a C variadic function cannot be a ")?;
+    appendQuotedType(mut message, c, t)?;
+    appendText(
+        mut message,
+        if (c.types.is(
+            t,
+            TypeKind.Integer,
+        )) ": C would promote it; widen it with 'as i32' or 'as u32' (ADR 0041 §3.3)" else if (c.types.is(
+            t,
+            TypeKind.Float,
+        )) ": C would promote it; widen it with 'as f64' (ADR 0041 §3.3)" else ": only i32, u32, i64, u64, isize, usize, f64 and raw pointers pass unchanged through '...' (ADR 0041 §3.3)",
+    )?;
+    return c.error(variadicArgument(), span.start, span.end, message);
+}
+
+fn variadicArgument() -> u32 => 347;
+
 /// CheckUserCall for a top-level function.
 fn checkUserCall(c: borrow mut Checker, function: u32, arguments: Range, span: Span) -> Result<u32, AllocError> =>
     checkUserCallWith(c, function, arguments, span, none());
@@ -1068,7 +1099,11 @@ fn checkUserCallWith(
         appendText(mut what, "'")?;
         requireUnsafe(c, span, what.view())?;
     }
-    if (arguments.count as usize != parameterCount) {
+    // A C variadic function takes its parameters and then any number of further arguments (ADR 0041 §3.3).
+    let variadic = syntax.isExtern && syntax.variadicStart != none();
+    let arityWrong = if (variadic) (arguments.count as usize) < parameterCount else arguments.count as usize !=
+        parameterCount;
+    if (arityWrong) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         if (owner != none()) {
@@ -1076,7 +1111,7 @@ fn checkUserCallWith(
             appendText(mut message, ".")?;
         }
         appendBytes(mut message, c.name(name))?;
-        appendText(mut message, "' takes ")?;
+        appendText(mut message, if (variadic) "' takes at least " else "' takes ")?;
         appendDecimal(mut message, parameterCount as u64)?;
         appendText(mut message, " argument(s) but ")?;
         appendDecimal(mut message, arguments.count as u64)?;
@@ -1114,8 +1149,13 @@ fn checkUserCallWith(
             namesEffectsOf(c, function, k as usize + skip);
         let savedAdapter = c.asyncAdapter;
         c.asyncAdapter = effectsOf;
-        let value = checkArgument(c, argument, parameterType)?;
+        // A further argument of a variadic function has no parameter: its own type, which must pass unchanged.
+        let further = variadic && parameterType == none();
+        let value = if (further) synth(c, argument, none())? else checkArgument(c, argument, parameterType)?;
         c.asyncAdapter = savedAdapter;
+        if (further) {
+            checkVariadicArgument(c, value)?;
+        }
         if (effectsOf) {
             match (c.hir.exprs[value as usize]) {
                 HirExpr.Closure(adapter, _) => {
@@ -1128,7 +1168,7 @@ fn checkUserCallWith(
         }
         values.push(value)?;
     }
-    if (arguments.count as usize != parameterCount) {
+    if (arityWrong) {
         return c.errorResult(span.start, span.end);
     }
     let list = c.hir.list(values.view())?;

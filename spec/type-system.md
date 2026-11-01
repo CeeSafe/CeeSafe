@@ -1844,6 +1844,28 @@ attribute twice is N0290.
 - A function that a `@header` defines `static inline` may be declared and called (ADR 0030): the generated prototype
   has no storage class, so it takes the definition's internal linkage (C11 §6.2.2p4–5). CosmoOS's `list.h` helpers are
   called so (lib/kernel's `List`).
+- **Variadic functions** (ADR 0041 §3.3). `fn klog(level: u32, format: *CChar, ...);` declares a C variadic
+  function: `...` ends its parameters, which must not be empty (N0290), and it is allowed in an `extern "C"` block
+  only (N0100). A call passes the parameters as for any C function and then any number of further arguments, each of
+  a type that C's default argument promotions (C11 §6.5.2.2p6–7) leave unchanged: `i32`, `u32`, `i64`, `u64`,
+  `isize`, `usize`, `f64` or a raw pointer, `*CChar` among them, passed as its C type (§28.3). A narrower integer,
+  `bool`, `f32` or anything else is N0347, whose message says how to widen it with `as`. Fewer arguments than
+  parameters is N0209.
+  - Like every C call, it is unsafe (N0280), and here the `/// Safety:` comment carries more: whether the further
+    arguments agree with what the callee reads (a format string's conversions, a count) is not something CeeSafe
+    checks, and C checks only a literal format, while the generated C passes a pointer.
+  - It is called directly, with no wrapper function, so it has no C function pointer type and cannot be one (N0291),
+    and it cannot return a `@repr` enum, which a wrapper would check (N0291). A unit that calls one disables C's
+    warnings about a format that is not a literal (`-Wformat-security`, `-Wformat-nonliteral`), for the reason above.
+  - **Formatting without a variadic call** (ADR 0041 §3.3). lib/core's `TextWriter<region r>`
+    (`lib/core/format.cee`, every profile) writes into a caller's `SliceMut<u8>` as `snprintf` does, with no
+    allocation: `create(buffer)`, then `text(s)`, `bytes(b)`, `byte(b)`, `decimal(u64)`, `signed(i64)` and
+    `hex(u64, width)`; what does not fit is cut, the text stays zero-terminated in a buffer of at least one byte, and
+    `written()`, `length()`, `wanted()` (every byte asked for, as `snprintf`'s result), `truncated()` and `cText()`
+    (a `*CChar` to it) read it. lib/kernel's `KernelLog` (`lib/kernel/log.cee`, `--kernel cosmoos`) sends one:
+    `send(level, line)` is `klog(level, "%s", text)`, `write(level, message)` a fixed message, and `panic(line)` is
+    CosmoOS's `panic("%s", text)`; `LogLevel` is log.h's levels, `LOG_LINE_MAX` its 256. These are the only variadic
+    calls, with a fixed format, so a port's messages are safe code.
 
 ### 28.3 FFI-safe types and their C types
 | CeeSafe | C, in prototypes and in `ceesafe_exports.h` |
@@ -1889,11 +1911,16 @@ declarations of C library functions match the C library's own prototypes exactly
 - `@repr(C)` on a struct fixes its layout to C's rules (fields in declaration order, each aligned,
   the size rounded up to the alignment; CeeSafe's layout already is this, and M9 may reorder only
   structs without it). Its fields must be integers, `bool`, raw pointers as in §28.3, `@repr(C)`
-  structs, imported C types by value (§31; ADR 0029), or arrays `[E; N]` of any of these (ADR 0029), and their
+  structs, imported C types by value (§31; ADR 0029), arrays `[E; N]` of any of these (ADR 0029), or `AtomicU32`,
+  `AtomicU64` and `AtomicUSize` (ADR 0041; not `AtomicBool`, a `u32` where C's `bool` is a byte), and their
   names valid, unreserved C identifiers (N0291, N0292). In C it is `struct S`
   with members named as in CeeSafe, of the types CeeSafe uses inside its own C (`usize` is `uint64_t`,
   pointers have no `const`), so that the generated code and C code that includes `ceesafe_exports.h`
   declare the same struct type. It is otherwise an ordinary struct.
+- An atomic field (ADR 0041 §3.1) is its integer member in C: `uint32_t`, `uint64_t`, and `uint64_t` for
+  `AtomicUSize`, as for `usize`. CeeSafe reaches it only through the atomic type's methods, which are the
+  `__atomic_*` operations on the member's address, so C code that includes `ceesafe_exports.h` shares it by applying
+  `__atomic_*` to the member (a non-atomic C access while CeeSafe may access it is a data race in C).
 - An array field is the C array member `CE f[N]` (nested arrays `CE f[N][M]`); in CeeSafe it is an ordinary array.
 - **C state** (ADR 0029). A `@repr(C)` struct with a field of an imported C type, directly or in an array or a
   `@repr(C)` field, is C-laid-out (§33.1), and every rule of §33 applies: it is never moved, copied or assigned in
@@ -2112,14 +2139,32 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   name must be valid, unreserved C identifiers (§28.2, N0292).
 - Fields are declared with their C member names, in any order, and only those CeeSafe uses. Their types
   must be integers, `bool`, raw pointers whose pointee C can name (§28.3, including imported types),
-  (since C7b, §33.1) imported types, for embedded members, or (since C9) **arrays** `[E; N]` of integers,
-  `bool` or imported types, for C array members `CE name[N]`; otherwise N0291. An embedded member is checked
+  (since C7b, §33.1) imported types, for embedded members, (since C9) **arrays** `[E; N]` of integers,
+  `bool` or imported types, for C array members `CE name[N]`, or (ADR 0041) `AtomicU32`, `AtomicU64` or
+  `AtomicUSize` for a `uint32_t`, `uint64_t` or `size_t` member; otherwise N0291. An embedded member is checked
   with `_Generic` only, since CeeSafe has no size for it. A field's declared type must be exactly the member's C type, under §28.3's mapping (`u32`
   is `uint32_t`, `usize` is `size_t`, `*CChar` is `const char *`, `*mut T` is `T *`, `[u8; 16]` is `uint8_t[16]`).
   This is checked when the C is compiled (§31.3), not by ceesafec. A C `char`, `signed char` or `unsigned char`
   member is declared `u8`, and an array of them `[u8; N]` (ADR 0034): C lets any object be read and written as
   bytes, and a byte's value does not depend on `char`'s signedness. `CChar` itself stays a pointee only (§28.3). The
   address of a `u8` member, when it is borrowed, converts to `uint8_t *` in the C.
+- **Unions** (ADR 0041 §3.2). Inside an imported struct, `union { a: T; b: U; }` declares the members of a C11
+  anonymous union member, reached as `r.a` and `r.b` (C's `p->a`). In the block, `union name { … }` declares an
+  **imported union**, spelled `union name` in C (or its `@ctype`), used as an imported struct is (behind a pointer or
+  reference, or embedded as a field) and its members reached the same way; `union name;` imports one opaque. A
+  union needs a member, and an anonymous union holds no union of its own (N0107; grammar.md §2's `ExternUnion` and
+  `AnonymousUnion`). `union` is a word only there: elsewhere it is an identifier.
+  - The members of one union share storage, so a member's type must be one every bit pattern is a value of: an
+    integer, a raw pointer, an array of these, or an imported type whose declared fields are such (N0346). Reading a
+    member after another was written reinterprets bytes, as C11 allows (C11 §6.5.2.3 note 95), and can never make an
+    invalid value; `bool`, function pointers, atomics and imported types holding them are refused.
+  - The borrow checker treats every member of one union as **one place** (§31.2).
+- **Atomic fields** (ADR 0041 §3.1). A member that C code reads and changes with `__atomic_*` (a statistic, a
+  reference count, a flag word shared between CPUs) is declared with the atomic type over its integer. The atomic
+  type is laid out exactly as its integer (§38.3), and the `_Generic` check compares the member with that integer
+  type. The field is a place of the atomic type, which CeeSafe reaches only through the type's methods: each is the
+  `__atomic_*` operation on the member's address. That C, too, accesses it only atomically is the C side's obligation,
+  as for any state C shares. `AtomicBool` is refused (N0291): it is a `u32`, and C's `bool` a byte.
 - **`@cname("name")`** on a field (C9) gives its C member name when that is a CeeSafe keyword (`type`, `in`,
   `match`, …); CeeSafe code uses the declared name. The C name must be a valid, unreserved C identifier (N0292),
   and no two fields may have the same C name (N0228). `@cname` anywhere else is N0290.
@@ -2138,6 +2183,9 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   it like any field place. A field of raw pointer type, `usize` or `isize` can be read and assigned
   but not borrowed (N0294): its C member type (`const char *`, `size_t`) is not the C type CeeSafe
   uses for the value (`char *`, `uint64_t`), so a pointer to it would have the wrong type in C.
+- **Union members** (ADR 0041 §3.2). The members of one union (§31.1) are one place: borrowing, assigning or using
+  any member, or a place inside it, conflicts with a live loan of any other member as it would with a loan of the
+  same member (B1–B2; N0240–N0242). Fields outside the union stay separate places.
 - **Array fields** (C9) are array places of their declared type, as in any struct (§16): `r.f[i]` is
   bounds-checked against `N`, `r.f[a..b]` is a slice (mutable through `borrow mut`), and when the element is
   an integer or `bool` the field can be read and assigned whole. An array of an imported type is
@@ -3029,11 +3077,15 @@ fn main() {
   is a static inline function of the runtime header, so it compiles to the machine's atomic instructions.
   - `create(v)`, then `load()`, `store(v)`, `swap(v)` and `compareExchange(expected, new)` (returns
     `Result<T, T>`, `Err` with the current value).
-  - The integer types also have `fetchAdd(v)` and `fetchSub(v)`, which wrap.
+  - The integer types also have `fetchAdd(v)` and `fetchSub(v)`, which wrap, and (ADR 0041) `fetchOr(v)` and
+    `fetchAnd(v)`; each returns the value before the change.
+  - **Layout.** `AtomicU32` and `AtomicU64` are laid out exactly as `u32` and `u64` (size and alignment, checked by
+    `_Static_assert` in every unit), and `AtomicUSize` as `usize`; so an atomic may be a field of a `@repr(C)` or
+    imported struct, as its integer member (§28.5, §31.1; ADR 0041). `AtomicBool` is a `u32`.
   - Every operation takes `borrow this`, is sequentially consistent, and has no effect.
   - **With an ordering** (ADR 0021): `loadWith(o: LoadOrdering)`, `storeWith(v, o: StoreOrdering)`, and
-    `swapWith`, `compareExchangeWith`, `fetchAddWith`, `fetchSubWith` taking `o: Ordering` (`AtomicBool` has the first
-    four). The enums are `LoadOrdering { Relaxed, Acquire, SequentiallyConsistent }`, `StoreOrdering { Relaxed, Release,
+    `swapWith`, `compareExchangeWith`, `fetchAddWith`, `fetchSubWith`, `fetchOrWith`, `fetchAndWith` taking
+    `o: Ordering` (`AtomicBool` has the first four). The enums are `LoadOrdering { Relaxed, Acquire, SequentiallyConsistent }`, `StoreOrdering { Relaxed, Release,
     SequentiallyConsistent }` and `Ordering { Relaxed, Acquire, Release, AcquireRelease, SequentiallyConsistent }`, with
     C11's meanings (C11 §7.17.3). A load cannot be given release ordering, nor a store acquire, which C11 leaves
     undefined. A compare-exchange that fails orders as a load: `AcquireRelease` as `Acquire`, `Release` as `Relaxed`.

@@ -265,6 +265,8 @@ struct Function {
     hasDoc: bool;
     doc: Range;
     isExtern: bool;
+    /// `...` after the parameters: a C variadic function (ADR 0041 §3.3); where it starts, or none.
+    variadicStart: u32;
     attributes: Range;
     start: u32;
     end: u32;
@@ -277,6 +279,11 @@ struct Field {
     attributes: Range;
     start: u32;
     end: u32;
+    /// An imported struct's union member (ADR 0041 §3.2): the first member of its union's `fields` index, which every
+    /// member of that union shares; every field of an imported union has its first field's. Otherwise none.
+    unionGroup: u32;
+    unionStart: u32; // where the `union` of an anonymous union member starts, for the formatter
+    unionEnd: u32;   // and where its `}` ends
 }
 
 struct Variant {
@@ -310,6 +317,7 @@ struct Struct {
     dropDoc: Range;
     isImported: bool;
     isOpaque: bool;
+    isUnion: bool; // `union name { … }` in an extern block: an imported C union (ADR 0041 §3.2)
     typeParameters: Range;
     regionParameters: Range;
 }

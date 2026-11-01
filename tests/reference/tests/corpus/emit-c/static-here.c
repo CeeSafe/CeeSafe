@@ -6,6 +6,8 @@
 #include "kernel/kmalloc.h"
 #include "kernel/object.h"
 #include "kernel/list.h"
+#include "kernel/log.h"
+#include "kernel/panic.h"
 #include "kernel/quiesce.h"
 #include "kernel/spinlock.h"
 #include "kernel/mutex.h"

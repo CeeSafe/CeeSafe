@@ -394,8 +394,8 @@ fn visitHeaderStruct(
     for (f in c.types.structs[c.types.info(t).structDef as usize].fields.view()) {
         let base = arrayBase(c, c.types.fields[f as usize].typ);
         let s = c.types.info(base).structDef;
-        if (s != none() && !c.types.structs[s as usize].isImported) {
-            visitHeaderStruct(c, base, seen, out)?;
+        if (s != none() && !c.types.structs[s as usize].isImported && atomicFieldInteger(c, base) == none()) {
+            visitHeaderStruct(c, base, seen, out)?; // an atomic member is its integer in C (ADR 0041)
         }
     }
     return out.push(t);

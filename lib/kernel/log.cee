@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// The kernel log from CeeSafe (ADR 0041 §3.3): a line built with lib/core's TextWriter, sent to CosmoOS's klog with one
+// call whose format is the fixed "%s", so a port's messages are safe code and no format string comes from it. A
+// formatted panic ends in CosmoOS's panic the same way.
+
+@header("kernel/log.h", "kernel/panic.h")
+extern "C" {
+    // log.h: "output never sleeps or allocates"; panic does not return.
+    @effects()
+    fn klog(level: u32, format: *CChar, ...);
+    @effects()
+    fn panic(format: *CChar, ...);
+}
+
+/// log.h's `enum klog_level`, but KLOG_PANIC, which `KernelLog.panic` is.
+public enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+/// log.h's KLOG_LINE_MAX: klog cuts a longer line, so a buffer of this many bytes holds any line it writes.
+public const LOG_LINE_MAX: usize = 256;
+
+/// CosmoOS's kernel log (kernel/include/kernel/log.h).
+public struct KernelLog {
+    /// Sends the writer's text as one line at `level`, as `klog(level, "%s", text)`.
+    /// Safety: the format is "%s" and the argument the writer's zero-terminated text (TextWriter.cText).
+    public fn send(level: LogLevel, line: borrow TextWriter) {
+        unsafe { klog(levelCode(level), "%s\0".ptr as *CChar, line.cText()); }
+    }
+
+    /// Sends a fixed message as one line at `level`.
+    public fn write(level: LogLevel, message: StringView) {
+        var buffer: [u8; 256] = [0; 256];
+        var line = TextWriter.create(mut buffer[..]);
+        line.text(message);
+        KernelLog.send(level, line);
+    }
+
+    /// Panics with the writer's text, as `panic("%s", text)`: CosmoOS's panic, which prints it and does not return.
+    /// Safety: as send.
+    public fn panic(line: borrow TextWriter) {
+        unsafe { panic("%s\0".ptr as *CChar, line.cText()); }
+    }
+}
+
+/// log.h's values of `enum klog_level`.
+fn levelCode(level: LogLevel) -> u32 => match (level) {
+    LogLevel.Debug => 0,
+    LogLevel.Info => 1,
+    LogLevel.Warn => 2,
+    LogLevel.Error => 3,
+};

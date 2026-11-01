@@ -1,0 +1,43 @@
+// Variadic C functions (ADR 0041 §3.3): declared with `...` after their parameters, and called, unsafely, with further
+// arguments of the types C's default argument promotions leave unchanged; the C half, variadic.c, reads them with
+// va_arg. A call converts its parameters as for any C function, and each further argument to its own C type.
+
+@header("variadic.types.h")
+extern "C" {
+    fn va_sum(count: i32, ...) -> i64;
+    fn va_log(level: u32, format: *CChar, ...) -> i32;
+    fn va_kind(format: *CChar, ...) -> *CChar;
+}
+
+/// Safety: each call's further arguments are what its count or format says, and every format is terminated.
+fn main() {
+    Console.writeLine(unsafe { va_sum(0) });
+    Console.writeLine(unsafe { va_sum(3, 1i64, -2i64, 40000000000i64) });
+    let format = "%d %u %lld %llu %zu %s %.1f %c\0";
+    let word = "word\0";
+    let n: u8 = 65;
+    let written = unsafe { va_log(
+        6,
+        format.ptr as *CChar,
+        -7,
+        4000000000u32,
+        -9i64,
+        18446744073709551615u64,
+        12usize,
+        word.ptr as *CChar,
+        2.5f64,
+        n as i32,
+    ) };
+    Console.writeLine(written);
+    unsafe { va_log(3, "no arguments\0".ptr as *CChar); }
+    let kind = unsafe { va_kind("kind\0".ptr as *CChar, 1, 2) };
+    Console.writeLine(kind as *u8 == word.ptr);
+    Console.writeLine(unsafe { Ptr.toBorrow(kind as *u8) });
+}
+// expect-stdout: 0
+// expect-stdout: 39999999999
+// expect-stdout: <6> -7 4000000000 -9 18446744073709551615 12 word 2.5 A
+// expect-stdout: 51
+// expect-stdout: <3> no arguments
+// expect-stdout: false
+// expect-stdout: 107

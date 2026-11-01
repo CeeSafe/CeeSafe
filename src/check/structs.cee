@@ -210,6 +210,7 @@ fn addField(
         isPrivate: false,
         isPublic: false,
         isRegionPart: false,
+        unionGroup: none(),
     })?;
     let field = truncate<u32>(c.types.fields.length - 1);
     c.types.structs[definition as usize].fields.push(field)?;
@@ -300,8 +301,11 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
     let savedEnvironment = enterEnvironment(c, entry.environment)?;
     let hasRegions = s.regionParameters.count > 0 || entry.template != none();
     var memberNames = Vector<u32>.create();
+    var unionFirsts = Vector<u32>.create(); // a union's first member: its AST field, then its field (ADR 0041 §3.2)
+    var unionFields = Vector<u32>.create();
     for (k in 0..s.fields.count) {
-        let field = c.front.ast.fields[c.front.ast.at(s.fields, k) as usize];
+        let astField = c.front.ast.at(s.fields, k);
+        let field = c.front.ast.fields[astField as usize];
         let typeSpan = c.front.ast.typeSpans[field.typ as usize];
         c.allowImported = true; // C state by value (§33.1)
         let resolved = c.resolveType(field.typ, false)?;
@@ -317,6 +321,19 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
         }
         memberNames.push(id.symbol)?;
         let added = addField(c, definition, id.symbol, typ, id.start, id.end)?;
+        if (field.unionGroup != none()) {
+            var group = added;
+            for (u in 0..unionFirsts.length) {
+                if (unionFirsts[u] == field.unionGroup) {
+                    group = unionFields[u];
+                }
+            }
+            if (group == added) {
+                unionFirsts.push(field.unionGroup)?;
+                unionFields.push(added)?;
+            }
+            c.types.fields[added as usize].unionGroup = group;
+        }
         c.types.fields[added as usize].isPrivate = isVisibility(field.visibility, 3);
         c.types.fields[added as usize].isPublic = isVisibility(field.visibility, 1);
     }
@@ -345,6 +362,7 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
             hasDoc: s.hasDropDoc,
             doc: s.dropDoc,
             isExtern: false,
+            variadicStart: none(),
             attributes: emptyRange(),
             start: dropSpan.start,
             end: dropSpan.end,
@@ -438,6 +456,7 @@ fn addPayload(c: borrow mut Checker, variant: u32, k: u32, typ: u32, start: u32,
         isPrivate: false,
         isPublic: false,
         isRegionPart: false,
+        unionGroup: none(),
     })?;
     c.types.variants[variant as usize].payload.push(truncate<u32>(c.types.fields.length - 1))?;
     return Ok();

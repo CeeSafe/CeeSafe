@@ -1,0 +1,54 @@
+// The members of one imported union are one place for the borrow checker (ADR 0041 §3.2): borrowing or assigning any
+// member conflicts with a live loan of any other, as it would of the same member; other fields stay separate places.
+@header("ffi-union-borrows.h")
+extern "C" {
+    struct in6 {
+        bytes: [u8; 16];
+    }
+    struct addr {
+        family: u16;
+        port: u16;
+        union {
+            v4: u32;
+            v6: in6;
+        }
+    }
+    union word {
+        whole: u32;
+        bytes: [u8; 4];
+    }
+    struct holder {
+        w: word;
+        tag: u8;
+    }
+}
+
+fn mutableThenOther(a: borrow mut addr) {
+    let v = borrow mut a.v6;
+    a.v4 = 1; // error[N0240]
+    v.bytes[0] = 2;
+}
+
+fn sharedThenWrite(a: borrow mut addr) {
+    let w = borrow a.v4;
+    a.v6.bytes[0] = 5; // error[N0240]
+    Console.writeLine(w);
+}
+
+fn unionType(h: borrow mut holder) {
+    let b = borrow mut h.w.bytes;
+    Console.writeLine(h.w.whole); // error[N0242]
+    b[0] = 1;
+}
+
+fn separate(a: borrow mut addr, h: borrow mut holder) {
+    let f = borrow mut a.family;
+    a.port = 3;
+    a.v4 = 4;
+    f += 1;
+    let t = borrow mut h.tag;
+    h.w.whole = 7;
+    t += 1;
+}
+
+fn main() {}

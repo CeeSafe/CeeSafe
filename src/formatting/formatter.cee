@@ -581,6 +581,12 @@ fn fmtWalkFunction(l: borrow mut FmtLayout, ast: borrow Ast, f: u32, inInterface
             let last = l.last(parameter.end);
             l.addElement(parameters, first, last)?;
         }
+        if (function.variadicStart != none()) {
+            // `...`, lexed as `..` and `.`, written as one (ADR 0041 §3.3).
+            let dots = l.first(function.variadicStart);
+            l.glueAfterAt(dots);
+            l.addElement(parameters, dots, dots + 1)?;
+        }
     }
     for (k in 0..function.parameters.count) {
         fmtWalkType(l, ast, ast.parameters[ast.at(function.parameters, k) as usize].typ)?;
@@ -613,12 +619,28 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
     var lasts = Vector<u32>.create();
     var kinds = Vector<u32>.create();
     var ids = Vector<u32>.create();
-    for (k in 0..structure.fields.count) {
-        let field = ast.at(structure.fields, k);
-        firsts.push(l.first(ast.fields[field as usize].start))?;
-        lasts.push(l.last(ast.fields[field as usize].end))?;
+    var fk: u32 = 0;
+    while (fk < structure.fields.count) {
+        let field = ast.at(structure.fields, fk);
+        let f = borrow ast.fields[field as usize];
+        if (f.unionStart != none()) {
+            // An anonymous union member, `union { a: T; b: U; }` (ADR 0041 §3.2): one member of the struct, whose
+            // own braces hold its members, one per line.
+            firsts.push(l.first(f.unionStart))?;
+            lasts.push(l.last(f.unionEnd))?;
+            kinds.push(3)?;
+            ids.push(fk)?;
+            while (fk < structure.fields.count &&
+                ast.fields[ast.at(structure.fields, fk) as usize].unionGroup == f.unionGroup) {
+                fk += 1;
+            }
+            continue;
+        }
+        firsts.push(l.first(f.start))?;
+        lasts.push(l.last(f.end))?;
         kinds.push(0)?;
         ids.push(field)?;
+        fk += 1;
     }
     for (k in 0..structure.functions.count) {
         let function = ast.at(structure.functions, k);
@@ -647,6 +669,16 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
         l.addElement(body, firsts[k], lasts[k])?;
         if (kinds[k] == 0) {
             fmtWalkType(l, ast, ast.fields[ids[k] as usize].typ)?;
+        } else if (kinds[k] == 3) {
+            let members = l.addContainer(firsts[k] + 1, true, false, priorityList())?;
+            var m = ids[k];
+            let group = ast.fields[ast.at(structure.fields, m) as usize].unionGroup;
+            while (m < structure.fields.count && ast.fields[ast.at(structure.fields, m) as usize].unionGroup == group) {
+                let member = borrow ast.fields[ast.at(structure.fields, m) as usize];
+                l.addElement(members, l.first(member.start), l.last(member.end))?;
+                fmtWalkType(l, ast, member.typ)?;
+                m += 1;
+            }
         } else if (kinds[k] == 1) {
             fmtWalkAttributes(l, ast, ast.functions[ids[k] as usize].attributes)?;
             fmtWalkFunction(l, ast, ids[k], false)?;
@@ -1214,6 +1246,9 @@ fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
         return false;
     }
     let b = l.kindAt(token);
+    if (sameKind(b, TokenKind.DotDot) && sameKind(l.kindAt(previous), TokenKind.Comma)) {
+        return true; // `f(a, ...)` (ADR 0041 §3.3), and a range after a comma
+    }
     if (sameKind(b, TokenKind.CloseParen) || sameKind(b, TokenKind.CloseBracket) || sameKind(b, TokenKind.Comma) ||
         sameKind(b, TokenKind.Semicolon) || sameKind(b, TokenKind.Dot) || sameKind(b, TokenKind.DotDot) ||
         sameKind(b, TokenKind.Colon)) {

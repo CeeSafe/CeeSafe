@@ -17,6 +17,7 @@
 - [struct AtomicU32](#struct-atomicu32)
 - [struct AtomicUSize](#struct-atomicusize)
 - [struct AtomicBool](#struct-atomicbool)
+- [struct TextWriter](#struct-textwriter)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
 - [struct SliceHalves](#struct-slicehalves)
@@ -387,6 +388,24 @@ public fn fetchSub(borrow this, value: u64) -> u64
 Subtracts, wrapping; returns the old value.
 Safety: as load.
 
+### AtomicU64.fetchOr
+
+```ceesafe
+public fn fetchOr(borrow this, value: u64) -> u64
+```
+
+Sets the bits of `value`; the value before (ADR 0041).
+Safety: as load.
+
+### AtomicU64.fetchAnd
+
+```ceesafe
+public fn fetchAnd(borrow this, value: u64) -> u64
+```
+
+Keeps only the bits of `value`; the value before (ADR 0041).
+Safety: as load.
+
 ### AtomicU64.loadWith
 
 ```ceesafe
@@ -439,6 +458,24 @@ public fn fetchSubWith(borrow this, value: u64, order: Ordering) -> u64
 ```
 
 fetchSub, with an ordering.
+Safety: as load.
+
+### AtomicU64.fetchOrWith
+
+```ceesafe
+public fn fetchOrWith(borrow this, value: u64, order: Ordering) -> u64
+```
+
+fetchOr, with an ordering.
+Safety: as load.
+
+### AtomicU64.fetchAndWith
+
+```ceesafe
+public fn fetchAndWith(borrow this, value: u64, order: Ordering) -> u64
+```
+
+fetchAnd, with an ordering.
 Safety: as load.
 
 ## struct AtomicU32
@@ -516,6 +553,24 @@ public fn fetchSub(borrow this, value: u32) -> u32
 
 Safety: as AtomicU64.load.
 
+### AtomicU32.fetchOr
+
+```ceesafe
+public fn fetchOr(borrow this, value: u32) -> u32
+```
+
+Sets the bits of `value`; the value before (ADR 0041).
+Safety: as load.
+
+### AtomicU32.fetchAnd
+
+```ceesafe
+public fn fetchAnd(borrow this, value: u32) -> u32
+```
+
+Keeps only the bits of `value`; the value before (ADR 0041).
+Safety: as load.
+
 ### AtomicU32.loadWith
 
 ```ceesafe
@@ -568,6 +623,24 @@ public fn fetchSubWith(borrow this, value: u32, order: Ordering) -> u32
 ```
 
 fetchSub, with an ordering.
+Safety: as load.
+
+### AtomicU32.fetchOrWith
+
+```ceesafe
+public fn fetchOrWith(borrow this, value: u32, order: Ordering) -> u32
+```
+
+fetchOr, with an ordering.
+Safety: as load.
+
+### AtomicU32.fetchAndWith
+
+```ceesafe
+public fn fetchAndWith(borrow this, value: u32, order: Ordering) -> u32
+```
+
+fetchAnd, with an ordering.
 Safety: as load.
 
 ## struct AtomicUSize
@@ -645,6 +718,22 @@ public fn fetchSub(borrow this, value: usize) -> usize
 
 Subtracts, wrapping; returns the old value.
 
+### AtomicUSize.fetchOr
+
+```ceesafe
+public fn fetchOr(borrow this, value: usize) -> usize
+```
+
+As fetchOr.
+
+### AtomicUSize.fetchAnd
+
+```ceesafe
+public fn fetchAnd(borrow this, value: usize) -> usize
+```
+
+As fetchAnd.
+
 ### AtomicUSize.loadWith
 
 ```ceesafe
@@ -697,6 +786,22 @@ public fn fetchSubWith(borrow this, value: usize, order: Ordering) -> usize
 ```
 
 As fetchSub, with `order`.
+
+### AtomicUSize.fetchOrWith
+
+```ceesafe
+public fn fetchOrWith(borrow this, value: usize, order: Ordering) -> usize
+```
+
+As fetchOrWith.
+
+### AtomicUSize.fetchAndWith
+
+```ceesafe
+public fn fetchAndWith(borrow this, value: usize, order: Ordering) -> usize
+```
+
+As fetchAndWith.
 
 ## struct AtomicBool
 
@@ -788,6 +893,114 @@ public fn compareExchangeWith(borrow this, expected: bool, desired: bool, order:
 ```
 
 As compareExchange, with `order` (a failure orders as a load, §38.3).
+
+## struct TextWriter
+
+```ceesafe
+public struct TextWriter<region r>
+```
+
+A writer of text into a caller's byte buffer, as C's `snprintf` writes: what does not fit is cut off, the text is
+always zero-terminated in a buffer of at least one byte (so `cText` can be handed to C), and `wanted` counts every
+byte asked for, as `snprintf`'s result does, so a caller can tell that the text was cut.
+
+### TextWriter.create
+
+```ceesafe
+public fn create(buffer: SliceMut<r, u8>) -> TextWriter<r>
+```
+
+A writer at the start of `buffer`, which it empties (a zero first byte, if it has one).
+
+### TextWriter.byte
+
+```ceesafe
+public fn byte(borrow mut this, b: u8)
+```
+
+Appends one byte.
+
+### TextWriter.bytes
+
+```ceesafe
+public fn bytes(borrow mut this, data: Slice<u8>)
+```
+
+Appends bytes.
+
+### TextWriter.text
+
+```ceesafe
+public fn text(borrow mut this, s: StringView)
+```
+
+Appends text.
+
+### TextWriter.decimal
+
+```ceesafe
+public fn decimal(borrow mut this, value: u64)
+```
+
+Appends an unsigned integer in decimal.
+
+### TextWriter.signed
+
+```ceesafe
+public fn signed(borrow mut this, value: i64)
+```
+
+Appends a signed integer in decimal, with a `-` if it is negative.
+
+### TextWriter.hex
+
+```ceesafe
+public fn hex(borrow mut this, value: u64, width: u32)
+```
+
+Appends an unsigned integer in lowercase hexadecimal, with at least `width` digits (zeros before it), as
+`%0*llx`; no `0x`.
+
+### TextWriter.written
+
+```ceesafe
+public fn written(borrow this) -> Slice<u8>
+```
+
+The bytes written, without the terminating zero.
+
+### TextWriter.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+How many bytes were written (at most the buffer's length less one).
+
+### TextWriter.wanted
+
+```ceesafe
+public fn wanted(borrow this) -> usize
+```
+
+How many bytes were asked for: more than `length()` when the text was cut, as `snprintf`'s result.
+
+### TextWriter.truncated
+
+```ceesafe
+public fn truncated(borrow this) -> bool
+```
+
+Whether some text did not fit.
+
+### TextWriter.cText
+
+```ceesafe
+public fn cText(borrow this) -> *CChar
+```
+
+The text as a zero-terminated C string, valid while the writer's buffer is. An empty buffer, which can hold no
+terminator, gives an empty string that is not in it.
 
 ## struct Volatile
 

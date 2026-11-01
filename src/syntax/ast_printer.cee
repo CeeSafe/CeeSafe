@@ -108,7 +108,7 @@ struct AstPrinter {
             ItemKind.Struct(index) => {
                 let s = ast.structs[index as usize];
                 this.open()?;
-                this.text(if (s.isImported) "(c-struct " else "(struct ")?;
+                this.text(if (s.isUnion) "(c-union " else if (s.isImported) "(c-struct " else "(struct ")?;
                 this.text(visibility)?;
                 this.text(" ")?;
                 this.name(ast, symbols, item.name)?;
@@ -127,6 +127,9 @@ struct AstPrinter {
                     this.name(ast, symbols, field.name)?;
                     this.text(" ")?;
                     this.typeText(ast, symbols, field.typ)?;
+                    if (field.unionStart != none()) {
+                        this.text(" in-union")?; // a member of an anonymous union (ADR 0041 §3.2)
+                    }
                     this.text(")")?;
                     this.close()?;
                 }
@@ -251,6 +254,9 @@ struct AstPrinter {
             this.text(" ")?;
             this.typeText(ast, symbols, p.typ)?;
             this.text(")")?;
+        }
+        if (f.variadicStart != none()) {
+            this.text(" ...")?; // C's further arguments (ADR 0041 §3.3)
         }
         this.text(")")?;
         if (f.returnType != none()) {

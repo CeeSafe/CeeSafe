@@ -47,3 +47,22 @@ fn object() -> u32 {
         Err(e) => { return 0; }
     }
 }
+
+/// A line for the kernel log, built with lib/core's TextWriter and sent with lib/kernel's KernelLog (ADR 0041 §3.3).
+@export("kl_log")
+fn log(packets: u64, delta: i64, flags: u32) -> usize {
+    var buffer: [u8; 256] = [0; 256]; // LOG_LINE_MAX
+    var line = TextWriter.create(mut buffer[..]);
+    line.text("safe: packets ");
+    line.decimal(packets);
+    line.text(" delta ");
+    line.signed(delta);
+    line.text(" flags 0x");
+    line.hex(flags as u64, 8);
+    KernelLog.send(LogLevel.Info, line);
+    KernelLog.write(LogLevel.Debug, "safe: fixed");
+    if (line.truncated()) {
+        KernelLog.panic(line);
+    }
+    return line.wanted();
+}

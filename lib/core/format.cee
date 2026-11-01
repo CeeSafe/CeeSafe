@@ -1,0 +1,120 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Text formatted into a caller's buffer, with no allocation, in every profile (ADR 0041 §3.3): what C code builds with
+// snprintf, built in safe CeeSafe. lib/kernel's KernelLog sends such a line to the kernel log.
+
+/// A writer of text into a caller's byte buffer, as C's `snprintf` writes: what does not fit is cut off, the text is
+/// always zero-terminated in a buffer of at least one byte (so `cText` can be handed to C), and `wanted` counts every
+/// byte asked for, as `snprintf`'s result does, so a caller can tell that the text was cut.
+public struct TextWriter<region r> {
+    buffer: SliceMut<r, u8>;
+    used: usize;  // bytes written: at most buffer.length - 1, followed by a zero
+    asked: usize; // bytes asked for, written or not
+
+    /// A writer at the start of `buffer`, which it empties (a zero first byte, if it has one).
+    public fn create(buffer: SliceMut<r, u8>) -> TextWriter<r> {
+        if (buffer.length > 0) {
+            buffer[0] = 0;
+        }
+        return TextWriter { buffer: buffer, used: 0, asked: 0 };
+    }
+
+    /// Appends one byte.
+    public fn byte(borrow mut this, b: u8) {
+        this.asked = this.asked.wrappingAdd(1);
+        if (this.used + 1 < this.buffer.length) {
+            this.buffer[this.used] = b;
+            this.used += 1;
+            this.buffer[this.used] = 0;
+        }
+    }
+
+    /// Appends bytes.
+    public fn bytes(borrow mut this, data: Slice<u8>) {
+        for (b in data) {
+            this.byte(b);
+        }
+    }
+
+    /// Appends text.
+    public fn text(borrow mut this, s: StringView) {
+        this.bytes(s.bytes());
+    }
+
+    /// Appends an unsigned integer in decimal.
+    public fn decimal(borrow mut this, value: u64) {
+        var digits: [u8; 20] = [0; 20];
+        var count: usize = 0;
+        var v = value;
+        loop {
+            digits[count] = truncate<u8>(v % 10) + 48;
+            count += 1;
+            v = v / 10;
+            if (v == 0) {
+                break;
+            }
+        }
+        while (count > 0) {
+            count -= 1;
+            this.byte(digits[count]);
+        }
+    }
+
+    /// Appends a signed integer in decimal, with a `-` if it is negative.
+    public fn signed(borrow mut this, value: i64) {
+        if (value < 0) {
+            this.byte(45);
+            // The magnitude, in two's complement: right for i64's least value too, whose negation an i64 cannot hold.
+            this.decimal(0u64.wrappingSub(truncate<u64>(value)));
+        } else {
+            this.decimal(truncate<u64>(value)); // not negative here
+        }
+    }
+
+    /// Appends an unsigned integer in lowercase hexadecimal, with at least `width` digits (zeros before it), as
+    /// `%0*llx`; no `0x`.
+    public fn hex(borrow mut this, value: u64, width: u32) {
+        var digits: [u8; 16] = [0; 16];
+        var count: usize = 0;
+        var v = value;
+        loop {
+            let d = truncate<u8>(v & 15);
+            digits[count] = if (d < 10) d + 48 else d + 87;
+            count += 1;
+            v = v >> 4;
+            if (v == 0) {
+                break;
+            }
+        }
+        var pad = width as usize;
+        while (pad > count) {
+            this.byte(48);
+            pad -= 1;
+        }
+        while (count > 0) {
+            count -= 1;
+            this.byte(digits[count]);
+        }
+    }
+
+    /// The bytes written, without the terminating zero.
+    public fn written(borrow this) -> Slice<u8> => this.buffer[..this.used];
+
+    /// How many bytes were written (at most the buffer's length less one).
+    public fn length(borrow this) -> usize => this.used;
+
+    /// How many bytes were asked for: more than `length()` when the text was cut, as `snprintf`'s result.
+    public fn wanted(borrow this) -> usize => this.asked;
+
+    /// Whether some text did not fit.
+    public fn truncated(borrow this) -> bool => this.asked > this.used;
+
+    /// The text as a zero-terminated C string, valid while the writer's buffer is. An empty buffer, which can hold no
+    /// terminator, gives an empty string that is not in it.
+    public fn cText(borrow this) -> *CChar {
+        if (this.buffer.length == 0) {
+            return "\0".ptr as *CChar;
+        }
+        let all = this.written(); // starts where the buffer does
+        return all.ptr as *CChar;
+    }
+}

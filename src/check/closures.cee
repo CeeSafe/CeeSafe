@@ -610,6 +610,7 @@ fn newClosureFunction(
         hasDoc: false,
         doc: emptyRange(),
         isExtern: false,
+        variadicStart: none(),
         attributes: emptyRange(),
         start: span.start,
         end: span.end,

@@ -534,6 +534,25 @@ fn appendStaticInitializer(
                     inner.push('.')?;
                     appendBytes(mut inner, member.view())?;
                     let fieldType = c.types.fields[fieldValue.field as usize].typ;
+                    let atomicInteger = if (isReprCStruct(c, t)) atomicFieldInteger(c, fieldType) else none();
+                    if (atomicInteger != none()) {
+                        // The member is its integer (ADR 0041 §3.1): the atomic's constant, whose one field holds
+                        // the value (AtomicUSize's through an AtomicU64), initialises it directly.
+                        var scalar = fieldValue.value;
+                        loop {
+                            match (c.hir.exprs[scalar as usize]) {
+                                HirExpr.StructLiteral(inside) => {
+                                    if (inside.count != 1) {
+                                        break;
+                                    }
+                                    scalar = c.hir.fieldValues[inside.start as usize].value;
+                                }
+                                _ => { break; }
+                            }
+                        }
+                        appendStaticInitializer(e, c, out, scalar, atomicInteger, inner.view(), false)?;
+                        continue;
+                    }
                     appendStaticInitializer(
                         e, c, out, fieldValue.value, fieldType, inner.view(),
                         isCArrayMember(c, t, fieldValue.field),
@@ -709,7 +728,9 @@ fn emitStructType(
             let field = c.types.fields[f as usize];
             e.t("    ")?;
             appendAlignPrefix(c, mut e.buf, t, field.index)?;
-            appendCTypeName(c, mut e.buf, field.typ)?;
+            let atomicInteger = if (isReprCStruct(c, t)) atomicFieldInteger(c, field.typ) else none();
+            // A @repr(C) struct's atomic member is its integer, as in the exports header (ADR 0041 §3.1).
+            appendCTypeName(c, mut e.buf, if (atomicInteger != none()) atomicInteger else field.typ)?;
             e.t(" ")?;
             appendFieldName(c, mut e.buf, f)?;
             e.t(";")?;

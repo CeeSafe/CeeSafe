@@ -36,7 +36,8 @@ fn atomics64(v: u64) -> u64 {
     sum = sum + C64.loadWith(LoadOrdering.Acquire) + C64.loadWith(LoadOrdering.Relaxed);
     sum = sum + C64.swapWith(v, Ordering.AcquireRelease) + C64.fetchAddWith(1, Ordering.Relaxed);
     sum = sum + C64.fetchSubWith(1, Ordering.Release) + ok64(C64.compareExchangeWith(v, 2, Ordering.Acquire));
-    return sum;
+    sum = sum + C64.fetchOr(4) + C64.fetchAnd(7) + C64.fetchOrWith(8, Ordering.Release); // ADR 0041
+    return sum + C64.fetchAndWith(15, Ordering.Relaxed);
 }
 
 @export("k3_atomics_u32")
@@ -46,6 +47,8 @@ fn atomics32(v: u32) -> u32 {
     C32.storeWith(v, StoreOrdering.Release);
     sum = sum + C32.loadWith(LoadOrdering.Acquire) + C32.swapWith(v, Ordering.Acquire);
     sum = sum + C32.fetchAddWith(1, Ordering.AcquireRelease) + C32.fetchSubWith(1, Ordering.Relaxed);
+    sum = sum + C32.fetchOr(4) + C32.fetchAnd(7) + C32.fetchOrWith(8, Ordering.AcquireRelease); // ADR 0041
+    sum = sum + C32.fetchAndWith(15, Ordering.Acquire);
     return sum + ok32(C32.compareExchangeWith(v, 2, Ordering.Release));
 }
 
@@ -56,6 +59,8 @@ fn atomicsSize(v: usize) -> usize {
     sum = sum + CSIZE.fetchSub(1) + CSIZE.loadWith(LoadOrdering.Acquire) + CSIZE.swapWith(v, Ordering.Release);
     CSIZE.storeWith(v, StoreOrdering.Release);
     sum = sum + CSIZE.fetchAddWith(1, Ordering.Relaxed) + CSIZE.fetchSubWith(1, Ordering.AcquireRelease);
+    sum = sum + CSIZE.fetchOr(4) + CSIZE.fetchAnd(7) + CSIZE.fetchOrWith(8, Ordering.Relaxed); // ADR 0041
+    sum = sum + CSIZE.fetchAndWith(15, Ordering.SequentiallyConsistent);
     return sum + okSize(CSIZE.compareExchangeWith(v, 2, Ordering.SequentiallyConsistent));
 }
 

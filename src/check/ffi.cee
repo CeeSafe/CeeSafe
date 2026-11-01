@@ -3,6 +3,7 @@
 // CheckSignatureIsFfiSafe and CheckForeignInterfaces): P3 S7b (type-system.md §28, §29.5, §31, §33, §34).
 
 fn notFfiSafe() -> u32 => 291;
+fn unionMemberType() -> u32 => 346;
 fn invalidCName() -> u32 => 292;
 
 /// A struct or array type written where a value of it needs a reference layout, checked once fields are known (§33.1).
@@ -133,6 +134,9 @@ fn isFfiSafe(c: borrow Checker, typ: u32, isResult: bool, inStruct: bool) -> boo
         if (inStruct && c.types.structs[t.structDef as usize].isImported) {
             return true; // C state by value (ADR 0029)
         }
+        if (inStruct && atomicFieldInteger(c, typ) != none()) {
+            return true; // its integer, which C accesses atomically (ADR 0041 §3.1)
+        }
         return c.types.structs[t.structDef as usize].isReprC;
     }
     if (c.types.is(typ, TypeKind.Array) && inStruct) {
@@ -236,6 +240,14 @@ fn functionAddress(c: borrow mut Checker, function: u32, expected: u32, span: Sp
             mut message,
             " has no C address: only extern \"C\", @export and @callback functions can be C function pointers (type-system.md §29.5, §34.1)",
         )?;
+        c.error(notFfiSafe(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (isExtern && c.front.ast.functions[syntax as usize].variadicStart != none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "C function ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, " takes '...', which no C function pointer type spells; call it (ADR 0041 §3.3)")?;
         c.error(notFfiSafe(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
@@ -399,6 +411,8 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
             problem = 3;
         } else if (decl.isUnsafe) {
             problem = 4;
+        } else if (decl.variadicStart != none() && decl.parameters.count == 0) {
+            problem = 5;
         }
         let id = c.front.ast.idents[decl.name as usize];
         if (problem != 0) {
@@ -411,6 +425,7 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
                     1 => " cannot have a body; it is defined in C (type-system.md §28.2)",
                     2 => " cannot have a 'this' parameter (type-system.md §28.2)",
                     3 => " cannot be generic (type-system.md §28.2)",
+                    5 => " needs a parameter before '...', as C does (ADR 0041 §3.3)",
                     _ => " is unsafe to call already; leave out 'unsafe' (type-system.md §28.2)",
                 },
             )?;
@@ -478,8 +493,9 @@ fn declareImportedStruct(c: borrow mut Checker, item: u32) -> Result<void, Alloc
     let definition = c.types.info(c.structs[index as usize].typ).structDef;
     c.types.structs[definition as usize].isImported = true;
     c.types.structs[definition as usize].isNonCopy = true; // no value of it exists in the reference (§31.2)
+    c.types.structs[definition as usize].isUnion = s.isUnion;
     var spelling = Vector<u8>.create();
-    appendText(mut spelling, "struct ")?;
+    appendText(mut spelling, if (s.isUnion) "union " else "struct ")?;
     appendBytes(mut spelling, c.name(id.symbol))?;
     var known = Vector<u32>.create();
     knownAttributes(c, entry.attributes, "an imported C type", "ctype", mut known)?;
@@ -597,6 +613,53 @@ fn identSpan(c: borrow Checker, ident: u32) -> Span {
     return Span { start: id.start, end: id.end };
 }
 
+/// The integer whose C type an atomic field shares, for lib/core's AtomicU32, AtomicU64 and AtomicUSize (u32, u64,
+/// usize), or none(): each is laid out exactly as its integer, so it may be an imported or exported struct's field
+/// whose C member is that integer, accessed atomically on both sides (ADR 0041 §3.1). AtomicBool is not: it holds a
+/// u32, while C's bool is one byte.
+/// A type every bit pattern of whose size is a value of (ADR 0041 §3.2): an integer, a raw pointer, an array of
+/// these, or an imported type whose declared fields are; what a union's members may be.
+fn anyBitPattern(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.RawPointer) || c.types.is(t, TypeKind.Error)) {
+        return true;
+    }
+    if (c.types.is(t, TypeKind.Array)) {
+        return anyBitPattern(c, c.types.info(t).element, depth);
+    }
+    let def = c.types.info(t).structDef;
+    if (c.types.is(t, TypeKind.Struct) && def != none() && c.types.structs[def as usize].isImported && depth < 64) {
+        for (f in c.types.structs[def as usize].fields.view()) {
+            if (!anyBitPattern(c, c.types.fields[f as usize].typ, depth + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+fn atomicFieldInteger(c: borrow Checker, t: u32) -> u32 {
+    let def = c.types.info(t).structDef;
+    if (def == none()) {
+        return none();
+    }
+    let file = c.types.structs[def as usize].file;
+    if (file == none() || !c.fileIsLibrary[file as usize]) {
+        return none();
+    }
+    let name = c.types.name(t);
+    if (sameText(name, "AtomicU64")) {
+        return c.types.u64;
+    }
+    if (sameText(name, "AtomicU32")) {
+        return c.types.u32;
+    }
+    if (sameText(name, "AtomicUSize")) {
+        return c.types.usize;
+    }
+    return none();
+}
+
 /// Once every type is resolved: FFI-safe signatures and fields, and valid, unique C names (CheckForeignInterfaces).
 fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
     let saved = c.file;
@@ -640,7 +703,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
                 appendQuotedType(mut message, c, t)?;
                 appendText(
                     mut message,
-                    ": only integers, bool, raw pointers to C types, @repr(C) structs, imported C types and arrays of these have C layouts (type-system.md §28.5)",
+                    ": only integers, bool, raw pointers to C types, @repr(C) structs, imported C types, arrays of these, and AtomicU32, AtomicU64 or AtomicUSize (laid out as their integer) have C layouts (type-system.md §28.5)",
                 )?;
                 c.error(notFfiSafe(), span.start, span.end, message)?;
             }
@@ -747,6 +810,19 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
                 }
             }
             let t = c.types.fields[field as usize].typ;
+            if (c.types.fields[field as usize].unionGroup != none() && !anyBitPattern(c, t, 0)) {
+                // Reading one member after writing another reinterprets bytes, which must always be a value.
+                let span = c.front.ast.typeSpans[syntax.typ as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "a union member cannot be a ")?;
+                appendQuotedType(mut message, c, t)?;
+                appendText(
+                    mut message,
+                    ": its members share storage, so each must be a type every bit pattern is a value of: integers, raw pointers, arrays of these, and imported types whose fields are (ADR 0041 §3.2)",
+                )?;
+                c.error(unionMemberType(), span.start, span.end, message)?;
+                continue;
+            }
             let isArray = c.types.is(t, TypeKind.Array);
             let element = if (isArray) c.types.info(t).element else none();
             if (element != none()) {
@@ -765,14 +841,15 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             let cPointer = c.types.is(t, TypeKind.RawPointer) && isCPointee(c, c.types.info(t).pointee);
             let embedded = fieldDef != none() && c.types.structs[fieldDef as usize].isImported; // §33.1
             let callback = c.types.is(t, TypeKind.FunctionPointer);                             // a C function pointer (§34.3)
-            if (!simple && !cPointer && !embedded && !callback) {
+            let atomic = atomicFieldInteger(c, t) != none();                                    // ADR 0041 §3.1
+            if (!simple && !cPointer && !embedded && !callback && !atomic) {
                 let span = c.front.ast.typeSpans[syntax.typ as usize];
                 var message = Vector<u8>.create();
                 appendText(mut message, "a field of an imported C type cannot be a ")?;
                 appendQuotedType(mut message, c, t)?;
                 appendText(
                     mut message,
-                    ": only integers, bool, raw pointers to C types, embedded imported types and arrays of integers, bool or imported types are spelled alike in C and CeeSafe (type-system.md §31.1)",
+                    ": only integers, bool, raw pointers to C types, embedded imported types, arrays of integers, bool or imported types, and AtomicU32, AtomicU64 or AtomicUSize over the matching integer are spelled alike in C and CeeSafe (type-system.md §31.1)",
                 )?;
                 c.error(notFfiSafe(), span.start, span.end, message)?;
             }
@@ -850,6 +927,17 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             claimCName(c, mut claims, name.view(), span, what.view())?;
         }
         checkSignatureIsFfiSafe(c, function, what.view())?;
+        if (decl.isExtern && decl.variadicStart != none() &&
+            c.types.is(c.hir.functions[k].returnType, TypeKind.Enum)) {
+            // A variadic function is called directly, with no wrapper to check an enum from C (ADR 0041 §3.3).
+            var message = Vector<u8>.create();
+            appendBytes(mut message, what.view())?;
+            appendText(
+                mut message,
+                " takes '...', so it cannot return a @repr enum: declare its integer (ADR 0041 §3.3)",
+            )?;
+            c.error(notFfiSafe(), span.start, span.end, message)?;
+        }
     }
     for (k in 0..c.constants.length) {
         let entry = c.constants[k];

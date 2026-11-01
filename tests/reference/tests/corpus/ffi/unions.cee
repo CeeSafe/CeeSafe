@@ -1,0 +1,66 @@
+// Imported unions (ADR 0041 §3.2): a struct's anonymous union member, reached as `a.v4` and `a.v6` as C's `a->v4`, and
+// a union type embedded in a struct. The members share storage, so a member read after another is written
+// reinterprets its bytes, which every member type allows. The C half, unions.c, owns the statics.
+
+@header("unions.types.h")
+extern "C" {
+    struct un_in6 {
+        s6_addr: [u8; 16];
+    }
+    struct un_addr {
+        family: u16;
+        port: u16;
+        union {
+            v4: u32;
+            v6: un_in6;
+        }
+    }
+    union un_word {
+        whole: u32;
+        bytes: [u8; 4];
+        halves: [u16; 2];
+    }
+    struct un_holder {
+        w: un_word;
+        tag: u8;
+    }
+    fn un_addr_get() -> *mut un_addr;
+    fn un_holder_get() -> *mut un_holder;
+    fn c_main() -> i32;
+}
+
+/// Reads and writes the unions through different members.
+/// Safety: un_addr_get and un_holder_get return statics that live for the program, which nothing else uses meanwhile.
+@export("un_use")
+unsafe fn use() {
+    let a = Ptr.toBorrowMut(un_addr_get());
+    Console.writeLine(a.family);        // 2
+    Console.writeLine(a.v4);            // 0x0100007f
+    Console.writeLine(a.v6.s6_addr[0]); // 127 (little-endian)
+    a.v6.s6_addr[3] = 10;
+    Console.writeLine(a.v4); // 0x0a00007f
+    let h = Ptr.toBorrowMut(un_holder_get());
+    Console.writeLine(h.w.whole);    // 0x11223344
+    Console.writeLine(h.w.bytes[0]); // 0x44
+    h.w.halves[1] = 0;
+    Console.writeLine(h.w.whole); // 0x3344
+    h.w.bytes[1] = 0x55;
+    Console.writeLine(h.tag); // 9
+}
+
+/// Safety: as un_use.
+@export("un_v4")
+unsafe fn v4() -> u32 => Ptr.toBorrow(un_addr_get()).v4;
+
+/// Safety: c_main only calls the exports above.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: 2
+// expect-stdout: 16777343
+// expect-stdout: 127
+// expect-stdout: 167772287
+// expect-stdout: 287454020
+// expect-stdout: 68
+// expect-stdout: 13124
+// expect-stdout: 9
+// expect-stdout: a00007f 5544 55
+// expect-stdout: 4294967295

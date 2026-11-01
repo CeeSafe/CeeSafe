@@ -27,14 +27,14 @@
   )
   (fn underLock ((values#0: SliceMut<i32>) (limit#1: i32)) -> i32
     (block
-      (var n#2: i32 = (+ (+ (call count (reborrow values#0) (closure 271 (shared limit#1) (block (return (> v#1 limit#1):bool))):borrow fn(i32) -> bool):i32 (call count (reborrow values#0) (closure 272 () (block (return (call isEven a0#1):bool))):borrow fn(i32) -> bool):i32):i32 (call countTwice (reborrow values#0) (closure 273 () (block (return (call isEven a0#1):bool))):borrow fn(i32) -> bool):i32):i32)
-      (let small#3: borrow fn(i32) -> bool = (closure 274 (shared limit#1) (block (return (< v#1 limit#1):bool))):borrow fn(i32) -> bool)
+      (var n#2: i32 = (+ (+ (call count (reborrow values#0) (closure 303 (shared limit#1) (block (return (> v#1 limit#1):bool))):borrow fn(i32) -> bool):i32 (call count (reborrow values#0) (closure 304 () (block (return (call isEven a0#1):bool))):borrow fn(i32) -> bool):i32):i32 (call countTwice (reborrow values#0) (closure 305 () (block (return (call isEven a0#1):bool))):borrow fn(i32) -> bool):i32):i32)
+      (let small#3: borrow fn(i32) -> bool = (closure 306 (shared limit#1) (block (return (< v#1 limit#1):bool))):borrow fn(i32) -> bool)
       (+= n#2 (call count (reborrow values#0) small#3):i32)
       (let table#4: Table = (new Table (values (array 1:i32 2:i32 3:i32 4:i32):[i32; 4])))
-      (+= n#2 (call Table.countWhere (borrow table#4) (closure 275 () (block (return (> v#1 1:i32):bool))):borrow fn(i32) -> bool):i32)
-      (expr (call SliceAlgorithms<i32>.sortBy (reborrow-mut values#0) (closure 286 () (block (return (- (deref a#1):i32 (deref b#2):i32):i32))):borrow mut fn(borrow i32, borrow i32) -> i32):void)
-      (expr (call SliceAlgorithms<i32>.forEach (reborrow (reborrow-mut values#0)) (closure 287 (mutable n#2) (block (+= n#2 (deref v#1):i32))):borrow mut fn(borrow i32)):void)
-      (if (&& (call SliceAlgorithms<i32>.any (reborrow (reborrow-mut values#0)) (closure 288 (shared limit#1) (block (return (== (deref v#1):i32 limit#1):bool))):borrow mut fn(borrow i32) -> bool):bool (call SliceAlgorithms<i32>.all (reborrow (reborrow-mut values#0)) (closure 289 () (block (return (> (deref v#1):i32 0:i32):bool))):borrow mut fn(borrow i32) -> bool):bool):bool
+      (+= n#2 (call Table.countWhere (borrow table#4) (closure 307 () (block (return (> v#1 1:i32):bool))):borrow fn(i32) -> bool):i32)
+      (expr (call SliceAlgorithms<i32>.sortBy (reborrow-mut values#0) (closure 318 () (block (return (- (deref a#1):i32 (deref b#2):i32):i32))):borrow mut fn(borrow i32, borrow i32) -> i32):void)
+      (expr (call SliceAlgorithms<i32>.forEach (reborrow (reborrow-mut values#0)) (closure 319 (mutable n#2) (block (+= n#2 (deref v#1):i32))):borrow mut fn(borrow i32)):void)
+      (if (&& (call SliceAlgorithms<i32>.any (reborrow (reborrow-mut values#0)) (closure 320 (shared limit#1) (block (return (== (deref v#1):i32 limit#1):bool))):borrow mut fn(borrow i32) -> bool):bool (call SliceAlgorithms<i32>.all (reborrow (reborrow-mut values#0)) (closure 321 () (block (return (> (deref v#1):i32 0:i32):bool))):borrow mut fn(borrow i32) -> bool):bool):bool
         (block
           (+= n#2 1:i32)
         )
@@ -45,7 +45,7 @@
   (fn inInterrupt ((values#0: Vector<i32>)) -> usize
     (block
       (var kept#1: Vector<i32> = values#0)
-      (expr (Process.exit (borrow-mut kept#1) (closure 290 () (block (return (> (deref v#1):i32 2:i32):bool))):borrow mut fn(borrow i32) -> bool (address retain)))
+      (expr (Process.exit (borrow-mut kept#1) (closure 322 () (block (return (> (deref v#1):i32 2:i32):bool))):borrow mut fn(borrow i32) -> bool (address retain)))
       (return (length kept#1):usize)
     )
   )
@@ -55,7 +55,7 @@
       (expr (Console.writeLine (call underLock (slice-mut values#0 _ _):SliceMut<i32> 4:i32):i32))
       (expr (Console.writeLine (call inInterrupt (Process.exit)):usize))
       (let f#1: fn(Slice<i32>, borrow fn(i32) -> bool) -> i32 = (address count))
-      (expr (Console.writeLine (Process.exit f#1 (slice values#0 _ _):Slice<i32> (closure 291 () (block (return (> v#1 0:i32):bool))):borrow fn(i32) -> bool)))
+      (expr (Console.writeLine (Process.exit f#1 (slice values#0 _ _):Slice<i32> (closure 323 () (block (return (> v#1 0:i32):bool))):borrow fn(i32) -> bool)))
     )
   )
   (fn Table.countWhere ((this#0: borrow Table) (keep#1: borrow fn(i32) -> bool)) -> i32
@@ -63,57 +63,57 @@
       (return (call count (slice (*this#0).values _ _):Slice<i32> keep#1):i32)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 271}) (v#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 303}) (v#1: i32)) -> bool
     (block
       (return (> v#1 limit#1):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 272}) (a0#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 304}) (a0#1: i32)) -> bool
     (block
       (return (call isEven a0#1):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 273}) (a0#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 305}) (a0#1: i32)) -> bool
     (block
       (return (call isEven a0#1):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 274}) (v#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 306}) (v#1: i32)) -> bool
     (block
       (return (< v#1 limit#1):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 275}) (v#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 307}) (v#1: i32)) -> bool
     (block
       (return (> v#1 1:i32):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 286}) (a#1: borrow i32) (b#2: borrow i32)) -> i32
+  (fn closure ((env#0: borrow mut {closure environment 318}) (a#1: borrow i32) (b#2: borrow i32)) -> i32
     (block
       (return (- (deref a#1):i32 (deref b#2):i32):i32)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 287}) (v#1: borrow i32)) -> void
+  (fn closure ((env#0: borrow mut {closure environment 319}) (v#1: borrow i32)) -> void
     (block
       (+= n#2 (deref v#1):i32)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 288}) (v#1: borrow i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 320}) (v#1: borrow i32)) -> bool
     (block
       (return (== (deref v#1):i32 limit#1):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 289}) (v#1: borrow i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 321}) (v#1: borrow i32)) -> bool
     (block
       (return (> (deref v#1):i32 0:i32):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 290}) (v#1: borrow i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 322}) (v#1: borrow i32)) -> bool
     (block
       (return (> (deref v#1):i32 2:i32):bool)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 291}) (v#1: i32)) -> bool
+  (fn closure ((env#0: borrow mut {closure environment 323}) (v#1: i32)) -> bool
     (block
       (return (> v#1 0:i32):bool)
     )

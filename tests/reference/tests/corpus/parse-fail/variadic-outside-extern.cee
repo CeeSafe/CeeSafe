@@ -1,0 +1,6 @@
+// `...` ends the parameters of a C function only (ADR 0041 §3.3).
+fn sum(count: i32, ...) -> i32 => count; // error[N0100]
+
+interface Logger {
+    fn log(borrow this, format: *CChar, ...); // error[N0100]
+}

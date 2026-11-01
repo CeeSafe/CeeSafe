@@ -1,0 +1,42 @@
+// The atomic types' bitwise read-modify-writes (type-system.md §38.3, ADR 0041 §3.1): fetchOr and fetchAnd return the
+// value before the change, with and without an ordering, on statics and locals of each integer atomic type.
+
+static FLAGS: AtomicU64 = AtomicU64.constant(0x0F);
+static SMALL: AtomicU32 = AtomicU32.constant(0xF0);
+
+fn main() {
+    Console.writeLine(FLAGS.fetchOr(0x30));                               // 0x0F
+    Console.writeLine(FLAGS.load());                                      // 0x3F
+    Console.writeLine(FLAGS.fetchAnd(0x21));                              // 0x3F
+    Console.writeLine(FLAGS.load());                                      // 0x21
+    Console.writeLine(SMALL.fetchOrWith(0x01, Ordering.Relaxed));         // 0xF0
+    Console.writeLine(SMALL.fetchAndWith(0x11, Ordering.AcquireRelease)); // 0xF1
+    Console.writeLine(SMALL.load());                                      // 0x11
+    let n = AtomicUSize.create(6);
+    Console.writeLine(n.fetchOr(1));  // 6
+    Console.writeLine(n.fetchAnd(3)); // 7
+    Console.writeLine(n.load());      // 3
+    let wide = AtomicU64.create(0xFFFF_FFFF_0000_0000);
+    Console.writeLine(wide.fetchOrWith(0xFF, Ordering.SequentiallyConsistent));
+    Console.writeLine(wide.fetchAndWith(0x1_0000_00F0, Ordering.Release));
+    Console.writeLine(wide.load());
+    Console.writeLine(n.fetchOrWith(8, Ordering.Acquire));  // 3
+    Console.writeLine(n.fetchAndWith(9, Ordering.Relaxed)); // 11
+    Console.writeLine(n.load());                            // 9
+}
+// expect-stdout: 15
+// expect-stdout: 63
+// expect-stdout: 63
+// expect-stdout: 33
+// expect-stdout: 240
+// expect-stdout: 241
+// expect-stdout: 17
+// expect-stdout: 6
+// expect-stdout: 7
+// expect-stdout: 3
+// expect-stdout: 18446744069414584320
+// expect-stdout: 18446744069414584575
+// expect-stdout: 4294967536
+// expect-stdout: 3
+// expect-stdout: 11
+// expect-stdout: 9

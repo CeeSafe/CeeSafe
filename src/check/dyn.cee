@@ -338,6 +338,7 @@ fn dynFunctionMethod(c: borrow mut Checker, dynType: u32) -> Result<u32, AllocEr
         hasDoc: false,
         doc: emptyRange(),
         isExtern: false,
+        variadicStart: none(),
         attributes: emptyRange(),
         start: 0,
         end: 0,

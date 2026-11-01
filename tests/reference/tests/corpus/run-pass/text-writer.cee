@@ -1,0 +1,70 @@
+// lib/core's TextWriter (ADR 0041 §3.3): text formatted into a caller's buffer with no allocation, as snprintf writes:
+// cut to the buffer less one byte, always zero-terminated, and `wanted` counting every byte asked for. The expected
+// lines are a Python model's: snprintf's cut, and Python's own decimal and hexadecimal formatting.
+
+/// The written text, then a line break.
+fn show(w: borrow TextWriter) {
+    Console.writeBytes(w.written());
+    Console.writeLine();
+}
+
+fn main() {
+    var big: [u8; 64] = [0xAA; 64];
+    var w = TextWriter.create(mut big[..]);
+    w.text("n=");
+    w.decimal(0);
+    w.byte(32);
+    w.decimal(18446744073709551615);
+    w.byte(32);
+    w.signed(-9223372036854775807 - 1);
+    w.byte(32);
+    w.signed(42);
+    w.byte(32);
+    w.hex(0xbeef, 8);
+    w.byte(32);
+    w.hex(0, 0);
+    show(w);
+    Console.writeLine(w.length());
+    Console.writeLine(w.wanted());
+    Console.writeLine(w.truncated());
+    let end = w.length();
+    Console.writeLine(big[end] == 0); // zero-terminated
+
+    var small: [u8; 6] = [0xAA; 6];
+    var t = TextWriter.create(mut small[..]);
+    t.text("abcdefgh");
+    Console.writeLine(t.length());
+    Console.writeLine(t.wanted());
+    Console.writeLine(t.truncated());
+    show(t);
+    Console.writeLine(small[5] == 0);
+
+    var none: [u8; 2] = [7; 2];
+    var z = TextWriter.create(mut none[..0]); // no room even for the zero
+    z.text("x");
+    Console.writeLine(z.wanted());
+    Console.writeLine(z.length());
+    Console.writeLine(none[0] == 7);
+
+    var other: [u8; 32] = [0; 32];
+    var h = TextWriter.create(mut other[..]);
+    h.hex(18446744073709551615, 4);
+    h.byte(10);
+    h.signed(-1);
+    show(h);
+}
+// expect-stdout: n=0 18446744073709551615 -9223372036854775808 42 0000beef 0
+// expect-stdout: 59
+// expect-stdout: 59
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: 8
+// expect-stdout: true
+// expect-stdout: abcde
+// expect-stdout: true
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: ffffffffffffffff
+// expect-stdout: -1

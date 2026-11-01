@@ -1,0 +1,17 @@
+// Imported unions (ADR 0041 §3.2): a union needs a member, and a union inside an anonymous union is not imported.
+@header("extern-unions.h")
+extern "C" {
+    union empty { // error[N0107]
+    }
+    struct twice {
+        union {
+            a: u32;
+            union { // error[N0107]
+                b: u32;
+            }
+        }
+    }
+}
+
+// `union` is a word only there: elsewhere it is a name.
+fn union(union: i32) -> i32 => union;

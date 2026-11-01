@@ -29,6 +29,11 @@ fn appendBoundaryType(c: borrow Checker, out: borrow mut Vector<u8>, t: u32, hea
             if (isImportedStruct(c, t)) {
                 return appendBytes(out, c.types.rangeText(c.types.structs[info.structDef as usize].cSpelling));
             }
+            let atomicInteger = atomicFieldInteger(c, t);
+            if (atomicInteger != none()) {
+                // An atomic field is its integer in C, which C code accesses with __atomic_* (ADR 0041 §3.1).
+                return appendBoundaryType(c, out, atomicInteger, header);
+            }
             if (header) {
                 appendText(out, "struct ")?;
                 return appendBytes(out, c.types.name(t));
@@ -56,6 +61,10 @@ fn appendHeaderMemberType(c: borrow Checker, out: borrow mut Vector<u8>, t: u32)
         TypeKind.Struct => {
             if (isImportedStruct(c, t)) {
                 return appendBytes(out, c.types.rangeText(c.types.structs[info.structDef as usize].cSpelling));
+            }
+            let atomicInteger = atomicFieldInteger(c, t);
+            if (atomicInteger != none()) {
+                return appendHeaderMemberType(c, out, atomicInteger); // its integer, for C's __atomic_* (ADR 0041)
             }
             appendText(out, "struct ")?;
             return appendStructTag(c, out, t);
@@ -205,6 +214,12 @@ fn emitCheckEnumFromC(
     return Ok();
 }
 
+/// A C function declared with `...` (ADR 0041 §3.3).
+fn isVariadicFunction(c: borrow Checker, function: u32) -> bool {
+    let syntax = borrow c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
+    return syntax.isExtern && syntax.variadicStart != none();
+}
+
 fn parameterType(c: borrow Checker, function: u32, k: usize) -> u32 =>
     c.hir.locals[c.hir.functions[function as usize].parameters[k] as usize].typ;
 
@@ -251,6 +266,12 @@ fn emitExterns(
         e.b(name)?;
         e.t("(")?;
         appendBoundaryParameters(c, mut e.buf, function, false, false)?;
+        if (isVariadicFunction(c, function)) {
+            // A C variadic function (ADR 0041 §3.3) is called directly, each argument converted at the call.
+            e.t(", ...);")?;
+            e.emit()?;
+            continue;
+        }
         e.t(");")?;
         e.emit()?;
         e.t("static CEE_UNUSED ")?;
@@ -302,6 +323,18 @@ fn emitExterns(
             e.emit()?;
         }
         e.line("}")?;
+    }
+    var variadic = false;
+    for (function in externs.view()) {
+        variadic = variadic || isVariadicFunction(c, function);
+    }
+    if (variadic) {
+        // A variadic call passes its format as a pointer, which C cannot check: the caller's `unsafe` states that the
+        // arguments match it (ADR 0041 §3.3), so C's warnings about a format that is not a literal do not apply.
+        e.line("#if defined(__GNUC__)")?;
+        e.line("#pragma GCC diagnostic ignored \"-Wformat-security\"")?;
+        e.line("#pragma GCC diagnostic ignored \"-Wformat-nonliteral\"")?;
+        e.line("#endif")?;
     }
     if (externs.length > 0) {
         e.line("")?;

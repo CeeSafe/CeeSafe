@@ -44,6 +44,22 @@ extern "C" {
     fn ceesafe_atomic_cas_ord_u32(p: *mut u32, expected: u32, desired: u32, order: i32) -> u32;
     @effects()
     fn ceesafe_atomic_add_ord_u32(p: *mut u32, v: u32, order: i32) -> u32;
+    @effects()
+    fn ceesafe_atomic_or_u64(p: *mut u64, v: u64) -> u64;
+    @effects()
+    fn ceesafe_atomic_or_ord_u64(p: *mut u64, v: u64, order: i32) -> u64;
+    @effects()
+    fn ceesafe_atomic_or_u32(p: *mut u32, v: u32) -> u32;
+    @effects()
+    fn ceesafe_atomic_or_ord_u32(p: *mut u32, v: u32, order: i32) -> u32;
+    @effects()
+    fn ceesafe_atomic_and_u64(p: *mut u64, v: u64) -> u64;
+    @effects()
+    fn ceesafe_atomic_and_ord_u64(p: *mut u64, v: u64, order: i32) -> u64;
+    @effects()
+    fn ceesafe_atomic_and_u32(p: *mut u32, v: u32) -> u32;
+    @effects()
+    fn ceesafe_atomic_and_ord_u32(p: *mut u32, v: u32, order: i32) -> u32;
 }
 
 /// The ordering of an atomic load (ADR 0021): C11's memory_order_relaxed, _acquire and _seq_cst.
@@ -120,6 +136,14 @@ public struct AtomicU64 {
     public fn fetchSub(borrow this, value: u64) -> u64 =>
         unsafe { ceesafe_atomic_add_u64(this.cell(), 0u64.wrappingSub(value)) };
 
+    /// Sets the bits of `value`; the value before (ADR 0041).
+    /// Safety: as load.
+    public fn fetchOr(borrow this, value: u64) -> u64 => unsafe { ceesafe_atomic_or_u64(this.cell(), value) };
+
+    /// Keeps only the bits of `value`; the value before (ADR 0041).
+    /// Safety: as load.
+    public fn fetchAnd(borrow this, value: u64) -> u64 => unsafe { ceesafe_atomic_and_u64(this.cell(), value) };
+
     /// load, with an ordering (ADR 0021).
     /// Safety: as load.
     public fn loadWith(borrow this, order: LoadOrdering) -> u64 =>
@@ -155,6 +179,16 @@ public struct AtomicU64 {
     /// Safety: as load.
     public fn fetchSubWith(borrow this, value: u64, order: Ordering) -> u64 =>
         unsafe { ceesafe_atomic_add_ord_u64(this.cell(), 0u64.wrappingSub(value), code(order)) };
+
+    /// fetchOr, with an ordering.
+    /// Safety: as load.
+    public fn fetchOrWith(borrow this, value: u64, order: Ordering) -> u64 =>
+        unsafe { ceesafe_atomic_or_ord_u64(this.cell(), value, code(order)) };
+
+    /// fetchAnd, with an ordering.
+    /// Safety: as load.
+    public fn fetchAndWith(borrow this, value: u64, order: Ordering) -> u64 =>
+        unsafe { ceesafe_atomic_and_ord_u64(this.cell(), value, code(order)) };
 
     fn cell(borrow this) -> *mut u64 => borrow this.value as *u64 as *mut u64;
 }
@@ -197,6 +231,14 @@ public struct AtomicU32 {
     public fn fetchSub(borrow this, value: u32) -> u32 =>
         unsafe { ceesafe_atomic_add_u32(this.cell(), 0u32.wrappingSub(value)) };
 
+    /// Sets the bits of `value`; the value before (ADR 0041).
+    /// Safety: as load.
+    public fn fetchOr(borrow this, value: u32) -> u32 => unsafe { ceesafe_atomic_or_u32(this.cell(), value) };
+
+    /// Keeps only the bits of `value`; the value before (ADR 0041).
+    /// Safety: as load.
+    public fn fetchAnd(borrow this, value: u32) -> u32 => unsafe { ceesafe_atomic_and_u32(this.cell(), value) };
+
     /// load, with an ordering (ADR 0021).
     /// Safety: as load.
     public fn loadWith(borrow this, order: LoadOrdering) -> u32 =>
@@ -232,6 +274,16 @@ public struct AtomicU32 {
     /// Safety: as load.
     public fn fetchSubWith(borrow this, value: u32, order: Ordering) -> u32 =>
         unsafe { ceesafe_atomic_add_ord_u32(this.cell(), 0u32.wrappingSub(value), code(order)) };
+
+    /// fetchOr, with an ordering.
+    /// Safety: as load.
+    public fn fetchOrWith(borrow this, value: u32, order: Ordering) -> u32 =>
+        unsafe { ceesafe_atomic_or_ord_u32(this.cell(), value, code(order)) };
+
+    /// fetchAnd, with an ordering.
+    /// Safety: as load.
+    public fn fetchAndWith(borrow this, value: u32, order: Ordering) -> u32 =>
+        unsafe { ceesafe_atomic_and_ord_u32(this.cell(), value, code(order)) };
 
     fn cell(borrow this) -> *mut u32 => borrow this.value as *u32 as *mut u32;
 }
@@ -272,6 +324,12 @@ public struct AtomicUSize {
     /// Subtracts, wrapping; returns the old value.
     public fn fetchSub(borrow this, value: usize) -> usize => truncate<usize>(this.inner.fetchSub(value as u64));
 
+    /// As fetchOr.
+    public fn fetchOr(borrow this, value: usize) -> usize => truncate<usize>(this.inner.fetchOr(value as u64));
+
+    /// As fetchAnd.
+    public fn fetchAnd(borrow this, value: usize) -> usize => truncate<usize>(this.inner.fetchAnd(value as u64));
+
     /// As load, with `order`.
     public fn loadWith(borrow this, order: LoadOrdering) -> usize => truncate<usize>(this.inner.loadWith(order));
 
@@ -302,6 +360,14 @@ public struct AtomicUSize {
     /// As fetchSub, with `order`.
     public fn fetchSubWith(borrow this, value: usize, order: Ordering) -> usize =>
         truncate<usize>(this.inner.fetchSubWith(value as u64, order));
+
+    /// As fetchOrWith.
+    public fn fetchOrWith(borrow this, value: usize, order: Ordering) -> usize =>
+        truncate<usize>(this.inner.fetchOrWith(value as u64, order));
+
+    /// As fetchAndWith.
+    public fn fetchAndWith(borrow this, value: usize, order: Ordering) -> usize =>
+        truncate<usize>(this.inner.fetchAndWith(value as u64, order));
 }
 
 /// A bool that threads may read and change at once.

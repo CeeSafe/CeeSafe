@@ -309,8 +309,18 @@ fn constantValue(n: borrow NirProgram, operand: u32) -> IntValue => match (n.ope
     _ => intValue(0),
 };
 
+/// Two fields of one union of an imported C struct or union (ADR 0041 §3.2).
+fn sameUnion(c: borrow Checker, x: u32, y: u32) -> bool {
+    if (x == none() || y == none()) {
+        return false;
+    }
+    let group = c.types.fields[x as usize].unionGroup;
+    return group != none() && group == c.types.fields[y as usize].unionGroup;
+}
+
 /// Same root, and one projection list is a prefix of the other (elements at different constant indices excepted).
-fn overlap(n: borrow NirProgram, a: PlaceRef, b: PlaceRef) -> bool {
+/// Two members of one C union overlap too.
+fn overlap(c: borrow Checker, n: borrow NirProgram, a: PlaceRef, b: PlaceRef) -> bool {
     if (a.local != b.local) {
         return false;
     }
@@ -322,7 +332,8 @@ fn overlap(n: borrow NirProgram, a: PlaceRef, b: PlaceRef) -> bool {
             return false;
         }
         let same = match (x.kind) {
-            ProjectionKind.Field => x.field == y.field,
+            // The members of one C union share storage: one place (ADR 0041 §3.2).
+            ProjectionKind.Field => x.field == y.field || sameUnion(c, x.field, y.field),
             ProjectionKind.Downcast => x.variant == y.variant,
             // Two different constant indices name different elements (M13 G5, lifetimes.md §8).
             ProjectionKind.Index => !(constantIndex(n, x.index) && constantIndex(n, y.index) &&
@@ -1213,7 +1224,7 @@ fn checkConflicts(c: borrow mut Checker, n: borrow NirProgram, b: borrow mut Bor
                     if (access.kind == accessWrite() && referenceOnTheWay(c, n, b, access.place, loanPlace)) {
                         throughReference = true;
                     }
-                    if (!throughReference && overlap(n, loanPlace, access.place) &&
+                    if (!throughReference && overlap(c, n, loanPlace, access.place) &&
                         conflicts(b.loans[id as usize], access.kind) && !containsU32(reported, id)) {
                         reported.push(id)?;
                         reportConflict(c, n, b, id, access, span, truncate<u32>(position), truncate<u32>(i))?;

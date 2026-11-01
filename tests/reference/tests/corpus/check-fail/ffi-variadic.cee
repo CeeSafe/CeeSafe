@@ -1,0 +1,33 @@
+// Variadic C functions (ADR 0041 §3.3): a further argument must be a type C's default argument promotions leave
+// unchanged (N0347); a call passes at least the parameters (N0209) and is unsafe (N0280); a variadic function needs a
+// parameter before `...` (N0290), has no function pointer type and cannot return a @repr enum (N0291).
+extern "C" {
+    fn log(level: u32, format: *CChar, ...) -> i32;
+    fn bare(...); // error[N0290]
+    fn mode(format: *CChar, ...) -> Mode; // error[N0291]
+}
+
+@repr(u8)
+enum Mode { A, B }
+
+/// Safety: each format matches its arguments.
+fn calls(p: *CChar) {
+    let small: u8 = 1;
+    let half: u16 = 2;
+    let flag = true;
+    let single: f32 = 1.5;
+    let wide: u64 = 3;
+    unsafe {
+        log(1, p, 7, -7, 4000000000u32, wide, 5usize, -5isize, 2.5f64, p, p as *u8);
+        log(1, p, small); // error[N0347]
+        log(1, p, half); // error[N0347]
+        log(1, p, flag); // error[N0347]
+        log(1, p, single); // error[N0347]
+        log(1, p, small as u32);
+        log(1); // error[N0209]
+    }
+    log(1, p); // error[N0280]
+    let f: extern "C" fn(u32, *CChar) -> i32 = log; // error[N0291]
+}
+
+fn main() {}

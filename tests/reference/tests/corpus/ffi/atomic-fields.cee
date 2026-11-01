@@ -1,0 +1,89 @@
+// Atomic fields shared with C (ADR 0041 §3.1). An imported struct's uint64_t, uint32_t and size_t members declared
+// AtomicU64, AtomicU32 and AtomicUSize, which CeeSafe changes only through their atomic methods while C changes them
+// with __atomic_*; and a @repr(C) struct with atomic fields, which the exports header writes as the integers, so the C
+// half, atomic-fields.c, changes them with __atomic_* too.
+
+@header("atomic-fields.types.h")
+extern "C" {
+    struct af_stats {
+        packets: AtomicU64;
+        flags: AtomicU32;
+        bytes: AtomicUSize;
+        other: u16;
+    }
+    fn af_stats_get() -> *mut af_stats;
+    fn af_stats_bump();
+    fn c_main() -> i32;
+}
+
+/// Changes C's statistics atomically, around C's own atomic changes.
+/// Safety: af_stats_get returns a static that lives for the program, and af_stats_bump changes it only atomically.
+@export("af_use_stats")
+unsafe fn useStats() {
+    let s = Ptr.toBorrow(af_stats_get());
+    Console.writeLine(s.packets.fetchAdd(5));                     // 10
+    af_stats_bump();                                              // C: packets + 1, flags | 1, bytes + 5
+    Console.writeLine(s.packets.load());                          // 16
+    Console.writeLine(s.flags.fetchOr(0x100));                    // 0x11
+    Console.writeLine(s.flags.fetchAnd(0x101));                   // 0x111
+    Console.writeLine(s.bytes.fetchAddWith(1, Ordering.Relaxed)); // 105
+    Console.writeLine(s.bytes.fetchSub(6));                       // 106
+    Console.writeLine(s.other);                                   // 0
+}
+
+@repr(C)
+struct af_counters {
+    hits: AtomicU64;
+    mask: AtomicU32;
+    total: AtomicUSize;
+    size: u32;
+}
+
+static COUNTERS: af_counters = af_counters {
+    hits: AtomicU64.constant(1),
+    mask: AtomicU32.constant(2),
+    total: AtomicUSize.constant(7),
+    size: 3,
+};
+
+/// The counters, which C reads and changes atomically too.
+@export("af_counters_get")
+fn get() -> *af_counters => borrow COUNTERS as *af_counters;
+
+@export("af_counters_hit")
+fn hit() -> u64 => COUNTERS.hits.fetchAdd(1);
+
+@export("af_report")
+fn report() {
+    Console.writeLine(COUNTERS.hits.load());          // 12
+    Console.writeLine(COUNTERS.mask.fetchAnd(0x102)); // 0x102
+    Console.writeLine(COUNTERS.total.fetchOr(8));     // 5
+}
+
+/// Safety: c_main only calls the exports above, and changes the shared integers only atomically.
+fn main() -> i32 {
+    let local = af_counters {
+        hits: AtomicU64.create(40),
+        mask: AtomicU32.create(0),
+        total: AtomicUSize.create(9),
+        size: 1,
+    };
+    Console.writeLine(local.hits.fetchAdd(2)); // 40
+    Console.writeLine(local.total.load());     // 9
+    return unsafe { c_main() };
+}
+// expect-stdout: 40
+// expect-stdout: 9
+// expect-stdout: 10
+// expect-stdout: 16
+// expect-stdout: 17
+// expect-stdout: 273
+// expect-stdout: 105
+// expect-stdout: 106
+// expect-stdout: 0
+// expect-stdout: 16 101 100 0
+// expect-stdout: 1
+// expect-stdout: 12
+// expect-stdout: 258
+// expect-stdout: 5
+// expect-stdout: 12 102 13 3

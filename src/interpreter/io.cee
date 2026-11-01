@@ -996,6 +996,19 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_atomic_add_ord_u32")) {
         return "Pui:u";
     }
+    // fetchOr and fetchAnd (ADR 0041)
+    if (sameText(name, "ceesafe_atomic_or_u64") || sameText(name, "ceesafe_atomic_and_u64")) {
+        return "Ps:s";
+    }
+    if (sameText(name, "ceesafe_atomic_or_u32") || sameText(name, "ceesafe_atomic_and_u32")) {
+        return "Pu:u";
+    }
+    if (sameText(name, "ceesafe_atomic_or_ord_u64") || sameText(name, "ceesafe_atomic_and_ord_u64")) {
+        return "Psi:s";
+    }
+    if (sameText(name, "ceesafe_atomic_or_ord_u32") || sameText(name, "ceesafe_atomic_and_ord_u32")) {
+        return "Pui:u";
+    }
     return null;
 }
 
@@ -1198,6 +1211,10 @@ fn callC(
         }
     } else if (sameText(plain, "add")) {
         it.memory.storeBits(at, old.wrappingAdd(arguments[1].bits(0, size)?) & mask, size)?;
+    } else if (sameText(plain, "or")) {
+        it.memory.storeBits(at, (old | arguments[1].bits(0, size)?) & mask, size)?;
+    } else if (sameText(plain, "and")) {
+        it.memory.storeBits(at, old & arguments[1].bits(0, size)? & mask, size)?;
     }
     return Ok(valueOf(old, size));
 }

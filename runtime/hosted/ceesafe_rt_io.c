@@ -574,15 +574,29 @@ cee_io_result ceesafe_tcp_shutdown_write(int32_t fd) {
 }
 
 /* ---- Async sockets (type-system.md §40.4; lib/std/async.cee): non-blocking descriptors. Each call is a value >= 0,
- * CEE_ASYNC_WOULD_BLOCK (the task waits for readiness, then calls again), or a negated errno. ---- */
+ * CEE_ASYNC_WOULD_BLOCK (the task waits for readiness, then calls again), or a negated errno.
+ *
+ * CosmoOS userland (CEE_COSMOOS) has no fcntl: its descriptors wait or not per call (MSG_DONTWAIT) or through its
+ * own asynchronous I/O, never by a flag set on the descriptor. A socket cannot be made non-blocking there, so opening
+ * one for async use (listen, accept, connect) is ENOSYS, which the library reports as AsyncError.Io; everything else
+ * a program does, and Async.run itself, works as elsewhere. ---- */
 
 static int64_t cee_async_errno(void) {
-    return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINPROGRESS ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    if (errno == EWOULDBLOCK) return CEE_ASYNC_WOULD_BLOCK;
+#endif
+    return errno == EAGAIN || errno == EINPROGRESS ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
 }
 
 static bool cee_nonblocking(int fd) {
+#if defined(CEE_COSMOOS)
+    (void)fd;
+    errno = ENOSYS;
+    return false;
+#else
     int flags = fcntl(fd, F_GETFL, 0);
     return flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+#endif
 }
 
 int64_t ceesafe_async_tcp_listen(const uint8_t *address, uint64_t length, uint16_t port) {
@@ -651,6 +665,10 @@ int64_t ceesafe_async_tcp_connect(const uint8_t *address, uint64_t length, uint1
 }
 
 int64_t ceesafe_async_tcp_connected(int32_t fd) {
+#if defined(CEE_COSMOOS)
+    (void)fd;
+    return -(int64_t)ENOSYS;   /* no async connection can be started (cee_nonblocking), and CosmoOS has no getpeername */
+#else
     int error = 0;
     socklen_t size = sizeof error;
     if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) < 0) {
@@ -666,6 +684,7 @@ int64_t ceesafe_async_tcp_connected(int32_t fd) {
         return 0;
     }
     return errno == ENOTCONN ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+#endif
 }
 
 int64_t ceesafe_async_read(int32_t fd, uint8_t *buffer, uint64_t length) {

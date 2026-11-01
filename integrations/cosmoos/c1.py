@@ -18,8 +18,9 @@ Steps, for one architecture:
   6. boot it with scripts/qemu-run.sh, type each program's name at the shell, check the output,
      then `exit 0`.
 
-With --corpus, every program in CeeSafe's corpus (tests/reference/tests/corpus) run-pass and run-fail is also built (as nv-<name>)
-and run in the guest. Its stdout, exit status (from the kernel's "exited with status" log line)
+With --corpus, every program in CeeSafe's corpus (tests/reference/tests/corpus) run-pass and run-fail is also built (as
+cee-<name>) and run in the guest, but the async ones (ASYNC): CosmoOS userland has no executor yet (the hosted one waits
+in poll() and runs threads; CosmoOS's libc has neither), so they are listed as skipped, not built. Its stdout, exit status (from the kernel's "exited with status" log line)
 and panic location are checked against the same `// expect-*` directives as the host tests.
 
 Usage:
@@ -42,6 +43,8 @@ from pathlib import Path
 CEESAFE_ROOT = Path(__file__).resolve().parents[2]
 C1_DIR = Path(__file__).resolve().parent / "c1"
 CORPUS_DIR = CEESAFE_ROOT / "tests" / "reference" / "tests" / "corpus"  # CeeSafe's corpus
+# A program that uses async (type-system.md §40): an async function, an await, or the Async API.
+ASYNC = re.compile(r"\basync fn\b|\bawait\b|\bAsync\.")
 # The compiler under test: $CEESAFEC, else the tree's out/ceesafec (built by tools/bootstrap_release.sh or by itself).
 CEESAFEC = Path(os.environ.get("CEESAFEC", CEESAFE_ROOT / "out" / "ceesafec")).resolve()
 PROMPT = b"\ncosmo$ "
@@ -262,7 +265,8 @@ def check_corpus(serial, programs):
         status = None
         output = []
         for line in lines:
-            exited = re.match(rf"\[ INFO\] process: pid \d+ '{re.escape(program.guest_name)}' exited with status (\d+)", line)
+            # The kernel keeps a process's name in PROCESS_NAME_MAX (32) bytes with its NUL: 31 characters.
+            exited = re.match(rf"\[ INFO\] process: pid \d+ '{re.escape(program.guest_name[:31])}' exited with status (\d+)", line)
             if exited:
                 status = int(exited.group(1))
             elif line.startswith("[ INFO]") or line in ("abort()", "Aborted") or line.startswith("sh: "):
@@ -314,10 +318,16 @@ def main():
 
     require_compiler()
     programs = [Program("ceesafe-hello", C1_DIR, "ceesafe-hello.cee"), Program("ceesafe-panic", C1_DIR, "ceesafe-panic.cee")]
+    skipped = []
     if args.corpus:
         for kind in ("run-pass", "run-fail"):
             for source in sorted((CORPUS_DIR / kind).glob("*.cee")):
-                programs.append(Program(f"nv-{source.stem}", CORPUS_DIR, f"{kind}/{source.name}"))
+                if ASYNC.search(source.read_text(encoding="utf-8")):
+                    skipped.append(f"{kind}/{source.name}")
+                    continue
+                programs.append(Program(f"cee-{source.stem}", CORPUS_DIR, f"{kind}/{source.name}"))
+        if skipped:
+            log(f"skipped, async (no executor in CosmoOS userland yet): {len(skipped)}: {' '.join(skipped)}")
 
     elves = [build_program(cosmo, program, work, cc, cflags, ld, ldflags) for program in programs]
     for elf in elves:

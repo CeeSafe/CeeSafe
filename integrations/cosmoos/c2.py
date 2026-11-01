@@ -195,7 +195,7 @@ def main():
     programs = []
     for kind in ("run-pass", "run-fail"):
         for source in sorted((c1.CORPUS_DIR / kind).glob("*.cee")):
-            programs.append(c1.Program(f"nv-{source.stem}", c1.CORPUS_DIR, f"{kind}/{source.name}"))
+            programs.append(c1.Program(f"cee-{source.stem}", c1.CORPUS_DIR, f"{kind}/{source.name}"))
 
     attempts = {}
     for program in programs:

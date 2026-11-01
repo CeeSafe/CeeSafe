@@ -1,0 +1,67 @@
+// `s.spawnSend(child)` (ADR 0038 §3.1): the child may run on another worker, so its captures follow Thread.both's rule
+// (type-system.md §38.6): one it reads must be Share, one it changes Send, and no closures; its error type must be
+// Send; and its frame comes from the system heap (N0334 each).
+
+extern "C" {
+    @effects(alloc)
+    fn malloc(size: usize) -> *mut void;
+    @effects()
+    fn free(p: *mut void);
+}
+
+interface Shape {
+    fn area(borrow this) -> u32;
+    fn grow(borrow mut this);
+}
+
+struct Square { side: u32; }
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+    fn grow(borrow mut this) { this.side += 1; }
+}
+
+struct Counting {}
+impl Allocator for Counting {
+    /// Safety: malloc returns null or a block of layout.size bytes, aligned for any type.
+    fn allocate(borrow this, layout: Layout) -> Result<*mut u8, AllocError> {
+        let p = unsafe { malloc(layout.size) } as *mut u8;
+        return if (p.isNull()) Err(AllocError.OutOfMemory) else Ok(p);
+    }
+
+    /// Safety: the blocks come back from allocate, once each.
+    unsafe fn deallocate(borrow this, p: *mut u8, layout: Layout) { free(p as *mut void); }
+}
+
+enum Failure {
+    Oom,
+    Bad(Box<dyn Shape>),
+}
+
+async fn work() -> Result<void, AsyncError> {
+    let reader: Box<dyn Shape> = Box.create(Square { side: 2 })!;
+    var writer: Box<dyn Shape> = Box.create(Square { side: 3 })!;
+    let step: u32 = 1;
+    let add = (x: u32) => x + step; // a closure: it captures
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawnSend(async () => { let a = reader.area(); return Ok(); }); // error[N0334]
+        s.spawnSend(async () => { writer.grow(); return Ok(); });         // error[N0334]
+        s.spawnSend(async () => { let b = add(1); return Ok(); });        // error[N0334]
+    })?;
+    await Async.scopeIn(Counting {}, AsyncError.Cancelled, (s) => {
+        s.spawnSend(async () => Ok()); // error[N0334]
+    })?;
+    match (await Async.scope(Failure.Oom, (s) => {
+        s.spawnSend(async () => Ok()); // error[N0334]
+    })) {
+        Ok() => {}
+        Err(_) => {}
+    }
+    return Ok();
+}
+
+fn main() {
+    match (Async.runWorkers(2, work())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

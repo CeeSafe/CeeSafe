@@ -2145,7 +2145,11 @@ fn lowerRvalueCore(
             operands.push(allocatorOperand)?; // Async.scopeIn's allocator type, or none (§40.5)
             let list = n.list(operands.view())?;
             let voidType = c.types.voidType;
-            return n.rvalue(NirRvalue.Builtin(bfAsyncSpawn(), list), voidType, exprSpan(c, e));
+            let spawn = n.rvalue(NirRvalue.Builtin(bfAsyncSpawn(), list), voidType, exprSpan(c, e))?;
+            if (containsU32(c.sendSpawns, e)) {
+                n.rvalueTasks[spawn as usize] = taskSend(); // `s.spawnSend(…)`: another worker may run it (ADR 0038)
+            }
+            return Ok(spawn);
         }
         HirExpr.BuiltinCall(function, arguments) => { return lowerBuiltinCall(c, n, b, e, function, arguments); }
         _ => {}
@@ -2329,6 +2333,21 @@ fn lowerBuiltinCall(
 ) -> Result<u32, AllocError> {
     let typ = c.hir.exprTypes[e as usize];
     let span = exprSpan(c, e);
+    if (function == bfAsyncRunWorkers() && arguments.count == 2) {
+        // `Async.runWorkers(n, task)` (ADR 0038): the next run's workers, then the run.
+        let countExpr = c.hir.at(arguments, 0);
+        let count = lowerOperand(c, n, b, countExpr)?;
+        if (count == none()) {
+            return Ok(none());
+        }
+        let values = [count];
+        let list = n.list(values[..])?;
+        let voidType = c.types.voidType;
+        let workers = n.rvalue(NirRvalue.Builtin(bfAsyncWorkers(), list), voidType, span)?;
+        emit(n, b, NirStatement.Eval(workers))?;
+        let runExpr = c.hir.at(arguments, 1);
+        return lowerRvalue(c, n, b, runExpr);
+    }
     if (function == bfProcessExit()) {
         let hoisted101 = c.hir.at(arguments, 0);
         let code = lowerOperand(c, n, b, hoisted101)?;

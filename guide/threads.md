@@ -162,6 +162,14 @@ not use it. A value both read must be `Share`, and one that a closure changes mu
 its referent here. `splitAtMut` gives two halves that each closure may change. If a thread cannot be started, `both`
 runs `a` and then `b` on this thread, so it never fails.
 
+## Async tasks on several threads
+
+An `Async.run` uses one thread. To spread a scope's children over several, run it with `Async.runWorkers(4, task)`
+and spawn them with `s.spawnSend(async () => …)` instead of `s.spawn`. Another worker may take such a child before it
+starts. Once started, the child stays on that worker. What the child captures follows the rule of `Thread.both`: a
+value it reads must be `Share`, and one it changes must be `Send`. Two children cannot change the same value, so they
+report results through atomics, or through a value per child. Under a plain `Async.run`, `spawnSend` is `spawn`.
+
 ## Where threads run
 
 Threads are part of the hosted profile: Linux, macOS, Windows and CosmoOS user programs. Kernel code uses the

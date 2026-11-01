@@ -102,6 +102,8 @@ struct NirBlock {
 /// A Call rvalue's role (NirProgram.rvalueTasks): the awaited call of `await f(…)`, or the task of `Async.run(f(…))`.
 fn taskAwait() -> u8 => 1;
 fn taskRun() -> u8 => 2;
+/// A Builtin(AsyncSpawn)'s role for `s.spawnSend(…)`: the child may run on another worker (ADR 0038).
+fn taskSend() -> u8 => 3;
 
 struct NirFunction {
     source: u32; // the HIR function

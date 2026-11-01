@@ -119,8 +119,9 @@ fn emitChildThunk(
     e.t(" *)(void *)scope;")?;
     e.emit()?;
     e.line("    if (f->cee_result.tag != 0) {")?;
-    e.line("        if (!s->rt.failed) {")?;
-    e.line("            s->rt.failed = true;")?;
+    e.line(
+        "        if (ceesafe_async_claim_failure(scope)) { /* the first: under the run's lock if shared (ADR 0038) */",
+    )?;
     e.line("            s->error = f->cee_result;")?;
     if (c.types.needsDrop(result)) {
         e.line("        } else {")?;
@@ -1041,10 +1042,13 @@ fn emitSpawn(
     let list = builtinArguments(n, r);
     let value = operandText(e, c, n, sources, f, n.at(list, 2))?;
     let childNir = asyncNirFunction(n, child);
+    let send = n.rvalueTasks[r as usize] == taskSend();
     e.line("    {")?;
     e.t("        struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
-    e.t(" *cee_child = ceesafe_async_spawn(&cee_frame->cee_s")?;
+    e.t(
+        if (send) " *cee_child = ceesafe_async_spawn_send(&cee_frame->cee_s" else " *cee_child = ceesafe_async_spawn(&cee_frame->cee_s",
+    )?;
     e.d(site as u64)?;
     e.t(".rt, sizeof(struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
@@ -1088,6 +1092,11 @@ fn emitSpawn(
         e.b(value.view())?;
         e.t(");")?;
         e.emit()?;
+    }
+    if (send) {
+        e.line(
+            "        if (cee_child != NULL) ceesafe_async_publish(cee_child); /* any worker may start it now (ADR 0038) */",
+        )?;
     }
     e.line("    }")?;
     return Ok(true);
@@ -1611,8 +1620,8 @@ fn layoutEnd(l: borrow LayoutBuilder) -> SizeAlign {
 fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
 
 /// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
-fn scopeLayout() -> SizeAlign => SizeAlign { size: 24, align: 8 };
-fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 128, align: 16 };
+fn scopeLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
+fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 144, align: 16 };
 fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
 
 /// What a frame is made of, for --explain-frames.

@@ -1,0 +1,46 @@
+// The parallel fan-out benchmark (ADR 0038): a scope of CHILDREN `spawnSend` children, each mixing its share of a
+// borrowed Vector (CPU only), run with `Async.runWorkers(WORKERS, …)`. It prints the milliseconds the run took, then
+// the sum, which must not depend on WORKERS. run.py substitutes the two numbers.
+
+fn mix(values: borrow Vector<u64>, part: usize, parts: usize) -> u64 {
+    var total: u64 = 0;
+    var i = part;
+    while (i < values.length) {
+        var x = values[i];
+        for (k in 0..20000) {
+            x = (x * 48271 + 11) % 2147483647;
+        }
+        total += x % 1000;
+        i += parts;
+    }
+    return total;
+}
+
+async fn fanOut(values: borrow Vector<u64>, children: u32) -> Result<u64, AsyncError> {
+    let total = AtomicU64.create(0);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (p in 0..children) {
+            let part = p as usize;
+            let parts = children as usize;
+            s.spawnSend(async () => {
+                total.fetchAdd(mix(values, part, parts));
+                return Ok();
+            });
+        }
+    })?;
+    return Ok(total.load());
+}
+
+fn main() {
+    var values = Vector<u64>.create();
+    for (i in 0..4000u64) {
+        values.push(i * 7 + 1)!;
+    }
+    let started = Timer.now();
+    let sum = match (Async.runWorkers(WORKERS, fanOut(borrow values, CHILDREN))) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    Console.writeLine(Timer.now() - started);
+    Console.writeLine(sum);
+}

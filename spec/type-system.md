@@ -3266,6 +3266,7 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | Operation | Result | Notes |
 |---|---|---|
 | `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295 |
+| `Async.runWorkers(n, f(…))` | `T` | `Async.run` with `n` workers, this thread among them (`n: u32`; ADR 0038): `n − 1` more threads, started for the run and joined when it returns, may take its `spawnSend` children (§40.5). A worker that cannot start is skipped: the result is the same. Hosted only |
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
 | `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body |
 | `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`, run at once; the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6. Without an expected type or an expression body for `a`, `E` is `AsyncError`. The two may not capture one local where either changes it (N0241) |
@@ -3292,6 +3293,13 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 - **`s.spawn(async () => …)`** starts a child whose result type must be `Result<void, E>`, the same `E` for every child
   of the scope. It returns `void`. The child's frame comes from the scope's allocator. If it cannot be allocated, the
   child is not started, the scope's other children are cancelled, and the scope's result is `Err(oom)`.
+- **`s.spawnSend(async () => …)`** (ADR 0038) is `spawn` for a child that any worker of `Async.runWorkers` may run.
+  It may move only before it starts: once started it runs, and everything it awaits or spawns starts, on that worker,
+  so frames never cross threads. What it is given does: its captures follow `Thread.both`'s rule (§38.6), so one it
+  reads needs `Share` and one it changes `Send`, references counting by their target, and a captured closure is
+  refused. Its error type must be `Send`, and its frame comes from the system heap (not `Async.scopeIn`'s allocator).
+  Each of these is **N0334**. A child's error cancels its siblings wherever they run. Under `Async.run`, which has
+  one worker, `spawnSend` is `spawn`.
 - **The scope returns only after every child has returned.** Its result is `Ok()` if every child returned `Ok`;
   otherwise the first `Err` (in the order the children returned), after the first `Err` has cancelled the others.
 - **The body is a block** of the awaiting function, not a closure (ADR 0031 §6.6): `s` is not a local, and names the
@@ -3350,10 +3358,11 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 ### 40.8 The interpreter and determinism
 - The interpreter runs tasks on one thread with a virtual clock (timers fire in deadline order without waiting) and a
   run order fixed by a seed. A program whose output does not depend on timing prints the same in C and in the
-  interpreter.
+  interpreter. It has one worker: `Async.runWorkers(n, …)` is `Async.run`, and `spawnSend` is `spawn` (ADR 0038). A
+  program's output must not depend on which worker ran what.
 
 Diagnostics: N0341 (`await` outside an async fn or async closure), N0342 (a task that is not awaited, run or spawned,
 or an operand of `await` that is not a task), N0343 (recursion through `await`), N0344 (a spawned child that captures
 the scope body's own locals), N0345 (`Async.park` or `Async.waker` outside the library); N0295 (blocking in async
 code, `await` while a `@context(atomic)` value is live, `Async.run` in async code); N0241 (conflicting captures of a
-scope's children); N0334 (`Async.blocking`'s captures and result).
+scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend`'s captures, error type and allocator).

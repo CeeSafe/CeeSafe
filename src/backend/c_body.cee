@@ -1073,7 +1073,8 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfFloatFromBits() ||
         b == bfFloatSqrt() || b == bfFloatAbs() || b == bfFloatFloor() || b == bfFloatCeil() ||
         b == bfFloatMin() || b == bfFloatMax() || b == bfThreadSpawn() || b == bfThreadJoin() ||
-        b == bfThreadSpawnBoxed() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf();
+        b == bfThreadSpawnBoxed() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
+        b == bfAsyncWorkers();
 
 fn emitBuiltin(
     e: borrow mut CEmitter,
@@ -1999,6 +2000,13 @@ fn appendBuiltinRvalue(
     }
     if (b == bfArgumentCount()) {
         return appendText(out, "ceesafe_arg_count()");
+    }
+    if (b == bfAsyncWorkers()) {
+        // Async.runWorkers (ADR 0038): the next run's workers.
+        let count = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        appendText(out, "ceesafe_async_workers(")?;
+        appendBytes(out, count.view())?;
+        return out.push(')');
     }
     if (b == bfPtrAdd() || b == bfPtrSub() || b == bfPtrOffset()) {
         return appendPointerStep(e, c, n, sources, f, out, r);

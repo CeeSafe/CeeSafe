@@ -145,6 +145,7 @@ fn checkProgram(
         asyncScopes: Vector<AsyncScopeContext>.create(),
         copyCaptures: false,
         asyncAdapter: false,
+        sendSpawns: Vector<u32>.create(),
         asyncSites: 0,
         scopeAllocators: Vector<u32>.create(),
         environments: Vector<EnvironmentRecord>.create(),

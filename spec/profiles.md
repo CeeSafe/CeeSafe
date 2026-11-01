@@ -19,7 +19,7 @@ allowed or not, and the list below is normative.
 | Panicking allocation helpers (`!` on `AllocError`, `create().orPanic`) | allowed | allowed | **lint error** | lint error |
 | `f32`/`f64` | yes | yes (no `<math.h>` in libc: the math methods are portable C in `rt.h`, type-system §35.8) | **forbidden** (`-mgeneral-regs-only`) [KA §7–8]; enforced by `ceesafec --no-float` (N0297, §35.9) | target-defined |
 | Threads, `Send`/`Sync` | later | via `cosmo_thread_*` only [PA impl 4] | kernel threads via KThread wrapper (C7) | no |
-| Async (`async fn`, `Async`; type-system.md §40) | yes (L1 A1–A2) | planned (L1 A4) | planned: the environment's executor (L1 A4) | the frame ABI only (L1 A4) |
+| Async (`async fn`, `Async`; type-system.md §40) | yes (L1 A1–A2; `Async.runWorkers`, ADR 0038) | planned (L1 A4) | planned: the environment's executor (L1 A4) | the frame ABI only (L1 A4) |
 | Native stack value limit | 64 KiB | 64 KiB | **512 B** per value; **2 KiB per frame** (CosmoOS `-Wframe-larger-than=2048`, error) [KA impl 21] | configurable |
 | Whole-call-chain stack budget | — | — | report + error against **16 KiB** (shared with IRQs) [KA §8] | configurable |
 | Scratch regions | reserved VM | reserved VM via `mmap` | fixed per-thread buffer, explicit checks | fixed buffer |

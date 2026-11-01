@@ -880,9 +880,10 @@ fn synthCall(
                     if (c.asyncScopes.length > 0 && typeArguments.count == 0) {
                         // `s.spawn(…)` in an `Async.scope` body: `s` is not a local (§40.5).
                         let scope = scopeNamed(c, targetSymbol);
-                        if (scope != none() &&
-                            sameText(c.name(c.front.ast.idents[member as usize].symbol), "spawn")) {
-                            return checkSpawn(c, scope, arguments, span);
+                        let memberText = c.name(c.front.ast.idents[member as usize].symbol);
+                        if (scope != none() && (sameText(memberText, "spawn") || sameText(memberText, "spawnSend"))) {
+                            let send = sameText(c.name(c.front.ast.idents[member as usize].symbol), "spawnSend");
+                            return checkSpawn(c, scope, arguments, send, span);
                         }
                     }
                     match (c.lookup(targetSymbol)?) {

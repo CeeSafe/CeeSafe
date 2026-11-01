@@ -163,7 +163,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5)",
     333 => "A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>`",
     334 =>
-        "A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value (`type-system.md` §38, §38.6)",
+        "A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038)",
     335 => "`ceesafec publish`: the package cannot be published as it is (§4.8)",
     336 =>
         "`@effectsOf` that names no parameter, or a parameter that is not of a function or closure type, or has no names (`type-system.md` §32.5)",

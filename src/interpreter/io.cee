@@ -1736,7 +1736,7 @@ fn asyncSpawn(
             }
             return Ok(null); // the scope already failed to start a child: it starts no more
         }
-        releaseSize = 128 + truncate<u64>(frameReport(c, n, function)!.layout.size);
+        releaseSize = 144 + truncate<u64>(frameReport(c, n, function)!.layout.size); // CEE_TASK_HEAD on 64-bit hosts
         releaseBlock = interpAllocate(it, c, n, allocator, releaseSize, 16)?;
         if (releaseBlock == 0) {
             it.asyncScopes[scope as usize].oom = true;

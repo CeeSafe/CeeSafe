@@ -1051,22 +1051,35 @@ void ceesafe_async_dump(void);
  * ceesafe_async_scope_done is true once every child has returned; otherwise the current task waits for the last. */
 typedef struct ceesafe_scope {
     uint32_t live;
+    uint32_t cancelled; /* a child failed or could not start: the others are cancelled (§40.7); read atomically */
     bool failed;
     bool oom;
-    bool cancelled; /* a child failed or could not start: the others are cancelled (§40.7) */
+    bool shared;        /* it has spawnSend children, which other workers may run: its state changes under the run's
+                           lock (ADR 0038) */
     void *waiter;
-    void *owner;    /* the task whose scope it is */
+    void *owner;        /* the task whose scope it is */
 } ceesafe_scope;
 /* `allocate` and `release` (both NULL: the system heap) are Async.scopeIn's allocator's (c-backend.md §3a). */
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                           void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
                           const ceesafe_frame_info *info);
 bool ceesafe_async_scope_done(ceesafe_scope *scope);
+/* Work stealing (ADR 0038). ceesafe_async_spawn_send is ceesafe_async_spawn for `s.spawnSend(child)`: with more than
+ * one worker, the child is queued for any worker of the run once ceesafe_async_publish(frame) says its frame is
+ * initialised (with one worker it is spawn, and publish does nothing). ceesafe_async_claim_failure is true for the
+ * first child of a scope to fail, which records its error. ceesafe_async_workers(n) gives the next ceesafe_async_run
+ * on this thread n workers, the caller among them (Async.runWorkers). */
+void *ceesafe_async_spawn_send(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                               void *(*allocate)(size_t size, size_t align),
+                               void (*release)(void *p, size_t size, size_t align), const ceesafe_frame_info *info);
+void ceesafe_async_publish(void *frame);
+bool ceesafe_async_claim_failure(ceesafe_scope *scope);
+void ceesafe_async_workers(uint32_t n);
 /* Async.race and Async.all (type-system.md §40.4): a child whose task and frame are the caller's storage, in its frame,
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
  * children and wakes those waiting. */
 typedef struct ceesafe_task_slot {
-    _Alignas(16) unsigned char bytes[128];
+    _Alignas(16) unsigned char bytes[144];
 } ceesafe_task_slot;
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
                          bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info);

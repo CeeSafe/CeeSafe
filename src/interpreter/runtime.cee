@@ -1252,6 +1252,9 @@ fn builtin(
     if (b == bfSpinHint()) {
         return Ok(null);
     }
+    if (b == bfAsyncWorkers()) {
+        return Ok(null); // one thread: Async.runWorkers is Async.run, and spawnSend is spawn (ADR 0038 §3.6)
+    }
     if (b == bfLayoutOf() || b == bfOffsetOf()) {
         return Err(
             fault(

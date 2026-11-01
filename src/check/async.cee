@@ -24,6 +24,10 @@ fn bfAsyncBoxed() -> u32 => 1006;
 /// The start of an `Async.scope` body: Eval(Builtin(AsyncScopeStart, [site])). It does nothing at run time; the
 /// borrow checker ends what the scope's children held in the scope's previous run there (ADR 0033 §3.2).
 fn bfAsyncScopeStart() -> u32 => 1007;
+/// `Async.runWorkers(n, task)` (ADR 0038): BuiltinCall(AsyncRunWorkers, [n, RunTask(task)]), lowered to
+/// Builtin(AsyncWorkers, [n]), which gives the next run n workers, then the run.
+fn bfAsyncWorkers() -> u32 => 1008;
+fn bfAsyncRunWorkers() -> u32 => 1009;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -169,6 +173,9 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "isCancelled") || sameText(c.name(memberIdent.symbol), "checkpoint")) {
         return checkCancellationCall(c, memberIdent.symbol, arguments, span);
     }
+    if (sameText(c.name(memberIdent.symbol), "runWorkers")) {
+        return checkRunWorkers(c, arguments, expected, span);
+    }
     if (!sameText(c.name(memberIdent.symbol), "run")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'Async' has no function ")?;
@@ -195,6 +202,30 @@ fn checkAsyncCall(
     }
     let typ = c.typeOf(call);
     return c.expr(HirExpr.RunTask(call), typ, span.start, span.end);
+}
+
+/// `Async.runWorkers(n, task)` (ADR 0038 §3.3): `Async.run` with n workers, the caller among them.
+fn checkRunWorkers(c: borrow mut Checker, arguments: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 2) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.runWorkers' takes a number of workers and a task, a call of an async fn")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let u32Type = c.types.lookup("u32".bytes());
+    let countSyntax = c.front.ast.at(arguments, 0);
+    let count = checkExpr(c, countSyntax, u32Type)?;
+    let task = c.front.ast.at(arguments, 1);
+    let call = checkTaskOperand(c, task, expected, "'Async.runWorkers'")?;
+    if (call == none() || c.isBottom(count)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let typ = c.typeOf(call);
+    let run = c.expr(HirExpr.RunTask(call), typ, span.start, span.end)?;
+    let values = [count, run];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(bfAsyncRunWorkers(), list), typ, span.start, span.end);
 }
 
 /// `await Async.park()` (§40.4): library code only (N0345), and only as `await`'s operand (N0342). The library's waiting
@@ -378,7 +409,7 @@ fn scopeNamed(c: borrow Checker, symbol: u32) -> u32 {
 /// `s.spawn(async () => …)` in a scope body: the child must be an async closure literal with result `Result<void, E>`.
 /// Its captures follow the scope-loan rule (§40.5): no capture of the body's own locals (N0344), no two children
 /// capturing one local where either changes it (N0241); `useOfCaptured` refuses the body's later uses.
-fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, send: bool, span: Span) -> Result<u32, AllocError> {
     let literal = if (arguments.count == 1) match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
         ExprNode.Closure(closure) =>
             if (c.front.ast.closures[closure as usize].isAsync &&
@@ -456,8 +487,83 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, span: Span) -
         c.asyncScopes[scope as usize].captured.push(((local as u64) << 1) | (if (mutable) 1u64 else 0u64))?;
     }
     let site = c.asyncScopes[scope as usize].site;
+    if (send && !checkSendChild(c, scope, site, captures, argumentSpan)?) {
+        return c.errorResult(span.start, span.end);
+    }
     let voidType = c.types.voidType;
-    return c.expr(HirExpr.Spawn(site, closure), voidType, span.start, span.end);
+    let spawn = c.expr(HirExpr.Spawn(site, closure), voidType, span.start, span.end)?;
+    if (send) {
+        c.sendSpawns.push(spawn)?;
+    }
+    return Ok(spawn);
+}
+
+/// `s.spawnSend(child)` (ADR 0038 §3.1): the child may run on another worker, so what it is given must be safe there,
+/// by `Thread.both`'s rule (§38.6): a capture it reads needs `Share`, one it changes `Send`, references counting by
+/// their target, and no closures; its error type must be `Send`; and its frame comes from the system heap.
+fn checkSendChild(
+    c: borrow mut Checker,
+    scope: u32,
+    site: u32,
+    captures: Range,
+    span: Span,
+) -> Result<bool, AllocError> {
+    var ok = true;
+    let allocator = c.scopeAllocators[site as usize];
+    if (allocator != none() && builtinItemIndex(c, allocator) != 2) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a 'spawnSend' child's frame is freed on the worker that ran it, so it comes from the system heap; this scope's allocator is ",
+        )?;
+        appendQuotedType(mut message, c, allocator)?;
+        appendText(mut message, ": use 'spawn', or 'Async.scope' (ADR 0038)")?;
+        c.error(notSend(), span.start, span.end, message)?;
+        ok = false;
+    }
+    for (k in 0..captures.count) {
+        let capture = c.hir.captures[(captures.start + k) as usize];
+        let local = c.hir.locals[capture.local as usize];
+        let t = if (capture.field != none()) c.types.fields[capture.field as usize].typ else local.typ;
+        let mutably = isMutableCapture(capture.mode);
+        let pointee = c.types.info(t).pointee;
+        if (c.types.is(t, TypeKind.Closure) || (pointee != none() && c.types.is(pointee, TypeKind.Closure))) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this child captures ")?;
+            appendQuotedName(mut message, c, local.name)?;
+            appendText(
+                mut message,
+                ", a closure: a 'spawnSend' child may run on another thread, which cannot call it (type-system.md §38.6, ADR 0038)",
+            )?;
+            c.error(notSend(), span.start, span.end, message)?;
+            ok = false;
+        } else if (!c.types.isForkSafe(t, mutably)?) {
+            var message = Vector<u8>.create();
+            appendText(mut message, if (mutably) "this child changes " else "this child reads ")?;
+            appendQuotedName(mut message, c, local.name)?;
+            appendText(mut message, ", a ")?;
+            appendQuotedType(mut message, c, t)?;
+            appendText(
+                mut message,
+                if (mutably) ", which is not Send: a 'spawnSend' child may change it from another thread (type-system.md §38.6, ADR 0038)" else ", which is not Share: a 'spawnSend' child may read it from another thread (type-system.md §38.6, ADR 0038)",
+            )?;
+            c.error(notSend(), span.start, span.end, message)?;
+            ok = false;
+        }
+    }
+    let errorType = c.asyncScopes[scope as usize].errorType;
+    if (!c.types.isSendType(errorType)?) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a 'spawnSend' child's error, a ")?;
+        appendQuotedType(mut message, c, errorType)?;
+        appendText(
+            mut message,
+            ", is not Send: it may come from another thread (type-system.md §38.1, ADR 0038)",
+        )?;
+        c.error(notSend(), span.start, span.end, message)?;
+        ok = false;
+    }
+    return Ok(ok);
 }
 
 /// A use of `local` in a scope body after a child captured it (§40.5): the child may run until the scope returns.

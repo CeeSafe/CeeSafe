@@ -497,6 +497,11 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   last child returns, then the result is the first error, else `Err(oom)` if a child could not start, else `Ok`, and
   the scope is zeroed for its next run. An async closure's environment keeps a null code pointer: it runs only through
   its frame.
+- **`s.spawnSend(child)`** (ADR 0038) is a spawn whose Builtin has the role `taskSend`: it calls
+  `ceesafe_async_spawn_send` (same arguments as `ceesafe_async_spawn`), initialises the frame, then
+  `ceesafe_async_publish(frame)`, which queues the child for any worker. A child records its scope's first error only
+  if `ceesafe_async_claim_failure(scope)` says it is the first, which takes the run's lock for a shared scope.
+  `Async.runWorkers(n, task)` is `ceesafe_async_workers(n)` before the run's code.
 - **Async instances** (ADR 0037, type-system.md §32.5) are async fns like any other, named `ceeAS<n>_<f>` after the
   function they copy (`<n>` the instance's HIR number). The caller awaits the instance; inside it, a call through a
   bound closure is an awaited call of the async closure's body, its frame a member of the instance's union.
@@ -603,6 +608,14 @@ Heap (M3b):
   - One executor per thread: the root task and the scopes' children run in turn from a queue; a parked task waits on
     what it registered or on its scope's last child (`ceesafe_async_spawn`, `ceesafe_async_scope_done`). A child's
     task and frame are one `ceesafe_alloc` block, so fault injection reaches it; `NULL` sets the scope's `oom`.
+  - Work stealing (ADR 0038): with `ceesafe_async_workers(n)`, n > 1, the run starts `n − 1` threads, each with its own
+    executor (reactor, timers, wake pipe), and joins them when the root returns. The run shares a queue of published
+    `spawnSend` children, which a worker with nothing ready takes, oldest first. A started task stays on its worker. A
+    scope with such children is shared: its count, first error and waiter change under the run's mutex. Its
+    cancellation is atomic and is announced to every worker (an epoch each worker compares when it wakes). Its last
+    child wakes the waiting parent through the parent's executor (`cee_wake_task`). Each worker counts the run as a
+    reason to wait for a wake, so its non-blocking wake pipe is watched. The `tasks` command lists the stopped thread's
+    executor.
   - Cancellation (L1 A2b): a task is cancelled if its own flag is set, or its scope's (a child failed or could not
     start), or the scope's owner is, transitively. `ceesafe_async_status()` is 0, 1 (cancelled) or 2 (inside
     `ceesafe_async_shield_enter(ms)` … `_leave()`, past its deadline; while shielded, cancellation reads as 0). A

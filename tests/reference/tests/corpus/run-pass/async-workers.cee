@@ -1,0 +1,118 @@
+// Work stealing (ADR 0038): `s.spawnSend` children may run on any worker of `Async.runWorkers(n, …)` until they
+// start, and stay on it after. A fan-out over a borrowed Vector gives the same sum with 1 and 4 workers (and in the
+// interpreter). A child's error cancels its siblings on other workers, whose timers are their own. A remote child
+// spawns children of its own, local and remote.
+
+async fn pause(ms: u64) {
+    match (await Timer.sleep(ms)) {
+        Ok() => {}
+        Err(_) => {} // the cancel sweep cancels at each suspension point
+    }
+}
+
+fn mix(values: borrow Vector<u64>, part: usize, parts: usize) -> u64 {
+    var total: u64 = 0;
+    var i = part;
+    while (i < values.length) {
+        var x = values[i];
+        for (k in 0..200) {
+            x = (x * 48271 + 11) % 2147483647;
+        }
+        total += x % 1000;
+        i += parts;
+    }
+    return total;
+}
+
+async fn fanOut(values: borrow Vector<u64>) -> Result<u64, AsyncError> {
+    let total = AtomicU64.create(0);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (p in 0..8u32) {
+            let part = p as usize;
+            s.spawnSend(async () => {
+                await pause(1);
+                total.fetchAdd(mix(values, part, 8));
+                return Ok();
+            });
+        }
+    })?;
+    return Ok(total.load());
+}
+
+async fn sleeper(done: borrow AtomicU32) -> Result<void, AsyncError> {
+    await Timer.sleep(2000)?; // cancelled long before
+    done.fetchAdd(1);
+    return Ok();
+}
+
+async fn failer() -> Result<void, AsyncError> {
+    await Timer.sleep(20)?;
+    return Err(AsyncError.TimedOut);
+}
+
+async fn cancelling() -> u32 {
+    let done = AtomicU32.create(0);
+    let started = Timer.now();
+    let outcome = await Async.scope(AsyncError.Cancelled, (s) => {
+        for (i in 0..6) {
+            s.spawnSend(async () => await sleeper(done));
+        }
+        s.spawnSend(async () => await failer());
+    });
+    let quick = Timer.now() - started < 1000;
+    let failed: u32 = match (outcome) {
+        Err(AsyncError.TimedOut) => 1,
+        _ => 0,
+    };
+    return failed * 100 + done.load() * 10 + (if (quick) 1u32 else 0u32);
+}
+
+async fn leaf(count: borrow AtomicU32) -> Result<void, AsyncError> {
+    await pause(1);
+    count.fetchAdd(1);
+    return Ok();
+}
+
+async fn branch(count: borrow AtomicU32) -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await leaf(count));     // on this branch's worker
+        s.spawnSend(async () => await leaf(count)); // on any
+    })?;
+    return Ok();
+}
+
+async fn nested() -> Result<u32, AsyncError> {
+    let count = AtomicU32.create(0);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (i in 0..4) {
+            s.spawnSend(async () => await branch(count));
+        }
+    })?;
+    return Ok(count.load());
+}
+
+fn main() {
+    var values = Vector<u64>.create();
+    for (i in 0..2000u64) {
+        values.push(i * 7 + 1)!;
+    }
+    let one = match (Async.run(fanOut(borrow values))) {
+        Ok(v) => v,
+        Err(_) => 0,
+    };
+    let four = match (Async.runWorkers(4, fanOut(borrow values))) {
+        Ok(v) => v,
+        Err(_) => 1,
+    };
+    Console.writeLine(if (one == four && one > 0) "same sum" else "different sums");
+    Console.writeLine(Async.runWorkers(4, cancelling()));
+    Console.writeLine(Async.run(cancelling()));
+    match (Async.runWorkers(3, nested())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: same sum
+// expect-stdout: 101
+// expect-stdout: 101
+// expect-stdout: 8

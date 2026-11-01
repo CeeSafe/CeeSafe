@@ -1,0 +1,4 @@
+frames/async-dyn.cee:28:10: 'total' has a frame of 472 bytes (align 8): 5 of 18 locals kept, 44 bytes; waiting storage 400 bytes for 1 suspension point(s); largest: t_12 (16), v_sources_0 (8), t_4 (8)
+frames/async-dyn.cee:31:22: the await of 'dyn Source.fetch' has a frame of 400 bytes, room for 2 type(s); largest: 'Large.fetch' (360)
+frames/async-dyn.cee:10:14: 'Small.fetch' has a frame of 96 bytes (align 8): 3 of 8 locals kept, 28 bytes; waiting storage 40 bytes for 1 suspension point(s); largest: t_2 (16), v_this_0 (8), v_n_1 (4)
+frames/async-dyn.cee:19:14: 'Large.fetch' has a frame of 360 bytes (align 8): 5 of 12 locals kept, 292 bytes; waiting storage 40 bytes for 1 suspension point(s); largest: v_buffer_2 (256), t_4 (16), v_this_0 (8)

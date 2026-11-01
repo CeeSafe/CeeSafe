@@ -14,6 +14,13 @@ fn appendAsyncName(
     function: u32,
 ) -> Result<void, AllocError> {
     appendText(out, prefix)?;
+    if (isDynAsync(c, function)) {
+        // A dyn async method (ADR 0036): its dyn type's mangle and its slot.
+        appendText(out, "dyn_")?;
+        appendMangle(c, out, c.hir.functions[function as usize].owner)?;
+        appendText(out, "_m")?;
+        return appendDecimal(out, c.hir.functions[function as usize].dynSlot as u64);
+    }
     return appendCFunctionName(c, out, function);
 }
 
@@ -150,6 +157,184 @@ fn awaitedCallee(n: borrow NirProgram, s: u32) -> u32 {
         NirRvalue.Call(callee, _) => callee,
         _ => none(),
     };
+}
+
+// ---- Async methods through `dyn` (ADR 0036) ----
+
+/// Whether `callee` is an async method of a `dyn I`, called through its table (ADR 0036).
+fn isDynAsync(c: borrow Checker, callee: u32) -> bool =>
+    c.hir.functions[callee as usize].isDynMethod && isAsyncFunction(c, callee);
+
+/// The methods a call of `dyn I`'s async method `callee` may reach (ADR 0036 §3.4): the method in its slot of every
+/// table of its dyn type, so of every type coerced to it.
+fn dynAsyncImpls(c: borrow Checker, callee: u32) -> Result<Vector<u32>, AllocError> {
+    var out = Vector<u32>.create();
+    let dyn = c.hir.functions[callee as usize].owner;
+    let slot = c.hir.functions[callee as usize].dynSlot;
+    for (t in c.dynTables.view()) {
+        if (t.dynType == dyn) {
+            let m = c.hir.at(t.methods, slot);
+            if (!containsU32(out, m)) {
+                out.push(m)?;
+            }
+        }
+    }
+    return Ok(out);
+}
+
+/// The C name of impl `m`'s member in a dyn frame's union.
+fn appendDynMember(c: borrow Checker, out: borrow mut Vector<u8>, m: u32) -> Result<void, AllocError> {
+    appendText(out, "i_")?;
+    return appendCFunctionName(c, out, m);
+}
+
+/// The frame of an awaited call: a dyn method's (ADR 0036), or the callee's own.
+fn calleeFrameLayout(c: borrow Checker, n: borrow NirProgram, callee: u32) -> Result<SizeAlign, AllocError> {
+    if (isDynAsync(c, callee)) {
+        return Ok(dynFrameParts(c, n, callee)?.layout);
+    }
+    return Ok(frameReport(c, n, asyncNirFunction(n, callee))?.layout);
+}
+
+/// A dyn frame's layout, and where its union of impl frames starts.
+struct DynFrameParts {
+    layout: SizeAlign;
+    implOffset: u64;
+}
+
+/// struct ceeAF_<D>, as emitDynFrame writes it: the state (always 0, for the debugger), the impl's resume adapter, the
+/// size of the frame from the impl's start (for Async.boxed), the result, then the union of every impl's frame.
+fn dynFrameParts(c: borrow Checker, n: borrow NirProgram, callee: u32) -> Result<DynFrameParts, AllocError> {
+    var l = LayoutBuilder { size: 0, align: 1 };
+    layoutAdd(mut l, 4, 4); // cee_state
+    layoutAdd(mut l, 8, 8); // cee_resume
+    layoutAdd(mut l, 8, 8); // cee_size
+    let result = c.hir.functions[callee as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        addLayout(mut l, typeLayout(c, result));
+    }
+    var union = LayoutBuilder { size: 1, align: 1 }; // cee_none
+    var unionSize: u64 = 1;
+    let impls = dynAsyncImpls(c, callee)?;
+    for (m in impls.view()) {
+        let part = frameReport(c, n, asyncNirFunction(n, m))?.layout;
+        if (truncate<u64>(part.size) > unionSize) {
+            unionSize = truncate<u64>(part.size);
+        }
+        if (part.align as u64 > union.align) {
+            union.align = part.align as u64;
+        }
+    }
+    union.size = unionSize;
+    let u = layoutEnd(union);
+    let a = u.align as u64;
+    let offset = (l.size + a - 1) / a * a;
+    addLayout(mut l, u);
+    return Ok(DynFrameParts { layout: layoutEnd(l), implOffset: offset });
+}
+
+/// A dyn async method D's frame and its functions (ADR 0036 §3.6): ceeAI_<D> starts the receiver's method through its
+/// table, which stores its resume adapter in the frame; ceeAR_<D> calls that adapter.
+fn emitDynFrame(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    callee: u32,
+) -> Result<void, AllocError> {
+    e.t("struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(" { /* ")?;
+    e.b(c.typeName(c.hir.functions[callee as usize].owner))?;
+    e.t(".")?;
+    e.b(c.name(c.hir.functions[callee as usize].name))?;
+    e.t(" */")?;
+    e.emit()?;
+    e.line("    uint32_t cee_state;")?;
+    e.line("    bool (*cee_resume)(void *);")?;
+    e.line("    uint64_t cee_size;")?;
+    let result = c.hir.functions[callee as usize].returnType;
+    if (!c.types.is(result, TypeKind.Void)) {
+        e.t("    ")?;
+        appendCTypeName(c, mut e.buf, result)?;
+        e.t(" cee_result;")?;
+        e.emit()?;
+    }
+    e.line("    union {")?;
+    e.line("        char cee_none;")?;
+    let impls = dynAsyncImpls(c, callee)?;
+    for (m in impls.view()) {
+        e.t("        struct ")?;
+        appendAsyncName(c, mut e.buf, "ceeAF_", m)?;
+        e.t(" ")?;
+        appendDynMember(c, mut e.buf, m)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    e.line("    } cee_impl;")?;
+    e.line("};")?;
+    let parts = dynFrameParts(c, n, callee)?;
+    e.t("_Static_assert(sizeof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(") == ")?;
+    e.d(truncate<u64>(parts.layout.size))?;
+    e.t(" && offsetof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(", cee_impl) == ")?;
+    e.d(parts.implOffset)?;
+    e.t(", \"dyn frame layout\");")?;
+    e.emit()?;
+    let count = c.hir.functions[callee as usize].parameters.length;
+    e.t("static CEE_UNUSED void ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
+    e.t("(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(" *cee_frame")?;
+    for (k in 0..count) {
+        e.t(", ")?;
+        appendCTypeName(c, mut e.buf, parameterType(c, callee, k))?;
+        e.t(" a")?;
+        e.d(k as u64)?;
+    }
+    e.t(") {")?;
+    e.emit()?;
+    e.t("    a0.vt->m")?;
+    e.d(c.hir.functions[callee as usize].dynSlot as u64)?;
+    e.t("(cee_frame, a0.data")?;
+    for (k in 1..count) {
+        e.t(", a")?;
+        e.d(k as u64)?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.line("}")?;
+    e.t("static CEE_UNUSED bool ")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", callee)?;
+    e.t("(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(" *cee_frame) { return cee_frame->cee_resume(cee_frame); }")?;
+    e.emit()?;
+    e.t("static CEE_UNUSED bool ")?;
+    appendAsyncName(c, mut e.buf, "ceeAT_", callee)?;
+    e.t("(void *frame) { return ((struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(" *)frame)->cee_resume(frame); }")?;
+    e.emit()?;
+    e.t("static CEE_UNUSED const uint32_t ")?;
+    appendAsyncName(c, mut e.buf, "ceeAL_", callee)?;
+    e.t("[] = {0};")?;
+    e.emit()?;
+    e.t("static CEE_UNUSED const ceesafe_frame_info ")?;
+    appendAsyncName(c, mut e.buf, "ceeAN_", callee)?;
+    e.t(" = {")?;
+    var name = Vector<u8>.create();
+    appendBytes(mut name, c.typeName(c.hir.functions[callee as usize].owner))?;
+    name.push('.')?;
+    appendBytes(mut name, c.name(c.hir.functions[callee as usize].name))?;
+    appendCStringLiteral(mut e.buf, name.view())?;
+    e.t(", \"\", ")?;
+    appendAsyncName(c, mut e.buf, "ceeAL_", callee)?;
+    e.t(", 1u};")?;
+    return e.emit();
 }
 
 /// The join of `race` or `all` at `site`: the runtime's scope, which child returned first (2 for neither yet), both
@@ -339,6 +524,17 @@ fn emitFrameStruct(
     return Ok();
 }
 
+/// Whether every impl a dyn async method may reach has its frame defined.
+fn dynImplsDone(c: borrow Checker, done: borrow Vector<u32>, callee: u32) -> Result<bool, AllocError> {
+    let impls = dynAsyncImpls(c, callee)?;
+    for (m in impls.view()) {
+        if (!containsU32(done, m)) {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
 /// The frame structs, children before the frames that embed them, and the async prototypes; before the functions.
 fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     var asyncs = Vector<u32>.create();
@@ -373,7 +569,12 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                 for (s in block.statements.view()) {
                     let callee = awaitedCallee(n, s);
                     if (callee != none() && !containsU32(done, callee)) {
-                        ready = false;
+                        if (isDynAsync(c, callee) && dynImplsDone(c, done, callee)?) {
+                            emitDynFrame(e, c, n, callee)?; // every impl's frame is defined (ADR 0036)
+                            done.push(callee)?;
+                        } else {
+                            ready = false;
+                        }
                     }
                     let r = statementRvalue(n, s);
                     if (r != none() && builtinOf(n, r) == bfAsyncJoin() &&
@@ -401,6 +602,32 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                 emitFrameAsserts(e, c, n, f)?;
             }
             pending.clear();
+        }
+    }
+    // A dyn frame only run (`Async.run`) or boxed is embedded in no frame: it follows every impl's (ADR 0036).
+    var compiled = Vector<u32>.create();
+    for (f in e.compiled.view()) {
+        compiled.push(f)?;
+    }
+    for (f in compiled.view()) {
+        for (block in n.functions[f as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalue(n, s);
+                if (r == none()) {
+                    continue;
+                }
+                var callee = if (builtinOf(n, r) == bfAsyncBoxed()) constArgument(n, r, 1) else none();
+                if (n.rvalueTasks[r as usize] != 0) {
+                    callee = match (n.rvalues[r as usize]) {
+                        NirRvalue.Call(function, _) => function,
+                        _ => none(),
+                    };
+                }
+                if (callee != none() && isDynAsync(c, callee) && !containsU32(done, callee)) {
+                    emitDynFrame(e, c, n, callee)?;
+                    done.push(callee)?;
+                }
+            }
         }
     }
     for (f in asyncs.view()) {
@@ -1487,7 +1714,7 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
-                member = frameReport(c, n, asyncNirFunction(n, callee))?.layout;
+                member = calleeFrameLayout(c, n, callee)?;
             }
             if (member.size >= 0) {
                 report.unionMembers += 1;
@@ -1597,6 +1824,59 @@ fn explainFrames(
             }
         }
         out.push('\n')?;
+        explainDynAwaits(c, n, sources, out, f)?;
+    }
+    return Ok();
+}
+
+/// For --explain-frames: each call through `dyn` that `f` awaits (ADR 0036 §3.4), its frame, the number of types it
+/// has room for, and the largest.
+fn explainDynAwaits(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    out: borrow mut Vector<u8>,
+    f: u32,
+) -> Result<void, AllocError> {
+    let file = c.hir.functions[nirFunctionSource(n, f) as usize].file;
+    for (block in n.functions[f as usize].blocks.view()) {
+        for (s in block.statements.view()) {
+            let callee = awaitedCallee(n, s);
+            if (callee == none() || !isDynAsync(c, callee)) {
+                continue;
+            }
+            let parts = dynFrameParts(c, n, callee)?;
+            let impls = dynAsyncImpls(c, callee)?;
+            var largest = none();
+            var largestSize: i64 = -1;
+            for (m in impls.view()) {
+                let size = frameReport(c, n, asyncNirFunction(n, m))?.layout.size;
+                if (size > largestSize) {
+                    largest = m;
+                    largestSize = size;
+                }
+            }
+            appendBytes(out, c.filePaths[file as usize].view())?;
+            out.push(':')?;
+            appendWhere(out, sources, file, n.rvalueSpans[statementRvalue(n, s) as usize].start)?;
+            appendText(out, ": the await of '")?;
+            appendBytes(out, c.typeName(c.hir.functions[callee as usize].owner))?;
+            out.push('.')?;
+            appendBytes(out, c.name(c.hir.functions[callee as usize].name))?;
+            appendText(out, "' has a frame of ")?;
+            appendDecimal(out, truncate<u64>(parts.layout.size))?;
+            appendText(out, " bytes, room for ")?;
+            appendDecimal(out, impls.length as u64)?;
+            appendText(out, " type(s)")?;
+            if (largest != none()) {
+                appendText(out, "; largest: ")?;
+                appendDescribedFunction(c, largest, out)?;
+                appendText(out, " (")?;
+                appendDecimal(out, truncate<u64>(largestSize))?;
+                appendText(out, ")")?;
+            }
+            out.push('\n')?;
+        }
     }
     return Ok();
 }
@@ -1749,9 +2029,19 @@ fn emitBoxed(
     e.b(slot.view())?;
     e.t(" = ")?;
     appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
-    e.t("(sizeof(")?;
-    e.b(frameType.view())?;
-    e.t("), _Alignof(")?;
+    e.t("(")?;
+    if (isDynAsync(c, callee)) {
+        // The impl's own size, from the receiver's table (ADR 0036 §3.4).
+        let receiver = operandText(e, c, n, sources, f, n.at(list, 2))?;
+        e.b(receiver.view())?;
+        e.t(".vt->s")?;
+        e.d(c.hir.functions[callee as usize].dynSlot as u64)?;
+    } else {
+        e.t("sizeof(")?;
+        e.b(frameType.view())?;
+        e.t(")")?;
+    }
+    e.t(", _Alignof(")?;
     e.b(frameType.view())?;
     e.t("));")?;
     e.emit()?;
@@ -1826,9 +2116,19 @@ fn emitBoxed(
     appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
     e.t("(")?;
     e.b(slot.view())?;
-    e.t(", sizeof(")?;
-    e.b(frameType.view())?;
-    e.t("), _Alignof(")?;
+    e.t(", ")?;
+    if (isDynAsync(c, callee)) {
+        e.t("((")?;
+        e.b(frameType.view())?;
+        e.t(" *)")?;
+        e.b(slot.view())?;
+        e.t(")->cee_size")?;
+    } else {
+        e.t("sizeof(")?;
+        e.b(frameType.view())?;
+        e.t(")")?;
+    }
+    e.t(", _Alignof(")?;
     e.b(frameType.view())?;
     e.t("));")?;
     e.emit()?;

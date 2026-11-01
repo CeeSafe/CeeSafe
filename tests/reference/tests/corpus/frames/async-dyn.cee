@@ -1,0 +1,44 @@
+// --explain-frames through `dyn` (ADR 0036 §3.4): the awaiter's waiting storage has room for the largest frame among
+// the types coerced to `dyn Source`, here Large.fetch's, and the report names it.
+
+interface Source {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError>;
+}
+
+struct Small { base: u32; }
+impl Source for Small {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError> {
+        await Timer.sleep(1)?;
+        this.base += n;
+        return Ok(this.base);
+    }
+}
+
+struct Large { scale: u32; }
+impl Source for Large {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError> {
+        var buffer = [0u8; 256];
+        buffer[3] = truncate<u8>(n);
+        let view = borrow buffer;
+        await Timer.sleep(2)?;
+        return Ok(this.scale * (view[3] as u32));
+    }
+}
+
+async fn total(sources: borrow mut Vector<Box<dyn Source>>) -> Result<u32, AsyncError> {
+    var sum: u32 = 0;
+    for (k in 0..sources.length) {
+        sum += await sources[k].fetch(truncate<u32>(k) + 1)?;
+    }
+    return Ok(sum);
+}
+
+fn main() {
+    var sources = Vector<Box<dyn Source>>.create();
+    sources.push(Box.create(Small { base: 10 })!)!;
+    sources.push(Box.create(Large { scale: 100 })!)!;
+    match (Async.run(total(mut sources))) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}

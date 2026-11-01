@@ -1,5 +1,5 @@
-// Async interface methods (type-system.md §40.1): an impl matches the interface's async-ness (N0267), and an
-// interface with an async method is not dyn-compatible yet (N0331).
+// Async interface methods (type-system.md §40.1): an impl matches the interface's async-ness (N0267). An interface
+// with an async method is dyn-compatible (ADR 0036), so useDyn is accepted.
 
 interface Source {
     async fn next(borrow mut this) -> u32;
@@ -15,6 +15,6 @@ impl Source for A {
     async fn plain(borrow this) -> u32 => 2; // error[N0267]
 }
 
-async fn useDyn(s: borrow mut dyn Source) -> u32 => await s.next(); // error[N0331]
+async fn useDyn(s: borrow mut dyn Source) -> u32 => await s.next();
 
 fn main() {}

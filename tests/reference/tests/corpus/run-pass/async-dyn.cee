@@ -1,0 +1,189 @@
+// Async methods through `dyn` (type-system.md §37.3, §40.1; ADR 0036): the awaiter's frame has room for the largest
+// frame among the types coerced to `dyn I`, and the table starts and resumes the receiver's own method. Boxes and
+// references in a Vector; a void method; drops in the callee's frame; Async.run of a call through the table; a
+// cancelled callee; Async.boxed with the impl's own size from the table; recursion through `dyn`, boxed.
+
+extern "C" {
+    @effects(alloc)
+    fn malloc(size: usize) -> *mut void;
+    @effects()
+    fn free(p: *mut void);
+}
+
+static ALLOCATED: AtomicU32 = AtomicU32.constant(0);
+static FREED: AtomicU32 = AtomicU32.constant(0);
+static BYTES_OUT: AtomicU32 = AtomicU32.constant(0);
+static BYTES_BACK: AtomicU32 = AtomicU32.constant(0);
+static DROPS: AtomicU32 = AtomicU32.constant(0);
+
+struct Counting {}
+
+impl Allocator for Counting {
+    /// Safety: malloc returns null or a block of layout.size bytes, aligned for any type.
+    fn allocate(borrow this, layout: Layout) -> Result<*mut u8, AllocError> {
+        ALLOCATED.fetchAdd(1);
+        BYTES_OUT.fetchAdd(truncate<u32>(layout.size));
+        let p = unsafe { malloc(layout.size) } as *mut u8;
+        if (p.isNull()) {
+            return Err(AllocError.OutOfMemory);
+        }
+        return Ok(p);
+    }
+
+    /// Safety: the frames come back from allocate, once each.
+    unsafe fn deallocate(borrow this, p: *mut u8, layout: Layout) {
+        FREED.fetchAdd(1);
+        BYTES_BACK.fetchAdd(truncate<u32>(layout.size));
+        free(p as *mut void);
+    }
+}
+
+/// Counts its drops: it lives in a callee's frame across an await.
+struct Guard {
+    id: u32;
+
+    drop {
+        DROPS.fetchAdd(1);
+    }
+}
+
+interface Source {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError>;
+    async fn reset(borrow mut this);
+    async fn peek(borrow this) -> u32;
+}
+
+struct Small { base: u32; }
+impl Source for Small {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError> {
+        await Timer.sleep(1)?;
+        this.base += n;
+        return Ok(this.base);
+    }
+    async fn reset(borrow mut this) {
+        this.base = 0;
+    }
+    async fn peek(borrow this) -> u32 => this.base;
+}
+
+struct Large { scale: u32; }
+impl Source for Large {
+    async fn fetch(borrow mut this, n: u32) -> Result<u32, AsyncError> {
+        let guard = Guard { id: n };
+        var buffer = [0u8; 256]; // makes Large's frame the largest
+        buffer[3] = truncate<u8>(n);
+        let view = borrow buffer;
+        await Timer.sleep(2)?;
+        return Ok(this.scale * (view[3] as u32) + guard.id - n);
+    }
+    async fn reset(borrow mut this) {
+        let slept = await Timer.sleep(0);
+        this.scale = match (slept) { Ok() => 1, Err(_) => 2 };
+    }
+    async fn peek(borrow this) -> u32 => this.scale;
+}
+
+async fn total(sources: borrow mut Vector<Box<dyn Source>>) -> Result<u32, AsyncError> {
+    var sum: u32 = 0;
+    for (k in 0..sources.length) {
+        sum += await sources[k].fetch(truncate<u32>(k) + 1)?;
+    }
+    return Ok(sum);
+}
+
+async fn peekAll(a: borrow dyn Source, b: borrow dyn Source) -> u32 => await a.peek() * 1000 + await b.peek();
+
+async fn resetOne(s: borrow mut dyn Source) -> u32 {
+    await s.reset();
+    return await s.peek();
+}
+
+async fn breaker() -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    return Err(AsyncError.Cancelled);
+}
+
+/// A dyn-awaited method cancelled while it sleeps: its guard is dropped as it returns.
+async fn cancelled(s: borrow mut dyn Source) -> u32 {
+    var outcome: u32 = 0;
+    match (await Async.scope(AsyncError.Cancelled, (scope) => {
+        scope.spawn(async () => {
+            await s.fetch(50)?;
+            return Ok();
+        });
+        scope.spawn(async () => await breaker());
+    })) {
+        Ok() => { outcome = 1; }
+        Err(_) => { outcome = 2; }
+    }
+    return outcome;
+}
+
+async fn boxedFetch(s: borrow mut dyn Source) -> u32 => match (await Async.boxed(Counting {}, s.fetch(4))) {
+    Ok(Ok(v)) => v,
+    _ => 0,
+};
+
+interface Node {
+    async fn sum(borrow this) -> u32;
+}
+
+struct Leaf { value: u32; }
+impl Node for Leaf {
+    async fn sum(borrow this) -> u32 => this.value;
+}
+
+struct Pair { left: Box<dyn Node>; right: Box<dyn Node>; }
+impl Node for Pair {
+    // Recursion through `dyn Node`: each child's frame from the heap (N0343 otherwise).
+    async fn sum(borrow this) -> u32 {
+        let a = await Async.boxed(SystemHeap {}, this.left.sum())!;
+        let b = await Async.boxed(SystemHeap {}, this.right.sum())!;
+        return a + b;
+    }
+}
+
+fn main() {
+    var sources = Vector<Box<dyn Source>>.create();
+    sources.push(Box.create(Small { base: 10 })!)!;
+    sources.push(Box.create(Large { scale: 100 })!)!;
+    match (Async.run(total(mut sources))) {
+        Ok(v) => { Console.writeLine(v); } // 11 + 200
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    Console.writeLine(DROPS.load()); // Large.fetch's guard
+    var small = Small { base: 7 };
+    var large = Large { scale: 3 };
+    Console.writeLine(Async.run(peekAll(borrow small, borrow large)));
+    Console.writeLine(Async.run(resetOne(mut large)));
+    Console.writeLine(Async.run(resetOne(mut small)));
+    {
+        let s: borrow dyn Source = borrow large;
+        Console.writeLine(Async.run(s.peek())); // a call through the table as the root task
+    }
+    var big = Large { scale: 9 };
+    Console.writeLine(Async.run(cancelled(mut big)));
+    Console.writeLine(DROPS.load()); // and the cancelled one's
+    Console.writeLine(Async.run(boxedFetch(mut big)));
+    Console.writeLine(ALLOCATED.load());
+    Console.writeLine(FREED.load());
+    Console.writeLine(if (BYTES_OUT.load() == BYTES_BACK.load()) "balanced" else "unbalanced");
+    let tree: Box<dyn Node> = Box.create(Pair {
+        left: Box.create(Leaf { value: 1 })!,
+        right: Box.create(Pair { left: Box.create(Leaf { value: 20 })!, right: Box.create(Leaf { value: 300 })! })!,
+    })!;
+    Console.writeLine(Async.run(tree.sum()));
+}
+// expect-stdout: 211
+// expect-stdout: 1
+// expect-stdout: 7003
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 2
+// expect-stdout: 36
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: balanced
+// expect-stdout: 321

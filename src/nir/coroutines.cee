@@ -50,7 +50,13 @@ fn awaitEdges(n: borrow NirProgram, out: borrow mut Vector<AwaitEdge>) -> Result
 }
 
 /// Whether `target` is reachable from `from` along the await edges.
-fn awaitReaches(edges: borrow Vector<AwaitEdge>, from: u32, target: u32) -> Result<bool, AllocError> {
+/// A call through `dyn I` (ADR 0036 §3.5) reaches every impl its table may hold.
+fn awaitReaches(
+    c: borrow Checker,
+    edges: borrow Vector<AwaitEdge>,
+    from: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
     var seen = Vector<u32>.create();
     var work = Vector<u32>.create();
     work.push(from)?;
@@ -64,6 +70,12 @@ fn awaitReaches(edges: borrow Vector<AwaitEdge>, from: u32, target: u32) -> Resu
                     continue;
                 }
                 seen.push(f)?;
+                if (isDynAsync(c, f)) {
+                    let impls = dynAsyncImpls(c, f)?;
+                    for (m in impls.view()) {
+                        work.push(m)?;
+                    }
+                }
                 for (edge in edges.view()) {
                     if (edge.caller == f) {
                         work.push(edge.callee)?;
@@ -80,15 +92,25 @@ fn checkCoroutines(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, 
     awaitEdges(n, mut edges)?;
     for (edge in edges.view()) {
         // An await on a cycle: its callee reaches its caller again.
-        if (!awaitReaches(edges, edge.callee, edge.caller)?) {
+        if (!awaitReaches(c, edges, edge.callee, edge.caller)?) {
             continue;
         }
         var message = Vector<u8>.create();
         appendText(mut message, "this await makes the frame of ")?;
         appendQuotedName(mut message, c, c.hir.functions[edge.caller as usize].name)?;
+        if (isDynAsync(c, edge.callee)) {
+            // Through a table: the frame holds room for every impl the call may reach (ADR 0036 §3.5).
+            appendText(mut message, " contain itself through '")?;
+            appendBytes(mut message, c.typeName(c.hir.functions[edge.callee as usize].owner))?;
+            message.push('.')?;
+            appendBytes(mut message, c.name(c.hir.functions[edge.callee as usize].name))?;
+            appendText(mut message, "', which may be its own")?;
+        } else {
+            appendText(mut message, " contain itself")?;
+        }
         appendText(
             mut message,
-            " contain itself: recursion through 'await' needs a frame from an allocator: 'Async.boxed(alloc, …)' (type-system.md §40.1)",
+            ": recursion through 'await' needs a frame from an allocator: 'Async.boxed(alloc, …)' (type-system.md §40.1)",
         )?;
         let file = c.hir.functions[edge.caller as usize].file;
         let span = n.rvalueSpans[edge.rvalue as usize];

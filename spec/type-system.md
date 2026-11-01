@@ -2876,7 +2876,8 @@ fn main() {
     type.
 - **Dyn-compatible interfaces.** `dyn I` is allowed only if every method of `I` takes `borrow this` or
   `borrow mut this`. A method that takes `this` by value makes the interface incompatible: `dyn I` is then
-  **N0331**, which names that method. A generic interface is checked once its type arguments are given.
+  **N0331**, which names that method. A generic interface is checked once its type arguments are given. An async
+  method does not make an interface incompatible (§40.1, ADR 0036).
 - `dyn` is a keyword in types only (grammar.md §2). `dyn I` binds tighter than `borrow`, so `borrow dyn I` is a
   reference to a `dyn I`.
 
@@ -2901,6 +2902,9 @@ fn main() {
   - a `borrow mut this` method needs mutable access: a `borrow mut dyn I`, or a mutable place of `Box<dyn I, A>`.
     Through a `borrow dyn I` it is N0248, as for any value behind a shared reference.
 - Only `I`'s methods can be called. `T`'s other methods and fields are not visible through `dyn I` (N0234).
+- **Async methods** (§40.1, ADR 0036). For an async method, `x.m(args)` is a task (N0342 unless awaited, run or
+  boxed): `await x.m(args)` has the method's result type, as through `T: I`. The receiver and the arguments are lent
+  to the callee's frame until it returns.
 - **Effects** (§32). An interface method may carry an effect list, which bounds every `impl` of it:
 
   ```ceesafe
@@ -2910,7 +2914,8 @@ fn main() {
   ```
 
   An `impl` method whose effects exceed its interface's list is N0295, reported at the `impl` method. A call through
-  `dyn I` has the effects of `I`'s list, or `sleep` and `alloc` without one, as for a closure without a list (§36.3).
+  `dyn I` has the effects of `I`'s list, or `sleep` and `alloc` without one, as for a closure without a list (§36.3);
+  an async method without one has `suspend` and `alloc`, since an async body cannot sleep (ADR 0036).
   A call on a generic `T: I` is unchanged: it has the effects of the instantiated method (§21.2).
 - **Drop.** Dropping a `Box<dyn I, A>` destroys its value with `T`'s drop glue, then frees it with `A`.
 
@@ -2920,7 +2925,8 @@ fn main() {
 - The table is a `static const` struct per pair (`T`, `I`) that a coercion names. It holds the drop glue, the value's
   size and alignment (for a user allocator's `deallocate`), then one function per method of `I`, in declaration
   order. Each function is a generated adapter taking `void *` as its receiver, so no function is called through a
-  pointer of another type.
+  pointer of another type. An async method's entry starts `T`'s method in the frame of a call through the table, and
+  the table also holds the size of that frame for `T` (§40.6, c-backend.md §3a).
 - `dyn I` values have no address identity beyond `data`. Two `borrow dyn I` values are not comparable (N0209).
 
 Diagnostics: N0330 (`dyn I` not behind a pointer), N0331 (an interface that is not dyn-compatible).
@@ -3195,8 +3201,10 @@ fn main() {
 - **`async fn f(…) -> T`** (grammar.md §2), at package level, as a method, or as an interface method. An `extern`
   function, a `drop` block and a `@constant` function cannot be async (N0290). `async` comes after `unsafe`.
 - **Interface methods.** An impl's method is async exactly when the interface's is (N0267). Through a type parameter
-  (`T: I`) each instance awaits the concrete method, whose frame is known. An interface with an async method is not
-  dyn-compatible yet (N0331): a call through a table does not know its frame's size (L1 A4).
+  (`T: I`) each instance awaits the concrete method, whose frame is known. Through `dyn I` (§37.3, ADR 0036) the
+  awaiter's frame has room for the largest frame of `I.m` among the types coerced to `dyn I` anywhere in the
+  program: the program is compiled whole, so that set is known. An await through the table that may reach its own
+  frame is N0343 (below). `Async.boxed` takes such a call too, with a frame of the receiver's own size.
 - **A call of an async fn is a task**, not a value: it runs nothing until it is awaited (§40.2), run (§40.4) or spawned
   (§40.5). A task call anywhere else (a `let`, an argument of any other call, a field, a return) is **N0342**. There is
   no type of tasks in v1, so a task cannot be stored, returned or passed on.

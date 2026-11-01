@@ -167,7 +167,9 @@ square: 16
 
 - A `borrow T` or a `Box<T>` converts to the `dyn` type where one is expected, if `T` implements the interface.
   There is no way back to `T`.
-- Every method of the interface must take `borrow this` or `borrow mut this`.
+- Every method of the interface must take `borrow this` or `borrow mut this`. Async methods are allowed:
+  `await shape.load()` through `dyn` waits for the value's own method, in room the compiler makes for the largest
+  of the types converted to that `dyn` type.
 - A call through `dyn` cannot be inlined. Prefer a bound when one type is enough.
 - An interface method may declare its effects, `@effects() fn visit(borrow mut this, x: u64);`, which every `impl`
   must keep: kernel code in an atomic context can then call it through `dyn`.

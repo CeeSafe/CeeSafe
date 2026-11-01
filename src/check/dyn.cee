@@ -73,23 +73,6 @@ fn resolveDynType(
     let methods = interfaceMethods(c, entry);
     for (k in 0..methods.count) {
         let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-        if (m.isAsync) {
-            // A call through a table cannot place a frame whose size only the concrete type knows (L1 A4).
-            var message = Vector<u8>.create();
-            quotedBound(mut message, c, bound)?;
-            appendText(mut message, " cannot be used as 'dyn ")?;
-            boundText(mut message, c, bound)?;
-            appendText(mut message, "': its method ")?;
-            appendQuotedName(mut message, c, c.front.ast.idents[m.name as usize].symbol)?;
-            appendText(
-                mut message,
-                " is async, and a call through a table does not know its frame's size yet; use a type parameter 'T: ",
-            )?;
-            boundText(mut message, c, bound)?;
-            appendText(mut message, "' (type-system.md §40.1)")?;
-            c.error(dynIncompatible(), span.start, span.end, message)?;
-            return Ok(c.types.error);
-        }
         if (receiverIndex(m.receiver) == 1) {
             var message = Vector<u8>.create();
             quotedBound(mut message, c, bound)?;

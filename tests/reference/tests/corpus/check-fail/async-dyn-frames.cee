@@ -1,0 +1,40 @@
+// Async methods through `dyn` after checking (type-system.md §37.3, §40.1; ADR 0036): a frame containing itself
+// through the table (N0343), and an impl whose effects exceed the interface's list (N0295).
+
+interface Node {
+    async fn sum(borrow this) -> u32;
+}
+
+struct Leaf { value: u32; }
+impl Node for Leaf {
+    async fn sum(borrow this) -> u32 => this.value;
+}
+
+struct Pair { left: Box<dyn Node>; right: Box<dyn Node>; }
+impl Node for Pair {
+    async fn sum(borrow this) -> u32 {
+        let a = await this.left.sum();     // error[N0343]
+        return a + await this.right.sum(); // error[N0343]
+    }
+}
+
+interface Quiet {
+    @effects(suspend) async fn run(borrow mut this) -> u32;
+}
+
+struct Loud { n: u32; }
+impl Quiet for Loud {
+    @effects(suspend) async fn run(borrow mut this) -> u32 {
+        var v = Vector<u32>.create();
+        v.push(this.n)!; // error[N0295]
+        return v[0];
+    }
+}
+
+async fn both(q: borrow mut dyn Quiet, node: borrow dyn Node) -> u32 => await q.run() + await node.sum();
+
+fn main() {
+    let pair = Pair { left: Box.create(Leaf { value: 1 })!, right: Box.create(Leaf { value: 2 })! };
+    var loud = Loud { n: 2 };
+    Console.writeLine(Async.run(both(mut loud, borrow pair))); // Pair is one of dyn Node's types
+}

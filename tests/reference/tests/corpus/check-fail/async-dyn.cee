@@ -1,0 +1,31 @@
+// Async methods through `dyn` (type-system.md §37.3, §40.1; ADR 0036): a task that is not awaited (N0342), and a
+// `borrow mut this` method through a shared reference (N0248).
+
+interface Node {
+    async fn sum(borrow this) -> u32;
+}
+
+struct Leaf { value: u32; }
+impl Node for Leaf {
+    async fn sum(borrow this) -> u32 => this.value;
+}
+
+interface Quiet {
+    async fn run(borrow mut this) -> u32;
+}
+
+struct Loud { n: u32; }
+impl Quiet for Loud {
+    async fn run(borrow mut this) -> u32 => this.n;
+}
+
+async fn misuse(q: borrow dyn Quiet, node: borrow dyn Node) -> u32 {
+    let task = node.sum(); // error[N0342]
+    return await q.run();  // error[N0248]
+}
+
+fn main() {
+    let leaf = Leaf { value: 1 };
+    var loud = Loud { n: 2 };
+    Console.writeLine(Async.run(misuse(borrow loud, borrow leaf)));
+}

@@ -93,10 +93,13 @@ fn growTo<T: Copy>(values: borrow mut Vector<T>, length: usize, value: T) -> Res
     return Ok();
 }
 
-/// The effects of a function as a callee (EffectsOf): an extern's or a `dyn` method's declaration (§37.3), a Nova
-/// function's inference; nothing for generic code, which is never compiled.
+/// The effects of a function as a callee (EffectsOf): an extern's or a `dyn` method's declaration (§37.3; an async
+/// one without a list has `suspend` and `alloc`), a Nova function's inference; nothing for generic code, which is never compiled.
 fn effectsOf(c: borrow Checker, e: borrow Effects, function: u32) -> u32 {
     let f = borrow c.hir.functions[function as usize];
+    if (f.isDynMethod && f.declaredEffects == none() && isAsyncFunction(c, function)) {
+        return suspendEffect() | allocEffect(); // an async body cannot sleep (ADR 0036 §3.3)
+    }
     if (isExternFunction(c, function) || f.isDynMethod) {
         return if (f.declaredEffects == none()) allEffects() else f.declaredEffects;
     }

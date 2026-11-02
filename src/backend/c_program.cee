@@ -227,6 +227,18 @@ fn usedLibraryFunctions(
     }
     // A dyn table's entries and its type's drop are reached through the table (§37.4).
     var reached = Vector<u64>.create();
+    // A package's own struct is emitted whether or not code uses it, with its drop: so are the drops of the library
+    // types it holds (bug B2: a struct holding an AsyncTcpStream the program never touches).
+    for (t in c.programStructs.view()) {
+        if (isAlwaysEmittedStruct(c, t)) {
+            var seen = Vector<bool>.create();
+            var drops = Vector<u32>.create();
+            dropFunctions(c, t, mut seen, mut drops)?;
+            for (d in drops.view()) {
+                reached.push(variantKey(d, 0))?;
+            }
+        }
+    }
     for (table in c.dynTables.view()) {
         for (k in 0..table.methods.count) {
             reached.push(variantKey(c.hir.at(table.methods, k), 0))?;
@@ -332,6 +344,12 @@ fn usedTypesOf(
     for (table in c.dynTables.view()) {
         addUsedType(c, used, table.implementation)?;
     }
+    // A package's own struct is emitted, used or not, so the types of its fields are too (bug B2).
+    for (t in c.programStructs.view()) {
+        if (isAlwaysEmittedStruct(c, t)) {
+            addUsedType(c, used, t)?;
+        }
+    }
     // Every static is emitted, used or not (§39), so its type is too.
     for (item in c.hir.statics.view()) {
         addUsedType(c, used, item.typ)?;
@@ -369,6 +387,10 @@ fn usedTypesOf(
     }
     return Ok();
 }
+
+/// A struct emitted whether or not code uses it: the package's own, not the library's, not imported from C.
+fn isAlwaysEmittedStruct(c: borrow Checker, t: u32) -> bool =>
+    !c.types.isGeneric(t) && !isLibraryType(c, t) && !c.types.info(t).libraryUse && !isImportedStruct(c, t);
 
 fn isLibraryType(c: borrow Checker, t: u32) -> bool {
     let info = c.types.info(t);

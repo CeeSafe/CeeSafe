@@ -1,0 +1,27 @@
+// Bug B2 (CeeSafe.Web, found 2026-11-02): a package's struct holding a lib/std socket type whose operations the
+// program never reaches. The struct is emitted with its drop whether or not code uses it, so the socket types and
+// their drops are too; the C used to name them without defining them.
+public struct Holder {
+    private stream: AsyncTcpStream;
+}
+
+public struct Server {
+    private listener: AsyncTcpListener;
+    private count: u32;
+}
+
+/// Never called: it constructs a listener, so its drop is reached only through this function.
+fn unused() -> u32 {
+    match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => {
+            let s = Server { listener: l, count: 1 };
+            return s.count;
+        }
+        Err(_) => { return 0; }
+    }
+}
+
+fn main() {
+    Console.writeLine(1);
+}
+// expect-stdout: 1

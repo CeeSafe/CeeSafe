@@ -245,14 +245,25 @@ public struct TaskSet<E: Copy> {
     fn started(borrow this, code: u32) -> bool => code == 0;
 }
 
-/// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the set's
-/// owner, with the set; then every child it started is waited for. The result is the body's error, else the first
-/// child's, else `oom` if a child's frame could not be allocated, else Ok. The body's error cancels the children;
-/// a child's error cancels no sibling.
+/// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): `Async.tasksIn` with the system heap.
 public struct AsyncTasks<E: Copy> {
+    @effectsOf(body)
+    public async fn run(
+        limit: u32,
+        oom: E,
+        body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,
+    ) -> Result<void, E> => await AsyncTasksIn<E, SystemHeap>.run(SystemHeap {}, limit, oom, body);
+}
+
+/// `await Async.tasksIn(alloc, limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the
+/// set's owner, with the set; then every child it started is waited for. The children's tasks and frames come from
+/// `alloc`'s allocator type. The result is the body's error, else the first child's, else `oom` if a child's frame
+/// could not be allocated, else Ok. The body's error cancels the children; a child's error cancels no sibling.
+public struct AsyncTasksIn<E: Copy, A> {
     /// Safety: the record is this frame's, which outlives every child: the set waits for them before it returns.
     @effectsOf(body)
     public async fn run(
+        alloc: A,
         limit: u32,
         oom: E,
         body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,
@@ -260,6 +271,7 @@ public struct AsyncTasks<E: Copy> {
         var record = TaskSetRecord<E> { words: [0u64; 12], first: Ok() };
         let raw = borrow mut record.words as *mut [u64; 12] as *mut void;
         unsafe { ceesafe_async_set_init(raw, limit, borrow mut record.first as *mut Result<void, E> as *mut void); }
+        Async.setAllocator(raw, alloc); // the children's frames from A's adapters (c-backend.md §3a)
         let set = TaskSet<E> { record: raw, oom: oom };
         let result = body(borrow set);
         match (result) {

@@ -1,0 +1,158 @@
+// Task sets, part 2 (ADR 0053): `Async.tasksIn` takes its children's tasks and frames from a user allocator, which
+// hands out and takes back each block, also when a function the set is passed to starts them; a failing allocator
+// makes `spawn` `Err(oom)` and `trySpawn` false, and the set's result `oom`, while the set goes on; `set.spawnSend`
+// children give the same sum on one worker and on four. Each expected line follows from the program.
+
+extern "C" {
+    @effects(alloc)
+    fn malloc(size: usize) -> *mut void;
+    @effects()
+    fn free(p: *mut void);
+}
+
+static ALLOCATED: AtomicU32 = AtomicU32.constant(0);
+static FREED: AtomicU32 = AtomicU32.constant(0);
+
+/// Counts what it hands out, over the system heap.
+struct Counting {}
+
+impl Allocator for Counting {
+    /// Safety: malloc returns null or a block of layout.size bytes, aligned for any type.
+    fn allocate(borrow this, layout: Layout) -> Result<*mut u8, AllocError> {
+        ALLOCATED.fetchAdd(1);
+        let p = unsafe { malloc(layout.size) } as *mut u8;
+        if (p.isNull()) {
+            return Err(AllocError.OutOfMemory);
+        }
+        return Ok(p);
+    }
+
+    /// Safety: the frames come back from allocate, once each.
+    unsafe fn deallocate(borrow this, p: *mut u8, layout: Layout) {
+        FREED.fetchAdd(1);
+        free(p as *mut void);
+    }
+}
+
+enum Failure {
+    NoFrame,
+    Other,
+}
+
+fn named(r: Result<void, Failure>) -> StringView => match (r) {
+    Ok() => "ok",
+    Err(Failure.NoFrame) => "oom",
+    Err(Failure.Other) => "another error",
+};
+
+async fn pause(ms: u64) -> Result<void, Failure> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(Failure.Other); }
+    }
+}
+
+async fn startFive(set: borrow TaskSet<Failure>) -> Result<void, Failure> {
+    for (k in 0..5u64) {
+        await set.spawn(async move () => await pause(k % 2 + 1))?;
+    }
+    return Ok();
+}
+
+async fn counted() -> Result<void, Failure> =>
+    await Async.tasksIn(Counting {}, 2, Failure.NoFrame, async (set) => await startFive(set));
+
+/// With no memory: spawn's result, trySpawn's, and the set's.
+async fn failing(spawned: borrow mut Result<void, Failure>, tried: borrow mut bool) -> Result<void, Failure> {
+    var first: Result<void, Failure> = Ok();
+    var second = true;
+    let r = await Async.tasksIn(FailingAllocator {}, 2, Failure.NoFrame, async (set) => {
+        first = await set.spawn(async move () => await pause(1));
+        second = set.trySpawn(async move () => await pause(1));
+        return Ok();
+    });
+    spawned = first;
+    tried = second;
+    return r;
+}
+
+fn mix(part: u64) -> u64 {
+    var x = part + 1;
+    for (k in 0..2000) {
+        x = (x * 48271 + 11) % 2147483647;
+    }
+    return x % 1000;
+}
+
+/// Eight spawnSend children, each sending its part's number through its own clone of the channel.
+async fn fanOut(parts: borrow Channel<u64>) -> Result<void, AsyncError> =>
+    await Async.tasks(8, AsyncError.Cancelled, async (set) => {
+        for (p in 0..8u64) {
+            let mine = parts.clone();
+            await set.spawnSend(async move () => {
+                match (await Timer.sleep(1)) {
+                    Ok() => {}
+                    Err(e) => { return Err(e); }
+                }
+                match (mine.trySend(mix(p))) {
+                    Ok() => {}
+                    Err(_) => {}
+                }
+                return Ok();
+            })?;
+        }
+        return Ok();
+    });
+
+fn sum(parts: borrow Channel<u64>) -> u64 {
+    var total: u64 = 0;
+    loop {
+        match (parts.recv()) {
+            Some(v) => { total += v; }
+            null => { return total; }
+        }
+    }
+}
+
+fn main() {
+    Console.write("counted: ");
+    Console.write(named(Async.run(counted())));
+    Console.write(", ");
+    Console.write(ALLOCATED.load());
+    Console.write(" allocated, ");
+    Console.write(FREED.load());
+    Console.writeLine(" freed");
+
+    var spawned: Result<void, Failure> = Ok();
+    var tried = true;
+    FailingAllocator.failAfter(0); // every allocation through FailingAllocator fails from now on
+    let set = Async.run(failing(mut spawned, mut tried));
+    Console.write("failing: spawn ");
+    Console.write(named(spawned));
+    Console.write(", trySpawn ");
+    Console.write(tried);
+    Console.write(", the set ");
+    Console.writeLine(named(set));
+
+    var expected: u64 = 0;
+    for (p in 0..8u64) {
+        expected += mix(p);
+    }
+    let one = Channel<u64>.create(16)!;
+    let a = Async.run(fanOut(borrow one));
+    one.close();
+    let four = Channel<u64>.create(16)!;
+    let b = Async.runWorkers(4, fanOut(borrow four));
+    four.close();
+    let same = match (a) {
+        Ok() => match (b) {
+            Ok() => sum(borrow one) == expected && sum(borrow four) == expected,
+            Err(_) => false,
+        },
+        Err(_) => false,
+    };
+    Console.writeLine(if (same) "spawnSend: the same sum on one worker and four" else "spawnSend: the sums differ");
+}
+// expect-stdout: counted: ok, 5 allocated, 5 freed
+// expect-stdout: failing: spawn oom, trySpawn false, the set oom
+// expect-stdout: spawnSend: the same sum on one worker and four

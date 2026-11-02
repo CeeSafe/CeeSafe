@@ -815,6 +815,9 @@ fn builtin(
     if (b == bfAsyncSetSpawn()) {
         return asyncSetSpawn(it, c, n, frame, arguments);
     }
+    if (b == bfAsyncSetAllocator()) {
+        return asyncSetAllocator(it, c, n, frame, arguments);
+    }
     if (b == bfAsyncScopeWait()) {
         return asyncScopeWait(it, c, n, frame, r, arguments);
     }

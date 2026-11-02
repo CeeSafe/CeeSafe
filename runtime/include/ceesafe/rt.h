@@ -1138,6 +1138,10 @@ void ceesafe_async_set_init(void *set, uint32_t limit, void *error);
 uint32_t ceesafe_async_set_admit(void *set, bool wait);
 void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                               const ceesafe_frame_info *info);
+/* `set.spawnSend(child)` (ADR 0053 §3.2, ADR 0038): as ceesafe_async_spawn_send, the child published once its frame is
+ * initialised; with a user allocator (tasksIn) it runs on this worker, since its frame is freed where it returns. */
+void *ceesafe_async_set_spawn_send(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                                   const ceesafe_frame_info *info);
 void *ceesafe_async_set_error(ceesafe_scope *scope);
 bool ceesafe_async_set_done(void *set);
 void ceesafe_async_set_cancel(void *set);

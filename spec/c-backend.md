@@ -499,6 +499,10 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   task waiting for room, the allocator), then the first child error. `AsyncSetSpawn` emits, in any function (sync too,
   for `trySpawn`): if the admission code is 0, `ceesafe_async_set_spawn(record, sizeof(struct ceeAF_<C>), ceeAC_<C>,
   &ceeAN_<C>)` and the frame's initialisation, or code 3 if it is NULL; a child not started drops its environment.
+  `spawnSend` calls `ceesafe_async_set_spawn_send`, then `ceesafe_async_publish`. `Async.setAllocator(record, alloc)`
+  (lib/core's, for `tasksIn`; `Async.tasks` is `tasksIn` with `SystemHeap`) is `Builtin(AsyncSetAllocator, [A,
+  record])`: `ceesafe_async_set_allocator(record, ceeAA_<A>, ceeAD_<A>)`, whose adapters are emitted as a
+  `scopeIn` scope's are. A shared set (spawnSend children) admits and waits for room under the run's lock.
   The child's thunk copies an `Err` to `ceesafe_async_set_error(scope)` if `ceesafe_async_claim_failure` says it is
   the first. In the runtime a set's child error cancels no sibling, a failed allocation stops nothing, and a returning
   child wakes the task waiting for room (`ceesafe_async_set_admit`), as the last one wakes the task waiting for the

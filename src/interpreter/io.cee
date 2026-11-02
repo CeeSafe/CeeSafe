@@ -1826,6 +1826,7 @@ fn asyncSet(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Val
                 roomWaiter: none(),
                 doneWaiter: none(),
                 errorSlot: arguments[2].bits(0, 8)?,
+                allocator: none(),
             },
         )!;
         it.memory.storeBits(record, it.asyncScopes.length as u64, 8)?;
@@ -1862,7 +1863,25 @@ fn asyncSet(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Val
         }
         return Ok(null);
     }
-    return Ok(valueOf(0, 1)); // ceesafe_async_set_oom: the interpreter's frames always come
+    return Ok(valueOf(if (it.asyncScopes[scope].oom) 1 else 0, 1)); // ceesafe_async_set_oom
+}
+
+/// `Async.setAllocator(record, alloc)` (ADR 0053): a user allocator's type, which the set's children's frames come
+/// from as a scopeIn scope's do (the system heap needs nothing here).
+fn asyncSetAllocator(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let allocator = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let record = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 8)?;
+    if (isUserAllocator(c, allocator) || builtinItemIndex(c, allocator) == 3) {
+        let scope = truncate<usize>(it.memory.loadBits(record, 8)? - 1);
+        it.asyncScopes[scope].allocator = allocator; // a user allocator, or FailingAllocator, which gives nothing
+    }
+    return Ok(null);
 }
 
 /// A task set's start (ADR 0053): if admitted, a child queued in the set's scope, as `asyncSpawn` does; else what its
@@ -1904,6 +1923,36 @@ fn asyncSetSpawn(
         return Ok(valueOf(code, 4));
     }
     let scope = truncate<u32>(it.memory.loadBits(record, 8)? - 1);
+    // Async.tasksIn: the child's task and frame from the user allocator, as the runtime asks (asyncSpawn's sizes).
+    var allocator = it.asyncScopes[scope as usize].allocator;
+    var releaseBlock: u64 = 0;
+    var releaseSize: u64 = 0;
+    if (allocator != none()) {
+        releaseSize = 144 + truncate<u64>(frameReport(c, n, function)!.layout.size); // CEE_TASK_HEAD on 64-bit hosts
+        if (builtinItemIndex(c, allocator) == 3) {
+            // FailingAllocator: the runtime's attempt (failAfter's count), the block given back at once, since the
+            // interpreter's frames are its own.
+            let block = alloc(it, releaseSize, allocFailing())?;
+            if (block != 0) {
+                freeMemory(it, block)?;
+                releaseBlock = 0;
+                releaseSize = 0;
+                allocator = none();
+            }
+        } else {
+            releaseBlock = interpAllocate(it, c, n, allocator, releaseSize, 16)?;
+        }
+        if (allocator != none() && releaseBlock == 0) {
+            it.asyncScopes[scope as usize].oom = true; // the set goes on (ADR 0053 §3.2)
+            if (environment != 0 && it.memory.isLive(environment)) {
+                if (environmentDrop != none()) {
+                    destroy(it, c, n, environmentDrop, environment)?;
+                }
+                it.memory.end(environment);
+            }
+            return Ok(valueOf(3, 4));
+        }
+    }
     it.asyncScopes[scope as usize].live += 1;
     it.asyncSpawns.push(
         InterpSpawn {
@@ -1913,9 +1962,9 @@ fn asyncSetSpawn(
             environment: environment,
             environmentDrop: environmentDrop,
             joinIndex: none(),
-            release: none(),
-            releaseBlock: 0,
-            releaseSize: 0,
+            release: allocator,
+            releaseBlock: releaseBlock,
+            releaseSize: releaseSize,
         },
     )!;
     return Ok(valueOf(0, 4));
@@ -2060,6 +2109,7 @@ struct InterpScope {
     roomWaiter: u32; // the task waiting to start a child (a global task id), or none
     doneWaiter: u32; // the task waiting for the set's children, or none
     errorSlot: u64;  // where a set's first child error is stored
+    allocator: u32;  // a set's user allocator type (Async.tasksIn), or none
 }
 
 /// What cancellation needs of a task, beside runTasks' own record (InterpTask).
@@ -2132,6 +2182,7 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             roomWaiter: none(),
             doneWaiter: none(),
             errorSlot: 0,
+            allocator: none(),
         },
     )!;
     return truncate<u32>(it.asyncScopes.length - 1);

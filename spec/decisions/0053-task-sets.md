@@ -163,9 +163,18 @@ await Async.tasks(limit, oom, async (set) => {
   - Only the owner can spawn (a child cannot capture the set), so the runtime keeps one task waiting for room, and
     the owner never changes.
   - A `limit` of 0 is 1.
-- **Not in this commit:** `Async.tasksIn(alloc, …)` and `set.spawnSend`. The runtime has the allocator's slot
-  (`ceesafe_async_set_allocator`); what remains is passing the allocator's adapters into the record at the
-  `tasksIn` call, since a spawn in another function does not know the allocator's type. A follow-up commit does both.
+- **`Async.tasksIn` (the second commit).** A spawn in another function does not know the allocator's type, so the set
+  is given its adapters when it starts: lib/core's `AsyncTasksIn<E, A>.run` calls `Async.setAllocator(record, alloc)`,
+  a library-only primitive (N0345), whose builtin `AsyncSetAllocator` carries `A` and emits
+  `ceesafe_async_set_allocator(record, ceeAA_<A>, ceeAD_<A>)`; the runtime's set spawns take their blocks from them.
+  `Async.tasks` is `AsyncTasksIn<E, SystemHeap>` (its frames are the system heap's either way). `tasksIn` works in
+  the freestanding profile; `tasks` is hosted only.
+- **`set.spawnSend`** checks ADR 0038's rule on the child's captures (each moved in, so each must be `Send`) and on
+  `E`, and calls `ceesafe_async_set_spawn_send` and `ceesafe_async_publish`. A set with `spawnSend` children is shared:
+  admission and its wait for room take the run's lock, as `scope_done` does. With a user allocator (tasksIn) the
+  child runs on this worker, since a frame from it is freed where the child returns.
+- **The interpreter** takes a user allocator's blocks for a set's children as for `scopeIn`, and models
+  FailingAllocator's attempts (`failAfter`).
 - **The interpreter** models the record (its InterpScope, flagged as a set), the room and done waits (parked until a
   child returns, through `asyncWoken`), the body's cancellation, and the start.
 - **Tests:** run-pass/async-task-set (ten children under a limit of three, started from a function the set is passed

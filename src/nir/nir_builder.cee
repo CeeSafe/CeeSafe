@@ -2181,7 +2181,11 @@ fn lowerRvalueCore(
             operands.push(admittedOperand)?;
             operands.push(child)?;
             let list = n.list(operands.view())?;
-            return n.rvalue(NirRvalue.Builtin(bfAsyncSetSpawn(), list), u32Type, exprSpan(c, e));
+            let start = n.rvalue(NirRvalue.Builtin(bfAsyncSetSpawn(), list), u32Type, exprSpan(c, e))?;
+            if (containsU32(c.sendSpawns, e)) {
+                n.rvalueTasks[start as usize] = taskSend(); // `set.spawnSend(…)` (ADR 0053, ADR 0038)
+            }
+            return Ok(start);
         }
         HirExpr.BuiltinCall(function, arguments) => { return lowerBuiltinCall(c, n, b, e, function, arguments); }
         _ => {}

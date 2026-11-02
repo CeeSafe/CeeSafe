@@ -918,6 +918,20 @@ fn emitTaskStatement(
     if (builtinOf(n, r) == bfAsyncSetSpawn()) {
         return emitSetSpawn(e, c, n, sources, f, r, target);
     }
+    if (builtinOf(n, r) == bfAsyncSetAllocator()) {
+        // A task set's allocator (ADR 0053): its adapters, which every spawn into the set takes its frame from.
+        let allocator = constArgument(n, r, 0);
+        let record = operandText(e, c, n, sources, f, n.at(builtinArguments(n, r), 1))?;
+        e.t("    ceesafe_async_set_allocator(")?;
+        e.b(record.view())?;
+        e.t(", ")?;
+        appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
+        e.t(", ")?;
+        appendAdapterName(c, mut e.buf, "ceeAD_", allocator)?;
+        e.t(");")?;
+        e.emit()?;
+        return Ok(true);
+    }
     if (builtinOf(n, r) == bfAsyncScopeStart()) {
         return Ok(true); // the borrow checker's marker: no C (ADR 0033 §3.2)
     }
@@ -1154,7 +1168,8 @@ fn emitSetSpawn(
     e.line("        if (cee_code == 0u) {")?;
     e.t("            struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
-    e.t(" *cee_child = ceesafe_async_set_spawn(")?;
+    let send = n.rvalueTasks[r as usize] == taskSend();
+    e.t(if (send) " *cee_child = ceesafe_async_set_spawn_send(" else " *cee_child = ceesafe_async_set_spawn(")?;
     e.b(record.view())?;
     e.t(", sizeof(struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
@@ -1180,6 +1195,11 @@ fn emitSetSpawn(
     e.t(");")?;
     e.emit()?;
     e.line("            else cee_code = 3u; /* no frame: the set goes on (ADR 0053 §3.2) */")?;
+    if (send) {
+        e.line(
+            "            if (cee_child != NULL) ceesafe_async_publish(cee_child); /* any worker may start it now */",
+        )?;
+    }
     e.line("        }")?;
     if (byValue && ownsEnvironment(c, child)) {
         e.t("        if (cee_code != 0u) ")?;
@@ -2031,6 +2051,8 @@ fn frameAllocators(e: borrow CEmitter, c: borrow Checker, n: borrow NirProgram) 
                     allocator = constArgument(n, r, 0);
                 } else if (builtinOf(n, r) == bfAsyncSpawn()) {
                     allocator = constArgument(n, r, 3);
+                } else if (builtinOf(n, r) == bfAsyncSetAllocator()) {
+                    allocator = constArgument(n, r, 0);
                 }
                 if (allocator != none() && !containsU32(found, allocator)) {
                     found.push(allocator)?;

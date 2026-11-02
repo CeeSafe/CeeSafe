@@ -1,5 +1,6 @@
 // Task sets (ADR 0053): a child owns what it captures (N0349: a reference, a slice, a StringView, the set itself), is an
-// `async move` literal (N0209), and `spawn` is awaited (N0342); a set's error type is Copy (N0268).
+// `async move` literal (N0209), and `spawn` is awaited (N0342); a set's error type is Copy (N0268); a spawnSend child's
+// captures are Send (N0334); tasksIn takes an allocator (N0263); Async.setAllocator is the library's (N0345).
 
 struct Message {
     text: String;
@@ -37,4 +38,18 @@ async fn notCopy() -> Result<void, Message> {
     return await Async.tasks(2, Message { text: text }, async (set) => Ok()); // error[N0268]
 }
 
-fn main() {}
+async fn sends(set: borrow TaskSet<AsyncError>, p: *mut u8) -> Result<void, AsyncError> {
+    await set.spawnSend(async move () => { // error[N0334]
+        let q = p;
+        return Ok();
+    })?;
+    return Ok();
+}
+
+async fn notAllocator() -> Result<void, AsyncError> =>
+    await Async.tasksIn(7u32, 2, AsyncError.Cancelled, async (set) => Ok()); // error[N0263]
+
+fn main() {
+    var x: u64 = 0;
+    Async.setAllocator(borrow mut x as *mut u64 as *mut void, SystemHeap {}); // error[N0345]
+}

@@ -3571,9 +3571,14 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 - **`await Async.tasks(limit, oom, async (set) => …)`** is `Result<void, E>`, `E` being `oom`'s type, which must be
   `Copy` (N0268). It is a call of lib/core's `AsyncTasks<E>.run` (ADR 0037): the body runs in the awaiting task, as
   the set's owner, with `set: borrow TaskSet<E>`, and may pass the set to the functions it calls. When the body has
-  returned, the set waits for every child. Hosted only (N0293), its children's frames from the system heap.
+  returned, the set waits for every child. Its children's tasks and frames come from the system heap, so it is hosted
+  only (N0293). **`await Async.tasksIn(alloc, limit, oom, body)`** takes them from `alloc`'s allocator type instead
+  (an allocator, N0263), as `Async.scopeIn` does, in every profile: lib/core's `AsyncTasksIn<E, A>.run` gives the set
+  its allocator when it starts, so a spawn in any function uses it.
 - **`await set.spawn(async move () => …)`** starts a child of result `Result<void, E>` and is `Result<void, E>`: while
-  `limit` children run, the task waits for one to return. Once the set or its task is cancelled, or if the child's
+  `limit` children run, the task waits for one to return. **`await set.spawnSend(child)`** is the same, but the child
+  may run on another worker of `Async.runWorkers` (ADR 0038): each capture and `E` must be `Send` (N0334); a set from
+  `tasksIn` with a user allocator starts it on this worker, since its frame is freed where it returns. Once the set or its task is cancelled, or if the child's
   frame cannot be allocated, it starts nothing and is `Err(oom)`; the set goes on. **`set.trySpawn(child)`** is `bool`,
   false instead of waiting (or once cancelled, or with no frame); it is not awaited. `set` is a local or parameter of
   type `TaskSet<E>` or a reference to one. Not awaiting `spawn` is N0342; a child that is not an `async move` literal

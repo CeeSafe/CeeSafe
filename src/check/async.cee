@@ -31,6 +31,9 @@ fn bfAsyncRunWorkers() -> u32 => 1009;
 /// A task set's start (ADR 0053): the child's function, the set's record, the admission code, the child's closure;
 /// its value is 0 (started), 2 (not admitted) or 3 (no frame).
 fn bfAsyncSetSpawn() -> u32 => 1010;
+/// `Async.setAllocator(record, alloc)` (ADR 0053): a task set's children's frames from `alloc`'s allocator type; the
+/// allocator type, then the record.
+fn bfAsyncSetAllocator() -> u32 => 1011;
 /// N0349: a task set's child that captures a value holding a loan (ADR 0053 §3.2).
 fn setCapturesLoan() -> u32 => 349;
 
@@ -181,7 +184,13 @@ fn checkAsyncCall(
         return checkAsyncScope(c, arguments, withAllocator, span);
     }
     if (sameText(c.name(memberIdent.symbol), "tasks")) {
-        return checkAsyncTasks(c, arguments, span);
+        return checkAsyncTasks(c, arguments, false, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "tasksIn")) {
+        return checkAsyncTasks(c, arguments, true, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "setAllocator")) {
+        return checkSetAllocator(c, arguments, span);
     }
     if (sameText(c.name(memberIdent.symbol), "boxed")) {
         return checkAsyncBoxed(c, arguments, expected, span);
@@ -409,41 +418,113 @@ fn checkAsyncScope(c: borrow mut Checker, all: Range, withAllocator: bool, span:
 
 /// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053 §3.1): a call of lib/core's `AsyncTasks<E>.run`, whose
 /// async instance awaits the body in this task (ADR 0037). `E` is `oom`'s type, and must be Copy (N0268).
-fn checkAsyncTasks(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
-    if (c.freestanding) {
-        hostedOnly(c, span, "'Async.tasks' (its children come from the system heap)".bytes())?;
+fn checkAsyncTasks(
+    c: borrow mut Checker,
+    arguments: Range,
+    withAllocator: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (c.freestanding && !withAllocator) {
+        hostedOnly(c, span, "'Async.tasks' (its children come from the system heap: use 'Async.tasksIn')".bytes())?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if (arguments.count != 3) {
+    let first: u32 = if (withAllocator) 1 else 0;
+    if (arguments.count != 3 + first) {
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "'Async.tasks' takes the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)",
+            if (withAllocator) "'Async.tasksIn' takes an allocator, the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)" else "'Async.tasks' takes the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    // `E` from `oom`, checked again by the call: this probe's diagnostics are the call's too, so dropped here.
+    // `E` from `oom` (and `A` from the allocator), checked again by the call: this probe's diagnostics are the call's
+    // too, so dropped here.
     let mark = diagnosticsMark(c);
-    let oomSyntax = c.front.ast.at(arguments, 1);
+    let oomSyntax = c.front.ast.at(arguments, 1 + first);
     let probe = synth(c, oomSyntax, none())?;
     let errorType = c.typeOf(probe);
+    var allocatorType = none();
+    if (withAllocator) {
+        let allocatorSyntax = c.front.ast.at(arguments, 0);
+        let allocatorProbe = synth(c, allocatorSyntax, none())?;
+        allocatorType = c.typeOf(allocatorProbe);
+    }
     dropDiagnosticsSince(c, mark);
-    if (c.types.isBottom(errorType)) {
+    if (c.types.isBottom(errorType) || (withAllocator && c.types.isBottom(allocatorType))) {
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    if (withAllocator) {
+        let allocatorSpan = c.front.ast.exprSpans[c.front.ast.at(arguments, 0) as usize];
+        if (!checkBoxAllocator(c, allocatorType, allocatorSpan)?) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+    }
     var typeArguments = Vector<u32>.create();
     typeArguments.push(errorType)?;
+    if (withAllocator) {
+        typeArguments.push(allocatorType)?;
+    }
     let runName = c.intern("run")?;
-    let run = libraryFunction(c, "AsyncTasks", typeArguments.view(), runName, span)?;
+    let run = libraryFunction(
+        c,
+        if (withAllocator) "AsyncTasksIn" else "AsyncTasks",
+        typeArguments.view(),
+        runName,
+        span,
+    )?;
     if (run == none()) {
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
     return checkUserCall(c, run, arguments, span);
+}
+
+/// `Async.setAllocator(record, alloc)`: lib/core's primitive (ADR 0053), which gives a task set's record the adapters
+/// of `alloc`'s allocator type. In the generic version the type may be a parameter; each instance has its own.
+fn checkSetAllocator(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let inLibrary = c.function != none() && c.hir.functions[c.function as usize].library;
+    if (!inLibrary || arguments.count != 2) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Async.setAllocator' is the library's primitive, for 'Async.tasksIn' (ADR 0053)")?;
+        c.error(asyncPrimitiveOutsideLibrary(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let recordSyntax = c.front.ast.at(arguments, 0);
+    let record = synth(c, recordSyntax, none())?;
+    let allocatorSyntax = c.front.ast.at(arguments, 1);
+    let allocatorRead = synth(c, allocatorSyntax, none())?;
+    let allocatorValue = autoDeref(c, allocatorRead)?;
+    let allocatorType = c.typeOf(allocatorValue);
+    if (c.types.isBottom(allocatorType)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let allocatorSpan = c.front.ast.exprSpans[allocatorSyntax as usize];
+    if (!c.types.isGeneric(allocatorType) && !checkBoxAllocator(c, allocatorType, allocatorSpan)?) {
+        return c.errorResult(span.start, span.end);
+    }
+    let u32Type = c.types.lookup("u32".bytes());
+    let typeOperand = c.expr(
+        HirExpr.IntConst(IntValue { negative: false, magnitude: allocatorType as u64 }),
+        u32Type,
+        span.start,
+        span.end,
+    )?;
+    var values = Vector<u32>.create();
+    values.push(typeOperand)?;
+    values.push(record)?;
+    let voidType = c.types.voidType;
+    return c.expr(
+        HirExpr.BuiltinCall(bfAsyncSetAllocator(), c.hir.list(values.view())?),
+        voidType,
+        span.start,
+        span.end,
+    );
 }
 
 /// Is `t` lib/core's TaskSet<E>?
@@ -483,9 +564,15 @@ fn checkSetSpawn(
     setType: u32,
     arguments: Range,
     trying: bool,
+    send: bool,
     targetSpan: Span,
     span: Span,
 ) -> Result<u32, AllocError> {
+    if (send && c.freestanding) {
+        hostedOnly(c, span, "'spawnSend' (the freestanding executor has one worker)".bytes())?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     let awaited = c.taskStart == span.start && c.taskEnd == span.end;
     if (awaited && !trying) {
         c.taskStart = none();
@@ -556,7 +643,28 @@ fn checkSetSpawn(
             )?;
             c.error(setCapturesLoan(), argumentSpan.start, argumentSpan.end, message)?;
             ok = false;
+        } else if (send && !c.types.isSendType(t)?) {
+            // `set.spawnSend`: the child may run on another worker (ADR 0038's rule, ADR 0053 §3.2).
+            var message = Vector<u8>.create();
+            appendText(mut message, "this child captures ")?;
+            appendQuotedName(mut message, c, local.name)?;
+            appendText(mut message, ", of type ")?;
+            appendQuotedType(mut message, c, t)?;
+            appendText(
+                mut message,
+                ", which is not Send, but a 'spawnSend' child may run on another worker (type-system.md §38.1, ADR 0038)",
+            )?;
+            c.error(notSend(), argumentSpan.start, argumentSpan.end, message)?;
+            ok = false;
         }
+    }
+    if (send && !c.types.isSendType(errorType)?) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a 'spawnSend' child's error ")?;
+        appendQuotedType(mut message, c, errorType)?;
+        appendText(mut message, " is not Send, but it may come back from another worker (ADR 0038)")?;
+        c.error(notSend(), argumentSpan.start, argumentSpan.end, message)?;
+        ok = false;
     }
     if (!ok) {
         return c.errorResult(span.start, span.end);
@@ -591,6 +699,9 @@ fn checkSetSpawn(
         admitted = c.expr(HirExpr.Await(admitted), u32Type, span.start, span.end)?;
     }
     let code = c.expr(HirExpr.SetSpawn(record, admitted, closure), u32Type, span.start, span.end)?;
+    if (send) {
+        c.sendSpawns.push(code)?; // another worker may run it (ADR 0038)
+    }
     let third = setArgument(c, target, setType, targetSpan)?;
     var finishArguments = Vector<u32>.create();
     finishArguments.push(third)?;

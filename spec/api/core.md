@@ -11,6 +11,7 @@
 - [struct Raced](#struct-raced)
 - [struct TaskSet](#struct-taskset)
 - [struct AsyncTasks](#struct-asynctasks)
+- [struct AsyncTasksIn](#struct-asynctasksin)
 - [struct AsyncSignal](#struct-asyncsignal)
 - [enum LoadOrdering](#enum-loadordering)
 - [enum StoreOrdering](#enum-storeordering)
@@ -240,16 +241,36 @@ capture the set (N0349). The calls are the checker's (src/check/async.cee): thes
 public struct AsyncTasks<E: Copy>
 ```
 
-`await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the set's
-owner, with the set; then every child it started is waited for. The result is the body's error, else the first
-child's, else `oom` if a child's frame could not be allocated, else Ok. The body's error cancels the children;
-a child's error cancels no sibling.
+`await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): `Async.tasksIn` with the system heap.
 
 ### AsyncTasks.run
 
 ```ceesafe
 @effectsOf(body)
 public async fn run(
+    limit: u32,
+    oom: E,
+    body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,
+) -> Result<void, E>
+```
+
+## struct AsyncTasksIn
+
+```ceesafe
+public struct AsyncTasksIn<E: Copy, A>
+```
+
+`await Async.tasksIn(alloc, limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the
+set's owner, with the set; then every child it started is waited for. The children's tasks and frames come from
+`alloc`'s allocator type. The result is the body's error, else the first child's, else `oom` if a child's frame
+could not be allocated, else Ok. The body's error cancels the children; a child's error cancels no sibling.
+
+### AsyncTasksIn.run
+
+```ceesafe
+@effectsOf(body)
+public async fn run(
+    alloc: A,
     limit: u32,
     oom: E,
     body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,

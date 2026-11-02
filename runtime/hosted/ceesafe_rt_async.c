@@ -1263,6 +1263,20 @@ uint32_t ceesafe_async_set_admit(void *set, bool wait) {
     if (ceesafe_atomic_load_u32(&s->scope.cancelled) != 0u || ceesafe_async_status() == 1u) {
         return 2u;
     }
+#if !defined(CEE_FREESTANDING)
+    if (s->scope.shared) {
+        /* spawnSend children return on other workers, under the run's lock (ADR 0038): wait as scope_done does. */
+        ceesafe_mutex_lock(cee_exec.run->lock);
+        bool room = s->scope.live < s->limit;
+        if (!room && wait) {
+            s->room_waiter = cee_exec.current;
+            cee_exec.current->on_wake = true; /* not cancellable: on_wake without channel_wait */
+            cee_exec.wake_count += 1u;
+        }
+        ceesafe_mutex_unlock(cee_exec.run->lock);
+        return room ? 0u : 1u;
+    }
+#endif
     if (s->scope.live < s->limit) {
         return 0u;
     }
@@ -1277,6 +1291,17 @@ void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void 
                               const ceesafe_frame_info *info) {
     ceesafe_task_set *s = (ceesafe_task_set *)set;
     return cee_spawn(&s->scope, frame_size, resume, s->allocate, s->release, info, false);
+}
+
+void *ceesafe_async_set_spawn_send(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                                   const ceesafe_frame_info *info) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+#if defined(CEE_FREESTANDING)
+    return cee_spawn(&s->scope, frame_size, resume, s->allocate, s->release, info, false);
+#else
+    bool workers = cee_exec.run != NULL && cee_exec.run->workers > 1u && s->allocate == NULL;
+    return cee_spawn(&s->scope, frame_size, resume, s->allocate, s->release, info, workers);
+#endif
 }
 
 void *ceesafe_async_set_error(ceesafe_scope *scope) { return ((ceesafe_task_set *)(void *)scope)->error; }

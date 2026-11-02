@@ -49,6 +49,8 @@ int32_t options_report(int32_t fd) {
     int linger_name = SO_LINGER;
 #endif
     (void)getsockopt(s, SOL_SOCKET, linger_name, (char *)&l, &length);
-    printf(" linger %d %d\n", l.l_onoff != 0, (int)l.l_linger);
+    /* The time only counts while linger is on: Linux keeps the last one after l_onoff is cleared. */
+    printf(" linger %d %d\n", l.l_onoff != 0, l.l_onoff != 0 ? (int)l.l_linger : 0);
+    fflush(stdout);
     return 0;
 }

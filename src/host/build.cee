@@ -71,6 +71,20 @@ fn buildFiles(
             appendText(mut output, ".o")!;
         }
     }
+    if (!object && hostIsWindows()) {
+        // tooling.md §8.4: a path without an extension gets .exe. cl adds it by itself, clang and gcc do not.
+        var dot = false;
+        for (c in output.view()) {
+            if (c == '.') {
+                dot = true;
+            } else if (c == '/' || c == '\\') {
+                dot = false;
+            }
+        }
+        if (!dot) {
+            appendText(mut output, ".exe")!;
+        }
+    }
     match (makeDirectories(directoryOf(output.view()))) {
         Ok() => {}
         Err(e) => { return fail(e.message()); }

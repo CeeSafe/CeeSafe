@@ -23,6 +23,9 @@ struct EffectsOfAttribute {
     attribute: u32; // Ast.attributes
 }
 
+/// N0348: a `@test` function of the wrong shape (ADR 0049 §3.1).
+fn testShape() -> u32 => 348;
+
 fn attributeName(c: borrow Checker, attribute: u32) -> Slice<u8> =>
     c.name(c.front.ast.idents[c.front.ast.attributes[attribute as usize].name as usize].symbol);
 
@@ -59,7 +62,7 @@ fn isAttributeWord(name: Slice<u8>) -> bool =>
             name,
             "align",
         ) || sameText(name, "noncopy") || sameText(name, "placed") || sameText(name, "callback") ||
-        sameText(name, "cfg");
+        sameText(name, "cfg") || sameText(name, "test");
 
 /// Reports repeated attributes and unknown ones (N0290), and returns those named in `known` (KnownAttributes).
 fn knownAttributes(
@@ -354,7 +357,7 @@ fn processFunctionAttributes(c: borrow mut Checker) -> Result<void, AllocError> 
 }
 
 fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, AllocError> {
-    let words = "export effects effectsOf context callback constant cfg";
+    let words = "export effects effectsOf context callback constant cfg test";
     var known = Vector<u32>.create();
     let attributes = c.front.ast.functions[f as usize].attributes;
     knownAttributes(c, attributes, "a function", words, mut known)?;
@@ -412,6 +415,49 @@ fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, Al
         } else if (kind == 2) {
             c.hir.functions[exported as usize].exported = true;
             c.hir.functions[exported as usize].exportName = symbol;
+        }
+    }
+    // `@test` (ADR 0049 §3.1): a free function with no parameters, not generic, not exported, returning void or
+    // Result<void, E>; N0348 otherwise.
+    for (attribute in known.view()) {
+        if (!sameText(attributeName(c, attribute), "test")) {
+            continue;
+        }
+        let a = c.front.ast.attributes[attribute as usize];
+        let decl = c.front.ast.functions[f as usize];
+        var why = Vector<u8>.create();
+        var testFunction = none();
+        match (ownEntity(c, name)) {
+            Entity.Function(function) => {
+                if (c.hir.functions[function as usize].syntax == f) {
+                    testFunction = function;
+                }
+            }
+            _ => {}
+        }
+        if (a.hasParentheses) {
+            appendText(mut why, "'@test' takes no arguments")?;
+        } else if (decl.parameters.count > 0) {
+            appendText(mut why, "a test takes no parameters: the runner calls it with none")?;
+        } else if (decl.typeParameters.count > 0 || decl.regionParameters.count > 0 || testFunction == none()) {
+            appendText(mut why, "a test is not generic: the runner calls one function")?;
+        } else if (hasExport) {
+            appendText(mut why, "a test is not exported: 'build' leaves tests out")?;
+        } else if (sameText(c.name(name), "main")) {
+            appendText(mut why, "'main' is the program, not a test")?;
+        } else {
+            let returned = c.hir.functions[testFunction as usize].returnType;
+            let parts = resultParts(c, returned);
+            if (!c.types.is(returned, TypeKind.Void) &&
+                !(parts.length == 2 && c.types.is(parts[0], TypeKind.Void))) {
+                appendText(mut why, "a test returns void or Result<void, E>: an Err is its failure")?;
+            }
+        }
+        if (why.length > 0) {
+            appendText(mut why, " (ADR 0049 §3.1)")?;
+            c.error(testShape(), a.start, a.end, why)?;
+        } else if (!containsU32(c.testFunctions, testFunction)) {
+            c.testFunctions.push(testFunction)?;
         }
     }
     // `@cfg("NAME")` (ADR 0043): the exported symbol exists only in the builds where the C macro NAME is non-zero.
@@ -517,10 +563,18 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
     var placedCount: u32 = 0;
     for (k in 0..functions.count) {
         let member = c.front.ast.at(functions, k);
-        let words = "effects effectsOf context placed constant";
+        let words = "effects effectsOf context placed constant test";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[member as usize].attributes;
         knownAttributes(c, attributes, "a method", words, mut known)?;
+        for (attribute in known.view()) {
+            if (sameText(attributeName(c, attribute), "test")) {
+                let a = c.front.ast.attributes[attribute as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "a test is a free function, not a method (ADR 0049 §3.1)")?;
+                c.error(testShape(), a.start, a.end, message)?;
+            }
+        }
         readEffectAttributes(c, member, known.view())?;
         for (attribute in known.view()) {
             if (!sameText(attributeName(c, attribute), "placed")) {

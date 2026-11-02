@@ -15,6 +15,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  build    compile the package to C, and by default to an executable; .c files are compiled\n")?;
     appendText(out, "           and linked with it (type-system.md §28.6)\n")?;
     appendText(out, "  run      run the package with the NIR reference interpreter (--interp)\n")?;
+    appendText(
+        out,
+        "  test     run the package's @test functions, each as its own process (ADR 0049): --filter <text>, --list,\n           --interp, --jobs <n>, --timeout <seconds>, --sweep alloc|cancel, --format text|json\n",
+    )?;
     appendText(out, "  fmt      rewrite the files (or the .cee files under a directory) in the canonical style\n")?;
     appendText(out, "           (formatting.md); --check lists the files that would change, --stdout prints one\n")?;
     appendText(
@@ -162,7 +166,7 @@ fn phaseOf(command: StringView) -> StringView? {
     }
     if (command == "run" || command == "fmt" || command == "new" || command == "agents" || command == "fetch" ||
         command == "publish" || command == "index-check" || command == "lsp" || command == "mcp" || command == "fix" ||
-        command == "explain" || command == "doc") {
+        command == "explain" || command == "doc" || command == "test") {
         return "P8";
     }
     return null;
@@ -206,6 +210,16 @@ struct Options {
     cNames: Vector<Vector<u8>>; // C files given or the manifest's (type-system.md §28.6): names
     cTexts: Vector<Vector<u8>>; // and texts
     native: NativeBuild;        // the manifests' libraries and separately compiled C (ADR 0047)
+    entryName: Vector<u8>;      // the program's entry: "main", or the test harness's (ADR 0049)
+    testing: bool;              // `test` (ADR 0049)
+    includeTests: bool;         // the root package's test directories are sources (`check`, `test`)
+    harness: Vector<u8>;        // a generated harness file to add to the sources, or empty
+    testFilter: Vector<u8>;     // test --filter
+    testList: bool;             // test --list
+    testJobs: u32;              // test --jobs
+    testTimeout: u64;           // test --timeout, in seconds
+    testSweep: u32;             // test --sweep: 0 none, 1 alloc, 2 cancel
+    testJson: bool;             // test --format json
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
     files: Vector<String>;
     offline: bool;                        // --offline: package mode uses only what is fetched
@@ -403,6 +417,30 @@ fn readOptions(options: borrow mut Options) -> i32 {
             }
         } else if (arg == "--dump-tokens") {
             options.dumpTokens = true;
+        } else if (options.testing && (arg == "--list" || arg == "--interp")) {
+            if (arg == "--list") {
+                options.testList = true;
+            } else {
+                options.interp = true;
+            }
+        } else if ((options.testing &&
+            (arg == "--filter" || arg == "--jobs" || arg == "--timeout" || arg == "--sweep" ||
+                arg == "--format")) || (options.running && arg == "--ceesafe-harness")) {
+            let value = match (Process.argument(a)) {
+                Some(v) => v,
+                null => {
+                    var message = String.create();
+                    message.append("option '")!;
+                    message.append(arg)!;
+                    message.append("' needs a value")!;
+                    return fail(message.view());
+                }
+            };
+            a += 1;
+            let status = readTestOption(mut options, arg, value);
+            if (status != 0) {
+                return status;
+            }
         } else if (options.running && arg == "--interp") {
             options.interp = true;
         } else if (options.running && arg == "--") {
@@ -427,6 +465,53 @@ fn readOptions(options: borrow mut Options) -> i32 {
     }
     return 0;
 }
+
+/// One of `test`'s options with its value (ADR 0049 §3.3), or `run`'s hidden `--ceesafe-harness`.
+fn readTestOption(options: borrow mut Options, arg: StringView, value: StringView) -> i32 {
+    if (arg == "--filter") {
+        options.testFilter = copyBytes(value.bytes())!;
+    } else if (arg == "--format") {
+        if (value != "text" && value != "json") {
+            return fail("--format is 'text' or 'json'");
+        }
+        options.testJson = value == "json";
+    } else if (arg == "--sweep") {
+        if (value != "alloc" && value != "cancel") {
+            return fail("--sweep is 'alloc' or 'cancel'");
+        }
+        options.testSweep = if (value == "alloc") 1 else 2;
+    } else if (arg == "--ceesafe-harness") {
+        options.harness = copyBytes(value.bytes())!;
+        options.includeTests = true;
+        options.entryName = copyBytes(harnessEntry().bytes())!;
+    } else {
+        var n: u64 = 0;
+        for (b in value.bytes()) {
+            if (b < '0' || b > '9' || n > 100000000) {
+                var message = String.create();
+                message.append(arg)!;
+                message.append(" takes a number")!;
+                return fail(message.view());
+            }
+            n = n * 10 + (b - '0') as u64;
+        }
+        if (n == 0) {
+            var message = String.create();
+            message.append(arg)!;
+            message.append(" takes a number above 0")!;
+            return fail(message.view());
+        }
+        if (arg == "--jobs") {
+            options.testJobs = truncate<u32>(n);
+        } else {
+            options.testTimeout = n;
+        }
+    }
+    return 0;
+}
+
+/// The generated harness's entry function (ADR 0049 §3.4).
+fn harnessEntry() -> StringView => "ceesafeTestMain";
 
 /// The path diagnostics name (SourceText.SourcePath, c-backend.md §7): `/` separators; an absolute path under the
 /// working directory becomes relative to it, and any other absolute path is reduced to its file name.
@@ -620,6 +705,16 @@ fn parseCommand() -> i32 {
         cNames: Vector<Vector<u8>>.create(),
         cTexts: Vector<Vector<u8>>.create(),
         native: NativeBuild.create(),
+        entryName: copyBytes("main".bytes())!,
+        testing: false,
+        includeTests: false,
+        harness: Vector<u8>.create(),
+        testFilter: Vector<u8>.create(),
+        testList: false,
+        testJobs: 1,
+        testTimeout: 60,
+        testSweep: 0,
+        testJson: false,
         defaultOutput: Vector<u8>.create(),
         files: Vector<String>.create(),
         offline: false,
@@ -806,6 +901,9 @@ fn loadPackage(
         )!;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)!;
+        if (p == 0 && options.includeTests) {
+            manifestTestFiles(manifest, mut paths)!; // the root package's tests (ADR 0049 §3.1)
+        }
         files.push(paths)!;
     }
     return 0;
@@ -956,6 +1054,16 @@ fn defaultOptions(building: bool) -> Options => Options {
     cNames: Vector<Vector<u8>>.create(),
     cTexts: Vector<Vector<u8>>.create(),
     native: NativeBuild.create(),
+    entryName: copyBytes("main".bytes())!,
+    testing: false,
+    includeTests: false,
+    harness: Vector<u8>.create(),
+    testFilter: Vector<u8>.create(),
+    testList: false,
+    testJobs: 1,
+    testTimeout: 60,
+    testSweep: 0,
+    testJson: false,
     defaultOutput: Vector<u8>.create(),
     files: Vector<String>.create(),
     offline: false,
@@ -976,6 +1084,7 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
     var options = defaultOptions(building);
     options.running = running;
     options.fixing = fixing;
+    options.includeTests = !building && !running; // `check` and `fix` check the tests too (ADR 0049 §3.1)
     options.fixRound = fixRound;
     let status = readOptions(mut options);
     if (status != 0) {
@@ -1077,6 +1186,17 @@ fn compileFiles(
                 filePackage.push(truncate<u32>(p))!;
             }
         }
+        if (options.harness.length > 0) {
+            // `test`'s generated harness, in the root package (ADR 0049 §3.4).
+            let path = StringView.fromUtf8(options.harness.view())!;
+            let bytes = match (readFile(path)) {
+                Ok(b) => b,
+                Err(_) => { return fail("cannot read the test harness"); }
+            };
+            let name = sourcePath(path);
+            sources.push(SourceText.create(name.view(), bytes.view())!)!;
+            filePackage.push(0)!;
+        }
     }
     while (fileIsLibrary.length < sources.length) {
         fileIsLibrary.push(false)!;
@@ -1116,6 +1236,7 @@ fn compileFiles(
         options.freestanding,
         packages,
         filePackage,
+        copyBytes(options.entryName.view())!,
     )!;
     if (!options.libraryDiagnostics) {
         // The reference's libraries check cleanly: what is reported in them here is a porting gap (docs/p3-plan.md S5).
@@ -1130,6 +1251,13 @@ fn compileFiles(
         var printer = HirPrinter.create();
         printer.printProgram(checker.hir, checker.types, checker.front.symbols)!;
         Console.writeBytes(printer.out.view());
+    }
+    if (options.testing && options.harness.length == 0) {
+        // `test`'s first step (ADR 0049 §3.3): the package and its tests checked, the harness written.
+        if (checker.front.diagnostics.hasErrors()) {
+            return report(options.json, checker.front.diagnostics, sources);
+        }
+        return writeHarness(options, checker);
     }
     if (options.running) {
         if (checker.front.diagnostics.hasErrors()) {
@@ -1250,6 +1378,9 @@ fn main() -> i32 {
     }
     if (command == "run") {
         return runCommand();
+    }
+    if (command == "test") {
+        return testCommand();
     }
     if (command == "fmt") {
         var arguments = Vector<Vector<u8>>.create();

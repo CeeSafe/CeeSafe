@@ -1,0 +1,21 @@
+/// `a + b`.
+public fn add(a: u64, b: u64) -> u64 => a + b;
+
+/// The bytes 0..n, or the allocation failure.
+public fn numbers(n: u64) -> Result<Vector<u8>, AllocError> {
+    var v = Vector<u8>.create();
+    for (k in 0..n) {
+        v.push(truncate<u8>(k))?;
+    }
+    return Ok(v);
+}
+
+@test
+fn adds() -> Result<void, TestFailure> {
+    Check.equalU64(5, add(2, 3))?;
+    return Ok();
+}
+
+fn main() {
+    Console.writeLine("the program");
+}

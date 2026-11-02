@@ -1058,6 +1058,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_io_kind")) {
         return "i:u";
     }
+    if (sameText(name, "ceesafe_test_begin")) {
+        return "ss:-";
+    }
+    if (sameText(name, "ceesafe_thread_watchdog")) {
+        return "s:-";
+    }
     if (sameText(name, "ceesafe_mutex_create")) {
         return ":P";
     }
@@ -1309,6 +1315,15 @@ fn callC(
             }
         }
         freeMemory(it, address)?;
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_test_begin")) {
+        // `ceesafec test --interp` (ADR 0049 §3.3): the runtime's reports and sweeps are native only.
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_thread_watchdog")) {
+        let ms = arguments[0].bits(0, 8)?;
+        it.testDeadline = if (ms == 0) 0 else Timer.now() + ms; // checked by `step`
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_io_kind")) {

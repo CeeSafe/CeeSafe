@@ -768,7 +768,7 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
     var main = none();
     for (function in n.functions.view()) {
         let f = borrow c.hir.functions[function.source as usize];
-        if (main == none() && f.owner == none() && sameText(c.name(f.name), "main")) {
+        if (main == none() && f.owner == none() && sameBytes(c.name(f.name), c.entryName.view())) {
             main = function.source;
         }
     }
@@ -778,10 +778,20 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
     e.line("int main(int argc, char **argv) {")?;
     e.line("    ceesafe_rt_args((int32_t)argc, (const uint8_t *const *)(void *)argv);")?;
     e.line("    ceesafe_rt_start();")?;
+    // The entry's C name: ceeF_main, or the test harness's (ADR 0049 §3.4).
+    var entry = copyBytes("ceeF_".bytes())?;
+    appendId(mut entry, c.entryName.view())?;
     if (c.types.is(c.hir.functions[main as usize].returnType, TypeKind.Void)) {
-        e.line("    ceeF_main();\n    return (int)ceesafe_rt_finish(0);")?;
+        e.t("    ")?;
+        e.b(entry.view())?;
+        e.t("();")?;
+        e.emit()?;
+        e.line("    return (int)ceesafe_rt_finish(0);")?;
     } else {
-        e.line("    return (int)ceesafe_rt_finish(ceeF_main());")?;
+        e.t("    return (int)ceesafe_rt_finish(")?;
+        e.b(entry.view())?;
+        e.t("());")?;
+        e.emit()?;
     }
     return e.line("}");
 }

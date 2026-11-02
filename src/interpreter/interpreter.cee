@@ -47,6 +47,7 @@ struct Interp {
     positionFile: u32;
     positionStart: u32;
     steps: u64;
+    testDeadline: u64; // `ceesafec test --interp`'s timeout (ADR 0049): Timer.now()'s time to stop at, or 0
     hasPlacement: bool;
     placement: PlacementAnalysis;
     hasChecks: bool;
@@ -514,6 +515,14 @@ fn endFrame(it: borrow mut Interp, frame: borrow Frame) {
 
 /// Counts one statement or terminator against the sandbox's step limit.
 fn step(it: borrow mut Interp) -> Result<void, Stop> {
+    if (it.testDeadline != 0) {
+        // A test's timeout (ADR 0049 §3.3), checked on the wall clock every 4096 steps: the harness's watchdog.
+        it.steps += 1;
+        if (it.steps % 4096 == 0 && Timer.now() >= it.testDeadline) {
+            writeError(it, "ceesafe-test 1 timeout\n".bytes());
+            return Err(exitWith(124));
+        }
+    }
     if (it.options.stepLimit != 0) {
         it.steps += 1;
         if (it.steps > it.options.stepLimit) {
@@ -1822,6 +1831,7 @@ fn newInterp(
         positionFile: 0,
         positionStart: 0,
         steps: 0,
+        testDeadline: 0,
         hasPlacement: false,
         placement: PlacementAnalysis {
             functions: Vector<FunctionPlacement>.create(),
@@ -1884,7 +1894,7 @@ fn interpretProgram(
     var main = none();
     for (k in 0..n.functions.length) {
         let hir = borrow c.hir.functions[n.functions[k].source as usize];
-        if (main == none() && hir.owner == none() && sameText(c.name(hir.name), "main")) {
+        if (main == none() && hir.owner == none() && sameBytes(c.name(hir.name), c.entryName.view())) {
             main = n.functions[k].source;
         }
     }
@@ -1920,7 +1930,7 @@ fn interpretCaptured(
     var main = none();
     for (k in 0..n.functions.length) {
         let hir = borrow c.hir.functions[n.functions[k].source as usize];
-        if (main == none() && hir.owner == none() && sameText(c.name(hir.name), "main")) {
+        if (main == none() && hir.owner == none() && sameBytes(c.name(hir.name), c.entryName.view())) {
             main = n.functions[k].source;
         }
     }

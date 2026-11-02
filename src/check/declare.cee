@@ -92,6 +92,7 @@ fn checkProgram(
     freestanding: bool,
     packages: Vector<PackageInfo>,
     filePackage: Vector<u32>,
+    entryName: Vector<u8>,
 ) -> Result<Checker, AllocError> {
     var c = Checker {
         front: front,
@@ -160,6 +161,8 @@ fn checkProgram(
         effectsOfAttributes: Vector<EffectsOfAttribute>.create(),
         constantFunctions: Vector<u32>.create(),
         callbacks: Vector<u32>.create(),
+        testFunctions: Vector<u32>.create(),
+        entryName: entryName,
         placedMethods: Vector<u32>.create(),
         moveBodies: Vector<MoveBody>.create(),
         unsafeDepth: 0,
@@ -594,7 +597,7 @@ fn declareFunctionCore(c: borrow mut Checker, f: u32, owner: u32, environment: R
 
 /// CheckMain: `main` takes no parameters and returns i32 or void (hosted).
 fn checkMain(c: borrow mut Checker) -> Result<void, AllocError> {
-    let symbol = c.front.symbols.find("main".bytes());
+    let symbol = c.front.symbols.find(c.entryName.view());
     let mainSymbol = match (symbol) {
         Some(s) => s.id,
         null => { return Ok(); }

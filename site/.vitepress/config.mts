@@ -49,6 +49,7 @@ const guide = [
     items: [
       { text: "The ceesafec command", link: "/guide/ceesafec" },
       { text: "Packages", link: "/guide/packages" },
+      { text: "Testing", link: "/guide/testing" },
       { text: "Formatting and documentation", link: "/guide/formatting-and-docs" },
       { text: "Editors", link: "/guide/editors" },
       { text: "Debugging", link: "/guide/debugging" },

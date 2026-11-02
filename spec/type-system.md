@@ -1858,6 +1858,7 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@align(n)` | a non-generic struct | at least `n`-byte alignment (M8d, §29.4) |
 | `@noncopy` | a struct | a move type even if every field is Copy (OD-7; M8d) |
 | `@cfg("NAME")` | an `@export` function | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043), §28.4 |
+| `@test` | a top-level function with no parameters, not generic, not exported, returning `void` or `Result<void, E>` | a test that `ceesafec test` runs (ADR 0049; tooling.md §10); `build` leaves it out, and only the generated harness may call it (**N0348** otherwise) |
 
 An unknown attribute, a known one in the wrong place or with the wrong arguments, or the same
 attribute twice is N0290.

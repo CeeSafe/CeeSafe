@@ -33,6 +33,10 @@ through two levels of dependency, and checks the link file, an unset variable, t
 `tools/dns_check.py` (ADR 0048's timed and sanitizer cases) and `tools/wake_check.py` (a cancellation wakes only the
 tasks it reaches: 200 races beside 100 idle sockets wake at most 200) are in the contract suite too.
 
+`tools/test_command_check.py` runs `ceesafec test` (ADR 0049) on `tests/packages/test-command`, whose tests have every
+outcome, and compares each with `expected.tsv` (reviewed by hand), natively and with `--interp`; it also checks
+`--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out.
+
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
 --package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.

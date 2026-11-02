@@ -236,3 +236,30 @@ write without tuples.
    - N0348 for each wrong shape; `build` emits no test;
    - the contract suite step, on macOS, Debian and Windows.
 5. ROADMAP §10, and CeeSafe.Web's runner moved onto it as the first user.
+
+## 8. Implementation notes (2026-11-02)
+
+- **The timeout is the test process's own.** The ADR (§5) planned a `Process` wait with a limit that ends the child.
+  The compiler's own sources must build with stage 0 (ceesafec 0.3.2), whose library has none, so the runner would
+  have needed another bootstrap chain step. Instead the harness arms a watchdog thread in the runtime
+  (`ceesafe_thread_watchdog`), which prints `ceesafe-test 1 timeout` and exits with 124. The interpreter checks the
+  same deadline on the wall clock every 4096 steps. `Process` is unchanged.
+- **The harness is generated CeeSafe source**, `out/ceesafe-test/harness.cee`, checked and lowered with the package
+  like any file. That is still before C, with no reflection. The checker's entry is a setting (`entryName`): `main`,
+  or `ceesafeTestMain` for the harness, whose `main` is then an ordinary function.
+- **`isOk` and `isErr`** are `CheckResult<T, E>`'s, not `Check`'s: a method declares no type parameters of its own in
+  v0.
+- **A test's name is its function's name.** A package's free functions share one namespace (N0201), so the name is
+  unique.
+- **`--interp`** runs each test as `ceesafec run --interp --ceesafe-harness <harness> -- --ceesafe-test <name> …`, a
+  process each, so its output is captured as natively. Leaks and sweeps are native only. A test that calls C is
+  reported as skipped.
+- **`--jobs N`** splits the tests between two threads (`Thread.both`) until each has one job; the results keep the
+  tests' order.
+- **Hooks without the environment.** `ceesafe_test_begin` sets the allocation that fails, the suspension that cancels,
+  and both reports, overriding `CEESAFE_FAIL_ALLOC_AT` and `CEESAFE_CANCEL_AT`: the runner cannot set a child's
+  environment.
+- **Tests:**
+  - check-fail/test-shapes (N0348, each shape and a call from `main`);
+  - `tools/test_command_check.py` in the contract suite, on `tests/packages/test-command`, whose 14 tests have every
+    outcome, against `expected.tsv`.

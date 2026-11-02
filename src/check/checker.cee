@@ -129,6 +129,8 @@ struct Checker {
     effectsOfAttributes: Vector<EffectsOfAttribute>; // `@effectsOf` by declaration
     constantFunctions: Vector<u32>;                  // Ast.functions declared `@constant`
     callbacks: Vector<u32>;                          // Ast.functions declared `@callback`
+    testFunctions: Vector<u32>;                      // HIR functions declared `@test` (ADR 0049), in declaration order
+    entryName: Vector<u8>;                           // the program's entry: "main", or the test harness's (ADR 0049)
     placedMethods: Vector<u32>;                      // Ast.functions declared `@placed`
     moveBodies: Vector<MoveBody>;                    // move literals' environments and bodies (§36.5)
     unsafeDepth: u32;                                // > 0 in an unsafe context (§27.4)

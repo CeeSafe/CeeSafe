@@ -61,7 +61,7 @@ fn generateC(
     let exportsHeaderName = o.exportsHeader.view();
     var hasMain = false;
     for (f in c.hir.functions.view()) {
-        if (f.registered && f.owner == none() && sameText(c.name(f.name), "main")) {
+        if (f.registered && f.owner == none() && sameBytes(c.name(f.name), c.entryName.view())) {
             hasMain = true;
         }
     }

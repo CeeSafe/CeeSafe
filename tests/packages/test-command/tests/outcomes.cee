@@ -1,0 +1,87 @@
+extern "C" {
+    fn tc_leak();
+    fn tc_crash();
+}
+
+enum Mine {
+    Broke,
+}
+
+@test
+fn passesVoid() {}
+
+@test
+fn fails() -> Result<void, TestFailure> {
+    Check.equalU64(6, add(2, 3))?;
+    return Ok();
+}
+
+@test
+fn failsText() -> Result<void, TestFailure> {
+    Check.equalText("abc", "abd")?;
+    return Ok();
+}
+
+@test
+fn failsIo() -> Result<void, IoError> => Err(IoError.NotFound);
+
+@test
+fn failsOther() -> Result<void, Mine> => Err(Mine.Broke);
+
+@test
+fn panics() {
+    let one = [7u8];
+    let s = one[..];
+    var k: usize = 3;
+    Console.writeLine(s[k]);
+}
+
+/// Safety: it leaks on purpose, to be found.
+@test
+fn leaks() {
+    unsafe { tc_leak(); }
+}
+
+/// Safety: it aborts on purpose, to be found.
+@test
+fn crashes() {
+    unsafe { tc_crash(); }
+}
+
+/// A loop with no way out. (Counting up instead could end in an overflow panic, and an optimiser may go straight to it:
+/// cl does.)
+@test
+fn hangs() {
+    var n: u64 = 0;
+    loop {
+        n = n ^ 1;
+    }
+}
+
+@test
+async fn sleeps() -> Result<void, AsyncError> {
+    await Timer.sleep(2)?;
+    await Timer.sleep(2)?;
+    return Ok();
+}
+
+@test
+async fn failsAsync() -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    return Err(AsyncError.TimedOut);
+}
+
+@test
+fn allocates() -> Result<void, TestFailure> {
+    match (numbers(40)) {
+        Ok(v) => { Check.equalU64(40, v.length as u64)?; }
+        Err(_) => { return Check.fail("out of memory"); }
+    }
+    return Ok();
+}
+
+@test
+fn printsAndFails() -> Result<void, TestFailure> {
+    Console.writeLine("shown because it fails");
+    return Check.fail("on purpose");
+}

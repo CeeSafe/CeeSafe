@@ -451,7 +451,10 @@ fn setUpEmitter(
     for (k in 0..n.functions.length) {
         let source = n.functions[k].source;
         let key = variantKey(source, n.functions[k].variant);
-        if (!functionIsGeneric(c, source) && (!isLibraryFunction(c, source) || containsU64(e.usedVariants, key))) {
+        // A test is left out unless this is the test harness (ADR 0049 §3.1): nothing else may call one.
+        let leftOut = containsU32(c.testFunctions, source) && sameText(c.entryName.view(), "main");
+        if (!functionIsGeneric(c, source) && !leftOut &&
+            (!isLibraryFunction(c, source) || containsU64(e.usedVariants, key))) {
             e.compiled.push(truncate<u32>(k))?;
         }
     }

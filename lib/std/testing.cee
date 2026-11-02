@@ -1,0 +1,241 @@
+// Tests (ADR 0049): what a failed check returns, the checks, and the generated harness's side of the runner protocol.
+
+extern "C" {
+    @effects()
+    fn ceesafe_test_begin(failAllocAt: u64, cancelAt: u64);
+    @effects()
+    fn ceesafe_thread_watchdog(ms: u64);
+}
+
+/// What a failed check returns (ADR 0049 §3.2): a message, owned, so it borrows nothing from the test. `ceesafec test`
+/// shows it with the test's name.
+public struct TestFailure {
+    public message: Vector<u8>;
+
+    /// A failure with `message`. If the message cannot be allocated, the failure has an empty one: it still fails.
+    public fn create(message: StringView) -> TestFailure {
+        var bytes = Vector<u8>.create();
+        for (b in message.bytes()) {
+            match (bytes.push(b)) {
+                Ok() => {}
+                Err(_) => { return TestFailure { message: bytes }; }
+            }
+        }
+        return TestFailure { message: bytes };
+    }
+
+    /// A failure with what `w` wrote.
+    fn written(w: borrow TextWriter) -> TestFailure {
+        var bytes = Vector<u8>.create();
+        for (b in w.written()) {
+            match (bytes.push(b)) {
+                Ok() => {}
+                Err(_) => { return TestFailure { message: bytes }; }
+            }
+        }
+        return TestFailure { message: bytes };
+    }
+}
+
+/// The checks of a test (ADR 0049 §3.2): each is `Ok` when it holds, and otherwise `Err` with what was expected, for
+/// `?`. The comparisons are typed: CeeSafe has no equality interface yet for a generic one.
+public struct Check {
+    /// `condition` holds; `what` says what it is.
+    public fn isTrue(condition: bool, what: StringView) -> Result<void, TestFailure> {
+        if (condition) {
+            return Ok();
+        }
+        var buffer = [0u8; 512];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected true: ");
+        w.text(what);
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `condition` does not hold.
+    public fn isFalse(condition: bool, what: StringView) -> Result<void, TestFailure> {
+        if (!condition) {
+            return Ok();
+        }
+        var buffer = [0u8; 512];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected false: ");
+        w.text(what);
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `actual` is `expected`.
+    public fn equalU64(expected: u64, actual: u64) -> Result<void, TestFailure> {
+        if (expected == actual) {
+            return Ok();
+        }
+        var buffer = [0u8; 128];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected ");
+        w.decimal(expected);
+        w.text(", got ");
+        w.decimal(actual);
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `actual` is `expected`.
+    public fn equalI64(expected: i64, actual: i64) -> Result<void, TestFailure> {
+        if (expected == actual) {
+            return Ok();
+        }
+        var buffer = [0u8; 128];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected ");
+        w.signed(expected);
+        w.text(", got ");
+        w.signed(actual);
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `actual` is the text `expected`.
+    public fn equalText(expected: StringView, actual: StringView) -> Result<void, TestFailure> {
+        if (expected == actual) {
+            return Ok();
+        }
+        var buffer = [0u8; 1024];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected \"");
+        w.text(expected);
+        w.text("\", got \"");
+        w.text(actual);
+        w.text("\"");
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `actual` has the bytes of `expected`; else where they first differ.
+    public fn equalBytes(expected: Slice<u8>, actual: Slice<u8>) -> Result<void, TestFailure> {
+        var at: usize = 0;
+        while (at < expected.length && at < actual.length && expected[at] == actual[at]) {
+            at += 1;
+        }
+        if (at == expected.length && at == actual.length) {
+            return Ok();
+        }
+        var buffer = [0u8; 256];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("the bytes differ at ");
+        w.decimal(at as u64);
+        w.text(": expected ");
+        if (at < expected.length) {
+            w.text("0x");
+            w.hex(expected[at] as u64, 2);
+        } else {
+            w.text("the end");
+        }
+        w.text(", got ");
+        if (at < actual.length) {
+            w.text("0x");
+            w.hex(actual[at] as u64, 2);
+        } else {
+            w.text("the end");
+        }
+        w.text(" (lengths ");
+        w.decimal(expected.length as u64);
+        w.text(" and ");
+        w.decimal(actual.length as u64);
+        w.text(")");
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// A failure with `message`, always.
+    public fn fail(message: StringView) -> Result<void, TestFailure> => Err(TestFailure.create(message));
+}
+
+/// The checks of a `Result` (ADR 0049 §3.2), a generic struct's since a method declares no type parameters of its own:
+/// `CheckResult<u32, ParseError>.isOk(borrow parsed, "the line parses")?`.
+public struct CheckResult<T, E> {
+    /// `r` is `Ok`.
+    public fn isOk(r: borrow Result<T, E>, what: StringView) -> Result<void, TestFailure> {
+        let failed = match (r) {
+            Err(_) => true,
+            _ => false,
+        };
+        if (!failed) {
+            return Ok();
+        }
+        var buffer = [0u8; 512];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected Ok: ");
+        w.text(what);
+        return Err(TestFailure.written(borrow w));
+    }
+
+    /// `r` is `Err`.
+    public fn isErr(r: borrow Result<T, E>, what: StringView) -> Result<void, TestFailure> {
+        let failed = match (r) {
+            Err(_) => true,
+            _ => false,
+        };
+        if (failed) {
+            return Ok();
+        }
+        var buffer = [0u8; 512];
+        var w = TextWriter.create(mut buffer[..]);
+        w.text("expected Err: ");
+        w.text(what);
+        return Err(TestFailure.written(borrow w));
+    }
+}
+
+/// The generated harness's side of the runner protocol, version 1 (ADR 0049 §3.4). Not for tests to call.
+public struct TestRun {
+    /// Before the test: the arguments after the test's name, `<fail-alloc-at> <cancel-at> <timeout-ms>` (0: none),
+    /// turn the runtime's reports and hooks on and arm the timeout.
+    /// Safety: the runtime only records the numbers, and the watchdog only waits and ends the process.
+    public fn begin() {
+        let failAt = TestRun.number(3);
+        let cancelAt = TestRun.number(4);
+        let timeout = TestRun.number(5);
+        unsafe {
+            ceesafe_test_begin(failAt, cancelAt);
+            ceesafe_thread_watchdog(timeout);
+        }
+    }
+
+    /// Argument `k` as a decimal number, or 0.
+    fn number(k: usize) -> u64 {
+        var value: u64 = 0;
+        match (Process.argument(k)) {
+            Some(text) => {
+                for (b in text.bytes()) {
+                    if (b >= '0' && b <= '9' && value < 0x0CCCCCCCCCCCCCCC) {
+                        value = value * 10 + (b - '0') as u64;
+                    }
+                }
+            }
+            null => {}
+        }
+        return value;
+    }
+
+    /// The test passed: its line, and the exit status 0.
+    public fn passed() -> i32 {
+        Console.writeErrorLine("ceesafe-test 1 passed");
+        return 0;
+    }
+
+    /// The test failed with `message`: its lines, and the exit status 1.
+    public fn failed(message: Slice<u8>) -> i32 {
+        Console.writeErrorLine("ceesafe-test 1 failed");
+        match (StringView.fromUtf8(message)) {
+            Some(text) => { Console.writeErrorLine(text); }
+            null => { Console.writeErrorLine("(a message that is not UTF-8)"); }
+        }
+        Console.writeErrorLine("ceesafe-test 1 end");
+        return 1;
+    }
+
+    /// The same with a fixed message.
+    public fn failedWith(message: StringView) -> i32 => TestRun.failed(message.bytes());
+
+    /// No test has the name the runner asked for.
+    public fn unknown() -> i32 {
+        Console.writeErrorLine("ceesafe-test 1 unknown");
+        return 2;
+    }
+}

@@ -15,6 +15,7 @@ directory or above. Outside one, give the files.
 | `ceesafec check` | parse, type-check and borrow-check; the fastest way to find errors |
 | `ceesafec build` | compile to C, then with the C compiler to `out/<name>` (or `-o`) |
 | `ceesafec run --interp` | run the program in the reference interpreter |
+| `ceesafec test` | run the package's `@test` functions, each as its own process ([Testing](testing.md)) |
 | `ceesafec parse` | parse only, reporting syntax errors |
 | `ceesafec fmt [--check \| --stdout]` | format in the canonical style ([Formatting](formatting-and-docs.md)) |
 | `ceesafec doc [-o file] [--title t] [--missing]` | a Markdown page of the public items ([Documentation](formatting-and-docs.md#documentation)) |

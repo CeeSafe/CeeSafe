@@ -1,0 +1,32 @@
+// `@test` (ADR 0049 §3.1): a free function with no parameters, not generic, not exported, returning void or
+// Result<void, E>, and called by nothing but the test harness. Each other shape is N0348.
+@test
+fn plain() {}
+
+@test
+fn checked() -> Result<void, u32> => Ok();
+
+@test // error[N0348]
+fn withParameter(x: u32) {}
+
+@test // error[N0348]
+fn generic<T>() {}
+
+@test // error[N0348]
+fn returnsValue() -> u32 => 1;
+
+@test("named") // error[N0348]
+fn withArguments() {}
+
+@test // error[N0348]
+@export
+fn exported() {}
+
+struct Holder {
+    @test // error[N0348]
+    fn method() {}
+}
+
+fn main() {
+    plain(); // error[N0348]
+}

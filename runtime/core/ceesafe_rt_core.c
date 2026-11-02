@@ -233,6 +233,18 @@ void ceesafe_rt_start(void) {
     alloc_report = ceesafe_platform_config("CEESAFE_ALLOC_REPORT") != 0u;
 }
 
+/* `ceesafec test`'s harness (ADR 0049): the allocation report on, and the sweeps' points from its arguments rather than
+   the environment (0: none). */
+uint64_t ceesafe_test_cancel_at;
+bool ceesafe_test_reports;
+
+void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
+    alloc_report = true;
+    alloc_fail_at = fail_alloc_at;
+    ceesafe_test_cancel_at = cancel_at;
+    ceesafe_test_reports = true;
+}
+
 /*
  * The counters change from every thread of a threaded program (type-system.md §38), so atomically. The fault-injection
  * flags are set before threads exist (FailingAllocator is single-threaded test code).

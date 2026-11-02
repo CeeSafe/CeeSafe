@@ -1893,8 +1893,8 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         }
     }
     cee_exec_begin(shared);
-    uint64_t cancel_at = ceesafe_platform_config("CEESAFE_CANCEL_AT");
-    bool cancel_report = ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
+    uint64_t cancel_at = ceesafe_test_reports ? ceesafe_test_cancel_at : ceesafe_platform_config("CEESAFE_CANCEL_AT");
+    bool cancel_report = ceesafe_test_reports || ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
     cee_task root;
     cee_task_init(&root, frame, NULL, info);
     root.resume.root = resume;

@@ -194,6 +194,7 @@ kernel = "cosmoos"           # with profile = "freestanding": include lib/kernel
 trusted = true               # its types may be declared @threadSafe (ADR 0025 §3.2); listed for reviewers
 sources = ["src"]
 c = ["src/shim.c"]           # C files compiled and linked with an executable (type-system.md §28.6)
+tests = ["tests"]            # test directories (§10): default "tests"; their files are sources for check and test only
 links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcrypto; ssl.lib crypto.lib with cl
 lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
 include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files only
@@ -276,6 +277,7 @@ source = "path+../geometry"
   above it (§7.3).
 - `ceesafec fetch [--offline] [--update [name]]` resolves and writes `ceesafe.lock` (§4.7).
 - `ceesafec publish` checks that the package can be published and prints its index entry (§4.8).
+- `ceesafec test` runs the package's `@test` functions (§10).
 - `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), or
   the C sources with `--emit c`; the manifest's profile, `float` and C files apply, and command-line options add to
@@ -709,3 +711,66 @@ decision someone must check, carries `TODO(c2cee)` with the reason, and it never
 - **Builds**: a function that differs between the debug and the release build (an `#if CONFIG_DEBUG` inside it, or
   present in one build only) is drafted from the debug build with a `TODO(c2cee)` naming the difference: a draft from
   one build alone would change the other.
+
+## 10. Tests: `ceesafec test` (ADR 0049)
+
+### 10.1 Declaring tests
+
+A test is a top-level function marked `@test` (type-system.md §28.1): no parameters, not generic, not exported,
+`async` or not, returning `void` or `Result<void, E>`, where an `Err` is its failure. Any other shape, and a call of a
+test from anything but the generated harness, is N0348.
+
+- **Where tests are.** Beside the code in the package's sources, or in its test directories (`tests = ["tests"]` in
+  `[package]`, by default `tests`). They are part of the same package and see its private items.
+- **Build and check.** `check` checks the test directories too. `build` leaves them out, and emits no `@test`
+  function. Only the root package's tests are run; a dependency's are not.
+- **Checks** (lib/std's `testing.cee`): `Check.isTrue`, `isFalse`, `equalU64`, `equalI64`, `equalText`, `equalBytes`
+  and `fail`, and `CheckResult<T, E>.isOk` and `isErr`. Each returns `Result<void, TestFailure>`, used with `?`; a
+  failure holds its message. Generic equality waits for an equality interface.
+
+### 10.2 The command
+
+`ceesafec test [--filter TEXT] [--list] [--interp] [--jobs N] [--timeout SECONDS] [--sweep alloc|cancel]
+[--format text|json]`, in a package:
+
+1. It checks the package with its tests and writes the harness and the list of tests to `out/ceesafe-test/`.
+2. It builds the harness once, as `out/<name>-tests`.
+3. It runs each test whose name contains `--filter` (all by default), `--jobs` at a time (default 1), each as its own
+   process. `--list` prints the names instead.
+
+Each test's outcome:
+
+| Outcome | When |
+|---|---|
+| passed | it returned `Ok`, or `void` |
+| failed | it returned `Err`; its message is shown, and its captured output |
+| panicked | the runtime's panic report, with its location |
+| crashed | it ended otherwise: a signal, `abort`, another status |
+| timed out | it ran past `--timeout` (default 60 s) |
+| leaked | it passed, but allocations were live at the end (`CEESAFE_ALLOC_REPORT`) |
+| skipped | with `--interp`, it calls C, which the interpreter cannot run |
+
+- **Exit status.** 1 if any test is not passed or skipped, else 0.
+- **JSON.** `--format json` prints one document: each test's name, outcome, milliseconds, message, standard output and
+  error; the sweeps' failures and runs; and the counts.
+- **`--interp`** runs each test with `ceesafec run --interp` on the harness: the virtual clock and the seeded run order
+  of type-system.md §40.8. The timeout holds there too. Leaks and sweeps are native only.
+- **`--sweep alloc`** runs each passing test again once per allocation attempt, the k-th failing. **`--sweep cancel`**
+  runs it once per suspension point, the k-th cancelling its root task, sampled past 200 as `tools/cancel_sweep.py`
+  is. A run may fail; it may not panic, crash, time out or leak.
+
+### 10.3 The harness protocol (version 1)
+
+The generated function `ceesafeTestMain` is the harness's entry. An executable package's own `main` is checked and
+compiled but not run.
+
+- **Listing.** `--ceesafe-list` prints `ceesafe-test 1` and then one name a line.
+- **Running.** `--ceesafe-test <name> <fail-alloc-at> <cancel-at> <timeout-ms>` runs one test (0: none for the last
+  three):
+  - lib/std's `TestRun.begin` turns on the runtime's allocation and cancellation reports and the two points
+    (`ceesafe_test_begin`), and arms a watchdog thread (`ceesafe_thread_watchdog`). The watchdog prints
+    `ceesafe-test 1 timeout` and ends the process with status 124.
+  - The harness then writes `ceesafe-test 1 passed`, or `ceesafe-test 1 failed`, the message and `ceesafe-test 1 end`,
+    to standard error.
+  - The runner reads these lines, the panic report, the allocation report (`ceesafe alloc: attempts=… live=…`), the
+    cancellation report (`points=…`) and the exit status.

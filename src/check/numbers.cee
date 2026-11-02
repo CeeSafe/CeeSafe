@@ -108,7 +108,7 @@ fn functionValue(c: borrow mut Checker, function: u32, span: Span) -> Result<u32
             mut why,
             "a function with region parameters: a function type cannot say how loans flow between its arguments",
         )?;
-    } else if (owner == none() && sameText(c.name(name), "main")) {
+    } else if (owner == none() && sameBytes(c.name(name), c.entryName.view())) {
         appendText(mut why, "the program's entry point")?;
     } else if (syntax.isAsync && !c.asyncAdapter) {
         appendText(

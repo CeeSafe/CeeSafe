@@ -808,6 +808,14 @@ fn synthCall(
             let id = c.front.ast.idents[name as usize];
             match (c.lookup(id.symbol)?) {
                 Entity.Function(function) => {
+                    let inHarness = !sameText(c.entryName.view(), "main") && c.function != none() &&
+                        sameBytes(c.name(c.hir.functions[c.function as usize].name), c.entryName.view());
+                    if (containsU32(c.testFunctions, function) && !inHarness) {
+                        // `build` leaves tests out, so nothing else may call one (ADR 0049 §3.1).
+                        var message = Vector<u8>.create();
+                        appendText(mut message, "a test is run by 'ceesafec test', not called (ADR 0049 §3.1)")?;
+                        c.error(testShape(), calleeSpan.start, calleeSpan.end, message)?;
+                    }
                     if (typeArguments.count == 0) {
                         return checkUserCall(c, function, arguments, span);
                     }

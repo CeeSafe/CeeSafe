@@ -675,6 +675,13 @@ void ceesafe_free(void *p, uint32_t allocator);
 /* FailingAllocator.failAfter(n) / FailingAllocator.reset(). */
 void ceesafe_fail_after(uint64_t n);
 void ceesafe_fail_reset(void);
+/* `ceesafec test`'s harness (ADR 0049): turns the allocation report and the cancellation report on, and sets the
+   allocation that fails and the suspension that cancels (0: none), overriding CEESAFE_FAIL_ALLOC_AT and
+   CEESAFE_CANCEL_AT. ceesafe_thread_watchdog ends the process with status 124 after `ms` (0: never). */
+void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at);
+extern uint64_t ceesafe_test_cancel_at;
+extern bool ceesafe_test_reports;
+void ceesafe_thread_watchdog(uint64_t ms);
 
 /* ---- Threads and mutexes (type-system.md §38; runtime/hosted/ceesafe_rt_thread.c), and atomics (here) ---------- */
 

@@ -283,7 +283,6 @@ fn writePosition(
     return Ok();
 }
 
-/// The whole JSON document for `diagnostics`, on one line (DiagnosticJson.Serialize).
 /// A blank source named `<library>` as long as `d` needs: what a diagnostic is shown with when its file is not among
 /// the compilation's sources (bug B6: an error in a library function's instance, reported in its library file, crashed
 /// the printers).
@@ -296,6 +295,7 @@ fn placeholderSource(d: borrow Diagnostic) -> Result<SourceText, AllocError> {
     return SourceText.create("<library>".bytes(), blank.view());
 }
 
+/// The whole JSON document for `diagnostics`, on one line (DiagnosticJson.Serialize).
 fn diagnosticsJson(
     diagnostics: borrow Diagnostics,
     sources: borrow Vector<SourceText>,

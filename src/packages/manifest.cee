@@ -119,6 +119,7 @@ struct Manifest {
     links: Vector<Vector<u8>>;       // ADR 0047: libraries to link, [package]'s then the host's [target.OS]'s
     libDirs: Vector<Vector<u8>>;     // their directories, absolute
     includeDirs: Vector<Vector<u8>>; // for this package's own C files, absolute
+    tests: Vector<Vector<u8>>;       // test directories (ADR 0049): sources for `check` and `test` only
 }
 
 /// The manifest's file name.
@@ -304,7 +305,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         links: Vector<Vector<u8>>.create(),
         libDirs: Vector<Vector<u8>>.create(),
         includeDirs: Vector<Vector<u8>>.create(),
+        tests: Vector<Vector<u8>>.create(),
     };
+    manifest.tests.push(copyBytes("tests".bytes())?)?;
     for (e in package.entries.view()) {
         let key = e.key.view();
         let v = borrow e.value;
@@ -356,6 +359,14 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                     manifest.sources.push(copyBytes(s.view())?)?;
                 }
             }
+        } else if (sameText(key, "tests")) {
+            valid = v.isArray();
+            if (valid) {
+                manifest.tests.clear();
+                for (s in v.strings.view()) {
+                    manifest.tests.push(copyBytes(s.view())?)?;
+                }
+            }
         } else if (isNativeField(key)) {
             valid = readNativeField(mut manifest, file, key, v, true, report)?;
         } else if (sameText(key, "c")) {
@@ -393,7 +404,12 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             )) "'sources' is a non-empty array of directories: [\"src\"]" else if (sameText(
                 key,
                 "c",
-            )) "'c' is an array of C files: [\"src/shim.c\"]" else if (isNativeField(key)) nativeFieldShape(
+            )) "'c' is an array of C files: [\"src/shim.c\"]" else if (sameText(
+                key,
+                "tests",
+            )) "'tests' is an array of test directories: [\"tests\"] (ADR 0049)" else if (isNativeField(
+                key,
+            )) nativeFieldShape(
                 key,
             ) else "'version' is MAJOR.MINOR.PATCH: \"1.4.0\" (tooling.md §4.6)";
             manifestError(report, file, v.start, v.end, copyBytes(message.bytes())?)?;
@@ -729,9 +745,21 @@ fn readDependency(
 
 /// The package's sources, absolute, in ordinal order of their paths relative to the package, without repeats
 /// (Manifest.SourceFiles).
-fn manifestSourceFiles(manifest: borrow Manifest, out: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> {
+fn manifestSourceFiles(manifest: borrow Manifest, out: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> =>
+    sourceFilesOf(manifest, borrow manifest.sources, out);
+
+/// The `.cee` files under the package's test directories (ADR 0049 §3.1), as manifestSourceFiles orders them; none
+/// for a directory that does not exist.
+fn manifestTestFiles(manifest: borrow Manifest, out: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> =>
+    sourceFilesOf(manifest, borrow manifest.tests, out);
+
+fn sourceFilesOf(
+    manifest: borrow Manifest,
+    directories: borrow Vector<Vector<u8>>,
+    out: borrow mut Vector<Vector<u8>>,
+) -> Result<void, AllocError> {
     var found = Vector<Vector<u8>>.create();
-    for (source in manifest.sources.view()) {
+    for (source in directories.view()) {
         let directory = joinPath(manifest.directory.view(), source.view())?;
         if (isDirectory(directory.view())) {
             sourceFilesUnder(directory.view(), mut found)?;

@@ -131,3 +131,58 @@ void ceesafe_mutex_destroy(void *m) {
 }
 
 /* The atomics (§38.3, ADR 0021) are static inline in ceesafe/rt.h (ADR 0026). */
+
+/* `ceesafec test`'s timeout (ADR 0049 §8): a detached thread that ends the process with status 124 once `ms` pass,
+   after a line the runner reads. Its own platform thread, so the program's allocation report does not count it. */
+#if defined(CEE_COSMOOS)
+void ceesafe_thread_watchdog(uint64_t ms) { (void)ms; }
+#else
+static uint64_t cee_watchdog_ms;
+
+#if defined(_WIN32)
+static DWORD WINAPI cee_watchdog(LPVOID unused) {
+    (void)unused;
+    Sleep((DWORD)cee_watchdog_ms);
+    static const char line[] = "ceesafe-test 1 timeout\n";
+    ceesafe_platform_write_stderr((const uint8_t *)line, sizeof line - 1u);
+    ExitProcess(124);
+    return 0;
+}
+
+void ceesafe_thread_watchdog(uint64_t ms) {
+    if (ms == 0u) {
+        return;
+    }
+    cee_watchdog_ms = ms;
+    HANDLE h = CreateThread(NULL, 0, cee_watchdog, NULL, 0, NULL);
+    if (h != NULL) {
+        CloseHandle(h);
+    }
+}
+#else
+#include <time.h>
+#include <unistd.h>
+
+static void *cee_watchdog(void *unused) {
+    (void)unused;
+    struct timespec t = {(time_t)(cee_watchdog_ms / 1000u), (long)(cee_watchdog_ms % 1000u) * 1000000L};
+    while (nanosleep(&t, &t) != 0) {
+    }
+    static const char line[] = "ceesafe-test 1 timeout\n";
+    ceesafe_platform_write_stderr((const uint8_t *)line, sizeof line - 1u);
+    _exit(124);
+    return NULL;
+}
+
+void ceesafe_thread_watchdog(uint64_t ms) {
+    if (ms == 0u) {
+        return;
+    }
+    cee_watchdog_ms = ms;
+    pthread_t t;
+    if (pthread_create(&t, NULL, cee_watchdog, NULL) == 0) {
+        (void)pthread_detach(t);
+    }
+}
+#endif
+#endif

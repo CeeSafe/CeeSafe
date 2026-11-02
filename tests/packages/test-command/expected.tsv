@@ -1,0 +1,16 @@
+# What `ceesafec test` must report for each test of this package (ADR 0049 §3.3), reviewed by hand: the name, the
+# outcome natively, the outcome with --interp, and a part of the failure message ("-": none checked). Tab-separated.
+adds	passed	passed	-
+passesVoid	passed	passed	-
+fails	failed	failed	expected 6, got 5
+failsText	failed	failed	expected "abc", got "abd"
+failsIo	failed	failed	-
+failsOther	failed	failed	returned Err
+panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25
+leaks	leaked	skipped	-
+crashes	crashed	skipped	-
+hangs	timed out	timed out	-
+sleeps	passed	passed	-
+failsAsync	failed	failed	timed out
+allocates	passed	passed	-
+printsAndFails	failed	failed	on purpose

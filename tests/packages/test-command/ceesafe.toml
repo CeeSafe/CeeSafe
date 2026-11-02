@@ -1,0 +1,5 @@
+# ADR 0049's fixture: an executable package whose tests have every outcome (tools/test_command_check.py).
+[package]
+name = "tc"
+version = "0.1.0"
+c = ["c/helpers.c"]

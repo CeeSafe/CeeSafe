@@ -82,7 +82,17 @@ fn compileInMemory(
     for (b in fileIsLibrary.view()) {
         libraries.push(b)?;
     }
-    var checker = checkProgram(front, libraries, texts, paths, noFloat, freestanding, packages, filePackage)?;
+    var checker = checkProgram(
+        front,
+        libraries,
+        texts,
+        paths,
+        noFloat,
+        freestanding,
+        packages,
+        filePackage,
+        copyBytes("main".bytes())?,
+    )?;
     checker.front.diagnostics.removeFiles(checker.fileIsLibrary.view());
     var nir = NirProgram.create();
     var analyzed = false;

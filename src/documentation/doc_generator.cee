@@ -659,7 +659,7 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
         let unit = borrow ast.units[0];
         for (k in 0..unit.items.count) {
             match (ast.items[ast.at(unit.items, k) as usize].kind) {
-                ItemKind.Impl(interfaceType, forType, _) => {
+                ItemKind.Impl(interfaceType, forType, _, _, _) => {
                     let span = ast.typeSpans[interfaceType as usize];
                     impls.push(
                         DocImpl {

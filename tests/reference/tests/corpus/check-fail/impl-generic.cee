@@ -1,0 +1,67 @@
+// Generic impls and impls for types with region parameters (ADR 0054): overlap, the orphan rule, a parameter the
+// target does not name, a generic impl for a type that is no generic struct or enum, an instance whose argument
+// does not meet the impl's bound, and a type with a region coerced to `dyn`.
+
+interface Show {
+    fn show(borrow this) -> u32;
+}
+
+struct Wrap<T> {
+    inner: T;
+}
+
+impl Show for Wrap<u8> {
+    fn show(borrow this) -> u32 => 8;
+}
+
+impl<T> Show for Wrap<T> { // error[N0267]
+    fn show(borrow this) -> u32 => 0;
+}
+
+struct Other<T> {
+    inner: T;
+}
+
+impl<T, U> Show for Other<T> { // error[N0267]
+    fn show(borrow this) -> u32 => 1;
+}
+
+impl<T> Show for u32 { // error[N0267]
+    fn show(borrow this) -> u32 => 2;
+}
+
+// lib/std declares HashKey and lib/core f64's type: this program may implement neither for the other.
+impl HashKey<f64> for f64 { // error[N0267]
+    fn hash(borrow this, h: borrow mut Hasher) {}
+    fn sameAs(borrow this, other: borrow f64) -> bool => false;
+}
+
+struct Plain {
+    n: u32;
+}
+
+struct Counted<T> {
+    inner: T;
+}
+
+impl<T: Show> Show for Counted<T> {
+    fn show(borrow this) -> u32 => this.inner.show() + 1;
+}
+
+fn shown<S: Show>(s: borrow S) -> u32 => s.show();
+
+struct Bytes<region r> {
+    data: Slice<r, u8>;
+}
+
+impl<region r> Show for Bytes<r> {
+    fn show(borrow this) -> u32 => truncate<u32>(this.data.length);
+}
+
+fn main() {
+    let plain = Counted { inner: Plain { n: 1 } };
+    shown(borrow plain); // error[N0268]
+    let raw = [1u8, 2u8];
+    let bytes = Bytes { data: raw[..] };
+    let s: borrow dyn Show = borrow bytes; // error[N0268]
+}

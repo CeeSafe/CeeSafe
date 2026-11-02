@@ -226,7 +226,7 @@ fn indexSyntax(
                 }
             }
             ItemKind.Interface(_, _) => { addDeclared(index, c, source, "interface", item.name)?; }
-            ItemKind.Impl(_, _, functions) => {
+            ItemKind.Impl(_, _, functions, _, _) => {
                 for (m in 0..functions.count) {
                     addFunctionName(index, c, sources, ast.at(functions, m))?;
                 }

@@ -116,3 +116,32 @@ are. The depth limit for instantiation (N0266, 64) applies to impls too.
    - the contract suite, and CeeSafe.Web's three probes (`tests/probes/impl-generic-fail.cee`,
      `impl-scoped-fail.cee`) turned into passing tests.
 4. ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Parsing.** `ItemKind.Impl` carries the impl's type and region parameters; the formatter and the AST printer
+  print them, and the documentation generator lists a generic impl under its struct's name, as any impl.
+- **Templates.** `processImpl` declares the impl's type parameters (with their bounds) and region names, resolves the
+  target and the interface with them in scope, and checks the impl once for its target, `C<T…>` with the parameters
+  opaque, as a generic struct's methods are checked. The template (`ImplTemplate`) is then implemented for each
+  instance of `C` that the target matches (unification, then substitution equal to the instance) and whose arguments
+  meet the bounds (`checkBounds`, quietly): its methods are declared again for the instance with the parameters'
+  environment (`attachGenericImpls`). Instances made while the declarations are read are handled once every impl is
+  known (`attachToInstances`, twice, so a bound met through another instance's impl does not depend on their order);
+  later ones as they are made (`instantiateStruct`, `instantiateEnum`). So `implements` and `implMethodFor` keep
+  looking up exact types, and the backends see ordinary methods.
+- **Overlap** is checked as §3.1 says: with a generic impl on either side, two impls of one interface (with arguments
+  that could be equal) whose targets are the same struct or enum are N0267.
+- **The orphan rule** compares packages: the impl's file's, the interface's and the target struct's or enum's. The
+  libraries are one package for it (the built-in types, lib/core and lib/std). The search §4 asked for found nothing it
+  breaks: the corpus, the support and package tests, and every package of CeeSafe.Web check as before.
+- **Regions.** A method of `impl<region r> …` has the impl's region names in scope (`regionScope`, through
+  `implRegionsOf`); regions are erased, so nothing else changes. A scoped type that implements an interface coerced to
+  `dyn I` is N0268 (`coerceToDyn`).
+- **Tests:** run-pass/impl-generic (a counting wrapper used directly, through a bound, nested and as `dyn`; two
+  parameters; a generic interface implemented generically; a scoped impl through a bound) and
+  run-pass/impl-generic-async (CeeSafe.Web's two probes as passing programs: an async transport wrapper, an async body
+  over borrowed bytes); check-fail/impl-generic (overlap, a parameter missing from the target, a generic impl for
+  `u32`, the orphan rule with lib/std's `HashKey` for `f64`, an unmet bound, a scoped type as `dyn`); the guide's
+  generics page. No `.hir` snapshot was added: the run-pass programs' output is specified by the programs.
+

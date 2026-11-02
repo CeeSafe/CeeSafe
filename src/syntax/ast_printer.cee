@@ -211,12 +211,13 @@ struct AstPrinter {
                 this.indent -= 1;
                 this.line(")")?;
             }
-            ItemKind.Impl(interfaceType, forType, functions) => {
+            ItemKind.Impl(interfaceType, forType, functions, typeParameters, regionParameters) => {
                 this.open()?;
                 this.text("(impl ")?;
                 this.typeText(ast, symbols, interfaceType)?;
                 this.text(" for ")?;
                 this.typeText(ast, symbols, forType)?;
+                this.typeParams(ast, symbols, regionParameters, typeParameters)?;
                 this.close()?;
                 this.indent += 1;
                 for (k in 0..functions.count) {

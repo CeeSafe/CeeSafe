@@ -465,6 +465,9 @@ fn instantiateStruct(
         c.instantiating -= 1;
         finishLateTypes(c)?;
     }
+    if (c.implsReady) {
+        attachGenericImpls(c, typ)?; // ADR 0054
+    }
     return Ok(index);
 }
 
@@ -522,6 +525,9 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
         endInstance(c, mark, arguments, text.view(), file, span, none())?;
         c.instantiating -= 1;
         finishLateTypes(c)?;
+    }
+    if (c.implsReady) {
+        attachGenericImpls(c, typ)?; // ADR 0054
     }
     return Ok(index);
 }

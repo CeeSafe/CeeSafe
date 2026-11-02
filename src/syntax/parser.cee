@@ -1035,6 +1035,8 @@ struct Parser {
     /// `impl I for T { fn … }` (type-system.md §21.1).
     fn parseImpl(borrow mut this, visibility: Visibility, start: u32) -> Result<u32, AllocError> {
         this.expect(TokenKind.ImplKeyword)?;
+        let parameters = this.parseTypeParameters()?; // ADR 0054
+        let split = this.splitTypeParameters(parameters)?;
         let interfaceType = this.parseType()?;
         this.expect(TokenKind.ForKeyword)?;
         let forType = this.parseType()?;
@@ -1069,7 +1071,12 @@ struct Parser {
             name = this.front.ast.addIdent(Ident { symbol: symbol, start: span.start, end: span.end, missing: true })?;
         }
         let functionRange = this.list(functions)?;
-        return this.addItem(ItemKind.Impl(interfaceType, forType, functionRange), visibility, name, start);
+        return this.addItem(
+            ItemKind.Impl(interfaceType, forType, functionRange, split.types, split.regions),
+            visibility,
+            name,
+            start,
+        );
     }
 
     fn parseEnum(borrow mut this, visibility: Visibility, start: u32) -> Result<u32, AllocError> {

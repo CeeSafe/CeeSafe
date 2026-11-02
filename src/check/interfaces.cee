@@ -244,6 +244,7 @@ fn processImpls(c: borrow mut Checker) -> Result<void, AllocError> {
         processImpl(c, pending.item)?;
     }
     c.implsReady = true;
+    attachToInstances(c)?; // the instances made while the declarations were read (ADR 0054)
     for (k in 0..c.pendingBounds.length) {
         let p = c.pendingBounds[k];
         {
@@ -269,34 +270,109 @@ fn processImpls(c: borrow mut Checker) -> Result<void, AllocError> {
     return Ok();
 }
 
-/// One impl (ProcessImpl): resolves both sides, declares the methods as methods of T, and checks them against the
-/// interface (N0267).
+/// One impl (ProcessImpl): resolves both sides with the impl's own parameters in scope (ADR 0054), checks where it
+/// may be written and that it overlaps no other, declares the methods as methods of T, and checks them against the
+/// interface (N0267). A generic impl is checked once for its target, which names the parameters, and becomes a
+/// template that each matching instance gets (attachGenericImpls).
 fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     let interfaceSyntax = match (entry.kind) {
-        ItemKind.Impl(i, _, _) => i,
+        ItemKind.Impl(i, _, _, _, _) => i,
         _ => { return Ok(); }
     };
     let forSyntax = match (entry.kind) {
-        ItemKind.Impl(_, t, _) => t,
+        ItemKind.Impl(_, t, _, _, _) => t,
         _ => none(),
     };
-    let functions = match (entry.kind) {
-        ItemKind.Impl(_, _, f) => f,
+    let typeSyntax = match (entry.kind) {
+        ItemKind.Impl(_, _, _, t, _) => t,
         _ => emptyRange(),
     };
+    let regionSyntax = match (entry.kind) {
+        ItemKind.Impl(_, _, _, _, r) => r,
+        _ => emptyRange(),
+    };
+    checkRegionParameters(c, regionSyntax, typeSyntax)?;
+    var regionNames = Vector<u32>.create();
+    pushRegionNames(c, regionSyntax, mut regionNames)?;
+    let savedRegions = swapRegions(c, regionNames)?;
+    var parameters = Vector<u32>.create();
+    var pairs = Vector<EnvPair>.create();
+    declareTypeParameters(c, typeSyntax, mut parameters, mut pairs)?;
+    let savedEnvironment = enterEnvironmentPairs(c, pairs.view())?;
     let forType = c.resolveType(forSyntax, false)?;
     let bound = resolveInterface(c, interfaceSyntax)?;
+    restoreEnvironment(c, savedEnvironment);
+    swapRegions(c, savedRegions)?;
     if (c.types.isBottom(forType) || bound == none()) {
         return Ok();
     }
-    if (c.types.isGeneric(forType) || c.types.isScoped(forType)) {
-        let span = c.front.ast.typeSpans[forSyntax as usize];
+    let span = c.front.ast.typeSpans[forSyntax as usize];
+    if (parameters.length > 0) {
+        if (declarationOf(c, forType) == none()) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'impl<…> … for ")?;
+            appendBytes(mut message, c.typeName(forType))?;
+            appendText(
+                mut message,
+                "': a generic impl is for a generic struct or enum, written with the impl's type ",
+            )?;
+            appendText(mut message, "parameters (ADR 0054)")?;
+            return c.error(implMismatch(), span.start, span.end, message);
+        }
+        var found = Vector<Found>.create();
+        unify(c, forType, forType, parameters.view(), mut found)?;
+        for (k in 0..parameters.length) {
+            if (foundFor(found, parameters[k]) == none()) {
+                let p = c.front.ast.typeParameters[c.front.ast.at(typeSyntax, truncate<u32>(k)) as usize];
+                let ident = c.front.ast.idents[p.name as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "type parameter ")?;
+                appendQuotedName(mut message, c, ident.symbol)?;
+                appendText(mut message, " does not appear in ")?;
+                appendQuotedType(mut message, c, forType)?;
+                appendText(mut message, ", so no instance could choose it (ADR 0054)")?;
+                return c.error(implMismatch(), ident.start, ident.end, message);
+            }
+        }
+    } else if (c.types.isGeneric(forType)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'impl … for ")?;
         appendBytes(mut message, c.typeName(forType))?;
-        appendText(mut message, "': v0 implements interfaces only for concrete, unscoped types")?;
+        appendText(mut message, "': implementing for a type parameter is not allowed")?;
         return c.error(implMismatch(), span.start, span.end, message);
+    }
+    if (c.types.isScoped(forType) && !(regionSyntax.count > 0 && hasRegionParameters(c, forType))) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'impl … for ")?;
+        appendBytes(mut message, c.typeName(forType))?;
+        appendText(mut message, "': a struct or enum with region parameters is implemented as ")?;
+        appendText(mut message, "'impl<region r> I for S<r>' (ADR 0054); other scoped types implement no interface")?;
+        return c.error(implMismatch(), span.start, span.end, message);
+    }
+    if (regionSyntax.count > 0 && !hasRegionParameters(c, forType)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'impl<region …> … for ")?;
+        appendBytes(mut message, c.typeName(forType))?;
+        appendText(mut message, "': region parameters are for a type that has them (ADR 0054)")?;
+        return c.error(implMismatch(), span.start, span.end, message);
+    }
+    // The orphan rule (ADR 0054 §3.1): the impl's package declares the interface or the type's struct or enum.
+    let b = c.types.bounds[bound as usize];
+    let home = currentPackage(c);
+    let interfaceFile = c.interfaces[b.interfaceEntry as usize].file;
+    if (home != packageOfFile(c, interfaceFile) && home != typeHome(c, forType)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'impl ")?;
+        boundText(mut message, c, bound)?;
+        appendText(mut message, " for ")?;
+        appendBytes(mut message, c.typeName(forType))?;
+        appendText(mut message, "' must be written in the package that declares ")?;
+        quotedBound(mut message, c, bound)?;
+        appendText(mut message, " or ")?;
+        appendQuotedType(mut message, c, forType)?;
+        appendText(mut message, " (the orphan rule, ADR 0054)")?;
+        return c.error(implMismatch(), entry.start, entry.end, message);
     }
     if (implements(c, forType, bound)) {
         var message = Vector<u8>.create();
@@ -305,6 +381,222 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         quotedBound(mut message, c, bound)?;
         return c.error(implMismatch(), entry.start, entry.end, message);
     }
+    // Overlap (ADR 0054 §3.1): with a generic impl on either side, one impl of an interface per struct or enum.
+    let constructor = declarationOf(c, forType);
+    if (constructor != none()) {
+        for (k in 0..c.implementations.length) {
+            let other = c.implementations[k];
+            let sameDeclaration = other.interfaceEntry == b.interfaceEntry && declarationOf(
+                c,
+                other.typ,
+            ) == constructor;
+            let eitherGeneric = parameters.length > 0 || c.types.isGeneric(other.typ);
+            let argumentsMayMeet = sameLists(c, other.arguments, b.arguments) || listIsGeneric(c, other.arguments) ||
+                listIsGeneric(c, b.arguments);
+            if (sameDeclaration && eitherGeneric && argumentsMayMeet) {
+                var message = Vector<u8>.create();
+                appendText(mut message, "'impl ")?;
+                boundText(mut message, c, bound)?;
+                appendText(mut message, " for ")?;
+                appendBytes(mut message, c.typeName(forType))?;
+                appendText(mut message, "' overlaps the impl for ")?;
+                appendQuotedType(mut message, c, other.typ)?;
+                appendText(mut message, ": a generic impl is the only impl of its interface for its struct or enum ")?;
+                appendText(mut message, "(ADR 0054)")?;
+                return c.error(implMismatch(), entry.start, entry.end, message);
+            }
+        }
+    }
+    let implEnvironment = storeEnvironment(c, pairs.view())?;
+    if (parameters.length > 0) {
+        let list = c.types.addList(parameters.view())?;
+        c.implTemplates.push(
+            ImplTemplate { item: item, file: c.file, target: forType, bound: bound, parameters: list },
+        )?;
+    }
+    return implementFor(c, item, forType, bound, implEnvironment, true);
+}
+
+/// A generic impl (ADR 0054): its target names the impl's type parameters.
+struct ImplTemplate {
+    item: u32;
+    file: u32;
+    target: u32;
+    bound: u32;        // the interface, whose arguments may name the parameters
+    parameters: Range; // the impl's type parameters, in TypeTable.lists
+}
+
+/// The AST item of a user struct's or enum's declaration (a generic one's instances share it), or none.
+fn declarationOf(c: borrow Checker, typ: u32) -> u32 {
+    let info = c.types.info(typ);
+    if (c.types.is(typ, TypeKind.Struct) && info.structDef != none()) {
+        let d = borrow c.types.structs[info.structDef as usize];
+        return if (d.isClosureEnvironment) none() else d.item;
+    }
+    if (c.types.is(typ, TypeKind.Enum) && info.enumDef != none()) {
+        return c.types.enums[info.enumDef as usize].item;
+    }
+    return none();
+}
+
+/// The package that declares a type: its struct's or enum's; the built-in types are the libraries' (none).
+fn typeHome(c: borrow Checker, typ: u32) -> u32 {
+    let info = c.types.info(typ);
+    if (declarationOf(c, typ) == none()) {
+        return none();
+    }
+    if (c.types.is(typ, TypeKind.Struct)) {
+        return packageOfFile(c, c.types.structs[info.structDef as usize].file);
+    }
+    return packageOfFile(c, c.types.enums[info.enumDef as usize].file);
+}
+
+fn hasRegionParameters(c: borrow Checker, typ: u32) -> bool {
+    let info = c.types.info(typ);
+    if (c.types.is(typ, TypeKind.Struct) && info.structDef != none()) {
+        return c.types.structs[info.structDef as usize].hasRegionParameters;
+    }
+    if (c.types.is(typ, TypeKind.Enum) && info.enumDef != none()) {
+        return c.types.enums[info.enumDef as usize].hasRegionParameters;
+    }
+    return false;
+}
+
+fn listIsGeneric(c: borrow Checker, list: Range) -> bool {
+    for (k in 0..list.count) {
+        if (c.types.isGeneric(c.types.listAt(list, k))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The region parameters of the impl whose method `f` (an AST function) is, or none (ADR 0054 §3.2).
+fn implRegionsOf(c: borrow Checker, f: u32) -> Range {
+    for (r in c.impls.view()) {
+        match (c.front.ast.items[r.item as usize].kind) {
+            ItemKind.Impl(_, _, functions, _, regions) => {
+                if (regions.count > 0) {
+                    for (k in 0..functions.count) {
+                        if (c.front.ast.at(functions, k) == f) {
+                            return regions;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    return emptyRange();
+}
+
+/// Implements every generic impl whose target matches `typ`, an instance of a generic struct or enum, when the
+/// arguments meet the impl's bounds (ADR 0054 §3.1). The methods are declared again for `typ`, as a generic struct's
+/// are for its instances; the generic version reported their problems.
+fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocError> {
+    let constructor = declarationOf(c, typ);
+    if (constructor == none()) {
+        return Ok();
+    }
+    for (t in 0..c.implTemplates.length) {
+        let template = c.implTemplates[t];
+        if (template.target == typ || declarationOf(c, template.target) != constructor) {
+            continue;
+        }
+        var parameters = Vector<u32>.create();
+        listTypes(c, template.parameters, mut parameters)?;
+        var found = Vector<Found>.create();
+        unify(c, template.target, typ, parameters.view(), mut found)?;
+        var arguments = Vector<u32>.create();
+        var map = Vector<TypeMapping>.create();
+        var complete = true;
+        for (p in parameters.view()) {
+            let a = foundFor(found, p);
+            if (a == none()) {
+                complete = false;
+            } else {
+                arguments.push(a)?;
+                map.push(TypeMapping { from: p, to: a })?;
+            }
+        }
+        if (!complete || substitute(c, template.target, map.view())? != typ) {
+            continue;
+        }
+        let original = c.types.bounds[template.bound as usize];
+        var substituted = Vector<u32>.create();
+        for (a in 0..original.arguments.count) {
+            let argumentType = c.types.listAt(original.arguments, a);
+            substituted.push(substitute(c, argumentType, map.view())?)?;
+        }
+        var boundName = Vector<u8>.create();
+        appendBytes(mut boundName, c.types.rangeText(original.name))?;
+        let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
+        if (implements(c, typ, required)) {
+            continue;
+        }
+        let mark = diagnosticsMark(c);
+        checkBounds(c, parameters.view(), arguments.view(), Span { start: 0, end: 0 })?;
+        let met = diagnosticsMark(c) == mark;
+        dropDiagnosticsSince(c, mark);
+        if (!met) {
+            continue; // the instance does not implement the interface
+        }
+        let savedFile = c.file;
+        {
+            let fileToSet = template.file;
+            c.setFile(fileToSet);
+        }
+        let typeSyntax = match (c.front.ast.items[template.item as usize].kind) {
+            ItemKind.Impl(_, _, _, ts, _) => ts,
+            _ => emptyRange(),
+        };
+        var pairs = Vector<EnvPair>.create();
+        zipEnvironment(c, typeSyntax, arguments.view(), mut pairs)?;
+        let environment = storeEnvironment(c, pairs.view())?;
+        implementFor(c, template.item, typ, required, environment, false)?;
+        dropDiagnosticsSince(c, mark);
+        c.setFile(savedFile);
+    }
+    return Ok();
+}
+
+/// Every instance made so far gets the generic impls that match it (twice, so an instance whose bound needs another
+/// instance's impl finds it whatever their order).
+fn attachToInstances(c: borrow mut Checker) -> Result<void, AllocError> {
+    if (c.implTemplates.length == 0) {
+        return Ok();
+    }
+    for (round in 0..2) {
+        var k: usize = 0;
+        while (k < c.structs.length) {
+            let typ = c.structs[k].typ;
+            if (c.structs[k].template != none()) {
+                attachGenericImpls(c, typ)?;
+            }
+            k += 1;
+        }
+        k = 0;
+        while (k < c.enums.length) {
+            let typ = c.enums[k].typ;
+            if (c.enums[k].template != none()) {
+                attachGenericImpls(c, typ)?;
+            }
+            k += 1;
+        }
+    }
+    return Ok();
+}
+
+/// An impl's methods for `forType` (the body of ProcessImpl after its checks): the interface's arguments in scope,
+/// and `implEnvironment`, the impl's own type parameters. `first` is false for an instance of a generic impl.
+fn implementFor(
+    c: borrow mut Checker,
+    item: u32,
+    forType: u32,
+    bound: u32,
+    implEnvironment: Range,
+    first: bool,
+) -> Result<void, AllocError> {
     let b = c.types.bounds[bound as usize];
     c.implementations.push(Implementation { typ: forType, interfaceEntry: b.interfaceEntry, arguments: b.arguments })?;
     let interfaceEntry = b.interfaceEntry;
@@ -318,6 +610,14 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     var pairs = Vector<EnvPair>.create();
     zipEnvironment(c, interfaceParameters, arguments.view(), mut pairs)?;
     let environment = storeEnvironment(c, pairs.view())?;
+    let interfaceSyntax = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Impl(i, _, _, _, _) => i,
+        _ => none(),
+    };
+    let functions = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Impl(_, _, f, _, _) => f,
+        _ => emptyRange(),
+    };
     var implemented = Vector<u32>.create(); // names
     for (k in 0..functions.count) {
         let f = c.front.ast.at(functions, k);
@@ -333,11 +633,14 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
             c.error(implMismatch(), id.start, id.end, message)?;
             continue;
         }
-        let words = "effects context";
-        var known = Vector<u32>.create();
-        knownAttributes(c, decl.attributes, "a method", words, mut known)?;
-        readEffectAttributes(c, f, known.view())?;
-        inheritEffects(c, signature, f)?;
+        if (first) {
+            // Per declaration: an instance of a generic impl shares its generic version's (ADR 0054).
+            let words = "effects context";
+            var known = Vector<u32>.create();
+            knownAttributes(c, decl.attributes, "a method", words, mut known)?;
+            readEffectAttributes(c, f, known.view())?;
+            inheritEffects(c, signature, f)?;
+        }
         if (c.types.is(forType, TypeKind.Integer) && integerMethod(c.name(id.symbol)) != none()) {
             var message = Vector<u8>.create();
             appendQuotedName(mut message, c, id.symbol)?;
@@ -352,7 +655,7 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
             c.error(duplicateMember(), id.start, id.end, message)?;
             continue;
         }
-        let hir = declareFunction(c, f, forType)?;
+        let hir = declareFunctionIn(c, f, forType, implEnvironment)?;
         if (implMethodFor(c, forType, id.symbol) != none() || containsU32(implemented, id.symbol)) {
             var message = Vector<u8>.create();
             appendQuotedType(mut message, c, forType)?;

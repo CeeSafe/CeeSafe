@@ -1,0 +1,118 @@
+// CeeSafe.Web's two shapes (ADR 0054; its probes impl-generic-fail and impl-scoped-fail): a transport wrapper that
+// implements its inner transport's async interface for every inner transport, and a request body over borrowed bytes
+// implementing an async interface through its region, both used through bounds. Each expected line follows from the
+// program's own definitions.
+
+interface Transport {
+    async fn read(borrow mut this, buffer: SliceMut<u8>) -> Result<usize, AsyncError>;
+}
+
+/// Gives `left` bytes, each its count so far.
+struct Fixed {
+    left: usize;
+    given: u8;
+}
+
+impl Transport for Fixed {
+    async fn read(borrow mut this, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        var n: usize = 0;
+        while (n < buffer.length && this.left > 0) {
+            this.given += 1;
+            buffer[n] = this.given;
+            this.left -= 1;
+            n += 1;
+        }
+        return Ok(n);
+    }
+}
+
+/// Wraps any transport, counting the bytes read through it.
+struct Metered<T: Transport> {
+    inner: T;
+    bytes: usize;
+}
+
+impl<T: Transport> Transport for Metered<T> {
+    async fn read(borrow mut this, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        let n = await this.inner.read(buffer)?;
+        this.bytes += n;
+        return Ok(n);
+    }
+}
+
+interface Body {
+    async fn read(borrow mut this, buffer: SliceMut<u8>) -> Result<usize, AsyncError>;
+}
+
+/// A body over bytes it borrows.
+struct RequestBody<region r> {
+    source: Slice<r, u8>;
+    at: usize;
+}
+
+impl<region r> Body for RequestBody<r> {
+    async fn read(borrow mut this, buffer: SliceMut<u8>) -> Result<usize, AsyncError> {
+        var n: usize = 0;
+        while (n < buffer.length && this.at < this.source.length) {
+            buffer[n] = this.source[this.at];
+            this.at += 1;
+            n += 1;
+        }
+        return Ok(n);
+    }
+}
+
+/// Reads a transport to its end through a 3-byte buffer: the bytes' sum.
+async fn drain<T: Transport>(t: borrow mut T) -> Result<u64, AsyncError> {
+    var sum: u64 = 0;
+    var buffer = [0u8; 3];
+    loop {
+        let n = await t.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok(sum);
+        }
+        for (k in 0..n) {
+            sum += buffer[k] as u64;
+        }
+    }
+}
+
+async fn total<B: Body>(b: borrow mut B) -> Result<u64, AsyncError> {
+    var sum: u64 = 0;
+    var buffer = [0u8; 2];
+    loop {
+        let n = await b.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok(sum);
+        }
+        for (k in 0..n) {
+            sum += buffer[k] as u64;
+        }
+    }
+}
+
+async fn run() -> Result<[u64; 4], AsyncError> {
+    var metered = Metered { inner: Fixed { left: 10, given: 0 }, bytes: 0 };
+    let sum = await drain(mut metered)?;
+    var twice = Metered { inner: Metered { inner: Fixed { left: 4, given: 0 }, bytes: 0 }, bytes: 0 };
+    let small = await drain(mut twice)?;
+    let raw = [5u8, 6u8, 7u8];
+    var body = RequestBody { source: raw[..], at: 0 };
+    let read = await total(mut body)?;
+    return Ok([sum, metered.bytes as u64, small + (twice.bytes + twice.inner.bytes) as u64, read]);
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(out) => {
+            for (v in out) {
+                Console.writeLine(v);
+            }
+        }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 55
+// expect-stdout: 10
+// expect-stdout: 18
+// expect-stdout: 18

@@ -302,8 +302,8 @@ enum ItemKind {
     Enum(Range, Range, Range),
     /// methods (functions), type parameters.
     Interface(Range, Range),
-    /// interface type, for type, functions.
-    Impl(u32, u32, Range),
+    /// interface type, for type, functions, type parameters, region parameters (ADR 0054: `impl<region r, T: B> …`).
+    Impl(u32, u32, Range, Range, Range),
     Const(u32, u32),        // type, value
     Static(bool, u32, u32), // mutable, type, value
 }

@@ -109,6 +109,65 @@ square: 9
 - Several bounds are joined with `+`: `<T: Shape + Copy>`.
 - An interface can itself be generic: `interface Comparable<T> { fn compare(borrow this, other: borrow T) -> i32; }`.
 
+## Generic impls
+
+An impl can have type parameters of its own. A wrapper then implements an interface for every inner type that has it:
+
+```ceesafe
+interface Source {
+    fn next(borrow mut this) -> u32;
+}
+
+struct Counter {
+    value: u32;
+}
+
+impl Source for Counter {
+    fn next(borrow mut this) -> u32 {
+        this.value += 1;
+        return this.value;
+    }
+}
+
+/// Any source, with the calls of `next` counted.
+struct Counted<T> {
+    inner: T;
+    calls: u32;
+}
+
+impl<T: Source> Source for Counted<T> {
+    fn next(borrow mut this) -> u32 {
+        this.calls += 1;
+        return this.inner.next();
+    }
+}
+
+fn take<S: Source>(s: borrow mut S) -> u32 => s.next() + s.next();
+
+fn main() {
+    var counted = Counted { inner: Counted { inner: Counter { value: 0 }, calls: 0 }, calls: 0 };
+    Console.writeLine(take(mut counted));
+    Console.writeLine(counted.calls + counted.inner.calls);
+}
+```
+
+```text
+3
+4
+```
+
+- The impl is checked once, then compiled for each instance it applies to: `Counted<Counter>` and
+  `Counted<Counted<Counter>>` here. An instance whose argument does not meet the bound (`Counted<u8>`) does not
+  implement `Source`.
+- Each of the impl's type parameters must appear in its target, and the target is a generic struct or enum.
+- Beside a generic impl, no other impl of the same interface may be written for the same struct or enum: no
+  `impl Source for Counted<Counter>` as well.
+- An impl lives in the package that declares the interface or the type (the orphan rule), so two packages never
+  both provide one.
+- A struct with region parameters implements an interface with its regions named, `impl<region r> Body for
+  RequestBody<r> { … }`, and is used through bounds; it does not convert to `dyn Body`, since a `dyn` value holds no
+  loans.
+
 ## Dynamic dispatch
 
 A bound is resolved at compile time, so a `Slice<S>` holds shapes of one type. For a collection of different types

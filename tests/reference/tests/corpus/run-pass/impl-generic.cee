@@ -1,0 +1,136 @@
+// Generic impls and impls for types with region parameters (ADR 0054): a wrapper that counts calls implements its
+// inner type's interface for every inner type that has it, used on a concrete instance, through a bound, nested, and as
+// `dyn`; an impl with two type parameters; a generic interface implemented generically; a struct with a region
+// implementing an interface, used through a bound. Each expected line follows from the program's own definitions.
+
+interface Source {
+    fn next(borrow mut this) -> u32;
+    fn name(borrow this) -> StringView;
+}
+
+struct Counter {
+    value: u32;
+}
+
+impl Source for Counter {
+    fn next(borrow mut this) -> u32 {
+        this.value += 1;
+        return this.value;
+    }
+    fn name(borrow this) -> StringView => "counter";
+}
+
+/// Wraps any source, counting the calls of `next`.
+struct Counted<T> {
+    inner: T;
+    calls: u32;
+}
+
+impl<T: Source> Source for Counted<T> {
+    fn next(borrow mut this) -> u32 {
+        this.calls += 1;
+        return this.inner.next() * 10;
+    }
+    fn name(borrow this) -> StringView => "counted";
+}
+
+/// Takes three from any source.
+fn sum<S: Source>(s: borrow mut S) -> u32 => s.next() + s.next() + s.next();
+
+interface Describe {
+    fn describe(borrow this) -> u64;
+}
+
+struct Pair<A, B> {
+    left: A;
+    right: B;
+}
+
+impl Describe for u8 {
+    fn describe(borrow this) -> u64 => this as u64;
+}
+
+impl Describe for u16 {
+    fn describe(borrow this) -> u64 => 1000 * this as u64;
+}
+
+impl<A: Describe, B: Describe> Describe for Pair<A, B> {
+    fn describe(borrow this) -> u64 => this.left.describe() + this.right.describe();
+}
+
+interface Into<T> {
+    fn into(borrow this) -> T;
+}
+
+struct Holder<T> {
+    value: T;
+}
+
+impl<T: Copy> Into<T> for Holder<T> {
+    fn into(borrow this) -> T => this.value;
+}
+
+fn take<T: Copy, H: Into<T>>(h: borrow H) -> T => h.into();
+
+/// A view of bytes it does not own: implemented through its region.
+struct Bytes<region r> {
+    data: Slice<r, u8>;
+}
+
+impl<region r> Describe for Bytes<r> {
+    fn describe(borrow this) -> u64 {
+        var total: u64 = 0;
+        for (b in this.data) {
+            total += b as u64;
+        }
+        return total;
+    }
+}
+
+fn describe<D: Describe>(d: borrow D) -> u64 => d.describe();
+
+fn main() {
+    var counted = Counted { inner: Counter { value: 0 }, calls: 0 };
+    Console.writeLine(counted.next());
+    Console.writeLine(sum(mut counted));
+    Console.writeLine(counted.calls);
+    Console.writeLine(counted.name());
+
+    var twice = Counted { inner: Counted { inner: Counter { value: 5 }, calls: 0 }, calls: 0 };
+    Console.writeLine(sum(mut twice));
+    Console.writeLine(twice.calls + twice.inner.calls);
+
+    var dynamic = Counted { inner: Counter { value: 1 }, calls: 0 };
+    {
+        let source: borrow mut dyn Source = borrow mut dynamic;
+        Console.writeLine(source.next());
+        Console.writeLine(source.name());
+    }
+    Console.writeLine(dynamic.calls);
+
+    let p = Pair { left: 3u8, right: Pair { left: 4u16, right: 5u8 } };
+    Console.writeLine(p.describe());
+    Console.writeLine(describe(borrow p));
+
+    let h = Holder { value: 77u32 };
+    Console.writeLine(take<u32, Holder<u32>>(borrow h));
+    Console.writeLine(h.into());
+
+    let raw = [1u8, 2u8, 3u8, 250u8];
+    let bytes = Bytes { data: raw[..] };
+    Console.writeLine(describe(borrow bytes));
+}
+// expect-stdout: 10
+// expect-stdout: 90
+// expect-stdout: 4
+// expect-stdout: counted
+// expect-stdout: 2100
+// expect-stdout: 6
+// expect-stdout: 20
+// expect-stdout: counted
+// expect-stdout: 1
+// expect-stdout: 4008
+// expect-stdout: 4008
+// expect-stdout: 77
+// expect-stdout: 77
+// expect-stdout: 256

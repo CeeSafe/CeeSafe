@@ -23,6 +23,7 @@ fn pushRegionNames(c: borrow Checker, regions: Range, out: borrow mut Vector<u32
 fn regionScope(c: borrow Checker, f: u32, owner: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
     let decl = c.front.ast.functions[f as usize];
     pushRegionNames(c, decl.regionParameters, out)?;
+    pushRegionNames(c, implRegionsOf(c, f), out)?; // a method of `impl<region r> …` names the impl's (ADR 0054)
     if (owner != none()) {
         let definition = c.types.info(owner).structDef;
         if (definition != none()) {

@@ -716,7 +716,7 @@ fn declarePackageNames(c: borrow mut Checker) -> Result<void, AllocError> {
                         declarePackageName(c, package, symbol, isPublicVisibility(visibility))?;
                     }
                 }
-                ItemKind.Impl(_, _, _) => {}
+                ItemKind.Impl(_, _, _, _, _) => {}
                 _ => {
                     let entry = c.front.ast.items[item as usize];
                     let symbol = c.front.ast.idents[entry.name as usize].symbol;

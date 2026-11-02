@@ -151,6 +151,7 @@ fn checkProgram(
         scopeAllocators: Vector<u32>.create(),
         environments: Vector<EnvironmentRecord>.create(),
         implementations: Vector<Implementation>.create(),
+        implTemplates: Vector<ImplTemplate>.create(),
         implMethods: Vector<ImplMethod>.create(),
         boundMethods: Vector<BoundMethod>.create(),
         pendingBounds: Vector<PendingBounds>.create(),
@@ -384,7 +385,7 @@ fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, A
 fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     match (entry.kind) {
-        ItemKind.Impl(_, _, _) => {
+        ItemKind.Impl(_, _, _, _, _) => {
             c.impls.push(ImplRef { item: item, file: c.file })?; // processed once every item is declared (§21.1)
             return Ok();
         }

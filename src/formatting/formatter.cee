@@ -497,7 +497,9 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
                 fmtWalkFunction(l, ast, method, true)?;
             }
         }
-        ItemKind.Impl(interfaceType, forType, functions) => {
+        ItemKind.Impl(interfaceType, forType, functions, typeParameters, regionParameters) => {
+            let keyword = l.first(it.start); // `impl`, which the parameters follow (ADR 0054)
+            fmtWalkTypeParameters(l, ast, keyword, regionParameters, typeParameters)?;
             fmtWalkType(l, ast, interfaceType)?;
             fmtWalkType(l, ast, forType)?;
             let forLast = l.last(ast.typeSpans[forType as usize].end);

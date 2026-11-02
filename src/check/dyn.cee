@@ -205,6 +205,17 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
     if (bound == none()) {
         return coerceToDynFunction(c, value, implementation, dynType, expected, span);
     }
+    if (c.types.isScoped(implementation) && implements(c, implementation, bound)) {
+        // A type with region parameters implements interfaces for bounds only (ADR 0054 §3.2): a `dyn` value carries
+        // no loans (§37).
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, implementation)?;
+        appendText(mut message, " holds loans, so it cannot be a ")?;
+        appendQuotedType(mut message, c, dynType)?;
+        appendText(mut message, ": use it through a bound instead (type-system.md §37.2, ADR 0054)")?;
+        c.error(boundNotSatisfied(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (!implements(c, implementation, bound)) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, implementation)?;

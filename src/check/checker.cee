@@ -119,6 +119,7 @@ struct Checker {
     scopeAllocators: Vector<u32>;            // by site: Async.scopeIn's allocator type, or none (§40.5)
     environments: Vector<EnvironmentRecord>;
     implementations: Vector<Implementation>;
+    implTemplates: Vector<ImplTemplate>; // generic impls (ADR 0054)
     implMethods: Vector<ImplMethod>;
     boundMethods: Vector<BoundMethod>;
     pendingBounds: Vector<PendingBounds>;

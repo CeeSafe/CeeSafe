@@ -1125,18 +1125,29 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 ```text
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
 MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'
-ImplDecl      = 'impl' Type 'for' Type '{' FunctionDecl* '}'
+ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
 ```
 - An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
   `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods
   cannot have type parameters of their own, and v0 has no `Self` type.
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
-  concrete type `T`: a struct, an enum, or a built-in type such as `i32`. `T` must not be generic
-  in v0 (`impl<T> I for Pair<T>` is future work).
+  type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
+  `impl<T: B, U> I<…> for C<…T…, …U…> { … }`, implements `I` for every instance of the generic struct or enum `C` that
+  its target matches and whose arguments meet the bounds; each of its type parameters appears in the target (N0267),
+  and the target is a generic struct or enum (N0267). Its methods are checked once, with the parameters opaque, and
+  instantiated per instance like a generic struct's: a call on the concrete type, a call through a bound and a `dyn`
+  table all use the instance. A type with region parameters is implemented with them named, `impl<region r> I for
+  S<r>` (§25.3), and no other scoped type implements an interface (N0267).
   - The block must define exactly the interface's methods, each with the same receiver kind,
     parameter types and return type, after the interface's type arguments are substituted
     (N0267). It may not define other functions.
   - Each type may implement each interface instantiation at most once (N0267).
+  - **Overlap.** Beside a generic impl, no other impl of the same interface may have a target of the same struct or
+    enum, generic or not (N0267): `impl I for Wrap<u8>` and `impl<T> I for Wrap<T>` are refused together. There is no
+    specialisation.
+  - **The orphan rule.** An impl is written in the package that declares the interface or the target's struct or
+    enum (N0267). The built-in types, and everything lib/core and lib/std declare, are the libraries': a program
+    implements its own interfaces for them, and lib/std's interfaces for its own types.
   - An `impl` block's methods are ordinary methods of `T`. `x.area()` works on any `Square`, and
     their names must not clash with `T`'s other methods (N0228).
 - Interfaces are not types: an interface is a bound (§21.2), and since M13 also the `I` of a `dyn I` type behind a
@@ -1516,6 +1527,11 @@ A type is **scoped** (§19.1) iff it is a reference, slice or `StringView`, a sc
 a `PoolBox`, an optional or result with a scoped part, a struct or enum that declares region
 parameters, an instance of a generic struct or enum with a scoped type argument, or a `Vector`,
 `StableVector` or `SlotMap` with a scoped element. `Handle<T>` is not scoped (it holds no loan).
+
+A struct or enum with region parameters implements an interface as `impl<region r> I for S<r> { … }` (ADR 0054): the
+impl's region names are in scope in its target and in its methods' signatures and bodies, as a struct's are in its own
+methods. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is used statically; it does not coerce to
+`dyn I` (§37.2).
 
 ### 25.4 Where scoped values may be stored
 - **Fields and payloads:** a struct field or enum payload may have a scoped type only if the
@@ -3019,8 +3035,8 @@ fn main() {
   - `borrow T` → `borrow dyn I`, and `borrow mut T` → `borrow mut dyn I` (or `borrow dyn I`);
   - `Box<T, A>` → `Box<dyn I, A>`: a move of the box, with no new allocation. The allocator type must be the same.
 - `T` must implement `I` (§21.1), else **N0268**, as for an unsatisfied bound.
-- `T` is never scoped (§19.1): no references, closures, views, slices or region parameters, since only an unscoped type
-  can implement an interface (§21.1). So a `dyn` value carries no loans of its own: `borrow dyn I` carries only the
+- `T` is never scoped (§19.1): no references, closures, views, slices or region parameters. A struct with region
+  parameters may implement `I` (§25.3), but coercing it to `dyn I` is **N0268**. So a `dyn` value carries no loans of its own: `borrow dyn I` carries only the
   loan of the reference it came from, and `Box<dyn I>` carries none. (Scoped `dyn(r) I` values are OD-10a.)
 - `T` must be a sized type: a struct, an enum, or a built-in type such as `i32`. A `dyn I` does not coerce to another
   `dyn` type, and there is no conversion back to `T` (no downcasting; OD-10b).

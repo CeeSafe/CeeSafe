@@ -1,8 +1,9 @@
 # ADR 0058 — The generated C compiled at `-O3`
 
-- Status: **Accepted** by the owner, 2026-11-03 ("I accept both ADRs with your recommendations"): every question of
-  §5 as recommended. **Held at the gate of §3.2**: §7 brings the measurement back to the owner, as §3.2 requires,
-  before `-O3` becomes the default. From the independent benchmark's analysis (pasted by the owner): the optimisation
+- Status: **Withdrawn** by the owner, 2026-11-03, at the gate of §3.2 ("Lets stop it there. I don't want to land
+  slow."): `-O2` stays the default. It had been accepted earlier the same day ("I accept both ADRs with your
+  recommendations"), subject to that gate, and §7 is what the gate found. `--cflag -O3` remains available to anyone
+  who wants it. From the independent benchmark's analysis (pasted by the owner): the optimisation
   level of the generated C is the largest gap between CeeSafe's default build and Rust's release build.
 - Scope: `ceesafec build` (src/host/build.cee, src/host/toolchain.cee), tooling.md §8, the guide's performance page,
   the fixed point's record. No language, runtime or library change.
@@ -129,3 +130,10 @@ So the regression in the table of §1 is one unlucky layout, not something `-O3`
 its own. §3.2 asked for the cause to be explained and the regression removed or bounded. It is explained, but it
 cannot be removed from the C, and it is no worse than what `-O2` already does. As §3.2 requires, the owner decides
 whether `-O3` becomes the default with this known, or waits. Nothing has changed in `src/host` yet.
+
+## 8. Outcome (2026-11-03)
+
+The owner kept `-O2` after §7's finding: a default that can land 1.7× slower on a common workload is not taken for a
+15% gain elsewhere. Nothing in `src/host`, the release workflow or the fixed point changed. If the C compilers' layout
+sensitivity is ever bounded (for example by a layout that does not depend on unrelated code), this can be proposed
+again with new measurements.

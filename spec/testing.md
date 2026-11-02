@@ -27,6 +27,10 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 
 `tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec.
 
+Both sweeps also take an executable package instead, built in its directory with its manifest:
+`tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
+--package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.
+
 ## 2. Corpus format
 
 Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/tests/corpus`.

@@ -21,6 +21,16 @@ extern "C" {
     fn ceesafe_async_signal_forget(signal: *mut void);
     @effects()
     fn ceesafe_async_signal_raise(signal: *mut void);
+    @effects()
+    fn ceesafe_async_set_init(set: *mut void, limit: u32, error: *mut void);
+    @effects()
+    fn ceesafe_async_set_admit(set: *mut void, wait: bool) -> u32;
+    @effects()
+    fn ceesafe_async_set_done(set: *mut void) -> bool;
+    @effects()
+    fn ceesafe_async_set_cancel(set: *mut void);
+    @effects()
+    fn ceesafe_async_set_oom(set: *mut void) -> bool;
 }
 
 /// Why an async operation failed (type-system.md §40.4, §40.7).
@@ -186,6 +196,91 @@ struct AsyncAllJoin<E> {
             Err(e) => { return Err(e); }
             Ok() => { return late; }
         }
+    }
+}
+
+/// A task set's record (ADR 0053 §3.4): the runtime's ceesafe_task_set, then the slot where a child's first error is
+/// copied. It lives in the frame of AsyncTasks.run's task, which never moves.
+struct TaskSetRecord<E> {
+    words: [u64; 12];
+    first: Result<void, E>;
+}
+
+/// The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
+/// children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
+/// `set.trySpawn(async move () => …)`, which is false instead. A child owns what it captures: no loans, so it cannot
+/// capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
+@noncopy // the one handle of its record
+public struct TaskSet<E: Copy> {
+    private record: *mut void;
+    private oom: E;
+
+    /// Waits until a child may start: 0, or 2 once the set or this task is cancelled (the child is then not started).
+    /// Safety: the record outlives the set, which the body holds by borrow while AsyncTasks.run waits for it.
+    async fn room(borrow this) -> u32 {
+        loop {
+            let admitted = unsafe { ceesafe_async_set_admit(this.record, true) };
+            if (admitted != 1) {
+                return admitted;
+            }
+            await Async.park(); // a returning child wakes this task
+        }
+    }
+
+    /// 0 if a child may start now, 1 while the limit run, 2 once cancelled.
+    /// Safety: as room.
+    fn tryRoom(borrow this) -> u32 => unsafe { ceesafe_async_set_admit(this.record, false) };
+
+    fn recordOf(borrow this) -> *mut void => this.record;
+
+    /// `spawn`'s result for the start's code: 0 started; else (full and cancelled, or no frame) `Err(oom)`.
+    async fn spawned(borrow this, code: u32) -> Result<void, E> {
+        if (code == 0) {
+            return Ok();
+        }
+        return Err(this.oom);
+    }
+
+    /// `trySpawn`'s result: whether the child started.
+    fn started(borrow this, code: u32) -> bool => code == 0;
+}
+
+/// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the set's
+/// owner, with the set; then every child it started is waited for. The result is the body's error, else the first
+/// child's, else `oom` if a child's frame could not be allocated, else Ok. The body's error cancels the children;
+/// a child's error cancels no sibling.
+public struct AsyncTasks<E: Copy> {
+    /// Safety: the record is this frame's, which outlives every child: the set waits for them before it returns.
+    @effectsOf(body)
+    public async fn run(
+        limit: u32,
+        oom: E,
+        body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,
+    ) -> Result<void, E> {
+        var record = TaskSetRecord<E> { words: [0u64; 12], first: Ok() };
+        let raw = borrow mut record.words as *mut [u64; 12] as *mut void;
+        unsafe { ceesafe_async_set_init(raw, limit, borrow mut record.first as *mut Result<void, E> as *mut void); }
+        let set = TaskSet<E> { record: raw, oom: oom };
+        let result = body(borrow set);
+        match (result) {
+            Err(_) => { unsafe { ceesafe_async_set_cancel(raw); } }
+            Ok() => {}
+        }
+        while (!unsafe { ceesafe_async_set_done(raw) }) {
+            await Async.park(); // the last child wakes this task
+        }
+        match (result) {
+            Err(e) => { return Err(e); }
+            Ok() => {}
+        }
+        match (record.first) {
+            Err(e) => { return Err(e); }
+            Ok() => {}
+        }
+        if (unsafe { ceesafe_async_set_oom(raw) }) {
+            return Err(oom);
+        }
+        return Ok();
     }
 }
 

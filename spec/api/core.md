@@ -9,6 +9,8 @@
 - [struct AsyncControl](#struct-asynccontrol)
 - [struct AsyncLeaf](#struct-asyncleaf)
 - [struct Raced](#struct-raced)
+- [struct TaskSet](#struct-taskset)
+- [struct AsyncTasks](#struct-asynctasks)
 - [struct AsyncSignal](#struct-asyncsignal)
 - [enum LoadOrdering](#enum-loadordering)
 - [enum StoreOrdering](#enum-storeordering)
@@ -219,6 +221,42 @@ public struct Raced<T> {
 
 `Async.race`'s result (type-system.md §40.4): the child that returned `Ok` first (0 or 1), its value, and the
 other's value if it also returned `Ok` before it saw its cancellation.
+
+## struct TaskSet
+
+```ceesafe
+@noncopy // the one handle of its record
+public struct TaskSet<E: Copy>
+```
+
+The set `Async.tasks`' body is given (ADR 0053 §3.1). The body, and the functions it passes the set to, start
+children with `await set.spawn(async move () => …)`, which waits while the set's limit of children run, and
+`set.trySpawn(async move () => …)`, which is false instead. A child owns what it captures: no loans, so it cannot
+capture the set (N0349). The calls are the checker's (src/check/async.cee): these are the steps it joins.
+
+## struct AsyncTasks
+
+```ceesafe
+public struct AsyncTasks<E: Copy>
+```
+
+`await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the set's
+owner, with the set; then every child it started is waited for. The result is the body's error, else the first
+child's, else `oom` if a child's frame could not be allocated, else Ok. The body's error cancels the children;
+a child's error cancels no sibling.
+
+### AsyncTasks.run
+
+```ceesafe
+@effectsOf(body)
+public async fn run(
+    limit: u32,
+    oom: E,
+    body: borrow mut fn(borrow TaskSet<E>) -> Result<void, E>,
+) -> Result<void, E>
+```
+
+Safety: the record is this frame's, which outlives every child: the set waits for them before it returns.
 
 ## struct AsyncSignal
 

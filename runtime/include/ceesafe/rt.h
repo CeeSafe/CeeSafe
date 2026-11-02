@@ -1094,6 +1094,8 @@ typedef struct ceesafe_scope {
     bool oom;
     bool shared;        /* it has spawnSend children, which other workers may run: its state changes under the run's
                            lock (ADR 0038) */
+    bool set;           /* a task set's (ADR 0053): a child's error cancels no sibling, a failed allocation stops
+                           nothing */
     void *waiter;
     void *owner;        /* the task whose scope it is */
 } ceesafe_scope;
@@ -1113,6 +1115,35 @@ void *ceesafe_async_spawn_send(ceesafe_scope *scope, size_t frame_size, bool (*r
 void ceesafe_async_publish(void *frame);
 bool ceesafe_async_claim_failure(ceesafe_scope *scope);
 void ceesafe_async_workers(uint32_t n);
+/* Task sets (ADR 0053): a scope whose children are started while it runs, at most `limit` live at once, from the task
+ * that owns it only (a child cannot capture the set's handle), so one task at most waits for room. The record is in
+ * the frame of lib/core's AsyncTasks.run. ceesafe_async_set_init empties it, with the slot where a child's first error
+ * is copied (a Result<void, E>). ceesafe_async_set_admit is 0 when a child may start, 2 once the set or its task is
+ * cancelled, and 1 when `limit` children run: then, with `wait`, the task is registered to be woken when one returns
+ * (it parks, and asks again). ceesafe_async_set_spawn starts a child as ceesafe_async_spawn does, its frame from the
+ * set's allocator (ceesafe_async_set_allocator; NULL: the system heap); NULL if it cannot be allocated, which
+ * ceesafe_async_set_oom then reports. A child's thunk copies its error to ceesafe_async_set_error(scope) if
+ * ceesafe_async_claim_failure says it is the first. ceesafe_async_set_done is ceesafe_async_scope_done for the set,
+ * and ceesafe_async_set_cancel cancels its children (the body's error, §3.3). */
+typedef struct ceesafe_task_set {
+    ceesafe_scope scope;
+    uint32_t limit;
+    bool oom;
+    void *error;
+    void *room_waiter;
+    void *(*allocate)(size_t size, size_t align);
+    void (*release)(void *p, size_t size, size_t align);
+} ceesafe_task_set;
+void ceesafe_async_set_init(void *set, uint32_t limit, void *error);
+uint32_t ceesafe_async_set_admit(void *set, bool wait);
+void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                              const ceesafe_frame_info *info);
+void *ceesafe_async_set_error(ceesafe_scope *scope);
+bool ceesafe_async_set_done(void *set);
+void ceesafe_async_set_cancel(void *set);
+bool ceesafe_async_set_oom(void *set);
+void ceesafe_async_set_allocator(void *set, void *(*allocate)(size_t size, size_t align),
+                                 void (*release)(void *p, size_t size, size_t align));
 /* AsyncSignal (ADR 0039), four words of lib/core's struct: raised, the waiting task, its executor, and a raise in
  * progress. ceesafe_async_signal_raise may be called from anywhere, an interrupt handler included: it marks the record
  * raised and wakes the task waiting on it. ceesafe_async_signal_take, in the waiting task, lowers a raised record and

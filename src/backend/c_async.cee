@@ -112,17 +112,24 @@ fn emitChildThunk(
         e.t("(&f->cee_env);")?;
         e.emit()?;
     }
-    e.t("    struct ceeAS_")?;
-    e.d(site as u64)?;
-    e.t(" *s = (struct ceeAS_")?;
-    e.d(site as u64)?;
-    e.t(" *)(void *)scope;")?;
-    e.emit()?;
+    if (site != none()) {
+        e.t("    struct ceeAS_")?;
+        e.d(site as u64)?;
+        e.t(" *s = (struct ceeAS_")?;
+        e.d(site as u64)?;
+        e.t(" *)(void *)scope;")?;
+        e.emit()?;
+    }
     e.line("    if (f->cee_result.tag != 0) {")?;
     e.line(
         "        if (ceesafe_async_claim_failure(scope)) { /* the first: under the run's lock if shared (ADR 0038) */",
     )?;
-    e.line("            s->error = f->cee_result;")?;
+    if (site != none()) {
+        e.line("            s->error = f->cee_result;")?;
+    } else {
+        // A task set's child (ADR 0053): its first error goes to the slot the set's record names.
+        e.line("            ceesafe_mem_copy(ceesafe_async_set_error(scope), &f->cee_result, sizeof f->cee_result);")?;
+    }
     if (c.types.needsDrop(result)) {
         e.line("        } else {")?;
         e.t("            ")?;
@@ -680,6 +687,17 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             }
         }
     }
+    // A task set's children (ADR 0053), started from any function: `trySpawn` needs no await.
+    for (f in 0..n.functions.length) {
+        for (block in n.functions[f].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = statementRvalue(n, s);
+                if (r != none() && builtinOf(n, r) == bfAsyncSetSpawn()) {
+                    emitChildThunk(e, c, n, none(), constArgument(n, r, 0))?;
+                }
+            }
+        }
+    }
     return Ok();
 }
 
@@ -897,6 +915,9 @@ fn emitTaskStatement(
     if (builtinOf(n, r) == bfAsyncSpawn()) {
         return emitSpawn(e, c, n, sources, f, r);
     }
+    if (builtinOf(n, r) == bfAsyncSetSpawn()) {
+        return emitSetSpawn(e, c, n, sources, f, r, target);
+    }
     if (builtinOf(n, r) == bfAsyncScopeStart()) {
         return Ok(true); // the borrow checker's marker: no C (ADR 0033 §3.2)
     }
@@ -1098,6 +1119,81 @@ fn emitSpawn(
         e.line(
             "        if (cee_child != NULL) ceesafe_async_publish(cee_child); /* any worker may start it now (ADR 0038) */",
         )?;
+    }
+    e.line("    }")?;
+    return Ok(true);
+}
+
+/// A task set's start (ADR 0053): if admitted (code 0), the child's task and frame from the set's allocator, its frame
+/// filled with the moved environment; the code becomes 3 if no frame could be had. A child not started drops what it
+/// was to own. The code is the statement's value.
+fn emitSetSpawn(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    r: u32,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let child = constArgument(n, r, 0);
+    let list = builtinArguments(n, r);
+    let record = operandText(e, c, n, sources, f, n.at(list, 1))?;
+    let admitted = operandText(e, c, n, sources, f, n.at(list, 2))?;
+    let value = operandText(e, c, n, sources, f, n.at(list, 3))?;
+    let childNir = asyncNirFunction(n, child);
+    var place = Vector<u8>.create();
+    if (target != none()) {
+        place = appendPlaceIn(e, c, n, sources, f, target)?;
+    }
+    e.line("    {")?;
+    e.t("        uint32_t cee_code = ")?;
+    e.b(admitted.view())?;
+    e.t(";")?;
+    e.emit()?;
+    e.line("        if (cee_code == 0u) {")?;
+    e.t("            struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t(" *cee_child = ceesafe_async_set_spawn(")?;
+    e.b(record.view())?;
+    e.t(", sizeof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
+    e.t("), ")?;
+    appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
+    e.t(", &")?;
+    appendAsyncName(c, mut e.buf, "ceeAN_", child)?;
+    e.t(");")?;
+    e.emit()?;
+    e.t("            if (cee_child != NULL) ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", child)?;
+    e.t("(cee_child")?;
+    let byValue = !c.types.is(n.operandTypes[n.at(list, 3) as usize], TypeKind.Reference);
+    if (childNir != none() && c.hir.functions[child as usize].closureEnvironment != none()) {
+        e.t(", (")?;
+        appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
+        e.t(")(uintptr_t)")?;
+        if (byValue) {
+            e.t("&")?;
+        }
+        e.b(value.view())?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.line("            else cee_code = 3u; /* no frame: the set goes on (ADR 0053 §3.2) */")?;
+    e.line("        }")?;
+    if (byValue && ownsEnvironment(c, child)) {
+        e.t("        if (cee_code != 0u) ")?;
+        appendDropGlueName(c, mut e.buf, c.hir.functions[child as usize].closureEnvironment)?;
+        e.t("(&")?;
+        e.b(value.view())?;
+        e.t("); /* not started: what it was to own is dropped */")?;
+        e.emit()?;
+    }
+    if (target != none()) {
+        e.t("        ")?;
+        e.b(place.view())?;
+        e.t(" = cee_code;")?;
+        e.emit()?;
     }
     e.line("    }")?;
     return Ok(true);

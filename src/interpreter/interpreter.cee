@@ -72,6 +72,7 @@ struct Interp {
     asyncFdEvents: u32;                 // 1 readable, 2 writable
     udpLocal: Vector<i32>;              // UDP sockets that asked for each datagram's local address (ADR 0050)
     asyncWoken: Vector<u32>;            // tasks a channel's change woke, for runTasks
+    asyncSetCancelled: bool;            // a task set was cancelled: runTasks wakes every waiting task (ADR 0053)
     // ceesafe_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
     attempts: u64;
@@ -1862,6 +1863,7 @@ fn newInterp(
         asyncFdEvents: 0,
         udpLocal: Vector<i32>.create(),
         asyncWoken: Vector<u32>.create(),
+        asyncSetCancelled: false,
         emptyVector: 0,
         attempts: 0,
         liveAllocations: 0,

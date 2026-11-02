@@ -86,6 +86,12 @@ suspension changes its blocks or statements.
   closure])`: a reference to the closure's environment, or, for `async move`, the environment itself, moved. `site`
   numbers the scope program-wide. The borrow checker keeps each spawn's environment live until its scope's wait, and
   ends it at the scope's start (`AsyncScopeStart` does nothing else; type-system.md §40.5, ADR 0033 §3.2).
+- A task set's start (ADR 0053), `set.spawn(child)` or `set.trySpawn(child)`, is checked as calls of lib/core's
+  `TaskSet<E>` steps around `SetSpawn(record, admitted, child)` (HIR), which lowers to `Builtin(AsyncSetSpawn, [the
+  child's HIR function, the record pointer, the admission code, the child closure])`, of type `u32`: 0 started, else
+  the admission's code, or 3 with no frame. `await set.spawn(c)` is `await TaskSet.spawned(set, SetSpawn(set.recordOf(),
+  await set.room(), c))`; `trySpawn` uses `tryRoom` and `started`. The child's environment is moved in, so the borrow
+  checker needs no rule for it: its captures hold no loans (N0349).
 - `await Async.boxed(alloc, g(args))` lowers to `Builtin(AsyncBoxed, [the allocator's type, g, args…])`, of type
   `Result<T, AllocError>`; it is not an edge of the await graph. `s.spawn` in a `scopeIn` scope carries the
   allocator's type as a fourth argument. The interpreter runs `AsyncBoxed` as a call on the task's stack, wraps its

@@ -494,6 +494,15 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   last child returns, then the result is the first error, else `Err(oom)` if a child could not start, else `Ok`, and
   the scope is zeroed for its next run. An async closure's environment keeps a null code pointer: it runs only through
   its frame.
+- **Task sets** (ADR 0053). The record is lib/core's `TaskSetRecord<E>` in the frame of `AsyncTasks<E>.run`'s task:
+  the runtime's `ceesafe_task_set` (a `ceesafe_scope` with `set` true, the limit, the oom flag, the error slot, the
+  task waiting for room, the allocator), then the first child error. `AsyncSetSpawn` emits, in any function (sync too,
+  for `trySpawn`): if the admission code is 0, `ceesafe_async_set_spawn(record, sizeof(struct ceeAF_<C>), ceeAC_<C>,
+  &ceeAN_<C>)` and the frame's initialisation, or code 3 if it is NULL; a child not started drops its environment.
+  The child's thunk copies an `Err` to `ceesafe_async_set_error(scope)` if `ceesafe_async_claim_failure` says it is
+  the first. In the runtime a set's child error cancels no sibling, a failed allocation stops nothing, and a returning
+  child wakes the task waiting for room (`ceesafe_async_set_admit`), as the last one wakes the task waiting for the
+  set (`ceesafe_async_set_done`).
 - **`s.spawnSend(child)`** (ADR 0038) is a spawn whose Builtin has the role `taskSend`: it calls
   `ceesafe_async_spawn_send` (same arguments as `ceesafe_async_spawn`), initialises the frame, then
   `ceesafe_async_publish(frame)`, which queues the child for any worker. A child records its scope's first error only

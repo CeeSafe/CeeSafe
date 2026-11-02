@@ -973,7 +973,7 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     if (scope->owner != cee_exec.current) {
         scope->owner = cee_exec.current; /* before its first child, which other workers may read it from */
     }
-    if (scope->oom) {
+    if (scope->oom && !scope->set) {
         return NULL; /* the scope already failed to start a child: it starts no more */
     }
     size_t block_size = CEE_TASK_HEAD + frame_size;
@@ -987,6 +987,10 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
                                             : (unsigned char *)ceesafe_alloc(block_size, CEE_ALLOC_SYSTEM);
 #endif
     if (block == NULL) {
+        if (scope->set) {
+            ((ceesafe_task_set *)(void *)scope)->oom = true; /* the set goes on (ADR 0053 §3.2) */
+            return NULL;
+        }
         scope->oom = true;
         cee_cancel_scope(scope); /* the children already started stop (type-system.md §40.5) */
         return NULL;
@@ -1240,6 +1244,55 @@ bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
     return false;
 }
 #endif /* Async.blocking */
+
+/* ---- Task sets (ADR 0053): a scope with a limit, spawned into while it runs by the task that owns it. ---- */
+
+_Static_assert(sizeof(ceesafe_task_set) <= 96, "lib/core's TaskSetRecord holds a task set");
+
+void ceesafe_async_set_init(void *set, uint32_t limit, void *error) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+    ceesafe_mem_set(s, 0, sizeof *s);
+    s->scope.set = true;
+    s->scope.owner = cee_exec.current; /* the task that awaits the set, which the body runs in */
+    s->limit = limit == 0u ? 1u : limit;
+    s->error = error;
+}
+
+uint32_t ceesafe_async_set_admit(void *set, bool wait) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+    if (ceesafe_atomic_load_u32(&s->scope.cancelled) != 0u || ceesafe_async_status() == 1u) {
+        return 2u;
+    }
+    if (s->scope.live < s->limit) {
+        return 0u;
+    }
+    if (wait) {
+        s->room_waiter = cee_exec.current; /* woken by the next child to return (cee_child_done) */
+        cee_exec.current->on_scope = true;
+    }
+    return 1u;
+}
+
+void *ceesafe_async_set_spawn(void *set, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
+                              const ceesafe_frame_info *info) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+    return cee_spawn(&s->scope, frame_size, resume, s->allocate, s->release, info, false);
+}
+
+void *ceesafe_async_set_error(ceesafe_scope *scope) { return ((ceesafe_task_set *)(void *)scope)->error; }
+
+bool ceesafe_async_set_done(void *set) { return ceesafe_async_scope_done(&((ceesafe_task_set *)set)->scope); }
+
+void ceesafe_async_set_cancel(void *set) { ceesafe_async_cancel(&((ceesafe_task_set *)set)->scope); }
+
+bool ceesafe_async_set_oom(void *set) { return ((ceesafe_task_set *)set)->oom; }
+
+void ceesafe_async_set_allocator(void *set, void *(*allocate)(size_t size, size_t align),
+                                 void (*release)(void *p, size_t size, size_t align)) {
+    ceesafe_task_set *s = (ceesafe_task_set *)set;
+    s->allocate = allocate;
+    s->release = release;
+}
 
 bool ceesafe_async_scope_done(ceesafe_scope *scope) {
 #if !defined(CEE_FREESTANDING)
@@ -1781,11 +1834,19 @@ static void cee_child_done(cee_task *t) {
     }
     cee_scope_lock(scope);
     scope->live -= 1u;
-    bool cancel = scope->failed && ceesafe_atomic_load_u32(&scope->cancelled) == 0u;
+    /* A task set's child error cancels no sibling (ADR 0053 §3.3). */
+    bool cancel = scope->failed && !scope->set && ceesafe_atomic_load_u32(&scope->cancelled) == 0u;
     cee_task *waiter = NULL;
     if (scope->live == 0u && scope->waiter != NULL) {
         waiter = (cee_task *)scope->waiter;
         scope->waiter = NULL;
+    }
+    if (waiter == NULL && scope->set) {
+        ceesafe_task_set *set = (ceesafe_task_set *)(void *)scope;
+        if (set->room_waiter != NULL && scope->live < set->limit) {
+            waiter = (cee_task *)set->room_waiter; /* the task waiting to start a child */
+            set->room_waiter = NULL;
+        }
     }
     cee_scope_unlock(scope);
     if (cancel) {

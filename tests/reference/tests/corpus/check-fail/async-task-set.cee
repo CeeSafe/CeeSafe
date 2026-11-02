@@ -1,0 +1,40 @@
+// Task sets (ADR 0053): a child owns what it captures (N0349: a reference, a slice, a StringView, the set itself), is an
+// `async move` literal (N0209), and `spawn` is awaited (N0342); a set's error type is Copy (N0268).
+
+struct Message {
+    text: String;
+}
+
+async fn starts(
+    set: borrow TaskSet<AsyncError>,
+    n: borrow u32,
+    bytes: Slice<u8>,
+    name: StringView,
+) -> Result<void, AsyncError> {
+    await set.spawn(async move () => { // error[N0349]
+        let k = n + 1;
+        return Ok();
+    })?;
+    await set.spawn(async move () => { // error[N0349]
+        let k = bytes.length;
+        return Ok();
+    })?;
+    await set.spawn(async move () => { // error[N0349]
+        let k = name.length;
+        return Ok();
+    })?;
+    await set.spawn(async move () => { // error[N0349]
+        let started = set.trySpawn(async move () => Ok());
+        return Ok();
+    })?;
+    await set.spawn(async () => Ok())?; // error[N0209]
+    set.spawn(async move () => Ok());   // error[N0342]
+    return Ok();
+}
+
+async fn notCopy() -> Result<void, Message> {
+    var text = String.create();
+    return await Async.tasks(2, Message { text: text }, async (set) => Ok()); // error[N0268]
+}
+
+fn main() {}

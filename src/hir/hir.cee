@@ -112,6 +112,7 @@ enum HirExpr {
     // timedOut, settle fn
     AsyncBlocking(u32, u32), // `await Async.blocking(() => …)` (§40.4): site, the sync closure
     AsyncBoxed(u32, u32),    // `await Async.boxed(alloc, f(…))` (§40.1): the allocator's type, the task's call
+    SetSpawn(u32, u32, u32), // a task set's start (ADR 0053): the record pointer, the admission code, the closure: a u32
     Error,
 }
 

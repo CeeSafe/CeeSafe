@@ -144,6 +144,61 @@ borrow checker's:
 `Async.scopeIn(alloc, oom, body)` takes the children's frames from an allocator of your choice; `Async.scope` uses the
 system heap.
 
+## Starting tasks as you go: task sets
+
+A scope's children are started in its body, from the variables in reach. A server starts a task per connection as
+connections come, from a loop that may be in another function. That is a **task set**:
+
+```ceesafe
+enum WorkError {
+    Failed(u32),
+    NoMemory,
+}
+
+async fn work(n: u32) -> Result<void, WorkError> {
+    match (await Timer.sleep(1)) {
+        Ok() => {}
+        Err(_) => { return Err(WorkError.Failed(n)); }
+    }
+    return if (n == 3) Err(WorkError.Failed(n)) else Ok();
+}
+
+/// Starts five tasks through the set it is given; at most two run at once.
+async fn startAll(set: borrow TaskSet<WorkError>) -> Result<void, WorkError> {
+    for (n in 0..5u32) {
+        await set.spawn(async move () => await work(n))?;
+    }
+    return Ok();
+}
+
+async fn run() -> Result<void, WorkError> {
+    return await Async.tasks(2, WorkError.NoMemory, async (set) => await startAll(set));
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok() => { Console.writeLine("all done"); }
+        Err(WorkError.Failed(n)) => {
+            Console.write("task ");
+            Console.write(n);
+            Console.writeLine(" failed; the others ran to the end");
+        }
+        Err(WorkError.NoMemory) => { Console.writeLine("no memory"); }
+    }
+}
+```
+
+```text
+task 3 failed; the others ran to the end
+```
+
+- `Async.tasks(limit, oom, body)` runs `body` with the set, then waits for every task it started. The set's error type
+  is `oom`'s, and must be `Copy`.
+- `await set.spawn(async move () => …)` waits while `limit` tasks run; `set.trySpawn(…)` is `false` instead.
+- One task's error does not stop the others: the set reports the first. The body's error cancels them all.
+- A task may outlive the function that started it, so it owns what it captures: no references or views (N0349).
+  Share through `Arc` or a `Channel`, or pass values in.
+
 ## Racing and joining two tasks
 
 `Async.race(a, b)` runs two async closures and keeps the first to finish; `Async.all(a, b)` runs both and fails with

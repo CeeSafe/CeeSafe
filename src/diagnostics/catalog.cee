@@ -104,9 +104,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
-        "An `impl` that does not match its interface (receiver, parameter or return type, a missing or extra method), a duplicate `impl`, an `impl` for a generic or scoped type, an interface method without a receiver, or a method call that two bounds both provide",
+        "An `impl` that does not match its interface (receiver, parameter or return type, a missing or extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide",
     268 =>
-        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`)",
+        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), or a type with region parameters coerced to `dyn I` (ADR 0054)",
     270 => "A scoped field or payload in a struct or enum without region parameters",
     272 => "Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it",
     273 => "An unknown region name, region arguments on a type without region parameters, or the wrong number of them",
@@ -191,5 +191,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3)",
     348 =>
         "A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1)",
+    349 =>
+        "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     _ => "",
 };

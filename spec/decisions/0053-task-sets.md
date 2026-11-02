@@ -143,3 +143,34 @@ await Async.tasks(limit, oom, async (set) => {
    - `tools/cancel_sweep.py`, the allocation-failure sweep with `--check-leaks`, TSan for `spawnSend` (ADR 0038);
    - every reactor and Windows.
 6. ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **The body through ADR 0037.** `Async.tasks(limit, oom, body)` is checked as a call of lib/core's
+  `AsyncTasks<E>.run`, an `@effectsOf(body)` async fn whose async instance awaits the body in the awaiting task: the
+  set's owner, as §3.1 says. Its frame holds the record (`TaskSetRecord<E>`: the runtime's `ceesafe_task_set`, then
+  the first child error), and after the body it waits for the children with `ceesafe_async_set_done` and
+  `Async.park`. So the compiler needs no form for the body or the wait, and the borrow checker no rule: only the
+  start is the compiler's.
+- **The start.** `await set.spawn(child)` is checked as `await TaskSet.spawned(set, SetSpawn(set.recordOf(), await
+  set.room(), child))`, and `trySpawn` with `tryRoom` and `started`. `SetSpawn` is a HIR form and the NIR builtin
+  `AsyncSetSpawn`, emitted in any function (a sync one may call `trySpawn`). `set` must be a local or parameter of
+  type `TaskSet<E>` or a reference to one, since it is read once per step.
+- **Readings of §3.2 and §3.4.**
+  - `spawn`'s `Err(oom)` may come many times, so `E` must be `Copy` (N0268 at `Async.tasks`).
+  - A spawn on a cancelled set has no error of `E` that means cancellation, so it starts nothing and is `Err(oom)`;
+    its task is being cancelled, and so is its set's result.
+  - Only the owner can spawn (a child cannot capture the set), so the runtime keeps one task waiting for room, and
+    the owner never changes.
+  - A `limit` of 0 is 1.
+- **Not in this commit:** `Async.tasksIn(alloc, …)` and `set.spawnSend`. The runtime has the allocator's slot
+  (`ceesafe_async_set_allocator`); what remains is passing the allocator's adapters into the record at the
+  `tasksIn` call, since a spawn in another function does not know the allocator's type. A follow-up commit does both.
+- **The interpreter** models the record (its InterpScope, flagged as a set), the room and done waits (parked until a
+  child returns, through `asyncWoken`), the body's cancellation, and the start.
+- **Tests:** run-pass/async-task-set (ten children under a limit of three, started from a function the set is passed
+  to; a child's error that cancels no sibling; the body's error cancelling every child; `trySpawn` refused while full;
+  an outer timeout reaching every child), natively, in the interpreter, under the cancellation sweep; check-fail/
+  async-task-set (N0349 for a reference, a slice, a `StringView` and the set itself; N0209; N0342; N0268); the guide's
+  example.
+

@@ -28,6 +28,11 @@ fn bfAsyncScopeStart() -> u32 => 1007;
 /// Builtin(AsyncWorkers, [n]), which gives the next run n workers, then the run.
 fn bfAsyncWorkers() -> u32 => 1008;
 fn bfAsyncRunWorkers() -> u32 => 1009;
+/// A task set's start (ADR 0053): the child's function, the set's record, the admission code, the child's closure;
+/// its value is 0 (started), 2 (not admitted) or 3 (no frame).
+fn bfAsyncSetSpawn() -> u32 => 1010;
+/// N0349: a task set's child that captures a value holding a loan (ADR 0053 §3.2).
+fn setCapturesLoan() -> u32 => 349;
 
 /// Whether `function` (a HirFunction) is an `async fn`.
 fn isAsyncFunction(c: borrow Checker, function: u32) -> bool {
@@ -174,6 +179,9 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "scope") || sameText(c.name(memberIdent.symbol), "scopeIn")) {
         let withAllocator = sameText(c.name(memberIdent.symbol), "scopeIn");
         return checkAsyncScope(c, arguments, withAllocator, span);
+    }
+    if (sameText(c.name(memberIdent.symbol), "tasks")) {
+        return checkAsyncTasks(c, arguments, span);
     }
     if (sameText(c.name(memberIdent.symbol), "boxed")) {
         return checkAsyncBoxed(c, arguments, expected, span);
@@ -398,6 +406,205 @@ fn checkAsyncScope(c: borrow mut Checker, all: Range, withAllocator: bool, span:
     c.asyncScopes.pop();
     return c.expr(HirExpr.AsyncScope(site, oom, block), resultType, span.start, span.end);
 }
+
+/// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053 §3.1): a call of lib/core's `AsyncTasks<E>.run`, whose
+/// async instance awaits the body in this task (ADR 0037). `E` is `oom`'s type, and must be Copy (N0268).
+fn checkAsyncTasks(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (c.freestanding) {
+        hostedOnly(c, span, "'Async.tasks' (its children come from the system heap)".bytes())?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 3) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.tasks' takes the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    // `E` from `oom`, checked again by the call: this probe's diagnostics are the call's too, so dropped here.
+    let mark = diagnosticsMark(c);
+    let oomSyntax = c.front.ast.at(arguments, 1);
+    let probe = synth(c, oomSyntax, none())?;
+    let errorType = c.typeOf(probe);
+    dropDiagnosticsSince(c, mark);
+    if (c.types.isBottom(errorType)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var typeArguments = Vector<u32>.create();
+    typeArguments.push(errorType)?;
+    let runName = c.intern("run")?;
+    let run = libraryFunction(c, "AsyncTasks", typeArguments.view(), runName, span)?;
+    if (run == none()) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return checkUserCall(c, run, arguments, span);
+}
+
+/// Is `t` lib/core's TaskSet<E>?
+fn isTaskSet(c: borrow Checker, t: u32) -> bool {
+    let definition = c.types.info(t).structDef;
+    if (!c.types.is(t, TypeKind.Struct) || definition == none()) {
+        return false;
+    }
+    let d = borrow c.types.structs[definition as usize];
+    if (d.item == none() || d.file == none() || !c.fileIsLibrary[d.file as usize]) {
+        return false;
+    }
+    let item = c.front.ast.items[d.item as usize];
+    return sameText(c.name(c.front.ast.idents[item.name as usize].symbol), "TaskSet");
+}
+
+/// `set` as a `borrow TaskSet<E>` argument, checked again from its syntax for each of the steps that take it.
+fn setArgument(c: borrow mut Checker, target: u32, setType: u32, span: Span) -> Result<u32, AllocError> {
+    let receiver = synth(c, target, none())?;
+    let shared = c.types.referenceTo(setType, false)?;
+    if (c.types.is(c.typeOf(receiver), TypeKind.Reference)) {
+        return coerce(c, receiver, shared, span);
+    }
+    let place = toPlace(c, receiver)?;
+    if (place != none()) {
+        return c.expr(HirExpr.Borrow(false, place), shared, span.start, span.end);
+    }
+    return c.expr(HirExpr.BorrowTemp(false, receiver), shared, span.start, span.end);
+}
+
+/// `await set.spawn(async move () => …)` and `set.trySpawn(async move () => …)` on a TaskSet (ADR 0053 §3.2): lib/core's
+/// steps around the start, `TaskSet.spawned(set, SetSpawn(record, await set.room(), child))` (`tryRoom` and `started`
+/// for trySpawn). The child is an `async move` literal of result `Result<void, E>` whose captures hold no loan (N0349).
+fn checkSetSpawn(
+    c: borrow mut Checker,
+    target: u32,
+    setType: u32,
+    arguments: Range,
+    trying: bool,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited && !trying) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else if (!awaited && !trying) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'spawn' waits while the set's limit of children run: write 'await set.spawn(…)', or use 'trySpawn' (ADR 0053 §3.2)",
+        )?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    let literal = if (arguments.count == 1) match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
+        ExprNode.Closure(closure) => if (c.front.ast.closures[closure as usize].isAsync &&
+            c.front.ast.closures[closure as usize].isMove &&
+            c.front.ast.closures[closure as usize].parameters.count == 0) closure else none(),
+        _ => none(),
+    } else none();
+    if (literal == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a task set's child is an async move closure literal with no parameters: 'set.spawn(async move () => …)' (ADR 0053 §3.2)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        let isClosure = arguments.count == 1 && match (c.front.ast.exprs[c.front.ast.at(arguments, 0) as usize]) {
+            ExprNode.Closure(_) => true,
+            _ => false,
+        };
+        if (!isClosure) {
+            checkArgumentsLoosely(c, arguments)?; // a closure literal refused here is not checked again
+        }
+        return c.errorResult(span.start, span.end);
+    }
+    let typeArguments = c.types.structs[c.types.info(setType).structDef as usize].typeArguments;
+    let errorType = c.types.listAt(typeArguments, 0);
+    let voidType = c.types.voidType;
+    let resultType = resultOf(c, voidType, errorType)?;
+    let none0 = Vector<u32>.create();
+    let into = c.types.dynFunctionOf(none0.view(), resultType, maskEffects(), true, false)?;
+    let argument = c.front.ast.at(arguments, 0);
+    let argumentSpan = c.front.ast.exprSpans[argument as usize];
+    let savedCopy = c.copyCaptures;
+    c.copyCaptures = true;
+    let closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
+    c.copyCaptures = savedCopy;
+    if (c.isBottom(closure)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let captures = match (c.hir.exprs[closure as usize]) {
+        HirExpr.Closure(_, list) => list,
+        _ => emptyRange(),
+    };
+    var ok = true;
+    for (k in 0..captures.count) {
+        let capture = c.hir.captures[(captures.start + k) as usize];
+        let local = c.hir.locals[capture.local as usize];
+        let t = if (capture.field != none()) c.types.fields[capture.field as usize].typ else local.typ;
+        if (c.types.isScoped(t) || !isOwnedCapture(capture.mode)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this child captures ")?;
+            appendQuotedName(mut message, c, local.name)?;
+            appendText(mut message, ", of type ")?;
+            appendQuotedType(mut message, c, t)?;
+            appendText(
+                mut message,
+                ", which holds a loan; a task set's child may outlive the code that starts it, so it captures owned or Copy values only: share through Arc, or pass values down (ADR 0053 §3.2)",
+            )?;
+            c.error(setCapturesLoan(), argumentSpan.start, argumentSpan.end, message)?;
+            ok = false;
+        }
+    }
+    if (!ok) {
+        return c.errorResult(span.start, span.end);
+    }
+    var setTypeArguments = Vector<u32>.create();
+    setTypeArguments.push(errorType)?;
+    let recordName = c.intern("recordOf")?;
+    let roomName = c.intern(if (trying) "tryRoom" else "room")?;
+    let resultName = c.intern(if (trying) "started" else "spawned")?;
+    let recordOf = libraryFunction(c, "TaskSet", setTypeArguments.view(), recordName, span)?;
+    let room = libraryFunction(c, "TaskSet", setTypeArguments.view(), roomName, span)?;
+    let finish = libraryFunction(c, "TaskSet", setTypeArguments.view(), resultName, span)?;
+    if (recordOf == none() || room == none() || finish == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let u32Type = c.types.lookup("u32".bytes());
+    let first = setArgument(c, target, setType, targetSpan)?;
+    var recordArguments = Vector<u32>.create();
+    recordArguments.push(first)?;
+    let pointerType = c.hir.functions[recordOf as usize].returnType;
+    let record = c.expr(
+        HirExpr.Call(recordOf, c.hir.list(recordArguments.view())?),
+        pointerType,
+        span.start,
+        span.end,
+    )?;
+    let second = setArgument(c, target, setType, targetSpan)?;
+    var roomArguments = Vector<u32>.create();
+    roomArguments.push(second)?;
+    var admitted = c.expr(HirExpr.Call(room, c.hir.list(roomArguments.view())?), u32Type, span.start, span.end)?;
+    if (!trying) {
+        admitted = c.expr(HirExpr.Await(admitted), u32Type, span.start, span.end)?;
+    }
+    let code = c.expr(HirExpr.SetSpawn(record, admitted, closure), u32Type, span.start, span.end)?;
+    let third = setArgument(c, target, setType, targetSpan)?;
+    var finishArguments = Vector<u32>.create();
+    finishArguments.push(third)?;
+    finishArguments.push(code)?;
+    let finishType = c.hir.functions[finish as usize].returnType;
+    return c.expr(HirExpr.Call(finish, c.hir.list(finishArguments.view())?), finishType, span.start, span.end);
+}
+
+/// A capture an `async move` child owns: moved or copied into it.
+fn isOwnedCapture(mode: CaptureMode) -> bool => match (mode) {
+    CaptureMode.Move => true,
+    CaptureMode.Copy => true,
+    _ => false,
+};
 
 /// Whether a `return` or `?` here would leave an `Async.scope` body of the current function (ADR 0031 §6.6).
 fn inScopeBody(c: borrow Checker) -> bool {

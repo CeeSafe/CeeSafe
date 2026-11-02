@@ -2154,6 +2154,35 @@ fn lowerRvalueCore(
             }
             return Ok(spawn);
         }
+        HirExpr.SetSpawn(record, admitted, closure) => {
+            // A task set's start (ADR 0053): the child's function, the record, the admission code, the closure, in
+            // that order of evaluation; the value is the start's code.
+            let u32Type = c.types.lookup("u32".bytes());
+            let body = match (c.hir.exprs[closure as usize]) {
+                HirExpr.Closure(function, _) => function,
+                _ => none(),
+            };
+            let bodyOperand = constOperand(n, body as i64, u32Type)?;
+            let recordOperand = lowerOperand(c, n, b, record)?;
+            if (recordOperand == none()) {
+                return Ok(none());
+            }
+            let admittedOperand = lowerOperand(c, n, b, admitted)?;
+            if (admittedOperand == none()) {
+                return Ok(none());
+            }
+            let child = lowerOperand(c, n, b, closure)?;
+            if (child == none()) {
+                return Ok(none());
+            }
+            var operands = Vector<u32>.create();
+            operands.push(bodyOperand)?;
+            operands.push(recordOperand)?;
+            operands.push(admittedOperand)?;
+            operands.push(child)?;
+            let list = n.list(operands.view())?;
+            return n.rvalue(NirRvalue.Builtin(bfAsyncSetSpawn(), list), u32Type, exprSpan(c, e));
+        }
         HirExpr.BuiltinCall(function, arguments) => { return lowerBuiltinCall(c, n, b, e, function, arguments); }
         _ => {}
     }
@@ -2640,6 +2669,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.AsyncBlocking(_, _) => { return true; }
         HirExpr.AsyncBoxed(_, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }
+        HirExpr.SetSpawn(_, _, _) => { return true; }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }
     }

@@ -1114,6 +1114,18 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_signal_take")) {
         return "P:b";
     }
+    if (sameText(name, "ceesafe_async_set_init")) {
+        return "PuP:-";
+    }
+    if (sameText(name, "ceesafe_async_set_admit")) {
+        return "Pb:u";
+    }
+    if (sameText(name, "ceesafe_async_set_done") || sameText(name, "ceesafe_async_set_oom")) {
+        return "P:b";
+    }
+    if (sameText(name, "ceesafe_async_set_cancel")) {
+        return "P:-";
+    }
     if (sameText(name, "ceesafe_async_signal_forget") || sameText(name, "ceesafe_async_signal_raise")) {
         return "P:-";
     }
@@ -1787,6 +1799,128 @@ fn mutexLock(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, add
     return Ok();
 }
 
+/// A task set's record (ADR 0053) on one thread: word 0 is its InterpScope plus one. A wait (for room, or for the
+/// children) parks the task until a child returns and wakes it (asyncWoken), or a cancellation.
+fn asyncSet(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    let record = arguments[0].bits(0, 8)?;
+    if (sameText(name, "ceesafe_async_set_init")) {
+        let limit = truncate<u32>(arguments[1].bits(0, 4)?);
+        it.asyncScopes.push(
+            InterpScope {
+                task: it.asyncCurrent,
+                site: none(),
+                active: true,
+                live: 0,
+                failed: false,
+                cancelled: false,
+                error: uninitialisedValue(0),
+                waiting: false,
+                isJoin: false,
+                isRace: false,
+                started: false,
+                first: 2,
+                results: Vector<Value>.create(),
+                oom: false,
+                isSet: true,
+                limit: if (limit == 0) 1 else limit,
+                roomWaiter: none(),
+                doneWaiter: none(),
+                errorSlot: arguments[2].bits(0, 8)?,
+            },
+        )!;
+        it.memory.storeBits(record, it.asyncScopes.length as u64, 8)?;
+        return Ok(null);
+    }
+    let scope = truncate<usize>(it.memory.loadBits(record, 8)? - 1);
+    if (sameText(name, "ceesafe_async_set_admit")) {
+        let wait = arguments[1].bits(0, 1)? != 0;
+        if (it.asyncScopes[scope].cancelled || asyncStatus(it) == 1) {
+            return Ok(valueOf(2, 4));
+        }
+        if (it.asyncScopes[scope].live < it.asyncScopes[scope].limit) {
+            return Ok(valueOf(0, 4));
+        }
+        if (wait) {
+            it.asyncScopes[scope].roomWaiter = it.asyncCurrent;
+            it.asyncOnWake = true; // parks until a child returns
+        }
+        return Ok(valueOf(1, 4));
+    }
+    if (sameText(name, "ceesafe_async_set_done")) {
+        if (it.asyncScopes[scope].live == 0) {
+            it.asyncScopes[scope].active = false;
+            return Ok(valueOf(1, 1));
+        }
+        it.asyncScopes[scope].doneWaiter = it.asyncCurrent;
+        it.asyncOnWake = true; // parks until the last child returns
+        return Ok(valueOf(0, 1));
+    }
+    if (sameText(name, "ceesafe_async_set_cancel")) {
+        if (!it.asyncScopes[scope].cancelled) {
+            it.asyncScopes[scope].cancelled = true;
+            it.asyncSetCancelled = true; // the children waiting run again, to see it
+        }
+        return Ok(null);
+    }
+    return Ok(valueOf(0, 1)); // ceesafe_async_set_oom: the interpreter's frames always come
+}
+
+/// A task set's start (ADR 0053): if admitted, a child queued in the set's scope, as `asyncSpawn` does; else what its
+/// environment was to own dropped. The value is the start's code: 0, or the admission's.
+fn asyncSetSpawn(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    arguments: Range,
+) -> Result<Value?, Stop> {
+    let child = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
+    let record = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 8)?;
+    let code = operand(it, c, n, frame, n.at(arguments, 2))?.bits(0, 4)?;
+    let closure = operand(it, c, n, frame, n.at(arguments, 3))?;
+    let function = nirFunctionOf(it, child, 0)?;
+    let environmentDrop = if (ownsEnvironment(c, child)) c.hir.functions[child as usize].closureEnvironment else none();
+    var values = Vector<Value>.create();
+    var environment: u64 = 0;
+    if (c.hir.functions[child as usize].closureEnvironment != none()) {
+        let envType = c.types.info(n.functions[function as usize].locals[0].typ).pointee;
+        let size = typeSize(c, envType)?;
+        environment = it.memory.allocate(allocationLocal(), size, true, "a child's environment".bytes())?;
+        if (c.types.is(n.operandTypes[n.at(arguments, 3) as usize], TypeKind.Reference)) {
+            let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
+            it.memory.store(environment, bytes)?;
+        } else {
+            it.memory.store(environment, closure)?;
+        }
+        values.push(valueOf(environment, 8))!;
+    }
+    if (code != 0) {
+        if (environment != 0) {
+            if (environmentDrop != none()) {
+                destroy(it, c, n, environmentDrop, environment)?; // not started: what it was to own is dropped
+            }
+            it.memory.end(environment);
+        }
+        return Ok(valueOf(code, 4));
+    }
+    let scope = truncate<u32>(it.memory.loadBits(record, 8)? - 1);
+    it.asyncScopes[scope as usize].live += 1;
+    it.asyncSpawns.push(
+        InterpSpawn {
+            function: function,
+            arguments: values,
+            scope: scope,
+            environment: environment,
+            environmentDrop: environmentDrop,
+            joinIndex: none(),
+            release: none(),
+            releaseBlock: 0,
+            releaseSize: 0,
+        },
+    )!;
+    return Ok(valueOf(0, 4));
+}
+
 /// AsyncSignal's record (ADR 0039) on one thread: word 0 is raised, word 1 the waiting task plus one (0: none).
 fn asyncSignal(it: borrow mut Interp, name: Slice<u8>, record: u64) -> Result<Value?, Stop> {
     let raised = it.memory.loadBits(record, 8)?;
@@ -1845,6 +1979,9 @@ fn asyncService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector
     if (sameText(name, "ceesafe_async_signal_take") || sameText(name, "ceesafe_async_signal_forget") ||
         sameText(name, "ceesafe_async_signal_raise")) {
         return asyncSignal(it, name, arguments[0].bits(0, 8)?);
+    }
+    if (name.length > 18 && sameText(name[0..18], "ceesafe_async_set_")) {
+        return asyncSet(it, name, arguments);
     }
     if (sameText(name, "ceesafe_async_shield_enter")) {
         let ms = arguments[0].bits(0, 8)?;
@@ -1917,7 +2054,12 @@ struct InterpScope {
     started: bool;
     first: u32;
     results: Vector<Value>;
-    oom: bool; // a child could not be allocated (Async.scopeIn)
+    oom: bool;       // a child could not be allocated (Async.scopeIn)
+    isSet: bool;     // a task set's (ADR 0053): a child's error cancels no sibling
+    limit: u32;      // a set's most live children
+    roomWaiter: u32; // the task waiting to start a child (a global task id), or none
+    doneWaiter: u32; // the task waiting for the set's children, or none
+    errorSlot: u64;  // where a set's first child error is stored
 }
 
 /// What cancellation needs of a task, beside runTasks' own record (InterpTask).
@@ -1985,6 +2127,11 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             first: 2,
             results: Vector<Value>.create(),
             oom: false,
+            isSet: false,
+            limit: 0,
+            roomWaiter: none(),
+            doneWaiter: none(),
+            errorSlot: 0,
         },
     )!;
     return truncate<u32>(it.asyncScopes.length - 1);
@@ -2169,6 +2316,17 @@ fn runTasks(
     ready.push(0)!;
     it.asyncTasks.push(InterpTaskInfo { scope: none(), shields: 0, shieldDeadline: 0xFFFFFFFFFFFFFFFF })!;
     loop {
+        if (it.asyncSetCancelled) {
+            // A task set was cancelled (ADR 0053): every waiting task runs again to see it, as for a scope's.
+            it.asyncSetCancelled = false;
+            for (j in 0..tasks.length) {
+                if (tasks[j].parked && !tasks[j].onScope) {
+                    tasks[j].parked = false;
+                    tasks[j].deadline = 0xFFFFFFFFFFFFFFFF;
+                    ready.push(truncate<u32>(j))!;
+                }
+            }
+        }
         // Tasks a channel woke (§40.8); another run's stay for it.
         var others = Vector<u32>.create();
         loop {
@@ -2400,12 +2558,30 @@ fn runTasks(
                     Some(result) => {
                         if (result.bits(0, 1)? != 0 && !it.asyncScopes[scope as usize].failed) {
                             it.asyncScopes[scope as usize].failed = true;
-                            it.asyncScopes[scope as usize].error = result; // the first child's error
+                            if (it.asyncScopes[scope as usize].isSet) {
+                                // A task set's first child error, to its record's slot (ADR 0053).
+                                it.memory.store(it.asyncScopes[scope as usize].errorSlot, result)?;
+                            } else {
+                                it.asyncScopes[scope as usize].error = result; // the first child's error
+                            }
                         }
                     }
                     null => {}
                 }
                 it.asyncScopes[scope as usize].live -= 1;
+                if (it.asyncScopes[scope as usize].isSet) {
+                    // A set's child: no sibling is cancelled; the task waiting for room or for the set runs again.
+                    let s = borrow mut it.asyncScopes[scope as usize];
+                    if (s.roomWaiter != none() && s.live < s.limit) {
+                        it.asyncWoken.push(s.roomWaiter)!;
+                        s.roomWaiter = none();
+                    }
+                    if (s.doneWaiter != none() && s.live == 0) {
+                        it.asyncWoken.push(s.doneWaiter)!;
+                        s.doneWaiter = none();
+                    }
+                    continue;
+                }
                 if (it.asyncScopes[scope as usize].failed && !it.asyncScopes[scope as usize].cancelled) {
                     // The first error cancels the other children: those waiting run again to see it (§40.7).
                     it.asyncScopes[scope as usize].cancelled = true;

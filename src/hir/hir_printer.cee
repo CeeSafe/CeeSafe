@@ -568,6 +568,15 @@ struct HirPrinter {
                 this.expr(hir, types, symbols, closure)?;
                 this.text(")")?;
             }
+            HirExpr.SetSpawn(record, admitted, closure) => {
+                this.text("(set-spawn ")?;
+                this.expr(hir, types, symbols, record)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, admitted)?;
+                this.text(" ")?;
+                this.expr(hir, types, symbols, closure)?;
+                this.text(")")?;
+            }
             HirExpr.Closure(function, captures) => {
                 let f = borrow hir.functions[function as usize];
                 this.text("(closure ")?;

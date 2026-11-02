@@ -686,7 +686,7 @@ fn builtinOperation(
     if (function == bfAsyncPark()) {
         return Ok(textOp(suspendEffect(), 9));
     }
-    if (function == bfAsyncSpawn()) {
+    if (function == bfAsyncSpawn() || function == bfAsyncSetSpawn()) {
         return Ok(textOp(alloc, 10));
     }
     if (function == bfAsyncScopeWait()) {

@@ -812,6 +812,9 @@ fn builtin(
     if (b == bfAsyncSpawn()) {
         return asyncSpawn(it, c, n, frame, arguments);
     }
+    if (b == bfAsyncSetSpawn()) {
+        return asyncSetSpawn(it, c, n, frame, arguments);
+    }
     if (b == bfAsyncScopeWait()) {
         return asyncScopeWait(it, c, n, frame, r, arguments);
     }

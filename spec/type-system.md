@@ -3566,6 +3566,26 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 
+**Task sets** (ADR 0053): children started while the set runs, from any function the set is passed to.
+
+- **`await Async.tasks(limit, oom, async (set) => …)`** is `Result<void, E>`, `E` being `oom`'s type, which must be
+  `Copy` (N0268). It is a call of lib/core's `AsyncTasks<E>.run` (ADR 0037): the body runs in the awaiting task, as
+  the set's owner, with `set: borrow TaskSet<E>`, and may pass the set to the functions it calls. When the body has
+  returned, the set waits for every child. Hosted only (N0293), its children's frames from the system heap.
+- **`await set.spawn(async move () => …)`** starts a child of result `Result<void, E>` and is `Result<void, E>`: while
+  `limit` children run, the task waits for one to return. Once the set or its task is cancelled, or if the child's
+  frame cannot be allocated, it starts nothing and is `Err(oom)`; the set goes on. **`set.trySpawn(child)`** is `bool`,
+  false instead of waiting (or once cancelled, or with no frame); it is not awaited. `set` is a local or parameter of
+  type `TaskSet<E>` or a reference to one. Not awaiting `spawn` is N0342; a child that is not an `async move` literal
+  with no parameters is N0209.
+- **A child owns what it captures** (N0349): each capture is moved or copied, and its type holds no loan (no reference,
+  slice, `StringView`, or struct with region parameters), since a child may outlive the code that started it. So a
+  child cannot capture the set: shared state goes through `Arc` or a `Channel`, or values are passed down.
+- **Errors.** A child's `Err` cancels no sibling; the set keeps the first. The body's `Err` cancels every child. The
+  set's result, once the body and every child have returned, is the body's `Err`, else the first child's, else `oom`
+  if a child's frame could not be allocated, else `Ok`. A cancellation of the set's owner reaches every child (§40.7),
+  since the owner is the task that awaits the set.
+
 ### 40.6 Frames
 - Each async fn or async closure has a **frame**: its parameters, the locals it needs across a suspension point (or
   borrows), storage for what it waits on (the awaited task's frame, shared by every await site), its result and its

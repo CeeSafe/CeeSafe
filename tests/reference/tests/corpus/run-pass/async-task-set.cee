@@ -1,0 +1,197 @@
+// Task sets (ADR 0053): children started while the set runs, at most `limit` at once, from the body and from a function
+// the set is passed to; a child's error cancels no sibling and is the set's result; the body's error cancels every
+// child; trySpawn refused while the set is full; a cancellation from outside reaching every child. Children report
+// through a channel each owns a clone of (they capture no loans). Each expected line follows from the program.
+
+enum Failure {
+    Child(u32),
+    Body,
+    Oom,
+    Cancelled,
+}
+
+fn failure(e: AsyncError) -> Failure => match (e) {
+    AsyncError.Cancelled => Failure.Cancelled,
+    _ => Failure.Oom,
+};
+
+fn waited(r: Result<void, AsyncError>) -> Result<void, Failure> => match (r) {
+    Ok() => Ok(),
+    Err(e) => Err(failure(e)),
+};
+
+fn name(r: Result<void, Failure>) -> StringView => match (r) {
+    Ok() => "ok",
+    Err(Failure.Child(_)) => "a child's error",
+    Err(Failure.Body) => "the body's error",
+    Err(Failure.Oom) => "oom",
+    Err(Failure.Cancelled) => "cancelled",
+};
+
+/// Each event a child sends: +1 when it starts, -1 when it ends, 100 if it saw its cancellation.
+fn report(events: borrow Channel<i64>, value: i64) {
+    match (events.trySend(value)) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}
+
+/// Starts `count` children through the set it is given, each sleeping a little.
+async fn starter(set: borrow TaskSet<Failure>, events: borrow Channel<i64>, count: u64) -> Result<void, Failure> {
+    for (k in 0..count) {
+        let mine = events.clone();
+        await set.spawn(async move () => {
+            report(borrow mine, 1);
+            let slept = waited(await Timer.sleep(k % 4 + 1));
+            report(borrow mine, -1);
+            return slept;
+        })?;
+    }
+    return Ok();
+}
+
+/// The most children live at once, and how many started and saw a cancellation, from a closed channel's events.
+fn tally(events: borrow Channel<i64>) -> [i64; 3] {
+    var live: i64 = 0;
+    var most: i64 = 0;
+    var started: i64 = 0;
+    var cancelled: i64 = 0;
+    loop {
+        match (events.recv()) {
+            Some(v) => {
+                if (v == 100) {
+                    cancelled += 1;
+                } else {
+                    live += v;
+                    if (v == 1) {
+                        started += 1;
+                    }
+                    if (live > most) {
+                        most = live;
+                    }
+                }
+            }
+            null => { break; }
+        }
+    }
+    return [most, started, cancelled];
+}
+
+async fn limited(events: borrow Channel<i64>) -> Result<void, Failure> {
+    return await Async.tasks(3, Failure.Oom, async (set) => {
+        await starter(set, events, 10)?;
+        return Ok();
+    });
+}
+
+async fn childFails(events: borrow Channel<i64>) -> Result<void, Failure> {
+    return await Async.tasks(4, Failure.Oom, async (set) => {
+        for (k in 0..6u32) {
+            let mine = events.clone();
+            await set.spawn(async move () => {
+                report(borrow mine, 1);
+                if (k == 2) {
+                    report(borrow mine, -1);
+                    return Err(Failure.Child(k)); // the siblings go on
+                }
+                let slept = waited(await Timer.sleep(5));
+                report(borrow mine, -1);
+                return slept;
+            })?;
+        }
+        return Ok();
+    });
+}
+
+async fn bodyFails(events: borrow Channel<i64>) -> Result<void, Failure> {
+    return await Async.tasks(4, Failure.Oom, async (set) => {
+        for (k in 0..3u32) {
+            let mine = events.clone();
+            await set.spawn(async move () => {
+                match (await Timer.sleep(10000)) {
+                    Ok() => {}
+                    Err(_) => { report(borrow mine, 100); } // cancelled by the body's error
+                }
+                return Ok();
+            })?;
+        }
+        return Err(Failure.Body);
+    });
+}
+
+/// trySpawn: true, then false while the one child of a set of one runs.
+async fn trying(out: borrow mut [bool; 2]) -> Result<void, Failure> {
+    var first = false;
+    var second = false;
+    let r = await Async.tasks(1, Failure.Oom, async (set) => {
+        first = set.trySpawn(async move () => waited(await Timer.sleep(5)));
+        second = set.trySpawn(async move () => waited(await Timer.sleep(5)));
+        return Ok();
+    });
+    out[0] = first;
+    out[1] = second;
+    return r;
+}
+
+async fn outside(events: borrow Channel<i64>) -> Result<void, Failure> {
+    return await Async.timeout(20, Failure.Cancelled, async () => await Async.tasks(8, Failure.Oom, async (set) => {
+        for (k in 0..3u32) {
+            let mine = events.clone();
+            await set.spawn(async move () => {
+                match (await Timer.sleep(10000)) {
+                    Ok() => {}
+                    Err(_) => { report(borrow mine, 100); } // the timeout's cancellation reaches the set's children,
+                    // which return Ok: the set's late Ok is the timeout's result (ADR 0046)
+                }
+                return Ok();
+            })?;
+        }
+        return Ok();
+    }));
+}
+
+fn show(what: StringView, r: Result<void, Failure>, counts: [i64; 3]) {
+    Console.write(what);
+    Console.write(": ");
+    Console.write(name(r));
+    Console.write(", at most ");
+    Console.write(counts[0]);
+    Console.write(" at once, ");
+    Console.write(counts[1]);
+    Console.write(" started, ");
+    Console.write(counts[2]);
+    Console.writeLine(" cancelled");
+}
+
+fn main() {
+    // Each case has its own channel, closed once the set is done, so that a tally ends where the events do.
+    let first = Channel<i64>.create(1000)!;
+    let a = Async.run(limited(borrow first));
+    first.close();
+    show("limited", a, tally(borrow first));
+    let second = Channel<i64>.create(1000)!;
+    let b = Async.run(childFails(borrow second));
+    second.close();
+    show("a child fails", b, tally(borrow second));
+    let third = Channel<i64>.create(1000)!;
+    let c = Async.run(bodyFails(borrow third));
+    third.close();
+    show("the body fails", c, tally(borrow third));
+    var tried = [false, false];
+    let d = Async.run(trying(mut tried));
+    Console.write("trySpawn: ");
+    Console.write(name(d));
+    Console.write(", ");
+    Console.write(tried[0]);
+    Console.write(", ");
+    Console.writeLine(tried[1]);
+    let fifth = Channel<i64>.create(1000)!;
+    let e = Async.run(outside(borrow fifth));
+    fifth.close();
+    show("outside", e, tally(borrow fifth));
+}
+// expect-stdout: limited: ok, at most 3 at once, 10 started, 0 cancelled
+// expect-stdout: a child fails: a child's error, at most 4 at once, 6 started, 0 cancelled
+// expect-stdout: the body fails: the body's error, at most 0 at once, 0 started, 3 cancelled
+// expect-stdout: trySpawn: ok, true, false
+// expect-stdout: outside: ok, at most 0 at once, 0 started, 3 cancelled

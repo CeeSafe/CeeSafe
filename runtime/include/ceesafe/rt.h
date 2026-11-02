@@ -1224,6 +1224,14 @@ void ceesafe_dns_end(void *lookup);
 #if defined(_WIN32)
 bool ceesafe_winsock_ready(void); /* Winsock started for the process (ceesafe_rt_io.c), for the resolver */
 #endif
+/* Sending a file (ADR 0051): a step of ceesafe_async_op_sendfile sends from `file` (a File: its int32_t descriptor), at
+ * `offset`, at most `length` bytes, to `socket`: the count sent (0 at the file's end), a negated errno,
+ * CEE_ASYNC_PENDING, or CEE_ASYNC_NO_SENDFILE where the system cannot (lib/std then copies through a buffer). The file's
+ * own position is not used. ceesafe_file_read_at reads at most `length` bytes at `offset` (pread): the count, 0 at the
+ * end, or a negated errno. */
+#define CEE_ASYNC_NO_SENDFILE (INT64_MIN + 2)
+int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, uint64_t offset, uint64_t length);
+int64_t ceesafe_file_read_at(const void *file, uint8_t *buffer, uint64_t length, uint64_t offset);
 /* Message operations (ADR 0045): vectored sends now, datagram messages later (U6). Their record is larger than an
  * operation's and starts with the same header, so ceesafe_async_op_cancel takes either; it is lib/std's AsyncMsgOp's
  * first field. Before the first step, ceesafe_async_msg_part puts part `index` (< CEE_MSG_PARTS) in the record; the

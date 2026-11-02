@@ -275,7 +275,7 @@ The library's waiting operations are async functions, in the hosted profile:
 | Time | `Timer.sleep(ms)`; `Timer.now()` (not async) |
 | Console | `AsyncConsole.write(text)`, `writeLine(text)`, `writeError(text)` |
 | Files | `AsyncFiles.open`, `create`, `read`, `write` (each on a worker thread while the task waits) |
-| Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); `AsyncDns.resolve(host, port)`, a name's addresses, cancellable; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
+| Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); `sendFile(file, offset, length)` and `sendFileAll(file, offset, length)`, a file's bytes sent by the kernel where it can (`sendfile`, `TransmitFile`), the file's position untouched; `AsyncDns.resolve(host, port)`, a name's addresses, cancellable; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
 | Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
 | Blocking calls | `Async.blocking(() => …)`: any sync code on a worker thread while the task waits |
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |
@@ -287,6 +287,12 @@ also accepts IPv4 clients, whose `peerAddress()` is `V4`. Network failures have 
 `ConnectionReset`, `TimedOut`, `HostUnreachable` and the rest, the same on every platform. A blocking call made
 directly in async code would stop every task of the thread, so it is a compile error (N0295): a `File` read or a
 `Mutex` lock belongs in `Async.blocking`.
+
+A static file goes to a socket with `await stream.sendFileAll(borrow file, offset, length)`: the kernel copies it from
+the page cache (`sendfile`, or `TransmitFile` on Windows), and where it cannot, lib/std reads 64 KiB at a time on a
+worker thread and writes them, with the same result. The offset is explicit and the file's position stays where it was,
+so one open file can be sent on many connections at once. If the file is shorter than `offset + length`, the result
+is `Io(InvalidInput)`. `sendFile` is one step and returns how many bytes went.
 
 ## How it runs
 

@@ -6,7 +6,7 @@
 /// A descriptor's host object.
 enum HostHandle {
     Closed,
-    OpenFile(File),
+    OpenFile(File, String), // the file, and its path (ADR 0051: a read at an offset reopens it)
     Listener(TcpListener),
     Stream(TcpStream),
 }
@@ -252,6 +252,54 @@ fn addHandle(it: borrow mut Interp, handle: HostHandle) -> i64 {
     return truncate<i64>(it.runtime.handles.length - 1) + 3;
 }
 
+/// ceesafe_file_read_at (ADR 0051): at most `length` bytes at `offset` of the file the first argument points at, its
+/// own position untouched. Stage 0's File cannot seek, so the model opens the file's path again and reads past the
+/// first `offset` bytes.
+fn readAt(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    requireHostIo(it)?;
+    let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+    let target = arguments[1].bits(0, 8)?;
+    let wanted = arguments[2].bits(0, 8)?;
+    let offset = arguments[3].bits(0, 8)?;
+    var path = String.create();
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            match (borrow it.runtime.handles[k]) {
+                HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                _ => {}
+            }
+        }
+        null => {}
+    }
+    if (path.view().length == 0) {
+        return Ok(valueOf(truncate<u64>(-9i64), 8)); // EBADF, 9 on every host
+    }
+    var file = match (File.open(path.view())) {
+        Ok(f) => f,
+        Err(e) => { return Ok(valueOf(truncate<u64>(0 - errnoOf(e)), 8)); }
+    };
+    var buffer = [0u8; 65536];
+    var skipped: u64 = 0;
+    while (skipped < offset) {
+        let step = if (offset - skipped > 65536) 65536 else offset - skipped;
+        match (file.read(mut buffer[0..step as usize])) {
+            Ok(0) => { return Ok(valueOf(0, 8)); } // the end is before `offset`
+            Ok(got) => { skipped += got as u64; }
+            Err(e) => { return Ok(valueOf(truncate<u64>(0 - errnoOf(e)), 8)); }
+        }
+    }
+    let count = if (wanted > 65536) 65536 else wanted;
+    match (file.read(mut buffer[0..count as usize])) {
+        Ok(got) => {
+            for (k in 0..got) {
+                it.memory.storeBits(target + k as u64, buffer[k] as u64, 1)?;
+            }
+            return Ok(valueOf(got as u64, 8));
+        }
+        Err(e) => { return Ok(valueOf(truncate<u64>(0 - errnoOf(e)), 8)); }
+    }
+}
+
 fn handleIndex(it: borrow Interp, fd: i32) -> usize? {
     if (fd < 3 || truncate<usize>(fd - 3) >= it.runtime.handles.length) {
         return null;
@@ -368,9 +416,11 @@ fn ioBuiltin(
         let path = bytesOf(it, pathValue)?;
         let text = StringView.fromUtf8(path.view())!;
         let opened = if (b == bfFileOpen()) File.open(text) else File.create(text);
+        var kept = String.create();
+        kept.append(text)!;
         match (opened) {
             Ok(file) => {
-                let fd = addHandle(it, HostHandle.OpenFile(file));
+                let fd = addHandle(it, HostHandle.OpenFile(file, kept));
                 return Ok(interpIoResult(c, resultType, fd, 0)?);
             }
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
@@ -394,7 +444,7 @@ fn ioBuiltin(
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow mut it.runtime.handles[k]) {
-                    HostHandle.OpenFile(file) => { read = file.read(mut buffer[..]); }
+                    HostHandle.OpenFile(file, _) => { read = file.read(mut buffer[..]); }
                     HostHandle.Stream(stream) => { read = stream.read(mut buffer[..]); }
                     _ => {}
                 }
@@ -440,7 +490,7 @@ fn ioBuiltin(
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow mut it.runtime.handles[k]) {
-                    HostHandle.OpenFile(file) => { written = file.write(bytes.view()); }
+                    HostHandle.OpenFile(file, _) => { written = file.write(bytes.view()); }
                     HostHandle.Stream(stream) => { written = stream.write(bytes.view()); }
                     _ => {}
                 }
@@ -1064,6 +1114,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_random_key")) {
         return "P:-";
     }
+    if (sameText(name, "ceesafe_async_op_sendfile")) {
+        return "PiPss:l";
+    }
+    if (sameText(name, "ceesafe_file_read_at")) {
+        return "PPss:l";
+    }
     if (sameText(name, "ceesafe_thread_watchdog")) {
         return "s:-";
     }
@@ -1326,6 +1382,13 @@ fn callC(
         it.memory.storeBits(at, 0xa6d2ae2816157e2b, 8)?;
         it.memory.storeBits(at + 8, 0x3c4fcf098815f7ab, 8)?;
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_async_op_sendfile")) {
+        // ADR 0051 §3.3: no sendfile here; lib/std copies through ceesafe_file_read_at, with the same results.
+        return Ok(valueOf(0x8000000000000002, 8)); // CEE_ASYNC_NO_SENDFILE
+    }
+    if (sameText(n0, "ceesafe_file_read_at")) {
+        return readAt(it, arguments);
     }
     if (sameText(n0, "ceesafe_test_begin")) {
         // `ceesafec test --interp` (ADR 0049 §3.3): the runtime's reports and sweeps are native only.

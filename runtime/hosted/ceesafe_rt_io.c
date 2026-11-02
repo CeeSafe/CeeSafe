@@ -5,6 +5,10 @@
  * Windows (MSVC, best effort; spec/c-backend.md §1.1): files and processes through its C runtime;
  * TCP through Winsock 2, its sockets behind a table of ids. Host services (type-system.md §26.7-§26.10, ADR 0028) work on all three.
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* pread, for a read at an offset (ADR 0051), under glibc's strict C11 headers, as ceesafe_rt_thread.c does. */
+#define _GNU_SOURCE
+#endif
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
@@ -1784,4 +1788,42 @@ void ceesafe_random_key(uint64_t *key) {
     }
     key[0] = cee_random_words[0];
     key[1] = cee_random_words[1];
+}
+
+/* ---- A read at an offset, the file's position untouched (ADR 0051's copy where sendfile cannot). ---- */
+int64_t ceesafe_file_read_at(const void *file, uint8_t *buffer, uint64_t length, uint64_t offset) {
+    int32_t fd = *(const int32_t *)file;
+    uint64_t count = length > ((uint64_t)1 << 30) ? ((uint64_t)1 << 30) : length;
+#if defined(_WIN32)
+    HANDLE base = (HANDLE)(intptr_t)_get_osfhandle(fd);
+    if (base == INVALID_HANDLE_VALUE) {
+        return -(int64_t)EBADF;
+    }
+    /* A ReadFile at an offset still moves a synchronous handle's file pointer: read through a handle of its own. */
+    HANDLE h = ReOpenFile(base, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (h == INVALID_HANDLE_VALUE) {
+        return -(int64_t)EIO;
+    }
+    OVERLAPPED at;
+    ceesafe_mem_set(&at, 0, sizeof at);
+    at.Offset = (DWORD)(offset & 0xFFFFFFFFu);
+    at.OffsetHigh = (DWORD)(offset >> 32);
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buffer, (DWORD)count, &got, &at);
+    DWORD error = ok ? 0 : GetLastError();
+    (void)CloseHandle(h);
+    if (!ok) {
+        return error == ERROR_HANDLE_EOF ? 0 : -(int64_t)EIO;
+    }
+    return (int64_t)got;
+#elif defined(CEE_COSMOOS)
+    (void)fd; (void)buffer; (void)count; (void)offset;
+    return -(int64_t)EOPNOTSUPP;
+#else
+    ssize_t n;
+    do {
+        n = pread(fd, buffer, (size_t)count, (off_t)offset);
+    } while (n < 0 && errno == EINTR);
+    return n < 0 ? -(int64_t)errno : (int64_t)n;
+#endif
 }

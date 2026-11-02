@@ -712,6 +712,17 @@ Heap (M3b):
     `SO_NOSIGPIPE`), an overlapped or plain `WSASend` with the record's `WSABUF`s (IOCP, `WSAPoll`), or
     `IORING_OP_SENDMSG` with the record's `msghdr`. CosmoOS userland sends the first non-empty part. The record also
     holds a peer address and a control buffer (128 bytes; 96 on Windows) for datagram messages (U6).
+  - **Sending a file** (ADR 0051): `ceesafe_async_op_sendfile(op, socket, file, offset, length)`, with the plain
+    operation record and `file` pointing at a `File` (its `int32_t` descriptor), steps: `sendfile(socket, fd, &offset,
+    count)` on Linux (epoll, and io_uring through the same readiness step), each call at most 0x7FFFF000 bytes;
+    `sendfile(fd, socket, offset, &len, NULL, 0)` on macOS, where `EAGAIN` with `len > 0` is a partial count; an
+    overlapped `TransmitFile` (found with `WSAID_TRANSMITFILE`) on IOCP, the offset in the `OVERLAPPED` and at most
+    2^31 − 2 bytes a call, the handle `_get_osfhandle(fd)`. It returns `CEE_ASYNC_NO_SENDFILE` (`INT64_MIN + 2`) on
+    `WSAPoll`, on CosmoOS, and where `sendfile` refuses the file (`EINVAL`, `ENOSYS`; macOS `ENOTSUP`, `ENOTSOCK`,
+    `EOPNOTSUPP`): lib/std then copies through `ceesafe_file_read_at(file, buffer, length, offset)`, `pread` (at most
+    2^30 bytes) or a `ReadFile` with the offset in an `OVERLAPPED` on Windows, which every hosted program links
+    (`ceesafe_rt_io.c`). The interpreter has no file send: it copies, reading at the offset by opening the file's path
+    again (its stage 0 `File` cannot seek).
   - **IOCP** (Windows' default): each thread has one completion port for its life, because a socket can be tied to
     only one port. A socket is tied to its thread's port at its first operation (`ceesafe_socket_associate`).
     Operations are `WSARecv`, `WSASend`, `AcceptEx` (a new overlapped socket, given an id when it completes) and

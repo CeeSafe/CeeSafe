@@ -65,6 +65,9 @@
 #include <sched.h>
 #include <sys/socket.h> /* sendmsg (ADR 0045) */
 #include <sys/uio.h>    /* struct iovec, writev */
+#if defined(__linux__)
+#include <sys/sendfile.h> /* sendfile (ADR 0051) */
+#endif
 #include <unistd.h>
 /* Empties a wake pipe, or reads an eventfd's counter, whose value nothing needs: how many bytes, and a failure
    (EAGAIN: already empty), change nothing. glibc declares read warn_unused_result under _FORTIFY_SOURCE, which
@@ -2287,7 +2290,7 @@ typedef struct {
     int64_t result;
     cee_task *task;      /* IOCP: the task waiting for the completion */
 #if defined(_WIN32)
-    uint32_t kind;       /* 1 read, 2 send, 3 accept, 4 connect, 5 vectored send (ADR 0045) */
+    uint32_t kind;       /* 1 read, 2 send, 3 accept, 4 connect, 5 vectored send (ADR 0045), 6 file (ADR 0051) */
     SOCKET socket;       /* the socket the operation is on */
     SOCKET accepted;     /* AcceptEx's and ConnectEx's new socket, until it has an id */
     SOCKET listener;
@@ -2298,6 +2301,7 @@ typedef struct {
             DWORD flags;
         } io;
         uint8_t addresses[2 * (sizeof(struct sockaddr_in6) + 16)]; /* AcceptEx's, for either family (ADR 0044) */
+        HANDLE file; /* TransmitFile's own handle to the file (ADR 0051), closed at the completion */
     } u;
 #endif
 } cee_op;
@@ -2393,6 +2397,7 @@ static int64_t cee_ready_connect(cee_op *o, const ceesafe_endpoint *e) {
 
 #if defined(_WIN32)
 #include <mswsock.h>
+#include <io.h> /* _get_osfhandle, for TransmitFile (ADR 0051) */
 
 /* The thread's completion port, for the life of the thread: a socket is tied to one port for ever. */
 static _Thread_local HANDLE cee_thread_port;
@@ -2480,6 +2485,9 @@ static void cee_iocp_complete(cee_op *o) {
         o->result = id < 0 ? -(int64_t)ENOMEM : (int64_t)id;
     } else {
         o->result = (int64_t)bytes;
+    }
+    if (o->kind == 6u) {
+        (void)CloseHandle(o->u.file);
     }
     cee_op_done(o, o->result);
 }
@@ -3166,6 +3174,115 @@ int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count) {
 #endif
     (void)o;
     return cee_ready_sendv(m, fd, count);
+}
+
+/* ---- Sending a file (ADR 0051): sendfile, or TransmitFile on IOCP; CEE_ASYNC_NO_SENDFILE where neither applies. ---- */
+
+#if !defined(_WIN32) && !defined(CEE_COSMOOS)
+/* A readiness step: one sendfile, or the wait for writability. */
+static int64_t cee_ready_sendfile(int32_t socket, int32_t file, uint64_t offset, uint64_t length) {
+#if defined(__linux__)
+    size_t count = length > 0x7FFFF000u ? (size_t)0x7FFFF000u : (size_t)length; /* Linux's limit for one call */
+    off_t at = (off_t)offset;
+    ssize_t n;
+    do {
+        n = sendfile(socket, file, &at, count);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ceesafe_async_wait_writable(socket);
+            return CEE_ASYNC_PENDING;
+        }
+        if (errno == EINVAL || errno == ENOSYS) {
+            return CEE_ASYNC_NO_SENDFILE; /* not a regular file, or no sendfile for it */
+        }
+        return -(int64_t)errno;
+    }
+    return (int64_t)n;
+#elif defined(__APPLE__)
+    off_t sent = (off_t)(length > ((uint64_t)1 << 40) ? ((uint64_t)1 << 40) : length);
+    int r = sendfile(file, socket, (off_t)offset, &sent, NULL, 0);
+    if (r < 0) {
+        if ((errno == EAGAIN || errno == EINTR) && sent > 0) {
+            return (int64_t)sent; /* a partial send: the count is the step's */
+        }
+        if (errno == EAGAIN || errno == EINTR) {
+            ceesafe_async_wait_writable(socket);
+            return CEE_ASYNC_PENDING;
+        }
+        if (errno == ENOTSUP || errno == ENOTSOCK || errno == EINVAL || errno == EOPNOTSUPP) {
+            return CEE_ASYNC_NO_SENDFILE;
+        }
+        return -(int64_t)errno;
+    }
+    return (int64_t)sent;
+#else
+    (void)socket; (void)file; (void)offset; (void)length;
+    return CEE_ASYNC_NO_SENDFILE;
+#endif
+}
+#endif
+
+#if defined(_WIN32)
+static LPFN_TRANSMITFILE cee_transmit_file;
+#endif
+
+int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, uint64_t offset, uint64_t length) {
+    cee_op *o = (cee_op *)op;
+    int32_t fd = *(const int32_t *)file;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    SOCKET s = cee_iocp_socket(socket);
+    if (s == INVALID_SOCKET) {
+        return CEE_ASYNC_NO_SENDFILE; /* WSAPoll: lib/std copies */
+    }
+    HANDLE base = (HANDLE)(intptr_t)_get_osfhandle(fd);
+    if (base == INVALID_HANDLE_VALUE) {
+        return -(int64_t)EBADF;
+    }
+    /* TransmitFile refuses a count past the file's end, so the step stops there; 0 at the end, as sendfile's. */
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(base, &size)) {
+        return CEE_ASYNC_NO_SENDFILE;
+    }
+    if (offset >= (uint64_t)size.QuadPart) {
+        return 0;
+    }
+    if (length > (uint64_t)size.QuadPart - offset) {
+        length = (uint64_t)size.QuadPart - offset;
+    }
+    if (cee_transmit_file == NULL) {
+        GUID id = WSAID_TRANSMITFILE;
+        cee_transmit_file = (LPFN_TRANSMITFILE)cee_extension(s, id);
+    }
+    if (cee_transmit_file == NULL) {
+        return CEE_ASYNC_NO_SENDFILE;
+    }
+    DWORD count = length > 0x7FFFFFFEu ? (DWORD)0x7FFFFFFEu : (DWORD)length; /* TransmitFile's limit for one call */
+    /* A handle of the operation's own: on a synchronous handle TransmitFile moves the file pointer, which the File's
+       position must not see, and other streams may send the same file at once. */
+    HANDLE h = ReOpenFile(base, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (h == INVALID_HANDLE_VALUE) {
+        return CEE_ASYNC_NO_SENDFILE;
+    }
+    cee_iocp_begin(o, 6u, s);
+    o->u.file = h;
+    o->overlapped.Offset = (DWORD)(offset & 0xFFFFFFFFu);
+    o->overlapped.OffsetHigh = (DWORD)(offset >> 32);
+    BOOL done = cee_transmit_file(s, h, count, 0, &o->overlapped, NULL, 0);
+    if (!done && WSAGetLastError() != WSA_IO_PENDING) {
+        (void)CloseHandle(h); /* failed at once: no completion will come */
+    }
+    return cee_iocp_submitted(o, 0, !done);
+#elif defined(CEE_COSMOOS)
+    (void)o; (void)socket; (void)fd; (void)offset; (void)length;
+    return CEE_ASYNC_NO_SENDFILE;
+#else
+    (void)o; /* io_uring too: the readiness path's sendfile (ADR 0051 §2) */
+    return cee_ready_sendfile(socket, fd, offset, length);
+#endif
 }
 #endif /* !CEE_FREESTANDING: channels, the debugger's tasks, operations */
 

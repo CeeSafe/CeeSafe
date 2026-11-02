@@ -102,3 +102,18 @@ send. The host lib/std has both, so no chain step is needed.
    - a step cancelled in flight under ASan, and `tools/cancel_sweep.py`;
    - every reactor, Debian, and Windows 11 ARM64 (IOCP's `TransmitFile`; `WSAPoll`'s fallback).
 6. ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Windows.** `TransmitFile` refuses a count that runs past the file's end, so the runtime clamps the step to the
+  file's size (`GetFileSizeEx`), and a step at the end returns 0 as `sendfile` does. On a synchronous handle both
+  `TransmitFile` and a `ReadFile` at an offset move the file pointer, so each runs on a handle of its own from
+  `ReOpenFile`, closed at the completion (or at once if the submission fails): the `File`'s position is never moved.
+- **The interpreter** has no file send: `ceesafe_async_op_sendfile` returns `CEE_ASYNC_NO_SENDFILE`, and its
+  `ceesafe_file_read_at` reopens the file's path (each open file's path is kept beside it) and reads past `offset`,
+  since stage 0's `File` cannot seek. No chain step was needed.
+- **Linux** needs `_GNU_SOURCE` in `ceesafe_rt_io.c` for `pread` under glibc's strict C11 headers, as
+  `ceesafe_rt_thread.c` has for `nanosleep` (ADR 0049).
+- **Tests** as §6 planned: the 4 GiB case is `tools/sendfile_check.py`, in the contract suite. Writing it found B7, a
+  closure capture named `code` (ROADMAP §10).
+

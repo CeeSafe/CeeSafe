@@ -3470,6 +3470,18 @@ empty.
   one slice. `await AsyncSockets.sendVectored(fd, borrow parts)` is the one step on a raw descriptor. Errors and
   cancellation are `write`'s (§40.7): a send the kernel completed before the cancellation reports its count.
 
+**Sending files** (lib/std, ADR 0051):
+
+- `await stream.sendFile(borrow file, offset, length)` (`file: borrow File`, `offset` and `length` `u64`) is one step:
+  the task waits until the socket takes at least one byte of the file from `offset`, and the result,
+  `Result<u64, AsyncError>`, is how many went; 0 if the file ends at `offset`. A `length` of 0 is `Ok(0)` without a
+  system call. The file's own position is neither used nor moved, so one file may be sent on several streams at once.
+- `await stream.sendFileAll(borrow file, offset, length)` sends `length` bytes in as many steps as the socket needs; if
+  the file ends first, the result is `Err(Io(InvalidInput))`, with the bytes before its end sent.
+- Where the system has no file send for the socket and the file (the runtime's `CEE_ASYNC_NO_SENDFILE`), a step reads
+  at most 64 KiB at the offset on a worker thread (`Async.blocking`) and writes them: the same results, through a
+  copy. Errors and cancellation are `write`'s (§40.7).
+
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
   `alloc` effect). With `scopeIn`, each child's task and frame come from `alloc` and go back to it when the child

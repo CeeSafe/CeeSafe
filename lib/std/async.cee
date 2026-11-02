@@ -56,6 +56,10 @@ extern "C" {
     fn ceesafe_async_msg_part(op: *mut void, index: u32, bytes: *u8, length: u64);
     @effects()
     fn ceesafe_async_op_sendv(op: *mut void, fd: i32, count: u32) -> i64;
+    @effects()
+    fn ceesafe_async_op_sendfile(op: *mut void, socket: i32, file: *void, offset: u64, length: u64) -> i64;
+    @effects()
+    fn ceesafe_file_read_at(file: *void, buffer: *mut u8, length: u64, offset: u64) -> i64;
 }
 
 /// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
@@ -407,6 +411,73 @@ public struct AsyncTcpStream {
             sent += await AsyncSockets.sendVectored(this.fd, borrow rest)?;
         }
         return Ok();
+    }
+
+    /// Sends from `file` at `offset`, at most `length` bytes, in one step (ADR 0051): the task parks until the socket
+    /// takes at least one byte, and the result is how many went, 0 if the file ends at `offset`. The file's own position
+    /// is neither used nor moved, so one file may be sent on several streams at once. Where the system cannot send a
+    /// file (ceesafe_async_op_sendfile's CEE_ASYNC_NO_SENDFILE), the step reads at most 64 KiB at `offset` on a worker
+    /// thread and writes them: the same results, through a copy.
+    /// Safety: the runtime reads the file's descriptor during the call only, and lends the kernel no buffer.
+    public async fn sendFile(borrow this, file: borrow File, offset: u64, length: u64) -> Result<u64, AsyncError> {
+        if (length == 0) {
+            return Ok(0);
+        }
+        var op = AsyncOp.create();
+        loop {
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_sendfile(op.raw(), this.fd, file as *File as *void, offset, length) };
+            if (r == AsyncTcpStream.noSendFile()) {
+                return await this.copyFile(file, offset, length);
+            }
+            if (r != AsyncOp.pending()) {
+                return Ok(truncate<u64>(op.result(r)?));
+            }
+            await Async.park();
+        }
+    }
+
+    /// Sends `length` bytes of `file` from `offset`, in as many steps as the socket needs. If the file ends first, the
+    /// result is `Io(InvalidInput)`, with the bytes before its end sent.
+    public async fn sendFileAll(borrow this, file: borrow File, offset: u64, length: u64) -> Result<void, AsyncError> {
+        var sent: u64 = 0;
+        while (sent < length) {
+            let n = await this.sendFile(file, offset + sent, length - sent)?;
+            if (n == 0) {
+                return Err(AsyncError.Io(IoError.InvalidInput));
+            }
+            sent += n;
+        }
+        return Ok();
+    }
+
+    fn noSendFile() -> i64 => -9223372036854775806; // CEE_ASYNC_NO_SENDFILE
+
+    /// sendFile's copy: at most 64 KiB read at `offset` on a worker thread, then written whole.
+    /// Safety: ceesafe_file_read_at writes at most the buffer's length, during the call only.
+    async fn copyFile(borrow this, file: borrow File, offset: u64, length: u64) -> Result<u64, AsyncError> {
+        let size: u64 = if (length > 65536) 65536 else length;
+        var buffer = match (Vector<u8>.withCapacity(size as usize)) {
+            Ok(v) => v,
+            Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); }
+        };
+        for (k in 0..size) {
+            match (buffer.push(0)) {
+                Ok() => {}
+                Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); } // not reached: the room is there
+            }
+        }
+        let target = buffer.viewMut();
+        let r = await Async.blocking(
+            () => unsafe { ceesafe_file_read_at(file as *File as *void, target.ptr, target.length as u64, offset) },
+        );
+        if (r < 0) {
+            return Err(AsyncError.Io(AsyncIo.ioError(r)));
+        }
+        let got = truncate<usize>(r);
+        let filled = buffer.view();
+        await this.write(filled[0..got])?;
+        return Ok(got as u64);
     }
 
     /// Ends this side's writing, so the peer reads the end of the stream.

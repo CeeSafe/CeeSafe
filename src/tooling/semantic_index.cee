@@ -458,6 +458,11 @@ fn walkExpression(
             walkExpression(index, c, sources, first)?;
             walkExpression(index, c, sources, second)?;
         }
+        HirExpr.AsyncTimeout(_, body, _, at, timedOut, _) => {
+            walkExpression(index, c, sources, at)?;
+            walkExpression(index, c, sources, timedOut)?;
+            walkExpression(index, c, sources, body)?;
+        }
         HirExpr.AsyncShield(enter, body, leave) => {
             walkExpression(index, c, sources, enter)?;
             walkExpression(index, c, sources, body)?;

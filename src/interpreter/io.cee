@@ -2338,7 +2338,7 @@ fn asyncJoin(
     arguments: Range,
 ) -> Result<Value?, Stop> {
     let site = truncate<u32>(operand(it, c, n, frame, n.at(arguments, 0))?.bits(0, 4)?);
-    let isRace = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)? == 1;
+    let isRace = operand(it, c, n, frame, n.at(arguments, 1))?.bits(0, 4)? != 0; // a timeout (2) is a race (ADR 0046)
     let scope = interpScope(it, site);
     if (!it.asyncScopes[scope as usize].started) {
         it.asyncScopes[scope as usize].started = true;
@@ -2359,6 +2359,8 @@ fn asyncJoin(
                 let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
                 it.memory.store(environment, bytes)?;
                 values.push(valueOf(environment, 8))!;
+            } else if (c.hir.functions[child as usize].parameters.length == 1) {
+                values.push(closure)!; // a timeout's deadline child, given the deadline (ADR 0046)
             }
             it.asyncScopes[scope as usize].live += 1;
             it.asyncSpawns.push(

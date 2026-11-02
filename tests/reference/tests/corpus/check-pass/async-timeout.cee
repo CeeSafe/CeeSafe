@@ -1,0 +1,14 @@
+// Async.timeout and Async.deadline in the HIR (ADR 0046 §3.4): the deadline (for timeout, lib/core's
+// AsyncTimeoutJoin<T, E>.after of the milliseconds), the caller's error, and the body closure.
+enum WebError {
+    TimedOut,
+}
+
+async fn body() -> Result<u32, WebError> => Ok(1);
+
+async fn timed() -> Result<u32, WebError> {
+    let a = await Async.timeout(5, WebError.TimedOut, async () => await body())?;
+    return await Async.deadline(Timer.now() + 10, WebError.TimedOut, async () => await body());
+}
+
+fn main() {}

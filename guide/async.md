@@ -223,6 +223,49 @@ fn main() {
 
 `Async.shield(ms, body)` runs cleanup that must finish: inside it the flag is ignored, for at most `ms` milliseconds.
 
+## Deadlines
+
+`Async.timeout(ms, timedOut, body)` runs `body` with a deadline. If the body has not returned after `ms`
+milliseconds, it is cancelled and awaited, and the result is `Err(timedOut)`, an error of the body's own type.
+`Async.deadline(at, timedOut, body)` is the same with a time on `Timer.now()`'s clock. Neither allocates.
+
+```ceesafe
+enum FetchError {
+    TimedOut,
+    Async(AsyncError),
+}
+
+async fn after(ms: u64, v: u32) -> Result<u32, FetchError> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(v); }
+        Err(e) => { return Err(FetchError.Async(e)); }
+    }
+}
+
+async fn fetch() -> Result<u32, FetchError> {
+    let quick = await Async.timeout(50, FetchError.TimedOut, async () => await after(5, 1))?;
+    match (await Async.timeout(5, FetchError.TimedOut, async () => await after(50, 2))) {
+        Ok(v) => { return Ok(quick * 10 + v); }
+        Err(FetchError.TimedOut) => { return Ok(quick * 10 + 9); } // the slow one ran out of time
+        Err(e) => { return Err(e); }
+    }
+}
+
+fn main() {
+    match (Async.run(fetch())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+```
+
+```text
+19
+```
+
+A body that returned `Ok` before it saw the cancellation keeps its value. If the caller itself is cancelled, the
+result is the body's own error, never `timedOut`: a timeout reports only its own deadline.
+
 ## Waiting for the outside world
 
 The library's waiting operations are async functions, in the hosted profile:

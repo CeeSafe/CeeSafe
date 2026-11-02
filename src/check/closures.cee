@@ -1052,6 +1052,11 @@ fn walkExpr(
             walkExpr(c, first, e, parent, walk)?;
             walkExpr(c, second, e, parent, walk)?;
         }
+        HirExpr.AsyncTimeout(_, body, _, at, timedOut, _) => {
+            walkExpr(c, at, e, parent, walk)?;
+            walkExpr(c, timedOut, e, parent, walk)?;
+            walkExpr(c, body, e, parent, walk)?;
+        }
         HirExpr.AsyncShield(enter, body, leave) => {
             walkExpr(c, enter, e, parent, walk)?;
             walkExpr(c, body, e, parent, walk)?;

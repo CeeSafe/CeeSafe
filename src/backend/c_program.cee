@@ -154,6 +154,21 @@ fn callees(
                                 // A box's construction runs its allocator and its contents' @placed methods.
                                 boxFunctions(c, resultOkOf(c, n.rvalueTypes[r as usize]), mut out)?;
                             }
+                            if (b == bfAsyncJoin()) {
+                                // A join runs its children; a timeout's second is lib/core's (ADR 0046).
+                                let arguments = match (n.rvalues[r as usize]) {
+                                    NirRvalue.Builtin(_, list) => list,
+                                    _ => emptyRange(),
+                                };
+                                for (k in [2u32, 4u32]) {
+                                    match (n.operands[n.at(arguments, k) as usize]) {
+                                        NirOperand.Const(v) => {
+                                            keys.push(variantKey(truncate<u32>(v.magnitude), 0))?;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }

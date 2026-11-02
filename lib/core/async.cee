@@ -127,6 +127,47 @@ struct AsyncRaceJoin<T, E> {
     }
 }
 
+/// `Async.timeout` and `Async.deadline` (type-system.md §40.4, ADR 0046): the deadline, the deadline child (the join's
+/// second, beside the body), and the result once both have returned.
+struct AsyncTimeoutJoin<T, E> {
+    /// The deadline `ms` milliseconds from now, saturated.
+    fn after(ms: u64) -> u64 {
+        let start = Timer.now();
+        return if (ms > 0xFFFFFFFFFFFFFFFF - start) 0xFFFFFFFFFFFFFFFF else start + ms;
+    }
+
+    /// Returns `Ok` once the clock reaches `at`, or `Err(Cancelled)` if the task is cancelled first: the body
+    /// returned, or the caller was cancelled.
+    /// Safety: ceesafe_async_wait_until only records the deadline for the executor.
+    async fn until(at: u64) -> Result<void, AsyncError> {
+        loop {
+            AsyncLeaf.status()?;
+            if (Timer.now() >= at) {
+                return Ok();
+            }
+            unsafe { ceesafe_async_wait_until(at); }
+            await Async.park();
+        }
+    }
+
+    /// The body decides when it returned first, or when the deadline child did not reach the deadline (the caller was
+    /// cancelled). After the deadline, a late `Ok` is kept and any `Err` is `timedOut` (ADR 0046 §3.2).
+    fn settle(first: u32, body: Result<T, E>, deadline: Result<void, AsyncError>, timedOut: E) -> Result<T, E> {
+        if (first == 0) {
+            return body;
+        }
+        match (deadline) {
+            Ok() => {
+                match (body) {
+                    Ok(value) => { return Ok(value); }
+                    Err(_) => { return Err(timedOut); }
+                }
+            }
+            Err(_) => { return body; }
+        }
+    }
+}
+
 /// What `Async.all` returns once both children have: the first error in the order they returned, else `Ok`.
 struct AsyncAllJoin<E> {
     fn settle(first: u32, a: Result<void, E>, b: Result<void, E>) -> Result<void, E> {

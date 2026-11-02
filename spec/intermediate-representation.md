@@ -95,6 +95,11 @@ suspension changes its blocks or statements.
   function, b])`, the index (0 or 1) of the child that returned first, then `r0 = Builtin(AsyncJoinResult, [site, 0])`
   and `r1 = …[site, 1]`, which move the children's results out, then the call `settle(t, r0, r1)` of lib/std's
   `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used.
+- `await Async.timeout(ms, timedOut, body)` and `deadline` (ADR 0046) lower to the deadline and `timedOut` in
+  temporaries, then a join of kind 2: `Builtin(AsyncJoin, [site, 2, body's function, body, until, at])`, a race whose
+  second child is lib/core's `AsyncTimeoutJoin<T, E>.until`, an async fn given the deadline `at` as its argument (for
+  `timeout`, `AsyncTimeoutJoin<T, E>.after(ms)`). `r1` has `until`'s type, `Result<void, AsyncError>`, and the settle
+  call is `AsyncTimeoutJoin<T, E>.settle(t, r0, r1, timedOut)`.
 - The **suspension points** of an async fn are its awaited calls, its `AsyncPark`s, `AsyncScopeWait`s and
   `AsyncJoin`s, numbered from 1 in block order
   and statement order (0 is the entry). The C backend (c-backend.md §3a) and the interpreter (§5) act on them.

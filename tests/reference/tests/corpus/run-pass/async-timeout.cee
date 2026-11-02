@@ -1,0 +1,186 @@
+// Async.timeout and Async.deadline (type-system.md §40.4, ADR 0046 §3.2): the body decides when it returns first; at
+// the deadline it is cancelled and awaited, and the result is the caller's own error, unless the body still returns
+// Ok. The deadline is the timeout's own: a cancellation from outside reports the body's error. Each line is one case;
+// the expected values are the ADR's rules: a value is itself, TimedOut 100, Failed(n) 200 + n, an AsyncError 300.
+
+enum WebError {
+    TimedOut,
+    Failed(u32),
+    Async(AsyncError),
+}
+
+async fn slow(ms: u64, value: u32) -> Result<u32, WebError> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(value); }
+        Err(e) => { return Err(WebError.Async(e)); }
+    }
+}
+
+fn outcome(r: Result<u32, WebError>) -> u32 => match (r) {
+    Ok(v) => v,
+    Err(e) => match (e) {
+        WebError.TimedOut => 100,
+        WebError.Failed(n) => 200 + n,
+        WebError.Async(_) => 300,
+    },
+};
+
+fn io<T>(r: Result<T, IoError>) -> Result<T, WebError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(WebError.Async(AsyncError.Io(e))),
+};
+
+fn done(r: Result<void, AsyncError>) -> Result<void, WebError> => match (r) {
+    Ok() => Ok(),
+    Err(e) => Err(WebError.Async(e)),
+};
+
+fn asyncly<T>(r: Result<T, AsyncError>) -> Result<T, WebError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(WebError.Async(e)),
+};
+
+// A read with nothing to read, timed out with the kernel holding its buffer on a completion backend; the next read
+// gets the bytes sent afterwards: the cancelled one took none (ADR 0035 §3.3).
+async fn socketRead() -> Result<u32, WebError> {
+    let listener = io(AsyncTcpListener.bind("127.0.0.1", 0))?;
+    let port = io(listener.port())?;
+    let client = asyncly(await AsyncTcpStream.connect("127.0.0.1", port))?;
+    let server = asyncly(await listener.accept())?;
+    var buffer = [0u8; 64];
+    let first: Result<u32, WebError> = await Async.timeout(20, WebError.TimedOut, async () => {
+        let n = asyncly(await client.read(mut buffer[..]))?;
+        return Ok(truncate<u32>(n));
+    });
+    done(await server.write("late bytes".bytes()))?;
+    var again = [0u8; 64];
+    let n = asyncly(await client.read(mut again[..]))?;
+    return Ok(outcome(first) * 100 + truncate<u32>(n));
+}
+
+// A channel receive: nothing sent, then one value.
+async fn channelReceive(ch: borrow Channel<u32>) -> Result<u32, WebError> {
+    let empty: Result<u32, WebError> = await Async.timeout(10, WebError.TimedOut, async () => {
+        match (asyncly(await ch.recvAsync())?) {
+            Some(v) => { return Ok(v); }
+            null => { return Err(WebError.Failed(0)); }
+        }
+    });
+    match (await ch.sendAsync(42)) {
+        Ok() => {}
+        Err(_) => { return Err(WebError.Failed(1)); }
+    }
+    let full: Result<u32, WebError> = await Async.timeout(10, WebError.TimedOut, async () => {
+        match (asyncly(await ch.recvAsync())?) {
+            Some(v) => { return Ok(v); }
+            null => { return Err(WebError.Failed(0)); }
+        }
+    });
+    return Ok(outcome(empty) * 1000 + outcome(full));
+}
+
+// A body whose scope has two children asleep: both are cancelled with it.
+async fn nestedScope() -> Result<u32, WebError> {
+    let r: Result<u32, WebError> = await Async.timeout(10, WebError.TimedOut, async () => {
+        done(await Async.scope(AsyncError.Cancelled, (s) => {
+            s.spawn(async () => await Timer.sleep(1000));
+            s.spawn(async () => await Timer.sleep(2000));
+        }))?;
+        return Ok(1);
+    });
+    return Ok(outcome(r));
+}
+
+// The caller cancelled from outside (all's other child fails): the body's own error, not TimedOut.
+async fn outerCancel() -> Result<u32, WebError> {
+    var seen: u32 = 0;
+    let r: Result<void, WebError> = await Async.all(
+        async () => {
+            let t = await Async.timeout(1000, WebError.TimedOut, async () => await slow(500, 1));
+            seen = outcome(t);
+            return Ok();
+        },
+        async () => {
+            done(await Timer.sleep(5))?;
+            return Err(WebError.Failed(9));
+        },
+    );
+    let failed: u32 = match (r) {
+        Ok() => 0,
+        Err(e) => outcome(Err(e)),
+    };
+    return Ok(seen * 1000 + failed);
+}
+
+async fn run(ch: borrow Channel<u32>) -> Result<[u32; 13], WebError> {
+    let a = await Async.timeout(50, WebError.TimedOut, async () => await slow(10, 1));
+    let b = await Async.timeout(10, WebError.TimedOut, async () => await slow(50, 2));
+    let c: Result<u32, WebError> = await Async.timeout(50, WebError.TimedOut, async () => {
+        return Err(WebError.Failed(3));
+    });
+    let d = await Async.deadline(Timer.now() + 20, WebError.TimedOut, async () => await slow(5, 4));
+    let e = await Async.timeout(0, WebError.TimedOut, async () => await slow(5, 5));
+    let f = await Async.timeout(
+        100,
+        WebError.TimedOut,
+        async () => await Async.timeout(10, WebError.Failed(6), async () => await slow(50, 7)),
+    );
+    let g = await Async.timeout(
+        10,
+        WebError.Failed(8),
+        async () => await Async.timeout(100, WebError.Failed(9), async () => await slow(50, 7)),
+    );
+    // A late Ok is kept: the body is shielded, so it finishes after the deadline.
+    let h = await Async.timeout(
+        10,
+        WebError.TimedOut,
+        async () => await Async.shield(1000, async () => await slow(30, 10)),
+    );
+    // A timeout inside a shield still cancels its own body.
+    let i: Result<u32, WebError> = await Async.shield(
+        1000,
+        async () => await Async.timeout(10, WebError.TimedOut, async () => await slow(100, 11)),
+    );
+    // A deadline already past.
+    let j = await Async.deadline(0, WebError.TimedOut, async () => await slow(5, 12));
+    return Ok([
+        outcome(a),
+        outcome(b),
+        outcome(c),
+        outcome(d),
+        outcome(e),
+        outcome(f),
+        outcome(g),
+        outcome(h),
+        outcome(i),
+        outcome(j),
+        await socketRead()?,
+        await channelReceive(ch)?,
+        await nestedScope()? + await outerCancel()?,
+    ]);
+}
+
+fn main() {
+    let ch = Channel<u32>.create(4)!;
+    match (Async.run(run(borrow ch))) {
+        Ok(lines) => {
+            for (x in lines) {
+                Console.writeLine(x);
+            }
+        }
+        Err(e) => { Console.writeLine(outcome(Err(e))); }
+    }
+}
+// expect-stdout: 1
+// expect-stdout: 100
+// expect-stdout: 203
+// expect-stdout: 4
+// expect-stdout: 100
+// expect-stdout: 206
+// expect-stdout: 208
+// expect-stdout: 10
+// expect-stdout: 100
+// expect-stdout: 100
+// expect-stdout: 10010
+// expect-stdout: 100042
+// expect-stdout: 300309

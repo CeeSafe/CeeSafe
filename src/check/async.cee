@@ -185,6 +185,10 @@ fn checkAsyncCall(
     if (sameText(c.name(memberIdent.symbol), "shield")) {
         return checkAsyncShield(c, arguments, expected, span);
     }
+    if (sameText(c.name(memberIdent.symbol), "timeout") || sameText(c.name(memberIdent.symbol), "deadline")) {
+        let isDeadline = sameText(c.name(memberIdent.symbol), "deadline");
+        return checkAsyncTimeout(c, isDeadline, arguments, expected, span);
+    }
     if (sameText(c.name(memberIdent.symbol), "blocking")) {
         return checkAsyncBlocking(c, arguments, expected, span);
     }
@@ -941,6 +945,91 @@ fn checkAsyncJoin(
     c.asyncSites += 1;
     let resultType = c.hir.functions[settle as usize].returnType;
     return c.expr(HirExpr.AsyncJoin(site, isRace, first, second, settle), resultType, span.start, span.end);
+}
+
+/// `await Async.timeout(ms, timedOut, body)` and `await Async.deadline(at, timedOut, body)` (§40.4, ADR 0046): the body
+/// and a deadline child (lib/core's `AsyncTimeoutJoin<T, E>.until(at)`) run as a race's two children, whose frames are
+/// the caller's. The body's result type is the expected one, else its expression body's; `timedOut` is its error type.
+fn checkAsyncTimeout(
+    c: borrow mut Checker,
+    isDeadline: bool,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let what: StringView = if (isDeadline) "'Async.deadline'" else "'Async.timeout'";
+    let awaited = c.taskStart == span.start && c.taskEnd == span.end;
+    if (awaited) {
+        c.taskStart = none();
+        c.taskEnd = none();
+    } else {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(mut message, " runs its body as a task: write it after 'await' (type-system.md §40.4)")?;
+        c.error(taskNotAwaited(), span.start, span.end, message)?;
+    }
+    if (arguments.count != 3 || asyncLiteralArgument(c, arguments, 2) == none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(
+            mut message,
+            if (isDeadline) " takes the deadline, the error and an async closure literal: 'Async.deadline(at, timedOut, async () => …)' (type-system.md §40.4)" else " takes the milliseconds, the error and an async closure literal: 'Async.timeout(ms, timedOut, async () => …)' (type-system.md §40.4)",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let u64Type = c.types.lookup("u64".bytes());
+    let timeSyntax = c.front.ast.at(arguments, 0);
+    let time = checkExpr(c, timeSyntax, u64Type)?;
+    // The body's result type: the expected one, else its expression body's.
+    let bodyResult = if (expected != none() && !c.types.isBottom(expected) && resultParts(
+        c,
+        expected,
+    ).length == 2) expected else none();
+    let body = checkJoinChild(c, arguments, 2, bodyResult)?;
+    let bodyFunction = match (c.hir.exprs[body as usize]) {
+        HirExpr.Closure(f, _) => f,
+        _ => none(),
+    };
+    if (bodyFunction == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let resultType = c.hir.functions[bodyFunction as usize].returnType;
+    let parts = resultParts(c, resultType);
+    if (parts.length != 2) {
+        var message = Vector<u8>.create();
+        appendText(mut message, what)?;
+        appendText(
+            mut message,
+            "'s body returns a 'Result<T, E>': give it an expected 'Result<T, E>' type, or an expression body (type-system.md §40.4)",
+        )?;
+        c.error(closureTypeUnknown(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let timedOutSyntax = c.front.ast.at(arguments, 1);
+    let timedOut = checkExpr(c, timedOutSyntax, parts[1])?;
+    var typeArguments = Vector<u32>.create();
+    typeArguments.push(parts[0])?;
+    typeArguments.push(parts[1])?;
+    let settleName = c.intern("settle")?;
+    let untilName = c.intern("until")?;
+    let afterName = c.intern("after")?;
+    let settle = libraryFunction(c, "AsyncTimeoutJoin", typeArguments.view(), settleName, span)?;
+    let until = libraryFunction(c, "AsyncTimeoutJoin", typeArguments.view(), untilName, span)?;
+    let after = libraryFunction(c, "AsyncTimeoutJoin", typeArguments.view(), afterName, span)?;
+    if (settle == none() || until == none() || after == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    var at = time;
+    if (!isDeadline) {
+        var afterArguments = Vector<u32>.create();
+        afterArguments.push(time)?;
+        at = c.expr(HirExpr.Call(after, c.hir.list(afterArguments.view())?), u64Type, span.start, span.end)?;
+    }
+    let site = c.asyncSites;
+    c.asyncSites += 1;
+    return c.expr(HirExpr.AsyncTimeout(site, body, until, at, timedOut, settle), resultType, span.start, span.end);
 }
 
 /// `await Async.blocking(() => …)` (§40.4): a sync closure literal that runs on a worker thread while the task waits.

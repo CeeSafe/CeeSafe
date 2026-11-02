@@ -1,0 +1,21 @@
+// Async.timeout and Async.deadline (type-system.md §40.4, ADR 0046): written after `await`, with the time, an error of
+// the body's error type, and an async closure literal.
+enum WebError {
+    TimedOut,
+}
+
+async fn body() -> Result<u32, WebError> => Ok(1);
+
+async fn misuse() -> Result<void, AsyncError> {
+    Async.timeout(5, WebError.TimedOut, async () => await body());                         // error[N0342]
+    let wrongError = await Async.timeout(5, 7, async () => await body());                  // error[N0205]
+    let notClosure = await Async.timeout(5, WebError.TimedOut, () => 1);                   // error[N0209]
+    let notTime = await Async.deadline(true, WebError.TimedOut, async () => await body()); // error[N0205]
+    let missing = await Async.timeout(5);                                                  // error[N0209]
+    let unknown = await Async.timeout(5, WebError.TimedOut, async () => {                  // error[N0236]
+        return Ok(1);
+    });
+    return Ok();
+}
+
+fn main() {}

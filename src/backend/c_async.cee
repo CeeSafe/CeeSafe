@@ -348,7 +348,8 @@ fn emitJoinStruct(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgra
     e.d(site as u64)?;
     e.t(" { ceesafe_scope rt; uint32_t first; ")?;
     for (k in 0..2u32) {
-        appendCTypeName(c, mut e.buf, c.hir.functions[first as usize].returnType)?;
+        let child = if (k == 0) first else second; // a timeout's second child returns its own type (ADR 0046)
+        appendCTypeName(c, mut e.buf, c.hir.functions[child as usize].returnType)?;
         e.t(" r")?;
         e.d(k as u64)?;
         e.t("; ")?;
@@ -365,7 +366,7 @@ fn emitJoinStruct(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgra
 /// cancelled when the first returns (race) or when one returns an `Err` (all) (type-system.md §40.4).
 fn emitJoinThunks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram, r: u32) -> Result<void, AllocError> {
     let site = constArgument(n, r, 0);
-    let isRace = constArgument(n, r, 1) == 1;
+    let isRace = constArgument(n, r, 1) != 0; // a timeout (2) is a race (ADR 0046)
     for (k in 0..2u32) {
         let child = constArgument(n, r, 2 + 2 * k);
         e.t(if (e.split) "static CEE_UNUSED bool ceeAJ" else "static bool ceeAJ")?;
@@ -1262,6 +1263,11 @@ fn emitJoin(
             appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
             e.t(")(uintptr_t)")?;
             e.b(value.view())?;
+        } else if (c.hir.functions[child as usize].closureEnvironment == none() &&
+            c.hir.functions[child as usize].parameters.length == 1) {
+            // A timeout's deadline child: a function given the deadline (ADR 0046).
+            e.t(", ")?;
+            e.b(value.view())?;
         }
         e.t(");")?;
         e.emit()?;
@@ -1701,9 +1707,8 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
                 var j = LayoutBuilder { size: 0, align: 1 };
                 addLayout(mut j, scopeLayout());
                 layoutAdd(mut j, 4, 4);
-                let result = typeLayout(c, c.hir.functions[first as usize].returnType);
-                addLayout(mut j, result);
-                addLayout(mut j, result);
+                addLayout(mut j, typeLayout(c, c.hir.functions[first as usize].returnType));
+                addLayout(mut j, typeLayout(c, c.hir.functions[second as usize].returnType));
                 addLayout(mut j, taskSlotLayout());
                 addLayout(mut j, taskSlotLayout());
                 addLayout(mut j, frameReport(c, n, asyncNirFunction(n, first))?.layout);

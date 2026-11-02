@@ -516,7 +516,9 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   task slots (`ceesafe_task_slot`) and frames, defined before the frame that holds it. The join zeroes it, initialises
   both frames, starts both with `ceesafe_async_start` (the caller's storage: nothing is allocated, nothing freed), and
   waits like a scope's end. `ceeAJ<site>_<k>` resumes child k and, once it returns, keeps its result, notes it if it
-  was first, and calls `ceesafe_async_cancel` on the join: always for race, on an `Err` for all.
+  was first, and calls `ceesafe_async_cancel` on the join: always for race and for a timeout, on an `Err` for all. A
+  timeout's second child (ADR 0046) is a function, not a closure: its initialiser is given the deadline, and its
+  result field has its own type.
 - **Blocking.** `Async.blocking(body)` at `site` is a field `struct ceeAB_<site> cee_b<site>`: the runtime's
   `ceesafe_blocking`, the closure value and its result. `ceesafe_async_blocking_start` runs `ceeABT_<site>` on a worker
   (`ceesafe_thread_start`; inline if none can start), which calls the closure through its code pointer, stores the

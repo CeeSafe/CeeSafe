@@ -3383,13 +3383,15 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body |
 | `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`, run at once; the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6. Without an expected type or an expression body for `a`, `E` is `AsyncError`. The two may not capture one local where either changes it (N0241) |
 | `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds. The body's result type is the expected one; without one, an expression body's own, and a block body's `Result<void, AsyncError>` |
+| `Async.timeout(ms, timedOut, body)`, `Async.deadline(at, timedOut, body)` | `Result<T, E>` | ADR 0046. Runs `body`, an async closure of result `Result<T, E>`, beside a deadline `ms: u64` milliseconds from the call (`timeout`) or at `at: u64` on `Timer.now()`'s clock (`deadline`). If the body returns first, its result is the result. Once the deadline passes first, the body is cancelled and awaited: a late `Ok` is kept, and any `Err` becomes `timedOut: E`, which is evaluated before the body starts and dropped if unused. A cancellation from outside gives the body's own result, never `timedOut`; a tie is decided by which task runs first, as in `race`. The body's type comes from an expected `Result<T, E>`, else from its expression body |
 | `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`: a cancellation point for long computations. A call of lib/std's `AsyncControl<E>.checkpoint` |
 | `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
 | `Async.blocking(closure)` | `T` | Runs a sync closure literal with no parameters on a worker thread and waits for it without blocking other tasks. Its captures follow §38.6's rule and `T` must be `Send` (N0334). If no worker can be started, it runs on the calling thread: the result is the same. The body's effects are the worker's (the task has `suspend`), and the wait is not cancelled: a cancelled task still waits for its worker |
 | `Async.park()`, `Async.waker()` | `void`, `u64` | Library-only primitives (**N0345** elsewhere): suspend the current task until its waker is woken; the current task's waker id |
 | `AsyncSignal.create()`, `s.raise()`, `await s.wait()` | `AsyncSignal`, `void`, `Result<void, AsyncError>` | lib/core (ADR 0039): `raise` is `@effects()`, so another thread or an `@context(irq)` handler may call it; `wait` parks the task until a raise, which a raise before the wait satisfies. One task waits at a time; a cancelled wait returns `Err(Cancelled)` |
 
-`race`, `all` and `shield` place their children's frames in the caller's frame, so they never allocate. The library
+`race`, `all`, `shield`, `timeout` and `deadline` place their children's frames in the caller's frame, so they never
+allocate. The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
 console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
@@ -3477,7 +3479,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 
 ### 40.7 Cancellation
 - **Cancelling a task sets its flag.** A scope cancels its children when one fails or one cannot start (§40.5), `race`
-  and `all` cancel the other child, and the runtime may cancel a root task (the `CEESAFE_CANCEL_AT` sweep,
+  and `all` cancel the other child, `timeout` and `deadline` cancel their body at the deadline (ADR 0046), and the
+  runtime may cancel a root task (the `CEESAFE_CANCEL_AT` sweep,
   `testing.md`). The flag is inherited: an awaited task shares its awaiter's, and a scope's children are cancelled with
   the task that owns the scope. A cancellation wakes every task waiting on a deadline or a descriptor, so it sees it.
 - **Only the library's waiting operations observe it,** together with `Async.checkpoint` and `Async.isCancelled`: a

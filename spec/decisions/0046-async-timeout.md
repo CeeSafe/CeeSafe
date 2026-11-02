@@ -139,3 +139,19 @@ The compiler's own sources do not use the operations, so the bootstrap from 0.3.
    - `tools/cancel_sweep.py` over the new tests, under ASan with `--check-leaks`. The contract suite on macOS, on
      Debian (with "reactor uring") and on Windows.
 5. The guide (`guide/async.md`, cancellation and deadlines), ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **The join.** The HIR form is `AsyncTimeout(site, body, until, at, timedOut, settle)`. It lowers to the join `race`
+  uses, with kind 2: `Builtin(AsyncJoin, [site, 2, body, its closure, until, at])`. Two things about a join changed,
+  each for every kind:
+  - a child that is a function rather than a closure, with one parameter, is given the operand as its argument (in
+    C, to its initialiser; in the interpreter, as its first value);
+  - the second result has its own child's type.
+- **Library walk.** The C backend's walk of the library functions a program uses now follows a join's children.
+  `AsyncTimeoutJoin<T, E>.until` is reached only that way.
+- **Shields.** A timeout inside a shield cancels its body: a join's children are tasks of their own, with no shield
+  (corpus `async-timeout`, case i).
+- **Bug B3, fixed here.** `async-timeout`'s socket case found it again: a closure that slices a captured array as
+  `mut a[..]` captured it shared, so its environment held a `const` pointer, which `-Werror` rejects. `synthSlice`
+  now notes the mutable use, as `borrow mut` does (corpus `async-race-mut-capture`, the CeeSafe.Web probe).

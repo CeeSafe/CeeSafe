@@ -2100,6 +2100,9 @@ fn lowerRvalueCore(
         HirExpr.AsyncJoin(site, isRace, first, second, settle) => {
             return lowerAsyncJoin(c, n, b, e, site, isRace, first, second, settle);
         }
+        HirExpr.AsyncTimeout(site, body, until, at, timedOut, settle) => {
+            return lowerAsyncTimeout(c, n, b, e, site, body, until, at, timedOut, settle);
+        }
         HirExpr.AsyncShield(enter, body, leave) => {
             // Enter, the awaited body into a temporary, leave, then the temporary (type-system.md §40.7).
             let entering = lowerRvalue(c, n, b, enter)?;
@@ -2318,6 +2321,77 @@ fn lowerAsyncJoin(
         assign(n, b, place, taken)?;
         arguments.push(readPlace(c, n, b, place)?)?;
     }
+    let argumentList = n.list(arguments.view())?;
+    let typ = c.hir.exprTypes[e as usize];
+    return n.rvalue(NirRvalue.Call(settle, argumentList), typ, span);
+}
+
+/// `await Async.timeout(ms, timedOut, body)` or `deadline` (ADR 0046): the deadline and `timedOut` into temporaries,
+/// then the join of kind 2 (a race whose second child is the deadline function `until`, given the deadline as its
+/// argument), the two results moved out, and lib/core's `AsyncTimeoutJoin<T, E>.settle` of the four.
+fn lowerAsyncTimeout(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    site: u32,
+    body: u32,
+    until: u32,
+    at: u32,
+    timedOut: u32,
+    settle: u32,
+) -> Result<u32, AllocError> {
+    let u32Type = c.types.lookup("u32".bytes());
+    let span = exprSpan(c, e);
+    let bodyFunction = match (c.hir.exprs[body as usize]) {
+        HirExpr.Closure(function, _) => function,
+        _ => none(),
+    };
+    let atValue = lowerOperand(c, n, b, at)?;
+    if (atValue == none()) {
+        return Ok(none());
+    }
+    let atType = n.operandTypes[atValue as usize];
+    let atPlace = localPlace(n, newTemp(b, atType)?)?;
+    let atUse = useRvalue(n, atValue)?;
+    assign(n, b, atPlace, atUse)?;
+    let errorValue = lowerOperand(c, n, b, timedOut)?;
+    if (errorValue == none()) {
+        return Ok(none());
+    }
+    let errorType = n.operandTypes[errorValue as usize];
+    let errorPlace = localPlace(n, newTemp(b, errorType)?)?;
+    let errorUse = useRvalue(n, errorValue)?;
+    assign(n, b, errorPlace, errorUse)?;
+    let bodyValue = lowerOperand(c, n, b, body)?;
+    if (bodyValue == none()) {
+        return Ok(none());
+    }
+    var operands = Vector<u32>.create();
+    operands.push(constOperand(n, site as i64, u32Type)?)?;
+    operands.push(constOperand(n, 2, u32Type)?)?;
+    operands.push(constOperand(n, bodyFunction as i64, u32Type)?)?;
+    operands.push(bodyValue)?;
+    operands.push(constOperand(n, until as i64, u32Type)?)?;
+    operands.push(readPlace(c, n, b, atPlace)?)?;
+    let list = n.list(operands.view())?;
+    let join = n.rvalue(NirRvalue.Builtin(bfAsyncJoin(), list), u32Type, span)?;
+    let orderPlace = localPlace(n, newTemp(b, u32Type)?)?;
+    assign(n, b, orderPlace, join)?;
+    var arguments = Vector<u32>.create();
+    arguments.push(readPlace(c, n, b, orderPlace)?)?;
+    for (k in 0..2) {
+        let childResult = c.hir.functions[(if (k == 0) bodyFunction else until) as usize].returnType;
+        var which = Vector<u32>.create();
+        which.push(constOperand(n, site as i64, u32Type)?)?;
+        which.push(constOperand(n, k as i64, u32Type)?)?;
+        let whichList = n.list(which.view())?;
+        let taken = n.rvalue(NirRvalue.Builtin(bfAsyncJoinResult(), whichList), childResult, span)?;
+        let place = localPlace(n, newTemp(b, childResult)?)?;
+        assign(n, b, place, taken)?;
+        arguments.push(readPlace(c, n, b, place)?)?;
+    }
+    arguments.push(readPlace(c, n, b, errorPlace)?)?;
     let argumentList = n.list(arguments.view())?;
     let typ = c.hir.exprTypes[e as usize];
     return n.rvalue(NirRvalue.Call(settle, argumentList), typ, span);
@@ -2562,6 +2636,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.AsyncScope(_, _, _) => { return true; }
         HirExpr.AsyncShield(_, _, _) => { return true; }
         HirExpr.AsyncJoin(_, _, _, _, _) => { return true; }
+        HirExpr.AsyncTimeout(_, _, _, _, _, _) => { return true; }
         HirExpr.AsyncBlocking(_, _) => { return true; }
         HirExpr.AsyncBoxed(_, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }

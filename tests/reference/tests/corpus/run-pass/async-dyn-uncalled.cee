@@ -1,0 +1,16 @@
+// Bug B10 (found by CeeSafe.Web, its probe tests/probes/async-dyn-uncalled-bug.cee on ceesafec 0.9.1); see ROADMAP §10's row.
+interface Job {
+    async fn run(borrow this) -> u32;
+}
+
+struct Seven {}
+
+impl Job for Seven {
+    async fn run(borrow this) -> u32 => 7;
+}
+
+fn main() {
+    let b: Box<dyn Job> = Box.create(Seven {})!;
+    Console.writeLine(1);
+}
+// expect-stdout: 1

@@ -639,6 +639,19 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             }
         }
     }
+    // A dyn table's async entries need their dyn frame (its size goes in the table) even when no call goes through
+    // `dyn` (bug B10).
+    for (table in c.dynTables.view()) {
+        for (slot in 0..table.methods.count) {
+            if (isAsyncFunction(c, c.hir.at(table.methods, slot))) {
+                let callee = dynSignatureMethod(c, table.dynType, slot);
+                if (callee != none() && !containsU32(done, callee)) {
+                    emitDynFrame(e, c, n, callee)?;
+                    done.push(callee)?;
+                }
+            }
+        }
+    }
     for (f in asyncs.view()) {
         let source = nirFunctionSource(n, f);
         e.fnProto()?;

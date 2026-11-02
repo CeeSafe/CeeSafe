@@ -1,0 +1,109 @@
+// Recursion through `await` (ADR 0056): each await on a cycle of the await graph takes its callee's frame from the
+// task's frame stack, so direct recursion, mutual recursion, recursion through `dyn` (a tree of `Box<dyn Node>`, and
+// middleware wrapping middleware, CeeSafe.Web's shape), a recursion past several chunks, and a cancellation deep in a
+// recursion all run. Each expected line follows from the program: the depths and sums are worked out from the inputs.
+
+async fn walk(n: u32) -> u32 {
+    if (n == 0) {
+        return 0;
+    }
+    return await walk(n - 1) + 1;
+}
+
+async fn ping(n: u32) -> u32 => if (n == 0) 0 else await pong(n - 1) + 1;
+async fn pong(n: u32) -> u32 => if (n == 0) 100 else await ping(n - 1) + 1;
+
+interface Node {
+    async fn sum(borrow this) -> u32;
+}
+
+struct Leaf {
+    value: u32;
+}
+
+impl Node for Leaf {
+    async fn sum(borrow this) -> u32 => this.value;
+}
+
+struct Pair {
+    left: Box<dyn Node>;
+    right: Box<dyn Node>;
+}
+
+impl Node for Pair {
+    async fn sum(borrow this) -> u32 {
+        let a = await this.left.sum();
+        return a + await this.right.sum();
+    }
+}
+
+interface Handler {
+    async fn handle(borrow this, n: u32) -> u32;
+}
+
+struct Base {}
+
+impl Handler for Base {
+    async fn handle(borrow this, n: u32) -> u32 => n + 1;
+}
+
+/// Middleware: the next handler, whatever it is, and a factor.
+struct Scaled {
+    inner: Box<dyn Handler>;
+    factor: u32;
+}
+
+impl Handler for Scaled {
+    async fn handle(borrow this, n: u32) -> u32 => await this.inner.handle(n) * this.factor;
+}
+
+async fn leaf(value: u32) -> Box<dyn Node> => Box.create(Leaf { value: value })!;
+
+/// Middleware three deep over Base: ((n + 1) * 2) * 3) * 5.
+async fn stacked(n: u32) -> u32 {
+    let base: Box<dyn Handler> = Box.create(Base {})!;
+    let two: Box<dyn Handler> = Box.create(Scaled { inner: base, factor: 2 })!;
+    let three: Box<dyn Handler> = Box.create(Scaled { inner: two, factor: 3 })!;
+    let five = Scaled { inner: three, factor: 5 };
+    return await five.handle(n);
+}
+
+async fn tree() -> u32 {
+    let left: Box<dyn Node> = Box.create(Pair { left: await leaf(1), right: await leaf(2) })!;
+    let right: Box<dyn Node> = Box.create(Pair { left: await leaf(3), right: await leaf(4) })!;
+    let root = Pair { left: left, right: right };
+    return await root.sum();
+}
+
+/// A recursion that sleeps at its bottom: cancelled there by a timeout, every level returns.
+async fn sleepy(n: u32) -> Result<u32, AsyncError> {
+    if (n == 0) {
+        await Timer.sleep(10000)?;
+        return Ok(0);
+    }
+    return Ok(await sleepy(n - 1)? + 1);
+}
+
+async fn cancelled() -> u32 {
+    let r: Result<u32, AsyncError> = await Async.timeout(5, AsyncError.TimedOut, async () => await sleepy(500));
+    return match (r) {
+        Ok(_) => 1,
+        Err(AsyncError.TimedOut) => 2,
+        Err(_) => 3,
+    };
+}
+
+fn main() {
+    Console.writeLine(Async.run(walk(3)));
+    Console.writeLine(Async.run(ping(3)));
+    Console.writeLine(Async.run(walk(5000)));
+    Console.writeLine(Async.run(tree()));
+    Console.writeLine(Async.run(stacked(1)));
+    Console.writeLine(Async.run(cancelled()));
+}
+// expect-stdout: 3
+// expect-stdout: 103
+// expect-stdout: 5000
+// expect-stdout: 10
+// expect-stdout: 60
+// expect-stdout: 2

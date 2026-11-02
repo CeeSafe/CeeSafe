@@ -39,7 +39,7 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
         makeAsyncInstances(c, mut n)?;
         // Context effects need the drops explicit (type-system.md §32).
         checkEffects(c, n)?;
-        checkCoroutines(c, n)?; // recursion through `await` (type-system.md §40.1)
+        checkCoroutines(c, mut n)?; // recursion through `await`: stacked awaits (ADR 0056), N0343 where none can be
     }
     return Ok(n);
 }

@@ -25,6 +25,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_LENGTH: return "slice lengths differ";
     case CEE_PANIC_FLOAT_RANGE: return "float out of range";
     case CEE_PANIC_ASYNC: return "async executor: every task waits with nothing to wake it";
+    case CEE_PANIC_FRAME_STACK: return "async frame stack: out of memory";
     default: return "unknown panic";
     }
 }

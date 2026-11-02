@@ -6,7 +6,8 @@ ceesafe_pool_take, ceesafe_vec_grow, ceesafe_svec_slot or ceesafe_async_spawn) i
 with CEESAFE_ALLOC_REPORT=1 to count its allocation attempts n; then once per failure point k
 (CEESAFE_FAIL_ALLOC_AT=k): every k <= n, or for n > 200
 the first 50, the last 50 and 100 evenly spaced. Every run must end with a normal return and no live allocations, or
-with the panic of `!` on the failed allocation (exit 134); a leak, any other panic or a sanitizer report fails.
+with the panic of `!` on the failed allocation (exit 134), or the panic of a task's frame stack that cannot grow (ADR
+0056 §3.3: "async frame stack: out of memory"); a leak, any other panic or a sanitizer report fails.
 
 With --reference, another ceesafec's build of each program (an earlier one, say) must give the same stdout, stderr
 and status at every point. Both compilers build in the default form (P7), or in P5's with --flat.
@@ -27,7 +28,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ALLOCATION_CALLS = ("ceesafe_alloc(", "ceesafe_alloc_zeroed(", "ceesafe_region_alloc(", "ceesafe_region_alloc_fast(",
                     "ceesafe_scratch_enter_root(", "ceesafe_pool_take(", "ceesafe_vec_grow(", "ceesafe_svec_slot(",
-                    "ceesafe_async_spawn(")  # a scope's child (type-system.md §40.5): its task and frame
+                    "ceesafe_async_spawn(",  # a scope's child (type-system.md §40.5): its task and frame
+                    "ceesafe_async_stack_push(")  # a stacked await's frame (ADR 0056)
 P5_SWITCHES = ["--flat-c", "--no-closure-specialisation", "--no-placement", "--no-bce", "--no-oce"]
 SWITCHES = []  # the default form; --flat sets P5_SWITCHES
 # The sanitizers are clang's, or GCC's where there is no clang (the Linux box: ROADMAP L1 A2's gate).
@@ -62,7 +64,9 @@ def problem(outcome):
     if "Sanitizer" in stderr or "runtime error" in stderr:
         return "sanitizer report"
     if "ceesafe panic: " in stderr:
-        return None if "ceesafe panic: unwrapped an Err value" in stderr and status == 134 else "unexpected panic"
+        expected = ("ceesafe panic: unwrapped an Err value" in stderr or
+                    "ceesafe panic: async frame stack: out of memory" in stderr)  # ADR 0056 §3.3
+        return None if expected and status == 134 else "unexpected panic"
     m = REPORT.search(stderr)
     if not m:
         return f"no allocation report (exit code {status})"

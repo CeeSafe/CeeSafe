@@ -98,7 +98,9 @@ static inline void cee_drain(int fd, void *buffer, size_t length) {
 #endif /* CEE_FREESTANDING */
 
 typedef struct cee_task {
-    void *frame;
+    /* Aligned to 16, so a child's frame after it (CEE_TASK_HEAD) is too, where max_align_t's alignment is 8 (macOS
+       arm64): the frames' structs may require 16. */
+    _Alignas(16) void *frame;
     union {
         bool (*root)(void *);
         bool (*child)(void *, ceesafe_scope *);
@@ -127,9 +129,11 @@ typedef struct cee_task {
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     bool parked;           /* on the parked list */
     bool on_op;            /* waiting for an IOCP completion (ADR 0035): readied by it, cancellable while channel_wait */
+    struct cee_chunk *stack; /* the chunk at the top of its frame stack (ADR 0056), or NULL */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
+_Static_assert(sizeof(cee_task) % 16u == 0u, "a child's frame after its task is 16-aligned");
 
 /* A child's task and frame are one block: the frame starts at the first max_align_t boundary after the task (its
    alignment, not its size: x86-64's max_align_t is 32 bytes aligned to 16, and a kernel heap gives 16). */
@@ -192,6 +196,8 @@ typedef struct {
     struct cee_task *root;     /* freestanding: the run's root (the hosted runtime's cee_cancel_root) */
     uint64_t wake_sequence;    /* freestanding: the hosted runtime's global cee_wake_sequence */
     uint64_t cancel_seen;      /* the run's cancel_epoch when this executor last rechecked its parked tasks */
+    struct cee_chunk *chunks;  /* frame-stack chunks no task uses, for the next (ADR 0056) */
+    uint32_t chunk_count;
 } cee_executor;
 
 #if defined(CEE_FREESTANDING)
@@ -1245,6 +1251,100 @@ bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
 }
 #endif /* Async.blocking */
 
+/* ---- Frame stacks (ADR 0056): the frames of awaits on a cycle, last in, first out, per task. ---- */
+
+#define CEE_CHUNK_SIZE ((size_t)16384u)
+#define CEE_CHUNK_POOL 64u
+
+typedef struct cee_chunk {
+    struct cee_chunk *below; /* the chunk under it in its task's stack, or the next in the executor's pool */
+    size_t size;             /* the bytes after the header */
+    size_t used;             /* the bytes in use, from the first after the header */
+} cee_chunk;
+
+#define CEE_CHUNK_HEAD ((sizeof(cee_chunk) + _Alignof(cee_max_align_t) - 1u) / _Alignof(cee_max_align_t) * _Alignof(cee_max_align_t))
+
+#if !defined(CEE_FREESTANDING)
+static unsigned char *cee_chunk_data(cee_chunk *chunk) { return (unsigned char *)chunk + CEE_CHUNK_HEAD; }
+
+/* A chunk of at least `size` bytes: the executor's, or new; NULL if none can be had. */
+static cee_chunk *cee_take_chunk(size_t size) {
+    cee_chunk **link = &cee_exec.chunks;
+    while (*link != NULL) {
+        cee_chunk *chunk = *link;
+        if (chunk->size >= size) {
+            *link = chunk->below;
+            cee_exec.chunk_count -= 1u;
+            chunk->used = 0;
+            return chunk;
+        }
+        link = &chunk->below;
+    }
+    size_t bytes = size > CEE_CHUNK_SIZE ? size : CEE_CHUNK_SIZE;
+    cee_chunk *chunk = (cee_chunk *)ceesafe_alloc(CEE_CHUNK_HEAD + bytes, CEE_ALLOC_SYSTEM);
+    if (chunk == NULL) {
+        return NULL;
+    }
+    chunk->size = bytes;
+    chunk->used = 0;
+    return chunk;
+}
+
+/* A chunk no task uses: kept for the next, or freed past the pool's size. */
+static void cee_give_chunk(cee_chunk *chunk) {
+    if (cee_exec.chunk_count >= CEE_CHUNK_POOL) {
+        ceesafe_free(chunk, CEE_ALLOC_SYSTEM);
+        return;
+    }
+    chunk->below = cee_exec.chunks;
+    cee_exec.chunks = chunk;
+    cee_exec.chunk_count += 1u;
+}
+
+void *ceesafe_async_stack_push(size_t size, size_t align) {
+    cee_task *t = cee_exec.current;
+    if (align == 0u) {
+        align = 1u;
+    }
+    cee_chunk *top = t->stack;
+    if (top != NULL) {
+        size_t at = (top->used + align - 1u) / align * align;
+        if (at + size <= top->size) {
+            top->used = at + size;
+            return cee_chunk_data(top) + at;
+        }
+    }
+    /* The data starts max_align_t-aligned, which every frame's alignment fits. */
+    cee_chunk *chunk = cee_take_chunk(size);
+    if (chunk == NULL) {
+        ceesafe_panic(CEE_PANIC_FRAME_STACK, CEE_LOC("ceesafe_rt_async.c", 0u, 0u));
+    }
+    chunk->below = top;
+    chunk->used = size;
+    t->stack = chunk;
+    return cee_chunk_data(chunk);
+}
+
+void ceesafe_async_stack_pop(void *frame) {
+    cee_task *t = cee_exec.current;
+    cee_chunk *top = t->stack;
+    top->used = (size_t)((unsigned char *)frame - cee_chunk_data(top));
+    if (top->used == 0u) {
+        t->stack = top->below; /* its first frame: the chunk goes back to the executor */
+        cee_give_chunk(top);
+    }
+}
+
+static void cee_free_chunks(void) {
+    while (cee_exec.chunks != NULL) {
+        cee_chunk *chunk = cee_exec.chunks;
+        cee_exec.chunks = chunk->below;
+        ceesafe_free(chunk, CEE_ALLOC_SYSTEM);
+    }
+    cee_exec.chunk_count = 0;
+}
+#endif
+
 /* ---- Task sets (ADR 0053): a scope with a limit, spawned into while it runs by the task that owns it. ---- */
 
 _Static_assert(sizeof(ceesafe_task_set) <= 96, "lib/core's TaskSetRecord holds a task set");
@@ -1841,6 +1941,7 @@ static void cee_exec_end(void) {
     ceesafe_platform_free(cee_exec.heap);
     ceesafe_platform_free(cee_exec.slots);
     ceesafe_platform_free(cee_exec.active_fds);
+    cee_free_chunks();
 }
 #endif
 

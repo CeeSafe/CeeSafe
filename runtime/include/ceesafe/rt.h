@@ -75,7 +75,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_FFI_ENUM = 11,
     CEE_PANIC_LENGTH = 12,
     CEE_PANIC_FLOAT_RANGE = 13,
-    CEE_PANIC_ASYNC = 14 /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
+    CEE_PANIC_ASYNC = 14, /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
+    CEE_PANIC_FRAME_STACK = 15 /* a task's frame stack could not grow (ADR 0056 §3.3) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -1171,11 +1172,18 @@ void ceesafe_async_signal_raise(void *signal);
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
  * children and wakes those waiting. */
 typedef struct ceesafe_task_slot {
-    _Alignas(16) unsigned char bytes[144];
+    _Alignas(16) unsigned char bytes[160];
 } ceesafe_task_slot;
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
                          bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info);
 void ceesafe_async_cancel(ceesafe_scope *scope);
+/* A task's frame stack (ADR 0056): an await on a cycle of the await graph (recursion through `await`, directly or
+ * through `dyn`) takes its callee's frame from the current task's stack, `size` bytes aligned to `align`, and gives it
+ * back when the call has returned. Frames are pushed and popped last in, first out, in 16 KiB chunks (or one of the
+ * frame's size) kept by the executor for the next tasks, up to 64. If no chunk can be had, the program panics
+ * (CEE_PANIC_FRAME_STACK). Hosted only. */
+void *ceesafe_async_stack_push(size_t size, size_t align);
+void ceesafe_async_stack_pop(void *frame);
 /* Async.blocking (type-system.md §40.4): `body(arg)` runs on a worker thread, which calls ceesafe_async_blocking_finish
  * when it is done; ceesafe_async_blocking_ready is true once it is, and otherwise parks the task until the worker wakes
  * it through its executor (any thread may wake a task: a flag and the executor's wake pipe). If no thread can be

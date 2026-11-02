@@ -451,7 +451,13 @@ static bool ceeAR_<F>(struct ceeAF_<F> *cee_frame);  /* runs F until it returns 
 static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime calls it */
 ```
 
-- **Frames are emitted child-first,** so a frame that embeds another's follows it. A cycle cannot occur (N0343).
+- **Frames are emitted child-first,** so a frame that embeds another's follows it. A cycle cannot occur: an await on a
+  cycle of the await graph is **stacked** (ADR 0056; its NIR role `taskStacked`), and its awaiter's union member is a
+  pointer `struct ceeAF_<C> *cee_a<k>`, which needs only the struct's name. The await sets it to
+  `ceesafe_async_stack_push(sizeof(struct ceeAF_<C>), _Alignof(struct ceeAF_<C>))`, starts and resumes the callee
+  through it, reads its result, and calls `ceesafe_async_stack_pop` on it. The runtime keeps the task's top chunk in
+  `cee_task.stack` (the task record is 160 bytes, `ceesafe_task_slot` with it) and each executor's free chunks, which
+  it frees as it ends. Freestanding code has no stack: there a cycle is N0343.
 - **Which locals are frame fields** (L1 A3): the parameters, every local that is ever borrowed, every local live just
   after a suspension point (backward liveness over the NIR, where a `StorageDead` reads nothing), and the locals a
   scope's end mentions (it reads its oom operand after resuming). Inside the resume function such a local's C name is

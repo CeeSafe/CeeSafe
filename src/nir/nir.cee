@@ -104,6 +104,12 @@ fn taskAwait() -> u8 => 1;
 fn taskRun() -> u8 => 2;
 /// A Builtin(AsyncSpawn)'s role for `s.spawnSend(…)`: the child may run on another worker (ADR 0038).
 fn taskSend() -> u8 => 3;
+/// An awaited call on a cycle of the await graph (ADR 0056): its frame comes from the task's frame stack, and the
+/// awaiter holds a pointer to it. Set by the coroutine pass; otherwise a taskAwait().
+fn taskStacked() -> u8 => 4;
+
+/// An awaited call's role: embedded (taskAwait) or stacked (ADR 0056).
+fn isAwaitRole(role: u8) -> bool => role == taskAwait() || role == taskStacked();
 
 struct NirFunction {
     source: u32; // the HIR function
@@ -126,7 +132,7 @@ struct NirProgram {
     rvalueTypes: Vector<u32>;
     rvalueSpans: Vector<Span>;   // a Binary's, Unary's or FloatToInt's span, where it may panic
     rvalueVariants: Vector<u32>; // a Call's callee variant (NirCall.Variant), 0 unless specialisation chose one
-    rvalueTasks: Vector<u8>;     // a Call's task role (type-system.md §40): 0 a call, taskAwait() or taskRun()
+    rvalueTasks: Vector<u8>;     // a Call's task role (type-system.md §40): 0 a call, taskAwait(), taskRun(), taskStacked()
     statements: Vector<NirStatement>;
     statementSpans: Vector<Span>;
     terminators: Vector<NirTerminator>;

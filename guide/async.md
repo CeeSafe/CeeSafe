@@ -67,8 +67,12 @@ main.cee:4:19: error[N0342]: a call of the async fn 'add' is a task: await it, o
   |                   ^^^^^^^^^
 ```
 
-`await` is allowed only in an async fn or an async closure (N0341). An async fn that would await itself is N0343, since
-its frame would contain itself; `Async.boxed` gives such a call a frame of its own from an allocator.
+`await` is allowed only in an async fn or an async closure (N0341). An async fn may await itself, directly, through
+other async fns, or through `dyn` (middleware wrapping middleware): each await on such a cycle takes its callee's frame
+from the task's own frame stack, reused from task to task, so recursion is written as in sync code. Running out of
+memory for it stops the program, as a deep sync recursion does; `Async.boxed(alloc, f(…))` gives a call a frame from an
+allocator instead, with the failure as a value. In freestanding code, which has no frame stack, such recursion is N0343
+and `Async.boxed` is the way.
 
 ## Running tasks at once: scopes
 

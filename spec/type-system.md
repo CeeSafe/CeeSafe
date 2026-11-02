@@ -3387,7 +3387,8 @@ fn main() {
   (`T: I`) each instance awaits the concrete method, whose frame is known. Through `dyn I` (§37.3, ADR 0036) the
   awaiter's frame has room for the largest frame of `I.m` among the types coerced to `dyn I` anywhere in the
   program: the program is compiled whole, so that set is known. An await through the table that may reach its own
-  frame is N0343 (below). `Async.boxed` takes such a call too, with a frame of the receiver's own size.
+  frame is recursion through `await` (below). `Async.boxed` takes such a call too, with a frame of the receiver's own
+  size.
 - **A call of an async fn is a task**, not a value: it runs nothing until it is awaited (§40.2), run (§40.4) or spawned
   (§40.5). A task call anywhere else (a `let`, an argument of any other call, a field, a return) is **N0342**. There is
   no type of tasks in v1, so a task cannot be stored, returned or passed on.
@@ -3396,12 +3397,20 @@ fn main() {
 - **The body** is checked like a function body with result type `T`, with three differences: it may `await`
   (§40.2); it is a context that forbids `sleep` (§32.3), so a blocking call is N0295 with its chain of calls; and its
   effects (§32.1) are those of its operations, `suspend` among them if it awaits.
-- **Recursion through `await`** (an async fn that awaits itself, directly or through other async fns) would make its
-  frame contain itself: **N0343**, naming the cycle. A recursive *sync* call from an async fn is an ordinary call.
+- **Recursion through `await`** (an async fn that awaits itself, directly, through other async fns, or through `dyn`)
+  would make its frame contain itself. In the hosted profile each await on such a cycle is **stacked** (ADR 0056): its
+  callee's frame comes from the task's **frame stack**, and the awaiter holds a pointer to it, so the program is
+  written as sync recursion is. The stack grows in 16 KiB chunks (or a frame's size), which a returning call gives
+  back to its executor's pool (up to 64) for the next tasks; if no chunk can be had, the program panics (`async frame
+  stack: out of memory`), as a sync program whose call stack overflows stops. Awaits not on a cycle are embedded as
+  before. `--explain-frames` names the stacked ones. **N0343** remains where there is no frame stack (the freestanding
+  profile), for a cycle through a `race` or `all` child, and for an async instance calling itself with its closure
+  (§32.5). A recursive *sync* call from an async fn is an ordinary call.
 - **`await Async.boxed(alloc, f(…))`** awaits a task whose frame comes from `alloc` (an allocator type, as for
   `Box.createIn`, §30) and is given back when it returns; the awaiting frame holds only a pointer, so recursion through
   it is allowed. Its value is `Result<T, AllocError>`: `Err(AllocError.OutOfMemory)` if the frame cannot be had, and
-  then the task does not run. N0343's sure fix is `Async.boxed(SystemHeap {}, f(…))!`.
+  then the task does not run. N0343's sure fix is `Async.boxed(SystemHeap {}, f(…))!`; in hosted code it keeps the
+  failure as a value where a stacked await would panic.
 - A generic async fn is checked once and instantiated like any generic function (§20.3).
 
 ### 40.2 `await`

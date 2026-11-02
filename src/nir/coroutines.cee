@@ -1,6 +1,8 @@
 // The coroutine pass (intermediate-representation.md §3, ADR 0031 §3.6): after the effect checker, over async fns. It
-// finds the awaited calls and reports recursion through `await` (N0343): a frame cannot contain itself (type-system.md
-// §40.1). It changes nothing.
+// finds the awaited calls on cycles of the await graph (recursion through `await`, directly or through `dyn`), whose
+// frames would contain themselves (type-system.md §40.1). In the hosted profile each such call is stacked: its frame
+// comes from the task's frame stack and its awaiter holds a pointer (ADR 0056). N0343 remains in the freestanding
+// profile, which has no frame stack, for a race or all child, and for an async instance calling itself (ADR 0037).
 
 fn awaitRecursion() -> u32 => 343;
 
@@ -25,7 +27,7 @@ fn awaitEdges(n: borrow NirProgram, out: borrow mut Vector<AwaitEdge>) -> Result
                 }
                 match (n.rvalues[r as usize]) {
                     NirRvalue.Call(callee, _) => {
-                        if (n.rvalueTasks[r as usize] == taskAwait()) {
+                        if (isAwaitRole(n.rvalueTasks[r as usize])) {
                             out.push(AwaitEdge { caller: f.source, callee: callee, rvalue: r })?;
                         }
                     }
@@ -87,12 +89,20 @@ fn awaitReaches(
     }
 }
 
-fn checkCoroutines(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+fn checkCoroutines(c: borrow mut Checker, n: borrow mut NirProgram) -> Result<void, AllocError> {
     var edges = Vector<AwaitEdge>.create();
     awaitEdges(n, mut edges)?;
     for (edge in edges.view()) {
         // An await on a cycle: its callee reaches its caller again.
         if (!awaitReaches(c, edges, edge.callee, edge.caller)?) {
+            continue;
+        }
+        let isAwaitCall = match (n.rvalues[edge.rvalue as usize]) {
+            NirRvalue.Call(_, _) => true,
+            _ => false,
+        };
+        if (!c.freestanding && isAwaitCall && c.hir.functions[edge.caller as usize].asyncInstanceOf == none()) {
+            n.rvalueTasks[edge.rvalue as usize] = taskStacked(); // every await on the cycle (ADR 0056 §3.1)
             continue;
         }
         var message = Vector<u8>.create();

@@ -28,7 +28,7 @@ fn appendAsyncName(
 fn isSuspension(n: borrow NirProgram, s: u32) -> bool {
     let r = statementRvalue(n, s);
     return r != none() &&
-        (n.rvalueTasks[r as usize] == taskAwait() || builtinOf(n, r) == bfAsyncPark() ||
+        (isAwaitRole(n.rvalueTasks[r as usize]) || builtinOf(n, r) == bfAsyncPark() ||
             builtinOf(n, r) == bfAsyncScopeWait() || builtinOf(n, r) == bfAsyncJoin() ||
             builtinOf(n, r) == bfAsyncBlocking() || builtinOf(n, r) == bfAsyncBoxed());
 }
@@ -155,10 +155,79 @@ fn ownsEnvironment(c: borrow Checker, child: u32) -> bool {
         c.types.needsDrop(environment);
 }
 
+/// Whether statement `s` is a stacked await (ADR 0056).
+fn isStackedStatement(n: borrow NirProgram, s: u32) -> bool {
+    let r = statementRvalue(n, s);
+    return r != none() && n.rvalueTasks[r as usize] == taskStacked();
+}
+
+/// `await g(…)` on a cycle (ADR 0056): the frame from the task's stack, started and resumed through the pointer in the
+/// awaiter's frame, its result read, then the frame given back. The pointer stays in the frame across the suspensions.
+fn emitStackedAwait(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    callee: u32,
+    args: Slice<u8>,
+    argumentCount: u32,
+    place: Slice<u8>,
+    target: u32,
+) -> Result<bool, AllocError> {
+    let k = e.nextState()?;
+    var slot = copyBytes("cee_frame->cee_u.cee_a".bytes())?;
+    appendDecimal(mut slot, k as u64)?;
+    e.t("    ")?;
+    e.b(slot.view())?;
+    e.t(" = (struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t(" *)ceesafe_async_stack_push(sizeof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t("), _Alignof(struct ")?;
+    appendAsyncName(c, mut e.buf, "ceeAF_", callee)?;
+    e.t("));")?;
+    e.emit()?;
+    e.t("    ")?;
+    appendAsyncName(c, mut e.buf, "ceeAI_", callee)?;
+    e.t("(")?;
+    e.b(slot.view())?;
+    if (argumentCount > 0) {
+        e.t(", ")?;
+        e.b(args)?;
+    }
+    e.t(");")?;
+    e.emit()?;
+    e.t("    cee_frame->cee_state = ")?;
+    e.d(k as u64)?;
+    e.t("u;")?;
+    e.emit()?;
+    e.t("cee_resume_")?;
+    e.d(k as u64)?;
+    e.t(":")?;
+    e.emit()?;
+    e.t("    if (!")?;
+    appendAsyncName(c, mut e.buf, "ceeAR_", callee)?;
+    e.t("(")?;
+    e.b(slot.view())?;
+    e.t(")) return false;")?;
+    e.emit()?;
+    if (target != none()) {
+        e.t("    ")?;
+        e.b(place)?;
+        e.t(" = ")?;
+        e.b(slot.view())?;
+        e.t("->cee_result;")?;
+        e.emit()?;
+    }
+    e.t("    ceesafe_async_stack_pop(")?;
+    e.b(slot.view())?;
+    e.t(");")?;
+    e.emit()?;
+    return Ok(true);
+}
+
 /// The awaited callee of statement `s`, or none.
 fn awaitedCallee(n: borrow NirProgram, s: u32) -> u32 {
     let r = statementRvalue(n, s);
-    if (r == none() || n.rvalueTasks[r as usize] != taskAwait()) {
+    if (r == none() || !isAwaitRole(n.rvalueTasks[r as usize])) {
         return none();
     }
     return match (n.rvalues[r as usize]) {
@@ -506,7 +575,8 @@ fn emitFrameStruct(
             if (callee != none()) {
                 var member = copyBytes("struct ".bytes())?;
                 appendAsyncName(c, mut member, "ceeAF_", callee)?;
-                appendText(mut member, " cee_a")?;
+                // A stacked await (ADR 0056) holds a pointer to its callee's frame on the task's stack.
+                appendText(mut member, if (isStackedStatement(n, s)) " *cee_a" else " cee_a")?;
                 appendDecimal(mut member, site as u64)?;
                 members.push(member)?;
             }
@@ -577,7 +647,7 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             for (block in n.functions[f as usize].blocks.view()) {
                 for (s in block.statements.view()) {
                     let callee = awaitedCallee(n, s);
-                    if (callee != none() && !containsU32(done, callee)) {
+                    if (callee != none() && !containsU32(done, callee) && !isStackedStatement(n, s)) {
                         if (isDynAsync(c, callee) && dynImplsDone(c, done, callee)?) {
                             emitDynFrame(e, c, n, callee)?; // every impl's frame is defined (ADR 0036)
                             done.push(callee)?;
@@ -1039,6 +1109,9 @@ fn emitTaskStatement(
         }
         e.line("    }")?;
         return Ok(true);
+    }
+    if (role == taskStacked()) {
+        return emitStackedAwait(e, c, callee, args.view(), arguments.count, place.view(), target);
     }
     // `await g(…)`: start the child in its field, then resume it until it returns.
     let k = e.nextState()?;
@@ -1756,7 +1829,7 @@ fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
 
 /// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
 fn scopeLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
-fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 144, align: 16 };
+fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 160, align: 16 };
 fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
 
 /// What a frame is made of, for --explain-frames.
@@ -1857,7 +1930,10 @@ fn frameReport(c: borrow Checker, n: borrow NirProgram, f: u32) -> Result<FrameR
             }
             let callee = awaitedCallee(n, s);
             if (callee != none()) {
-                member = calleeFrameLayout(c, n, callee)?;
+                member = if (isStackedStatement(n, s)) SizeAlign {
+                    size: 8,
+                    align: 8,
+                } else calleeFrameLayout(c, n, callee)?;
             }
             if (member.size >= 0) {
                 report.unionMembers += 1;
@@ -1995,6 +2071,18 @@ fn explainDynAwaits(
     for (block in n.functions[f as usize].blocks.view()) {
         for (s in block.statements.view()) {
             let callee = awaitedCallee(n, s);
+            if (callee != none() && isStackedStatement(n, s)) {
+                // ADR 0056: recursion through `await`, its frame from the task's frame stack.
+                appendBytes(out, c.filePaths[file as usize].view())?;
+                out.push(':')?;
+                appendWhere(out, sources, file, n.rvalueSpans[statementRvalue(n, s) as usize].start)?;
+                appendText(out, ": the await of ")?;
+                appendDescribedFunction(c, callee, out)?;
+                appendText(out, " is stacked: on a cycle of awaits, its frame of ")?;
+                appendDecimal(out, truncate<u64>(calleeFrameLayout(c, n, callee)?.size))?;
+                appendText(out, " bytes comes from the task's frame stack (ADR 0056)\n")?;
+                continue;
+            }
             if (callee == none() || !isDynAsync(c, callee)) {
                 continue;
             }

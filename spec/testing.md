@@ -30,6 +30,8 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 `tools/package_tests.py --compiler PATH` (in the contract suite) builds packages that link a C static library it makes,
 through two levels of dependency, and checks the link file, an unset variable, the locked hash and N0321 (ADR 0047).
 
+`tools/dns_check.py` (ADR 0048's timed and sanitizer cases) is in the contract suite too.
+
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
 --package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.

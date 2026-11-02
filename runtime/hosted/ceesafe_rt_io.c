@@ -347,6 +347,9 @@ static BOOL CALLBACK cee_wsa_start(PINIT_ONCE once, PVOID parameter, PVOID *cont
 
 static bool cee_wsa_ready(void) { return InitOnceExecuteOnce(&cee_wsa_once, cee_wsa_start, NULL, NULL) != 0; }
 
+/* Winsock started once for the process, for ceesafe_rt_async.c's resolver (ADR 0048). */
+bool ceesafe_winsock_ready(void) { return cee_wsa_ready(); }
+
 /* A Winsock error as the C runtime's errno, so ceesafe_io_kind and messages read it as on POSIX. */
 static int32_t cee_wsa_errno(int error) {
     switch (error) {
@@ -1700,4 +1703,5 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     ceesafe_free(argv, CEE_ALLOC_SYSTEM);
     return result;
 }
+
 

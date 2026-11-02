@@ -5,6 +5,16 @@
 extern "C" {
     @effects()
     fn ceesafe_interface_index(name: *u8, length: u64) -> u32;
+    @effects()
+    fn ceesafe_dns_start(host: *u8, length: u64, port: u16) -> *mut void;
+    @effects()
+    fn ceesafe_dns_poll(lookup: *mut void) -> i32;
+    @effects()
+    fn ceesafe_dns_count(lookup: *mut void) -> u32;
+    @effects()
+    fn ceesafe_dns_address(lookup: *mut void, index: u32, bytes: *mut u8, family: *mut u32, scope: *mut u32);
+    @effects()
+    fn ceesafe_dns_end(lookup: *mut void);
 }
 
 /// An IPv4 or IPv6 endpoint: the address bytes in network order and the port; an IPv6 address also has its scope id
@@ -474,5 +484,90 @@ public struct IoParts<region r> {
             p7: this.part(k + 7),
             n: this.n - k,
         };
+    }
+}
+
+/// Name resolution for tasks (ADR 0048).
+public struct AsyncDns {
+    /// The addresses of `host`, each with `port`: both families, in the resolver's order, duplicates removed, never
+    /// empty. A literal address is itself, at once. Otherwise the system's resolver runs on one of at most four
+    /// resolver threads while the task waits; a cancelled task returns `Err(Cancelled)` at once, and the lookup is left
+    /// to its thread. Errors are `AsyncError.Io`: `NotFound` (no such name), `TimedOut` (a temporary failure: try
+    /// again), `InvalidInput` (an empty name, one over 253 bytes or with a NUL), `OutOfMemory`, `Unsupported` (no
+    /// resolver: CosmoOS, the interpreter for names other than `localhost`).
+    /// Safety: the runtime copies the name during the start; the lookup's record is the runtime's, ended once by
+    /// `DnsLookup`'s drop, so no path leaves it or ends it twice.
+    public async fn resolve(host: StringView, port: u16) -> Result<Vector<SocketAddress>, AsyncError> {
+        var out = Vector<SocketAddress>.create();
+        match (SocketAddresses.parseIp(host, port)) {
+            Some(address) => {
+                match (out.push(address)) {
+                    Ok() => { return Ok(out); }
+                    Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); }
+                }
+            }
+            null => {}
+        }
+        let name = host.bytes();
+        var plain = name.length > 0 && name.length <= 253;
+        for (b in name) {
+            if (b == 0) {
+                plain = false;
+            }
+        }
+        if (!plain) {
+            return Err(AsyncError.Io(IoError.InvalidInput));
+        }
+        let raw = unsafe { ceesafe_dns_start(name.ptr, name.length as u64, port) };
+        if (raw.isNull()) {
+            return Err(AsyncError.Io(IoError.OutOfMemory));
+        }
+        let lookup = DnsLookup { raw: raw };
+        loop {
+            AsyncLeaf.status()?; // cancelled: the drop leaves the lookup to its thread
+            let r = unsafe { ceesafe_dns_poll(lookup.raw) };
+            if (r == 1) {
+                break;
+            }
+            if (r < 0) {
+                return Err(AsyncError.Io(AsyncIo.ioError(r as i64)));
+            }
+            await Async.park();
+        }
+        let count = unsafe { ceesafe_dns_count(lookup.raw) };
+        for (k in 0..count) {
+            var bytes = [0u8; 16];
+            var family: u32 = 0;
+            var scope: u32 = 0;
+            unsafe {
+                ceesafe_dns_address(
+                    lookup.raw,
+                    k,
+                    borrow mut bytes as *mut [u8; 16] as *mut u8,
+                    borrow mut family as *mut u32,
+                    borrow mut scope as *mut u32,
+                );
+            }
+            let address = if (family == 4) SocketAddress.V4(
+                [bytes[0], bytes[1], bytes[2], bytes[3]],
+                port,
+            ) else SocketAddress.V6(bytes, port, scope);
+            match (out.push(address)) {
+                Ok() => {}
+                Err(_) => { return Err(AsyncError.Io(IoError.OutOfMemory)); }
+            }
+        }
+        return Ok(out);
+    }
+}
+
+/// A lookup the runtime holds (ADR 0048 §3.3), ended exactly once, here.
+@noncopy
+struct DnsLookup {
+    raw: *mut void;
+
+    /// Safety: the record is this lookup's, and ended only here.
+    drop {
+        unsafe { ceesafe_dns_end(this.raw); }
     }
 }

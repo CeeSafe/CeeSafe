@@ -135,3 +135,20 @@ everywhere: the interpreter's `localhost` order is fixed, so tests should not de
      - 100 lookups at once, which never use more than 4 threads;
    - `tools/cancel_sweep.py` over the new tests; every reactor; Windows on the Windows 11 ARM64 test host.
 6. The guide (`guide/async.md`, sockets), ROADMAP §10, the 0.8.0 release.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Threads.** A resolver thread ends when the queue is empty, rather than staying until the process exits: the next
+  lookup starts one again. Threads, records and the lock are the platform's (detached threads, `SRWLOCK` or a static
+  `pthread_mutex_t`, `ceesafe_platform_alloc`). So a lookup a cancelled task left behind is not the program's memory:
+  `CEESAFE_ALLOC_REPORT` shows `live=0`, and the process does not wait for the resolver to exit.
+- **Where it is.** The resolver is in `ceesafe_rt_async.c`. A first cut put it in `ceesafe_rt_io.c`, which every
+  hosted program links, calling into the async runtime, which only async programs link. On Windows a program without
+  async then failed to link (the package tests found it).
+- **Waking.** A task waits as a channel's waiter does: cancellable, woken from another thread through its executor.
+  The waiter is registered and unregistered under the lock, so no thread wakes a task after it has ended its lookup.
+- **Tests.**
+  - The corpus case (run-pass/async-dns) runs in the interpreter and natively with one expected output. An unknown
+    name is `NotFound` natively and `Unsupported` in the interpreter; both print "not resolved".
+  - The timed and sanitizer checks are `tools/dns_check.py` (in the contract suite). The thread bound is checked by
+    time: eight lookups with a 300 ms resolver take two rounds.

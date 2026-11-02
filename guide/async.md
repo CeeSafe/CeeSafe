@@ -275,7 +275,7 @@ The library's waiting operations are async functions, in the hosted profile:
 | Time | `Timer.sleep(ms)`; `Timer.now()` (not async) |
 | Console | `AsyncConsole.write(text)`, `writeLine(text)`, `writeError(text)` |
 | Files | `AsyncFiles.open`, `create`, `read`, `write` (each on a worker thread while the task waits) |
-| Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
+| Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); `AsyncDns.resolve(host, port)`, a name's addresses, cancellable; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
 | Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
 | Blocking calls | `Async.blocking(() => …)`: any sync code on a worker thread while the task waits |
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |

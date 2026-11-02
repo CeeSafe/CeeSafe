@@ -694,6 +694,16 @@ Heap (M3b):
     the completion, so a lent buffer outlives the kernel's use (type-system.md §40.7). A value completed meanwhile is
     kept: the operation returns it, and the next one sees the cancellation. Otherwise it releases what the record
     holds (a half-made connection) and returns false.
+  - **DNS** (ADR 0048): `ceesafe_dns_start` copies the name into a record of platform memory and queues it; at most
+    `CEE_DNS_THREADS` (4) detached resolver threads take lookups first come first served, and a thread ends when the
+    queue is empty. One lock guards the queue, each record's state and its waiter.
+    - `ceesafe_dns_poll` registers the current task to be woken, cancellably, as a channel's wait is, and the thread
+      wakes it under the lock when the lookup is done.
+    - The resolver is in `ceesafe_rt_async.c`, which only programs that use async link; `ceesafe_rt_io.c`, which
+      every hosted program links, gives it `ceesafe_winsock_ready` on Windows.
+    - `ceesafe_dns_end` unregisters: a done or queued lookup is freed, a running one marked abandoned, which its thread
+      frees without waking anyone.
+    - The test hook `CEESAFE_DNS_DELAY_MS` delays each lookup (tools/dns_check.py).
   - **Message operations** (ADR 0045): a vectored send's record is lib/std's `AsyncMsgOp` (`ceesafe_async_msg_op`,
     512 bytes), which starts with an operation's header, so `ceesafe_async_op_cancel` and the completion paths take
     it too. Before the first step `ceesafe_async_msg_part(op, index, bytes, length)` puts each non-empty part in it

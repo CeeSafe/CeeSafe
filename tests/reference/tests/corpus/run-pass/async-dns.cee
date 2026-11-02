@@ -1,0 +1,84 @@
+// AsyncDns.resolve (ADR 0048): literals are themselves at once; `localhost` resolves to loopback addresses (natively by
+// the system's resolver, in its order; in the interpreter as 127.0.0.1 then ::1); a name under `.invalid` (RFC 6761)
+// has no address (NotFound natively, Unsupported in the interpreter, which has no resolver: both "not resolved"); an
+// empty name, one over 253 bytes or one with a NUL is InvalidInput. tools/dns_check.py has the native-only cases.
+
+fn line(out: borrow mut Vector<u8>, text: StringView) {
+    for (b in text.bytes()) {
+        out.push(b)!;
+    }
+    out.push('\n')!;
+}
+
+fn describe(r: Result<Vector<SocketAddress>, AsyncError>, out: borrow mut Vector<u8>) {
+    match (r) {
+        Ok(list) => {
+            for (k in 0..list.length) {
+                if (k > 0) {
+                    out.push(' ')!;
+                }
+                var buffer = [0u8; 80];
+                var w = TextWriter.create(mut buffer[..]);
+                list[k].write(mut w);
+                for (b in w.written()) {
+                    out.push(b)!;
+                }
+            }
+            out.push('\n')!;
+        }
+        Err(AsyncError.Io(IoError.NotFound)) => { line(mut out, "not resolved"); }
+        Err(AsyncError.Io(IoError.Unsupported)) => { line(mut out, "not resolved"); }
+        Err(AsyncError.Io(IoError.InvalidInput)) => { line(mut out, "invalid"); }
+        Err(AsyncError.Io(e)) => { line(mut out, e.message()); }
+        Err(_) => { line(mut out, "other"); }
+    }
+}
+
+/// `localhost`'s addresses: at least one, each a loopback address with the port.
+fn loopbackOnly(r: Result<Vector<SocketAddress>, AsyncError>, out: borrow mut Vector<u8>) {
+    match (r) {
+        Ok(list) => {
+            var ok = list.length > 0;
+            for (a in list.view()) {
+                ok = ok && a.isLoopback() && a.port() == 443;
+            }
+            line(mut out, if (ok) "localhost: loopback" else "localhost: not loopback");
+        }
+        Err(_) => { line(mut out, "localhost: failed"); }
+    }
+}
+
+async fn run() -> Result<Vector<u8>, AsyncError> {
+    var out = Vector<u8>.create();
+    describe(await AsyncDns.resolve("192.0.2.7", 80), mut out);
+    describe(await AsyncDns.resolve("2001:DB8::1", 8080), mut out);
+    describe(await AsyncDns.resolve("fe80::1%3", 1), mut out);
+    loopbackOnly(await AsyncDns.resolve("localhost", 443), mut out);
+    loopbackOnly(await AsyncDns.resolve("LocalHost", 443), mut out);
+    describe(await AsyncDns.resolve("no-such-host.invalid", 1), mut out);
+    describe(await AsyncDns.resolve("", 1), mut out);
+    var long = Vector<u8>.create();
+    for (k in 0..254) {
+        long.push('a')!;
+    }
+    describe(await AsyncDns.resolve(StringView.fromUtf8(long.view())!, 1), mut out);
+    let withNul = [0x61u8, 0, 0x62];
+    describe(await AsyncDns.resolve(StringView.fromUtf8(withNul[..])!, 1), mut out);
+    return Ok(out);
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(text) => { Console.write(StringView.fromUtf8(text.view())!); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 192.0.2.7:80
+// expect-stdout: [2001:db8::1]:8080
+// expect-stdout: [fe80::1%3]:1
+// expect-stdout: localhost: loopback
+// expect-stdout: localhost: loopback
+// expect-stdout: not resolved
+// expect-stdout: invalid
+// expect-stdout: invalid
+// expect-stdout: invalid

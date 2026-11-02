@@ -3161,3 +3161,375 @@ int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count) {
     return cee_ready_sendv(m, fd, count);
 }
 #endif /* !CEE_FREESTANDING: channels, the debugger's tasks, operations */
+
+#if !defined(CEE_FREESTANDING)
+#if !defined(CEE_COSMOOS)
+/* The current task, marked as waiting to be woken, cancellably (as a channel's wait), and its executor: a lookup's
+   waiter, which its resolver thread wakes (ADR 0048). */
+static void *cee_dns_wait_task(void **executor) {
+    cee_open_wake_pipe();
+    cee_task *t = cee_exec.current;
+    *executor = &cee_exec;
+    if (t != NULL && !t->on_wake) {
+        t->on_wake = true;
+        t->channel_wait = true;
+        cee_exec.wake_count += 1u;
+    }
+    return t;
+}
+#endif
+
+/* ---- DNS (ADR 0048): lookups on at most CEE_DNS_THREADS detached resolver threads, the rest queued. A lookup's record
+   is platform memory, so an abandoned one its thread still holds is not the program's. Its state, its waiter and the
+   queue are under one lock: a thread wakes a task only while it is registered, and ceesafe_dns_end unregisters it. */
+
+#if defined(CEE_COSMOOS)
+void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port) {
+    (void)host; (void)length; (void)port;
+    return ceesafe_platform_alloc_zeroed(1u); /* a token: every poll is EOPNOTSUPP */
+}
+int32_t ceesafe_dns_poll(void *lookup) { (void)lookup; return -(int32_t)EOPNOTSUPP; }
+uint32_t ceesafe_dns_count(void *lookup) { (void)lookup; return 0u; }
+void ceesafe_dns_address(void *lookup, uint32_t index, uint8_t *bytes, uint32_t *family, uint32_t *scope) {
+    (void)lookup; (void)index; (void)bytes; *family = 0u; *scope = 0u;
+}
+void ceesafe_dns_end(void *lookup) { ceesafe_platform_free(lookup); }
+#else
+#include <stdlib.h> /* getenv (POSIX), strtoul: the test hook */
+#if !defined(_WIN32)
+#include <netdb.h>
+#endif
+
+typedef struct cee_dns {
+    struct cee_dns *next; /* the queue */
+    uint32_t state;       /* 0 queued, 1 running, 2 done */
+    uint32_t abandoned;   /* running, and its task has left: the thread frees it */
+    void *task;           /* the registered waiter, or NULL */
+    void *executor;
+    int32_t error;        /* 0, or a negated errno */
+    uint32_t count;
+    ceesafe_endpoint *addresses;
+    uint16_t port;
+    char host[];          /* NUL-terminated */
+} cee_dns;
+
+static cee_dns *cee_dns_head;
+static cee_dns *cee_dns_tail;
+static uint32_t cee_dns_threads; /* running resolver threads */
+#if defined(_WIN32)
+static SRWLOCK cee_dns_lock_word = SRWLOCK_INIT;
+static void cee_dns_lock(void) { AcquireSRWLockExclusive(&cee_dns_lock_word); }
+static void cee_dns_unlock(void) { ReleaseSRWLockExclusive(&cee_dns_lock_word); }
+#else
+static pthread_mutex_t cee_dns_lock_word = PTHREAD_MUTEX_INITIALIZER;
+static void cee_dns_lock(void) { (void)pthread_mutex_lock(&cee_dns_lock_word); }
+static void cee_dns_unlock(void) { (void)pthread_mutex_unlock(&cee_dns_lock_word); }
+#endif
+
+static void cee_dns_free(cee_dns *d) {
+    ceesafe_platform_free(d->addresses);
+    ceesafe_platform_free(d);
+}
+
+/* The test hook CEESAFE_DNS_DELAY_MS: each lookup waits that long first, so a test can cancel one while it runs. */
+static void cee_dns_delay(void) {
+#if defined(_WIN32)
+    char buffer[32];
+    DWORD got = GetEnvironmentVariableA("CEESAFE_DNS_DELAY_MS", buffer, (DWORD)sizeof buffer);
+    if (got == 0u || got >= sizeof buffer) {
+        return;
+    }
+    const char *text = buffer;
+#else
+    const char *text = getenv("CEESAFE_DNS_DELAY_MS");
+    if (text == NULL) {
+        return;
+    }
+#endif
+    unsigned long ms = strtoul(text, NULL, 10);
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    struct timespec t = {(time_t)(ms / 1000u), (long)(ms % 1000u) * 1000000L};
+    while (nanosleep(&t, &t) != 0 && errno == EINTR) {
+    }
+#endif
+}
+
+/* One address of the resolver's into `out`; false for another family. */
+static bool cee_dns_endpoint(const struct sockaddr *a, uint16_t port, ceesafe_endpoint *out) {
+    ceesafe_mem_set(out, 0, sizeof *out);
+    out->port = port;
+    if (a->sa_family == AF_INET) {
+        const struct sockaddr_in *v4 = (const struct sockaddr_in *)(const void *)a;
+        out->family = 4u;
+        ceesafe_mem_copy(out->bytes, &v4->sin_addr, 4u);
+        return true;
+    }
+    if (a->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *v6 = (const struct sockaddr_in6 *)(const void *)a;
+        out->family = 6u;
+        ceesafe_mem_copy(out->bytes, &v6->sin6_addr, 16u);
+        out->scope = (uint32_t)v6->sin6_scope_id;
+        return true;
+    }
+    return false;
+}
+
+/* Adds `e` unless an equal address is there already. */
+static void cee_dns_add(cee_dns *d, const ceesafe_endpoint *e, uint32_t room) {
+    for (uint32_t k = 0; k < d->count; k++) {
+        const ceesafe_endpoint *x = &d->addresses[k];
+        if (x->family == e->family && x->scope == e->scope && memcmp(x->bytes, e->bytes, 16u) == 0) {
+            return;
+        }
+    }
+    if (d->count < room) {
+        d->addresses[d->count++] = *e;
+    }
+}
+
+/* The resolver's answer for `d`: its addresses, or a negated errno (ADR 0048 §3.1's table). */
+static int32_t cee_dns_resolve(cee_dns *d) {
+#if defined(_WIN32)
+    if (!ceesafe_winsock_ready()) {
+        return -(int32_t)EIO;
+    }
+    int wide = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, d->host, -1, NULL, 0);
+    if (wide <= 0) {
+        return -(int32_t)EINVAL;
+    }
+    wchar_t *name = (wchar_t *)ceesafe_platform_alloc((size_t)wide * sizeof(wchar_t));
+    if (name == NULL) {
+        return -(int32_t)ENOMEM;
+    }
+    (void)MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, d->host, -1, name, wide);
+    ADDRINFOW hints;
+    ceesafe_mem_set(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    ADDRINFOW *list = NULL;
+    int r = GetAddrInfoW(name, NULL, &hints, &list);
+    ceesafe_platform_free(name);
+    if (r != 0) {
+        switch (r) {
+        case WSAHOST_NOT_FOUND: case WSANO_DATA: return -(int32_t)ENOENT;
+        case WSATRY_AGAIN: return -(int32_t)ETIMEDOUT;
+        case WSA_NOT_ENOUGH_MEMORY: return -(int32_t)ENOMEM;
+        case WSAEINVAL: case WSAEAFNOSUPPORT: case WSATYPE_NOT_FOUND: return -(int32_t)EINVAL;
+        default: return -(int32_t)EIO;
+        }
+    }
+    uint32_t room = 0;
+    for (ADDRINFOW *a = list; a != NULL; a = a->ai_next) room++;
+    d->addresses = (ceesafe_endpoint *)ceesafe_platform_alloc((room > 0u ? room : 1u) * sizeof(ceesafe_endpoint));
+    if (d->addresses == NULL) {
+        FreeAddrInfoW(list);
+        return -(int32_t)ENOMEM;
+    }
+    for (ADDRINFOW *a = list; a != NULL; a = a->ai_next) {
+        ceesafe_endpoint e;
+        if (a->ai_addr != NULL && cee_dns_endpoint(a->ai_addr, d->port, &e)) cee_dns_add(d, &e, room);
+    }
+    FreeAddrInfoW(list);
+#else
+    struct addrinfo hints;
+    ceesafe_mem_set(&hints, 0, sizeof hints);
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *list = NULL;
+    int r = getaddrinfo(d->host, NULL, &hints, &list);
+    if (r != 0) {
+        switch (r) {
+        case EAI_NONAME:
+#if defined(EAI_NODATA) && EAI_NODATA != EAI_NONAME
+        case EAI_NODATA:
+#endif
+#if defined(EAI_ADDRFAMILY)
+        case EAI_ADDRFAMILY:
+#endif
+            return -(int32_t)ENOENT;
+        case EAI_AGAIN: return -(int32_t)ETIMEDOUT;
+        case EAI_MEMORY: return -(int32_t)ENOMEM;
+        case EAI_FAMILY: case EAI_SERVICE: case EAI_BADFLAGS: return -(int32_t)EINVAL;
+#if defined(EAI_SYSTEM)
+        case EAI_SYSTEM: return -(int32_t)(errno != 0 ? errno : EIO);
+#endif
+        default: return -(int32_t)EIO;
+        }
+    }
+    uint32_t room = 0;
+    for (struct addrinfo *a = list; a != NULL; a = a->ai_next) room++;
+    d->addresses = (ceesafe_endpoint *)ceesafe_platform_alloc((room > 0u ? room : 1u) * sizeof(ceesafe_endpoint));
+    if (d->addresses == NULL) {
+        freeaddrinfo(list);
+        return -(int32_t)ENOMEM;
+    }
+    for (struct addrinfo *a = list; a != NULL; a = a->ai_next) {
+        ceesafe_endpoint e;
+        if (a->ai_addr != NULL && cee_dns_endpoint(a->ai_addr, d->port, &e)) cee_dns_add(d, &e, room);
+    }
+    freeaddrinfo(list);
+#endif
+    return d->count == 0u ? -(int32_t)ENOENT : 0;
+}
+
+/* A resolver thread: lookups from the queue until it is empty, then it ends. */
+#if defined(_WIN32)
+static DWORD WINAPI cee_dns_thread(LPVOID unused)
+#else
+static void *cee_dns_thread(void *unused)
+#endif
+{
+    (void)unused;
+    for (;;) {
+        cee_dns_lock();
+        cee_dns *d = cee_dns_head;
+        if (d == NULL) {
+            cee_dns_threads -= 1u;
+            cee_dns_unlock();
+            break;
+        }
+        cee_dns_head = d->next;
+        if (cee_dns_head == NULL) {
+            cee_dns_tail = NULL;
+        }
+        d->next = NULL;
+        d->state = 1u;
+        cee_dns_unlock();
+        cee_dns_delay();
+        int32_t error = cee_dns_resolve(d);
+        cee_dns_lock();
+        if (d->abandoned != 0u) {
+            cee_dns_unlock();
+            cee_dns_free(d);
+            continue;
+        }
+        d->error = error;
+        d->state = 2u;
+        if (d->task != NULL) {
+            cee_wake_task((cee_executor *)d->executor, (cee_task *)d->task);
+            d->task = NULL;
+        }
+        cee_dns_unlock();
+    }
+#if defined(_WIN32)
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+/* Starts a resolver thread, detached; false if none could start. */
+static bool cee_dns_spawn(void) {
+#if defined(_WIN32)
+    HANDLE h = CreateThread(NULL, 0, cee_dns_thread, NULL, 0, NULL);
+    if (h == NULL) {
+        return false;
+    }
+    CloseHandle(h);
+    return true;
+#else
+    pthread_t t;
+    if (pthread_create(&t, NULL, cee_dns_thread, NULL) != 0) {
+        return false;
+    }
+    (void)pthread_detach(t);
+    return true;
+#endif
+}
+
+void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port) {
+    cee_dns *d = (cee_dns *)ceesafe_platform_alloc_zeroed(sizeof(cee_dns) + (size_t)length + 1u);
+    if (d == NULL) {
+        return NULL;
+    }
+    ceesafe_mem_copy(d->host, host, (size_t)length);
+    d->host[length] = '\0';
+    d->port = port;
+    cee_dns_lock();
+    if (cee_dns_tail != NULL) {
+        cee_dns_tail->next = d;
+    } else {
+        cee_dns_head = d;
+    }
+    cee_dns_tail = d;
+    bool spawn = cee_dns_threads < CEE_DNS_THREADS;
+    if (spawn) {
+        cee_dns_threads += 1u;
+    }
+    cee_dns_unlock();
+    if (spawn && !cee_dns_spawn()) {
+        /* No thread: resolve here, at once (as Async.blocking does), unless another thread already took it. */
+        cee_dns_lock();
+        cee_dns_threads -= 1u;
+        bool mine = d->state == 0u;
+        if (mine) {
+            cee_dns *prev = NULL;
+            for (cee_dns *x = cee_dns_head; x != NULL; prev = x, x = x->next) {
+                if (x == d) {
+                    if (prev != NULL) prev->next = d->next; else cee_dns_head = d->next;
+                    if (cee_dns_tail == d) cee_dns_tail = prev;
+                    break;
+                }
+            }
+            d->state = 1u;
+        }
+        cee_dns_unlock();
+        if (mine) {
+            d->error = cee_dns_resolve(d);
+            d->state = 2u;
+        }
+    }
+    return d;
+}
+
+int32_t ceesafe_dns_poll(void *lookup) {
+    cee_dns *d = (cee_dns *)lookup;
+    cee_dns_lock();
+    int32_t r = 0;
+    if (d->state == 2u) {
+        d->task = NULL;
+        r = d->error != 0 ? d->error : 1;
+    } else {
+        d->task = cee_dns_wait_task(&d->executor);
+    }
+    cee_dns_unlock();
+    return r;
+}
+
+uint32_t ceesafe_dns_count(void *lookup) { return ((cee_dns *)lookup)->count; }
+
+void ceesafe_dns_address(void *lookup, uint32_t index, uint8_t *bytes, uint32_t *family, uint32_t *scope) {
+    const ceesafe_endpoint *e = &((cee_dns *)lookup)->addresses[index];
+    ceesafe_mem_copy(bytes, e->bytes, 16u);
+    *family = e->family;
+    *scope = e->scope;
+}
+
+void ceesafe_dns_end(void *lookup) {
+    cee_dns *d = (cee_dns *)lookup;
+    cee_dns_lock();
+    d->task = NULL;
+    bool free_now = true;
+    if (d->state == 0u) {
+        cee_dns *prev = NULL;
+        for (cee_dns *x = cee_dns_head; x != NULL; prev = x, x = x->next) {
+            if (x == d) {
+                if (prev != NULL) prev->next = d->next; else cee_dns_head = d->next;
+                if (cee_dns_tail == d) cee_dns_tail = prev;
+                break;
+            }
+        }
+    } else if (d->state == 1u) {
+        d->abandoned = 1u; /* its thread frees it */
+        free_now = false;
+    }
+    cee_dns_unlock();
+    if (free_now) {
+        cee_dns_free(d);
+    }
+}
+#endif
+#endif /* !CEE_FREESTANDING: DNS */
+

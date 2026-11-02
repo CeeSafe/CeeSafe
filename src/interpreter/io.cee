@@ -986,6 +986,21 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_msg_part")) {
         return "PuPs:-";
     }
+    if (sameText(name, "ceesafe_dns_start")) {
+        return "Psh:P";
+    }
+    if (sameText(name, "ceesafe_dns_poll")) {
+        return "P:i";
+    }
+    if (sameText(name, "ceesafe_dns_count")) {
+        return "P:u";
+    }
+    if (sameText(name, "ceesafe_dns_address")) {
+        return "PuPPP:-";
+    }
+    if (sameText(name, "ceesafe_dns_end")) {
+        return "P:-";
+    }
     if (sameText(name, "ceesafe_async_op_sendv")) {
         return "Piu:l";
     }
@@ -1305,6 +1320,9 @@ fn callC(
     }
     if (n0.length > 14 && sameText(n0[0..14], "ceesafe_async_")) {
         return asyncService(it, n0, arguments);
+    }
+    if (n0.length > 12 && sameText(n0[0..12], "ceesafe_dns_")) {
+        return asyncService(it, n0, arguments); // ADR 0048's model, with the sockets'
     }
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_host_")) {
         let result = hostService(it, n0, arguments)?;
@@ -2549,7 +2567,9 @@ fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
         sameText(name, "ceesafe_async_tcp_connect_at") || sameText(name, "ceesafe_async_socket_name") ||
         sameText(name, "ceesafe_async_socket_option") || sameText(name, "ceesafe_async_shutdown_read") ||
         sameText(name, "ceesafe_interface_index") || sameText(name, "ceesafe_async_msg_part") ||
-        sameText(name, "ceesafe_async_op_sendv");
+        sameText(name, "ceesafe_async_op_sendv") || sameText(name, "ceesafe_dns_start") ||
+        sameText(name, "ceesafe_dns_poll") || sameText(name, "ceesafe_dns_count") ||
+        sameText(name, "ceesafe_dns_address") || sameText(name, "ceesafe_dns_end");
 
 fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
     var bytes = Vector<u8>.create();
@@ -2566,6 +2586,49 @@ fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow 
         sameText(name, "ceesafe_async_op_accept") || sameText(name, "ceesafe_async_op_connect") ||
         sameText(name, "ceesafe_async_op_connect_at") || sameText(name, "ceesafe_async_op_cancel")) {
         return asyncOpStep(it, name, arguments);
+    }
+    // DNS (ADR 0048 §3.4): stage 0's library has no resolver, so the model knows `localhost` (any case), as 127.0.0.1
+    // then ::1; any other name is Unsupported. A lookup is handle 1 (localhost) or 2 (any other); ending one is nothing.
+    if (sameText(name, "ceesafe_dns_start")) {
+        let host = interpBytes(it, arguments[0].bits(0, 8)?, arguments[1].bits(0, 8)?)?;
+        var local = host.length == 9;
+        if (local) {
+            for (k in 0..9usize) {
+                let c = host[k];
+                let lower = if (c >= 'A' && c <= 'Z') c + 32 else c;
+                if (lower != "localhost".bytes()[k]) {
+                    local = false;
+                }
+            }
+        }
+        return Ok(valueOf(if (local) 1 else 2, 8));
+    }
+    if (sameText(name, "ceesafe_dns_poll")) {
+        let handle = arguments[0].bits(0, 8)?;
+        let r: i64 = if (handle == 1) 1 else 0 - networkErrno(18, hostErrnos());
+        return Ok(valueOf(truncate<u64>(r), 4));
+    }
+    if (sameText(name, "ceesafe_dns_count")) {
+        return Ok(valueOf(2, 4));
+    }
+    if (sameText(name, "ceesafe_dns_address")) {
+        let index = arguments[1].bits(0, 4)?;
+        let bytes = arguments[2].bits(0, 8)?;
+        for (k in 0..16u64) {
+            it.memory.storeBits(bytes + k, 0, 1)?;
+        }
+        if (index == 0) {
+            it.memory.storeBits(bytes, 127, 1)?;
+            it.memory.storeBits(bytes + 3, 1, 1)?;
+        } else {
+            it.memory.storeBits(bytes + 15, 1, 1)?;
+        }
+        it.memory.storeBits(arguments[3].bits(0, 8)?, if (index == 0) 4 else 6, 4)?;
+        it.memory.storeBits(arguments[4].bits(0, 8)?, 0, 4)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_dns_end")) {
+        return Ok(null);
     }
     if (sameText(name, "ceesafe_async_msg_part")) {
         // ADR 0045: the part's address and length in the record's words 8 + 2 × index (the interpreter's own layout).

@@ -3422,6 +3422,17 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
   `peerAddress()`, `localAddress()`, `shutdownRead()` and the setters of §26.4, none async. A dual-stack listener's
   IPv4 peer is `V4`, not `::ffff:a.b.c.d`.
 
+**Name resolution** (lib/std, ADR 0048): `await AsyncDns.resolve(host, port)` is `Result<Vector<SocketAddress>,
+AsyncError>`: the addresses of both families, each with `port`, in the resolver's order, duplicates removed, never
+empty.
+- A literal (`SocketAddresses.parseIp`) is itself at once.
+- Otherwise `getaddrinfo` (`GetAddrInfoW` on Windows; `AF_UNSPEC`, `SOCK_STREAM`, no flags) runs on one of at most four
+  resolver threads, the rest queued. The name is passed as given (an internationalised one in its ASCII form).
+- A cancelled task returns `Err(Cancelled)` at once; its lookup is unqueued, or left to its thread, which frees it.
+- Errors are `Io` kinds: `NotFound` (no such name, or no address), `TimedOut` (a temporary failure), `InvalidInput`
+  (empty, over 253 bytes, a NUL), `OutOfMemory`, `Unsupported` (CosmoOS userland; the interpreter, which knows only
+  literals and `localhost`, as 127.0.0.1 then ::1).
+
 **Vectored sends** (lib/std, ADR 0045):
 
 - `IoParts<region r>` (`net.cee`) is a list of up to eight byte parts, a value built by copying, since a slice is not an

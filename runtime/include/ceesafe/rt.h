@@ -1197,6 +1197,23 @@ int64_t ceesafe_async_op_send(void *op, int32_t fd, const uint8_t *bytes, uint64
 int64_t ceesafe_async_op_accept(void *op, int32_t fd);
 int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port);
 bool ceesafe_async_op_cancel(void *op);
+/* DNS (ADR 0048; lib/std's AsyncDns): a lookup runs getaddrinfo (GetAddrInfoW on Windows) on one of at most
+ * CEE_DNS_THREADS resolver threads, the rest queued first come first served. Its record and the threads are the
+ * runtime's own (platform memory, detached threads), not the program's. ceesafe_dns_start copies the name and queues
+ * the lookup (NULL: out of memory). ceesafe_dns_poll is 1 once it is done, a negated errno if it failed, else 0 after
+ * registering the current task to be woken (cancellably, as a channel's wait). ceesafe_dns_count and
+ * ceesafe_dns_address read a done lookup's addresses (family 4 or 6, the address bytes, an IPv6 scope).
+ * ceesafe_dns_end ends it: a done or queued one is freed; a running one is abandoned, and its thread frees it when the
+ * resolver returns, without waking anyone. CosmoOS userland has no resolver: every lookup is EOPNOTSUPP. */
+#define CEE_DNS_THREADS 4u
+void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port);
+int32_t ceesafe_dns_poll(void *lookup);
+uint32_t ceesafe_dns_count(void *lookup);
+void ceesafe_dns_address(void *lookup, uint32_t index, uint8_t *bytes, uint32_t *family, uint32_t *scope);
+void ceesafe_dns_end(void *lookup);
+#if defined(_WIN32)
+bool ceesafe_winsock_ready(void); /* Winsock started for the process (ceesafe_rt_io.c), for the resolver */
+#endif
 /* Message operations (ADR 0045): vectored sends now, datagram messages later (U6). Their record is larger than an
  * operation's and starts with the same header, so ceesafe_async_op_cancel takes either; it is lib/std's AsyncMsgOp's
  * first field. Before the first step, ceesafe_async_msg_part puts part `index` (< CEE_MSG_PARTS) in the record; the

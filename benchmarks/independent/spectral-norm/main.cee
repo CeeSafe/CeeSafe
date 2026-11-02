@@ -1,0 +1,64 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn a(i: usize, j: usize) -> f64 {
+    let ij = i + j;
+    return 1.0 / round<f64>(ij * (ij + 1) / 2 + i + 1);
+}
+
+fn multiplyAv(v: Slice<f64>, out: SliceMut<f64>) {
+    let n = v.length;
+    for (i in 0..n) {
+        var sum = 0.0;
+        for (j in 0..n) {
+            sum += a(i, j) * v[j];
+        }
+        out[i] = sum;
+    }
+}
+
+fn multiplyAtv(v: Slice<f64>, out: SliceMut<f64>) {
+    let n = v.length;
+    for (i in 0..n) {
+        var sum = 0.0;
+        for (j in 0..n) {
+            sum += a(j, i) * v[j];
+        }
+        out[i] = sum;
+    }
+}
+
+fn main() {
+    let n = arg(1, 100) as usize;
+    var u = Vector<f64>.withCapacity(n)!;
+    var v = Vector<f64>.withCapacity(n)!;
+    var tmp = Vector<f64>.withCapacity(n)!;
+    for (i in 0..n) {
+        u.push(1.0)!;
+        v.push(0.0)!;
+        tmp.push(0.0)!;
+    }
+    for (k in 0..10) {
+        multiplyAv(u.view(), tmp.viewMut());
+        multiplyAtv(tmp.view(), v.viewMut());
+        multiplyAv(v.view(), tmp.viewMut());
+        multiplyAtv(tmp.view(), u.viewMut());
+    }
+    var vBv = 0.0;
+    var vv = 0.0;
+    for (i in 0..n) {
+        vBv += u[i] * v[i];
+        vv += v[i] * v[i];
+    }
+    Console.writeLine(truncate<i64>((vBv / vv).sqrt() * 1000000000.0));
+}

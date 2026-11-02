@@ -1,0 +1,73 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+fn next(state: borrow mut u64) -> u64 {
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 16;
+}
+
+fn writeNumber(out: borrow mut Vector<u8>, value: u64) {
+    var digits = [0u8; 20];
+    var count: usize = 0;
+    var v = value;
+    loop {
+        digits[count] = truncate<u8>(v % 10) + 48;
+        count += 1;
+        v = v / 10;
+        if (v == 0) {
+            break;
+        }
+    }
+    while (count > 0) {
+        count -= 1;
+        out.push(digits[count])!;
+    }
+}
+
+fn main() {
+    let n = arg(1, 1000);
+    var text = Vector<u8>.create();
+    var s: u64 = 3;
+    for (i in 0..n) {
+        writeNumber(mut text, next(mut s) % 1000000);
+        if (i % 16 == 15) {
+            text.push(10)!;
+        } else {
+            text.push(32)!;
+        }
+    }
+    var sum: u64 = 0;
+    var numbers: u64 = 0;
+    var lines: u64 = 0;
+    var current: u64 = 0;
+    var inNumber = false;
+    for (b in text) {
+        if (b >= 48 && b <= 57) {
+            current = current * 10 + (b - 48) as u64;
+            inNumber = true;
+        } else {
+            if (inNumber) {
+                sum += current;
+                numbers += 1;
+                current = 0;
+                inNumber = false;
+            }
+            if (b == 10) {
+                lines += 1;
+            }
+        }
+    }
+    Console.writeLine(text.length);
+    Console.writeLine(sum);
+    Console.writeLine(numbers);
+    Console.writeLine(lines);
+}

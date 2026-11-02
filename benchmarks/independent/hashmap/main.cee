@@ -1,0 +1,57 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+fn next(state: borrow mut u64) -> u64 {
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 16;
+}
+
+fn main() {
+    let n = arg(1, 1000);
+    var map = HashMap<u64, u64>.create();
+    var s: u64 = 1;
+    for (i in 0..n) {
+        let k = next(mut s);
+        map.put(k, i)!;
+    }
+    var found: u64 = 0;
+    var hits: u64 = 0;
+    s = 1;
+    for (i in 0..n) {
+        let k = next(mut s);
+        match (map.get(borrow k)) {
+            Some(v) => { found = found.wrappingAdd(v); hits += 1; }
+            null => {}
+        }
+    }
+    var t: u64 = 99;
+    for (i in 0..n) {
+        let k = next(mut t);
+        match (map.get(borrow k)) {
+            Some(v) => { hits += 1; }
+            null => {}
+        }
+    }
+    s = 1;
+    var removed: u64 = 0;
+    for (i in 0..(n / 2)) {
+        let k = next(mut s);
+        match (map.remove(borrow k)) {
+            Some(v) => { removed += 1; }
+            null => {}
+        }
+    }
+    Console.writeLine(found);
+    Console.writeLine(hits);
+    Console.writeLine(removed);
+    Console.writeLine(map.length());
+}

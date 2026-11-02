@@ -1,0 +1,44 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn main() {
+    let n = arg(1, 100) as usize;
+    var a = Vector<f64>.withCapacity(n * n)!;
+    var b = Vector<f64>.withCapacity(n * n)!;
+    var c = Vector<f64>.withCapacity(n * n)!;
+    for (i in 0..n) {
+        for (j in 0..n) {
+            a.push(round<f64>((i * j) % 7))!;
+            b.push(round<f64>((i + 2 * j) % 5))!;
+            c.push(0.0)!;
+        }
+    }
+    for (i in 0..n) {
+        for (k in 0..n) {
+            let aik = a[i * n + k];
+            for (j in 0..n) {
+                c[i * n + j] += aik * b[k * n + j];
+            }
+        }
+    }
+    var sum = 0.0;
+    var trace = 0.0;
+    for (i in 0..n) {
+        trace += c[i * n + i];
+        for (j in 0..n) {
+            sum += c[i * n + j];
+        }
+    }
+    Console.writeLine(truncate<i64>(sum));
+    Console.writeLine(truncate<i64>(trace));
+}

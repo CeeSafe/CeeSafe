@@ -1,0 +1,88 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn next(state: borrow mut u64) -> u64 {
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 16;
+}
+
+fn insertion(v: borrow mut Vector<u64>, lo: usize, hi: usize) {
+    var i = lo + 1;
+    while (i <= hi) {
+        let x = v[i];
+        var j = i;
+        while (j > lo && v[j - 1] > x) {
+            v[j] = v[j - 1];
+            j -= 1;
+        }
+        v[j] = x;
+        i += 1;
+    }
+}
+
+fn order(v: borrow mut Vector<u64>, a: usize, b: usize) {
+    if (v[b] < v[a]) {
+        v.swap(a, b);
+    }
+}
+
+fn quicksort(v: borrow mut Vector<u64>, low: usize, high: usize) {
+    var lo = low;
+    var hi = high;
+    while (hi > lo + 16) {
+        let mid = lo + (hi - lo) / 2;
+        order(mut v, lo, mid);
+        order(mut v, mid, hi);
+        order(mut v, lo, mid);
+        let pivot = v[mid];
+        var i = lo;
+        var j = hi;
+        loop {
+            while (v[i] < pivot) { i += 1; }
+            while (v[j] > pivot) { j -= 1; }
+            if (i >= j) { break; }
+            v.swap(i, j);
+            i += 1;
+            j -= 1;
+        }
+        if (j - lo < hi - j) {
+            quicksort(mut v, lo, j);
+            lo = j + 1;
+        } else {
+            quicksort(mut v, j + 1, hi);
+            hi = j;
+        }
+    }
+    insertion(mut v, lo, hi);
+}
+
+fn main() {
+    let n = arg(1, 1000);
+    var v = Vector<u64>.withCapacity(n as usize)!;
+    var s: u64 = 7;
+    for (i in 0..n) {
+        v.push(next(mut s))!;
+    }
+    let last = v.length - 1;
+    quicksort(mut v, 0, last);
+    var sorted = true;
+    var checksum: u64 = 0;
+    for (i in 0..v.length) {
+        if (i > 0 && v[i - 1] > v[i]) {
+            sorted = false;
+        }
+        checksum = checksum.wrappingMul(31).wrappingAdd(v[i]);
+    }
+    Console.writeLine(sorted);
+    Console.writeLine(checksum);
+}

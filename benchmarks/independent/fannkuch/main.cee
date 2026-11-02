@@ -1,0 +1,78 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn main() {
+    let n = arg(1, 7) as usize;
+    var perm = Vector<i32>.withCapacity(n)!;
+    var perm1 = Vector<i32>.withCapacity(n)!;
+    var count = Vector<i32>.withCapacity(n)!;
+    for (i in 0..n) {
+        perm.push(0)!;
+        perm1.push(truncate<i32>(i))!;
+        count.push(0)!;
+    }
+    var maxFlips = 0;
+    var checksum = 0;
+    var permCount = 0;
+    var r = n;
+    loop {
+        while (r != 1) {
+            count[r - 1] = truncate<i32>(r);
+            r -= 1;
+        }
+        for (i in 0..n) {
+            perm[i] = perm1[i];
+        }
+        var flips = 0;
+        var k = perm[0];
+        while (k != 0) {
+            var lo: usize = 0;
+            var hi = truncate<usize>(k);
+            while (lo < hi) {
+                let t = perm[lo];
+                perm[lo] = perm[hi];
+                perm[hi] = t;
+                lo += 1;
+                hi -= 1;
+            }
+            flips += 1;
+            k = perm[0];
+        }
+        if (flips > maxFlips) {
+            maxFlips = flips;
+        }
+        if (permCount % 2 == 0) {
+            checksum += flips;
+        } else {
+            checksum -= flips;
+        }
+        loop {
+            if (r == n) {
+                Console.writeLine(checksum);
+                Console.writeLine(maxFlips);
+                return;
+            }
+            let perm0 = perm1[0];
+            for (i in 0..r) {
+                perm1[i] = perm1[i + 1];
+            }
+            perm1[r] = perm0;
+            count[r] -= 1;
+            if (count[r] > 0) {
+                break;
+            }
+            r += 1;
+        }
+        permCount += 1;
+    }
+}

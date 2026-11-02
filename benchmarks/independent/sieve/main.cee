@@ -1,0 +1,43 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn main() {
+    let limit = arg(1, 1000) as usize;
+    var flags = Vector<u8>.withCapacity(limit + 1)!;
+    for (i in 0..(limit + 1)) {
+        flags.push(1)!;
+    }
+    flags[0] = 0;
+    flags[1] = 0;
+    var i: usize = 2;
+    while (i * i <= limit) {
+        if (flags[i] == 1) {
+            var j = i * i;
+            while (j <= limit) {
+                flags[j] = 0;
+                j += i;
+            }
+        }
+        i += 1;
+    }
+    var count: u64 = 0;
+    var last: usize = 0;
+    for (k in 0..(limit + 1)) {
+        if (flags[k] == 1) {
+            count += 1;
+            last = k;
+        }
+    }
+    Console.writeLine(count);
+    Console.writeLine(last);
+}

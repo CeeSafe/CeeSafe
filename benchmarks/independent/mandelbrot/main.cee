@@ -1,0 +1,50 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn main() {
+    let n = truncate<u32>(arg(1, 200));
+    let size = round<f64>(n);
+    var checksum: u64 = 0;
+    for (y in 0..n) {
+        let ci = 2.0 * round<f64>(y) / size - 1.0;
+        var bits: u32 = 0;
+        var bit: u32 = 0;
+        for (x in 0..n) {
+            let cr = 2.0 * round<f64>(x) / size - 1.5;
+            var zr = 0.0;
+            var zi = 0.0;
+            var tr = 0.0;
+            var ti = 0.0;
+            var i = 0;
+            while (i < 50 && tr + ti <= 4.0) {
+                zi = 2.0 * zr * zi + ci;
+                zr = tr - ti + cr;
+                tr = zr * zr;
+                ti = zi * zi;
+                i += 1;
+            }
+            bits = bits << 1;
+            if (tr + ti <= 4.0) {
+                bits = bits | 1;
+            }
+            bit += 1;
+            if (bit == 8 || x == n - 1) {
+                bits = bits << (8 - bit);
+                checksum = checksum.wrappingMul(31).wrappingAdd(bits as u64);
+                bits = 0;
+                bit = 0;
+            }
+        }
+    }
+    Console.writeLine(checksum);
+}

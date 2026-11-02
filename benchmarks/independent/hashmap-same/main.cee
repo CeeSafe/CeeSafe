@@ -1,0 +1,90 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn next(state: borrow mut u64) -> u64 {
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 16;
+}
+
+struct Table {
+    keys: Vector<u64>;   // 0 = empty; a key is stored as key + 1
+    values: Vector<u64>;
+    mask: u64;
+    shift: u64;
+}
+
+fn slot(t: borrow Table, key: u64) -> u64 => (key + 1).wrappingMul(0x9E3779B97F4A7C15) >> t.shift;
+
+fn put(t: borrow mut Table, key: u64, value: u64) {
+    var i = slot(t, key);
+    loop {
+        let k = t.keys[i as usize];
+        if (k == 0 || k == key + 1) {
+            t.keys[i as usize] = key + 1;
+            t.values[i as usize] = value;
+            return;
+        }
+        i = (i + 1) & t.mask;
+    }
+}
+
+fn get(t: borrow Table, key: u64) -> u64? {
+    var i = slot(t, key);
+    loop {
+        let k = t.keys[i as usize];
+        if (k == key + 1) {
+            return t.values[i as usize];
+        }
+        if (k == 0) {
+            return null;
+        }
+        i = (i + 1) & t.mask;
+    }
+}
+
+fn main() {
+    let n = arg(1, 1000);
+    var bits: u64 = 1;
+    while ((1u64 << bits) < 2 * n) {
+        bits += 1;
+    }
+    let capacity = 1u64 << bits;
+    var t = Table { keys: Vector<u64>.withCapacity(capacity as usize)!, values: Vector<u64>.withCapacity(capacity as usize)!,
+        mask: capacity - 1, shift: 64 - bits };
+    for (i in 0..capacity) {
+        t.keys.push(0)!;
+        t.values.push(0)!;
+    }
+    var s: u64 = 1;
+    for (i in 0..n) {
+        put(mut t, next(mut s), i);
+    }
+    var found: u64 = 0;
+    var hits: u64 = 0;
+    s = 1;
+    for (i in 0..n) {
+        match (get(borrow t, next(mut s))) {
+            Some(v) => { found = found.wrappingAdd(v); hits += 1; }
+            null => {}
+        }
+    }
+    var u: u64 = 99;
+    for (i in 0..n) {
+        match (get(borrow t, next(mut u))) {
+            Some(v) => { hits += 1; }
+            null => {}
+        }
+    }
+    Console.writeLine(found);
+    Console.writeLine(hits);
+}

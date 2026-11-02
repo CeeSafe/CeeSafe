@@ -1,0 +1,60 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+struct Node {
+    left: Box<Node>?;
+    right: Box<Node>?;
+}
+
+fn make(depth: u32) -> Box<Node> {
+    if (depth == 0) {
+        return Box.create(Node { left: null, right: null })!;
+    }
+    return Box.create(Node { left: make(depth - 1), right: make(depth - 1) })!;
+}
+
+fn check(node: borrow Node) -> u64 {
+    var total: u64 = 1;
+    match (borrow node.left) {
+        Some(l) => { total += check(l); }
+        null => {}
+    }
+    match (borrow node.right) {
+        Some(r) => { total += check(r); }
+        null => {}
+    }
+    return total;
+}
+
+fn main() {
+    let maxDepth = truncate<u32>(arg(1, 10));
+    {
+        let stretch = make(maxDepth + 1);
+        Console.writeLine(check(stretch));
+    }
+    let longLived = make(maxDepth);
+    var depth: u32 = 4;
+    var total: u64 = 0;
+    while (depth <= maxDepth) {
+        let iterations: u64 = 1u64 << (maxDepth - depth + 4);
+        var sum: u64 = 0;
+        for (i in 0..iterations) {
+            let t = make(depth);
+            sum += check(t);
+        }
+        total += sum;
+        depth += 2;
+    }
+    Console.writeLine(total);
+    Console.writeLine(check(longLived));
+}

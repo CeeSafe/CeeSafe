@@ -1,0 +1,65 @@
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+fn next(state: borrow mut u64) -> u64 {
+    state = state.wrappingMul(6364136223846793005).wrappingAdd(1442695040888963407);
+    return state >> 16;
+}
+
+interface Shape {
+    fn area(borrow this) -> f64;
+    fn scale(borrow mut this, by: f64);
+}
+
+struct Circle { r: f64; }
+impl Shape for Circle {
+    fn area(borrow this) -> f64 => 3.141592653589793 * this.r * this.r;
+    fn scale(borrow mut this, by: f64) { this.r = this.r * by; }
+}
+
+struct Rect { w: f64; h: f64; }
+impl Shape for Rect {
+    fn area(borrow this) -> f64 => this.w * this.h;
+    fn scale(borrow mut this, by: f64) { this.w = this.w * by; }
+}
+
+struct Triangle { b: f64; h: f64; }
+impl Shape for Triangle {
+    fn area(borrow this) -> f64 => 0.5 * this.b * this.h;
+    fn scale(borrow mut this, by: f64) { this.h = this.h * by; }
+}
+
+fn main() {
+    let rounds = arg(1, 10);
+    var shapes = Vector<Box<dyn Shape>>.create();
+    var s: u64 = 5;
+    for (i in 0..1000) {
+        let x = round<f64>(next(mut s) % 100) / 10.0 + 0.5;
+        let kind = next(mut s) % 3;
+        if (kind == 0) {
+            shapes.push(Box.create(Circle { r: x })!)!;
+        } else if (kind == 1) {
+            shapes.push(Box.create(Rect { w: x, h: x + 1.0 })!)!;
+        } else {
+            shapes.push(Box.create(Triangle { b: x, h: 2.0 * x })!)!;
+        }
+    }
+    var total = 0.0;
+    for (r in 0..rounds) {
+        for (shape in shapes) {
+            total += shape.area();
+        }
+        let k = (r % 1000) as usize;
+        shapes[k].scale(1.0000001);
+    }
+    Console.writeLine(truncate<i64>(total));
+}

@@ -1,0 +1,60 @@
+nbody          rust    588.5  rust-chk    589.5  cee-gcc   1038.1  cee-clang   1056.7 ms   cee-O3    564.7  (cee-gcc/rust-chk 1.76)
+spectral-norm  rust    620.8  rust-chk    627.2  cee-gcc    827.3  cee-clang    826.9 ms   cee-O3    627.4  (cee-gcc/rust-chk 1.32)
+fannkuch       rust   2057.0  rust-chk   2006.3  cee-gcc   2158.1  cee-clang   2166.7 ms   cee-O3   2127.2  (cee-gcc/rust-chk 1.08)
+binary-trees   rust   1191.5  rust-chk   1193.8  cee-gcc   1298.9  cee-clang   1299.8 ms   cee-O3   1298.3  (cee-gcc/rust-chk 1.09)
+mandelbrot     rust    933.5  rust-chk    934.0  cee-gcc    943.5  cee-clang    954.2 ms   cee-O3    942.6  (cee-gcc/rust-chk 1.01)
+hashmap        rust    518.7  rust-chk    521.8  cee-gcc    995.2  cee-clang    981.8 ms   cee-O3    965.2  (cee-gcc/rust-chk 1.91)
+sort           rust    473.4  rust-chk    454.2  cee-gcc   1955.5  cee-clang   2004.6 ms   cee-O3   1952.1  (cee-gcc/rust-chk 4.30)
+text-parse     rust    566.1  rust-chk    624.3  cee-gcc    718.3  cee-clang    715.3 ms   cee-O3    616.9  (cee-gcc/rust-chk 1.15)
+sieve          rust    516.6  rust-chk    601.5  cee-gcc    627.2  cee-clang    609.0 ms   cee-O3    629.4  (cee-gcc/rust-chk 1.04)
+matmul         rust    329.1  rust-chk    328.5  cee-gcc   1161.3  cee-clang   1158.3 ms   cee-O3    333.5  (cee-gcc/rust-chk 3.53)
+dyn-dispatch   rust    422.1  rust-chk    417.7  cee-gcc    413.0  cee-clang    417.1 ms   cee-O3    726.0  (cee-gcc/rust-chk 0.99)
+sort-same      rust    708.3  rust-chk    710.7  cee-gcc    712.4  cee-clang    713.1 ms   cee-O3    716.8  (cee-gcc/rust-chk 1.00)
+hashmap-same   rust    610.6  rust-chk    620.4  cee-gcc    681.4  cee-clang    682.4 ms   cee-O3    595.2  (cee-gcc/rust-chk 1.10)
+geometric means: {
+ "rust/rust": 1.0,
+ "rust-checked/rust": 1.0163932916960163,
+ "cee-gcc/rust": 1.452903879751228,
+ "cee-clang/rust": 1.4551941616157384,
+ "cee-clang-O3/rust": 1.2558274354943437,
+ "rust/rust-checked": 0.9838711138395437,
+ "rust-checked/rust-checked": 1.0,
+ "cee-gcc/rust-checked": 1.4294701584726353,
+ "cee-clang/rust-checked": 1.4317235006416777,
+ "cee-clang-O3/rust-checked": 1.2355723377500778
+}
+95% intervals: {
+ "rust-checked/rust": [
+  1.003880718758183,
+  1.0298038445131779
+ ],
+ "cee-gcc/rust": [
+  1.435745804688474,
+  1.470909664677386
+ ],
+ "cee-clang/rust": [
+  1.4364716909636643,
+  1.469991228642569
+ ],
+ "cee-clang-O3/rust": [
+  1.2393677602153448,
+  1.2710161330454885
+ ],
+ "rust/rust-checked": [
+  0.9705804337650569,
+  0.9955873388722617
+ ],
+ "cee-gcc/rust-checked": [
+  1.4135920994897537,
+  1.4452931666986546
+ ],
+ "cee-clang/rust-checked": [
+  1.4143353401591523,
+  1.4453441178136648
+ ],
+ "cee-clang-O3/rust-checked": [
+  1.2207261385445718,
+  1.248894313397048
+ ]
+}
+exit=0

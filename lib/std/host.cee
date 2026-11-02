@@ -6,6 +6,8 @@
 
 extern "C" {
     @effects()
+    fn ceesafe_clock_realtime(seconds: *mut i64, nanoseconds: *mut u32);
+    @effects()
     fn ceesafe_host_env(name: *u8, length: u64, value: *mut (*u8), valueLength: *mut u64) -> i64;
     @effects(sleep)
     fn ceesafe_host_path_kind(path: *u8, length: u64) -> i64;
@@ -353,3 +355,32 @@ public struct HostServices {
         };
     }
 }
+
+/// A point in real time (ADR 0055): seconds since 1970-01-01T00:00:00Z, leap seconds not counted (POSIX time), negative
+/// before it, and the nanoseconds after them.
+public struct UnixTime {
+    public seconds: i64;
+    /// 0 to 999 999 999.
+    public nanoseconds: u32;
+
+    /// The milliseconds since 1970, rounded toward minus infinity (the nanoseconds are never negative).
+    public fn millis(borrow this) -> i64 => this.seconds * 1000 + (this.nanoseconds / 1000000) as i64;
+}
+
+/// The system's real time (ADR 0055): the date, which may jump backward or forward (NTP, the user). Measure and wait
+/// with `Timer`, whose monotonic clock never jumps. The interpreter answers 2000-01-01T00:00:00Z plus its virtual
+/// clock, so its runs stay reproducible.
+public struct Clock {
+    /// Now.
+    /// Safety: the runtime writes the two values during the call only.
+    public fn now() -> UnixTime {
+        var seconds: i64 = 0;
+        var nanoseconds: u32 = 0;
+        unsafe { ceesafe_clock_realtime(borrow mut seconds as *mut i64, borrow mut nanoseconds as *mut u32); }
+        return UnixTime { seconds: seconds, nanoseconds: nanoseconds };
+    }
+
+    /// Now, in milliseconds since 1970.
+    public fn unixMillis() -> i64 => Clock.now().millis();
+}
+

@@ -1794,6 +1794,36 @@ void ceesafe_random_key(uint64_t *key) {
     key[1] = cee_random_words[1];
 }
 
+/* ---- Wall-clock time (ADR 0055). The monotonic clock, for waits, is ceesafe_async_now. ---- */
+#if !defined(_WIN32)
+#include <time.h>
+#endif
+
+void ceesafe_clock_realtime(int64_t *seconds, uint32_t *nanoseconds) {
+    *seconds = 0;
+    *nanoseconds = 0;
+#if defined(_WIN32)
+    FILETIME now;
+    GetSystemTimePreciseAsFileTime(&now);
+    /* 100-nanosecond steps since 1601-01-01, which is 11644473600 seconds before 1970. */
+    uint64_t steps = ((uint64_t)now.dwHighDateTime << 32) | (uint64_t)now.dwLowDateTime;
+    const uint64_t epoch = UINT64_C(116444736000000000);
+    if (steps >= epoch) {
+        uint64_t since = steps - epoch;
+        *seconds = (int64_t)(since / 10000000u);
+        *nanoseconds = (uint32_t)(since % 10000000u) * 100u;
+    }
+#elif defined(CEE_COSMOOS) && !defined(CLOCK_REALTIME)
+    /* no real-time clock in this userland: 1970 (ADR 0055 §3) */
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_REALTIME, &now) == 0) {
+        *seconds = (int64_t)now.tv_sec;
+        *nanoseconds = (uint32_t)now.tv_nsec;
+    }
+#endif
+}
+
 /* ---- UDP (ADR 0050): binding with the options, and one nonblocking send or receive for code that runs its own wait
  * loop (the interpreter). The operations of tasks are ceesafe_rt_async.c's. ---- */
 

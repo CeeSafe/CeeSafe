@@ -1267,6 +1267,9 @@ bool ceesafe_winsock_ready(void); /* Winsock started for the process (ceesafe_rt
 #define CEE_ASYNC_NO_SENDFILE (INT64_MIN + 2)
 int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, uint64_t offset, uint64_t length);
 int64_t ceesafe_file_read_at(const void *file, uint8_t *buffer, uint64_t length, uint64_t offset);
+/* Wall-clock time (ADR 0055): the system's real time, seconds since 1970-01-01T00:00:00Z (POSIX time) and the
+ * nanoseconds (0 to 999999999) after them; 1970 itself if the system has no real-time clock. */
+void ceesafe_clock_realtime(int64_t *seconds, uint32_t *nanoseconds);
 /* Message operations (ADR 0045): vectored sends now, datagram messages later (U6). Their record is larger than an
  * operation's and starts with the same header, so ceesafe_async_op_cancel takes either; it is lib/std's AsyncMsgOp's
  * first field. Before the first step, ceesafe_async_msg_part puts part `index` (< CEE_MSG_PARTS) in the record; the

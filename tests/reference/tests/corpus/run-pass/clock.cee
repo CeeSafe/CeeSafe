@@ -1,0 +1,27 @@
+// lib/std's Clock and UnixTime (ADR 0055): `millis()` rounds toward minus infinity, since the nanoseconds are never
+// negative; and `Clock.now()` is after 2000 with nanoseconds below 10^9, natively and in the interpreter (whose clock
+// starts at 2000-01-01T00:00:00Z; tools/clock_check.py checks both clocks' values). The expected values are worked out
+// by hand: -1 s + 0.5 s is -500 ms, and -1 s + 999 999 ns is -999.000001 ms, so -1000.
+
+fn show(seconds: i64, nanoseconds: u32) {
+    let t = UnixTime { seconds: seconds, nanoseconds: nanoseconds };
+    Console.writeLine(t.millis());
+}
+
+fn main() {
+    show(0, 0);
+    show(1, 999999999);
+    show(-1, 500000000);
+    show(-1, 999999);
+    show(1700000000, 123456789);
+    let now = Clock.now();
+    Console.writeLine(now.seconds >= 946684800 && now.nanoseconds < 1000000000);
+    Console.writeLine(Clock.unixMillis() >= now.millis());
+}
+// expect-stdout: 0
+// expect-stdout: 1999
+// expect-stdout: -500
+// expect-stdout: -1000
+// expect-stdout: 1700000000123
+// expect-stdout: true
+// expect-stdout: true

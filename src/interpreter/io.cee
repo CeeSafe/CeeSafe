@@ -1150,6 +1150,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_random_key")) {
         return "P:-";
     }
+    if (sameText(name, "ceesafe_clock_realtime")) {
+        return "PP:-";
+    }
     if (sameText(name, "ceesafe_async_op_sendfile")) {
         return "PiPss:l";
     }
@@ -1425,6 +1428,13 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_file_read_at")) {
         return readAt(it, arguments);
+    }
+    if (sameText(n0, "ceesafe_clock_realtime")) {
+        // Wall-clock time (ADR 0055): 2000-01-01T00:00:00Z plus the virtual clock, so a run stays reproducible.
+        let ms = it.asyncClock;
+        it.memory.storeBits(arguments[0].bits(0, 8)?, 946684800 + ms / 1000, 8)?;
+        it.memory.storeBits(arguments[1].bits(0, 8)?, (ms % 1000) * 1000000, 4)?;
+        return Ok(null);
     }
     if (sameText(n0, "ceesafe_test_begin")) {
         // `ceesafec test --interp` (ADR 0049 §3.3): the runtime's reports and sweeps are native only.

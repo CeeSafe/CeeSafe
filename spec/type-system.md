@@ -1751,6 +1751,17 @@ Diagnostics: none new.
     (`runtime/hosted/ceesafe_rt_io.c`).
   - The interpreter models them, and its sandbox (`ceesafec mcp`, `ceesafe_run`) refuses them all.
 
+### 26.11 The wall clock (ADR 0055)
+- `Clock.now()` (lib/std) is a `UnixTime`: `seconds: i64` since 1970-01-01T00:00:00Z, leap seconds not counted (POSIX
+  time), negative before it, and `nanoseconds: u32`, 0 to 999,999,999. `t.millis()` is `seconds * 1000 + nanoseconds /
+  1,000,000`, rounded toward minus infinity; `Clock.unixMillis()` is `Clock.now().millis()`.
+- It is the system's real time (`clock_gettime(CLOCK_REALTIME)`; Windows `GetSystemTimePreciseAsFileTime`), which may
+  jump backward or forward: waits and measurements use `Timer`'s monotonic clock (§40.4). Where the system has no
+  real-time clock (CosmoOS userland without one) it is 1970.
+- Hosted only: in freestanding code `Clock` and `UnixTime`, being lib/std's, are not defined (N0200).
+- The interpreter answers 2000-01-01T00:00:00Z (946,684,800 seconds) plus its virtual clock (§40.8), so a run stays
+  reproducible. Calendar dates, time zones and formatting are not part of the library.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in
@@ -3623,7 +3634,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   is observed again.
 
 ### 40.8 The interpreter and determinism
-- The interpreter runs tasks on one thread with a virtual clock (timers fire in deadline order without waiting) and a
+- The interpreter runs tasks on one thread with a virtual clock (timers fire in deadline order without waiting; the wall
+  clock, §26.11, is 2000-01-01 plus it) and a
   run order fixed by a seed. A program whose output does not depend on timing prints the same in C and in the
   interpreter. It has one worker: `Async.runWorkers(n, …)` is `Async.run`, and `spawnSend` is `spawn` (ADR 0038). A
   program's output must not depend on which worker ran what.

@@ -1,0 +1,77 @@
+// Bug B8 (found by CeeSafe.Web, its probe tests/probes/generic-dyn-box-flow-bug.cee): a `Box<dyn I<S>>` parameter
+// stored into a container of the same type through `borrow mut` was N0272 when `S` is a type parameter. A `dyn` value
+// carries no loans of its own (type-system.md §37.2), so `S` inside it brings none (§25.7 rule 5). A method, a free
+// function, and the same with `S` concrete.
+
+interface Handler<S> {
+    fn run(borrow this, state: borrow S) -> u32;
+}
+
+struct Generic<S> {
+    handlers: Vector<Box<dyn Handler<S>>>;
+    fn add(borrow mut this, h: Box<dyn Handler<S>>) -> bool { // N0272 before the fix
+        match (this.handlers.push(h)) {
+            Ok() => { return true; }
+            Err(_) => { return false; }
+        }
+    }
+}
+
+struct St {
+    n: u32;
+}
+
+struct Concrete {
+    handlers: Vector<Box<dyn Handler<St>>>;
+    fn add(borrow mut this, h: Box<dyn Handler<St>>) -> bool { // the same with S = St: accepted
+        match (this.handlers.push(h)) {
+            Ok() => { return true; }
+            Err(_) => { return false; }
+        }
+    }
+}
+
+struct C {}
+
+impl Handler<St> for C {
+    fn run(borrow this, state: borrow St) -> u32 => state.n;
+}
+
+fn addFree<S>(r: borrow mut Generic<S>, h: Box<dyn Handler<S>>) -> bool {
+    match (r.handlers.push(h)) {
+        Ok() => { return true; }
+        Err(_) => { return false; }
+    }
+}
+
+fn main() {
+    var g = Generic<St> { handlers: Vector<Box<dyn Handler<St>>>.create() };
+    var c = Concrete { handlers: Vector<Box<dyn Handler<St>>>.create() };
+    match (Box.create(C {})) {
+        Ok(b) => {
+            let ok = g.add(b);
+        }
+        Err(_) => {}
+    }
+    match (Box.create(C {})) {
+        Ok(b) => {
+            let ok = c.add(b);
+        }
+        Err(_) => {}
+    }
+    match (Box.create(C {})) {
+        Ok(b) => {
+            let ok = addFree(mut g, b);
+        }
+        Err(_) => {}
+    }
+    var total: u32 = 0;
+    let state = St { n: 5 };
+    for (h in g.handlers.view()) {
+        total += h.run(borrow state);
+    }
+    Console.writeLine(g.handlers.length + c.handlers.length);
+    Console.writeLine(total);
+}
+// expect-stdout: 3
+// expect-stdout: 10

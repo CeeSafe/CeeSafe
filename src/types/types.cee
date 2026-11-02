@@ -420,6 +420,48 @@ struct TypeTable {
         return this.anyGeneric(t.parameters) || (t.result != none() && this.isGeneric(t.result));
     }
 
+    /// isGeneric for loans (§25.7 rule 5 with §37.2): a type parameter seen only inside a `dyn` type (its interface's
+    /// arguments, a `dyn fn`'s signature) brings no loan, since a `dyn` value carries none of its own.
+    fn mentionsParameterOutsideDyn(borrow this, id: u32) -> bool {
+        let t = this.types[id as usize];
+        if (isKind(t.kind, TypeKind.Dyn)) {
+            return false;
+        }
+        if (isKind(t.kind, TypeKind.TypeParameter)) {
+            return true;
+        }
+        if ((t.pointee != none() && this.mentionsParameterOutsideDyn(t.pointee)) ||
+            (t.element != none() && this.mentionsParameterOutsideDyn(t.element))) {
+            return true;
+        }
+        if (t.structDef != none() && this.anyOutsideDyn(this.structs[t.structDef as usize].typeArguments)) {
+            return true;
+        }
+        if (t.enumDef != none()) {
+            let e = borrow this.enums[t.enumDef as usize];
+            if (this.anyOutsideDyn(e.typeArguments)) {
+                return true;
+            }
+            if (e.resultOk != none() &&
+                (this.mentionsParameterOutsideDyn(e.resultOk) || this.mentionsParameterOutsideDyn(e.resultErr))) {
+                return true;
+            }
+            if (e.optionType != none() && this.mentionsParameterOutsideDyn(e.optionType)) {
+                return true;
+            }
+        }
+        return this.anyOutsideDyn(t.parameters) || (t.result != none() && this.mentionsParameterOutsideDyn(t.result));
+    }
+
+    fn anyOutsideDyn(borrow this, r: Range) -> bool {
+        for (k in 0..r.count) {
+            if (this.mentionsParameterOutsideDyn(this.listAt(r, k))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     fn anyGeneric(borrow this, r: Range) -> bool {
         for (k in 0..r.count) {
             if (this.isGeneric(this.listAt(r, k))) {

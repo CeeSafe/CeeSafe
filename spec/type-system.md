@@ -1580,7 +1580,9 @@ With one loan set per value:
 3. `push`, `insert` and `append` write their argument through their receiver (rule 2).
 4. At a call, an argument that flows into a `borrow mut` parameter adds its loans to what that
    argument refers to.
-5. In generic code, values whose type mentions a type parameter carry loans like scoped values.
+5. In generic code, values whose type mentions a type parameter carry loans like scoped values, unless it mentions
+   it only inside a `dyn` type (an interface's arguments, a `dyn fn`'s signature): a `dyn` value carries no loans of
+   its own (§37.2), so `Box<dyn Handler<S>>` is stored where `S` is a type parameter as it is for a concrete `S`.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
    them, so they must still be live (N0243 otherwise).
 

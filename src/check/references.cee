@@ -372,7 +372,10 @@ fn overlaps(a: borrow Vector<u64>, b: borrow Vector<u64>) -> bool {
 
 /// Can a value of this type carry loans (MayHoldLoans)? Scoped types, and in generic code anything mentioning a type
 /// parameter (§25.7).
-fn mayHoldLoans(c: borrow Checker, typ: u32) -> bool => c.types.isScoped(typ) || c.types.isGeneric(typ);
+/// §25.7 rule 5: a scoped type, or in generic code one that mentions a type parameter, except inside a `dyn` type,
+/// which carries no loans of its own (§37.2; bug B8: a `Box<dyn I<S>>` parameter could not be stored).
+fn mayHoldLoans(c: borrow Checker, typ: u32) -> bool =>
+    c.types.isScoped(typ) || c.types.mentionsParameterOutsideDyn(typ);
 
 /// The flows of a signature (ResolveFlows, §25.6): which parameters' loans the result may carry (its return sources)
 /// and which parameters' loans the callee may store through each `borrow mut` parameter.

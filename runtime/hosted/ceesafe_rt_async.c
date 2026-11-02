@@ -63,6 +63,8 @@
 #endif
 #include <fcntl.h>
 #include <sched.h>
+#include <sys/socket.h> /* sendmsg (ADR 0045) */
+#include <sys/uio.h>    /* struct iovec, writev */
 #include <unistd.h>
 /* Empties a wake pipe, or reads an eventfd's counter, whose value nothing needs: how many bytes, and a failure
    (EAGAIN: already empty), change nothing. glibc declares read warn_unused_result under _FORTIFY_SOURCE, which
@@ -2272,7 +2274,7 @@ typedef struct {
     int64_t result;
     cee_task *task;      /* IOCP: the task waiting for the completion */
 #if defined(_WIN32)
-    uint32_t kind;       /* 1 read, 2 send, 3 accept, 4 connect */
+    uint32_t kind;       /* 1 read, 2 send, 3 accept, 4 connect, 5 vectored send (ADR 0045) */
     SOCKET socket;       /* the socket the operation is on */
     SOCKET accepted;     /* AcceptEx's and ConnectEx's new socket, until it has an id */
     SOCKET listener;
@@ -3006,5 +3008,150 @@ bool ceesafe_async_op_cancel(void *op) {
         o->backend = 0u;
     }
     return false;
+}
+
+/* ---- Message operations (ADR 0045): lib/std's AsyncMsgOp record, a vectored send's steps. ---- */
+
+/* A part as the kernel reads it. */
+#if defined(CEE_COSMOOS)
+typedef struct {
+    const uint8_t *base;
+    uint64_t len;
+} cee_msg_buffer;
+#elif defined(_WIN32)
+typedef WSABUF cee_msg_buffer;
+#else
+typedef struct iovec cee_msg_buffer;
+#endif
+
+/* Room for a datagram's ancillary data (U6): packet info, traffic class and segment size on every platform. */
+#if defined(_WIN32)
+#define CEE_MSG_CONTROL 96u
+#else
+#define CEE_MSG_CONTROL 128u
+#endif
+
+/* The record: an operation's header (so the cancel and completion paths take it), the parts, the message header,
+   and, for U6's datagrams, a peer address and the control buffer. The kernel reads the parts, and on io_uring the
+   message header, while the operation is in flight, so they are here, in the task's frame. */
+typedef struct {
+    cee_op op;
+    uint32_t count;
+    cee_msg_buffer parts[CEE_MSG_PARTS];
+#if defined(_WIN32)
+    WSAMSG msg;
+#elif !defined(CEE_COSMOOS)
+    struct msghdr msg;
+#endif
+    uint32_t name[8]; /* a sockaddr_in6 or sockaddr_in (28 bytes at most) */
+    uint64_t control[CEE_MSG_CONTROL / 8u];
+} cee_msg_op;
+
+_Static_assert(sizeof(cee_msg_op) <= sizeof(ceesafe_async_msg_op), "ceesafe_async_msg_op holds a message operation");
+
+void ceesafe_async_msg_part(void *op, uint32_t index, const uint8_t *bytes, uint64_t length) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    if (index >= CEE_MSG_PARTS) {
+        return;
+    }
+    uint64_t n = length > (1u << 30) ? (uint64_t)1u << 30 : length; /* as a send's chunk: a partial count is normal */
+#if defined(CEE_COSMOOS)
+    m->parts[index].base = bytes;
+    m->parts[index].len = n;
+#elif defined(_WIN32)
+    m->parts[index].buf = (char *)(uintptr_t)bytes;
+    m->parts[index].len = (ULONG)n;
+#else
+    m->parts[index].iov_base = (void *)(uintptr_t)bytes;
+    m->parts[index].iov_len = (size_t)n;
+#endif
+}
+
+/* A readiness step: one vectored send, or the wait for writability. */
+static int64_t cee_ready_sendv(cee_msg_op *m, int32_t fd, uint32_t count) {
+#if defined(CEE_COSMOOS)
+    /* One buffer per call there: the first non-empty part, a legal partial send. */
+    for (uint32_t k = 0; k < count; k++) {
+        if (m->parts[k].len > 0u) {
+            return cee_ready_send(fd, m->parts[k].base, m->parts[k].len);
+        }
+    }
+    return 0;
+#elif defined(_WIN32)
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) {
+        return -(int64_t)EBADF;
+    }
+    DWORD sent = 0;
+    if (WSASend(s, m->parts, (DWORD)count, &sent, 0, NULL, NULL) != 0) {
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+            ceesafe_async_wait_writable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        return cee_wsa_failure();
+    }
+    return (int64_t)sent;
+#else
+    ssize_t n;
+    do {
+#if defined(MSG_NOSIGNAL)
+        ceesafe_mem_set(&m->msg, 0, sizeof m->msg);
+        m->msg.msg_iov = m->parts;
+        m->msg.msg_iovlen = (__typeof__(m->msg.msg_iovlen))count; /* int on macOS, size_t on Linux */
+        n = sendmsg(fd, &m->msg, MSG_NOSIGNAL);
+#else
+        n = writev(fd, m->parts, (int)count); /* the socket has SO_NOSIGPIPE */
+#endif
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ceesafe_async_wait_writable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        return -(int64_t)errno;
+    }
+    return (int64_t)n;
+#endif
+}
+
+int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    cee_op *o = &m->op;
+    if (count > CEE_MSG_PARTS) {
+        count = CEE_MSG_PARTS;
+    }
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET) {
+        cee_iocp_begin(o, 5u, s);
+        int status = WSASend(s, m->parts, (DWORD)count, NULL, 0, &o->overlapped, NULL);
+        return cee_iocp_submitted(o, status, status != 0);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+    if (cee_uring_open()) {
+        struct io_uring_sqe *e = cee_uring_entry();
+        if (e != NULL) {
+            ceesafe_mem_set(&m->msg, 0, sizeof m->msg);
+            m->msg.msg_iov = m->parts;
+            m->msg.msg_iovlen = (__typeof__(m->msg.msg_iovlen))count; /* int on macOS, size_t on Linux */
+            cee_uring_begin(o, 5u);
+            e->opcode = IORING_OP_SENDMSG;
+            e->fd = fd;
+            e->addr = (uint64_t)(uintptr_t)&m->msg;
+            e->len = 1u;
+            e->msg_flags = MSG_NOSIGNAL;
+            return cee_uring_go(o, e);
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_sendv(m, fd, count);
 }
 #endif /* !CEE_FREESTANDING: channels, the debugger's tasks, operations */

@@ -3421,6 +3421,19 @@ where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
   `peerAddress()`, `localAddress()`, `shutdownRead()` and the setters of §26.4, none async. A dual-stack listener's
   IPv4 peer is `V4`, not `::ffff:a.b.c.d`.
 
+**Vectored sends** (lib/std, ADR 0045):
+
+- `IoParts<region r>` (`net.cee`) is a list of up to eight byte parts, a value built by copying, since a slice is not an
+  array element (§25.4): `IoParts.of(a)`, then `parts.then(b)`, which is `IoParts<r>?`, null when eight are there
+  already. `count()`, `part(i)` (empty past the last), `totalLength()`, and `after(n)`: the bytes after the first `n`,
+  as parts, whole parts dropped and the one where byte `n` falls cut; no parts from `totalLength()` on. Empty parts are
+  allowed and send nothing.
+- `await stream.writeVectored(borrow parts)` is one step: the task waits until the socket takes at least one byte, and
+  the result, `Result<usize, AsyncError>`, is how many it took, which may stop inside any part. Empty parts return
+  `Ok(0)` without a system call. `await stream.writeAllVectored(borrow parts)` sends every byte, as `write` does for
+  one slice. `await AsyncSockets.sendVectored(fd, borrow parts)` is the one step on a raw descriptor. Errors and
+  cancellation are `write`'s (§40.7): a send the kernel completed before the cancellation reports its count.
+
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
   `alloc` effect). With `scopeIn`, each child's task and frame come from `alloc` and go back to it when the child

@@ -383,3 +383,96 @@ public struct ListenOptions {
     fn flags(borrow this) -> u32 =>
         (if (this.reuseAddress) 1u32 else 0) | (if (this.reusePort) 2u32 else 0) | (if (this.v6Only) 4u32 else 0);
 }
+
+/// A list of up to eight byte parts sent as one (ADR 0045 §3.1): an HTTP response's head and body, or a chunk's size
+/// line, data and CRLF, in one system call and without a copy. It is a value built by copying, since a slice cannot be
+/// an array element: `IoParts.of(head).then(body)`. Empty parts are allowed and send nothing.
+public struct IoParts<region r> {
+    private p0: Slice<r, u8>;
+    private p1: Slice<r, u8>;
+    private p2: Slice<r, u8>;
+    private p3: Slice<r, u8>;
+    private p4: Slice<r, u8>;
+    private p5: Slice<r, u8>;
+    private p6: Slice<r, u8>;
+    private p7: Slice<r, u8>;
+    private n: u32;
+
+    /// One part.
+    public fn of(part: Slice<r, u8>) -> IoParts<r> {
+        let e = part[0..0];
+        return IoParts { p0: part, p1: e, p2: e, p3: e, p4: e, p5: e, p6: e, p7: e, n: 1 };
+    }
+
+    /// These parts and `part` after them, or null when there are eight already.
+    public fn then(this, part: Slice<r, u8>) -> IoParts<r>? {
+        if (this.n >= 8) {
+            return null;
+        }
+        return Some(IoParts {
+            p0: this.p0,
+            p1: if (this.n == 1) part else this.p1,
+            p2: if (this.n == 2) part else this.p2,
+            p3: if (this.n == 3) part else this.p3,
+            p4: if (this.n == 4) part else this.p4,
+            p5: if (this.n == 5) part else this.p5,
+            p6: if (this.n == 6) part else this.p6,
+            p7: if (this.n == 7) part else this.p7,
+            n: this.n + 1,
+        });
+    }
+
+    /// How many parts (0 to 8; 0 only from `after`).
+    public fn count(borrow this) -> u32 => this.n;
+
+    /// Part `i` (from 0); empty past the last.
+    public fn part(this, i: u32) -> Slice<r, u8> {
+        if (i >= this.n) {
+            let first = this.p0;
+            return first[0..0];
+        }
+        return match (i) {
+            0 => this.p0,
+            1 => this.p1,
+            2 => this.p2,
+            3 => this.p3,
+            4 => this.p4,
+            5 => this.p5,
+            6 => this.p6,
+            _ => this.p7,
+        };
+    }
+
+    /// The number of bytes in every part.
+    public fn totalLength(borrow this) -> usize {
+        var total: usize = 0;
+        for (i in 0..this.n) {
+            total += this.part(i).length;
+        }
+        return total;
+    }
+
+    /// The bytes after the first `skip`, as parts: whole parts dropped, the part where byte `skip` falls cut. Empty
+    /// (no parts) from `totalLength()` on. What a write loop sends after a partial send.
+    public fn after(this, skip: usize) -> IoParts<r> {
+        var k: u32 = 0;
+        var left = skip;
+        while (k < this.n && left >= this.part(k).length) {
+            left -= this.part(k).length;
+            k += 1;
+        }
+        let first = this.part(k);
+        let cut = if (k < this.n) left else 0; // past the end: empty
+        return IoParts {
+            p0: first[cut..],
+            p1: this.part(k + 1),
+            p2: this.part(k + 2),
+            p3: this.part(k + 3),
+            p4: this.part(k + 4),
+            p5: this.part(k + 5),
+            p6: this.part(k + 6),
+            p7: this.part(k + 7),
+            n: this.n - k,
+        };
+    }
+}

@@ -1,0 +1,92 @@
+// A vectored send cancelled while the kernel holds its parts (ADR 0045 §3.2, ADR 0035 §3.4): the sender is a scope's
+// child, its bytes in a vector it owns, freed when it returns. The peer does not read, so sending the megabyte again
+// and again soon waits (in flight on IOCP and io_uring, registered for writability on epoll, kqueue and poll()) until a
+// sibling's error cancels it. The child returns only once the kernel is done with the parts (ASan would report a freed
+// buffer read). The peer then reads what arrived: the parts' bytes in order, repeated, whatever the count.
+
+fn pattern(i: usize) -> u8 => truncate<u8>(((i % 1000000) * 13 + 5) % 251);
+
+async fn sender(stream: borrow AsyncTcpStream) -> Result<void, AsyncError> {
+    var bytes = Vector<u8>.create(); // freed when this child returns
+    for (i in 0..1000000usize) {
+        match (bytes.push(pattern(i))) {
+            Ok() => {}
+            Err(_) => { return Err(AsyncError.Cancelled); }
+        }
+    }
+    let all = bytes.view();
+    let head = all[0..100];
+    let body = all[100..];
+    let parts = match (IoParts.of(head).then(body)) {
+        Some(p) => p,
+        null => { return Err(AsyncError.Cancelled); },
+    };
+    loop {
+        await stream.writeAllVectored(borrow parts)?; // a peer that never reads takes only what its buffers hold
+    }
+}
+
+async fn breaker() -> Result<void, AsyncError> {
+    await Timer.sleep(20)?;
+    return Err(AsyncError.Cancelled); // the scope's first error: it cancels the sender
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let client = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    let server = await listener.accept()?;
+    match (client.setSendBuffer(4096)) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    match (server.setRecvBuffer(4096)) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    var outcome: u32 = 0;
+    match (await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => await sender(borrow client));
+        s.spawn(async () => await breaker());
+    })) {
+        Ok() => { outcome = 1; }
+        Err(AsyncError.Cancelled) => { outcome = 2; } // the breaker's error, as expected
+        Err(_) => { outcome = 3; }
+    }
+    match (client.shutdownWrite()) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    var buffer = [0u8; 4096];
+    var got: usize = 0;
+    var inOrder: u32 = 1;
+    loop {
+        let n = await server.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        for (k in 0..n) {
+            if (buffer[k] != pattern(got + k)) {
+                inOrder = 0;
+            }
+        }
+        got += n;
+    }
+    let some: u32 = if (got > 0) 1 else 0;
+    return Ok(outcome * 100 + inOrder * 10 + some);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 211

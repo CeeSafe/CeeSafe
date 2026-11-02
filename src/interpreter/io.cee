@@ -983,6 +983,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_async_op_accept")) {
         return "Pi:l";
     }
+    if (sameText(name, "ceesafe_async_msg_part")) {
+        return "PuPs:-";
+    }
+    if (sameText(name, "ceesafe_async_op_sendv")) {
+        return "Piu:l";
+    }
     if (sameText(name, "ceesafe_async_op_connect")) {
         return "PPsh:l";
     }
@@ -2542,7 +2548,8 @@ fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
         sameText(name, "ceesafe_async_op_connect_at") || sameText(name, "ceesafe_async_tcp_listen_at") ||
         sameText(name, "ceesafe_async_tcp_connect_at") || sameText(name, "ceesafe_async_socket_name") ||
         sameText(name, "ceesafe_async_socket_option") || sameText(name, "ceesafe_async_shutdown_read") ||
-        sameText(name, "ceesafe_interface_index");
+        sameText(name, "ceesafe_interface_index") || sameText(name, "ceesafe_async_msg_part") ||
+        sameText(name, "ceesafe_async_op_sendv");
 
 fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
     var bytes = Vector<u8>.create();
@@ -2559,6 +2566,38 @@ fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow 
         sameText(name, "ceesafe_async_op_accept") || sameText(name, "ceesafe_async_op_connect") ||
         sameText(name, "ceesafe_async_op_connect_at") || sameText(name, "ceesafe_async_op_cancel")) {
         return asyncOpStep(it, name, arguments);
+    }
+    if (sameText(name, "ceesafe_async_msg_part")) {
+        // ADR 0045: the part's address and length in the record's words 8 + 2 × index (the interpreter's own layout).
+        let index = arguments[1].bits(0, 4)?;
+        if (index < 8) {
+            let slot = arguments[0].bits(0, 8)? + 64 + 16 * index;
+            it.memory.storeBits(slot, arguments[2].bits(0, 8)?, 8)?;
+            it.memory.storeBits(slot + 8, arguments[3].bits(0, 8)?, 8)?;
+        }
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_op_sendv")) {
+        // A vectored step sends the first non-empty part (ADR 0045 §3.5): a legal partial send, so a program sees the
+        // same bytes in the same order. Stage 0's lib/std has no vectored send.
+        let record = arguments[0].bits(0, 8)?;
+        let fd = truncate<i32>(truncate<u32>(arguments[1].bits(0, 4)?));
+        let count = arguments[2].bits(0, 4)?;
+        for (k in 0..(if (count > 8) 8 else count)) {
+            let length = it.memory.loadBits(record + 64 + 16 * k + 8, 8)?;
+            if (length > 0) {
+                let chunk = if (length > 65536) 65536 else length; // at most 64 KiB a step: still a partial send
+                let bytes = interpBytes(it, it.memory.loadBits(record + 64 + 16 * k, 8)?, chunk)?;
+                let r = truncate<u64>(AsyncSockets.send(fd, bytes.view()));
+                if (r == 0x8000000000000000) {
+                    it.asyncFd = fd;
+                    it.asyncFdEvents = 2;
+                    return Ok(valueOf(0x8000000000000001, 8)); // CEE_ASYNC_PENDING
+                }
+                return Ok(valueOf(r, 8));
+            }
+        }
+        return Ok(valueOf(0, 8));
     }
     if (sameText(name, "ceesafe_async_tcp_listen_at") || sameText(name, "ceesafe_async_tcp_connect_at")) {
         // ADR 0044: an address's fields (family, its 16 bytes, port, scope), and for a listener the backlog and flags.

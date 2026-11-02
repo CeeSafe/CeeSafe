@@ -52,6 +52,10 @@ extern "C" {
     fn ceesafe_async_shutdown_read(fd: i32) -> i64;
     @effects()
     fn ceesafe_async_op_cancel(op: *mut void) -> bool;
+    @effects()
+    fn ceesafe_async_msg_part(op: *mut void, index: u32, bytes: *u8, length: u64);
+    @effects()
+    fn ceesafe_async_op_sendv(op: *mut void, fd: i32, count: u32) -> i64;
 }
 
 /// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
@@ -144,6 +148,63 @@ struct AsyncOp {
     }
 
     fn pending() -> i64 => -9223372036854775807; // CEE_ASYNC_PENDING
+}
+
+/// A message operation of a task (ADR 0045): a vectored send now, a datagram later. The runtime's larger record
+/// (`ceesafe_async_msg_op`), which holds the parts the kernel reads while the operation is in flight; the rest is
+/// `AsyncOp`'s.
+struct AsyncMsgOp {
+    words: [u64; 64];
+    leaving: AsyncError?;
+
+    fn create() -> AsyncMsgOp => AsyncMsgOp { words: [0u64; 64], leaving: null };
+
+    /// The record, for the runtime.
+    fn raw(borrow mut this) -> *mut void => borrow mut this.words as *mut [u64; 64] as *mut void;
+
+    /// `parts`' non-empty parts into the record, before the first step; how many.
+    /// Safety: the runtime reads each pointer and length during its call only; the bytes stay borrowed by the
+    /// caller until the operation is complete, which the caller's frame outlives.
+    fn fill(borrow mut this, parts: borrow IoParts) -> u32 {
+        var filled: u32 = 0;
+        for (i in 0..parts.count()) {
+            let part = parts.part(i);
+            if (part.length > 0) {
+                unsafe { ceesafe_async_msg_part(this.raw(), filled, part.ptr, part.length as u64); }
+                filled += 1;
+            }
+        }
+        return filled;
+    }
+
+    /// As `AsyncOp.check`.
+    /// Safety: the record is this operation's; ceesafe_async_op_cancel only asks the kernel to stop it.
+    fn check(borrow mut this) -> Result<void, AsyncError> {
+        if (this.leaving != null) {
+            return Ok();
+        }
+        match (AsyncLeaf.status()) {
+            Ok() => { return Ok(); }
+            Err(e) => {
+                if (unsafe { ceesafe_async_op_cancel(this.raw()) }) {
+                    this.leaving = Some(e);
+                    return Ok();
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    /// As `AsyncOp.result`.
+    fn result(borrow this, r: i64) -> Result<i64, AsyncError> {
+        if (r >= 0) {
+            return Ok(r);
+        }
+        return match (this.leaving) {
+            Some(e) => Err(e),
+            null => Err(AsyncError.Io(AsyncIo.ioError(r))),
+        };
+    }
 }
 
 /// A TCP listener for tasks (type-system.md §40.4): `accept` parks the task until a connection arrives. Its socket is
@@ -332,6 +393,22 @@ public struct AsyncTcpStream {
         return Ok();
     }
 
+    /// Sends from `parts` in one step (ADR 0045 §3.2): the task parks until the socket takes at least one byte, and the
+    /// result is how many it took, which may stop inside any part. Empty parts send nothing and return 0.
+    public async fn writeVectored(borrow this, parts: borrow IoParts) -> Result<usize, AsyncError> =>
+        await AsyncSockets.sendVectored(this.fd, parts);
+
+    /// Sends every byte of `parts`, in as many steps as the socket needs.
+    public async fn writeAllVectored(borrow this, parts: borrow IoParts) -> Result<void, AsyncError> {
+        var sent: usize = 0;
+        let total = parts.totalLength();
+        while (sent < total) {
+            let rest = parts.after(sent);
+            sent += await AsyncSockets.sendVectored(this.fd, borrow rest)?;
+        }
+        return Ok();
+    }
+
     /// Ends this side's writing, so the peer reads the end of the stream.
     /// Safety: the descriptor is this stream's.
     public fn shutdownWrite(borrow this) -> Result<void, IoError> {
@@ -418,6 +495,25 @@ public struct AsyncSockets {
 
     /// Safety: as port.
     public fn shutdownRead(fd: i32) -> i64 => unsafe { ceesafe_async_shutdown_read(fd) };
+
+    /// One vectored send on a descriptor (ADR 0045 §3.2): the task parks until the socket takes at least one byte;
+    /// the count may stop inside any part. Empty parts send nothing and return 0.
+    /// Safety: the parts stay borrowed until the operation completes, and its record is in this task's frame.
+    public async fn sendVectored(fd: i32, parts: borrow IoParts) -> Result<usize, AsyncError> {
+        var op = AsyncMsgOp.create();
+        let count = op.fill(parts);
+        if (count == 0) {
+            return Ok(0);
+        }
+        loop {
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_sendv(op.raw(), fd, count) };
+            if (r != AsyncOp.pending()) {
+                return Ok(truncate<usize>(op.result(r)?));
+            }
+            await Async.park();
+        }
+    }
 
     /// An interface's index by name (an IPv6 zone), 0 if there is none (lib/std's net.cee declares the call).
     /// Safety: the runtime reads the name during the call only.

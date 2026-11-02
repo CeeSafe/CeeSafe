@@ -1,0 +1,51 @@
+// ADR 0045 §3.2: a vectored send to a peer that reset the connection fails with IoError.ConnectionReset or
+// BrokenPipe, as a plain write does (which one is the platform's: ADR 0044 §3.4), and raises no signal.
+fn io<T>(r: Result<T, IoError>) -> Result<T, AsyncError> => match (r) {
+    Ok(v) => Ok(v),
+    Err(e) => Err(AsyncError.Io(e)),
+};
+
+/// The server's end of a connection whose client has gone: set to linger 0, then dropped when this returns, so its
+/// close resets the connection.
+async fn resetPair(listener: borrow AsyncTcpListener) -> Result<AsyncTcpStream, AsyncError> {
+    let client = await AsyncTcpStream.connectTo(io(listener.localAddress())?)?;
+    let server = await listener.accept()?;
+    match (client.setLinger(Some(0))) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    return Ok(server);
+}
+
+async fn run() -> Result<IoError?, AsyncError> {
+    let listener = io(AsyncTcpListener.bindWith(SocketAddresses.v4Loopback(0), ListenOptions.defaults()))?;
+    let server = await resetPair(borrow listener)?;
+    await Timer.sleep(10)?; // the reset arrives
+    let head = "HTTP/1.1 200 OK\r\n\r\n";
+    let body = [7u8; 4096];
+    let parts = match (IoParts.of(head.bytes()).then(body[..])) {
+        Some(p) => p,
+        null => { return Ok(null); },
+    };
+    // The first send may still be taken before the reset is seen; keep sending until it is.
+    for (k in 0..100) {
+        match (await server.writeAllVectored(borrow parts)) {
+            Ok() => {}
+            Err(AsyncError.Io(e)) => { return Ok(Some(e)); }
+            Err(e) => { return Err(e); }
+        }
+        await Timer.sleep(1)?;
+    }
+    return Ok(null);
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(Some(IoError.ConnectionReset)) => { Console.writeLine("reset"); }
+        Ok(Some(IoError.BrokenPipe)) => { Console.writeLine("reset"); }
+        Ok(Some(e)) => { Console.writeLine(e.message()); }
+        Ok(null) => { Console.writeLine("every send succeeded"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: reset

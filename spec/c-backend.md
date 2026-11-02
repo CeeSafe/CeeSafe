@@ -694,6 +694,14 @@ Heap (M3b):
     the completion, so a lent buffer outlives the kernel's use (type-system.md §40.7). A value completed meanwhile is
     kept: the operation returns it, and the next one sees the cancellation. Otherwise it releases what the record
     holds (a half-made connection) and returns false.
+  - **Message operations** (ADR 0045): a vectored send's record is lib/std's `AsyncMsgOp` (`ceesafe_async_msg_op`,
+    512 bytes), which starts with an operation's header, so `ceesafe_async_op_cancel` and the completion paths take
+    it too. Before the first step `ceesafe_async_msg_part(op, index, bytes, length)` puts each non-empty part in it
+    (at most `CEE_MSG_PARTS`, 8; each capped at 2^30 bytes, as a send's chunk); then `ceesafe_async_op_sendv(op, fd,
+    count)` steps: `sendmsg` with `MSG_NOSIGNAL` (Linux) or `writev` (macOS and the BSDs, whose sockets have
+    `SO_NOSIGPIPE`), an overlapped or plain `WSASend` with the record's `WSABUF`s (IOCP, `WSAPoll`), or
+    `IORING_OP_SENDMSG` with the record's `msghdr`. CosmoOS userland sends the first non-empty part. The record also
+    holds a peer address and a control buffer (128 bytes; 96 on Windows) for datagram messages (U6).
   - **IOCP** (Windows' default): each thread has one completion port for its life, because a socket can be tied to
     only one port. A socket is tied to its thread's port at its first operation (`ceesafe_socket_associate`).
     Operations are `WSARecv`, `WSASend`, `AcceptEx` (a new overlapped socket, given an id when it completes) and

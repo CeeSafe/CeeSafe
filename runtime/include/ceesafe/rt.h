@@ -1197,6 +1197,18 @@ int64_t ceesafe_async_op_send(void *op, int32_t fd, const uint8_t *bytes, uint64
 int64_t ceesafe_async_op_accept(void *op, int32_t fd);
 int64_t ceesafe_async_op_connect(void *op, const uint8_t *address, uint64_t length, uint16_t port);
 bool ceesafe_async_op_cancel(void *op);
+/* Message operations (ADR 0045): vectored sends now, datagram messages later (U6). Their record is larger than an
+ * operation's and starts with the same header, so ceesafe_async_op_cancel takes either; it is lib/std's AsyncMsgOp's
+ * first field. Before the first step, ceesafe_async_msg_part puts part `index` (< CEE_MSG_PARTS) in the record; the
+ * runtime reads the pointer and length only during that call, and the kernel reads the bytes until the operation
+ * completes. A step of ceesafe_async_op_sendv sends from the first `count` parts: a count >= 0 (it may stop inside any
+ * part), a negated errno, or CEE_ASYNC_PENDING. */
+#define CEE_MSG_PARTS 8u
+typedef struct ceesafe_async_msg_op {
+    uint64_t words[64];
+} ceesafe_async_msg_op;
+void ceesafe_async_msg_part(void *op, uint32_t index, const uint8_t *bytes, uint64_t length);
+int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count);
 #if defined(_WIN32)
 /* Windows sockets (L1 A4a): a descriptor from CEE_SOCKET_BASE up names a SOCKET in ceesafe_rt_io.c's table, so
  * lib/std's i32 descriptors never hold a truncated handle; below it, a C runtime file descriptor.

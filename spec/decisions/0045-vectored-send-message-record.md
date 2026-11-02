@@ -179,3 +179,22 @@ legal partial write, so programs see the same bytes in the same order, and the b
      ARM64 test host;
    - the allocation-failure sweep with `--check-leaks`.
 6. The guide (`guide/async.md`, the sockets section), ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Record sizes** (each checked by a `_Static_assert` in `ceesafe_rt_async.c`, and on every host the tests ran on):
+  - the header, then the count, the eight parts and the message header;
+  - a 32-byte peer address;
+  - a control buffer of 128 bytes, or 96 on Windows, whose header is larger (an `OVERLAPPED` and three sockets). 96
+    bytes still holds Windows' packet info, ECN and segment-size messages.
+- **`IoParts`' receivers.** `then`, `part` and `after` take `this` by value. With `borrow this`, a result of type
+  `IoParts<r>` was taken to borrow the receiver's own local (N0244), since regions are erased (ADR 0006), so a helper
+  could not return a list it had built. `IoParts` holds only slices, so the copy is a few words.
+- **The interpreter.** It keeps each part's address and length in the record's words 8 to 23. A step sends at most
+  64 KiB of the first non-empty part, which is a legal partial send.
+- **Windows' interpreter errors.** The interpreter's errno mapping (ADR 0044) had Linux's and macOS's numbers only.
+  On Windows the runtime gives MSVC's `errno.h` values, read with `cl` on the test host: ECONNRESET 108, ENOTCONN 126,
+  ETIMEDOUT 138, EOPNOTSUPP 130, and the rest. So a reset read as `Other`, and both reset tests failed there in the
+  interpreter until the mapping gained a third column.
+- **T1, done with this ADR.** `tools/cancel_sweep.py` and `tools/fault_sweep.py` take `--package DIR`
+  (spec/testing.md §1).

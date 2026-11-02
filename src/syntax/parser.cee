@@ -2363,9 +2363,13 @@ struct Parser {
         // comparison.
         var depth: i32 = 0;
         var inFunctionType = false;
+        var sawDyn = false; // `+ Send` is a type's only after `dyn` (§38.4; bug B14)
         var i: usize = 0;
         loop {
             let kind = this.peek(i).kind;
+            if (sameKind(kind, TokenKind.Identifier) && this.nameIs(this.peek(i), "dyn")) {
+                sawDyn = true;
+            }
             let functionPart = sameKind(kind, TokenKind.OpenParen) || sameKind(kind, TokenKind.CloseParen) ||
                 sameKind(kind, TokenKind.Arrow);
             if (sameKind(kind, TokenKind.FnKeyword) || sameKind(kind, TokenKind.At)) {
@@ -2404,6 +2408,8 @@ struct Parser {
                     TokenKind.MutKeyword => true,
                     TokenKind.Star => true,
                     TokenKind.Question => true,
+                    TokenKind.Plus => sawDyn && this.peekIs(i + 1, TokenKind.Identifier) &&
+                        this.nameIs(this.peek(i + 1), "Send"),
                     _ => false,
                 };
                 if (!allowed) {

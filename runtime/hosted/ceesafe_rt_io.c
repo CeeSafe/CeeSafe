@@ -604,7 +604,9 @@ static cee_io_result cee_socket_open(const ceesafe_endpoint *e, uint32_t backlog
     SOCKET s = socket(e->family == 6u ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCKET) return cee_wsa_fail();
     u_long on = 1;
-    if (nonblocking && ioctlsocket(s, FIONBIO, &on) != 0) {
+    /* FIONBIO is an unsigned long expression and ioctlsocket takes a long: the cast keeps -Wsign-conversion quiet
+       (CeeSafe.Web T3); the value is the SDK's own. */
+    if (nonblocking && ioctlsocket(s, (long)FIONBIO, &on) != 0) {
         cee_io_result failed = cee_wsa_fail();
         (void)closesocket(s);
         return failed;
@@ -655,7 +657,7 @@ static cee_io_result cee_socket_accept(int32_t fd, bool nonblocking) {
        undo them for a blocking stream. */
     (void)WSAEventSelect(peer, NULL, 0);
     u_long mode = nonblocking ? 1u : 0u;
-    if (ioctlsocket(peer, FIONBIO, &mode) != 0) {
+    if (ioctlsocket(peer, (long)FIONBIO, &mode) != 0) {
         cee_io_result failed = cee_wsa_fail();
         (void)closesocket(peer);
         return failed;
@@ -1976,7 +1978,7 @@ int64_t ceesafe_async_udp_bind(uint32_t family, const uint8_t *bytes, uint16_t p
         (void)WSAIoctl(s, SIO_UDP_CONNRESET, &report, (DWORD)sizeof report, NULL, 0, &returned, NULL, NULL);
     }
     u_long on = 1;
-    if (failure == 0 && ioctlsocket(s, FIONBIO, &on) != 0) failure = cee_udp_error();
+    if (failure == 0 && ioctlsocket(s, (long)FIONBIO, &on) != 0) failure = cee_udp_error();
     if (failure == 0 && bind(s, &a.sa, (int)length) != 0) failure = cee_udp_error();
 #else
     if (failure == 0 && !cee_nonblocking(s)) failure = errno;

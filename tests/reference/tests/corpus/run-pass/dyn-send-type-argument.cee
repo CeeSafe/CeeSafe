@@ -1,0 +1,31 @@
+// `dyn I + Send` as a type argument in an expression (bug B14; grammar.md §2.1, type-system.md §38.4): the '<' after
+// `Vector` opens type arguments, since `+` is a type's only after `dyn` and before `Send`. A comparison with a `+` in
+// it stays a comparison.
+interface Job {
+    fn id(borrow this) -> u32;
+}
+
+struct One {}
+
+impl Job for One {
+    fn id(borrow this) -> u32 => 1;
+}
+
+fn both(a: bool, b: bool) -> u32 => (if (a) 1u32 else 0u32) + (if (b) 2u32 else 0u32);
+
+fn main() {
+    var v = Vector<Box<dyn Job + Send>>.create();
+    let b: Box<dyn Job + Send> = Box.create(One {})!;
+    v.push(b)!;
+    Console.writeLine(v[0].id());
+    var w = Vector<Vector<Box<dyn Job + Send>>>.create();
+    w.push(Vector<Box<dyn Job + Send>>.create())!;
+    Console.writeLine(w.length);
+    let x: u32 = 1;
+    let y: u32 = 2;
+    let z: u32 = 3;
+    Console.writeLine(both(x < y + z, z > (y)));
+}
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 3

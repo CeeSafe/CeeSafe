@@ -1,0 +1,66 @@
+// Async calls through both `dyn I` and `dyn I + Send` (bug B15; ADR 0036): the two dyn types share their C names, so
+// their dyn frames are one definition, sized for every impl behind either. Here the impl with the large frame (Big)
+// is reached only through `dyn Job + Send`, the small ones through `dyn Job`, and a third dyn type of the family is
+// only boxed and dropped (its table needs the frame too, bug B10).
+interface Job {
+    async fn run(borrow mut this) -> u32;
+}
+
+struct One {}
+
+impl Job for One {
+    async fn run(borrow mut this) -> u32 => 1;
+}
+
+struct Two {}
+
+impl Job for Two {
+    async fn run(borrow mut this) -> u32 => 2;
+}
+
+struct Big {
+    seed: u32;
+}
+
+impl Job for Big {
+    async fn run(borrow mut this) -> u32 {
+        var table = [0u32; 256];
+        for (k in 0..256usize) {
+            table[k] = this.seed + truncate<u32>(k);
+        }
+        await Timer.sleep(1);
+        var sum: u32 = 0;
+        for (k in 0..256usize) {
+            sum = sum.wrappingAdd(table[k]);
+        }
+        return sum;
+    }
+}
+
+struct Three {}
+
+impl Job for Three {
+    async fn run(borrow mut this) -> u32 => 3;
+}
+
+async fn viaPlain(j: borrow mut dyn Job) -> u32 => await j.run();
+
+async fn viaSend(j: borrow mut Box<dyn Job + Send>) -> u32 => await j.run();
+
+async fn both() -> u32 {
+    var one = One {};
+    var two: Box<dyn Job + Send> = Box.create(Two {})!;
+    var big: Box<dyn Job + Send> = Box.create(Big { seed: 10 })!;
+    let a = await viaPlain(mut one);
+    let b = await viaSend(mut two);
+    let c = await viaSend(mut big);
+    return a + b + c;
+}
+
+fn main() {
+    Console.writeLine(Async.run(both()));
+    let unused: Box<dyn Job + Send> = Box.create(Three {})!;
+    Console.writeLine(true);
+}
+// expect-stdout: 35203
+// expect-stdout: true

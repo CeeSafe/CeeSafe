@@ -2690,7 +2690,7 @@ static void cee_iocp_complete(cee_op *o) {
             (void)setsockopt(made, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT, NULL, 0);
         }
         u_long on = 1;
-        (void)ioctlsocket(made, FIONBIO, &on);
+        (void)ioctlsocket(made, (long)FIONBIO, &on);
         /* ConnectEx's socket was tied to the port before it connected; AcceptEx's is not tied yet. */
         int32_t id = ceesafe_socket_adopt((uintptr_t)made, o->kind == 4u ? cee_exec.port : NULL);
         o->result = id < 0 ? -(int64_t)ENOMEM : (int64_t)id;

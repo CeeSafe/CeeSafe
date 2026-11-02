@@ -3388,7 +3388,8 @@ fn main() {
 - **Interface methods.** An impl's method is async exactly when the interface's is (N0267). Through a type parameter
   (`T: I`) each instance awaits the concrete method, whose frame is known. Through `dyn I` (§37.3, ADR 0036) the
   awaiter's frame has room for the largest frame of `I.m` among the types coerced to `dyn I` anywhere in the
-  program: the program is compiled whole, so that set is known. An await through the table that may reach its own
+  program: the program is compiled whole, so that set is known. `dyn I` and `dyn I + Send` have one such frame,
+  with room for the types coerced to either, since `+ Send` changes no layout (bug B15). An await through the table that may reach its own
   frame is recursion through `await` (below). `Async.boxed` takes such a call too, with a frame of the receiver's own
   size.
 - **A call of an async fn is a task**, not a value: it runs nothing until it is awaited (§40.2), run (§40.4) or spawned

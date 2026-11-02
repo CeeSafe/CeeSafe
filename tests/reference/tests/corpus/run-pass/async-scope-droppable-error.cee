@@ -1,0 +1,53 @@
+// `Async.scope` with an error type that has a drop (bug B13; type-system.md §40.5): the scope keeps its first child's
+// error and drops a later child's, so the drop of `Result<void, Failure>` is called in the child's adapter, before
+// the drops are defined. Run under the leak check, the dropped error leaves nothing live.
+struct Failure {
+    text: Vector<u8>;
+}
+
+fn failure(byte: u8) -> Failure {
+    var text = Vector<u8>.create();
+    text.push(byte)!;
+    return Failure { text: text };
+}
+
+async fn sum() -> Result<u64, Failure> {
+    var a: u64 = 0;
+    var b: u64 = 0;
+    let r: Result<void, Failure> = await Async.scope(failure('x'), (s) => {
+        s.spawn(async () => {
+            a = 1;
+            return Ok();
+        });
+        s.spawn(async () => {
+            b = 2;
+            return Ok();
+        });
+    });
+    match (r) {
+        Ok() => { return Ok(a + b); }
+        Err(e) => { return Err(e); }
+    }
+}
+
+async fn bothFail() -> u8 {
+    let r: Result<void, Failure> = await Async.scope(failure('t'), (s) => {
+        s.spawn(async () => Err(failure('a')));
+        s.spawn(async () => Err(failure('b')));
+    });
+    return match (r) {
+        Ok() => 0,
+        Err(e) => e.text[0],
+    };
+}
+
+fn main() {
+    match (Async.run(sum())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    let first = Async.run(bothFail());
+    Console.writeLine(first == 'a' || first == 'b');
+}
+// expect-stdout: 3
+// expect-stdout: true

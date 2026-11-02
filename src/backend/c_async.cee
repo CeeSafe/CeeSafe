@@ -90,6 +90,19 @@ fn emitChildThunk(
         e.t(" *);")?;
         e.emit()?;
     }
+    if (c.types.needsDrop(result)) {
+        // A later child's error is dropped here: its drop glue, declared here too, as the thunks come before the
+        // helpers (bug B13). The runtime's own drops (a resource's) are declared by its header.
+        if (!c.types.is(result, TypeKind.Resource) && !c.types.is(result, TypeKind.Region)) {
+            e.helperProto()?;
+            e.t("void ")?;
+            appendDropGlueName(c, mut e.buf, result)?;
+            e.t("(")?;
+            appendCTypeName(c, mut e.buf, result)?;
+            e.t(" *);")?;
+            e.emit()?;
+        }
+    }
     e.t(if (e.split) "static CEE_UNUSED bool " else "static bool ")?; // split: in the header every unit includes
     appendAsyncName(c, mut e.buf, "ceeAC_", child)?;
     e.t("(void *frame, ceesafe_scope *scope) {")?;
@@ -242,14 +255,59 @@ fn awaitedCallee(n: borrow NirProgram, s: u32) -> u32 {
 fn isDynAsync(c: borrow Checker, callee: u32) -> bool =>
     c.hir.functions[callee as usize].isDynMethod && isAsyncFunction(c, callee);
 
+/// Whether dyn types `a` and `b` share their C names: `dyn I` and `dyn I + Send` mangle alike (`+ Send` changes neither
+/// the table nor a value's layout), so their async methods' dyn frames are one C definition (bug B15).
+fn sameDynFamily(c: borrow Checker, a: u32, b: u32) -> bool {
+    if (a == b) {
+        return true;
+    }
+    if (!c.types.is(a, TypeKind.Dyn) || !c.types.is(b, TypeKind.Dyn)) {
+        return false;
+    }
+    let x = c.types.info(a);
+    let y = c.types.info(b);
+    if (x.dynInterface == none() || y.dynInterface == none()) {
+        return false;
+    }
+    let p = c.types.bounds[x.dynInterface as usize];
+    let q = c.types.bounds[y.dynInterface as usize];
+    if (p.interfaceEntry != q.interfaceEntry || p.arguments.count != q.arguments.count) {
+        return false;
+    }
+    for (k in 0..p.arguments.count) {
+        if (c.types.listAt(p.arguments, k) != c.types.listAt(q.arguments, k)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The one method that stands for `callee`'s dyn frame: of the async methods in `callee`'s slot of every dyn type in
+/// its family (sameDynFamily), the first. The frame is emitted once, for it.
+fn dynFrameMethod(c: borrow Checker, callee: u32) -> u32 {
+    let dyn = c.hir.functions[callee as usize].owner;
+    let slot = c.hir.functions[callee as usize].dynSlot;
+    var first = callee;
+    for (signature in c.dynSignatures.view()) {
+        if (slot < signature.methods.count && sameDynFamily(c, signature.dynType, dyn)) {
+            let m = c.hir.at(signature.methods, slot);
+            if (m < first) {
+                first = m;
+            }
+        }
+    }
+    return first;
+}
+
 /// The methods a call of `dyn I`'s async method `callee` may reach (ADR 0036 §3.4): the method in its slot of every
-/// table of its dyn type, so of every type coerced to it.
+/// table of its dyn type, so of every type coerced to it. The tables of `dyn I` and `dyn I + Send` both count, since
+/// they share one frame (bug B15).
 fn dynAsyncImpls(c: borrow Checker, callee: u32) -> Result<Vector<u32>, AllocError> {
     var out = Vector<u32>.create();
     let dyn = c.hir.functions[callee as usize].owner;
     let slot = c.hir.functions[callee as usize].dynSlot;
     for (t in c.dynTables.view()) {
-        if (t.dynType == dyn) {
+        if (sameDynFamily(c, t.dynType, dyn)) {
             let m = c.hir.at(t.methods, slot);
             if (!containsU32(out, m)) {
                 out.push(m)?;
@@ -646,7 +704,11 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
             var ready = true;
             for (block in n.functions[f as usize].blocks.view()) {
                 for (s in block.statements.view()) {
-                    let callee = awaitedCallee(n, s);
+                    let awaited = awaitedCallee(n, s);
+                    let callee = if (awaited != none() && isDynAsync(
+                        c,
+                        awaited,
+                    )) dynFrameMethod(c, awaited) else awaited;
                     if (callee != none() && !containsU32(done, callee) && !isStackedStatement(n, s)) {
                         if (isDynAsync(c, callee) && dynImplsDone(c, done, callee)?) {
                             emitDynFrame(e, c, n, callee)?; // every impl's frame is defined (ADR 0036)
@@ -702,9 +764,9 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
                         _ => none(),
                     };
                 }
-                if (callee != none() && isDynAsync(c, callee) && !containsU32(done, callee)) {
-                    emitDynFrame(e, c, n, callee)?;
-                    done.push(callee)?;
+                if (callee != none() && isDynAsync(c, callee) && !containsU32(done, dynFrameMethod(c, callee))) {
+                    emitDynFrame(e, c, n, dynFrameMethod(c, callee))?;
+                    done.push(dynFrameMethod(c, callee))?;
                 }
             }
         }
@@ -714,7 +776,8 @@ fn emitAsyncDeclarations(e: borrow mut CEmitter, c: borrow Checker, n: borrow Ni
     for (table in c.dynTables.view()) {
         for (slot in 0..table.methods.count) {
             if (isAsyncFunction(c, c.hir.at(table.methods, slot))) {
-                let callee = dynSignatureMethod(c, table.dynType, slot);
+                let method = dynSignatureMethod(c, table.dynType, slot);
+                let callee = if (method == none()) none() else dynFrameMethod(c, method);
                 if (callee != none() && !containsU32(done, callee)) {
                     emitDynFrame(e, c, n, callee)?;
                     done.push(callee)?;

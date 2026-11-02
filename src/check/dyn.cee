@@ -233,7 +233,10 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
             recorded = true;
         }
     }
-    if (!recorded) {
+    // Generic code's coercion needs no table: each instance records its own, for its types (bug B12: a generic table
+    // named the uninstantiated type in C).
+    let generic = c.types.isGeneric(implementation) || c.types.isGeneric(dynType);
+    if (!recorded && !generic) {
         let methods = interfaceMethods(c, c.types.bounds[bound as usize].interfaceEntry);
         var functions = Vector<u32>.create();
         for (k in 0..methods.count) {

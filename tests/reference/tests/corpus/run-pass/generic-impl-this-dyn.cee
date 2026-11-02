@@ -1,0 +1,32 @@
+// Bug B12 (found by CeeSafe.Web, its probe tests/probes/generic-impl-this-dyn-bug.cee on ceesafec 0.9.1); see ROADMAP §10's row.
+interface Run {
+    fn run(borrow this) -> u32;
+}
+
+interface Outer {
+    fn outer(borrow this) -> u32;
+}
+
+struct Wrap<S> {
+    state: S;
+}
+
+impl<S> Run for Wrap<S> {
+    fn run(borrow this) -> u32 => 7;
+}
+
+impl<S> Outer for Wrap<S> {
+    fn outer(borrow this) -> u32 => runDyn(this);
+}
+
+struct St {
+    k: u32;
+}
+
+fn runDyn(r: borrow dyn Run) -> u32 => r.run();
+
+fn main() {
+    let w = Wrap<St> { state: St { k: 1 } };
+    Console.writeLine(w.outer());
+}
+// expect-stdout: 7

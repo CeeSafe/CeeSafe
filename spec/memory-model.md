@@ -123,8 +123,9 @@ public interface Allocator {
   - *As implemented in M3b (ADR 0003):* `FailingAllocator` is a built-in, zero-sized allocator
     type over the platform heap, steered by `FailingAllocator.failAfter(n)` and `.reset()`
     (a process-wide countdown).
-  - The runtime counts every allocation attempt. `CEESAFE_FAIL_ALLOC_AT=k` fails attempt *k*,
-    and `CEESAFE_ALLOC_REPORT=1` prints `ceesafe alloc: attempts=<n> live=<m>` when `main` returns.
+  - The runtime counts every allocation attempt when asked to (ADR 0059). `CEESAFE_FAIL_ALLOC_AT=k` fails attempt *k*,
+    and `CEESAFE_ALLOC_REPORT=1` prints `ceesafe alloc: attempts=<n> live=<m>` when `main` returns. Either one, or
+    `ceesafec test`, turns counting on; without them the runtime counts nothing.
   - The test runner's sweep uses both (`testing.md`).
 
 ### 3.3 Arenas (regions)

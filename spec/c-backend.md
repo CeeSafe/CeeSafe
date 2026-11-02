@@ -775,6 +775,10 @@ Heap (M3b):
 - The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
   via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
   allocation report if asked. `Process.exit` and panics skip the report.
+- The allocation counters are kept only when something reads them (ADR 0059): `CEESAFE_ALLOC_REPORT`,
+  `CEESAFE_FAIL_ALLOC_AT`, or `ceesafec test`'s `ceesafe_test_begin`. That is decided before the program's first
+  allocation and never changes afterwards. Without any of them, an allocation, reallocation or free touches no
+  counter, and so makes no atomic operation.
 
 
 - `ceesafe_panic(kind, src)`: `noreturn`. Provided by the profile: hosted (write to

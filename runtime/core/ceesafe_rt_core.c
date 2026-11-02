@@ -226,12 +226,17 @@ static uint64_t alloc_attempts;   /* every allocation attempt, failed ones inclu
 static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_fail_at;    /* CEESAFE_FAIL_ALLOC_AT: this attempt fails; 0 = never */
 static bool alloc_report;         /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
+/* Whether to count at all (ADR 0059): only a report, CEESAFE_FAIL_ALLOC_AT or `ceesafec test` reads the counters. Decided
+   before the program's first allocation and never changed afterwards, so a free never subtracts what its allocation
+   did not add. */
+static bool alloc_counting;
 static bool failing_armed;        /* FailingAllocator.failAfter has been called */
 static uint64_t failing_left;     /* successes FailingAllocator still allows */
 
 void ceesafe_rt_start(void) {
     alloc_fail_at = ceesafe_platform_config("CEESAFE_FAIL_ALLOC_AT");
     alloc_report = ceesafe_platform_config("CEESAFE_ALLOC_REPORT") != 0u;
+    alloc_counting = alloc_report || alloc_fail_at != 0u;
 }
 
 /* `ceesafec test`'s harness (ADR 0049): the allocation report on, and the sweeps' points from its arguments rather than
@@ -241,6 +246,7 @@ bool ceesafe_test_reports;
 
 void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
     alloc_report = true;
+    alloc_counting = true;
     alloc_fail_at = fail_alloc_at;
     ceesafe_test_cancel_at = cancel_at;
     ceesafe_test_reports = true;
@@ -257,9 +263,10 @@ void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
 #define CEE_COUNT(counter, delta) __atomic_add_fetch(&(counter), (uint64_t)(delta), __ATOMIC_RELAXED)
 #endif
 
-/* Counts an attempt; true if it is to fail (FailingAllocator, or CEESAFE_FAIL_ALLOC_AT). */
+/* Counts an attempt when counting; true if it is to fail (FailingAllocator, or CEESAFE_FAIL_ALLOC_AT, which only a
+   counting program has). */
 static bool alloc_refused(uint32_t allocator) {
-    uint64_t attempt = CEE_COUNT(alloc_attempts, 1u);
+    uint64_t attempt = alloc_counting ? CEE_COUNT(alloc_attempts, 1u) : 0u;
     if (allocator == CEE_ALLOC_FAILING && failing_armed) {
         if (failing_left == 0u) {
             return true;
@@ -274,7 +281,7 @@ void *ceesafe_alloc(size_t size, uint32_t allocator) {
         return NULL;
     }
     void *p = ceesafe_platform_alloc(size == 0u ? 1u : size);
-    if (p != NULL) {
+    if (p != NULL && alloc_counting) {
         (void)CEE_COUNT(alloc_live, 1u);
     }
     return p;
@@ -285,7 +292,7 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
         return NULL;
     }
     void *p = ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size);
-    if (p != NULL) {
+    if (p != NULL && alloc_counting) {
         (void)CEE_COUNT(alloc_live, 1u);
     }
     return p;
@@ -300,7 +307,9 @@ void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
 
 void ceesafe_free(void *p, uint32_t allocator) {
     (void)allocator; /* every M3 allocator frees to the platform heap */
-    (void)CEE_COUNT(alloc_live, UINT64_MAX); /* minus one */
+    if (alloc_counting) {
+        (void)CEE_COUNT(alloc_live, UINT64_MAX); /* minus one */
+    }
     ceesafe_platform_free(p);
 }
 

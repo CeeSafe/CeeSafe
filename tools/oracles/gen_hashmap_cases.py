@@ -10,6 +10,8 @@ this file.
    of a present key replaces its value in place; a removal moves the last entry into the removed one's place. The
    expected lines are the FNV-1a of every result, then the final iteration order.
 3. String keys: header names put, got, replaced and removed, and the final order.
+1b (printed after 1): SipHash-1-3 of mixed feeds, p bytes then a word then p + 9 bytes for p in 0..8, so the hasher's
+   word paths meet a pending tail.
 
 usage: python3 tools/oracles/gen_hashmap_cases.py   (formats with $CEESAFEC, default out/ceesafec)
 """
@@ -75,6 +77,11 @@ def main():
         if got != want:
             sys.exit(f"gen_hashmap_cases: this oracle's SipHash-2-4 of {n} bytes is {got:#x}, not {want:#x}")
     expected = [str(siphash(k0, k1, bytes(range(n)), 1, 3)) for n in range(16)]
+    # 1b. Mixed feeds: p bytes, a word, then p + 9 bytes, so the word and the runs of whole words meet a pending tail.
+    word = 0x1122334455667788
+    for p_len in range(9):
+        data = bytes(range(p_len)) + word.to_bytes(8, "little") + bytes(16 + k for k in range(p_len + 9))
+        expected.append(str(siphash(k0, k1, data, 1, 3)))
 
     # 2. The integer map.
     rng = random.Random(49)
@@ -199,6 +206,19 @@ fn main() {{
     for (n in 0..16usize) {{
         var h = Hasher.create(0x0706050403020100, 0x0F0E0D0C0B0A0908);
         h.bytes(message[0..n]);
+        Console.writeLine(h.finish());
+    }}
+    // 1b. Mixed feeds: `p` bytes, a word, then `p + 9` bytes (ADR 0052 §8: a word and whole runs of words are
+    // compressed directly only while nothing is pending).
+    var long = [0u8; 24];
+    for (k in 0..24usize) {{
+        long[k] = truncate<u8>(16 + k);
+    }}
+    for (p in 0..9usize) {{
+        var h = Hasher.create(0x0706050403020100, 0x0F0E0D0C0B0A0908);
+        h.bytes(message[0..p]);
+        h.u64(0x1122334455667788);
+        h.bytes(long[0..(p + 9)]);
         Console.writeLine(h.finish());
     }}
 

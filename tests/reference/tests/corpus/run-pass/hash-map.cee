@@ -53,6 +53,19 @@ fn main() {
         h.bytes(message[0..n]);
         Console.writeLine(h.finish());
     }
+    // 1b. Mixed feeds: `p` bytes, a word, then `p + 9` bytes (ADR 0052 §8: a word and whole runs of words are
+    // compressed directly only while nothing is pending).
+    var long = [0u8; 24];
+    for (k in 0..24usize) {
+        long[k] = truncate<u8>(16 + k);
+    }
+    for (p in 0..9usize) {
+        var h = Hasher.create(0x0706050403020100, 0x0F0E0D0C0B0A0908);
+        h.bytes(message[0..p]);
+        h.u64(0x1122334455667788);
+        h.bytes(long[0..(p + 9)]);
+        Console.writeLine(h.finish());
+    }
 
     // 2. The integer map against the model.
     let kinds = [
@@ -9136,6 +9149,15 @@ fn main() {
 // expect-stdout: 3490138030451851175
 // expect-stdout: 6943038873169124660
 // expect-stdout: 15213397504630561110
+// expect-stdout: 6978265754324593080
+// expect-stdout: 13322157446738899344
+// expect-stdout: 7694720961205875237
+// expect-stdout: 968656689664981153
+// expect-stdout: 15060552158163159620
+// expect-stdout: 7144432645204432310
+// expect-stdout: 5889333340837202941
+// expect-stdout: 914061875787304661
+// expect-stdout: 10946056467743667281
 // expect-stdout: 11343881868429628686 460
 // expect-stdout: 434=3937524207 45=3321130279 54=592915807 153=504066591 575=2038573232 383=3246254356 224=3266362785 486=2681053560 249=3808100859 182=3746389079 141=3956292750 533=330261855 34=604823446 449=2573434585 276=3470427546 90=3295903234 522=2205958672 77=1727033114 156=118794416 3=628736904 428=3801056031 225=2047201397 481=2226588777 466=4071552705 13=2374267709 493=2372973032 176=4061271529 230=2675605290 404=1293547257 483=976305647 305=3948325410 343=1895686591 408=1158592425 580=1759480404 496=3150371366 505=3901530936 14=691079075 219=559137278 165=2323965436 223=638830711
 // expect-stdout: put host: -

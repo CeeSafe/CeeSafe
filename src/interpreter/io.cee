@@ -1839,6 +1839,7 @@ fn asyncSet(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Val
                 doneWaiter: none(),
                 errorSlot: arguments[2].bits(0, 8)?,
                 allocator: none(),
+                childResult: none(),
             },
         )!;
         it.memory.storeBits(record, it.asyncScopes.length as u64, 8)?;
@@ -1935,6 +1936,7 @@ fn asyncSetSpawn(
         return Ok(valueOf(code, 4));
     }
     let scope = truncate<u32>(it.memory.loadBits(record, 8)? - 1);
+    it.asyncScopes[scope as usize].childResult = c.hir.functions[child as usize].returnType;
     // Async.tasksIn: the child's task and frame from the user allocator, as the runtime asks (asyncSpawn's sizes).
     var allocator = it.asyncScopes[scope as usize].allocator;
     var releaseBlock: u64 = 0;
@@ -2115,13 +2117,14 @@ struct InterpScope {
     started: bool;
     first: u32;
     results: Vector<Value>;
-    oom: bool;       // a child could not be allocated (Async.scopeIn)
-    isSet: bool;     // a task set's (ADR 0053): a child's error cancels no sibling
-    limit: u32;      // a set's most live children
-    roomWaiter: u32; // the task waiting to start a child (a global task id), or none
-    doneWaiter: u32; // the task waiting for the set's children, or none
-    errorSlot: u64;  // where a set's first child error is stored
-    allocator: u32;  // a set's user allocator type (Async.tasksIn), or none
+    oom: bool;        // a child could not be allocated (Async.scopeIn)
+    isSet: bool;      // a task set's (ADR 0053): a child's error cancels no sibling
+    limit: u32;       // a set's most live children
+    roomWaiter: u32;  // the task waiting to start a child (a global task id), or none
+    doneWaiter: u32;  // the task waiting for the set's children, or none
+    errorSlot: u64;   // where a set's first child error is stored
+    allocator: u32;   // a set's user allocator type (Async.tasksIn), or none
+    childResult: u32; // the children's result type, set when one spawns: a later child's error is dropped (bug B13)
 }
 
 /// What cancellation needs of a task, beside runTasks' own record (InterpTask).
@@ -2195,6 +2198,7 @@ fn interpScope(it: borrow mut Interp, site: u32) -> u32 {
             doneWaiter: none(),
             errorSlot: 0,
             allocator: none(),
+            childResult: none(),
         },
     )!;
     return truncate<u32>(it.asyncScopes.length - 1);
@@ -2230,6 +2234,7 @@ fn asyncSpawn(
         values.push(valueOf(environment, 8))!;
     }
     let scope = interpScope(it, site);
+    it.asyncScopes[scope as usize].childResult = c.hir.functions[child as usize].returnType;
     // Async.scopeIn: the child's task and frame from the user allocator, as the runtime asks (its 128-byte task
     // header, then the frame, aligned to 16).
     let allocator = if (arguments.count > 3) truncate<u32>(
@@ -2297,8 +2302,10 @@ fn asyncScopeWait(
         return Err(parkStop());
     }
     let oom = operand(it, c, n, frame, n.at(arguments, 1))?;
+    let oomType = n.operandTypes[n.at(arguments, 1) as usize];
     it.asyncScopes[scope as usize].active = false;
     if (it.asyncScopes[scope as usize].failed) {
+        destroyValue(it, c, n, oomType, borrow oom)?; // the scope's own error, unused: dropped, as in C (bug B13)
         return Ok(copyValue(it.asyncScopes[scope as usize].error));
     }
     let t = n.rvalueTypes[r as usize];
@@ -2309,6 +2316,7 @@ fn asyncScopeWait(
         payload.push(oom)!;
         return Ok(makeEnumValue(c, t, errVariant, payload)?);
     }
+    destroyValue(it, c, n, oomType, borrow oom)?; // Ok: the scope's own error is unused, and dropped (bug B13)
     let ok = c.types.enums[c.types.info(t).enumDef as usize].variants[0];
     let none0 = Vector<Value>.create();
     return Ok(makeEnumValue(c, t, ok, none0)?);
@@ -2619,6 +2627,13 @@ fn runTasks(
                 }
                 match (value) {
                     Some(result) => {
+                        if (result.bits(0, 1)? != 0 && it.asyncScopes[scope as usize].failed) {
+                            // A later child's error, not the scope's: dropped, as the C adapter does (bug B13).
+                            let resultType = it.asyncScopes[scope as usize].childResult;
+                            if (resultType != none()) {
+                                destroyValue(it, c, n, resultType, borrow result)?;
+                            }
+                        }
                         if (result.bits(0, 1)? != 0 && !it.asyncScopes[scope as usize].failed) {
                             it.asyncScopes[scope as usize].failed = true;
                             if (it.asyncScopes[scope as usize].isSet) {

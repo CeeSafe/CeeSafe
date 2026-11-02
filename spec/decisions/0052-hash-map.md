@@ -147,3 +147,38 @@ as calls on other types do. A built-in method keeps its name: an impl method wit
   - check-fail/hash-map-key (N0268).
   - Natively on macOS, on Debian (gcc `-Werror`, `getrandom`) and on Windows 11 ARM64 (clang and cl, `rand_s`), and
     in the interpreter.
+
+## 8. Amendment (2026-11-03): the table's slots, and the hasher's word paths
+
+From a reviewer's prototypes (`/tmp/ceesafe-bench/hashmap-prototypes`, shared by the owner), after the independent
+benchmark's `hashmap` workload. No promise of §3 changes: the API, the order of §2, allocation only in `put`, and a
+failed `put` leaving the map as it was all stay.
+
+- **Slots carry 32 bits of hash.** A slot is a `u64`: the hash's low 32 bits above the entry's index plus one (0:
+  empty). The low 32 bits are the slot's home (`& mask`) and a fingerprint. So a probe rejects a slot of another hash
+  without reading any entry, and growing and backward-shift deletion read nothing but slots. The `hashes` vector of §7
+  is gone. The table is the same size per slot as `slots` plus `hashes` was per entry.
+- **A new key goes into the empty slot its lookup stopped at,** unless the table grew, so an insert probes once.
+- **Moving the last entry into a removed one's place** finds its slot from its key's hash, computed again. The search
+  for its entry number wraps, so it ends even if the key's hash were not stable.
+- **At most 2^32 − 1 entries.** A slot's entry field is 32 bits. One more `put` is `Err(OutOfMemory)`, where the u32
+  slots of §7 wrapped silently.
+- **`Hasher.u64`** compresses the word directly when nothing is pending, and **`Hasher.bytes`** compresses whole
+  eight-byte words while nothing is pending. Both give the same output as byte by byte.
+- **Tests:** run-pass/hash-map gains SipHash-1-3 of mixed feeds (p bytes, a word, p + 9 bytes, p = 0..8) from the
+  generator's own SipHash. They pass with the old byte-by-byte hasher and the new one. The map's tests, the oracle of
+  the order (3000 operations, `String` keys) and the "hashmap sweep" (now 64 failure points, from 79, since there is
+  no `hashes` push) pass natively, under the leak check and in the interpreter.
+- **Measured** with the reviewer's per-phase driver (4 M `u64` keys, the library's map before and after, best of a few
+  runs):
+
+  | | insert | hit | miss | remove |
+  |---|---|---|---|---|
+  | Apple M1, clang 21 `-O2`: before | 320–366 ms | 227–236 | 249–280 | 204–205 |
+  | the same, after | 264–266 | 160–171 | 216–218 | 210–212 |
+  | Rust `HashMap` (rustc 1.99, `-O3`) | 285 | 212 | 68 | 113 |
+  | Ryzen 5 3600, gcc 12 `-O2` (loaded): before | 832–1206 | 696–823 | 717–877 | 445–551 |
+  | the same, after | 550–608 | 418–464 | 432–475 | 441–519 |
+
+  Misses stay about 3× Rust's on the M1. Rust's map scans a group of tag bytes per probe. The reviewer's tag-byte
+  prototype (variants 6–7) cut big maps' misses by 40% but slowed removals 15–25%, so it is left for later.

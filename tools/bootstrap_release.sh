@@ -27,9 +27,11 @@ case "$version" in
     # The release's stage 0 since 2026-11-01. ADR 0044 crosses two commits: f7a7d57 adds AsyncSockets' address calls
     # to lib/std, and 93c433f uses them in the interpreter and adds TcpStream's setters to the compiler, which the
     # interpreter's own models of them (the next commit) call on the host's TcpStream. So 0.3.2 builds f7a7d57, whose
-    # compiler builds 93c433f, whose compiler builds the tree.
+    # compiler builds 93c433f, whose compiler builds the tree. ADR 0050 adds a step the same way: 71d5c13 adds
+    # AsyncSockets' UDP calls to lib/std, and the next commit's interpreter models them with the host's.
     CHAIN="f7a7d57f7d34993cccff434ca0ee02ff97294495
-93c433f9ec70f3154dc0004984bef9e0cdcc9c77"
+93c433f9ec70f3154dc0004984bef9e0cdcc9c77
+71d5c135e57a00ab803884d65ad2a8d7bfd0d470"
     ;;
 "ceesafec 0.2.0")
     # 7d2a041: the newest commit 0.2.0 builds (ADR 0032, channels). 291246d (L1 A2d) adds AsyncSockets to lib/std

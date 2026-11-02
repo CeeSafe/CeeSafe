@@ -156,3 +156,34 @@ plain datagrams there.
    - expected datagram contents from a Python oracle (the bytes and their split into segments);
    - every reactor, the contract suite on macOS, Debian (io_uring) and Windows 11 ARM64 (IOCP, `WSAPoll`).
 6. ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Two commits, one chain step** (§3.3): `71d5c13` adds the library and the runtime, with `AsyncSockets.udpBind`,
+  `udpSend` and `udpRecv`; the next commit's interpreter models the datagram calls with them on the host.
+  `tools/bootstrap_release.sh` builds `71d5c13` after `93c433f`.
+- **The record.** The send's destination is written into the record's name (IPv4-mapped for an IPv6 socket), and its
+  control messages are built once before the first step; five 32-bit fields after the control buffer hold the socket's
+  family, the ECN bits, the segment size and the two lengths. Windows' control buffer is 72 bytes (a packet info and
+  an ECN value), so the record still fits ADR 0045's 512.
+- **ECN on send** is a control message on Linux and Windows (`IP_ECN`/`IPV6_ECN` where the headers have them). On
+  macOS and the BSDs the socket's `IP_TOS`/`IPV6_TCLASS` is set for the send and cleared after it, which no other task
+  can see, since the step is one synchronous call on the executor's thread. **Windows refuses a sender's CE (3)**:
+  `InvalidInput`, which `tools/udp_check.py` expects there.
+- **Segments.** Linux sends up to 64 segments in one call (`UDP_SEGMENT`); more, and every other system, return
+  `CEE_ASYNC_NO_SEGMENTS`, and lib/std sends them one by one (`IoParts.upTo` cuts each). Windows' `UDP_SEND_MSG_SIZE`
+  is left for later, when QUIC measures the need (as §5.4 left batched receives).
+- **The local address** comes from the packet info: `IP_PKTINFO`'s `ipi_addr` (macOS sets it with `IP_RECVPKTINFO`),
+  `IPV6_PKTINFO` (IPv4-mapped as V4; a link-local address with its interface as the scope), `IP_RECVDSTADDR` where
+  the others are missing. Its port is the socket's, which lib/std keeps from the bind. macOS needs
+  `__APPLE_USE_RFC_3542` for the IPv6 options.
+- **Windows:** `WSAEMSGSIZE` is a truncated datagram, also from an overlapped `WSARecvMsg`'s completion; the
+  control-message arithmetic is the runtime's own (ws2def.h's `TYPE_ALIGNMENT` makes clang warn).
+- **An empty datagram** is sent as one empty part: macOS refuses `sendmsg` without any.
+- **The interpreter** reports the socket's bound address as the local one when it asked for it and is bound to a
+  specified address (what the packet info says on loopback), no ECN bits, and sends segments one by one.
+- **Tests:** run-pass/async-udp from `tools/oracles/gen_udp_cases.py` (IPv4 and IPv6 round trips, an empty datagram,
+  a truncated one, the peer and the local address, three segments across two parts), natively and in the interpreter;
+  `tools/udp_check.py` in the contract suite. A dual-stack socket's IPv4-mapped traffic with packet info and ECN is
+  not tested yet.
+

@@ -180,7 +180,7 @@ fn ioKindOf(error: i64) -> u64 {
     if (error == 20) {
         return 4;
     }
-    if (error == 22 || error == errnoFor(system, 36, 63, 38)) {
+    if (error == 22 || error == errnoFor(system, 36, 63, 38) || error == errnoFor(system, 90, 40, 115)) { // EMSGSIZE too
         return 5;
     }
     if (error == 32) {
@@ -1053,6 +1053,30 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_async_op_sendv")) {
         return "Piu:l";
+    }
+    if (sameText(name, "ceesafe_async_udp_bind")) {
+        return "uPhuuuu:l";
+    }
+    if (sameText(name, "ceesafe_async_msg_send_to")) {
+        return "PuuPhuuPuu:-";
+    }
+    if (sameText(name, "ceesafe_async_op_sendmsg")) {
+        return "Piu:l";
+    }
+    if (sameText(name, "ceesafe_async_op_recvmsg")) {
+        return "PiPs:l";
+    }
+    if (sameText(name, "ceesafe_async_msg_address")) {
+        return "PuPP:l";
+    }
+    if (sameText(name, "ceesafe_async_msg_flags")) {
+        return "P:u";
+    }
+    if (sameText(name, "ceesafe_async_udp_send")) {
+        return "iPsuuPhu:l";
+    }
+    if (sameText(name, "ceesafe_async_udp_recv")) {
+        return "iPsPPP:l";
     }
     if (sameText(name, "ceesafe_async_op_connect")) {
         return "PPsh:l";
@@ -2657,7 +2681,11 @@ fn n0IsAsyncSocketCall(name: Slice<u8>) -> bool =>
         sameText(name, "ceesafe_interface_index") || sameText(name, "ceesafe_async_msg_part") ||
         sameText(name, "ceesafe_async_op_sendv") || sameText(name, "ceesafe_dns_start") ||
         sameText(name, "ceesafe_dns_poll") || sameText(name, "ceesafe_dns_count") ||
-        sameText(name, "ceesafe_dns_address") || sameText(name, "ceesafe_dns_end");
+        sameText(name, "ceesafe_dns_address") || sameText(name, "ceesafe_dns_end") ||
+        sameText(name, "ceesafe_async_udp_bind") || sameText(name, "ceesafe_async_msg_send_to") ||
+        sameText(name, "ceesafe_async_op_sendmsg") || sameText(name, "ceesafe_async_op_recvmsg") ||
+        sameText(name, "ceesafe_async_msg_address") || sameText(name, "ceesafe_async_msg_flags") ||
+        sameText(name, "ceesafe_async_udp_send") || sameText(name, "ceesafe_async_udp_recv");
 
 fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8>, Stop> {
     var bytes = Vector<u8>.create();
@@ -2665,6 +2693,191 @@ fn interpBytes(it: borrow Interp, address: u64, length: u64) -> Result<Vector<u8
         bytes.push(truncate<u8>(it.memory.loadBits(address + k, 1)?))!;
     }
     return Ok(bytes);
+}
+
+// ---- UDP (ADR 0050 §3.3) ----
+//
+// The host's raw AsyncSockets UDP calls, one try each. The message record's own layout here: the parts at 64 + 16 k
+// (as the vectored send's), a send's destination from 200 (the socket's family, the family, 16 bytes, the port, the
+// scope, the segment size), a receive's peer from 240 ((family << 16) | port, 16 bytes, the scope), its flags at 268
+// and its local address from 272 (packed, or all ones for none; 16 bytes; the scope). The interpreter sends no
+// segments in one call and reports no ECN bits; the local address of a datagram is the socket's own when it is bound
+// to one (an unspecified one reports none), which is the packet info's on loopback.
+
+fn udpService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    let pending: u64 = 0x8000000000000001; // CEE_ASYNC_PENDING
+    let wouldBlock: u64 = 0x8000000000000000;
+    if (sameText(name, "ceesafe_async_udp_bind")) {
+        let bytes = interpBytes(it, arguments[1].bits(0, 8)?, 16)?;
+        let flags = truncate<u32>(arguments[4].bits(0, 4)?);
+        let r = AsyncSockets.udpBind(
+            truncate<u32>(arguments[0].bits(0, 4)?),
+            bytes.view(),
+            truncate<u16>(arguments[2].bits(0, 2)?),
+            truncate<u32>(arguments[3].bits(0, 4)?),
+            flags,
+            truncate<u32>(arguments[5].bits(0, 4)?),
+            truncate<u32>(arguments[6].bits(0, 4)?),
+        );
+        if (r >= 0 && (flags & 16) != 0) {
+            it.udpLocal.push(truncate<i32>(r))!; // CEE_UDP_RECEIVE_LOCAL
+        }
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_udp_send")) {
+        let data = interpBytes(it, arguments[1].bits(0, 8)?, arguments[2].bits(0, 8)?)?;
+        let bytes = interpBytes(it, arguments[5].bits(0, 8)?, 16)?;
+        let r = AsyncSockets.udpSend(
+            truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?)),
+            data.view(),
+            truncate<u32>(arguments[3].bits(0, 4)?),
+            truncate<u32>(arguments[4].bits(0, 4)?),
+            bytes.view(),
+            truncate<u16>(arguments[6].bits(0, 2)?),
+            truncate<u32>(arguments[7].bits(0, 4)?),
+        );
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_udp_recv")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[0].bits(0, 4)?));
+        var buffer = zeros(arguments[2].bits(0, 8)?);
+        var bytes = zeros(16);
+        var scope: u32 = 0;
+        var info: u32 = 0;
+        let r = AsyncSockets.udpRecv(fd, buffer.viewMut(), bytes.viewMut(), mut scope, mut info);
+        if (r >= 0) {
+            storeBytes(it, arguments[1].bits(0, 8)?, buffer.view(), truncate<u64>(r))?;
+            storeBytes(it, arguments[3].bits(0, 8)?, bytes.view(), 16)?;
+            it.memory.storeBits(arguments[4].bits(0, 8)?, scope as u64, 4)?;
+            it.memory.storeBits(arguments[5].bits(0, 8)?, info as u64, 4)?;
+        }
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    let record = arguments[0].bits(0, 8)?;
+    if (sameText(name, "ceesafe_async_msg_send_to")) {
+        let bytes = interpBytes(it, arguments[3].bits(0, 8)?, 16)?;
+        it.memory.storeBits(record + 200, arguments[1].bits(0, 4)?, 4)?;
+        it.memory.storeBits(record + 204, arguments[2].bits(0, 4)?, 4)?;
+        storeBytes(it, record + 208, bytes.view(), 16)?;
+        it.memory.storeBits(record + 224, arguments[4].bits(0, 2)?, 2)?;
+        it.memory.storeBits(record + 228, arguments[5].bits(0, 4)?, 4)?;
+        it.memory.storeBits(record + 232, arguments[9].bits(0, 4)?, 4)?;
+        return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_op_sendmsg")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[1].bits(0, 4)?));
+        let count = arguments[2].bits(0, 4)?;
+        var data = Vector<u8>.create();
+        for (k in 0..(if (count > 8) 8 else count)) {
+            let part = interpBytes(
+                it,
+                it.memory.loadBits(record + 64 + 16 * k, 8)?,
+                it.memory.loadBits(record + 64 + 16 * k + 8, 8)?,
+            )?;
+            for (b in part.view()) {
+                data.push(b)!;
+            }
+        }
+        let segment = it.memory.loadBits(record + 232, 4)?;
+        if (segment > 0 && data.length as u64 > segment) {
+            return Ok(valueOf(0x8000000000000003, 8)); // CEE_ASYNC_NO_SEGMENTS: lib/std sends them one by one
+        }
+        let bytes = interpBytes(it, record + 208, 16)?;
+        let r = truncate<u64>(AsyncSockets.udpSend(
+            fd,
+            data.view(),
+            truncate<u32>(it.memory.loadBits(record + 200, 4)?),
+            truncate<u32>(it.memory.loadBits(record + 204, 4)?),
+            bytes.view(),
+            truncate<u16>(it.memory.loadBits(record + 224, 2)?),
+            truncate<u32>(it.memory.loadBits(record + 228, 4)?),
+        ));
+        if (r == wouldBlock) {
+            it.asyncFd = fd;
+            it.asyncFdEvents = 2;
+            return Ok(valueOf(pending, 8));
+        }
+        return Ok(valueOf(r, 8));
+    }
+    if (sameText(name, "ceesafe_async_op_recvmsg")) {
+        let fd = truncate<i32>(truncate<u32>(arguments[1].bits(0, 4)?));
+        let length = arguments[3].bits(0, 8)?;
+        var buffer = zeros(if (length > 65536) 65536 else length);
+        var bytes = zeros(16);
+        var scope: u32 = 0;
+        var info: u32 = 0;
+        let r = AsyncSockets.udpRecv(fd, buffer.viewMut(), bytes.viewMut(), mut scope, mut info);
+        if (truncate<u64>(r) == wouldBlock) {
+            it.asyncFd = fd;
+            it.asyncFdEvents = 1;
+            return Ok(valueOf(pending, 8));
+        }
+        if (r < 0) {
+            return Ok(valueOf(truncate<u64>(r), 8));
+        }
+        storeBytes(it, arguments[2].bits(0, 8)?, buffer.view(), truncate<u64>(r))?;
+        it.memory.storeBits(record + 240, ((info >> 24) as u64 << 16) | (info & 65535) as u64, 8)?;
+        storeBytes(it, record + 248, bytes.view(), 16)?;
+        it.memory.storeBits(record + 264, scope as u64, 4)?;
+        it.memory.storeBits(record + 268, ((info >> 16) & 1) as u64, 4)?;
+        // The local address: the socket's own, if it asked for it and is bound to one.
+        var local: u64 = 0xFFFFFFFFFFFFFFFF;
+        var bound = zeros(16);
+        var ownScope: u32 = 0;
+        var asked = false;
+        for (d in it.udpLocal.view()) {
+            if (d == fd) {
+                asked = true;
+            }
+        }
+        if (asked) {
+            let named = AsyncSockets.name(fd, 0, bound.viewMut(), mut ownScope);
+            var specified = false;
+            for (b in bound.view()) {
+                if (b != 0) {
+                    specified = true;
+                }
+            }
+            if (named >= 0 && specified) {
+                local = (truncate<u64>(named) >> 16) << 16; // the port is lib/std's
+            }
+        }
+        it.memory.storeBits(record + 272, local, 8)?;
+        storeBytes(it, record + 280, bound.view(), 16)?;
+        it.memory.storeBits(record + 296, ownScope as u64, 4)?;
+        return Ok(valueOf(truncate<u64>(r), 8));
+    }
+    if (sameText(name, "ceesafe_async_msg_address")) {
+        let which = arguments[1].bits(0, 4)?;
+        let at = if (which == 0) record + 240 else record + 272;
+        let packed = it.memory.loadBits(at, 8)?;
+        if (packed == 0xFFFFFFFFFFFFFFFF) {
+            return Ok(valueOf(packed, 8)); // none
+        }
+        let bytes = interpBytes(it, at + 8, 16)?;
+        storeBytes(it, arguments[2].bits(0, 8)?, bytes.view(), 16)?;
+        it.memory.storeBits(arguments[3].bits(0, 8)?, it.memory.loadBits(at + 24, 4)?, 4)?;
+        return Ok(valueOf(packed, 8));
+    }
+    // ceesafe_async_msg_flags: the truncation; no ECN bits here.
+    return Ok(valueOf(it.memory.loadBits(record + 268, 4)?, 4));
+}
+
+/// `length` zero bytes.
+fn zeros(length: u64) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    for (k in 0..length) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+/// The first `count` of `bytes` into the program's memory at `address`.
+fn storeBytes(it: borrow mut Interp, address: u64, bytes: Slice<u8>, count: u64) -> Result<void, Stop> {
+    for (k in 0..count) {
+        it.memory.storeBits(address + k, bytes[k as usize] as u64, 1)?;
+    }
+    return Ok();
 }
 
 /// lib/std's async sockets on real descriptors, through lib/std's AsyncSockets (the interpreter cannot name the
@@ -2727,6 +2940,12 @@ fn asyncSocketService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow 
             it.memory.storeBits(slot + 8, arguments[3].bits(0, 8)?, 8)?;
         }
         return Ok(null);
+    }
+    if (sameText(name, "ceesafe_async_udp_bind") || sameText(name, "ceesafe_async_msg_send_to") ||
+        sameText(name, "ceesafe_async_op_sendmsg") || sameText(name, "ceesafe_async_op_recvmsg") ||
+        sameText(name, "ceesafe_async_msg_address") || sameText(name, "ceesafe_async_msg_flags") ||
+        sameText(name, "ceesafe_async_udp_send") || sameText(name, "ceesafe_async_udp_recv")) {
+        return udpService(it, name, arguments);
     }
     if (sameText(name, "ceesafe_async_op_sendv")) {
         // A vectored step sends the first non-empty part (ADR 0045 §3.5): a legal partial send, so a program sees the

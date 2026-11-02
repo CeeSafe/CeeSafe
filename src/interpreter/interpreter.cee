@@ -70,6 +70,7 @@ struct Interp {
     asyncOnWake: bool;                  // the parked task waits on a channel's change (ADR 0032)
     asyncFd: i32;                       // the parked task waits on this descriptor (a socket), or -1
     asyncFdEvents: u32;                 // 1 readable, 2 writable
+    udpLocal: Vector<i32>;              // UDP sockets that asked for each datagram's local address (ADR 0050)
     asyncWoken: Vector<u32>;            // tasks a channel's change woke, for runTasks
     // ceesafe_rt_core.c: allocation accounting, fault injection, the scratch stack.
     emptyVector: u64;
@@ -1859,6 +1860,7 @@ fn newInterp(
         asyncOnWake: false,
         asyncFd: -1,
         asyncFdEvents: 0,
+        udpLocal: Vector<i32>.create(),
         asyncWoken: Vector<u32>.create(),
         emptyVector: 0,
         attempts: 0,

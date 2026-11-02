@@ -7,7 +7,8 @@
   on the executor's poll() fallback (CEESAFE_REACTOR_POLL=1);
 - the support library's tests with leak checks, and its allocation-failure sweep;
 - the mutation suite, the fault sweep over the corpus, the cancellation sweep over its async programs, the package
-  tests (tools/package_tests.py), the native DNS checks (tools/dns_check.py), the collection
+  tests (tools/package_tests.py), the native DNS checks (tools/dns_check.py), the
+  cancellation wake count (tools/wake_check.py), the collection
   properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py) and the debugger scripts.
 Each step's last line is printed.
@@ -89,6 +90,7 @@ def main():
             ("cancel sweep", py + [f"{HERE}/cancel_sweep.py", "--compiler", cee, "--corpus", corpus]),
             ("packages", py + [f"{HERE}/package_tests.py", "--compiler", cee]),
             ("dns", py + [f"{HERE}/dns_check.py", "--compiler", cee]),
+            ("wakes", py + [f"{HERE}/wake_check.py", "--compiler", cee]),
             ("collections", py + [f"{HERE}/collection_properties.py", "--compiler", cee, "--sweep"]),
             ("freestanding", py + [f"{HERE}/freestanding_check.py", "--compiler", cee, "--corpus", corpus]),
             ("spec", py + [f"{HERE}/spec_check.py", "--ceesafec", cee]),

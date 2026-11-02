@@ -294,6 +294,7 @@ static cee_task *cee_steal(void) {
 #else
 static uint64_t cee_suspensions; /* every thread's executor counts here (ceesafe_atomic_*) */
 static _Thread_local cee_task *cee_cancel_root; /* the running Async.run's root, which the sweep cancels */
+static uint64_t cee_cancel_woken; /* tasks cancellations woke, every thread's (ceesafe_atomic_*): CEESAFE_CANCEL_REPORT */
 #endif
 
 /* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
@@ -1149,7 +1150,12 @@ static void cee_wake_waiters(void) {
     while (t != NULL) {
         cee_task *next = t->next;
         bool cancellable = t->on_op ? t->channel_wait : (!t->on_wake || t->channel_wait);
-        if (!t->on_scope && cancellable) { /* a worker's wait, and an operation being cancelled, are not */
+        /* Only a task the cancellation reaches (bug B5): any other would retry its wait and park again, a system call
+           and a reactor change each, for every cancellation, so a server with n idle connections paid O(n) per race. */
+        if (!t->on_scope && cancellable && cee_cancelled(t)) { /* a worker's wait, an operation being cancelled, not */
+#if !defined(CEE_FREESTANDING)
+            (void)ceesafe_atomic_add_ord_u64(&cee_cancel_woken, 1u, 0);
+#endif
             cee_unpark(t);
             /* Unparking can ready others: kqueue's change queue, when full, is flushed and readies what is ready
                (bug B4). If that took `next` off the parked list, its links are the ready list's now: start again
@@ -1918,9 +1924,10 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         ceesafe_mutex_destroy(run.lock);
     }
     if (cancel_report) {
-        char line[64];
-        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu\n",
-                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_suspensions, 0));
+        char line[96];
+        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu woken=%llu\n",
+                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_suspensions, 0),
+                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_cancel_woken, 0));
         ceesafe_platform_write_stderr((const uint8_t *)line, (size_t)length);
     }
     cee_cancel_root = saved_root;

@@ -3507,7 +3507,9 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   and `all` cancel the other child, `timeout` and `deadline` cancel their body at the deadline (ADR 0046), and the
   runtime may cancel a root task (the `CEESAFE_CANCEL_AT` sweep,
   `testing.md`). The flag is inherited: an awaited task shares its awaiter's, and a scope's children are cancelled with
-  the task that owns the scope. A cancellation wakes every task waiting on a deadline or a descriptor, so it sees it.
+  the task that owns the scope. A cancellation wakes the tasks it reaches that wait on a deadline, a descriptor or a
+  cancellable wake, so they see it; a task it does not reach is left parked (bug B5: every waiting task used to be
+  woken, to retry and park again, at every cancellation).
 - **Only the library's waiting operations observe it,** together with `Async.checkpoint` and `Async.isCancelled`: a
   cancelled task's next such operation returns `Err(AsyncError.Cancelled)` at once, or, for an operation already
   waiting, as soon as it can do so safely (a completion-based read first cancels and waits for the kernel's operation).

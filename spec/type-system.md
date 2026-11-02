@@ -1458,6 +1458,27 @@ fn main() {
 
 Diagnostics: none new. The errors reuse N0205, N0209, N0240–N0251, N0260 and N0263.
 
+### 24.3 `HashMap<K, V>` (lib/std, ADR 0052)
+
+- **Keys.** `K: HashKey<K>`, a lib/std interface: `hash(borrow this, h: borrow mut Hasher)` feeds what identifies the
+  key, and `sameAs(borrow this, other: borrow K)` compares two keys. lib/std implements it for the integer types,
+  `bool`, `String` and `Vector<u8>`; a program implements it for its own types. A key type without it is N0268.
+- **The hash.** `Hasher` is SipHash-1-3 keyed by 128 bits. `HashMap.create()` uses a key read once per process from the
+  system's random source (`getrandom`, `arc4random_buf`, `rand_s`; fixed in the interpreter and CosmoOS userland), so
+  colliding keys cannot be chosen against a map. `HashMap.withSeed(k0, k1)` fixes the key.
+- **Operations:**
+  - `put(key, value)`: `Result<V?, AllocError>`, the old value if the key was there;
+  - `get(borrow key)`, `getMut`: an optional reference;
+  - `contains`, `remove(borrow key)` (`V?`), `clear`, `length()`;
+  - `keyAt(i)` and `valueAt(i)` for `i` in `0..length()`.
+- **Order.** Iteration is in insertion order, except that a removal moves the last entry into the removed one's place.
+  So the order never depends on the hash or its key, and a program's output is the same everywhere.
+- **Failure.** Only `put` allocates. A failed `put` leaves the map as it was (docs/limits.md §2): a new entry's table
+  grows first, and a replaced value goes in at the end before it is swapped into place.
+- **Methods of `String` and `Vector`.** A call naming no built-in method reaches an impl's method (ADR 0052 §3.3), so
+  `impl I for String` is usable.
+- **The allocator.** The system heap.
+
 ## 25. Region parameters (M6x; OD-3, ADR 0006)
 
 ```ceesafe

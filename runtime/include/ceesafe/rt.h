@@ -1213,6 +1213,9 @@ bool ceesafe_async_op_cancel(void *op);
  * ceesafe_dns_end ends it: a done or queued one is freed; a running one is abandoned, and its thread frees it when the
  * resolver returns, without waking anyone. CosmoOS userland has no resolver: every lookup is EOPNOTSUPP. */
 #define CEE_DNS_THREADS 4u
+/* HashMap's per-process key (ADR 0052): 128 bits from the system's random source (getrandom, arc4random_buf, rand_s),
+ * read once and the same for every map; a fixed key where there is none. */
+void ceesafe_random_key(uint64_t *key);
 void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port);
 int32_t ceesafe_dns_poll(void *lookup);
 uint32_t ceesafe_dns_count(void *lookup);

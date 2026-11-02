@@ -8,6 +8,9 @@
 #if defined(_WIN32) && !defined(_CRT_SECURE_NO_WARNINGS)
 #define _CRT_SECURE_NO_WARNINGS
 #endif
+#if defined(_WIN32) && !defined(_CRT_RAND_S)
+#define _CRT_RAND_S /* rand_s, for HashMap's key (ADR 0052) */
+#endif
 #include "ceesafe/rt.h"
 
 #include <errno.h>
@@ -1704,4 +1707,81 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     return result;
 }
 
+/* ---- HashMap's per-process key (ADR 0052 §3.2): 128 bits from the system's random source, read once. ---- */
 
+#if !defined(_WIN32) && !defined(CEE_COSMOOS) && defined(__has_include)
+#if __has_include(<sys/random.h>) && defined(__linux__)
+#include <sys/random.h>
+#define CEE_HAVE_GETRANDOM 1
+#endif
+#endif
+
+static uint64_t cee_random_words[2];
+static uint32_t cee_random_state; /* 0 not read, 1 being read, 2 read (ceesafe_atomic_*) */
+
+/* Fills `out` from the system's random source; leaves it as it was where there is none. */
+static void cee_random_fill(uint8_t *out, size_t length) {
+#if defined(_WIN32)
+    for (size_t k = 0; k < length; k += 4u) {
+        unsigned int r = 0;
+        if (rand_s(&r) == 0) {
+            for (size_t b = 0; b < 4u && k + b < length; b++) {
+                out[k + b] = (uint8_t)(r >> (8u * b));
+            }
+        }
+    }
+#elif defined(CEE_COSMOOS)
+    (void)out; (void)length; /* no random source in CosmoOS userland yet: the fixed key stays */
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    arc4random_buf(out, length);
+#else
+    size_t done = 0;
+#if defined(CEE_HAVE_GETRANDOM)
+    while (done < length) {
+        ssize_t n = getrandom(out + done, length - done, 0);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) continue;
+            break;
+        }
+        done += (size_t)n;
+    }
+#endif
+    if (done < length) {
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd >= 0) {
+            while (done < length) {
+                ssize_t n = read(fd, out + done, length - done);
+                if (n <= 0) {
+                    if (n < 0 && errno == EINTR) continue;
+                    break;
+                }
+                done += (size_t)n;
+            }
+            (void)close(fd);
+        }
+    }
+#endif
+}
+
+void ceesafe_random_key(uint64_t *key) {
+    if (ceesafe_atomic_load_u32(&cee_random_state) != 2u) {
+        if (ceesafe_atomic_cas_u32(&cee_random_state, 0u, 1u) == 0u) {
+            uint8_t bytes[16] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+                                 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}; /* kept where there is no source */
+            cee_random_fill(bytes, sizeof bytes);
+            uint64_t a = 0, b = 0;
+            for (unsigned k = 0; k < 8u; k++) {
+                a |= (uint64_t)bytes[k] << (8u * k);
+                b |= (uint64_t)bytes[8u + k] << (8u * k);
+            }
+            cee_random_words[0] = a;
+            cee_random_words[1] = b;
+            ceesafe_atomic_store_u32(&cee_random_state, 2u);
+        } else {
+            while (ceesafe_atomic_load_u32(&cee_random_state) != 2u) {
+            }
+        }
+    }
+    key[0] = cee_random_words[0];
+    key[1] = cee_random_words[1];
+}

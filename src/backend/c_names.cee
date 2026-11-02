@@ -465,7 +465,8 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
     }
     if (f.owner != none()) {
         appendText(out, "ceeM_")?;
-        if (isInstanceType(c, f.owner)) {
+        // An instance, or a built-in type whose name is not an identifier (an impl on Vector<u8>, ADR 0052 §3.3).
+        if (isInstanceType(c, f.owner) || c.types.is(f.owner, TypeKind.Vector)) {
             appendMangle(c, out, f.owner)?;
         } else {
             let owner = c.types.name(f.owner);

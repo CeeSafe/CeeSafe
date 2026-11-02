@@ -182,6 +182,43 @@ true
 `StableVector<T>` is a grow-only sequence whose elements never move, so an element can stay borrowed while more are
 pushed.
 
+## Maps: `HashMap`
+
+```ceesafe
+fn key(text: StringView) -> String {
+    var s = String.create();
+    s.append(text)!;
+    return s;
+}
+
+fn main() {
+    var ages = HashMap<String, u32>.create();
+    ages.put(key("ada"), 36)!;
+    ages.put(key("alan"), 41)!;
+    let previous = ages.put(key("ada"), 37)!; // the old value: Some(36)
+    let ada = key("ada");
+    match (ages.get(borrow ada)) {
+        Some(age) => { Console.writeLine(age); }
+        null => { Console.writeLine("unknown"); }
+    }
+    for (i in 0..ages.length()) {
+        let name = ages.keyAt(i);
+        Console.writeLine(name.view());
+    }
+}
+```
+
+```text
+37
+ada
+alan
+```
+
+- **Keys.** A key type implements `HashKey`; lib/std does for integers, `bool`, `String` and `Vector<u8>`.
+- **The hash.** It is keyed by a random value chosen once per process, so a client cannot send keys that all collide.
+- **Order.** Iteration follows insertion, so a program's output never depends on the hash. A removal moves the last
+  entry into the removed one's place.
+
 ## Next
 
 [Generics and interfaces](generics.md).

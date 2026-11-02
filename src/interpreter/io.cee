@@ -1061,6 +1061,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_test_begin")) {
         return "ss:-";
     }
+    if (sameText(name, "ceesafe_random_key")) {
+        return "P:-";
+    }
     if (sameText(name, "ceesafe_thread_watchdog")) {
         return "s:-";
     }
@@ -1315,6 +1318,13 @@ fn callC(
             }
         }
         freeMemory(it, address)?;
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_random_key")) {
+        // HashMap's key (ADR 0052): fixed in the interpreter; a map's order never depends on it.
+        let at = arguments[0].bits(0, 8)?;
+        it.memory.storeBits(at, 0xa6d2ae2816157e2b, 8)?;
+        it.memory.storeBits(at + 8, 0x3c4fcf098815f7ab, 8)?;
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_test_begin")) {

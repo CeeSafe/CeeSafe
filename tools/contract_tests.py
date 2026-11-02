@@ -86,6 +86,8 @@ def main():
                                       "--check-leaks"] + [x for f in support for x in ("--with", f)]),
             ("support sweep", py + [f"{HERE}/fault_sweep.py", "--compiler", cee,
                                     os.path.join(ROOT, "tests", "support", "fault", "alloc-sweep.cee")] + support),
+            ("hashmap sweep", py + [f"{HERE}/fault_sweep.py", "--compiler", cee,
+                                    os.path.join(ROOT, "tests", "support", "fault", "hash-map-sweep.cee")]),
             ("mutations", py + [f"{HERE}/mutation_suite.py", "--compiler", cee]),
             ("fault sweep", py + [f"{HERE}/fault_injection.py", "--compiler", cee, "--corpus", corpus]),
             ("cancel sweep", py + [f"{HERE}/cancel_sweep.py", "--compiler", cee, "--corpus", corpus]),

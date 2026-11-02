@@ -1,0 +1,79 @@
+// Allocation-failure behaviour of lib/std's HashMap (ADR 0052 §3.2, docs/limits.md §2). tools/fault_sweep.py runs this
+// once to count allocation attempts, then once per attempt with that attempt failing. Every failure must come back as
+// an AllocError from `put`, with no panic, and leave the map as it was: the same length, every key put before still
+// there with its value, in the same order. The program prints "consistent" and the operation it stopped at, or
+// "consistent complete".
+
+/// Whether `map` holds exactly the first `count` keys (k → 3k + 1), in insertion order, the replaced ones with 7k.
+fn holds(map: borrow HashMap<String, u64>, count: u64, replaced: u64) -> bool {
+    if (map.length() as u64 != count) {
+        return false;
+    }
+    for (k in 0..count) {
+        var key = String.create();
+        match (key.appendNumber(k)) {
+            Ok() => {}
+            Err(_) => { return false; }
+        }
+        let want = if (k < replaced) 7 * k else 3 * k + 1;
+        match (map.get(borrow key)) {
+            Some(v) => {
+                if (v != want) {
+                    return false;
+                }
+            }
+            null => { return false; }
+        }
+        let stored = map.keyAt(k as usize);
+        if (stored.view() != key.view()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn run() -> Result<u64, u64> {
+    var map = HashMap<String, u64>.withSeed(5, 6);
+    var added: u64 = 0;
+    var replaced: u64 = 0;
+    // Enough keys to grow the table three times.
+    for (k in 0..40u64) {
+        var key = String.create();
+        match (key.appendNumber(k)) {
+            Ok() => {}
+            Err(_) => { return Err(if (holds(borrow map, added, replaced)) k else 1000 + k); }
+        }
+        match (map.put(key, 3 * k + 1)) {
+            Ok(_) => { added += 1; }
+            Err(_) => { return Err(if (holds(borrow map, added, replaced)) k else 1000 + k); }
+        }
+    }
+    // Replacing values allocates too (ADR 0052: the new value goes in at the end first).
+    for (k in 0..10u64) {
+        var key = String.create();
+        match (key.appendNumber(k)) {
+            Ok() => {}
+            Err(_) => { return Err(if (holds(borrow map, added, replaced)) 100 + k else 2000 + k); }
+        }
+        match (map.put(key, 7 * k)) {
+            Ok(_) => { replaced += 1; }
+            Err(_) => { return Err(if (holds(borrow map, added, replaced)) 100 + k else 2000 + k); }
+        }
+    }
+    return Ok(added);
+}
+
+fn main() {
+    match (run()) {
+        Ok(_) => { Console.writeLine("consistent complete"); }
+        Err(at) => {
+            if (at >= 1000) {
+                Console.write("INCONSISTENT at ");
+                Console.writeLine(at);
+            } else {
+                Console.write("consistent at ");
+                Console.writeLine(at);
+            }
+        }
+    }
+}

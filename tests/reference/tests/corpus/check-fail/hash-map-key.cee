@@ -1,0 +1,9 @@
+// A HashMap's key type implements HashKey (ADR 0052 §3.1); one that does not breaks the bound: N0268.
+struct Point {
+    x: u32;
+    y: u32;
+}
+
+fn main() {
+    var map = HashMap<Point, u32>.withSeed(1, 2); // error[N0268]
+}

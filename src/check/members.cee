@@ -428,7 +428,12 @@ fn checkMethodCall(
     if (c.types.is(c.typeOf(vector), TypeKind.Thread)) {
         return checkThreadMethod(c, member, arguments, vector, span);
     }
-    if (c.types.is(c.typeOf(vector), TypeKind.Vector)) {
+    // A Vector's or String's own methods, unless the name is an impl's (ADR 0052 §3.3): impl methods on them are reached
+    // by the general lookup below.
+    let implOnVector = c.types.is(c.typeOf(vector), TypeKind.Vector) &&
+        vectorMethodArity(c.types.isString(c.typeOf(vector)), c.name(memberIdent.symbol)) < 0 &&
+        implMethodFor(c, c.typeOf(vector), memberIdent.symbol) != none();
+    if (c.types.is(c.typeOf(vector), TypeKind.Vector) && !implOnVector) {
         return checkVectorMethod(c, member, arguments, vector, targetSpan, span);
     }
     if (c.types.is(c.typeOf(vector), TypeKind.SlotMap) || c.types.is(c.typeOf(vector), TypeKind.StableVector)) {
@@ -450,7 +455,7 @@ fn checkMethodCall(
     }
     let readAgain = autoDeref(c, receiver)?;
     let view = viewOf(c, readAgain);
-    if (c.types.isStringView(c.typeOf(view))) {
+    if (c.types.isStringView(c.typeOf(view)) && !implOnVector) {
         return checkViewMethod(c, member, arguments, view, span);
     }
     let ownType = c.typeOf(receiver);

@@ -1,0 +1,379 @@
+// HashMap (ADR 0052): keys that hash into a keyed SipHash-1-3, entries kept in insertion order (a removal moves the last
+// entry into the gap), and an open-addressing table of entry numbers, so iteration never depends on the hash.
+
+extern "C" {
+    @effects()
+    fn ceesafe_random_key(key: *mut u64);
+}
+
+/// A key of a HashMap (ADR 0052 §3.1): `K: HashKey<K>`, since an interface has no `Self`.
+public interface HashKey<K> {
+    /// Feeds what identifies the key to `h`: equal keys must feed equal bytes.
+    fn hash(borrow this, h: borrow mut Hasher);
+    /// Whether `other` is the same key.
+    fn sameAs(borrow this, other: borrow K) -> bool;
+}
+
+/// SipHash-1-3 (one compression round, three finalisation rounds), keyed by 128 bits: a hash an attacker cannot aim
+/// collisions at without the key.
+public struct Hasher {
+    v0: u64;
+    v1: u64;
+    v2: u64;
+    v3: u64;
+    tail: u64;   // up to seven bytes not yet compressed, little-endian
+    pending: u32;
+    length: u64; // bytes fed
+
+    /// A hasher keyed by `k0` and `k1`.
+    public fn create(k0: u64, k1: u64) -> Hasher => Hasher {
+        v0: k0 ^ 0x736f6d6570736575,
+        v1: k1 ^ 0x646f72616e646f6d,
+        v2: k0 ^ 0x6c7967656e657261,
+        v3: k1 ^ 0x7465646279746573,
+        tail: 0,
+        pending: 0,
+        length: 0,
+    };
+
+    fn rotate(x: u64, n: u64) -> u64 => (x << n) | (x >> (64 - n));
+
+    fn round(borrow mut this) {
+        this.v0 = this.v0.wrappingAdd(this.v1);
+        this.v1 = Hasher.rotate(this.v1, 13);
+        this.v1 = this.v1 ^ this.v0;
+        this.v0 = Hasher.rotate(this.v0, 32);
+        this.v2 = this.v2.wrappingAdd(this.v3);
+        this.v3 = Hasher.rotate(this.v3, 16);
+        this.v3 = this.v3 ^ this.v2;
+        this.v0 = this.v0.wrappingAdd(this.v3);
+        this.v3 = Hasher.rotate(this.v3, 21);
+        this.v3 = this.v3 ^ this.v0;
+        this.v2 = this.v2.wrappingAdd(this.v1);
+        this.v1 = Hasher.rotate(this.v1, 17);
+        this.v1 = this.v1 ^ this.v2;
+        this.v2 = Hasher.rotate(this.v2, 32);
+    }
+
+    fn compress(borrow mut this, m: u64) {
+        this.v3 = this.v3 ^ m;
+        this.round();
+        this.v0 = this.v0 ^ m;
+    }
+
+    /// Feeds `data`.
+    public fn bytes(borrow mut this, data: Slice<u8>) {
+        for (b in data) {
+            this.tail = this.tail | ((b as u64) << (8 * this.pending as u64));
+            this.pending += 1;
+            this.length = this.length.wrappingAdd(1);
+            if (this.pending == 8) {
+                let m = this.tail;
+                this.compress(m);
+                this.tail = 0;
+                this.pending = 0;
+            }
+        }
+    }
+
+    /// Feeds `value`'s eight bytes, little-endian.
+    public fn u64(borrow mut this, value: u64) {
+        var eight = [0u8; 8];
+        for (k in 0..8usize) {
+            eight[k] = truncate<u8>(value >> (8 * k as u64));
+        }
+        this.bytes(eight[..]);
+    }
+
+    /// The hash of what was fed.
+    public fn finish(borrow this) -> u64 {
+        var h = Hasher {
+            v0: this.v0,
+            v1: this.v1,
+            v2: this.v2,
+            v3: this.v3,
+            tail: this.tail,
+            pending: this.pending,
+            length: this.length,
+        };
+        let last = ((h.length & 0xFF) << 56) | h.tail;
+        h.compress(last);
+        h.v2 = h.v2 ^ 0xFF;
+        h.round();
+        h.round();
+        h.round();
+        return h.v0 ^ h.v1 ^ h.v2 ^ h.v3;
+    }
+}
+
+impl HashKey<u8> for u8 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(this as u64); }
+    fn sameAs(borrow this, other: borrow u8) -> bool => this == other;
+}
+
+impl HashKey<u16> for u16 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(this as u64); }
+    fn sameAs(borrow this, other: borrow u16) -> bool => this == other;
+}
+
+impl HashKey<u32> for u32 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(this as u64); }
+    fn sameAs(borrow this, other: borrow u32) -> bool => this == other;
+}
+
+impl HashKey<u64> for u64 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(this); }
+    fn sameAs(borrow this, other: borrow u64) -> bool => this == other;
+}
+
+impl HashKey<usize> for usize {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(this as u64); }
+    fn sameAs(borrow this, other: borrow usize) -> bool => this == other;
+}
+
+impl HashKey<i8> for i8 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(truncate<u64>(this as i64)); }
+    fn sameAs(borrow this, other: borrow i8) -> bool => this == other;
+}
+
+impl HashKey<i16> for i16 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(truncate<u64>(this as i64)); }
+    fn sameAs(borrow this, other: borrow i16) -> bool => this == other;
+}
+
+impl HashKey<i32> for i32 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(truncate<u64>(this as i64)); }
+    fn sameAs(borrow this, other: borrow i32) -> bool => this == other;
+}
+
+impl HashKey<i64> for i64 {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(truncate<u64>(this)); }
+    fn sameAs(borrow this, other: borrow i64) -> bool => this == other;
+}
+
+impl HashKey<bool> for bool {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(if (this) 1 else 0); }
+    fn sameAs(borrow this, other: borrow bool) -> bool => this == other;
+}
+
+impl HashKey<String> for String {
+    fn hash(borrow this, h: borrow mut Hasher) {
+        h.bytes(this.view().bytes());
+        h.u64(0xFF); // a terminator, so a key's bytes are never a prefix of another's stream
+    }
+    fn sameAs(borrow this, other: borrow String) -> bool => this.view() == other.view();
+}
+
+impl HashKey<Vector<u8>> for Vector<u8> {
+    fn hash(borrow this, h: borrow mut Hasher) {
+        h.bytes(this.view());
+        h.u64(0xFF);
+    }
+    fn sameAs(borrow this, other: borrow Vector<u8>) -> bool {
+        if (this.length != other.length) {
+            return false;
+        }
+        for (k in 0..this.length) {
+            if (this[k] != other[k]) {
+                return false;
+            }
+        }
+        return true;
+    }
+}
+
+/// A map from keys to values (ADR 0052 §3.2). Iteration (`keyAt`, `valueAt` for 0..length) is in insertion order, except
+/// that a removal moves the last entry into the removed one's place. Only `put` allocates; a failed `put` leaves the map
+/// as it was.
+public struct HashMap<K: HashKey<K>, V> {
+    keys: Vector<K>;
+    values: Vector<V>;
+    hashes: Vector<u64>; // each entry's hash, so growing does not hash again
+    slots: Vector<u32>;  // 0: empty; else the entry's index plus one. The length is 0 or a power of two.
+    k0: u64;
+    k1: u64;
+
+    /// An empty map keyed by the process's random key.
+    /// Safety: the runtime writes two words into the array, which outlives the call.
+    public fn create() -> HashMap<K, V> {
+        var key = [0u64; 2];
+        unsafe { ceesafe_random_key(borrow mut key as *mut [u64; 2] as *mut u64); }
+        return HashMap<K, V>.withSeed(key[0], key[1]);
+    }
+
+    /// An empty map keyed by `k0` and `k1`: for tests, and for keys no one chooses against it.
+    public fn withSeed(k0: u64, k1: u64) -> HashMap<K, V> => HashMap {
+        keys: Vector<K>.create(),
+        values: Vector<V>.create(),
+        hashes: Vector<u64>.create(),
+        slots: Vector<u32>.create(),
+        k0: k0,
+        k1: k1,
+    };
+
+    /// How many entries.
+    public fn length(borrow this) -> usize => this.keys.length;
+
+    fn hashOf(borrow this, key: borrow K) -> u64 {
+        var h = Hasher.create(this.k0, this.k1);
+        key.hash(mut h);
+        return h.finish();
+    }
+
+    /// The slot that holds `key`'s entry, or none.
+    fn slotOf(borrow this, key: borrow K, hash: u64) -> usize? {
+        if (this.slots.length == 0) {
+            return null;
+        }
+        let mask = this.slots.length - 1;
+        var i = truncate<usize>(hash) & mask;
+        loop {
+            let slot = this.slots[i];
+            if (slot == 0) {
+                return null;
+            }
+            let entry = (slot - 1) as usize;
+            if (this.hashes[entry] == hash && this.keys[entry].sameAs(key)) {
+                return i;
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// The value of `key`, if it is there.
+    public fn get(borrow this, key: borrow K) -> borrow(this) V? {
+        let slot = this.slotOf(key, this.hashOf(key))?;
+        return borrow this.values[(this.slots[slot] - 1) as usize];
+    }
+
+    /// The same, to change it.
+    public fn getMut(borrow mut this, key: borrow K) -> borrow mut(this) V? {
+        let hash = this.hashOf(key);
+        let slot = this.slotOf(key, hash)?;
+        let entry = (this.slots[slot] - 1) as usize;
+        return borrow mut this.values[entry];
+    }
+
+    /// Whether `key` is there.
+    public fn contains(borrow this, key: borrow K) -> bool => this.slotOf(key, this.hashOf(key)) != null;
+
+    /// The key of entry `i` (0 ≤ i < length).
+    public fn keyAt(borrow this, i: usize) -> borrow(this) K => borrow this.keys[i];
+
+    /// The value of entry `i` (0 ≤ i < length).
+    public fn valueAt(borrow this, i: usize) -> borrow(this) V => borrow this.values[i];
+
+    /// Puts entry `entry` (with `hash`) in the first free slot from its own; the table has room.
+    fn place(borrow mut this, hash: u64, entry: usize) {
+        let mask = this.slots.length - 1;
+        var i = truncate<usize>(hash) & mask;
+        while (this.slots[i] != 0) {
+            i = (i + 1) & mask;
+        }
+        this.slots[i] = truncate<u32>(entry + 1);
+    }
+
+    /// A table twice as large (at least 8), built before it replaces the old one, so a failure changes nothing.
+    fn grow(borrow mut this) -> Result<void, AllocError> {
+        let size = if (this.slots.length == 0) 8 else this.slots.length * 2;
+        var slots = Vector<u32>.create();
+        for (k in 0..size) {
+            slots.push(0)?;
+        }
+        this.slots = slots;
+        for (entry in 0..this.hashes.length) {
+            let hash = this.hashes[entry];
+            this.place(hash, entry);
+        }
+        return Ok();
+    }
+
+    /// Puts `value` at `key`: the old value if the key was there, else null. A failure leaves the map as it was.
+    public fn put(borrow mut this, key: K, value: V) -> Result<V?, AllocError> {
+        let hash = this.hashOf(borrow key);
+        match (this.slotOf(borrow key, hash)) {
+            Some(slot) => {
+                // The new value in at the end, swapped into the entry's place, and the old one taken from the end. A
+                // failed push leaves the map as it was.
+                let entry = (this.slots[slot] - 1) as usize;
+                this.values.push(value)?;
+                let last = this.values.length - 1;
+                this.values.swap(entry, last);
+                return Ok(this.values.pop());
+            }
+            null => {}
+        }
+        if ((this.keys.length + 1) * 4 > this.slots.length * 3) {
+            this.grow()?;
+        }
+        this.hashes.push(hash)?;
+        match (this.keys.push(key)) {
+            Ok() => {}
+            Err(e) => {
+                this.hashes.pop();
+                return Err(e);
+            }
+        }
+        match (this.values.push(value)) {
+            Ok() => {}
+            Err(e) => {
+                this.keys.pop();
+                this.hashes.pop();
+                return Err(e);
+            }
+        }
+        let entry = this.keys.length - 1;
+        this.place(hash, entry);
+        return Ok(null);
+    }
+
+    /// Takes `key` out: its value, or null. The last entry moves into its place (ADR 0052 §2).
+    public fn remove(borrow mut this, key: borrow K) -> V? {
+        let hash = this.hashOf(key);
+        let found = this.slotOf(key, hash)?;
+        let entry = (this.slots[found] - 1) as usize;
+        // The table: empty the slot, then shift back the run after it (backward-shift deletion: no tombstones).
+        let mask = this.slots.length - 1;
+        var hole = found;
+        this.slots[hole] = 0;
+        var i = (hole + 1) & mask;
+        while (this.slots[i] != 0) {
+            let moved = (this.slots[i] - 1) as usize;
+            let home = truncate<usize>(this.hashes[moved]) & mask;
+            // Move it into the hole unless its home is cyclically within (hole, i].
+            let within = if (hole <= i) home > hole && home <= i else home > hole || home <= i;
+            if (!within) {
+                this.slots[hole] = this.slots[i];
+                this.slots[i] = 0;
+                hole = i;
+            }
+            i = (i + 1) & mask;
+        }
+        // The entries: the last moves into `entry`'s place, and its slot is renumbered.
+        let last = this.keys.length - 1;
+        if (entry != last) {
+            let lastHash = this.hashes[last];
+            var j = truncate<usize>(lastHash) & mask;
+            while ((this.slots[j] - 1) as usize != last) {
+                j = (j + 1) & mask;
+            }
+            this.slots[j] = truncate<u32>(entry + 1);
+        }
+        this.hashes.swap(entry, last);
+        this.hashes.pop();
+        this.keys.swap(entry, last);
+        let removedKey = this.keys.pop();
+        this.values.swap(entry, last);
+        return this.values.pop();
+    }
+
+    /// Takes every entry out; the table keeps its size.
+    public fn clear(borrow mut this) {
+        this.keys.clear();
+        this.values.clear();
+        this.hashes.clear();
+        for (k in 0..this.slots.length) {
+            this.slots[k] = 0;
+        }
+    }
+}

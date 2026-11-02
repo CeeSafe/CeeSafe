@@ -1,0 +1,37 @@
+// A closure environment's own members never clash with its captures (type-system.md §36.2): a local named `code`,
+// like the code pointer, captured by a closure and by an async closure; and a local named `p__x` captured beside a
+// field-precise capture of `p.x`. Each once gave the C environment two members of one name.
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn apply(f: borrow fn() -> i32) -> i32 => f();
+
+async fn run() -> Result<u64, AsyncError> {
+    var code: u64 = 1;
+    await Async.all(
+        async () => {
+            code += 40;
+            return Ok();
+        },
+        async () => { return Ok(); },
+    )?;
+    return Ok(code + 1);
+}
+
+fn main() {
+    let code: i32 = 7;
+    Console.writeLine(apply(() => code * 6));
+    let p = Point { x: 3, y: 4 };
+    let p__x: i32 = 100;
+    Console.writeLine(apply(() => p.x + p__x + p.y));
+    match (Async.run(run())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 42
+// expect-stdout: 107
+// expect-stdout: 42

@@ -649,7 +649,9 @@ fn newClosureFunction(
 }
 
 /// The environment's fields (FinishEnvironment): the code pointer, then each capture (a reference, or the copied
-/// value). Returns the captures' range in Hir.captures.
+/// value). Returns the captures' range in Hir.captures. The code pointer's name, and a field-precise capture's, start
+/// with a digit, which no identifier does, so they never clash with a captured local's (a capture named `code` once
+/// gave the environment two `f_code` members).
 fn finishEnvironment(
     c: borrow mut Checker,
     function: u32,
@@ -664,7 +666,7 @@ fn finishEnvironment(
         parameters.push(c.hir.locals[c.hir.functions[function as usize].parameters[k] as usize].typ)?;
     }
     let returnType = c.hir.functions[function as usize].returnType;
-    let codeName = c.intern("code")?;
+    let codeName = c.intern("0code")?;
     let codeType = c.types.closureTo(parameters.view(), returnType, effects)?;
     addField(c, definition, codeName, codeType, span.start, span.end)?;
     for (capture in captures) {
@@ -673,6 +675,7 @@ fn finishEnvironment(
             // A field-precise capture (§36.2): a reference to that field, named after the local and the field.
             let field = c.types.fields[capture.field as usize];
             var text = Vector<u8>.create();
+            text.push('0')?;
             appendBytes(mut text, c.name(local.name))?;
             appendText(mut text, "__")?;
             appendBytes(mut text, c.name(field.name))?;

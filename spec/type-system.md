@@ -2809,7 +2809,9 @@ fn main() {
   the body reaches it through a reference (N0251).
 - **C.** The environment is a struct `ceeE_…` whose first member is the code pointer, followed by one pointer per
   capture. The closure's value is a pointer to that first member (C11 6.7.2.1p15). The body is a `static` function
-  taking `const void *env` first. A call is `(*f)(f, args…)`.
+  taking `const void *env` first. A call is `(*f)(f, args…)`. The code pointer's member is `f_0code`, and a
+  field-precise capture's `f_0<local>__<field>`: the digit, which starts no identifier, keeps them apart from a
+  captured local's `f_<local>`, whatever its name.
 
 ### 36.3 Effect lists on function and closure types (G8b′; ADR 0012 §3.7)
 ```ceesafe

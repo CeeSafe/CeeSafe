@@ -1151,6 +1151,12 @@ static void cee_wake_waiters(void) {
         bool cancellable = t->on_op ? t->channel_wait : (!t->on_wake || t->channel_wait);
         if (!t->on_scope && cancellable) { /* a worker's wait, and an operation being cancelled, are not */
             cee_unpark(t);
+            /* Unparking can ready others: kqueue's change queue, when full, is flushed and readies what is ready
+               (bug B4). If that took `next` off the parked list, its links are the ready list's now: start again
+               from the head. Every restart follows an unpark, and nothing parks during the walk, so it ends. */
+            if (next != NULL && !next->parked) {
+                next = cee_exec.parked;
+            }
         }
         t = next;
     }

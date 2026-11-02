@@ -328,6 +328,10 @@ fn synthSlice(
             errorWithLetToVar(c, borrowMutOfImmutable(), span.start, span.end, message, place, reason)?;
             return c.errorResult(span.start, span.end);
         }
+        // A closure that slices a captured array as mutable captures it mutably, as `borrow mut` does (bug B3: the
+        // environment held a const pointer).
+        let root = c.hir.places[place as usize].root;
+        noteMutableUse(c, root);
     }
     let slice = c.types.sliceOf(c.types.info(t).element, mutable)?;
     return c.expr(HirExpr.Slice(mutable, place, low, high), slice, span.start, span.end);

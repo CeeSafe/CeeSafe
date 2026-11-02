@@ -113,6 +113,14 @@ fn isLinuxHost() -> bool => match (File.kind("/proc/self")) {
     Err(_) => false,
 };
 
+/// The host's errno numbering: 0 Linux, 1 macOS (and the BSDs), 2 Windows (MSVC's errno.h, to which the runtime
+/// translates Winsock's errors).
+fn hostErrnos() -> u32 => if (hostIsWindows()) 2 else if (isLinuxHost()) 0 else 1;
+
+/// One errno on Linux, macOS and Windows.
+fn errnoFor(system: u32, linux: i64, mac: i64, windows: i64) -> i64 =>
+    if (system == 0) linux else if (system == 1) mac else windows;
+
 /// The errno a lib/core IoError stands for (HostIo's numbers), so the program's ceesafe_io_kind maps it back.
 fn errnoOf(error: IoError) -> i64 => match (error) {
     IoError.NotFound => 2,
@@ -122,40 +130,41 @@ fn errnoOf(error: IoError) -> i64 => match (error) {
     IoError.NotDirectory => 20,
     IoError.InvalidInput => 22,
     IoError.BrokenPipe => 32,
-    IoError.ConnectionRefused => if (isLinuxHost()) 111i64 else 61i64,
-    IoError.AddressInUse => if (isLinuxHost()) 98i64 else 48i64,
+    IoError.ConnectionRefused => errnoFor(hostErrnos(), 111, 61, 107),
+    IoError.AddressInUse => errnoFor(hostErrnos(), 98, 48, 100),
     IoError.OutOfMemory => 12,
     IoError.Other(code) => code as i64,
     // ADR 0044's kinds, which stage 0 (ceesafec 0.3.2, Decision 0009) cannot name: each has its own fixed message.
     _ => errnoOfMessage(error.message()),
 };
 
-/// The errno of one of ADR 0044's kinds (Linux's numbers, else macOS's), from its message (§26.2's wording).
+/// The errno of one of ADR 0044's kinds, from its message (§26.2's wording).
 fn errnoOfMessage(text: StringView) -> i64 {
-    let linux = isLinuxHost();
+    let system = hostErrnos();
     for (k in 11..19u64) {
         if (sameText(text.bytes(), ioMessage(k))) {
-            return networkErrno(k, linux);
+            return networkErrno(k, system);
         }
     }
     return 5; // EIO: not reached, every kind has a message
 }
 
-/// The errno each of ADR 0044's kinds stands for, on Linux or macOS.
-fn networkErrno(kind: u64, linux: bool) -> i64 => match (kind) {
-    11 => if (linux) 104i64 else 54i64, // ECONNRESET
-    12 => if (linux) 103i64 else 53i64, // ECONNABORTED
-    13 => if (linux) 107i64 else 57i64, // ENOTCONN
-    14 => if (linux) 110i64 else 60i64, // ETIMEDOUT
-    15 => if (linux) 113i64 else 65i64, // EHOSTUNREACH
-    16 => if (linux) 101i64 else 51i64, // ENETUNREACH
-    17 => if (linux) 99i64 else 49i64,  // EADDRNOTAVAIL
-    _ => if (linux) 95i64 else 102i64,  // EOPNOTSUPP
+/// The errno each of ADR 0044's kinds stands for on the host (Linux's, macOS's, MSVC's numbers; MSVC's read from its
+/// errno.h with cl on the Windows 11 ARM64 test host, 2026-11-02).
+fn networkErrno(kind: u64, system: u32) -> i64 => match (kind) {
+    11 => errnoFor(system, 104, 54, 108), // ECONNRESET
+    12 => errnoFor(system, 103, 53, 106), // ECONNABORTED
+    13 => errnoFor(system, 107, 57, 126), // ENOTCONN
+    14 => errnoFor(system, 110, 60, 138), // ETIMEDOUT
+    15 => errnoFor(system, 113, 65, 110), // EHOSTUNREACH
+    16 => errnoFor(system, 101, 51, 118), // ENETUNREACH
+    17 => errnoFor(system, 99, 49, 101),  // EADDRNOTAVAIL
+    _ => errnoFor(system, 95, 102, 130),  // EOPNOTSUPP
 };
 
 /// HostIo.Kind: the IoError variant (by declaration order) for an errno.
 fn ioKindOf(error: i64) -> u64 {
-    let linux = isLinuxHost();
+    let system = hostErrnos();
     if (error == 2) {
         return 0;
     }
@@ -171,30 +180,30 @@ fn ioKindOf(error: i64) -> u64 {
     if (error == 20) {
         return 4;
     }
-    if (error == 22 || error == (if (linux) 36i64 else 63i64)) {
+    if (error == 22 || error == errnoFor(system, 36, 63, 38)) {
         return 5;
     }
     if (error == 32) {
         return 6;
     }
-    if (error == (if (linux) 111i64 else 61i64)) {
+    if (error == errnoFor(system, 111, 61, 107)) {
         return 7;
     }
-    if (error == (if (linux) 98i64 else 48i64)) {
+    if (error == errnoFor(system, 98, 48, 100)) {
         return 8;
     }
     if (error == 12) {
         return 9;
     }
     for (k in 11..19u64) {
-        if (error == networkErrno(k, linux)) {
+        if (error == networkErrno(k, system)) {
             return k;
         }
     }
-    // The other spellings of Unsupported: ENOTSUP (macOS's differs from EOPNOTSUPP), ENOPROTOOPT, EAFNOSUPPORT,
+    // The other spellings of Unsupported: ENOTSUP (where it differs from EOPNOTSUPP), ENOPROTOOPT, EAFNOSUPPORT,
     // EPROTONOSUPPORT.
-    let unsupported = if (linux) error == 92 || error == 97 || error == 93 else error == 45 || error == 42 ||
-        error == 47 || error == 43;
+    let unsupported = if (system == 0) error == 92 || error == 97 || error == 93 else if (system == 1) error == 45 ||
+        error == 42 || error == 47 || error == 43 else error == 129 || error == 123 || error == 102 || error == 135;
     return if (unsupported) 18 else 10;
 }
 

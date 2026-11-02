@@ -502,6 +502,19 @@ fn loadFiles(files: borrow Vector<String>, sources: borrow mut Vector<SourceText
 }
 
 /// A diagnostic as text with a source excerpt and caret (DiagnosticRenderer.Render).
+/// `render` with the diagnostic's own source, or a placeholder when the list lacks its file (bug B6).
+fn renderAny(
+    out: borrow mut Vector<u8>,
+    d: borrow Diagnostic,
+    sources: borrow Vector<SourceText>,
+) -> Result<void, AllocError> {
+    if ((d.file as usize) < sources.length) {
+        return render(out, d, sources[d.file as usize]);
+    }
+    let placeholder = placeholderSource(d)?;
+    return render(out, d, placeholder);
+}
+
 fn render(out: borrow mut Vector<u8>, d: borrow Diagnostic, source: borrow SourceText) -> Result<void, AllocError> {
     let position = source.position(d.start as usize);
     appendBytes(out, source.path.view())?;
@@ -668,7 +681,7 @@ fn parseCommand() -> i32 {
         var text = Vector<u8>.create();
         for (i in 0..diagnostics.items.length) {
             let d = borrow diagnostics.items[i];
-            render(mut text, d, sources[d.file as usize])!;
+            renderAny(mut text, d, sources)!;
         }
         // Valid UTF-8: paths come from arguments, and source lines are decoded with U+FFFD.
         Console.writeError(StringView.fromUtf8(text.view())!);
@@ -686,7 +699,7 @@ fn report(json: bool, diagnostics: borrow Diagnostics, sources: borrow Vector<So
         var text = Vector<u8>.create();
         for (i in 0..diagnostics.items.length) {
             let d = borrow diagnostics.items[i];
-            render(mut text, d, sources[d.file as usize])!;
+            renderAny(mut text, d, sources)!;
         }
         // Valid UTF-8: paths come from arguments, and source lines are decoded with U+FFFD.
         Console.writeError(StringView.fromUtf8(text.view())!);

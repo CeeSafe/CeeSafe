@@ -155,3 +155,8 @@ The compiler's own sources do not use the operations, so the bootstrap from 0.3.
 - **Bug B3, fixed here.** `async-timeout`'s socket case found it again: a closure that slices a captured array as
   `mut a[..]` captured it shared, so its environment held a `const` pointer, which `-Werror` rejects. `synthSlice`
   now notes the mutable use, as `borrow mut` does (corpus `async-race-mut-capture`, the CeeSafe.Web probe).
+- **Bug B6, fixed later (2026-11-02).** `settle` bound the body's `Ok` value, which is invalid when `T` is `void`. The
+  compiler instantiates `AsyncTimeoutJoin<void, E>` for a body of type `Result<void, E>`, and the instance's error was
+  reported in its library file, whose source the diagnostic printers did not have: `check` panicked. `settle` now
+  binds no payload. Every printer shows a diagnostic whose file it lacks against a blank `<library>` source, rather
+  than crash. Test: run-pass/async-timeout-void.

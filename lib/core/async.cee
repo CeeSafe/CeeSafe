@@ -156,15 +156,19 @@ struct AsyncTimeoutJoin<T, E> {
         if (first == 0) {
             return body;
         }
-        match (deadline) {
-            Ok() => {
-                match (body) {
-                    Ok(value) => { return Ok(value); }
-                    Err(_) => { return Err(timedOut); }
-                }
-            }
-            Err(_) => { return body; }
+        // No `Ok` payload is bound, so T may be void (bug B6: `Ok(value)` was invalid for Result<void, E>).
+        let reached = match (deadline) {
+            Ok() => true,
+            Err(_) => false,
+        };
+        let failed = match (body) {
+            Err(_) => true,
+            _ => false,
+        };
+        if (reached && failed) {
+            return Err(timedOut);
         }
+        return body;
     }
 }
 

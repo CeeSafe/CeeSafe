@@ -646,7 +646,7 @@ fn docCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
     }
     var rendered = Vector<u8>.create();
     for (d in diagnostics.items.view()) {
-        render(mut rendered, d, sources[d.file as usize])!;
+        renderAny(mut rendered, d, sources)!;
     }
     Console.writeError(StringView.fromUtf8(rendered.view())!);
     if (diagnostics.hasErrors()) {

@@ -1,0 +1,37 @@
+// Bug B6 (CeeSafe.Web, found 2026-11-02): Async.timeout and Async.deadline over a body of type Result<void, E>. lib/core's
+// settle bound the body's Ok value, invalid for void, and the diagnostic, in a library file, crashed the printer. The
+// three cases follow ADR 0046 §3.2: a body that finishes is Ok, one past its deadline is timedOut, an early Err is its own.
+enum E {
+    TimedOut,
+    Failed,
+}
+
+async fn work(ms: u64) -> Result<void, E> {
+    match (await Timer.sleep(ms)) {
+        Ok() => { return Ok(); }
+        Err(_) => { return Err(E.Failed); }
+    }
+}
+
+async fn fail() -> Result<void, E> => Err(E.Failed);
+
+fn outcome(r: Result<void, E>) -> u32 => match (r) {
+    Ok() => 0,
+    Err(E.TimedOut) => 1,
+    Err(E.Failed) => 2,
+};
+
+async fn run() -> Result<u32, AsyncError> {
+    let a = await Async.deadline(Timer.now() + 1000, E.TimedOut, async () => await work(1));
+    let b = await Async.timeout(5, E.TimedOut, async () => await work(1000));
+    let c = await Async.timeout(1000, E.TimedOut, async () => await fail());
+    return Ok(outcome(a) * 100 + outcome(b) * 10 + outcome(c));
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 12

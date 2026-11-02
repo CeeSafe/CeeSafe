@@ -284,6 +284,18 @@ fn writePosition(
 }
 
 /// The whole JSON document for `diagnostics`, on one line (DiagnosticJson.Serialize).
+/// A blank source named `<library>` as long as `d` needs: what a diagnostic is shown with when its file is not among
+/// the compilation's sources (bug B6: an error in a library function's instance, reported in its library file, crashed
+/// the printers).
+fn placeholderSource(d: borrow Diagnostic) -> Result<SourceText, AllocError> {
+    var blank = Vector<u8>.create();
+    let end = if (d.fixEnd > d.end) d.fixEnd else d.end;
+    for (k in 0..(end as usize + 1)) {
+        blank.push(' ')?;
+    }
+    return SourceText.create("<library>".bytes(), blank.view());
+}
+
 fn diagnosticsJson(
     diagnostics: borrow Diagnostics,
     sources: borrow Vector<SourceText>,
@@ -300,7 +312,8 @@ fn diagnosticsJson(
     json.startArray()?;
     for (i in 0..diagnostics.items.length) {
         let d = borrow diagnostics.items[i];
-        let source = borrow sources[d.file as usize];
+        let placeholder = placeholderSource(d)?;
+        let source = if ((d.file as usize) < sources.length) borrow sources[d.file as usize] else borrow placeholder;
         json.startObject()?;
         json.name("code")?;
         var code = Vector<u8>.create();

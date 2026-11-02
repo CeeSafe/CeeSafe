@@ -8,7 +8,7 @@ fn reportPackageText(json: bool, packageReport: borrow PackageReport) {
     }
     var text = Vector<u8>.create();
     for (d in packageReport.diagnostics.items.view()) {
-        render(mut text, d, packageReport.sources[d.file as usize])!;
+        renderAny(mut text, d, packageReport.sources)!;
     }
     Console.writeError(StringView.fromUtf8(text.view())!);
 }

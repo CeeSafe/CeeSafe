@@ -723,6 +723,22 @@ Heap (M3b):
     2^30 bytes) or a `ReadFile` with the offset in an `OVERLAPPED` on Windows, which every hosted program links
     (`ceesafe_rt_io.c`). The interpreter has no file send: it copies, reading at the offset by opening the file's path
     again (its stage 0 `File` cannot seek).
+  - **Datagrams** (ADR 0050): `ceesafe_async_udp_bind(family, bytes, port, scope, flags, send_buffer,
+    receive_buffer)` makes a nonblocking `SOCK_DGRAM` socket with the `CEE_UDP_*` options (`IP_PKTINFO` or
+    `IP_RECVPKTINFO`, `IPV6_RECVPKTINFO`; `IP_RECVTOS`, `IPV6_RECVTCLASS`; Windows `IP_RECVECN`, `IPV6_RECVECN`, and
+    `SIO_UDP_CONNRESET` off). macOS needs `__APPLE_USE_RFC_3542` for the IPv6 packet info. A send fills the message
+    record's parts, then `ceesafe_async_msg_send_to` writes the destination (IPv4-mapped for an IPv6 socket) into the
+    record's name and builds the control messages: packet info for a source address, `IP_TOS`/`IPV6_TCLASS` for ECN on
+    Linux (`IP_ECN`/`IPV6_ECN` on Windows; elsewhere the socket's option is set for the send and cleared after it), and
+    `UDP_SEGMENT` on Linux. `ceesafe_async_op_sendmsg` steps it: `sendmsg`, `IORING_OP_SENDMSG`, or `WSASendMsg`
+    (overlapped on IOCP); `CEE_ASYNC_NO_SEGMENTS` (`INT64_MIN + 3`) where segments cannot go in one call, and lib/std
+    sends them one by one. An empty datagram is one empty part. `ceesafe_async_op_recvmsg` receives into one part with
+    the record's name and control buffer: `recvmsg`, `IORING_OP_RECVMSG`, or `WSARecvMsg` (found with
+    `WSAID_WSARECVMSG`), where `WSAEMSGSIZE` is a truncated datagram, not an error. Then `ceesafe_async_msg_address`
+    reads the peer from the name and the local address from the packet info, and `ceesafe_async_msg_flags` the
+    truncation (`MSG_TRUNC`) and the ECN bits. `EMSGSIZE` is `InvalidInput`. Windows' control buffer is 72 bytes, so
+    the record still fits 512. `ceesafe_async_udp_send` and `ceesafe_async_udp_recv` are one nonblocking
+    `sendto`/`recvmsg` each, for the interpreter.
   - **IOCP** (Windows' default): each thread has one completion port for its life, because a socket can be tied to
     only one port. A socket is tied to its thread's port at its first operation (`ceesafe_socket_associate`).
     Operations are `WSARecv`, `WSASend`, `AcceptEx` (a new overlapped socket, given an id when it completes) and

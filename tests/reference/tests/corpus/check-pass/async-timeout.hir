@@ -6,8 +6,8 @@
   )
   (fn timed () -> Result<u32, WebError>
     (block
-      (let a#0: u32 = (try (async-timeout 0 (call AsyncTimeoutJoin<u32, WebError>.after 5:u64):u64 (WebError.TimedOut) (closure 445 () (block (return (await (call body):Result<u32, WebError>):Result<u32, WebError>))):fn() -> Result<u32, WebError>):Result<u32, WebError>):u32)
-      (return (async-timeout 1 (+ (call Timer.now):u64 10:u64):u64 (WebError.TimedOut) (closure 449 () (block (return (await (call body):Result<u32, WebError>):Result<u32, WebError>))):borrow mut @effects(sleep, alloc, suspend) fn() -> Result<u32, WebError>):Result<u32, WebError>)
+      (let a#0: u32 = (try (async-timeout 0 (call AsyncTimeoutJoin<u32, WebError>.after 5:u64):u64 (WebError.TimedOut) (closure 470 () (block (return (await (call body):Result<u32, WebError>):Result<u32, WebError>))):fn() -> Result<u32, WebError>):Result<u32, WebError>):u32)
+      (return (async-timeout 1 (+ (call Timer.now):u64 10:u64):u64 (WebError.TimedOut) (closure 474 () (block (return (await (call body):Result<u32, WebError>):Result<u32, WebError>))):borrow mut @effects(sleep, alloc, suspend) fn() -> Result<u32, WebError>):Result<u32, WebError>)
     )
   )
   (fn main () -> void
@@ -18,7 +18,7 @@
       (return (await (call body):Result<u32, WebError>):Result<u32, WebError>)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 449})) -> Result<u32, WebError>
+  (fn closure ((env#0: borrow mut {closure environment 474})) -> Result<u32, WebError>
     (block
       (return (await (call body):Result<u32, WebError>):Result<u32, WebError>)
     )

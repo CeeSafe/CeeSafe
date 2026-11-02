@@ -3498,6 +3498,30 @@ empty.
   at most 64 KiB at the offset on a worker thread (`Async.blocking`) and writes them: the same results, through a
   copy. Errors and cancellation are `write`'s (§40.7).
 
+**UDP** (lib/std, ADR 0050):
+
+- `AsyncUdpSocket.bind(address, options)` (`UdpOptions`: `reuseAddress`, `reusePort`, `v6Only`, `sendBuffer`,
+  `recvBuffer`, `receiveEcn`, `receiveLocal`; `UdpOptions.defaults()` sets none) is `Result<AsyncUdpSocket, IoError>`,
+  not async; port 0 lets the system choose. `localAddress()` is the bound address. The socket owns its descriptor and
+  closes it when destroyed.
+- `await s.sendTo(bytes, to)` sends one datagram, whole or not at all: `Result<void, AsyncError>`. A datagram too long
+  for the system is `Io(InvalidInput)`. An empty slice sends an empty datagram.
+- `await s.recvFrom(buffer)` waits for one datagram: `Datagram { length, from, truncated }`. A datagram longer than the
+  buffer fills it, and `truncated` says the rest is gone.
+- `await s.sendMsg(borrow message)` sends a `UdpMessage { parts, to, from, ecn, segmentSize }`: the parts (an
+  `IoParts`, §40.4) as one datagram, from the local address `from` if given (packet info), with the ECN bits `ecn`
+  (0: not set). With `segmentSize > 0` the bytes are sent as datagrams of that size, the last shorter: in one call
+  where the system can (Linux's `UDP_SEGMENT`, up to 64 segments), else one by one. The result is the bytes sent, whole
+  segments only: if a segment fails after others went, the bytes before it; if the first fails, its error.
+- `await s.recvMsg(buffer)` is `UdpReceived { length, truncated, from, to, ecn }`: `to` is the local address the
+  datagram arrived at, with the socket's port (with `receiveLocal`; else null), `ecn` its ECN bits (with `receiveEcn`;
+  else 0).
+- An IPv4 peer of a dual-stack IPv6 socket is reported as `V4`, and a `V4` destination is sent IPv4-mapped. A port
+  unreachable is not reported on a later receive (on Windows `SIO_UDP_CONNRESET` turns its report off). Windows refuses
+  a sender's ECN value 3 (CE) as `Io(InvalidInput)`. CosmoOS userland has no UDP yet: `bind` is `Io(Unsupported)`.
+- Cancellation is `read`'s and `write`'s (§40.7). `AsyncSockets.udpBind`, `udpSend` and `udpRecv` are the raw calls
+  on descriptors, one try each, for code that runs its own wait loop.
+
 ### 40.5 Scopes
 - **`await Async.scopeIn(alloc, oom, (s) => { … })`**, and `Async.scope(oom, body)` with the system heap (and the
   `alloc` effect). With `scopeIn`, each child's task and frame come from `alloc` and go back to it when the child

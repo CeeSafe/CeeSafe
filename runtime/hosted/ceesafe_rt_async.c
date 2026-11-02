@@ -11,6 +11,9 @@
 /* The freestanding executor (ADR 0039): only the portable part below, over the environment's ceesafe_env_* hooks. */
 #include "ceesafe/rt.h"
 #else
+#if defined(__APPLE__) && !defined(__APPLE_USE_RFC_3542)
+#define __APPLE_USE_RFC_3542 1 /* IPV6_PKTINFO and IPV6_TCLASS as control messages (ADR 0050) */
+#endif
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 /* ceesafec compiles with -std=c11, under which glibc hides POSIX's clock_gettime and CLOCK_MONOTONIC, and syscall(),
    which io_uring needs (ADR 0035). (Not on macOS, where such a macro would hide the BSD interfaces instead.) */
@@ -63,8 +66,18 @@
 #endif
 #include <fcntl.h>
 #include <sched.h>
+#include <netinet/in.h> /* in_pktinfo, in6_pktinfo (ADR 0050) */
 #include <sys/socket.h> /* sendmsg (ADR 0045) */
 #include <sys/uio.h>    /* struct iovec, writev */
+#if defined(__linux__)
+#include <netinet/udp.h> /* UDP_SEGMENT (ADR 0050) */
+#if !defined(UDP_SEGMENT)
+#define UDP_SEGMENT 103
+#endif
+#if !defined(SOL_UDP)
+#define SOL_UDP 17
+#endif
+#endif
 #if defined(__linux__)
 #include <sys/sendfile.h> /* sendfile (ADR 0051) */
 #endif
@@ -2461,9 +2474,20 @@ static void *cee_extension(SOCKET s, GUID id) {
 }
 
 /* A completion from the port: the operation's result, and its task readied. */
+static void cee_msg_received(cee_op *o, DWORD flags, bool truncated);
+
 static void cee_iocp_complete(cee_op *o) {
     DWORD bytes = 0;
     DWORD flags = 0;
+    if (o->kind == 7u) {
+        /* A datagram's receive (ADR 0050): one longer than the buffer completes with WSAEMSGSIZE, the buffer full. */
+        BOOL done = WSAGetOverlappedResult(o->socket, &o->overlapped, &bytes, FALSE, &flags);
+        bool truncated = !done && WSAGetLastError() == WSAEMSGSIZE;
+        o->result = done || truncated ? (int64_t)bytes : cee_wsa_failure();
+        cee_msg_received(o, flags, truncated);
+        cee_op_done(o, o->result);
+        return;
+    }
     if (!WSAGetOverlappedResult(o->socket, &o->overlapped, &bytes, FALSE, &flags)) {
         o->result = cee_wsa_failure();
         if (o->accepted != INVALID_SOCKET) {
@@ -3047,7 +3071,7 @@ typedef struct iovec cee_msg_buffer;
 
 /* Room for a datagram's ancillary data (U6): packet info, traffic class and segment size on every platform. */
 #if defined(_WIN32)
-#define CEE_MSG_CONTROL 96u
+#define CEE_MSG_CONTROL 72u /* a packet info and an ECN value: the record's room after the datagram fields */
 #else
 #define CEE_MSG_CONTROL 128u
 #endif
@@ -3066,6 +3090,13 @@ typedef struct {
 #endif
     uint32_t name[8]; /* a sockaddr_in6 or sockaddr_in (28 bytes at most) */
     uint64_t control[CEE_MSG_CONTROL / 8u];
+    struct {
+        uint32_t socket_family; /* a datagram send's (ADR 0050) */
+        uint32_t ecn;
+        uint32_t segment;
+        uint32_t name_length;
+        uint32_t control_length;
+    } datagram;
 } cee_msg_op;
 
 _Static_assert(sizeof(cee_msg_op) <= sizeof(ceesafe_async_msg_op), "ceesafe_async_msg_op holds a message operation");
@@ -3174,6 +3205,512 @@ int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count) {
 #endif
     (void)o;
     return cee_ready_sendv(m, fd, count);
+}
+
+/* ---- Datagrams (ADR 0050): a send with its destination and control messages, a receive with the peer's address and
+ * the control messages it brought, on the message record. ---- */
+
+#if defined(_WIN32)
+/* ws2def.h's control-message macros, whose TYPE_ALIGNMENT defines a type inside offsetof, which clang warns about:
+   headers and data aligned to 8, a pointer's size on the 64-bit targets Windows builds for. */
+#define CEE_WSA_ALIGN(n) (((size_t)(n) + 7u) & ~(size_t)7u)
+#define CEE_WSA_DATA(c) ((unsigned char *)(c) + CEE_WSA_ALIGN(sizeof(WSACMSGHDR)))
+#define CEE_WSA_LEN(n) (CEE_WSA_ALIGN(sizeof(WSACMSGHDR)) + (size_t)(n))
+#define CEE_WSA_SPACE(n) (CEE_WSA_ALIGN(sizeof(WSACMSGHDR)) + CEE_WSA_ALIGN(n))
+
+static WSACMSGHDR *cee_wsa_first(WSAMSG *msg) {
+    return msg->Control.len >= sizeof(WSACMSGHDR) ? (WSACMSGHDR *)(void *)msg->Control.buf : NULL;
+}
+
+static WSACMSGHDR *cee_wsa_next(WSAMSG *msg, WSACMSGHDR *c) {
+    unsigned char *next = (unsigned char *)c + CEE_WSA_ALIGN(c->cmsg_len);
+    unsigned char *end = (unsigned char *)msg->Control.buf + msg->Control.len;
+    return c->cmsg_len < sizeof(WSACMSGHDR) || next + sizeof(WSACMSGHDR) > end ? NULL : (WSACMSGHDR *)(void *)next;
+}
+
+static LPFN_WSARECVMSG cee_wsa_recvmsg;
+
+/* The WSARecvMsg extension, found once on the first socket that asks. */
+static bool cee_have_recvmsg(SOCKET s) {
+    if (cee_wsa_recvmsg == NULL) {
+        GUID id = WSAID_WSARECVMSG;
+        cee_wsa_recvmsg = (LPFN_WSARECVMSG)cee_extension(s, id);
+    }
+    return cee_wsa_recvmsg != NULL;
+}
+
+static void cee_msg_received(cee_op *o, DWORD flags, bool truncated) {
+    cee_msg_op *m = (cee_msg_op *)o;
+    m->msg.dwFlags = flags | (truncated ? (DWORD)MSG_TRUNC : 0u);
+}
+#endif
+
+#if !defined(CEE_COSMOOS)
+/* Appends one control message to the record's control buffer; false if it does not fit. */
+static bool cee_control_add(cee_msg_op *m, uint32_t *used, int level, int type, const void *data, uint32_t size) {
+#if defined(_WIN32)
+    uint32_t space = (uint32_t)CEE_WSA_SPACE(size);
+    if (*used + space > (uint32_t)sizeof m->control) return false;
+    WSACMSGHDR *c = (WSACMSGHDR *)(void *)((uint8_t *)m->control + *used);
+    ceesafe_mem_set(c, 0, space);
+    c->cmsg_len = CEE_WSA_LEN(size);
+    c->cmsg_level = level;
+    c->cmsg_type = type;
+    memcpy(CEE_WSA_DATA(c), data, size);
+#else
+    uint32_t space = (uint32_t)CMSG_SPACE(size);
+    if (*used + space > (uint32_t)sizeof m->control) return false;
+    struct cmsghdr *c = (struct cmsghdr *)(void *)((uint8_t *)m->control + *used);
+    ceesafe_mem_set(c, 0, space);
+    c->cmsg_len = (__typeof__(c->cmsg_len))CMSG_LEN(size); /* socklen_t on macOS, size_t on Linux */
+    c->cmsg_level = level;
+    c->cmsg_type = type;
+    memcpy(CMSG_DATA(c), data, size);
+#endif
+    *used += space;
+    return true;
+}
+#endif
+
+void ceesafe_async_msg_send_to(void *op, uint32_t socket_family, uint32_t family, const uint8_t *bytes, uint16_t port,
+                               uint32_t scope, uint32_t from_family, const uint8_t *from_bytes, uint32_t ecn,
+                               uint32_t segment) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    m->datagram.socket_family = socket_family;
+    m->datagram.ecn = ecn & 3u;
+    m->datagram.segment = segment;
+    m->datagram.name_length = 0;
+    m->datagram.control_length = 0;
+    ceesafe_endpoint e;
+    if (ceesafe_endpoint_make(family, bytes, port, scope, &e)) {
+        m->datagram.name_length = ceesafe_endpoint_sockaddr_for(&e, socket_family, m->name, (uint32_t)sizeof m->name);
+    }
+#if defined(CEE_COSMOOS)
+    (void)from_family;
+    (void)from_bytes;
+#else
+    uint32_t used = 0;
+    bool v6 = socket_family == 6u;
+    if (from_family != 0u && v6) {
+        struct in6_pktinfo info;
+        ceesafe_mem_set(&info, 0, sizeof info);
+        uint8_t *to = (uint8_t *)&info.ipi6_addr;
+        if (from_family == 4u) {
+            to[10] = 0xffu;
+            to[11] = 0xffu;
+            memcpy(to + 12, from_bytes, 4);
+        } else {
+            memcpy(to, from_bytes, 16);
+        }
+        (void)cee_control_add(m, &used, IPPROTO_IPV6, IPV6_PKTINFO, &info, (uint32_t)sizeof info);
+    } else if (from_family == 4u) {
+        struct in_pktinfo info;
+        ceesafe_mem_set(&info, 0, sizeof info);
+#if defined(_WIN32)
+        memcpy(&info.ipi_addr, from_bytes, 4);
+#else
+        memcpy(&info.ipi_spec_dst, from_bytes, 4); /* the source address to use */
+#endif
+        (void)cee_control_add(m, &used, IPPROTO_IP, IP_PKTINFO, &info, (uint32_t)sizeof info);
+    }
+#if defined(__linux__)
+    if (m->datagram.ecn != 0u) {
+        int value = (int)m->datagram.ecn;
+        (void)cee_control_add(m, &used, v6 ? IPPROTO_IPV6 : IPPROTO_IP, v6 ? IPV6_TCLASS : IP_TOS, &value,
+                              (uint32_t)sizeof value);
+    }
+    if (segment > 0u) {
+        uint16_t size = (uint16_t)segment;
+        (void)cee_control_add(m, &used, SOL_UDP, UDP_SEGMENT, &size, (uint32_t)sizeof size);
+    }
+#elif defined(_WIN32) && defined(IP_ECN) && defined(IPV6_ECN)
+    if (m->datagram.ecn != 0u) {
+        INT value = (INT)m->datagram.ecn;
+        (void)cee_control_add(m, &used, v6 ? IPPROTO_IPV6 : IPPROTO_IP, v6 ? IPV6_ECN : IP_ECN, &value,
+                              (uint32_t)sizeof value);
+    }
+#endif
+    m->datagram.control_length = used;
+#endif
+}
+
+/* The datagram's length: its parts' total. */
+static uint64_t cee_msg_total(const cee_msg_op *m, uint32_t count) {
+    uint64_t total = 0;
+    for (uint32_t k = 0; k < count; k++) {
+#if defined(CEE_COSMOOS)
+        total += m->parts[k].len;
+#elif defined(_WIN32)
+        total += m->parts[k].len;
+#else
+        total += m->parts[k].iov_len;
+#endif
+    }
+    return total;
+}
+
+#if !defined(CEE_COSMOOS)
+/* The record's message header for a send, or for a receive into the first part. */
+static void cee_msg_header(cee_msg_op *m, uint32_t count, bool receiving) {
+    ceesafe_mem_set(&m->msg, 0, sizeof m->msg);
+#if defined(_WIN32)
+    m->msg.name = (LPSOCKADDR)(void *)m->name;
+    m->msg.namelen = receiving ? (INT)sizeof m->name : (INT)m->datagram.name_length;
+    m->msg.lpBuffers = m->parts;
+    m->msg.dwBufferCount = count;
+    uint32_t control = receiving ? (uint32_t)sizeof m->control : m->datagram.control_length;
+    if (control > 0u) {
+        m->msg.Control.buf = (CHAR *)(void *)m->control;
+        m->msg.Control.len = control;
+    }
+#else
+    m->msg.msg_name = m->name;
+    m->msg.msg_namelen = receiving ? (socklen_t)sizeof m->name : (socklen_t)m->datagram.name_length;
+    m->msg.msg_iov = m->parts;
+    m->msg.msg_iovlen = (__typeof__(m->msg.msg_iovlen))count; /* int on macOS, size_t on Linux */
+    uint32_t control = receiving ? (uint32_t)sizeof m->control : m->datagram.control_length;
+    if (control > 0u) {
+        m->msg.msg_control = m->control;
+        m->msg.msg_controllen = (__typeof__(m->msg.msg_controllen))control;
+    }
+#endif
+}
+#endif
+
+/* A readiness step of a datagram send: one sendmsg, or the wait for writability. */
+static int64_t cee_ready_sendmsg(cee_msg_op *m, int32_t fd, uint32_t count) {
+#if defined(CEE_COSMOOS)
+    (void)m; (void)fd; (void)count;
+    return -(int64_t)EOPNOTSUPP;
+#elif defined(_WIN32)
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) {
+        return -(int64_t)EBADF;
+    }
+    cee_msg_header(m, count, false);
+    DWORD sent = 0;
+    if (WSASendMsg(s, &m->msg, 0, &sent, NULL, NULL) != 0) {
+        if (WSAGetLastError() == WSAEWOULDBLOCK) {
+            ceesafe_async_wait_writable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        return cee_wsa_failure();
+    }
+    return (int64_t)sent;
+#else
+    cee_msg_header(m, count, false);
+    bool v6 = m->datagram.socket_family == 6u;
+#if !defined(__linux__)
+    /* No ECN control message here: the socket's own value, set for this send and cleared after it (ADR 0050 §3.2). */
+    if (m->datagram.ecn != 0u) {
+        int value = (int)m->datagram.ecn;
+        (void)setsockopt(fd, v6 ? IPPROTO_IPV6 : IPPROTO_IP, v6 ? IPV6_TCLASS : IP_TOS, &value, sizeof value);
+    }
+#endif
+    ssize_t n;
+    do {
+        n = sendmsg(fd, &m->msg, 0);
+    } while (n < 0 && errno == EINTR);
+    int failed = errno;
+#if !defined(__linux__)
+    if (m->datagram.ecn != 0u) {
+        int zero = 0;
+        (void)setsockopt(fd, v6 ? IPPROTO_IPV6 : IPPROTO_IP, v6 ? IPV6_TCLASS : IP_TOS, &zero, sizeof zero);
+    }
+#else
+    (void)v6;
+#endif
+    if (n < 0) {
+        if (failed == EAGAIN || failed == EWOULDBLOCK) {
+            ceesafe_async_wait_writable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        return -(int64_t)failed;
+    }
+    return (int64_t)n;
+#endif
+}
+
+int64_t ceesafe_async_op_sendmsg(void *op, int32_t fd, uint32_t count) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    cee_op *o = &m->op;
+    if (count > CEE_MSG_PARTS) {
+        count = CEE_MSG_PARTS;
+    }
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+#endif
+    if (m->datagram.name_length == 0u) {
+        return -(int64_t)EINVAL;
+    }
+    if (count == 0u) {
+        /* An empty datagram: one empty part, since macOS refuses a message without any. */
+        ceesafe_async_msg_part(op, 0u, (const uint8_t *)m->name, 0u);
+        count = 1u;
+    }
+    if (m->datagram.segment > 0u && cee_msg_total(m, count) > m->datagram.segment) {
+#if defined(__linux__)
+        /* UDP_SEGMENT: at most 64 segments a call, and the datagram's own limit */
+        if ((cee_msg_total(m, count) + m->datagram.segment - 1u) / m->datagram.segment > 64u ||
+            cee_msg_total(m, count) > 65000u) {
+            return CEE_ASYNC_NO_SEGMENTS;
+        }
+#else
+        return CEE_ASYNC_NO_SEGMENTS; /* lib/std sends the segments one by one */
+#endif
+    }
+#if defined(_WIN32)
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET) {
+        cee_msg_header(m, count, false);
+        cee_iocp_begin(o, 8u, s);
+        int status = WSASendMsg(s, &m->msg, 0, NULL, &o->overlapped, NULL);
+        return cee_iocp_submitted(o, status, status != 0);
+    }
+#endif
+#if defined(CEE_URING)
+    if (cee_uring_open()) {
+        struct io_uring_sqe *e = cee_uring_entry();
+        if (e != NULL) {
+            cee_msg_header(m, count, false);
+            cee_uring_begin(o, 8u);
+            e->opcode = IORING_OP_SENDMSG;
+            e->fd = fd;
+            e->addr = (uint64_t)(uintptr_t)&m->msg;
+            e->len = 1u;
+            return cee_uring_go(o, e);
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_sendmsg(m, fd, count);
+}
+
+/* A readiness step of a receive: one recvmsg, or the wait for readability. */
+static int64_t cee_ready_recvmsg(cee_msg_op *m, int32_t fd) {
+#if defined(CEE_COSMOOS)
+    (void)m; (void)fd;
+    return -(int64_t)EOPNOTSUPP;
+#elif defined(_WIN32)
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) {
+        return -(int64_t)EBADF;
+    }
+    if (!cee_have_recvmsg(s)) {
+        return -(int64_t)EOPNOTSUPP;
+    }
+    cee_msg_header(m, 1u, true);
+    DWORD got = 0;
+    if (cee_wsa_recvmsg(s, &m->msg, &got, NULL, NULL) != 0) {
+        int failed = WSAGetLastError();
+        if (failed == WSAEWOULDBLOCK) {
+            ceesafe_async_wait_readable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        if (failed != WSAEMSGSIZE) {
+            return -(int64_t)ceesafe_socket_errno(failed);
+        }
+        m->msg.dwFlags |= (DWORD)MSG_TRUNC;
+        got = m->parts[0].len; /* the buffer is full, the rest is gone */
+    }
+    return (int64_t)got;
+#else
+    cee_msg_header(m, 1u, true);
+    ssize_t n;
+    do {
+        n = recvmsg(fd, &m->msg, 0);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            ceesafe_async_wait_readable(fd);
+            return CEE_ASYNC_PENDING;
+        }
+        return -(int64_t)errno;
+    }
+    return (int64_t)n;
+#endif
+}
+
+int64_t ceesafe_async_op_recvmsg(void *op, int32_t fd, uint8_t *buffer, uint64_t length) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    cee_op *o = &m->op;
+#if defined(_WIN32)
+    if (o->backend == 2u) {
+        return cee_op_poll(o);
+    }
+#endif
+#if defined(CEE_URING)
+    if (o->backend == 3u) {
+        return cee_op_poll(o);
+    }
+#endif
+    uint64_t room = length > 65536u ? 65536u : length; /* a datagram is at most 65507 bytes */
+    ceesafe_async_msg_part(op, 0u, buffer, room);
+#if defined(_WIN32)
+    SOCKET s = cee_iocp_socket(fd);
+    if (s != INVALID_SOCKET && cee_have_recvmsg(s)) {
+        cee_msg_header(m, 1u, true);
+        cee_iocp_begin(o, 7u, s);
+        int status = cee_wsa_recvmsg(s, &m->msg, NULL, &o->overlapped, NULL);
+        if (status != 0 && WSAGetLastError() == WSAEMSGSIZE) {
+            status = 0; /* completed at once, truncated: the completion still comes to the port */
+        }
+        return cee_iocp_submitted(o, status, status != 0);
+    }
+#endif
+#if defined(CEE_URING)
+    if (cee_uring_open()) {
+        struct io_uring_sqe *e = cee_uring_entry();
+        if (e != NULL) {
+            cee_msg_header(m, 1u, true);
+            cee_uring_begin(o, 7u);
+            e->opcode = IORING_OP_RECVMSG;
+            e->fd = fd;
+            e->addr = (uint64_t)(uintptr_t)&m->msg;
+            e->len = 1u;
+            return cee_uring_go(o, e);
+        }
+    }
+#endif
+    (void)o;
+    return cee_ready_recvmsg(m, fd);
+}
+
+#if !defined(CEE_COSMOOS)
+/* The local address an IPv6 packet info names: IPv4-mapped as IPv4; a link-local address with its interface. */
+static int64_t cee_local_v6(const uint8_t *address, uint32_t index, uint8_t *bytes, uint32_t *scope) {
+    bool mapped = address[10] == 0xffu && address[11] == 0xffu;
+    for (int k = 0; k < 10 && mapped; k++) {
+        mapped = address[k] == 0u;
+    }
+    ceesafe_mem_set(bytes, 0, 16);
+    if (mapped) {
+        memcpy(bytes, address + 12, 4);
+        *scope = 0;
+        return (int64_t)4 << 16;
+    }
+    memcpy(bytes, address, 16);
+    *scope = address[0] == 0xfeu && (address[1] & 0xc0u) == 0x80u ? index : 0u;
+    return (int64_t)6 << 16;
+}
+#endif
+
+int64_t ceesafe_async_msg_address(void *op, uint32_t which, uint8_t *bytes, uint32_t *scope) {
+    cee_msg_op *m = (cee_msg_op *)op;
+    if (which == 0u) {
+        ceesafe_endpoint e;
+        if (!ceesafe_endpoint_from_sockaddr(m->name, &e)) {
+            return -1;
+        }
+        memcpy(bytes, e.bytes, 16);
+        *scope = e.scope;
+        return ((int64_t)e.family << 16) | (int64_t)e.port;
+    }
+#if defined(CEE_COSMOOS)
+    (void)bytes;
+    (void)scope;
+    return -1;
+#elif defined(_WIN32)
+    if (m->msg.Control.buf == NULL) {
+        return -1;
+    }
+    for (WSACMSGHDR *c = cee_wsa_first(&m->msg); c != NULL; c = cee_wsa_next(&m->msg, c)) {
+        if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
+            IN_PKTINFO info;
+            memcpy(&info, CEE_WSA_DATA(c), sizeof info);
+            ceesafe_mem_set(bytes, 0, 16);
+            memcpy(bytes, &info.ipi_addr, 4);
+            *scope = 0;
+            return (int64_t)4 << 16;
+        }
+        if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO) {
+            IN6_PKTINFO info;
+            memcpy(&info, CEE_WSA_DATA(c), sizeof info);
+            return cee_local_v6((const uint8_t *)&info.ipi6_addr, (uint32_t)info.ipi6_ifindex, bytes, scope);
+        }
+    }
+    return -1;
+#else
+    if (m->msg.msg_control == NULL) {
+        return -1;
+    }
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&m->msg); c != NULL; c = CMSG_NXTHDR(&m->msg, c)) {
+#if defined(IP_PKTINFO)
+        if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_PKTINFO) {
+            struct in_pktinfo info;
+            memcpy(&info, CMSG_DATA(c), sizeof info);
+            ceesafe_mem_set(bytes, 0, 16);
+            memcpy(bytes, &info.ipi_addr, 4); /* the datagram's destination */
+            *scope = 0;
+            return (int64_t)4 << 16;
+        }
+#endif
+#if defined(IP_RECVDSTADDR)
+        if (c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_RECVDSTADDR) {
+            ceesafe_mem_set(bytes, 0, 16);
+            memcpy(bytes, CMSG_DATA(c), 4);
+            *scope = 0;
+            return (int64_t)4 << 16;
+        }
+#endif
+        if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_PKTINFO) {
+            struct in6_pktinfo info;
+            memcpy(&info, CMSG_DATA(c), sizeof info);
+            return cee_local_v6((const uint8_t *)&info.ipi6_addr, (uint32_t)info.ipi6_ifindex, bytes, scope);
+        }
+    }
+    return -1;
+#endif
+}
+
+uint32_t ceesafe_async_msg_flags(void *op) {
+    cee_msg_op *m = (cee_msg_op *)op;
+#if defined(CEE_COSMOOS)
+    (void)m;
+    return 0;
+#elif defined(_WIN32)
+    uint32_t flags = (m->msg.dwFlags & (DWORD)MSG_TRUNC) != 0u ? 1u : 0u;
+    if (m->msg.Control.buf != NULL) {
+        for (WSACMSGHDR *c = cee_wsa_first(&m->msg); c != NULL; c = cee_wsa_next(&m->msg, c)) {
+#if defined(IP_ECN) && defined(IPV6_ECN)
+            if ((c->cmsg_level == IPPROTO_IP && c->cmsg_type == IP_ECN) ||
+                (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_ECN)) {
+                INT value = 0;
+                memcpy(&value, CEE_WSA_DATA(c), sizeof value);
+                flags |= ((uint32_t)value & 3u) << 8;
+            }
+#endif
+        }
+    }
+    return flags;
+#else
+    uint32_t flags = (m->msg.msg_flags & MSG_TRUNC) != 0 ? 1u : 0u;
+    if (m->msg.msg_control != NULL) {
+        for (struct cmsghdr *c = CMSG_FIRSTHDR(&m->msg); c != NULL; c = CMSG_NXTHDR(&m->msg, c)) {
+            bool tos = c->cmsg_level == IPPROTO_IP && (c->cmsg_type == IP_TOS
+#if defined(IP_RECVTOS)
+                                                      || c->cmsg_type == IP_RECVTOS
+#endif
+                                                      );
+            if (tos) {
+                flags |= ((uint32_t)CMSG_DATA(c)[0] & 3u) << 8; /* one byte */
+            }
+            if (c->cmsg_level == IPPROTO_IPV6 && c->cmsg_type == IPV6_TCLASS) {
+                int value = 0;
+                memcpy(&value, CMSG_DATA(c), sizeof value);
+                flags |= ((uint32_t)value & 3u) << 8;
+            }
+        }
+    }
+    return flags;
+#endif
 }
 
 /* ---- Sending a file (ADR 0051): sendfile, or TransmitFile on IOCP; CEE_ASYNC_NO_SENDFILE where neither applies. ---- */

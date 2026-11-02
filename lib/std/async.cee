@@ -60,6 +60,57 @@ extern "C" {
     fn ceesafe_async_op_sendfile(op: *mut void, socket: i32, file: *void, offset: u64, length: u64) -> i64;
     @effects()
     fn ceesafe_file_read_at(file: *void, buffer: *mut u8, length: u64, offset: u64) -> i64;
+    @effects()
+    fn ceesafe_async_udp_bind(
+        family: u32,
+        bytes: *u8,
+        port: u16,
+        scope: u32,
+        flags: u32,
+        sendBuffer: u32,
+        receiveBuffer: u32,
+    ) -> i64;
+    @effects()
+    fn ceesafe_async_msg_send_to(
+        op: *mut void,
+        socketFamily: u32,
+        family: u32,
+        bytes: *u8,
+        port: u16,
+        scope: u32,
+        fromFamily: u32,
+        fromBytes: *u8,
+        ecn: u32,
+        segment: u32,
+    );
+    @effects()
+    fn ceesafe_async_op_sendmsg(op: *mut void, fd: i32, count: u32) -> i64;
+    @effects()
+    fn ceesafe_async_op_recvmsg(op: *mut void, fd: i32, buffer: *mut u8, length: u64) -> i64;
+    @effects()
+    fn ceesafe_async_msg_address(op: *mut void, which: u32, bytes: *mut u8, scope: *mut u32) -> i64;
+    @effects()
+    fn ceesafe_async_msg_flags(op: *mut void) -> u32;
+    @effects()
+    fn ceesafe_async_udp_send(
+        fd: i32,
+        data: *u8,
+        length: u64,
+        socketFamily: u32,
+        family: u32,
+        bytes: *u8,
+        port: u16,
+        scope: u32,
+    ) -> i64;
+    @effects()
+    fn ceesafe_async_udp_recv(
+        fd: i32,
+        buffer: *mut u8,
+        length: u64,
+        bytes: *mut u8,
+        scope: *mut u32,
+        info: *mut u32,
+    ) -> i64;
 }
 
 /// Console output for tasks: in order with Console's, and never blocking the thread (ADR 0031 §3.5).
@@ -496,6 +547,196 @@ public struct AsyncTcpStream {
     }
 }
 
+/// A UDP socket for tasks (ADR 0050): datagrams sent whole or not at all, and received one at a time, a longer one than
+/// the buffer reported as truncated. `sendTo` and `recvFrom` are the common case; `sendMsg` and `recvMsg` add the
+/// local address, ECN bits and segments that QUIC needs.
+public struct AsyncUdpSocket {
+    private fd: i32;
+    private family: u32; // 4 or 6: an IPv4 destination of an IPv6 socket is sent IPv4-mapped
+    private port: u16;   // the bound port, for `UdpReceived.to`
+
+    /// A socket bound to `address` (port 0: the system chooses), with `options`.
+    /// Safety: the runtime reads the address only during the call; the descriptor becomes the socket's at once, so an
+    /// error closes it.
+    public fn bind(address: SocketAddress, options: UdpOptions) -> Result<AsyncUdpSocket, IoError> {
+        let raw = RawAddress.of(address);
+        let r = unsafe { ceesafe_async_udp_bind(
+            raw.family,
+            borrow raw.bytes as *[u8; 16] as *u8,
+            raw.port,
+            raw.scope,
+            options.flags(),
+            options.sendBuffer,
+            options.recvBuffer,
+        ) };
+        if (r < 0) {
+            return Err(AsyncIo.ioError(r));
+        }
+        var socket = AsyncUdpSocket { fd: truncate<i32>(r), family: raw.family, port: raw.port };
+        if (raw.port == 0) {
+            socket.port = match (RawAddress.name(socket.fd, 0)?) {
+                SocketAddress.V4(_, p) => p,
+                SocketAddress.V6(_, p, _) => p,
+            };
+        }
+        return Ok(socket);
+    }
+
+    /// The address it is bound to.
+    public fn localAddress(borrow this) -> Result<SocketAddress, IoError> => RawAddress.name(this.fd, 0);
+
+    /// Sends `bytes` as one datagram to `to`: whole, or not at all (a datagram too long for the path is
+    /// `Io(InvalidInput)`). An empty slice sends an empty datagram.
+    public async fn sendTo(borrow this, bytes: Slice<u8>, to: SocketAddress) -> Result<void, AsyncError> {
+        let parts = IoParts.of(bytes);
+        await this.sendOnce(borrow parts, to, null, 0, 0)?;
+        return Ok();
+    }
+
+    /// Waits for one datagram, into `buffer`.
+    public async fn recvFrom(borrow this, buffer: SliceMut<u8>) -> Result<Datagram, AsyncError> {
+        let r = await this.recvMsg(buffer)?;
+        return Ok(Datagram { length: r.length, from: r.from, truncated: r.truncated });
+    }
+
+    /// Sends `message` (ADR 0050 §3.1): one datagram of its parts, or with `segmentSize` > 0 datagrams of that many
+    /// bytes each, the last one shorter, in one call where the system can (Linux's UDP_SEGMENT) and one by one
+    /// elsewhere. The result is the bytes sent: always whole segments. If a segment fails after others went, the result
+    /// is the bytes of those before it; if the first fails, its error.
+    public async fn sendMsg(borrow this, message: borrow UdpMessage) -> Result<usize, AsyncError> {
+        let total = message.parts.totalLength();
+        let size = message.segmentSize as usize;
+        if (size == 0 || total <= size) {
+            let r = await this.sendOnce(borrow message.parts, message.to, message.from, message.ecn, 0)?;
+            return Ok(truncate<usize>(r));
+        }
+        let together = await this.sendOnce(
+            borrow message.parts,
+            message.to,
+            message.from,
+            message.ecn,
+            message.segmentSize,
+        )?;
+        if (together >= 0) {
+            return Ok(truncate<usize>(together));
+        }
+        var sent: usize = 0;
+        while (sent < total) {
+            let rest = message.parts.after(sent);
+            let piece = rest.upTo(size);
+            match (await this.sendOnce(borrow piece, message.to, message.from, message.ecn, 0)) {
+                Ok(_) => { sent += piece.totalLength(); }
+                Err(e) => { return if (sent == 0) Err(e) else Ok(sent); }
+            }
+        }
+        return Ok(sent);
+    }
+
+    /// Waits for one datagram, into `buffer`, with what `UdpOptions` asked to be reported about it.
+    /// Safety: the runtime writes at most the buffer's length; the buffer stays borrowed until the operation is
+    /// complete, which this frame outlives (an operation abandoned by a cancellation is waited for, §40.7).
+    public async fn recvMsg(borrow this, buffer: SliceMut<u8>) -> Result<UdpReceived, AsyncError> {
+        var op = AsyncMsgOp.create();
+        loop {
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_recvmsg(op.raw(), this.fd, buffer.ptr, buffer.length as u64) };
+            if (r != AsyncOp.pending()) {
+                let length = truncate<usize>(op.result(r)?);
+                return this.received(mut op, length);
+            }
+            await Async.park();
+        }
+    }
+
+    fn noSegments() -> i64 => -9223372036854775805; // CEE_ASYNC_NO_SEGMENTS
+
+    /// One send of `parts` (with `segment` > 0, as segments in one call): the bytes sent, or -1 where the system cannot
+    /// send them so (the caller then sends the segments one by one).
+    /// Safety: the runtime reads the addresses during the call only; the parts stay borrowed until the operation is
+    /// complete, which this frame outlives.
+    async fn sendOnce(
+        borrow this,
+        parts: borrow IoParts,
+        to: SocketAddress,
+        from: SocketAddress?,
+        ecn: u8,
+        segment: u16,
+    ) -> Result<i64, AsyncError> {
+        var op = AsyncMsgOp.create();
+        let count = op.fill(parts);
+        let target = RawAddress.of(to);
+        let source = match (from) {
+            Some(a) => RawAddress.of(a),
+            null => RawAddress { family: 0, bytes: [0u8; 16], port: 0, scope: 0 },
+        };
+        unsafe {
+            ceesafe_async_msg_send_to(
+                op.raw(),
+                this.family,
+                target.family,
+                borrow target.bytes as *[u8; 16] as *u8,
+                target.port,
+                target.scope,
+                source.family,
+                borrow source.bytes as *[u8; 16] as *u8,
+                ecn as u32,
+                segment as u32,
+            );
+        }
+        loop {
+            op.check()?;
+            let r = unsafe { ceesafe_async_op_sendmsg(op.raw(), this.fd, count) };
+            if (r == AsyncUdpSocket.noSegments()) {
+                return Ok(-1);
+            }
+            if (r != AsyncOp.pending()) {
+                return op.result(r);
+            }
+            await Async.park();
+        }
+    }
+
+    /// A completed receive's addresses and flags, from the record.
+    /// Safety: the runtime writes the 16 bytes and the scope during each call only.
+    fn received(borrow this, op: borrow mut AsyncMsgOp, length: usize) -> Result<UdpReceived, AsyncError> {
+        var bytes = [0u8; 16];
+        var scope: u32 = 0;
+        let peer = unsafe { ceesafe_async_msg_address(
+            op.raw(),
+            0,
+            borrow mut bytes as *mut [u8; 16] as *mut u8,
+            borrow mut scope as *mut u32,
+        ) };
+        if (peer < 0) {
+            return Err(AsyncError.Io(IoError.Unsupported));
+        }
+        let from = RawAddress.decode(peer, bytes, scope);
+        let local = unsafe { ceesafe_async_msg_address(
+            op.raw(),
+            1,
+            borrow mut bytes as *mut [u8; 16] as *mut u8,
+            borrow mut scope as *mut u32,
+        ) };
+        // A local address's port field is 0: the socket's port is added.
+        let to: SocketAddress? = if (local < 0) null else Some(
+            RawAddress.decode(local + this.port as i64, bytes, scope),
+        );
+        let flags = unsafe { ceesafe_async_msg_flags(op.raw()) };
+        return Ok(UdpReceived {
+            length: length,
+            truncated: (flags & 1) != 0,
+            from: from,
+            to: to,
+            ecn: truncate<u8>((flags >> 8) & 3),
+        });
+    }
+
+    /// Safety: the descriptor is closed once, here.
+    drop {
+        unsafe { ceesafe_async_close(this.fd); }
+    }
+}
+
 /// The non-blocking socket calls under AsyncTcpListener and AsyncTcpStream, one at a time, on descriptors: a value
 /// >= 0, `wouldBlock()`, or a negated errno. For code that runs its own wait loop, as the interpreter does; programs use
 /// the async types, which own their descriptors.
@@ -586,6 +827,74 @@ public struct AsyncSockets {
         }
     }
 
+    /// A UDP socket bound to the address's fields (ADR 0050), with UdpOptions' flags and the buffer sizes: the
+    /// descriptor, or a negated errno.
+    /// Safety: the runtime reads the 16 address bytes during the call only.
+    public fn udpBind(
+        family: u32,
+        bytes: Slice<u8>,
+        port: u16,
+        scope: u32,
+        flags: u32,
+        sendBuffer: u32,
+        receiveBuffer: u32,
+    ) -> i64 {
+        if (bytes.length < 16) {
+            return -22; // EINVAL
+        }
+        return unsafe { ceesafe_async_udp_bind(family, bytes.ptr, port, scope, flags, sendBuffer, receiveBuffer) };
+    }
+
+    /// One datagram of `data` to the address's fields, from a socket of `socketFamily`: the count, `wouldBlock()`, or
+    /// a negated errno.
+    /// Safety: the runtime reads the data and the 16 address bytes during the call only.
+    public fn udpSend(
+        fd: i32,
+        data: Slice<u8>,
+        socketFamily: u32,
+        family: u32,
+        bytes: Slice<u8>,
+        port: u16,
+        scope: u32,
+    ) -> i64 {
+        if (bytes.length < 16) {
+            return -22; // EINVAL
+        }
+        return unsafe { ceesafe_async_udp_send(
+            fd,
+            data.ptr,
+            data.length as u64,
+            socketFamily,
+            family,
+            bytes.ptr,
+            port,
+            scope,
+        ) };
+    }
+
+    /// One datagram into `buffer`: its length there, `wouldBlock()`, or a negated errno; the peer's 16 bytes and scope,
+    /// and in `info` (family << 24) | (truncated << 16) | port.
+    /// Safety: the runtime writes at most the buffer's length and 16 address bytes, during the call only.
+    public fn udpRecv(
+        fd: i32,
+        buffer: SliceMut<u8>,
+        bytes: SliceMut<u8>,
+        scope: borrow mut u32,
+        info: borrow mut u32,
+    ) -> i64 {
+        if (bytes.length < 16) {
+            return -22; // EINVAL
+        }
+        return unsafe { ceesafe_async_udp_recv(
+            fd,
+            buffer.ptr,
+            buffer.length as u64,
+            bytes.ptr,
+            scope as *mut u32,
+            info as *mut u32,
+        ) };
+    }
+
     /// An interface's index by name (an IPv6 zone), 0 if there is none (lib/std's net.cee declares the call).
     /// Safety: the runtime reads the name during the call only.
     public fn interfaceIndex(name: Slice<u8>) -> u32 =>
@@ -661,6 +970,16 @@ struct RawAddress {
         }
         SocketAddress.V6(v6, p, s) => RawAddress { family: 6, bytes: v6, port: p, scope: s },
     };
+
+    /// The address the runtime packed as (family << 16) | port, with its 16 bytes and scope.
+    fn decode(packed: i64, bytes: [u8; 16], scope: u32) -> SocketAddress {
+        let p = truncate<u64>(packed);
+        let port = truncate<u16>(p & 65535);
+        if ((p >> 16) == 4) {
+            return SocketAddress.V4([bytes[0], bytes[1], bytes[2], bytes[3]], port);
+        }
+        return SocketAddress.V6(bytes, port, scope);
+    }
 
     /// The descriptor's own (`peer` 0) or its peer's address.
     /// Safety: the runtime writes the 16 bytes and the scope during the call only.

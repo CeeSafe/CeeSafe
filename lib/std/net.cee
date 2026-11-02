@@ -462,6 +462,111 @@ public struct IoParts<region r> {
         return total;
     }
 
+    /// The first `limit` bytes, as parts: what one segment of a datagram send holds (ADR 0050).
+    fn upTo(this, limit: usize) -> IoParts<r> {
+        var parts = this;
+        var left = limit;
+        var k: u32 = 0;
+        while (k < this.n) {
+            let part = this.part(k);
+            let keep = if (part.length < left) part.length else left;
+            let cut = part[0..keep];
+            parts = match (k) {
+                0 => IoParts {
+                    p0: cut,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                1 => IoParts {
+                    p0: parts.p0,
+                    p1: cut,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                2 => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: cut,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                3 => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: cut,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                4 => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: cut,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                5 => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: cut,
+                    p6: parts.p6,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                6 => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: cut,
+                    p7: parts.p7,
+                    n: parts.n,
+                },
+                _ => IoParts {
+                    p0: parts.p0,
+                    p1: parts.p1,
+                    p2: parts.p2,
+                    p3: parts.p3,
+                    p4: parts.p4,
+                    p5: parts.p5,
+                    p6: parts.p6,
+                    p7: cut,
+                    n: parts.n,
+                },
+            };
+            left -= keep;
+            k += 1;
+        }
+        return parts;
+    }
+
     /// The bytes after the first `skip`, as parts: whole parts dropped, the part where byte `skip` falls cut. Empty
     /// (no parts) from `totalLength()` on. What a write loop sends after a partial send.
     public fn after(this, skip: usize) -> IoParts<r> {
@@ -485,6 +590,75 @@ public struct IoParts<region r> {
             n: this.n - k,
         };
     }
+}
+
+/// How a UDP socket is made (ADR 0050 §3.1). `defaults()`: no option set, the system's buffer sizes, and dual stack for
+/// an IPv6 address.
+public struct UdpOptions {
+    /// SO_REUSEADDR (POSIX; Windows: ignored).
+    public reuseAddress: bool;
+    /// SO_REUSEPORT: several sockets on one port; refused where the platform has no such option (Windows:
+    /// IoError.Unsupported).
+    public reusePort: bool;
+    /// IPV6_V6ONLY for an IPv6 address: false (dual stack) also takes IPv4 datagrams, their peers reported as V4.
+    public v6Only: bool;
+    /// SO_SNDBUF; 0: the system's.
+    public sendBuffer: u32;
+    /// SO_RCVBUF; 0: the system's.
+    public recvBuffer: u32;
+    /// IP_RECVTOS / IPV6_RECVTCLASS: recvMsg reports each datagram's ECN bits.
+    public receiveEcn: bool;
+    /// IP_PKTINFO / IPV6_RECVPKTINFO: recvMsg reports the local address each datagram arrived at.
+    public receiveLocal: bool;
+
+    public fn defaults() -> UdpOptions => UdpOptions {
+        reuseAddress: false,
+        reusePort: false,
+        v6Only: false,
+        sendBuffer: 0,
+        recvBuffer: 0,
+        receiveEcn: false,
+        receiveLocal: false,
+    };
+
+    /// The runtime's flags (rt.h's CEE_UDP_*).
+    fn flags(borrow this) -> u32 =>
+        (if (this.reuseAddress) 1u32 else 0) | (if (this.reusePort) 2u32 else 0) | (if (this.v6Only) 4u32 else 0) |
+            (if (this.receiveEcn) 8u32 else 0) | (if (this.receiveLocal) 16u32 else 0);
+}
+
+/// What `AsyncUdpSocket.recvFrom` gives: the datagram's length in the buffer, where it came from, and whether it was
+/// longer than the buffer (the rest is gone).
+public struct Datagram {
+    public length: usize;
+    public from: SocketAddress;
+    public truncated: bool;
+}
+
+/// What `AsyncUdpSocket.recvMsg` gives (ADR 0050 §3.1).
+public struct UdpReceived {
+    /// The bytes in the buffer.
+    public length: usize;
+    /// The datagram was longer than the buffer; the rest is gone.
+    public truncated: bool;
+    public from: SocketAddress;
+    /// The local address it arrived at, with the socket's port (with `receiveLocal`; else null).
+    public to: SocketAddress?;
+    /// Its ECN bits, 0 to 3 (with `receiveEcn`; else 0).
+    public ecn: u8;
+}
+
+/// A datagram for `AsyncUdpSocket.sendMsg` (ADR 0050 §3.1): its parts (ADR 0045), where it goes, and optionally the
+/// local address it leaves from, its ECN bits and a segment size.
+public struct UdpMessage<region r> {
+    public parts: IoParts<r>;
+    public to: SocketAddress;
+    /// The source address (IP_PKTINFO); null: the system's choice.
+    public from: SocketAddress?;
+    /// 0: not set.
+    public ecn: u8;
+    /// 0: one datagram; else the parts are sent as datagrams of this many bytes, the last one shorter.
+    public segmentSize: u16;
 }
 
 /// Name resolution for tasks (ADR 0048).

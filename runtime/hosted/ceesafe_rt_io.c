@@ -5,6 +5,9 @@
  * Windows (MSVC, best effort; spec/c-backend.md §1.1): files and processes through its C runtime;
  * TCP through Winsock 2, its sockets behind a table of ids. Host services (type-system.md §26.7-§26.10, ADR 0028) work on all three.
  */
+#if defined(__APPLE__) && !defined(__APPLE_USE_RFC_3542)
+#define __APPLE_USE_RFC_3542 1 /* IPV6_RECVPKTINFO and IPV6_RECVTCLASS (ADR 0050) */
+#endif
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 /* pread, for a read at an offset (ADR 0051), under glibc's strict C11 headers, as ceesafe_rt_thread.c does. */
 #define _GNU_SOURCE
@@ -41,6 +44,7 @@
 #include <spawn.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/uio.h> /* struct iovec, for a datagram's receive (ADR 0050) */
 #include <sys/wait.h>
 #include <unistd.h>
 #if defined(__has_include)
@@ -90,7 +94,7 @@ uint32_t ceesafe_io_kind(int32_t error) {
     case EEXIST: return CEE_IO_ALREADY_EXISTS;
     case EISDIR: return CEE_IO_IS_DIRECTORY;
     case ENOTDIR: return CEE_IO_NOT_DIRECTORY;
-    case EINVAL: case ENAMETOOLONG: return CEE_IO_INVALID_INPUT;
+    case EINVAL: case ENAMETOOLONG: case EMSGSIZE: return CEE_IO_INVALID_INPUT; /* EMSGSIZE: a datagram too long */
     case EPIPE: return CEE_IO_BROKEN_PIPE;
     case ECONNREFUSED: return CEE_IO_CONNECTION_REFUSED;
     case EADDRINUSE: return CEE_IO_ADDRESS_IN_USE;
@@ -379,7 +383,7 @@ static int32_t cee_wsa_errno(int error) {
     case WSAEAFNOSUPPORT: return EAFNOSUPPORT;
     case WSAEPROTONOSUPPORT: return EPROTONOSUPPORT;
     case WSAEACCES: return EACCES;
-    case WSAEINVAL: case WSAEFAULT: return EINVAL;
+    case WSAEINVAL: case WSAEFAULT: case WSAEMSGSIZE: return EINVAL;
     case WSAENOTSOCK: return ENOTSOCK;
     case WSAEMFILE: return EMFILE;
     case WSAENOBUFS: case WSA_NOT_ENOUGH_MEMORY: return ENOMEM;
@@ -1789,6 +1793,248 @@ void ceesafe_random_key(uint64_t *key) {
     key[0] = cee_random_words[0];
     key[1] = cee_random_words[1];
 }
+
+/* ---- UDP (ADR 0050): binding with the options, and one nonblocking send or receive for code that runs its own wait
+ * loop (the interpreter). The operations of tasks are ceesafe_rt_async.c's. ---- */
+
+bool ceesafe_endpoint_from_sockaddr(const void *address, ceesafe_endpoint *out) {
+    return cee_endpoint_from((const cee_sockaddr *)address, out);
+}
+
+uint32_t ceesafe_endpoint_sockaddr_for(const ceesafe_endpoint *e, uint32_t socket_family, void *out, uint32_t room) {
+    if (e->family == 4u && socket_family == 6u) {
+        ceesafe_endpoint mapped = *e; /* ::ffff:a.b.c.d */
+        mapped.family = 6u;
+        mapped.scope = 0u;
+        ceesafe_mem_set(mapped.bytes, 0, sizeof mapped.bytes);
+        mapped.bytes[10] = 0xffu;
+        mapped.bytes[11] = 0xffu;
+        memcpy(mapped.bytes + 12, e->bytes, 4);
+        return ceesafe_endpoint_sockaddr(&mapped, out, room);
+    }
+    return ceesafe_endpoint_sockaddr(e, out, room);
+}
+
+#if defined(CEE_COSMOOS) || defined(COSMO_AF_INET)
+/* CosmoOS userland's socket layer has no UDP yet (ADR 0050 §3.2). */
+int64_t ceesafe_async_udp_bind(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope, uint32_t flags,
+                               uint32_t send_buffer, uint32_t receive_buffer) {
+    (void)family; (void)bytes; (void)port; (void)scope; (void)flags; (void)send_buffer; (void)receive_buffer;
+    return -(int64_t)EOPNOTSUPP;
+}
+
+int64_t ceesafe_async_udp_send(int32_t fd, const uint8_t *data, uint64_t length, uint32_t socket_family, uint32_t family,
+                               const uint8_t *bytes, uint16_t port, uint32_t scope) {
+    (void)fd; (void)data; (void)length; (void)socket_family; (void)family; (void)bytes; (void)port; (void)scope;
+    return -(int64_t)EOPNOTSUPP;
+}
+
+int64_t ceesafe_async_udp_recv(int32_t fd, uint8_t *buffer, uint64_t length, uint8_t *bytes, uint32_t *scope,
+                               uint32_t *info) {
+    (void)fd; (void)buffer; (void)length; (void)bytes; (void)scope; (void)info;
+    return -(int64_t)EOPNOTSUPP;
+}
+#else
+#if defined(_WIN32)
+typedef SOCKET cee_udp_socket;
+#define CEE_UDP_INVALID INVALID_SOCKET
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
+static int cee_udp_error(void) { return cee_wsa_errno(WSAGetLastError()); }
+static void cee_udp_close(SOCKET s) { (void)closesocket(s); }
+#else
+typedef int cee_udp_socket;
+#define CEE_UDP_INVALID (-1)
+static int cee_udp_error(void) { return errno; }
+static void cee_udp_close(int s) { (void)close(s); }
+#endif
+
+static int cee_udp_flag(cee_udp_socket s, int level, int name, int value) {
+    return setsockopt(s, level, name, (const char *)&value, (int)sizeof value) != 0 ? cee_udp_error() : 0;
+}
+
+/* The local address of each datagram (IP_PKTINFO and its kin). On an IPv6 socket the IPv4 option is best effort: it
+   covers the IPv4-mapped traffic of a dual-stack socket where the system takes it. */
+static int cee_udp_receive_local(cee_udp_socket s, bool v6) {
+    int failure = 0;
+    if (v6) {
+#if defined(IPV6_RECVPKTINFO)
+        failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_RECVPKTINFO, 1);
+#elif defined(IPV6_PKTINFO)
+        failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_PKTINFO, 1); /* Windows */
+#else
+        failure = EOPNOTSUPP;
+#endif
+    }
+#if defined(IP_RECVPKTINFO)
+    int v4 = cee_udp_flag(s, IPPROTO_IP, IP_RECVPKTINFO, 1); /* macOS */
+#elif defined(IP_PKTINFO)
+    int v4 = cee_udp_flag(s, IPPROTO_IP, IP_PKTINFO, 1);
+#elif defined(IP_RECVDSTADDR)
+    int v4 = cee_udp_flag(s, IPPROTO_IP, IP_RECVDSTADDR, 1);
+#else
+    int v4 = EOPNOTSUPP;
+#endif
+    return v6 ? failure : v4;
+}
+
+/* The ECN bits of each datagram: the traffic class's or the type of service's low two bits. */
+static int cee_udp_receive_ecn(cee_udp_socket s, bool v6) {
+    int failure = 0;
+#if defined(_WIN32)
+#if defined(IP_RECVECN) && defined(IPV6_RECVECN)
+    if (v6) failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_RECVECN, 1);
+    int v4 = cee_udp_flag(s, IPPROTO_IP, IP_RECVECN, 1);
+#else
+    if (v6) failure = EOPNOTSUPP;
+    int v4 = EOPNOTSUPP;
+#endif
+#else
+#if defined(IPV6_RECVTCLASS)
+    if (v6) failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_RECVTCLASS, 1);
+#else
+    if (v6) failure = EOPNOTSUPP;
+#endif
+#if defined(IP_RECVTOS)
+    int v4 = cee_udp_flag(s, IPPROTO_IP, IP_RECVTOS, 1);
+#else
+    int v4 = EOPNOTSUPP;
+#endif
+#endif
+    return v6 ? failure : v4;
+}
+
+int64_t ceesafe_async_udp_bind(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope, uint32_t flags,
+                               uint32_t send_buffer, uint32_t receive_buffer) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) return -(int64_t)EINVAL;
+    cee_sockaddr a;
+    uint32_t length = ceesafe_endpoint_sockaddr(&e, &a, (uint32_t)sizeof a);
+    if (length == 0) return -(int64_t)EAFNOSUPPORT;
+#if defined(_WIN32)
+    if ((flags & CEE_UDP_REUSE_PORT) != 0u) return -(int64_t)EOPNOTSUPP;
+    if (!cee_wsa_ready()) return -(int64_t)ENOSYS;
+#elif !defined(SO_REUSEPORT)
+    if ((flags & CEE_UDP_REUSE_PORT) != 0u) return -(int64_t)EOPNOTSUPP;
+#endif
+    bool v6 = e.family == 6u;
+    cee_udp_socket s = socket(v6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == CEE_UDP_INVALID) return -(int64_t)cee_udp_error();
+    int failure = 0;
+#if !defined(_WIN32)
+    if ((flags & CEE_UDP_REUSE_ADDRESS) != 0u) failure = cee_udp_flag(s, SOL_SOCKET, SO_REUSEADDR, 1);
+#if defined(SO_REUSEPORT)
+    if (failure == 0 && (flags & CEE_UDP_REUSE_PORT) != 0u) failure = cee_udp_flag(s, SOL_SOCKET, SO_REUSEPORT, 1);
+#endif
+#endif
+    if (failure == 0 && v6) failure = cee_udp_flag(s, IPPROTO_IPV6, IPV6_V6ONLY, (flags & CEE_UDP_V6_ONLY) != 0u ? 1 : 0);
+    if (failure == 0 && send_buffer > 0u) {
+        failure = cee_udp_flag(s, SOL_SOCKET, SO_SNDBUF, send_buffer > (uint32_t)INT32_MAX ? INT32_MAX : (int)send_buffer);
+    }
+    if (failure == 0 && receive_buffer > 0u) {
+        int size = receive_buffer > (uint32_t)INT32_MAX ? INT32_MAX : (int)receive_buffer;
+        failure = cee_udp_flag(s, SOL_SOCKET, SO_RCVBUF, size);
+    }
+    if (failure == 0 && (flags & CEE_UDP_RECEIVE_LOCAL) != 0u) failure = cee_udp_receive_local(s, v6);
+    if (failure == 0 && (flags & CEE_UDP_RECEIVE_ECN) != 0u) failure = cee_udp_receive_ecn(s, v6);
+#if defined(_WIN32)
+    if (failure == 0) {
+        /* A port unreachable would otherwise fail a later receive with WSAECONNRESET (ADR 0050 §3.1). */
+        BOOL report = FALSE;
+        DWORD returned = 0;
+        (void)WSAIoctl(s, SIO_UDP_CONNRESET, &report, (DWORD)sizeof report, NULL, 0, &returned, NULL, NULL);
+    }
+    u_long on = 1;
+    if (failure == 0 && ioctlsocket(s, FIONBIO, &on) != 0) failure = cee_udp_error();
+    if (failure == 0 && bind(s, &a.sa, (int)length) != 0) failure = cee_udp_error();
+#else
+    if (failure == 0 && !cee_nonblocking(s)) failure = errno;
+    if (failure == 0 && bind(s, &a.sa, (socklen_t)length) != 0) failure = errno;
+#endif
+    if (failure != 0) {
+        cee_udp_close(s);
+        return -(int64_t)failure;
+    }
+#if defined(_WIN32)
+    int32_t id = cee_socket_add(s);
+    return id < 0 ? -(int64_t)ENOMEM : (int64_t)id;
+#else
+    return (int64_t)s;
+#endif
+}
+
+int64_t ceesafe_async_udp_send(int32_t fd, const uint8_t *data, uint64_t length, uint32_t socket_family, uint32_t family,
+                               const uint8_t *bytes, uint16_t port, uint32_t scope) {
+    ceesafe_endpoint e;
+    if (!ceesafe_endpoint_make(family, bytes, port, scope, &e)) return -(int64_t)EINVAL;
+    cee_sockaddr a;
+    uint32_t to = ceesafe_endpoint_sockaddr_for(&e, socket_family, &a, (uint32_t)sizeof a);
+    if (to == 0) return -(int64_t)EAFNOSUPPORT;
+    if (length > 65535u) return -(int64_t)EINVAL;
+#if defined(_WIN32)
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    int n = sendto(s, (const char *)data, (int)length, 0, &a.sa, (int)to);
+    if (n == SOCKET_ERROR) {
+        int failed = WSAGetLastError();
+        return failed == WSAEWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)cee_wsa_errno(failed);
+    }
+    return (int64_t)n;
+#else
+    ssize_t n;
+    do {
+        n = sendto(fd, data, (size_t)length, 0, &a.sa, (socklen_t)to);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+    return (int64_t)n;
+#endif
+}
+
+int64_t ceesafe_async_udp_recv(int32_t fd, uint8_t *buffer, uint64_t length, uint8_t *bytes, uint32_t *scope,
+                               uint32_t *info) {
+    cee_sockaddr a;
+    ceesafe_mem_set(&a, 0, sizeof a);
+    uint64_t room = length > 65536u ? 65536u : length; /* a datagram is at most 65507 bytes */
+    bool truncated = false;
+#if defined(_WIN32)
+    SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
+    if (s == INVALID_SOCKET) return -(int64_t)EBADF;
+    int from = (int)sizeof a;
+    int n = recvfrom(s, (char *)buffer, (int)room, 0, &a.sa, &from);
+    if (n == SOCKET_ERROR) {
+        int failed = WSAGetLastError();
+        if (failed != WSAEMSGSIZE) {
+            return failed == WSAEWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)cee_wsa_errno(failed);
+        }
+        truncated = true; /* the buffer is full, the rest is gone */
+        n = (int)room;
+    }
+#else
+    struct iovec part;
+    part.iov_base = buffer;
+    part.iov_len = (size_t)room;
+    struct msghdr m;
+    ceesafe_mem_set(&m, 0, sizeof m);
+    m.msg_name = &a;
+    m.msg_namelen = (socklen_t)sizeof a;
+    m.msg_iov = &part;
+    m.msg_iovlen = 1;
+    ssize_t n;
+    do {
+        n = recvmsg(fd, &m, 0);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) return errno == EAGAIN || errno == EWOULDBLOCK ? CEE_ASYNC_WOULD_BLOCK : -(int64_t)errno;
+    truncated = (m.msg_flags & MSG_TRUNC) != 0;
+#endif
+    ceesafe_endpoint e;
+    if (!cee_endpoint_from(&a, &e)) return -(int64_t)EAFNOSUPPORT;
+    for (int k = 0; k < 16; k++) bytes[k] = e.bytes[k];
+    *scope = e.scope;
+    *info = (e.family << 24) | (truncated ? 1u << 16 : 0u) | (uint32_t)e.port;
+    return (int64_t)n;
+}
+#endif
 
 /* ---- A read at an offset, the file's position untouched (ADR 0051's copy where sendfile cannot). ---- */
 int64_t ceesafe_file_read_at(const void *file, uint8_t *buffer, uint64_t length, uint64_t offset) {

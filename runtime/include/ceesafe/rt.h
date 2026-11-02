@@ -1244,6 +1244,43 @@ typedef struct ceesafe_async_msg_op {
 } ceesafe_async_msg_op;
 void ceesafe_async_msg_part(void *op, uint32_t index, const uint8_t *bytes, uint64_t length);
 int64_t ceesafe_async_op_sendv(void *op, int32_t fd, uint32_t count);
+/* UDP (ADR 0050). ceesafe_async_udp_bind makes a nonblocking datagram socket bound to the address, with the CEE_UDP_*
+ * flags and the buffer sizes (0: the system's): its descriptor, or a negated errno (EOPNOTSUPP for an option the
+ * platform lacks; CosmoOS userland has no UDP). On Windows the port-unreachable reports on receive are off
+ * (SIO_UDP_CONNRESET).
+ * A datagram send uses a message record: its parts (ceesafe_async_msg_part), then ceesafe_async_msg_send_to with the
+ * destination, the socket's family (an IPv4 destination of an IPv6 socket is sent IPv4-mapped), an optional source
+ * address (`from_family` 0: the system's choice), the ECN bits (0: not set) and a segment size (0: one datagram), then
+ * steps of ceesafe_async_op_sendmsg: the bytes sent (the whole datagram, or every segment), a negated errno (EMSGSIZE as
+ * EINVAL), CEE_ASYNC_PENDING, or CEE_ASYNC_NO_SEGMENTS where the system cannot send segments in one call (lib/std then
+ * sends them one by one).
+ * A receive: steps of ceesafe_async_op_recvmsg into `buffer`, the datagram's length in it; then
+ * ceesafe_async_msg_address gives the peer (`which` 0) or the local address it arrived at (1, with
+ * CEE_UDP_RECEIVE_LOCAL; its port 0): (family << 16) | port with the 16 bytes and the scope written, or -1 if there is
+ * none; and ceesafe_async_msg_flags gives bit 0 for a truncated datagram and the ECN bits in bits 8-9.
+ * ceesafe_async_udp_send and ceesafe_async_udp_recv are the same without a record or a wait, one call each: a count,
+ * CEE_ASYNC_WOULD_BLOCK or a negated errno; the receive writes the peer's bytes and scope and, in `info`, the family,
+ * the port and the truncation bit ((family << 24) | (truncated << 16) | port). For code that runs its own wait loop,
+ * as the interpreter does. */
+#define CEE_UDP_REUSE_ADDRESS 1u
+#define CEE_UDP_REUSE_PORT 2u
+#define CEE_UDP_V6_ONLY 4u
+#define CEE_UDP_RECEIVE_ECN 8u
+#define CEE_UDP_RECEIVE_LOCAL 16u
+#define CEE_ASYNC_NO_SEGMENTS (INT64_MIN + 3)
+int64_t ceesafe_async_udp_bind(uint32_t family, const uint8_t *bytes, uint16_t port, uint32_t scope, uint32_t flags,
+                               uint32_t send_buffer, uint32_t receive_buffer);
+void ceesafe_async_msg_send_to(void *op, uint32_t socket_family, uint32_t family, const uint8_t *bytes, uint16_t port,
+                               uint32_t scope, uint32_t from_family, const uint8_t *from_bytes, uint32_t ecn,
+                               uint32_t segment);
+int64_t ceesafe_async_op_sendmsg(void *op, int32_t fd, uint32_t count);
+int64_t ceesafe_async_op_recvmsg(void *op, int32_t fd, uint8_t *buffer, uint64_t length);
+int64_t ceesafe_async_msg_address(void *op, uint32_t which, uint8_t *bytes, uint32_t *scope);
+uint32_t ceesafe_async_msg_flags(void *op);
+int64_t ceesafe_async_udp_send(int32_t fd, const uint8_t *data, uint64_t length, uint32_t socket_family, uint32_t family,
+                               const uint8_t *bytes, uint16_t port, uint32_t scope);
+int64_t ceesafe_async_udp_recv(int32_t fd, uint8_t *buffer, uint64_t length, uint8_t *bytes, uint32_t *scope,
+                               uint32_t *info);
 #if defined(_WIN32)
 /* Windows sockets (L1 A4a): a descriptor from CEE_SOCKET_BASE up names a SOCKET in ceesafe_rt_io.c's table, so
  * lib/std's i32 descriptors never hold a truncated handle; below it, a C runtime file descriptor.
@@ -1280,6 +1317,10 @@ bool ceesafe_endpoint_make(uint32_t family, const uint8_t *bytes, uint16_t port,
 /* The endpoint as the platform's sockaddr in `out` (`room` bytes: a sockaddr_in6 fits): its length, 0 if it does not
  * fit or the platform has no such family. */
 uint32_t ceesafe_endpoint_sockaddr(const ceesafe_endpoint *e, void *out, uint32_t room);
+/* A sockaddr (IPv4 or IPv6) as an endpoint, an IPv4-mapped address as IPv4; false for another family. And an endpoint
+ * as the sockaddr of a socket of `socket_family`: an IPv4 endpoint IPv4-mapped for an IPv6 socket. */
+bool ceesafe_endpoint_from_sockaddr(const void *address, ceesafe_endpoint *out);
+uint32_t ceesafe_endpoint_sockaddr_for(const ceesafe_endpoint *e, uint32_t socket_family, void *out, uint32_t room);
 /* A new socket of the endpoint's family for TCP (macOS: SO_NOSIGPIPE), or a negated errno. POSIX only; Windows makes
  * its overlapped sockets itself. */
 int64_t ceesafe_tcp_socket_for(const ceesafe_endpoint *e);

@@ -1,0 +1,9 @@
+# A library that wraps a C library: its header from include-dirs, the archive from lib-dirs (ADR 0047).
+[package]
+name = "wrap"
+version = "0.1.0"
+kind = "library"
+c = ["c/shim.c"]
+links = ["mylib"]
+include-dirs = ["../clib/include"]
+lib-dirs = ["$CEESAFE_TEST_LIBDIR"]

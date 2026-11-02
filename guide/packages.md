@@ -24,6 +24,26 @@ lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev 
 Only `name` is required. A dependency's key must be the name its own manifest gives it, and a dependency must be a
 library.
 
+## C libraries
+
+A package that wraps a C library names it, and every program that depends on the package links it:
+
+```toml
+[package]
+name = "tls"
+kind = "library"
+c = ["c/shim.c"]
+links = ["ssl", "crypto"]                # -lssl -lcrypto (ssl.lib crypto.lib with cl)
+lib-dirs = ["$OPENSSL_DIR/lib"]          # an environment variable, or a literal path
+include-dirs = ["$OPENSSL_DIR/include"]  # for this package's own C files
+
+[target.windows]                         # added on Windows; also [target.macos], [target.linux]
+links = ["libssl", "libcrypto"]
+```
+
+Nothing runs to find the library: no pkg-config, no scripts. A directory is literal, or starts with an environment
+variable, which must be set. `ceesafec build --emit c` writes the link line to `ceesafe_link.txt`, for building by hand.
+
 ## Using a dependency
 
 All files of one package share one scope. Another package's items are reached through its name, and only its

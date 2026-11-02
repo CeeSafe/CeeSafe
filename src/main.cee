@@ -205,6 +205,7 @@ struct Options {
     linker: Vector<u8>;         // --ld (build --emit obj)
     cNames: Vector<Vector<u8>>; // C files given or the manifest's (type-system.md §28.6): names
     cTexts: Vector<Vector<u8>>; // and texts
+    native: NativeBuild;        // the manifests' libraries and separately compiled C (ADR 0047)
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
     files: Vector<String>;
     offline: bool;                        // --offline: package mode uses only what is fetched
@@ -605,6 +606,7 @@ fn parseCommand() -> i32 {
         linker: Vector<u8>.create(),
         cNames: Vector<Vector<u8>>.create(),
         cTexts: Vector<Vector<u8>>.create(),
+        native: NativeBuild.create(),
         defaultOutput: Vector<u8>.create(),
         files: Vector<String>.create(),
         offline: false,
@@ -755,17 +757,27 @@ fn loadPackage(
     if (options.programName.length == 0) {
         options.programName = copyBytes(workspace.root.name.view())!;
     }
-    // The C files of every package, root first (Workspace.CFiles).
+    // The C files of every package, root first (Workspace.CFiles); a package with include directories has its own
+    // compiled apart with them (ADR 0047 §3.3).
     for (p in 0..workspace.resolved.length + 1) {
         let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
         for (c in manifest.cFiles.view()) {
             let path = joinPath(manifest.directory.view(), c.view())!;
+            if (manifest.includeDirs.length > 0) {
+                var includes = Vector<Vector<u8>>.create();
+                for (d in manifest.includeDirs.view()) {
+                    includes.push(copyBytes(d.view())!)!;
+                }
+                options.native.separate.push(SeparateC { path: path, includeDirs: includes })!;
+                continue;
+            }
             let status = addCFile(mut options, path.view());
             if (status != 0) {
                 return 1;
             }
         }
     }
+    collectNativeLinks(borrow workspace, mut options.native)!;
     for (p in 0..workspace.resolved.length + 1) {
         let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
         var dependencies = Vector<Vector<u8>>.create();
@@ -930,6 +942,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     linker: Vector<u8>.create(),
     cNames: Vector<Vector<u8>>.create(),
     cTexts: Vector<Vector<u8>>.create(),
+    native: NativeBuild.create(),
     defaultOutput: Vector<u8>.create(),
     files: Vector<String>.create(),
     offline: false,
@@ -1301,10 +1314,68 @@ fn main() -> i32 {
 }
 
 /// A C file for the C compiler: its name and text; two files may not share a name.
+/// The libraries and library directories of every package, in link order (ADR 0047 §3.2): packages dependents first
+/// (by their longest path from the root), a package's entries in its manifest's order; a library named again keeps
+/// its last place, a directory its first.
+fn collectNativeLinks(workspace: borrow Workspace, native: borrow mut NativeBuild) -> Result<void, AllocError> {
+    let count = workspace.resolved.length + 1;
+    var depth = Vector<u32>.create();
+    for (k in 0..count) {
+        depth.push(0)?;
+    }
+    for (round in 0..count) {
+        for (p in 0..count) {
+            let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+            for (d in manifest.dependencies.view()) {
+                for (q in 1..count) {
+                    let other = workspace.dependentManifest(truncate<u32>(q - 1));
+                    if (sameBytes(
+                        other.name.view(),
+                        d.name.view(),
+                    ) && depth[q] < depth[p] + 1 && (depth[p] as usize) < count) {
+                        depth[q] = depth[p] + 1;
+                    }
+                }
+            }
+        }
+    }
+    var links = Vector<Vector<u8>>.create();
+    for (level in 0..count) {
+        for (p in 0..count) {
+            if (depth[p] as usize != level) {
+                continue;
+            }
+            let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+            for (l in manifest.links.view()) {
+                links.push(copyBytes(l.view())?)?;
+            }
+            for (d in manifest.libDirs.view()) {
+                var seen = false;
+                for (x in native.libDirs.view()) {
+                    seen = seen || sameBytes(x.view(), d.view());
+                }
+                if (!seen) {
+                    native.libDirs.push(copyBytes(d.view())?)?;
+                }
+            }
+        }
+    }
+    for (k in 0..links.length) {
+        var later = false;
+        for (j in (k + 1)..links.length) {
+            later = later || sameBytes(links[j].view(), links[k].view());
+        }
+        if (!later) {
+            native.links.push(copyBytes(links[k].view())?)?;
+        }
+    }
+    return Ok();
+}
+
 fn addCFile(options: borrow mut Options, path: Slice<u8>) -> i32 {
     var name = Vector<u8>.create();
     var start = path.length;
-    while (start > 0 && path[start - 1] != '/') {
+    while (start > 0 && path[start - 1] != '/' && path[start - 1] != '\\') { // a Windows path's own separator too
         start -= 1;
     }
     appendBytes(mut name, path[start..])!;

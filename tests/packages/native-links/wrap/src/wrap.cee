@@ -1,0 +1,7 @@
+extern "C" {
+    fn wrap_add(a: i32, b: i32) -> i32;
+}
+
+/// `a + b`, scaled, through the C library.
+/// Safety: wrap_add only adds its two integers.
+public fn add(a: i32, b: i32) -> i32 => unsafe { wrap_add(a, b) };

@@ -130,3 +130,15 @@ The generated C, and other packages' C, never see those directories.
    - `--emit c`'s link file;
    - Windows with `cl` and with clang, on the Windows 11 ARM64 test host.
 5. The guide (`guide/packages.md`, C libraries), ROADMAP §10.
+
+## 7. Implementation notes (2026-11-02)
+
+- **Link files.** They are written only when the manifests name a library, a library directory or an include
+  directory, so existing `--emit c` outputs do not change.
+- **Separate C files.** A package with `include-dirs` has its C files compiled from where they are, not copied into
+  the build's directory as other C files are. So a `#include "local.h"` beside the file also works.
+- **The hash.** A path dependency has no hash (tooling.md §4.3). `tools/package_tests.py` checks the hash through a git
+  dependency instead: its locked hash changes with `links`.
+- **Windows file names.** `addCFile` took a C file's name after the last `/` only, so a Windows path (`C:\…\x.c`)
+  became its whole name, and writing it into the build directory failed ("cannot write the C: Invalid argument"; the
+  ROADMAP's open Windows item). It now also stops at `\`.

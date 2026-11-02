@@ -55,7 +55,7 @@ fn buildFiles(
             appendText(mut directory, "-c")!;
         }
         match (writeFilesUnder(directory.view(), files)) {
-            Ok() => { return 0; }
+            Ok() => { return writeLinkFile(options, directory.view(), "ceesafe_link.txt".bytes(), true); }
             Err(e) => {
                 var message = copyBytes("cannot write the C: ".bytes())!;
                 appendText(mut message, e.message())!;
@@ -95,7 +95,31 @@ fn buildFiles(
     let workBytes = copyBytes(work.view().bytes())!;
     let status = compileIn(options, files, workBytes.view(), compiler, output.view(), object);
     removeTree(workBytes.view());
+    if (status == 0 && object) {
+        var linkPath = copyBytes(output.view())!;
+        appendText(mut linkPath, ".link.txt")!;
+        return writeLinkFile(options, "".bytes(), linkPath.view(), false); // an object's libraries are its user's
+    }
     return status;
+}
+
+/// Writes the manifests' link line (ADR 0047 §3.4) as `name` in `directory` (or, with `nameIsPath` false, to the path
+/// `name`), when there is one; 0, or 1 after reporting a failure.
+fn writeLinkFile(options: borrow Options, directory: Slice<u8>, name: Slice<u8>, nameIsPath: bool) -> i32 {
+    let msvc = compilerStem(options.cc.view()).length > 0 && isMsvcName(options.cc.view());
+    let text = linkFileText(borrow options.native, msvc)!;
+    if (text.length == 0) {
+        return 0;
+    }
+    let path = if (nameIsPath) joinPath(directory, name)! else copyBytes(name)!;
+    match (writeFile(StringView.fromUtf8(path.view())!, text.view())) {
+        Ok() => { return 0; }
+        Err(e) => {
+            var message = copyBytes("cannot write the link file: ".bytes())!;
+            appendText(mut message, e.message())!;
+            return failBytes(message.view());
+        }
+    }
 }
 
 fn compileIn(
@@ -132,7 +156,17 @@ fn compileIn(
         flags,
         options.freestanding,
         options.linker.view(),
-    )! else compileExecutable(compilerFound, work, files, output, options.debug, options.cflags, options.freestanding)!;
+        borrow options.native,
+    )! else compileExecutable(
+        compilerFound,
+        work,
+        files,
+        output,
+        options.debug,
+        options.cflags,
+        options.freestanding,
+        borrow options.native,
+    )!;
     if (!outcome.started) {
         var message = copyBytes("cannot run the C compiler '".bytes())!;
         appendBytes(mut message, compiler)!;

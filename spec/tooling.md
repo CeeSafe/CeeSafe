@@ -194,6 +194,12 @@ kernel = "cosmoos"           # with profile = "freestanding": include lib/kernel
 trusted = true               # its types may be declared @threadSafe (ADR 0025 §3.2); listed for reviewers
 sources = ["src"]
 c = ["src/shim.c"]           # C files compiled and linked with an executable (type-system.md §28.6)
+links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcrypto; ssl.lib crypto.lib with cl
+lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
+include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files only
+
+[target.windows]             # also [target.macos] and [target.linux]: added after [package]'s on that system
+links = ["libssl", "libcrypto"]
 
 [dependencies]
 geometry = { path = "../geometry" }
@@ -205,6 +211,22 @@ json = { version = "0.9", index = "https://example.org/my-index.git" }   # from 
 A dependency's key is its package's `name`: a dependency is known by the name its own manifest gives it. A
 dependency of kind `executable` is N0321: only a library's items are used. Errors in the manifest are N0320 (its
 syntax) and N0321 (a missing, unknown or invalid field), with the line.
+
+**System libraries** (ADR 0047):
+- `links` names libraries: letters, digits, `_`, `.`, `+` and `-`, not starting with `-`. `lib-dirs` and `include-dirs`
+  are directories, absolute or relative to the package, not starting with `-`.
+- A directory may start with `$NAME` or `${NAME}`: the environment variable's value, read when the manifest is. An
+  unset one is N0321. Nothing runs (ADR 0013), and the hash (§4.3) is of the manifest's text, not the value.
+- A `[target.OS]` table (`linux`, `macos` or `windows`) holds the same three fields. The host's is added after
+  `[package]`'s; every one is checked.
+- The libraries and library directories of every package in the build reach the executable's link, a library's
+  included. Packages are taken dependents first (by their longest path from the root). A library named twice keeps
+  its last place, so it follows what uses it; a directory keeps its first.
+- A package with `include-dirs` has its own C files compiled apart, with `-c` and those directories, and the objects
+  join the build. No other C file sees its directories.
+- `--emit c` writes the link line as `ceesafe_link.txt` beside the C, and `--emit obj` as `<output>.link.txt`, when the
+  manifests name any: one argument per line, each separately compiled C file after its include directories, then the
+  library directories and the libraries (`cl`'s spelling when `--cc` is `cl`).
 
 ### 4.2 Resolving dependencies
 
@@ -571,8 +593,8 @@ Visual Studio's "Desktop development with C++" workload (or the Build Tools), or
 
 | Compiler | Flags |
 |---|---|
-| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc |
-| `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1) |
+| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc |
+| `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
 
 A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one relocatable object) needs clang or gcc.
 

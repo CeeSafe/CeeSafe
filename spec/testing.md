@@ -27,6 +27,9 @@ Sanitizer results are supporting evidence, never proof of the language's safety.
 
 `tools/contract_tests.py --ceesafec PATH` runs all of these but CosmoOS and the host check, against one ceesafec.
 
+`tools/package_tests.py --compiler PATH` (in the contract suite) builds packages that link a C static library it makes,
+through two levels of dependency, and checks the link file, an unset variable, the locked hash and N0321 (ADR 0047).
+
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
 --package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.

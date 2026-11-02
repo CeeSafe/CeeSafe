@@ -1,0 +1,7 @@
+# The program: two levels above the C library (ADR 0047).
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+mid = { path = "../mid" }

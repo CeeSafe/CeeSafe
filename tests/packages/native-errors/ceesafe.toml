@@ -1,0 +1,13 @@
+# Each value below is invalid (ADR 0047 §3.1): every one is N0321.
+[package]
+name = "broken"
+version = "0.1.0"
+links = ["-lssl"]
+lib-dirs = ["-L/opt/lib"]
+include-dirs = "include"
+
+[target.linux]
+libs = ["ssl"]
+
+[target.beos]
+links = ["ssl"]

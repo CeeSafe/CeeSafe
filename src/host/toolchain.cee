@@ -94,6 +94,141 @@ fn runTool(program: Slice<u8>, arguments: borrow Vector<Vector<u8>>) -> Result<T
 fn isCSourceName(name: Slice<u8>) -> bool =>
     name.length > 2 && name[name.length - 2] == '.' && name[name.length - 1] == 'c';
 
+/// What the packages' manifests add to a native build (ADR 0047): libraries and their directories, in link order
+/// (dependents first, a repeated library at its last place, a repeated directory at its first), and the C files of
+/// packages with include directories, compiled apart with them.
+struct NativeBuild {
+    links: Vector<Vector<u8>>;
+    libDirs: Vector<Vector<u8>>;
+    separate: Vector<SeparateC>;
+
+    fn create() -> NativeBuild => NativeBuild {
+        links: Vector<Vector<u8>>.create(),
+        libDirs: Vector<Vector<u8>>.create(),
+        separate: Vector<SeparateC>.create(),
+    };
+}
+
+/// A package's C file compiled apart, with that package's include directories (ADR 0047 §3.3).
+struct SeparateC {
+    path: Vector<u8>;
+    includeDirs: Vector<Vector<u8>>;
+}
+
+/// Compiles each of `native`'s separate C files into the work directory with `-c` (or `cl /c`), the build's flags and its
+/// package's include directories; their objects, or the first failure.
+fn compileSeparate(
+    compiler: borrow CCompiler,
+    directory: Slice<u8>,
+    debug: bool,
+    userFlags: borrow Vector<Vector<u8>>,
+    freestanding: bool,
+    native: borrow NativeBuild,
+    objects: borrow mut Vector<Vector<u8>>,
+) -> Result<ToolOutcome?, AllocError> {
+    for (k in 0..native.separate.length) {
+        let s = borrow native.separate[k];
+        var name = copyBytes("ceesafe_package_".bytes())?;
+        appendDecimal(mut name, k as u64)?;
+        appendText(mut name, if (compiler.msvc) ".obj" else ".o")?;
+        let object = if (compiler.msvc) windowsJoin(directory, name.view())? else joinPath(directory, name.view())?;
+        var arguments = Vector<Vector<u8>>.create();
+        if (compiler.msvc) {
+            pushText(mut arguments, "/nologo")?;
+            pushText(mut arguments, "/std:c11")?;
+            pushText(mut arguments, "/W3")?;
+            pushText(mut arguments, "/I")?;
+            pushBytes(mut arguments, directory)?;
+            pushText(mut arguments, if (debug) "/Od" else "/O2")?;
+        } else {
+            pushCommonFlags(mut arguments, directory, freestanding)?;
+            pushText(mut arguments, if (debug) "-O0" else "-O2")?;
+        }
+        if (debug) {
+            pushText(mut arguments, if (compiler.msvc) "/Zi" else "-g")?;
+        }
+        for (flag in userFlags.view()) {
+            pushBytes(mut arguments, flag.view())?;
+        }
+        for (d in s.includeDirs.view()) {
+            pushText(mut arguments, if (compiler.msvc) "/I" else "-I")?;
+            pushBytes(mut arguments, d.view())?;
+        }
+        pushText(mut arguments, if (compiler.msvc) "/c" else "-c")?;
+        pushBytes(mut arguments, s.path.view())?;
+        if (compiler.msvc) {
+            var out = copyBytes("/Fo:".bytes())?;
+            appendBytes(mut out, object.view())?;
+            arguments.push(out)?;
+        } else {
+            pushText(mut arguments, "-o")?;
+            pushBytes(mut arguments, object.view())?;
+        }
+        let outcome = runCompiler(compiler, directory, arguments)?;
+        if (!outcome.started || outcome.status != 0) {
+            return Ok(Some(outcome));
+        }
+        objects.push(object)?;
+    }
+    return Ok(null);
+}
+
+/// The link file of `--emit c` and `--emit obj` (ADR 0047 §3.4), one argument per line in the compiler's spelling:
+/// each separately compiled C file after its include directories, then the library directories and libraries.
+/// Empty when the manifests name none.
+fn linkFileText(native: borrow NativeBuild, msvc: bool) -> Result<Vector<u8>, AllocError> {
+    var arguments = Vector<Vector<u8>>.create();
+    for (s in native.separate.view()) {
+        for (d in s.includeDirs.view()) {
+            var flag = copyBytes((if (msvc) "/I" else "-I").bytes())?;
+            appendBytes(mut flag, d.view())?;
+            arguments.push(flag)?;
+        }
+        pushBytes(mut arguments, s.path.view())?;
+    }
+    if (msvc) {
+        pushMsvcLinkFlags(mut arguments, native)?;
+    } else {
+        pushGnuLinkFlags(mut arguments, native)?;
+    }
+    var text = Vector<u8>.create();
+    for (a in arguments.view()) {
+        appendBytes(mut text, a.view())?;
+        text.push('\n')?;
+    }
+    return Ok(text);
+}
+
+/// The link flags of `native` in GCC's and clang's spelling: `-L dir`, then `-l name`.
+fn pushGnuLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow NativeBuild) -> Result<void, AllocError> {
+    for (d in native.libDirs.view()) {
+        var flag = copyBytes("-L".bytes())?;
+        appendBytes(mut flag, d.view())?;
+        arguments.push(flag)?;
+    }
+    for (l in native.links.view()) {
+        var flag = copyBytes("-l".bytes())?;
+        appendBytes(mut flag, l.view())?;
+        arguments.push(flag)?;
+    }
+    return Ok();
+}
+
+/// The same after cl's `/link`: `/LIBPATH:dir`, then `name.lib`.
+fn pushMsvcLinkFlags(arguments: borrow mut Vector<Vector<u8>>, native: borrow NativeBuild) -> Result<void, AllocError> {
+    for (d in native.libDirs.view()) {
+        var flag = copyBytes("/LIBPATH:".bytes())?;
+        appendBytes(mut flag, d.view())?;
+        arguments.push(flag)?;
+    }
+    for (l in native.links.view()) {
+        var name = copyBytes(l.view())?;
+        appendText(mut name, ".lib")?;
+        arguments.push(name)?;
+    }
+    return Ok();
+}
+
 /// `build`'s compile of an executable (CompileExecutable, §8.3): `compiler`'s flag dialect and environment; `debug` is
 /// debug information and no optimisation; on Windows the 8 MiB stack that Linux and macOS give the main thread
 /// (c-backend.md §1.1).
@@ -105,7 +240,13 @@ fn compileExecutable(
     debug: bool,
     userFlags: borrow Vector<Vector<u8>>,
     freestanding: bool,
+    native: borrow NativeBuild,
 ) -> Result<ToolOutcome, AllocError> {
+    var objects = Vector<Vector<u8>>.create();
+    match (compileSeparate(compiler, directory, debug, userFlags, freestanding, native, mut objects)?) {
+        Some(failed) => { return Ok(failed); }
+        null => {}
+    }
     if (compiler.msvc) {
         if (freestanding) {
             return Ok(ToolOutcome {
@@ -118,8 +259,23 @@ fn compileExecutable(
                 error: IoError.Other(0),
             });
         }
-        let arguments = msvcArguments(directory, files, output, debug, userFlags)?;
-        return runCompiler(compiler, directory, arguments);
+        var arguments = msvcArguments(directory, files, output, debug, userFlags)?;
+        // The objects with the sources (before /Fo:), the libraries after /link.
+        var at: usize = 0;
+        while (at < arguments.length && !(arguments[at].length >= 4 && sameText(arguments[at][..4], "/Fo:"))) {
+            at += 1;
+        }
+        var withObjects = Vector<Vector<u8>>.create();
+        for (k in 0..arguments.length) {
+            if (k == at) {
+                for (o in objects.view()) {
+                    pushBytes(mut withObjects, o.view())?;
+                }
+            }
+            pushBytes(mut withObjects, arguments[k].view())?;
+        }
+        pushMsvcLinkFlags(mut withObjects, native)?;
+        return runCompiler(compiler, directory, withObjects);
     }
     var arguments = Vector<Vector<u8>>.create();
     pushCommonFlags(mut arguments, directory, freestanding)?;
@@ -137,6 +293,10 @@ fn compileExecutable(
             arguments.push(joinPath(directory, file.name.view())?)?;
         }
     }
+    for (o in objects.view()) {
+        pushBytes(mut arguments, o.view())?;
+    }
+    pushGnuLinkFlags(mut arguments, native)?;
     if (!freestanding && hostIsWindows()) {
         // MinGW's ld, or the MSVC linker clang drives.
         let gcc = isGccName(compiler.path.view());
@@ -157,8 +317,35 @@ fn compileObject(
     flags: borrow Vector<Vector<u8>>,
     freestanding: bool,
     linker: Slice<u8>,
+    native: borrow NativeBuild,
 ) -> Result<ToolOutcome, AllocError> {
     var objects = Vector<Vector<u8>>.create();
+    // A package's C files with its include directories (ADR 0047 §3.3).
+    for (k in 0..native.separate.length) {
+        let s = borrow native.separate[k];
+        var name = copyBytes("ceesafe_package_".bytes())?;
+        appendDecimal(mut name, k as u64)?;
+        appendText(mut name, ".o")?;
+        let object = joinPath(directory, name.view())?;
+        var arguments = Vector<Vector<u8>>.create();
+        pushCommonFlags(mut arguments, directory, freestanding)?;
+        for (flag in flags.view()) {
+            pushBytes(mut arguments, flag.view())?;
+        }
+        for (d in s.includeDirs.view()) {
+            pushText(mut arguments, "-I")?;
+            pushBytes(mut arguments, d.view())?;
+        }
+        pushText(mut arguments, "-c")?;
+        pushBytes(mut arguments, s.path.view())?;
+        pushText(mut arguments, "-o")?;
+        pushBytes(mut arguments, object.view())?;
+        let compiled = runTool(compiler, arguments)?;
+        if (!compiled.started || compiled.status != 0) {
+            return Ok(compiled);
+        }
+        objects.push(object)?;
+    }
     for (file in files.view()) {
         if (!isCSourceName(file.name.view())) {
             continue;

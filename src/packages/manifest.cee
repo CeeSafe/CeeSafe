@@ -116,6 +116,9 @@ struct Manifest {
     sources: Vector<Vector<u8>>;
     cFiles: Vector<Vector<u8>>;
     dependencies: Vector<DependencySpec>;
+    links: Vector<Vector<u8>>;       // ADR 0047: libraries to link, [package]'s then the host's [target.OS]'s
+    libDirs: Vector<Vector<u8>>;     // their directories, absolute
+    includeDirs: Vector<Vector<u8>>; // for this package's own C files, absolute
 }
 
 /// The manifest's file name.
@@ -215,7 +218,8 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
     let errors = report.count();
     for (k in 1..tables.length) {
         let t = borrow tables[k];
-        if (!sameText(t.name.view(), "package") && !sameText(t.name.view(), "dependencies")) {
+        if (!sameText(t.name.view(), "package") && !sameText(t.name.view(), "dependencies") &&
+            !isTargetTable(t.name.view())) {
             // TrimStart('[', ']'): an array table's "[]" goes.
             var start: usize = 0;
             while (start < t.name.length && (t.name[start] == '[' || t.name[start] == ']')) {
@@ -226,7 +230,11 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 file,
                 t.start,
                 t.end,
-                message2("unknown table '[", t.name[start..], "]': a manifest has [package] and [dependencies]")?,
+                message2(
+                    "unknown table '[",
+                    t.name[start..],
+                    "]': a manifest has [package], [dependencies] and [target.linux], [target.macos], [target.windows]",
+                )?,
             )?;
         }
     }
@@ -293,6 +301,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         sources: sources,
         cFiles: Vector<Vector<u8>>.create(),
         dependencies: Vector<DependencySpec>.create(),
+        links: Vector<Vector<u8>>.create(),
+        libDirs: Vector<Vector<u8>>.create(),
+        includeDirs: Vector<Vector<u8>>.create(),
     };
     for (e in package.entries.view()) {
         let key = e.key.view();
@@ -345,6 +356,8 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                     manifest.sources.push(copyBytes(s.view())?)?;
                 }
             }
+        } else if (isNativeField(key)) {
+            valid = readNativeField(mut manifest, file, key, v, true, report)?;
         } else if (sameText(key, "c")) {
             valid = v.isArray();
             if (valid) {
@@ -380,7 +393,9 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             )) "'sources' is a non-empty array of directories: [\"src\"]" else if (sameText(
                 key,
                 "c",
-            )) "'c' is an array of C files: [\"src/shim.c\"]" else "'version' is MAJOR.MINOR.PATCH: \"1.4.0\" (tooling.md §4.6)";
+            )) "'c' is an array of C files: [\"src/shim.c\"]" else if (isNativeField(key)) nativeFieldShape(
+                key,
+            ) else "'version' is MAJOR.MINOR.PATCH: \"1.4.0\" (tooling.md §4.6)";
             manifestError(report, file, v.start, v.end, copyBytes(message.bytes())?)?;
         }
     }
@@ -402,6 +417,32 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             copyBytes("'kernel' needs profile = \"freestanding\": lib/kernel is for a kernel (ADR 0025)".bytes())?,
         )?;
     }
+    // The [target.OS] tables (ADR 0047): each checked, the host's added after [package].
+    let host = manifestTarget();
+    for (k in 1..tables.length) {
+        let t = borrow tables[k];
+        if (!isTargetTable(t.name.view())) {
+            continue;
+        }
+        let apply = sameText(t.name[7..], host);
+        for (e in t.entries.view()) {
+            let key = e.key.view();
+            if (!isNativeField(key)) {
+                var message = message2("unknown field '", key, "' in [")?;
+                appendBytes(mut message, t.name.view())?;
+                appendText(mut message, "]: a target table has links, lib-dirs and include-dirs")?;
+                manifestError(report, file, e.keyStart, e.keyEnd, message)?;
+            } else if (!readNativeField(mut manifest, file, key, borrow e.value, apply, report)?) {
+                manifestError(
+                    report,
+                    file,
+                    e.value.start,
+                    e.value.end,
+                    copyBytes(nativeFieldShape(key).bytes())?,
+                )?;
+            }
+        }
+    }
     var dependencyTable: usize = 0;
     for (k in 1..tables.length) {
         if (dependencyTable == 0 && sameText(tables[k].name.view(), "dependencies")) {
@@ -417,6 +458,109 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         return Ok(null);
     }
     return Ok(manifest);
+}
+
+/// The manifest's name for the system the build is for (ADR 0047 §3.1): the host's.
+fn manifestTarget() -> StringView => if (hostIsWindows()) "windows" else if (isLinuxHost()) "linux" else "macos";
+
+/// `[target.linux]`, `[target.macos]` or `[target.windows]`.
+fn isTargetTable(name: Slice<u8>) -> bool =>
+    sameText(name, "target.linux") || sameText(name, "target.macos") || sameText(name, "target.windows");
+
+fn isNativeField(key: Slice<u8>) -> bool =>
+    sameText(key, "links") || sameText(key, "lib-dirs") || sameText(key, "include-dirs");
+
+fn nativeFieldShape(key: Slice<u8>) -> StringView =>
+    if (sameText(
+        key,
+        "links",
+    )) "'links' is an array of library names, letters, digits, '_', '.', '+' and '-', not starting with '-': [\"ssl\", \"crypto\"]" else "'lib-dirs' and 'include-dirs' are arrays of directories, absolute or relative to the package, not starting with '-'; one may start with $NAME or ${NAME}";
+
+/// A library name `links` may hold: letters, digits, `_`, `.`, `+`, `-`, not starting with `-` (no entry is a flag).
+fn isLibraryName(name: Slice<u8>) -> bool {
+    if (name.length == 0 || name[0] == '-') {
+        return false;
+    }
+    for (c in name) {
+        let ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' ||
+            c == '+' || c == '-';
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Reads `links`, `lib-dirs` or `include-dirs` (ADR 0047 §3.1): false if its shape is wrong. With `apply`, the entries
+/// are added to the manifest, each directory's leading `$NAME` or `${NAME}` replaced by the variable's value (an unset
+/// one is reported here) and made absolute; without, they are only checked.
+fn readNativeField(
+    manifest: borrow mut Manifest,
+    file: u32,
+    key: Slice<u8>,
+    v: borrow TomlValue,
+    apply: bool,
+    report: borrow mut PackageReport,
+) -> Result<bool, AllocError> {
+    if (!v.isArray()) {
+        return Ok(false);
+    }
+    let links = sameText(key, "links");
+    for (s in v.strings.view()) {
+        let text = s.view();
+        if (links) {
+            if (!isLibraryName(text)) {
+                return Ok(false);
+            }
+            if (apply) {
+                manifest.links.push(copyBytes(text)?)?;
+            }
+            continue;
+        }
+        if (text.length == 0 || text[0] == '-') {
+            return Ok(false);
+        }
+        if (!apply) {
+            continue;
+        }
+        var expanded = Vector<u8>.create();
+        if (text[0] == '$') {
+            let braced = text.length > 1 && text[1] == '{';
+            var end: usize = if (braced) 2 else 1;
+            while (end < text.length && text[end] != '/' && text[end] != '\\' && text[end] != '}') {
+                end += 1;
+            }
+            let nameStart: usize = if (braced) 2 else 1;
+            if (end == nameStart || (braced && (end >= text.length || text[end] != '}'))) {
+                return Ok(false);
+            }
+            let name = text[nameStart..end];
+            let rest = if (braced) end + 1 else end;
+            match (Environment.variable(StringView.fromUtf8(name)!)) {
+                Some(value) => { appendBytes(mut expanded, value.bytes())?; }
+                null => {
+                    var message = copyBytes("the environment variable '".bytes())?;
+                    appendBytes(mut message, name)?;
+                    appendText(mut message, "' that '")?;
+                    appendBytes(mut message, key)?;
+                    appendText(mut message, "' names is not set (ADR 0047)")?;
+                    manifestError(report, file, v.start, v.end, message)?;
+                    return Ok(true); // reported
+                }
+            }
+            appendBytes(mut expanded, text[rest..])?;
+        } else {
+            appendBytes(mut expanded, text)?;
+        }
+        let absolute = expanded.length > 0 && (expanded[0] == '/' || expanded[0] == '\\' || hasDrive(expanded.view()));
+        let directory = if (absolute) expanded else joinPath(manifest.directory.view(), expanded.view())?;
+        if (sameText(key, "lib-dirs")) {
+            manifest.libDirs.push(directory)?;
+        } else {
+            manifest.includeDirs.push(directory)?;
+        }
+    }
+    return Ok(true);
 }
 
 fn invalidRequirement(

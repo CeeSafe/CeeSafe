@@ -27,7 +27,7 @@ features:
   - title: C you can read
     details: Structured, warning-clean C11 for clang, gcc and MSVC, with source maps back to CeeSafe lines and a reference interpreter that checks the same programs.
   - title: Structured async
-    details: async fn and await over one executor, scopes whose children have all returned when they do, race, all and timeout, cancellation that waits for the kernel, IPv4 and IPv6 sockets on epoll, kqueue, io_uring and IOCP, and DNS.
+    details: async fn and await over one executor, scopes whose children have all returned when they do, race, all and timeout, cancellation that waits for the kernel, task sets that start children as work comes, TCP and UDP over IPv4 and IPv6 on epoll, kqueue, io_uring and IOCP, files sent by the kernel, and DNS.
   - title: Ready for kernels
     details: A freestanding profile, context effects that reject sleeping under a spin lock, imported C structs, lock guards and kernel objects.
   - title: Self-hosted

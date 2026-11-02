@@ -61,10 +61,12 @@ And beyond safety:
 
 - **Structured async and threads.** `async fn` and `await` run many waits on one thread (timers, sockets, files,
   channels, DNS) with no garbage collector and no task that outlives its caller: `Async.scope` starts children that may
-  borrow the caller's locals and have all returned when it does, `Async.race` and `Async.all` take two, a failure
-  cancels the rest, and `Async.timeout` bounds any of it. Each task's frame has a size known at compile time and never
-  moves. Sockets speak IPv4 and IPv6 on epoll, kqueue, io_uring and IOCP, with socket options, vectored sends and
-  portable network errors. `Async.runWorkers` spreads
+  borrow the caller's locals and have all returned when it does, `Async.tasks` starts them as work comes (a task per
+  connection, up to a limit), `Async.race` and `Async.all` take two, a failure cancels the rest, and `Async.timeout`
+  bounds any of it. Each task's frame has a size known at compile time and never
+  moves. TCP and UDP sockets speak IPv4 and IPv6 on epoll, kqueue, io_uring and IOCP, with socket options, vectored
+  sends, files sent by the kernel (`sendfile`, `TransmitFile`), datagrams with ECN bits and segments, and portable
+  network errors. `Async.runWorkers` spreads
   tasks over threads; `Thread.spawn`, `Thread.both`, `Arc`, `Mutex` and atomics share data, with `Send` and `Share`
   checked.
 - **Explicit, pluggable allocation.** Each allocation chooses its allocator: the system heap, an arena, a pool, a fixed

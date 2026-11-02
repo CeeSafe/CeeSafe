@@ -39,24 +39,53 @@ public struct SliceSplitting<region r, T> {
 /// The algorithms over a slice of `T`, as static functions: the struct has no fields and is never made.
 public struct SliceAlgorithms<T> {
     /// Orders `s` so that `cmp` of each element and the next is at most zero, for a consistent `cmp`. Not stable.
-    /// An introsort: quicksort with a median-of-three pivot, insertion sort for short runs, and heapsort past a
-    /// depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. Allocates nothing; the shorter side is
-    /// sorted first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
+    /// An introsort (ADR 0057): quicksort with a median-of-three pivot and a partition without a branch on `cmp`'s
+    /// result, the elements equal to an earlier pivot set aside at once, insertion sort for short runs, and heapsort
+    /// past a depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. A slice that is one ascending run is
+    /// left as it is, and one strictly descending run is reversed. Allocates nothing; the shorter side is sorted
+    /// first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
     @effectsOf(cmp)
     public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
+        let length = s.length;
+        if (length < 2) {
+            return;
+        }
+        // One run from the start: ascending is sorted already, strictly descending is sorted by reversing it.
+        var run: usize = 1;
+        if (cmp(borrow s[1], borrow s[0]) < 0) {
+            while (run < length && cmp(borrow s[run], borrow s[run - 1]) < 0) {
+                run += 1;
+            }
+            if (run == length) {
+                var i: usize = 0;
+                while (i < length / 2) {
+                    s.swap(i, length - 1 - i);
+                    i += 1;
+                }
+                return;
+            }
+        } else {
+            while (run < length && cmp(borrow s[run], borrow s[run - 1]) >= 0) {
+                run += 1;
+            }
+            if (run == length) {
+                return;
+            }
+        }
         var depth: u32 = 0;
-        var n = s.length;
+        var n = length;
         while (n > 1) {
             depth += 2;
             n = n >> 1;
         }
-        let length = s.length;
         SliceAlgorithms<T>.introsort(s, 0, length, depth, cmp);
     }
 
     /// Sorts `s[lo..hi]`, with `depth` partitions left before heapsort takes over. Iterative, so that an async
     /// instance's frame has a size (ADR 0037 §3.7): the longer side of each partition waits while the shorter is
     /// sorted, the order the recursion had, so at most log₂ n ranges wait at once (64 for any length).
+    /// Every range but one starting at 0 starts just after an earlier pivot, which is at most each of its elements:
+    /// when the new pivot is not above that one, the elements not above the pivot all equal it, and are done.
     @effectsOf(cmp)
     fn introsort(s: SliceMut<T>, lo: usize, hi: usize, depth: u32, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
         var lows = [0usize; 64];
@@ -74,6 +103,11 @@ public struct SliceAlgorithms<T> {
                     break;
                 }
                 left -= 1;
+                SliceAlgorithms<T>.pivot(s, low, high, cmp);
+                if (low > 0 && cmp(borrow s[low - 1], borrow s[high - 1]) >= 0) {
+                    low = SliceAlgorithms<T>.partitionEqual(s, low, high, cmp) + 1;
+                    continue;
+                }
                 let p = SliceAlgorithms<T>.partition(s, low, high, cmp);
                 if (p - low < high - p) {
                     lows[waiting] = p + 1;
@@ -99,25 +133,45 @@ public struct SliceAlgorithms<T> {
         }
     }
 
-    /// Partitions `s[lo..hi]` (at least 3 elements) around a median-of-three pivot; returns the pivot's index.
-    /// Everything before it compares below the pivot, nothing after it does.
+    /// Moves the median of `s[lo]`, the middle element and `s[hi - 1]` to `s[hi - 1]`, the pivot's place while
+    /// partitioning (`s[lo..hi]` has at least 3 elements).
     @effectsOf(cmp)
-    fn partition(s: SliceMut<T>, lo: usize, hi: usize, cmp: borrow mut fn(borrow T, borrow T) -> i32) -> usize {
+    fn pivot(s: SliceMut<T>, lo: usize, hi: usize, cmp: borrow mut fn(borrow T, borrow T) -> i32) {
         let last = hi - 1;
         let mid = lo + (hi - lo) / 2;
-        // Order s[lo], s[mid], s[last]; the median goes to `last`, the pivot's place while partitioning.
         if (cmp(borrow s[mid], borrow s[lo]) < 0) { s.swap(mid, lo); }
         if (cmp(borrow s[last], borrow s[mid]) < 0) {
             s.swap(last, mid);
             if (cmp(borrow s[mid], borrow s[lo]) < 0) { s.swap(mid, lo); }
         }
         s.swap(mid, last);
+    }
+
+    /// Partitions `s[lo..hi]` around the pivot at `s[hi - 1]`; returns the pivot's index. Everything before it
+    /// compares below the pivot, nothing after it does. Without a branch on `cmp`'s result: each element is swapped
+    /// with `s[store]` (itself, or one not below the pivot), and `store` advances when it was below.
+    @effectsOf(cmp)
+    fn partition(s: SliceMut<T>, lo: usize, hi: usize, cmp: borrow mut fn(borrow T, borrow T) -> i32) -> usize {
+        let last = hi - 1;
         var store = lo;
         for (i in lo..last) {
-            if (cmp(borrow s[i], borrow s[last]) < 0) {
-                s.swap(i, store);
-                store += 1;
-            }
+            let below: usize = if (cmp(borrow s[i], borrow s[last]) < 0) 1 else 0;
+            s.swap(i, store);
+            store += below;
+        }
+        s.swap(store, last);
+        return store;
+    }
+
+    /// As partition, with the elements not above the pivot before it.
+    @effectsOf(cmp)
+    fn partitionEqual(s: SliceMut<T>, lo: usize, hi: usize, cmp: borrow mut fn(borrow T, borrow T) -> i32) -> usize {
+        let last = hi - 1;
+        var store = lo;
+        for (i in lo..last) {
+            let notAbove: usize = if (cmp(borrow s[last], borrow s[i]) >= 0) 1 else 0;
+            s.swap(i, store);
+            store += notAbove;
         }
         s.swap(store, last);
         return store;

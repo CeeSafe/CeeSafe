@@ -155,7 +155,8 @@ fn main() {
 true
 ```
 
-`sortBy` is an introsort: it allocates nothing and runs in O(n log n), but it is not stable. Its comparator returns a
+`sortBy` is an introsort: it allocates nothing and runs in O(n log n), but it is not stable. Sorted, reversed and
+duplicate-heavy input take about one pass. Its comparator returns a
 negative number, zero or a positive number. These methods are written in CeeSafe, in `lib/core/slices.cee`.
 
 In an async fn, they take async closures too: `await readings.forEach(async (r) => await upload(r))` calls the

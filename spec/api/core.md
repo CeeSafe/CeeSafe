@@ -1194,9 +1194,11 @@ public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
 ```
 
 Orders `s` so that `cmp` of each element and the next is at most zero, for a consistent `cmp`. Not stable.
-An introsort: quicksort with a median-of-three pivot, insertion sort for short runs, and heapsort past a
-depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. Allocates nothing; the shorter side is
-sorted first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
+An introsort (ADR 0057): quicksort with a median-of-three pivot and a partition without a branch on `cmp`'s
+result, the elements equal to an earlier pivot set aside at once, insertion sort for short runs, and heapsort
+past a depth of 2·log₂ n, so O(n log n) calls of `cmp` in the worst case. A slice that is one ascending run is
+left as it is, and one strictly descending run is reversed. Allocates nothing; the shorter side is sorted
+first, so at most 64 ranges wait. An inconsistent `cmp` leaves some permutation of `s`.
 
 ### SliceAlgorithms.forEach
 

@@ -1,6 +1,7 @@
 // Library methods taking closures (type-system.md §36.4, M11 G8c): sortBy, forEach, any, all and retain on slices,
 // arrays and vectors, with Copy and move-type elements, plus swap and truncate. Sorting runs every path of the
-// introsort: insertion sort, partitioning, and heapsort (all-equal keys exhaust the depth limit).
+// introsort (ADR 0057): the run at the start (ascending, reversed), insertion sort, partitioning, the equal-key
+// partition (all-equal keys), and heapsort (McIlroy's adversary exhausts the depth limit).
 struct Item { key: i32; name: Box<i32>; }
 
 fn compare(a: borrow i32, b: borrow i32) -> i32 => a - b;
@@ -92,6 +93,40 @@ fn main() {
     items.truncate(50);
     Console.writeLine(items.length);
     Console.writeLine(items[4].name >= 0);
+
+    // McIlroy's adversary ("A Killer Adversary for Quicksort", 1999): the comparator fixes the elements' values as it
+    // goes, so that each pivot is nearly the least; the first two are fixed in descending order so that the run at
+    // the start ends at once. Every partition is then lopsided, and only the depth limit's heapsort keeps the count
+    // of comparisons near n log n: without it, n = 2000 takes about n²/4 = 1 000 000.
+    let n: u32 = 2000;
+    var val = Vector<u32>.create();
+    var keys = Vector<u32>.create();
+    for (k in 0u32..n) {
+        val.push(n)!;
+        keys.push(k)!;
+    }
+    val[0] = 1;
+    val[1] = 0;
+    var solid: u32 = 2;
+    var candidate: u32 = 0;
+    var asked = 0;
+    keys.sortBy((a, b) => {
+        asked += 1;
+        let i = a as usize;
+        let j = b as usize;
+        if (val[i] == n && val[j] == n) {
+            if (a == candidate) { val[i] = solid; } else { val[j] = solid; }
+            solid += 1;
+        }
+        if (val[i] == n) { candidate = a; } else if (val[j] == n) { candidate = b; }
+        return if (val[i] < val[j]) -1 else if (val[i] > val[j]) 1 else 0;
+    });
+    var ordered = true;
+    for (k in 1..keys.length) {
+        if (val[keys[k - 1] as usize] > val[keys[k] as usize]) { ordered = false; }
+    }
+    Console.writeLine(ordered);
+    Console.writeLine(asked < 100000);
 }
 // expect-stdout: 1 3 4 5 9 22
 // expect-stdout: true
@@ -119,4 +154,6 @@ fn main() {
 // expect-stdout: 38
 // expect-stdout: 5
 // expect-stdout: 5
+// expect-stdout: true
+// expect-stdout: true
 // expect-stdout: true

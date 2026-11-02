@@ -68,6 +68,7 @@ Imported on 2026-11-02 from an independent author, unchanged except for `run.py`
 |---|---|---|---|
 | the author's | a 2-vCPU Xeon VM, Ubuntu 24.04, gcc 13, clang 18, rustc 1.97, pinned | 0.9.0 | `results-linux-0.9.0.json`, `run-linux-0.9.0.log` |
 | 2026-11-02 | Apple M1 (8 cores), macOS, Apple clang 21 (the `gcc` there), rustc 1.99.1, not pinned | 0.9.3 | `results-macos-0.9.3.json`, `run-macos-0.9.3.log` |
+| 2026-11-03 | the same M1; `sort` and `sort-same` only, after ADR 0057's `sortBy` | 0.9.3 + ADR 0057 | `results-macos-adr0057.json`: `sort` 1.69× `rust-checked` (was 4.30×), `sort-same` 0.99× |
 
 ```sh
 python3 benchmarks/independent/run.py --ceesafec out/ceesafec --json benchmarks/independent/results-<os>-<version>.json

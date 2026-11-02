@@ -2922,8 +2922,10 @@ fn main() {
   - It is **not stable**: equal elements may end in any order. The order chosen is a deterministic function of the
     input and of `cmp`'s results.
   - It allocates nothing, calls `cmp` O(n log n) times in the worst case, and uses O(log n) stack: an introsort
-    (quicksort with a median-of-three pivot; insertion sort below 16 elements; heapsort past a depth of
-    2·log₂ n).
+    (ADR 0057): quicksort with a median-of-three pivot and a partition without a branch on `cmp`'s result; the
+    elements equal to an earlier pivot set aside in one pass; insertion sort below 17 elements; heapsort past a
+    depth of 2·log₂ n. A slice that is one ascending run from the start is left as it is, and one strictly
+    descending run is reversed, after at most n − 1 calls of `cmp`.
   - If `cmp` is not a consistent order, or changes what it captures, the elements end in some order: they are
     still a permutation of the input, and nothing panics or misbehaves.
 - **`forEach`** calls `visit` on each element in index order. **`any`** calls `test` in index order until it returns

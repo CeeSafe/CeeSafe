@@ -2,31 +2,41 @@ closure-calls/known.cee:7: in twice: indirect: the closure is not known here
 closure-calls/known.cee:8: in twice: indirect: the closure is not known here
 closure-calls/known.cee:15: in apply: indirect: the closure is not known here
 closure-calls/known.cee:40: in main: indirect: the closure is not known here
+lib/core/slices.cee:55: in SliceAlgorithms<i32>.sortBy#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:56: in SliceAlgorithms<i32>.sortBy#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:68: in SliceAlgorithms<i32>.sortBy#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:55: in SliceAlgorithms<i32>.sortBy#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:56: in SliceAlgorithms<i32>.sortBy#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:68: in SliceAlgorithms<i32>.sortBy#2: direct call to the closure at closure-calls/known.cee:28
 closure-calls/known.cee:15: in apply#1: direct call to the closure at closure-calls/known.cee:31
 closure-calls/known.cee:15: in apply#2: direct call to the closure at closure-calls/known.cee:32
 closure-calls/known.cee:15: in apply#3: direct call to the closure at closure-calls/known.cee:33
 closure-calls/known.cee:7: in twice#1: direct call to the closure at closure-calls/known.cee:44
 closure-calls/known.cee:8: in twice#1: direct call to the closure at closure-calls/known.cee:44
+lib/core/slices.cee:107: in SliceAlgorithms<i32>.introsort#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:107: in SliceAlgorithms<i32>.introsort#2: direct call to the closure at closure-calls/known.cee:28
 closure-calls/known.cee:7: in twice#2: direct call to the closure at closure-calls/known.cee:31
 closure-calls/known.cee:8: in twice#2: direct call to the closure at closure-calls/known.cee:31
 closure-calls/known.cee:7: in twice#3: direct call to the closure at closure-calls/known.cee:32
 closure-calls/known.cee:8: in twice#3: direct call to the closure at closure-calls/known.cee:32
 closure-calls/known.cee:7: in twice#4: direct call to the closure at closure-calls/known.cee:33
 closure-calls/known.cee:8: in twice#4: direct call to the closure at closure-calls/known.cee:33
-lib/core/slices.cee:131: in SliceAlgorithms<i32>.insertion#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:109: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:110: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:112: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:117: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:131: in SliceAlgorithms<i32>.insertion#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:109: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:110: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:112: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:117: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:161: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:164: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
-lib/core/slices.cee:161: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
-lib/core/slices.cee:164: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:185: in SliceAlgorithms<i32>.insertion#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:142: in SliceAlgorithms<i32>.pivot#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:143: in SliceAlgorithms<i32>.pivot#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:145: in SliceAlgorithms<i32>.pivot#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:172: in SliceAlgorithms<i32>.partitionEqual#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:158: in SliceAlgorithms<i32>.partition#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:185: in SliceAlgorithms<i32>.insertion#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:142: in SliceAlgorithms<i32>.pivot#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:143: in SliceAlgorithms<i32>.pivot#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:145: in SliceAlgorithms<i32>.pivot#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:172: in SliceAlgorithms<i32>.partitionEqual#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:158: in SliceAlgorithms<i32>.partition#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:215: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:218: in SliceAlgorithms<i32>.siftDown#1: direct call to the closure at closure-calls/known.cee:26
+lib/core/slices.cee:215: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
+lib/core/slices.cee:218: in SliceAlgorithms<i32>.siftDown#2: direct call to the closure at closure-calls/known.cee:28
 variant SliceAlgorithms<i32>.sortBy#1: parameter 1 = the closure at closure-calls/known.cee:26
 variant SliceAlgorithms<i32>.sortBy#2: parameter 1 = the closure at closure-calls/known.cee:28
 variant apply#1: parameter 0 = the closure at closure-calls/known.cee:31
@@ -40,9 +50,13 @@ variant twice#3: parameter 0 = the closure at closure-calls/known.cee:32
 variant twice#4: parameter 0 = the closure at closure-calls/known.cee:33
 variant SliceAlgorithms<i32>.insertion#1: parameter 3 = the closure at closure-calls/known.cee:26
 variant SliceAlgorithms<i32>.heapsort#1: parameter 3 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.pivot#1: parameter 3 = the closure at closure-calls/known.cee:26
+variant SliceAlgorithms<i32>.partitionEqual#1: parameter 3 = the closure at closure-calls/known.cee:26
 variant SliceAlgorithms<i32>.partition#1: parameter 3 = the closure at closure-calls/known.cee:26
 variant SliceAlgorithms<i32>.insertion#2: parameter 3 = the closure at closure-calls/known.cee:28
 variant SliceAlgorithms<i32>.heapsort#2: parameter 3 = the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.pivot#2: parameter 3 = the closure at closure-calls/known.cee:28
+variant SliceAlgorithms<i32>.partitionEqual#2: parameter 3 = the closure at closure-calls/known.cee:28
 variant SliceAlgorithms<i32>.partition#2: parameter 3 = the closure at closure-calls/known.cee:28
 variant SliceAlgorithms<i32>.siftDown#1: parameter 4 = the closure at closure-calls/known.cee:26
 variant SliceAlgorithms<i32>.siftDown#2: parameter 4 = the closure at closure-calls/known.cee:28

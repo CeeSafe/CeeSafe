@@ -2392,7 +2392,8 @@ fn underLock(values: Slice<i32>, limit: i32) -> i32 {
   (§40.3) whose task's result is the closure type's, or a named async fn of that signature (§36.1), unless the type's
   effect list lacks `suspend` (N0295). The call is then a task (§40.1): `await f(…)`, `Async.run(f(…))`,
   `Async.boxed(alloc, f(…))` or a spawn's body; N0342 elsewhere. It runs `f`'s **async instance** for those arguments,
-  one per (`f`, the closures bound to its parameters): a copy of `f` in which each call through such a parameter, or a
+  one per (`f`, the closures bound to its parameters), whether `f` is sync or async: a copy of `f` in which each call
+  through such a parameter, or a
   local holding it, awaits the closure, and passing it on to another function's `@effectsOf` parameter awaits that
   function's instance.
   - The instance is checked as an async fn (§40.1), and its errors are reported at the call that made it, since its

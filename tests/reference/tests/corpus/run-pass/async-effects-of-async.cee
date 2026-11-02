@@ -1,0 +1,51 @@
+// Bug B1 (CeeSafe.Web, found 2026-11-02): an async fn with `@effectsOf`, called with an async closure, runs its async
+// instance (type-system.md §32.5, ADR 0037), as a sync one does: each call through the parameter awaits the closure.
+// It used to call the closure as a plain function (a null pointer in C, 0 in the interpreter).
+async fn slow(v: u32) -> Result<u32, AsyncError> {
+    await Timer.sleep(2)?;
+    return Ok(v);
+}
+
+async fn eight() -> Result<u32, AsyncError> {
+    await Timer.sleep(1)?;
+    return Ok(8);
+}
+
+fn plain() -> Result<u32, AsyncError> => Ok(5);
+
+@effectsOf(body)
+async fn viaAsync(body: borrow fn() -> Result<u32, AsyncError>) -> Result<u32, AsyncError> {
+    await Timer.sleep(1)?;
+    return body();
+}
+
+/// Passes the closure on to another async `@effectsOf` function, and calls it itself.
+@effectsOf(body)
+async fn twice(body: borrow fn() -> Result<u32, AsyncError>) -> Result<u32, AsyncError> {
+    let a = await viaAsync(body)?;
+    let b = body()?;
+    return Ok(a + b);
+}
+
+async fn run() -> Result<[u32; 4], AsyncError> {
+    let a = await viaAsync(async () => await slow(7))?;
+    let b = await twice(async () => await slow(3))?;
+    let c = await viaAsync(() => plain())?;
+    let d = await viaAsync(eight)?;
+    return Ok([a, b, c, d]);
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok(values) => {
+            for (v in values) {
+                Console.writeLine(v);
+            }
+        }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: 7
+// expect-stdout: 6
+// expect-stdout: 5
+// expect-stdout: 8

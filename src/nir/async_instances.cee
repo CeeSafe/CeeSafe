@@ -211,7 +211,7 @@ fn instanceSiteFile(c: borrow Checker, function: u32, file: u32) -> u32 =>
     if (c.hir.functions[function as usize].asyncInstanceOf !=
         none()) c.hir.functions[function as usize].siteFile else file;
 
-/// Rewrites NIR function `f`: a task call (awaited, run) of a sync callee with async closures for `@effectsOf`
+/// Rewrites NIR function `f`: a task call (awaited, run) of a callee with async closures for `@effectsOf`
 /// parameters goes to the callee's instance. In an instance (`bindings` not empty), a call through a bound closure
 /// awaits it, a sync call passing one on to an `@effectsOf` parameter awaits that callee's instance, and any other
 /// use of one is N0342: the closure would be called without an await.
@@ -261,7 +261,7 @@ fn rewriteForInstances(
                             NirOperand.Const(v) => truncate<u32>(v.magnitude),
                             _ => none(),
                         };
-                        if (callee != none() && !isAsyncFunction(c, callee) && a.originals[callee as usize] != none()) {
+                        if (callee != none() && a.originals[callee as usize] != none()) {
                             let callArguments = Range { start: arguments.start + 2, count: arguments.count - 2 };
                             let bound = asyncBindings(c, n, known, callee, callArguments)?;
                             if (bound.length > 0) {
@@ -290,7 +290,9 @@ fn rewriteForInstances(
                     }
                 }
                 NirRvalue.Call(callee, arguments) => {
-                    if (!isAsyncFunction(c, callee) && !c.hir.functions[callee as usize].isDynMethod &&
+                    // An async callee too (bug B1: its call through the parameter ran the async closure as a plain
+                    // function, a null pointer in C): §32.5's instance is the callee's, sync or async.
+                    if (!c.hir.functions[callee as usize].isDynMethod &&
                         a.originals[callee as usize] != none() && (role != 0 || inInstance)) {
                         let bound = asyncBindings(c, n, known, callee, arguments)?;
                         if (bound.length > 0) {

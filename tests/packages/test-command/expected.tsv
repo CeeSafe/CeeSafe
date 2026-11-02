@@ -1,16 +1,21 @@
 # What `ceesafec test` must report for each test of this package (ADR 0049 §3.3), reviewed by hand: the name, the
-# outcome natively, the outcome with --interp, and a part of the failure message ("-": none checked). Tab-separated.
+# outcome natively, the outcome with --interp, and a part of the failure message ("-": none checked). Tab-separated,
+# in the names' order, which the runner follows. Reviewed changes (2026-11-02, CeeSafe.Web's report): failsOther names
+# its variant; leaksSafely leaks without C, so --interp finds it; exits ends the process itself ("exited", not
+# "crashed").
 adds	passed	passed	-
-passesVoid	passed	passed	-
-fails	failed	failed	expected 6, got 5
-failsText	failed	failed	expected "abc", got "abd"
-failsIo	failed	failed	-
-failsOther	failed	failed	returned Err
-panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25
-leaks	leaked	skipped	-
-crashes	crashed	skipped	-
-hangs	timed out	timed out	-
-sleeps	passed	passed	-
-failsAsync	failed	failed	timed out
 allocates	passed	passed	-
+crashes	crashed	skipped	-
+exits	exited	exited	exit status 3
+fails	failed	failed	expected 6, got 5
+failsAsync	failed	failed	timed out
+failsIo	failed	failed	-
+failsOther	failed	failed	returned Err(Mine.Broke)
+failsText	failed	failed	expected "abc", got "abd"
+hangs	timed out	timed out	-
+leaks	leaked	skipped	-
+leaksSafely	leaked	leaked	-
+panics	panicked	panicked	index out of bounds at tests/outcomes.cee:36:25
+passesVoid	passed	passed	-
 printsAndFails	failed	failed	on purpose
+sleeps	passed	passed	-

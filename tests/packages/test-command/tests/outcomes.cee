@@ -42,6 +42,21 @@ fn leaks() {
     unsafe { tc_leak(); }
 }
 
+/// It leaks without C (Box.intoRaw is safe: a leak is not undefined behaviour), so the interpreter finds it too.
+@test
+fn leaksSafely() {
+    match (Box.create(5u32)) {
+        Ok(b) => { let p = Box.intoRaw(b); }
+        Err(_) => {}
+    }
+}
+
+/// It ends the process itself, which is not a crash.
+@test
+fn exits() {
+    Process.exit(3);
+}
+
 /// Safety: it aborts on purpose, to be found.
 @test
 fn crashes() {

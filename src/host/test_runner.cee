@@ -7,6 +7,37 @@ struct TestEntry {
     name: Vector<u8>;
     isAsync: bool;
     errorKind: u32;
+    variants: Vector<Vector<u8>>; // for its own enum error type: each variant's pattern, so a failure names it
+}
+
+/// The patterns of the variants of `t`, a test's own enum error type (`Mine.Broke`, `Mine.Bad(_, _)`), so the harness
+/// names the one returned (ADR 0049 §3.2); none for another type, or one the harness cannot name unqualified.
+fn variantPatterns(c: borrow Checker, t: u32) -> Result<Vector<Vector<u8>>, AllocError> {
+    var out = Vector<Vector<u8>>.create();
+    let definition = c.types.info(t).enumDef;
+    if (definition == none()) {
+        return Ok(out);
+    }
+    let e = borrow c.types.enums[definition as usize];
+    let name = c.typeName(t);
+    if (e.item == none() || e.typeArguments.count > 0 || containsText(name, ".") || containsText(name, "<")) {
+        return Ok(out);
+    }
+    for (v in e.variants.view()) {
+        let variant = borrow c.types.variants[v as usize];
+        var pattern = copyBytes(name)?;
+        pattern.push('.')?;
+        appendBytes(mut pattern, c.name(variant.name))?;
+        if (variant.payload.length > 0) {
+            pattern.push('(')?;
+            for (k in 0..variant.payload.length) {
+                appendText(mut pattern, if (k == 0) "_" else ", _")?;
+            }
+            pattern.push(')')?;
+        }
+        out.push(pattern)?;
+    }
+    return Ok(out);
 }
 
 /// The checker's `@test` functions, in declaration order.
@@ -16,18 +47,23 @@ fn testEntries(c: borrow Checker) -> Result<Vector<TestEntry>, AllocError> {
         let hir = borrow c.hir.functions[f as usize];
         let parts = resultParts(c, hir.returnType);
         var kind: u32 = 0;
+        var variants = Vector<Vector<u8>>.create();
         if (parts.length == 2) {
             let name = c.typeName(parts[1]);
             kind = if (sameText(name, "TestFailure")) 1 else if (sameText(name, "IoError")) 2 else if (sameText(
                 name,
                 "AsyncError",
             )) 3 else 4;
+            if (kind == 4) {
+                variants = variantPatterns(c, parts[1])?;
+            }
         }
         out.push(
             TestEntry {
                 name: copyBytes(c.name(hir.name))?,
                 isAsync: c.front.ast.functions[hir.syntax as usize].isAsync,
                 errorKind: kind,
+                variants: variants,
             },
         )?;
     }
@@ -77,6 +113,24 @@ fn harnessSource(tests: borrow Vector<TestEntry>) -> Result<Vector<u8>, AllocErr
             appendText(mut s, "        ")?;
             appendBytes(mut s, call.view())?;
             appendText(mut s, ";\n        return TestRun.passed();\n")?;
+        } else if (t.errorKind == 4 && t.variants.length > 0) {
+            // Its own enum: the variant returned, by name (ADR 0049 §3.2).
+            appendText(mut s, "        match (")?;
+            appendBytes(mut s, call.view())?;
+            appendText(mut s, ") {\n            Ok() => { return TestRun.passed(); }\n")?;
+            for (pattern in t.variants.view()) {
+                appendText(mut s, "            Err(")?;
+                appendBytes(mut s, pattern.view())?;
+                appendText(mut s, ") => { return TestRun.failedWith(\"returned Err(")?;
+                for (b in pattern.view()) {
+                    if (b == '(') {
+                        break; // the name without its payload's placeholders
+                    }
+                    s.push(b)?;
+                }
+                appendText(mut s, ")\"); }\n")?;
+            }
+            appendText(mut s, "        }\n")?;
         } else {
             appendText(mut s, "        match (")?;
             appendBytes(mut s, call.view())?;
@@ -135,7 +189,7 @@ fn writeHarness(options: borrow Options, c: borrow Checker) -> i32 {
 
 /// What one run of a test showed (ADR 0049 §3.3's outcomes).
 struct TestOutcome {
-    outcome: u32; // 0 passed, 1 failed, 2 panicked, 3 crashed, 4 timed out, 5 leaked, 6 unknown, 7 skipped
+    outcome: u32; // 0 passed, 1 failed, 2 panicked, 3 crashed, 4 timed out, 5 leaked, 6 unknown, 7 skipped, 8 exited
     message: Vector<u8>;
     stdout: Vector<u8>;
     stderr: Vector<u8>;
@@ -152,6 +206,7 @@ fn outcomeName(outcome: u32) -> StringView => match (outcome) {
     4 => "timed out",
     5 => "leaked",
     7 => "skipped",
+    8 => "exited",
     _ => "not found",
 };
 
@@ -288,6 +343,10 @@ fn runTest(
                     appendText(mut result.message, " allocation(s) still live at the end")!;
                 }
             } else {
+                // A status a signal gives (128 + its number, as Process.capture reports one; on Windows an exception's
+                // code, negative as an i32) is a crash; any other is the test ending the process itself (Process.exit).
+                let signalled = output.status < 0 || (!hostIsWindows() && output.status > 128 && output.status <= 192);
+                result.outcome = if (signalled) 3 else 8;
                 appendText(mut result.message, "exit status ")!;
                 if (output.status < 0) {
                     result.message.push('-')!;
@@ -412,12 +471,49 @@ fn testStep(harness: Slice<u8>, exe: Slice<u8>) -> i32 {
     return compileFiles(options, true, Vector<String>.create(), packages, packageFiles);
 }
 
+/// `ceesafec test --help`: its options and outcomes.
+fn testHelp() {
+    Console.writeLine("usage: ceesafec test [options]   (in a package's directory; tooling.md §10, ADR 0049)");
+    Console.writeLine("runs the package's @test functions, each as a process of its own, in the order of their names");
+    Console.writeLine("  --filter <text>       only the tests whose name contains <text> (none matching is an error)");
+    Console.writeLine("  --list                print the tests' names and run none");
+    Console.writeLine("  --interp              run them in the interpreter (a test that calls C is skipped)");
+    Console.writeLine("  --jobs <n>            run n tests at once");
+    Console.writeLine("  --timeout <seconds>   a test running longer has timed out (default 60)");
+    Console.writeLine("  --sweep alloc|cancel  run each passing test again under every failed allocation or every");
+    Console.writeLine("                        cancellation point (native only)");
+    Console.writeLine("  --format text|json    the report's form");
+    Console.writeLine(
+        "outcomes: passed, failed, panicked, crashed (a signal or exception), exited (the test ended the",
+    );
+    Console.writeLine("process itself), timed out, leaked (allocations still live at exit), skipped");
+}
+
 /// `ceesafec test` (ADR 0049 §3.3).
 fn testCommand() -> i32 {
+    var argument: usize = 2;
+    loop {
+        match (Process.argument(argument)) {
+            Some(a) => {
+                if (a == "--help" || a == "-h") {
+                    testHelp();
+                    return 0;
+                }
+            }
+            null => { break; }
+        }
+        argument += 1;
+    }
     var options = defaultOptions(true);
     let status = testOptions(mut options);
     if (status != 0) {
         return status;
+    }
+    if (options.interp && options.testSweep != 0) {
+        // The sweeps need the native runtime's hooks; under --interp they would pass without one run.
+        return fail(
+            "'--sweep' runs the tests natively, under the runtime's allocation and cancellation hooks: it cannot be combined with '--interp'",
+        );
     }
     {
         // The package's output directory (out/<name>), as a build's.
@@ -452,6 +548,16 @@ fn testCommand() -> i32 {
         } else {
             line.push(b)!;
         }
+    }
+    // In the order of their names (ADR 0049 §3.3), whatever their order in the sources.
+    names.sortBy((a, b) => compareBytes(a.view(), b.view()));
+    if (names.length == 0 && options.testFilter.length > 0) {
+        // A filter that matches nothing is an error, so a mistyped one cannot pass in CI.
+        var message = copyBytes("ceesafec test: no test's name contains '".bytes())!;
+        appendBytes(mut message, options.testFilter.view())!;
+        appendText(mut message, "'\n")!;
+        Console.writeError(StringView.fromUtf8(message.view())!);
+        return 1;
     }
     if (options.testList) {
         for (n in names.view()) {

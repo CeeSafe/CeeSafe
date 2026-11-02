@@ -263,3 +263,17 @@ write without tuples.
   - check-fail/test-shapes (N0348, each shape and a call from `main`);
   - `tools/test_command_check.py` in the contract suite, on `tests/packages/test-command`, whose 14 tests have every
     outcome, against `expected.tsv`.
+- **After CeeSafe.Web's report (2026-11-02).**
+  - `--interp` finds leaks too: the interpreter's model of `ceesafe_test_begin` turns on its allocation report, which
+    counts as the runtime's does. The sweeps stay native, and `--interp --sweep` is now a usage error (it ran no sweep
+    and passed).
+  - A `--filter` that matches nothing is exit status 1.
+  - Tests run in the names' order, as §3.3 says (they ran in declaration order).
+  - A test failing with its own enum names the variant (`returned Err(Mine.Broke)`), as §3.2 says, when the harness
+    can name the type unqualified and it is not generic; else `returned Err`.
+  - A new outcome, **exited**: a test that ends the process itself with a status (`Process.exit(3)`) was reported as
+    crashed, which §3.3 keeps for a signal or exception (129 to 192 on POSIX, an exception's code on Windows).
+  - `ceesafec test --help`.
+  - The fixture gains `leaksSafely` (leaked natively and under `--interp`) and `exits`; `tools/test_command_check.py`
+    checks the empty filter, the refusal of `--interp --sweep`, `--help` and the order.
+

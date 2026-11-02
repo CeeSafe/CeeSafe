@@ -735,17 +735,19 @@ test from anything but the generated harness, is N0348.
 
 1. It checks the package with its tests and writes the harness and the list of tests to `out/ceesafe-test/`.
 2. It builds the harness once, as `out/<name>-tests`.
-3. It runs each test whose name contains `--filter` (all by default), `--jobs` at a time (default 1), each as its own
-   process. `--list` prints the names instead.
+3. It runs each test whose name contains `--filter` (all by default), in the order of their names (bytewise), `--jobs`
+   at a time (default 1), each as its own process. `--list` prints the names instead. A `--filter` that no name
+   contains is an error (exit status 1), so a mistyped filter cannot pass. `ceesafec test --help` lists the options.
 
 Each test's outcome:
 
 | Outcome | When |
 |---|---|
 | passed | it returned `Ok`, or `void` |
-| failed | it returned `Err`; its message is shown, and its captured output |
+| failed | it returned `Err`; its message is shown (`IoError`'s and `AsyncError`'s message, a `TestFailure`'s, or for the test's own enum the variant: `returned Err(Mine.Broke)`), and its captured output |
 | panicked | the runtime's panic report, with its location |
-| crashed | it ended otherwise: a signal, `abort`, another status |
+| crashed | a signal or exception: `abort`, a fault (a status of 129 to 192 on POSIX, as `Process.capture` reports a signal; an exception's code on Windows) |
+| exited | the test ended the process itself with another status (`Process.exit(3)`) |
 | timed out | it ran past `--timeout` (default 60 s) |
 | leaked | it passed, but allocations were live at the end (`CEESAFE_ALLOC_REPORT`) |
 | skipped | with `--interp`, it calls C, which the interpreter cannot run |
@@ -754,7 +756,8 @@ Each test's outcome:
 - **JSON.** `--format json` prints one document: each test's name, outcome, milliseconds, message, standard output and
   error; the sweeps' failures and runs; and the counts.
 - **`--interp`** runs each test with `ceesafec run --interp` on the harness: the virtual clock and the seeded run order
-  of type-system.md §40.8. The timeout holds there too. Leaks and sweeps are native only.
+  of type-system.md §40.8. The timeout holds there too, and so does the leak check: the interpreter counts allocations as
+  the runtime does. The sweeps are native only: `--interp --sweep` is a usage error (exit status 2).
 - **`--sweep alloc`** runs each passing test again once per allocation attempt, the k-th failing. **`--sweep cancel`**
   runs it once per suspension point, the k-th cancelling its root task, sampled past 200 as `tools/cancel_sweep.py`
   is. A run may fail; it may not panic, crash, time out or leak.

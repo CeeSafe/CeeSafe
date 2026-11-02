@@ -1437,7 +1437,9 @@ fn callC(
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_test_begin")) {
-        // `ceesafec test --interp` (ADR 0049 §3.3): the runtime's reports and sweeps are native only.
+        // `ceesafec test --interp` (ADR 0049 §3.3): the allocation report, so a leak is found as natively; the
+        // sweeps are native only (the runner refuses --interp --sweep).
+        it.options.allocationReport = true;
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_thread_watchdog")) {

@@ -4,7 +4,8 @@
 1. `check` checks the package with its tests.
 2. `test --format json` natively and with --interp: each test's outcome, and a part of its message, as
    tests/packages/test-command/expected.tsv says (reviewed by hand).
-3. `test --list --filter fails`: the matching names, in declaration order.
+3. `test --list --filter fails`: the matching names, in the names' order; a filter that matches nothing is exit status 1;
+   `--interp --sweep` is a usage error (2), since the sweeps are native only; `test --help` prints the options.
 4. `test --sweep alloc` and `--sweep cancel`: no sweep failure, and as many runs as the harness reports allocation
    attempts or suspension points when run directly (the counts tools/fault_sweep.py and tools/cancel_sweep.py sweep).
 5. `build`: the program runs its own main, and `--emit c` holds no test function.
@@ -81,11 +82,20 @@ def main():
                 if "shown because it fails" not in shown:
                     problems.append(f"printsAndFails's output was not captured: {shown!r}")
 
-        # 3. list
+        # 3. list, an empty filter, --interp --sweep, --help
         p = run(["test", "--list", "--filter", "fails"], package)
-        want = [e[0] for e in expected if "fails" in e[0]]
+        want = sorted((e[0] for e in expected if "fails" in e[0]), key=lambda n: n.encode())
         if p.stdout.split() != want:
             problems.append(f"test --list --filter fails printed {p.stdout.split()}, not {want}")
+        p = run(["test", "--filter", "noSuchTest"], package)
+        if p.returncode != 1 or "noSuchTest" not in p.stderr:
+            problems.append(f"a filter matching nothing: exit status {p.returncode}, {p.stderr[-200:]!r}")
+        p = run(["test", "--interp", "--sweep", "alloc"], package)
+        if p.returncode != 2 or "--interp" not in p.stderr:
+            problems.append(f"--interp --sweep: exit status {p.returncode}, not 2: {p.stderr[-200:]!r}")
+        p = run(["test", "--help"], package)
+        if p.returncode != 0 or "--sweep" not in p.stdout or "exited" not in p.stdout:
+            problems.append(f"test --help: exit status {p.returncode}, {p.stdout[:200]!r}")
 
         # 4. sweeps, against the harness's own counts
         harness = os.path.join(package, "out", "tc-tests" + (".exe" if WINDOWS else ""))

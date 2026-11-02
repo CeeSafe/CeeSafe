@@ -60,9 +60,11 @@ In safe code (everything outside an `unsafe` block), CeeSafe rules out:
 And beyond safety:
 
 - **Structured async and threads.** `async fn` and `await` run many waits on one thread (timers, sockets, files,
-  channels) with no garbage collector and no task that outlives its caller: `Async.scope` starts children that may
-  borrow the caller's locals and have all returned when it does, `Async.race` and `Async.all` take two, and a failure
-  cancels the rest. Each task's frame has a size known at compile time and never moves. `Async.runWorkers` spreads
+  channels, DNS) with no garbage collector and no task that outlives its caller: `Async.scope` starts children that may
+  borrow the caller's locals and have all returned when it does, `Async.race` and `Async.all` take two, a failure
+  cancels the rest, and `Async.timeout` bounds any of it. Each task's frame has a size known at compile time and never
+  moves. Sockets speak IPv4 and IPv6 on epoll, kqueue, io_uring and IOCP, with socket options, vectored sends and
+  portable network errors. `Async.runWorkers` spreads
   tasks over threads; `Thread.spawn`, `Thread.both`, `Arc`, `Mutex` and atomics share data, with `Send` and `Share`
   checked.
 - **Explicit, pluggable allocation.** Each allocation chooses its allocator: the system heap, an arena, a pool, a fixed
@@ -77,8 +79,10 @@ And beyond safety:
   ([CosmoOS](integrations/cosmoos/) does).
 - **The compiler shows its work.** `--explain-allocations`, `--explain-bounds-checks` and `--explain-overflow-checks`
   say which boxes went on the stack and which checks were removed, and why.
-- **Tools included.** A formatter, a documentation generator, packages with git dependencies, a language server and
-  VS Code extension, debugger scripts, and an MCP server for AI coding agents.
+- **Testing built in.** `@test` functions and `ceesafec test`, which runs each test as its own process and fails one
+  that leaks, and can run each again under every allocation failure and every cancellation point.
+- **Tools included.** A formatter, a documentation generator, packages with git dependencies and system C libraries,
+  a language server and VS Code extension, debugger scripts, and an MCP server for AI coding agents.
 
 ## Performance
 
@@ -115,6 +119,7 @@ ceesafec check            # type and borrow checks only: the fastest way to find
 ceesafec build            # compiles to C, then to out/hello
 ./out/hello
 ceesafec run --interp     # runs the program in the reference interpreter
+ceesafec test             # runs the package's @test functions
 ceesafec fmt              # formats the sources in the one canonical style
 ```
 
@@ -126,7 +131,7 @@ Other commands: `ceesafec fix` applies the compiler's sure fixes, `ceesafec expl
 
 | | |
 |---|---|
-| [The guide](guide/) | the language from basics to ownership, memory, collections, generics, closures, threads, [async tasks](guide/async.md), `unsafe` and kernel code; [coming from Rust, Zig, C, C#, Go](guide/coming-from/) |
+| [The guide](guide/) | the language from basics to ownership, memory, collections, generics, closures, threads, [async tasks](guide/async.md), `unsafe` and kernel code, [packages](guide/packages.md) and [testing](guide/testing.md); [coming from Rust, Zig, C, C#, Go](guide/coming-from/) |
 | [The specification](spec/) | the normative rules: grammar, type system, ownership, lifetimes, memory model, the C backend, diagnostics, tooling |
 | [For AI agents](guide/for-agents.md) | how an agent should write and check CeeSafe; `ceesafec new --agent claude` sets one up |
 | [Editors](guide/editors.md), [debugging](guide/debugging.md) | the [VS Code extension](https://marketplace.visualstudio.com/items?itemName=ceesafe.ceesafe-language) (`code --install-extension ceesafe.ceesafe-language`) and the language server; lldb and gdb |
@@ -145,7 +150,7 @@ out/ceesafec build -o out/ceesafec.new && mv out/ceesafec.new out/ceesafec   # i
 
 Check a change with the contract suite (the fixed point, the corpus under `-Werror`, ASan+UBSan with leak checks and,
 on Linux, gcc with `-O2 -D_FORTIFY_SOURCE=2`; the async programs under ThreadSanitizer, the allocation-failure and
-cancellation sweeps, the mutation suite, the specification and guide):
+cancellation sweeps, the mutation suite, the package, DNS and `ceesafec test` checks, the specification and guide):
 
 ```sh
 python3 tools/contract_tests.py --ceesafec out/ceesafec

@@ -189,5 +189,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A member of an imported union whose type has bit patterns that are not values: anything but an integer, a raw pointer, an array of these, or an imported type whose fields are such (`type-system.md` §31.1, ADR 0041 §3.2)",
     347 =>
         "A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3)",
+    348 =>
+        "A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1)",
     _ => "",
 };

@@ -561,7 +561,8 @@ fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocErro
 }
 
 /// Every instance made so far gets the generic impls that match it (twice, so an instance whose bound needs another
-/// instance's impl finds it whatever their order).
+/// instance's impl finds it whatever their order), and so does each generic struct's or enum's own type, whose methods
+/// are checked with its parameters opaque (bug B9).
 fn attachToInstances(c: borrow mut Checker) -> Result<void, AllocError> {
     if (c.implTemplates.length == 0) {
         return Ok();
@@ -570,7 +571,7 @@ fn attachToInstances(c: borrow mut Checker) -> Result<void, AllocError> {
         var k: usize = 0;
         while (k < c.structs.length) {
             let typ = c.structs[k].typ;
-            if (c.structs[k].template != none()) {
+            if (c.structs[k].template != none() || isGenericItem(c, c.structs[k].item)) {
                 attachGenericImpls(c, typ)?;
             }
             k += 1;
@@ -578,7 +579,7 @@ fn attachToInstances(c: borrow mut Checker) -> Result<void, AllocError> {
         k = 0;
         while (k < c.enums.length) {
             let typ = c.enums[k].typ;
-            if (c.enums[k].template != none()) {
+            if (c.enums[k].template != none() || isGenericItem(c, c.enums[k].item)) {
                 attachGenericImpls(c, typ)?;
             }
             k += 1;

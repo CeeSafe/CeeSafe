@@ -5,6 +5,10 @@
  * programs that use them (c-backend.md §6). Thread and mutex memory comes from ceesafe_alloc,
  * so the fault-injection sweep reaches it.
  */
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+/* nanosleep, for the test watchdog (ADR 0049), under glibc's strict C11 headers. */
+#define _GNU_SOURCE
+#endif
 #include "ceesafe/rt.h"
 
 #if defined(CEE_COSMOOS)
@@ -14,6 +18,8 @@
 #include <windows.h>
 #else
 #include <pthread.h>
+#include <time.h>
+#include <unistd.h>
 #endif
 
 struct cee_thread {
@@ -160,9 +166,6 @@ void ceesafe_thread_watchdog(uint64_t ms) {
     }
 }
 #else
-#include <time.h>
-#include <unistd.h>
-
 static void *cee_watchdog(void *unused) {
     (void)unused;
     struct timespec t = {(time_t)(cee_watchdog_ms / 1000u), (long)(cee_watchdog_ms % 1000u) * 1000000L};

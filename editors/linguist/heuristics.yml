@@ -1,0 +1,9 @@
+# For lib/linguist/heuristics.yml in github-linguist/linguist, needed only if another language in Linguist claims
+# `.cee` by then. Other `.cee` languages exist on GitHub (tools/linguist_usage.py lists their repositories), none in
+# Linguist as of 2026-11-03. The patterns are CeeSafe's: borrows (`borrow this`, `borrow mut x`), and functions with
+# a `->` result. Check them against the other languages' files before submitting.
+disambiguations:
+- extensions: ['.cee']
+  rules:
+  - language: CeeSafe
+    pattern: '\bborrow\s+(mut\s+)?\w+|^\s*(public\s+)?(async\s+)?fn\s+\w+\s*(<[^>]*>)?\([^)]*\)\s*->'

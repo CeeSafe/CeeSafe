@@ -1,0 +1,106 @@
+// Reactor benchmark (L1 A4b): IDLE connections whose both ends are tasks parked on a read, and one connection
+// doing ROUNDS one-byte round trips. Each round trip's waits pass through the reactor with every idle task
+// registered, so the time per round trip grows with IDLE for a reactor that rescans its registrations.
+const IDLE: usize = 1000; // benchmarks/async-reactor/run.py sets IDLE and ROUNDS
+const ROUNDS: u32 = 20000;
+
+async fn hold(stream: borrow AsyncTcpStream) -> Result<void, AsyncError> {
+    var byte = [0u8; 1];
+    let n = await stream.read(mut byte[..])?; // never written: waits until cancelled
+    return Ok();
+}
+
+async fn echo(listener: borrow AsyncTcpListener) -> Result<u32, AsyncError> {
+    let peer = await listener.accept()?;
+    var byte = [0u8; 1];
+    var count: u32 = 0;
+    loop {
+        let n = await peer.read(mut byte[..])?;
+        if (n == 0) {
+            return Ok(count);
+        }
+        await peer.write(byte[..])?;
+        count += 1;
+    }
+}
+
+async fn ping(port: u16) -> Result<u32, AsyncError> {
+    let stream = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    var byte = [7u8; 1];
+    let start = Timer.now();
+    for (i in 0..ROUNDS) {
+        await stream.write(byte[..])?;
+        let n = await stream.read(mut byte[..])?;
+        if (n == 0) {
+            return Err(AsyncError.Cancelled);
+        }
+    }
+    let elapsed = Timer.now() - start;
+    match (stream.shutdownWrite()) {
+        Ok() => {}
+        Err(e) => { return Err(AsyncError.Io(e)); }
+    }
+    return Ok(truncate<u32>(elapsed));
+}
+
+fn listen() -> Result<AsyncTcpListener, AsyncError> {
+    return match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => Ok(l),
+        Err(e) => Err(AsyncError.Io(e)),
+    };
+}
+
+fn portOf(listener: borrow AsyncTcpListener) -> Result<u16, AsyncError> {
+    return match (listener.port()) {
+        Ok(p) => Ok(p),
+        Err(e) => Err(AsyncError.Io(e)),
+    };
+}
+
+async fn work() -> Result<u32, AsyncError> {
+    // The idle connections, both ends, made before the clock starts.
+    let idle = listen()?;
+    let idlePort = portOf(borrow idle)?;
+    var streams = Vector<AsyncTcpStream>.create(); // both ends of every idle connection
+    for (k in 0..IDLE) {
+        let client = await AsyncTcpStream.connect("127.0.0.1", idlePort)?;
+        let server = await idle.accept()?;
+        match (streams.push(client)) {
+            Ok() => {}
+            Err(_) => { return Err(AsyncError.Cancelled); }
+        }
+        match (streams.push(server)) {
+            Ok() => {}
+            Err(_) => { return Err(AsyncError.Cancelled); }
+        }
+    }
+    let busy = listen()?;
+    let busyPort = portOf(borrow busy)?;
+    let r: Result<Raced<u32>, AsyncError> = await Async.race(async () => {
+        var ms: u32 = 0;
+        await Async.all(async () => {
+            await echo(borrow busy)?;
+            return Ok();
+        }, async () => {
+            ms = await ping(busyPort)?;
+            return Ok();
+        })?;
+        return Ok(ms);
+    }, async () => {
+        await Async.scope(AsyncError.Cancelled, (s) => {
+            for (k in 0..streams.length) {
+                s.spawn(async () => await hold(borrow streams[k])); // k is each child's own (ADR 0033)
+            }
+        })?;
+        return Ok(0);
+    });
+    return Ok(r?.value);
+}
+
+fn main() {
+    match (Async.run(work())) {
+        Ok(ms) => { Console.writeLine(ms); }
+        Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}

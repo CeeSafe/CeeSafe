@@ -47,4 +47,5 @@ code --install-extension ceesafe-language-*.vsix
 
 ## License
 
-GPL-2.0-only, as CeeSafe.
+GPL-2.0-only, as CeeSafe, except the TextMate grammar, `syntaxes/ceesafe.tmLanguage.json`, which is under the MIT
+licence (`syntaxes/LICENSE`) so that other tools, GitHub's Linguist among them, can use it (`editors/linguist/`).

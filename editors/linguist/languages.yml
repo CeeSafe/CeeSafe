@@ -1,0 +1,9 @@
+# The entry for lib/linguist/languages.yml in github-linguist/linguist, in its alphabetical place. Omit language_id:
+# script/update-ids adds it (Linguist's CONTRIBUTING.md, "Adding a language").
+CeeSafe:
+  type: programming
+  color: "#128d99"
+  extensions:
+  - ".cee"
+  tm_scope: source.ceesafe
+  ace_mode: text

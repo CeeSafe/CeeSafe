@@ -128,7 +128,8 @@ public interface Allocator {
     `ceesafec test`, turns counting on; without them the runtime counts nothing.
   - C code's allocations through `CEE_ALLOC_FOREIGN` (ADR 0060, type-system.md §28.6) count in `attempts` and can be
     failed, but not in `live`: when there were any, a second line, `ceesafe alloc: foreign held=<k>`, gives the blocks
-    C still holds, and no tool reads it as a leak.
+    C still holds, and no tool reads it as a leak. `CEE_ALLOC_FOREIGN_INIT` (ADR 0061), for a C library's one-time
+    initialisation, is neither counted in `attempts` nor failed; its blocks are in `foreign held`.
   - The test runner's sweep uses both (`testing.md`).
 
 ### 3.3 Arenas (regions)

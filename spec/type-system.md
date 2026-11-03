@@ -2047,7 +2047,10 @@ declarations of C library functions match the C library's own prototypes exactly
   `realloc(NULL, n)` allocates; aligned for any C type; a failed realloc keeps the block). Their attempts are counted
   and fault-injected in one sequence with CeeSafe's (`CEESAFE_FAIL_ALLOC_AT`), but a block live at exit is not a
   leak: the report gives such blocks on a line of their own (memory-model.md §3.2). A C library's global state, kept
-  until the process ends, may live there, such as OpenSSL's through `CRYPTO_set_mem_functions` in test builds. With them, a program may have
+  until the process ends, may live there, such as OpenSSL's through `CRYPTO_set_mem_functions` in test builds.
+  `CEE_ALLOC_FOREIGN_INIT` (ADR 0061) is for a C library's one-time initialisation, which cannot survive a failed
+  allocation: never failed and not counted as an attempt, its blocks held with `CEE_ALLOC_FOREIGN`'s (either number
+  may reallocate or free them). With them, a program may have
   its `main` in C instead of in CeeSafe; without a CeeSafe `main`, the CeeSafe runtime is not started, so
   allocation-failure injection (`CEESAFE_FAIL_ALLOC_AT`) and program arguments are not available to
   exported functions.

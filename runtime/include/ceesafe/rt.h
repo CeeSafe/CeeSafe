@@ -661,8 +661,8 @@ uint64_t ceesafe_platform_config(const char *name);
 /* Allocator types, as passed by generated code. */
 #define CEE_ALLOC_SYSTEM 0u
 #define CEE_ALLOC_FAILING 1u
-/* CEE_ALLOC_FOREIGN (2u, for C code: ADR 0060) and the three calls are declared in ceesafe/foreign.h, which a
-   package's C files include on their own. */
+/* CEE_ALLOC_FOREIGN (2u, for C code: ADR 0060), CEE_ALLOC_FOREIGN_INIT (3u, a C library's one-time initialisation:
+   ADR 0061) and the three calls are declared in ceesafe/foreign.h, which a package's C files include on their own. */
 #include "foreign.h" /* beside this header, whatever the include path */
 
 /*

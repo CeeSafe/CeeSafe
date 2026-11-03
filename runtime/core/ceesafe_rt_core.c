@@ -267,8 +267,12 @@ void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
 #endif
 
 /* Counts an attempt when counting; true if it is to fail (FailingAllocator, or CEESAFE_FAIL_ALLOC_AT, which only a
-   counting program has). */
+   counting program has). A C library's one-time initialisation (CEE_ALLOC_FOREIGN_INIT, ADR 0061) is neither counted
+   nor failed. */
 static bool alloc_refused(uint32_t allocator) {
+    if (allocator == CEE_ALLOC_FOREIGN_INIT) {
+        return false;
+    }
     uint64_t attempt = alloc_counting ? CEE_COUNT(alloc_attempts, 1u) : 0u;
     if (allocator == CEE_ALLOC_FAILING && failing_armed) {
         if (failing_left == 0u) {
@@ -279,9 +283,10 @@ static bool alloc_refused(uint32_t allocator) {
     return alloc_fail_at != 0u && attempt == alloc_fail_at;
 }
 
-/* One more live block (or one fewer, with UINT64_MAX) when counting, in C's count for CEE_ALLOC_FOREIGN (ADR 0060). */
+/* One more live block (or one fewer, with UINT64_MAX) when counting, in C's count for CEE_ALLOC_FOREIGN (ADR 0060) and
+   CEE_ALLOC_FOREIGN_INIT (ADR 0061), one count for both: a block may be freed under either. */
 static void alloc_count_live(uint32_t allocator, uint64_t delta) {
-    if (allocator == CEE_ALLOC_FOREIGN && alloc_counting) {
+    if ((allocator == CEE_ALLOC_FOREIGN || allocator == CEE_ALLOC_FOREIGN_INIT) && alloc_counting) {
         (void)CEE_COUNT(alloc_foreign, delta);
         alloc_foreign_used = true;
     } else if (alloc_counting) {

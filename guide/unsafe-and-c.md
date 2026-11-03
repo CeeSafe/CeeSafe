@@ -191,6 +191,13 @@ ends. The allocation report shows those blocks on their own line, `ceesafe alloc
 allocation hooks can be pointed at them in test builds; OpenSSL's are `CRYPTO_set_mem_functions`
 ([ADR 0060](../spec/decisions/0060-web-random-tryrecv-foreign-host.md)).
 
+Some libraries cannot survive a failed allocation during their one-time setup: OpenSSL's initialisation re-enters
+itself when one fails. Allocate during that setup with `CEE_ALLOC_FOREIGN_INIT` instead: those allocations are never
+failed and do not count as attempts, so the sweep tests the program's own out-of-memory paths, and the blocks they
+keep are reported as held, like `CEE_ALLOC_FOREIGN`'s. Either number may reallocate or free a block made under the
+other. Use it for the setup only: an allocation made under it is never tested
+([ADR 0061](../spec/decisions/0061-foreign-allocations-for-initialisation.md)).
+
 ## Next
 
 [Kernel code](kernel.md).

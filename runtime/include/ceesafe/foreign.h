@@ -11,7 +11,7 @@
  *
  * The calls follow malloc, realloc and free: memory aligned for any C type (max_align_t), NULL on failure,
  * ceesafe_free(NULL, …) does nothing and ceesafe_realloc(NULL, n, …) allocates. A failed realloc leaves the block
- * unchanged and live. A block is freed with the number it was allocated with.
+ * unchanged and live. A block is freed with the number it was allocated with, or with the other foreign number.
  */
 #ifndef CEESAFE_FOREIGN_H
 #define CEESAFE_FOREIGN_H
@@ -20,6 +20,15 @@
 #include <stdint.h>
 
 #define CEE_ALLOC_FOREIGN 2u
+
+/*
+ * For a C library's one-time initialisation, which cannot survive a failed allocation (ADR 0061: OpenSSL's raises an
+ * error that re-enters the pthread_once running it). Never failed and not counted as an attempt, so a sweep's numbering
+ * is the program's own; its blocks count with CEE_ALLOC_FOREIGN's in "foreign held", and a block may be reallocated
+ * or freed under either number. Use it for the initialisation only: everything else allocated under it escapes the
+ * allocation-failure sweep.
+ */
+#define CEE_ALLOC_FOREIGN_INIT 3u
 
 void *ceesafe_alloc(size_t size, uint32_t allocator);
 void *ceesafe_realloc(void *p, size_t size, uint32_t allocator);

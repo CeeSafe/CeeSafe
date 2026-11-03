@@ -1891,8 +1891,8 @@ fn layoutEnd(l: borrow LayoutBuilder) -> SizeAlign {
 fn typeLayout(c: borrow Checker, t: u32) -> SizeAlign => cLayout(c, t);
 
 /// The runtime's structs (ceesafe/rt.h), on the 64-bit targets ceesafec emits for.
-fn scopeLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
-fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 160, align: 16 };
+fn scopeLayout() -> SizeAlign => SizeAlign { size: 48, align: 8 };
+fn taskSlotLayout() -> SizeAlign => SizeAlign { size: 192, align: 16 };
 fn blockingLayout() -> SizeAlign => SizeAlign { size: 32, align: 8 };
 
 /// What a frame is made of, for --explain-frames.

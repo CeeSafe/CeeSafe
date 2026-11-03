@@ -129,7 +129,11 @@ typedef struct cee_task {
     bool channel_wait;     /* on_wake for a channel: a cancellation wakes it too (type-system.md §40.7) */
     bool parked;           /* on the parked list */
     bool on_op;            /* waiting for an IOCP completion (ADR 0035): readied by it, cancellable while channel_wait */
+    bool listed;           /* on its scope's list of children (ADR 0062): a child that runs on its scope's worker */
     struct cee_chunk *stack; /* the chunk at the top of its frame stack (ADR 0056), or NULL */
+    struct cee_task *sibling_next; /* its scope's children (ADR 0062) */
+    struct cee_task *sibling_prev;
+    ceesafe_scope *owned;  /* the scopes it owns that have children or wait for them, innermost first (ADR 0062) */
 } cee_task;
 
 _Static_assert(sizeof(cee_task) <= sizeof(ceesafe_task_slot), "ceesafe_task_slot holds a task");
@@ -199,6 +203,8 @@ typedef struct {
     uint64_t cancel_seen;      /* the run's cancel_epoch when this executor last rechecked its parked tasks */
     struct cee_chunk *chunks;  /* frame-stack chunks no task uses, for the next (ADR 0056) */
     uint32_t chunk_count;
+    struct cee_woken *woken;   /* the woken tasks one wait readies, sorted by wake (ADR 0062 §7); grown on need */
+    uint32_t woken_capacity;
 } cee_executor;
 
 #if defined(CEE_FREESTANDING)
@@ -277,9 +283,11 @@ static void cee_scope_unlock(ceesafe_scope *scope) {
 /* Cancels a scope's children (type-system.md §40.5): every worker rechecks its parked tasks if the scope is shared. */
 static void cee_wake_waiters(void);
 
+static void cee_cancel_visit(ceesafe_scope *scope);
+
 static void cee_cancel_scope(ceesafe_scope *scope) {
     ceesafe_atomic_store_u32(&scope->cancelled, 1u);
-    cee_wake_waiters();
+    cee_cancel_visit(scope); /* its own tasks, not every parked one (ADR 0062) */
     if (scope->shared && cee_exec.run != NULL) {
         (void)ceesafe_atomic_add_u64(&cee_exec.run->cancel_epoch, 1u);
         cee_run_poke(cee_exec.run);
@@ -318,6 +326,7 @@ static cee_task *cee_steal(void) {
 static uint64_t cee_suspensions; /* every thread's executor counts here (ceesafe_atomic_*) */
 static _Thread_local cee_task *cee_cancel_root; /* the running Async.run's root, which the sweep cancels */
 static uint64_t cee_cancel_woken; /* tasks cancellations woke, every thread's (ceesafe_atomic_*): CEESAFE_CANCEL_REPORT */
+static uint64_t cee_cancel_visited; /* tasks cancellations looked at (ADR 0062), every thread's: CEESAFE_CANCEL_REPORT */
 #endif
 
 /* Whether a task is cancelled: itself, or its scope (a sibling failed), or the task that owns its scope. */
@@ -975,10 +984,68 @@ static void cee_task_init(cee_task *t, void *frame, ceesafe_scope *scope, const 
     t->info = info;
 }
 
+/* ---- What a cancellation visits (ADR 0062): each scope's children that run on its worker, and each task's scopes. ----
+ * Kept by the scope's owner, on its worker: a child joins when it is started and leaves when it returns; a scope joins
+ * its owner's list with its first child and leaves when it is done. A spawnSend child, which may run elsewhere, is
+ * not listed: a visit that meets a shared scope walks every parked task instead (§3.3). */
+static void cee_scope_own(ceesafe_scope *scope) {
+    cee_task *owner = (cee_task *)scope->owner;
+    if (!scope->listed && owner != NULL) {
+        scope->listed = true;
+        scope->outer = owner->owned;
+        owner->owned = scope;
+    }
+}
+
+static void cee_scope_disown(ceesafe_scope *scope) {
+    if (!scope->listed) {
+        return;
+    }
+    cee_task *owner = (cee_task *)scope->owner;
+    ceesafe_scope **at = &owner->owned;
+    while (*at != NULL && *at != scope) {
+        at = (ceesafe_scope **)&(*at)->outer;
+    }
+    if (*at == scope) {
+        *at = (ceesafe_scope *)scope->outer;
+    }
+    scope->listed = false;
+    scope->outer = NULL;
+}
+
+static void cee_child_link(ceesafe_scope *scope, cee_task *t) {
+    cee_task *first = (cee_task *)scope->children;
+    t->listed = true;
+    t->sibling_prev = NULL;
+    t->sibling_next = first;
+    if (first != NULL) {
+        first->sibling_prev = t;
+    }
+    scope->children = t;
+}
+
+static void cee_child_unlink(cee_task *t) {
+    if (!t->listed) {
+        return;
+    }
+    if (t->sibling_prev != NULL) {
+        t->sibling_prev->sibling_next = t->sibling_next;
+    } else {
+        t->scope->children = t->sibling_next;
+    }
+    if (t->sibling_next != NULL) {
+        t->sibling_next->sibling_prev = t->sibling_prev;
+    }
+    t->sibling_next = NULL;
+    t->sibling_prev = NULL;
+    t->listed = false;
+}
+
 static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                        void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
                        const ceesafe_frame_info *info, bool send) {
     if (scope->owner != cee_exec.current) {
+        cee_scope_disown(scope); /* listed under the task that owned it until now (ADR 0062) */
         scope->owner = cee_exec.current; /* before its first child, which other workers may read it from */
     }
     if (scope->oom && !scope->set) {
@@ -1014,9 +1081,11 @@ static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(v
     cee_scope_lock(scope);
     scope->live += 1u;
     cee_scope_unlock(scope);
+    cee_scope_own(scope);
     if (send) {
         t->unpublished = true; /* queued by ceesafe_async_publish once its frame is initialised */
     } else {
+        cee_child_link(scope, t); /* it runs on this worker (ADR 0062) */
         cee_ready(t);
     }
     return t->frame;
@@ -1134,6 +1203,8 @@ void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *fr
     t->resume.child = resume;
     t->embedded = true;
     scope->live += 1u;
+    cee_scope_own(scope);
+    cee_child_link(scope, t);
     cee_ready(t);
 }
 
@@ -1177,6 +1248,9 @@ static void cee_wake_waiters(void) {
     cee_task *t = cee_exec.parked;
     while (t != NULL) {
         cee_task *next = t->next;
+#if !defined(CEE_FREESTANDING)
+        (void)ceesafe_atomic_add_ord_u64(&cee_cancel_visited, 1u, 0);
+#endif
         bool cancellable = t->on_op ? t->channel_wait : (!t->on_wake || t->channel_wait);
         /* Only a task the cancellation reaches (bug B5): any other would retry its wait and park again, a system call
            and a reactor change each, for every cancellation, so a server with n idle connections paid O(n) per race. */
@@ -1193,6 +1267,61 @@ static void cee_wake_waiters(void) {
             }
         }
         t = next;
+    }
+}
+
+/* A parked task that a cancellation reaches runs again, to see it: as cee_wake_waiters decides, for one task. */
+static void cee_unpark_cancelled(cee_task *t) {
+#if !defined(CEE_FREESTANDING)
+    (void)ceesafe_atomic_add_ord_u64(&cee_cancel_visited, 1u, 0);
+#endif
+    if (!t->parked || t->on_scope) {
+        return; /* running or ready: it sees the cancellation at its next check; waiting for its scope: its children */
+    }
+    bool cancellable = t->on_op ? t->channel_wait : (!t->on_wake || t->channel_wait);
+    if (cancellable && cee_cancelled(t)) {
+#if !defined(CEE_FREESTANDING)
+        (void)ceesafe_atomic_add_ord_u64(&cee_cancel_woken, 1u, 0);
+#endif
+        cee_unpark(t);
+    }
+}
+
+/* ADR 0062 §3.2: a cancelled scope's children, and the scopes they own, depth first, without recursion in C. A
+   scope's children and a task's scopes change only when tasks run, and none runs during the visit; unparking moves a
+   task between the executor's lists, never between these. A shared scope's children may be parked unlisted, here or
+   on other workers: meeting one, the visit ends with today's walk (§3.3). */
+static void cee_cancel_visit(ceesafe_scope *root) {
+    bool shared = root->shared;
+    ceesafe_scope *s = root;
+    cee_task *t = (cee_task *)s->children;
+    for (;;) {
+        if (t != NULL) {
+            cee_unpark_cancelled(t);
+            if (t->owned != NULL) {
+                s = t->owned; /* down: the task's innermost scope */
+                shared = shared || s->shared;
+                t = (cee_task *)s->children;
+            } else {
+                t = t->sibling_next;
+            }
+            continue;
+        }
+        if (s == root) {
+            break;
+        }
+        if (s->outer != NULL) {
+            s = (ceesafe_scope *)s->outer; /* across: the owner's next scope */
+            shared = shared || s->shared;
+            t = (cee_task *)s->children;
+            continue;
+        }
+        cee_task *owner = (cee_task *)s->owner; /* up: the owner's scopes are done; on to its next sibling */
+        s = owner->scope;
+        t = owner->sibling_next;
+    }
+    if (shared) {
+        cee_wake_waiters();
     }
 }
 
@@ -1433,10 +1562,14 @@ bool ceesafe_async_scope_done(ceesafe_scope *scope) {
             cee_exec.wake_count += 1u;
         }
         ceesafe_mutex_unlock(cee_exec.run->lock);
+        if (done) {
+            cee_scope_disown(scope);
+        }
         return done;
     }
 #endif
     if (scope->live == 0u) {
+        cee_scope_disown(scope);
         return true;
     }
     scope->waiter = cee_exec.current;
@@ -1776,6 +1909,99 @@ static void cee_wait(void) {
     }
 }
 #else
+/* ADR 0062 §7: one pass over the wake list takes the woken tasks, which then run in the order of their wakes. Walking
+   the list once per woken task, as before, cost the woken times the waiting: quadratic for a server whose every
+   connection and stream waits on a channel. Without room to sort, that walk is what remains. */
+typedef struct cee_woken {
+    uint64_t at;
+    cee_task *task;
+} cee_woken;
+
+/* Heapsort by `at`, ascending: no allocation, and no C library beyond the runtime's (CosmoOS among the hosts). */
+static void cee_woken_sift(cee_woken *a, uint32_t root, uint32_t count) {
+    for (;;) {
+        uint32_t child = 2u * root + 1u;
+        if (child >= count) {
+            return;
+        }
+        if (child + 1u < count && a[child + 1u].at > a[child].at) {
+            child += 1u;
+        }
+        if (a[root].at >= a[child].at) {
+            return;
+        }
+        cee_woken swap = a[root];
+        a[root] = a[child];
+        a[child] = swap;
+        root = child;
+    }
+}
+
+static void cee_woken_sort(cee_woken *a, uint32_t count) {
+    for (uint32_t k = count / 2u; k > 0u; k--) {
+        cee_woken_sift(a, k - 1u, count);
+    }
+    for (uint32_t end = count; end > 1u; end--) {
+        cee_woken swap = a[0];
+        a[0] = a[end - 1u];
+        a[end - 1u] = swap;
+        cee_woken_sift(a, 0u, end - 1u);
+    }
+}
+
+static bool cee_ready_woken(void) {
+    uint32_t count = 0u;
+    bool room = true;
+    for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
+        uint64_t at = ceesafe_atomic_load_u64(&w->woken);
+        if (at == 0u) {
+            continue;
+        }
+        if (count == cee_exec.woken_capacity) {
+            uint32_t capacity = cee_exec.woken_capacity == 0u ? 64u : cee_exec.woken_capacity * 2u;
+            cee_woken *grown =
+                (cee_woken *)ceesafe_platform_realloc(cee_exec.woken, (size_t)capacity * sizeof *grown);
+            if (grown == NULL) {
+                room = false;
+                break;
+            }
+            cee_exec.woken = grown;
+            cee_exec.woken_capacity = capacity;
+        }
+        cee_exec.woken[count].at = at;
+        cee_exec.woken[count].task = w;
+        count += 1u;
+    }
+    bool any = false;
+    if (room) {
+        cee_woken_sort(cee_exec.woken, count);
+        for (uint32_t k = 0; k < count; k++) {
+            cee_task *t = cee_exec.woken[k].task;
+            ceesafe_atomic_store_u64(&t->woken, 0u);
+            cee_unpark(t);
+            any = true;
+        }
+        return any;
+    }
+    for (;;) {
+        cee_task *first = NULL;
+        uint64_t first_at = UINT64_MAX;
+        for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
+            uint64_t at = ceesafe_atomic_load_u64(&w->woken);
+            if (at != 0u && at < first_at) {
+                first = w;
+                first_at = at;
+            }
+        }
+        if (first == NULL) {
+            return any;
+        }
+        ceesafe_atomic_store_u64(&first->woken, 0u);
+        cee_unpark(first);
+        any = true;
+    }
+}
+
 static void cee_wait(void) {
     for (;;) {
         if (cee_exec.heap_count == 0u && cee_exec.fd_count == 0u && cee_exec.wake_count == 0u && cee_exec.op_count == 0u) {
@@ -1809,21 +2035,7 @@ static void cee_wait(void) {
 #endif
 #endif
         /* Woken tasks, earliest wake first. */
-        for (;;) {
-            cee_task *first = NULL;
-            uint64_t first_at = UINT64_MAX;
-            for (cee_task *w = cee_exec.wake_list; w != NULL; w = w->link_next) {
-                uint64_t at = ceesafe_atomic_load_u64(&w->woken);
-                if (at != 0u && at < first_at) {
-                    first = w;
-                    first_at = at;
-                }
-            }
-            if (first == NULL) {
-                break;
-            }
-            ceesafe_atomic_store_u64(&first->woken, 0u);
-            cee_unpark(first);
+        if (cee_ready_woken()) {
             any = true;
         }
         /* The tasks whose time has come run earliest deadline first, however late the executor woke. */
@@ -1891,6 +2103,8 @@ static void cee_exec_begin(cee_run *run) {
     cee_exec.slots = NULL;
     cee_exec.slot_count = 0u;
     cee_exec.active_fds = NULL;
+    cee_exec.woken = NULL;
+    cee_exec.woken_capacity = 0u;
     cee_exec.active_count = 0u;
     cee_exec.active_capacity = 0u;
     cee_exec.reactor = -1;
@@ -1955,6 +2169,7 @@ static void cee_exec_end(void) {
     ceesafe_platform_free(cee_exec.heap);
     ceesafe_platform_free(cee_exec.slots);
     ceesafe_platform_free(cee_exec.active_fds);
+    ceesafe_platform_free(cee_exec.woken);
     cee_free_chunks();
 }
 #endif
@@ -1963,6 +2178,7 @@ static void cee_exec_end(void) {
    child wakes the task waiting for it, on whichever worker that task runs (ADR 0038). */
 static void cee_child_done(cee_task *t) {
     ceesafe_scope *scope = t->scope;
+    cee_child_unlink(t); /* before its block is released (ADR 0062) */
     if (!t->embedded) {
         if (t->release != NULL) {
             t->release(t, t->block_size, _Alignof(cee_max_align_t));
@@ -2141,10 +2357,11 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         ceesafe_mutex_destroy(run.lock);
     }
     if (cancel_report) {
-        char line[96];
-        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu woken=%llu\n",
+        char line[128];
+        int length = snprintf(line, sizeof line, "ceesafe cancel: points=%llu woken=%llu visited=%llu\n",
                               (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_suspensions, 0),
-                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_cancel_woken, 0));
+                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_cancel_woken, 0),
+                              (unsigned long long)ceesafe_atomic_load_ord_u64(&cee_cancel_visited, 0));
         ceesafe_platform_write_stderr((const uint8_t *)line, (size_t)length);
     }
     cee_cancel_root = saved_root;

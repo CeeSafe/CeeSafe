@@ -2,8 +2,12 @@
 """A cancellation wakes only the tasks it reaches (bug B5, type-system.md §40.7), measured: 100 tasks wait on idle
 sockets while 200 races resolve, each cancelling its loser, a timer. With CEESAFE_CANCEL_REPORT=1 the runtime prints how
 many tasks cancellations woke (`woken=`). Each race's cancellation reaches its loser only, so the count is at most one
-per race (200); before the fix every cancellation woke every idle reader too (about 100 × 200). Run natively, on the
-host's reactor and on poll().
+per race (200); before the fix every cancellation woke every idle reader too (about 100 × 200).
+
+A cancellation also only looks at the cancelled scope's own tasks (ADR 0062, CeeSafe.Web's B17): the runtime prints how
+many tasks cancellations looked at (`visited=`). Each race has two children, so at most two per race (400); before
+ADR 0062 each cancellation walked every parked task, the 100 idle readers among them (over 100 × 200). Run natively,
+on the host's reactor and on poll().
 
 usage: python3 tools/wake_check.py --compiler out/ceesafec
 """
@@ -78,6 +82,7 @@ fn main() {
 """
 
 WOKEN = re.compile(r"woken=(\d+)")
+VISITED = re.compile(r"visited=(\d+)")
 
 
 def main():
@@ -98,12 +103,15 @@ def main():
             env = dict(os.environ, CEESAFE_CANCEL_REPORT="1", **extra)
             p = subprocess.run([exe], capture_output=True, text=True, env=env, timeout=120)
             counts = WOKEN.findall(p.stderr)
-            if p.returncode != 0 or p.stdout.strip() != "1" or not counts:
+            visits = VISITED.findall(p.stderr)
+            if p.returncode != 0 or p.stdout.strip() != "1" or not counts or not visits:
                 problems.append(f"{label}: status {p.returncode}, printed {p.stdout.strip()!r}, {p.stderr.strip()[:200]!r}")
             elif int(counts[-1]) > 200:
                 problems.append(f"{label}: cancellations woke {counts[-1]} tasks, more than the 200 losers")
+            elif int(visits[-1]) > 400:
+                problems.append(f"{label}: cancellations looked at {visits[-1]} tasks, more than the races' 400 children")
             else:
-                print(f"wake_check: {label}: {counts[-1]} tasks woken by 200 cancellations")
+                print(f"wake_check: {label}: {counts[-1]} tasks woken and {visits[-1]} looked at by 200 cancellations")
     print(f"wake_check: {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)

@@ -456,8 +456,8 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   pointer `struct ceeAF_<C> *cee_a<k>`, which needs only the struct's name. The await sets it to
   `ceesafe_async_stack_push(sizeof(struct ceeAF_<C>), _Alignof(struct ceeAF_<C>))`, starts and resumes the callee
   through it, reads its result, and calls `ceesafe_async_stack_pop` on it. The runtime keeps the task's top chunk in
-  `cee_task.stack` (the task record is 160 bytes, `ceesafe_task_slot` with it) and each executor's free chunks, which
-  it frees as it ends. Freestanding code has no stack: there a cycle is N0343.
+  `cee_task.stack` (the task record is 192 bytes since ADR 0062, `ceesafe_task_slot` with it) and each executor's
+  free chunks, which it frees as it ends. Freestanding code has no stack: there a cycle is N0343.
 - **Which locals are frame fields** (L1 A3): the parameters, every local that is ever borrowed, every local live just
   after a suspension point (backward liveness over the NIR, where a `StorageDead` reads nothing), and the locals a
   scope's end mentions (it reads its oom operand after resuming). Inside the resume function such a local's C name is
@@ -645,9 +645,16 @@ Heap (M3b):
   - Cancellation (L1 A2b): a task is cancelled if its own flag is set, or its scope's (a child failed or could not
     start), or the scope's owner is, transitively. `ceesafe_async_status()` is 0, 1 (cancelled) or 2 (inside
     `ceesafe_async_shield_enter(ms)` … `_leave()`, past its deadline; while shielded, cancellation reads as 0). A
-    cancellation unparks every task waiting on a deadline or descriptor; a shield's deadline wakes its task.
+    cancellation unparks the tasks it reaches that wait on a deadline, a descriptor or a cancellable wake; a
+    shield's deadline wakes its task. It finds them without walking the executor's parked tasks (ADR 0062). Each
+    scope lists its children that run on its worker, linked through `cee_task`'s siblings, and each task lists the
+    scopes it owns from their first child until they are done (`ceesafe_scope`'s `outer`). A cancellation visits the
+    scope's children and their scopes, depth first. A shared scope's `spawnSend` children are not listed: a visit that
+    meets one walks every parked task, as the cancellation sweep and another worker's epoch do. `ceesafe_scope` is 48
+    bytes.
   - `CEESAFE_CANCEL_AT=k` cancels the running `Async.run`'s root task at the program's k-th suspension, and
-    `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N` after each `Async.run` (`testing.md`).
+    `CEESAFE_CANCEL_REPORT=1` prints `ceesafe cancel: points=N woken=W visited=V` after each `Async.run`
+    (`testing.md`): the suspensions, the tasks cancellations woke, and the tasks they looked at.
   - `ceesafe_async_start(scope, slot, frame, resume, info)` starts a child in the caller's storage (`race`, `all`), and
     `ceesafe_async_cancel(scope)` cancels a scope's children.
   - For debuggers (L1 A3): `ceesafe_async_tasks()` describes the calling thread's tasks in a static buffer, one line

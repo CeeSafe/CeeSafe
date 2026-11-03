@@ -1103,8 +1103,11 @@ typedef struct ceesafe_scope {
                            lock (ADR 0038) */
     bool set;           /* a task set's (ADR 0053): a child's error cancels no sibling, a failed allocation stops
                            nothing */
+    bool listed;        /* on its owner's list of scopes (ADR 0062): from its first child until it is done */
     void *waiter;
     void *owner;        /* the task whose scope it is */
+    void *children;     /* its live children that run on this worker, linked by their siblings (ADR 0062) */
+    void *outer;        /* the next scope on its owner's list (ADR 0062) */
 } ceesafe_scope;
 /* `allocate` and `release` (both NULL: the system heap) are Async.scopeIn's allocator's (c-backend.md §3a). */
 void *ceesafe_async_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
@@ -1178,7 +1181,7 @@ void ceesafe_async_signal_raise(void *signal);
  * so nothing is allocated; it is started like a spawned child and never freed. ceesafe_async_cancel cancels a scope's
  * children and wakes those waiting. */
 typedef struct ceesafe_task_slot {
-    _Alignas(16) unsigned char bytes[160];
+    _Alignas(16) unsigned char bytes[192];
 } ceesafe_task_slot;
 void ceesafe_async_start(ceesafe_scope *scope, ceesafe_task_slot *slot, void *frame,
                          bool (*resume)(void *frame, ceesafe_scope *scope), const ceesafe_frame_info *info);

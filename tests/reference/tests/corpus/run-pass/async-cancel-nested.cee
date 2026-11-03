@@ -1,0 +1,69 @@
+// ADR 0062: a cancellation visits the cancelled scope's children and the scopes they own, depth first. Here an outer
+// race's loser owns a task set, whose children each own a race of a channel's receive against a 100 s sleep, and the
+// set's body itself waits in a race too: three levels of scopes, every task parked. The outer race's winner ends
+// after 20 ms. Every parked task must see the cancellation at once: the program ends in well under a second, not
+// after 100 s, and each level reports that it was cancelled.
+
+async fn receive(ch: borrow Channel<u8>) -> Result<u8, AsyncError> {
+    match (await ch.recvAsync()) {
+        Ok(Some(v)) => { return Ok(v); }
+        Ok(null) => { return Ok(0); }
+        Err(e) => { return Err(e); }
+    }
+}
+
+async fn long() -> Result<u8, AsyncError> {
+    await Timer.sleep(100000)?;
+    return Ok(1);
+}
+
+async fn leaf(ch: borrow Channel<u8>, seen: borrow Arc<AtomicU64>) -> Result<void, AsyncError> {
+    let r = await Async.race(async () => await receive(ch), async () => await long());
+    match (r) {
+        Err(AsyncError.Cancelled) => { seen.get().fetchAdd(1); }
+        _ => {}
+    }
+    return Ok();
+}
+
+async fn middle(seen: borrow Arc<AtomicU64>) -> Result<u8, AsyncError> {
+    let ch = Channel<u8>.create(1)!;
+    let r = await Async.tasks(16, AsyncError.Cancelled, async (set) => {
+        for (k in 0..8) {
+            let c = ch.clone();
+            let s = seen.clone();
+            let started = set.trySpawn(async move () => await leaf(c, s));
+        }
+        // The body waits too, in a race of its own.
+        let inner = await Async.race(async () => await receive(ch), async () => await long());
+        match (inner) {
+            Err(AsyncError.Cancelled) => { seen.get().fetchAdd(1); }
+            _ => {}
+        }
+        return Ok();
+    });
+    return Ok(0);
+}
+
+async fn quick() -> Result<u8, AsyncError> {
+    await Timer.sleep(20)?;
+    return Ok(7);
+}
+
+async fn body() -> Result<u64, AsyncError> {
+    let seen = Arc<AtomicU64>.create(AtomicU64.create(0))!;
+    let t0 = Timer.now();
+    let r = await Async.race(async () => await middle(seen), async () => await quick());
+    let won = r?.value;
+    let fast = Timer.now() - t0 < 1000;
+    // 7 from the winner; the 8 leaves and the set's body each saw the cancellation.
+    return Ok(if (won == 7 && fast && seen.get().load() == 9) 1u64 else 0u64);
+}
+
+fn main() {
+    match (Async.run(body())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("error"); }
+    }
+}
+// expect-stdout: 1

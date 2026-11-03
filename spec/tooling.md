@@ -305,7 +305,7 @@ source = "path+../geometry"
 ### 4.6 The registry (M13 G6, ADR 0017)
 
 A **registry dependency** names a package and a **version requirement**. The package is found in an **index**: a git
-repository, by default `https://github.com/vkuttyp/CeeSafe-index`, or `$CEESAFE_INDEX`, or the dependency's `index`.
+repository, by default `https://github.com/CeeSafe/CeeSafe-index`, or `$CEESAFE_INDEX`, or the dependency's `index`.
 
 - **Versions** are `MAJOR.MINOR.PATCH`, three decimal numbers with no leading zeros, compared numerically. There
   are no pre-release or build suffixes in v1.

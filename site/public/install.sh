@@ -1,7 +1,7 @@
 #!/bin/sh
-# Installs ceesafec, the CeeSafe compiler, from a GitHub release (https://github.com/vkuttyp/CeeSafe; docs/release.md).
+# Installs ceesafec, the CeeSafe compiler, from a GitHub release (https://github.com/CeeSafe/CeeSafe; docs/release.md).
 #
-#   curl -fsSL https://vkuttyp.github.io/CeeSafe/install.sh | sh
+#   curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh
 #
 # CEESAFE_VERSION=v0.1.0   install that release instead of the latest
 # CEESAFE_INSTALL=<dir>    install into <dir>/bin instead of ~/.ceesafe/bin
@@ -9,7 +9,7 @@
 # The archive is checked against the release's SHA256SUMS before anything is installed.
 set -eu
 
-repo="vkuttyp/CeeSafe"
+repo="CeeSafe/CeeSafe"
 version="${CEESAFE_VERSION:-latest}"
 root="${CEESAFE_INSTALL:-$HOME/.ceesafe}"
 

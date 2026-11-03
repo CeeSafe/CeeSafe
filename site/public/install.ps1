@@ -1,6 +1,6 @@
-# Installs ceesafec, the CeeSafe compiler, from a GitHub release (https://github.com/vkuttyp/CeeSafe; docs/release.md).
+# Installs ceesafec, the CeeSafe compiler, from a GitHub release (https://github.com/CeeSafe/CeeSafe; docs/release.md).
 #
-#   irm https://vkuttyp.github.io/CeeSafe/install.ps1 | iex
+#   irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex
 #
 # $env:CEESAFE_VERSION = "v0.1.0"   install that release instead of the latest
 # $env:CEESAFE_INSTALL = "<dir>"     install into <dir>\bin instead of %USERPROFILE%\.ceesafe\bin
@@ -9,7 +9,7 @@
 # added to the user's PATH.
 $ErrorActionPreference = "Stop"
 
-$repo = "vkuttyp/CeeSafe"
+$repo = "CeeSafe/CeeSafe"
 $version = if ($env:CEESAFE_VERSION) { $env:CEESAFE_VERSION } else { "latest" }
 $root = if ($env:CEESAFE_INSTALL) { $env:CEESAFE_INSTALL } else { Join-Path $HOME ".ceesafe" }
 

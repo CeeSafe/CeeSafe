@@ -5,24 +5,24 @@
 On macOS and Linux:
 
 ```sh
-curl -fsSL https://vkuttyp.github.io/CeeSafe/install.sh | sh
+curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://vkuttyp.github.io/CeeSafe/install.ps1 | iex
+irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex
 ```
 
 The script downloads the latest release of `ceesafec` for your machine from
-[GitHub](https://github.com/vkuttyp/CeeSafe/releases), checks its SHA-256, and installs it in `~/.ceesafe/bin`
+[GitHub](https://github.com/CeeSafe/CeeSafe/releases), checks its SHA-256, and installs it in `~/.ceesafe/bin`
 (`%USERPROFILE%\.ceesafe\bin`). On macOS and Linux it then tells you how to add that directory to your `PATH`; on
 Windows it adds it for you. `CEESAFE_VERSION=v0.1.0` installs a given release instead. Run the same line again to
 update.
 
 Releases are built for macOS (arm64 and x64, signed and notarized by Apple), Linux (x64 and arm64; glibc 2.35 or newer:
 Ubuntu 22.04, Debian 12, Fedora 36 and later) and Windows (x64 and arm64). You can also download an archive from the
-[releases page](https://github.com/vkuttyp/CeeSafe/releases) yourself: each holds `ceesafec` (`ceesafec.exe`), and
+[releases page](https://github.com/CeeSafe/CeeSafe/releases) yourself: each holds `ceesafec` (`ceesafec.exe`), and
 `SHA256SUMS` lists their checksums. `ceesafec` is one native executable: its runtime, its libraries and this
 specification are inside it, and it needs nothing else to run.
 
@@ -45,10 +45,10 @@ CeeSafe and builds itself, so the first build of a checkout needs a `ceesafec`: 
 release's C seed with a C compiler alone.
 
 With a released `ceesafec` (any platform's archive from the
-[releases](https://github.com/vkuttyp/CeeSafe/releases), or the one `install.sh` put in `~/.ceesafe/bin`):
+[releases](https://github.com/CeeSafe/CeeSafe/releases), or the one `install.sh` put in `~/.ceesafe/bin`):
 
 ```sh
-git clone https://github.com/vkuttyp/CeeSafe.git
+git clone https://github.com/CeeSafe/CeeSafe.git
 cd CeeSafe
 sh tools/bootstrap_release.sh ~/.ceesafe/bin/ceesafec HEAD out/ceesafec
 out/ceesafec --version

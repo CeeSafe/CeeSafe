@@ -2,7 +2,7 @@
 
 A tag `v<version>` pushed to GitHub runs `.github/workflows/release.yml`, which publishes `ceesafec` for six platforms
 as a GitHub release, with `SHA256SUMS`. `site/public/install.sh` and `install.ps1` (served at
-`https://vkuttyp.github.io/CeeSafe/install.sh` and `install.ps1`) install the latest release from it.
+`https://ceesafe.github.io/CeeSafe/install.sh` and `install.ps1`) install the latest release from it.
 
 ## How the binaries are made
 
@@ -56,11 +56,13 @@ base64), `APPLE_CERTIFICATE_PASSWORD`, and for `notarytool` `ASC_P8` (the App St
 
 The `stores` job publishes to the Marketplace with no secret, by Trusted Publishing: the publisher `ceesafe`
 (marketplace.visualstudio.com/manage/publishers/ceesafe, **Trusted Publishing**) has the policy "Release workflow" for
-repository owner `vkuttyp`, repository `CeeSafe`, workflow `release.yml`, no environment, and the job, with
-`id-token: write`, runs `vsce publish --oidc`. Renaming the workflow file needs the policy changed too.
+repository owner `CeeSafe`, repository `CeeSafe`, workflow `release.yml`, no environment, and the job, with
+`id-token: write`, runs `vsce publish --oidc`. Renaming the workflow file needs the policy changed too, and so did
+moving the repository from `vkuttyp` to the `CeeSafe` organisation (2026-11-03): the owner in both stores' policies
+is the repository's.
 
 Open VSX is the same, with no secret: the namespace `ceesafe` (owned by `vkuttyp`, its claim
-EclipseFdn/open-vsx.org#15060 approved) has a trusted publisher for owner `vkuttyp`, repository `CeeSafe`, workflow
+EclipseFdn/open-vsx.org#15060 approved) has a trusted publisher for owner `CeeSafe`, repository `CeeSafe`, workflow
 `release.yml`, no environment (open-vsx.org, Settings, Trusted Publishers), and the job runs
 `ovsx publish --trusted-publishing`, which exchanges the job's OIDC token for a five-minute token scoped to the
 extension. Open VSX registers a trusted publisher only for an extension that exists, so 0.3.2, the first version there,

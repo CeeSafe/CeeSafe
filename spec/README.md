@@ -31,7 +31,7 @@ Descriptive: [`architecture.md`](architecture.md) (how `ceesafec` is built),
 [`testing.md`](testing.md) (how CeeSafe is tested).
 
 The [guide](../guide/introduction.md) teaches the language; every example in it is compiled by `tools/guide_check.py`.
-Both are published at [vkuttyp.github.io/CeeSafe](https://vkuttyp.github.io/CeeSafe/) (the repository's `site/`).
+Both are published at [ceesafe.github.io/CeeSafe](https://ceesafe.github.io/CeeSafe/) (the repository's `site/`).
 
 ## 2. Decisions
 
@@ -45,7 +45,7 @@ a separate series.
 The compiler, its files and the C it generates use CeeSafe's names:
 
 - the compiler is `ceesafec`; source files are `.cee`; packages are `ceesafe.toml` and `ceesafe.lock`, the cache is
-  `$CEESAFE_HOME` (default `~/.ceesafe`), and the default registry index is `github.com/vkuttyp/CeeSafe-index`;
+  `$CEESAFE_HOME` (default `~/.ceesafe`), and the default registry index is `github.com/CeeSafe/CeeSafe-index`;
 - the command line reads only `.cee` and `.c` files (`tooling.md`);
 - the generated C and the runtime use CeeSafe's names: `cee_`, `ceeF_`, `ceeMk_`, … for generated names, and
   `ceesafe_*`, `CEE_*`, `CEESAFE_*`, `ceesafe/rt.h` for the runtime; programs may not declare C names with those

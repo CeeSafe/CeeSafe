@@ -20,4 +20,4 @@ trip you up.
 | Go | [CeeSafe for Go programmers](go.md) | no garbage collector; errors propagate with `?`; interfaces are explicit and static; no goroutines yet |
 
 Why CeeSafe is built the way it is, against those languages, is on the repository's
-[README](https://github.com/vkuttyp/CeeSafe#why-ceesafe).
+[README](https://github.com/CeeSafe/CeeSafe#why-ceesafe).

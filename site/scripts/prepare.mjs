@@ -10,8 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = join(site, "..");
-const github = "https://github.com/vkuttyp/CeeSafe";
-const base = "https://vkuttyp.github.io/CeeSafe/";
+const github = "https://github.com/CeeSafe/CeeSafe";
+const base = "https://ceesafe.github.io/CeeSafe/";
 
 // Repository directory → site directory.
 const trees = [

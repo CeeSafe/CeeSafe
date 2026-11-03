@@ -1,6 +1,6 @@
 name: docs
 
-# The documentation site (site/README.md): VitePress, published to GitHub Pages at https://vkuttyp.github.io/CeeSafe/.
+# The documentation site (site/README.md): VitePress, published to GitHub Pages at https://ceesafe.github.io/CeeSafe/.
 # Its pages are spec/ and guide/; the guide's examples are checked by tools/guide_check.py in the contract suite.
 on:
   push:

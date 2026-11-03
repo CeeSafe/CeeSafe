@@ -7,14 +7,14 @@
     "Formatters",
     "Programming Languages"
   ],
-  "homepage": "https://vkuttyp.github.io/CeeSafe/guide/editors",
+  "homepage": "https://ceesafe.github.io/CeeSafe/guide/editors",
   "bugs": {
-    "url": "https://github.com/vkuttyp/CeeSafe/issues"
+    "url": "https://github.com/CeeSafe/CeeSafe/issues"
   },
   "license": "GPL-2.0-only",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vkuttyp/CeeSafe.git",
+    "url": "https://github.com/CeeSafe/CeeSafe.git",
     "directory": "editors/vscode"
   },
   "publisher": "ceesafe",

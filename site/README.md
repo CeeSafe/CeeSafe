@@ -1,6 +1,6 @@
 # The documentation site
 
-The source of [vkuttyp.github.io/CeeSafe](https://vkuttyp.github.io/CeeSafe/), built with
+The source of [ceesafe.github.io/CeeSafe](https://ceesafe.github.io/CeeSafe/), built with
 [VitePress](https://vitepress.dev/) and published to GitHub Pages by `.github/workflows/docs.yml` on every push to
 `main` that changes the site, `spec/`, `guide/` or the grammar.
 

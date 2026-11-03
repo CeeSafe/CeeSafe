@@ -121,15 +121,15 @@ export default defineConfig({
       { text: "Decisions", link: "/reference/decisions/", activeMatch: "/reference/decisions/" },
     ],
     sidebar: { "/guide/": guide, "/reference/": reference },
-    socialLinks: [{ icon: "github", link: "https://github.com/vkuttyp/CeeSafe" }],
+    socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/CeeSafe" }],
     search: { provider: "local" },
     outline: { level: [2, 3] },
     editLink: {
       // Pages are copies of spec/ and guide/ (site/scripts/prepare.mjs): edit the originals.
       pattern: ({ filePath }) =>
         filePath.startsWith("reference/")
-          ? `https://github.com/vkuttyp/CeeSafe/edit/main/spec/${filePath.slice("reference/".length).replace(/(^|\/)index\.md$/, "$1README.md")}`
-          : `https://github.com/vkuttyp/CeeSafe/edit/main/${filePath}`,
+          ? `https://github.com/CeeSafe/CeeSafe/edit/main/spec/${filePath.slice("reference/".length).replace(/(^|\/)index\.md$/, "$1README.md")}`
+          : `https://github.com/CeeSafe/CeeSafe/edit/main/${filePath}`,
       text: "Edit this page on GitHub",
     },
     footer: {

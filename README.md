@@ -11,10 +11,10 @@ Linux, macOS and Windows, bare metal, and inside an operating system kernel. The
 reference counting; values are destroyed deterministically. The compiler is written in CeeSafe and rebuilds itself to
 the same bytes.
 
-[Documentation](https://vkuttyp.github.io/CeeSafe/) ·
+[Documentation](https://ceesafe.github.io/CeeSafe/) ·
 [Getting started](guide/getting-started.md) ·
 [Specification](spec/) ·
-[Releases](https://github.com/vkuttyp/CeeSafe/releases) ·
+[Releases](https://github.com/CeeSafe/CeeSafe/releases) ·
 [Performance](guide/performance.md)
 
 ```ceesafe
@@ -98,13 +98,13 @@ why, and `benchmarks/` to run it yourself.
 On macOS and Linux:
 
 ```sh
-curl -fsSL https://vkuttyp.github.io/CeeSafe/install.sh | sh
+curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://vkuttyp.github.io/CeeSafe/install.ps1 | iex
+irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex
 ```
 
 The script installs the latest release into `~/.ceesafe/bin` after checking its SHA-256. Releases are built for macOS
@@ -144,7 +144,7 @@ Other commands: `ceesafec fix` applies the compiler's sure fixes, `ceesafec expl
 [installation](guide/installation.md#build-from-source), which also covers building one from a release's C seed):
 
 ```sh
-git clone https://github.com/vkuttyp/CeeSafe.git
+git clone https://github.com/CeeSafe/CeeSafe.git
 cd CeeSafe
 sh tools/bootstrap_release.sh ~/.ceesafe/bin/ceesafec HEAD out/ceesafec
 out/ceesafec build -o out/ceesafec.new && mv out/ceesafec.new out/ceesafec   # it rebuilds itself from then on

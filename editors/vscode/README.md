@@ -1,6 +1,6 @@
 # CeeSafe for VS Code
 
-Language support for [CeeSafe](https://github.com/vkuttyp/CeeSafe), the memory-safe systems programming language that
+Language support for [CeeSafe](https://github.com/CeeSafe/CeeSafe), the memory-safe systems programming language that
 compiles to C: syntax highlighting for `.cee` files, and, through the `ceesafec lsp` language server,
 
 - errors as you type, with their diagnostic codes;
@@ -16,11 +16,11 @@ A file that belongs to a package (a `ceesafe.toml`) is checked with the package 
 The extension starts `ceesafec`, the CeeSafe compiler. Install it on macOS or Linux with
 
 ```sh
-curl -fsSL https://vkuttyp.github.io/CeeSafe/install.sh | sh
+curl -fsSL https://ceesafe.github.io/CeeSafe/install.sh | sh
 ```
 
-or on Windows, in PowerShell, with `irm https://vkuttyp.github.io/CeeSafe/install.ps1 | iex`
-([installation](https://vkuttyp.github.io/CeeSafe/guide/installation)).
+or on Windows, in PowerShell, with `irm https://ceesafe.github.io/CeeSafe/install.ps1 | iex`
+([installation](https://ceesafe.github.io/CeeSafe/guide/installation)).
 
 ## Settings
 
@@ -30,9 +30,9 @@ or on Windows, in PowerShell, with `irm https://vkuttyp.github.io/CeeSafe/instal
 
 ## Links
 
-- [The CeeSafe guide](https://vkuttyp.github.io/CeeSafe/guide/introduction) and [editors](https://vkuttyp.github.io/CeeSafe/guide/editors)
-- [Releases](https://github.com/vkuttyp/CeeSafe/releases): `ceesafec` for six platforms, and this extension as a `.vsix`
-- [Issues](https://github.com/vkuttyp/CeeSafe/issues)
+- [The CeeSafe guide](https://ceesafe.github.io/CeeSafe/guide/introduction) and [editors](https://ceesafe.github.io/CeeSafe/guide/editors)
+- [Releases](https://github.com/CeeSafe/CeeSafe/releases): `ceesafec` for six platforms, and this extension as a `.vsix`
+- [Issues](https://github.com/CeeSafe/CeeSafe/issues)
 
 ## Building from the repository
 

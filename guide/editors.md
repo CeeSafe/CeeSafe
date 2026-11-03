@@ -12,7 +12,7 @@ search for **CeeSafe** in VS Code's Extensions view, or run
 code --install-extension ceesafe.ceesafe-language
 ```
 
-Every [release](https://github.com/vkuttyp/CeeSafe/releases) also has it as `ceesafe-language-<version>.vsix`, built and
+Every [release](https://github.com/CeeSafe/CeeSafe/releases) also has it as `ceesafe-language-<version>.vsix`, built and
 tested with that release's `ceesafec` (its checksum is in `SHA256SUMS`), for **Extensions: Install from VSIX…**.
 
 To build it from the repository instead, with [Vite+](https://viteplus.dev/):

@@ -92,7 +92,7 @@ fn defaultIndexUrl() -> Result<Vector<u8>, AllocError> {
         }
         null => {}
     }
-    return copyBytes("https://github.com/vkuttyp/CeeSafe-index".bytes());
+    return copyBytes("https://github.com/CeeSafe/CeeSafe-index".bytes());
 }
 
 /// `to` relative to the directory `from`, both absolute and normalised (Path.GetRelativePath), with `/`.

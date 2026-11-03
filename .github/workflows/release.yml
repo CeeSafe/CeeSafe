@@ -19,7 +19,7 @@ permissions:
 env:
   SIGNING_IDENTITY: "Developer ID Application: Veeran Puthumkara (68PG74DU2D)"
   # The stage-0 compiler (Decision 0009; bootstrap/reference.md, "Release stage 0"): this repository's own release.
-  STAGE0_URL: https://github.com/vkuttyp/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz
+  STAGE0_URL: https://github.com/CeeSafe/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz
   STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
 
 jobs:
@@ -350,7 +350,7 @@ jobs:
     # so a store's failure never holds the release back. The Marketplace by Trusted Publishing: the publisher's policy
     # "Release workflow" accepts this repository's release.yml, and vsce exchanges the job's GitHub OIDC token for a
     # 15-minute Marketplace credential, so no secret is stored. Open VSX the same way: the namespace's trusted publisher
-    # (vkuttyp/CeeSafe, release.yml, no environment) accepts the job's OIDC token for a five-minute token scoped to the
+    # (CeeSafe/CeeSafe, release.yml, no environment) accepts the job's OIDC token for a five-minute token scoped to the
     # extension. --skip-duplicate makes a rerun harmless.
     needs: [version, extension, publish]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')

@@ -38,7 +38,8 @@ syntax, if the index outgrows git.
 
 ## 3. Proposed decision
 
-1. **The index** is a git repository: by default `https://github.com/vkuttyp/CeeSafe-index`, or `$CEESAFE_INDEX`.
+1. **The index** is a git repository: by default `https://github.com/CeeSafe/CeeSafe-index` (`vkuttyp/CeeSafe-index`
+   until the repository moved to the `CeeSafe` organisation, 2026-11-03; question 2), or `$CEESAFE_INDEX`.
    - One file per package, `packages/<name>.toml`, with one entry per published version: `version`, `git` (a URL),
      `commit` (a full id), `hash` (the SHA-256 of `tooling.md` §4.3), and `dependencies` (the version requirements of
      that version's `ceesafe.toml`, so solving needs no checkouts).

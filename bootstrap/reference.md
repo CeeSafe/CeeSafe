@@ -9,7 +9,7 @@ CeeSafe builds itself. A checkout's first `ceesafec`, and every release's, comes
 
 | Item | Value |
 |---|---|
-| Compiler | `ceesafec 0.3.2`, `https://github.com/vkuttyp/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz` |
+| Compiler | `ceesafec 0.3.2`, `https://github.com/CeeSafe/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz` |
 | sha256 | `59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22` (v0.3.2's `SHA256SUMS`) |
 | Chain | `f7a7d57`, then `93c433f` (ADR 0044's library calls, used by the next commit's compiler sources), then `71d5c13` (ADR 0050's UDP calls, used by the next commit's interpreter): `tools/bootstrap_release.sh` |
 | Checked | 2026-11-01 at `ef7820d`: macOS arm64 (the released, notarized binary) and Debian 12 x86-64 (its linux-x64 archive), fixed point reached on both, seed `main.c` `fc5ce1d4…` on both |

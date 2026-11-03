@@ -126,6 +126,9 @@ public interface Allocator {
   - The runtime counts every allocation attempt when asked to (ADR 0059). `CEESAFE_FAIL_ALLOC_AT=k` fails attempt *k*,
     and `CEESAFE_ALLOC_REPORT=1` prints `ceesafe alloc: attempts=<n> live=<m>` when `main` returns. Either one, or
     `ceesafec test`, turns counting on; without them the runtime counts nothing.
+  - C code's allocations through `CEE_ALLOC_FOREIGN` (ADR 0060, type-system.md §28.6) count in `attempts` and can be
+    failed, but not in `live`: when there were any, a second line, `ceesafe alloc: foreign held=<k>`, gives the blocks
+    C still holds, and no tool reads it as a leak.
   - The test runner's sweep uses both (`testing.md`).
 
 ### 3.3 Arenas (regions)

@@ -8,6 +8,8 @@ extern "C" {
     @effects()
     fn ceesafe_clock_realtime(seconds: *mut i64, nanoseconds: *mut u32);
     @effects()
+    fn ceesafe_random_fill(out: *mut u8, length: u64) -> i64;
+    @effects()
     fn ceesafe_host_env(name: *u8, length: u64, value: *mut (*u8), valueLength: *mut u64) -> i64;
     @effects(sleep)
     fn ceesafe_host_path_kind(path: *u8, length: u64) -> i64;
@@ -351,6 +353,7 @@ public struct HostServices {
             16 => IoError.NetworkUnreachable,
             17 => IoError.AddressNotAvailable,
             18 => IoError.Unsupported,
+            19 => IoError.HostNotFound,
             _ => IoError.Other(error),
         };
     }
@@ -384,3 +387,17 @@ public struct Clock {
     public fn unixMillis() -> i64 => Clock.now().millis();
 }
 
+/// Random bytes from the system's cryptographic source (ADR 0060): `getrandom` (or `/dev/urandom`) on Linux,
+/// `arc4random_buf` on macOS and the BSDs, `BCryptGenRandom` on Windows; for keys, nonces, masks and tokens. Each call
+/// reads the source, which is cheap enough to call per message. The interpreter answers a fixed sequence instead, so
+/// its runs stay reproducible: its bytes are not secret.
+public struct Random {
+    /// Fills `into` with random bytes. `Err(Unsupported)` where the system has no source (CosmoOS userland); another
+    /// error if the source fails, with `into` partly written. It has no effect, so async code and a `drop` block may
+    /// call it.
+    /// Safety: the runtime writes at most the slice's length, during the call only.
+    public fn fill(into: SliceMut<u8>) -> Result<void, IoError> {
+        let result = unsafe { ceesafe_random_fill(into.ptr, into.length as u64) };
+        return if (result < 0) Err(HostServices.hostError(result)) else Ok();
+    }
+}

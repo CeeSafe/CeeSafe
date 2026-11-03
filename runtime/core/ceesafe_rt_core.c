@@ -37,8 +37,9 @@ cee_str ceesafe_io_message(uint32_t kind) {
         "Address already in use", "Out of memory", "Input/output error", "Connection reset by peer",
         "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
         "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not supported",
+        "Host not found",
     };
-    const char *text = messages[kind <= CEE_IO_UNSUPPORTED ? kind : CEE_IO_OTHER];
+    const char *text = messages[kind <= CEE_IO_HOST_NOT_FOUND ? kind : CEE_IO_OTHER];
     uint64_t length = 0;
     while (text[length] != 0) length++;
     return (cee_str){ .ptr = (const uint8_t *)text, .len = length };
@@ -224,6 +225,8 @@ _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
 
 static uint64_t alloc_attempts;   /* every allocation attempt, failed ones included */
 static uint64_t alloc_live;       /* successful allocations not yet freed */
+static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
+static bool alloc_foreign_used;   /* C has allocated: the report gives alloc_foreign */
 static uint64_t alloc_fail_at;    /* CEESAFE_FAIL_ALLOC_AT: this attempt fails; 0 = never */
 static bool alloc_report;         /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
 /* Whether to count at all (ADR 0059): only a report, CEESAFE_FAIL_ALLOC_AT or `ceesafec test` reads the counters. Decided
@@ -276,13 +279,23 @@ static bool alloc_refused(uint32_t allocator) {
     return alloc_fail_at != 0u && attempt == alloc_fail_at;
 }
 
+/* One more live block (or one fewer, with UINT64_MAX) when counting, in C's count for CEE_ALLOC_FOREIGN (ADR 0060). */
+static void alloc_count_live(uint32_t allocator, uint64_t delta) {
+    if (allocator == CEE_ALLOC_FOREIGN && alloc_counting) {
+        (void)CEE_COUNT(alloc_foreign, delta);
+        alloc_foreign_used = true;
+    } else if (alloc_counting) {
+        (void)CEE_COUNT(alloc_live, delta);
+    }
+}
+
 void *ceesafe_alloc(size_t size, uint32_t allocator) {
     if (alloc_refused(allocator)) {
         return NULL;
     }
     void *p = ceesafe_platform_alloc(size == 0u ? 1u : size);
     if (p != NULL && alloc_counting) {
-        (void)CEE_COUNT(alloc_live, 1u);
+        alloc_count_live(allocator, 1u);
     }
     return p;
 }
@@ -293,12 +306,15 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
     }
     void *p = ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size);
     if (p != NULL && alloc_counting) {
-        (void)CEE_COUNT(alloc_live, 1u);
+        alloc_count_live(allocator, 1u);
     }
     return p;
 }
 
 void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
+    if (p == NULL) {
+        return ceesafe_alloc(size, allocator); /* C's realloc(NULL, n), for CEE_ALLOC_FOREIGN's callers */
+    }
     if (alloc_refused(allocator)) {
         return NULL;
     }
@@ -306,9 +322,12 @@ void *ceesafe_realloc(void *p, size_t size, uint32_t allocator) {
 }
 
 void ceesafe_free(void *p, uint32_t allocator) {
-    (void)allocator; /* every M3 allocator frees to the platform heap */
+    /* every allocator frees to the platform heap */
+    if (p == NULL) {
+        return; /* C's free(NULL); CeeSafe's own code never frees NULL */
+    }
     if (alloc_counting) {
-        (void)CEE_COUNT(alloc_live, UINT64_MAX); /* minus one */
+        alloc_count_live(allocator, UINT64_MAX); /* minus one */
     }
     ceesafe_platform_free(p);
 }
@@ -328,7 +347,8 @@ static void write_err_u64(uint64_t value) {
     ceesafe_platform_write_stderr(buffer + start, 20u - start);
 }
 
-/* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n" */
+/* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
+   with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak. */
 int32_t ceesafe_rt_finish(int32_t code) {
     if (alloc_report) {
         write_err_cstr("ceesafe alloc: attempts=");
@@ -336,6 +356,11 @@ int32_t ceesafe_rt_finish(int32_t code) {
         write_err_cstr(" live=");
         write_err_u64(alloc_live);
         write_err_cstr("\n");
+        if (alloc_foreign_used) {
+            write_err_cstr("ceesafe alloc: foreign held=");
+            write_err_u64(alloc_foreign);
+            write_err_cstr("\n");
+        }
     }
     return code;
 }

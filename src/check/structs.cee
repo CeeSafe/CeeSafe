@@ -413,8 +413,8 @@ fn isVisibility(v: Visibility, index: u32) -> bool => match (v) {
     Visibility.Private => index == 3,
 };
 
-/// IoError's variants, in the runtime's order (DeclareIoError's built-in source); ADR 0044's follow `Other`, so the
-/// earlier ones keep their tags.
+/// IoError's variants, in the runtime's order (DeclareIoError's built-in source); ADR 0044's follow `Other`, and ADR
+/// 0060's `HostNotFound` follows them, so the earlier ones keep their tags.
 fn ioErrorVariant(k: usize) -> StringView => match (k) {
     0 => "NotFound",
     1 => "PermissionDenied",
@@ -434,7 +434,8 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
     15 => "HostUnreachable",
     16 => "NetworkUnreachable",
     17 => "AddressNotAvailable",
-    _ => "Unsupported",
+    18 => "Unsupported",
+    _ => "HostNotFound",
 };
 
 fn addVariant(c: borrow mut Checker, definition: u32, name: u32, start: u32, end: u32) -> Result<u32, AllocError> {
@@ -491,7 +492,7 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
         return Ok();
     }
     if (entry.builtin == 1) {
-        for (k in 0..19usize) {
+        for (k in 0..20usize) {
             let symbol = c.intern(ioErrorVariant(k))?;
             let variant = addVariant(c, definition, symbol, 0, 0)?;
             if (k == 10) {

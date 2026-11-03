@@ -172,6 +172,25 @@ fn isEsp(table: borrow gpt_table, i: usize) -> bool {
 This is how CosmoOS's GPT parser is written (`integrations/cosmoos/c9.py` checks it; the rules are
 [ADR 0014](../spec/decisions/0014-c9-c-arrays-and-exported-constants.md)).
 
+## C code that allocates
+
+A package's C files can allocate through CeeSafe's allocator, so the allocation-failure sweep reaches their
+out-of-memory paths too. `ceesafe/foreign.h` is on every C file's include path:
+
+```c
+#include "ceesafe/foreign.h"
+
+void *block = ceesafe_alloc(size, CEE_ALLOC_FOREIGN);      /* malloc */
+block = ceesafe_realloc(block, bigger, CEE_ALLOC_FOREIGN); /* realloc; NULL allocates */
+ceesafe_free(block, CEE_ALLOC_FOREIGN);                    /* free; NULL does nothing */
+```
+
+These allocations are counted and can be failed (`CEESAFE_FAIL_ALLOC_AT`, `ceesafec test --sweep alloc`) like
+CeeSafe's own, but a block C still holds at exit is not a leak, since C libraries keep global state until the process
+ends. The allocation report shows those blocks on their own line, `ceesafe alloc: foreign held=<k>`. A library with
+allocation hooks can be pointed at them in test builds; OpenSSL's are `CRYPTO_set_mem_functions`
+([ADR 0060](../spec/decisions/0060-web-random-tryrecv-foreign-host.md)).
+
 ## Next
 
 [Kernel code](kernel.md).

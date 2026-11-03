@@ -1,0 +1,17 @@
+// IoError.HostNotFound (ADR 0060): the variant after Unsupported, its message "Host not found"; a match names it.
+// AsyncDns.resolve's answer for a name under `.invalid` is it, in tests/reference/tests/corpus/run-pass/async-dns.cee.
+
+fn name(e: IoError) -> StringView => match (e) {
+    IoError.HostNotFound => "host",
+    IoError.NotFound => "file",
+    _ => "other",
+};
+
+fn main() {
+    Console.writeLine(IoError.HostNotFound.message());
+    Console.writeLine(name(IoError.HostNotFound));
+    Console.writeLine(name(IoError.NotFound));
+}
+// expect-stdout: Host not found
+// expect-stdout: host
+// expect-stdout: file

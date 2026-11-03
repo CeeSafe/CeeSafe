@@ -139,6 +139,7 @@ fn generateC(
         out.push(CFile { name: copyBytes(file.name.view())?, text: copyBytes(file.text.view())? })?;
     }
     out.push(runtimeFile(0, "")?)?;
+    out.push(runtimeFile(7, "")?)?; // ceesafe/foreign.h, which rt.h includes and C files may (ADR 0060)
     if (freestanding) {
         out.push(
             runtimeFile(

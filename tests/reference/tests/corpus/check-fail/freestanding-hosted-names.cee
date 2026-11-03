@@ -18,6 +18,7 @@ fn types(b: Box<i32>) {}                 // error[N0293]
 fn vectors(v: borrow Vector<u8>) {}      // error[N0293]
 fn files(f: File) {}                     // error[N0293]
 fn clock() -> i64 => Clock.unixMillis(); // error[N0200]: lib/std, and its Clock (ADR 0055), are hosted only
+fn random(b: SliceMut<u8>) -> Result<void, IoError> => Random.fill(b); // error[N0200]: and its Random (ADR 0060)
 fn errors(e: IoError) {}                 // the type is fine (AsyncError names it, ADR 0039); making one is not
 fn allocators(a: FailingAllocator) {}    // error[N0293]
 fn arenas(a: borrow Arena) {}            // error[N0293]

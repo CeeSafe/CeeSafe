@@ -23,6 +23,8 @@ extern "C" {
     fn ceesafe_chan_end_recv(channel: *mut void);
     @effects()
     fn ceesafe_chan_close(channel: *mut void);
+    @effects()
+    fn ceesafe_chan_closed(channel: *mut void) -> bool;
     @effects(sleep)
     fn ceesafe_chan_wait(channel: *mut void, epoch: u64);
     @effects()
@@ -78,6 +80,11 @@ public struct Channel<T: Send> {
         unsafe { ceesafe_chan_close(this.raw); }
     }
 
+    /// Whether `close` has been called (ADR 0060). Values sent before it may still be buffered: the channel is drained
+    /// when `isClosed()` is true and a `tryRecv()` after it is `null`, in that order.
+    /// Safety: as `close`.
+    public fn isClosed(borrow this) -> bool => unsafe { ceesafe_chan_closed(this.raw) };
+
     /// Sends `value`, waiting while the channel is full; `Err(value)` if it is closed.
     /// Safety: a slot from begin_send is the channel's, under its lock until end_send, and holds no value.
     public fn send(borrow this, value: T) -> Result<void, T> {
@@ -114,6 +121,21 @@ public struct Channel<T: Send> {
             ceesafe_chan_end_send(this.raw);
         }
         return Ok();
+    }
+
+    /// The next value if one is buffered, else `null` at once, whether the channel is empty or closed and empty
+    /// (ADR 0060; `isClosed` tells the two apart). It has no effect, so async code and a `drop` block may call it.
+    /// Safety: as `recv`.
+    public fn tryRecv(borrow this) -> T? {
+        var status: u32 = 0;
+        var epoch: u64 = 0;
+        let slot = unsafe { ceesafe_chan_begin_recv(this.raw, borrow mut status as *mut u32, borrow mut epoch as *mut u64) };
+        if (status != 0) {
+            return null;
+        }
+        let value = unsafe { (slot as *mut T).read() };
+        unsafe { ceesafe_chan_end_recv(this.raw); }
+        return Some(value);
     }
 
     /// The next value, waiting while the channel is empty; `null` once it is closed and empty.

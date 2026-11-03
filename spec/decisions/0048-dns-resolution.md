@@ -5,6 +5,8 @@
   (`~/dev/CeeSafe.Web/docs/ceesafe-upstream-work.md`, item U5, phase A). CeeSafe.Web's HTTP client (its M5) connects to
   host names. Phase B, a resolver over UDP, is CeeSafe.Web's own work later, on U6.
 - Scope: lib/std (`AsyncDns`), the hosted runtime (a resolver on worker threads), the interpreter's model.
+- Amended by ADR 0060 (2026-11-03): "no such name" and "no address" are `IoError.HostNotFound`, not `NotFound`, and
+  the interpreter's model answers it for names under `.invalid`.
 
 ## 1. Context
 

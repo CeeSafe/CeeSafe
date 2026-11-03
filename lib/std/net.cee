@@ -666,9 +666,10 @@ public struct AsyncDns {
     /// The addresses of `host`, each with `port`: both families, in the resolver's order, duplicates removed, never
     /// empty. A literal address is itself, at once. Otherwise the system's resolver runs on one of at most four
     /// resolver threads while the task waits; a cancelled task returns `Err(Cancelled)` at once, and the lookup is left
-    /// to its thread. Errors are `AsyncError.Io`: `NotFound` (no such name), `TimedOut` (a temporary failure: try
-    /// again), `InvalidInput` (an empty name, one over 253 bytes or with a NUL), `OutOfMemory`, `Unsupported` (no
-    /// resolver: CosmoOS, the interpreter for names other than `localhost`).
+    /// to its thread. Errors are `AsyncError.Io`: `HostNotFound` (no such name, or no address for it; ADR 0060),
+    /// `TimedOut` (a temporary failure: try again), `InvalidInput` (an empty name, one over 253 bytes or with a NUL),
+    /// `OutOfMemory`, `Unsupported` (no resolver: CosmoOS, the interpreter for names other than `localhost` and the
+    /// reserved `.invalid` ones).
     /// Safety: the runtime copies the name during the start; the lookup's record is the runtime's, ended once by
     /// `DnsLookup`'s drop, so no path leaves it or ends it twice.
     public async fn resolve(host: StringView, port: u16) -> Result<Vector<SocketAddress>, AsyncError> {

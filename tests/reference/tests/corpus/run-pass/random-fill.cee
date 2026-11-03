@@ -1,0 +1,62 @@
+// lib/std's Random.fill (ADR 0060): bytes from the system's cryptographic source natively, a fixed SplitMix64
+// sequence in the interpreter. Properties both hold, with failure odds below 2^-200: an empty slice is Ok; two
+// 32-byte fills differ and are not all zero; 65 536 bytes take each of the 256 values (a value is missed with
+// probability (255/256)^65536 < 2^-369, times 256); the bytes of a fill split across calls are written to the end.
+// tools/random_check.py checks the native bytes' distribution and the cost of a call.
+
+fn zero(bytes: borrow [u8; 32]) -> bool {
+    for (b in bytes) {
+        if (b != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn main() {
+    var one = [0u8; 1];
+    match (Random.fill(mut one[0..0])) {
+        Ok() => { Console.writeLine(one[0] == 0); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    var a = [0u8; 32];
+    var b = [0u8; 32];
+    Random.fill(mut a[..])!;
+    Random.fill(mut b[..])!;
+    var same = true;
+    for (k in 0..32usize) {
+        if (a[k] != b[k]) {
+            same = false;
+        }
+    }
+    Console.writeLine(!same && !zero(borrow a) && !zero(borrow b));
+    var big = Vector<u8>.create();
+    for (k in 0..65536usize) {
+        big.push(0)!;
+    }
+    Random.fill(big.viewMut())!;
+    var seen = [false; 256];
+    for (x in big.view()) {
+        seen[x as usize] = true;
+    }
+    var all = true;
+    for (s in seen) {
+        all = all && s;
+    }
+    Console.writeLine(all);
+    // An odd length: the last byte is written too.
+    var odd = [0u8; 13];
+    var hits = 0;
+    for (round in 0..8) {
+        odd[12] = 0;
+        Random.fill(mut odd[..])!;
+        if (odd[12] != 0) {
+            hits += 1;
+        }
+    }
+    Console.writeLine(hits > 0);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

@@ -1,0 +1,88 @@
+// Channel.tryRecv and isClosed (ADR 0060): tryRecv takes a buffered value or is null at once, empty or closed; the
+// "drop the oldest" queue CeeSafe.Web's web_sse builds on it; a drained channel is isClosed() then tryRecv() == null;
+// tryRecv has no effect, so a task and a drop block call it; values left in a channel are dropped with it (the leak
+// check). The expected values follow from the operations, in order.
+
+struct Drainer {
+    channel: Channel<String>;
+    drop {
+        var n = 0;
+        while (this.channel.tryRecv() != null) {
+            n += 1;
+        }
+        Console.writeLine(n);
+    }
+}
+
+fn text(s: StringView) -> String {
+    var t = String.create();
+    t.append(s)!;
+    return t;
+}
+
+/// Sends `value`; on a full queue, drops the oldest value and sends again.
+fn sendDroppingOldest(c: borrow Channel<i32>, value: i32) {
+    match (c.trySend(value)) {
+        Ok() => {}
+        Err(v) => {
+            let oldest = c.tryRecv();
+            c.trySend(v)!;
+        }
+    }
+}
+
+async fn total(c: Channel<i32>) -> i32 {
+    var sum = 0;
+    loop {
+        match (c.tryRecv()) {
+            Some(v) => { sum += v; }
+            null => { break; }
+        }
+    }
+    return sum;
+}
+
+fn main() {
+    let c = Channel<i32>.create(3)!;
+    Console.writeLine(c.tryRecv() == null);
+    Console.writeLine(c.isClosed());
+    for (v in 1..6) {
+        sendDroppingOldest(borrow c, v);
+    }
+    // 1 and 2 were dropped: 3, 4, 5 remain.
+    var drained = String.create();
+    loop {
+        match (c.tryRecv()) {
+            Some(v) => { drained.appendNumber(v)!; }
+            null => { break; }
+        }
+    }
+    Console.writeLine(drained.view());
+    c.trySend(7)!;
+    c.close();
+    Console.writeLine(c.isClosed());
+    Console.writeLine(match (c.tryRecv()) { Some(v) => v == 7, null => false });
+    Console.writeLine(c.isClosed() && c.tryRecv() == null);
+
+    let d = Channel<i32>.create(4)!;
+    d.trySend(10)!;
+    d.trySend(20)!;
+    Console.writeLine(Async.run(total(d.clone())));
+
+    let s = Channel<String>.create(4)!;
+    s.trySend(text("a"))!;
+    s.trySend(text("b"))!;
+    {
+        let drainer = Drainer { channel: s.clone() };
+    }
+    let left = Channel<String>.create(2)!;
+    left.trySend(text("kept until the channel's drop"))!;
+}
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 345
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 30
+// expect-stdout: 2

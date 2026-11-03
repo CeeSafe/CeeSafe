@@ -332,10 +332,11 @@ The library's waiting operations are async functions, in the hosted profile:
 | What | Operations |
 |---|---|
 | Time | `Timer.sleep(ms)`; `Timer.now()` (not async), a monotonic clock for waits and measurements; `Clock.now()`, the date as a `UnixTime` (seconds and nanoseconds since 1970), which may jump |
+| Random bytes | `Random.fill(bytes)` (not async, and cheap enough per message): bytes from the system's cryptographic source, for keys, masks and tokens |
 | Console | `AsyncConsole.write(text)`, `writeLine(text)`, `writeError(text)` |
 | Files | `AsyncFiles.open`, `create`, `read`, `write` (each on a worker thread while the task waits) |
 | Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); `sendFile(file, offset, length)` and `sendFileAll(file, offset, length)`, a file's bytes sent by the kernel where it can (`sendfile`, `TransmitFile`), the file's position untouched; `AsyncUdpSocket.bind(address, options)`, `sendTo`, `recvFrom`, and `sendMsg`/`recvMsg` with the local address, ECN bits, truncation and segments; `AsyncDns.resolve(host, port)`, a name's addresses, cancellable; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |
-| Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
+| Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `trySend` and `tryRecv`, which never wait (a full or empty channel answers at once), and `isClosed()`; `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
 | Blocking calls | `Async.blocking(() => …)`: any sync code on a worker thread while the task waits |
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |
 
@@ -364,7 +365,7 @@ The executor waits with kqueue on macOS and the BSDs, epoll on Linux (io_uring w
 file APIs on Windows. `Async.run` uses one thread; `Async.runWorkers(n, task)` and `s.spawnSend(…)` spread a scope's
 children over `n` threads ([Threads](threads.md#async-tasks-on-several-threads)). In the interpreter tasks run in a
 fixed order with a virtual clock, so the examples above print the same every time, and quickly; there `Clock.now()`
-is 2000-01-01T00:00:00Z plus that clock.
+is 2000-01-01T00:00:00Z plus that clock, and `Random.fill` gives the same bytes every run, which are not secret.
 
 Async code also runs in CosmoOS user programs (without async sockets) and in kernel code, over an executor the kernel
 provides ([Kernel code](kernel.md#async-tasks-in-kernel-code)). The debugger lists a program's tasks and where each

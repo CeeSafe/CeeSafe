@@ -110,6 +110,7 @@ uint32_t ceesafe_io_kind(int32_t error) {
 #if defined(ENOTSUP) && ENOTSUP != EOPNOTSUPP
     case ENOTSUP: return CEE_IO_UNSUPPORTED;
 #endif
+    case CEE_ERROR_HOST_NOT_FOUND: return CEE_IO_HOST_NOT_FOUND; /* the resolver's, not an errno (ADR 0060) */
     default: return CEE_IO_OTHER;
     }
 }
@@ -1717,7 +1718,7 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
     return result;
 }
 
-/* ---- HashMap's per-process key (ADR 0052 §3.2): 128 bits from the system's random source, read once. ---- */
+/* ---- Random bytes (ADR 0060) and HashMap's per-process key (ADR 0052 §3.2), from the system's source. ---- */
 
 #if !defined(_WIN32) && !defined(CEE_COSMOOS) && defined(__has_include)
 #if __has_include(<sys/random.h>) && defined(__linux__)
@@ -1725,51 +1726,68 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
 #define CEE_HAVE_GETRANDOM 1
 #endif
 #endif
+#include <limits.h> /* SSIZE_MAX, ULONG_MAX */
+#if defined(_WIN32)
+#include <bcrypt.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "bcrypt.lib")
+#endif
+#endif
 
 static uint64_t cee_random_words[2];
 static uint32_t cee_random_state; /* 0 not read, 1 being read, 2 read (ceesafe_atomic_*) */
 
-/* Fills `out` from the system's random source; leaves it as it was where there is none. */
-static void cee_random_fill(uint8_t *out, size_t length) {
+/* Fills `out` from the system's cryptographic random source: 0, or a negated errno with `out` partly written. */
+int64_t ceesafe_random_fill(uint8_t *out, uint64_t length) {
 #if defined(_WIN32)
-    for (size_t k = 0; k < length; k += 4u) {
-        unsigned int r = 0;
-        if (rand_s(&r) == 0) {
-            for (size_t b = 0; b < 4u && k + b < length; b++) {
-                out[k + b] = (uint8_t)(r >> (8u * b));
-            }
+    while (length > 0u) {
+        ULONG piece = length > (uint64_t)ULONG_MAX ? ULONG_MAX : (ULONG)length;
+        if (!BCRYPT_SUCCESS(BCryptGenRandom(NULL, out, piece, BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+            return -(int64_t)EIO;
         }
+        out += piece;
+        length -= piece;
     }
+    return 0;
 #elif defined(CEE_COSMOOS)
-    (void)out; (void)length; /* no random source in CosmoOS userland yet: the fixed key stays */
+    (void)out; (void)length;
+    return -(int64_t)EOPNOTSUPP; /* no random source in CosmoOS userland yet */
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    arc4random_buf(out, length);
+    arc4random_buf(out, (size_t)length);
+    return 0;
 #else
-    size_t done = 0;
+    uint64_t done = 0;
 #if defined(CEE_HAVE_GETRANDOM)
     while (done < length) {
-        ssize_t n = getrandom(out + done, length - done, 0);
-        if (n <= 0) {
-            if (n < 0 && errno == EINTR) continue;
-            break;
+        size_t want = length - done > (uint64_t)SSIZE_MAX ? (size_t)SSIZE_MAX : (size_t)(length - done);
+        ssize_t n = getrandom(out + done, want, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == ENOSYS) break; /* before Linux 3.17: /dev/urandom below */
+            return -(int64_t)errno;
         }
-        done += (size_t)n;
+        done += (uint64_t)n;
     }
 #endif
     if (done < length) {
         int fd = open("/dev/urandom", O_RDONLY);
-        if (fd >= 0) {
-            while (done < length) {
-                ssize_t n = read(fd, out + done, length - done);
-                if (n <= 0) {
-                    if (n < 0 && errno == EINTR) continue;
-                    break;
-                }
-                done += (size_t)n;
-            }
-            (void)close(fd);
+        if (fd < 0) {
+            return -(int64_t)(errno != 0 ? errno : EIO);
         }
+        while (done < length) {
+            size_t want = length - done > (uint64_t)SSIZE_MAX ? (size_t)SSIZE_MAX : (size_t)(length - done);
+            ssize_t n = read(fd, out + done, want);
+            if (n <= 0) {
+                if (n < 0 && errno == EINTR) continue;
+                int error = n < 0 ? errno : EIO;
+                (void)close(fd);
+                return -(int64_t)error;
+            }
+            done += (uint64_t)n;
+        }
+        (void)close(fd);
     }
+    return 0;
 #endif
 }
 
@@ -1778,7 +1796,10 @@ void ceesafe_random_key(uint64_t *key) {
         if (ceesafe_atomic_cas_u32(&cee_random_state, 0u, 1u) == 0u) {
             uint8_t bytes[16] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
                                  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c}; /* kept where there is no source */
-            cee_random_fill(bytes, sizeof bytes);
+            uint8_t fresh[16];
+            if (ceesafe_random_fill(fresh, sizeof fresh) == 0) {
+                ceesafe_mem_copy(bytes, fresh, sizeof bytes);
+            }
             uint64_t a = 0, b = 0;
             for (unsigned k = 0; k < 8u; k++) {
                 a |= (uint64_t)bytes[k] << (8u * k);

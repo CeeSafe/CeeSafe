@@ -661,18 +661,20 @@ uint64_t ceesafe_platform_config(const char *name);
 /* Allocator types, as passed by generated code. */
 #define CEE_ALLOC_SYSTEM 0u
 #define CEE_ALLOC_FAILING 1u
+/* CEE_ALLOC_FOREIGN (2u, for C code: ADR 0060) and the three calls are declared in ceesafe/foreign.h, which a
+   package's C files include on their own. */
+#include "foreign.h" /* beside this header, whatever the include path */
 
 /*
  * Allocation for Box and every later heap type. Every attempt is counted, and the attempt numbered
  * CEESAFE_FAIL_ALLOC_AT (1-based, all allocators) fails: the fault-injection hook for the M3 sweep.
  */
-void *ceesafe_alloc(size_t size, uint32_t allocator);
+/* ceesafe_alloc(size_t size, uint32_t allocator): in ceesafe/foreign.h. */
 /* ceesafe_alloc with every byte zero: for a box whose value is all zero bytes, such as `[0u8; N]`. Counted and
    fault-injected like ceesafe_alloc, freed with ceesafe_free. */
 void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator);
-/* Resizes a block from ceesafe_alloc: one attempt, the block unchanged (and still live) on failure. */
-void *ceesafe_realloc(void *p, size_t size, uint32_t allocator);
-void ceesafe_free(void *p, uint32_t allocator);
+/* ceesafe_realloc (one attempt, the block unchanged and still live on failure) and ceesafe_free: in
+   ceesafe/foreign.h. */
 /* FailingAllocator.failAfter(n) / FailingAllocator.reset(). */
 void ceesafe_fail_after(uint64_t n);
 void ceesafe_fail_reset(void);
@@ -1014,6 +1016,10 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 #define CEE_IO_NETWORK_UNREACHABLE 16u
 #define CEE_IO_ADDRESS_NOT_AVAILABLE 17u
 #define CEE_IO_UNSUPPORTED 18u
+/* ADR 0060: after Unsupported. The resolver's "no such host" is the runtime-only error number below, which no
+   system's errno uses; ceesafe_io_kind maps it to CEE_IO_HOST_NOT_FOUND. */
+#define CEE_IO_HOST_NOT_FOUND 19u
+#define CEE_ERROR_HOST_NOT_FOUND 65536
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);
@@ -1215,6 +1221,8 @@ void ceesafe_chan_end_send(void *c);
 void *ceesafe_chan_begin_recv(void *c, uint32_t *status, uint64_t *epoch);
 void ceesafe_chan_end_recv(void *c);
 void ceesafe_chan_close(void *c);
+/* Whether ceesafe_chan_close has been called (ADR 0060), read under the lock. */
+bool ceesafe_chan_closed(void *c);
 void ceesafe_chan_wait(void *c, uint64_t epoch);
 bool ceesafe_chan_park(void *c, void *node, uint64_t epoch);
 void ceesafe_chan_unpark(void *c, void *node);
@@ -1259,6 +1267,9 @@ bool ceesafe_async_op_cancel(void *op);
 /* HashMap's per-process key (ADR 0052): 128 bits from the system's random source (getrandom, arc4random_buf, rand_s),
  * read once and the same for every map; a fixed key where there is none. */
 void ceesafe_random_key(uint64_t *key);
+/* Random.fill (ADR 0060): `length` bytes from the system's cryptographic source (getrandom or /dev/urandom,
+ * arc4random_buf, BCryptGenRandom); 0, or a negated errno (EOPNOTSUPP where there is no source: CosmoOS userland). */
+int64_t ceesafe_random_fill(uint8_t *out, uint64_t length);
 void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port);
 int32_t ceesafe_dns_poll(void *lookup);
 uint32_t ceesafe_dns_count(void *lookup);

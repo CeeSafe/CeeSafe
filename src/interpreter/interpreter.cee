@@ -60,6 +60,7 @@ struct Interp {
     inputRead: usize;
     // Async tasks (type-system.md §40.8): a virtual clock in milliseconds, and what the parked task waits for.
     asyncClock: u64;
+    randomState: u64;   // Random.fill's SplitMix64 state (ADR 0060), from a fixed seed
     asyncDeadline: u64; // or none (u64 max)
     asyncWritable: bool;
     asyncCurrent: u32;                // the running task (runTasks), or none
@@ -1851,6 +1852,7 @@ fn newInterp(
         truncated: false,
         inputRead: 0,
         asyncClock: 0,
+        randomState: 0x2b7e151628aed2a6,
         asyncDeadline: 0xFFFFFFFFFFFFFFFF,
         asyncWritable: false,
         asyncCurrent: 0xFFFFFFFF,

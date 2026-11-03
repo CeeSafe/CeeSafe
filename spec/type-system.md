@@ -1626,12 +1626,12 @@ A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDen
 `ConnectionRefused`, `AddressInUse`, `OutOfMemory`, `Other(i32)` (the platform's error number), and
 after it (ADR 0044, so the earlier variants keep their tags) the network kinds `ConnectionReset`,
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
-`AddressNotAvailable` and `Unsupported`.
+`AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host".
 `e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
 platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
 "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
 "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
-supported"; `Other`'s is "Input/output error".
+supported", and "Host not found", which no errno has; `Other`'s is "Input/output error".
 
 | Variant | POSIX | Winsock |
 |---|---|---|
@@ -1643,10 +1643,12 @@ supported"; `Other`'s is "Input/output error".
 | `NetworkUnreachable` | `ENETUNREACH` | `WSAENETUNREACH` |
 | `AddressNotAvailable` | `EADDRNOTAVAIL` | `WSAEADDRNOTAVAIL` |
 | `Unsupported` | `EOPNOTSUPP`, `ENOTSUP`, `ENOPROTOOPT`, `EAFNOSUPPORT`, `EPROTONOSUPPORT` | their `WSAE` forms |
+| `HostNotFound` | `getaddrinfo`'s `EAI_NONAME`, `EAI_NODATA`, `EAI_ADDRFAMILY` | `WSAHOST_NOT_FOUND`, `WSANO_DATA` |
 
 `IoError.TimedOut` is the kernel's (a connect or keep-alive gave up); `AsyncError.TimedOut` is a
 deadline of the program's. A `match` that names the first eleven variants and has no `_` arm does
-not cover the network kinds (N0256): a source change of 0.7.0.
+not cover the network kinds (N0256): a source change of 0.7.0; one that names the first nineteen does not cover
+`HostNotFound` (N0256): a source change of ADR 0060's release.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
@@ -1761,6 +1763,19 @@ Diagnostics: none new.
 - Hosted only: in freestanding code `Clock` and `UnixTime`, being lib/std's, are not defined (N0200).
 - The interpreter answers 2000-01-01T00:00:00Z (946,684,800 seconds) plus its virtual clock (§40.8), so a run stays
   reproducible. Calendar dates, time zones and formatting are not part of the library.
+
+### 26.12 Random bytes (ADR 0060)
+- `Random.fill(into)` (lib/std; `into: SliceMut<u8>`) is `Result<void, IoError>`: it fills `into` from the system's
+  cryptographic random source, read on every call: `getrandom(…, 0)` on Linux (retried on `EINTR` and for short reads;
+  `/dev/urandom` where `getrandom` is missing or `ENOSYS`), `arc4random_buf` on macOS and the BSDs,
+  `BCryptGenRandom(NULL, …, BCRYPT_USE_SYSTEM_PREFERRED_RNG)` on Windows. An empty slice is `Ok`.
+- Errors: `Unsupported` where there is no source (CosmoOS userland); the source's error otherwise (`IoError` of its
+  errno; `Other(EIO)`'s kind on Windows), with `into` partly written. It never answers predictable bytes.
+- It has no effect (`@effects()`): it does not allocate, and waits only for the kernel's first seeding at boot.
+- Hosted only: in freestanding code `Random` is not defined (N0200).
+- The interpreter answers a fixed sequence (SplitMix64 from the seed `0x2b7e151628aed2a6`, each call taking whole
+  64-bit words, low byte first, and dropping what it does not use), so a run stays reproducible (§40.8). Its bytes are
+  not secret.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 
@@ -2025,7 +2040,14 @@ declarations of C library functions match the C library's own prototypes exactly
 
 ### 28.6 Building with C
 - `ceesafec build` accepts C source files (`.c`) besides CeeSafe files. They are compiled with the generated
-  C and linked into the program, with the same C compiler and flags. With them, a program may have
+  C and linked into the program, with the same C compiler and flags.
+- Every C file of the build has the runtime's headers on its include path. `ceesafe/foreign.h` (ADR 0060) is CeeSafe's
+  allocator for C code: `ceesafe_alloc(size, CEE_ALLOC_FOREIGN)`, `ceesafe_realloc(p, size, CEE_ALLOC_FOREIGN)` and
+  `ceesafe_free(p, CEE_ALLOC_FOREIGN)`, which follow `malloc`, `realloc` and `free` (`free(NULL)` does nothing,
+  `realloc(NULL, n)` allocates; aligned for any C type; a failed realloc keeps the block). Their attempts are counted
+  and fault-injected in one sequence with CeeSafe's (`CEESAFE_FAIL_ALLOC_AT`), but a block live at exit is not a
+  leak: the report gives such blocks on a line of their own (memory-model.md §3.2). A C library's global state, kept
+  until the process ends, may live there, such as OpenSSL's through `CRYPTO_set_mem_functions` in test builds. With them, a program may have
   its `main` in C instead of in CeeSafe; without a CeeSafe `main`, the CeeSafe runtime is not started, so
   allocation-failure injection (`CEESAFE_FAIL_ALLOC_AT`) and program arguments are not available to
   exported functions.
@@ -3463,7 +3485,9 @@ console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
 `AsyncSockets`, the same calls on raw descriptors for code with its own wait loop; their addresses below), `AsyncMutex<T>` (a guard that may be
 held across `await`, its waiters served first come, first served), and channels (`Channel<T: Send>`, ADR 0032: `create(capacity)`,
-`clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks). Its operations return `Result<T, AsyncError>`,
+`clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
+`tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or
+null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null). Its operations return `Result<T, AsyncError>`,
 where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
 
 **Socket addresses** (lib/std's `net.cee`, ADR 0044):
@@ -3494,9 +3518,10 @@ empty.
 - Otherwise `getaddrinfo` (`GetAddrInfoW` on Windows; `AF_UNSPEC`, `SOCK_STREAM`, no flags) runs on one of at most four
   resolver threads, the rest queued. The name is passed as given (an internationalised one in its ASCII form).
 - A cancelled task returns `Err(Cancelled)` at once; its lookup is unqueued, or left to its thread, which frees it.
-- Errors are `Io` kinds: `NotFound` (no such name, or no address), `TimedOut` (a temporary failure), `InvalidInput`
-  (empty, over 253 bytes, a NUL), `OutOfMemory`, `Unsupported` (CosmoOS userland; the interpreter, which knows only
-  literals and `localhost`, as 127.0.0.1 then ::1).
+- Errors are `Io` kinds: `HostNotFound` (no such name, or no address; ADR 0060, before which it was `NotFound`),
+  `TimedOut` (a temporary failure), `InvalidInput` (empty, over 253 bytes, a NUL), `OutOfMemory`, `Unsupported`
+  (CosmoOS userland; the interpreter, which knows only literals, `localhost`, as 127.0.0.1 then ::1, and names under
+  the reserved `.invalid`, RFC 6761 §6.4, which are `HostNotFound`).
 
 **Vectored sends** (lib/std, ADR 0045):
 

@@ -2321,6 +2321,14 @@ void ceesafe_chan_end_recv(void *channel) {
     cee_chan_signal(c);
 }
 
+bool ceesafe_chan_closed(void *channel) {
+    cee_chan *c = (cee_chan *)channel;
+    cee_chan_lock(c);
+    bool closed = c->closed;
+    cee_chan_unlock(c);
+    return closed;
+}
+
 void ceesafe_chan_close(void *channel) {
     cee_chan *c = (cee_chan *)channel;
     cee_chan_lock(c);
@@ -4161,7 +4169,7 @@ static int32_t cee_dns_resolve(cee_dns *d) {
     ceesafe_platform_free(name);
     if (r != 0) {
         switch (r) {
-        case WSAHOST_NOT_FOUND: case WSANO_DATA: return -(int32_t)ENOENT;
+        case WSAHOST_NOT_FOUND: case WSANO_DATA: return -(int32_t)CEE_ERROR_HOST_NOT_FOUND; /* ADR 0060 */
         case WSATRY_AGAIN: return -(int32_t)ETIMEDOUT;
         case WSA_NOT_ENOUGH_MEMORY: return -(int32_t)ENOMEM;
         case WSAEINVAL: case WSAEAFNOSUPPORT: case WSATYPE_NOT_FOUND: return -(int32_t)EINVAL;
@@ -4196,7 +4204,7 @@ static int32_t cee_dns_resolve(cee_dns *d) {
 #if defined(EAI_ADDRFAMILY)
         case EAI_ADDRFAMILY:
 #endif
-            return -(int32_t)ENOENT;
+            return -(int32_t)CEE_ERROR_HOST_NOT_FOUND; /* IoError.HostNotFound (ADR 0060) */
         case EAI_AGAIN: return -(int32_t)ETIMEDOUT;
         case EAI_MEMORY: return -(int32_t)ENOMEM;
         case EAI_FAMILY: case EAI_SERVICE: case EAI_BADFLAGS: return -(int32_t)EINVAL;
@@ -4219,7 +4227,7 @@ static int32_t cee_dns_resolve(cee_dns *d) {
     }
     freeaddrinfo(list);
 #endif
-    return d->count == 0u ? -(int32_t)ENOENT : 0;
+    return d->count == 0u ? -(int32_t)CEE_ERROR_HOST_NOT_FOUND : 0;
 }
 
 /* A resolver thread: lookups from the queue until it is empty, then it ends. */

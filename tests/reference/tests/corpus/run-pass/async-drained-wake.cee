@@ -1,0 +1,80 @@
+// Bug B16 (CeeSafe.Web, found 2026-11-03): on kqueue a full change queue (64 entries) is sent early, and that send
+// took the wake pipe's byte, so the next wait blocked with a woken task on the wake list until a deadline came: HTTP/2
+// streams 1 s late past ~20 connections. Here 80 readers wake together; the first sends to a parked receiver (one
+// pipe byte), then all 80 park on sockets (80 changes, so the queue is sent early); then nothing is ready. The
+// receiver must have its value at once, not when its 2 s guard ends.
+
+async fn reader(k: usize, s: borrow AsyncTcpStream, go: borrow Channel<u8>, ch: borrow Channel<u64>) -> Result<void, AsyncError> {
+    match (await go.recvAsync()) {
+        Ok(_) => {}
+        Err(e) => { return Err(e); }
+    }
+    if (k == 0) {
+        match (await ch.sendAsync(Timer.now())) {
+            Ok() => {}
+            Err(_) => { return Err(AsyncError.Cancelled); }
+        }
+    }
+    var buf = [0u8; 16];
+    loop {
+        let n = await s.read(mut buf[..])?;
+        if (n == 0) {
+            return Ok();
+        }
+    }
+}
+
+async fn received(ch: borrow Channel<u64>) -> Result<u64, AsyncError> {
+    match (await ch.recvAsync()) {
+        Ok(Some(sent)) => { return Ok(sent); }
+        Ok(null) => { return Ok(0); }
+        Err(e) => { return Err(e); }
+    }
+}
+
+async fn guard() -> Result<u64, AsyncError> {
+    await Timer.sleep(2000)?;
+    return Ok(0);
+}
+
+async fn body() -> Result<u64, AsyncError> {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 0)!;
+    let port = listener.port()!;
+    var clients = Vector<AsyncTcpStream>.create();
+    var servers = Vector<AsyncTcpStream>.create();
+    for (k in 0..80) {
+        clients.push(await AsyncTcpStream.connect("127.0.0.1", port)?)!;
+        servers.push(await listener.accept()?)!;
+    }
+    let go = Channel<u8>.create(1)!;
+    let ch = Channel<u64>.create(1)!;
+    var late: u64 = 1;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async () => {
+            let r = await Async.race(async () => await received(ch), async () => await guard());
+            let sent = r?.value;
+            late = if (sent != 0 && Timer.now() - sent < 500) 0u64 else 1u64;
+            for (k in 0..clients.length) {
+                clients[k].shutdownWrite()!;
+            }
+            return Ok();
+        });
+        for (k in 0..servers.length) {
+            s.spawn(async () => await reader(k, servers[k], go, ch));
+        }
+        s.spawn(async () => {
+            await Timer.sleep(50)?; // every reader waits on `go`, the receiver on `ch`
+            go.close(); // the readers wake together
+            return Ok();
+        });
+    })?;
+    return Ok(if (late == 0) 1u64 else 0u64);
+}
+
+fn main() {
+    match (Async.run(body())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("error"); }
+    }
+}
+// expect-stdout: 1

@@ -187,6 +187,7 @@ typedef struct {
 #if defined(CEE_KQUEUE)
     struct kevent changes[64]; /* kqueue: arming and disarming not yet sent, sent with the next wait */
     int change_count;
+    bool pipe_drained;   /* a full change queue's early send drained the wake pipe: the next wait must not block (B16) */
 #endif
 #if defined(CEE_URING)
     struct cee_uring *uring;   /* io_uring for socket operations (CEESAFE_REACTOR_URING=1, ADR 0035), or NULL */
@@ -507,6 +508,7 @@ static bool cee_kqueue_call(const struct timespec *limit) {
         if (fd == cee_exec.wake_pipe[0] && (events[k].flags & EV_ERROR) == 0) {
             unsigned char drained[64];
             cee_drain(fd, drained, sizeof drained);
+            cee_exec.pipe_drained = true; /* a wake came: cee_wait looks for woken tasks before it blocks again */
             continue;
         }
         unsigned d = events[k].filter == EVFILT_WRITE ? 1u : 0u;
@@ -1791,9 +1793,20 @@ static void cee_wait(void) {
 #elif defined(CEE_COSMOOS)
         any = cee_wait_cosmoos(timeout);
 #else
+#if defined(CEE_KQUEUE)
+        /* A wake whose byte a full change queue's early send drained (cee_kqueue_change) is in no pipe now: blocking
+           would leave its task on the wake list until the next deadline or descriptor (bug B16). Not blocking lets
+           the scan below find it. */
+        if (cee_exec.pipe_drained) {
+            timeout = 0;
+        }
+#endif
         if (cee_exec.wake_count > 0u || cee_exec.fd_count > 0u || cee_exec.op_count > 0u || timeout != 0) {
             any = cee_reactor_open() ? cee_wait_reactor(timeout) : cee_wait_poll(timeout);
         }
+#if defined(CEE_KQUEUE)
+        cee_exec.pipe_drained = false; /* the scan below sees every wake so far */
+#endif
 #endif
         /* Woken tasks, earliest wake first. */
         for (;;) {
@@ -1890,6 +1903,7 @@ static void cee_exec_begin(cee_run *run) {
     cee_exec.pipe_watched = false;
 #if defined(CEE_KQUEUE)
     cee_exec.change_count = 0;
+    cee_exec.pipe_drained = false;
 #endif
 #if defined(CEE_URING)
     cee_exec.uring = NULL;

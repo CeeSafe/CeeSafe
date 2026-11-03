@@ -55,11 +55,13 @@ base64), `APPLE_CERTIFICATE_PASSWORD`, and for `notarytool` `ASC_P8` (the App St
 `ASC_KEY_ID` and `ASC_ISSUER` (the issuer UUID). They were set on 2026-10-31.
 
 The `stores` job publishes to the Marketplace with no secret, by Trusted Publishing: the publisher `ceesafe`
-(marketplace.visualstudio.com/manage/publishers/ceesafe, **Trusted Publishing**) has the policy "Release workflow" for
-repository owner `CeeSafe`, repository `CeeSafe`, workflow `release.yml`, no environment, and the job, with
-`id-token: write`, runs `vsce publish --oidc`. Renaming the workflow file needs the policy changed too, and so did
-moving the repository from `vkuttyp` to the `CeeSafe` organisation (2026-11-03): the owner in both stores' policies
-is the repository's.
+(marketplace.visualstudio.com/manage/publishers/ceesafe, **Trusted Publishing**) has the policy "Release workflow
+(CeeSafe organization)" for repository owner `CeeSafe` (#351822535), repository `CeeSafe` (#1440301724), workflow
+`release.yml`, no environment, and the job, with `id-token: write`, runs `vsce publish --oidc`. The Marketplace
+records the owner and the repository by their numeric ids, and a policy cannot be edited: renaming the workflow file
+or moving the repository means creating a new policy, then deleting the old one. Moving the repository from `vkuttyp`
+to the `CeeSafe` organisation (2026-11-03) did: the old policy, still for `vkuttyp` (#146238), refused v0.10.1's token
+until it was replaced.
 
 Open VSX is the same, with no secret: the namespace `ceesafe` (owned by `vkuttyp`, its claim
 EclipseFdn/open-vsx.org#15060 approved) has a trusted publisher for owner `CeeSafe`, repository `CeeSafe`, workflow
@@ -67,4 +69,5 @@ EclipseFdn/open-vsx.org#15060 approved) has a trusted publisher for owner `CeeSa
 `ovsx publish --trusted-publishing`, which exchanges the job's OIDC token for a five-minute token scoped to the
 extension. Open VSX registers a trusted publisher only for an extension that exists, so 0.3.2, the first version there,
 was published by the owner with an access token (2026-11-01). A registration cannot be edited: renaming the workflow
-file means deleting it and registering again.
+file means deleting it and registering again. It compares the owner and the repository with their case: a
+registration for `ceesafe/ceesafe` refused the job's `CeeSafe/CeeSafe` (v0.10.1, 2026-11-03).

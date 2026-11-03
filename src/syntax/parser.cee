@@ -1038,8 +1038,11 @@ struct Parser {
         let parameters = this.parseTypeParameters()?; // ADR 0054
         let split = this.splitTypeParameters(parameters)?;
         let interfaceType = this.parseType()?;
-        this.expect(TokenKind.ForKeyword)?;
-        let forType = this.parseType()?;
+        let inherent = !this.at(TokenKind.ForKeyword); // `impl S { … }` (ADR 0064 §1)
+        if (!inherent) {
+            this.expect(TokenKind.ForKeyword)?;
+        }
+        let forType = if (inherent) interfaceType else this.parseType()?;
         var functions = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
         while (this.atFunction() || this.at(TokenKind.PublicKeyword) || this.at(TokenKind.At)) {
@@ -1071,6 +1074,14 @@ struct Parser {
             name = this.front.ast.addIdent(Ident { symbol: symbol, start: span.start, end: span.end, missing: true })?;
         }
         let functionRange = this.list(functions)?;
+        if (inherent) {
+            return this.addItem(
+                ItemKind.InherentImpl(forType, functionRange, split.types, split.regions),
+                visibility,
+                name,
+                start,
+            );
+        }
         return this.addItem(
             ItemKind.Impl(interfaceType, forType, functionRange, split.types, split.regions),
             visibility,
@@ -1182,7 +1193,13 @@ struct Parser {
                 Ident { symbol: token.data, start: token.start, end: token.end, missing: false },
             );
         }
-        this.errorFound(expectedToken(), "expected identifier, found ", "")?;
+        // A reserved word where a name goes (`let own = 1;`): say so, since it reads like a name (grammar.md §1.3).
+        let reserved = isKeyword(this.current().kind);
+        this.errorFound(
+            expectedToken(),
+            "expected identifier, found ",
+            if (reserved) ", which is a reserved word: choose another name (grammar.md §1.3)" else "",
+        )?;
         let symbol = this.intern("<missing>")?;
         let at = this.current().start;
         return this.front.ast.addIdent(Ident { symbol: symbol, start: at, end: at, missing: true });
@@ -2134,6 +2151,13 @@ struct Parser {
             } else if (this.at(TokenKind.Dot)) {
                 this.advance();
                 let member = this.parseIdentifier()?;
+                if (this.isGenericArgumentListAhead()) {
+                    // `x.m<T>(…)`: a generic method's or static function's type arguments (ADR 0064 §1).
+                    let arguments = this.parseGenericArguments()?;
+                    this.front.ast.memberTypeArguments.push(
+                        MemberTypeArguments { member: member, arguments: arguments },
+                    )?;
+                }
                 expr = this.front.ast.addExpr(ExprNode.Member(expr, member), start, this.endFrom(start))?;
             } else if (this.at(TokenKind.Question)) {
                 this.advance();

@@ -386,7 +386,30 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
             c.error(duplicateMember(), id.start, id.end, message)?;
             continue;
         }
-        let function = declareFunctionIn(c, f, entry.typ, entry.environment)?;
+        let ownTypeParameters = c.front.ast.functions[f as usize].typeParameters;
+        var function = none();
+        if (ownTypeParameters.count > 0) {
+            // A generic method (ADR 0064 §1): checked once with its own parameters opaque, instantiated per call.
+            var parameters = Vector<u32>.create();
+            var pairs = Vector<EnvPair>.create();
+            declareTypeParameters(c, ownTypeParameters, mut parameters, mut pairs)?;
+            let env = storeEnvironment(c, pairs.view())?;
+            let list = c.types.addList(parameters.view())?;
+            c.genericMethod = true;
+            function = declareFunctionIn(c, f, entry.typ, env)?;
+            c.genericMethod = false;
+            c.genericFunctions.push(GenericFunctionEntry {
+                syntax: f,
+                file: c.file,
+                generic: function,
+                parameters: list,
+                owner: entry.typ,
+                ownerEnvironment: entry.environment,
+            })?;
+            c.hir.functions[function as usize].methodTemplate = truncate<u32>(c.genericFunctions.length - 1);
+        } else {
+            function = declareFunctionIn(c, f, entry.typ, entry.environment)?;
+        }
         c.types.structs[definition as usize].functions.push(function)?;
         c.types.structs[definition as usize].functionNames.push(id.symbol)?;
     }

@@ -51,6 +51,7 @@ fn checkResourceFunction(
         appendText(mut message, builtinName(owner))?;
         appendText(mut message, "' has no function ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
+        appendBuiltinDidYouMean(c, mut message, builtinName(owner).bytes(), ident.symbol)?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -165,6 +166,7 @@ fn checkResourceMethod(
         appendQuotedType(mut message, c, typ)?;
         appendText(mut message, " has no method ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
+        appendBuiltinDidYouMean(c, mut message, c.typeName(typ), ident.symbol)?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -263,6 +265,18 @@ fn integerMethod(name: Slice<u8>) -> u32 {
     if (sameText(name, "saturatingMul")) {
         return bfSaturatingMul();
     }
+    if (sameText(name, "min")) {
+        return bfIntMin();
+    }
+    if (sameText(name, "max")) {
+        return bfIntMax();
+    }
+    if (sameText(name, "abs")) {
+        return bfIntAbs();
+    }
+    if (sameText(name, "unsignedAbs")) {
+        return bfIntUnsignedAbs();
+    }
     return none();
 }
 
@@ -292,7 +306,7 @@ fn floatMethod(name: Slice<u8>) -> u32 {
     return none();
 }
 
-/// `x.wrappingAdd(y)` and the rest (CheckIntegerMethod): one argument of the receiver's type; never panics.
+/// `x.wrappingAdd(y)`, `x.min(y)` and the rest (CheckIntegerMethod): one argument of the receiver's type; never panics.
 fn checkIntegerMethod(
     c: borrow mut Checker,
     member: u32,
@@ -301,6 +315,9 @@ fn checkIntegerMethod(
     function: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
+    if (function == bfIntAbs() || function == bfIntUnsignedAbs()) {
+        return checkIntegerAbs(c, member, arguments, receiver, function, span);
+    }
     if (arguments.count != 1) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
@@ -318,6 +335,51 @@ fn checkIntegerMethod(
     let checked = function == bfCheckedAdd() || function == bfCheckedSub() || function == bfCheckedMul();
     let result = if (checked) optionOf(c, typ)? else typ;
     let values = [receiver, argument];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
+}
+
+/// The unsigned integer type of `typ`'s width.
+fn unsignedTwin(c: borrow Checker, typ: u32) -> u32 {
+    if (typ == c.types.isize) {
+        return c.types.usize;
+    }
+    let bits = c.types.info(typ).bits;
+    return if (bits == 8) c.types.u8 else if (bits == 16) c.types.u16 else if (bits == 32) c.types.u32 else c.types.u64;
+}
+
+/// `x.abs()` and `x.unsignedAbs()` (ADR 0063 §2.5): no arguments, a signed receiver; `abs` is of the receiver's type and
+/// panics at its minimum, as `-x` does; `unsignedAbs` is of the unsigned type of its width and never panics.
+fn checkIntegerAbs(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    receiver: u32,
+    function: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let typ = c.typeOf(receiver);
+    if (!c.types.info(typ).signed) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        appendText(mut message, " is unsigned, so it has no ")?;
+        appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(mut message, ": the value is its own magnitude (ADR 0063 §2.5)")?;
+        c.error(notAStruct(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(mut message, " takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let result = if (function == bfIntAbs()) typ else unsignedTwin(c, typ);
+    let values = [receiver];
     let list = c.hir.list(values[..])?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }

@@ -140,6 +140,7 @@ fn checkProgram(
         impls: Vector<ImplRef>.create(),
         implsReady: false,
         registerNext: true,
+        genericMethod: false,
         dynAllowed: false,
         dynTables: Vector<DynTable>.create(),
         closureContexts: Vector<ClosureContext>.create(),
@@ -157,6 +158,7 @@ fn checkProgram(
         pendingBounds: Vector<PendingBounds>.create(),
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
+        pendingDynInstances: Vector<PendingDynInstance>.create(),
         letKeywords: Vector<LetKeyword>.create(),
         effectAttributes: Vector<EffectAttributes>.create(),
         effectsOfAttributes: Vector<EffectsOfAttribute>.create(),
@@ -206,6 +208,7 @@ fn checkProgram(
     declareFrameFields(mut c)?;
     declareBuiltinItems(mut c)?;
     checkQualifiedNames(mut c)?;
+    mergeInherentImpls(mut c)?;
 
     // Interfaces, then structs and enums, then every other item, unit by unit (Check()).
     for (u in 0..c.front.ast.units.length) {
@@ -258,6 +261,7 @@ fn checkProgram(
                 ItemKind.Interface(_, _) => {}
                 ItemKind.Struct(_) => {}
                 ItemKind.Enum(_, _, _) => {}
+                ItemKind.InherentImpl(_, _, _, _) => {} // merged into its struct (MergeInherentImpls)
                 _ => { declare(mut c, item)?; }
             }
         }
@@ -266,6 +270,7 @@ fn checkProgram(
     processFunctionAttributes(mut c)?;
     processImpls(mut c)?;
     resolveAllMembers(mut c)?;
+    checkPendingDynInstances(mut c)?;
     checkLayoutUses(mut c)?;
     checkStructRecursion(mut c)?;
     computeCopyAndDrop(mut c)?;
@@ -303,6 +308,7 @@ fn checkProgram(
                 }
                 let mark = diagnosticsMark(c);
                 checkFunctionBody(mut c, function)?;
+                checkDynInstance(mut c, function, arguments.view())?;
                 endInstance(mut c, mark, arguments.view(), name.view(), siteFile, siteSpan, function)?;
             } else {
                 checkFunctionBody(mut c, function)?;
@@ -421,7 +427,14 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
                 let list = c.types.addList(parameters.view())?;
                 let generic = declareFunctionIn(c, f, none(), env)?;
                 c.genericFunctions.push(
-                    GenericFunctionEntry { syntax: f, file: c.file, generic: generic, parameters: list },
+                    GenericFunctionEntry {
+                        syntax: f,
+                        file: c.file,
+                        generic: generic,
+                        parameters: list,
+                        owner: none(),
+                        ownerEnvironment: emptyRange(),
+                    },
                 )?;
                 let index = truncate<u32>(c.genericFunctions.length - 1);
                 ownItem(c, id.symbol, Entity.GenericFunction(index))?;
@@ -444,9 +457,12 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
                 )?;
                 c.error(unsupported(), span.start, span.end, message)?;
                 t = c.types.error;
-            } else if (c.types.isScoped(t)) {
+            } else if (c.types.isScoped(t) && !isConstantView(c, t)) {
                 var message = Vector<u8>.create();
-                appendText(mut message, "constants cannot be references")?;
+                appendText(
+                    mut message,
+                    "constants cannot be references; a string view, or an array of them, can (ADR 0064 §2)",
+                )?;
                 c.error(referenceNotAllowed(), span.start, span.end, message)?;
                 t = c.types.error;
             }
@@ -480,8 +496,13 @@ fn constElementOk(c: borrow Checker, t: u32) -> bool {
     return c.types.is(
         element,
         TypeKind.Integer,
-    ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error);
+    ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error) || c.types.isStringView(element);
 }
+
+/// A constant's type that may hold loans but only of static data (ADR 0064 §2): `StringView` or `[StringView; N]`,
+/// whose value is string literals.
+fn isConstantView(c: borrow Checker, t: u32) -> bool =>
+    c.types.isStringView(t) || (c.types.is(t, TypeKind.Array) && c.types.isStringView(c.types.info(t).element));
 
 fn receiverIndex(kind: ReceiverKind) -> u32 => match (kind) {
     ReceiverKind.None => 0,
@@ -528,12 +549,15 @@ fn declareFunctionCore(c: borrow mut Checker, f: u32, owner: u32, environment: R
     }
     checkRegionParameters(c, decl.regionParameters, decl.typeParameters)?;
     var env = environment;
-    if (owner != none() && decl.typeParameters.count > 0) {
+    if (owner != none() && decl.typeParameters.count > 0 && c.genericMethod) {
+        // A struct method's own type parameters (ADR 0064 §1): bound by the caller's environment, opaque in the generic
+        // version, the type arguments in an instance.
+    } else if (owner != none() && decl.typeParameters.count > 0) {
         let tp = c.front.ast.typeParameters[c.front.ast.at(decl.typeParameters, 0) as usize];
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "methods cannot declare type parameters of their own in v0; use the struct's, or a top-level generic function",
+            "an interface's methods cannot have type parameters of their own: its table holds one function per method (ADR 0064 §1); give the type parameter to the interface, or make the function a generic method of a struct",
         )?;
         c.error(unsupported(), tp.start, tp.end, message)?;
         // Declared anyway, so their names resolve (no cascade of unknown types).

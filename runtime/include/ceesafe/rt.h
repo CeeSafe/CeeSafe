@@ -384,6 +384,27 @@ CEE_SAT_SIGNED(int16_t, i16, INT16_MIN, INT16_MAX)
 CEE_SAT_SIGNED(int32_t, i32, INT32_MIN, INT32_MAX)
 CEE_SAT_SIGNED(int64_t, i64, INT64_MIN, INT64_MAX)
 
+/* min and max on integers (type-system.md §6): the smaller or larger operand; never overflows. */
+#define CEE_MINMAX(T, S)                                                                               \
+    static inline T cee_min_##S(T a, T b) { return a <= b ? a : b; }                                   \
+    static inline T cee_max_##S(T a, T b) { return a >= b ? a : b; }
+CEE_MINMAX(uint8_t, u8)
+CEE_MINMAX(uint16_t, u16)
+CEE_MINMAX(uint32_t, u32)
+CEE_MINMAX(uint64_t, u64)
+CEE_MINMAX(int8_t, i8)
+CEE_MINMAX(int16_t, i16)
+CEE_MINMAX(int32_t, i32)
+CEE_MINMAX(int64_t, i64)
+
+/* unsignedAbs (ADR 0063 §2.5): the magnitude in the unsigned type of the same width, so the minimum fits. */
+#define CEE_UNSIGNED_ABS(T, S, U) \
+    static inline U cee_unsigned_abs_##S(T a) { return a < 0 ? (U)((U)0 - (U)a) : (U)a; }
+CEE_UNSIGNED_ABS(int8_t, i8, uint8_t)
+CEE_UNSIGNED_ABS(int16_t, i16, uint16_t)
+CEE_UNSIGNED_ABS(int32_t, i32, uint32_t)
+CEE_UNSIGNED_ABS(int64_t, i64, uint64_t)
+
 #if defined(CEE_FLOATS)
 /* ---- Floats: representation and conversions (type-system.md §35.4–§35.6) ----------------------- */
 

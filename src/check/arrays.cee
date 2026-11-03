@@ -67,9 +67,14 @@ fn checkElement(c: borrow mut Checker, element: u32, length: i64, span: Span) ->
     if (c.types.isBottom(element)) {
         return Ok(false);
     }
-    if (c.types.isScoped(element)) {
+    if (c.types.is(element, TypeKind.Reference) && !c.types.isStringView(element) && !c.types.isSlice(element)) {
+        // Views (StringView, slices) and values holding loans may be elements (ADR 0064 §2), as in a Vector; a bare
+        // `borrow T` may not: an array of references to references is §25.4's "written references to references".
         var message = Vector<u8>.create();
-        appendText(mut message, "array and slice elements cannot be references in v0")?;
+        appendText(
+            mut message,
+            "array and slice elements cannot be 'borrow' references; views and values holding loans can",
+        )?;
         c.error(referenceNotAllowed(), span.start, span.end, message)?;
         return Ok(false);
     }

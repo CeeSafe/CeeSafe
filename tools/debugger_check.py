@@ -128,6 +128,7 @@ def main():
     sys.path.insert(0, SCRIPTS)
     import ceesafe_names
     for c, name in (("ceeF_length", "length"), ("ceeM_7Counter_bump", "Counter.bump"),
+                    ("ceeMG_6Canvas_3add1S6Square", "Canvas.add"),
                     ("ceeM_12SpinLock_u64_create", "SpinLock_u64.create"), ("ceeAR_ceeF_twice", "twice"),
                     ("ceeAR_ceeCB_250", "async closure"), ("main", "main")):
         if ceesafe_names.function(c) != name:

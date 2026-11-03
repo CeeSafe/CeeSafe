@@ -1,0 +1,55 @@
+// A `borrow mut T` variable or field passed where a `borrow mut dyn I` is expected is reborrowed, as every use of a
+// `borrow mut` is (§13.3): it stays usable after the call (it was moved before, N0250 on its second use).
+interface Sink {
+    fn put(borrow mut this, v: i32);
+}
+
+struct Counter {
+    n: i32;
+}
+
+impl Sink for Counter {
+    fn put(borrow mut this, v: i32) {
+        this.n += v;
+    }
+}
+
+fn use(s: borrow mut dyn Sink, v: i32) {
+    s.put(v);
+}
+
+/// A parameter, used through `dyn` twice and then directly.
+fn twice(c: borrow mut Counter) {
+    use(c, 1);
+    use(c, 2);
+    c.n += 10;
+}
+
+struct Holder<region r> {
+    c: borrow mut(r) Counter;
+}
+
+/// A `borrow mut` field, the same way.
+fn viaField(h: borrow mut Holder) {
+    use(h.c, 100);
+    use(h.c, 200);
+}
+
+/// A `dyn` parameter passed on to another `dyn` parameter.
+fn forward(s: borrow mut dyn Sink) {
+    use(s, 1000);
+    use(s, 2000);
+}
+
+fn main() {
+    var c = Counter { n: 0 };
+    twice(mut c);
+    Console.writeLine(c.n);
+    var h = Holder { c: borrow mut c };
+    viaField(mut h);
+    forward(mut c);
+    Console.writeLine(c.n);
+}
+
+// expect-stdout: 13
+// expect-stdout: 3313

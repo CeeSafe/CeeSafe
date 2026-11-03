@@ -1,0 +1,35 @@
+// A `borrow mut T` reborrowed as a `borrow mut dyn I` freezes the original while the reborrow is live (B4), as a
+// reborrow at the same type does.
+interface Sink {
+    fn put(borrow mut this, v: i32);
+}
+
+struct Counter {
+    n: i32;
+}
+
+impl Sink for Counter {
+    fn put(borrow mut this, v: i32) {
+        this.n += v;
+    }
+}
+
+fn keep(s: borrow mut dyn Sink) -> borrow mut dyn Sink => s;
+
+fn writeWhileReborrowLive(c: borrow mut Counter) {
+    let held = keep(c);
+    c.n = 5; // error[N0240]
+    held.put(1);
+}
+
+fn readWhileReborrowLive(c: borrow mut Counter) {
+    let held = keep(c);
+    Console.writeLine(c.n); // error[N0242]
+    held.put(1);
+}
+
+fn main() {
+    var c = Counter { n: 0 };
+    writeWhileReborrowLive(mut c);
+    readWhileReborrowLive(mut c);
+}

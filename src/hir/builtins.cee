@@ -1,7 +1,7 @@
 // The builtin functions, by declaration index: what HirExpr.BuiltinCall stores. Edited by hand: a new builtin takes
 // the next index and raises builtinFunctionCount.
 
-fn builtinFunctionCount() -> u32 => 103;
+fn builtinFunctionCount() -> u32 => 107;
 
 fn bfConsoleWrite() -> u32 => 0;
 fn bfConsoleWriteLine() -> u32 => 1;
@@ -107,6 +107,12 @@ fn bfTcpSetSendBuffer() -> u32 => 99;
 fn bfTcpSetRecvBuffer() -> u32 => 100;
 fn bfTcpSetLinger() -> u32 => 101;
 fn bfTcpShutdownRead() -> u32 => 102;
+/// `a.min(b)` and `a.max(b)` on integers (type-system.md §6).
+fn bfIntMin() -> u32 => 103;
+fn bfIntMax() -> u32 => 104;
+/// `a.abs()` (panics at the minimum) and `a.unsignedAbs()` on signed integers (ADR 0063 §2.5).
+fn bfIntAbs() -> u32 => 105;
+fn bfIntUnsignedAbs() -> u32 => 106;
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -213,6 +219,10 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     100 => "TcpSetRecvBuffer",
     101 => "TcpSetLinger",
     102 => "TcpShutdownRead",
+    103 => "IntMin",
+    104 => "IntMax",
+    105 => "IntAbs",
+    106 => "IntUnsignedAbs",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

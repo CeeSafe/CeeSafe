@@ -945,6 +945,22 @@ fn explainOp(
             }
             break;
         }
+        if (c.hir.functions[next as usize].isDynMethod) {
+            // A call through `dyn` has the interface method's declared effects, all of them without a list (§37.3):
+            // the fix is usually on the interface, not at the call.
+            let declared = c.hir.functions[next as usize].declaredEffects;
+            if (declared != none()) {
+                appendText(out, ", declared @effects(")?;
+                appendEffectNames(out, declared)?;
+                appendText(out, ")")?;
+            } else {
+                appendText(
+                    out,
+                    ", an interface method without @effects, which may do anything: if no implementation may block or allocate, declare it '@effects() fn …' in the interface (type-system.md §37.3)",
+                )?;
+            }
+            break;
+        }
         if ((next as usize) >= e.inferred.length || !e.inferred[next as usize].present) {
             break;
         }

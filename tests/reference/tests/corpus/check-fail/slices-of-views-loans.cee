@@ -1,0 +1,25 @@
+// Arrays of views hold their elements' loans (ADR 0064 §2): an element may not outlive its data, leave through a
+// parameter, or have its data changed while the array lives.
+fn escape() -> usize {
+    var arr = ["x", "y"];
+    {
+        var owned = String.create();
+        owned.append("temp")!;
+        arr[0] = owned.view();
+    } // error[N0243]
+    return arr[0].length;
+}
+
+fn keep(items: Slice<StringView>, into: borrow mut Vector<StringView>) {
+    into.push(items[0])!; // error[N0272]
+}
+
+fn mutateWhileHeld() {
+    var owned = String.create();
+    owned.append("temp")!;
+    let arr = [owned.view()];
+    owned.append("more")!; // error[N0241]
+    Console.writeLine(arr[0].length);
+}
+
+fn main() {}

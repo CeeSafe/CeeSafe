@@ -444,7 +444,8 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
 }
 
 /// A function's C name (FunctionName): `ceeF_name`, members `ceeM_<length><Struct>_name`, instances of generic
-/// functions `ceeG_<length><name><mangled arguments>`, closure bodies `ceeCB_<id>`, externs' wrappers `ceeC_name`.
+/// methods `ceeMG_<length><Struct>_<length><name><mangled arguments>`, instances of generic functions
+/// `ceeG_<length><name><mangled arguments>`, closure bodies `ceeCB_<id>`, externs' wrappers `ceeC_name`.
 fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: u32) -> Result<void, AllocError> {
     let f = borrow c.hir.functions[function as usize];
     let name = c.name(f.name);
@@ -464,7 +465,10 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         return appendBytes(out, name);
     }
     if (f.owner != none()) {
-        appendText(out, "ceeM_")?;
+        // An instance of a generic method (ADR 0064 §1) has its own prefix, as a generic function's does: `ceeMG_`, the
+        // owner, then the name with its length and the mangled type arguments.
+        let genericMethod = f.typeArguments.count > 0;
+        appendText(out, if (genericMethod) "ceeMG_" else "ceeM_")?;
         // An instance, or a built-in type whose name is not an identifier (an impl on Vector<u8>, ADR 0052 §3.3).
         if (isInstanceType(c, f.owner) || c.types.is(f.owner, TypeKind.Vector)) {
             appendMangle(c, out, f.owner)?;
@@ -474,6 +478,11 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
             appendId(out, owner)?;
         }
         out.push('_')?;
+        if (genericMethod) {
+            appendDecimal(out, name.length as u64)?;
+            appendId(out, name)?;
+            return appendMangledArguments(c, out, f.typeArguments);
+        }
         return appendBytes(out, name);
     }
     if (f.typeArguments.count == 0) {

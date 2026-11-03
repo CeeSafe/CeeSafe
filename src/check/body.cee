@@ -249,7 +249,23 @@ fn checkLocalDecl(
             mut message,
             "a reference variable must be declared with 'let': references cannot be re-pointed (assigning to one writes through it)",
         )?;
-        c.error(referenceNotAllowed(), id.start, id.end, message)?;
+        let referent = c.types.info(localType).pointee;
+        if (declared == none() && referent != none() && c.types.isCopy(referent) &&
+            !c.types.is(referent, TypeKind.Reference) && !c.types.isStringView(localType) &&
+            !c.types.isSlice(localType)) {
+            // `var k = len;` with `len: borrow mut usize` most likely wants a copy of the value: declaring the type
+            // reads through the reference (§13.3).
+            appendText(mut message, "; to copy the value it refers to, declare the variable's type: ")?;
+            appendQuotedType(mut message, c, referent)?;
+            var title = Vector<u8>.create();
+            appendText(mut title, "declare the type to copy the value")?;
+            var text = Vector<u8>.create();
+            appendText(mut text, ": ")?;
+            appendBytes(mut text, c.typeName(referent))?;
+            c.errorWithFix(referenceNotAllowed(), id.start, id.end, message, title, id.end, id.end, text)?;
+        } else {
+            c.error(referenceNotAllowed(), id.start, id.end, message)?;
+        }
         localType = c.types.error;
     }
     if (c.lookupLocal(id.symbol)? != none()) {
@@ -488,7 +504,15 @@ fn checkFor(
             let startHint = if (c.types.is(endType, TypeKind.Integer)) endType else none();
             start = checkExpr(c, startSyntax, startHint)?;
         } else {
-            let s = synth(c, startSyntax, none())?;
+            // Both flexible: `usize` if the body indexes with the variable (ADR 0063), else the literals' default.
+            let variableSymbol = c.front.ast.idents[variable as usize].symbol;
+            let indexes = isFlexible(c, startSyntax) && isFlexible(c, endSyntax) && indexesWith(
+                c,
+                body,
+                variableSymbol,
+            );
+            let hint = if (indexes) c.types.usize else none();
+            let s = synth(c, startSyntax, hint)?;
             start = autoDeref(c, s)?;
             let startType = c.typeOf(start);
             let endHint = if (c.types.is(startType, TypeKind.Integer)) startType else none();

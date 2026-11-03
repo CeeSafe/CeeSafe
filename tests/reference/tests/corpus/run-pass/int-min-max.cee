@@ -1,0 +1,33 @@
+// `a.min(b)` and `a.max(b)` on every integer type (type-system.md §6): the smaller or larger operand, which never
+// overflows, the same in the interpreter and in C.
+fn main() {
+    let a: i32 = -3;
+    let b: u32 = 7;
+    Console.writeLine(a.max(2));
+    Console.writeLine(a.min(2));
+    Console.writeLine(b.min(5));
+    Console.writeLine(b.max(5));
+    let least: i64 = -9223372036854775807 - 1;
+    Console.writeLine(least.min(0));
+    let most: u64 = 18446744073709551615;
+    Console.writeLine(most.max(1));
+    let x: u8 = 200;
+    Console.writeLine(x.min(201));
+    let y: i8 = -128;
+    Console.writeLine(y.max(-128));
+    var acc: usize = 0;
+    for (i in 0usize..5) {
+        acc = acc.max(i * 3);
+    }
+    Console.writeLine(acc);
+}
+
+// expect-stdout: 2
+// expect-stdout: -3
+// expect-stdout: 5
+// expect-stdout: 7
+// expect-stdout: -9223372036854775808
+// expect-stdout: 18446744073709551615
+// expect-stdout: 200
+// expect-stdout: -128
+// expect-stdout: 12

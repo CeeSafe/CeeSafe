@@ -1,0 +1,41 @@
+// A struct with region parameters behind `borrow dyn I` (ADR 0064 §3.2, OD-10a): passed, stored in a field whose
+// region the view outlives, and given to a generic through `dyn I` (§3.1).
+interface Measure {
+    fn width(borrow this) -> usize;
+}
+
+struct View<region r> {
+    bytes: Slice<r, u8>;
+}
+
+impl<region r> Measure for View<r> {
+    fn width(borrow this) -> usize => this.bytes.length;
+}
+
+struct Holder<region a> {
+    m: borrow(a) dyn Measure;
+}
+
+fn put<region a>(h: borrow mut Holder<a>, v: borrow(a) View) {
+    h.m = v;
+}
+
+fn show(m: borrow dyn Measure) -> usize => m.width();
+
+fn generic<M: Measure>(m: borrow M) -> usize => m.width() * 10;
+
+fn main() {
+    let first = [1u8];
+    let second = [1u8, 2, 3, 4];
+    let a = View { bytes: first[..] };
+    let b = View { bytes: second[..] };
+    Console.writeLine(show(a));
+    var h = Holder { m: borrow a };
+    put(mut h, b);
+    Console.writeLine(h.m.width());
+    Console.writeLine(generic(h.m));
+}
+
+// expect-stdout: 1
+// expect-stdout: 4
+// expect-stdout: 40

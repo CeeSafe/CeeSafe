@@ -1,0 +1,57 @@
+// `dyn I` implements `I` for bounds (ADR 0064 §3.1): one generic serves concrete callers and `dyn` callers, a generic
+// struct holding `borrow T` can be instantiated with `dyn I`, and the calls go through the table.
+interface Metrics {
+    fn width(borrow this, bytes: usize) -> u32;
+}
+
+struct Fixed {
+    w: u32;
+}
+
+impl Metrics for Fixed {
+    fn width(borrow this, bytes: usize) -> u32 => this.w * truncate<u32>(bytes);
+}
+
+struct Doubled {
+    unused: u8;
+}
+
+impl Metrics for Doubled {
+    fn width(borrow this, bytes: usize) -> u32 => 2 * truncate<u32>(bytes);
+}
+
+fn layout<M: Metrics>(m: borrow M, text: StringView) -> u32 => m.width(text.length) + 1;
+
+fn first<M: Metrics>(m: borrow M) -> borrow M => m;
+
+struct Engine<region r, M: Metrics> {
+    metrics: borrow(r) M;
+
+    public fn measure(borrow this, s: StringView) -> u32 => layout(this.metrics, s);
+}
+
+fn viaDyn(m: borrow dyn Metrics) -> u32 => layout(m, "abc");
+
+fn takesEngine(e: borrow Engine<dyn Metrics>) -> u32 => e.measure("xyz");
+
+fn main() {
+    let f = Fixed { w: 10 };
+    let d = Doubled { unused: 0 };
+    Console.writeLine(layout(f, "hello"));
+    Console.writeLine(viaDyn(f));
+    Console.writeLine(viaDyn(d));
+    let pick: borrow dyn Metrics = borrow d;
+    Console.writeLine(layout(pick, "xy"));
+    Console.writeLine(first(pick).width(4));
+    let e = Engine { metrics: pick };
+    Console.writeLine(e.measure("abcd"));
+    Console.writeLine(takesEngine(e));
+}
+
+// expect-stdout: 51
+// expect-stdout: 31
+// expect-stdout: 7
+// expect-stdout: 5
+// expect-stdout: 8
+// expect-stdout: 9
+// expect-stdout: 7

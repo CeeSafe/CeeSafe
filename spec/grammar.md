@@ -105,6 +105,8 @@ TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-syste
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'   (* M6b; §21 *)
 MethodSig  = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'   (* attributes: M13 G2, `@effects`; §37.3 *)
 ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* M6b; §21; attributes C7a *)
+           | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
+MemberCall = Expr '.' Identifier ('<' Type (',' Type)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
 TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
            | Identifier (':' Type ('+' Type)*)?                (* bounds: M6b *)
 (* `region` is contextual: only `region` followed by a name declares a region. In a type, a region

@@ -1,0 +1,59 @@
+// Arrays and slices of views, and constant tables of them (ADR 0064 §2): elements share the element type's region,
+// a slice of views is passed and searched like any slice, and a constant's views are static data.
+const LEVELS: [StringView; 3] = ["Low", "Medium", "High"];
+const GREETING: StringView = "hello";
+
+fn count(items: Slice<StringView>) -> usize => items.length;
+
+fn total(items: Slice<StringView>) -> usize {
+    var n: usize = 0;
+    for (s in items) {
+        n += s.length;
+    }
+    return n;
+}
+
+fn longest<region r>(items: Slice<StringView<r>>) -> StringView<r> {
+    var best: usize = 0;
+    for (k in 0..items.length) {
+        if (items[k].length > items[best].length) {
+            best = k;
+        }
+    }
+    return items[best];
+}
+
+struct Token<region r> {
+    text: StringView<r>;
+    line: u32;
+}
+
+fn main() {
+    let items = ["Low", "Medium", "High"];
+    Console.writeLine(count(items[..]));
+    Console.writeLine(total(items[..]));
+    Console.writeLine(longest(items[..]));
+    var owned = String.create();
+    owned.append("dynamic text")!;
+    var mixed = ["a", "bb"];
+    mixed[1] = owned.view();
+    Console.writeLine(longest(mixed[..]));
+    let copy = mixed;
+    Console.writeLine(copy[1]);
+    let levels = LEVELS;
+    Console.writeLine(levels[2]);
+    Console.writeLine(total(levels[..]));
+    Console.writeLine(GREETING);
+    let tokens = [Token { text: owned.view(), line: 1 }, Token { text: "x", line: 2 }];
+    Console.writeLine(tokens[0].text.length + tokens[1].line as usize);
+}
+
+// expect-stdout: 3
+// expect-stdout: 13
+// expect-stdout: Medium
+// expect-stdout: dynamic text
+// expect-stdout: dynamic text
+// expect-stdout: High
+// expect-stdout: 13
+// expect-stdout: hello
+// expect-stdout: 14

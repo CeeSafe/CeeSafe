@@ -1,0 +1,48 @@
+// A range whose bounds are both flexible literals is `usize` when the body indexes with its variable: as the index,
+// an arithmetic operand of it, or a slice bound, in nested blocks and closures too (type-system.md §16.4, ADR 0063).
+// Otherwise it keeps the literals' default, `i32`.
+fn main() {
+    var a = [0u8; 8];
+    for (i in 0..4) {
+        a[i] = 1; // the index itself
+    }
+    for (i in 0..2) {
+        a[i * 2 + 4] = 2; // arithmetic in the index
+    }
+    var total: usize = 0;
+    for (i in 0..8) {
+        if (a[i] > 0) {
+            total += i; // `i` is a usize, so this needs no conversion
+        }
+    }
+    Console.writeLine(total);
+    for (n in 1..4) {
+        let s = a[0..n]; // a slice bound
+        Console.writeLine(s.length);
+    }
+    var hits: u32 = 0;
+    for (i in 0..3) {
+        let f = () => a[i]; // inside a closure
+        hits += f() as u32;
+    }
+    Console.writeLine(hits);
+    // No index use: the literals' default, i32.
+    var negative: i32 = 0;
+    for (k in 0..3) {
+        negative -= k;
+    }
+    Console.writeLine(negative);
+    // Only inside a call or cast in the index: still i32, converted explicitly.
+    for (k in 0..2) {
+        a[truncate<usize>(k)] = 9;
+    }
+    Console.writeLine(a[1]);
+}
+
+// expect-stdout: 16
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: -3
+// expect-stdout: 9

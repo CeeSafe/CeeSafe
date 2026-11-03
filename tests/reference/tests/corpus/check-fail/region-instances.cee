@@ -12,7 +12,7 @@ fn main() {
     let alsoOk = pair(5);
     let views = Pair { first: s.view(), second: "z" };
     let b = boxed(s.view()); // error[N0274]
-    let a = pair(s.view()); // error[N0274]
+    let a = pair(s.view()); // `[T; 2]` of views: allowed since ADR 0064 §2 (was N0274)
     let c: Cell<StringView> = Cell { b: Box.create(1)! }; // error[N0274]
 }
 

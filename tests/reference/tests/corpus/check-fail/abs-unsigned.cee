@@ -1,0 +1,8 @@
+// `abs` and `unsignedAbs` are for signed integers only (ADR 0063 §2.5), and take no arguments.
+fn main() {
+    let u: u32 = 3;
+    let a = u.abs(); // error[N0234]
+    let b = u.unsignedAbs(); // error[N0234]
+    let s: i32 = -3;
+    let c = s.abs(1); // error[N0209]
+}

@@ -497,6 +497,22 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
                 fmtWalkFunction(l, ast, method, true)?;
             }
         }
+        ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters) => {
+            let keyword = l.first(it.start); // `impl S { … }` (ADR 0064 §1)
+            fmtWalkTypeParameters(l, ast, keyword, regionParameters, typeParameters)?;
+            fmtWalkType(l, ast, forType)?;
+            let forLast = l.last(ast.typeSpans[forType as usize].end);
+            let open = l.find(forLast, TokenKind.OpenBrace);
+            let body = l.addContainer(open, true, false, priorityList())?;
+            for (k in 0..functions.count) {
+                let function = ast.at(functions, k);
+                let first = functionFirst(l, ast, function);
+                let last = l.last(ast.functions[function as usize].end);
+                l.addElement(body, first, last)?;
+                fmtWalkAttributes(l, ast, ast.functions[function as usize].attributes)?;
+                fmtWalkFunction(l, ast, function, false)?;
+            }
+        }
         ItemKind.Impl(interfaceType, forType, functions, typeParameters, regionParameters) => {
             let keyword = l.first(it.start); // `impl`, which the parameters follow (ADR 0054)
             fmtWalkTypeParameters(l, ast, keyword, regionParameters, typeParameters)?;
@@ -949,6 +965,11 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
         }
         ExprNode.Member(target, member) => {
             fmtWalkExpr(l, ast, target)?;
+            let memberTypeArguments = ast.typeArgumentsOfMember(member);
+            if (memberTypeArguments.count > 0) {
+                let memberToken = identLast(l, ast, member);
+                fmtWalkTypeArguments(l, ast, memberToken, memberTypeArguments)?; // `x.m<T>(…)`
+            }
             let chained = match (ast.exprs[target as usize]) {
                 ExprNode.Call(_, _) => true,
                 ExprNode.Index(_, _) => true,

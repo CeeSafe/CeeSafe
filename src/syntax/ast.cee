@@ -304,6 +304,9 @@ enum ItemKind {
     Interface(Range, Range),
     /// interface type, for type, functions, type parameters, region parameters (ADR 0054: `impl<region r, T: B> …`).
     Impl(u32, u32, Range, Range, Range),
+    /// `impl S { … }` (ADR 0064 §1): the struct type, functions, type parameters, region parameters. Its functions are
+    /// the struct's methods, as if written in its body (MergeInherentImpls).
+    InherentImpl(u32, Range, Range, Range),
     Const(u32, u32),        // type, value
     Static(bool, u32, u32), // mutable, type, value
 }
@@ -342,6 +345,13 @@ struct Unit {
     identEnd: u32;
 }
 
+/// Explicit type arguments of a method or static function call, `x.m<T>(…)` (ADR 0064 §1): the member's identifier
+/// (Ast.idents) and the arguments (Ast.lists of types). Kept beside ExprNode.Member, which most passes match on.
+struct MemberTypeArguments {
+    member: u32;
+    arguments: Range;
+}
+
 struct Ast {
     lists: Vector<u32>;
     text: Vector<u8>;
@@ -370,6 +380,17 @@ struct Ast {
     structs: Vector<Struct>;
     items: Vector<Item>;
     units: Vector<Unit>;
+    memberTypeArguments: Vector<MemberTypeArguments>;
+
+    /// The type arguments written after member `member` (an identifier), or an empty range.
+    fn typeArgumentsOfMember(borrow this, member: u32) -> Range {
+        for (m in this.memberTypeArguments.view()) {
+            if (m.member == member) {
+                return m.arguments;
+            }
+        }
+        return Range { start: 0, count: 0 };
+    }
 
     fn create() -> Ast => Ast {
         lists: Vector<u32>.create(),
@@ -399,6 +420,7 @@ struct Ast {
         structs: Vector<Struct>.create(),
         items: Vector<Item>.create(),
         units: Vector<Unit>.create(),
+        memberTypeArguments: Vector<MemberTypeArguments>.create(),
     };
 
     /// Appends `ids` to `lists` as one run.

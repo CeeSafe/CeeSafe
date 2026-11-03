@@ -13,6 +13,7 @@ const guide = [
       { text: "Installation", link: "/guide/installation" },
       { text: "Getting started", link: "/guide/getting-started" },
       { text: "For AI agents", link: "/guide/for-agents" },
+      { text: "Built-in types and functions", link: "/guide/builtins" },
     ],
   },
   {
@@ -88,7 +89,7 @@ const reference = [
       { text: "Formatting", link: "/reference/formatting" },
     ],
   },
-  { text: "Library", items: [{ text: "lib/core", link: "/reference/api/core" }] },
+  { text: "Library", items: [{ text: "lib/core", link: "/reference/api/core" }, { text: "lib/std", link: "/reference/api/std" }] },
   {
     text: "The compiler",
     collapsed: true,

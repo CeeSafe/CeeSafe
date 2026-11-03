@@ -365,6 +365,7 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
                 HirExpr.IntConst(i) => { return c.expr(HirExpr.IntConst(i), t, span.start, span.end); }
                 HirExpr.BoolConst(b) => { return c.expr(HirExpr.BoolConst(b), t, span.start, span.end); }
                 HirExpr.FloatConst(f) => { return c.expr(HirExpr.FloatConst(f), t, span.start, span.end); }
+                HirExpr.StringConst(text) => { return c.expr(HirExpr.StringConst(text), t, span.start, span.end); }
                 _ => { return c.errorResult(span.start, span.end); }
             }
         }
@@ -686,7 +687,13 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
         return coerceToClosure(c, e, expected, span);
     }
     if (c.types.isDynReference(expected) || c.types.isDynBox(expected)) {
-        let converted = coerceToDyn(c, e, expected, span)?;
+        // A `borrow mut T` variable or field used as a `borrow mut dyn I` is reborrowed, as every use of a `borrow mut`
+        // is (§13.3), and the reborrow is what coerces: the variable stays usable after the call.
+        var operand = e;
+        if (c.types.isDynReference(expected) && c.types.is(t, TypeKind.Reference) && c.types.info(t).mutableReference) {
+            operand = coerce(c, e, t, span)?;
+        }
+        let converted = coerceToDyn(c, operand, expected, span)?;
         if (converted != none()) {
             return Ok(converted);
         }
@@ -1259,6 +1266,7 @@ fn checkBuiltinMemberCall(
         appendText(mut message, " has no member '")?;
         appendBytes(mut message, m)?;
         appendText(mut message, "'")?;
+        appendBuiltinDidYouMean(c, mut message, c.name(targetSymbol), memberIdent.symbol)?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);

@@ -494,6 +494,7 @@ paths given.
 | `ceesafe_spec_search` | `query`, `limit` (default 10) | `results`: the sections whose heading or text contain every word of the query, best first: `document`, `heading`, `snippet`, `uri` |
 | `ceesafe_spec_section` | `document` (`type-system`, `grammar`, …), `section` (`31.2`, or heading text) | `text` of that section, with its subsections |
 | `ceesafe_symbol` | `path`, `line`, `column` (1-based) | the type or signature under the position, and its declaration's location, as hover and definition give them (§2.2) |
+| `ceesafe_api` | `name`: a type (`TextWriter`), a member (`TextWriter.decimal`) or a bare member name (`decimal`) | `results`: the entries of `spec/api/core.md`, `spec/api/std.md` and `guide/builtins.md` that document the name (`document`, `heading`, `text`): a type's whole section, a member's entry, or the built-in table rows naming it. With no entry, `suggestions`: up to eight names, the closest by edit distance, the type's real members for `Type.member`, and the entries whose text mentions the member's name |
 
 `ceesafe_run` runs the program in the interpreter (`run --interp`) **sandboxed**:
 - files, sockets and processes are refused (a fault that names the refusal);

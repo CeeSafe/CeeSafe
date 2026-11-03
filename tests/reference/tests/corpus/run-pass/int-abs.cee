@@ -1,0 +1,28 @@
+// `x.abs()` and `x.unsignedAbs()` on signed integers (ADR 0063 §2.5): the magnitude, as `T` or as the unsigned type of
+// the same width; `unsignedAbs` holds the minimum's magnitude, and a discarded `abs` is still evaluated.
+fn main() {
+    let a: i32 = -7;
+    Console.writeLine(a.abs());
+    Console.writeLine((5i32).abs());
+    let q: i16 = -32767;
+    Console.writeLine(q.abs());
+    let least: i64 = -9223372036854775807 - 1;
+    Console.writeLine(least.unsignedAbs());
+    let small: i8 = -128;
+    Console.writeLine(small.unsignedAbs());
+    let z: isize = -3;
+    Console.writeLine(z.unsignedAbs());
+    let w: u8 = small.unsignedAbs() - 1;
+    Console.writeLine(w);
+    a.abs();
+    Console.writeLine((0i64).abs());
+}
+
+// expect-stdout: 7
+// expect-stdout: 5
+// expect-stdout: 32767
+// expect-stdout: 9223372036854775808
+// expect-stdout: 128
+// expect-stdout: 3
+// expect-stdout: 127
+// expect-stdout: 0

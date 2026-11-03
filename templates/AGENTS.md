@@ -46,7 +46,7 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 ## Common mistakes
 
 - There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases, tuples or `==` on arrays.
-- Indexes are `usize`; `0..4` is a range of `i32`. Loop with `for (i in 0..values.length)`.
+- Indexes are `usize`. `0..4` is a `usize` range when the body indexes with its variable, else `i32`; `0..values.length` is `usize`.
 - `if` and `match` expressions take expressions, not blocks: `let s = if (x < 0) -1 else 1;`.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.
 - `as` converts only without loss; `truncate<u8>(x)` wraps.
@@ -54,5 +54,9 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - Pass a function or closure as a parameter and call the parameter; a field holding one cannot be called.
 - A `StringView` inside an enum or struct needs a region parameter; for fixed messages, use an enum of reasons.
 - A method cannot have the name of a field.
+- Look a name up before deciding it does not exist: MCP `ceesafe_api` (`TextWriter.decimal`, `Process.argument`), or
+  the guide's built-in types page and the lib/core and lib/std API pages. A "did you mean" in an error names the real one.
+- A lookup that may find nothing is an optional (`Process.argument(i)`, `StringView.fromUtf8(b)`): `Some`/`null`.
+- Some keywords read like names (`own`, `type`, `move`, `drop`, `where`); async code uses `AsyncConsole`, not `Console`.
 
 <!--CEESAFE END-->

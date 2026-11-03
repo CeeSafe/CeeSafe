@@ -366,7 +366,7 @@ fn dispatchMcp(
         json.endObject()!;
         json.name("instructions")!;
         json.string(
-            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules. ceesafe_run runs a program in a sandboxed interpreter. The prompt write-ceesafe has the agent guide.",
+            "CeeSafe is a memory-safe systems language compiled to C. Use ceesafe_check after every edit; apply ceesafe_fix for the fixes the compiler is sure of; read ceesafe_explain for a diagnostic code; ceesafe_spec_search and ceesafe_spec_section for the rules; ceesafe_api to look up a library or built-in name before concluding it does not exist. ceesafe_run runs a program in a sandboxed interpreter. The prompt write-ceesafe has the agent guide.",
         )!;
         json.endObject()!;
         return mcpResult(json);
@@ -608,7 +608,7 @@ fn diagnosticsSchema(json: borrow mut JsonWriter) {
     json.endObject()!;
 }
 
-fn mcpToolCount() -> usize => 9;
+fn mcpToolCount() -> usize => 10;
 
 fn toolName(k: usize) -> StringView => match (k) {
     0 => "ceesafe_check",
@@ -619,7 +619,8 @@ fn toolName(k: usize) -> StringView => match (k) {
     5 => "ceesafe_explain",
     6 => "ceesafe_spec_search",
     7 => "ceesafe_spec_section",
-    _ => "ceesafe_symbol",
+    8 => "ceesafe_symbol",
+    _ => "ceesafe_api",
 };
 
 fn toolTitle(k: usize) -> StringView => match (k) {
@@ -631,7 +632,8 @@ fn toolTitle(k: usize) -> StringView => match (k) {
     5 => "Explain a diagnostic code",
     6 => "Search the CeeSafe specification",
     7 => "Read a specification section",
-    _ => "What is at a position",
+    8 => "What is at a position",
+    _ => "Look up a library or built-in name",
 };
 
 fn toolDescription(k: usize) -> StringView => match (k) {
@@ -647,7 +649,9 @@ fn toolDescription(k: usize) -> StringView => match (k) {
     5 => "What a CeeSafe diagnostic code (N0249) means, an example, and what the diagnostics reference says about it.",
     6 => "Find sections of CeeSafe's specification and guide whose heading or text contain every word of a query.",
     7 => "Read one section of a CeeSafe document, with its subsections: for example type-system §31.2, or a heading.",
-    _ => "The type or signature of the name or expression at a 1-based line and column, and where it is declared.",
+    8 => "The type or signature of the name or expression at a 1-based line and column, and where it is declared.",
+    _ =>
+        "Look up a type, function or method of lib/core, lib/std or the built-in types by name (TextWriter, TextWriter.decimal, decimal, Process.argument, Vector.push): its signature and documentation, or the closest names when there is none. Use it before concluding a function does not exist.",
 };
 
 fn writeInputSchema(json: borrow mut JsonWriter, k: usize) {
@@ -701,6 +705,14 @@ fn writeInputSchema(json: borrow mut JsonWriter, k: usize) {
         json.name("section")!;
         typeSchema(json, "string", "a section number such as 31.2, or heading text; omit for the whole document");
         schemaEnd(json, "document");
+    } else if (k == 9) {
+        json.name("name")!;
+        typeSchema(
+            json,
+            "string",
+            "a type (TextWriter), a member (TextWriter.decimal) or a bare member name (decimal)",
+        );
+        schemaEnd(json, "name");
     } else {
         sourceProperties(json);
         json.name("path")!;
@@ -785,6 +797,16 @@ fn writeOutputSchema(json: borrow mut JsonWriter, k: usize) {
         json.name("text")!;
         typeSchema(json, "string", "");
         schemaEnd(json, "document heading text");
+    } else if (k == 9) {
+        json.name("results")!;
+        arrayStart(json);
+        objectSchema(json);
+        arrayEnd(json, "document, heading, text (Markdown)");
+        json.name("suggestions")!;
+        arrayStart(json);
+        typeSchema(json, "string", "a name");
+        arrayEnd(json, "the closest names, when nothing matched");
+        schemaEnd(json, "results suggestions");
     } else {
         json.name("hover")!;
         typeSchema(json, "string", "type or signature, as Markdown");
@@ -898,7 +920,8 @@ fn runMcpTool(
         5 => explainTool(doc, arguments),
         6 => searchTool(doc, arguments),
         7 => sectionTool(doc, arguments),
-        _ => symbolTool(server, doc, arguments),
+        8 => symbolTool(server, doc, arguments),
+        _ => apiTool(doc, arguments),
     };
 }
 
@@ -1897,4 +1920,35 @@ fn mcpCommand() -> i32 {
         }
     }
     return 0;
+}
+
+/// ceesafe_api (tooling.md §6.3): ApiLookup's entries for `name`, or the closest names.
+fn apiTool(doc: borrow JsonDoc, arguments: u32) -> Result<ToolResult, McpFailure> {
+    let name = requiredString(doc, arguments, "name")?;
+    var hits = Vector<ApiHit>.create();
+    var suggestions = Vector<Vector<u8>>.create();
+    apiLookup(name.view(), mut hits, mut suggestions)!;
+    var json = JsonWriter.create();
+    json.startObject()!;
+    json.name("results")!;
+    json.startArray()!;
+    for (h in hits.view()) {
+        json.startObject()!;
+        json.name("document")!;
+        json.stringBytes(h.document.view())!;
+        json.name("heading")!;
+        json.stringBytes(h.heading.view())!;
+        json.name("text")!;
+        json.stringBytes(h.text.view())!;
+        json.endObject()!;
+    }
+    json.endArray()!;
+    json.name("suggestions")!;
+    json.startArray()!;
+    for (s in suggestions.view()) {
+        json.stringBytes(s.view())!;
+    }
+    json.endArray()!;
+    json.endObject()!;
+    return toolResult(json, false);
 }

@@ -211,6 +211,19 @@ struct AstPrinter {
                 this.indent -= 1;
                 this.line(")")?;
             }
+            ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters) => {
+                this.open()?;
+                this.text("(impl ")?;
+                this.typeText(ast, symbols, forType)?;
+                this.typeParams(ast, symbols, regionParameters, typeParameters)?;
+                this.close()?;
+                this.indent += 1;
+                for (k in 0..functions.count) {
+                    this.printFunction(ast, symbols, ast.at(functions, k))?;
+                }
+                this.indent -= 1;
+                this.line(")")?;
+            }
             ItemKind.Impl(interfaceType, forType, functions, typeParameters, regionParameters) => {
                 this.open()?;
                 this.text("(impl ")?;

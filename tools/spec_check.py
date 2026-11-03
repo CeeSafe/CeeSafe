@@ -4,8 +4,8 @@
 - explain: every diagnostic code in the catalog (src/diagnostics/catalog.cee) has an entry `ceesafec explain` finds
   , and the embedded documents are the tree's (src/library/documents.cee is up to date);
 - links: every relative link in spec/, guide/ and templates/ names a file that exists;
-- api: spec/api/core.md is what `ceesafec doc lib/core --title "lib/core"` writes for lib/core, the source
-  tools/gen_library.py embeds (Decision 0008);
+- api: spec/api/core.md and spec/api/std.md are what `ceesafec doc lib/core --title "lib/core"` and
+  `ceesafec doc lib/std --title "lib/std"` write for the sources tools/gen_library.py embeds (Decision 0008);
 - names: no tracked file names the retired predecessor language or its compiler, in any case or as a C prefix, but
   COPYING.RUNTIME, whose notice says where CeeSafe came from (Decision 0010). The word is spelled in two pieces here
   so that this file passes its own check.
@@ -73,16 +73,20 @@ def check_links(problems):
 
 
 def check_api(cee, problems):
-    with tempfile.TemporaryDirectory() as work:
-        core = os.path.join(work, "lib", "core")
-        os.makedirs(core)
-        for source in sorted(glob.glob(os.path.join(ROOT, "lib", "core", "*.cee"))):
-            with open(source, "rb") as f, open(os.path.join(core, os.path.basename(source)), "wb") as g:
-                g.write(f.read())
-        page = subprocess.run([cee, "doc", "lib/core", "--title", "lib/core"], cwd=work, capture_output=True)
-    with open(os.path.join(ROOT, "spec", "api", "core.md"), "rb") as f:
-        if page.returncode != 0 or page.stdout != f.read():
-            problems.append("api: spec/api/core.md is not what `ceesafec doc lib/core` writes")
+    """spec/api/core.md and spec/api/std.md against `ceesafec doc` of the libraries' sources."""
+    for library in ("core", "std"):
+        with tempfile.TemporaryDirectory() as work:
+            for name in ("core", "std"):  # lib/std's items name lib/core's, so both are present
+                directory = os.path.join(work, "lib", name)
+                os.makedirs(directory)
+                for source in sorted(glob.glob(os.path.join(ROOT, "lib", name, "*.cee"))):
+                    with open(source, "rb") as f, open(os.path.join(directory, os.path.basename(source)), "wb") as g:
+                        g.write(f.read())
+            page = subprocess.run([cee, "doc", f"lib/{library}", "--title", f"lib/{library}"], cwd=work,
+                                  capture_output=True)
+        with open(os.path.join(ROOT, "spec", "api", f"{library}.md"), "rb") as f:
+            if page.returncode != 0 or page.stdout != f.read():
+                problems.append(f"api: spec/api/{library}.md is not what `ceesafec doc lib/{library}` writes")
 
 
 def check_names(problems):

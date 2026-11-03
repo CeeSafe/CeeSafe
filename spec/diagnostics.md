@@ -61,6 +61,12 @@ diagnostics, so any cascade fails the test.
 
 ### Names, types and flow (N0200–N0299)
 
+**Suggestions** (ADR 0065). A member that does not exist (N0200, N0230, N0234 on a number) names
+up to three it might be: the type's members within a few edits of it, then those whose doc comment mentions it
+(`TextWriter.unsigned` gives `signed`, `decimal` or `hex`); for a built-in type (`Process`, `Console`, …) the members
+the built-in types page lists for it, the longest shared start first; and for a small type with no close member, all
+its members. A reserved word where a name goes (N0100) says so.
+
 Semantic checks run only when every file parsed without errors.
 
 | Code | Meaning | Example |

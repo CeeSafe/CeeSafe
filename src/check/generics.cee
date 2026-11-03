@@ -19,8 +19,10 @@ struct EnvPair {
 struct GenericFunctionEntry {
     syntax: u32; // Ast.functions
     file: u32;
-    generic: u32;      // the generic version (a HIR function)
-    parameters: Range; // its type parameters, in TypeTable.lists
+    generic: u32;            // the generic version (a HIR function)
+    parameters: Range;       // its type parameters, in TypeTable.lists
+    owner: u32;              // a generic method's struct type (ADR 0064 §1), else none
+    ownerEnvironment: Range; // that struct's type environment (Checker.envPairs), else empty
 }
 
 /// A diagnostics mark for CheckInstance and Quietly: diagnostics after it are dropped when the trial ends.
@@ -569,6 +571,9 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
         return Ok(none());
     }
     var pairs = Vector<EnvPair>.create();
+    for (k in 0..entry.ownerEnvironment.count) {
+        pairs.push(c.envPairs[(entry.ownerEnvironment.start + k) as usize])?; // a generic method's struct's (ADR 0064)
+    }
     zipEnvironment(c, decl.typeParameters, arguments, mut pairs)?;
     let env = storeEnvironment(c, pairs.view())?;
     let savedFile = c.file;
@@ -580,7 +585,10 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(symbol))?;
     let mark = diagnosticsMark(c);
-    let instance = declareFunctionIn(c, entry.syntax, none(), env)?;
+    let savedGenericMethod = c.genericMethod;
+    c.genericMethod = entry.owner != none();
+    let instance = declareFunctionIn(c, entry.syntax, entry.owner, env)?;
+    c.genericMethod = savedGenericMethod;
     endInstance(c, mark, arguments, text.view(), savedFile, span, none())?;
     c.setFile(savedFile);
     let list = c.types.addList(arguments)?;
@@ -836,6 +844,48 @@ fn checkGenericCall(
     return checkUserCall(c, instance, arguments, span);
 }
 
+/// A generic method's instance for a call (ADR 0064 §1): the type arguments written, or inferred from `arguments`
+/// against its parameters after the first `skip` (the receiver); none (reported) when they cannot be had.
+fn instantiateMethod(
+    c: borrow mut Checker,
+    g: u32,
+    nameSymbol: u32,
+    typeArguments: Range,
+    arguments: Range,
+    skip: usize,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let entry = c.genericFunctions[g as usize];
+    var parameterTypes = Vector<u32>.create();
+    listTypes(c, entry.parameters, mut parameterTypes)?;
+    var pairs = Vector<InferencePair>.create();
+    let declared = c.hir.functions[entry.generic as usize].parameters.length;
+    for (k in 0..arguments.count) {
+        let index = (k as usize) + skip;
+        if (index < declared) {
+            let local = c.hir.functions[entry.generic as usize].parameters[index];
+            pairs.push(
+                InferencePair { declared: c.hir.locals[local as usize].typ, value: c.front.ast.at(arguments, k) },
+            )?;
+        }
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(nameSymbol))?;
+    var found = Vector<u32>.create();
+    let ok = typeArgumentsFor(
+        c,
+        text.view(),
+        parameterTypes.view(),
+        typeArguments,
+        emptyRange(),
+        false,
+        pairs.view(),
+        span,
+        mut found,
+    )?;
+    return Ok(if (ok) instantiateFunction(c, g, found.view(), span)? else none());
+}
+
 /// `S<A>` or `E<A>` for a user generic struct or enum (ResolveGenericItemType's instantiation, after the regions).
 fn instantiateItemType(
     c: borrow mut Checker,
@@ -916,4 +966,131 @@ fn staticOwner(
         return Ok(none());
     }
     return Ok(structEntryFor(c, index, typ));
+}
+
+// ---- `dyn I` as a type argument (ADR 0064 §3.1) ----
+
+/// Whether a value of type `t` holds a `dyn` value by value, not behind a reference or a box: `dyn I` is unsized.
+fn holdsBareDyn(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (t == none() || depth > 32) {
+        return false;
+    }
+    if (c.types.isDyn(t)) {
+        return true;
+    }
+    if (c.types.is(t, TypeKind.Reference) || c.types.is(t, TypeKind.Box) || c.types.is(t, TypeKind.RawPointer)) {
+        return false; // behind a reference or a box: the dyn value's size is its table's
+    }
+    let info = c.types.info(t);
+    if (c.types.is(t, TypeKind.Array)) {
+        return holdsBareDyn(c, info.element, depth + 1);
+    }
+    if (c.types.is(t, TypeKind.Vector) || c.types.is(t, TypeKind.StableVector)) {
+        return holdsBareDyn(c, c.types.info(info.pointee).element, depth + 1);
+    }
+    if (info.structDef != none()) {
+        for (field in c.types.structs[info.structDef as usize].fields.view()) {
+            if (holdsBareDyn(c, c.types.fields[field as usize].typ, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (info.enumDef != none()) {
+        let e = borrow c.types.enums[info.enumDef as usize];
+        for (k in 0..e.typeArguments.count) {
+            if (holdsBareDyn(c, c.types.listAt(e.typeArguments, k), depth + 1)) {
+                return true;
+            }
+        }
+        if (e.optionType != none() && holdsBareDyn(c, e.optionType, depth + 1)) {
+            return true;
+        }
+        if (e.resultOk != none() && (holdsBareDyn(
+            c,
+            e.resultOk,
+            depth + 1,
+        ) || holdsBareDyn(c, e.resultErr, depth + 1))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// An instance with a `dyn` type argument (ADR 0064 §3.1): its parameters, locals and result must hold the `dyn`
+/// value only behind references (N0274). Reported inside the instance's check, so endInstance gives it at the use.
+fn checkDynInstance(c: borrow mut Checker, function: u32, arguments: Slice<u32>) -> Result<void, AllocError> {
+    var hasDyn = false;
+    for (a in arguments) {
+        if (c.types.isDyn(a)) {
+            hasDyn = true;
+        }
+    }
+    if (!hasDyn) {
+        return Ok();
+    }
+    let f = borrow c.hir.functions[function as usize];
+    var offending = none();
+    var offendingType = none();
+    if (holdsBareDyn(c, f.returnType, 0)) {
+        offendingType = f.returnType;
+    }
+    for (local in f.locals.view()) {
+        let l = c.hir.locals[local as usize];
+        if (offendingType == none() && holdsBareDyn(c, l.typ, 0)) {
+            offending = local;
+            offendingType = l.typ;
+        }
+    }
+    if (offendingType == none()) {
+        return Ok();
+    }
+    let syntax = c.front.ast.functions[f.syntax as usize];
+    let start = if (offending == none()) syntax.start else c.hir.locals[offending as usize].start;
+    let end = if (offending == none()) syntax.start + 1 else c.hir.locals[offending as usize].end;
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "a 'dyn' type can be a type argument only where the generic uses it behind references; here a value of type ",
+    )?;
+    appendQuotedType(mut message, c, offendingType)?;
+    appendText(mut message, " holds one by value, and a 'dyn' value is unsized (ADR 0064 §3.1)")?;
+    return c.error(scopedTypeArgument(), start, end, message);
+}
+
+/// A user type instantiated with a `dyn` argument before its members were known (ADR 0064 §3.1).
+struct PendingDynInstance {
+    typ: u32;
+    argument: u32;
+    file: u32;
+    start: u32;
+    end: u32;
+}
+
+fn reportBareDynInstance(c: borrow mut Checker, instance: u32, argument: u32, span: Span) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendQuotedType(mut message, c, instance)?;
+    appendText(mut message, " holds a ")?;
+    appendQuotedType(mut message, c, argument)?;
+    appendText(
+        mut message,
+        " by value, which has no size the compiler knows: a 'dyn' type argument must be used behind a reference or a box (ADR 0064 §3.1, type-system.md §37.1)",
+    )?;
+    return c.error(dynNotBehindPointer(), span.start, span.end, message);
+}
+
+fn checkPendingDynInstances(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.pendingDynInstances.length) {
+        let p = c.pendingDynInstances[k];
+        if (holdsBareDyn(c, p.typ, 0)) {
+            {
+                let fileToSet = p.file;
+                c.setFile(fileToSet);
+            }
+            reportBareDynInstance(c, p.typ, p.argument, Span { start: p.start, end: p.end })?;
+        }
+    }
+    c.setFile(saved);
+    return Ok();
 }

@@ -186,7 +186,11 @@ fn resolveRegionItemType(
     var resolved = Vector<u32>.create();
     for (k in (arguments.count - typeArguments)..arguments.count) {
         let argumentSyntax = c.front.ast.at(arguments, k);
+        // A `dyn I` argument is allowed where the instance holds it only behind references (ADR 0064 §3.1), checked
+        // on the instance below.
+        c.dynAllowed = true;
         let t = c.resolveType(argumentSyntax, false)?;
+        c.dynAllowed = false;
         if (c.types.isBottom(t)) {
             return Ok(c.types.error);
         }
@@ -203,7 +207,31 @@ fn resolveRegionItemType(
         }
         resolved.push(t)?; // scoped arguments make a scoped instance (§25.3)
     }
-    return instantiateItemType(c, isStruct, index, resolved.view(), span);
+    let instance = instantiateItemType(c, isStruct, index, resolved.view(), span)?;
+    var dynArgument = none();
+    for (t in resolved.view()) {
+        if (c.types.isDyn(t)) {
+            dynArgument = t;
+        }
+    }
+    if (dynArgument != none()) {
+        if (!c.membersResolved) {
+            // The instance's fields are not known yet: checked after the members are (checkPendingDynInstances).
+            c.pendingDynInstances.push(
+                PendingDynInstance {
+                    typ: instance,
+                    argument: dynArgument,
+                    file: c.file,
+                    start: span.start,
+                    end: span.end,
+                },
+            )?;
+        } else if (holdsBareDyn(c, instance, 0)) {
+            reportBareDynInstance(c, instance, dynArgument, span)?;
+            return Ok(c.types.error);
+        }
+    }
+    return Ok(instance);
 }
 
 // ---- pools ----

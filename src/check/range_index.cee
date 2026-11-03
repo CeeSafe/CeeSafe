@@ -1,0 +1,135 @@
+// IndexesWith (type-system.md §16.4, ADR 0063): does a `for` body index with its loop variable? It does where the
+// variable is an index or a slice bound, or an operand of `+ - * / %` that is one (`a[i]`, `a[i * w + x]`,
+// `a[lo..i + 1]`); not inside a call, cast, comparison or condition there. A range whose bounds are both flexible
+// literals is then `usize`, the index type, instead of `i32`. The scan is syntactic, over the body's AST, before the
+// body is checked: locals cannot be shadowed (N0203), so the name means the variable everywhere in the body, nested
+// closures included.
+
+/// Whether statement `s` indexes with `symbol`.
+fn indexesWith(c: borrow Checker, s: u32, symbol: u32) -> bool => s != none() && indexesInStmt(c, s, symbol);
+
+fn indexesInStmt(c: borrow Checker, s: u32, symbol: u32) -> bool {
+    match (c.front.ast.stmts[s as usize]) {
+        StmtNode.Block(statements) => {
+            for (k in 0..statements.count) {
+                if (indexesInStmt(c, c.front.ast.at(statements, k), symbol)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        StmtNode.Local(_, _, _, initializer) => { return indexesIn(c, initializer, symbol, false); }
+        StmtNode.Defer(body) => { return indexesInStmt(c, body, symbol); }
+        StmtNode.Match(scrutinee, arms) => {
+            if (indexesIn(c, scrutinee, symbol, false)) {
+                return true;
+            }
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
+                if (indexesInStmt(c, arm.body, symbol)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        StmtNode.If(condition, then, otherwise) => {
+            return indexesIn(c, condition, symbol, false) || indexesInStmt(c, then, symbol) ||
+                (otherwise != none() && indexesInStmt(c, otherwise, symbol));
+        }
+        StmtNode.While(condition, body) => {
+            return indexesIn(c, condition, symbol, false) || indexesInStmt(c, body, symbol);
+        }
+        StmtNode.For(_, start, end, body) => {
+            return indexesIn(c, start, symbol, false) || indexesIn(c, end, symbol, false) ||
+                indexesInStmt(c, body, symbol);
+        }
+        StmtNode.Loop(body) => { return indexesInStmt(c, body, symbol); }
+        StmtNode.Return(value) => { return indexesIn(c, value, symbol, false); }
+        StmtNode.Assign(target, _, value) => {
+            return indexesIn(c, target, symbol, false) || indexesIn(c, value, symbol, false);
+        }
+        StmtNode.Expression(e) => { return indexesIn(c, e, symbol, false); }
+        StmtNode.Unsafe(block) => { return indexesInStmt(c, block, symbol); }
+        _ => { return false; }
+    }
+}
+
+fn indexesInList(c: borrow Checker, list: Range, symbol: u32, inIndex: bool) -> bool {
+    for (k in 0..list.count) {
+        if (indexesIn(c, c.front.ast.at(list, k), symbol, inIndex)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Expression `e` (or none): `inIndex` when its value is an index or a slice bound, or an arithmetic operand of one.
+fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
+    if (e == none()) {
+        return false;
+    }
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Name(name, _) => { return inIndex && c.front.ast.idents[name as usize].symbol == symbol; }
+        ExprNode.Paren(inner) => { return indexesIn(c, inner, symbol, inIndex); }
+        ExprNode.Unary(_, operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Binary(left, op, right) => {
+            let arithmetic = inIndex && isArithmetic(op);
+            return indexesIn(c, left, symbol, arithmetic) || indexesIn(c, right, symbol, arithmetic);
+        }
+        ExprNode.Cast(operand, _) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Call(callee, arguments) => {
+            return indexesIn(c, callee, symbol, false) || indexesInList(c, arguments, symbol, false);
+        }
+        ExprNode.Member(target, _) => { return indexesIn(c, target, symbol, false); }
+        ExprNode.Unsafe(inner) => { return indexesIn(c, inner, symbol, false); }
+        ExprNode.If(condition, then, otherwise) => {
+            return indexesIn(c, condition, symbol, false) || indexesIn(c, then, symbol, false) ||
+                indexesIn(c, otherwise, symbol, false);
+        }
+        ExprNode.Match(scrutinee, arms) => {
+            if (indexesIn(c, scrutinee, symbol, false)) {
+                return true;
+            }
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
+                if (indexesIn(c, arm.value, symbol, false)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        ExprNode.Closure(nested) => {
+            let literal = c.front.ast.closures[nested as usize];
+            return (literal.block != none() && indexesInStmt(c, literal.block, symbol)) ||
+                indexesIn(c, literal.body, symbol, false);
+        }
+        ExprNode.Block(block) => { return indexesInStmt(c, block, symbol); }
+        ExprNode.Borrow(_, operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Move(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.MutArg(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.StructLiteral(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let value = c.front.ast.fieldInits[c.front.ast.at(fields, k) as usize].value;
+                if (indexesIn(c, value, symbol, false)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        ExprNode.ArrayLiteral(elements) => { return indexesInList(c, elements, symbol, false); }
+        ExprNode.ArrayRepeat(value, count) => {
+            return indexesIn(c, value, symbol, false) || indexesIn(c, count, symbol, false);
+        }
+        ExprNode.Index(target, index) => {
+            return indexesIn(c, target, symbol, false) || indexesIn(c, index, symbol, true);
+        }
+        ExprNode.Slice(target, low, high) => {
+            return indexesIn(c, target, symbol, false) || indexesIn(c, low, symbol, true) ||
+                indexesIn(c, high, symbol, true);
+        }
+        ExprNode.Try(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Unwrap(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Await(operand) => { return indexesIn(c, operand, symbol, false); }
+        _ => { return false; }
+    }
+}

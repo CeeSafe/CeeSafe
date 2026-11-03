@@ -1,0 +1,9 @@
+// `x.abs()` at the minimum panics, as `-x` does (ADR 0063 §2.5), even when its value is discarded.
+fn main() {
+    let small: i8 = -127;
+    Console.writeLine(small.abs());
+    let least: i8 = small - 1;
+    least.abs(); // expect-panic: integer overflow
+    Console.writeLine("after");
+}
+// expect-stdout: 127

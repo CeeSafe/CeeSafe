@@ -83,6 +83,7 @@ fn fold(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
         HirExpr.IntConst(_) => { return Ok(e); }
         HirExpr.BoolConst(_) => { return Ok(e); }
         HirExpr.FloatConst(_) => { return Ok(e); }
+        HirExpr.StringConst(_) => { return Ok(e); } // static data (ADR 0064 §2)
         HirExpr.Error => { return Ok(e); }
         HirExpr.Unary(op, operand) => {
             let folded = fold(c, operand)?;

@@ -208,6 +208,7 @@ struct HirFunction {
     mutableFlows: Vector<u64>;  // (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i
     environment: Range;         // its type environment (the checker's envPairs)
     genericEntry: u32;          // for an instance of a generic function: the checker's GenericFunctionEntry, else none
+    methodTemplate: u32;        // for a generic method's generic version: its GenericFunctionEntry, else none (ADR 0064)
     instantiationDepth: u32;
     siteFile: u32; // where an instance was made, or none
     siteStart: u32;
@@ -409,6 +410,7 @@ struct HirProgram {
             mutableFlows: Vector<u64>.create(),
             environment: Range { start: 0, count: 0 },
             genericEntry: 0xFFFFFFFF,
+            methodTemplate: 0xFFFFFFFF,
             instantiationDepth: 0,
             siteFile: 0xFFFFFFFF,
             siteStart: 0,

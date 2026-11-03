@@ -1,0 +1,50 @@
+// A scoped value behind `borrow dyn I` keeps its loans (ADR 0064 §3.2): its data cannot change or end while the
+// `dyn` reference lives, a `dyn` of a local cannot be returned, and its loans cannot leave through a parameter.
+interface Measure {
+    fn width(borrow this) -> usize;
+}
+
+struct View<region r> {
+    bytes: Slice<r, u8>;
+}
+
+impl<region r> Measure for View<r> {
+    fn width(borrow this) -> usize => this.bytes.length;
+}
+
+struct Holder<region a> {
+    m: borrow(a) dyn Measure;
+}
+
+fn asDyn(v: borrow View) -> borrow dyn Measure => v;
+
+fn changeWhileHeld() -> usize {
+    var data = [1u8, 2, 3];
+    let v = View { bytes: data[..] };
+    let d = asDyn(v);
+    data[0] = 9; // error[N0240]
+    return d.width();
+}
+
+fn outlives() -> usize {
+    let outerData = [7u8];
+    let outer = View { bytes: outerData[..] };
+    var h = Holder { m: borrow outer };
+    {
+        let data = [1u8, 2, 3];
+        let v = View { bytes: data[..] };
+        h.m = borrow v;
+    } // error[N0243] // error[N0243]
+    return h.m.width();
+}
+
+fn make(data: borrow [u8; 3]) -> borrow dyn Measure {
+    let v = View { bytes: data[..] };
+    return borrow v; // error[N0244]
+}
+
+fn put<region a>(h: borrow mut Holder<a>, v: borrow View) {
+    h.m = v; // error[N0272]
+}
+
+fn main() {}

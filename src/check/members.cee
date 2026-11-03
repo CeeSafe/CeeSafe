@@ -70,6 +70,7 @@ fn resolveField(c: borrow mut Checker, typ: u32, name: u32) -> Result<u32, Alloc
         appendQuotedType(mut message, c, typ)?;
         appendText(mut message, " has no field named ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
+        appendDidYouMean(c, mut message, definition, ident.symbol, false, true)?;
     }
     c.error(unknownField(), span.start, span.end, message)?;
     return Ok(none());
@@ -198,6 +199,7 @@ fn synthStructLiteral(
             appendQuotedName(mut message, c, nameIdent.symbol)?;
             appendText(mut message, " has no field named ")?;
             appendQuotedName(mut message, c, id.symbol)?;
+            appendDidYouMean(c, mut message, definition, id.symbol, false, true)?;
             c.error(unknownField(), idSpan.start, idSpan.end, message)?;
             synth(c, init.value, none())?;
             ok = false;
@@ -298,6 +300,7 @@ fn checkStaticCall(
         appendQuotedType(mut message, c, typ)?;
         appendText(mut message, " has no function named ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendDidYouMean(c, mut message, definition, memberIdent.symbol, true, false)?;
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -313,6 +316,21 @@ fn checkStaticCall(
         appendBytes(mut message, c.name(memberIdent.symbol))?;
         appendText(mut message, "(...)")?;
         c.error(methodCallKind(), calleeSpan.start, calleeSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let template = c.hir.functions[function as usize].methodTemplate;
+    if (template != none()) {
+        // A generic static function of a struct (ADR 0064 §1): no receiver to skip.
+        let explicit = c.front.ast.typeArgumentsOfMember(member);
+        let instance = instantiateMethod(c, template, memberIdent.symbol, explicit, arguments, 0, span)?;
+        if (instance == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return checkUserCall(c, instance, arguments, span);
+    }
+    if (!noMemberTypeArguments(c, member, span)?) {
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
@@ -512,6 +530,7 @@ fn checkMethodCall(
             appendQuotedType(mut message, c, currentType)?;
             appendText(mut message, " has no method named ")?;
             appendQuotedName(mut message, c, memberIdent.symbol)?;
+            appendDidYouMean(c, mut message, definition, memberIdent.symbol, true, true)?;
         }
         c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -570,13 +589,40 @@ fn checkMethodCall(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    let template = c.hir.functions[function as usize].methodTemplate;
+    if (template != none()) {
+        let explicit = c.front.ast.typeArgumentsOfMember(member);
+        let instance = instantiateMethod(c, template, memberIdent.symbol, explicit, arguments, 1, span)?;
+        if (instance == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return checkUserCallWith(c, instance, arguments, span, argument);
+    }
+    if (!noMemberTypeArguments(c, member, span)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     return checkUserCallWith(c, function, arguments, span, argument);
+}
+
+/// Type arguments written on a call of a function that has none of its own (ADR 0064 §1): N0209, reported here.
+fn noMemberTypeArguments(c: borrow mut Checker, member: u32, span: Span) -> Result<bool, AllocError> {
+    if (c.front.ast.typeArgumentsOfMember(member).count == 0) {
+        return Ok(true);
+    }
+    var message = Vector<u8>.create();
+    appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
+    appendText(mut message, " has no type parameters of its own, so it takes no type arguments")?;
+    c.error(argumentCount(), span.start, span.end, message)?;
+    return Ok(false);
 }
 
 fn isIntegerMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "wrappingAdd") || sameText(name, "wrappingSub") || sameText(name, "wrappingMul") ||
         sameText(name, "checkedAdd") || sameText(name, "checkedSub") || sameText(name, "checkedMul") ||
-        sameText(name, "saturatingAdd") || sameText(name, "saturatingSub") || sameText(name, "saturatingMul");
+        sameText(name, "saturatingAdd") || sameText(name, "saturatingSub") || sameText(name, "saturatingMul") ||
+        sameText(name, "min") || sameText(name, "max") || sameText(name, "abs") || sameText(name, "unsignedAbs");
 
 fn isFloatMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "bits") || sameText(name, "sqrt") || sameText(name, "abs") || sameText(name, "floor") ||
@@ -616,6 +662,18 @@ fn checkNonStructMethod(
         return c.errorResult(span.start, span.end);
     }
     var message = Vector<u8>.create();
+    let isNumber = c.types.is(structType, TypeKind.Integer) || c.types.is(structType, TypeKind.Float);
+    if (isNumber) {
+        // Numbers have built-in methods (§6, §35.5), just not this one.
+        appendText(mut message, "type ")?;
+        appendQuotedType(mut message, c, structType)?;
+        appendText(mut message, " has no method ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendNumberDidYouMean(c, mut message, c.types.is(structType, TypeKind.Float), memberIdent.symbol)?;
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     appendText(mut message, "type ")?;
     appendQuotedType(mut message, c, structType)?;
     appendText(mut message, " has no methods; ")?;

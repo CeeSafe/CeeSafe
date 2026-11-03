@@ -7,8 +7,10 @@ that quickly. It says exactly what is wrong, fixes what it is sure of, and serve
 The guide and the specification are inside `ceesafec`: an agent reads them through `ceesafec explain` and the MCP
 server's resources (`ceesafe://docs/…`, below), so it needs no network access to read the rules. On the web they are
 also in machine-readable form: [llms.txt](https://ceesafe.github.io/CeeSafe/llms.txt) (an index) and
-[llms-full.txt](https://ceesafe.github.io/CeeSafe/llms-full.txt) (the guide and the specification in one file), and
-every page is available as Markdown at its address with `.md` added.
+[llms-full.txt](https://ceesafe.github.io/CeeSafe/llms-full.txt) (the guide, the specification and the library
+reference in one file), and every page is available as Markdown at its address with `.md` added. The library reference
+is [lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md), and the compiler's own types and functions
+(`Console`, `File`, `Vector`, `StringView`, integer methods, …) are on [built-in types and functions](builtins.md).
 
 ## In a new package
 
@@ -57,6 +59,7 @@ Its tools:
 | `ceesafe_explain` | what a diagnostic code means |
 | `ceesafe_spec_search`, `ceesafe_spec_section` | search and read the specification, which is embedded in `ceesafec` |
 | `ceesafe_symbol` | the type and declaration of what is at a position |
+| `ceesafe_api` | a library or built-in name looked up (`TextWriter.decimal`, `Process.argument`): its signature and documentation, or the closest names |
 
 The prompt `write-ceesafe` gives an agent this page and the loop below. The specification and this guide are resources
 (`ceesafe://docs/…`). The [tooling reference](../spec/tooling.md) §6 has the details.
@@ -68,7 +71,8 @@ The prompt `write-ceesafe` gives an agent this page and the loop below. The spec
 3. Apply the fixes: `ceesafe_fix`, or `ceesafec fix`. A fix is offered only where the compiler is sure of it: `mut` before
    an argument, `let` to `var`, `truncate<T>(…)` for a narrowing cast, a missing `;`.
 4. Fix the rest yourself. Each diagnostic has a code; `ceesafe_explain` (or `ceesafec explain N0249`) says what it means, and
-   the message often names the specification section to read.
+   the message often names the specification section to read. For a function or method you are not sure of, look it
+   up with `ceesafe_api` before writing it, rather than guessing a name from another language.
 5. Repeat until there are no errors. Then run it with `ceesafe_run`, or build it with `ceesafec build`.
 
 Without MCP, the same loop works from a shell: `ceesafec check --diagnostics-format=json main.cee` prints one JSON
@@ -159,7 +163,8 @@ fn same(a: [u8; 4], b: [u8; 4]) -> bool {
 
 ### Indexes are `usize`, and a range's type comes from its bounds
 
-<!-- ceesafe: fail N0205 -->
+A range of two literals that the body indexes with is a `usize` range, so this works as written:
+
 ```ceesafe
 fn sum(values: Slice<u64>) -> u64 {
     var total: u64 = 0;
@@ -170,22 +175,33 @@ fn sum(values: Slice<u64>) -> u64 {
 }
 ```
 
-```text
-main.cee:4:25: error[N0205]: expected 'usize', found 'i32'
-  |
-4 |         total += values[i];
-  |                         ^
+The variable then is a `usize` everywhere in the body. Using it as an `i32` as well is an error:
+
+<!-- ceesafe: fail N0205 -->
+```ceesafe
+fn fill(values: SliceMut<i32>) {
+    for (i in 0..4) {
+        let v: i32 = i;
+        values[i] = v;
+    }
+}
 ```
 
-`0..4` is a range of `i32`. Use the length, which is a `usize`, or a typed literal:
+```text
+main.cee:3:22: error[N0205]: expected 'i32', found 'usize'
+  |
+3 |         let v: i32 = i;
+  |                      ^
+```
+
+A range's type otherwise comes from its bounds: `0..4` with no index use is a range of `i32`, and
+`0..values.length` is a `usize` range. Convert explicitly where the two meet:
 
 ```ceesafe
-fn sum(values: Slice<u64>) -> u64 {
-    var total: u64 = 0;
+fn fill(values: SliceMut<i32>) {
     for (i in 0..values.length) {
-        total += values[i];
+        values[i] = truncate<i32>(i);
     }
-    return total;
 }
 ```
 
@@ -334,6 +350,147 @@ main.cee:4:8: error[N0228]: 'Account' already has a member named 'balance'
 
 Name the method for what it does (`current`), or make the field `public`.
 
+### Look a name up before deciding it is missing
+
+A model guesses names from the languages it knows (`unsigned`, `args`, `writeLn`). CeeSafe's names are often
+different, and the compiler says which ones exist:
+
+<!-- ceesafe: fail N0200 -->
+```ceesafe
+fn main() {
+    var buffer = [0u8; 32];
+    var w = TextWriter.create(mut buffer[..]);
+    w.unsigned(42);
+}
+```
+
+```text
+main.cee:4:7: error[N0200]: 'TextWriter' has no method named 'unsigned'; did you mean 'signed', 'decimal' or 'hex'?
+  |
+4 |     w.unsigned(42);
+  |       ^^^^^^^^
+```
+
+`decimal` is suggested because its documentation says "Appends an unsigned integer in decimal". Before writing a call
+you are unsure of, look the name up: `ceesafe_api` with `TextWriter`, `TextWriter.decimal`, `decimal` or
+`Process.argument` returns the entries, or the closest names. Without MCP, the [built-in types](builtins.md) and the
+[lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md) pages list every name.
+
+### Reserved words are not names
+
+Some keywords read like ordinary names: `own`, `type`, `move`, `drop`, `where`, `class`, `yield`, `macro`, `using`,
+`static` and `in` are among them ([grammar](../spec/grammar.md) §1.3 lists them all).
+
+<!-- ceesafe: fail N0100 -->
+```ceesafe
+fn main() {
+    let own = 1;
+}
+```
+
+```text
+main.cee:2:9: error[N0100]: expected identifier, found 'own', which is a reserved word: choose another name (grammar.md §1.3)
+  |
+2 |     let own = 1;
+  |         ^^^
+```
+
+### A lookup that may find nothing is an optional, not a `Result`
+
+`Process.argument(i)`, `StringView.fromUtf8(bytes)`, `Environment.variable(name)`, `v.pop()` and `x.checkedAdd(y)`
+give a `T?`: match it with `Some(…)` and `null`, not `Ok` and `Err`. A `!` unwraps an optional as well as a result.
+
+```ceesafe
+fn main() {
+    match (Process.argument(1)) {
+        Some(path) => { Console.writeLine(path); }
+        null => { Console.writeLine("no file given"); }
+    }
+    let bytes = [104u8, 105];
+    let text = StringView.fromUtf8(bytes[..])!; // `!` unwraps an optional too, and panics on null
+    Console.writeLine(text);
+}
+```
+
+```text
+no file given
+hi
+```
+
+### `Console` blocks its thread, so async code uses `AsyncConsole`
+
+<!-- ceesafe: fail N0295 -->
+```ceesafe
+async fn greet() {
+    Console.writeLine("hello");
+}
+
+fn main() {
+    Async.run(greet());
+}
+```
+
+```text
+main.cee:2:5: error[N0295]: 'greet' is an async fn, which must not block its thread (type-system.md §40.1), but this may sleep: it does console I/O
+  |
+2 |     Console.writeLine("hello");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+The same holds for `File` and `TcpStream`: async code uses `AsyncFiles`, `AsyncTcpListener` and `AsyncTcpStream`
+from lib/std. A call through `dyn` counts as blocking unless the interface method is declared `@effects()`.
+
+```ceesafe
+async fn greet() -> Result<void, AsyncError> {
+    await AsyncConsole.writeLine("hello")?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(greet())) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+```
+
+```text
+hello
+```
+
+### `mut` at a call, `borrow mut` anywhere else
+
+A mutable borrow passed as an argument is written `mut x` (or `mut a[lo..hi]`). The same borrow in a `let` or any
+other expression is `borrow mut x`.
+
+```ceesafe
+fn bump(n: borrow mut i32) {
+    n += 1;
+}
+
+fn zero(bytes: SliceMut<u8>) {
+    bytes.fill(0);
+}
+
+fn main() {
+    var n = 1;
+    bump(mut n); // an argument: `mut`
+    let r = borrow mut n; // anywhere else: `borrow mut`
+    r += 1;
+    var buffer = [7u8; 4];
+    zero(mut buffer[0..2]);
+    let tail = borrow mut buffer[2..];
+    tail[0] = 9;
+    Console.writeLine(n);
+    Console.writeLine(buffer[2]);
+}
+```
+
+```text
+3
+9
+```
+
 ### What the compiler fixes for you
 
 `ceesafe_fix` and `ceesafec fix` repair these without being asked twice: a `let` that is assigned (`var`), an argument for a
@@ -343,5 +500,7 @@ can lose information (`truncate<T>(…)`, which wraps), and a `;` missing after 
 ## Where to read more
 
 The [guide](introduction.md) teaches the language; [Coming from another language](coming-from/index.md) maps what you know.
+[Built-in types and functions](builtins.md), [lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md) list every
+name.
 The rules themselves are the [specification](../spec/type-system.md), with the [grammar](../spec/grammar.md) and every
 [diagnostic](../spec/diagnostics.md).

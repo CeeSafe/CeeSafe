@@ -1,0 +1,8 @@
+// Arrays and constants of views (ADR 0064 §2): bare references are still neither elements nor constants.
+fn bareReferences(x: borrow i32) {
+    let refs: [borrow i32; 1] = [x]; // error[N0246]
+}
+
+const OWNED: borrow i32 = 3; // error[N0246]
+
+fn main() {}

@@ -1,0 +1,13 @@
+// A generic whose instance would hold a `dyn I` by value cannot take `dyn I` (ADR 0064 §3.1): N0222 at the use,
+// with the reason.
+interface Metrics {
+    fn width(borrow this) -> u32;
+}
+
+fn copyOf<M: Metrics + Copy>(m: borrow M) -> M => m;
+
+fn byValue(m: borrow dyn Metrics) {
+    let a = copyOf(m); // error[N0222]
+}
+
+fn main() {}

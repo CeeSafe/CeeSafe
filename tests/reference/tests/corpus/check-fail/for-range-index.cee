@@ -1,0 +1,9 @@
+// A range of flexible literals that the body indexes with is `usize` (ADR 0063), so the variable is a usize
+// everywhere in the body; using it as an i32 too needs a conversion.
+fn main() {
+    var a = [0u8; 4];
+    for (i in 0..4) {
+        a[i] = 1;
+        let signed: i32 = i; // error[N0205]
+    }
+}

@@ -15,7 +15,7 @@ fn main<T>() { } // error[N0219]
 
 struct Methods<T> {
     v: T;
-    fn generic<U>(this, u: U) { } // error[N0216]
+    fn generic<U>(this, u: U) { } // a generic method: allowed since ADR 0064 §1 (was N0216)
 }
 
 fn uses(p: Pair<i32>) {

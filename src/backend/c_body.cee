@@ -1081,7 +1081,7 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfFloatSqrt() || b == bfFloatAbs() || b == bfFloatFloor() || b == bfFloatCeil() ||
         b == bfFloatMin() || b == bfFloatMax() || b == bfThreadSpawn() || b == bfThreadJoin() ||
         b == bfThreadSpawnBoxed() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
-        b == bfAsyncWorkers();
+        b == bfAsyncWorkers() || b == bfIntAbs() || b == bfIntUnsignedAbs();
 
 fn emitBuiltin(
     e: borrow mut CEmitter,
@@ -1105,7 +1105,7 @@ fn emitBuiltin(
         return e.emit();
     }
     if (b == bfWrappingAdd() || b == bfWrappingSub() || b == bfWrappingMul() || b == bfSaturatingAdd() ||
-        b == bfSaturatingSub() || b == bfSaturatingMul()) {
+        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax()) {
         var call = Vector<u8>.create();
         appendArithmeticCall(e, c, n, sources, f, mut call, r, "")?;
         e.t("    (void)")?;
@@ -1433,7 +1433,9 @@ fn appendArithmeticCall(
             bfCheckedSub()) "cee_try_sub_" else if (b ==
             bfCheckedMul()) "cee_try_mul_" else if (b ==
             bfSaturatingAdd()) "cee_saturating_add_" else if (b ==
-            bfSaturatingSub()) "cee_saturating_sub_" else "cee_saturating_mul_";
+            bfSaturatingSub()) "cee_saturating_sub_" else if (b ==
+            bfIntMin()) "cee_min_" else if (b ==
+            bfIntMax()) "cee_max_" else "cee_saturating_mul_";
     let left = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
     let right = operandText(e, c, n, sources, f, builtinArgument(n, r, 1))?;
     appendText(out, name)?;
@@ -2137,8 +2139,33 @@ fn appendBuiltinRvalue(
         return appendBuiltinCall(e, c, n, sources, f, out, name.view(), arguments);
     }
     if (b == bfWrappingAdd() || b == bfWrappingSub() || b == bfWrappingMul() || b == bfSaturatingAdd() ||
-        b == bfSaturatingSub() || b == bfSaturatingMul()) {
+        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax()) {
         return appendArithmeticCall(e, c, n, sources, f, out, r, "");
+    }
+    if (b == bfIntAbs() || b == bfIntUnsignedAbs()) {
+        // abs: the checked negation of a negative value, so the minimum panics at the call as `-x` does (§6);
+        // unsignedAbs: rt.h's never-failing magnitude. The operand is a NIR operand, without side effects.
+        let operand = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
+        let absType = n.operandTypes[builtinArgument(n, r, 0) as usize];
+        if (b == bfIntUnsignedAbs()) {
+            appendText(out, "cee_unsigned_abs_")?;
+            appendSuffix(c, out, absType)?;
+            out.push('(')?;
+            appendBytes(out, operand.view())?;
+            return out.push(')');
+        }
+        let site = siteText(e, c, n, sources, f, n.rvalueSpans[r as usize].start)?;
+        appendText(out, "((")?;
+        appendBytes(out, operand.view())?;
+        appendText(out, ") < 0 ? cee_neg_")?;
+        appendSuffix(c, out, absType)?;
+        out.push('(')?;
+        appendBytes(out, operand.view())?;
+        appendText(out, ", ")?;
+        appendBytes(out, site.view())?;
+        appendText(out, ") : (")?;
+        appendBytes(out, operand.view())?;
+        return appendText(out, "))");
     }
     if (b == bfCallPointer()) {
         // A call through a C function pointer converts like an extern wrapper (c-backend §2.3).

@@ -1295,6 +1295,28 @@ fn builtin(
         }
         return Ok(floatValue(c, roundFloat(result, bits), resultType)?);
     }
+    if (b == bfIntAbs() || b == bfIntUnsignedAbs()) {
+        let t = builtinArgumentType(n, arguments, 0);
+        let x = integerOf(c, argument(it, c, n, frame, arguments, 0)?, t)?;
+        let magnitude = IntValue { negative: false, magnitude: x.magnitude };
+        if (b == bfIntUnsignedAbs()) {
+            return Ok(fromInteger(c, magnitude, resultType)?);
+        }
+        if (!inRange(c, magnitude, t)) {
+            return Err(overflowStop(it, c, n, frame, r, "integer overflow")); // the minimum, as `-x` (§6)
+        }
+        return Ok(fromInteger(c, magnitude, t)?);
+    }
+    if (b == bfIntMin() || b == bfIntMax()) {
+        let t = builtinArgumentType(n, arguments, 0);
+        let left = argument(it, c, n, frame, arguments, 0)?;
+        let right = argument(it, c, n, frame, arguments, 1)?;
+        let x = integerOf(c, left, t)?;
+        let y = integerOf(c, right, t)?;
+        let order = intCompare(x, y);
+        let keepLeft = if (b == bfIntMin()) order <= 0 else order >= 0;
+        return Ok(fromInteger(c, if (keepLeft) x else y, t)?);
+    }
     if (b >= bfWrappingAdd() && b <= bfSaturatingMul()) {
         let t = builtinArgumentType(n, arguments, 0);
         let left = argument(it, c, n, frame, arguments, 0)?;

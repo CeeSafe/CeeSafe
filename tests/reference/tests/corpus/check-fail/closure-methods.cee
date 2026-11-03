@@ -14,5 +14,5 @@ fn main() {
     v.truncate(-1); // error[N0207]
     var s = String.create();
     s.retain((b) => true); // error[N0200]
-    let words = ["kiwi", "fig"]; // error[N0246]
+    let words = ["kiwi", "fig"]; // an array of views: allowed since ADR 0064 §2 (was N0246)
 }

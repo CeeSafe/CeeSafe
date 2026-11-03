@@ -1,0 +1,385 @@
+// ApiLookup: ceesafe_api, a name looked up in the embedded library reference (spec/api/core.md, spec/api/std.md)
+// and the built-in types page (guide/builtins.md). A type's name gives its whole section, `Type.member` or a bare
+// member name the member's entries; with no match, the closest names (Suggest). tooling.md §6.3.
+
+/// One entry found: where, its heading, and its Markdown.
+struct ApiHit {
+    document: Vector<u8>;
+    heading: Vector<u8>;
+    text: Vector<u8>;
+}
+
+/// A line of a document: where it starts and ends (without its "\n").
+struct DocLine {
+    start: usize;
+    end: usize;
+}
+
+fn apiDocumentCount() -> usize => 3;
+
+fn apiDocument(k: usize) -> StringView => match (k) {
+    0 => "spec/api/core.md",
+    1 => "spec/api/std.md",
+    _ => "guide/builtins.md",
+};
+
+fn splitLines(text: Slice<u8>, out: borrow mut Vector<DocLine>) -> Result<void, AllocError> {
+    var start: usize = 0;
+    for (k in 0..text.length + 1) {
+        if (k == text.length || text[k] == '\n') {
+            if (k > start || k < text.length) {
+                out.push(DocLine { start: start, end: k })?;
+            }
+            start = k + 1;
+        }
+    }
+    return Ok();
+}
+
+fn sameSlices(a: Slice<u8>, b: Slice<u8>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (k in 0..a.length) {
+        if (a[k] != b[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// The last word of a heading (`## struct TextWriter` names `TextWriter`).
+fn lastWord(line: Slice<u8>) -> Slice<u8> {
+    var k = line.length;
+    while (k > 0 && line[k - 1] != ' ') {
+        k -= 1;
+    }
+    return line[k..];
+}
+
+/// The member part of `Type.member`, or the whole name.
+fn memberPart(name: Slice<u8>) -> Slice<u8> {
+    var k = name.length;
+    while (k > 0 && name[k - 1] != '.') {
+        k -= 1;
+    }
+    return name[k..];
+}
+
+fn hasDot(name: Slice<u8>) -> bool {
+    for (b in name) {
+        if (b == '.') {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn isIdentifierByte(b: u8) -> bool =>
+    (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_';
+
+fn pushHit(
+    hits: borrow mut Vector<ApiHit>,
+    document: StringView,
+    heading: Slice<u8>,
+    text: Slice<u8>,
+) -> Result<void, AllocError> {
+    var d = Vector<u8>.create();
+    appendText(mut d, document)?;
+    var h = Vector<u8>.create();
+    appendBytes(mut h, heading)?;
+    var t = Vector<u8>.create();
+    appendBytes(mut t, text)?;
+    return hits.push(ApiHit { document: d, heading: h, text: t });
+}
+
+fn addApiName(names: borrow mut Vector<Vector<u8>>, name: Slice<u8>) -> Result<void, AllocError> {
+    if (name.length == 0) {
+        return Ok();
+    }
+    for (existing in names.view()) {
+        if (sameSlices(existing.view(), name)) {
+            return Ok();
+        }
+    }
+    var copy = Vector<u8>.create();
+    appendBytes(mut copy, name)?;
+    return names.push(copy);
+}
+
+/// A documented name and its entry's text, for suggestions by what the text says.
+struct ApiEntry {
+    name: Vector<u8>;
+    text: Vector<u8>;
+}
+
+fn addApiEntry(entries: borrow mut Vector<ApiEntry>, name: Slice<u8>, text: Slice<u8>) -> Result<void, AllocError> {
+    var n = Vector<u8>.create();
+    appendBytes(mut n, name)?;
+    var t = Vector<u8>.create();
+    appendBytes(mut t, text)?;
+    return entries.push(ApiEntry { name: n, text: t });
+}
+
+/// An API page: `## <kind> T` sections and `### T.member` entries.
+fn lookupApiPage(
+    document: StringView,
+    text: Slice<u8>,
+    query: Slice<u8>,
+    hits: borrow mut Vector<ApiHit>,
+    names: borrow mut Vector<Vector<u8>>,
+    entries: borrow mut Vector<ApiEntry>,
+) -> Result<void, AllocError> {
+    var lines = Vector<DocLine>.create();
+    splitLines(text, mut lines)?;
+    let qualified = hasDot(query);
+    for (i in 0..lines.length) {
+        let line = text[lines[i].start..lines[i].end];
+        let isType = startsWithText(line, "## ");
+        let isMember = startsWithText(line, "### ");
+        if (!isType && !isMember) {
+            continue;
+        }
+        let name = lastWord(line);
+        addApiName(mut names, name)?;
+        if (isMember) {
+            addApiName(mut names, memberPart(name))?;
+        }
+        let matches = if (isType) !qualified && sameSlices(name, query) else sameSlices(name, query) ||
+            (!qualified && sameSlices(memberPart(name), query));
+        // The section runs to the next heading of the same or a higher level.
+        var j = i + 1;
+        while (j < lines.length) {
+            let next = text[lines[j].start..lines[j].end];
+            if (startsWithText(next, "## ") || (isMember && startsWithText(next, "### "))) {
+                break;
+            }
+            j += 1;
+        }
+        let end = if (j < lines.length) lines[j].start else text.length;
+        if (isMember) {
+            addApiEntry(entries, name, text[lines[i].start..end])?;
+        }
+        if (matches) {
+            pushHit(mut hits, document, line, text[lines[i].start..end])?;
+        }
+    }
+    return Ok();
+}
+
+/// The names a table row of the built-ins page documents: each backticked call or member in its first cell, as
+/// `Type.member` (the type from the call, or else each type the section's heading names) and as `member`.
+fn rowNames(
+    cell: Slice<u8>,
+    headingTypes: borrow Vector<Vector<u8>>,
+    out: borrow mut Vector<Vector<u8>>,
+) -> Result<void, AllocError> {
+    var k: usize = 0;
+    while (k < cell.length) {
+        if (cell[k] != '`') {
+            k += 1;
+            continue;
+        }
+        var end = k + 1;
+        while (end < cell.length && cell[end] != '`') {
+            end += 1;
+        }
+        let token = cell[k + 1..end];
+        // The leading identifier chain: `Process.argument(i)` gives `Process.argument`, `v.push(x)` gives `v.push`,
+        // and `Vector<T>.create()` gives `Vector.create` (the type arguments are skipped).
+        var head = Vector<u8>.create();
+        var n: usize = 0;
+        while (n < token.length) {
+            if (isIdentifierByte(token[n]) || token[n] == '.') {
+                head.push(token[n])?;
+                n += 1;
+            } else if (token[n] == '<') {
+                var depth: usize = 0;
+                while (n < token.length) {
+                    if (token[n] == '<') {
+                        depth += 1;
+                    } else if (token[n] == '>') {
+                        depth -= 1;
+                        if (depth == 0) {
+                            n += 1;
+                            break;
+                        }
+                    }
+                    n += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        let headView = head.view();
+        if (hasDot(headView)) {
+            let member = memberPart(headView);
+            let receiver = typePart(headView);
+            if (receiver.length > 0 && receiver[0] >= 'A' && receiver[0] <= 'Z') {
+                addApiName(out, headView)?;
+            } else {
+                for (t in headingTypes.view()) {
+                    var q = Vector<u8>.create();
+                    appendBytes(mut q, t.view())?;
+                    q.push('.')?;
+                    appendBytes(mut q, member)?;
+                    addApiName(out, q.view())?;
+                }
+            }
+            addApiName(out, member)?;
+        } else if (headView.length > 0 && headView[0] >= 'A' && headView[0] <= 'Z') {
+            addApiName(out, headView)?; // a type, such as `Arena`
+        }
+        k = end + 1;
+    }
+    return Ok();
+}
+
+/// The built-ins page: `## ` sections of tables; a type's name gives its section, a member the rows naming it.
+fn lookupBuiltins(
+    document: StringView,
+    text: Slice<u8>,
+    query: Slice<u8>,
+    hits: borrow mut Vector<ApiHit>,
+    names: borrow mut Vector<Vector<u8>>,
+    entries: borrow mut Vector<ApiEntry>,
+) -> Result<void, AllocError> {
+    var lines = Vector<DocLine>.create();
+    splitLines(text, mut lines)?;
+    var heading: usize = none64();
+    var headingTypes = Vector<Vector<u8>>.create();
+    var header: usize = none64(); // the current table's header row
+    for (i in 0..lines.length) {
+        let line = text[lines[i].start..lines[i].end];
+        if (startsWithText(line, "## ")) {
+            heading = i;
+            header = none64();
+            headingTypes.clear();
+            // The types a heading names: its backticked words (`Vector`, `StringView`).
+            var k: usize = 3;
+            while (k < line.length) {
+                if (line[k] == '`') {
+                    var e = k + 1;
+                    while (e < line.length && line[e] != '`') {
+                        e += 1;
+                    }
+                    addApiName(mut headingTypes, line[k + 1..e])?;
+                    addApiName(mut names, line[k + 1..e])?;
+                    k = e + 1;
+                } else {
+                    k += 1;
+                }
+            }
+            if (!hasDot(query)) {
+                for (t in headingTypes.view()) {
+                    if (sameSlices(t.view(), query)) {
+                        var j = i + 1;
+                        while (j < lines.length && !startsWithText(text[lines[j].start..lines[j].end], "## ")) {
+                            j += 1;
+                        }
+                        let end = if (j < lines.length) lines[j].start else text.length;
+                        pushHit(mut hits, document, line, text[lines[i].start..end])?;
+                    }
+                }
+            }
+            continue;
+        }
+        if (heading == none64() || !startsWithText(line, "|")) {
+            header = none64();
+            continue;
+        }
+        if (header == none64()) {
+            header = i; // the header row; the next is its `|---|` rule
+            continue;
+        }
+        if (startsWithText(line, "|---")) {
+            continue;
+        }
+        // The first cell, between the first two `|` outside backticks.
+        var close: usize = 1;
+        var quoted = false;
+        while (close < line.length && (line[close] != '|' || quoted)) {
+            if (line[close] == '`') {
+                quoted = !quoted;
+            }
+            close += 1;
+        }
+        var rowList = Vector<Vector<u8>>.create();
+        rowNames(line[1..close], headingTypes, mut rowList)?;
+        var matched = false;
+        for (n in rowList.view()) {
+            addApiName(mut names, n.view())?;
+            if (hasDot(n.view())) {
+                addApiEntry(entries, n.view(), line)?;
+            }
+            if (sameSlices(n.view(), query)) {
+                matched = true;
+            }
+        }
+        if (matched) {
+            var shown = Vector<u8>.create();
+            appendBytes(mut shown, text[lines[header].start..lines[header].end])?;
+            appendText(mut shown, "\n|---|---|\n")?;
+            appendBytes(mut shown, line)?;
+            pushHit(mut hits, document, text[lines[heading].start..lines[heading].end], shown.view())?;
+        }
+    }
+    return Ok();
+}
+
+fn none64() -> usize => 0xFFFFFFFFFFFFFFFF;
+
+/// The type part of `Type.member`, or empty.
+fn typePart(name: Slice<u8>) -> Slice<u8> {
+    let member = memberPart(name);
+    return if (name.length > member.length) name[0..name.length - member.length - 1] else name[0..0];
+}
+
+/// ceesafe_api's search: the entries for `query`; when there are none, up to eight suggestions: the closest names, a
+/// `Type.member` query's real members of that type, and the entries whose text mentions the query's member part (so
+/// `unsigned` finds `TextWriter.decimal`, "Appends an unsigned integer in decimal").
+fn apiLookup(
+    query: Slice<u8>,
+    hits: borrow mut Vector<ApiHit>,
+    suggestions: borrow mut Vector<Vector<u8>>,
+) -> Result<void, AllocError> {
+    var names = Vector<Vector<u8>>.create();
+    var entries = Vector<ApiEntry>.create();
+    for (k in 0..apiDocumentCount()) {
+        let path = apiDocument(k);
+        let index = match (documentIndex(path.bytes())) {
+            Some(i) => i,
+            null => { continue; }
+        };
+        var text = Vector<u8>.create();
+        appendDocumentText(mut text, index)?;
+        if (k < 2) {
+            lookupApiPage(path, text.view(), query, hits, mut names, mut entries)?;
+        } else {
+            lookupBuiltins(path, text.view(), query, hits, mut names, mut entries)?;
+        }
+    }
+    if (hits.length > 0) {
+        return Ok();
+    }
+    let member = memberPart(query);
+    let typeName = typePart(query);
+    for (n in names.view()) {
+        let candidate = n.view();
+        let close = if (hasDot(candidate)) hasDot(query) && isCloseName(
+            query,
+            candidate,
+        ) else isCloseName(member, candidate);
+        if (close && suggestions.length < 8) {
+            addApiName(suggestions, candidate)?;
+        }
+    }
+    for (e in entries.view()) {
+        let sameType = typeName.length > 0 && sameSlices(typePart(e.name.view()), typeName);
+        let mentions = member.length >= 4 && containsIgnoringCase(e.text.view(), member);
+        if ((sameType || mentions) && suggestions.length < 8) {
+            addApiName(suggestions, e.name.view())?;
+        }
+    }
+    return Ok();
+}

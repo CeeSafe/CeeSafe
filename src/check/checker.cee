@@ -107,8 +107,9 @@ struct Checker {
     interfaces: Vector<InterfaceEntry>;
     impls: Vector<ImplRef>; // every impl, processed once every item is declared (§21.1)
     implsReady: bool;
-    registerNext: bool; // false while declaring a signature only
-    dynAllowed: bool;   // set by resolvePointee for the next type resolved (the reference's _dynAllowed)
+    registerNext: bool;  // false while declaring a signature only
+    genericMethod: bool; // true while declaring a struct method that has type parameters of its own (ADR 0064 §1)
+    dynAllowed: bool;    // set by resolvePointee for the next type resolved (the reference's _dynAllowed)
     dynTables: Vector<DynTable>;
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
     asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
@@ -125,6 +126,7 @@ struct Checker {
     pendingBounds: Vector<PendingBounds>;
     pendingAllocators: Vector<PendingAllocator>;
     pendingElements: Vector<PendingElement>;
+    pendingDynInstances: Vector<PendingDynInstance>; // ADR 0064 §3.1: checked once members are resolved
     letKeywords: Vector<LetKeyword>;
     effectAttributes: Vector<EffectAttributes>;      // `@effects`/`@context` by declaration (_effectAttributes)
     effectsOfAttributes: Vector<EffectsOfAttribute>; // `@effectsOf` by declaration

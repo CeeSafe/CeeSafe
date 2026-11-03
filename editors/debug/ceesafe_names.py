@@ -1,7 +1,8 @@
 """CeeSafe names for the C names ceesafec generates (spec/c-backend.md section 2.1, spec/tooling.md section 3.2).
 
 Shared by ceesafe_lldb.py and ceesafe_gdb.py; plain Python, no debugger API. The C names are CeeSafe's
-(Decision 0004): functions `ceeF_`, methods `ceeM_`, locals `v_`, fields `f_`.
+(Decision 0004): functions `ceeF_`, methods `ceeM_`, generic methods' instances `ceeMG_` (ADR 0064), locals `v_`,
+fields `f_`.
 """
 
 import os
@@ -15,6 +16,7 @@ _LOCAL = re.compile(r"^v_(.+)_\d+$")
 _FIELD = re.compile(r"^f_(.+)$")
 _FUNCTION = re.compile(r"^ceeF_(.+)$")
 _METHOD = re.compile(r"^ceeM_(\d+)(.+)$")
+_GENERIC_METHOD = re.compile(r"^ceeMG_(\d+)(.+)$")
 
 
 def local(name):
@@ -49,4 +51,12 @@ def function(name):
         length, rest = int(match.group(1)), match.group(2)
         if len(rest) > length + 1 and rest[length] == "_":
             return rest[:length] + "." + rest[length + 1:]
+    match = _GENERIC_METHOD.match(name)
+    if match:
+        # `ceeMG_6Canvas_3add1S6Square`: the owner, then the method's name by its length; the arguments are dropped.
+        length, rest = int(match.group(1)), match.group(2)
+        if len(rest) > length + 1 and rest[length] == "_":
+            inner = re.match(r"^(\d+)(.+)$", rest[length + 1:])
+            if inner and len(inner.group(2)) >= int(inner.group(1)):
+                return rest[:length] + "." + inner.group(2)[:int(inner.group(1))]
     return name

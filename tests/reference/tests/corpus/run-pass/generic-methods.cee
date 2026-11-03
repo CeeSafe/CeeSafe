@@ -1,0 +1,79 @@
+// Generic methods and inherent impls (ADR 0064 §1): a method or static function with type parameters of its own,
+// inferred after the receiver or written after the name, on plain and generic structs, declared in the body or in an
+// `impl S { … }` block; each call's instance is its own function, in the interpreter and in C.
+interface Shape {
+    fn area(borrow this) -> i64;
+}
+
+struct Square {
+    side: i64;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> i64 => this.side * this.side;
+}
+
+struct Rect {
+    w: i64;
+    h: i64;
+}
+
+impl Shape for Rect {
+    fn area(borrow this) -> i64 => this.w * this.h;
+}
+
+struct Canvas {
+    total: i64;
+    count: u32;
+
+    public fn add<S: Shape>(borrow mut this, s: borrow S) {
+        this.total += s.area();
+        this.count += 1;
+    }
+
+    public fn pick<T: Copy>(borrow this, a: T, b: T) -> T => if (this.count % 2 == 0) a else b;
+}
+
+impl Canvas {
+    public fn empty() -> Canvas => Canvas { total: 0, count: 0 };
+    public fn same<T: Copy>(value: T) -> T => value;
+    public fn second<A: Copy, B: Copy>(borrow this, a: A, b: B) -> B => this.keep(b);
+    fn keep<U: Copy>(borrow this, u: U) -> U => u;
+}
+
+struct Holder<T: Copy> {
+    value: T;
+}
+
+impl<T: Copy> Holder<T> {
+    public fn get(borrow this) -> T => this.value;
+    public fn with<U: Copy>(borrow this, other: U) -> U => other;
+}
+
+fn main() {
+    var c = Canvas.empty();
+    c.add(Square { side: 3 });
+    c.add(Rect { w: 2, h: 5 });
+    c.add<Square>(Square { side: 1 });
+    Console.writeLine(c.total);
+    Console.writeLine(c.pick(10, 20));
+    Console.writeLine(c.pick<bool>(true, false));
+    Console.writeLine(c.second(1u8, -5i64));
+    Console.writeLine(Canvas.same<u16>(7));
+    let h = Holder { value: 7u32 };
+    Console.writeLine(h.get());
+    Console.writeLine(h.with(2.5));
+    let g = Holder { value: true };
+    Console.writeLine(g.get());
+    Console.writeLine(g.with<i8>(-3));
+}
+
+// expect-stdout: 20
+// expect-stdout: 20
+// expect-stdout: false
+// expect-stdout: -5
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 2.5
+// expect-stdout: true
+// expect-stdout: -3

@@ -141,7 +141,7 @@ const pageUrl = (page) => base + page;
 
 /** The guide in reading order: the sidebar's (config.mts), then any page it does not list. */
 const guideOrder = [
-  "introduction", "installation", "getting-started", "for-agents",
+  "introduction", "installation", "getting-started", "for-agents", "builtins",
   "basics", "structs-and-enums", "ownership", "errors", "memory", "collections", "generics", "closures", "threads",
   "unsafe-and-c", "kernel", "ceesafec", "packages", "formatting-and-docs", "editors", "debugging",
   "coming-from/index", "coming-from/rust", "coming-from/zig", "coming-from/c-and-cpp", "coming-from/csharp-java-typescript", "coming-from/go",
@@ -154,6 +154,9 @@ const guidePages = pages
 const specification = ["grammar", "type-system", "diagnostics", "unsafe", "ownership", "lifetimes", "memory-model", "formatting", "tooling", "c-backend"]
   .map((name) => `reference/${name}.md`);
 
+/** The libraries' API pages: every public item's signature, so an agent finds `TextWriter.decimal` by reading. */
+const libraries = ["reference/api/core.md", "reference/api/std.md"];
+
 const summary = [
   "# CeeSafe",
   "",
@@ -163,6 +166,8 @@ const summary = [
   "",
   "Agents writing CeeSafe: read the agent guide first, and use `ceesafec mcp` (an MCP server with a checker, fixes, a",
   "sandboxed interpreter and this documentation) or `ceesafec check --diagnostics-format=json` and `ceesafec fix`.",
+  "Before concluding that a function or method does not exist, look it up: `ceesafe_api` (MCP) with its name, or the",
+  "built-in types page and the lib/core and lib/std API pages below.",
   "",
 ];
 writeFileSync(
@@ -181,12 +186,13 @@ writeFileSync(
     "",
     `- [Everything above in one file](${base}llms-full.txt)`,
     `- [Library: lib/core](${pageUrl("reference/api/core.md")})`,
+    `- [Library: lib/std](${pageUrl("reference/api/std.md")})`,
     `- [The specification's index](${pageUrl("reference/index.md")})`,
     "",
   ].join("\n"),
 );
 writeFileSync(
   join(publicDirectory, "llms-full.txt"),
-  [...summary, ...[...guidePages, ...specification].map((page) => `\n<!-- ${pageUrl(page)} -->\n\n${textOf(page).trim()}\n`)].join("\n"),
+  [...summary, ...[...guidePages, ...specification, ...libraries].map((page) => `\n<!-- ${pageUrl(page)} -->\n\n${textOf(page).trim()}\n`)].join("\n"),
 );
-console.log(`prepare: llms.txt (${guidePages.length} guide pages, ${specification.length} specifications) and llms-full.txt`);
+console.log(`prepare: llms.txt (${guidePages.length} guide pages, ${specification.length} specifications, ${libraries.length} libraries) and llms-full.txt`);

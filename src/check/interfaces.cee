@@ -210,6 +210,17 @@ fn implements(c: borrow Checker, typ: u32, bound: u32) -> bool {
         }
         return false;
     }
+    if (c.types.isDyn(typ)) {
+        // `dyn I` implements `I` (ADR 0064 §3.1): each method calls through the value's table. Only behind a reference,
+        // since `dyn I` is unsized; a generic that needs `T` by value fails its instance (N0222).
+        let dynBound = c.types.info(typ).dynInterface;
+        if (dynBound != none()) {
+            let o = c.types.bounds[dynBound as usize];
+            if (o.interfaceEntry == b.interfaceEntry && sameLists(c, o.arguments, b.arguments)) {
+                return true;
+            }
+        }
+    }
     for (i in c.implementations.view()) {
         if (i.typ == typ && i.interfaceEntry == b.interfaceEntry && sameLists(c, i.arguments, b.arguments)) {
             return true;

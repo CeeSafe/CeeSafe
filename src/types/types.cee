@@ -1477,6 +1477,9 @@ struct TypeTable {
             let inner = this.types[t.pointee as usize].element;
             return inner != none() && this.isScoped(inner);
         }
+        if (isKind(t.kind, TypeKind.Array)) {
+            return t.element != none() && this.isScoped(t.element); // `[StringView; 3]` holds its elements' loans (ADR 0064 §2)
+        }
         return isKind(t.kind, TypeKind.SlotMap) && this.isScoped(t.element);
     }
 

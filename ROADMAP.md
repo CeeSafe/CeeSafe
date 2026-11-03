@@ -1003,6 +1003,57 @@ a C seed; v0.3.0 (the reference compiler's download refused) and v0.3.1 (the ext
 workflow and published nothing. Six platforms from one seed, the seed checked on three systems, the extension on
 the Marketplace by trusted publishing (§10).
 
+**ClayWind port findings, ADR 0063 (proposed) and ADR 0064 (draft)** (2026-11-03; uncommitted, not released). This
+work was asked for by the owner ("explore ~/dev/CeeSafe and tackle those findings") after the pure CeeSafe port of
+ClayWind (`~/dev/CeeSafeApps/CEESAFE-FINDINGS.md`).
+- **ADR 0063, implemented on the working tree:**
+  - a `borrow mut` variable or field is reborrowed into `borrow mut dyn I`. Before, it was moved (N0250), and a field
+    was N0251;
+  - `for` ranges of flexible literals are `usize` when the body indexes with the variable (§16.4,
+    `src/check/range_index.cee`);
+  - integer `min`/`max` (§6; `bfIntMin`/`bfIntMax`, `CEE_MINMAX` in `rt.h`);
+  - N0246 suggests a copy, with a fix;
+  - effect explanations name an interface method without `@effects`.
+- **ADR 0064:** a draft of the larger proposals (generic methods and inherent `impl`, arrays and slices of views,
+  `dyn I` as a bound, OD-10a), for the owner to decide; none of it is implemented.
+- **Run with `out/ceesafec.cand4`, built from the tree, macOS arm64:**
+  - `tools/contract_tests.py`: every contract ok except `spec`, whose one problem was stale embedded documents.
+    After `tools/gen_docs.py` and a rebuild, `spec_check` reports 0 problems.
+  - `tools/run_corpus.py`: 580 tests, 0 failures. Five tests are new; the `dyn-reborrow` pair fails with 0.10.3.
+  - The fixed point: the changed compiler rebuilds itself to byte-identical C (`--emit c`, `diff -rq`).
+  - `guide_check`: 103 examples, 0 problems. The guide's for-agents range example now compiles; its failing example
+    is a mixed `usize`/`i32` use.
+
+**ADR 0063 and ADR 0064 accepted and implemented** (2026-11-04; uncommitted, not released). The owner wrote "I
+accept the ADR", then chose "Both 0063 and 0064" and, for `abs`, "Both".
+- **ADR 0063 §2.5:** `abs()`, which panics at the minimum as `-x` does, and `unsignedAbs()`.
+- **ADR 0064, all of it:**
+  - §1: generic methods, `x.m<T>(…)`, and inherent `impl S { … }`;
+  - §2: arrays and slices of views, and constant views;
+  - §3.1: `dyn I` implements `I`, used only behind references;
+  - §3.2 (OD-10a): a scoped `T` behind `borrow dyn I`.
+- **Run with `out/ceesafec`, built from the tree, macOS arm64:**
+  - `tools/contract_tests.py`: 29 contracts ok. The one failure, `spec`, was stale embedded documents; after
+    `gen_docs.py` and a rebuild, `spec_check`, `guide_check` and `debugger_check` report 0 problems.
+  - `run_corpus.py`: 596 tests, 0 failures. Sixteen tests are new across both ADRs. Six expectations that encoded
+    the old rules were changed in place, each with a note (ADR 0064 §5.5).
+  - The fixed point: byte-identical C.
+  - ClayWind's seven packages and CosmoStack build.
+
+**ADR 0065, the agent-facing reference** (2026-11-04; uncommitted, not released). The owner wrote "Go ahead implement
+1-4".
+- **The library reference for agents:**
+  - `spec/api/std.md`, checked by `spec_check` like `core.md`;
+  - `guide/builtins.md`, built-in types and functions, whose every row a type-checked example verifies;
+  - both API pages in `llms-full.txt`.
+- **`ceesafe_api`:** an MCP lookup by name, with suggestions; `tools/mcp_api_check.py` is a new contract.
+- **"Did you mean" in N0200, N0230 and N0234,** and reserved words named in N0100.
+- **`guide/for-agents.md` and `templates/AGENTS.md`:** five new checked sections and four lines.
+- **Run with `out/ceesafec`, macOS arm64:**
+  - `guide_check`: 117 examples, 0 problems. `spec_check`: 0 problems. `mcp_api_check`: 15 lookups, 0 problems.
+  - Corpus: 596 tests, 0 failures. The fixed point: byte-identical C. `tools/contract_tests.py`: all 31 contracts ok, the
+    new `mcp api` among them.
+
 `main` is 0.8.0.
 
 Not yet run: the rest of P9 (§9 item 4).

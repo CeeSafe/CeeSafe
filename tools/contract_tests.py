@@ -14,7 +14,8 @@
   cancellation wake count (tools/wake_check.py), `ceesafec test` on its fixture (tools/test_command_check.py),
   the collection
   properties, the freestanding checks;
-- CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py) and the debugger scripts.
+- CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the debugger scripts, and the MCP
+  server's name lookup (tools/mcp_api_check.py).
 Each step's last line is printed.
 
 usage: python3 tools/contract_tests.py --ceesafec PATH
@@ -110,6 +111,7 @@ def main():
             ("spec", py + [f"{HERE}/spec_check.py", "--ceesafec", cee]),
             ("guide", py + [f"{HERE}/guide_check.py", "--ceesafec", cee]),
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
+            ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
         ]
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":

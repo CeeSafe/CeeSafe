@@ -1,0 +1,127 @@
+// MergeInherentImpls (ADR 0064 §1): `impl S { … }` and `impl<T> S<T> { … }` blocks add methods to a struct of the same
+// package, as if written in its body. They are merged before anything is declared, so every later pass (a generic
+// struct's methods per instance, duplicate members, generic methods, visibility) sees one list of functions.
+
+fn inherentImplError() -> u32 => 267;
+
+/// The struct item named `symbol` in package `package`, or none.
+fn structItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
+    for (u in 0..c.front.ast.units.length) {
+        if (packageOfFile(c, c.front.ast.units[u].file) != package) {
+            continue;
+        }
+        let items = c.front.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = c.front.ast.at(items, k);
+            match (c.front.ast.items[item as usize].kind) {
+                ItemKind.Struct(_) => {
+                    if (c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol == symbol) {
+                        return item;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return none();
+}
+
+/// The symbols of a list of type parameters (Ast.typeParameters), in order.
+fn parameterSymbols(c: borrow Checker, list: Range, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    for (k in 0..list.count) {
+        let p = c.front.ast.typeParameters[c.front.ast.at(list, k) as usize];
+        out.push(c.front.ast.idents[p.name as usize].symbol)?;
+    }
+    return Ok();
+}
+
+/// Whether the impl's target `S<…>` names the struct's own parameters in order (`impl<T> S<T>`, `impl<region r> S<r>`).
+fn sameParameters(c: borrow Checker, implTypes: Range, implRegions: Range, s: Struct) -> Result<bool, AllocError> {
+    var a = Vector<u32>.create();
+    var b = Vector<u32>.create();
+    parameterSymbols(c, implTypes, mut a)?;
+    parameterSymbols(c, s.typeParameters, mut b)?;
+    var ar = Vector<u32>.create();
+    var br = Vector<u32>.create();
+    parameterSymbols(c, implRegions, mut ar)?;
+    parameterSymbols(c, s.regionParameters, mut br)?;
+    if (a.length != b.length || ar.length != br.length) {
+        return Ok(false);
+    }
+    for (k in 0..a.length) {
+        if (a[k] != b[k]) {
+            return Ok(false);
+        }
+    }
+    for (k in 0..ar.length) {
+        if (ar[k] != br[k]) {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
+fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (u in 0..c.front.ast.units.length) {
+        let file = c.front.ast.units[u].file;
+        let items = c.front.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = c.front.ast.at(items, k);
+            let entry = c.front.ast.items[item as usize];
+            match (entry.kind) {
+                ItemKind.InherentImpl(target, functions, typeParameters, regionParameters) => {
+                    c.setFile(file);
+                    let span = c.front.ast.typeSpans[target as usize];
+                    let nameIdent = match (c.front.ast.types[target as usize]) {
+                        TypeNode.Named(q) => if (q.parts.count == 1) c.front.ast.at(q.parts, 0) else none(),
+                        TypeNode.Generic(q, _) => if (q.parts.count == 1) c.front.ast.at(q.parts, 0) else none(),
+                        _ => none(),
+                    };
+                    let symbol = if (nameIdent == none()) none() else c.front.ast.idents[nameIdent as usize].symbol;
+                    let structItem = if (symbol == none()) none() else structItemNamed(
+                        c,
+                        symbol,
+                        packageOfFile(c, file),
+                    );
+                    if (structItem == none()) {
+                        var message = Vector<u8>.create();
+                        appendText(
+                            mut message,
+                            "an 'impl' without 'for' adds methods to a struct of this package; this names none (ADR 0064 §1)",
+                        )?;
+                        c.error(inherentImplError(), span.start, span.end, message)?;
+                        continue;
+                    }
+                    let structIndex = match (c.front.ast.items[structItem as usize].kind) {
+                        ItemKind.Struct(s) => s,
+                        _ => 0,
+                    };
+                    let s = c.front.ast.structs[structIndex as usize];
+                    if (!sameParameters(c, typeParameters, regionParameters, s)?) {
+                        var message = Vector<u8>.create();
+                        appendText(
+                            mut message,
+                            "an 'impl' of a struct's methods names the struct with its own parameters, in order: 'impl<T> S<T>' for 'struct S<T>' (ADR 0064 §1)",
+                        )?;
+                        c.error(inherentImplError(), span.start, span.end, message)?;
+                        continue;
+                    }
+                    // The struct's functions, then the block's: one list in Ast.lists.
+                    var merged = Vector<u32>.create();
+                    for (j in 0..s.functions.count) {
+                        merged.push(c.front.ast.at(s.functions, j))?;
+                    }
+                    for (j in 0..functions.count) {
+                        merged.push(c.front.ast.at(functions, j))?;
+                    }
+                    let list = c.front.ast.list(merged)?;
+                    c.front.ast.structs[structIndex as usize].functions = list;
+                }
+                _ => {}
+            }
+        }
+    }
+    c.setFile(saved);
+    return Ok();
+}

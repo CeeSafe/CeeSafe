@@ -1,0 +1,29 @@
+// `dyn I` as a type argument only behind references (ADR 0064 §3.1): a struct with a `T` field cannot take `dyn I`,
+// and `dyn I` implements only its own interface. (A function that holds `T` by value: dyn-as-bound-by-value.cee.)
+interface Metrics {
+    fn width(borrow this) -> u32;
+}
+
+interface Other {
+    fn name(borrow this) -> u32;
+}
+
+struct Fixed {
+    w: u32;
+}
+
+impl Metrics for Fixed {
+    fn width(borrow this) -> u32 => this.w;
+}
+
+fn other<O: Other>(o: borrow O) -> u32 => o.name();
+
+struct Wrap<T: Metrics> {
+    inner: T;
+}
+
+fn wrongInterface(m: borrow dyn Metrics) -> u32 => other(m); // error[N0268]
+
+fn wrapped(w: borrow Wrap<dyn Metrics>) {} // error[N0330]
+
+fn main() {}

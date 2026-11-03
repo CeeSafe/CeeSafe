@@ -1,0 +1,50 @@
+// Generic methods and inherent impls (ADR 0064 §1): bounds are checked per call, interface methods stay monomorphic,
+// type arguments need type parameters, and an inherent impl names a struct of its package with the struct's own
+// parameters.
+interface Shape {
+    fn area(borrow this) -> i64;
+}
+
+struct Square {
+    side: i64;
+}
+
+impl Shape for Square {
+    fn area<T>(borrow this) -> i64 => this.side; // error[N0216]
+}
+
+struct Plain {
+    x: u8;
+}
+
+struct Canvas {
+    total: i64;
+
+    public fn add<S: Shape>(borrow mut this, s: borrow S) {
+        this.total += s.area();
+    }
+
+    public fn get(borrow this) -> i64 => this.total;
+}
+
+impl Canvas {
+    public fn get(borrow this) -> i64 => 0; // error[N0228]
+}
+
+impl Missing { // error[N0267]
+    fn f() {}
+}
+
+struct G<T: Copy> {
+    v: T;
+}
+
+impl<U: Copy> G<U> { // error[N0267]
+    fn h() {}
+}
+
+fn main() {
+    var c = Canvas { total: 0 };
+    c.add(Plain { x: 1 }); // error[N0268]
+    let n = c.get<u8>(); // error[N0209]
+}

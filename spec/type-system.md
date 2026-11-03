@@ -139,7 +139,14 @@ literal adapts:
 | `x.checkedAdd(y)`, `x.checkedSub(y)`, `x.checkedMul(y)` | `T?` | `null` (otherwise `Some` of the result) |
 | `x.saturatingAdd(y)`, `x.saturatingSub(y)`, `x.saturatingMul(y)` | `T` | the nearest of `T`'s minimum and maximum |
 
-None of them panics. Their names are reserved on integer types: an `impl` for an integer type cannot define a method
+Two more take one argument the same way and cannot overflow (ADR 0063): `x.min(y)` and `x.max(y)`, of result `T`,
+the smaller and the larger operand (`x` when they are equal).
+
+On signed types (ADR 0063 §2.5), `x.abs()` is the magnitude as a `T`. It panics at `T`'s minimum, whose magnitude
+`T` cannot hold, exactly as `-x` does, reported at the call. `x.unsignedAbs()` is the magnitude in the unsigned type
+of the same width and never panics. Neither exists on unsigned types (N0234).
+
+None of them panics except `abs`. Their names are reserved on integer types: an `impl` for an integer type cannot define a method
 with one of these names (N0228). In C they are `static inline` helpers of `rt.h` with no undefined behaviour: a
 wrapping operation computes in the unsigned type of the same width and converts back with `cee_as_iN`
 (`c-backend.md` §6).
@@ -199,10 +206,13 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217).
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
-- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type or `bool`, and `e` an array
-  literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value, like an
-  array literal: it can be indexed and iterated, and bound to a local to be sliced or borrowed. Arrays of other
-  types, and of arrays, are N0216.
+- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
+  `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
+  like an array literal: it can be indexed and iterated, and bound to a local to be sliced or borrowed. Arrays of
+  other types, and of arrays, are N0216.
+- **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
+  the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
+  N0246.
 - `@export` on a constant makes it C data (§28.4).
 
 ## 11. `main`
@@ -608,6 +618,12 @@ struct literal.
 - `for (i in lo..hi) { … }`: `i` takes each value from `lo` up to but not including `hi`. Both bounds
   are evaluated once, have the same integer type (flexible literals adapt), and `i` is immutable
   in the body.
+  - **Index ranges** (ADR 0063). When both bounds are flexible literals, the range is `usize` if the body indexes
+    with `i`, and the literals' default (`i32`, §5) otherwise. The body indexes with `i` where `i` is an index
+    (`a[i]`) or a slice bound (`a[lo..i]`), or an operand of `+ - * / %` that is one (`a[i * w + x]`), in the body's
+    statements, nested blocks and closures. Inside a call, cast, comparison or condition in an index it does not
+    count (`a[truncate<usize>(i)]` keeps `i32`). The decision is syntactic and made before the body is checked;
+    locals cannot be shadowed (N0203), so the name means `i` throughout.
 - `for (x in seq) { … }`: `seq` is an array place, a slice, or a reference to an array. `x` is a copy
   of each element from index 0 upward. The element is read when the loop reaches it, and the
   length is read once at the start.
@@ -1052,8 +1068,14 @@ StructDecl   = 'struct' Identifier TypeParams? '{' … '}'
 EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 ```
 - A top-level function, struct or enum may declare **type parameters**. Inside the declaration,
-  each parameter is a type. Methods of a generic struct see the struct's parameters; methods
-  cannot declare parameters of their own in v0.
+  each parameter is a type. Methods of a generic struct see the struct's parameters.
+- **Generic methods** (ADR 0064 §1). A struct's method or static function may declare type parameters of its own:
+  `fn add<S: Shape>(borrow mut this, s: borrow S)`. It sees the struct's parameters too. It is checked once with its
+  parameters opaque (§20.3) and instantiated per call (§20.4), as a top-level generic function is. Its type
+  arguments are inferred from the arguments after the receiver, or written after the name: `canvas.add<Square>(s)`,
+  `Pair<i32>.make<u8>(…)`. Type arguments on a call of a function without type parameters of its own are N0209.
+  An interface's methods, and so an `impl I for T` block's, cannot have type parameters (N0216): a `dyn` table
+  holds one function per method.
 - Names must be distinct, and must not shadow items or built-in types (N0201).
 
 ### 20.2 Using generic items
@@ -1126,7 +1148,13 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
 MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'
 ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
+InherentImpl  = 'impl' TypeParams? Type '{' FunctionDecl* '}'
 ```
+- **`impl S { … }`** (an inherent impl, ADR 0064 §1) adds methods and static functions to a struct `S`, as if they
+  were written in its body: the same visibility, the same "no member named twice" rule (N0228), and generic methods
+  (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
+  `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
+  N0267.
 - An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
   `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods
   cannot have type parameters of their own, and v0 has no `Self` type.
@@ -1544,8 +1572,13 @@ methods. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is 
   passed to a region's `alloc`, except a bare reference (N0264: region memory holds values).
 - **Assignment:** assigning to a reference *local* still writes through it (§13.3). Assigning to a
   field or element of reference type replaces the reference stored there (`token.text = view`).
-- **Still rejected (N0246):** `Box`, `Pool`, statics and constants, array and slice elements, and
-  written references to references. **Region values and pool boxes** (`FixedBufferAllocator`,
+- **Arrays and slices** (ADR 0064 §2): their elements may be scoped values that are Copy: views (`StringView`,
+  `Slice<T>`) and structs or enums holding them, but not bare `borrow T` references. All elements share the element
+  type's regions, so `[StringView<r>; N]` and `Slice<a, StringView<r>>` hold loans of `r`. An array of scoped
+  elements is itself scoped, like a `Vector` of them (§19.1): its loans are checked as a whole, as its places are
+  (§16.3). A slice's elements live at least as long as the slice, as a Vector's view's do.
+- **Still rejected (N0246):** `Box`, `Pool`, statics, constants other than views (§10), `borrow T` array and slice
+  elements, and written references to references. **Region values and pool boxes** (`FixedBufferAllocator`,
   `ScratchFrame`, `PoolBox<T>`) stay out of every place this section opens up (fields, payloads,
   collection elements, type arguments of user types): they must stay pinned or LIFO in locals.
 
@@ -3072,14 +3105,27 @@ fn main() {
 - A value converts to a `dyn` type only where that type is **expected**: an annotated `let`, an argument, a field
   initialiser, a `return`, or an argument of a collection method such as `push`. Inference never invents a `dyn`
   type.
-  - `borrow T` → `borrow dyn I`, and `borrow mut T` → `borrow mut dyn I` (or `borrow dyn I`);
+  - `borrow T` → `borrow dyn I`, and `borrow mut T` → `borrow mut dyn I` (or `borrow dyn I`). A `borrow mut T`
+    variable or field converts through a reborrow, as every use of a `borrow mut` does (§13.3): it stays usable
+    after the reborrow ends, and is frozen while it lives (B4);
   - `Box<T, A>` → `Box<dyn I, A>`: a move of the box, with no new allocation. The allocator type must be the same.
 - `T` must implement `I` (§21.1), else **N0268**, as for an unsatisfied bound.
-- `T` is never scoped (§19.1): no references, closures, views, slices or region parameters. A struct with region
-  parameters may implement `I` (§25.3), but coercing it to `dyn I` is **N0268**. So a `dyn` value carries no loans of its own: `borrow dyn I` carries only the
-  loan of the reference it came from, and `Box<dyn I>` carries none. (Scoped `dyn(r) I` values are OD-10a.)
+- **Scoped `T` behind a reference** (ADR 0064 §3.2, OD-10a). A type with region parameters that implements `I`
+  (§25.3), such as `View<r>`, coerces to `borrow dyn I` and `borrow mut dyn I`. The `dyn` reference carries the loan
+  of the reference it came from. As for any `borrow(a) View<r>`, `r` outlives `a`, so the referent's loans outlive
+  the `dyn` reference, and borrowing the value keeps its loans alive (B4). No region is written on the `dyn` type.
+  Other scoped types (references, closures, views, slices) are not `dyn` (they implement no interface), and
+  `Box<dyn I>` takes no scoped `T` (**N0268**): a box owns its value, and its type keeps no region.
 - `T` must be a sized type: a struct, an enum, or a built-in type such as `i32`. A `dyn I` does not coerce to another
   `dyn` type, and there is no conversion back to `T` (no downcasting; OD-10b).
+- **`dyn I` implements `I`** (ADR 0064 §3.1). For bounds, `dyn I` (and `dyn I + Send`) implements its own
+  interface, with the same type arguments: each method calls through the value's table. So a generic
+  `fn layout<M: Metrics>(m: borrow M)` takes a `borrow dyn Metrics` as well as a `borrow Fixed`, with `M = dyn Metrics`.
+  `dyn I` is unsized, so it may be a type argument only where the generic holds it behind a reference or a box:
+  - A function instance whose parameters, locals or result hold a `dyn` value by value is N0222 at the use, with the
+    reason.
+  - A user struct or enum instantiated with `dyn I` (`ByRef<dyn I>`, written or inferred) is N0330 if it holds the
+    value by value (`struct Wrap<T> { inner: T }`).
 
 ### 37.3 Calls
 - `x.m(args)`, where `x` is a `borrow dyn I`, a `borrow mut dyn I`, a `Box<dyn I, A>`, or a place of one of these

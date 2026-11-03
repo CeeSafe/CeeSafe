@@ -63,5 +63,5 @@ fn main() {
     shown(borrow plain); // error[N0268]
     let raw = [1u8, 2u8];
     let bytes = Bytes { data: raw[..] };
-    let s: borrow dyn Show = borrow bytes; // error[N0268]
+    let s: borrow dyn Show = borrow bytes; // a scoped value behind a dyn reference: allowed since ADR 0064 §3.2 (was N0268)
 }

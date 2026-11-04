@@ -1,0 +1,443 @@
+// The methods of bytes and text written in lib/core (ADR 0071 §2.2, §2.4, §2.5): byte order, searching, trimming,
+// splitting and parsing numbers, on `Slice<u8>`, `SliceMut<u8>`, `StringView`, and a `Vector<u8>`'s or `String`'s
+// contents. Each is a call of a static function of lib/core's ByteOrder, VectorBytes, TextSearch<r>, ByteSearch<r>
+// or NumberParsing, chosen by the method's name and, for the generic ones, its type argument.
+
+/// Whether `name` is one of the methods of bytes or text handled here (not `pushBE`/`pushLE`, which are a vector's).
+fn isBytesTextMethod(name: Slice<u8>) -> bool =>
+    isSearchMethod(name) || isParseMethod(name) || sameText(name, "readBE") || sameText(name, "readLE") ||
+        isByteWriter(name);
+
+/// `writeBE` and `writeLE`: they write through the receiver, which must be a `SliceMut<u8>`.
+fn isByteWriter(name: Slice<u8>) -> bool => sameText(name, "writeBE") || sameText(name, "writeLE");
+
+fn isParseMethod(name: Slice<u8>) -> bool =>
+    sameText(name, "parseInt") || sameText(name, "parseIntRadix") || sameText(name, "parseFloat");
+
+fn isSearchMethod(name: Slice<u8>) -> bool =>
+    sameText(name, "indexOf") || sameText(name, "lastIndexOf") || sameText(name, "indexOfByte") ||
+        sameText(name, "contains") || sameText(name, "startsWith") || sameText(name, "endsWith") ||
+        sameText(name, "equalsIgnoreAsciiCase") || sameText(name, "trim") || sameText(name, "trimStart") ||
+        sameText(name, "trimEnd") || sameText(name, "splitOnce") || sameText(name, "split");
+
+/// `receiver` is a byte slice (`Slice<u8>` or `SliceMut<u8>`) or, with `isText`, a `StringView`, already borrowed.
+fn checkBytesTextMethod(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    receiver: u32,
+    isText: bool,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    if (c.isBottom(receiver)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let receiverType = c.typeOf(receiver);
+    if (!isText && c.types.info(c.types.info(receiverType).pointee).element != c.types.u8) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, receiverType)?;
+        appendText(mut message, " has no method '")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "': it is a method of 'Slice<u8>' and 'StringView' (ADR 0071)")?;
+        c.error(undefinedName(), ident.start, ident.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (isParseMethod(text)) {
+        return checkParseMethod(c, member, arguments, receiver, isText, span);
+    }
+    let explicit = c.front.ast.typeArgumentsOfMember(member);
+    if (isSearchMethod(text)) {
+        if (!noMemberTypeArguments(c, member, span)?) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        var shared = receiver;
+        if (!isText && c.types.info(receiverType).mutableReference) {
+            let u8Type = c.types.u8;
+            let sliceType = c.types.sliceOf(u8Type, false)?;
+            shared = coerce(c, receiver, sliceType, targetSpan)?;
+        }
+        let none0 = Vector<u32>.create();
+        let function = libraryFunction(
+            c,
+            if (isText) "TextSearch" else "ByteSearch",
+            none0.view(),
+            ident.symbol,
+            span,
+        )?;
+        return checkLibraryMethodCall(c, function, arguments, shared, span);
+    }
+    if (isText) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'StringView' has no method '")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "': byte order is read from bytes, as 's.bytes().")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "<u32>(at)'")?;
+        c.error(undefinedName(), ident.start, ident.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let bigEndian = text[text.length - 2] == 'B';
+    if (!isByteWriter(text)) {
+        // s.readBE<T>(at): the type argument picks the reader.
+        if (explicit.count != 1) {
+            return byteOrderTypeMissing(c, text, arguments, span);
+        }
+        let typeSyntax = c.front.ast.at(explicit, 0);
+        let t = c.resolveType(typeSyntax, false)?;
+        let function = byteOrderFunction(c, "read", t, bigEndian, span)?;
+        if (function == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        var shared = receiver;
+        if (c.types.info(receiverType).mutableReference) {
+            let u8Type = c.types.u8;
+            let sliceType = c.types.sliceOf(u8Type, false)?;
+            shared = coerce(c, receiver, sliceType, targetSpan)?;
+        }
+        return checkLibraryMethodCall(c, function, arguments, shared, span);
+    }
+    // s.writeBE(at, x): x's type (or the type argument) picks the writer.
+    if (!c.types.info(receiverType).mutableReference) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' writes through the slice, which is a ")?;
+        appendQuotedType(mut message, c, receiverType)?;
+        appendText(mut message, "; it needs a 'SliceMut<u8>'")?;
+        c.error(assignToImmutable(), targetSpan.start, targetSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 2) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' takes an offset and a value: 's.")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "(at, x)'")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let usize = c.types.usize;
+    let atSyntax = c.front.ast.at(arguments, 0);
+    let at = checkExpr(c, atSyntax, usize)?;
+    let valueSyntax = c.front.ast.at(arguments, 1);
+    let value = checkByteOrderValue(c, text, explicit, valueSyntax, span)?;
+    if (c.isBottom(at) || c.isBottom(value)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let valueType = c.typeOf(value);
+    let function = byteOrderFunction(c, "write", valueType, bigEndian, span)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [receiver, at, value];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `v.pushBE(x)` and `v.pushLE(x)` on a `Vector<u8, A>` (ADR 0071 §2.2): VectorBytes's pusher of x's type. The
+/// value is checked before the vector's mutable loan starts (two-phase, B5), as for `push`.
+fn checkVectorPushBytes(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let vectorType = c.typeOf(vector);
+    if (c.types.info(c.types.info(vectorType).pointee).element != c.types.u8 || c.types.isString(vectorType)) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, vectorType)?;
+        appendText(mut message, " has no method '")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "': it appends bytes, to a 'Vector<u8>' (ADR 0071 §2.2)")?;
+        c.error(undefinedName(), ident.start, ident.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' takes one argument, the integer to append")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let explicit = c.front.ast.typeArgumentsOfMember(member);
+    let valueSyntax = c.front.ast.at(arguments, 0);
+    let value = checkByteOrderValue(c, text, explicit, valueSyntax, span)?;
+    let receiver = borrowPlace(c, vector, true, targetSpan)?;
+    if (c.isBottom(value) || c.isBottom(receiver)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let t = c.typeOf(value);
+    var name = byteOrderName(c, "push", t, text[text.length - 2] == 'B', span)?;
+    if (name.length == 0) {
+        return c.errorResult(span.start, span.end);
+    }
+    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
+        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
+    }
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "VectorBytes", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0071")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [receiver, value];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `s.parseInt<T>()`, `s.parseIntRadix<T>(radix)` and `s.parseFloat<T>()` (ADR 0071 §2.5): NumberParsing's parser of T,
+/// on the bytes.
+fn checkParseMethod(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    receiver: u32,
+    isText: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let explicit = c.front.ast.typeArgumentsOfMember(member);
+    let float = sameText(text, "parseFloat");
+    if (explicit.count != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' needs the type to parse as: 's.")?;
+        appendBytes(mut message, text)?;
+        appendText(
+            mut message,
+            if (float) "<f64>()'" else if (sameText(text, "parseIntRadix")) "<u32>(16)'" else "<u32>()'",
+        )?;
+        c.error(cannotInferTypeArguments(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let typeSyntax = c.front.ast.at(explicit, 0);
+    let t = c.resolveType(typeSyntax, false)?;
+    if (c.types.isBottom(t)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var name = Vector<u8>.create();
+    appendText(mut name, "parse")?;
+    if (float) {
+        if (!c.types.is(t, TypeKind.Float)) {
+            return parseTypeWrong(c, text, t, "a float type, 'f32' or 'f64'", arguments, span);
+        }
+        appendText(mut name, if (c.types.info(t).bits == 32) "F32" else "F64")?;
+    } else {
+        if (!c.types.is(t, TypeKind.Integer)) {
+            return parseTypeWrong(c, text, t, "an integer type", arguments, span);
+        }
+        let typeName = c.typeName(t);
+        name.push(typeName[0] - 32)?; // u32 → U32, isize → Isize
+        appendBytes(mut name, typeName[1..])?;
+        if (sameText(text, "parseIntRadix")) {
+            appendText(mut name, "Radix")?;
+        }
+    }
+    var bytes = receiver;
+    if (isText) {
+        let u8Type = c.types.u8;
+        let bytesType = c.types.sliceOf(u8Type, false)?;
+        bytes = c.expr(HirExpr.Cast(receiver), bytesType, span.start, span.end)?;
+    } else if (c.types.info(c.typeOf(receiver)).mutableReference) {
+        let u8Type = c.types.u8;
+        let bytesType = c.types.sliceOf(u8Type, false)?;
+        bytes = coerce(c, receiver, bytesType, span)?;
+    }
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "NumberParsing", none0.view(), symbol, span)?;
+    return checkLibraryMethodCall(c, function, arguments, bytes, span);
+}
+
+fn parseTypeWrong(
+    c: borrow mut Checker,
+    text: Slice<u8>,
+    t: u32,
+    wanted: StringView,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "'")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "' parses as ")?;
+    appendText(mut message, wanted)?;
+    appendText(mut message, ", not ")?;
+    appendQuotedType(mut message, c, t)?;
+    c.error(invalidOperandTypes(), span.start, span.end, message)?;
+    checkArgumentsLoosely(c, arguments)?;
+    return c.errorResult(span.start, span.end);
+}
+
+fn byteOrderTypeMissing(
+    c: borrow mut Checker,
+    text: Slice<u8>,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "'")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "' needs the integer type to read: 's.")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "<u32>(at)'")?;
+    c.error(cannotInferTypeArguments(), span.start, span.end, message)?;
+    checkArgumentsLoosely(c, arguments)?;
+    return c.errorResult(span.start, span.end);
+}
+
+/// The value of `writeBE`/`pushBE`, which gives the width: of the explicit type argument if there is one; otherwise
+/// its own type, which a literal without a suffix does not have (N0265).
+fn checkByteOrderValue(
+    c: borrow mut Checker,
+    text: Slice<u8>,
+    explicit: Range,
+    valueSyntax: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (explicit.count > 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' takes one type argument, the integer type")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (explicit.count == 1) {
+        let typeSyntax = c.front.ast.at(explicit, 0);
+        let t = c.resolveType(typeSyntax, false)?;
+        return checkExpr(c, valueSyntax, t);
+    }
+    let unsuffixed = match (c.front.ast.exprs[valueSyntax as usize]) {
+        ExprNode.IntLiteral(_, suffix) => match (suffix) {
+            IntSuffix.None => true,
+            _ => false,
+        },
+        _ => false,
+    };
+    if (unsuffixed) {
+        let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "a literal has no width of its own, so '")?;
+        appendBytes(mut message, text)?;
+        appendText(
+            mut message,
+            "' cannot tell how many bytes to write: give it a suffix ('5u32') or a type argument ('",
+        )?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "<u32>(…)')")?;
+        c.error(cannotInferTypeArguments(), valueSpan.start, valueSpan.end, message)?;
+        return c.errorResult(valueSpan.start, valueSpan.end);
+    }
+    let value = synth(c, valueSyntax, none())?;
+    return autoDeref(c, value);
+}
+
+/// `read`/`write`/`push` + `U32BE` and so on: the name of the function for integer type `t`, or empty after an error.
+fn byteOrderName(
+    c: borrow mut Checker,
+    verb: StringView,
+    t: u32,
+    bigEndian: bool,
+    span: Span,
+) -> Result<Vector<u8>, AllocError> {
+    var name = Vector<u8>.create();
+    if (c.types.isBottom(t)) {
+        return Ok(name);
+    }
+    if (!c.types.is(t, TypeKind.Integer) || t == c.types.usize || t == c.types.isize) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "byte order reads and writes an integer of a fixed width ('u8' to 'u64', 'i8' to 'i64'), not ",
+        )?;
+        appendQuotedType(mut message, c, t)?;
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+        return Ok(name);
+    }
+    appendText(mut name, verb)?;
+    name.push(if (c.types.info(t).signed) 'I' else 'U')?;
+    appendDecimal(mut name, c.types.info(t).bits as u64)?;
+    appendText(mut name, if (bigEndian) "BE" else "LE")?;
+    return Ok(name);
+}
+
+/// ByteOrder's reader or writer for `t`, or none after an error.
+fn byteOrderFunction(
+    c: borrow mut Checker,
+    verb: StringView,
+    t: u32,
+    bigEndian: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let name = byteOrderName(c, verb, t, bigEndian, span)?;
+    if (name.length == 0) {
+        return Ok(none());
+    }
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "ByteOrder", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0071")?;
+    }
+    return Ok(function);
+}
+
+/// A call of a library function with the receiver first and the method's arguments after it.
+fn checkLibraryMethodCall(
+    c: borrow mut Checker,
+    function: u32,
+    arguments: Range,
+    receiver: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0071")?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return checkUserCallWith(c, function, arguments, span, receiver);
+}
+
+/// A call of a library function on values already checked, each converted to its parameter's type.
+fn libraryCall(c: borrow mut Checker, function: u32, values: Slice<u32>, span: Span) -> Result<u32, AllocError> {
+    var converted = Vector<u32>.create();
+    for (k in 0..values.length) {
+        let parameter = c.hir.functions[function as usize].parameters[k];
+        let parameterType = c.hir.locals[parameter as usize].typ;
+        let value = values[k];
+        let valueSpan = c.spanOf(value);
+        converted.push(coerce(c, value, parameterType, valueSpan)?)?;
+    }
+    let list = c.hir.list(converted.view())?;
+    checkTaskCall(c, function, span)?;
+    let returnType = c.hir.functions[function as usize].returnType;
+    return c.expr(HirExpr.Call(function, list), returnType, span.start, span.end);
+}

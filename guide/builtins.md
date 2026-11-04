@@ -101,6 +101,15 @@ No such file or directory
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |
+| `s.indexOf(t)`, `s.lastIndexOf(t)`, `s.indexOfByte(b)` | `usize?` |
+| `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)`, `s.equalsIgnoreAsciiCase(t)` | `bool` |
+| `s.trim()`, `s.trimStart()`, `s.trimEnd()` | the `StringView` without ASCII whitespace |
+| `s.splitOnce(sep)`, `s.split(sep)` | `TextHalves?` (`left`, `right`); a `TextSplit`, whose `next()` gives each piece, then `null` |
+| `s.parseInt<T>()`, `s.parseIntRadix<T>(radix)`, `s.parseFloat<T>()` | `T?`: `null` for text that is not a `T` |
+
+The searches and parsers work on a `String` too, and on bytes: a `Slice<u8>` (or a `Vector<u8>`) takes and gives
+`Slice<u8>` where a view takes and gives `StringView`. Every view they return stays valid UTF-8. Floats parse
+correctly rounded, and accept `inf`, `infinity` and `nan` in any case.
 
 A `StringView` is a reference: a variable holding one is a `let`, and a struct or enum holding one needs a region
 parameter. For formatting into a fixed buffer without allocating, use lib/core's `TextWriter` (`text`, `byte`,
@@ -142,6 +151,44 @@ hi
 | `v.view()`, `v.viewMut()` | `Slice<T>`, `SliceMut<T>` |
 | `[x; N]`, `[a, b, c]`, `a[lo..hi]`, `borrow mut a[lo..hi]` | an array; a `Slice<T>`; a `SliceMut<T>` |
 | `d.copyFrom(s)`, `d.fill(v)` | bulk writes into a `SliceMut<T>` |
+| `v.extend(s)`, `v.resize(n, fill)`, `v.reserve(extra)` | `Result<void, AllocError>`; one growth at most; `extend` and `resize` need Copy elements |
+| `b.readBE<T>(at)`, `b.readLE<T>(at)` | `T`, an integer from bytes, big- or little-endian |
+| `b.writeBE(at, x)`, `b.writeLE(at, x)` | into a `SliceMut<u8>` (or a mutable `Vector<u8>`) |
+| `v.pushBE(x)`, `v.pushLE(x)` | `Result<void, AllocError>`: `x`'s bytes appended to a `Vector<u8>` |
+
+Byte order works on fixed-width integers (`u8` to `u64`, `i8` to `i64`); the value's type gives the width, so a
+literal needs a suffix (`v.pushBE(5u32)`). A read or write past the end panics at the call, and writes nothing.
+
+```ceesafe
+fn main() {
+    var message = Vector<u8>.create();
+    message.pushBE(0x51u8)!; // 'Q'
+    message.pushBE(0u32)!; // the length, patched below
+    message.extend("SELECT 1".bytes())!;
+    message.pushBE(0u8)!;
+    let length = truncate<u32>(message.length - 1);
+    message.writeBE(1, length);
+    Console.writeLine(message.readBE<u32>(1));
+    var fields = "r=abc,s=xyz,i=4096".split(",");
+    while (true) {
+        let field = match (fields.next()) {
+            Some(f) => f,
+            null => { break; }
+        };
+        let pair = field.splitOnce("=")!;
+        if (pair.left == "i") {
+            Console.writeLine(pair.right.parseInt<u32>()! * 2);
+        }
+    }
+    Console.writeLine(" 2.5e-3 ".trim().parseFloat<f64>()!);
+}
+```
+
+```text
+13
+8192
+0.0025
+```
 
 Indexes are `usize`. A range of two literals that the body indexes with is a `usize` range. Arrays and slices may
 hold views (`[StringView; 3]`, `Slice<StringView>`), but not `borrow T` references. Slice a variable, not a call's
@@ -190,6 +237,9 @@ Medium
 | `x.wrappingAdd(y)`, `x.checkedAdd(y)`, `x.saturatingAdd(y)` | also `Sub`, `Mul`; `checked…` is a `T?` |
 | `x.min(y)`, `x.max(y)` | every integer type |
 | `x.abs()`, `x.unsignedAbs()` | signed types: `abs` panics at the minimum, `unsignedAbs` is the unsigned type of the width |
+| `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)`, `x.wrappingShr(n)` | unsigned types; `n: u32`, taken modulo the width |
+| `x.leadingZeros()`, `x.trailingZeros()`, `x.countOnes()` | unsigned types; a `u32` (the width for 0) |
+| `x.byteSwap()` | every integer type: the bytes in the other order |
 | `x as T` | only conversions that never lose information |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |
 | `checkedTruncate<T>(f)`, `saturatingTruncate<T>(f)` | a float to an integer: `T?` (`null` where `truncate` would panic); the nearest bound (NaN gives 0) |
@@ -290,7 +340,37 @@ fn collections() -> Result<void, AllocError> {
     var dst = [0u8; 2];
     let src = [1u8, 2];
     dst[..].copyFrom(src[..]);
+    var bytes = Vector<u8>.create();
+    bytes.extend(src[..])?;
+    bytes.resize(8, 0)?;
+    bytes.reserve(8)?;
+    bytes.pushBE(1u16)?;
+    bytes.pushLE(-1i32)?;
+    let word: u32 = bytes.readBE<u32>(0);
+    let back: i16 = bytes.view().readLE<i16>(2);
+    bytes.writeLE(0, 7u64);
+    dst[..].writeBE(0, 3u16);
     return Ok();
+}
+fn text() {
+    let s: StringView = " a,b ";
+    let at: usize? = s.indexOf(",");
+    let last: usize? = s.lastIndexOf("b");
+    let byte: usize? = s.indexOfByte(',');
+    let has: bool = s.contains("a") && s.startsWith(" ") && s.endsWith(" ") && s.equalsIgnoreAsciiCase(" A,B ");
+    let t: StringView = s.trim().trimStart().trimEnd();
+    let halves: TextHalves? = t.splitOnce(",");
+    var pieces: TextSplit = t.split(",");
+    let piece: StringView? = pieces.next();
+    let n: i64? = "-12".parseInt<i64>();
+    let h: u8? = "ff".parseIntRadix<u8>(16);
+    let f: f32? = "1.5".parseFloat<f32>();
+    let raw: Slice<u8> = s.bytes();
+    let rawAt: usize? = raw.indexOf(",".bytes());
+    let rawTrim: Slice<u8> = raw.trim();
+    let rawHalves: ByteHalves? = raw.splitOnce(",".bytes());
+    var rawPieces: ByteSplit = raw.split(",".bytes());
+    let rawN: u32? = raw.parseInt<u32>();
 }
 fn numbers() {
     let a: u8 = 250;
@@ -303,6 +383,10 @@ fn numbers() {
     let st: u8 = saturatingTruncate<u8>(f);
     let r: f64 = f.sqrt().abs().ceil().min(1.0).max(0.5);
     let bits: u64 = f.bits();
+    let w: u32 = 0x80000001;
+    let rotated: u32 = w.rotateLeft(1).rotateRight(2).wrappingShl(33).wrappingShr(1);
+    let counts: u32 = w.leadingZeros() + w.trailingZeros() + w.countOnes();
+    let swapped: i16 = (-2i16).byteSwap();
 }
 fn memory() {
     var storage = [0u8; 64];

@@ -1,0 +1,11 @@
+// The bit methods (ADR 0071 §2.3) are on unsigned types, except byteSwap; amounts are one u32 and counts take none.
+fn main() {
+    let s: i32 = 5;
+    let a = s.rotateLeft(1); // error[N0234]
+    let b = s.countOnes(); // error[N0234]
+    let c = s.byteSwap();
+    let u: u32 = 5;
+    let d = u.countOnes(1); // error[N0209]
+    let e = u.rotateLeft(); // error[N0209]
+    let f = u.rotateLeft(1u64); // error[N0205]
+}

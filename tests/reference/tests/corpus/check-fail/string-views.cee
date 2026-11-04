@@ -11,7 +11,7 @@ fn main() {
     for (b in s) { } // error[N0205]
     Console.writeLine(s < "u"); // error[N0207]
     Console.writeLine(s == 1); // error[N0207]
-    s.trim(); // error[N0200]
+    s.reverse(); // error[N0200]
     let b = s.bytes(1); // error[N0209]
     let x: Slice<u8> = s; // error[N0205]
     let y: StringView = s.bytes(); // error[N0205]

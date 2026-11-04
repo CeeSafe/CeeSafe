@@ -1,0 +1,398 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: integers read from and written to bytes in big- or little-endian order (ADR 0071 §2.2). Bundled with
+// ceesafec and part of every package. `s.readBE<u32>(at)` is `ByteOrder.readU32BE(s, at)`, `s.writeBE(at, x)` the
+// writer of `x`'s type, and `v.pushBE(x)` on a `Vector<u8>` is `VectorBytes.pushU32BE(v, x)`, and so on.
+//
+// Each call checks its range once, by slicing: `s[at..]` and then its first `size` bytes, which panics as slicing does
+// when they are not all inside `s`. The bytes are then read by index into that window, whose length the C compiler
+// knows, so it drops the per-byte checks and joins the bytes into one load or store.
+
+/// Reading and writing integers in a byte order: static functions; the struct has no fields and is never made.
+public struct ByteOrder {
+    /// The `u8` in the 1 byte at `at`, big-endian.
+    public fn readU8BE(s: Slice<u8>, at: usize) -> u8 {
+        let tail = s[at..];
+        let w = tail[..1];
+        return w[0];
+    }
+
+    /// The `i8` in the 1 byte at `at`, big-endian, in two's complement.
+    public fn readI8BE(s: Slice<u8>, at: usize) -> i8 => truncate<i8>(ByteOrder.readU8BE(s, at));
+
+    /// Writes `x` to the 1 byte at `at`, big-endian.
+    public fn writeU8BE(s: SliceMut<u8>, at: usize, x: u8) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..1];
+        w[0] = x;
+    }
+
+    /// Writes `x` to the 1 byte at `at`, big-endian, in two's complement.
+    public fn writeI8BE(s: SliceMut<u8>, at: usize, x: i8) {
+        ByteOrder.writeU8BE(s, at, truncate<u8>(x));
+    }
+
+    /// The `u8` in the 1 byte at `at`, little-endian.
+    public fn readU8LE(s: Slice<u8>, at: usize) -> u8 {
+        let tail = s[at..];
+        let w = tail[..1];
+        return w[0];
+    }
+
+    /// The `i8` in the 1 byte at `at`, little-endian, in two's complement.
+    public fn readI8LE(s: Slice<u8>, at: usize) -> i8 => truncate<i8>(ByteOrder.readU8LE(s, at));
+
+    /// Writes `x` to the 1 byte at `at`, little-endian.
+    public fn writeU8LE(s: SliceMut<u8>, at: usize, x: u8) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..1];
+        w[0] = x;
+    }
+
+    /// Writes `x` to the 1 byte at `at`, little-endian, in two's complement.
+    public fn writeI8LE(s: SliceMut<u8>, at: usize, x: i8) {
+        ByteOrder.writeU8LE(s, at, truncate<u8>(x));
+    }
+
+    /// The `u16` in the 2 bytes at `at`, big-endian.
+    public fn readU16BE(s: Slice<u8>, at: usize) -> u16 {
+        let tail = s[at..];
+        let w = tail[..2];
+        return ((w[0] as u16) << 8) | (w[1] as u16);
+    }
+
+    /// The `i16` in the 2 bytes at `at`, big-endian, in two's complement.
+    public fn readI16BE(s: Slice<u8>, at: usize) -> i16 => truncate<i16>(ByteOrder.readU16BE(s, at));
+
+    /// Writes `x` to the 2 bytes at `at`, big-endian.
+    public fn writeU16BE(s: SliceMut<u8>, at: usize, x: u16) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..2];
+        w[0] = truncate<u8>(x >> 8);
+        w[1] = truncate<u8>(x);
+    }
+
+    /// Writes `x` to the 2 bytes at `at`, big-endian, in two's complement.
+    public fn writeI16BE(s: SliceMut<u8>, at: usize, x: i16) {
+        ByteOrder.writeU16BE(s, at, truncate<u16>(x));
+    }
+
+    /// The `u16` in the 2 bytes at `at`, little-endian.
+    public fn readU16LE(s: Slice<u8>, at: usize) -> u16 {
+        let tail = s[at..];
+        let w = tail[..2];
+        return (w[0] as u16) | ((w[1] as u16) << 8);
+    }
+
+    /// The `i16` in the 2 bytes at `at`, little-endian, in two's complement.
+    public fn readI16LE(s: Slice<u8>, at: usize) -> i16 => truncate<i16>(ByteOrder.readU16LE(s, at));
+
+    /// Writes `x` to the 2 bytes at `at`, little-endian.
+    public fn writeU16LE(s: SliceMut<u8>, at: usize, x: u16) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..2];
+        w[0] = truncate<u8>(x);
+        w[1] = truncate<u8>(x >> 8);
+    }
+
+    /// Writes `x` to the 2 bytes at `at`, little-endian, in two's complement.
+    public fn writeI16LE(s: SliceMut<u8>, at: usize, x: i16) {
+        ByteOrder.writeU16LE(s, at, truncate<u16>(x));
+    }
+
+    /// The `u32` in the 4 bytes at `at`, big-endian.
+    public fn readU32BE(s: Slice<u8>, at: usize) -> u32 {
+        let tail = s[at..];
+        let w = tail[..4];
+        return ((w[0] as u32) << 24) | ((w[1] as u32) << 16) | ((w[2] as u32) << 8) | (w[3] as u32);
+    }
+
+    /// The `i32` in the 4 bytes at `at`, big-endian, in two's complement.
+    public fn readI32BE(s: Slice<u8>, at: usize) -> i32 => truncate<i32>(ByteOrder.readU32BE(s, at));
+
+    /// Writes `x` to the 4 bytes at `at`, big-endian.
+    public fn writeU32BE(s: SliceMut<u8>, at: usize, x: u32) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..4];
+        w[0] = truncate<u8>(x >> 24);
+        w[1] = truncate<u8>(x >> 16);
+        w[2] = truncate<u8>(x >> 8);
+        w[3] = truncate<u8>(x);
+    }
+
+    /// Writes `x` to the 4 bytes at `at`, big-endian, in two's complement.
+    public fn writeI32BE(s: SliceMut<u8>, at: usize, x: i32) {
+        ByteOrder.writeU32BE(s, at, truncate<u32>(x));
+    }
+
+    /// The `u32` in the 4 bytes at `at`, little-endian.
+    public fn readU32LE(s: Slice<u8>, at: usize) -> u32 {
+        let tail = s[at..];
+        let w = tail[..4];
+        return (w[0] as u32) | ((w[1] as u32) << 8) | ((w[2] as u32) << 16) | ((w[3] as u32) << 24);
+    }
+
+    /// The `i32` in the 4 bytes at `at`, little-endian, in two's complement.
+    public fn readI32LE(s: Slice<u8>, at: usize) -> i32 => truncate<i32>(ByteOrder.readU32LE(s, at));
+
+    /// Writes `x` to the 4 bytes at `at`, little-endian.
+    public fn writeU32LE(s: SliceMut<u8>, at: usize, x: u32) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..4];
+        w[0] = truncate<u8>(x);
+        w[1] = truncate<u8>(x >> 8);
+        w[2] = truncate<u8>(x >> 16);
+        w[3] = truncate<u8>(x >> 24);
+    }
+
+    /// Writes `x` to the 4 bytes at `at`, little-endian, in two's complement.
+    public fn writeI32LE(s: SliceMut<u8>, at: usize, x: i32) {
+        ByteOrder.writeU32LE(s, at, truncate<u32>(x));
+    }
+
+    /// The `u64` in the 8 bytes at `at`, big-endian.
+    public fn readU64BE(s: Slice<u8>, at: usize) -> u64 {
+        let tail = s[at..];
+        let w = tail[..8];
+        return ((w[0] as u64) << 56) |
+            ((w[1] as u64) << 48) |
+            ((w[2] as u64) << 40) |
+            ((w[3] as u64) << 32) |
+            ((w[4] as u64) << 24) | ((w[5] as u64) << 16) | ((w[6] as u64) << 8) | (w[7] as u64);
+    }
+
+    /// The `i64` in the 8 bytes at `at`, big-endian, in two's complement.
+    public fn readI64BE(s: Slice<u8>, at: usize) -> i64 => truncate<i64>(ByteOrder.readU64BE(s, at));
+
+    /// Writes `x` to the 8 bytes at `at`, big-endian.
+    public fn writeU64BE(s: SliceMut<u8>, at: usize, x: u64) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..8];
+        w[0] = truncate<u8>(x >> 56);
+        w[1] = truncate<u8>(x >> 48);
+        w[2] = truncate<u8>(x >> 40);
+        w[3] = truncate<u8>(x >> 32);
+        w[4] = truncate<u8>(x >> 24);
+        w[5] = truncate<u8>(x >> 16);
+        w[6] = truncate<u8>(x >> 8);
+        w[7] = truncate<u8>(x);
+    }
+
+    /// Writes `x` to the 8 bytes at `at`, big-endian, in two's complement.
+    public fn writeI64BE(s: SliceMut<u8>, at: usize, x: i64) {
+        ByteOrder.writeU64BE(s, at, truncate<u64>(x));
+    }
+
+    /// The `u64` in the 8 bytes at `at`, little-endian.
+    public fn readU64LE(s: Slice<u8>, at: usize) -> u64 {
+        let tail = s[at..];
+        let w = tail[..8];
+        return (w[0] as u64) |
+            ((w[1] as u64) << 8) |
+            ((w[2] as u64) << 16) |
+            ((w[3] as u64) << 24) |
+            ((w[4] as u64) << 32) | ((w[5] as u64) << 40) | ((w[6] as u64) << 48) | ((w[7] as u64) << 56);
+    }
+
+    /// The `i64` in the 8 bytes at `at`, little-endian, in two's complement.
+    public fn readI64LE(s: Slice<u8>, at: usize) -> i64 => truncate<i64>(ByteOrder.readU64LE(s, at));
+
+    /// Writes `x` to the 8 bytes at `at`, little-endian.
+    public fn writeU64LE(s: SliceMut<u8>, at: usize, x: u64) {
+        let tail = borrow mut s[at..];
+        let w = borrow mut tail[..8];
+        w[0] = truncate<u8>(x);
+        w[1] = truncate<u8>(x >> 8);
+        w[2] = truncate<u8>(x >> 16);
+        w[3] = truncate<u8>(x >> 24);
+        w[4] = truncate<u8>(x >> 32);
+        w[5] = truncate<u8>(x >> 40);
+        w[6] = truncate<u8>(x >> 48);
+        w[7] = truncate<u8>(x >> 56);
+    }
+
+    /// Writes `x` to the 8 bytes at `at`, little-endian, in two's complement.
+    public fn writeI64LE(s: SliceMut<u8>, at: usize, x: i64) {
+        ByteOrder.writeU64LE(s, at, truncate<u64>(x));
+    }
+}
+
+/// Appending integers to a byte vector in a byte order: `v.pushBE(x)` and `v.pushLE(x)` (ADR 0071 §2.2). Each is one
+/// `extend` of the bytes, so it grows the vector at most once and leaves it unchanged if that fails. A vector's
+/// allocator is `SystemHeap` or `FailingAllocator` (type-system.md §23.1); the `…Failing` functions are the latter's.
+public struct VectorBytes {
+    /// Appends `x` as 1 byte, big-endian.
+    public fn pushU8BE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 1 byte, big-endian, in two's complement.
+    public fn pushI8BE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8BE(v, truncate<u8>(x));
+
+    /// Appends `x` as 1 byte, little-endian.
+    public fn pushU8LE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 1 byte, little-endian, in two's complement.
+    public fn pushI8LE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8LE(v, truncate<u8>(x));
+
+    /// Appends `x` as 2 bytes, big-endian.
+    public fn pushU16BE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, big-endian, in two's complement.
+    public fn pushI16BE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16BE(v, truncate<u16>(x));
+
+    /// Appends `x` as 2 bytes, little-endian.
+    public fn pushU16LE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, little-endian, in two's complement.
+    public fn pushI16LE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16LE(v, truncate<u16>(x));
+
+    /// Appends `x` as 4 bytes, big-endian.
+    public fn pushU32BE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, big-endian, in two's complement.
+    public fn pushI32BE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32BE(v, truncate<u32>(x));
+
+    /// Appends `x` as 4 bytes, little-endian.
+    public fn pushU32LE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, little-endian, in two's complement.
+    public fn pushI32LE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32LE(v, truncate<u32>(x));
+
+    /// Appends `x` as 8 bytes, big-endian.
+    public fn pushU64BE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, big-endian, in two's complement.
+    public fn pushI64BE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64BE(v, truncate<u64>(x));
+
+    /// Appends `x` as 8 bytes, little-endian.
+    public fn pushU64LE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, little-endian, in two's complement.
+    public fn pushI64LE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64LE(v, truncate<u64>(x));
+
+    /// Appends `x` as 1 byte, big-endian.
+    public fn pushU8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 1 byte, big-endian, in two's complement.
+    public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8BEFailing(v, truncate<u8>(x));
+
+    /// Appends `x` as 1 byte, little-endian.
+    public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError> {
+        var bytes = [0u8; 1];
+        ByteOrder.writeU8LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 1 byte, little-endian, in two's complement.
+    public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError> =>
+        VectorBytes.pushU8LEFailing(v, truncate<u8>(x));
+
+    /// Appends `x` as 2 bytes, big-endian.
+    public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, big-endian, in two's complement.
+    public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16BEFailing(v, truncate<u16>(x));
+
+    /// Appends `x` as 2 bytes, little-endian.
+    public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError> {
+        var bytes = [0u8; 2];
+        ByteOrder.writeU16LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 2 bytes, little-endian, in two's complement.
+    public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError> =>
+        VectorBytes.pushU16LEFailing(v, truncate<u16>(x));
+
+    /// Appends `x` as 4 bytes, big-endian.
+    public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, big-endian, in two's complement.
+    public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32BEFailing(v, truncate<u32>(x));
+
+    /// Appends `x` as 4 bytes, little-endian.
+    public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError> {
+        var bytes = [0u8; 4];
+        ByteOrder.writeU32LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 4 bytes, little-endian, in two's complement.
+    public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError> =>
+        VectorBytes.pushU32LEFailing(v, truncate<u32>(x));
+
+    /// Appends `x` as 8 bytes, big-endian.
+    public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64BE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, big-endian, in two's complement.
+    public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64BEFailing(v, truncate<u64>(x));
+
+    /// Appends `x` as 8 bytes, little-endian.
+    public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError> {
+        var bytes = [0u8; 8];
+        ByteOrder.writeU64LE(mut bytes[..], 0, x);
+        return v.extend(bytes[..]);
+    }
+
+    /// Appends `x` as 8 bytes, little-endian, in two's complement.
+    public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError> =>
+        VectorBytes.pushU64LEFailing(v, truncate<u64>(x));
+}

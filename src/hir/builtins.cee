@@ -113,6 +113,19 @@ fn bfIntMax() -> u32 => 104;
 /// `a.abs()` (panics at the minimum) and `a.unsignedAbs()` on signed integers (ADR 0063 §2.5).
 fn bfIntAbs() -> u32 => 105;
 fn bfIntUnsignedAbs() -> u32 => 106;
+/// The bit methods of integers (ADR 0071 §2.3): rotations and masking shifts take a `u32` amount.
+fn bfIntRotateLeft() -> u32 => 107;
+fn bfIntRotateRight() -> u32 => 108;
+fn bfIntWrappingShl() -> u32 => 109;
+fn bfIntWrappingShr() -> u32 => 110;
+fn bfIntLeadingZeros() -> u32 => 111;
+fn bfIntTrailingZeros() -> u32 => 112;
+fn bfIntCountOnes() -> u32 => 113;
+fn bfIntByteSwap() -> u32 => 114;
+/// `v.extend(s)`, `v.resize(n, fill)` and `v.reserve(extra)` on vectors of Copy elements (ADR 0071 §2.1).
+fn bfVectorExtend() -> u32 => 115;
+fn bfVectorResize() -> u32 => 116;
+fn bfVectorReserve() -> u32 => 117;
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -223,6 +236,17 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     104 => "IntMax",
     105 => "IntAbs",
     106 => "IntUnsignedAbs",
+    107 => "IntRotateLeft",
+    108 => "IntRotateRight",
+    109 => "IntWrappingShl",
+    110 => "IntWrappingShr",
+    111 => "IntLeadingZeros",
+    112 => "IntTrailingZeros",
+    113 => "IntCountOnes",
+    114 => "IntByteSwap",
+    115 => "VectorExtend",
+    116 => "VectorResize",
+    117 => "VectorReserve",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

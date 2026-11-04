@@ -1,0 +1,12 @@
+// extend and resize copy elements, so they need Copy ones; extend of the vector's own view is a conflicting loan.
+struct Owned { b: Box<i32>; }
+
+fn main() {
+    var owned = Vector<Owned>.create();
+    owned.resize(2, Owned { b: Box.create(1)! })!; // error[N0259]
+    owned.reserve(4)!;
+    var v = Vector<u8>.create();
+    v.resize(3)!; // error[N0209]
+    var s = String.create();
+    s.extend("x".bytes())!; // error[N0200]
+}

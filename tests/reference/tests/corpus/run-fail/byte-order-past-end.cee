@@ -1,0 +1,7 @@
+// A read of bytes past the end panics as slicing does, and reads nothing (ADR 0071 §2.2).
+fn main() {
+    let bytes = [1u8, 2, 3, 4, 5];
+    Console.writeLine(bytes[..].readBE<u32>(1));
+    bytes[..].readBE<u32>(2); // expect-panic: index out of bounds
+}
+// expect-stdout: 33752069

@@ -1,0 +1,11 @@
+// Searching is on bytes and text; parsing names an integer or float type (ADR 0071 §2.4, §2.5).
+fn main() {
+    let words = ["a", "b"];
+    let ints = [1, 2, 3];
+    let i = ints[..].indexOf(ints[..1]); // error[N0200]
+    let p = "12".parseInt(); // error[N0265]
+    let q = "12".parseInt<bool>(); // error[N0207]
+    let r = "1.5".parseFloat<i32>(); // error[N0207]
+    let s = "x".trim<u8>(); // error[N0209]
+    let t = "x".indexOf(5); // error[N0205]
+}

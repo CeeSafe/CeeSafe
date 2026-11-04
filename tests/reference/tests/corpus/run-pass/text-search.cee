@@ -1,0 +1,103 @@
+// Searching, trimming and splitting text and bytes (ADR 0071 §2.4): a SCRAM server-first message.
+fn show(v: usize?) {
+    match (v) {
+        Some(i) => { Console.writeLine(i); }
+        null => { Console.writeLine("null"); }
+    }
+}
+
+fn main() {
+    let s: StringView = "  r=abc,s=xyz,i=4096\r\n";
+    let t = s.trim();
+    Console.writeLine(t);
+    Console.writeLine(s.trimStart().length);
+    Console.writeLine(s.trimEnd().length);
+    Console.writeLine("   ".trim().length);
+    show(t.indexOf("s="));
+    show(t.indexOf(""));
+    show(t.lastIndexOf("="));
+    show(t.lastIndexOf(""));
+    show(t.indexOf("q"));
+    show(t.indexOfByte(','));
+    show("aaaaaaaaaaaaaaaaaaaaaaaaab".indexOf("aab"));
+    show("abc".indexOf("abcd"));
+    Console.writeLine(t.startsWith("r="));
+    Console.writeLine(t.endsWith("4096"));
+    Console.writeLine(t.endsWith("40960"));
+    Console.writeLine(t.contains("xyz"));
+    Console.writeLine("Content-Type".equalsIgnoreAsciiCase("content-type"));
+    Console.writeLine("Content-Type".equalsIgnoreAsciiCase("content-typ"));
+    var iterations: u32 = 0;
+    var fields = t.split(",");
+    while (true) {
+        let field = match (fields.next()) { Some(f) => f, null => { break; } };
+        match (field.splitOnce("=")) {
+            Some(kv) => {
+                Console.write(kv.left);
+                Console.write(" -> ");
+                Console.writeLine(kv.right);
+                if (kv.left == "i") {
+                    iterations = kv.right.parseInt<u32>()!;
+                }
+            }
+            null => {}
+        }
+    }
+    Console.writeLine(iterations);
+    var pieces = "a,,b,".split(",");
+    var count = 0;
+    while (pieces.next() != null) {
+        count += 1;
+    }
+    Console.writeLine(count);
+    var whole = "a,b".split("");
+    Console.writeLine(whole.next()!);
+    Console.writeLine(whole.next() == null);
+    Console.writeLine("é,ü".splitOnce(",")!.right);
+    // The same on bytes, and a String's text
+    let raw = "INSERT 0 1".bytes();
+    show(raw.lastIndexOf(" ".bytes()));
+    let tag = raw.splitOnce(" ".bytes())!;
+    Console.writeLine(tag.left.length);
+    Console.writeLine(raw.startsWith("INSERT".bytes()));
+    var line = String.create();
+    line.append("  EHLO example.org  ")!;
+    Console.writeLine(line.trim());
+    Console.writeLine(line.contains("EHLO"));
+    var v = Vector<u8>.create();
+    v.push('x')!;
+    v.push(' ')!;
+    show(v.indexOfByte(' '));
+}
+// expect-stdout: r=abc,s=xyz,i=4096
+// expect-stdout: 20
+// expect-stdout: 20
+// expect-stdout: 0
+// expect-stdout: 6
+// expect-stdout: 0
+// expect-stdout: 13
+// expect-stdout: 18
+// expect-stdout: null
+// expect-stdout: 5
+// expect-stdout: 23
+// expect-stdout: null
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: r -> abc
+// expect-stdout: s -> xyz
+// expect-stdout: i -> 4096
+// expect-stdout: 4096
+// expect-stdout: 4
+// expect-stdout: a,b
+// expect-stdout: true
+// expect-stdout: ü
+// expect-stdout: 8
+// expect-stdout: 6
+// expect-stdout: true
+// expect-stdout: EHLO example.org
+// expect-stdout: true
+// expect-stdout: 1

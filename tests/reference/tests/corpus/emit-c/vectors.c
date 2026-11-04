@@ -63,6 +63,9 @@ static CEE_UNUSED void ceeD_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
 static CEE_UNUSED ceeR_vE10AllocError ceeVA_VZS10SystemHeap(ceeV_ZS10SystemHeap *, cee_str);
 static CEE_UNUSED void ceeVC_VZS10SystemHeap(ceeV_ZS10SystemHeap *);
 static CEE_UNUSED ceeR_vE10AllocError ceeVP_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, int32_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVR_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, uint64_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, const int32_t *, uint64_t);
+static CEE_UNUSED ceeR_vE10AllocError ceeVZ_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *, uint64_t, int32_t);
 static CEE_UNUSED ceeO_i32 ceeVO_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
 static CEE_UNUSED void ceeVC_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *);
 
@@ -159,6 +162,41 @@ static ceeR_vE10AllocError ceeVP_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, i
     v->ptr[v->len] = x;
     v->len += 1u;
     return ((ceeR_vE10AllocError){ .tag = 0 });
+}
+
+static ceeR_vE10AllocError ceeVR_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, uint64_t extra) {
+    if (extra > v->cap - v->len) {
+        uint64_t cap = v->cap;
+        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(int32_t), CEE_ALLOC_SYSTEM);
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        v->ptr = (int32_t *)p;
+        v->cap = cap;
+    }
+    return ((ceeR_vE10AllocError){ .tag = 0 });
+}
+
+static ceeR_vE10AllocError ceeVE_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, const int32_t *src, uint64_t n) {
+    ceeR_vE10AllocError room = ceeVR_VUi32S10SystemHeap(v, n);
+    if (room.tag != 0) return room;
+    if (n <= 16u) {
+        for (uint64_t i = 0u; i < n; i++) v->ptr[v->len + i] = src[i];
+    } else {
+        ceesafe_mem_copy(v->ptr + v->len, src, (size_t)n * sizeof *src);
+    }
+    v->len += n;
+    return room;
+}
+
+static ceeR_vE10AllocError ceeVZ_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, uint64_t n, int32_t fill) {
+    if (n <= v->len) {
+        v->len = n;
+        return ((ceeR_vE10AllocError){ .tag = 0 });
+    }
+    ceeR_vE10AllocError room = ceeVR_VUi32S10SystemHeap(v, n - v->len);
+    if (room.tag != 0) return room;
+    for (uint64_t i = v->len; i < n; i++) v->ptr[i] = fill;
+    v->len = n;
+    return room;
 }
 
 static ceeO_i32 ceeVO_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v) {

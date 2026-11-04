@@ -277,6 +277,35 @@ fn integerMethod(name: Slice<u8>) -> u32 {
     if (sameText(name, "unsignedAbs")) {
         return bfIntUnsignedAbs();
     }
+    return integerBitMethod(name);
+}
+
+/// The bit methods of integers (ADR 0071 §2.3), or none.
+fn integerBitMethod(name: Slice<u8>) -> u32 {
+    if (sameText(name, "rotateLeft")) {
+        return bfIntRotateLeft();
+    }
+    if (sameText(name, "rotateRight")) {
+        return bfIntRotateRight();
+    }
+    if (sameText(name, "wrappingShl")) {
+        return bfIntWrappingShl();
+    }
+    if (sameText(name, "wrappingShr")) {
+        return bfIntWrappingShr();
+    }
+    if (sameText(name, "leadingZeros")) {
+        return bfIntLeadingZeros();
+    }
+    if (sameText(name, "trailingZeros")) {
+        return bfIntTrailingZeros();
+    }
+    if (sameText(name, "countOnes")) {
+        return bfIntCountOnes();
+    }
+    if (sameText(name, "byteSwap")) {
+        return bfIntByteSwap();
+    }
     return none();
 }
 
@@ -317,6 +346,9 @@ fn checkIntegerMethod(
 ) -> Result<u32, AllocError> {
     if (function == bfIntAbs() || function == bfIntUnsignedAbs()) {
         return checkIntegerAbs(c, member, arguments, receiver, function, span);
+    }
+    if (function >= bfIntRotateLeft() && function <= bfIntByteSwap()) {
+        return checkIntegerBits(c, member, arguments, receiver, function, span);
     }
     if (arguments.count != 1) {
         var message = Vector<u8>.create();
@@ -381,6 +413,58 @@ fn checkIntegerAbs(
     let result = if (function == bfIntAbs()) typ else unsignedTwin(c, typ);
     let values = [receiver];
     let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
+}
+
+/// `x.rotateLeft(n)` … `x.byteSwap()` (ADR 0071 §2.3). Every one but `byteSwap` needs an unsigned receiver, as the bit
+/// operators do (§6). Rotations and the masking shifts take a `u32` amount, taken modulo the width; the counts are
+/// `u32`. None of them panics.
+fn checkIntegerBits(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    receiver: u32,
+    function: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let typ = c.typeOf(receiver);
+    if (function != bfIntByteSwap() && c.types.info(typ).signed) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        appendText(mut message, " is signed, so it has no ")?;
+        appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(
+            mut message,
+            ": bit operations are on unsigned types; reinterpret with 'truncate<u32>(x)' (ADR 0071 §2.3)",
+        )?;
+        c.error(notAStruct(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let takesAmount = function <= bfIntWrappingShr();
+    if (arguments.count != (if (takesAmount) 1u32 else 0u32)) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, c.front.ast.idents[member as usize].symbol)?;
+        appendText(mut message, if (takesAmount) " takes one argument, a 'u32' amount" else " takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var values = Vector<u32>.create();
+    values.push(receiver)?;
+    if (takesAmount) {
+        let u32Type = c.types.u32;
+        let argumentSyntax = c.front.ast.at(arguments, 0);
+        let amount = checkExpr(c, argumentSyntax, u32Type)?;
+        if (c.isBottom(amount)) {
+            return c.errorResult(span.start, span.end);
+        }
+        values.push(amount)?;
+    }
+    let counts = function == bfIntLeadingZeros() || function == bfIntTrailingZeros() || function == bfIntCountOnes();
+    let result = if (counts) c.types.u32 else typ;
+    let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }
 

@@ -1,0 +1,6 @@
+// The source of extend is borrowed while the vector is lent mutably (ADR 0071 §2.1).
+fn main() {
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    v.extend(v.view())!; // error[N0241]
+}

@@ -41,6 +41,7 @@ fn isPlacedBoxLocal(p: borrow FunctionPlacement, local: u32) -> bool =>
 /// Allocating built-ins that M5 does not place (Unanalysed): what, and why; none otherwise.
 fn unanalysedAllocation(b: u32) -> u32 =>
     if (b == bfVectorPush() ||
+        b == bfVectorExtend() || b == bfVectorResize() || b == bfVectorReserve() ||
         b == bfStringAppend() ||
         b == bfStringAppendNumber() ||
         b ==

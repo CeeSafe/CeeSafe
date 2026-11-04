@@ -1066,6 +1066,7 @@ fn isTcpOptionBuiltin(b: u32) -> bool =>
 /// Whether a builtin evaluated for its effect is written as its rvalue (EmitBuiltin's first case).
 fn isRvalueBuiltin(b: u32) -> bool =>
     b == bfVectorPush() || b == bfStringAppend() || b == bfStringAppendNumber() || b == bfVectorPop() ||
+        b == bfVectorExtend() || b == bfVectorResize() || b == bfVectorReserve() ||
         b == bfVectorClear() || b == bfVectorWithCapacity() || b == bfStableVectorPush() || b == bfSlotMapInsert() ||
         b == bfSlotMapGet() || b == bfSlotMapRemove() || b == bfSlotMapContains() || b == bfFileOpen() ||
         b == bfFileCreate() || b == bfFileRemove() || b == bfResourceRead() || b == bfResourceWrite() ||
@@ -1081,7 +1082,8 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfFloatSqrt() || b == bfFloatAbs() || b == bfFloatFloor() || b == bfFloatCeil() ||
         b == bfFloatMin() || b == bfFloatMax() || b == bfThreadSpawn() || b == bfThreadJoin() ||
         b == bfThreadSpawnBoxed() || b == bfThreadBoth() || b == bfCallerAddress() || b == bfOffsetOf() ||
-        b == bfAsyncWorkers() || b == bfIntAbs() || b == bfIntUnsignedAbs();
+        b == bfAsyncWorkers() || b == bfIntAbs() || b == bfIntUnsignedAbs() ||
+        (b >= bfIntRotateLeft() && b <= bfIntByteSwap());
 
 fn emitBuiltin(
     e: borrow mut CEmitter,
@@ -2142,6 +2144,28 @@ fn appendBuiltinRvalue(
         b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax()) {
         return appendArithmeticCall(e, c, n, sources, f, out, r, "");
     }
+    if (b >= bfIntRotateLeft() && b <= bfIntByteSwap()) {
+        // The bit methods (ADR 0071 §2.3): rt.h's helpers, which mask the amount and have no undefined behaviour.
+        let name =
+            if (b ==
+                bfIntRotateLeft()) "cee_rotl_" else if (b ==
+                bfIntRotateRight()) "cee_rotr_" else if (b ==
+                bfIntWrappingShl()) "cee_shl_wrap_" else if (b ==
+                bfIntWrappingShr()) "cee_shr_wrap_" else if (b ==
+                bfIntLeadingZeros()) "cee_clz_" else if (b ==
+                bfIntTrailingZeros()) "cee_ctz_" else if (b == bfIntCountOnes()) "cee_popcount_" else "cee_bswap_";
+        let operand = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
+        appendText(out, name)?;
+        appendSuffix(c, out, n.operandTypes[builtinArgument(n, r, 0) as usize])?;
+        out.push('(')?;
+        appendBytes(out, operand.view())?;
+        if (b <= bfIntWrappingShr()) {
+            let amount = operandText(e, c, n, sources, f, builtinArgument(n, r, 1))?;
+            appendText(out, ", ")?;
+            appendBytes(out, amount.view())?;
+        }
+        return out.push(')');
+    }
     if (b == bfIntAbs() || b == bfIntUnsignedAbs()) {
         // abs: the checked negation of a negative value, so the minimum panics at the call as `-x` does (§6);
         // unsignedAbs: rt.h's never-failing magnitude. The operand is a NIR operand, without side effects.
@@ -2303,6 +2327,26 @@ fn appendBuiltinRvalue(
     }
     if (b == bfStringAppend()) {
         return appendHelperCall(e, c, n, sources, f, out, "ceeVA_", receiver, arguments);
+    }
+    if (b == bfVectorExtend()) {
+        // The source slice's pointer and length (ADR 0071 §2.1).
+        let v = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let source = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        appendText(out, "ceeVE_")?;
+        appendMangle(c, out, receiver)?;
+        out.push('(')?;
+        appendBytes(out, v.view())?;
+        appendText(out, ", (")?;
+        appendBytes(out, source.view())?;
+        appendText(out, ").ptr, (")?;
+        appendBytes(out, source.view())?;
+        return appendText(out, ").len)");
+    }
+    if (b == bfVectorResize()) {
+        return appendHelperCall(e, c, n, sources, f, out, "ceeVZ_", receiver, arguments);
+    }
+    if (b == bfVectorReserve()) {
+        return appendHelperCall(e, c, n, sources, f, out, "ceeVR_", receiver, arguments);
     }
     if (b == bfStringAppendNumber()) {
         // The digits go into a compound literal, which lives to the end of the block, past the call (rt.h).

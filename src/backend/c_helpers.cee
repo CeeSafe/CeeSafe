@@ -1704,6 +1704,36 @@ fn emitVectorHelperPrototypes(e: borrow mut CEmitter, c: borrow Checker) -> Resu
             e.t(");")?;
             e.emit()?;
             e.helperProto()?;
+            appendCTypeName(c, mut e.buf, voidResult)?;
+            e.t(" ceeVR_")?;
+            e.b(m.view())?;
+            e.t("(")?;
+            e.b(name.view())?;
+            e.t(" *, uint64_t);")?;
+            e.emit()?;
+            if (c.types.isCopy(elementType)) {
+                e.helperProto()?;
+                appendCTypeName(c, mut e.buf, voidResult)?;
+                e.t(" ceeVE_")?;
+                e.b(m.view())?;
+                e.t("(")?;
+                e.b(name.view())?;
+                e.t(" *, const ")?;
+                appendCTypeName(c, mut e.buf, elementType)?;
+                e.t(" *, uint64_t);")?;
+                e.emit()?;
+                e.helperProto()?;
+                appendCTypeName(c, mut e.buf, voidResult)?;
+                e.t(" ceeVZ_")?;
+                e.b(m.view())?;
+                e.t("(")?;
+                e.b(name.view())?;
+                e.t(" *, uint64_t, ")?;
+                appendCTypeName(c, mut e.buf, elementType)?;
+                e.t(");")?;
+                e.emit()?;
+            }
+            e.helperProto()?;
             appendCTypeName(c, mut e.buf, optionFor(c, elementType))?;
             e.t(" ceeVO_")?;
             e.b(m.view())?;
@@ -1838,6 +1868,7 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
             e.emit()?;
             e.line("}")?;
             e.line("")?;
+            emitVectorBulkHelpers(e, c, vector, elementType, allocator.view(), result.view(), error.view())?;
             e.helper()?;
             appendCTypeName(c, mut e.buf, optionType)?;
             e.t(" ceeVO_")?;
@@ -1929,5 +1960,114 @@ fn emitVectorHelpers(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, 
         e.line("}")?;
         e.line("")?;
     }
+    return Ok();
+}
+
+/// `reserve`, `extend` and `resize` of a vector (ADR 0071 §2.1): one `ceesafe_vec_grow` for the whole growth, so a
+/// failure leaves the vector unchanged; `extend` and `resize` only for Copy elements, which are copied as bytes.
+fn emitVectorBulkHelpers(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    vector: u32,
+    elementType: u32,
+    allocator: Slice<u8>,
+    result: Slice<u8>,
+    error: Slice<u8>,
+) -> Result<void, AllocError> {
+    let name = cTypeName(c, vector)?;
+    let m = mangled(c, vector)?;
+    let element = cTypeName(c, elementType)?;
+    // Room for `extra` more: the growth of push, at least to len + extra.
+    e.helper()?;
+    e.b(result)?;
+    e.t(" ceeVR_")?;
+    e.b(m.view())?;
+    e.t("(")?;
+    e.b(name.view())?;
+    e.t(" *v, uint64_t extra) {")?;
+    e.emit()?;
+    e.line("    if (extra > v->cap - v->len) {")?;
+    e.line("        uint64_t cap = v->cap;")?;
+    e.t("        void *p = ceesafe_vec_grow(v->ptr, v->len, &cap, extra, sizeof(")?;
+    e.b(element.view())?;
+    e.t("), ")?;
+    e.b(allocator)?;
+    e.t(");")?;
+    e.emit()?;
+    e.t("        if (p == NULL) return ")?;
+    e.b(error)?;
+    e.t(";")?;
+    e.emit()?;
+    e.t("        v->ptr = (")?;
+    e.b(element.view())?;
+    e.t(" *)p;")?;
+    e.emit()?;
+    e.line("        v->cap = cap;")?;
+    e.line("    }")?;
+    e.t("    return ((")?;
+    e.b(result)?;
+    e.t("){ .tag = 0 });")?;
+    e.emit()?;
+    e.line("}")?;
+    e.line("")?;
+    if (!c.types.isCopy(elementType)) {
+        return Ok();
+    }
+    e.helper()?;
+    e.b(result)?;
+    e.t(" ceeVE_")?;
+    e.b(m.view())?;
+    e.t("(")?;
+    e.b(name.view())?;
+    e.t(" *v, const ")?;
+    e.b(element.view())?;
+    e.t(" *src, uint64_t n) {")?;
+    e.emit()?;
+    e.t("    ")?;
+    e.b(result)?;
+    e.t(" room = ceeVR_")?;
+    e.b(m.view())?;
+    e.t("(v, n);")?;
+    e.emit()?;
+    e.line("    if (room.tag != 0) return room;")?;
+    // A short run by a loop: gcc calls memcpy for an unknown length, even of one element (c-backend §2).
+    e.line("    if (n <= 16u) {")?;
+    e.line("        for (uint64_t i = 0u; i < n; i++) v->ptr[v->len + i] = src[i];")?;
+    e.line("    } else {")?;
+    e.line("        ceesafe_mem_copy(v->ptr + v->len, src, (size_t)n * sizeof *src);")?;
+    e.line("    }")?;
+    e.line("    v->len += n;")?;
+    e.line("    return room;")?;
+    e.line("}")?;
+    e.line("")?;
+    e.helper()?;
+    e.b(result)?;
+    e.t(" ceeVZ_")?;
+    e.b(m.view())?;
+    e.t("(")?;
+    e.b(name.view())?;
+    e.t(" *v, uint64_t n, ")?;
+    e.b(element.view())?;
+    e.t(" fill) {")?;
+    e.emit()?;
+    e.line("    if (n <= v->len) {")?;
+    e.line("        v->len = n;")?;
+    e.t("        return ((")?;
+    e.b(result)?;
+    e.t("){ .tag = 0 });")?;
+    e.emit()?;
+    e.line("    }")?;
+    e.t("    ")?;
+    e.b(result)?;
+    e.t(" room = ceeVR_")?;
+    e.b(m.view())?;
+    e.t("(v, n - v->len);")?;
+    e.emit()?;
+    e.line("    if (room.tag != 0) return room;")?;
+    e.line("    for (uint64_t i = v->len; i < n; i++) v->ptr[i] = fill;")?;
+    e.line("    v->len = n;")?;
+    e.line("    return room;")?;
+    e.line("}")?;
+    e.line("")?;
     return Ok();
 }

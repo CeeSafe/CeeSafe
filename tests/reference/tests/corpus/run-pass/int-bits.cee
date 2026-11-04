@@ -1,0 +1,66 @@
+// The bit methods of integers (ADR 0071 §2.3): rotations and masking shifts take the amount modulo the width, counts
+// of zero are the width, and byteSwap is on every integer type.
+fn main() {
+    let a: u32 = 0x80000001;
+    Console.writeLine(a.rotateLeft(1));
+    Console.writeLine(a.rotateRight(1));
+    Console.writeLine(a.rotateLeft(33));
+    Console.writeLine(a.rotateRight(0));
+    Console.writeLine(a.wrappingShl(32));
+    Console.writeLine(a.wrappingShl(35));
+    Console.writeLine(a.wrappingShr(31));
+    let b: u8 = 0x81;
+    Console.writeLine(b.rotateLeft(1));
+    Console.writeLine(b.rotateRight(9));
+    Console.writeLine(b.leadingZeros());
+    let h: u16 = 0x0102;
+    Console.writeLine(h.byteSwap());
+    Console.writeLine(h.countOnes());
+    let z: u64 = 0;
+    Console.writeLine(z.leadingZeros());
+    Console.writeLine(z.trailingZeros());
+    Console.writeLine(z.countOnes());
+    let w: u64 = 0xF0F0;
+    Console.writeLine(w.countOnes());
+    Console.writeLine(w.trailingZeros());
+    Console.writeLine(w.leadingZeros());
+    let all: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    Console.writeLine(all.countOnes());
+    Console.writeLine(all.rotateLeft(17) == all);
+    let s: u32 = 0x11223344;
+    Console.writeLine(s.byteSwap());
+    let n: i16 = -2;
+    Console.writeLine(n.byteSwap());
+    let m: i64 = 1;
+    Console.writeLine(m.byteSwap());
+    let one: usize = 1;
+    Console.writeLine(one.rotateRight(1).leadingZeros());
+    // SHA-256's Σ0 of its first word
+    let x: u32 = 0x6a09e667;
+    Console.writeLine(x.rotateRight(2) ^ x.rotateRight(13) ^ x.rotateRight(22));
+}
+// expect-stdout: 3
+// expect-stdout: 3221225472
+// expect-stdout: 3
+// expect-stdout: 2147483649
+// expect-stdout: 2147483649
+// expect-stdout: 8
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 192
+// expect-stdout: 0
+// expect-stdout: 513
+// expect-stdout: 2
+// expect-stdout: 64
+// expect-stdout: 64
+// expect-stdout: 0
+// expect-stdout: 8
+// expect-stdout: 4
+// expect-stdout: 48
+// expect-stdout: 64
+// expect-stdout: true
+// expect-stdout: 1144201745
+// expect-stdout: -257
+// expect-stdout: 72057594037927936
+// expect-stdout: 0
+// expect-stdout: 3458249854

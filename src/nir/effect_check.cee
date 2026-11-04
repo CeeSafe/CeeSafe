@@ -648,7 +648,8 @@ fn builtinOperation(
     if (function == bfArenaCreate() || function == bfArenaAlloc() || function == bfArenaAllocArray() ||
         function == bfScratchEnter() || function == bfPoolCreate() || function == bfVectorWithCapacity() ||
         function == bfVectorPush() || function == bfStringAppend() || function == bfStringAppendNumber() ||
-        function == bfStableVectorPush() || function == bfSlotMapInsert()) {
+        function == bfStableVectorPush() || function == bfSlotMapInsert() || function == bfVectorExtend() ||
+        function == bfVectorResize() || function == bfVectorReserve()) {
         var op = effectOp(alloc, opMayAllocate(), none(), none(), none());
         op.builtin = function;
         return Ok(op);

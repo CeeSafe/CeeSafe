@@ -1,0 +1,6 @@
+// option: no-float
+// parseFloat names a float type, which --no-float rejects (type-system.md §35.9); integers still parse.
+fn main() {
+    let n = "12".parseInt<u32>();
+    let x = "1.5".parseFloat<f64>(); // error[N0297]
+}

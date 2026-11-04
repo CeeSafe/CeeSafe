@@ -58,7 +58,7 @@ fn checkFloatLiteral(
     expected: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
-    if (c.noFloat) {
+    if (c.noFloat && !isLibraryFile(c)) {
         var what = Vector<u8>.create();
         appendText(mut what, "a float literal")?;
         c.floatsDisabled(span.start, span.end, what)?;
@@ -278,7 +278,7 @@ fn checkFromBits(
     span: Span,
 ) -> Result<u32, AllocError> {
     let memberIdent = c.front.ast.idents[member as usize];
-    if (c.noFloat) {
+    if (c.noFloat && !isLibraryFile(c)) {
         var what = Vector<u8>.create();
         appendText(mut what, "'")?;
         appendBytes(mut what, c.typeName(floatType))?;

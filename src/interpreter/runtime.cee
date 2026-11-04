@@ -1056,6 +1056,60 @@ fn builtin(
         it.memory.storeBits(vector + 8, length + 1, 8)?;
         return Ok(okValue(c, resultType, null)?);
     }
+    if (b == bfVectorExtend() || b == bfVectorResize() || b == bfVectorReserve()) {
+        // ADR 0071 §2.1: one growth for all of it, then the copies; unchanged if the growth fails.
+        let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
+        let vectorType = pointeeOf(c, builtinArgumentType(n, arguments, 0));
+        let element = elementOf(c, pointeeOf(c, vectorType));
+        let size = typeSize(c, element)? as u64;
+        let length = it.memory.loadBits(vector + 8, 8)?;
+        var sourcePointer: u64 = 0;
+        var target = length;
+        if (b == bfVectorExtend()) {
+            let source = argument(it, c, n, frame, arguments, 1)?;
+            sourcePointer = source.bits(0, 8)?;
+            target = length + source.bits(8, 8)?;
+        } else if (b == bfVectorResize()) {
+            target = argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
+            if (target <= length) {
+                it.memory.storeBits(vector + 8, target, 8)?; // Copy elements: nothing to destroy
+                return Ok(okValue(c, resultType, null)?);
+            }
+        } else {
+            let extra = argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
+            target = if (extra > 0xFFFFFFFFFFFFFFFF - length) 0xFFFFFFFFFFFFFFFF else length + extra;
+        }
+        let old = pointerAt(it, vector)?;
+        let pointer = vectorGrow(
+            it,
+            old,
+            length,
+            vector + 16,
+            target - length,
+            size,
+            allocatorId(c, c.types.info(vectorType).allocator),
+        )?;
+        if (pointer == 0) {
+            return Ok(outOfMemory(c, resultType)?);
+        }
+        it.memory.storeBits(vector, pointer, 8)?;
+        if (b == bfVectorReserve()) {
+            return Ok(okValue(c, resultType, null)?);
+        }
+        if (b == bfVectorExtend()) {
+            for (i in 0..target - length) {
+                let value = it.memory.load(sourcePointer + i * size, size as usize)?;
+                it.memory.store(pointer + (length + i) * size, value)?;
+            }
+        } else {
+            let fill = argument(it, c, n, frame, arguments, 2)?;
+            for (i in length..target) {
+                it.memory.store(pointer + i * size, fill)?;
+            }
+        }
+        it.memory.storeBits(vector + 8, target, 8)?;
+        return Ok(okValue(c, resultType, null)?);
+    }
     if (b == bfStringAppend()) {
         let target = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
         let text = argument(it, c, n, frame, arguments, 1)?;
@@ -1295,6 +1349,14 @@ fn builtin(
         }
         return Ok(floatValue(c, roundFloat(result, bits), resultType)?);
     }
+    if (b >= bfIntRotateLeft() && b <= bfIntByteSwap()) {
+        let t = builtinArgumentType(n, arguments, 0);
+        let size = typeSize(c, t)?;
+        let x = argument(it, c, n, frame, arguments, 0)?.bits(0, size)?;
+        let amount = if (arguments.count > 1) argument(it, c, n, frame, arguments, 1)?.bits(0, 4)? else 0;
+        let counts = b == bfIntLeadingZeros() || b == bfIntTrailingZeros() || b == bfIntCountOnes();
+        return Ok(valueOf(integerBits(b, x, (size * 8) as u64, amount), if (counts) 4 else size));
+    }
     if (b == bfIntAbs() || b == bfIntUnsignedAbs()) {
         let t = builtinArgumentType(n, arguments, 0);
         let x = integerOf(c, argument(it, c, n, frame, arguments, 0)?, t)?;
@@ -1402,4 +1464,55 @@ fn wrappedResult(c: borrow Checker, op: BinaryOp, x: IntValue, y: IntValue, t: u
     let k = binaryIndex(op);
     let r = if (k == 15) a.wrappingMul(b) else if (k == 14) a.wrappingSub(b) else a.wrappingAdd(b);
     return if (c.types.info(t).signed) intValue(truncate<i64>(r)) else intOfU64(r);
+}
+
+/// The bit methods (ADR 0071 §2.3) on the `width` low bits of `x`; written without them, since the compiler that builds
+/// this one may not have them.
+fn integerBits(b: u32, x: u64, width: u64, amount: u64) -> u64 {
+    let mask = if (width == 64) 0xFFFF_FFFF_FFFF_FFFFu64 else (1u64 << width) - 1;
+    let n = amount & (width - 1);
+    if (b == bfIntRotateLeft() || b == bfIntRotateRight()) {
+        if (n == 0) {
+            return x;
+        }
+        let left = if (b == bfIntRotateLeft()) n else width - n;
+        return ((x << left) | (x >> (width - left))) & mask;
+    }
+    if (b == bfIntWrappingShl()) {
+        return (x << n) & mask;
+    }
+    if (b == bfIntWrappingShr()) {
+        return x >> n;
+    }
+    if (b == bfIntCountOnes()) {
+        var count: u64 = 0;
+        var v = x;
+        while (v != 0) {
+            count += v & 1;
+            v = v >> 1;
+        }
+        return count;
+    }
+    if (b == bfIntLeadingZeros()) {
+        var count: u64 = 0;
+        while (count < width && ((x >> (width - 1 - count)) & 1) == 0) {
+            count += 1;
+        }
+        return count;
+    }
+    if (b == bfIntTrailingZeros()) {
+        var count: u64 = 0;
+        while (count < width && ((x >> count) & 1) == 0) {
+            count += 1;
+        }
+        return count;
+    }
+    // byteSwap: the bytes in the other order.
+    var swapped: u64 = 0;
+    var k: u64 = 0;
+    while (k < width / 8) {
+        swapped = (swapped << 8) | ((x >> (8 * k)) & 0xFF);
+        k += 1;
+    }
+    return swapped;
 }

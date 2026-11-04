@@ -1,0 +1,52 @@
+// v.extend(s), v.resize(n, fill) and v.reserve(extra) (ADR 0071 §2.1).
+fn run() -> Result<void, AllocError> {
+    var out = Vector<u8>.create();
+    out.extend("hello".bytes())?;
+    out.resize(8, '!')?;
+    Console.writeLine(StringView.fromUtf8(out.view())!);
+    out.resize(5, 0)?;
+    Console.writeLine(StringView.fromUtf8(out.view())!);
+    out.reserve(100)?;
+    Console.writeLine(out.length);
+    Console.writeLine(out.capacity >= 105);
+    let capacity = out.capacity;
+    out.extend(", world".bytes())?;
+    Console.writeLine(out.capacity == capacity); // reserved: no growth
+    Console.writeLine(StringView.fromUtf8(out.view())!);
+    var empty = Vector<u8>.create();
+    let none: [u8; 1] = [0];
+    empty.extend(none[..0])?;
+    Console.writeLine(empty.length);
+    var ints = Vector<i32>.create();
+    let some = [1, 2, 3];
+    ints.extend(some[..])?;
+    ints.extend(some[1..])?;
+    ints.resize(ints.length + 2, -1)?; // the arguments before the vector's loan (B5)
+    for (x in ints) {
+        Console.write(x);
+        Console.write(" ");
+    }
+    Console.writeLine("");
+    var big = Vector<u64>.create();
+    var many = [7u64; 100];
+    many[99] = 9;
+    big.extend(many[..])?;
+    big.extend(many[98..])?;
+    Console.writeLine(big.length);
+    Console.writeLine(big[99]);
+    return Ok();
+}
+
+fn main() {
+    run()!;
+}
+// expect-stdout: hello!!!
+// expect-stdout: hello
+// expect-stdout: 5
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: hello, world
+// expect-stdout: 0
+// expect-stdout: 1 2 3 2 3 -1 -1 
+// expect-stdout: 102
+// expect-stdout: 9

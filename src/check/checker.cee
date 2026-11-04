@@ -361,7 +361,9 @@ struct Checker {
             hostedOnly(this, span, what.view())?;
             return Ok(this.types.error);
         }
-        if (this.noFloat && this.types.is(resolved, TypeKind.Float)) {
+        // Not in the libraries: lib/core's float parsers are only reached through a float type the program names
+        // (ADR 0071 §2.5), and functions nothing calls are not emitted.
+        if (this.noFloat && !isLibraryFile(this) && this.types.is(resolved, TypeKind.Float)) {
             let span = this.front.ast.typeSpans[typ as usize];
             var what = Vector<u8>.create();
             appendText(mut what, "type '")?;

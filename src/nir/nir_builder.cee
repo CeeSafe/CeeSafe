@@ -2206,7 +2206,12 @@ fn lowerCall(
     let typ = c.hir.exprTypes[e as usize];
     let span = exprSpan(c, e);
     let syntax = c.hir.functions[callee as usize].syntax;
-    let borrowMutReceiver = receiverIndex(c.front.ast.functions[syntax as usize].receiver) == 3 && arguments.count > 0;
+    // lib/core's VectorBytes functions are `v.pushBE(x)` (ADR 0071 §2.2): two-phase as `push` is, though static. The
+    // name is reserved for lib/core (N0201), so no program's struct has it.
+    let owner = c.hir.functions[callee as usize].owner;
+    let vectorBytes = owner != none() && sameText(c.typeName(owner), "VectorBytes");
+    let borrowMutReceiver = (receiverIndex(c.front.ast.functions[syntax as usize].receiver) == 3 || vectorBytes) &&
+        arguments.count > 0;
     if (borrowMutReceiver) {
         let first = c.hir.at(arguments, 0);
         let isBorrow = match (c.hir.exprs[first as usize]) {
@@ -2241,8 +2246,65 @@ fn lowerCall(
     if (!lowerOperands(c, n, b, arguments, mut operands)?) {
         return Ok(none());
     }
+    let size = byteOrderAccessSize(c, b, callee);
+    if (size > 0) {
+        operands[0] = checkByteRange(c, n, b, operands[0], operands[1], size, span)?;
+    }
     let list = n.list(operands.view())?;
     return n.rvalue(NirRvalue.Call(callee, list), typ, span);
+}
+
+/// The byte count of a call of lib/core's ByteOrder.readU32BE and the like from a program's own code (ADR 0071 §2.2),
+/// or 0. Such a call checks its range at the call, so a panic names the program's line; inside the libraries the
+/// readers' own slicing checks suffice.
+fn byteOrderAccessSize(c: borrow Checker, b: borrow Lowering, callee: u32) -> i64 {
+    let f = borrow c.hir.functions[callee as usize];
+    if (f.owner == none() || !sameText(
+        c.typeName(f.owner),
+        "ByteOrder",
+    ) || c.hir.functions[b.function as usize].library) {
+        return 0;
+    }
+    let name = c.name(f.name);
+    var bits: i64 = 0;
+    for (ch in name) {
+        if (ch >= '0' && ch <= '9') {
+            bits = bits * 10 + ((ch - '0') as i64);
+        }
+    }
+    return bits / 8;
+}
+
+/// `at` and the `size - 1` bytes after it are inside the slice: two bounds checks at the call (§16.3), the first of
+/// which keeps `at + size - 1` from overflowing. The slice is spilled to a place if it is not one.
+fn checkByteRange(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    slice: u32,
+    at: u32,
+    size: i64,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let place = slicePlaceOf(c, n, b, slice)?;
+    let saved = b.span;
+    b.span = span;
+    let elements = projectPlace(n, place, derefProjectionN())?;
+    let length = lengthOf(c, n, b, elements)?;
+    emit(n, b, NirStatement.BoundsCheck(at, length))?;
+    if (size > 1) {
+        let usize = c.types.usize;
+        let rest = constOperand(n, size - 1, usize)?;
+        let last = newTemp(b, usize)?;
+        let lastPlace = localPlace(n, last)?;
+        let sum = n.rvalue(NirRvalue.Binary(BinaryOp.Add, at, rest), usize, span)?;
+        assign(n, b, lastPlace, sum)?;
+        let lastOperand = placeOperand(c, n, b, lastPlace)?;
+        let secondLength = lengthOf(c, n, b, elements)?;
+        emit(n, b, NirStatement.BoundsCheck(lastOperand, secondLength))?;
+    }
+    b.span = saved;
+    return Ok(if (operandPlace(n, slice) != none()) slice else placeOperand(c, n, b, place)?);
 }
 
 /// `await f(…)` and `Async.run(f(…))` (type-system.md §40): the task's call, lowered as a call and marked with its role,
@@ -2475,8 +2537,30 @@ fn lowerBuiltinCall(
         let read = readPlace(c, n, b, place)?;
         return useRvalue(n, read);
     }
+    if (function == bfVectorResize()) {
+        // B5 with two arguments (ADR 0071 §2.1): the length and the fill, then the receiver's loan.
+        let lengthExpr = c.hir.at(arguments, 1);
+        let length = lowerOperand(c, n, b, lengthExpr)?;
+        if (length == none()) {
+            return Ok(none());
+        }
+        let fillExpr = c.hir.at(arguments, 2);
+        let fill = lowerOperand(c, n, b, fillExpr)?;
+        if (fill == none()) {
+            return Ok(none());
+        }
+        let receiverExpr = c.hir.at(arguments, 0);
+        let receiver = lowerOperand(c, n, b, receiverExpr)?;
+        if (receiver == none()) {
+            return Ok(none());
+        }
+        let values = [receiver, length, fill];
+        let list = n.list(values[..])?;
+        return n.rvalue(NirRvalue.Builtin(function, list), typ, span);
+    }
     if (function == bfVectorPush() || function == bfStringAppend() || function == bfStringAppendNumber() ||
-        function == bfSlotMapInsert() || function == bfVectorTruncate()) {
+        function == bfSlotMapInsert() || function == bfVectorTruncate() || function == bfVectorExtend() ||
+        function == bfVectorReserve()) {
         // B5, as for a `borrow mut this` method: the receiver's loan starts after the argument (§23.1).
         let hoisted103 = c.hir.at(arguments, 1);
         let argument = lowerOperand(c, n, b, hoisted103)?;

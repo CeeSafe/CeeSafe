@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: searching, trimming and splitting bytes and text (ADR 0071 §2.4). Bundled with ceesafec and part of every
+// package. On a `StringView`, `s.indexOf(n)` is `TextSearch<r>.indexOf(s, n)` and so on; on a `Slice<u8>` (or a
+// `Vector<u8>`'s elements) it is `ByteSearch<r>`'s function of that name.
+//
+// Every view these return is valid UTF-8 when `s` is: a match of valid UTF-8 inside valid UTF-8 starts and ends on
+// character boundaries, and ASCII whitespace is one byte that is never part of a longer character.
+
+/// The parts of a text before and after a separator: what `s.splitOnce(sep)` finds.
+public struct TextHalves<region r> {
+    public left: StringView<r>;
+    public right: StringView<r>;
+}
+
+/// The parts of bytes before and after a separator: what `s.splitOnce(sep)` finds on a `Slice<u8>`.
+public struct ByteHalves<region r> {
+    public left: Slice<r, u8>;
+    public right: Slice<r, u8>;
+}
+
+/// The pieces of a text between separators, in order: `s.split(sep)`. `next()` gives each piece, then null. `"a,,b"`
+/// split by `","` is `"a"`, `""`, `"b"`; an empty text is one empty piece; an empty separator gives the text whole.
+public struct TextSplit<region r> {
+    text: StringView<r>;
+    separator: StringView<r>;
+    position: usize; // where the next piece starts
+    finished: bool;
+
+    /// The next piece, or null after the last.
+    public fn next(borrow mut this) -> StringView<r>? {
+        if (this.finished) {
+            return null;
+        }
+        let text = this.text;
+        let start = this.position;
+        if (this.separator.length > 0) {
+            let all = text.bytes();
+            let rest = all[start..];
+            match (ByteScan.indexOf(rest, this.separator.bytes())) {
+                Some(i) => {
+                    this.position = start + i + this.separator.length;
+                    return text[start..start + i];
+                }
+                null => {}
+            }
+        }
+        this.finished = true;
+        return text[start..];
+    }
+}
+
+/// The pieces of bytes between separators, in order: `s.split(sep)` on a `Slice<u8>`, as TextSplit.
+public struct ByteSplit<region r> {
+    bytes: Slice<r, u8>;
+    separator: Slice<r, u8>;
+    position: usize;
+    finished: bool;
+
+    /// The next piece, or null after the last.
+    public fn next(borrow mut this) -> Slice<r, u8>? {
+        if (this.finished) {
+            return null;
+        }
+        let bytes = this.bytes;
+        let start = this.position;
+        if (this.separator.length > 0) {
+            let rest = bytes[start..];
+            match (ByteScan.indexOf(rest, this.separator)) {
+                Some(i) => {
+                    this.position = start + i + this.separator.length;
+                    return bytes[start..start + i];
+                }
+                null => {}
+            }
+        }
+        this.finished = true;
+        return bytes[start..];
+    }
+}
+
+/// The searches themselves, on bytes; TextSearch and ByteSearch call these.
+struct ByteScan {
+    /// Where `b` first is in `s`. Eight bytes at a time: a word with no byte equal to `b` is passed over at once.
+    fn indexOfByte(s: Slice<u8>, b: u8) -> usize? {
+        let length = s.length;
+        let pattern = (b as u64) * 0x0101_0101_0101_0101;
+        var i: usize = 0;
+        while (length - i >= 8) {
+            let word = ByteOrder.readU64LE(s, i) ^ pattern;
+            // A zero byte in `word` (a byte equal to `b`) sets its high bit here; no other byte can.
+            if ((word.wrappingSub(
+                0x0101_0101_0101_0101,
+            ) & (word ^ 0xFFFF_FFFF_FFFF_FFFF) & 0x8080_8080_8080_8080) != 0) {
+                break;
+            }
+            i += 8;
+        }
+        while (i < length) {
+            if (s[i] == b) {
+                return i;
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    /// Whether the bytes of `a` from `at` on begin with `b`.
+    fn matchesAt(a: Slice<u8>, at: usize, b: Slice<u8>) -> bool {
+        if (at > a.length || a.length - at < b.length) {
+            return false;
+        }
+        for (k in 0..b.length) {
+            if (a[at + k] != b[k]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Where `needle` first is in `s`: its first byte by indexOfByte, then the rest compared. Empty: 0.
+    fn indexOf(s: Slice<u8>, needle: Slice<u8>) -> usize? {
+        let n = needle.length;
+        if (n == 0) {
+            return 0;
+        }
+        if (n > s.length) {
+            return null;
+        }
+        let last = s.length - n; // the last start a match can have
+        let first = needle[0];
+        var i: usize = 0;
+        while (i <= last) {
+            let window = s[i..last + 1];
+            match (ByteScan.indexOfByte(window, first)) {
+                Some(k) => {
+                    i += k;
+                }
+                null => {
+                    return null;
+                }
+            }
+            if (ByteScan.matchesAt(s, i, needle)) {
+                return i;
+            }
+            i += 1;
+        }
+        return null;
+    }
+
+    /// Where `needle` last is in `s`. Empty: `s.length`.
+    fn lastIndexOf(s: Slice<u8>, needle: Slice<u8>) -> usize? {
+        let n = needle.length;
+        if (n > s.length) {
+            return null;
+        }
+        var i = s.length - n;
+        while (true) {
+            if (ByteScan.matchesAt(s, i, needle)) {
+                return i;
+            }
+            if (i == 0) {
+                return null;
+            }
+            i -= 1;
+        }
+        return null;
+    }
+
+    fn startsWith(s: Slice<u8>, prefix: Slice<u8>) -> bool => ByteScan.matchesAt(s, 0, prefix);
+
+    fn endsWith(s: Slice<u8>, suffix: Slice<u8>) -> bool =>
+        suffix.length <= s.length && ByteScan.matchesAt(s, s.length - suffix.length, suffix);
+
+    /// `b` with `A`–`Z` made `a`–`z`.
+    fn lowerAscii(b: u8) -> u8 => if (b >= 'A' && b <= 'Z') b + 32 else b;
+
+    fn equalsIgnoreAsciiCase(a: Slice<u8>, b: Slice<u8>) -> bool {
+        if (a.length != b.length) {
+            return false;
+        }
+        for (k in 0..a.length) {
+            if (ByteScan.lowerAscii(a[k]) != ByteScan.lowerAscii(b[k])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Space, tab, line feed, vertical tab, form feed and carriage return.
+    fn isAsciiSpace(b: u8) -> bool => b == ' ' || (b >= 0x09 && b <= 0x0D);
+
+    /// The index of the first byte that is not ASCII whitespace (`s.length` if none).
+    fn trimStartIndex(s: Slice<u8>) -> usize {
+        var i: usize = 0;
+        while (i < s.length && ByteScan.isAsciiSpace(s[i])) {
+            i += 1;
+        }
+        return i;
+    }
+
+    /// The index just past the last byte that is not ASCII whitespace (0 if none).
+    fn trimEndIndex(s: Slice<u8>) -> usize {
+        var end = s.length;
+        while (end > 0 && ByteScan.isAsciiSpace(s[end - 1])) {
+            end -= 1;
+        }
+        return end;
+    }
+}
+
+/// The methods of a `StringView` that search it (ADR 0071 §2.4), as static functions: the struct is never made.
+public struct TextSearch<region r> {
+    public fn indexOf(s: StringView<r>, needle: StringView) -> usize? => ByteScan.indexOf(s.bytes(), needle.bytes());
+
+    public fn lastIndexOf(s: StringView<r>, needle: StringView) -> usize? =>
+        ByteScan.lastIndexOf(s.bytes(), needle.bytes());
+
+    public fn indexOfByte(s: StringView<r>, b: u8) -> usize? => ByteScan.indexOfByte(s.bytes(), b);
+
+    public fn contains(s: StringView<r>, needle: StringView) -> bool =>
+        ByteScan.indexOf(s.bytes(), needle.bytes()) != null;
+
+    public fn startsWith(s: StringView<r>, prefix: StringView) -> bool =>
+        ByteScan.startsWith(s.bytes(), prefix.bytes());
+
+    public fn endsWith(s: StringView<r>, suffix: StringView) -> bool => ByteScan.endsWith(s.bytes(), suffix.bytes());
+
+    public fn equalsIgnoreAsciiCase(s: StringView<r>, other: StringView) -> bool =>
+        ByteScan.equalsIgnoreAsciiCase(s.bytes(), other.bytes());
+
+    public fn trim(s: StringView<r>) -> StringView<r> {
+        let start = ByteScan.trimStartIndex(s.bytes());
+        let end = ByteScan.trimEndIndex(s.bytes());
+        return if (start >= end) s[..0] else s[start..end];
+    }
+
+    public fn trimStart(s: StringView<r>) -> StringView<r> => s[ByteScan.trimStartIndex(s.bytes())..];
+
+    public fn trimEnd(s: StringView<r>) -> StringView<r> => s[..ByteScan.trimEndIndex(s.bytes())];
+
+    /// The text before the first `separator` and after it, or null if it does not occur. An empty separator is found
+    /// at the start.
+    public fn splitOnce(s: StringView<r>, separator: StringView) -> TextHalves<r>? {
+        let i = ByteScan.indexOf(s.bytes(), separator.bytes())?;
+        return TextHalves { left: s[..i], right: s[i + separator.length..] };
+    }
+
+    public fn split(s: StringView<r>, separator: StringView<r>) -> TextSplit<r> =>
+        TextSplit { text: s, separator: separator, position: 0, finished: false };
+}
+
+/// The methods of a `Slice<u8>` that search it (ADR 0071 §2.4), as TextSearch's.
+public struct ByteSearch<region r> {
+    public fn indexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize? => ByteScan.indexOf(s, needle);
+
+    public fn lastIndexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize? => ByteScan.lastIndexOf(s, needle);
+
+    public fn indexOfByte(s: Slice<r, u8>, b: u8) -> usize? => ByteScan.indexOfByte(s, b);
+
+    public fn contains(s: Slice<r, u8>, needle: Slice<u8>) -> bool => ByteScan.indexOf(s, needle) != null;
+
+    public fn startsWith(s: Slice<r, u8>, prefix: Slice<u8>) -> bool => ByteScan.startsWith(s, prefix);
+
+    public fn endsWith(s: Slice<r, u8>, suffix: Slice<u8>) -> bool => ByteScan.endsWith(s, suffix);
+
+    public fn equalsIgnoreAsciiCase(s: Slice<r, u8>, other: Slice<u8>) -> bool =>
+        ByteScan.equalsIgnoreAsciiCase(s, other);
+
+    public fn trim(s: Slice<r, u8>) -> Slice<r, u8> {
+        let start = ByteScan.trimStartIndex(s);
+        let end = ByteScan.trimEndIndex(s);
+        return if (start >= end) s[..0] else s[start..end];
+    }
+
+    public fn trimStart(s: Slice<r, u8>) -> Slice<r, u8> => s[ByteScan.trimStartIndex(s)..];
+
+    public fn trimEnd(s: Slice<r, u8>) -> Slice<r, u8> => s[..ByteScan.trimEndIndex(s)];
+
+    public fn splitOnce(s: Slice<r, u8>, separator: Slice<u8>) -> ByteHalves<r>? {
+        let i = ByteScan.indexOf(s, separator)?;
+        return ByteHalves { left: s[..i], right: s[i + separator.length..] };
+    }
+
+    public fn split(s: Slice<r, u8>, separator: Slice<r, u8>) -> ByteSplit<r> =>
+        ByteSplit { bytes: s, separator: separator, position: 0, finished: false };
+}

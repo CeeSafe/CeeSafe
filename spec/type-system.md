@@ -146,6 +146,12 @@ On signed types (ADR 0063 §2.5), `x.abs()` is the magnitude as a `T`. It panics
 `T` cannot hold, exactly as `-x` does, reported at the call. `x.unsignedAbs()` is the magnitude in the unsigned type
 of the same width and never panics. Neither exists on unsigned types (N0234).
 
+**Bit methods** (ADR 0071 §2.3). On every unsigned type, `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)` and
+`x.wrappingShr(n)` take a `u32` amount (a flexible literal adapts), taken modulo the bit width, and are of type `T`;
+`x.leadingZeros()`, `x.trailingZeros()` and `x.countOnes()` are a `u32` (the width for a zero `x`). On a signed type
+they are N0234, as the bit operators are restricted to unsigned types. `x.byteSwap()` is on every integer type: the
+bytes in the other order, of type `T` (two's complement for signed types; a one-byte type is unchanged).
+
 None of them panics except `abs`. Their names are reserved on integer types: an `impl` for an integer type cannot define a method
 with one of these names (N0228). In C they are `static inline` helpers of `rt.h` with no undefined behaviour: a
 wrapping operation computes in the unsigned type of the same width and converts back with `cee_as_iN`
@@ -672,6 +678,56 @@ fn copy(out: SliceMut<u8>, to: usize, src: Slice<u8>, from: usize, n: usize) {
 
 Diagnostics: N0259 (an element type that is not Copy, an invalid length, or a too-large array).
 The other errors reuse N0205, N0211, N0216, N0230, N0246, N0247 and N0248 (`diagnostics.md`).
+
+### 16.6 Bytes and text (ADR 0071)
+Methods of byte slices (`Slice<u8>`, `SliceMut<u8>`, a `Vector<u8>`'s elements), of `StringView` and of a `String`'s
+text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached like `sortBy` (§36.4).
+
+**Byte order** (§2.2), on byte slices and byte vectors only (a `StringView` reads through `s.bytes()`; N0200 otherwise):
+- `b.readBE<T>(at)` and `b.readLE<T>(at)` (`at: usize`) are the `T` in the `size(T)` bytes at `at`, big- or
+  little-endian, in two's complement for signed `T`. `T` is a fixed-width integer type, `u8` to `u64` or `i8` to `i64`
+  (N0207 otherwise, `usize` and `isize` included); a missing type argument is N0265.
+- `d.writeBE(at, x)` and `d.writeLE(at, x)` write `x` there. The receiver is a `SliceMut<u8>`, a mutable vector's
+  elements, or a slicing expression taken mutably (N0211 for a `Slice<u8>`). `x`'s type gives the width: a type
+  argument (`writeBE<u32>(at, 5)`) or the value's own type; a literal without a suffix and without a type argument
+  is N0265. They are not two-phase, like `copyFrom` (§16.5).
+- `v.pushBE(x)` and `v.pushLE(x)` on a `Vector<u8, A>` append `x`'s bytes with one growth: `Result<void, AllocError>`,
+  the vector unchanged on failure. The width is chosen as for `writeBE`. They are two-phase (B5), like `push`.
+- A read or write checks `at < length` and `at + size(T) - 1 < length` at the call, before anything is read or
+  written, and **panics** "index out of bounds" there otherwise.
+
+**Searching and trimming** (§2.4). On a `StringView` (or a `String`), with `StringView` arguments; on byte slices with
+`Slice<u8>` arguments and results. Results that are views borrow the receiver, like slicing it.
+- `s.indexOf(t)` and `s.lastIndexOf(t)`: `usize?`, where `t` first or last starts; an empty `t` is at `0`, and at
+  `s.length` for `lastIndexOf`. `s.indexOfByte(b)` (`b: u8`): `usize?`.
+- `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)` and `s.equalsIgnoreAsciiCase(t)`: `bool`; only `A`–`Z` and
+  `a`–`z` fold.
+- `s.trim()`, `s.trimStart()`, `s.trimEnd()`: the view without leading and trailing ASCII whitespace (space, `\t`,
+  `\n`, `\v`, `\f`, `\r`).
+- `s.splitOnce(sep)`: `TextHalves<r>?` (`ByteHalves<r>?` on bytes) with the parts before and after the first `sep`, or
+  `null`; an empty `sep` is found at the start.
+- `s.split(sep)`: a `TextSplit<r>` (`ByteSplit<r>`) whose `next()` is each piece between separators in order, then
+  `null`: `"a,,b"` gives `"a"`, `""`, `"b"`, an empty text one empty piece, and an empty `sep` the text whole.
+- **UTF-8.** A match of valid UTF-8 inside valid UTF-8 starts and ends on character boundaries, and ASCII whitespace
+  is never part of a longer character, so every `StringView` these return is valid UTF-8 without a further check.
+- On other element types they are N0200. None of them panics.
+
+**Numbers from text** (§2.5), on `StringView`, `String` and byte slices:
+- `s.parseInt<T>()` and `s.parseIntRadix<T>(radix)` (`radix: u32`, 2 to 36): `T?` for any integer type `T`. The text
+  is an optional `+` (or `-` for a signed `T`), then one or more digits `0`–`9`, `a`–`z`, `A`–`Z` below the radix,
+  and nothing else. A value outside `T`, any other text, and a radix outside 2–36 are `null`.
+- `s.parseFloat<T>()`, `T` `f32` or `f64`: `T?`. The text is `[+-]digits[.digits][(e|E)[+-]digits]` with a digit on
+  at least one side of the point, or `inf`, `infinity` or `nan` in any case after an optional sign; anything else is
+  `null`. The result is the nearest `T` to the decimal value, ties to even, rounded once (an `f32` is not rounded
+  through an `f64`); past the largest finite value it is ±infinity, and below the smallest subnormal ±0. For every
+  finite `x`, parsing the text `Console.writeLine(x)` prints gives `x` back (§35.7). It does not use the C library,
+  so the locale does not matter, and the interpreter runs the same code.
+- A missing type argument is N0265, and a type that is not an integer (or float) type N0207. Under `--no-float`,
+  `parseFloat<f64>` names a float type, which is N0297 (§35.9).
+
+The method names are reserved on these types, as the integer methods are (§6). The lib/core structs that hold them
+(`ByteOrder`, `VectorBytes`, `TextSearch`, `ByteSearch`, `TextHalves`, `ByteHalves`, `TextSplit`, `ByteSplit`,
+`NumberParsing`) are names no program may define (N0201).
 
 ## 17. Results and error propagation (M3a)
 
@@ -1302,7 +1358,8 @@ fn main() {
     multi-byte sequence). Otherwise it **panics** with "string slice not on a character
     boundary";
   - `==` and `!=` compare the bytes;
-  - `Console.write(s)` and `Console.writeLine(s)` print it.
+  - `Console.write(s)` and `Console.writeLine(s)` print it;
+  - searching, trimming, splitting and parsing numbers: §16.6.
 - `for (b in s)` is not defined: iterate over `s.bytes()` (characters come with `String`
   methods later).
 - **From bytes** (M15 S6): `StringView.fromUtf8(bytes)` (`bytes: Slice<u8>`, or a `Vector<u8>` lent
@@ -1365,6 +1422,13 @@ fn main() -> i32 {
   - `v.clear()`: destroys every element; the capacity stays;
   - `v.truncate(n)` (M11 G8c, `n: usize`): if `n < v.length`, destroys the elements from index `n` up, lowest
     first, and the length becomes `n`; otherwise nothing changes. The capacity stays;
+  - `v.extend(s)` (`s: Slice<T>`), `v.resize(n, fill)` (`n: usize`, `fill: T`) and `v.reserve(extra)` (`extra: usize`),
+    ADR 0071 §2.1: `Result<void, AllocError>`. Each grows the buffer at most once (as `push` grows it, to at least
+    the length needed) and leaves the vector unchanged if that fails. `extend` appends a copy of `s`; `resize` appends
+    copies of `fill` up to length `n`, or truncates to `n`; `reserve` makes room for `extra` more elements and
+    changes nothing else. `extend` and `resize` need a Copy `T` (N0259). They take `borrow mut this` and are
+    two-phase (B5), so `v.resize(v.length + 1, 0)` is allowed; `v.extend(v.view())` is not (N0241);
+  - for a `Vector<u8, A>`, byte order, searching and parsing (§16.6), on its elements;
   - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `retain`): §16.5 and §36.4;
   - `v.view()`: the elements as a `Slice<T>`, and `v.viewMut()` as a `SliceMut<T>`;
   - a `Vector<T>` argument for a `Slice<T>` parameter is borrowed as `v.view()`, and `mut v` for a
@@ -2824,7 +2888,8 @@ fn main() {
     (C11 6.3.1.5).
 - The interpreter computes in CeeSafe's own `f32` and `f64` (`ceesafec`'s C `float` and `double`), which round the same way. Compiled and interpreted programs
   give the same results, NaN bits aside (§35.3).
-- Not in G7 (ADR 0011 §3.8): `%`, a math library beyond §35.8, parsing floats from text, and other float formats.
+- Not in G7 (ADR 0011 §3.8): `%`, a math library beyond §35.8, and other float formats. Parsing floats from text came
+  with ADR 0071 (§16.6).
 
 ### 35.7 Printing (M11 G7b)
 - `Console.write`, `Console.writeLine` and `String.appendNumber` accept `f32` and `f64` (and references to them).
@@ -2874,6 +2939,9 @@ fn main() {
 - It is meant for kernels and other code built without FP registers. CosmoOS's kernel builds pass it (`c4.py` to
   `c8.py`), and `check-fpregs.sh` remains the backstop. Floats in the generic freestanding profile are otherwise
   allowed (`profiles.md` §1).
+- The libraries are not checked this way: lib/core's float parser (§16.6) is reached only through `parseFloat<f64>` or
+  `parseFloat<f32>`, whose type argument the program writes and N0297 rejects, and a function nothing calls is not
+  emitted (ADR 0071 §2.5).
 - In the corpus, a line `// option: no-float` checks a file this way (testing.md §3).
 
 Diagnostics: none new. Mismatched float types, and float literals where an integer is expected, are N0205.

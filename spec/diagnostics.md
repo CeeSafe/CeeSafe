@@ -142,7 +142,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | N0256 | `match` that does not cover every value (add the missing variants or `_`) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_` | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
-| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5) | `[Res; 2]`, `[i32; 0]` |
+| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize` | `[Res; 2]`, `[i32; 0]` |
 
 Arrays and slices otherwise reuse codes: indexing or slicing a non-array, a non-`usize` index,
 or a bad `for` sequence or range is N0205; writing an element of a `let` array or through a

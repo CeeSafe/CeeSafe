@@ -693,7 +693,7 @@ fn checkNonStructMethod(
 fn isSliceMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "copyFrom") || sameText(name, "fill") || sameText(name, "swap") || sameText(name, "sortBy") ||
         sameText(name, "forEach") || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
-        sameText(name, "splitAtMut");
+        sameText(name, "splitAtMut") || isByteWriter(name);
 
 /// A string literal for a `[u8; N]` member of an imported struct's literal (ADR 0042 §3.4): its bytes, which C's
 /// initialiser zero-pads to N, as a constant of the array type; none if `value` is not a string literal or the member

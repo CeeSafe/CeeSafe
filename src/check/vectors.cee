@@ -196,6 +196,26 @@ fn checkVectorMethod(
     var textBytes = Vector<u8>.create();
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
+    if (isString && (isSearchMethod(text) || isParseMethod(text))) {
+        // A string's text, as a view (ADR 0071 §2.4).
+        let s = c.spanOf(vector);
+        let elements = c.expr(HirExpr.Deref(vector), c.types.info(typ).pointee, s.start, s.end)?;
+        let view = borrowPlace(c, elements, false, targetSpan)?;
+        return checkBytesTextMethod(c, member, arguments, view, true, targetSpan, span);
+    }
+    if (!isString && isBytesTextMethod(text)) {
+        // The elements, as a slice: mutably for writeBE and writeLE (ADR 0071 §2.2, §2.4).
+        let s = c.spanOf(vector);
+        let elements = c.expr(HirExpr.Deref(vector), c.types.info(typ).pointee, s.start, s.end)?;
+        let slice = borrowPlace(c, elements, isByteWriter(text), targetSpan)?;
+        return checkBytesTextMethod(c, member, arguments, slice, false, targetSpan, span);
+    }
+    if (sameText(text, "pushBE") || sameText(text, "pushLE")) {
+        return checkVectorPushBytes(c, member, arguments, vector, targetSpan, span);
+    }
+    if (!isString && (sameText(text, "extend") || sameText(text, "resize") || sameText(text, "reserve"))) {
+        return checkVectorBulk(c, member, arguments, vector, targetSpan, span);
+    }
     let arity = vectorMethodArity(isString, text);
     if (arity < 0) {
         var message = Vector<u8>.create();
@@ -204,7 +224,7 @@ fn checkVectorMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         appendText(
             mut message,
-            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'" else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut'",
+            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'" else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -349,11 +369,14 @@ fn checkViewMethod(
     span: Span,
 ) -> Result<u32, AllocError> {
     let ident = c.front.ast.idents[member as usize];
+    if (isBytesTextMethod(c.name(ident.symbol))) {
+        return checkBytesTextMethod(c, member, arguments, view, true, span, span); // ADR 0071
+    }
     if (!sameText(c.name(ident.symbol), "bytes")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'StringView' has no method ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
-        appendText(mut message, "; it has 'bytes()' and 'length'")?;
+        appendText(mut message, "; it has 'bytes()', 'length', and the searches and parsers of ADR 0071")?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -387,6 +410,9 @@ fn checkSliceMethod(
     if (sameText(text, "sortBy") || sameText(text, "forEach") || sameText(text, "any") || sameText(text, "all") ||
         sameText(text, "swap") || sameText(text, "splitAt") || sameText(text, "splitAtMut")) {
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
+    }
+    if (isBytesTextMethod(text)) {
+        return checkBytesTextMethod(c, member, arguments, slice, false, targetSpan, span); // ADR 0071
     }
     let sliceType = c.typeOf(slice);
     if (!sameText(text, "copyFrom") && !sameText(text, "fill")) {
@@ -522,4 +548,77 @@ fn forOverVector(c: borrow mut Checker, vector: u32, span: Span) -> Result<u32, 
     }
     let v = c.spanOf(view);
     return c.expr(HirExpr.Deref(view), pointee, v.start, v.end);
+}
+
+/// `v.extend(s)`, `v.resize(n, fill)` and `v.reserve(extra)` (ADR 0071 §2.1): bulk growth for Copy elements. Two-phase
+/// (B5): the arguments are checked, and evaluated, before the vector's mutable loan starts.
+fn checkVectorBulk(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let typ = c.typeOf(vector);
+    let element = c.types.info(c.types.info(typ).pointee).element;
+    let resize = sameText(text, "resize");
+    let wanted: u32 = if (resize) 2 else 1;
+    if (arguments.count != wanted) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(
+            mut message,
+            if (resize) "' takes a length and a fill value: 'v.resize(n, fill)'" else "' takes one argument",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (!sameText(text, "reserve") && !c.types.isCopy(element)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' copies elements, so the element type must be Copy; ")?;
+        appendQuotedType(mut message, c, element)?;
+        appendText(mut message, " is not")?;
+        c.error(invalidArray(), ident.start, ident.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var values = Vector<u32>.create();
+    values.push(none())?; // the receiver, below
+    let first = c.front.ast.at(arguments, 0);
+    if (sameText(text, "extend")) {
+        let source = c.types.sliceOf(element, false)?;
+        values.push(checkArgument(c, first, source)?)?;
+    } else {
+        let usize = c.types.usize;
+        values.push(checkExpr(c, first, usize)?)?;
+        if (resize) {
+            let second = c.front.ast.at(arguments, 1);
+            values.push(checkExpr(c, second, element)?)?;
+        }
+    }
+    let receiver = borrowPlace(c, vector, true, targetSpan)?;
+    values[0] = receiver;
+    for (v in values.view()) {
+        if (c.isBottom(v)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    let voidType = c.types.voidType;
+    let allocError = usedAllocError(c);
+    let voidResult = resultOf(c, voidType, allocError)?;
+    let list = c.hir.list(values.view())?;
+    let function = if (sameText(
+        text,
+        "extend",
+    )) bfVectorExtend() else if (resize) bfVectorResize() else bfVectorReserve();
+    return c.expr(HirExpr.BuiltinCall(function, list), voidResult, span.start, span.end);
 }

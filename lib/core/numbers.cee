@@ -1,0 +1,559 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: numbers read from text (ADR 0071 §2.5). Bundled with ceesafec and part of every package. On a `StringView`
+// or a `Slice<u8>`, `s.parseInt<u32>()` is `NumberParsing.parseU32(bytes)`, `s.parseIntRadix<u32>(r)` is
+// `parseU32Radix(bytes, r)` and `s.parseFloat<f64>()` is `parseF64(bytes)`; each gives null for text that is not a
+// number of that type.
+//
+// Floats are correctly rounded (to nearest, ties to even) for every input. Inputs of at most 15 significant digits
+// (7 for f32) with a small exponent take Clinger's fast path: the digits and the power of ten are both exact floats,
+// so one IEEE operation rounds once. Every other input goes through FloatDecimal, an exact decimal that is shifted by
+// powers of two until it is a 54-bit (or 25-bit) integer, then rounded: the "simple decimal conversion" of Go's
+// strconv and Wuffs. It never uses the C library, so it does not depend on the locale.
+
+/// Parsing integers and floats from bytes: static functions; the struct has no fields and is never made.
+public struct NumberParsing {
+    /// The value of a digit in bases up to 36 (`0`–`9`, `a`–`z`, `A`–`Z`), or 99.
+    fn digitValue(b: u8) -> u32 {
+        if (b >= '0' && b <= '9') {
+            return (b - '0') as u32;
+        }
+        if (b >= 'a' && b <= 'z') {
+            return (b - 'a') as u32 + 10;
+        }
+        if (b >= 'A' && b <= 'Z') {
+            return (b - 'A') as u32 + 10;
+        }
+        return 99;
+    }
+
+    /// The digits of `s` from `start` on, in `radix`, or null: none, a byte that is not a digit, or more than a `u64`.
+    fn magnitude(s: Slice<u8>, start: usize, radix: u32) -> u64? {
+        if (radix < 2 || radix > 36 || start >= s.length) {
+            return null;
+        }
+        var n: u64 = 0;
+        for (i in start..s.length) {
+            let d = NumberParsing.digitValue(s[i]);
+            if (d >= radix) {
+                return null;
+            }
+            n = n.checkedMul(radix as u64)?.checkedAdd(d as u64)?;
+        }
+        return n;
+    }
+
+    /// An optional `+`, then digits.
+    fn unsigned(s: Slice<u8>, radix: u32) -> u64? {
+        let start: usize = if (s.length > 0 && s[0] == '+') 1 else 0;
+        return NumberParsing.magnitude(s, start, radix);
+    }
+
+    /// An optional `-` or `+`, then digits, within an `i64`.
+    fn signed(s: Slice<u8>, radix: u32) -> i64? {
+        let negative = s.length > 0 && s[0] == '-';
+        let start: usize = if (s.length > 0 && (s[0] == '-' || s[0] == '+')) 1 else 0;
+        let m = NumberParsing.magnitude(s, start, radix)?;
+        if (negative) {
+            if (m == 0x8000_0000_0000_0000) {
+                return -9223372036854775807 - 1;
+            }
+            if (m > 0x8000_0000_0000_0000) {
+                return null;
+            }
+            return -truncate<i64>(m);
+        }
+        if (m > 0x7FFF_FFFF_FFFF_FFFF) {
+            return null;
+        }
+        return truncate<i64>(m);
+    }
+
+    /// Decimal text as a `u8`.
+    public fn parseU8(s: Slice<u8>) -> u8? => NumberParsing.parseU8Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as a `u8`.
+    public fn parseU8Radix(s: Slice<u8>, radix: u32) -> u8? {
+        let v = NumberParsing.unsigned(s, radix)?;
+        let t = truncate<u8>(v);
+        if (t as u64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as a `u16`.
+    public fn parseU16(s: Slice<u8>) -> u16? => NumberParsing.parseU16Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as a `u16`.
+    public fn parseU16Radix(s: Slice<u8>, radix: u32) -> u16? {
+        let v = NumberParsing.unsigned(s, radix)?;
+        let t = truncate<u16>(v);
+        if (t as u64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as a `u32`.
+    public fn parseU32(s: Slice<u8>) -> u32? => NumberParsing.parseU32Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as a `u32`.
+    public fn parseU32Radix(s: Slice<u8>, radix: u32) -> u32? {
+        let v = NumberParsing.unsigned(s, radix)?;
+        let t = truncate<u32>(v);
+        if (t as u64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as a `u64`.
+    public fn parseU64(s: Slice<u8>) -> u64? => NumberParsing.parseU64Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as a `u64`.
+    public fn parseU64Radix(s: Slice<u8>, radix: u32) -> u64? {
+        let v = NumberParsing.unsigned(s, radix)?;
+        let t = truncate<u64>(v);
+        if (t as u64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as a `usize`.
+    public fn parseUsize(s: Slice<u8>) -> usize? => NumberParsing.parseUsizeRadix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as a `usize`.
+    public fn parseUsizeRadix(s: Slice<u8>, radix: u32) -> usize? {
+        let v = NumberParsing.unsigned(s, radix)?;
+        let t = truncate<usize>(v);
+        if (t as u64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as an `i8`.
+    public fn parseI8(s: Slice<u8>) -> i8? => NumberParsing.parseI8Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as an `i8`.
+    public fn parseI8Radix(s: Slice<u8>, radix: u32) -> i8? {
+        let v = NumberParsing.signed(s, radix)?;
+        let t = truncate<i8>(v);
+        if (t as i64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as an `i16`.
+    public fn parseI16(s: Slice<u8>) -> i16? => NumberParsing.parseI16Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as an `i16`.
+    public fn parseI16Radix(s: Slice<u8>, radix: u32) -> i16? {
+        let v = NumberParsing.signed(s, radix)?;
+        let t = truncate<i16>(v);
+        if (t as i64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as an `i32`.
+    public fn parseI32(s: Slice<u8>) -> i32? => NumberParsing.parseI32Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as an `i32`.
+    public fn parseI32Radix(s: Slice<u8>, radix: u32) -> i32? {
+        let v = NumberParsing.signed(s, radix)?;
+        let t = truncate<i32>(v);
+        if (t as i64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as an `i64`.
+    public fn parseI64(s: Slice<u8>) -> i64? => NumberParsing.parseI64Radix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as an `i64`.
+    public fn parseI64Radix(s: Slice<u8>, radix: u32) -> i64? {
+        let v = NumberParsing.signed(s, radix)?;
+        let t = truncate<i64>(v);
+        if (t as i64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Decimal text as an `isize`.
+    public fn parseIsize(s: Slice<u8>) -> isize? => NumberParsing.parseIsizeRadix(s, 10);
+
+    /// Text in `radix` (2 to 36; null otherwise) as an `isize`.
+    public fn parseIsizeRadix(s: Slice<u8>, radix: u32) -> isize? {
+        let v = NumberParsing.signed(s, radix)?;
+        let t = truncate<isize>(v);
+        if (t as i64 != v) {
+            return null;
+        }
+        return t;
+    }
+
+    /// Whether `s` from `at` on is `word`, ignoring ASCII case.
+    fn isWord(s: Slice<u8>, at: usize, word: StringView) -> bool {
+        if (s.length - at != word.length) {
+            return false;
+        }
+        for (k in 0..word.length) {
+            let b = s[at + k];
+            let lower = if (b >= 'A' && b <= 'Z') b + 32 else b;
+            if (lower != word[k]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Text as an `f64`, correctly rounded, or null. `[+-]digits[.digits][(e|E)[+-]digits]` with a digit on at least one
+    /// side of the point, or `inf`, `infinity` or `nan` in any case, with an optional sign. Too large is ±infinity.
+    public fn parseF64(s: Slice<u8>) -> f64? {
+        let bits = NumberParsing.floatBits(s, 52, 11, -1023)?;
+        return f64.fromBits(bits);
+    }
+
+    /// Text as an `f32`, correctly rounded (once: not through an `f64`), or null; the grammar of parseF64.
+    public fn parseF32(s: Slice<u8>) -> f32? {
+        let bits = NumberParsing.floatBits(s, 23, 8, -127)?;
+        return f32.fromBits(truncate<u32>(bits));
+    }
+
+    /// The IEEE representation of the text in a format with `mantissaBits` and `exponentBits` (bias `bias`), or null.
+    fn floatBits(s: Slice<u8>, mantissaBits: u32, exponentBits: u32, bias: i32) -> u64? {
+        let negative = s.length > 0 && s[0] == '-';
+        let start: usize = if (s.length > 0 && (s[0] == '-' || s[0] == '+')) 1 else 0;
+        let signBit = if (negative) 1u64 << (mantissaBits + exponentBits) else 0;
+        let infinity = ((1u64 << exponentBits) - 1) << mantissaBits;
+        if (NumberParsing.isWord(s, start, "inf") || NumberParsing.isWord(s, start, "infinity")) {
+            return signBit | infinity;
+        }
+        if (NumberParsing.isWord(s, start, "nan")) {
+            return signBit | infinity | (1u64 << (mantissaBits - 1)); // the quiet NaN
+        }
+        var d = FloatDecimal { digits: [0u8; 800], count: 0, point: 0, truncated: false };
+        if (!d.read(s, start)) {
+            return null;
+        }
+        let fast = NumberParsing.fastPath(borrow d, mantissaBits);
+        if (fast != null) {
+            return signBit | fast!;
+        }
+        return signBit | d.toBits(mantissaBits, exponentBits, bias);
+    }
+
+    /// Clinger's fast path: the magnitude's bits when the digits and the power of ten are exact in the format, so one
+    /// multiplication or division rounds correctly; otherwise null.
+    fn fastPath(d: borrow FloatDecimal, mantissaBits: u32) -> u64? {
+        let double = mantissaBits == 52;
+        let maxDigits: usize = if (double) 15 else 7;
+        let maxPower: i32 = if (double) 22 else 10;
+        if (d.truncated || d.count > maxDigits) {
+            return null;
+        }
+        var m: u64 = 0;
+        for (k in 0..d.count) {
+            m = m * 10 + (d.digits[k] as u64);
+        }
+        let exponent = d.point - truncate<i32>(d.count);
+        if (d.count == 0) {
+            return 0;
+        }
+        if (exponent < -maxPower || exponent > maxPower) {
+            return null;
+        }
+        let power = if (exponent < 0) -exponent else exponent;
+        if (double) {
+            var scale: f64 = 1.0;
+            for (k in 0..power) {
+                scale = scale * 10.0;
+            }
+            let x = round<f64>(m);
+            return (if (exponent < 0) x / scale else x * scale).bits();
+        }
+        var scale: f32 = 1.0;
+        for (k in 0..power) {
+            scale = scale * 10.0;
+        }
+        let x = round<f32>(m);
+        return (if (exponent < 0) x / scale else x * scale).bits() as u64;
+    }
+}
+
+/// An exact decimal: `digits[0..count]` (each 0–9, no trailing zeros) with the point after `point` of them, so the
+/// value is 0.d₀d₁… × 10^point. Past 800 digits only whether anything nonzero was dropped is kept (`truncated`),
+/// which is enough to round: a float's exact decimal value needs at most 767 significant digits.
+struct FloatDecimal {
+    digits: [u8; 800];
+    count: usize;
+    point: i32;
+    truncated: bool;
+
+    /// The digits, point and exponent of `s` from `start` on; false if it is not a number.
+    fn read(borrow mut this, s: Slice<u8>, start: usize) -> bool {
+        var i = start;
+        var sawDigits = false;
+        var sawPoint = false;
+        while (i < s.length) {
+            let b = s[i];
+            if (b == '.') {
+                if (sawPoint) {
+                    return false;
+                }
+                sawPoint = true;
+                this.point = truncate<i32>(this.count);
+            } else if (b >= '0' && b <= '9') {
+                sawDigits = true;
+                if (b == '0' && this.count == 0) {
+                    this.point -= 1; // a leading zero
+                } else if (this.count < 800) {
+                    this.digits[this.count] = b - '0';
+                    this.count += 1;
+                } else if (b != '0') {
+                    this.truncated = true;
+                }
+            } else {
+                break;
+            }
+            i += 1;
+        }
+        if (!sawDigits) {
+            return false;
+        }
+        if (!sawPoint) {
+            this.point = truncate<i32>(this.count);
+        }
+        if (i < s.length && (s[i] == 'e' || s[i] == 'E')) {
+            i += 1;
+            var exponentSign: i32 = 1;
+            if (i < s.length && (s[i] == '+' || s[i] == '-')) {
+                if (s[i] == '-') {
+                    exponentSign = -1;
+                }
+                i += 1;
+            }
+            if (i >= s.length) {
+                return false;
+            }
+            var exponent: i32 = 0;
+            while (i < s.length && s[i] >= '0' && s[i] <= '9') {
+                if (exponent < 10000) {
+                    exponent = exponent * 10 + ((s[i] - '0') as i32);
+                }
+                i += 1;
+            }
+            this.point += exponentSign * exponent;
+        }
+        if (i != s.length) {
+            return false;
+        }
+        this.trim();
+        return true;
+    }
+
+    /// Drops trailing zeros; zero has no digits and its point at 0.
+    fn trim(borrow mut this) {
+        while (this.count > 0 && this.digits[this.count - 1] == 0) {
+            this.count -= 1;
+        }
+        if (this.count == 0) {
+            this.point = 0;
+        }
+    }
+
+    /// Multiplies by 2^k, 1 ≤ k ≤ 60, in place from the last digit: the digits move up by at most `room`, so each is
+    /// read before its place is written.
+    fn shiftLeft(borrow mut this, k: u32) {
+        let room = (k as usize) * 30103 / 100000 + 1; // ≥ the digits that 2^k adds
+        var r = this.count;
+        var w = this.count + room;
+        var n: u64 = 0;
+        while (r > 0) {
+            r -= 1;
+            n += (this.digits[r] as u64) << k;
+            let quotient = n / 10;
+            let remainder = n - 10 * quotient;
+            w -= 1;
+            if (w < 800) {
+                this.digits[w] = truncate<u8>(remainder);
+            } else if (remainder != 0) {
+                this.truncated = true;
+            }
+            n = quotient;
+        }
+        while (n > 0) {
+            let quotient = n / 10;
+            let remainder = n - 10 * quotient;
+            w -= 1;
+            if (w < 800) {
+                this.digits[w] = truncate<u8>(remainder);
+            } else if (remainder != 0) {
+                this.truncated = true;
+            }
+            n = quotient;
+        }
+        let end = (this.count + room).min(800);
+        for (k2 in w..end) {
+            this.digits[k2 - w] = this.digits[k2];
+        }
+        this.count = end - w;
+        this.point += truncate<i32>(room) - truncate<i32>(w);
+        this.trim();
+    }
+
+    /// Divides by 2^k, 1 ≤ k ≤ 60: long division from the first digit.
+    fn shiftRight(borrow mut this, k: u32) {
+        var r: usize = 0;
+        var w: usize = 0;
+        var n: u64 = 0;
+        while ((n >> k) == 0) {
+            if (r >= this.count) {
+                if (n == 0) {
+                    this.count = 0;
+                    this.point = 0;
+                    return;
+                }
+                while ((n >> k) == 0) {
+                    n = n * 10;
+                    r += 1;
+                }
+                break;
+            }
+            n = n * 10 + (this.digits[r] as u64);
+            r += 1;
+        }
+        this.point -= truncate<i32>(r) - 1;
+        let mask = (1u64 << k) - 1;
+        while (r < this.count) {
+            let digit = n >> k;
+            n = n & mask;
+            this.digits[w] = truncate<u8>(digit);
+            w += 1;
+            n = n * 10 + (this.digits[r] as u64);
+            r += 1;
+        }
+        while (n > 0) {
+            let digit = n >> k;
+            n = n & mask;
+            if (w < 800) {
+                this.digits[w] = truncate<u8>(digit);
+                w += 1;
+            } else if (digit > 0) {
+                this.truncated = true;
+            }
+            n = n * 10;
+        }
+        this.count = w;
+        this.trim();
+    }
+
+    /// Multiplies by 2^k (divides, for a negative k).
+    fn shift(borrow mut this, k: i32) {
+        var left = k;
+        while (left > 60) {
+            this.shiftLeft(60);
+            left -= 60;
+        }
+        while (left < -60) {
+            this.shiftRight(60);
+            left += 60;
+        }
+        if (left > 0) {
+            this.shiftLeft(truncate<u32>(left));
+        } else if (left < 0) {
+            this.shiftRight(truncate<u32>(-left));
+        }
+    }
+
+    /// Whether the integer part, cut after `n` digits, rounds up: past the half, or at exactly half to an even digit.
+    fn roundsUp(borrow this, n: i32) -> bool {
+        if (n < 0 || n >= truncate<i32>(this.count)) {
+            return false;
+        }
+        let at = truncate<usize>(n);
+        if (this.digits[at] == 5 && at + 1 == this.count) {
+            if (this.truncated) {
+                return true; // more than half: something nonzero was dropped
+            }
+            return at > 0 && this.digits[at - 1] % 2 == 1;
+        }
+        return this.digits[at] >= 5;
+    }
+
+    /// The value rounded to an integer (ties to even); the value is below 2^64 here.
+    fn roundedInteger(borrow this) -> u64 {
+        if (this.point > 20) {
+            return 0xFFFF_FFFF_FFFF_FFFF;
+        }
+        var n: u64 = 0;
+        var i: i32 = 0;
+        while (i < this.point && i < truncate<i32>(this.count)) {
+            n = n.wrappingMul(10).wrappingAdd(this.digits[truncate<usize>(i)] as u64);
+            i += 1;
+        }
+        while (i < this.point) {
+            n = n.wrappingMul(10);
+            i += 1;
+        }
+        if (this.roundsUp(this.point)) {
+            n += 1;
+        }
+        return n;
+    }
+
+    /// The magnitude's IEEE bits: scale into [1/2, 1) by powers of two, counting them as the binary exponent, then take
+    /// the top mantissaBits + 1 bits rounded. Subnormals keep the minimum exponent; overflow is infinity.
+    fn toBits(borrow mut this, mantissaBits: u32, exponentBits: u32, bias: i32) -> u64 {
+        let maxExponent = truncate<i32>((1u32 << exponentBits) - 1); // the all-ones exponent field: infinity
+        let infinity = ((1u64 << exponentBits) - 1) << mantissaBits;
+        if (this.count == 0 || this.point < -330) {
+            return 0;
+        }
+        if (this.point > 310) {
+            return infinity;
+        }
+        // Steps that keep the shifts within 60 bits: shifting by powers[p] moves the point by about p.
+        let powers = [1, 3, 6, 9, 13, 16, 19, 23, 26];
+        var exponent: i32 = 0;
+        while (this.point > 0) {
+            let n = if (this.point >= 9) 27 else powers[truncate<usize>(this.point)];
+            this.shift(-n);
+            exponent += n;
+        }
+        while (this.point < 0 || (this.point == 0 && this.digits[0] < 5)) {
+            let n = if (-this.point >= 9) 27 else powers[truncate<usize>(-this.point)];
+            this.shift(n);
+            exponent -= n;
+        }
+        exponent -= 1; // [1/2, 1) to the format's [1, 2)
+        if (exponent < bias + 1) {
+            let n = bias + 1 - exponent; // a subnormal: fewer mantissa bits
+            this.shift(-n);
+            exponent += n;
+        }
+        if (exponent - bias >= maxExponent) {
+            return infinity;
+        }
+        this.shift(truncate<i32>(1 + mantissaBits));
+        var mantissa = this.roundedInteger();
+        if (mantissa == 2u64 << mantissaBits) {
+            mantissa = mantissa >> 1; // rounding carried into a new bit
+            exponent += 1;
+            if (exponent - bias >= maxExponent) {
+                return infinity;
+            }
+        }
+        if ((mantissa & (1u64 << mantissaBits)) == 0) {
+            exponent = bias; // a subnormal (or zero): the exponent field is 0
+        }
+        let field = truncate<u64>(exponent - bias) & ((1u64 << exponentBits) - 1);
+        return (mantissa & ((1u64 << mantissaBits) - 1)) | (field << mantissaBits);
+    }
+}

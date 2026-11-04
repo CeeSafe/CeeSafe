@@ -1,0 +1,53 @@
+// Byte order on slices and byte vectors (ADR 0071 §2.2): a Postgres-style message with a length patched afterwards.
+fn run() -> Result<void, AllocError> {
+    var out = Vector<u8>.create();
+    out.pushBE(0x51u8)?; // 'Q'
+    let at = out.length;
+    out.pushBE(0u32)?;
+    out.extend("SELECT 1".bytes())?;
+    out.pushBE(0u8)?;
+    out.pushBE(truncate<u32>(out.length))?; // two-phase, as push
+    let length = truncate<u32>(out.length - at);
+    out.viewMut().writeBE(at, length);
+    Console.writeLine(out.length);
+    Console.writeLine(out.readBE<u32>(1));
+    Console.writeLine(out[4]);
+    Console.writeLine(out.readBE<u32>(out.length - 4));
+    out.pushLE(-2i16)?;
+    out.pushBE<i64>(-1)?;
+    Console.writeLine(out.readLE<i16>(out.length - 10));
+    Console.writeLine(out.readBE<u16>(out.length - 10));
+    Console.writeLine(out.readBE<i64>(out.length - 8));
+    Console.writeLine(out.readLE<u32>(out.length - 4));
+    var buffer = [0u8; 8];
+    buffer[..].writeLE(0, 0x0102030405060708u64);
+    Console.writeLine(buffer[0]);
+    Console.writeLine(buffer[..].readBE<u64>(0));
+    buffer[2..6].writeBE(0, -1i32);
+    Console.writeLine(buffer[..].readLE<u64>(0));
+    let bytes = buffer[..];
+    Console.writeLine(bytes.readBE<u8>(7));
+    Console.writeLine(bytes.readLE<i8>(2));
+    var failing = Vector<u8, FailingAllocator>.create();
+    failing.pushLE(0xABCDu16)?;
+    Console.writeLine(failing.readBE<u16>(0));
+    return Ok();
+}
+
+fn main() {
+    run()!;
+}
+// expect-stdout: 18
+// expect-stdout: 17
+// expect-stdout: 17
+// expect-stdout: 14
+// expect-stdout: -2
+// expect-stdout: 65279
+// expect-stdout: -1
+// expect-stdout: 4294967295
+// expect-stdout: 8
+// expect-stdout: 578437695752307201
+// expect-stdout: 72902018967996168
+// expect-stdout: 1
+// expect-stdout: -1
+// expect-stdout: 52651

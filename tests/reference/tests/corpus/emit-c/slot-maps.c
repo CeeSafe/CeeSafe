@@ -12,10 +12,10 @@ static CEE_UNUSED const cee_loc ceeL_0 = { cee_file_0, 7u, 26u };
 
 typedef struct ceeT_SystemHeap ceeT_SystemHeap;
 typedef struct ceeE_AllocError ceeE_AllocError;
+typedef struct ceeO_i32 ceeO_i32;
 typedef struct ceeR_Hi32E10AllocError ceeR_Hi32E10AllocError;
 typedef struct ceeO_Pi32 ceeO_Pi32;
 typedef struct ceeO_Qi32 ceeO_Qi32;
-typedef struct ceeO_i32 ceeO_i32;
 typedef struct ceeK_i32S10SystemHeap ceeK_i32S10SystemHeap;
 typedef struct ceeR_usizeE10AllocError ceeR_usizeE10AllocError;
 typedef struct ceeSV_i32S10SystemHeap ceeSV_i32S10SystemHeap;
@@ -31,6 +31,16 @@ struct ceeE_AllocError {
 };
 _Static_assert(sizeof(ceeE_AllocError) == 1, "ceesafec layout: sizeof(AllocError)");
 _Static_assert(_Alignof(ceeE_AllocError) == 1, "ceesafec layout: alignof(AllocError)");
+
+struct ceeO_i32 {
+    uint8_t tag;
+    union {
+        struct { int32_t f__0; } v_Some;
+    } u;
+};
+_Static_assert(sizeof(ceeO_i32) == 8, "ceesafec layout: sizeof(i32\?)");
+_Static_assert(_Alignof(ceeO_i32) == 4, "ceesafec layout: alignof(i32\?)");
+_Static_assert(offsetof(ceeO_i32, u) == 4, "ceesafec layout: i32\? payload offset");
 
 struct ceeR_Hi32E10AllocError {
     uint8_t tag;
@@ -53,16 +63,6 @@ _Static_assert(_Alignof(ceeO_Pi32) == 8, "ceesafec layout: alignof(borrow i32\?)
 struct ceeO_Qi32 { int32_t * f__0; };
 _Static_assert(sizeof(ceeO_Qi32) == 8, "ceesafec layout: sizeof(borrow mut i32\?)");
 _Static_assert(_Alignof(ceeO_Qi32) == 8, "ceesafec layout: alignof(borrow mut i32\?)");
-
-struct ceeO_i32 {
-    uint8_t tag;
-    union {
-        struct { int32_t f__0; } v_Some;
-    } u;
-};
-_Static_assert(sizeof(ceeO_i32) == 8, "ceesafec layout: sizeof(i32\?)");
-_Static_assert(_Alignof(ceeO_i32) == 4, "ceesafec layout: alignof(i32\?)");
-_Static_assert(offsetof(ceeO_i32, u) == 4, "ceesafec layout: i32\? payload offset");
 
 typedef struct ceeKS_Ki32S10SystemHeap { uint32_t gen; uint32_t next; int32_t value; } ceeKS_Ki32S10SystemHeap;
 struct ceeK_i32S10SystemHeap { ceeKS_Ki32S10SystemHeap *ptr; uint64_t len; uint64_t cap; uint64_t count; uint32_t free; };

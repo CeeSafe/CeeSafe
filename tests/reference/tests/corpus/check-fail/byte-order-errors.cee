@@ -1,0 +1,14 @@
+// Byte order (ADR 0071 §2.2): a reader names its type, a writer's value has a width, the types are fixed-width
+// integers, and writing needs a mutable slice.
+fn main() {
+    var v = Vector<u8>.create();
+    v.pushBE(5)!; // error[N0265]
+    let bytes: Slice<u8> = v.view();
+    let a = bytes.readBE(0); // error[N0265]
+    let b = bytes.readBE<usize>(0); // error[N0207]
+    let c = bytes.readLE<bool>(0); // error[N0207]
+    bytes.writeBE(0, 1u32); // error[N0211]
+    let d = "abcd".readBE<u32>(0); // error[N0200]
+    var ints = Vector<i32>.create();
+    ints.pushBE(1u32)!; // error[N0200]
+}

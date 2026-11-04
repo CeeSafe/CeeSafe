@@ -405,6 +405,87 @@ CEE_UNSIGNED_ABS(int16_t, i16, uint16_t)
 CEE_UNSIGNED_ABS(int32_t, i32, uint32_t)
 CEE_UNSIGNED_ABS(int64_t, i64, uint64_t)
 
+/* The bit methods (ADR 0071 §2.3). Amounts are taken modulo the width, so no shift is by the width or more; the
+   arithmetic is in a type no narrower than unsigned int, so nothing is promoted to int. Counts of a zero value are
+   the width. GCC and clang get their builtins; MSVC gets portable loops (c-backend.md §1.1). */
+#define CEE_BITS_UNSIGNED(T, S, W, N)                                                                  \
+    static inline T cee_rotl_##S(T x, uint32_t n) {                                                     \
+        n &= (N) - 1u;                                                                                  \
+        return n == 0u ? x : (T)(((W)x << n) | ((W)x >> ((N) - n)));                                    \
+    }                                                                                                   \
+    static inline T cee_rotr_##S(T x, uint32_t n) {                                                     \
+        n &= (N) - 1u;                                                                                  \
+        return n == 0u ? x : (T)(((W)x >> n) | ((W)x << ((N) - n)));                                    \
+    }                                                                                                   \
+    static inline T cee_shl_wrap_##S(T x, uint32_t n) { return (T)((W)x << (n & ((N) - 1u))); }          \
+    static inline T cee_shr_wrap_##S(T x, uint32_t n) { return (T)((W)x >> (n & ((N) - 1u))); }          \
+    static inline uint32_t cee_popcount_##S(T x) {                                                      \
+        uint32_t c = 0u;                                                                                \
+        W v = (W)x;                                                                                     \
+        while (v != 0u) { v &= v - 1u; c++; }                                                           \
+        return c;                                                                                       \
+    }                                                                                                   \
+    static inline uint32_t cee_clz_##S(T x) {                                                           \
+        uint32_t c = 0u;                                                                                \
+        W top = (W)1 << ((N) - 1u);                                                                     \
+        W v = (W)x;                                                                                     \
+        if (v == 0u) return (N);                                                                        \
+        while ((v & top) == 0u) { v <<= 1; c++; }                                                       \
+        return c;                                                                                       \
+    }                                                                                                   \
+    static inline uint32_t cee_ctz_##S(T x) {                                                           \
+        uint32_t c = 0u;                                                                                \
+        W v = (W)x;                                                                                     \
+        if (v == 0u) return (N);                                                                        \
+        while ((v & 1u) == 0u) { v >>= 1; c++; }                                                        \
+        return c;                                                                                       \
+    }
+CEE_BITS_UNSIGNED(uint8_t, u8, uint32_t, 8u)
+CEE_BITS_UNSIGNED(uint16_t, u16, uint32_t, 16u)
+#if defined(__GNUC__) || defined(__clang__)
+static inline uint32_t cee_rotl_u32(uint32_t x, uint32_t n) { n &= 31u; return n == 0u ? x : (x << n) | (x >> (32u - n)); }
+static inline uint32_t cee_rotr_u32(uint32_t x, uint32_t n) { n &= 31u; return n == 0u ? x : (x >> n) | (x << (32u - n)); }
+static inline uint32_t cee_shl_wrap_u32(uint32_t x, uint32_t n) { return x << (n & 31u); }
+static inline uint32_t cee_shr_wrap_u32(uint32_t x, uint32_t n) { return x >> (n & 31u); }
+static inline uint32_t cee_popcount_u32(uint32_t x) {
+    /* Not __builtin_popcount: without a popcount instruction GCC calls libgcc, which a freestanding build may not link. */
+    x = x - ((x >> 1) & 0x55555555u);
+    x = (x & 0x33333333u) + ((x >> 2) & 0x33333333u);
+    return (((x + (x >> 4)) & 0x0F0F0F0Fu) * 0x01010101u) >> 24;
+}
+static inline uint32_t cee_clz_u32(uint32_t x) { return x == 0u ? 32u : (uint32_t)__builtin_clz(x); }
+static inline uint32_t cee_ctz_u32(uint32_t x) { return x == 0u ? 32u : (uint32_t)__builtin_ctz(x); }
+static inline uint64_t cee_rotl_u64(uint64_t x, uint32_t n) { n &= 63u; return n == 0u ? x : (x << n) | (x >> (64u - n)); }
+static inline uint64_t cee_rotr_u64(uint64_t x, uint32_t n) { n &= 63u; return n == 0u ? x : (x >> n) | (x << (64u - n)); }
+static inline uint64_t cee_shl_wrap_u64(uint64_t x, uint32_t n) { return x << (n & 63u); }
+static inline uint64_t cee_shr_wrap_u64(uint64_t x, uint32_t n) { return x >> (n & 63u); }
+static inline uint32_t cee_popcount_u64(uint64_t x) {
+    x = x - ((x >> 1) & 0x5555555555555555u);
+    x = (x & 0x3333333333333333u) + ((x >> 2) & 0x3333333333333333u);
+    return (uint32_t)((((x + (x >> 4)) & 0x0F0F0F0F0F0F0F0Fu) * 0x0101010101010101u) >> 56);
+}
+static inline uint32_t cee_clz_u64(uint64_t x) { return x == 0u ? 64u : (uint32_t)__builtin_clzll(x); }
+static inline uint32_t cee_ctz_u64(uint64_t x) { return x == 0u ? 64u : (uint32_t)__builtin_ctzll(x); }
+static inline uint16_t cee_bswap_u16(uint16_t x) { return __builtin_bswap16(x); }
+static inline uint32_t cee_bswap_u32(uint32_t x) { return __builtin_bswap32(x); }
+static inline uint64_t cee_bswap_u64(uint64_t x) { return __builtin_bswap64(x); }
+#else
+CEE_BITS_UNSIGNED(uint32_t, u32, uint32_t, 32u)
+CEE_BITS_UNSIGNED(uint64_t, u64, uint64_t, 64u)
+static inline uint16_t cee_bswap_u16(uint16_t x) { return (uint16_t)(((uint32_t)x << 8) | ((uint32_t)x >> 8)); }
+static inline uint32_t cee_bswap_u32(uint32_t x) {
+    return (x << 24) | ((x & 0xFF00u) << 8) | ((x >> 8) & 0xFF00u) | (x >> 24);
+}
+static inline uint64_t cee_bswap_u64(uint64_t x) {
+    return ((uint64_t)cee_bswap_u32((uint32_t)x) << 32) | (uint64_t)cee_bswap_u32((uint32_t)(x >> 32));
+}
+#endif
+static inline uint8_t cee_bswap_u8(uint8_t x) { return x; }
+static inline int8_t cee_bswap_i8(int8_t x) { return x; }
+static inline int16_t cee_bswap_i16(int16_t x) { return cee_as_i16(cee_bswap_u16((uint16_t)x)); }
+static inline int32_t cee_bswap_i32(int32_t x) { return cee_as_i32(cee_bswap_u32((uint32_t)x)); }
+static inline int64_t cee_bswap_i64(int64_t x) { return cee_as_i64(cee_bswap_u64((uint64_t)x)); }
+
 #if defined(CEE_FLOATS)
 /* ---- Floats: representation and conversions (type-system.md §35.4–§35.6) ----------------------- */
 

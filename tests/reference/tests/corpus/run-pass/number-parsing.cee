@@ -1,0 +1,75 @@
+// Numbers from text (ADR 0071 §2.5): integers of each width, radixes, and correctly rounded floats.
+fn main() {
+    Console.writeLine("255".parseInt<u8>()!);
+    Console.writeLine("256".parseInt<u8>() == null);
+    Console.writeLine("-128".parseInt<i8>()!);
+    Console.writeLine("-129".parseInt<i8>() == null);
+    Console.writeLine("+42".parseInt<i32>()!);
+    Console.writeLine("-0".parseInt<u32>() == null);
+    Console.writeLine("18446744073709551615".parseInt<u64>()!);
+    Console.writeLine("18446744073709551616".parseInt<u64>() == null);
+    Console.writeLine("-9223372036854775808".parseInt<i64>()!);
+    Console.writeLine("".parseInt<i32>() == null);
+    Console.writeLine(" 1".parseInt<i32>() == null);
+    Console.writeLine("1_000".parseInt<i32>() == null);
+    Console.writeLine("ff".parseIntRadix<u32>(16)!);
+    Console.writeLine("-ZZ".parseIntRadix<i32>(36)!);
+    Console.writeLine("101".parseIntRadix<u8>(2)!);
+    Console.writeLine("1".parseIntRadix<u8>(37) == null);
+    Console.writeLine("4096".bytes().parseInt<usize>()!);
+    Console.writeLine("3.14159".parseFloat<f64>()!);
+    Console.writeLine("0.1".parseFloat<f64>()!.bits());
+    Console.writeLine("0.1".parseFloat<f32>()!.bits());
+    Console.writeLine("1e23".parseFloat<f64>()!);
+    Console.writeLine("2.2250738585072011e-308".parseFloat<f64>()!.bits());
+    Console.writeLine("4.9e-324".parseFloat<f64>()!.bits());
+    Console.writeLine("1e-400".parseFloat<f64>()!.bits());
+    Console.writeLine("-0".parseFloat<f64>()!.bits());
+    Console.writeLine("1.7976931348623159e308".parseFloat<f64>()!);
+    Console.writeLine("-Infinity".parseFloat<f64>()!);
+    Console.writeLine("NaN".parseFloat<f64>()!.bits());
+    Console.writeLine("9007199254740993".parseFloat<f64>()!.bits()); // halfway: to even
+    Console.writeLine("3.4028236e38".parseFloat<f32>()!);
+    Console.writeLine("0.30000000000000004".parseFloat<f64>()!);
+    Console.writeLine("1.".parseFloat<f64>()!);
+    Console.writeLine(".5".parseFloat<f64>()!);
+    Console.writeLine("1e".parseFloat<f64>() == null);
+    Console.writeLine("0x10".parseFloat<f64>() == null);
+    Console.writeLine("infinit".parseFloat<f64>() == null);
+}
+// expect-stdout: 255
+// expect-stdout: true
+// expect-stdout: -128
+// expect-stdout: true
+// expect-stdout: 42
+// expect-stdout: true
+// expect-stdout: 18446744073709551615
+// expect-stdout: true
+// expect-stdout: -9223372036854775808
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 255
+// expect-stdout: -1295
+// expect-stdout: 5
+// expect-stdout: true
+// expect-stdout: 4096
+// expect-stdout: 3.14159
+// expect-stdout: 4591870180066957722
+// expect-stdout: 1036831949
+// expect-stdout: 1e+23
+// expect-stdout: 4503599627370495
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 9223372036854775808
+// expect-stdout: Infinity
+// expect-stdout: -Infinity
+// expect-stdout: 9221120237041090560
+// expect-stdout: 4845873199050653696
+// expect-stdout: Infinity
+// expect-stdout: 0.30000000000000004
+// expect-stdout: 1
+// expect-stdout: 0.5
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

@@ -208,8 +208,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
-  like an array literal: it can be indexed and iterated, and bound to a local to be sliced or borrowed. Arrays of
-  other types, and of arrays, are N0216.
+  like an array literal: it can be indexed and iterated, and bound to a local to be sliced or borrowed. A table to
+  be sliced where it is named is a `static` instead (§39.2, ADR 0066). Arrays of other types, and of arrays, are
+  N0216.
 - **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
   the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
   N0246.
@@ -3329,7 +3330,11 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   allowed, and its drop never runs.
 
 ### 39.2 `static`
-- `T` must be `Share` (§38.1), because every thread may use a static (N0337).
+- `T` must be `Share` (§38.1), because every thread may use a static (N0337). Views of static string data are the
+  one exception, since they cannot change and outlive everything: `T` may be `StringView`, and in a `static` (not a
+  `static mut`) also `[StringView; N]`, whose initialiser is an array of string literals or constant views (ADR 0066).
+  Such a table is a place, so unlike a constant table (§10) it is sliced and borrowed where it is named:
+  `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`.
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:

@@ -1,0 +1,16 @@
+// Static tables of views (ADR 0066): only a `static` that is never written may hold an array of views; it stays
+// unchangeable, and its initialiser is still made of string literals.
+static mut WRITABLE: [StringView; 2] = ["a", "b"]; // error[N0337]
+static NESTED: [[StringView; 2]; 1] = [["a", "b"]]; // error[N0337]
+
+fn name() -> StringView => "x";
+static COMPUTED: [StringView; 1] = [name()]; // error[N0338]
+
+static LEVELS: [StringView; 2] = ["Low", "High"];
+
+fn change(t: borrow mut [StringView; 2]) {}
+
+fn main() {
+    LEVELS[0] = "Medium"; // error[N0211]
+    change(mut LEVELS); // error[N0248]
+}

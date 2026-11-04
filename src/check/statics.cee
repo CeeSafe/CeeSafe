@@ -180,8 +180,9 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
         let s = c.hir.statics[entry.hir as usize];
         let typ = s.typ;
         let typeSpan = c.front.ast.typeSpans[typeSyntax as usize];
-        // A view of static string data is the one reference a static may hold, and it is safe to share.
-        if (!s.mutable && typ != c.types.error && !c.types.isShare(typ)? && !c.types.isStringView(typ)) {
+        // Views of static string data are the one reference a static may hold, and they are safe to share: a view,
+        // or in a static that is never written, an array of views (ADR 0066).
+        if (!s.mutable && typ != c.types.error && !c.types.isShare(typ)? && !isConstantView(c, typ)) {
             var message = Vector<u8>.create();
             appendText(mut message, "a static is shared by every thread, so its type must be 'Share', and ")?;
             appendQuotedType(mut message, c, typ)?;
@@ -192,7 +193,7 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
                 if (imported) " is not: C writes a C object, so declare it 'static mut' (type-system.md §39.3; ADR 0042 §3.1)" else " is not (type-system.md §39.2; §38.1)",
             )?;
             c.error(staticNotAllowed(), typeSpan.start, typeSpan.end, message)?;
-        } else if (c.types.isScoped(typ) && !c.types.isStringView(typ)) {
+        } else if (c.types.isScoped(typ) && !c.types.isStringView(typ) && !(!s.mutable && isConstantView(c, typ))) {
             var message = Vector<u8>.create();
             appendText(mut message, "a static of type ")?;
             appendQuotedType(mut message, c, typ)?;

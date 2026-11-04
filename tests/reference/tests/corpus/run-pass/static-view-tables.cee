@@ -1,0 +1,60 @@
+// Static tables of views (ADR 0066): a `static` of type `[StringView; N]` is a place, like any static, so it is
+// sliced, measured and borrowed where it is named, with no local copy; its views are static data.
+static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];
+static REPEATED: [StringView; 2] = ["ab"; 2];
+static NAME: StringView = "levels";
+const FIRST: StringView = "first";
+static MIXED: [StringView; 2] = [FIRST, "second"];
+
+fn total(items: Slice<StringView>) -> usize {
+    var n: usize = 0;
+    for (s in items) {
+        n += s.length;
+    }
+    return n;
+}
+
+fn pick(k: usize) -> StringView => LEVELS[k];
+
+fn table() -> borrow(static) [StringView; 3] => borrow LEVELS;
+
+fn widest(items: Slice<StringView>) -> StringView {
+    var best: usize = 0;
+    for (k in 0..items.length) {
+        if (items[k].length > items[best].length) {
+            best = k;
+        }
+    }
+    return items[best];
+}
+
+fn main() {
+    Console.writeLine(LEVELS.length);
+    Console.writeLine(total(LEVELS[..]));
+    Console.writeLine(total(LEVELS[1..]));
+    Console.writeLine(pick(2));
+    for (level in LEVELS) {
+        Console.writeLine(level);
+    }
+    let t = table();
+    Console.writeLine(t[0]);
+    Console.writeLine(widest(LEVELS[..]));
+    Console.writeLine(total(REPEATED[..]));
+    Console.writeLine(NAME);
+    Console.writeLine(MIXED[0]);
+    Console.writeLine(total(MIXED[..]));
+}
+
+// expect-stdout: 3
+// expect-stdout: 13
+// expect-stdout: 10
+// expect-stdout: High
+// expect-stdout: Low
+// expect-stdout: Medium
+// expect-stdout: High
+// expect-stdout: Low
+// expect-stdout: Medium
+// expect-stdout: 4
+// expect-stdout: levels
+// expect-stdout: first
+// expect-stdout: 11

@@ -141,6 +141,80 @@ fn main() {
 }
 """
 
+# presentChanged (ADR 0070): step k paints the whole image color k but says only its boxes changed. A scripted window
+# applies only the boxes, so the last dump shows which ones it applied.
+CHANGED = r"""
+fn color(k: u32) -> u32 => 0xff000000u32 | (k * 37 + 11) & 0xff | ((k * 59 + 7) & 0xff) << 8 | ((k * 83 + 3) & 0xff) << 16;
+
+fn main() -> i32 {
+    var window = match (Window.open("window_check changed", 16, 12)) {
+        Ok(w) => w,
+        Err(_) => { return 1; }
+    };
+    let steps = match (Process.argument(1)) {
+        Some(a) => if (a.length == 1) truncate<u32>(a.bytes()[0] - 48) else 0,
+        null => 0,
+    };
+    var pixels = Vector<u32>.create();
+    for (k in 0..steps) {
+        let width: u32 = if (k >= 5) 20 else 16;
+        let height: u32 = if (k >= 5) 14 else 12;
+        pixels.clear();
+        for (i in 0..(width * height) as usize) {
+            pixels.push(color(k))!;
+        }
+        let one = [WindowBox { x: 2, y: 2, width: 4, height: 4 }];
+        let edges = [WindowBox { x: 0, y: 0, width: 16, height: 1 }, WindowBox { x: 15, y: 0, width: 1, height: 12 }];
+        let outside = [WindowBox { x: 10, y: 10, width: 10, height: 10 }];
+        let late = [WindowBox { x: 1, y: 1, width: 2, height: 2 }];
+        let tiny = [WindowBox { x: 3, y: 3, width: 0, height: 5 }, WindowBox { x: 1, y: 1, width: 1, height: 1 }];
+        let result = match (k) {
+            0 => window.presentChanged(pixels.view(), width, height, one[..]),
+            1 => window.presentChanged(pixels.view(), width, height, one[..]),
+            2 => window.presentChanged(pixels.view(), width, height, one[0..0]),
+            3 => window.presentChanged(pixels.view(), width, height, edges[..]),
+            4 => window.presentChanged(pixels.view(), width, height, outside[..]),
+            5 => window.presentChanged(pixels.view(), width, height, late[..]),
+            6 => window.present(pixels.view(), width, height),
+            _ => window.presentChanged(pixels.view(), width, height, tiny[..]),
+        };
+        match (result) {
+            Ok() => {}
+            Err(_) => { return 2; }
+        }
+    }
+    return 0;
+}
+"""
+
+
+def color(k):
+    return (0xFF000000 | ((k * 37 + 11) & 0xFF) | (((k * 59 + 7) & 0xFF) << 8) | (((k * 83 + 3) & 0xFF) << 16))
+
+
+def changed_expected(steps):
+    """The frame a scripted window shows after `steps` steps of CHANGED, by ADR 0070's rules."""
+    boxes = {0: [(2, 2, 4, 4)], 1: [(2, 2, 4, 4)], 2: [], 3: [(0, 0, 16, 1), (15, 0, 1, 12)], 4: [(10, 10, 10, 10)],
+             5: [(1, 1, 2, 2)], 7: [(3, 3, 0, 5), (1, 1, 1, 1)]}
+    frame, size = None, None
+    for k in range(steps):
+        w, h = (20, 14) if k >= 5 else (16, 12)
+        full = k == 6 or frame is None or size != (w, h) or any(
+            bw and bh and (x + bw > w or y + bh > h) for x, y, bw, bh in boxes[k])
+        if full:
+            frame, size = [color(k)] * (w * h), (w, h)
+            continue
+        for x, y, bw, bh in boxes[k]:
+            for yy in range(y, y + bh):
+                for xx in range(x, x + bw):
+                    frame[yy * w + xx] = color(k)
+    w, h = size
+    out = bytearray(f"ceesafe-window {w} {h}\n".encode())
+    for p in frame:
+        out += bytes((p & 0xFF, (p >> 8) & 0xFF, (p >> 16) & 0xFF, p >> 24))
+    return bytes(out)
+
+
 DISPLAY = r"""
 fn main() -> i32 {
     var window = match (Window.open("window_check --display", 320, 200)) {
@@ -163,7 +237,13 @@ fn main() -> i32 {
         for (i in 0..(w as u64) * (h as u64)) {
             pixels.push(0xff000000u32 | (frame * 8) << 8 | truncate<u32>(i & 0xff))!;
         }
-        window.present(pixels.view(), w, h)!;
+        // Every other frame through presentChanged: the first row band changed, then everything (ADR 0070).
+        if (frame % 2 == 0) {
+            window.present(pixels.view(), w, h)!;
+        } else {
+            let band = [WindowBox { x: 0, y: 0, width: w, height: h / 4 }];
+            window.presentChanged(pixels.view(), w, h, band[..])!;
+        }
         window.waitFrame();
     }
     let size = window.size();
@@ -331,7 +411,17 @@ def main():
                 problems.append(f"{what}: expected {answer}, got {r.stdout.strip()!r} (status {r.returncode}) "
                                 f"{r.stderr.strip()}")
 
-        checks = 1 + len(cases)
+        _, changed = build(compiler, CHANGED, work, "changed")
+        empty = os.path.join(work, "empty.txt")
+        with open(empty, "w", encoding="utf-8") as f:
+            f.write("")
+        for steps in range(1, 9):
+            out = os.path.join(work, f"changed{steps}.bin")
+            r = run([changed, str(steps)], {"CEESAFE_WINDOW_SCRIPT": empty, "CEESAFE_WINDOW_DUMP": out}, work)
+            if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
+                problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
+                                f"(status {r.returncode})")
+        checks = 1 + len(cases) + 8
         if args.display:
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)

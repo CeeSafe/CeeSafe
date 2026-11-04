@@ -1859,13 +1859,21 @@ Diagnostics: none new.
   - **Errors.** `pixels.length < width × height`, or a zero dimension, is `Resources`.
   - **Copying.** The pixels are copied during the call. A program draws at `size() × scale()` for one image pixel
     per screen pixel.
+  - **`w.presentChanged(pixels, width, height, changed: Slice<WindowBox>)`** (ADR 0070) is `present` with a promise:
+    only the pixels inside the `changed` boxes differ from the last frame presented. `WindowBox` is `{ x, y, width,
+    height }` in the image's pixels. The window may then show just those pixels.
+    - It is a plain `present` when there is no last frame of this size, when a box is not inside the image, or
+      when there are more than 64 boxes.
+    - An empty `changed` shows nothing new, and a box of zero size is skipped.
+    - Pixels outside the boxes may be shown from `pixels` or from the window's copy of the last frame, so a program
+      that breaks the promise sees either. A scripted window shows the copy.
 - **Settings and waiting.**
   - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
     `ResizeVertical`, shown while the pointer is over the content.
   - `w.setTitle(title)` sets the title.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
     arrives, so an idle loop does not spin.
-- **Effects.** `open`, `present`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`). `nextEvent`, `size`,
+- **Effects.** `open`, `present`, `presentChanged`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`). `nextEvent`, `size`,
   `scale`, `setCursor` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program

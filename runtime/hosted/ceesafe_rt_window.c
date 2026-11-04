@@ -74,6 +74,11 @@ struct cee_window_event {
     float x, y;
 };
 
+/* A changed part of a frame, in the image's pixels (lib/std's WindowBox). */
+struct cee_window_box {
+    uint32_t x, y, w, h;
+};
+
 /* One scripted event and the frame it belongs to. */
 struct cee_window_scripted {
     uint64_t frame;
@@ -94,6 +99,11 @@ struct cee_window {
     size_t script_count, script_next;
     uint64_t frames; /* presents so far */
     const char *dump;
+    /* The last frame presented: its size (present_changed's promise is about it), and for a scripted window a copy
+       of it, which present_changed updates and the dump writes. */
+    int shown;
+    uint32_t shown_width, shown_height;
+    uint32_t *kept;
     /* The system's window. */
     void *native;
 };
@@ -102,6 +112,8 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
 void ceesafe_window_close(void *window);
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position);
 int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t width, uint32_t height);
+int32_t ceesafe_window_present_changed(void *window, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                       const uint32_t *boxes, uint64_t count);
 void ceesafe_window_size(void *window, uint32_t *width, uint32_t *height);
 void ceesafe_window_scale(void *window, float *scale);
 void ceesafe_window_set_cursor(void *window, int32_t cursor);
@@ -189,6 +201,13 @@ static uint32_t cee_window_utf8(const unsigned char *s, size_t n, size_t *i) {
     *i += extra + 1u;
     return c;
 }
+
+#if defined(__APPLE__) || defined(_WIN32)
+/* An RGBA pixel (bytes R, G, B, A) as BGRA with an opaque alpha (bytes B, G, R, 255): GDI's and the IOSurface's. */
+static uint32_t cee_window_bgra(uint32_t p) {
+    return ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu) | 0xff000000u;
+}
+#endif
 
 /* ---- The monotonic clock and sleeping ---------------------------------------------------------------------------- */
 
@@ -563,6 +582,26 @@ static struct {
     void (*provider_release)(void *);
     cee_id *default_mode;
     cee_id *gravity_resize;
+    /* IOSurface and the CoreFoundation it needs (all or none: `surfaces`). */
+    int surfaces;
+    void *(*surface_create)(void *);
+    int32_t (*surface_lock)(void *, uint32_t, uint32_t *);
+    int32_t (*surface_unlock)(void *, uint32_t, uint32_t *);
+    void *(*surface_base)(void *);
+    size_t (*surface_stride)(void *);
+    void (*surface_set_value)(void *, const void *, const void *);
+    void **key_width;
+    void **key_height;
+    void **key_bytes_per_element;
+    void **key_pixel_format;
+    void **key_color_space;
+    void *(*dictionary_create)(void *, long, const void *, const void *);
+    void (*dictionary_set)(void *, const void *, const void *);
+    void *(*number_create)(void *, long, const void *);
+    void (*cf_release)(const void *);
+    const void *key_callbacks;
+    const void *value_callbacks;
+    void *(*color_space_plist)(void *);
     cee_id app;
     cee_id delegate_class;
     void *rgb;
@@ -575,10 +614,20 @@ static struct {
     struct cee_window *window;
 } cee_mac_windows[CEE_MAC_WINDOWS];
 
+/* A window's frame: two IOSurfaces shown in turn (the layer's contents), and the frame itself as BGRA. A surface
+   that is not shown still lacks the boxes presented since it last was: `pending` (or all of it, `pending_full`). */
+#define CEE_MAC_PENDING 16
 struct cee_mac {
     cee_id window;
     cee_id view;
     cee_id delegate;
+    void *surface[2];
+    int current;
+    uint32_t surface_width, surface_height;
+    uint32_t *frame;
+    struct cee_window_box pending[2][CEE_MAC_PENDING];
+    int pending_count[2];
+    int pending_full[2];
 };
 
 static cee_fn cee_mac_symbol(void *handle, const char *name) {
@@ -730,6 +779,41 @@ static int cee_mac_load(void) {
     cee_objc.provider_release = (void (*)(void *))cee_mac_symbol(graphics, "CGDataProviderRelease");
     cee_objc.default_mode = (cee_id *)cee_mac_data_symbol(appkit, "NSDefaultRunLoopMode");
     cee_objc.gravity_resize = (cee_id *)cee_mac_data_symbol(quartz, "kCAGravityResize");
+    /* IOSurface, for frames the window server shares (ADR 0070); without it, frames are CGImages as before. */
+    void *iosurface = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_NOW | RTLD_GLOBAL);
+    void *foundation = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW | RTLD_GLOBAL);
+    if (iosurface != NULL && foundation != NULL) {
+        cee_objc.surface_create = (void *(*)(void *))cee_mac_symbol(iosurface, "IOSurfaceCreate");
+        cee_objc.surface_lock = (int32_t(*)(void *, uint32_t, uint32_t *))cee_mac_symbol(iosurface, "IOSurfaceLock");
+        cee_objc.surface_unlock = (int32_t(*)(void *, uint32_t, uint32_t *))cee_mac_symbol(iosurface, "IOSurfaceUnlock");
+        cee_objc.surface_base = (void *(*)(void *))cee_mac_symbol(iosurface, "IOSurfaceGetBaseAddress");
+        cee_objc.surface_stride = (size_t(*)(void *))cee_mac_symbol(iosurface, "IOSurfaceGetBytesPerRow");
+        cee_objc.surface_set_value =
+            (void (*)(void *, const void *, const void *))cee_mac_symbol(iosurface, "IOSurfaceSetValue");
+        cee_objc.key_width = (void **)cee_mac_data_symbol(iosurface, "kIOSurfaceWidth");
+        cee_objc.key_height = (void **)cee_mac_data_symbol(iosurface, "kIOSurfaceHeight");
+        cee_objc.key_bytes_per_element = (void **)cee_mac_data_symbol(iosurface, "kIOSurfaceBytesPerElement");
+        cee_objc.key_pixel_format = (void **)cee_mac_data_symbol(iosurface, "kIOSurfacePixelFormat");
+        cee_objc.key_color_space = (void **)cee_mac_data_symbol(iosurface, "kIOSurfaceColorSpace");
+        cee_objc.dictionary_create = (void *(*)(void *, long, const void *, const void *))cee_mac_symbol(
+            foundation, "CFDictionaryCreateMutable");
+        cee_objc.dictionary_set =
+            (void (*)(void *, const void *, const void *))cee_mac_symbol(foundation, "CFDictionarySetValue");
+        cee_objc.number_create = (void *(*)(void *, long, const void *))cee_mac_symbol(foundation, "CFNumberCreate");
+        cee_objc.cf_release = (void (*)(const void *))cee_mac_symbol(foundation, "CFRelease");
+        cee_objc.key_callbacks = cee_mac_data_symbol(foundation, "kCFTypeDictionaryKeyCallBacks");
+        cee_objc.value_callbacks = cee_mac_data_symbol(foundation, "kCFTypeDictionaryValueCallBacks");
+        cee_objc.color_space_plist = (void *(*)(void *))cee_mac_symbol(graphics, "CGColorSpaceCopyPropertyList");
+        cee_objc.surfaces = cee_objc.surface_create != NULL && cee_objc.surface_lock != NULL &&
+                            cee_objc.surface_unlock != NULL && cee_objc.surface_base != NULL &&
+                            cee_objc.surface_stride != NULL && cee_objc.surface_set_value != NULL &&
+                            cee_objc.key_width != NULL && cee_objc.key_height != NULL &&
+                            cee_objc.key_bytes_per_element != NULL && cee_objc.key_pixel_format != NULL &&
+                            cee_objc.key_color_space != NULL && cee_objc.dictionary_create != NULL &&
+                            cee_objc.dictionary_set != NULL && cee_objc.number_create != NULL &&
+                            cee_objc.cf_release != NULL && cee_objc.key_callbacks != NULL &&
+                            cee_objc.value_callbacks != NULL && cee_objc.color_space_plist != NULL;
+    }
     if (cee_objc.get_class == NULL || cee_objc.sel == NULL || cee_objc.send == NULL || cee_objc.allocate_class == NULL ||
         cee_objc.add_method == NULL || cee_objc.register_class == NULL || cee_objc.pool_push == NULL ||
         cee_objc.pool_pop == NULL || cee_objc.color_space == NULL || cee_objc.provider_create == NULL ||
@@ -833,10 +917,17 @@ static void cee_native_close(struct cee_window *w) {
         }
     }
     cee_send_v_id(m->window, "setDelegate:", NULL);
+    cee_send_v_id(cee_send(m->view, "layer"), "setContents:", NULL);
     cee_send_v(m->window, "close");
     cee_send_v(m->window, "release");
     cee_send_v(m->delegate, "release");
     cee_objc.pool_pop(pool);
+    for (int k = 0; k < 2; k++) {
+        if (m->surface[k] != NULL) {
+            cee_objc.cf_release(m->surface[k]);
+        }
+    }
+    free(m->frame);
     free(m);
     w->native = NULL;
 }
@@ -1001,7 +1092,8 @@ static void cee_mac_release_pixels(void *info, const void *data, size_t size) {
     free(info);
 }
 
-static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
+/* A frame as a CGImage on the layer: the way without IOSurface. */
+static int32_t cee_mac_present_image(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
     struct cee_mac *m = (struct cee_mac *)w->native;
     size_t bytes = (size_t)width * (size_t)height * 4u;
     void *copy = malloc(bytes);
@@ -1026,6 +1118,126 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
     cee_objc.pool_pop(pool);
     cee_objc.image_release(image);
     return 0;
+}
+
+/* A width x height BGRA IOSurface tagged sRGB (the frames' colours), or NULL. */
+static void *cee_mac_surface(uint32_t width, uint32_t height) {
+    void *properties = cee_objc.dictionary_create(NULL, 0, cee_objc.key_callbacks, cee_objc.value_callbacks);
+    if (properties == NULL) {
+        return NULL;
+    }
+    int32_t values[4] = {(int32_t)width, (int32_t)height, 4, 0x42475241 /* 'BGRA' */};
+    void **keys[4] = {cee_objc.key_width, cee_objc.key_height, cee_objc.key_bytes_per_element, cee_objc.key_pixel_format};
+    for (int k = 0; k < 4; k++) {
+        void *number = cee_objc.number_create(NULL, 3 /* kCFNumberSInt32Type */, &values[k]);
+        if (number != NULL) {
+            cee_objc.dictionary_set(properties, *keys[k], number);
+            cee_objc.cf_release(number);
+        }
+    }
+    void *surface = cee_objc.surface_create(properties);
+    cee_objc.cf_release(properties);
+    if (surface != NULL) {
+        void *space = cee_objc.color_space_plist(cee_objc.rgb);
+        if (space != NULL) {
+            cee_objc.surface_set_value(surface, *cee_objc.key_color_space, space);
+            cee_objc.cf_release(space);
+        }
+    }
+    return surface;
+}
+
+/* Remembers that both surfaces lack `b` (the shown one is replaced before it is shown again). */
+static void cee_mac_pend(struct cee_mac *m, struct cee_window_box b) {
+    for (int k = 0; k < 2; k++) {
+        if (m->pending_count[k] < CEE_MAC_PENDING) {
+            m->pending[k][m->pending_count[k]++] = b;
+        } else {
+            m->pending_full[k] = 1;
+        }
+    }
+}
+
+/* Brings the surface not shown up to date with the frame and shows it. */
+static int32_t cee_mac_flip(struct cee_mac *m) {
+    int back = 1 - m->current;
+    void *surface = m->surface[back];
+    if (cee_objc.surface_lock(surface, 0, NULL) != 0) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    unsigned char *base = (unsigned char *)cee_objc.surface_base(surface);
+    size_t stride = cee_objc.surface_stride(surface);
+    size_t width = m->surface_width;
+    if (m->pending_full[back]) {
+        for (size_t y = 0; y < m->surface_height; y++) {
+            memcpy(base + y * stride, m->frame + y * width, width * 4u);
+        }
+    } else {
+        for (int k = 0; k < m->pending_count[back]; k++) {
+            struct cee_window_box b = m->pending[back][k];
+            for (size_t y = b.y; y < (size_t)b.y + b.h; y++) {
+                memcpy(base + y * stride + (size_t)b.x * 4u, m->frame + y * width + b.x, (size_t)b.w * 4u);
+            }
+        }
+    }
+    cee_objc.surface_unlock(surface, 0, NULL);
+    m->pending_full[back] = 0;
+    m->pending_count[back] = 0;
+    void *pool = cee_objc.pool_push();
+    cee_send_v_id(cee_send(m->view, "layer"), "setContents:", surface);
+    cee_objc.pool_pop(pool);
+    m->current = back;
+    return 0;
+}
+
+static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (!cee_objc.surfaces) {
+        return cee_mac_present_image(w, pixels, width, height);
+    }
+    if (m->frame == NULL || m->surface_width != width || m->surface_height != height) {
+        for (int k = 0; k < 2; k++) {
+            if (m->surface[k] != NULL) {
+                cee_objc.cf_release(m->surface[k]);
+            }
+            m->surface[k] = cee_mac_surface(width, height);
+        }
+        free(m->frame);
+        m->frame = (uint32_t *)malloc((size_t)width * (size_t)height * 4u);
+        if (m->frame == NULL || m->surface[0] == NULL || m->surface[1] == NULL) {
+            free(m->frame);
+            m->frame = NULL;
+            return cee_mac_present_image(w, pixels, width, height);
+        }
+        m->surface_width = width;
+        m->surface_height = height;
+    }
+    size_t count = (size_t)width * (size_t)height;
+    for (size_t k = 0; k < count; k++) {
+        m->frame[k] = cee_window_bgra(pixels[k]);
+    }
+    m->pending_full[0] = 1;
+    m->pending_full[1] = 1;
+    return cee_mac_flip(m);
+}
+
+/* Only `boxes` changed since the last present, which had this size (ceesafe_window_present_changed checks it). */
+static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                        const struct cee_window_box *boxes, size_t count) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    if (!cee_objc.surfaces || m->frame == NULL || m->surface_width != width || m->surface_height != height) {
+        return cee_native_present(w, pixels, width, height);
+    }
+    for (size_t k = 0; k < count; k++) {
+        struct cee_window_box b = boxes[k];
+        for (size_t y = b.y; y < (size_t)b.y + b.h; y++) {
+            for (size_t x = b.x; x < (size_t)b.x + b.w; x++) {
+                m->frame[y * width + x] = cee_window_bgra(pixels[y * width + x]);
+            }
+        }
+        cee_mac_pend(m, b);
+    }
+    return cee_mac_flip(m);
 }
 
 static void cee_native_cursor(struct cee_window *w) {
@@ -1343,14 +1555,56 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
         n->frame_height = height;
     }
     for (size_t k = 0; k < count; k++) { /* RGBA bytes to GDI's BGRX */
-        uint32_t p = pixels[k];
-        n->frame[k] = ((p & 0xffu) << 16) | (p & 0xff00u) | ((p >> 16) & 0xffu);
+        n->frame[k] = cee_window_bgra(pixels[k]);
     }
     HDC dc = GetDC(n->hwnd);
     if (dc != NULL) {
         cee_win32_paint(w, dc);
         ReleaseDC(n->hwnd, dc);
     }
+    return 0;
+}
+
+static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                        const struct cee_window_box *boxes, size_t count) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
+        return cee_native_present(w, pixels, width, height);
+    }
+    for (size_t k = 0; k < count; k++) {
+        struct cee_window_box b = boxes[k];
+        for (size_t y = b.y; y < (size_t)b.y + b.h; y++) {
+            for (size_t x = b.x; x < (size_t)b.x + b.w; x++) {
+                n->frame[y * width + x] = cee_window_bgra(pixels[y * width + x]);
+            }
+        }
+    }
+    HDC dc = GetDC(n->hwnd);
+    if (dc == NULL) {
+        return 0;
+    }
+    RECT client;
+    GetClientRect(n->hwnd, &client);
+    if ((uint32_t)(client.right - client.left) == width && (uint32_t)(client.bottom - client.top) == height) {
+        /* One pixel per pixel: only the boxes. StretchDIBits measures a source rectangle's y from the bottom row,
+           even for a top-down DIB, so the box's source y is height - (y + h). */
+        BITMAPINFO info;
+        memset(&info, 0, sizeof info);
+        info.bmiHeader.biSize = sizeof info.bmiHeader;
+        info.bmiHeader.biWidth = (LONG)width;
+        info.bmiHeader.biHeight = -(LONG)height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        for (size_t k = 0; k < count; k++) {
+            struct cee_window_box b = boxes[k];
+            StretchDIBits(dc, (int)b.x, (int)b.y, (int)b.w, (int)b.h, (int)b.x, (int)(height - b.y - b.h), (int)b.w,
+                          (int)b.h, n->frame, &info, DIB_RGB_COLORS, SRCCOPY);
+        }
+    } else {
+        cee_win32_paint(w, dc);
+    }
+    ReleaseDC(n->hwnd, dc);
     return 0;
 }
 
@@ -1776,6 +2030,51 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
     return 0;
 }
 
+static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                        const struct cee_window_box *boxes, size_t count) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
+        return cee_native_present(w, pixels, width, height);
+    }
+    for (size_t k = 0; k < count; k++) {
+        struct cee_window_box b = boxes[k];
+        for (size_t y = b.y; y < (size_t)b.y + b.h; y++) {
+            memcpy(n->frame + y * width + b.x, pixels + y * width + b.x, (size_t)b.w * sizeof(uint32_t));
+        }
+    }
+    if (w->width != width || w->height != height) {
+        cee_x_draw(w); /* scaled: the whole frame */
+        return 0;
+    }
+    /* One pixel per pixel: only the boxes. */
+    for (size_t k = 0; k < count; k++) {
+        struct cee_window_box b = boxes[k];
+        char *data = (char *)malloc((size_t)b.w * (size_t)b.h * 4u);
+        if (data == NULL) {
+            return -CEE_WINDOW_RESOURCES;
+        }
+        cee_x_image *image =
+            cee_x.create_image(n->display, n->visual, (unsigned int)n->depth, 2 /* ZPixmap */, 0, data, b.w, b.h, 32, 0);
+        if (image == NULL) {
+            free(data);
+            return -CEE_WINDOW_RESOURCES;
+        }
+        unsigned rs = cee_x_shift(image->red_mask), gs = cee_x_shift(image->green_mask), bs = cee_x_shift(image->blue_mask);
+        for (uint32_t y = 0; y < b.h; y++) {
+            uint32_t *row = (uint32_t *)(void *)(data + (size_t)y * (size_t)image->bytes_per_line);
+            for (uint32_t x = 0; x < b.w; x++) {
+                uint32_t p = n->frame[(size_t)(b.y + y) * width + b.x + x];
+                row[x] = ((p & 0xffu) << rs) | (((p >> 8) & 0xffu) << gs) | (((p >> 16) & 0xffu) << bs);
+            }
+        }
+        cee_x.put_image(n->display, n->window, cee_x.default_gc(n->display, n->screen), image, 0, 0, (int)b.x,
+                        (int)b.y, b.w, b.h);
+        image->f.destroy_image(image);
+    }
+    cee_x.flush(n->display);
+    return 0;
+}
+
 static void cee_native_cursor(struct cee_window *w) {
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     static const unsigned int shapes[] = {68, 60, 152, 34, 52, 108, 116}; /* XC_left_ptr, hand2, xterm, ... */
@@ -1894,6 +2193,7 @@ void ceesafe_window_close(void *window) {
     }
 #endif
     free(w->script);
+    free(w->kept);
     free(w);
 }
 
@@ -1926,13 +2226,72 @@ int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t wi
     if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE * 4u || height > CEE_WINDOW_MAX_SIDE * 4u) {
         return -CEE_WINDOW_RESOURCES;
     }
+    int32_t result;
     if (w->scripted) {
-        int32_t result = cee_window_dump(w, pixels, width, height);
+        size_t count = (size_t)width * (size_t)height;
+        if (!w->shown || w->shown_width != width || w->shown_height != height) {
+            uint32_t *grown = (uint32_t *)realloc(w->kept, count * sizeof(uint32_t));
+            if (grown == NULL) {
+                return -CEE_WINDOW_RESOURCES;
+            }
+            w->kept = grown;
+        }
+        memcpy(w->kept, pixels, count * sizeof(uint32_t));
+        result = cee_window_dump(w, w->kept, width, height);
+        w->frames++;
+    } else {
+#if !defined(CEE_WINDOW_NO_NATIVE)
+        result = cee_native_present(w, pixels, width, height);
+#else
+        result = -CEE_WINDOW_UNSUPPORTED;
+#endif
+    }
+    if (result == 0) {
+        w->shown = 1;
+        w->shown_width = width;
+        w->shown_height = height;
+    }
+    return result;
+}
+
+/* type-system.md §26.13, ADR 0070: only `boxes` (x, y, w, h in the image's pixels) differ from the last frame
+   presented. Without a last frame of this size, or with a box outside the image, it is a plain present. */
+int32_t ceesafe_window_present_changed(void *window, const uint32_t *pixels, uint32_t width, uint32_t height,
+                                       const uint32_t *boxes, uint64_t count) {
+    struct cee_window *w = (struct cee_window *)window;
+    if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE * 4u || height > CEE_WINDOW_MAX_SIDE * 4u) {
+        return -CEE_WINDOW_RESOURCES;
+    }
+    if (!w->shown || w->shown_width != width || w->shown_height != height || count > 4096u) {
+        return ceesafe_window_present(window, pixels, width, height);
+    }
+    struct cee_window_box list[64];
+    size_t n = 0;
+    for (uint64_t k = 0; k < count; k++) {
+        struct cee_window_box b = {boxes[4 * k], boxes[4 * k + 1], boxes[4 * k + 2], boxes[4 * k + 3]};
+        if (b.w == 0 || b.h == 0) {
+            continue;
+        }
+        if (b.x >= width || b.y >= height || b.w > width - b.x || b.h > height - b.y || n == 64) {
+            return ceesafe_window_present(window, pixels, width, height);
+        }
+        list[n++] = b;
+    }
+    if (w->scripted) {
+        for (size_t k = 0; k < n; k++) {
+            for (size_t y = list[k].y; y < (size_t)list[k].y + list[k].h; y++) {
+                memcpy(w->kept + y * width + list[k].x, pixels + y * width + list[k].x, (size_t)list[k].w * 4u);
+            }
+        }
+        int32_t result = n > 0 ? cee_window_dump(w, w->kept, width, height) : 0;
         w->frames++;
         return result;
     }
+    if (n == 0) {
+        return 0;
+    }
 #if !defined(CEE_WINDOW_NO_NATIVE)
-    return cee_native_present(w, pixels, width, height);
+    return cee_native_present_boxes(w, pixels, width, height, list, n);
 #else
     return -CEE_WINDOW_UNSUPPORTED;
 #endif

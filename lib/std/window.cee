@@ -13,6 +13,15 @@ extern "C" {
     fn ceesafe_window_poll(window: *mut void, fields: *mut i32, position: *mut f32) -> i32;
     @effects(sleep)
     fn ceesafe_window_present(window: *mut void, pixels: *u32, width: u32, height: u32) -> i32;
+    @effects(sleep)
+    fn ceesafe_window_present_changed(
+        window: *mut void,
+        pixels: *u32,
+        width: u32,
+        height: u32,
+        boxes: *u32,
+        count: u64,
+    ) -> i32;
     @effects()
     fn ceesafe_window_size(window: *mut void, width: *mut u32, height: *mut u32);
     @effects()
@@ -39,6 +48,14 @@ public enum WindowError {
 
 /// A window's content size in points.
 public struct WindowSize {
+    public width: u32;
+    public height: u32;
+}
+
+/// A part of an image that changed (`Window.presentChanged`), in the image's pixels.
+public struct WindowBox {
+    public x: u32;
+    public y: u32;
     public width: u32;
     public height: u32;
 }
@@ -172,6 +189,42 @@ public struct Window {
             return Err(WindowError.Resources);
         }
         let result = unsafe { ceesafe_window_present(this.raw, pixels.ptr, width, height) };
+        return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
+    }
+
+    /// Like `present`, but only the pixels inside `changed` differ from the last frame presented (§26.13, ADR 0070):
+    /// the window shows just those, which saves copying the rest. Without a last frame of this size, with a box
+    /// outside the image, or with more than 64 boxes, it is `present`. An empty `changed` shows nothing new.
+    /// Safety: the runtime reads `width × height` pixels, which `pixels` is checked to hold, and the boxes, during
+    /// the call only.
+    public fn presentChanged(
+        borrow mut this,
+        pixels: Slice<u32>,
+        width: u32,
+        height: u32,
+        changed: Slice<WindowBox>,
+    ) -> Result<void, WindowError> {
+        if (width == 0 || height == 0 || (pixels.length as u64) < (width as u64) * (height as u64)) {
+            return Err(WindowError.Resources);
+        }
+        if (changed.length > 64) {
+            return this.present(pixels, width, height);
+        }
+        var flat = [0u32; 256];
+        for (k in 0..changed.length) {
+            flat[4 * k] = changed[k].x;
+            flat[4 * k + 1] = changed[k].y;
+            flat[4 * k + 2] = changed[k].width;
+            flat[4 * k + 3] = changed[k].height;
+        }
+        let result = unsafe { ceesafe_window_present_changed(
+            this.raw,
+            pixels.ptr,
+            width,
+            height,
+            borrow flat[0] as *u32,
+            changed.length as u64,
+        ) };
         return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
     }
 

@@ -41,6 +41,7 @@
 - [struct TestRun](#struct-testrun)
 - [enum WindowError](#enum-windowerror)
 - [struct WindowSize](#struct-windowsize)
+- [struct WindowBox](#struct-windowbox)
 - [enum WindowButton](#enum-windowbutton)
 - [struct WindowModifiers](#struct-windowmodifiers)
 - [enum WindowKey](#enum-windowkey)
@@ -1670,6 +1671,19 @@ public struct WindowSize {
 
 A window's content size in points.
 
+## struct WindowBox
+
+```ceesafe
+public struct WindowBox {
+    public x: u32;
+    public y: u32;
+    public width: u32;
+    public height: u32;
+}
+```
+
+A part of an image that changed (`Window.presentChanged`), in the image's pixels.
+
 ## enum WindowButton
 
 ```ceesafe
@@ -1793,6 +1807,24 @@ public fn present(borrow mut this, pixels: Slice<u32>, width: u32, height: u32) 
 Shows a `width` × `height` image of premultiplied RGBA8 pixels (bytes R, G, B, A), rows top to bottom, scaled
 to the content.
 Safety: the runtime reads `width × height` pixels, which `pixels` is checked to hold, during the call only.
+
+### Window.presentChanged
+
+```ceesafe
+public fn presentChanged(
+    borrow mut this,
+    pixels: Slice<u32>,
+    width: u32,
+    height: u32,
+    changed: Slice<WindowBox>,
+) -> Result<void, WindowError>
+```
+
+Like `present`, but only the pixels inside `changed` differ from the last frame presented (§26.13, ADR 0070):
+the window shows just those, which saves copying the rest. Without a last frame of this size, with a box
+outside the image, or with more than 64 boxes, it is `present`. An empty `changed` shows nothing new.
+Safety: the runtime reads `width × height` pixels, which `pixels` is checked to hold, and the boxes, during
+the call only.
 
 ### Window.size
 

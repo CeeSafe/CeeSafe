@@ -145,6 +145,7 @@ const guideOrder = [
   "basics", "structs-and-enums", "ownership", "errors", "memory", "collections", "generics", "closures", "threads",
   "unsafe-and-c", "kernel", "ceesafec", "packages", "formatting-and-docs", "editors", "debugging",
   "coming-from/index", "coming-from/rust", "coming-from/zig", "coming-from/c-and-cpp", "coming-from/csharp-java-typescript", "coming-from/go",
+  "clay",
 ].map((name) => `guide/${name}.md`);
 const guidePages = pages
   .filter((page) => page.startsWith("guide/"))

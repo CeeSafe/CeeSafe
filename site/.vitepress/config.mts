@@ -57,6 +57,10 @@ const guide = [
       { text: "Performance", link: "/guide/performance" },
     ],
   },
+  {
+    text: "Built with CeeSafe",
+    items: [{ text: "Clay: a UI toolkit", link: "/guide/clay" }],
+  },
 ];
 
 // The ADRs, by number and first heading, from spec/decisions/.

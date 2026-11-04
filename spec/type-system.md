@@ -1819,6 +1819,83 @@ Diagnostics: none new.
   64-bit words, low byte first, and dropping what it does not use), so a run stays reproducible (§40.8). Its bytes are
   not secret.
 
+### 26.13 Native windows (ADR 0069)
+- **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
+  WindowError>`.
+  - **The window.** It is titled, resizable and visible, and on top of the program's other windows.
+  - **`WindowError`:**
+    - `Unsupported`: no backend for this system, the interpreter, or `width`/`height` 0 or over 16384;
+    - `NoDisplay`: no window server, such as no `DISPLAY` or no X11 library;
+    - `NotMainThread`: called on any thread but the program's first, on every system, so that programs stay
+      portable to macOS, which allows windows only there;
+    - `Resources`: the system refused.
+  - **Ownership.** `Window` is a move type, neither `Send` nor `Share`. Its drop closes the window.
+- **Events.** `w.nextEvent()` is `WindowEvent?`: the next pending event, or null. It never blocks, and the events of
+  one window come in order. `WindowEvent`:
+  - `Closed`: the user asked to close the window, which stays open until it is dropped;
+  - `Resized(WindowSize)`, in points;
+  - `Focus(bool)`;
+  - `PointerMoved(x, y)` and `PointerButton(WindowButton, down, x, y)`. `WindowButton` is `Primary`, `Secondary`
+    or `Middle`. Positions are `f32` points from the content's top left; a pointer outside the window during a
+    drag gives coordinates outside the size;
+  - `Wheel(dx, dy)`, in lines, positive `dy` away from the user (scrolling up);
+  - `Key(WindowKey, down, repeat, WindowModifiers)`. `WindowModifiers` has `shift`, `control`, `alt` and `command`:
+    `command` is ⌘ on macOS and the Windows key elsewhere;
+  - `Text(u32)`: a Unicode scalar the user typed, after the key's own `Key` event; control characters are not
+    reported as `Text`.
+- **Keys.** `WindowKey` is one of:
+  - `Tab`, `Enter`, `Escape`, `Backspace`, `Delete`, `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `PageUp`,
+    `PageDown` and `Space`;
+  - `Character(u32)`: a letter, as lowercase, a digit, or the unshifted character of a punctuation key, on the
+    layout in use;
+  - `Function(u8)`: F1 to F12;
+  - `Other(u32)`: the system's code for any other key.
+- **Size and drawing.** `w.size()` is `WindowSize { width, height }` in points, and `w.scale()` is pixels per point
+  as an `f32`, such as 2.0 on a Retina display.
+  - **`w.present(pixels: Slice<u32>, width, height)`** is `Result<void, WindowError>`. It shows a `width × height`
+    image, rows top to bottom, scaled to fill the window's content.
+  - **Pixels.** Each `u32` is one premultiplied RGBA8 pixel with bytes R, G, B, A in memory order:
+    `r | g << 8 | b << 16 | a << 24`. The window is opaque, so alpha does not show through.
+  - **Errors.** `pixels.length < width × height`, or a zero dimension, is `Resources`.
+  - **Copying.** The pixels are copied during the call. A program draws at `size() × scale()` for one image pixel
+    per screen pixel.
+- **Settings and waiting.**
+  - `w.setCursor(WindowCursor)` takes `Default`, `Pointer`, `Text`, `Crosshair`, `Grab`, `ResizeHorizontal` or
+    `ResizeVertical`, shown while the pointer is over the content.
+  - `w.setTitle(title)` sets the title.
+  - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
+    arrives, so an idle loop does not spin.
+- **Effects.** `open`, `present`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`). `nextEvent`, `size`,
+  `scale`, `setCursor` and the drop have no effect.
+- **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
+  - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
+    links it;
+  - **Windows:** Win32 and GDI;
+  - **Linux:** X11, `libX11.so.6` loaded with `dlopen`.
+
+  The runtime file is part of a build only when the program calls a window function.
+- **Scripted windows** (for tests, ADR 0069 §2.3). When the environment variable `CEESAFE_WINDOW_SCRIPT` names a
+  file, `open` makes a window that exists only in memory, on any system:
+  - **Size and scale.** Its size is the requested one, until a `resize`, and its scale is 1.
+  - **Frames.** Frame *n* is the time after the *n*-th `present`. The script's events for frame *n* are what
+    `nextEvent` returns then, in the script's order.
+  - **Script grammar.** The file holds `;`-separated `FRAME:WHAT` items:
+    - `move:X,Y`;
+    - `down:B,X,Y` and `up:B,X,Y`, with B 0 to 2 for primary, secondary and middle;
+    - `click:X,Y`: a primary down on FRAME and its up on FRAME+1;
+    - `wheel:DX,DY`;
+    - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`;
+    - `type:TEXT`: one `Text` per character;
+    - `resize:W,H`, `focus:0|1` and `close`.
+  - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
+    `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
+  - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` replaces it with the line
+    `ceesafe-window W H`, then the W×H pixels as RGBA bytes.
+  - **Waiting.** `waitFrame` returns at once.
+  - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
+- **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
+  to `open`.
+
 ## 27. Raw pointers and `unsafe` (M8a)
 
 The contract that unsafe code must keep, and what the compiler and the interpreter check, is in

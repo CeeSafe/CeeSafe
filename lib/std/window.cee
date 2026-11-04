@@ -1,0 +1,281 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Native windows (type-system.md §26.13, ADR 0069): one window that shows premultiplied RGBA8 frames and reports the
+// pointer, keys, typed text, the wheel, resizes and close requests. Hosted only, over
+// runtime/hosted/ceesafe_rt_window.c: AppKit on macOS, Win32 on Windows, X11 on Linux, or an in-memory window that a
+// script drives when CEESAFE_WINDOW_SCRIPT is set.
+
+extern "C" {
+    @effects(sleep, alloc)
+    fn ceesafe_window_open(title: *u8, length: u64, width: u32, height: u32, error: *mut i32) -> *mut void;
+    @effects()
+    fn ceesafe_window_close(window: *mut void);
+    @effects()
+    fn ceesafe_window_poll(window: *mut void, fields: *mut i32, position: *mut f32) -> i32;
+    @effects(sleep)
+    fn ceesafe_window_present(window: *mut void, pixels: *u32, width: u32, height: u32) -> i32;
+    @effects()
+    fn ceesafe_window_size(window: *mut void, width: *mut u32, height: *mut u32);
+    @effects()
+    fn ceesafe_window_scale(window: *mut void, scale: *mut f32);
+    @effects()
+    fn ceesafe_window_set_cursor(window: *mut void, cursor: i32);
+    @effects(sleep)
+    fn ceesafe_window_set_title(window: *mut void, title: *u8, length: u64);
+    @effects(sleep)
+    fn ceesafe_window_wait(window: *mut void);
+}
+
+/// Why a window could not be opened or drawn (§26.13).
+public enum WindowError {
+    /// No backend for this system, the interpreter, or a size of 0 or over 16384.
+    Unsupported,
+    /// No window server: no `DISPLAY`, no X11 library, or a session without one.
+    NoDisplay,
+    /// Called on a thread other than the program's first.
+    NotMainThread,
+    /// The system refused, or the pixels do not cover the image.
+    Resources,
+}
+
+/// A window's content size in points.
+public struct WindowSize {
+    public width: u32;
+    public height: u32;
+}
+
+/// A pointer button.
+public enum WindowButton {
+    Primary,
+    Secondary,
+    Middle,
+}
+
+/// The modifier keys held during a key event. `command` is ⌘ on macOS and the Windows key elsewhere.
+public struct WindowModifiers {
+    public shift: bool;
+    public control: bool;
+    public alt: bool;
+    public command: bool;
+}
+
+/// A key (§26.13): the named keys a UI needs, letters and digits as `Character`, F1 to F12 as `Function`.
+public enum WindowKey {
+    Tab,
+    Enter,
+    Escape,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Space,
+    /// A letter (lowercase), a digit, or a punctuation key's unshifted character, on the layout in use.
+    Character(u32),
+    /// F1 to F12.
+    Function(u8),
+    /// The system's code for any other key.
+    Other(u32),
+}
+
+/// The pointer's shape over the content.
+public enum WindowCursor {
+    Default,
+    Pointer,
+    Text,
+    Crosshair,
+    Grab,
+    ResizeHorizontal,
+    ResizeVertical,
+}
+
+/// What happened to a window (§26.13). Positions are points from the content's top left.
+public enum WindowEvent {
+    /// The user asked to close the window; it stays open until the `Window` is dropped.
+    Closed,
+    Resized(WindowSize),
+    Focus(bool),
+    /// x, y.
+    PointerMoved(f32, f32),
+    /// The button, whether it went down, x, y.
+    PointerButton(WindowButton, bool, f32, f32),
+    /// dx, dy in lines; positive dy scrolls up.
+    Wheel(f32, f32),
+    /// The key, whether it went down, whether it is the system's repeat, the modifiers.
+    Key(WindowKey, bool, bool, WindowModifiers),
+    /// A Unicode scalar the user typed.
+    Text(u32),
+}
+
+/// A native window (§26.13): a move type that closes the window when dropped. It is used on the program's first
+/// thread only.
+public struct Window {
+    raw: *mut void;
+
+    /// Opens a resizable window of `width` × `height` points titled `title`.
+    /// Safety: the runtime reads the title's bytes during the call only, and the handle it returns is this window's
+    /// until the drop closes it.
+    public fn open(title: StringView, width: u32, height: u32) -> Result<Window, WindowError> {
+        var error: i32 = 0;
+        let raw = unsafe { ceesafe_window_open(
+            title.ptr,
+            title.length as u64,
+            width,
+            height,
+            borrow mut error as *mut i32,
+        ) };
+        if (raw.isNull()) {
+            return Err(Window.errorOf(error));
+        }
+        return Ok(Window { raw: raw });
+    }
+
+    /// The next pending event, or null; it never blocks.
+    /// Safety: the runtime writes four fields and two coordinates, the sizes of the arrays it is given.
+    public fn nextEvent(borrow mut this) -> WindowEvent? {
+        var fields = [0i32; 4];
+        var position = [0.0f32; 2];
+        let kind = unsafe { ceesafe_window_poll(
+            this.raw,
+            borrow mut fields[0] as *mut i32,
+            borrow mut position[0] as *mut f32,
+        ) };
+        let x = position[0];
+        let y = position[1];
+        return match (kind) {
+            1 => WindowEvent.Closed,
+            2 => WindowEvent.Resized(WindowSize { width: truncate<u32>(fields[0]), height: truncate<u32>(fields[1]) }),
+            3 => WindowEvent.Focus(fields[0] != 0),
+            4 => WindowEvent.PointerMoved(x, y),
+            5 => WindowEvent.PointerButton(Window.buttonOf(fields[0]), fields[1] != 0, x, y),
+            6 => WindowEvent.Wheel(x, y),
+            7 => WindowEvent.Key(
+                Window.keyOf(fields[0]),
+                fields[1] != 0,
+                fields[2] != 0,
+                Window.modifiersOf(fields[3]),
+            ),
+            8 => WindowEvent.Text(truncate<u32>(fields[0])),
+            _ => null,
+        };
+    }
+
+    /// Shows a `width` × `height` image of premultiplied RGBA8 pixels (bytes R, G, B, A), rows top to bottom, scaled
+    /// to the content.
+    /// Safety: the runtime reads `width × height` pixels, which `pixels` is checked to hold, during the call only.
+    public fn present(borrow mut this, pixels: Slice<u32>, width: u32, height: u32) -> Result<void, WindowError> {
+        if (width == 0 || height == 0 || (pixels.length as u64) < (width as u64) * (height as u64)) {
+            return Err(WindowError.Resources);
+        }
+        let result = unsafe { ceesafe_window_present(this.raw, pixels.ptr, width, height) };
+        return if (result < 0) Err(Window.errorOf(0 - result)) else Ok();
+    }
+
+    /// The content's size in points.
+    /// Safety: the runtime writes the two sizes.
+    public fn size(borrow this) -> WindowSize {
+        var width: u32 = 0;
+        var height: u32 = 0;
+        unsafe { ceesafe_window_size(this.raw, borrow mut width as *mut u32, borrow mut height as *mut u32); }
+        return WindowSize { width: width, height: height };
+    }
+
+    /// Pixels per point: 2.0 on a Retina display.
+    /// Safety: the runtime writes the scale.
+    public fn scale(borrow this) -> f32 {
+        var scale: f32 = 1.0;
+        unsafe { ceesafe_window_scale(this.raw, borrow mut scale as *mut f32); }
+        return scale;
+    }
+
+    /// The pointer's shape while it is over the content.
+    /// Safety: the runtime only reads the cursor's number.
+    public fn setCursor(borrow mut this, cursor: WindowCursor) {
+        let code: i32 = match (cursor) {
+            WindowCursor.Default => 0,
+            WindowCursor.Pointer => 1,
+            WindowCursor.Text => 2,
+            WindowCursor.Crosshair => 3,
+            WindowCursor.Grab => 4,
+            WindowCursor.ResizeHorizontal => 5,
+            WindowCursor.ResizeVertical => 6,
+        };
+        unsafe { ceesafe_window_set_cursor(this.raw, code); }
+    }
+
+    /// Sets the title.
+    /// Safety: the runtime reads the title's bytes during the call only.
+    public fn setTitle(borrow mut this, title: StringView) {
+        unsafe { ceesafe_window_set_title(this.raw, title.ptr, title.length as u64); }
+    }
+
+    /// Returns about 1/60 s after the previous call, or earlier when an event arrives.
+    /// Safety: the runtime only waits on the window it was given.
+    public fn waitFrame(borrow mut this) {
+        unsafe { ceesafe_window_wait(this.raw); }
+    }
+
+    fn errorOf(code: i32) -> WindowError => match (code) {
+        1 => WindowError.Unsupported,
+        2 => WindowError.NoDisplay,
+        3 => WindowError.NotMainThread,
+        _ => WindowError.Resources,
+    };
+
+    fn buttonOf(code: i32) -> WindowButton => match (code) {
+        1 => WindowButton.Secondary,
+        2 => WindowButton.Middle,
+        _ => WindowButton.Primary,
+    };
+
+    /// The runtime's key numbers (ceesafe_rt_window.c): 1-14 the named keys, 100 + n F(n), 0x10000 + c a character,
+    /// 0x20000 + code any other key.
+    fn keyOf(code: i32) -> WindowKey {
+        if (code >= 0x20000) {
+            return WindowKey.Other(truncate<u32>(code - 0x20000));
+        }
+        if (code >= 0x10000) {
+            return WindowKey.Character(truncate<u32>(code - 0x10000));
+        }
+        if (code > 100 && code <= 112) {
+            return WindowKey.Function(truncate<u8>(code - 100));
+        }
+        return match (code) {
+            1 => WindowKey.Tab,
+            2 => WindowKey.Enter,
+            3 => WindowKey.Escape,
+            4 => WindowKey.Backspace,
+            5 => WindowKey.Delete,
+            6 => WindowKey.Left,
+            7 => WindowKey.Right,
+            8 => WindowKey.Up,
+            9 => WindowKey.Down,
+            10 => WindowKey.Home,
+            11 => WindowKey.End,
+            12 => WindowKey.PageUp,
+            13 => WindowKey.PageDown,
+            14 => WindowKey.Space,
+            _ => WindowKey.Other(truncate<u32>(code)),
+        };
+    }
+
+    fn modifiersOf(code: i32) -> WindowModifiers {
+        let bits = truncate<u32>(code);
+        return WindowModifiers {
+            shift: (bits & 1) != 0,
+            control: (bits & 2) != 0,
+            alt: (bits & 4) != 0,
+            command: (bits & 8) != 0,
+        };
+    }
+
+    /// Closes the window.
+    /// Safety: the handle is this window's, and nothing uses it after the drop.
+    drop {
+        unsafe { ceesafe_window_close(this.raw); }
+    }
+}

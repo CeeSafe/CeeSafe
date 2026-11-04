@@ -39,6 +39,14 @@
 - [struct Check](#struct-check)
 - [struct CheckResult](#struct-checkresult)
 - [struct TestRun](#struct-testrun)
+- [enum WindowError](#enum-windowerror)
+- [struct WindowSize](#struct-windowsize)
+- [enum WindowButton](#enum-windowbutton)
+- [struct WindowModifiers](#struct-windowmodifiers)
+- [enum WindowKey](#enum-windowkey)
+- [enum WindowCursor](#enum-windowcursor)
+- [enum WindowEvent](#enum-windowevent)
+- [struct Window](#struct-window)
 
 ## struct AsyncConsole
 
@@ -1637,3 +1645,196 @@ public fn unknown() -> i32
 ```
 
 No test has the name the runner asked for.
+
+## enum WindowError
+
+```ceesafe
+public enum WindowError {
+    Unsupported,
+    NoDisplay,
+    NotMainThread,
+    Resources,
+}
+```
+
+Why a window could not be opened or drawn (§26.13).
+
+## struct WindowSize
+
+```ceesafe
+public struct WindowSize {
+    public width: u32;
+    public height: u32;
+}
+```
+
+A window's content size in points.
+
+## enum WindowButton
+
+```ceesafe
+public enum WindowButton {
+    Primary,
+    Secondary,
+    Middle,
+}
+```
+
+A pointer button.
+
+## struct WindowModifiers
+
+```ceesafe
+public struct WindowModifiers {
+    public shift: bool;
+    public control: bool;
+    public alt: bool;
+    public command: bool;
+}
+```
+
+The modifier keys held during a key event. `command` is ⌘ on macOS and the Windows key elsewhere.
+
+## enum WindowKey
+
+```ceesafe
+public enum WindowKey {
+    Tab,
+    Enter,
+    Escape,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Space,
+    Character(u32),
+    Function(u8),
+    Other(u32),
+}
+```
+
+A key (§26.13): the named keys a UI needs, letters and digits as `Character`, F1 to F12 as `Function`.
+
+## enum WindowCursor
+
+```ceesafe
+public enum WindowCursor {
+    Default,
+    Pointer,
+    Text,
+    Crosshair,
+    Grab,
+    ResizeHorizontal,
+    ResizeVertical,
+}
+```
+
+The pointer's shape over the content.
+
+## enum WindowEvent
+
+```ceesafe
+public enum WindowEvent {
+    Closed,
+    Resized(WindowSize),
+    Focus(bool),
+    PointerMoved(f32, f32),
+    PointerButton(WindowButton, bool, f32, f32),
+    Wheel(f32, f32),
+    Key(WindowKey, bool, bool, WindowModifiers),
+    Text(u32),
+}
+```
+
+What happened to a window (§26.13). Positions are points from the content's top left.
+
+## struct Window
+
+```ceesafe
+public struct Window {
+    drop { … }
+}
+```
+
+A native window (§26.13): a move type that closes the window when dropped. It is used on the program's first
+thread only.
+
+### Window.open
+
+```ceesafe
+public fn open(title: StringView, width: u32, height: u32) -> Result<Window, WindowError>
+```
+
+Opens a resizable window of `width` × `height` points titled `title`.
+Safety: the runtime reads the title's bytes during the call only, and the handle it returns is this window's
+until the drop closes it.
+
+### Window.nextEvent
+
+```ceesafe
+public fn nextEvent(borrow mut this) -> WindowEvent?
+```
+
+The next pending event, or null; it never blocks.
+Safety: the runtime writes four fields and two coordinates, the sizes of the arrays it is given.
+
+### Window.present
+
+```ceesafe
+public fn present(borrow mut this, pixels: Slice<u32>, width: u32, height: u32) -> Result<void, WindowError>
+```
+
+Shows a `width` × `height` image of premultiplied RGBA8 pixels (bytes R, G, B, A), rows top to bottom, scaled
+to the content.
+Safety: the runtime reads `width × height` pixels, which `pixels` is checked to hold, during the call only.
+
+### Window.size
+
+```ceesafe
+public fn size(borrow this) -> WindowSize
+```
+
+The content's size in points.
+Safety: the runtime writes the two sizes.
+
+### Window.scale
+
+```ceesafe
+public fn scale(borrow this) -> f32
+```
+
+Pixels per point: 2.0 on a Retina display.
+Safety: the runtime writes the scale.
+
+### Window.setCursor
+
+```ceesafe
+public fn setCursor(borrow mut this, cursor: WindowCursor)
+```
+
+The pointer's shape while it is over the content.
+Safety: the runtime only reads the cursor's number.
+
+### Window.setTitle
+
+```ceesafe
+public fn setTitle(borrow mut this, title: StringView)
+```
+
+Sets the title.
+Safety: the runtime reads the title's bytes during the call only.
+
+### Window.waitFrame
+
+```ceesafe
+public fn waitFrame(borrow mut this)
+```
+
+Returns about 1/60 s after the previous call, or earlier when an event arrives.
+Safety: the runtime only waits on the window it was given.

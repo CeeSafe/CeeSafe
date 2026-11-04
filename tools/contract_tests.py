@@ -101,6 +101,7 @@ def main():
             ("udp", py + [f"{HERE}/udp_check.py", "--compiler", cee]),
             ("clock", py + [f"{HERE}/clock_check.py", "--compiler", cee]),
             ("random", py + [f"{HERE}/random_check.py", "--compiler", cee]),
+            ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),
             ("frame stacks", py + [f"{HERE}/frame_stack_check.py", "--compiler", cee]),
             ("alloc counting", py + [f"{HERE}/alloc_counting_check.py", "--compiler", cee]),

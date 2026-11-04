@@ -172,6 +172,9 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_async_")) {
             out.push(runtimeFile(6, "")?)?; // async tasks (c-backend.md §3a)
         }
+        if (containsBytes(mainText.view(), "ceesafe_window_")) {
+            out.push(runtimeFile(8, "")?)?; // native windows (type-system.md §26.13, ADR 0069)
+        }
     }
     if (hasHeader) {
         out.push(CFile { name: copyBytes(exportsHeaderName)?, text: header })?;

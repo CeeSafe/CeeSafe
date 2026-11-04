@@ -3,7 +3,8 @@ struct Token<region src> { text: StringView<src>; }
 struct Logger<region r> { name: StringView<r>; drop { Console.writeLine(this.name); } }
 enum Field<region r> { Text(StringView<r>), Missing }
 struct Pair<T> { first: T; second: T; }
-struct Window<region r> {
+// Renamed from `Window` by ADR 0069, which made `Window` a lib/std name.
+struct Pane<region r> {
     bytes: Slice<r, u8>;
     fn first(borrow this) -> u8 => this.bytes[0];
 }
@@ -48,7 +49,7 @@ fn main() {
     // Scoped payloads, slices with regions, methods on region structs, results with two sources.
     Console.writeLine(describe(Field.Text(s.view())));
     Console.writeLine(describe(Field.Missing));
-    let w = Window { bytes: s.view().bytes() };
+    let w = Pane { bytes: s.view().bytes() };
     Console.writeLine(w.first());
     Console.writeLine(longest(s.view(), "a much longer text"));
 

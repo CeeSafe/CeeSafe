@@ -1,0 +1,5 @@
+// A Window (type-system.md §26.13, ADR 0069) is neither Send nor Share: it is used on the program's first thread only.
+fn main() {
+    let window = Window.open("x", 10, 10)!;
+    let t = Thread.spawn(move () => window.size().width)!; // error[N0334]
+}

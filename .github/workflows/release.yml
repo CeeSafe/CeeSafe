@@ -263,6 +263,30 @@ jobs:
             run build hello.cee -o hello-native
             hello=./hello-native; [ -f hello-native.exe ] && hello=./hello-native.exe
             test "$("$hello" | tr -d '\r')" = 42
+            # The window runtime (ADR 0069), which no other step compiles: built with this platform's C compiler and
+            # run scripted, since the runner has no display. 4 events: the key's down and up, the text, the close.
+            cat > window.cee <<'CEE'
+          fn main() {
+              var window = Window.open("smoke", 8, 6)!;
+              var events: u32 = 0;
+              let pixels = [0xff0000ffu32; 48];
+              for (frame in 0u32..3) {
+                  loop {
+                      match (window.nextEvent()) {
+                          Some(_) => { events += 1; }
+                          null => { break; }
+                      }
+                  }
+                  window.present(pixels[..], 8, 6)!;
+              }
+              Console.writeLine(events);
+          }
+          CEE
+            run build window.cee -o window-native
+            printf '0:key:a;1:type:b;2:close' > window-script.txt
+            win=./window-native; [ -f window-native.exe ] && win=./window-native.exe
+            test "$(CEESAFE_WINDOW_SCRIPT=window-script.txt CEESAFE_WINDOW_DUMP=window-frame.bin "$win" | tr -d '\r')" = 4
+            head -1 window-frame.bin | tr -d '\r' | grep -Fx "ceesafe-window 8 6"
           fi
           echo '{"jsonrpc":"2.0","id":1,"method":"ping"}' | run mcp | grep -F '"result":{}'
       - name: Package

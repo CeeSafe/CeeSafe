@@ -186,3 +186,15 @@ owner ran it on the Mac and on the Windows VM: "Worked perfectly on both mac and
 `library` contract. A user program that uses the file gets misleading results instead, such as N0212 or an
 "unreachable" panic. Anyone changing lib/std should run that contract first.
 
+## 8. After the release: an sRGB window on macOS (0.13.1)
+
+- **What profiling found.** ClayWind's desktop host on a Retina display, profiled after it gained incremental
+  rendering, spent most of its time presenting frames. Core Animation converted every new sRGB `CGImage` to the
+  display's colour space on the CPU: vImage table lookups, about 500 samples against about 230 for all of the
+  rendering.
+- **The fix.** The window's colour space is now sRGB (`setColorSpace:` with `NSColorSpace.sRGBColorSpace`). Its
+  backing store then matches the frames, and the window server matches the window to the display.
+- **Result:** the host's CPU use while idle went from 47% to 31%, and vImage left the profile. A screenshot's
+  colours are within 1 of the earlier ones.
+- **No API change.** The other backends are unchanged.
+

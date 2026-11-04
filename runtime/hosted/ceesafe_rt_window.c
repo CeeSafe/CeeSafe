@@ -805,6 +805,9 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     cee_send_v_id(window, "setDelegate:", m->delegate);
     cee_send_v_bool(window, "setAcceptsMouseMovedEvents:", 1);
     cee_send_v_id(window, "setTitle:", cee_nsstring(title));
+    /* An sRGB window: its backing store matches the frames (sRGB CGImages), so Core Animation shows them without
+       converting every frame on the CPU; the window server matches the window to the display. */
+    cee_send_v_id(window, "setColorSpace:", cee_send(cee_mac_cls("NSColorSpace"), "sRGBColorSpace"));
     cee_send_v_bool(m->view, "setWantsLayer:", 1);
     cee_id layer = cee_send(m->view, "layer");
     cee_send_v_id(layer, "setContentsGravity:", *cee_objc.gravity_resize);

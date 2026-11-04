@@ -1,0 +1,24 @@
+// `static` written in a parameter's type is N0273 (ADR 0068): no call checks that its argument is static data, so
+// the callee could not rely on it. Functions, methods, generic functions and interface methods alike.
+fn view(v: StringView<static>) {} // error[N0273]
+fn slice(xs: Slice<static, u8>) {} // error[N0273]
+fn reference(r: borrow(static) i32) {} // error[N0273]
+fn optional(v: StringView<static>?) {} // error[N0273]
+fn generic<T: Copy>(v: StringView<static>, t: T) -> T => t; // error[N0273]
+
+struct Holder {
+    n: i32;
+
+    fn method(borrow this, v: StringView<static>) -> i32 => this.n; // error[N0273]
+}
+
+interface Named {
+    fn rename(borrow mut this, name: StringView<static>); // error[N0273]
+}
+
+// Without `static`, a string literal still passes.
+fn plain(v: StringView) -> usize => v.length;
+
+fn main() {
+    let n = plain("literal");
+}

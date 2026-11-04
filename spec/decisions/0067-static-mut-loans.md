@@ -36,19 +36,18 @@
 - **Still accepted: static data,** which carries no loan:
   - a string literal and a constant view;
   - a view read from another static or from a static table (`LEVELS[1]`);
-  - a call's result when its arguments are static data.
-- **Rejected:** a view of a local, of a parameter (including through a call or a subview), and of a parameter
-  declared `StringView<static>`.
-- **Why `StringView<static>` parameters are rejected.** A call does not check that the argument of a
-  `StringView<static>` parameter is static data: `take(s.view())` with a local `s` compiles. Trusting that region
-  here would reopen the hole through the caller. The unchecked call is a separate gap, recorded in §4.
+  - a call's result when its arguments are static data, or when its type names only `static` (ADR 0068).
+- **Rejected:** a view of a local or of a parameter, including through a call or a subview.
+- **`StringView<static>` parameters.** As first implemented, this ADR rejected them too, since a call did not check
+  that their argument is static data (`take(s.view())` with a local `s` compiled). ADR 0068 made `static` in a
+  parameter's type N0273, so the case no longer arises.
 - **Why N0272 and not a new code.** N0272 is "storing loans where the signature does not let them flow". A static
   is the extreme case: nothing may flow there.
 
 ## 3. Evidence (macOS arm64)
 
-- **`check-fail/static-mut-loans`:** five writes rejected (a local, a parameter, through a call, a subview, a
-  `StringView<static>` parameter).
+- **`check-fail/static-mut-loans`:** four writes rejected (a local, a parameter, through a call, a subview). Its
+  fifth case, a `StringView<static>` parameter, moved to ADR 0068's `check-fail/static-parameters`.
 - **`run-pass/static-mut-views`:** six accepted writes of static data, and a `static mut` integer, alongside them.
   Its expected output comes from a Python model. It passes compiled and with `--interp`.
 - **On 0.11.0, both tests fail:** the check-fail test because the hole compiles, and the run-pass test because it
@@ -59,6 +58,5 @@
 
 - **Programs this change breaks.** None of the repository's packages writes a `static mut` view. A program that
   stored a non-static view this way was already unsound, and now gets N0272.
-- **Open: `StringView<static>` parameters** (§2). Either a call checks that the argument is static data (N0243
-  then, as for a returned local), or a written `static` region on a parameter becomes N0273. Until then, a value
-  that must be stored in a static has to be static data at the point of the write.
+- **`StringView<static>` parameters,** left open here, are settled by ADR 0068: N0273 on a parameter, and a result
+  that names only `static` is enforced and may be stored in a static.

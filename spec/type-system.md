@@ -1549,7 +1549,8 @@ fn split<region r>(line: StringView<r>) -> Result<Vector<StringView<r>>, AllocEr
   erased, §25.5).
 - A written region must be in scope: a region parameter of the enclosing item or function, or
   `static`. In a function's result, `borrow(p)` may also name a parameter, as in v0 (§13.5).
-  Otherwise, or with the wrong number of arguments: N0273.
+  Otherwise, or with the wrong number of arguments: N0273. `static` in a parameter's type is N0273 too (§25.6, ADR
+  0068).
 
 ### 25.3 Scoped types
 A type is **scoped** (§19.1) iff it is a reference, slice or `StringView`, a scoped region value,
@@ -1594,8 +1595,15 @@ Each parameter and the result of a function have **flow names**:
 - for a parameter of scoped type without written regions: a fresh name of its own (elision);
 - for a result of scoped type without written regions: the flow names of the single scoped
   parameter (v0 elision); with several scoped parameters and none written, N0245 (as in v0).
+- for a result whose written regions are all `static` (`StringView<static>`, `Slice<static, T>`, `S<static>`,
+  `borrow(static) T`, or an optional or array of one): none, and no elision (ADR 0068). It borrows from no
+  parameter, so the body may return only static data (N0245 for a parameter's loan, N0244 for a local's), and a
+  caller treats the result as static data: it outlives the arguments and may be stored in a static (§39.3).
 
-`static` is never a flow name. A function's **flows** are then:
+`static` is never a flow name. It is written only in results and bodies: in a parameter's type (a function's, a
+method's or an interface method's) it is N0273 (ADR 0068), since a call does not check that an argument is static
+data, and through a function value, a `dyn` method or a bound it could not. A string literal still passes to a
+parameter without `static`. A function's **flows** are then:
 - **result ← parameter `i`** iff they share a flow name: the result may carry `i`'s loans (this
   generalises v0's return sources, §13.5);
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
@@ -3355,9 +3363,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   on it (`unsafe.md` U3).
 - **What may be written** (ADR 0067). `S` refers to memory that outlives every borrow, so a value written to it, or
   into it, may carry no loan: N0272 otherwise. Static data carries none: a string literal, a constant view, or a
-  view read from another static. A view of a local or of a parameter is rejected, even a parameter declared
-  `StringView<static>`, since a call does not check that its argument is static data. The unsafe block makes the
-  use unsafe; it does not lift this rule.
+  view read from another static, and a call's result whose type names only `static` (§25.6, ADR 0068). A view of a
+  local or of a parameter is rejected. The unsafe block makes the use unsafe; it does not lift this rule.
 - **C objects** (ADR 0042). `T` may be an imported C type (§31), or hold one: a device, a protocol's ops table. C
   code reaches it through the addresses CeeSafe gives it and writes it, which is why it is a `static mut`: a plain
   `static` of an imported type is N0337, since CeeSafe would read it as unchanging. Its initialiser is C's (§39.4).

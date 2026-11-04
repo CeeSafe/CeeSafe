@@ -10,10 +10,10 @@ fn h(xs: Slice<Res>) {}
 fn k(xs: [u8; 0]) {}
 fn l(xs: [u8; 3u8]) {}
 fn m(xs: Slice<i32, i32>) {}
-fn n(xs: Slice<static, i32>) {}
+fn n(xs: Slice<static, i32>) {} // since ADR 0068 also N0273: `static` on a parameter
 fn o(xs: [[Big; 1000]; 1000]) {}
 fn p() -> [u8; 2] => [1, 2];
-fn mixed(r: borrow(static, q) i32) {}
+fn mixed(r: borrow(static, q) i32) {} // since ADR 0068 also N0273 for `static`
 
 fn main() {
     let a = [1, 2, 3];

@@ -1536,6 +1536,9 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 appendText(mut message, "the returned reference may be derived from parameter '")?;
                 appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
                 appendText(mut message, "', which the return type does not list")?;
+                if (c.hir.functions[source as usize].returnSources.length == 0) {
+                    appendText(mut message, "; a 'static' result may hold only static data, such as a string literal")?;
+                }
                 c.front.diagnostics.error(returnSourceMismatch(), b.file, span.start, span.end, message)?;
             }
         }

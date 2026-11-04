@@ -28,9 +28,4 @@ fn aSubview(owned: borrow String) {
     unsafe { LAST = whole[0..1]; } // error[N0272]
 }
 
-/// Safety: one thread uses LAST. A `static` region on a parameter is not checked at the call, so it is no exception.
-fn staticParameter(name: StringView<static>) {
-    unsafe { LAST = name; } // error[N0272]
-}
-
 fn main() {}

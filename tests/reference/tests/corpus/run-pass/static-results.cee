@@ -1,0 +1,46 @@
+// A `static` result carries no loan (ADR 0068): it outlives the call's arguments, and it may be stored in a static.
+static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];
+static mut CHOSEN: StringView = "unset";
+
+fn level(k: usize) -> StringView<static> => LEVELS[k % 3];
+
+fn answer(yes: bool) -> StringView<static> => if (yes) "yes" else "no";
+
+fn table() -> Slice<static, StringView> => LEVELS[..];
+
+fn find(text: StringView) -> StringView<static>? {
+    for (name in LEVELS) {
+        if (name == text) {
+            return name;
+        }
+    }
+    return null;
+}
+
+/// Safety: one thread uses CHOSEN.
+fn main() {
+    var kept: [StringView; 1] = ["none"];
+    {
+        var owned = String.create();
+        owned.append("Medium")!;
+        match (find(owned.view())) {
+            Some(v) => { kept[0] = v; }
+            null => {}
+        }
+    }
+    // `owned` is gone; `kept` holds static data from LEVELS (before ADR 0068, `find`'s result borrowed `owned`).
+    Console.writeLine(kept[0]);
+    unsafe { CHOSEN = level(5); }
+    unsafe { Console.writeLine(CHOSEN); }
+    unsafe { CHOSEN = answer(false); }
+    unsafe { Console.writeLine(CHOSEN); }
+    Console.writeLine(table().length);
+    unsafe { CHOSEN = table()[0]; }
+    unsafe { Console.writeLine(CHOSEN); }
+}
+
+// expect-stdout: Medium
+// expect-stdout: High
+// expect-stdout: no
+// expect-stdout: 3
+// expect-stdout: Low

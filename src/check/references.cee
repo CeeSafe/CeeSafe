@@ -417,6 +417,9 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
         } else {
             let p = c.front.ast.parameters[c.front.ast.at(decl.parameters, truncate<u32>(i - receiverOffset)) as usize];
             collectFlowNames(c, p.typ, function, false, mut set)?;
+            if (writesStatic(c, p.typ)) {
+                staticParameterError(c, p.typ)?;
+            }
         }
         let local = c.hir.functions[function as usize].parameters[i];
         var hasRegion = false;
@@ -451,7 +454,8 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 named = true;
             }
         }
-        if (hasSourceList || (c.types.isScoped(returnType) && !named)) {
+        // A result that names only `static` borrows from no parameter, so it is not elided (ADR 0068).
+        if (hasSourceList || (c.types.isScoped(returnType) && !named && !writesStatic(c, decl.returnType))) {
             var resolved = Vector<u32>.create();
             resolveReturnSources(c, f, function, mut resolved)?; // v0: `borrow(a, b)`, or elision (§13.5)
             for (i in resolved.view()) {
@@ -722,6 +726,48 @@ fn sortU32(values: borrow mut Vector<u32>) {
             j -= 1;
         }
     }
+}
+
+/// Does the type syntax write the region `static` anywhere: `StringView<static>`, `Slice<static, T>`, `S<static>`,
+/// `borrow(static) T`, or inside an optional or array of one (ADR 0068)?
+fn writesStatic(c: borrow Checker, syntax: u32) -> bool {
+    match (c.front.ast.types[syntax as usize]) {
+        TypeNode.Optional(inner) => { return writesStatic(c, inner); }
+        TypeNode.Array(element, _) => { return writesStatic(c, element); }
+        TypeNode.Reference(_, _, sources, pointee) => {
+            for (k in 0..sources.count) {
+                if (sameText(c.name(c.front.ast.idents[c.front.ast.at(sources, k) as usize].symbol), "static")) {
+                    return true;
+                }
+            }
+            return writesStatic(c, pointee);
+        }
+        TypeNode.Generic(_, arguments) => {
+            for (k in 0..arguments.count) {
+                let argument = c.front.ast.at(arguments, k);
+                let symbol = singleName(c, argument);
+                if (symbol != none() && sameText(c.name(symbol), "static")) {
+                    return true;
+                }
+                if (writesStatic(c, argument)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        _ => { return false; }
+    }
+}
+
+/// N0273 for `static` written in a parameter's type (ADR 0068): no call checks that its argument is static data.
+fn staticParameterError(c: borrow mut Checker, syntax: u32) -> Result<void, AllocError> {
+    let span = c.front.ast.typeSpans[syntax as usize];
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "a parameter cannot require the region 'static': a call does not check that its argument is static data, so the callee could not rely on it; drop 'static' (string literals still pass) (type-system.md §25.2; ADR 0068)",
+    )?;
+    return c.error(unknownRegion(), span.start, span.end, message);
 }
 
 fn unknownRegion() -> u32 => 273;

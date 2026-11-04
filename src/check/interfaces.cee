@@ -120,6 +120,13 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
         var known = Vector<u32>.create();
         knownAttributes(c, attributes, "an interface method", words, mut known)?;
         readEffectAttributes(c, method, known.view())?; // §37.3
+        let declared = c.front.ast.functions[method as usize].parameters;
+        for (j in 0..declared.count) {
+            let typ = c.front.ast.parameters[c.front.ast.at(declared, j) as usize].typ;
+            if (writesStatic(c, typ)) {
+                staticParameterError(c, typ)?; // ADR 0068
+            }
+        }
     }
     return Ok();
 }

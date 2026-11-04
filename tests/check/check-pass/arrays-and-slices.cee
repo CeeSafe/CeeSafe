@@ -20,7 +20,9 @@ fn clear(xs: SliceMut<u8>) {
 
 fn firstX(ps: Slice<Point>) -> i32 => ps[0].x;
 
-fn staticView(s: StringView<static>, xs: Slice<static, u8>, r: borrow(static) i32) -> usize => s.length + xs.length;
+// Changed by ADR 0068: this was `fn staticView(s: StringView<static>, xs: Slice<static, u8>, r: borrow(static) i32)`;
+// `static` on a parameter is now N0273 (check-fail/static-parameters), so the regions are written on the result.
+fn staticView() -> Slice<static, u8> => "abc".bytes();
 
 fn main() {
     var a = [1u32, 2, 3, 4];
@@ -46,7 +48,7 @@ fn main() {
         let r = row[0];
     }
     let five = 5;
-    let sv = staticView("abc", bytes[..], five);
+    let sv = staticView().length;
     let m = borrow mut a[1..2];
     m[0] = 3;
 }

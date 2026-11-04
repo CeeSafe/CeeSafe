@@ -158,7 +158,7 @@ references, so the borrow checker reports their conflicts as N0240–N0245.
 |---|---|---|
 | N0270 | A scoped field or payload in a struct or enum without region parameters | `struct S { v: StringView; }` |
 | N0272 | Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067) | `fn put(v: borrow mut Vector<StringView>, s: StringView) { v.push(s)!; }` |
-| N0273 | An unknown region name, region arguments on a type without region parameters, or the wrong number of them | `StringView<nowhere>`, `Plain<r>` |
+| N0273 | An unknown region name, region arguments on a type without region parameters, the wrong number of them, or `static` in a parameter's type (ADR 0068) | `StringView<nowhere>`, `Plain<r>` |
 | N0274 | A generic used with a scoped type argument where it needs an unscoped one (it boxes `T`, makes an array of `T`, …) | `boxed<StringView>(s)` with `fn boxed<T>(v: T) -> Box<T>` |
 
 N0271 is unassigned: destroying a value that holds loans while their referents are gone reports N0243.

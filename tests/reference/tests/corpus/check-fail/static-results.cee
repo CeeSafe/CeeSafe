@@ -1,0 +1,13 @@
+// A result that names only `static` borrows from no parameter (ADR 0068): returning a parameter's view is N0245 and
+// a local's is N0244, so a caller may treat the result as static data.
+fn launder(v: StringView) -> StringView<static> => v; // error[N0245]
+
+fn local() -> StringView<static> {
+    var s = String.create();
+    s.append("temporary")!;
+    return s.view(); // error[N0244]
+}
+
+fn sliceOf(xs: Slice<u8>) -> Slice<static, u8> => xs; // error[N0245]
+
+fn main() {}

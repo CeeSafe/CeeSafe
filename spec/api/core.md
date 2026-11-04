@@ -20,13 +20,22 @@
 - [struct AtomicU32](#struct-atomicu32)
 - [struct AtomicUSize](#struct-atomicusize)
 - [struct AtomicBool](#struct-atomicbool)
+- [struct ByteOrder](#struct-byteorder)
+- [struct VectorBytes](#struct-vectorbytes)
 - [struct TextWriter](#struct-textwriter)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
+- [struct NumberParsing](#struct-numberparsing)
 - [struct SliceHalves](#struct-slicehalves)
 - [struct SliceHalvesMut](#struct-slicehalvesmut)
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
+- [struct TextHalves](#struct-texthalves)
+- [struct ByteHalves](#struct-bytehalves)
+- [struct TextSplit](#struct-textsplit)
+- [struct ByteSplit](#struct-bytesplit)
+- [struct TextSearch](#struct-textsearch)
+- [struct ByteSearch](#struct-bytesearch)
 
 ## struct PhysAddr
 
@@ -953,6 +962,536 @@ public fn compareExchangeWith(borrow this, expected: bool, desired: bool, order:
 
 As compareExchange, with `order` (a failure orders as a load, §38.3).
 
+## struct ByteOrder
+
+```ceesafe
+public struct ByteOrder
+```
+
+Reading and writing integers in a byte order: static functions; the struct has no fields and is never made.
+
+### ByteOrder.readU8BE
+
+```ceesafe
+public fn readU8BE(s: Slice<u8>, at: usize) -> u8
+```
+
+The `u8` in the 1 byte at `at`, big-endian.
+
+### ByteOrder.readI8BE
+
+```ceesafe
+public fn readI8BE(s: Slice<u8>, at: usize) -> i8
+```
+
+The `i8` in the 1 byte at `at`, big-endian, in two's complement.
+
+### ByteOrder.writeU8BE
+
+```ceesafe
+public fn writeU8BE(s: SliceMut<u8>, at: usize, x: u8)
+```
+
+Writes `x` to the 1 byte at `at`, big-endian.
+
+### ByteOrder.writeI8BE
+
+```ceesafe
+public fn writeI8BE(s: SliceMut<u8>, at: usize, x: i8)
+```
+
+Writes `x` to the 1 byte at `at`, big-endian, in two's complement.
+
+### ByteOrder.readU8LE
+
+```ceesafe
+public fn readU8LE(s: Slice<u8>, at: usize) -> u8
+```
+
+The `u8` in the 1 byte at `at`, little-endian.
+
+### ByteOrder.readI8LE
+
+```ceesafe
+public fn readI8LE(s: Slice<u8>, at: usize) -> i8
+```
+
+The `i8` in the 1 byte at `at`, little-endian, in two's complement.
+
+### ByteOrder.writeU8LE
+
+```ceesafe
+public fn writeU8LE(s: SliceMut<u8>, at: usize, x: u8)
+```
+
+Writes `x` to the 1 byte at `at`, little-endian.
+
+### ByteOrder.writeI8LE
+
+```ceesafe
+public fn writeI8LE(s: SliceMut<u8>, at: usize, x: i8)
+```
+
+Writes `x` to the 1 byte at `at`, little-endian, in two's complement.
+
+### ByteOrder.readU16BE
+
+```ceesafe
+public fn readU16BE(s: Slice<u8>, at: usize) -> u16
+```
+
+The `u16` in the 2 bytes at `at`, big-endian.
+
+### ByteOrder.readI16BE
+
+```ceesafe
+public fn readI16BE(s: Slice<u8>, at: usize) -> i16
+```
+
+The `i16` in the 2 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.writeU16BE
+
+```ceesafe
+public fn writeU16BE(s: SliceMut<u8>, at: usize, x: u16)
+```
+
+Writes `x` to the 2 bytes at `at`, big-endian.
+
+### ByteOrder.writeI16BE
+
+```ceesafe
+public fn writeI16BE(s: SliceMut<u8>, at: usize, x: i16)
+```
+
+Writes `x` to the 2 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.readU16LE
+
+```ceesafe
+public fn readU16LE(s: Slice<u8>, at: usize) -> u16
+```
+
+The `u16` in the 2 bytes at `at`, little-endian.
+
+### ByteOrder.readI16LE
+
+```ceesafe
+public fn readI16LE(s: Slice<u8>, at: usize) -> i16
+```
+
+The `i16` in the 2 bytes at `at`, little-endian, in two's complement.
+
+### ByteOrder.writeU16LE
+
+```ceesafe
+public fn writeU16LE(s: SliceMut<u8>, at: usize, x: u16)
+```
+
+Writes `x` to the 2 bytes at `at`, little-endian.
+
+### ByteOrder.writeI16LE
+
+```ceesafe
+public fn writeI16LE(s: SliceMut<u8>, at: usize, x: i16)
+```
+
+Writes `x` to the 2 bytes at `at`, little-endian, in two's complement.
+
+### ByteOrder.readU32BE
+
+```ceesafe
+public fn readU32BE(s: Slice<u8>, at: usize) -> u32
+```
+
+The `u32` in the 4 bytes at `at`, big-endian.
+
+### ByteOrder.readI32BE
+
+```ceesafe
+public fn readI32BE(s: Slice<u8>, at: usize) -> i32
+```
+
+The `i32` in the 4 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.writeU32BE
+
+```ceesafe
+public fn writeU32BE(s: SliceMut<u8>, at: usize, x: u32)
+```
+
+Writes `x` to the 4 bytes at `at`, big-endian.
+
+### ByteOrder.writeI32BE
+
+```ceesafe
+public fn writeI32BE(s: SliceMut<u8>, at: usize, x: i32)
+```
+
+Writes `x` to the 4 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.readU32LE
+
+```ceesafe
+public fn readU32LE(s: Slice<u8>, at: usize) -> u32
+```
+
+The `u32` in the 4 bytes at `at`, little-endian.
+
+### ByteOrder.readI32LE
+
+```ceesafe
+public fn readI32LE(s: Slice<u8>, at: usize) -> i32
+```
+
+The `i32` in the 4 bytes at `at`, little-endian, in two's complement.
+
+### ByteOrder.writeU32LE
+
+```ceesafe
+public fn writeU32LE(s: SliceMut<u8>, at: usize, x: u32)
+```
+
+Writes `x` to the 4 bytes at `at`, little-endian.
+
+### ByteOrder.writeI32LE
+
+```ceesafe
+public fn writeI32LE(s: SliceMut<u8>, at: usize, x: i32)
+```
+
+Writes `x` to the 4 bytes at `at`, little-endian, in two's complement.
+
+### ByteOrder.readU64BE
+
+```ceesafe
+public fn readU64BE(s: Slice<u8>, at: usize) -> u64
+```
+
+The `u64` in the 8 bytes at `at`, big-endian.
+
+### ByteOrder.readI64BE
+
+```ceesafe
+public fn readI64BE(s: Slice<u8>, at: usize) -> i64
+```
+
+The `i64` in the 8 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.writeU64BE
+
+```ceesafe
+public fn writeU64BE(s: SliceMut<u8>, at: usize, x: u64)
+```
+
+Writes `x` to the 8 bytes at `at`, big-endian.
+
+### ByteOrder.writeI64BE
+
+```ceesafe
+public fn writeI64BE(s: SliceMut<u8>, at: usize, x: i64)
+```
+
+Writes `x` to the 8 bytes at `at`, big-endian, in two's complement.
+
+### ByteOrder.readU64LE
+
+```ceesafe
+public fn readU64LE(s: Slice<u8>, at: usize) -> u64
+```
+
+The `u64` in the 8 bytes at `at`, little-endian.
+
+### ByteOrder.readI64LE
+
+```ceesafe
+public fn readI64LE(s: Slice<u8>, at: usize) -> i64
+```
+
+The `i64` in the 8 bytes at `at`, little-endian, in two's complement.
+
+### ByteOrder.writeU64LE
+
+```ceesafe
+public fn writeU64LE(s: SliceMut<u8>, at: usize, x: u64)
+```
+
+Writes `x` to the 8 bytes at `at`, little-endian.
+
+### ByteOrder.writeI64LE
+
+```ceesafe
+public fn writeI64LE(s: SliceMut<u8>, at: usize, x: i64)
+```
+
+Writes `x` to the 8 bytes at `at`, little-endian, in two's complement.
+
+## struct VectorBytes
+
+```ceesafe
+public struct VectorBytes
+```
+
+Appending integers to a byte vector in a byte order: `v.pushBE(x)` and `v.pushLE(x)` (ADR 0071 §2.2). Each is one
+`extend` of the bytes, so it grows the vector at most once and leaves it unchanged if that fails. A vector's
+allocator is `SystemHeap` or `FailingAllocator` (type-system.md §23.1); the `…Failing` functions are the latter's.
+
+### VectorBytes.pushU8BE
+
+```ceesafe
+public fn pushU8BE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian.
+
+### VectorBytes.pushI8BE
+
+```ceesafe
+public fn pushI8BE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian, in two's complement.
+
+### VectorBytes.pushU8LE
+
+```ceesafe
+public fn pushU8LE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian.
+
+### VectorBytes.pushI8LE
+
+```ceesafe
+public fn pushI8LE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian, in two's complement.
+
+### VectorBytes.pushU16BE
+
+```ceesafe
+public fn pushU16BE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian.
+
+### VectorBytes.pushI16BE
+
+```ceesafe
+public fn pushI16BE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU16LE
+
+```ceesafe
+public fn pushU16LE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian.
+
+### VectorBytes.pushI16LE
+
+```ceesafe
+public fn pushI16LE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushU32BE
+
+```ceesafe
+public fn pushU32BE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian.
+
+### VectorBytes.pushI32BE
+
+```ceesafe
+public fn pushI32BE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU32LE
+
+```ceesafe
+public fn pushU32LE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian.
+
+### VectorBytes.pushI32LE
+
+```ceesafe
+public fn pushI32LE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushU64BE
+
+```ceesafe
+public fn pushU64BE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian.
+
+### VectorBytes.pushI64BE
+
+```ceesafe
+public fn pushI64BE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU64LE
+
+```ceesafe
+public fn pushU64LE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian.
+
+### VectorBytes.pushI64LE
+
+```ceesafe
+public fn pushI64LE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushU8BEFailing
+
+```ceesafe
+public fn pushU8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian.
+
+### VectorBytes.pushI8BEFailing
+
+```ceesafe
+public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, big-endian, in two's complement.
+
+### VectorBytes.pushU8LEFailing
+
+```ceesafe
+public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian.
+
+### VectorBytes.pushI8LEFailing
+
+```ceesafe
+public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+```
+
+Appends `x` as 1 byte, little-endian, in two's complement.
+
+### VectorBytes.pushU16BEFailing
+
+```ceesafe
+public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian.
+
+### VectorBytes.pushI16BEFailing
+
+```ceesafe
+public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU16LEFailing
+
+```ceesafe
+public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian.
+
+### VectorBytes.pushI16LEFailing
+
+```ceesafe
+public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+```
+
+Appends `x` as 2 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushU32BEFailing
+
+```ceesafe
+public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian.
+
+### VectorBytes.pushI32BEFailing
+
+```ceesafe
+public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU32LEFailing
+
+```ceesafe
+public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian.
+
+### VectorBytes.pushI32LEFailing
+
+```ceesafe
+public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+```
+
+Appends `x` as 4 bytes, little-endian, in two's complement.
+
+### VectorBytes.pushU64BEFailing
+
+```ceesafe
+public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian.
+
+### VectorBytes.pushI64BEFailing
+
+```ceesafe
+public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, big-endian, in two's complement.
+
+### VectorBytes.pushU64LEFailing
+
+```ceesafe
+public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian.
+
+### VectorBytes.pushI64LEFailing
+
+```ceesafe
+public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+```
+
+Appends `x` as 8 bytes, little-endian, in two's complement.
+
 ## struct TextWriter
 
 ```ceesafe
@@ -1129,6 +1668,191 @@ public fn address(borrow this) -> usize
 
 The address of the registers, as given to `at`.
 
+## struct NumberParsing
+
+```ceesafe
+public struct NumberParsing
+```
+
+Parsing integers and floats from bytes: static functions; the struct has no fields and is never made.
+
+### NumberParsing.parseU8
+
+```ceesafe
+public fn parseU8(s: Slice<u8>) -> u8?
+```
+
+Decimal text as a `u8`.
+
+### NumberParsing.parseU8Radix
+
+```ceesafe
+public fn parseU8Radix(s: Slice<u8>, radix: u32) -> u8?
+```
+
+Text in `radix` (2 to 36; null otherwise) as a `u8`.
+
+### NumberParsing.parseU16
+
+```ceesafe
+public fn parseU16(s: Slice<u8>) -> u16?
+```
+
+Decimal text as a `u16`.
+
+### NumberParsing.parseU16Radix
+
+```ceesafe
+public fn parseU16Radix(s: Slice<u8>, radix: u32) -> u16?
+```
+
+Text in `radix` (2 to 36; null otherwise) as a `u16`.
+
+### NumberParsing.parseU32
+
+```ceesafe
+public fn parseU32(s: Slice<u8>) -> u32?
+```
+
+Decimal text as a `u32`.
+
+### NumberParsing.parseU32Radix
+
+```ceesafe
+public fn parseU32Radix(s: Slice<u8>, radix: u32) -> u32?
+```
+
+Text in `radix` (2 to 36; null otherwise) as a `u32`.
+
+### NumberParsing.parseU64
+
+```ceesafe
+public fn parseU64(s: Slice<u8>) -> u64?
+```
+
+Decimal text as a `u64`.
+
+### NumberParsing.parseU64Radix
+
+```ceesafe
+public fn parseU64Radix(s: Slice<u8>, radix: u32) -> u64?
+```
+
+Text in `radix` (2 to 36; null otherwise) as a `u64`.
+
+### NumberParsing.parseUsize
+
+```ceesafe
+public fn parseUsize(s: Slice<u8>) -> usize?
+```
+
+Decimal text as a `usize`.
+
+### NumberParsing.parseUsizeRadix
+
+```ceesafe
+public fn parseUsizeRadix(s: Slice<u8>, radix: u32) -> usize?
+```
+
+Text in `radix` (2 to 36; null otherwise) as a `usize`.
+
+### NumberParsing.parseI8
+
+```ceesafe
+public fn parseI8(s: Slice<u8>) -> i8?
+```
+
+Decimal text as an `i8`.
+
+### NumberParsing.parseI8Radix
+
+```ceesafe
+public fn parseI8Radix(s: Slice<u8>, radix: u32) -> i8?
+```
+
+Text in `radix` (2 to 36; null otherwise) as an `i8`.
+
+### NumberParsing.parseI16
+
+```ceesafe
+public fn parseI16(s: Slice<u8>) -> i16?
+```
+
+Decimal text as an `i16`.
+
+### NumberParsing.parseI16Radix
+
+```ceesafe
+public fn parseI16Radix(s: Slice<u8>, radix: u32) -> i16?
+```
+
+Text in `radix` (2 to 36; null otherwise) as an `i16`.
+
+### NumberParsing.parseI32
+
+```ceesafe
+public fn parseI32(s: Slice<u8>) -> i32?
+```
+
+Decimal text as an `i32`.
+
+### NumberParsing.parseI32Radix
+
+```ceesafe
+public fn parseI32Radix(s: Slice<u8>, radix: u32) -> i32?
+```
+
+Text in `radix` (2 to 36; null otherwise) as an `i32`.
+
+### NumberParsing.parseI64
+
+```ceesafe
+public fn parseI64(s: Slice<u8>) -> i64?
+```
+
+Decimal text as an `i64`.
+
+### NumberParsing.parseI64Radix
+
+```ceesafe
+public fn parseI64Radix(s: Slice<u8>, radix: u32) -> i64?
+```
+
+Text in `radix` (2 to 36; null otherwise) as an `i64`.
+
+### NumberParsing.parseIsize
+
+```ceesafe
+public fn parseIsize(s: Slice<u8>) -> isize?
+```
+
+Decimal text as an `isize`.
+
+### NumberParsing.parseIsizeRadix
+
+```ceesafe
+public fn parseIsizeRadix(s: Slice<u8>, radix: u32) -> isize?
+```
+
+Text in `radix` (2 to 36; null otherwise) as an `isize`.
+
+### NumberParsing.parseF64
+
+```ceesafe
+public fn parseF64(s: Slice<u8>) -> f64?
+```
+
+Text as an `f64`, correctly rounded, or null. `[+-]digits[.digits][(e|E)[+-]digits]` with a digit on at least one
+side of the point, or `inf`, `infinity` or `nan` in any case, with an optional sign. Too large is ±infinity.
+
+### NumberParsing.parseF32
+
+```ceesafe
+public fn parseF32(s: Slice<u8>) -> f32?
+```
+
+Text as an `f32`, correctly rounded (once: not through an `f64`), or null; the grammar of parseF64.
+
 ## struct SliceHalves
 
 ```ceesafe
@@ -1236,3 +1960,221 @@ public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
 
 Moves the elements for which `keep` returns true to the front, in order, calling it once on each element in
 index order; returns how many there are. `v.retain(keep)` then truncates the vector to that length.
+
+## struct TextHalves
+
+```ceesafe
+public struct TextHalves<region r> {
+    public left: StringView<r>;
+    public right: StringView<r>;
+}
+```
+
+The parts of a text before and after a separator: what `s.splitOnce(sep)` finds.
+
+## struct ByteHalves
+
+```ceesafe
+public struct ByteHalves<region r> {
+    public left: Slice<r, u8>;
+    public right: Slice<r, u8>;
+}
+```
+
+The parts of bytes before and after a separator: what `s.splitOnce(sep)` finds on a `Slice<u8>`.
+
+## struct TextSplit
+
+```ceesafe
+public struct TextSplit<region r>
+```
+
+The pieces of a text between separators, in order: `s.split(sep)`. `next()` gives each piece, then null. `"a,,b"`
+split by `","` is `"a"`, `""`, `"b"`; an empty text is one empty piece; an empty separator gives the text whole.
+
+### TextSplit.next
+
+```ceesafe
+public fn next(borrow mut this) -> StringView<r>?
+```
+
+The next piece, or null after the last.
+
+## struct ByteSplit
+
+```ceesafe
+public struct ByteSplit<region r>
+```
+
+The pieces of bytes between separators, in order: `s.split(sep)` on a `Slice<u8>`, as TextSplit.
+
+### ByteSplit.next
+
+```ceesafe
+public fn next(borrow mut this) -> Slice<r, u8>?
+```
+
+The next piece, or null after the last.
+
+## struct TextSearch
+
+```ceesafe
+public struct TextSearch<region r>
+```
+
+The methods of a `StringView` that search it (ADR 0071 §2.4), as static functions: the struct is never made.
+
+### TextSearch.indexOf
+
+```ceesafe
+public fn indexOf(s: StringView<r>, needle: StringView) -> usize?
+```
+
+### TextSearch.lastIndexOf
+
+```ceesafe
+public fn lastIndexOf(s: StringView<r>, needle: StringView) -> usize?
+```
+
+### TextSearch.indexOfByte
+
+```ceesafe
+public fn indexOfByte(s: StringView<r>, b: u8) -> usize?
+```
+
+### TextSearch.contains
+
+```ceesafe
+public fn contains(s: StringView<r>, needle: StringView) -> bool
+```
+
+### TextSearch.startsWith
+
+```ceesafe
+public fn startsWith(s: StringView<r>, prefix: StringView) -> bool
+```
+
+### TextSearch.endsWith
+
+```ceesafe
+public fn endsWith(s: StringView<r>, suffix: StringView) -> bool
+```
+
+### TextSearch.equalsIgnoreAsciiCase
+
+```ceesafe
+public fn equalsIgnoreAsciiCase(s: StringView<r>, other: StringView) -> bool
+```
+
+### TextSearch.trim
+
+```ceesafe
+public fn trim(s: StringView<r>) -> StringView<r>
+```
+
+### TextSearch.trimStart
+
+```ceesafe
+public fn trimStart(s: StringView<r>) -> StringView<r>
+```
+
+### TextSearch.trimEnd
+
+```ceesafe
+public fn trimEnd(s: StringView<r>) -> StringView<r>
+```
+
+### TextSearch.splitOnce
+
+```ceesafe
+public fn splitOnce(s: StringView<r>, separator: StringView) -> TextHalves<r>?
+```
+
+The text before the first `separator` and after it, or null if it does not occur. An empty separator is found
+at the start.
+
+### TextSearch.split
+
+```ceesafe
+public fn split(s: StringView<r>, separator: StringView<r>) -> TextSplit<r>
+```
+
+## struct ByteSearch
+
+```ceesafe
+public struct ByteSearch<region r>
+```
+
+The methods of a `Slice<u8>` that search it (ADR 0071 §2.4), as TextSearch's.
+
+### ByteSearch.indexOf
+
+```ceesafe
+public fn indexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize?
+```
+
+### ByteSearch.lastIndexOf
+
+```ceesafe
+public fn lastIndexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize?
+```
+
+### ByteSearch.indexOfByte
+
+```ceesafe
+public fn indexOfByte(s: Slice<r, u8>, b: u8) -> usize?
+```
+
+### ByteSearch.contains
+
+```ceesafe
+public fn contains(s: Slice<r, u8>, needle: Slice<u8>) -> bool
+```
+
+### ByteSearch.startsWith
+
+```ceesafe
+public fn startsWith(s: Slice<r, u8>, prefix: Slice<u8>) -> bool
+```
+
+### ByteSearch.endsWith
+
+```ceesafe
+public fn endsWith(s: Slice<r, u8>, suffix: Slice<u8>) -> bool
+```
+
+### ByteSearch.equalsIgnoreAsciiCase
+
+```ceesafe
+public fn equalsIgnoreAsciiCase(s: Slice<r, u8>, other: Slice<u8>) -> bool
+```
+
+### ByteSearch.trim
+
+```ceesafe
+public fn trim(s: Slice<r, u8>) -> Slice<r, u8>
+```
+
+### ByteSearch.trimStart
+
+```ceesafe
+public fn trimStart(s: Slice<r, u8>) -> Slice<r, u8>
+```
+
+### ByteSearch.trimEnd
+
+```ceesafe
+public fn trimEnd(s: Slice<r, u8>) -> Slice<r, u8>
+```
+
+### ByteSearch.splitOnce
+
+```ceesafe
+public fn splitOnce(s: Slice<r, u8>, separator: Slice<u8>) -> ByteHalves<r>?
+```
+
+### ByteSearch.split
+
+```ceesafe
+public fn split(s: Slice<r, u8>, separator: Slice<r, u8>) -> ByteSplit<r>
+```

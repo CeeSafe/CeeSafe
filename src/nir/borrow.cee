@@ -811,6 +811,77 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
     return Ok();
 }
 
+/// The static whose address local `local` holds (`local = StaticAddress(s)`, §39.2), or none.
+fn addressedStatic(n: borrow NirProgram, b: borrow Borrows, local: u32) -> u32 {
+    let function = borrow n.functions[b.function as usize];
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, value) => {
+                    if (n.places[target as usize].local == local && n.places[target as usize].projections.count == 0) {
+                        match (n.rvalues[value as usize]) {
+                            NirRvalue.StaticAddress(index) => { return index; }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return none();
+}
+
+/// N0272 (§39.3, ADR 0067): a static outlives every loan, so a write into one (a `static mut`, the only kind that can
+/// be written) may store no loan at all; only static data, such as a string literal, may go there.
+fn checkStaticWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) -> Result<void, AllocError> {
+    for (write in b.throughWrites.view()) {
+        let index = addressedStatic(n, b, write.holder);
+        if (index == none()) {
+            continue;
+        }
+        var stored: u32 = none();
+        for (s in write.sources.view()) {
+            if (b.pointsTo[s as usize].length > 0) {
+                stored = b.pointsTo[s as usize][0];
+                break;
+            }
+        }
+        if (stored == none()) {
+            continue;
+        }
+        let loan = borrow b.loans[stored as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "this stores a value borrowed from ")?;
+        var notes = Vector<DiagnosticNote>.create();
+        if (!loan.hasPlace) {
+            appendText(mut message, "parameter '")?;
+            appendLocalNameOr(c, n, b, loan.parameterIndex, "?", mut message)?;
+            appendText(mut message, "'")?;
+        } else {
+            appendQuotedPlace(c, n, b, loan.place, mut message)?;
+            var note = Vector<u8>.create();
+            appendText(mut note, "borrowed here")?;
+            notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+        }
+        appendText(mut message, " into static '")?;
+        appendBytes(mut message, c.name(c.hir.statics[index as usize].name))?;
+        appendText(
+            mut message,
+            "', which outlives every borrow; a static may hold only static data, such as a string literal (type-system.md §39.3)",
+        )?;
+        c.front.diagnostics.errorWithNotes(
+            foreignLoanStored(),
+            b.file,
+            write.span.start,
+            write.span.end,
+            message,
+            notes,
+        )?;
+    }
+    return Ok();
+}
+
 fn containsU64(values: borrow Vector<u64>, value: u64) -> bool {
     for (v in values.view()) {
         if (v == value) {
@@ -1524,6 +1595,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         b.reached.push(Vector<bool>.create())?;
     }
     checkParameterWrites(c, n, b)?;
+    checkStaticWrites(c, n, b)?;
     checkConflicts(c, n, mut b)?;
     return checkReturns(c, n, b);
 }

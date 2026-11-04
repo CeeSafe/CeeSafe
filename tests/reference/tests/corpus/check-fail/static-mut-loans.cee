@@ -1,0 +1,36 @@
+// A write to a `static mut` may carry no loan (ADR 0067): the static outlives every borrow, so a view of a local, of a
+// parameter, or of anything reached from one would dangle once its referent is gone. The unsafe block does not lift
+// the rule.
+static mut LAST: StringView = "none";
+
+fn same<region r>(v: StringView<r>) -> StringView<r> => v;
+
+/// Safety: one thread uses LAST.
+fn fromLocal() {
+    var s = String.create();
+    s.append("temporary")!;
+    unsafe { LAST = s.view(); } // error[N0272]
+}
+
+/// Safety: one thread uses LAST.
+fn fromParameter(name: StringView) {
+    unsafe { LAST = name; } // error[N0272]
+}
+
+/// Safety: one thread uses LAST.
+fn throughACall(owned: borrow String) {
+    unsafe { LAST = same(owned.view()); } // error[N0272]
+}
+
+/// Safety: one thread uses LAST.
+fn aSubview(owned: borrow String) {
+    let whole = owned.view();
+    unsafe { LAST = whole[0..1]; } // error[N0272]
+}
+
+/// Safety: one thread uses LAST. A `static` region on a parameter is not checked at the call, so it is no exception.
+fn staticParameter(name: StringView<static>) {
+    unsafe { LAST = name; } // error[N0272]
+}
+
+fn main() {}

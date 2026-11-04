@@ -1,0 +1,44 @@
+// A `static mut` view may be written with static data (ADR 0067): a string literal, a constant view, a view read from
+// another static, or a function's result when every argument is static data.
+static mut LAST: StringView = "none";
+static mut OTHER: StringView = "other";
+static NAME: StringView = "name";
+static LEVELS: [StringView; 2] = ["Low", "High"];
+const GREETING: StringView = "hello";
+static mut WRITES: u32 = 0;
+
+fn same<region r>(v: StringView<r>) -> StringView<r> => v;
+
+/// Safety: one thread uses LAST and WRITES.
+fn record(k: u32) {
+    unsafe {
+        LAST = match (k) {
+            0 => "literal",
+            1 => NAME,
+            2 => GREETING,
+            3 => LEVELS[1],
+            4 => OTHER,
+            _ => same("through a call"),
+        };
+        WRITES += 1;
+    }
+}
+
+/// Safety: one thread uses LAST and WRITES.
+fn main() {
+    unsafe { Console.writeLine(LAST); }
+    for (k in 0u32..6) {
+        record(k);
+        unsafe { Console.writeLine(LAST); }
+    }
+    unsafe { Console.writeLine(WRITES); }
+}
+
+// expect-stdout: none
+// expect-stdout: literal
+// expect-stdout: name
+// expect-stdout: hello
+// expect-stdout: High
+// expect-stdout: other
+// expect-stdout: through a call
+// expect-stdout: 6

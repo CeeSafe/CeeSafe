@@ -3353,6 +3353,11 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - **Every use is an unsafe operation** (§27.3), N0280 outside an unsafe context. The unsafe code's `/// Safety:`
   comment must argue what the checker cannot. Two uses give two references that may alias, and two threads may race
   on it (`unsafe.md` U3).
+- **What may be written** (ADR 0067). `S` refers to memory that outlives every borrow, so a value written to it, or
+  into it, may carry no loan: N0272 otherwise. Static data carries none: a string literal, a constant view, or a
+  view read from another static. A view of a local or of a parameter is rejected, even a parameter declared
+  `StringView<static>`, since a call does not check that its argument is static data. The unsafe block makes the
+  use unsafe; it does not lift this rule.
 - **C objects** (ADR 0042). `T` may be an imported C type (§31), or hold one: a device, a protocol's ops table. C
   code reaches it through the addresses CeeSafe gives it and writes it, which is why it is a `static mut`: a plain
   `static` of an imported type is N0337, since CeeSafe would read it as unchanging. Its initialiser is C's (§39.4).

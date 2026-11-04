@@ -38,8 +38,8 @@ ADR 0064 §2 allowed constant tables of views, such as `const LEVELS: [StringVie
   `String` into `static mut N: StringView` compiles, and reading `N` afterwards reads freed memory.
 - **This ADR does not extend `static mut` to arrays of views,** which would widen that hole. Only the immutable
   form is added, and it cannot be written at all.
-- **The hole itself is a separate soundness bug.** It needs its own decision: either require the written value to
-  have the `static` region (N0243), or forbid views in `static mut` altogether.
+- **The hole itself is a separate soundness bug,** fixed by ADR 0067: a write to a static may carry no loan
+  (N0272).
 
 ## 4. Evidence (macOS arm64)
 

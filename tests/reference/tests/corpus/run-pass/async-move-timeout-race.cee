@@ -1,0 +1,96 @@
+// Run-once bodies of `Async.timeout`, `race` and `all` (ADR 0074 §2.3) may be `async move`: a timeout body that moves
+// its capture before the deadline, one cancelled before it does (its capture dropped as it returns), a race whose
+// loser is cancelled holding its capture, and a full task set whose `trySpawn` child never starts (its environment
+// dropped at once). The log has one digit per event: 9 when `consume` takes a value, then each value's name when it
+// is dropped.
+
+static LOG: AtomicU64 = AtomicU64.constant(0);
+
+fn note(k: u64) { LOG.store(LOG.load() * 10 + k); }
+
+struct Noisy {
+    name: u64;
+    v: Vector<u8>;
+    drop { note(this.name); }
+}
+
+fn noisy(name: u64) -> Noisy {
+    var v = Vector<u8>.create();
+    match (v.push(1)) { Ok() => {} Err(_) => {} }
+    return Noisy { name: name, v: v };
+}
+
+async fn consume(n: Noisy, ms: u64) -> Result<u32, AsyncError> {
+    note(9);
+    await Timer.sleep(ms)?;
+    return Ok(truncate<u32>(n.v.length));
+}
+
+async fn timeouts() -> Result<void, AsyncError> {
+    let a = noisy(1);
+    let fast = await Async.timeout(50, AsyncError.TimedOut, async move () => await consume(a, 1));
+    match (fast) { Ok(_) => { note(7); } Err(_) => { note(6); } }
+    let b = noisy(2);
+    let slow = await Async.timeout(5, AsyncError.TimedOut, async move () => {
+        await Timer.sleep(50)?;
+        return await consume(b, 1);
+    });
+    match (slow) { Ok(_) => { note(7); } Err(_) => { note(6); } }
+    return Ok();
+}
+
+async fn races() -> Result<void, AsyncError> {
+    let c = noisy(3);
+    let d = noisy(4);
+    let r: Result<Raced<u32>, AsyncError> = await Async.race(
+        async move () => await consume(c, 1),
+        async move () => {
+            await Timer.sleep(50)?;
+            return await consume(d, 1);
+        },
+    );
+    match (r) { Ok(w) => { note(w.winner as u64 + 5); } Err(_) => { note(6); } }
+    let e = noisy(1);
+    let f = noisy(2);
+    await Async.all(async move () => {
+        await consume(e, 2)?;
+        return Ok();
+    }, async move () => {
+        await consume(f, 1)?;
+        return Ok();
+    })?;
+    return Ok();
+}
+
+async fn full() -> Result<void, AsyncError> {
+    await Async.tasks(1, AsyncError.Cancelled, async (set) => {
+        let g = noisy(3);
+        let h = noisy(4);
+        await set.spawn(async move () => {
+            await consume(g, 5)?;
+            return Ok();
+        })?;
+        let started = set.trySpawn(async move () => {
+            await consume(h, 1)?;
+            return Ok();
+        });
+        note(if (started) 7 else 6);
+        return Ok();
+    })?;
+    return Ok();
+}
+
+fn main() {
+    LOG.store(0);
+    match (Async.run(timeouts())) { Ok() => {} Err(_) => { Console.writeLine("failed"); } }
+    Console.writeLine(LOG.load());
+    LOG.store(0);
+    match (Async.run(races())) { Ok() => {} Err(_) => { Console.writeLine("failed"); } }
+    Console.writeLine(LOG.load());
+    LOG.store(0);
+    match (Async.run(full())) { Ok() => {} Err(_) => { Console.writeLine("failed"); } }
+    Console.writeLine(LOG.load());
+}
+// expect-stdout: 91726
+// expect-stdout: 93459921
+// expect-stdout: 4693

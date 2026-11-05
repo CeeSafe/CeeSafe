@@ -96,6 +96,7 @@ def main():
             ("fault sweep", py + [f"{HERE}/fault_injection.py", "--compiler", cee, "--corpus", corpus]),
             ("cancel sweep", py + [f"{HERE}/cancel_sweep.py", "--compiler", cee, "--corpus", corpus]),
             ("packages", py + [f"{HERE}/package_tests.py", "--compiler", cee]),
+            ("fmt snapshots", py + [f"{HERE}/fmt_snapshots.py", "--compiler", cee]),
             ("dns", py + [f"{HERE}/dns_check.py", "--compiler", cee]),
             ("sendfile", py + [f"{HERE}/sendfile_check.py", "--compiler", cee]),
             ("udp", py + [f"{HERE}/udp_check.py", "--compiler", cee]),

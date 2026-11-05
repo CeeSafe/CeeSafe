@@ -26,7 +26,7 @@ fn main() {
     let l = d as f32; // error[N0208]
     let m = truncate<f32>(d); // error[N0207]
     let n = round<i32>(d); // error[N0207]
-    let o = checkedTruncate<i32>(i); // error[N0207]
+    let o = checkedTruncate<i32>(true); // error[N0207]: an integer converts since ADR 0074 §2.9, a bool does not
     let p = saturatingTruncate<i32, u8>(d); // error[N0216]
     match (d) { _ => { } } // error[N0207]
     let q = d.bits(1); // error[N0209]

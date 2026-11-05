@@ -169,7 +169,14 @@ once the view is used after it.
     `borrow (*a).f`;
   - any other real loan borrows a local or temporary of this function: N0244 ("returns a reference
     to local data").
-- **Callers** use the signature as the `Call` constraint in §3.
+- **Deep results** (type-system.md §25.6, ADR 0074 §2.4). A reference parameter that is not a view has two
+  placeholder loans: `Outer_i`, the loan of the reference itself, and `Param_i`, what its referent holds. A value read
+  through `*p_i` carries `Param_i` and not `Outer_i`; so does a borrow of a place beyond another reference stored in
+  the referent. If the result is a deep result of `i`, the body check also rejects (N0245) `Outer_i`, and a real loan
+  whose place starts with `Deref` of `p_i` and passes no other reference: the referent's own storage.
+- **Callers** use the signature as the `Call` constraint in §3. For a deep result of parameter `i` whose argument is
+  `t = &p` (`&mut p`), the result takes `p`'s local's loans, less `Outer` placeholders of a parameter `p` is reached
+  through, instead of `t`'s; for an argument that is a reference parameter, its loans less its `Outer`.
 
 ## 8. What the v0 checker deliberately does not do
 

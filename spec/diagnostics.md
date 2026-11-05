@@ -42,6 +42,7 @@ diagnostics, so any cascade fails the test.
 | N0008 | Invalid digit for the radix, or no digits after a radix prefix | `0b102`, `0x` |
 | N0009 | Unknown literal suffix | `12abc`, `1f32` (float suffix needs a float literal) |
 | N0010 | Misplaced digit separator `_` (must sit between two digits) | `1__0`, `0x_FF`, `1_.5` |
+| N0011 | A raw `"""` string literal laid out wrongly: text after the opening `"""` on its line, or a content line that is not blank and is indented less than the closing `"""` (`grammar.md` §1.6, ADR 0074 §2.6) | `""" x`, a line left of the closing `"""` |
 
 ### Parser (N0100–N0199)
 
@@ -84,22 +85,22 @@ Semantic checks run only when every file parsed without errors.
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
 | N0211 | Assignment to an immutable binding (`let`, parameter, constant, function) | `param = 3;` |
 | N0212 | Local read before it is definitely assigned | `var x: i32; return x;` |
-| N0213 | End of a non-`void` function is reachable | `fn f() -> i32 { }` |
+| N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3) | `fn f() -> i32 { }` |
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
-| N0215 | `return` with or without a value contradicts the return type | `return 1;` in a `void` function |
+| N0215 | `return` with or without a value contradicts the return type, or `return` in a `never` function | `return 1;` in a `void` function |
 | N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11) | `truncate<i32, u8>(x)` |
 | N0217 | Not a constant expression, or constant evaluation would panic | `const C: u8 = 200 + 100;` |
 | N0218 | Constant depends on itself | `const A: i32 = A + 1;` |
 | N0219 | Invalid `main` signature | `fn main(args: i32)` |
 | N0220 | `let` without initializer | `let a: i32;` |
 | N0221 | `var` without type annotation or initializer | `var c;` |
-| N0222 | A generic's substituted copy does not check for its type arguments, and no other error explains why (type-system §20.4). Today: `void` for a type parameter whose payload the body binds or builds, since `Result<void, E>.Ok` has none | `fn same<T>(r: Result<T, u8>) -> Result<T, u8> => match (r) { Ok(v) => Ok(v), Err(e) => Err(e) };` used with `Result<void, u8>` |
+| N0222 | A generic's substituted copy does not check for its type arguments, and no other error explains why (type-system §20.4) | `fn copyOf<M: Metrics + Copy>(m: borrow M) -> M => m;` used with `dyn Metrics`, which no value holds (ADR 0064 §3.1) |
 | N0223 | *(unassigned)* | |
-| N0224 | Value of type `void` used as a value | `let d = nothing();` |
+| N0224 | Value of type `void` used as a value, or a `let` of a `never` expression | `let d = nothing();` |
 | N0225 | Expression statement that is not a call | `1 + 2;` |
-| N0226 | `void` used other than as a return type | `var e: void;` |
+| N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle | `struct Node { next: Node; }` |
-| N0228 | Duplicate member (field or function) in a struct | `struct D { a: i32; a: i64; }` |
+| N0228 | Duplicate member (field or function) in a struct, or an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7) | `struct D { a: i32; a: i64; }` |
 | N0229 | Struct literal does not initialise every field | `Point { x: 1 }` |
 | N0230 | Unknown field (in a literal or an access), or a function named where a field was expected | `p.z`, `p.sum` |
 | N0231 | Field initialised twice in a literal | `Point { x: 1, x: 2, y: 3 }` |
@@ -121,7 +122,7 @@ errors carry notes ("borrowed here", "the borrow is used later here").
 | N0242 | Read of a place while it is mutably borrowed | `let m = borrow mut x; print(x); m = 1;` |
 | N0243 | A place or temporary goes out of scope while borrowed | `let r = same(five()); use(r)` |
 | N0244 | Returning a reference to a local or temporary (E1) | `return borrow x;` with `x` local |
-| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, or a result derived from an unlisted parameter | `fn f(a: borrow T, b: borrow T) -> borrow T` |
+| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
 | N0246 | Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1) | `struct S { r: borrow i64; }` |
 | N0247 | `borrow` of something that is not a place | `borrow 5`, `take(mut five())` |
 | N0248 | `borrow mut` (or a `borrow mut this` call) on an immutable place | `borrow mut param`, `shared.grow()` |
@@ -214,6 +215,8 @@ Generic code (M6a) reuses codes:
 - a generic type without its arguments, or with the wrong number of them, is N0204;
 - a duplicate or shadowing type parameter is N0201;
 - a method with type parameters of its own is N0216;
+- an interface's method, or a method of an `impl` of an interface, with region parameters of its own is N0216 (ADR
+  0074 §2.4);
 - a generic `main` is N0219;
 - naming something that is not an interface as a bound or in an `impl` is N0204;
 - a method on a type parameter that no bound declares is N0234;
@@ -245,7 +248,7 @@ Names across packages (N0310–N0319; `type-system.md` §2, ADR 0013):
 | N0312 | The item exists but is not `public`, or a field or method of a public struct is not | `geometry.helper()` with `fn helper` internal |
 | N0313 | A simple name is provided by two imports | `import a; import b;` both with `Point`, then `Point` |
 | N0314 | A public item's signature names a type that other packages cannot see | `public fn make() -> Hidden` with `struct Hidden` internal |
-| N0315 | An item, parameter, local, loop variable or pattern binding has the name of one of the package's dependencies | `let geometry = 1;` |
+| N0315 | An item or a type parameter has the name of one of the package's dependencies (a local, parameter, loop variable or binding may, ADR 0074 §2.10) | `struct geometry { … }` |
 
 Packages (N0320–N0329; `tooling.md` §4, ADR 0013):
 
@@ -299,3 +302,4 @@ error, and the command fails (ADR 0073 §2.4).
 | Code | Meaning | Example |
 |---|---|---|
 | N0400 | A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\{` means the brace and does not warn (`grammar.md` §1.6) | `let x = 3; Console.writeLine("x = {x}");` |
+| N0401 | `name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10) | `fn f(tls: Conn) { tls.connect(); }` with a dependency `tls` that has `public fn connect` |

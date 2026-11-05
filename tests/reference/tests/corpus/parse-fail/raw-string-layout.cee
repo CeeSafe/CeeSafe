@@ -1,0 +1,15 @@
+// N0011 (grammar.md §1.6, ADR 0074 §2.6): text after the opening `"""`, and a content line indented less than the
+// closing line. Each annotation is part of the literal's text, on the line it is reported for.
+fn f() {
+    let a = """ text // error[N0011]@17
+        x
+        """;
+    let b = """
+        fine
+
+      less // error[N0011]@1
+        """;
+    let c = """
+	tab, where the closing line has spaces // error[N0011]@1
+        """;
+}

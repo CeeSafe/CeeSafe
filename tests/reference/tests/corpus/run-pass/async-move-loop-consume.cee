@@ -1,0 +1,37 @@
+// Run-once children spawned in a loop (ADR 0074 §2.3): each changes its own captured vectors, then moves one into a
+// call and reads a borrow moved in (`out`) after the move; the other is dropped when the child returns.
+
+async fn sum(v: Vector<u32>, ms: u64) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    var t: u32 = 0;
+    for (x in v.view()) { t += x; }
+    return Ok(t);
+}
+async fn work() -> Result<u32, AsyncError> {
+    let ch = match (Channel<u32>.create(8)) { Ok(c) => c, Err(_) => { return Err(AsyncError.Cancelled); } };
+    let out = borrow ch;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (k in 0..3u32) {
+            var items = Vector<u32>.create();
+            var name = Vector<u8>.create();
+            s.spawn(async move () => {
+                match (items.push(k + 1)) { Ok() => {} Err(_) => {} }
+                match (name.push(1)) { Ok() => {} Err(_) => {} }
+                let t = await sum(items, (3 - k) as u64 * 5)?;
+                match (await out.sendAsync(t + truncate<u32>(name.length))) {
+                    Ok() => { return Ok(); }
+                    Err(_) => { return Err(AsyncError.Cancelled); }
+                }
+            });
+        }
+    })?;
+    var total: u32 = 0;
+    for (k in 0..3) {
+        match (await ch.recvAsync()?) { Some(v) => { total = total * 10 + v; } null => {} }
+    }
+    return Ok(total);
+}
+fn main() {
+    match (Async.run(work())) { Ok(t) => { Console.writeLine(t); } Err(_) => { Console.writeLine("failed"); } }
+}
+// expect-stdout: 432

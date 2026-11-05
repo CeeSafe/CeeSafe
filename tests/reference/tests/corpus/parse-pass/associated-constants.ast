@@ -1,0 +1,19 @@
+(unit
+  (struct default Oid
+    (field default bytes [u8; 2])
+    (fn default first (params (borrow this)) (returns u8)
+      (=> (index (. this bytes) 0))
+    )
+    (const public RSA [u8; 3] (array 1 2 3))
+    (const default LENGTH usize 2)
+  )
+  (impl Mode
+    (const public DEFAULT u32 25)
+  )
+  (impl Oid
+    (fn default length (params) (returns usize)
+      (=> (. Oid LENGTH))
+    )
+    (const private HIDDEN bool true)
+  )
+)

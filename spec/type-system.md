@@ -13,7 +13,7 @@ codes are listed in `diagnostics.md`.
 | `isize` / `usize` | pointer width of the **target** (64 on every M1 target) | from `TargetInfo`, never the host |
 | `bool` | `true`, `false` | |
 | `void` | no value | function return type only |
-| *never* | no value; the expression does not complete | internal only (`Process.exit`); not nameable |
+| `never` | no value; the expression does not complete | a function's return type only (§15.3, ADR 0074 §2.2) |
 
 Not in M1 (error N0216): floats, `char`, strings as values, user-defined types, references. Floats came in M11
 (`f32`, `f64`, §35); character literals are integers (§4).
@@ -22,6 +22,14 @@ since M6c it is a `StringView` value (§22.2).
 
 `void` may appear only as a return type (writing `-> void` is the same as omitting the
 return type). A *never* expression is accepted wherever any type is expected.
+
+`never` (ADR 0074 §2.2) names the bottom type, and only as the return type of a function or of a struct's method: a
+call of one is a call of type *never* (§9), as `Process.exit` is. Anywhere else (a parameter, a field, a local, a type
+argument, a function type, an `async` function, an interface method, an `extern` function) it is N0226: "'never' can
+only be a function's return type". A `never` function does not return: the end of its body must be unreachable
+(N0213), and `return` in it is N0215. A `let` whose initializer has type *never* has no value to bind (N0224). In C,
+the function is `_Noreturn void` (`c-backend.md`); in NIR, a call of one ends its block with `Unreachable`. `never` is
+a type name, not a keyword: a value named `never` is unaffected.
 
 ## 2. Names and scopes
 
@@ -40,9 +48,16 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   A static function of a generic type of a dependency is called through an import (`Pair<u8>.make()`), since
   `geometry.Pair<u8>.make()` does not parse (grammar.md §2.1: in an expression, generic arguments follow a simple
   name only).
-- **Dependency names are reserved.** In a package, nothing else may have the name of one of its dependencies: no
-  item, parameter, local, loop variable or pattern binding (N0315). So `geometry.x`, with `geometry` a dependency,
-  always means the dependency's item, and the compiler resolves it before type checking (`PackageNames`).
+- **Dependency names and items.** In a package, no item or type parameter may have the name of one of its
+  dependencies (N0315): they share the namespace `geometry.X` is resolved in. A parameter, local, loop variable,
+  closure parameter or pattern binding may (ADR 0074 §2.10):
+  - in its scope, `geometry.x` in an expression is the local's member, and the dependency's values are unreachable;
+  - types and patterns are unaffected (a local is never a type), so `geometry.Point` in a type, a struct literal
+    `geometry.Point { … }` and a pattern `geometry.Shape.Circle(r)` keep naming the package's items;
+  - where `x` is also a public item of the dependency, `geometry.x` is warning N0401, since the item is hidden.
+
+  Elsewhere `geometry.x` means the dependency's item, and the compiler resolves it before type checking
+  (`PackageNames`), with a syntactic scope walk to find the locals.
 - **Imports.** `import geometry;` at the top of a file brings every public item of the dependency `geometry` into
   that file's scope; `import geometry.Point;` brings one (N0311 if it has none of that name, N0312 if it is not
   public). An import applies to its file only. The name before the `.` must be a dependency of the package (N0310).
@@ -62,7 +77,8 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
 - **Lookup order** for a simple name: locals (innermost first), the package's items, the file's imports, `lib/core`,
   built-ins. Two imports that both provide a name are an error where the name is used (N0313), not where it is
   imported. For `a.b`: if `a` is a local or an item of the package or of `lib/core`, `.b` is a member as before;
-  otherwise, `a` being a dependency (and so not a local or item, N0315), `a.b` is that dependency's item `b`.
+  otherwise, `a` being a dependency (and so not an item, N0315), `a.b` is that dependency's item `b`, unless a local
+  `a` is in scope there (ADR 0074 §2.10). `T.NAME`, with `T` a struct or an enum, is its associated constant (§10).
 - **Messages and C names** write an item of a dependency with its package's name, `geometry.Point`; the C backend
   gives it a prefixed name, `ceeT_geometry_Point` (`c-backend.md` §2.1).
 
@@ -177,6 +193,12 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - `truncate<T>(e)`: `e` of any integer type, `T` any integer type. The result is `e`
   modulo 2^bits(T), reinterpreted in `T` (two's complement). It is always defined. Use it for
   narrowing and for signed↔unsigned reinterpretation.
+- `checkedTruncate<T>(e)` and `saturatingTruncate<T>(e)` (ADR 0074 §2.9): `e` of any integer type, `T` any integer
+  type. `checkedTruncate` gives `T?`: `e`'s value when `T` holds it, else `null`. `saturatingTruncate` gives `T`:
+  `e`'s value when `T` holds it, else `T`'s least value for an `e` below `T`'s range and its greatest for one above.
+  Both are always defined. They also convert floats (§35.4).
+- The three spellings say what may happen to the value: `as` never loses information; `truncate` wraps;
+  `checkedTruncate` and `saturatingTruncate` check or clamp (`checkedTruncate<i64>(n)!` for a `usize` `n`).
 
 ## 8. Calls and statements
 
@@ -190,7 +212,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - `truncate<T>(e)`: see §7. Exactly one type argument (N0216 for other generic arguments).
 - An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
 - `break`/`continue` must be inside `while` or `loop` (N0214).
-- `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215).
+- `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
+  unit local is `return;` (§20.4). Neither is allowed in a `never` function (§1), which does not return (N0215).
 
 ## 9. Control flow facts
 
@@ -204,7 +227,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   with no `break` that targets it. A `while` loop may always complete, whatever its condition:
   write `loop` for infinite loops. An `if` or `match` expression (§15.3) cannot complete when none of its
   branches can: its condition or scrutinee does not complete, or every branch is a block that cannot complete.
-- **Missing return.** If the end of a non-`void` function body may be reached, that is N0213.
+- **Missing return.** If the end of a non-`void` function body may be reached, that is N0213. For a function
+  returning `never` (§1), the end must be unreachable too: every path ends in a call of type *never* or a `loop`
+  without `break`.
 
 ## 10. Constants
 
@@ -224,6 +249,16 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
   N0246.
 - `@export` on a constant makes it C data (§28.4).
+- **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
+  struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`,
+  a block with constants only). They follow the rules above and are reached as `Type.NAME`, and from a dependent
+  package as `dep.Type.NAME` when public (N0312 otherwise). A bare `NAME` does not reach one, inside the type's
+  methods either.
+  - A constant whose name is a field, method or variant of its type, or another of its constants, is N0228.
+  - A generic struct or `impl` has none yet (N0216).
+  - An associated constant takes no attributes (N0290).
+  - Array lengths in types and repeats stay integer literals (§13): `[u8; Oid.LENGTH]` is not accepted, as
+    `[u8; LENGTH]` is not.
 
 ## 11. `main`
 
@@ -313,6 +348,9 @@ The algorithm that enforces these rules is in `lifetimes.md`.
     shared reborrow.
   - A `borrow mut T` parameter accepts `mut p`, where `p` is a mutable place of type `T`, or a
     `borrow mut T` value (reborrowed).
+
+  - A `borrow T?` parameter accepts a place of type `T?` or `T`, and a `(borrow mut T)?` parameter `mut p` of one
+    (§22.1, ADR 0074 §2.5).
 
   The `mut` marker is required for a plain place and is rejected where the parameter is not
   `borrow mut` (N0249). It makes mutation visible at the call site, as C#'s `ref` does.
@@ -561,7 +599,8 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
   `else` (N0100 otherwise).
 - **Branches.** A branch is an expression, the value of the whole when that branch is taken, or a block that
   cannot complete (§9): one that ends in `return`, `break`, `continue` or a call of type *never*, such as
-  `{ return; }` or `{ Process.exit(1); }`. A block that can complete has no value: N0235.
+  `{ return; }`, `{ Process.exit(1); }` or `{ die("bad number"); }` with `fn die(m: StringView) -> never` (§1). A
+  block that can complete has no value: N0235.
 - **Value blocks** (ADR 0073 §2.3). A block branch may end with an expression written without `;`: the branch's
   value, typed as an expression branch is. An `if` (with its `else`) or `match` that ends a value block, directly
   before its `}`, is read as an expression. Only branches of `if` and `match` expressions have value blocks: in a
@@ -661,7 +700,7 @@ struct literal.
     directly, a struct's static function (`Table.at(i)`), or a method on `this`, a parameter or an earlier local
     (`list.host(i)`). The decision is syntactic and made before the body is checked;
     locals cannot be shadowed (N0203), so the name means `i` throughout.
-- `for (x in seq) { … }`: `seq` is an array place, a slice, or a reference to an array. `x` is a copy
+- `for (x in seq) { … }`: `seq` is an array place, a slice, a reference to an array, or an iterator (below). `x` is a copy
   of each element from index 0 upward. The element is read when the loop reaches it, and the
   length is read once at the start.
 - **Non-Copy elements** (M11, G2): when the element type `T` is not Copy, `x` is a `borrow T` to the element, in
@@ -669,9 +708,22 @@ struct literal.
   borrow checker treats it as a shared borrow of that element for as long as `x` is used. While it lives, the
   sequence cannot be changed (§13.4, §23.1). A Copy element is still copied, as before.
 - `break` and `continue` behave as in `while`. `continue` proceeds to the next element.
+- **Iterators** (ADR 0074 §2.8). `for (x in e) { … }`, where `e`'s type is a struct, or a `borrow mut` of one, with a
+  method `next(borrow mut this) -> T?` (its own or an impl's, with no other parameter and no type parameter), calls
+  `next` until it returns `null`:
+  - `e` is evaluated once, before the first pass, into a hidden local of the loop's header. That local and `e`'s
+    temporaries live until the loop exits (ADR 0073 §2.1), and are destroyed then, the iterator first. A value `e`
+    moves into the loop; a `borrow mut` `e` is reborrowed, and the iterator keeps its state after the loop.
+  - Each pass borrows the iterator mutably only for the call to `next`, whose temporaries end before the body. The
+    body may use what the iterator borrows as a shared borrow (`text` in `for (part in text.split(",")) { … }`), but
+    not change it while the iterator lives (N0241).
+  - On `Some(v)`, `x` takes `v` (moved: `x` owns a non-Copy `T`), with type `T` and the region of `next`'s result.
+  - `continue` proceeds to the next call of `next`; `break` leaves the loop.
+  - No interface is involved: the method's shape is the rule. A struct without such a `next`, or whose `next` has
+    another shape, is N0205, naming the expected signature. A shared reference to an iterator is N0248.
 
 - The loop variable is immutable. It has the bounds' type for a range, and the element type
-  for a sequence (or `borrow T`, above). Like every local, it cannot shadow another (N0203).
+  for a sequence (or `borrow T`, above), and `next`'s payload type for an iterator. Like every local, it cannot shadow another (N0203).
 
 ### 16.5 Bulk operations (M9b)
 Two methods write a whole slice in one operation. A program computes the same thing with them as with
@@ -1200,9 +1252,22 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   (N0227).
 - Instantiation is depth-limited: a chain of more than 64 nested instantiations (polymorphic
   recursion such as `f<T>` calling `f<Box<T>>`) is N0266.
+- **Unit payloads** (ADR 0074 §2.1). `Result<void, E>.Ok` has no payload (§17.1), but a pattern may bind one name
+  to it, and `Ok(e)` may pass one argument of type `void`, so `Ok(v) => Ok(v)` means the same at `T = void` as at
+  any other `T`, in a generic body and written out by hand:
+  - A name bound so is a **unit local**: it has type `void` and holds nothing. `let v = r?;` (or `r!`) with
+    `r: Result<void, E>` declares one too, as does `let w = v;` of one. A `let` of a call of a `void` function is
+    still N0224, and a `var` cannot hold a unit.
+  - Reading a unit local is a unit value. It may be passed where `void` is expected: as `Ok`'s payload, and as
+    `return v;` in a `void` function, which is `return;`. Elsewhere it is a `void` value of the usual rules: N0205
+    where another type is expected, N0211 when assigned.
+  - `Ok(e)` with any `void` `e` evaluates `e` for its effects, then builds the payload-less `Ok`. Any other type is
+    N0209.
+  - The checker erases units: a unit local is no HIR local, a unit read no operand, and nothing is captured, moved,
+    borrowed or destroyed for one. NIR, the C backend and the interpreter never see them.
+  - Not included: user generic enums instantiated at `void` (N0226), and `Some(v)` with `void`.
 - **An instantiation that does not check is an error at its use** (M15 S1). §20.3's checking
-  covers every type argument except `void`, whose values have no payload: `Ok(v)` in a generic
-  body binds and rebuilds a `T`, but `Result<void, E>.Ok` has none (§17.1). A scoped type argument
+  covers every type argument; a `void` one's payloads are unit payloads (above). A scoped type argument
   the body cannot take is N0274 (§25.4). Otherwise the copy's errors are usually explained by an
   error at the use (an unmet bound, N0268; a move of C state, N0294). If, after the ownership
   checks, no error explains them, the copy is N0222 at the use, naming the type arguments and its
@@ -1236,13 +1301,13 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
 MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'
 ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
-InherentImpl  = 'impl' TypeParams? Type '{' FunctionDecl* '}'
+InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ```
 - **`impl S { … }`** (an inherent impl, ADR 0064 §1) adds methods and static functions to a struct `S`, as if they
   were written in its body: the same visibility, the same "no member named twice" rule (N0228), and generic methods
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
-  N0267.
+  N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
 - An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
   `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods
   cannot have type parameters of their own, and v0 has no `Self` type.
@@ -1342,8 +1407,18 @@ fn main() {
 - **Matching.** Patterns `null`, `Some(x)` and `Some(_)` are written without a type prefix; the
   rules of §15.2 and §18.4 apply.
 - **Comparisons.** `o == null` and `o != null` test for absence, for any `T` (the value is only
-  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s; any other method on an optional
-  is N0234. Other comparisons of optionals are not defined (N0207).
+  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s. Other comparisons of optionals are
+  not defined (N0207).
+- **Optional borrows** (ADR 0074 §2.5). `o.asBorrow()`, on a place of type `T?` or on a `borrow (T?)`, is a
+  `borrow T?`: `Some` borrows the payload, and `null` is `null`. `o.asBorrowMut()`, on a mutable place of type `T?`
+  or on a `borrow mut (T?)`, is a `(borrow mut T)?` (N0248 otherwise). Either is a shared or mutable loan of the place
+  for as long as the result is used, and is lowered as `match` would be: a tag test, then the payload's address or
+  `null`. Any other method on an optional is N0234.
+- **Optional borrow arguments.** At an argument whose parameter is `borrow T?`, a place of type `T?` is borrowed as
+  by `asBorrow()`, and a place of type `T` as `Some(borrow t)`, as a place of `T` is borrowed for a `borrow T`
+  parameter (§13.2). At a `(borrow mut T)?` parameter the same holds with `mut p` and `asBorrowMut()` (N0249 without
+  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. A `borrow (T?)` stays a different
+  type: it converts with `asBorrow()`.
 - **`a ?? b`** (ADR 0072) is `a`'s value, or `b` when `a` is `null`. `a` is a `T?` (N0262 otherwise) and `b` is
   checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
   chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,
@@ -1640,6 +1715,10 @@ fn split<region r>(line: StringView<r>) -> Result<Vector<StringView<r>>, AllocEr
   followed by a name declares a region; `region` alone is still an ordinary name.
 - A method may use its struct's regions. `static` is the built-in region of static data (string
   literals); it outlives everything.
+- A method of a struct or of an inherent impl may also declare regions of its own (ADR 0074 §2.4), as a free function
+  does: `fn first<region a>(borrow this, other: borrow(a) Vector<u8>) -> Slice<a, u8>`. Its region names may not
+  repeat the struct's or the impl's (N0202). An interface's methods, and the methods of an `impl` of an interface,
+  may not (N0216): conformance compares the signatures, which would have to match the region lists.
 
 ### 25.2 Region arguments
 - A type with region parameters takes region arguments first, then its type arguments:
@@ -1662,7 +1741,7 @@ parameters, an instance of a generic struct or enum with a scoped type argument,
 
 A struct or enum with region parameters implements an interface as `impl<region r> I for S<r> { … }` (ADR 0054): the
 impl's region names are in scope in its target and in its methods' signatures and bodies, as a struct's are in its own
-methods. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is used statically; it does not coerce to
+methods. Such an impl's methods do not declare regions of their own (N0216, §25.1); an inherent impl's may. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is used statically; it does not coerce to
 `dyn I` (§37.2).
 
 ### 25.4 Where scoped values may be stored
@@ -1708,6 +1787,19 @@ data, and through a function value, a `dyn` method or a bound it could not. A st
 parameter without `static`. A function's **flows** are then:
 - **result ← parameter `i`** iff they share a flow name: the result may carry `i`'s loans (this
   generalises v0's return sources, §13.5);
+- **deep results** (ADR 0074 §2.4). A reference parameter `i` that is not a view (`borrow T`, `borrow mut T`, the
+  receiver included) has an **outer** name of its own: its elided name, or the regions written on the reference
+  (`borrow(a) T`). A result that shares a flow name with `i` but names none of `i`'s outer names, and is not tied to
+  `i` by elision or `borrow(i)`, is a **deep** result of `i`: it names only regions that `i`'s referent holds
+  (`fn token(borrow mut this) -> Slice<r, u8>` in `struct Lexer<region r>`). It carries the referent's loans, not the
+  loan of `i` itself:
+  - **callee:** a deep result may carry what the referent holds (a copy of a view field, a slice of one, a borrow
+    through a reference stored in it), but not a loan of the referent's own storage, a place reached through `i`
+    without passing another reference (`this.buf[0..2]` for a `buf: [u8; 4]`), nor `i` itself: N0245. Such a
+    function names `i`'s own region instead (`-> Slice<u8>`, elided);
+  - **caller:** for a deep result, an argument `borrow p` contributes `p`'s loans (what `p` holds), not the new loan
+    of `p`; a reference parameter passed on contributes what it refers to. So `let t = lexer.token();
+    lexer.skipSpace();` is accepted, and `t` is tied to the text the lexer views.
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
   with `j`: the callee may store `j`'s loans into what `i` refers to.
 
@@ -2901,8 +2993,9 @@ fn main() {
 - **`checkedTruncate<T>(e)`**: as `truncate`, but the result is `T?`, `null` where `truncate` would panic.
 - **`saturatingTruncate<T>(e)`**: as `truncate`, but a value below `T`'s range gives its minimum and one above gives
   its maximum. NaN gives 0. It never panics.
-- `checkedTruncate` and `saturatingTruncate` need a float `e` and an integer `T`, and `round` a float `T` (N0207
-  otherwise). All four take exactly one type argument (N0216).
+- `checkedTruncate` and `saturatingTruncate` need a float or integer `e` (an integer `e` converts as in §7, ADR 0074
+  §2.9) and an integer `T`, and `round` a float `T` (N0207 otherwise). All four take exactly one type argument
+  (N0216).
 
 ### 35.5 Representation
 - `f.bits()` is the IEEE representation of `f`: a `u32` for `f32`, a `u64` for `f64`. `f32.fromBits(u)` (`u: u32`) and
@@ -3237,7 +3330,13 @@ fn main() {
   value with region parameters. That is **N0332**: the box would outlive the loan.
 - **Mutation.** A body that assigns to a capture, borrows it mutably or calls a mutating method on it changes the
   closure's own copy. It makes the literal a `dyn mut fn`: where a `dyn fn` is expected, that is N0299. A captured
-  value cannot be moved out of the body (N0251): it belongs to the closure, which may be called again.
+  value cannot be moved out of a boxed body (N0251): it belongs to the closure, which may be called again.
+- **Run-once environments** (ADR 0074 §2.3). An `async move` child (§40.4, §40.5) runs its body at most once, so its
+  body may move each capture out, once: `s.spawn(async move () => await serve(stream))`. A second move is N0250, and
+  a capture whose type has a drop block cannot be partly moved (N0252). The body drops, as it returns, the captures it
+  did not move, as a function drops its locals (§14.5): one that may or may not have been moved has a drop flag. A
+  cancelled body returns along a normal path (§40.6), so it drops them there too; a child that never starts drops its
+  whole environment at once. A field-precise capture (§36.2) is a reference and is never movable.
 - **Calls.** `f(args)` where `f` is a place of type `Box<dyn fn…>`, `borrow dyn fn…`, or a reference to such a box,
   calls the closure. A `dyn mut fn` needs mutable access: a `var` box, or a `borrow mut`, else N0248. A call has the
   effects of the type's effect list, else `sleep` and `alloc` (§36.3).
@@ -3736,7 +3835,12 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `AsyncSignal.create()`, `s.raise()`, `await s.wait()` | `AsyncSignal`, `void`, `Result<void, AsyncError>` | lib/core (ADR 0039): `raise` is `@effects()`, so another thread or an `@context(irq)` handler may call it; `wait` parks the task until a raise, which a raise before the wait satisfies. One task waits at a time; a cancelled wait returns `Err(Cancelled)` |
 
 `race`, `all`, `shield`, `timeout` and `deadline` place their children's frames in the caller's frame, so they never
-allocate. The library
+allocate. A child of `race` or `all`, and the body of `timeout` or `deadline`, may be `async move () => …` (ADR 0074
+§2.3): it owns what it captures, moved into its frame, and as it runs once its body may move a capture out (§36.5).
+`let r = await Async.timeout(ms, E.Timeout, async move () => await TlsStream.accept(stream, cfg));` gives `stream`
+to the body: after the deadline it is gone, dropped as the cancelled body returned. Two children of one `race` or
+`all` may not both capture a local where one changes it (N0241); a local moved into one is moved (N0250 in the
+other). The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
 console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
@@ -3868,8 +3972,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   - **`async move () => …`** (§3.3) moves every capture into the child's frame, as a `move` literal moves into its
     environment (§36.5): the body cannot use what it moved (N0250), and the child drops what it owns when it returns
     (a cancelled child returns early). A child that cannot be started (no frame) drops it at once. A borrow may be
-    moved in, and is held until the scope returns as a copied one is; it makes the environment scoped (§25). Only
-    `s.spawn` takes `async move`: a race or all child is the caller's (N0209).
+    moved in, and is held until the scope returns as a copied one is; it makes the environment scoped (§25). The
+    child's body runs once, so it may move its captures out (§36.5, ADR 0074 §2.3).
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 

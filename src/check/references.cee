@@ -153,6 +153,10 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
     if (c.types.isClosure(parameterType) && mutOperand == none()) {
         return checkExpr(c, argument, parameterType);
     }
+    let converted = optionalBorrowArgument(c, argument, mutOperand, parameterType, span)?;
+    if (converted != none()) {
+        return Ok(converted);
+    }
     let pointee = c.types.info(parameterType).pointee;
     if (mutOperand != none()) {
         let operandSpan = c.front.ast.exprSpans[mutOperand as usize];
@@ -285,6 +289,100 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
         return c.expr(HirExpr.Borrow(false, place), parameterType, span.start, span.end);
     }
     return c.expr(HirExpr.BorrowTemp(false, value), parameterType, span.start, span.end);
+}
+
+/// Is the expression written as a place: a name, `this`, a field or an element (in parentheses or not)?
+fn isPlaceSyntax(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Name(_, _) => true,
+    ExprNode.This => true,
+    ExprNode.Member(_, _) => true,
+    ExprNode.Index(_, _) => true,
+    ExprNode.Paren(inner) => isPlaceSyntax(c, inner),
+    _ => false,
+};
+
+/// An argument for an optional borrow parameter, `borrow T?` or `(borrow mut T)?` (ADR 0074 §2.5): a place of type
+/// `T?` is borrowed as an optional borrow, and a place of type `T` as `Some(borrow t)`; for
+/// `(borrow mut T)?` the argument is written `mut p`. None when the parameter or the argument is not of this kind,
+/// for checkArgument's other rules.
+fn optionalBorrowArgument(
+    c: borrow mut Checker,
+    argument: u32,
+    mutOperand: u32,
+    parameterType: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let lent = c.types.optionType(parameterType);
+    if (lent == none() || !c.types.is(lent, TypeKind.Reference) || c.types.isSlice(lent) || c.types.isStringView(
+        lent,
+    ) || c.types.isDynReference(lent)) {
+        return Ok(none());
+    }
+    let mutable = c.types.info(lent).mutableReference;
+    let target = c.types.info(lent).pointee;
+    let operand = if (mutOperand != none()) mutOperand else argument;
+    if ((mutOperand != none() && !mutable) || !isPlaceSyntax(c, operand)) {
+        return Ok(none());
+    }
+    let operandSpan = c.front.ast.exprSpans[operand as usize];
+    let value = synth(c, operand, integerHint(c, target))?;
+    let t = c.typeOf(value);
+    if (c.types.isBottom(t)) {
+        return Ok(value);
+    }
+    // A reference to an optional stays a different type (§22.1): it converts with `asBorrow()`.
+    let referent = if (c.types.is(t, TypeKind.Reference)) c.types.info(t).pointee else t;
+    let ofOptional = !c.types.is(t, TypeKind.Reference) && c.types.optionType(t) == target;
+    let ofTarget = referent == target;
+    if (!ofOptional && !ofTarget) {
+        if (mutOperand == none()) {
+            return coerce(c, value, parameterType, span);
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "expected ")?;
+        appendQuotedType(mut message, c, target)?;
+        appendText(mut message, " or ")?;
+        appendQuotedType(mut message, c, c.types.info(parameterType).pointee)?;
+        appendText(mut message, "?, found ")?;
+        appendQuotedType(mut message, c, t)?;
+        c.error(typeMismatch(), operandSpan.start, operandSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (ofTarget && c.types.is(t, TypeKind.Reference)) {
+        // A reference to `T`: `Some` of it, reborrowed (§22.1).
+        if (mutable && !c.types.info(t).mutableReference) {
+            return coerce(c, value, parameterType, span); // reports the mismatch
+        }
+        let reborrowed = c.expr(HirExpr.Reborrow(mutable, value), lent, span.start, span.end)?;
+        return enumValue(c, variantAt(c, parameterType, 1), reborrowed, parameterType, span);
+    }
+    if (mutable && mutOperand == none() && !c.types.is(t, TypeKind.Reference)) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "this parameter is an optional 'borrow mut': write 'mut' before the argument to let the call modify it",
+        )?;
+        mutArgumentError(c, value, span, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (ofTarget) {
+        // A place of `T`: `Some(borrow t)`.
+        let borrowed = if (!mutable && toPlace(c, value)? == none()) c.expr(
+            HirExpr.BorrowTemp(false, value),
+            lent,
+            span.start,
+            span.end,
+        )? else borrowPlace(c, value, mutable, span)?;
+        if (c.isBottom(borrowed)) {
+            return Ok(borrowed);
+        }
+        return enumValue(c, variantAt(c, parameterType, 1), borrowed, parameterType, span);
+    }
+    let reference = optionalReference(c, value, mutable, span)?;
+    if (reference == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    return optionalBorrow(c, reference, mutable, span);
 }
 
 /// N0249 for a value passed to a `borrow mut` parameter without `mut`, with MutArgumentFix's fix: insert `mut`, and
@@ -455,8 +553,8 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             }
         }
         // A result that names only `static` borrows from no parameter, so it is not elided (ADR 0068).
+        var resolved = Vector<u32>.create();
         if (hasSourceList || (c.types.isScoped(returnType) && !named && !writesStatic(c, decl.returnType))) {
-            var resolved = Vector<u32>.create();
             resolveReturnSources(c, f, function, mut resolved)?; // v0: `borrow(a, b)`, or elision (§13.5)
             for (i in resolved.view()) {
                 if (!containsU32(sources, i)) {
@@ -465,7 +563,39 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             }
         }
         sortU32(mut sources);
+        // A deep result of a reference parameter (ADR 0074 §2.4) names none of the reference's own regions (its
+        // elided one, or those written on it), only regions of its pointee.
+        var deep = Vector<u32>.create();
+        for (i in sources.view()) {
+            let local = c.hir.functions[function as usize].parameters[i as usize];
+            let t = c.hir.locals[local as usize].typ;
+            if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t) ||
+                containsU32(resolved, i)) {
+                continue;
+            }
+            var outer = Vector<u64>.create();
+            addName(mut outer, elidedFlowName(i as usize))?;
+            if ((i as usize) >= receiverOffset) {
+                let p = c.front.ast.parameters[c.front.ast.at(
+                    decl.parameters,
+                    truncate<u32>(i as usize - receiverOffset),
+                ) as usize];
+                match (c.front.ast.types[p.typ as usize]) {
+                    TypeNode.Reference(_, _, written, _) => {
+                        for (k in 0..written.count) {
+                            let symbol = c.front.ast.idents[c.front.ast.at(written, k) as usize].symbol;
+                            addName(mut outer, regionFlowName(symbol))?;
+                        }
+                    }
+                    _ => { continue; } // written otherwise (in parentheses): kept outer
+                }
+            }
+            if (!overlaps(outer, resultNames)) {
+                deep.push(i)?;
+            }
+        }
         c.hir.functions[function as usize].returnSources = sources;
+        c.hir.functions[function as usize].deepSources = deep;
     }
     var flows = Vector<u64>.create();
     for (i in 0..parameterCount) {

@@ -1,0 +1,6 @@
+(unit
+  (const default SQL StringView "SELECT 1\n\n  FROM t -- \\n {x}")
+  (fn default f (params) (returns StringView)
+    (=> "a \"\"\\\" b")
+  )
+)

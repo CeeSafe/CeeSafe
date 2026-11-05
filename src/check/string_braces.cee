@@ -44,6 +44,7 @@ fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
                 ItemKind.Struct(s) => {
                     let st = c.front.ast.structs[s as usize];
                     braceFunctions(c, mut scope, file, st.functions)?;
+                    braceConstants(c, mut scope, file, st.constants)?;
                     if (st.dropBlock != none()) {
                         scope.hasThis = true;
                         braceStmt(c, mut scope, file, st.dropBlock)?;
@@ -52,7 +53,10 @@ fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
                 }
                 ItemKind.Interface(functions, _) => { braceFunctions(c, mut scope, file, functions)?; }
                 ItemKind.Impl(_, _, functions, _, _) => { braceFunctions(c, mut scope, file, functions)?; }
-                ItemKind.InherentImpl(_, functions, _, _) => { braceFunctions(c, mut scope, file, functions)?; }
+                ItemKind.InherentImpl(_, functions, _, _, constants) => {
+                    braceFunctions(c, mut scope, file, functions)?;
+                    braceConstants(c, mut scope, file, constants)?;
+                }
                 ItemKind.Const(_, value) => { braceExpr(c, mut scope, file, value)?; }
                 ItemKind.Static(_, _, value) => { braceExpr(c, mut scope, file, value)?; }
                 _ => {}
@@ -79,6 +83,23 @@ fn braceFunctions(
     for (k in 0..functions.count) {
         let f = c.front.ast.at(functions, k);
         braceFunction(c, scope, file, f)?;
+    }
+    return Ok();
+}
+
+/// The values of a struct's or an impl's constants (ADR 0074 §2.7).
+fn braceConstants(
+    c: borrow mut Checker,
+    scope: borrow mut BraceScope,
+    file: u32,
+    constants: Range,
+) -> Result<void, AllocError> {
+    for (k in 0..constants.count) {
+        let item = c.front.ast.items[c.front.ast.at(constants, k) as usize];
+        match (item.kind) {
+            ItemKind.Const(_, value) => { braceExpr(c, scope, file, value)?; }
+            _ => {}
+        }
     }
     return Ok();
 }
@@ -297,6 +318,9 @@ fn braceLiteral(c: borrow mut Checker, scope: borrow BraceScope, file: u32, span
         let text = c.fileTexts[file as usize].view();
         let end = if ((span.end as usize) <= text.length) span.end as usize else text.length;
         var i = span.start as usize + 1;
+        if (isRawLiteralAt(text, span.start as usize)) {
+            i = end; // a raw literal has no escapes, and `{` in it is a brace (ADR 0074 §2.6)
+        }
         while (!found && i + 1 < end) {
             let b = text[i];
             if (b == '\\') {
@@ -373,3 +397,7 @@ fn braceBound(c: borrow Checker, scope: borrow BraceScope, name: Slice<u8>) -> b
     }
     return false;
 }
+
+/// Whether the string literal starting at `start` is a raw `"""` literal (grammar.md §1.6).
+fn isRawLiteralAt(text: Slice<u8>, start: usize) -> bool =>
+    start + 3 <= text.length && text[start] == '"' && text[start + 1] == '"' && text[start + 2] == '"';

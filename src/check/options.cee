@@ -259,6 +259,35 @@ fn checkResultValue(
         return c.errorResult(span.start, span.end);
     }
     let count = payloadCount(c, variant);
+    if (count == 0 && arguments.count == 1 && isUnitPayload(c, expected, variant)) {
+        // `Ok(e)` of a `Result<void, E>` (§20.4): `e` is a `void` value, erased; its effects are kept.
+        let argument = c.front.ast.at(arguments, 0);
+        let payload = synth(c, argument, none())?;
+        if (c.isBottom(payload) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            return c.errorResult(span.start, span.end);
+        }
+        if (!c.types.is(c.typeOf(payload), TypeKind.Void) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            let argumentSpan = c.front.ast.exprSpans[argument as usize];
+            var message = Vector<u8>.create();
+            appendQuotedName(mut message, c, name)?;
+            appendText(mut message, " of ")?;
+            appendQuotedType(mut message, c, expected)?;
+            appendText(mut message, " takes no value, or a 'void' one, but this has type ")?;
+            appendQuotedType(mut message, c, c.typeOf(payload))?;
+            c.error(argumentCount(), argumentSpan.start, argumentSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let value = c.expr(HirExpr.EnumValue(variant, emptyRange()), expected, span.start, span.end)?;
+        if (isUnitValue(c, payload)) {
+            return Ok(value);
+        }
+        var statements = Vector<u32>.create();
+        statements.push(c.hir.addStmt(HirStmt.Expression(payload), span.start, span.end)?)?;
+        statements.push(c.hir.addStmt(HirStmt.Yield(value), span.start, span.end)?)?;
+        let list = c.hir.list(statements.view())?;
+        let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+        return c.expr(HirExpr.StmtValue(block), expected, span.start, span.end);
+    }
     if (arguments.count as usize != count) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, name)?;
@@ -408,6 +437,86 @@ fn checkUnwrap(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: S
     let option = c.types.optionType(t);
     let value = if (option != none()) option else resultOk(c, t);
     return c.expr(HirExpr.Unwrap(operand), value, span.start, span.end);
+}
+
+/// An optional borrow (ADR 0074 §2.5) from `reference`, a `borrow (T?)` or `borrow mut (T?)`: `borrow T?` (or
+/// `(borrow mut T)?` when `mutable`), `Some` borrowing the payload and `null` for `null`. It is lowered to the match
+/// it replaces: `{ let lent = reference; match (lent) { Some(x) => Some(x), null => null } }`.
+fn optionalBorrow(c: borrow mut Checker, reference: u32, mutable: bool, span: Span) -> Result<u32, AllocError> {
+    let referenceType = c.typeOf(reference);
+    let option = c.types.info(referenceType).pointee;
+    let payload = c.types.optionType(option);
+    let lent = c.types.referenceTo(payload, mutable)?;
+    let result = optionOf(c, lent)?;
+    let lentName = c.intern("lent")?;
+    let lentLocal = c.hir.addLocal(c.function, lentName, referenceType, false, false, span.start, span.end)?;
+    let declaration = c.hir.addStmt(HirStmt.LocalDecl(lentLocal, reference), span.start, span.end)?;
+    let scrutinee = c.expr(HirExpr.LocalRef(lentLocal), referenceType, span.start, span.end)?;
+    let payloadName = c.intern("payload")?;
+    let bound = c.hir.addLocal(c.function, payloadName, lent, false, false, span.start, span.end)?;
+    let bindingStart = truncate<u32>(c.hir.armBindings.length);
+    c.hir.armBindings.push(HirArmBinding { local: bound, payloadIndex: 0 })?;
+    let read = c.expr(HirExpr.LocalRef(bound), lent, span.start, span.end)?;
+    let present = enumValue(c, variantAt(c, result, 1), read, result, span)?;
+    let presentBody = yieldBlock(c, present, span)?;
+    c.hir.arms.push(HirArm {
+        kind: HirPatternKind.Variant,
+        variant: variantAt(c, option, 1),
+        value: intValue(0),
+        bindings: Range { start: bindingStart, count: 1 },
+        body: presentBody,
+        start: span.start,
+        end: span.end,
+        listsPayloads: true,
+        pattern: none(),
+    })?;
+    let someArm = truncate<u32>(c.hir.arms.length - 1);
+    let absent = c.expr(HirExpr.EnumValue(variantAt(c, result, 0), emptyRange()), result, span.start, span.end)?;
+    let absentBody = yieldBlock(c, absent, span)?;
+    c.hir.arms.push(HirArm {
+        kind: HirPatternKind.Variant,
+        variant: variantAt(c, option, 0),
+        value: intValue(0),
+        bindings: Range { start: truncate<u32>(c.hir.armBindings.length), count: 0 },
+        body: absentBody,
+        start: span.start,
+        end: span.end,
+        listsPayloads: false,
+        pattern: none(),
+    })?;
+    let nullArm = truncate<u32>(c.hir.arms.length - 1);
+    let armIds = [someArm, nullArm];
+    let arms = c.hir.list(armIds[..])?;
+    let choice = c.hir.addStmt(HirStmt.Match(scrutinee, arms, false, false), span.start, span.end)?;
+    let statements = [declaration, choice];
+    let list = c.hir.list(statements[..])?;
+    let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+    return c.expr(HirExpr.StmtValue(block), result, span.start, span.end);
+}
+
+/// A reference to the optional `value` (of type `T?`, or a reference to one) for an optional borrow (ADR 0074
+/// §2.5): a reborrow of a reference, else a borrow of the place (N0248 for `mutable` and an immutable place), or of
+/// a temporary for a shared borrow of a value. None after an error.
+fn optionalReference(c: borrow mut Checker, value: u32, mutable: bool, span: Span) -> Result<u32, AllocError> {
+    let t = c.typeOf(value);
+    if (c.types.is(t, TypeKind.Reference)) {
+        if (mutable && !c.types.info(t).mutableReference) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "cannot borrow the optional as mutable: ")?;
+            appendQuotedType(mut message, c, t)?;
+            appendText(mut message, " is a shared reference")?;
+            c.error(borrowMutOfImmutable(), span.start, span.end, message)?;
+            return Ok(none());
+        }
+        let reference = c.types.referenceTo(c.types.info(t).pointee, mutable)?;
+        return c.expr(HirExpr.Reborrow(mutable, value), reference, span.start, span.end);
+    }
+    if (!mutable && toPlace(c, value)? == none()) {
+        let reference = c.types.referenceTo(t, false)?;
+        return c.expr(HirExpr.BorrowTemp(false, value), reference, span.start, span.end);
+    }
+    let borrowed = borrowPlace(c, value, mutable, span)?;
+    return Ok(if (c.isBottom(borrowed)) none() else borrowed);
 }
 
 /// `a ?? b` (SynthCoalesce, ADR 0072 §2.1): `a`'s payload, or `b` when `a` is null; `b` is evaluated only then. It

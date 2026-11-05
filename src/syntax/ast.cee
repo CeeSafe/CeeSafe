@@ -308,9 +308,9 @@ enum ItemKind {
     Interface(Range, Range),
     /// interface type, for type, functions, type parameters, region parameters (ADR 0054: `impl<region r, T: B> …`).
     Impl(u32, u32, Range, Range, Range),
-    /// `impl S { … }` (ADR 0064 §1): the struct type, functions, type parameters, region parameters. Its functions are
-    /// the struct's methods, as if written in its body (MergeInherentImpls).
-    InherentImpl(u32, Range, Range, Range),
+    /// `impl S { … }` (ADR 0064 §1): the struct type, functions, type parameters, region parameters, and its `const`
+    /// items (ADR 0074 §2.7). Its functions are the struct's methods, as if written in its body (MergeInherentImpls).
+    InherentImpl(u32, Range, Range, Range, Range),
     Const(u32, u32),        // type, value
     Static(bool, u32, u32), // mutable, type, value
 }
@@ -318,6 +318,7 @@ enum ItemKind {
 struct Struct {
     fields: Range;    // fields
     functions: Range; // functions
+    constants: Range; // `const` items of its body (ADR 0074 §2.7), not in the unit's items
     dropBlock: u32;   // a block statement, or none
     dropStart: u32;   // where the `drop` keyword starts (the DropBlock's span)
     hasDropDoc: bool;
@@ -336,6 +337,13 @@ struct Item {
     attributes: Range;
     start: u32;
     end: u32;
+}
+
+/// A member expression `name.x` whose `name` is a local with a dependency's name, which PackageNames left as it is
+/// (ADR 0074 §2.10), and its file.
+struct ShadowedMember {
+    file: u32;
+    expr: u32;
 }
 
 /// One file's tree.
@@ -367,7 +375,8 @@ struct Ast {
     patterns: Vector<PatternNode>;
     patternSpans: Vector<Span>;
     bindings: Vector<Binding>;
-    replacedIdents: Vector<u32>; // identifiers PackageNames joined into a `dep.X` name: no longer in the tree
+    replacedIdents: Vector<u32>;      // identifiers PackageNames joined into a `dep.X` name: no longer in the tree
+    shadowed: Vector<ShadowedMember>; // `local.x` where the local has a dependency's name (ADR 0074 §2.10)
     stmts: Vector<StmtNode>;
     stmtSpans: Vector<Span>;
     closures: Vector<Closure>;
@@ -408,6 +417,7 @@ struct Ast {
         patternSpans: Vector<Span>.create(),
         bindings: Vector<Binding>.create(),
         replacedIdents: Vector<u32>.create(),
+        shadowed: Vector<ShadowedMember>.create(),
         stmts: Vector<StmtNode>.create(),
         stmtSpans: Vector<Span>.create(),
         closures: Vector<Closure>.create(),

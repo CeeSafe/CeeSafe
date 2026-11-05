@@ -1,0 +1,11 @@
+// Raw `"""` literals in the tree (grammar.md §1.6, ADR 0074 §2.6): the value, with the closing line's indentation
+// removed, blank lines empty, "\n" between lines and no escapes, is an ordinary string literal.
+const SQL: StringView = """
+    SELECT 1
+
+      FROM t -- \n {x}
+    """;
+
+fn f() -> StringView => """
+        a ""\" b
+        """;

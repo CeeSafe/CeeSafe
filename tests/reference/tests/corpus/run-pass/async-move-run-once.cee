@@ -1,0 +1,61 @@
+// Run-once children (ADR 0074 §2.3): `s.spawn` and `set.spawn` children move a capture into a call; a capture moved
+// on one path only is dropped behind a drop flag that lives across an `await`. The log has one digit per event:
+// 9 when `consume` takes a value, then each value's name when it is dropped.
+
+static LOG: AtomicU64 = AtomicU64.constant(0);
+
+fn note(k: u64) { LOG.store(LOG.load() * 10 + k); }
+
+struct Noisy {
+    name: u64;
+    v: Vector<u8>;
+    drop { note(this.name); }
+}
+
+async fn consume(n: Noisy) -> Result<void, AsyncError> {
+    note(9);
+    return Ok();
+}
+
+async fn top(flag: bool) -> Result<void, AsyncError> {
+    var bytes = Vector<u8>.create();
+    match (bytes.push(1)) { Ok() => {} Err(_) => {} }
+    let a = Noisy { name: 1, v: bytes };
+    let b = Noisy { name: 2, v: Vector<u8>.create() };
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async move () => await consume(a));
+        s.spawn(async move () => {
+            await Timer.sleep(1)?;
+            if (flag) {
+                await consume(b)?;
+            }
+            await Timer.sleep(1)?;
+            note(8);
+            return Ok();
+        });
+    })?;
+    await Async.tasks(4, AsyncError.Cancelled, async (set) => {
+        let c = Noisy { name: 3, v: Vector<u8>.create() };
+        let d = Noisy { name: 4, v: Vector<u8>.create() };
+        await set.spawn(async move () => await consume(c))?;
+        await set.spawn(async move () => {
+            await Timer.sleep(1)?;
+            await consume(d)?;
+            return Ok();
+        })?;
+        return Ok();
+    })?;
+    return Ok();
+}
+
+fn main() {
+    for (flag in [true, false]) {
+        LOG.store(0);
+        match (Async.run(top(flag))) {
+            Ok() => { Console.writeLine(LOG.load()); }
+            Err(_) => { Console.writeLine("failed"); }
+        }
+    }
+}
+// expect-stdout: 919289394
+// expect-stdout: 91829394

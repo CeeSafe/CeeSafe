@@ -1,0 +1,9 @@
+// The iterator borrows its source for the whole loop (ADR 0074 §2.8): the body may read it, but not change it.
+fn main() {
+    var s = String.create();
+    s.append("a,b")!;
+    for (part in s.view().split(",")) {
+        Console.writeLine(part);
+        s.append(",c")!; // error[N0241]
+    }
+}

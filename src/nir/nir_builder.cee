@@ -442,7 +442,8 @@ fn emitReturn(
     return Ok();
 }
 
-/// The NIR local of a HIR local.
+/// The NIR local of a HIR local. A unit local (type-system.md §20.4) is no HIR local: the checker erases it, so its
+/// scope marker (0xFFFFFFFE) never reaches here, and if it did, the bounds check on `locals` would stop the compiler.
 fn nirLocalOf(c: borrow Checker, local: u32) -> u32 => c.hir.locals[local as usize].id;
 
 /// A local's place: its NIR local, or for a capture of the closure being built, its place in the environment
@@ -575,6 +576,9 @@ fn lowerStmt(
             }
         }
         HirStmt.For(variable, start, end, body) => { lowerFor(c, n, b, s, variable, start, end, body)?; }
+        HirStmt.ForNext(variable, declaration, next, body) => {
+            lowerForNext(c, n, b, s, variable, declaration, next, body)?;
+        }
         HirStmt.Loop(body) => {
             let head = newBlock(b)?;
             terminate(n, b, NirTerminator.Goto(head))?;
@@ -654,6 +658,15 @@ fn lowerExpressionStmt(
         let saved = beginStatementTemps(b)?;
         lowerResultAccess(c, n, b, e)?;
         return endStatementTemps(n, b, saved);
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.StmtValue(statement) => {
+            if (c.types.is(typ, TypeKind.Void)) {
+                // A `void` block value, a unit read's included (type-system.md §20.4): only its statement.
+                return lowerStmt(c, n, b, statement);
+            }
+        }
+        _ => {}
     }
     let write = match (c.hir.exprs[e as usize]) {
         HirExpr.BuiltinCall(function, arguments) => if (function == bfPtrWrite()) arguments else Range {
@@ -1213,6 +1226,112 @@ fn lowerFor(
     let add = n.rvalue(NirRvalue.Binary(BinaryOp.Add, counterOperand, one), counterType, span)?;
     assign(n, b, counterPlace, add)?;
     terminate(n, b, NirTerminator.Goto(head))?;
+
+    b.current = exit;
+    b.span = Span { start: span.end, end: span.end };
+    emitStorageDead(c, n, b, headerScope)?;
+    b.scopes.truncate(headerScope as usize);
+    return Ok();
+}
+
+/// A `for` loop over an iterator (LowerForNext, ADR 0074 §2.8). The iterator expression initialises a hidden local of
+/// the header; it and the expression's temporaries live until the loop exits, the iterator destroyed first. Each pass
+/// calls `next` into an optional, whose own temporaries (the iterator's loan among them) end before the test: `null`
+/// leaves the loop, `Some(v)` moves `v` into the variable. `continue` goes back to the call.
+fn lowerForNext(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    s: u32,
+    variable: u32,
+    declaration: u32,
+    next: u32,
+    body: u32,
+) -> Result<void, AllocError> {
+    let span = stmtSpan(c, s);
+    var iteratorLocal = none();
+    var initializer = none();
+    match (c.hir.stmts[declaration as usize]) {
+        HirStmt.LocalDecl(local, value) => {
+            iteratorLocal = local;
+            initializer = value;
+        }
+        _ => {}
+    }
+    let savedTemps = b.statementTemps;
+    b.tempLists.push(Vector<u32>.create())?;
+    let headerTemps = truncate<u32>(b.tempLists.length - 1);
+    b.statementTemps = headerTemps;
+    let headerScope = truncate<u32>(b.scopes.length);
+    b.scopes.push(Vector<ScopeItem>.create())?;
+    b.openTemps.push(OpenTemps { list: headerTemps, scope: headerScope })?; // an early exit in `e` ends them too
+    let iterator = nirLocalOf(c, iteratorLocal);
+    let iteratorPlace = localPlace(n, iterator)?;
+    assignRvalue(c, n, b, iteratorPlace, initializer)?;
+    b.openTemps.truncate(b.openTemps.length - 1);
+    b.statementTemps = savedTemps;
+    for (t in b.tempLists[headerTemps as usize].view()) {
+        b.scopes[headerScope as usize].push(ScopeItem { isDefer: false, value: t })?;
+    }
+    if (b.current == none()) {
+        b.scopes.truncate(headerScope as usize); // the header never completes
+        return Ok();
+    }
+    b.scopes[headerScope as usize].push(ScopeItem { isDefer: false, value: iterator })?;
+
+    let head = newBlock(b)?;
+    terminate(n, b, NirTerminator.Goto(head))?;
+    b.current = head;
+    b.span = span;
+    let optionType = c.hir.exprTypes[next as usize];
+    let option = newLocal(b, optionType)?;
+    let optionPlace = localPlace(n, option)?;
+    let saved = beginStatementTemps(b)?;
+    assignRvalue(c, n, b, optionPlace, next)?;
+    endStatementTemps(n, b, saved)?;
+    if (b.current == none()) {
+        b.scopes.truncate(headerScope as usize);
+        return Ok();
+    }
+    b.span = span;
+    let u32Type = c.types.u32;
+    let tag = newLocal(b, u32Type)?;
+    let tagPlace = localPlace(n, tag)?;
+    let discriminant = n.rvalue(NirRvalue.Discriminant(optionPlace), u32Type, span)?;
+    assign(n, b, tagPlace, discriminant)?;
+    let tagOperand = placeOperand(c, n, b, tagPlace)?;
+    let some = successVariant(c, optionType);
+    let bodyBlock = newBlock(b)?;
+    let finished = newBlock(b)?;
+    let exit = newBlock(b)?;
+    let start = truncate<u32>(n.cases.length);
+    n.cases.push(NirCase { value: intValue(c.types.variants[some as usize].index as i64), target: bodyBlock })?;
+    terminate(n, b, NirTerminator.Switch(tagOperand, Range { start: start, count: 1 }, finished))?;
+
+    // `null`: the optional holds nothing to destroy.
+    b.current = finished;
+    emit(n, b, NirStatement.StorageDead(option))?;
+    terminate(n, b, NirTerminator.Goto(exit))?;
+
+    let depth = truncate<u32>(b.scopes.length);
+    b.loops.push(LoopTarget { head: head, exit: exit, scopeDepth: depth, exitUsed: false })?;
+    b.current = bodyBlock;
+    let variableLocal = nirLocalOf(c, variable);
+    var scope = Vector<ScopeItem>.create();
+    scope.push(ScopeItem { isDefer: false, value: variableLocal })?;
+    b.scopes.push(scope)?;
+    let targets = [variableLocal];
+    let list = n.list(targets[..])?;
+    emit(n, b, NirStatement.Unpack(optionPlace, some, list))?;
+    emit(n, b, NirStatement.StorageDead(option))?;
+    lowerStmt(c, n, b, body)?;
+    if (b.current != none()) {
+        let top = truncate<u32>(b.scopes.length - 1);
+        emitStorageDead(c, n, b, top)?;
+        terminate(n, b, NirTerminator.Goto(head))?;
+    }
+    b.scopes.truncate(b.scopes.length - 1);
+    b.loops.truncate(b.loops.length - 1);
 
     b.current = exit;
     b.span = Span { start: span.end, end: span.end };
@@ -2244,6 +2363,14 @@ fn lowerCall(
         operands[0] = checkByteRange(c, n, b, operands[0], operands[1], size, span)?;
     }
     let list = n.list(operands.view())?;
+    if (c.types.is(typ, TypeKind.Never)) {
+        // A call of a `never` function (§15.3) ends its block, as `Process.exit` does.
+        let voidType = c.types.voidType;
+        let call = n.rvalue(NirRvalue.Call(callee, list), voidType, span)?;
+        emit(n, b, NirStatement.Eval(call))?;
+        terminate(n, b, NirTerminator.Unreachable)?;
+        return Ok(none());
+    }
     return n.rvalue(NirRvalue.Call(callee, list), typ, span);
 }
 

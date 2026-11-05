@@ -238,16 +238,13 @@ fn checkFloatConversion(
     let operandType = c.typeOf(operand);
     let isInteger = c.types.is(operandType, TypeKind.Integer);
     let isFloat = c.types.is(operandType, TypeKind.Float);
-    let wrongOperand = if (toFloat) !isInteger && !isFloat else !isFloat;
+    // checkedTruncate and saturatingTruncate convert an integer as well as a float (ADR 0074 §2.9).
+    let wrongOperand = !isInteger && !isFloat;
     if (!c.types.isBottom(operandType) && wrongOperand) {
         let argumentSpan = c.front.ast.exprSpans[argument as usize];
         var message = Vector<u8>.create();
-        if (toFloat) {
-            appendText(mut message, "round requires an integer or float value, found ")?;
-        } else {
-            appendText(mut message, text)?;
-            appendText(mut message, " requires a float value, found ")?;
-        }
+        appendText(mut message, text)?;
+        appendText(mut message, " requires an integer or float value, found ")?;
         appendQuotedType(mut message, c, operandType)?;
         c.error(invalidOperandTypes(), argumentSpan.start, argumentSpan.end, message)?;
         return c.errorResult(span.start, span.end);

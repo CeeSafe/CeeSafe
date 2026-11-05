@@ -1,0 +1,25 @@
+// An optional borrow is a loan of the optional place (ADR 0074 §2.5): shared for `asBorrow`, mutable for
+// `asBorrowMut` and for a `mut` argument.
+struct C {
+    n: u32;
+}
+
+struct R {
+    cfg: C?;
+}
+
+fn main() {
+    var s = R { cfg: C { n: 1 } };
+    let a = s.cfg.asBorrow();
+    s.cfg = null; // error[N0240]
+    match (a) {
+        Some(x) => { Console.writeLine(x.n); }
+        null => {}
+    }
+    let m = s.cfg.asBorrowMut();
+    Console.writeLine(s.cfg.isSome()); // error[N0241]
+    match (m) {
+        Some(x) => { x.n = 2; }
+        null => {}
+    }
+}

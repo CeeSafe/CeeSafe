@@ -1,0 +1,99 @@
+// Unit payloads (ADR 0074 §2.1, type-system.md §20.4): `Ok(v)` binds a unit local where the payload type is `void`,
+// and `Ok(v)` of one builds the payload-less `Ok`. A generic body means the same at `void` as at `u32`.
+enum A { X }
+enum B { Y }
+
+fn act() -> Result<void, A> { return Ok(); }
+
+fn fail() -> Result<void, A> { return Err(A.X); }
+
+fn number() -> Result<u32, A> => Ok(7);
+
+// The finding's adapter, used at `void` and at `u32`.
+fn conv<T>(r: Result<T, A>) -> Result<T, B> => match (r) {
+    Ok(v) => Ok(v),
+    Err(_) => Err(B.Y),
+};
+
+// `let v = r?;` declares a unit local.
+fn relay(r: Result<void, A>) -> Result<void, A> {
+    let v = r?;
+    return Ok(v);
+}
+
+// A generic `?` and rebuild, at `void` and at `u32`.
+fn again<T>(r: Result<T, A>) -> Result<T, A> {
+    let v = r?;
+    return Ok(v);
+}
+
+fn note() { Console.writeLine("note"); }
+
+// `Ok(e)` with a `void` `e` keeps `e`'s effects.
+fn noted() -> Result<void, A> => Ok(note());
+
+// `return v;` of a unit in a `void` function is `return;`.
+fn early(r: Result<void, A>) {
+    match (r) {
+        Ok(v) => { return v; }
+        Err(_) => { Console.writeLine("early: err"); }
+    }
+}
+
+fn main() {
+    match (conv(act())) {
+        Ok() => { Console.writeLine("conv: ok"); }
+        Err(_) => { Console.writeLine("conv: err"); }
+    }
+    match (conv(fail())) {
+        Ok(_) => { Console.writeLine("conv: ok"); }
+        Err(_) => { Console.writeLine("conv: err"); }
+    }
+    match (conv(number())) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => { Console.writeLine("conv: err"); }
+    }
+    match (relay(act())) {
+        Ok(u) => {
+            let w = u;
+            let f = () => w; // a closure reads a unit local: nothing is captured
+            Console.writeLine("relay: ok");
+        }
+        Err(_) => { Console.writeLine("relay: err"); }
+    }
+    match (relay(fail())) {
+        Ok(_) => { Console.writeLine("relay: ok"); }
+        Err(_) => { Console.writeLine("relay: err"); }
+    }
+    match (again(act())) {
+        Ok() => { Console.writeLine("again: ok"); }
+        Err(_) => { Console.writeLine("again: err"); }
+    }
+    match (again(number())) {
+        Ok(n) => { Console.writeLine(n + 1); }
+        Err(_) => { Console.writeLine("again: err"); }
+    }
+    match (noted()) {
+        Ok(_) => { Console.writeLine("noted: ok"); }
+        Err(_) => { Console.writeLine("noted: err"); }
+    }
+    early(act());
+    early(fail());
+    let nested: Result<Result<void, A>, B> = Ok(act());
+    match (nested) {
+        Ok(Ok(v)) => { Console.writeLine("nested: ok"); }
+        Ok(Err(_)) => { Console.writeLine("nested: inner err"); }
+        Err(_) => { Console.writeLine("nested: err"); }
+    }
+}
+// expect-stdout: conv: ok
+// expect-stdout: conv: err
+// expect-stdout: 7
+// expect-stdout: relay: ok
+// expect-stdout: relay: err
+// expect-stdout: again: ok
+// expect-stdout: 8
+// expect-stdout: note
+// expect-stdout: noted: ok
+// expect-stdout: early: err
+// expect-stdout: nested: ok

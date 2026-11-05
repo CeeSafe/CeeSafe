@@ -21,6 +21,10 @@ enum Entity {
     Static(u32),          // Checker.statics
 }
 
+/// The scope entry of a unit local (§20.4): a name bound to a `void` payload, with no HIR local. `lookup` finds it as
+/// `Entity.Local(unitLocal())`; reading it is a unit value (`unitValue`).
+fn unitLocal() -> u32 => 0xFFFFFFFE;
+
 /// The reference's Builtin enum members S1 uses, by declaration index.
 fn builtinConsole() -> u32 => 0;
 fn builtinProcess() -> u32 => 1;
@@ -114,6 +118,7 @@ struct Checker {
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
     asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
     copyCaptures: bool;                      // a spawned child is being checked: its Copy captures are values (ADR 0033)
+    runOnceLiteral: bool;                    // the move literal being checked is a run-once child (ADR 0074 §2.3)
     asyncAdapter: bool;                      // an @effectsOf argument is being checked: an async fn may be one (ADR 0037)
     sendSpawns: Vector<u32>;                 // the HIR Spawn expressions of `s.spawnSend(…)` (ADR 0038)
     asyncSites: u32;                         // scopes numbered so far, program-wide
@@ -143,6 +148,8 @@ struct Checker {
     atomicStructs: Vector<u32>;                      // Ast.items of structs declared `@context(atomic)`
     allowImported: bool;                             // the next resolution may be an imported C type (§31.2)
     coreAllowImported: bool;                         // resolveTypeWith's allowImported, for resolveTypeCore
+    allowNever: bool;                                // the next resolution may be `never` (a function's return type)
+    coreAllowNever: bool;                            // resolveTypeWith's allowNever, for resolveTypeCore
     layoutUses: Vector<LayoutUse>;                   // struct types used by value before members are known
     headers: Vector<Vector<u8>>;                     // `@header`s of extern blocks, each once, in order (§31.3)
     builtinUses: Vector<u8>;                         // per built-in item (AllocError, IoError, SystemHeap, FailingAllocator): 1 used, 2 by a library
@@ -160,8 +167,9 @@ struct Checker {
     blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
     declaredOrder: Vector<DeclaredEntry>;
-    methodFiles: Vector<MethodFile>; // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
-    fileImports: Vector<FileImport>; // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
+    methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
+    memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)
+    fileImports: Vector<FileImport>;         // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
 
     fn letKeywordOf(borrow this, local: u32) -> u32 {
         for (k in this.letKeywords.view()) {
@@ -267,7 +275,9 @@ struct Checker {
             i -= 1;
             if (this.scopes[i].symbol == symbol) {
                 let local = this.scopes[i].local;
-                recordCaptures(this, i, local)?;
+                if (local != unitLocal()) {
+                    recordCaptures(this, i, local)?; // a unit local holds nothing to capture
+                }
                 return Ok(local);
             }
         }
@@ -309,6 +319,9 @@ struct Checker {
         return Ok();
     }
 
+    /// Binds a unit local (§20.4): a name of type `void` that holds nothing and has no HIR local.
+    fn bindUnit(borrow mut this, symbol: u32) -> Result<void, AllocError> => this.bind(symbol, unitLocal());
+
     // ---- Types ----
 
     /// N0297: floats are disabled (FloatsDisabled).
@@ -328,6 +341,8 @@ struct Checker {
         let allowImported = this.allowImported;
         this.allowImported = false;
         this.coreAllowImported = allowImported;
+        this.coreAllowNever = this.allowNever;
+        this.allowNever = false;
         let resolved = this.resolveTypeCore(typ, allowVoid, allowSources)?;
         let structDef = this.types.info(resolved).structDef;
         if (structDef != none() && this.types.structs[structDef as usize].isImported && !allowImported) {
@@ -432,6 +447,8 @@ struct Checker {
         this.allowCChar = false;
         let allowImported = this.coreAllowImported;
         this.coreAllowImported = false;
+        let allowNever = this.coreAllowNever;
+        this.coreAllowNever = false;
         match (this.front.ast.types[typ as usize]) {
             TypeNode.Named(q) => {
                 if (q.parts.count > 1) {
@@ -484,6 +501,12 @@ struct Checker {
                     appendBytes(mut message, text.view())?;
                     appendText(mut message, "'")?;
                     this.error(unknownType(), span.start, span.end, message)?;
+                    return Ok(this.types.error);
+                }
+                if (this.types.is(found, TypeKind.Never) && !allowNever) {
+                    var message = Vector<u8>.create();
+                    appendText(mut message, "'never' can only be a function's return type")?;
+                    this.error(voidNotAllowed(), span.start, span.end, message)?;
                     return Ok(this.types.error);
                 }
                 if (this.types.is(found, TypeKind.Void) && !allowVoid) {

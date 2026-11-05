@@ -229,9 +229,16 @@ fn elaborateDrops(c: borrow Checker, n: borrow mut NirProgram, function: u32) ->
             let span = n.statementSpans[s as usize];
             match (n.statements[s as usize]) {
                 NirStatement.StorageDead(local) => {
-                    if (c.types.needsDrop(n.functions[function as usize].locals[local as usize].typ)) {
+                    let localType = n.functions[function as usize].locals[local as usize].typ;
+                    // A run-once function's `env` ends: what the body did not move out of `*env` is dropped there,
+                    // field by field or behind flags as for a local (ADR 0074 §2.3).
+                    let onceEnvironment = local == 0 && n.functions[function as usize].parameterCount > 0 &&
+                        isOnceEnvironmentLocal(c, n.functions[function as usize].locals, 0);
+                    if (c.types.needsDrop(localType) || onceEnvironment) {
+                        let root = d.roots[local as usize];
+                        let node = if (onceEnvironment) d.nodes[root as usize].children[0] else root;
                         var drops = Vector<u32>.create();
-                        dropSequence(c, n, d, mut e, d.roots[local as usize], d.before[position][i], span, mut drops)?;
+                        dropSequence(c, n, d, mut e, node, d.before[position][i], span, mut drops)?;
                         edits.push(
                             DropEdit {
                                 block: truncate<u32>(position),

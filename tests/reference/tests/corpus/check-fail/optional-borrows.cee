@@ -1,0 +1,21 @@
+// Optional borrows (ADR 0074 §2.5): `asBorrowMut` needs a mutable place, and a `(borrow mut T)?` argument needs `mut`.
+struct C {
+    n: u32;
+}
+
+struct R {
+    cfg: C?;
+}
+
+fn bump(c: (borrow mut C)?) {}
+
+fn shared(o: borrow (C?)) {
+    let m = o.asBorrowMut(); // error[N0248]
+}
+
+fn main() {
+    let r = R { cfg: C { n: 5 } };
+    let m = r.cfg.asBorrowMut(); // error[N0248]
+    var s = R { cfg: C { n: 1 } };
+    bump(s.cfg); // error[N0249]
+}

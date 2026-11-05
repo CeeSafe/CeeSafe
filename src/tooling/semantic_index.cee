@@ -171,6 +171,23 @@ fn addDeclared(
     return addEntry(index, source, ident.start, ident.end, codeBlock(text.view())?, true, ident.start, ident.end);
 }
 
+/// The associated constants of a struct body or an impl (ADR 0074 §2.7): their declarations.
+fn indexConstants(
+    index: borrow mut SemanticIndex,
+    c: borrow Checker,
+    source: borrow SourceText,
+    constants: Range,
+) -> Result<void, AllocError> {
+    let ast = borrow c.front.ast;
+    for (m in 0..constants.count) {
+        let item = borrow ast.items[ast.at(constants, m) as usize];
+        let ident = ast.idents[item.name as usize];
+        let text = signatureOf(source, item.start, item.end)?;
+        addEntry(index, source, ident.start, ident.end, codeBlock(text.view())?, true, ident.start, ident.end)?;
+    }
+    return Ok();
+}
+
 /// Declarations, from the syntax (IndexSyntax).
 fn indexSyntax(
     index: borrow mut SemanticIndex,
@@ -206,6 +223,7 @@ fn indexSyntax(
                 for (m in 0..structure.functions.count) {
                     addFunctionName(index, c, sources, ast.at(structure.functions, m))?;
                 }
+                indexConstants(index, c, source, structure.constants)?;
             }
             ItemKind.Enum(variants, _, _) => {
                 addDeclared(index, c, source, "enum", item.name)?;
@@ -230,6 +248,12 @@ fn indexSyntax(
                 for (m in 0..functions.count) {
                     addFunctionName(index, c, sources, ast.at(functions, m))?;
                 }
+            }
+            ItemKind.InherentImpl(_, functions, _, _, constants) => {
+                for (m in 0..functions.count) {
+                    addFunctionName(index, c, sources, ast.at(functions, m))?;
+                }
+                indexConstants(index, c, source, constants)?;
             }
             ItemKind.Const(_, _) => {
                 let ident = ast.idents[item.name as usize];
@@ -362,6 +386,10 @@ fn walkStatement(
         HirStmt.For(_, start, end, body) => {
             walkExpression(index, c, sources, start)?;
             walkExpression(index, c, sources, end)?;
+            walkStatement(index, c, sources, body)?;
+        }
+        HirStmt.ForNext(_, declaration, _, body) => {
+            walkStatement(index, c, sources, declaration)?; // the call of `next` has no source of its own
             walkStatement(index, c, sources, body)?;
         }
         HirStmt.Return(value) => { walkExpression(index, c, sources, value)?; }

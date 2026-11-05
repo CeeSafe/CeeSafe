@@ -48,7 +48,8 @@ rvalue    = Use(operand)
                                                  -- the pair (T, dyn I) is in the program's DynTables; loans and moves
                                                  -- flow through it as through any cast
           | Truncate(operand, type)
-          | FloatToInt(operand, Panic | Checked | Saturating, type, span)   -- M11 G7: truncate<T> of a float (§35.4)
+          | FloatToInt(operand, Panic | Checked | Saturating, type, span)   -- M11 G7: truncate<T> of a float (§35.4); Checked and
+                                                 -- Saturating also of an integer (ADR 0074 §2.9)
           | Aggregate(struct, [operand])           -- field values in declaration order (M2a)
           | Ref(Shared | Mut, place)               -- creates a loan (M2b; lifetimes.md)
           | Discriminant(place) | EnumAggregate(V, [operand])   -- M2d enums
@@ -100,7 +101,8 @@ suspension changes its blocks or statements.
 - `await Async.race(a, b)` and `all` lower to `t = Builtin(AsyncJoin, [site, 1 for race or 0, a's function, a, b's
   function, b])`, the index (0 or 1) of the child that returned first, then `r0 = Builtin(AsyncJoinResult, [site, 0])`
   and `r1 = …[site, 1]`, which move the children's results out, then the call `settle(t, r0, r1)` of lib/std's
-  `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used.
+  `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used. A child is a
+  reference to its closure's environment, or, for `async move` (ADR 0074 §2.3), the environment itself, moved.
 - `await Async.timeout(ms, timedOut, body)` and `deadline` (ADR 0046) lower to the deadline and `timedOut` in
   temporaries, then a join of kind 2: `Builtin(AsyncJoin, [site, 2, body's function, body, until, at])`, a race whose
   second child is lib/core's `AsyncTimeoutJoin<T, E>.until`, an async fn given the deadline `at` as its argument (for
@@ -139,6 +141,10 @@ Lowering rules (HIR → NIR, `NirBuilder`):
   argument, evaluated before the explicit arguments.
 - `while` becomes `cond → body → cond`, and `loop` becomes `body → body`. `break` and `continue`
   jump to the innermost loop's exit or head.
+- `for` over an iterator (HIR `ForNext(variable, the iterator's LocalDecl, the call of next, body)`, ADR 0074 §2.8)
+  becomes: the iterator into its local, with the header's temporaries; then `option = next(&mut iterator)` with its
+  own temporaries ended, `Switch(Discriminant(option))`: `null` to the exit, `Some` to `Unpack(option, Some,
+  [variable])`, the body and back to the call. The iterator and the header's temporaries end at the exit.
 - Statements after a `return`, `break`, `continue`, `Process.exit` or never-typed call are
   unreachable and are not lowered. Blocks with no predecessors are not emitted.
 - Constants are already folded in HIR. NIR performs no optimisation in M1.
@@ -170,6 +176,10 @@ Lowering rules (HIR → NIR, `NirBuilder`):
     - what is dropped depends on the state: whole, nothing, a flagged drop, or per field for a
       partially moved struct;
     - one bool flag per leaf is updated after every statement that changes that leaf's state.
+    - In a run-once function (an `async move` child, type-system.md §36.5, ADR 0074 §2.3), `*env` (local 0's
+      referent) is a move path, tracked from the entry as a box's contents are, but without an allocation leaf. At
+      `StorageDead(env)` the captures still initialised are dropped, whole, flagged or field by field; the backends
+      no longer drop the child's environment after the body, only that of a child that never started.
 
     The C backend emits drop glue `ceeD_<len><Name>(T *)`: the `drop` block, then each field that
     needs drop, in declaration order.

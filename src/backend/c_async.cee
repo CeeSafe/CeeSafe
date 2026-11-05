@@ -118,8 +118,9 @@ fn emitChildThunk(
     e.t("(f)) return false;")?;
     e.emit()?;
     let environment = c.hir.functions[child as usize].closureEnvironment;
-    if (ownsEnvironment(c, child)) {
-        // An `async move` child owns its environment's copy (ADR 0033 §3.3): dropped when it returns.
+    if (ownsEnvironment(c, child) && !isRunOnce(c, child)) {
+        // An `async move` child owns its environment's copy (ADR 0033 §3.3): dropped when it returns. A run-once
+        // body drops what it did not move itself (ADR 0074 §2.3).
         e.t("    ")?;
         appendDropGlueName(c, mut e.buf, environment)?;
         e.t("(&f->cee_env);")?;
@@ -166,6 +167,16 @@ fn ownsEnvironment(c: borrow Checker, child: u32) -> bool {
     let definition = c.types.info(environment).structDef;
     return definition != none() && c.types.structs[definition as usize].isMoveEnvironment &&
         c.types.needsDrop(environment);
+}
+
+/// Whether async closure `child` has a run-once environment (ADR 0074 §2.3): its body drops its captures.
+fn isRunOnce(c: borrow Checker, child: u32) -> bool {
+    let environment = c.hir.functions[child as usize].closureEnvironment;
+    if (environment == none()) {
+        return false;
+    }
+    let definition = c.types.info(environment).structDef;
+    return definition != none() && c.types.structs[definition as usize].isOnceEnvironment;
 }
 
 /// Whether statement `s` is a stacked await (ADR 0056).
@@ -1524,9 +1535,14 @@ fn emitJoin(
         e.t(".f")?;
         e.d(k as u64)?;
         if (childNir != none() && c.hir.functions[child as usize].closureEnvironment != none()) {
+            // An `async move` child's value is its environment, moved into the join (ADR 0074 §2.3).
+            let byValue = !c.types.is(n.operandTypes[n.at(list, 3 + 2 * k) as usize], TypeKind.Reference);
             e.t(", (")?;
             appendCTypeName(c, mut e.buf, n.functions[childNir as usize].locals[0].typ)?;
             e.t(")(uintptr_t)")?;
+            if (byValue) {
+                e.t("&")?;
+            }
             e.b(value.view())?;
         } else if (c.hir.functions[child as usize].closureEnvironment == none() &&
             c.hir.functions[child as usize].parameters.length == 1) {

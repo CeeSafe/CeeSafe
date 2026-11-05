@@ -1,0 +1,18 @@
+// Associated constants in the tree (grammar.md §2, ADR 0074 §2.7): `const` among a struct's members, and in an
+// inherent `impl` among its functions, with their visibility.
+struct Oid {
+    bytes: [u8; 2];
+    public const RSA: [u8; 3] = [1, 2, 3];
+
+    fn first(borrow this) -> u8 => this.bytes[0];
+    const LENGTH: usize = 2;
+}
+
+impl Mode {
+    public const DEFAULT: u32 = 25;
+}
+
+impl Oid {
+    fn length() -> usize => Oid.LENGTH;
+    private const HIDDEN: bool = true;
+}

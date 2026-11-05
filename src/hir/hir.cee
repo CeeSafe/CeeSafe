@@ -165,6 +165,8 @@ enum HirStmt {
     While(u32, u32),
     Loop(u32),
     For(u32, u32, u32, u32), // variable, start, end or none, body
+    // `for` over an iterator (ADR 0074 §2.8): variable, the iterator's LocalDecl, the call of `next` on it, body.
+    ForNext(u32, u32, u32, u32),
     Break,
     Continue,
     Return(u32), // value or none
@@ -208,10 +210,13 @@ struct HirFunction {
     hasInstanceError: bool;
     instanceError: Vector<u8>;
     returnSources: Vector<u32>; // the parameters (by index) a scoped result may borrow from
-    mutableFlows: Vector<u64>;  // (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i
-    environment: Range;         // its type environment (the checker's envPairs)
-    genericEntry: u32;          // for an instance of a generic function: the checker's GenericFunctionEntry, else none
-    methodTemplate: u32;        // for a generic method's generic version: its GenericFunctionEntry, else none (ADR 0064)
+    /// The reference parameters among returnSources whose result is deep (ADR 0074 §2.4): it names only regions of
+    /// the pointee, so it carries the pointee's loans and not the loan of the parameter itself.
+    deepSources: Vector<u32>;
+    mutableFlows: Vector<u64>; // (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i
+    environment: Range;        // its type environment (the checker's envPairs)
+    genericEntry: u32;         // for an instance of a generic function: the checker's GenericFunctionEntry, else none
+    methodTemplate: u32;       // for a generic method's generic version: its GenericFunctionEntry, else none (ADR 0064)
     instantiationDepth: u32;
     siteFile: u32; // where an instance was made, or none
     siteStart: u32;
@@ -410,6 +415,7 @@ struct HirProgram {
             hasInstanceError: false,
             instanceError: Vector<u8>.create(),
             returnSources: Vector<u32>.create(),
+            deepSources: Vector<u32>.create(),
             mutableFlows: Vector<u64>.create(),
             environment: Range { start: 0, count: 0 },
             genericEntry: 0xFFFFFFFF,

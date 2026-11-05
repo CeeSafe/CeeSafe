@@ -1367,7 +1367,8 @@ fn projectionIsDeref(p: NirProjection) -> bool => match (p.kind) {
 };
 
 /// `truncate`, `checkedTruncate` and `saturatingTruncate` from a float (§35.4): toward zero, and for NaN or a value
-/// outside the integer type a panic, null, or the nearest bound (0 for NaN).
+/// outside the integer type a panic, null, or the nearest bound (0 for NaN). The last two also take an integer (ADR
+/// 0074 §2.9): its value if it fits, else null or the nearer bound.
 fn floatToInt(
     it: borrow mut Interp,
     c: borrow Checker,
@@ -1384,9 +1385,22 @@ fn floatToInt(
     };
     let integer = if (checked) c.types.optionType(t) else t;
     let v = operand(it, c, n, frame, value)?;
-    let x = toDouble(c, v, n.operandTypes[value as usize])?;
     let min = intMin(c, integer);
     let max = intMax(c, integer);
+    let operandType = n.operandTypes[value as usize];
+    if (c.types.is(operandType, TypeKind.Integer)) {
+        // An integer operand (ADR 0074 §2.9): the value if it fits, else null or the nearer bound.
+        let exact = integerOf(c, v, operandType)?;
+        if (inRange(c, exact, integer)) {
+            let result = fromInteger(c, exact, integer)?;
+            return if (checked) someValue(c, t, result) else Ok(result);
+        }
+        if (checked) {
+            return noneValue(c, t);
+        }
+        return fromInteger(c, if (exact.negative) min else max, integer);
+    }
+    let x = toDouble(c, v, operandType)?;
     let finite = x == x && x - x == 0.0;
     if (finite) {
         let truncated = if (x < 0.0) -(-x).floor() else x.floor();

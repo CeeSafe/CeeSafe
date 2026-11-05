@@ -790,6 +790,28 @@ fn emitStatement(
                             appendOptionValue(e, c, mut some, optionType, true, "cee_r".bytes())?;
                             var missing = Vector<u8>.create();
                             appendOptionValue(e, c, mut missing, optionType, false, "".bytes())?;
+                            let operandType = n.operandTypes[o as usize];
+                            if (c.types.is(operandType, TypeKind.Integer)) {
+                                // From an integer (ADR 0074 §2.9): converted only once it is known to fit.
+                                var fits = Vector<u8>.create();
+                                appendIntFitsTest(c, mut fits, operandType, integer, operand.view())?;
+                                e.t("      if (")?;
+                                e.b(fits.view())?;
+                                e.t(") { cee_r = (")?;
+                                appendCTypeName(c, mut e.buf, integer)?;
+                                e.t(")(")?;
+                                e.b(operand.view())?;
+                                e.t("); ")?;
+                                e.b(place.view())?;
+                                e.t(" = ")?;
+                                e.b(some.view())?;
+                                e.t("; } else { ")?;
+                                e.b(place.view())?;
+                                e.t(" = ")?;
+                                e.b(missing.view())?;
+                                e.t("; } }")?;
+                                return e.emit();
+                            }
                             e.t("      ")?;
                             e.b(place.view())?;
                             e.t(" = cee_try_ftoi_")?;
@@ -1647,6 +1669,10 @@ fn appendRvalue(
         }
         NirRvalue.FloatToInt(o, kind) => {
             let operand = operandText(e, c, n, sources, f, o)?;
+            let operandType = n.operandTypes[o as usize];
+            if (c.types.is(operandType, TypeKind.Integer)) {
+                return appendIntSaturation(c, out, operandType, t, operand.view()); // ADR 0074 §2.9
+            }
             match (kind) {
                 FloatToIntKind.Saturating => {
                     appendText(out, "cee_sat_ftoi_")?;
@@ -2953,4 +2979,123 @@ fn isImportedByteMember(c: borrow Checker, n: borrow NirProgram, f: u32, place: 
         owner = applyNirProjection(c, owner, n.projections[(p.projections.start + k) as usize]);
     }
     return c.types.is(owner, TypeKind.Struct) && c.types.structs[c.types.info(owner).structDef as usize].isImported;
+}
+
+// ---- Integer to integer conversions (checkedTruncate and saturatingTruncate, ADR 0074 §2.9) ----
+
+/// Whether integer type `from` has a value below `to`'s least (IntBelowNeeded).
+fn intBelowPossible(c: borrow Checker, from: u32, to: u32) -> bool {
+    let source = c.types.info(from);
+    let target = c.types.info(to);
+    return if (target.signed) source.signed && source.bits > target.bits else source.signed;
+}
+
+/// Whether integer type `from` has a value above `to`'s greatest (IntAboveNeeded).
+fn intAbovePossible(c: borrow Checker, from: u32, to: u32) -> bool {
+    let source = c.types.info(from);
+    let target = c.types.info(to);
+    let sourceValueBits = if (source.signed) source.bits - 1 else source.bits;
+    let targetValueBits = if (target.signed) target.bits - 1 else target.bits;
+    return sourceValueBits > targetValueBits;
+}
+
+/// A bound of integer type `t` as a C constant of type `holder`: `(int64_t)INT32_MIN`, `(uint16_t)0`. `holder` has
+/// the value whenever the bound is tested.
+fn appendIntBound(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    t: u32,
+    greatest: bool,
+    holder: u32,
+) -> Result<void, AllocError> {
+    let info = c.types.info(t);
+    out.push('(')?;
+    out.push('(')?;
+    appendCTypeName(c, out, holder)?;
+    out.push(')')?;
+    if (!greatest && !info.signed) {
+        out.push('0')?;
+    } else {
+        appendText(out, if (info.signed) "INT" else "UINT")?;
+        appendDecimal(out, info.bits as u64)?;
+        appendText(out, if (greatest) "_MAX" else "_MIN")?;
+    }
+    return out.push(')');
+}
+
+/// `v < least` or `v > greatest` of `to`, compared in `from`'s own type.
+fn appendIntOutside(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    from: u32,
+    to: u32,
+    operand: Slice<u8>,
+    greatest: bool,
+) -> Result<void, AllocError> {
+    out.push('(')?;
+    appendBytes(out, operand)?;
+    appendText(out, if (greatest) " > " else " < ")?;
+    appendIntBound(c, out, to, greatest, from)?;
+    return out.push(')');
+}
+
+/// The C test that integer `operand` of type `from` lies in `to`'s range (IntFitsTest): `1` when it always does. Only
+/// the bounds `from` can pass are tested, each against a constant of `from`'s type, so no comparison mixes signedness
+/// and none is always true.
+fn appendIntFitsTest(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    from: u32,
+    to: u32,
+    operand: Slice<u8>,
+) -> Result<void, AllocError> {
+    let below = intBelowPossible(c, from, to);
+    let above = intAbovePossible(c, from, to);
+    if (!below && !above) {
+        return out.push('1');
+    }
+    out.push('!')?;
+    out.push('(')?;
+    if (below) {
+        appendIntOutside(c, out, from, to, operand, false)?;
+    }
+    if (below && above) {
+        appendText(out, " || ")?;
+    }
+    if (above) {
+        appendIntOutside(c, out, from, to, operand, true)?;
+    }
+    return out.push(')');
+}
+
+/// `saturatingTruncate<to>(operand)` of an integer (IntSaturation): the nearer bound when the value is outside `to`'s
+/// range, else the value, converted only once it fits.
+fn appendIntSaturation(
+    c: borrow Checker,
+    out: borrow mut Vector<u8>,
+    from: u32,
+    to: u32,
+    operand: Slice<u8>,
+) -> Result<void, AllocError> {
+    out.push('(')?;
+    appendCTypeName(c, out, to)?;
+    appendText(out, ")(")?;
+    if (intBelowPossible(c, from, to)) {
+        appendIntOutside(c, out, from, to, operand, false)?;
+        appendText(out, " ? ")?;
+        appendIntBound(c, out, to, false, to)?;
+        appendText(out, " : ")?;
+    }
+    if (intAbovePossible(c, from, to)) {
+        appendIntOutside(c, out, from, to, operand, true)?;
+        appendText(out, " ? ")?;
+        appendIntBound(c, out, to, true, to)?;
+        appendText(out, " : ")?;
+    }
+    out.push('(')?;
+    appendCTypeName(c, out, to)?;
+    appendText(out, ")(")?;
+    appendBytes(out, operand)?;
+    out.push(')')?;
+    return out.push(')');
 }

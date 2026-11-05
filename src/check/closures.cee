@@ -542,6 +542,7 @@ fn returnTypes(c: borrow Checker, stmt: u32, out: borrow mut Vector<u32>) -> Res
         HirStmt.While(_, body) => { returnTypes(c, body, out)?; }
         HirStmt.Loop(body) => { returnTypes(c, body, out)?; }
         HirStmt.For(_, _, _, body) => { returnTypes(c, body, out)?; }
+        HirStmt.ForNext(_, _, _, body) => { returnTypes(c, body, out)?; }
         HirStmt.Match(_, arms, _, _) => {
             for (k in 0..arms.count) {
                 returnTypes(c, c.hir.arms[c.hir.at(arms, k) as usize].body, out)?;
@@ -571,6 +572,7 @@ fn returnsValue(c: borrow Checker, stmt: u32) -> bool {
         HirStmt.While(_, body) => { return returnsValue(c, body); }
         HirStmt.Loop(body) => { return returnsValue(c, body); }
         HirStmt.For(_, _, _, body) => { return returnsValue(c, body); }
+        HirStmt.ForNext(_, _, _, body) => { return returnsValue(c, body); }
         HirStmt.Match(_, arms, _, _) => {
             for (k in 0..arms.count) {
                 if (returnsValue(c, c.hir.arms[c.hir.at(arms, k) as usize].body)) {
@@ -908,6 +910,11 @@ fn walkStmt(c: borrow Checker, s: u32, walk: borrow mut FieldWalk) -> Result<voi
             if (end != none()) {
                 walkExpr(c, end, none(), none(), walk)?;
             }
+            walkStmt(c, body, walk)?;
+        }
+        HirStmt.ForNext(_, declaration, next, body) => {
+            walkStmt(c, declaration, walk)?;
+            walkExpr(c, next, none(), none(), walk)?;
             walkStmt(c, body, walk)?;
         }
         HirStmt.Return(value) => {

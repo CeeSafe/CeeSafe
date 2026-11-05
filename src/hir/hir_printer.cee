@@ -291,6 +291,15 @@ struct HirPrinter {
                 }
                 this.nested(hir, types, symbols, p.out, body)?;
             }
+            HirStmt.ForNext(variable, declaration, next, body) => {
+                this.stmt(hir, types, symbols, declaration)?;
+                var p = HirPrinter.create();
+                p.text("for ")?;
+                p.local(hir, symbols, variable)?;
+                p.text(" in next ")?;
+                p.expr(hir, types, symbols, next)?;
+                this.nested(hir, types, symbols, p.out, body)?;
+            }
             HirStmt.Break => { this.line("(break)")?; }
             HirStmt.Continue => { this.line("(continue)")?; }
             HirStmt.Return(value) => {

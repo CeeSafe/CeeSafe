@@ -185,6 +185,12 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - `truncate<T>(e)`: `e` of any integer type, `T` any integer type. The result is `e`
   modulo 2^bits(T), reinterpreted in `T` (two's complement). It is always defined. Use it for
   narrowing and for signed↔unsigned reinterpretation.
+- `checkedTruncate<T>(e)` and `saturatingTruncate<T>(e)` (ADR 0074 §2.9): `e` of any integer type, `T` any integer
+  type. `checkedTruncate` gives `T?`: `e`'s value when `T` holds it, else `null`. `saturatingTruncate` gives `T`:
+  `e`'s value when `T` holds it, else `T`'s least value for an `e` below `T`'s range and its greatest for one above.
+  Both are always defined. They also convert floats (§35.4).
+- The three spellings say what may happen to the value: `as` never loses information; `truncate` wraps;
+  `checkedTruncate` and `saturatingTruncate` check or clamp (`checkedTruncate<i64>(n)!` for a `usize` `n`).
 
 ## 8. Calls and statements
 
@@ -673,7 +679,7 @@ struct literal.
     directly, a struct's static function (`Table.at(i)`), or a method on `this`, a parameter or an earlier local
     (`list.host(i)`). The decision is syntactic and made before the body is checked;
     locals cannot be shadowed (N0203), so the name means `i` throughout.
-- `for (x in seq) { … }`: `seq` is an array place, a slice, or a reference to an array. `x` is a copy
+- `for (x in seq) { … }`: `seq` is an array place, a slice, a reference to an array, or an iterator (below). `x` is a copy
   of each element from index 0 upward. The element is read when the loop reaches it, and the
   length is read once at the start.
 - **Non-Copy elements** (M11, G2): when the element type `T` is not Copy, `x` is a `borrow T` to the element, in
@@ -681,9 +687,22 @@ struct literal.
   borrow checker treats it as a shared borrow of that element for as long as `x` is used. While it lives, the
   sequence cannot be changed (§13.4, §23.1). A Copy element is still copied, as before.
 - `break` and `continue` behave as in `while`. `continue` proceeds to the next element.
+- **Iterators** (ADR 0074 §2.8). `for (x in e) { … }`, where `e`'s type is a struct, or a `borrow mut` of one, with a
+  method `next(borrow mut this) -> T?` (its own or an impl's, with no other parameter and no type parameter), calls
+  `next` until it returns `null`:
+  - `e` is evaluated once, before the first pass, into a hidden local of the loop's header. That local and `e`'s
+    temporaries live until the loop exits (ADR 0073 §2.1), and are destroyed then, the iterator first. A value `e`
+    moves into the loop; a `borrow mut` `e` is reborrowed, and the iterator keeps its state after the loop.
+  - Each pass borrows the iterator mutably only for the call to `next`, whose temporaries end before the body. The
+    body may use what the iterator borrows as a shared borrow (`text` in `for (part in text.split(",")) { … }`), but
+    not change it while the iterator lives (N0241).
+  - On `Some(v)`, `x` takes `v` (moved: `x` owns a non-Copy `T`), with type `T` and the region of `next`'s result.
+  - `continue` proceeds to the next call of `next`; `break` leaves the loop.
+  - No interface is involved: the method's shape is the rule. A struct without such a `next`, or whose `next` has
+    another shape, is N0205, naming the expected signature. A shared reference to an iterator is N0248.
 
 - The loop variable is immutable. It has the bounds' type for a range, and the element type
-  for a sequence (or `borrow T`, above). Like every local, it cannot shadow another (N0203).
+  for a sequence (or `borrow T`, above), and `next`'s payload type for an iterator. Like every local, it cannot shadow another (N0203).
 
 ### 16.5 Bulk operations (M9b)
 Two methods write a whole slice in one operation. A program computes the same thing with them as with
@@ -2926,8 +2945,9 @@ fn main() {
 - **`checkedTruncate<T>(e)`**: as `truncate`, but the result is `T?`, `null` where `truncate` would panic.
 - **`saturatingTruncate<T>(e)`**: as `truncate`, but a value below `T`'s range gives its minimum and one above gives
   its maximum. NaN gives 0. It never panics.
-- `checkedTruncate` and `saturatingTruncate` need a float `e` and an integer `T`, and `round` a float `T` (N0207
-  otherwise). All four take exactly one type argument (N0216).
+- `checkedTruncate` and `saturatingTruncate` need a float or integer `e` (an integer `e` converts as in §7, ADR 0074
+  §2.9) and an integer `T`, and `round` a float `T` (N0207 otherwise). All four take exactly one type argument
+  (N0216).
 
 ### 35.5 Representation
 - `f.bits()` is the IEEE representation of `f`: a `u32` for `f32`, a `u64` for `f64`. `f32.fromBits(u)` (`u: u32`) and

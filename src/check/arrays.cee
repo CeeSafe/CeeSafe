@@ -471,9 +471,13 @@ fn allConstant(c: borrow Checker, elements: Range) -> bool {
 }
 
 /// `for (x in a)` over an array or slice (CheckFor's sequence case): the start, and the variable's type.
-fn forSequence(c: borrow mut Checker, startSyntax: u32, variableType: borrow mut u32) -> Result<u32, AllocError> {
+fn forSequence(
+    c: borrow mut Checker,
+    startSyntax: u32,
+    sequence: u32,
+    variableType: borrow mut u32,
+) -> Result<u32, AllocError> {
     let span = c.front.ast.exprSpans[startSyntax as usize];
-    let sequence = synth(c, startSyntax, none())?;
     var vector = sequence;
     loop {
         let t = c.typeOf(vector);
@@ -511,7 +515,10 @@ fn forSequence(c: borrow mut Checker, startSyntax: u32, variableType: borrow mut
         c.error(typeMismatch(), span.start, span.end, message)?;
     } else if (!c.types.isBottom(st) && !c.types.is(st, TypeKind.Array)) {
         var message = Vector<u8>.create();
-        appendText(mut message, "'for' iterates over an array, a slice or a range 'a..b'; found ")?;
+        appendText(
+            mut message,
+            "'for' iterates over an array, a slice, a range 'a..b' or an iterator (a struct with 'fn next(borrow mut this) -> T?'); found ",
+        )?;
         appendQuotedType(mut message, c, st)?;
         c.error(typeMismatch(), span.start, span.end, message)?;
     }

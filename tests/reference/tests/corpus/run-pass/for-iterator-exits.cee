@@ -1,0 +1,53 @@
+// `for` over an iterator (ADR 0074 §2.8): a `return` from the body destroys the iterator; an iterator whose source
+// is an owned local; nested iterator loops in a closure.
+struct Noisy {
+    left: i32;
+    drop { Console.writeLine("iterator dropped"); }
+    fn next(borrow mut this) -> i32? {
+        if (this.left == 0) { return null; }
+        this.left -= 1;
+        return this.left;
+    }
+}
+
+fn firstBelow(limit: i32) -> i32 {
+    for (n in Noisy { left: 10 }) {
+        if (n < limit) {
+            return n;
+        }
+    }
+    return -1;
+}
+
+fn parse(text: StringView) -> Result<i32, AllocError> {
+    var total = 0;
+    var line = String.create();
+    line.append(text)?;
+    for (part in line.view().split(" ")) {
+        total += truncate<i32>(part.length);
+    }
+    return Ok(total);
+}
+
+fn apply(f: borrow fn() -> i32) -> i32 {
+    return f();
+}
+
+fn main() {
+    Console.writeLine(firstBelow(7));
+    Console.writeLine(parse("ab cde f")!);
+    let text = "x\ny,w\nz";
+    Console.writeLine(apply(() => {
+        var k = 0;
+        for (l in text.split("\n")) {
+            for (c in l.split(",")) {
+                k += 1;
+            }
+        }
+        return k;
+    }));
+}
+// expect-stdout: iterator dropped
+// expect-stdout: 6
+// expect-stdout: 6
+// expect-stdout: 4

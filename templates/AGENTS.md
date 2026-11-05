@@ -51,7 +51,12 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - `if` and `match` expressions take expressions, `let s = if (x < 0) -1 else 1;`, or blocks that end with their value
   without `;`; a statement's block has no value.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.
-- `as` converts only without loss; `truncate<u8>(x)` wraps.
+- `as` converts only without loss; `truncate<u8>(x)` wraps; `checkedTruncate<i64>(n)` (an optional) and
+  `saturatingTruncate<u8>(n)` check or clamp, for integers and floats.
+- `for (part in text.split(","))` loops over any value with `fn next(borrow mut this) -> T?`.
+- A multi-line string is a raw `"""` literal: the closing `"""` line's indentation is removed, and there are no escapes.
+- A function that always exits returns `never`: `fn die(m: StringView) -> never { …; Process.exit(1); }`.
+- An `async move` child (`s.spawn`, `set.spawn`, `Async.timeout`/`race`/`all`) owns its captures and may move them.
 - A view of a temporary, `make().view()`, lasts until the end of its statement: to keep it, bind the value to a local.
 - There is no string interpolation: `"x = {x}"` prints `{x}` (warning N0400); write the value in a call of its own.
 - Pass a function or closure as a parameter and call the parameter; a field holding one cannot be called.

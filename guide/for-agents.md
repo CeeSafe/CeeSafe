@@ -340,6 +340,94 @@ fn main() {
 x = 3
 ```
 
+### A multi-line string is a raw `"""` literal
+
+A `"..."` literal ends on its line. For several lines, open with `"""` at the end of a line and close with `"""` on a
+line of its own. The closing line's indentation is removed from every line, there is no final newline, and there are
+no escapes:
+
+```ceesafe
+fn main() {
+    let query = """
+        SELECT id, name
+          FROM users
+        """;
+    Console.writeLine(query);
+}
+```
+
+```text
+SELECT id, name
+  FROM users
+```
+
+### `for` loops over iterators too
+
+`for` takes arrays, slices, ranges, and any value with `fn next(borrow mut this) -> T?`, such as a `split`:
+
+```ceesafe
+fn main() {
+    let text = "a,b,c";
+    for (part in text.split(",")) {
+        Console.writeLine(part);
+    }
+}
+```
+
+```text
+a
+b
+c
+```
+
+### A function that always exits returns `never`
+
+A call of a `never` function ends its branch, so a `match` that gives a value needs no value from that branch:
+
+```ceesafe
+fn die(message: StringView) -> never {
+    Console.writeLine(message);
+    Process.exit(1);
+}
+
+fn main() {
+    let n: Result<u32, u32> = Ok(7);
+    let value = match (n) {
+        Ok(v) => v,
+        Err(_) => {
+            die("no number");
+        }
+    };
+    Console.writeLine(value);
+}
+```
+
+```text
+7
+```
+
+### Converting with a check: `checkedTruncate` and `saturatingTruncate`
+
+`as` only allows conversions that never lose information, so `usize` to `i64` is not one. `checkedTruncate<T>(x)` is
+`null` when the value does not fit, and `saturatingTruncate<T>(x)` clamps it:
+
+```ceesafe
+fn main() {
+    let n: usize = 300;
+    let wide = checkedTruncate<i64>(n) ?? -1;
+    let small = checkedTruncate<u8>(n) ?? 0;
+    Console.writeLine(wide);
+    Console.writeLine(small);
+    Console.writeLine(saturatingTruncate<u8>(n));
+}
+```
+
+```text
+300
+0
+255
+```
+
 ### A function in a field is not called through the field
 
 <!-- ceesafe: fail N0210 -->

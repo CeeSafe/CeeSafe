@@ -1499,7 +1499,9 @@ fn synthCast(c: borrow mut Checker, operandSyntax: u32, typeSyntax: u32, span: S
         appendQuotedType(mut message, c, target)?;
         appendText(mut message, " with 'as': 'as' only allows conversions that never lose information")?;
         if (integers) {
-            appendText(mut message, "; use truncate<")?;
+            appendText(mut message, "; use checkedTruncate<")?;
+            appendBytes(mut message, c.typeName(target))?;
+            appendText(mut message, ">(...) for an optional that is null when it does not fit, or truncate<")?;
             appendBytes(mut message, c.typeName(target))?;
             appendText(mut message, ">(...) to convert with wrap-around")?;
             // `(a + b) as u8` → `truncate<u8>(a + b)`: the operand's text, without its parentheses.

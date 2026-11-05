@@ -64,6 +64,7 @@ enum BinaryOp {
     Multiply,
     Divide,
     Remainder,
+    Coalesce, // `a ?? b` (ADR 0072); the checker lowers it to a match
 }
 
 enum AssignOp {

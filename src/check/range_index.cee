@@ -1,6 +1,7 @@
 // IndexesWith (type-system.md §16.4, ADR 0063): does a `for` body index with its loop variable? It does where the
 // variable is an index or a slice bound, or an operand of `+ - * / %` that is one (`a[i]`, `a[i * w + x]`,
-// `a[lo..i + 1]`); not inside a call, cast, comparison or condition there. A range whose bounds are both flexible
+// `a[lo..i + 1]`); not inside a call, cast, comparison or condition there. It also does where the variable is passed
+// directly for a `usize` parameter of a callee known before the body is checked (ADR 0072 §2.5). A range whose bounds are both flexible
 // literals is then `usize`, the index type, instead of `i32`. The scan is syntactic, over the body's AST, before the
 // body is checked: locals cannot be shadowed (N0203), so the name means the variable everywhere in the body, nested
 // closures included.
@@ -78,7 +79,8 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
         }
         ExprNode.Cast(operand, _) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.Call(callee, arguments) => {
-            return indexesIn(c, callee, symbol, false) || indexesInList(c, arguments, symbol, false);
+            return passesAsUsize(c, callee, arguments, symbol) || indexesIn(c, callee, symbol, false) ||
+                indexesInList(c, arguments, symbol, false);
         }
         ExprNode.Member(target, _) => { return indexesIn(c, target, symbol, false); }
         ExprNode.Unsafe(inner) => { return indexesIn(c, inner, symbol, false); }
@@ -132,4 +134,98 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
         ExprNode.Await(operand) => { return indexesIn(c, operand, symbol, false); }
         _ => { return false; }
     }
+}
+
+/// Whether the call passes `symbol` directly as an argument for a `usize` parameter (ADR 0072 §2.5). The callee must
+/// be known before the body is checked: a function named directly, a struct's static function (`Table.at(i)`), or a
+/// method on `this`, a parameter or a local declared before the loop (`list.host(i)`).
+fn passesAsUsize(c: borrow Checker, callee: u32, arguments: Range, symbol: u32) -> bool {
+    var function = none();
+    var skip: usize = 0;
+    match (c.front.ast.exprs[callee as usize]) {
+        ExprNode.Name(name, _) => {
+            let named = c.front.ast.idents[name as usize].symbol;
+            if (localNamed(c, named) == none()) {
+                match (c.item(named)) {
+                    Entity.Function(f) => { function = f; }
+                    _ => {}
+                }
+            }
+        }
+        ExprNode.Member(target, member) => {
+            let method = c.front.ast.idents[member as usize].symbol;
+            var receiverType = none();
+            match (c.front.ast.exprs[target as usize]) {
+                ExprNode.This => {
+                    if (c.function != none() && isMethod(c, c.function)) {
+                        receiverType = c.hir.locals[c.hir.functions[c.function as usize].parameters[0] as usize].typ;
+                    }
+                }
+                ExprNode.Name(name, _) => {
+                    let named = c.front.ast.idents[name as usize].symbol;
+                    let local = localNamed(c, named);
+                    if (local != none()) {
+                        receiverType = c.hir.locals[local as usize].typ;
+                    } else {
+                        match (c.item(named)) {
+                            Entity.Struct(s) => {
+                                let definition = c.types.info(c.structs[s as usize].typ).structDef;
+                                if (definition != none()) {
+                                    let f = findStructFunction(c, definition, method);
+                                    if (f != none() && !isMethod(c, f)) {
+                                        function = f;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if (receiverType != none()) {
+                let structType = if (c.types.is(receiverType, TypeKind.Reference)) c.types.info(
+                    receiverType,
+                ).pointee else receiverType;
+                let definition = c.types.info(structType).structDef;
+                if (definition != none()) {
+                    let f = findStructFunction(c, definition, method);
+                    if (f != none() && isMethod(c, f)) {
+                        function = f;
+                        skip = 1;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if (function == none()) {
+        return false;
+    }
+    let parameters = borrow c.hir.functions[function as usize].parameters;
+    let usizeType = c.types.usize;
+    for (k in 0..arguments.count) {
+        let argument = c.front.ast.at(arguments, k);
+        let direct = match (c.front.ast.exprs[argument as usize]) {
+            ExprNode.Name(name, _) => c.front.ast.idents[name as usize].symbol == symbol,
+            _ => false,
+        };
+        let p = skip + k as usize;
+        if (direct && p < parameters.length && c.hir.locals[parameters[p] as usize].typ == usizeType) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The local in scope named `symbol`, or none (a lookup that records no capture).
+fn localNamed(c: borrow Checker, symbol: u32) -> u32 {
+    var i = c.scopes.length;
+    while (i > 0) {
+        i -= 1;
+        if (c.scopes[i].symbol == symbol) {
+            return c.scopes[i].local;
+        }
+    }
+    return none();
 }

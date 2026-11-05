@@ -2035,6 +2035,13 @@ fn lowerRvalueCore(
             if (!lowerOperands(c, n, b, range, mut operands)?) {
                 return Ok(none());
             }
+            let operandType = c.hir.exprTypes[left as usize];
+            if (c.types.is(operandType, TypeKind.Enum)) {
+                // Fieldless enums (ADR 0072 §2.3): their tags compare.
+                let l = enumTag(c, n, b, operands[0], operandType, span)?;
+                let r = enumTag(c, n, b, operands[1], operandType, span)?;
+                return n.rvalue(NirRvalue.Binary(op, l, r), typ, span);
+            }
             return n.rvalue(NirRvalue.Binary(op, operands[0], operands[1]), typ, span);
         }
         HirExpr.Cast(operand) => {
@@ -2309,6 +2316,30 @@ fn checkByteRange(
 
 /// `await f(…)` and `Async.run(f(…))` (type-system.md §40): the task's call, lowered as a call and marked with its role,
 /// so the ownership and effect analyses see a call (intermediate-representation.md §3).
+/// The tag of an enum operand, as a u32 operand (a fieldless enum's `==`, ADR 0072 §2.3).
+fn enumTag(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    operand: u32,
+    enumType: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var place = operandPlace(n, operand);
+    if (place == none()) {
+        let value = newTemp(b, enumType)?;
+        place = localPlace(n, value)?;
+        let use = n.rvalue(NirRvalue.Use(operand), enumType, span)?;
+        assign(n, b, place, use)?;
+    }
+    let u32Type = c.types.u32;
+    let tag = newTemp(b, u32Type)?;
+    let tagPlace = localPlace(n, tag)?;
+    let discriminant = n.rvalue(NirRvalue.Discriminant(place), u32Type, span)?;
+    assign(n, b, tagPlace, discriminant)?;
+    return placeOperand(c, n, b, tagPlace);
+}
+
 fn lowerTaskCall(
     c: borrow mut Checker,
     n: borrow mut NirProgram,

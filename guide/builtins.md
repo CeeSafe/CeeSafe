@@ -11,11 +11,15 @@ and run by the guide's checks, so the names and signatures are the compiler's. W
 | Function | Type |
 |---|---|
 | `Console.write(x)`, `Console.writeLine(x)` | `x` an integer, float, `bool`, `StringView` or `String` |
-| `Console.writeBytes(bytes)` | `bytes: Slice<u8>`, raw bytes to standard output |
+| `Console.writeBytes(bytes)` | `bytes: Slice<u8>`, raw bytes to standard output, UTF-8 or not |
 | `Console.writeError(text)`, `Console.writeErrorLine(text)` | `text: StringView`, to standard error |
 | `Console.read(mut buffer)` | `Result<usize, IoError>`; `0` at the end of input |
 
 `Console` blocks its thread: in an `async fn`, use lib/std's `AsyncConsole` (N0295 otherwise).
+
+`Console.write` takes text, which is always UTF-8. Bytes from a file or the network may not be:
+`StringView.fromUtf8(bytes)!` stops the program on them. To pass them through as they are, write them with
+`Console.writeBytes(bytes)`.
 
 ```ceesafe
 fn main() {

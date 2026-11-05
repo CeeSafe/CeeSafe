@@ -1,0 +1,56 @@
+// ADR 0072 §2.5: a literal range passed to a `usize` parameter is `usize`; `.length` of a `const` array; `let _`.
+struct List {
+    n: usize;
+
+    fn count(borrow this) -> usize => this.n;
+    fn host(borrow this, i: usize) -> usize => i * 10;
+    fn sum(borrow this) -> usize {
+        var total: usize = 0;
+        for (i in 0..3) {
+            total += this.host(i);
+        }
+        return total;
+    }
+    fn twice(i: usize) -> usize => i * 2;
+}
+
+const TABLE: [u32; 4] = [1, 2, 3, 4];
+
+fn appendNumber(n: usize) -> usize => n + 1;
+
+fn noisy(n: i32) -> i32 {
+    Console.writeLine(n);
+    return n;
+}
+
+fn main() {
+    let list = List { n: 2 };
+    var total: usize = 0;
+    for (i in 0..25) {
+        total += appendNumber(i);
+    }
+    Console.writeLine(total);
+    for (i in 0..2) {
+        Console.writeLine(list.host(i));
+        Console.writeLine(List.twice(i));
+    }
+    Console.writeLine(list.sum());
+    Console.writeLine(TABLE.length);
+    Console.writeLine([7u8, 8, 9].length);
+    let _ = noisy(5);
+    let _ = noisy(6) + 1;
+    var s = String.create();
+    s.append("dropped")!;
+    let _ = s;
+}
+
+// expect-stdout: 325
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 10
+// expect-stdout: 2
+// expect-stdout: 30
+// expect-stdout: 4
+// expect-stdout: 3
+// expect-stdout: 5
+// expect-stdout: 6

@@ -1,0 +1,56 @@
+// `==` and `!=` (ADR 0072 §2.3–§2.4) on fieldless enums, slices, a vector against a slice, and arrays, temporaries
+// included.
+enum Kind { User, Alias, List }
+
+struct Rcpt {
+    kind: Kind;
+}
+
+fn kindOf(n: i32) -> Kind => if (n == 0) Kind.User else Kind.List;
+
+fn digest(seed: u8) -> [u8; 4] => [seed, 2, 3, 4];
+
+fn main() {
+    let k = Kind.Alias;
+    Console.writeLine(k == Kind.Alias);
+    Console.writeLine(k != Kind.Alias);
+    Console.writeLine(kindOf(0) == Kind.User);
+    let r = Rcpt { kind: Kind.List };
+    Console.writeLine(r.kind == kindOf(1));
+    let tag = "BODY[]".bytes();
+    let other = "BODY[]".bytes();
+    Console.writeLine(tag == other);
+    Console.writeLine(tag == "BODY".bytes());
+    var v = Vector<u8>.create();
+    v.extend(tag)!;
+    Console.writeLine(v == tag);
+    Console.writeLine(tag != v);
+    let a = [1u32, 2, 3];
+    let b = [1u32, 2, 4];
+    Console.writeLine(a == b);
+    Console.writeLine(a[..2] == b[..2]);
+    Console.writeLine(digest(1) == [1u8, 2, 3, 4]);
+    Console.writeLine(digest(9) == digest(1));
+    let kinds = [Kind.User, Kind.List];
+    let more = [Kind.User, Kind.List];
+    Console.writeLine(kinds == more);
+    Console.writeLine([true, false] == [true, false]);
+    let empty: Slice<u8> = tag[0..0];
+    Console.writeLine(empty == other[3..3]);
+}
+
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

@@ -395,8 +395,8 @@ fn arrayMember(c: borrow mut Checker, value: u32, through: u32, member: u32, spa
         };
         return c.expr(HirExpr.SliceLength(reference), usize, span.start, span.end);
     }
-    if (toPlace(c, value)? == none()) {
-        // The constant would skip evaluating the array (and any calls in it).
+    if (!isConstantArray(c, value) && toPlace(c, value)? == none()) {
+        // The constant would skip evaluating the array (and any calls in it); a constant's has none (ADR 0072 §2.5).
         var message = Vector<u8>.create();
         appendText(mut message, "'length' needs an array variable or field; bind the value to a local first")?;
         c.error(unsupported(), span.start, span.end, message)?;
@@ -409,6 +409,26 @@ fn arrayMember(c: borrow mut Checker, value: u32, through: u32, member: u32, spa
         span.start,
         span.end,
     );
+}
+
+/// An array value with nothing to evaluate: a `const` array's use, or a literal of constants (ADR 0072 §2.5).
+fn isConstantArray(c: borrow Checker, value: u32) -> bool => match (c.hir.exprs[value as usize]) {
+    HirExpr.IntConst(_) => true,
+    HirExpr.BoolConst(_) => true,
+    HirExpr.FloatConst(_) => true,
+    HirExpr.StringConst(_) => true,
+    HirExpr.ArrayRepeat(repeated) => isConstantArray(c, repeated),
+    HirExpr.ArrayLiteral(elements) => allConstant(c, elements),
+    _ => false,
+};
+
+fn allConstant(c: borrow Checker, elements: Range) -> bool {
+    for (k in 0..elements.count) {
+        if (!isConstantArray(c, c.hir.at(elements, k))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// `for (x in a)` over an array or slice (CheckFor's sequence case): the start, and the variable's type.

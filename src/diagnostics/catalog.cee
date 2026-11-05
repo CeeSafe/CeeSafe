@@ -34,7 +34,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     205 => "Type mismatch against the expected type",
     206 => "Integer literal out of range for its type",
     207 =>
-        "Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values)",
+        "Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072)",
     208 => "`as` conversion that can lose information",
     209 => "Wrong number of arguments",
     210 => "Not callable, or a function or built-in used as a value",
@@ -63,7 +63,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     231 => "Field initialised twice in a literal",
     232 => "`this` outside a method, or a `this` parameter outside a struct",
     233 => "Method called as a static function, or a static function called on a value",
-    234 => "Field access, method call or literal on something that is not a struct",
+    234 =>
+        "Field access, method call or literal on something that is not a struct (an optional has only `isSome` and `isNull`, ADR 0072)",
     235 => "A block branch of an `if` or `match` expression can complete, so it has no value (type-system.md §15.3)",
     236 =>
         "A closure whose type cannot be inferred: a parameter without a type, or a block body returning a value, where no function or closure type is expected (type-system.md §36.2)",
@@ -90,12 +91,13 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5)",
+        "Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
         "`?` in a function that does not return a `Result` with the same error type; `?` on an optional in a function that does not return an optional (M6c)",
-    262 => "`?` or `!` on something that is not a `Result` or optional value (a reference to one included)",
+    262 =>
+        "`?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional",
     263 =>
         "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`)",
     264 =>
@@ -181,7 +183,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     341 =>
         "`await` outside the body of an async fn or async closure: in a sync function or closure, a `drop` block or a deferred statement (`type-system.md` §40.2, ADR 0031)",
     342 =>
-        "A task that is not awaited, run or spawned: a call of an async fn, an async closure, or a call with an async closure for an `@effectsOf` parameter, anywhere else; an `await` whose operand is not a task; or an `@effectsOf` function that uses such a closure other than by calling it or passing it on to an `@effectsOf` parameter (`type-system.md` §40.1, §40.3, §32.5)",
+        "A task that is not awaited, run or spawned: a call of an async fn, an async closure, or a call with an async closure for an `@effectsOf` parameter, anywhere else; an `await` whose operand is not a task; an `Async.run` or `Async.runWorkers` operand that is not a call of an async fn (`Async.run(Async.scope(…))`); or an `@effectsOf` function that uses such a closure other than by calling it or passing it on to an `@effectsOf` parameter (`type-system.md` §40.1, §40.3, §32.5)",
     343 =>
         "Recursion through `await` where no frame stack takes it (ADR 0056): in the freestanding profile, an async fn whose frame would contain itself, directly or through a call through `dyn` that may reach it; in any profile, a cycle through a `race` or `all` child, or an `@effectsOf` function's async instance calling itself with its closure (`type-system.md` §40.1, §32.5, ADRs 0036, 0037)",
     344 =>

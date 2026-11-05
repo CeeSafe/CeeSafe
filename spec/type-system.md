@@ -69,6 +69,8 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
 ## 3. Bindings and mutability
 
 - `let x = e;` declares an immutable local and **requires** an initialiser (N0220).
+- `let _ = e;` (ADR 0072) binds nothing: `e`, any expression, is evaluated and its value destroyed at the end of the
+  statement (a non-Copy value is consumed). `_` may be used any number of times; `var _` and `let _: T` are N0100.
 - `var x = e;` / `var x: T = e;` / `var x: T;` declare a mutable local. Without an initialiser
   the type is required (N0221), and the variable must be definitely assigned before every read (§7).
 - Without an annotation, a local's type is the type of its initialiser. An initialiser of type
@@ -186,7 +188,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     literal. `writeLine()` with no argument writes a newline. Both return `void`.
   - `Process.exit(code: i32)`: has type *never*.
   - `truncate<T>(e)`: see §7. Exactly one type argument (N0216 for other generic arguments).
-- An expression statement must be a call (N0225). `1 + 2;` is rejected.
+- An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
 - `break`/`continue` must be inside `while` or `loop` (N0214).
 - `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215).
 
@@ -214,7 +216,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
-  like an array literal: it can be indexed and iterated, and bound to a local to be sliced or borrowed. A table to
+  like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
+  sliced or borrowed. A table to
   be sliced where it is named is a `static` instead (§39.2, ADR 0066). Arrays of other types, and of arrays, are
   N0216.
 - **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
@@ -473,6 +476,9 @@ fn area(s: Shape) -> i64 {
   An enum must not contain itself by value (N0227).
 - **Values.** `E.V` for a variant without payload; `E.V(e1, …)` with exactly the payload arity
   (N0209). Each `ei` is checked against its payload type.
+- **Equality** (ADR 0072). For an enum none of whose variants has a payload (a *fieldless* enum), `a == b` and
+  `a != b` compare the variants; both operands have that enum type and are only read. An enum with payloads is
+  N0207 (compare with `match`), and so are `<`, `>` and the other orderings on any enum.
 - **Copy and drop.** An enum is Copy iff every payload type is Copy. It needs drop iff some payload
   needs drop; destroying it destroys the payloads of the active variant. Enums have no `drop`
   block (v0).
@@ -599,7 +605,13 @@ Branch    = Expr | Block
 - `[v; N]`: N copies of `v`.
 - `a.length` is a `usize`: the constant `N` for arrays, the stored length for slices. For an
   array, `a` must be a place (a variable, field or element), because the constant would skip
-  evaluating it (N0216).
+  evaluating it (N0216), unless there is nothing to evaluate: a `const` array (§10) or a literal of constants
+  (ADR 0072).
+- **Equality** (ADR 0072). `a == b` and `a != b` compare two arrays of the same type `[T; N]`, or two slices of the
+  same `T` (a `SliceMut<T>`, and a vector's elements, lent as `Slice<T>`): equal lengths and equal elements in order.
+  `T` is an integer type, `bool` or a fieldless enum (§15.1); other element types, floats included (`NaN != NaN`),
+  are N0207, and so are arrays of different lengths. `Slice<u8> == StringView` is N0205: compare `s == t.bytes()`.
+  The operands are only read. The comparison is not constant-time.
 
 ### 16.3 Indexing and slicing
 - `a[i]`:
@@ -629,7 +641,10 @@ struct literal.
     with `i`, and the literals' default (`i32`, §5) otherwise. The body indexes with `i` where `i` is an index
     (`a[i]`) or a slice bound (`a[lo..i]`), or an operand of `+ - * / %` that is one (`a[i * w + x]`), in the body's
     statements, nested blocks and closures. Inside a call, cast, comparison or condition in an index it does not
-    count (`a[truncate<usize>(i)]` keeps `i32`). The decision is syntactic and made before the body is checked;
+    count (`a[truncate<usize>(i)]` keeps `i32`). The body also indexes with `i` where it passes `i` itself as an
+    argument for a `usize` parameter (ADR 0072), of a callee known before the body is checked: a function named
+    directly, a struct's static function (`Table.at(i)`), or a method on `this`, a parameter or an earlier local
+    (`list.host(i)`). The decision is syntactic and made before the body is checked;
     locals cannot be shadowed (N0203), so the name means `i` throughout.
 - `for (x in seq) { … }`: `seq` is an array place, a slice, or a reference to an array. `x` is a copy
   of each element from index 0 upward. The element is read when the loop reaches it, and the
@@ -1312,7 +1327,14 @@ fn main() {
 - **Matching.** Patterns `null`, `Some(x)` and `Some(_)` are written without a type prefix; the
   rules of §15.2 and §18.4 apply.
 - **Comparisons.** `o == null` and `o != null` test for absence, for any `T` (the value is only
-  read, not consumed). Other comparisons of optionals are not defined (N0207).
+  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s; any other method on an optional
+  is N0234. Other comparisons of optionals are not defined (N0207).
+- **`a ?? b`** (ADR 0072) is `a`'s value, or `b` when `a` is `null`. `a` is a `T?` (N0262 otherwise) and `b` is
+  checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
+  chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,
+  a call of type *never*, stops with a message. `a` is consumed, as by `match (a)`: a non-Copy payload moves out.
+  `??` binds less tightly than every other binary operator, `||` included, and is right-associative
+  (grammar.md §2.1); beside an unparenthesised `||` or `&&` it is N0100.
 - **`o!`** is the value, or **panics** with "unwrapped null".
 - **`o?`** is the value, or returns `null` from the enclosing function, which must return an
   optional (N0261). `?` on an optional in a function returning a `Result` is N0261 in v0

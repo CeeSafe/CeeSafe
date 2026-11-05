@@ -83,6 +83,23 @@ fn main() {
 0
 ```
 
+An enum whose variants have no payloads compares with `==` and `!=`. An enum with payloads compares with `match`.
+
+```ceesafe
+enum Kind { User, Alias, List }
+
+fn main() {
+    let kind = Kind.Alias;
+    Console.writeLine(kind == Kind.Alias);
+    Console.writeLine(kind != Kind.User);
+}
+```
+
+```text
+true
+true
+```
+
 ## `match`
 
 `match` tries its arms in order. It must be **exhaustive**: every possible value matches some arm, or the compiler
@@ -175,6 +192,8 @@ fn main() {
     }
     Console.writeLine(find(numbers[..], 7) == null);
     Console.writeLine(firstOfTwo(numbers[..])!);   // `!`: the value, or stop the program if null
+    Console.writeLine(find(numbers[..], 7) ?? 99); // `??`: the value, or a fallback
+    Console.writeLine(find(numbers[..], 5).isSome());
 }
 ```
 
@@ -182,9 +201,13 @@ fn main() {
 2
 true
 1
+99
+true
 ```
 
-- `o == null` and `o != null` test for absence.
+- `o == null` and `o != null` test for absence; so do `o.isNull()` and `o.isSome()`.
+- `o ?? fallback` is the value, or `fallback` when `o` is `null`. The fallback is evaluated only then, and a chain
+  `a ?? b ?? c` takes the first value present.
 - `o!` is the value; on `null` it stops the program with "unwrapped null".
 - `o?` is the value; on `null` the enclosing function returns `null` (it must return an optional).
 - A reference can be optional (`borrow T?`), and so can a box (`Box<T>?`); both are one pointer.

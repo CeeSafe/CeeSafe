@@ -86,6 +86,18 @@ fn main() -> i32 {
 C files are built with the program: `ceesafec build main.cee helpers.c -o program`, or the `c` list of a package's
 manifest.
 
+CeeSafe can't see what a C function does, so a call of one counts as possibly sleeping and allocating
+(type-system.md §32). Async code may not sleep, so calling such a function from an `async fn` is N0295. When the C
+function returns promptly, say so on its declaration: `@effects()` for none, or `@effects(alloc)` if it allocates.
+
+<!-- ceesafe: skip -->
+```ceesafe
+extern "C" {
+    @effects()
+    fn crc32_update(crc: u32, data: *u8, length: usize) -> u32;
+}
+```
+
 ## Being called from C
 
 `@export` makes a CeeSafe function callable from C, and `@repr(C)` gives a struct C's layout. `ceesafec` writes

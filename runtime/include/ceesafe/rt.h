@@ -742,6 +742,21 @@ static inline bool ceesafe_str_eq(cee_str a, cee_str b) {
     return true;
 }
 
+/* `==` on arrays and slices of integers, bools and fieldless enums (ADR 0072 §2.4): their bytes, which have no
+   padding. Not constant-time. */
+static inline bool cee_mem_eq(const void *a, const void *b, size_t size) {
+    const uint8_t *x = (const uint8_t *)a;
+    const uint8_t *y = (const uint8_t *)b;
+    for (size_t i = 0; i < size; i++) {
+        if (x[i] != y[i]) return false;
+    }
+    return true;
+}
+
+static inline bool cee_slice_eq(const void *a, uint64_t alen, const void *b, uint64_t blen, size_t size) {
+    return alen == blen && (alen == 0 || cee_mem_eq(a, b, (size_t)alen * size));
+}
+
 /* ---- Platform services (supplied by the profile runtime) -------------------------------- */
 
 void ceesafe_platform_write_stdout(const uint8_t *bytes, size_t length);

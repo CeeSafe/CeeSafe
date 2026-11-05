@@ -1,0 +1,21 @@
+// `T??` is still an optional of an optional (ADR 0072: `??` is one token, read as two `?` in a type), `(x?)?`
+// applies `?` twice, and `??` mixes with `||` inside parentheses.
+fn inner(o: i32??) -> i32? {
+    let a = (o?)?;
+    return a + 1;
+}
+
+fn main() {
+    let nested: i32?? = Some(Some(4));
+    Console.writeLine(inner(nested) ?? 0);
+    let empty: i32?? = Some(null);
+    Console.writeLine(inner(empty) ?? 0);
+    let o: i32? = null;
+    Console.writeLine((o ?? 1) == 1 || false);
+    Console.writeLine(o ?? (if (true) 2 else 3));
+}
+
+// expect-stdout: 5
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 2

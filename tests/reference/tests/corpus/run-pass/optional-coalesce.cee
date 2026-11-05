@@ -1,0 +1,58 @@
+// `a ?? b` (ADR 0072 §2.1): the value or the fallback, evaluated only when needed; chains; an optional at the end;
+// a non-Copy payload moved out.
+struct Name {
+    text: String;
+}
+
+fn half(x: i32) -> i32? => if (x % 2 == 0) x / 2 else null;
+
+fn noisy(tag: StringView) -> i32 {
+    Console.writeLine(tag);
+    return 7;
+}
+
+fn named(n: i32) -> Name? {
+    if (n < 0) {
+        return null;
+    }
+    var s = String.create();
+    s.append("name")!;
+    return Name { text: s };
+}
+
+fn fallbackName() -> Name {
+    var s = String.create();
+    s.append("fallback")!;
+    return Name { text: s };
+}
+
+fn main() {
+    Console.writeLine(half(10) ?? 0);
+    Console.writeLine(half(3) ?? -1);
+    Console.writeLine(half(4) ?? noisy("not evaluated"));
+    Console.writeLine(half(5) ?? noisy("evaluated"));
+    Console.writeLine(half(5) ?? half(7) ?? half(8) ?? 0);
+    let port: u16? = null;
+    let p = port ?? 5432;
+    Console.writeLine(p);
+    let text = StringView.fromUtf8("abc".bytes()) ?? "(bad)";
+    Console.writeLine(text);
+    let maybe: i32? = half(3) ?? half(9);
+    Console.writeLine(maybe == null);
+    let n = named(1) ?? fallbackName();
+    Console.writeLine(n.text.view());
+    let m = named(-1) ?? fallbackName();
+    Console.writeLine(m.text.view());
+}
+
+// expect-stdout: 5
+// expect-stdout: -1
+// expect-stdout: 2
+// expect-stdout: evaluated
+// expect-stdout: 7
+// expect-stdout: 4
+// expect-stdout: 5432
+// expect-stdout: abc
+// expect-stdout: true
+// expect-stdout: name
+// expect-stdout: fallback

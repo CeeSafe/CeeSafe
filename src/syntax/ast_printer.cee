@@ -994,6 +994,7 @@ fn binaryOpText(op: BinaryOp) -> StringView => match (op) {
     BinaryOp.Multiply => "*",
     BinaryOp.Divide => "/",
     BinaryOp.Remainder => "%",
+    BinaryOp.Coalesce => "??",
 };
 
 fn assignOpText(op: AssignOp) -> StringView => match (op) {

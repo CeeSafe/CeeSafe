@@ -45,7 +45,8 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 
 ## Common mistakes
 
-- There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases, tuples or `==` on arrays.
+- There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases or tuples, and no `==` on structs.
+- An optional's fallback is `o ?? value`; `o.isSome()` and `o.isNull()` test it. `let _ = f();` discards a value.
 - Indexes are `usize`; `0..4` is a range of `i32`. Loop with `for (i in 0..values.length)`.
 - `if` and `match` expressions take expressions, not blocks: `let s = if (x < 0) -1 else 1;`.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.

@@ -1227,9 +1227,13 @@ struct Parser {
     fn parseType(borrow mut this) -> Result<u32, AllocError> {
         let start = this.current().start;
         var typ = this.parseTypeCore()?;
-        while (this.at(TokenKind.Question)) {
+        while (this.at(TokenKind.Question) || this.at(TokenKind.QuestionQuestion)) {
+            let twice = this.at(TokenKind.QuestionQuestion); // `T??` is one token: an optional of an optional
             this.advance();
             typ = this.front.ast.addType(TypeNode.Optional(typ), start, this.endFrom(start))?; // `T?` (§22.1)
+            if (twice) {
+                typ = this.front.ast.addType(TypeNode.Optional(typ), start, this.endFrom(start))?;
+            }
         }
         return Ok(typ);
     }
@@ -1821,6 +1825,29 @@ struct Parser {
     fn parseLocalDecl(borrow mut this) -> Result<u32, AllocError> {
         let start = this.current().start;
         let isMutable = sameKind(this.advance().kind, TokenKind.VarKeyword);
+        if (this.at(TokenKind.Underscore) && !isMutable) {
+            // `let _ = e;` (ADR 0072 §2.5): `e` is evaluated and its value destroyed. A `let` named `_`.
+            let underscore = this.advance();
+            let symbol = this.intern("_")?;
+            let name = this.front.ast.addIdent(
+                Ident { symbol: symbol, start: underscore.start, end: underscore.end, missing: false },
+            )?;
+            if (!this.at(TokenKind.Equals)) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected '=' after 'let _' (it binds nothing, so it has no type), found ",
+                    "",
+                )?;
+            }
+            this.expect(TokenKind.Equals)?;
+            let value = this.parseExpr()?;
+            this.expect(TokenKind.Semicolon)?;
+            return this.front.ast.addStmt(
+                StmtNode.Local(LocalKind.Let, name, none(), value),
+                start,
+                this.endFrom(start),
+            );
+        }
         let name = this.parseIdentifier()?;
         let typ = if (this.eat(TokenKind.Colon)) this.parseType()? else none();
         let initializer = if (this.eat(TokenKind.Equals)) this.parseExpr()? else none();
@@ -1937,7 +1964,7 @@ struct Parser {
 
     // ---- Expressions ----
 
-    fn parseExpr(borrow mut this) -> Result<u32, AllocError> => this.parseBinary(1);
+    fn parseExpr(borrow mut this) -> Result<u32, AllocError> => this.parseBinary(0);
 
     fn parseBinary(borrow mut this, minPrecedence: u32) -> Result<u32, AllocError> {
         var links: u32 = 0; // each link of the chain deepens the left operand's tree (maxNesting)
@@ -1986,14 +2013,73 @@ struct Parser {
             for (i in 0..op.tokens) {
                 this.advance();
             }
+            if (op.precedence == 0) {
+                // `a ?? b` (ADR 0072): right-associative, below every other operator.
+                if (!this.startsOperand()) {
+                    let at = this.current().start;
+                    this.error(
+                        expectedToken(),
+                        at,
+                        this.current().end,
+                        textMessage(
+                            "expected an expression after '??'; to apply '?' twice, write '(x?)?' (grammar.md §2.1)",
+                        )?,
+                    )?;
+                    return this.front.ast.addExpr(ExprNode.Error, start, this.endFrom(start));
+                }
+                let right = this.parseBinary(0)?;
+                this.requireParenthesesAround(left)?;
+                this.requireParenthesesAround(right)?;
+                left = this.front.ast.addExpr(ExprNode.Binary(left, op.op, right), start, this.endFrom(start))?;
+                continue;
+            }
             let right = this.parseBinary(op.precedence + 1)?;
             left = this.front.ast.addExpr(ExprNode.Binary(left, op.op, right), start, this.endFrom(start))?;
             leftIsComparison = op.precedence == comparisonPrecedence();
         }
     }
 
+    /// After `??`: whether the token can begin its right operand. `x??` in an expression, the old double `?`, ends
+    /// where an operand cannot start.
+    fn startsOperand(borrow this) -> bool => match (this.current().kind) {
+        TokenKind.CloseParen => false,
+        TokenKind.CloseBracket => false,
+        TokenKind.CloseBrace => false,
+        TokenKind.Comma => false,
+        TokenKind.Semicolon => false,
+        TokenKind.Dot => false,
+        TokenKind.FatArrow => false,
+        TokenKind.Question => false,
+        TokenKind.QuestionQuestion => false,
+        TokenKind.EndOfFile => false,
+        _ => true,
+    };
+
+    /// `??` beside an unparenthesised `||` or `&&` (ADR 0072 §2.1): the reader cannot tell which applies first.
+    fn requireParenthesesAround(borrow mut this, operand: u32) -> Result<void, AllocError> {
+        let logical = match (this.front.ast.exprs[operand as usize]) {
+            ExprNode.Binary(_, op, _) => match (op) {
+                BinaryOp.LogicalOr => true,
+                BinaryOp.LogicalAnd => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        if (logical) {
+            let span = this.front.ast.exprSpans[operand as usize];
+            this.error(
+                expectedToken(),
+                span.start,
+                span.end,
+                textMessage("'??' beside '||' or '&&' needs parentheses to say which applies first (grammar.md §2.1)")?,
+            )?;
+        }
+        return Ok();
+    }
+
     fn peekBinaryOp(borrow this) -> BinaryOpAhead {
         let found: BinaryOpAhead? = match (this.current().kind) {
+            TokenKind.QuestionQuestion => binaryAhead(BinaryOp.Coalesce, 0),
             TokenKind.PipePipe => binaryAhead(BinaryOp.LogicalOr, 1),
             TokenKind.AmpAmp => binaryAhead(BinaryOp.LogicalAnd, 2),
             TokenKind.EqualsEquals => binaryAhead(BinaryOp.Equal, comparisonPrecedence()),
@@ -2432,6 +2518,7 @@ struct Parser {
                     TokenKind.MutKeyword => true,
                     TokenKind.Star => true,
                     TokenKind.Question => true,
+                    TokenKind.QuestionQuestion => true,
                     TokenKind.Plus => sawDyn && this.peekIs(i + 1, TokenKind.Identifier) &&
                         this.nameIs(this.peek(i + 1), "Send"),
                     _ => false,

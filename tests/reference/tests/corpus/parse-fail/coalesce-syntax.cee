@@ -1,0 +1,13 @@
+// ADR 0072: `??` is one token, so `x??` (`?` twice) is written `(x?)?`; `??` beside an unparenthesised `||` or `&&`
+// needs parentheses; `let _` takes no type, and `var _` binds nothing.
+fn twice(o: i32??) -> i32? {
+    let a = o??; // error[N0100]
+    return a;
+}
+
+fn main() {
+    let o: i32? = null;
+    let b = o ?? 1 == 1 || true; // error[N0100]
+    let _: i32 = 4; // error[N0100]
+    var _ = 5; // error[N0100]
+}

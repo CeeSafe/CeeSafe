@@ -1,0 +1,124 @@
+// `==` and `!=` beyond numbers, bools, views and pointers (ADR 0072 §2.3–§2.4): fieldless enums compare their
+// variants, and slices, vectors and arrays of integers, bools or fieldless enums compare their elements.
+
+/// An enum, other than `Result` and optionals, none of whose variants has a payload (type-system.md §15.1).
+fn isFieldlessEnum(c: borrow Checker, t: u32) -> bool {
+    if (!c.types.is(t, TypeKind.Enum)) {
+        return false;
+    }
+    let definition = c.types.info(t).enumDef;
+    if (definition == none()) {
+        return false;
+    }
+    let e = borrow c.types.enums[definition as usize];
+    if (e.resultOk != none() || e.optionType != none()) {
+        return false;
+    }
+    for (v in e.variants.view()) {
+        if (c.types.variants[v as usize].payload.length > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// An element type whose equality is its bytes': integers, `bool` and fieldless enums (§16.2). Floats are not
+/// (`NaN != NaN`).
+fn isEqualityElement(c: borrow Checker, t: u32) -> bool =>
+    c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Bool) || isFieldlessEnum(c, t);
+
+/// The element type of a slice or vector, or none.
+fn sequenceElement(c: borrow Checker, t: u32) -> u32 {
+    if (c.types.isSlice(t)) {
+        return c.types.info(c.types.info(t).pointee).element;
+    }
+    if (c.types.is(t, TypeKind.Vector) && !c.types.isString(t)) {
+        let pointee = c.types.info(t).pointee;
+        return if (pointee != none()) c.types.info(pointee).element else c.types.info(t).element;
+    }
+    return none();
+}
+
+/// A slice operand read through (`[T]`, after the operands' automatic dereference): the slice again, as `viewOf`
+/// does for views.
+fn sliceOperand(c: borrow Checker, e: u32) -> u32 {
+    if (c.types.isUnsized(c.typeOf(e))) {
+        match (c.hir.exprs[e as usize]) {
+            HirExpr.Deref(reference) => { return reference; }
+            _ => {}
+        }
+    }
+    return e;
+}
+
+/// `a == b` or `a != b` on enums, slices, vectors and arrays (CheckEquality): the comparison, an error, or none when
+/// these rules do not apply and the general ones decide.
+fn checkEquality(
+    c: borrow mut Checker,
+    op: BinaryOp,
+    leftOperand: u32,
+    rightOperand: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let left = sliceOperand(c, leftOperand);
+    let right = sliceOperand(c, rightOperand);
+    let lt = c.typeOf(left);
+    let rt = c.typeOf(right);
+    let boolType = c.types.boolType;
+    if (lt == rt && c.types.is(lt, TypeKind.Enum) && c.types.optionType(lt) == none() &&
+        c.types.info(lt).enumDef != none() && c.types.enums[c.types.info(lt).enumDef as usize].resultOk == none()) {
+        if (isFieldlessEnum(c, lt)) {
+            return c.expr(HirExpr.Binary(op, left, right), boolType, span.start, span.end);
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendText(mut message, binaryOpText(op))?;
+        appendText(mut message, "' compares enums whose variants have no payloads; ")?;
+        appendQuotedType(mut message, c, lt)?;
+        appendText(mut message, " has payloads: compare with 'match' (type-system.md §15.1)")?;
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let le = sequenceElement(c, lt);
+    let re = sequenceElement(c, rt);
+    let arrays = lt == rt && c.types.is(lt, TypeKind.Array) && !c.types.isUnsized(lt);
+    if (!arrays && (le == none() || re == none() || le != re)) {
+        return Ok(none()); // the general rules report the mismatch
+    }
+    let element = if (arrays) c.types.info(lt).element else le;
+    if (!isEqualityElement(c, element)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendText(mut message, binaryOpText(op))?;
+        appendText(
+            mut message,
+            "' compares slices and arrays of integers, bools and fieldless enums, not of ",
+        )?;
+        appendQuotedType(mut message, c, element)?;
+        appendText(mut message, " (type-system.md §16.2)")?;
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arrays) {
+        return c.expr(HirExpr.Binary(op, left, right), boolType, span.start, span.end);
+    }
+    let slice = c.types.sliceOf(element, false)?;
+    let l = lendAsSlice(c, left, slice)?;
+    let r = lendAsSlice(c, right, slice)?;
+    if (c.isBottom(l) || c.isBottom(r)) {
+        return c.errorResult(span.start, span.end);
+    }
+    return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+}
+
+/// A slice operand as a `Slice<T>` (a `SliceMut<T>` reborrowed), or a vector's elements lent as one, as `v.view()`.
+fn lendAsSlice(c: borrow mut Checker, e: u32, slice: u32) -> Result<u32, AllocError> {
+    let span = c.spanOf(e);
+    let t = c.typeOf(e);
+    if (c.types.is(t, TypeKind.Vector)) {
+        let pointee = c.types.info(t).pointee;
+        let elements = c.expr(HirExpr.Deref(e), pointee, span.start, span.end)?;
+        return borrowPlace(c, elements, false, span);
+    }
+    return coerce(c, e, slice, span);
+}

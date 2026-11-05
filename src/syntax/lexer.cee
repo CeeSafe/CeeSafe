@@ -563,7 +563,7 @@ struct Lexer {
             ';' => TokenKind.Semicolon,
             ':' => TokenKind.Colon,
             '@' => TokenKind.At,
-            '?' => TokenKind.Question,
+            '?' => if (next == '?') TokenKind.QuestionQuestion else TokenKind.Question,
             '~' => TokenKind.Tilde,
             '.' => if (next == '.') TokenKind.DotDot else TokenKind.Dot,
             '-' => if (next == '>') TokenKind.Arrow else if (next == '=') TokenKind.MinusEquals else TokenKind.Minus,

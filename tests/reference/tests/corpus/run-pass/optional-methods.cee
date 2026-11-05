@@ -1,0 +1,29 @@
+// `o.isSome()` and `o.isNull()` (ADR 0072 §2.2): they read the optional without consuming it, through a field, a
+// reference to an optional and an optional reference.
+struct Box2 {
+    name: String?;
+}
+fn find(x: i32) -> i32? => if (x > 0) x else null;
+fn check(o: borrow (String?)) -> bool => o.isSome();
+fn main() {
+    Console.writeLine(find(1).isSome());
+    Console.writeLine(find(-1).isNull());
+    var s = String.create();
+    s.append("x")!;
+    let b = Box2 { name: s };
+    Console.writeLine(b.name.isSome());
+    Console.writeLine(check(b.name));
+    Console.writeLine(b.name.isNull());
+    let held = b.name;
+    Console.writeLine(held.isSome());
+    let r: borrow i32? = null;
+    Console.writeLine(r.isNull());
+}
+
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true

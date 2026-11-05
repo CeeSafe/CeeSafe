@@ -2472,6 +2472,33 @@ fn appendBinary(
     let r = operandText(e, c, n, sources, f, right)?;
     let operandType = n.operandTypes[left as usize];
     let index = binaryIndex(op);
+    if ((c.types.isSlice(operandType) && !c.types.isStringView(operandType)) ||
+        c.types.is(operandType, TypeKind.Array)) {
+        // Slices and arrays of integers, bools and fieldless enums compare their bytes (ADR 0072 §2.4).
+        if (index == 3) {
+            out.push('!')?;
+        }
+        if (c.types.is(operandType, TypeKind.Array)) {
+            appendText(out, "cee_mem_eq(&(")?;
+            appendBytes(out, l.view())?;
+            appendText(out, "), &(")?;
+            appendBytes(out, r.view())?;
+            appendText(out, "), sizeof(")?;
+            appendBytes(out, l.view())?;
+            return appendText(out, "))");
+        }
+        appendText(out, "cee_slice_eq((")?;
+        appendBytes(out, l.view())?;
+        appendText(out, ").ptr, (")?;
+        appendBytes(out, l.view())?;
+        appendText(out, ").len, (")?;
+        appendBytes(out, r.view())?;
+        appendText(out, ").ptr, (")?;
+        appendBytes(out, r.view())?;
+        appendText(out, ").len, sizeof *(")?;
+        appendBytes(out, l.view())?;
+        return appendText(out, ").ptr)");
+    }
     if (c.types.is(operandType, TypeKind.Handle) || c.types.isStringView(operandType)) {
         if (index == 3) {
             out.push('!')?;

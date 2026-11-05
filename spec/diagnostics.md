@@ -78,7 +78,7 @@ Semantic checks run only when every file parsed without errors.
 | N0204 | Unknown type name | `fn f(a: int)` |
 | N0205 | Type mismatch against the expected type | `let a: bool = 1;`, `if (n) {}` |
 | N0206 | Integer literal out of range for its type | `256u8`, `let c: i8 = 128;` |
-| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
+| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
 | N0208 | `as` conversion that can lose information | `a as u32` with `a: i32` |
 | N0209 | Wrong number of arguments | `two(1)` |
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
@@ -105,7 +105,7 @@ Semantic checks run only when every file parsed without errors.
 | N0231 | Field initialised twice in a literal | `Point { x: 1, x: 2, y: 3 }` |
 | N0232 | `this` outside a method, or a `this` parameter outside a struct | `fn f() -> i32 => this;` |
 | N0233 | Method called as a static function, or a static function called on a value | `Point.sum()`, `p.origin()` |
-| N0234 | Field access, method call or literal on something that is not a struct | `n.x` with `n: i32` |
+| N0234 | Field access, method call or literal on something that is not a struct (an optional has only `isSome` and `isNull`, ADR 0072) | `n.x` with `n: i32` |
 | N0235 | A block branch of an `if` or `match` expression can complete, so it has no value (type-system.md §15.3) | `let a = if (c) { f(); } else 2;` |
 | N0236 | A closure whose type cannot be inferred: a parameter without a type, or a block body returning a value, where no function or closure type is expected (type-system.md §36.2) | `let f = (x) => x + 1;` |
 
@@ -200,7 +200,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 |---|---|---|
 | N0260 | `Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected | `let a = Ok(1);`, `let p = Pool.create(SystemHeap {}, 4u32);`, `let n = null;` |
 | N0261 | `?` in a function that does not return a `Result` with the same error type; `?` on an optional in a function that does not return an optional (M6c) | `?` on `Result<i32, F>` in a function returning `Result<i32, E>` |
-| N0262 | `?` or `!` on something that is not a `Result` or optional value (a reference to one included) | `n?` with `n: i32` |
+| N0262 | `?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional | `n?` with `n: i32` |
 | N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
 | N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep (polymorphic recursion) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }` |

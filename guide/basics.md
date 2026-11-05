@@ -63,7 +63,16 @@ CeeSafe
 ```
 
 Reading a variable that might not be assigned yet is a compile error, and so is assigning to a `let`. Two locals in
-scope cannot have the same name: there is no shadowing.
+scope cannot have the same name: there is no shadowing. `let _ = f();` evaluates `f()` and discards its value.
+
+### Reserved words and built-in names
+
+Some words that look like ordinary names are reserved, so they can't name a variable, parameter or field: `move`,
+`own`, `type`, `namespace`, `macro`, `yield`, `class` and `internal`, among others. The full list is in
+[grammar.md §1.3](../spec/grammar.md). The compiler says so when one is used as a name.
+
+The built-in types' names are taken in every program, so a program can't declare its own `Handle` (a `SlotMap`'s
+handle), `Check` (the test helpers), `TestFailure`, or the lib/core names listed in [the library API](builtins.md).
 
 ## Integer literals and the expected type
 
@@ -128,7 +137,9 @@ and `i64`.
 | `+ - * / %` | integers, floats | integer overflow stops the program; so does dividing by zero |
 | `& \| ^ << >>` | unsigned integers | a shift by the width or more stops the program |
 | `== != < <= > >=` | integers, floats, `bool` (`==`, `!=`), text (`==`, `!=`) | |
+| `== !=` | enums without payloads; arrays and slices of integers, `bool` or such enums | compare the elements |
 | `&& \|\| !` | `bool` | `&&` and `\|\|` short-circuit |
+| `??` | an optional and a fallback | `o ?? d`: `o`'s value, or `d` when `o` is `null` |
 
 When overflow is expected, say what should happen:
 

@@ -410,6 +410,59 @@ fn checkUnwrap(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: S
     return c.expr(HirExpr.Unwrap(operand), value, span.start, span.end);
 }
 
+/// `a ?? b` (SynthCoalesce, ADR 0072 §2.1): `a`'s payload, or `b` when `a` is null; `b` is evaluated only then. It
+/// is lowered to the statement it replaces: `{ let t = a; if (t == null) b else t! }`. With `b` a `T?` of `a`'s type,
+/// the whole is that optional (`if (t == null) b else t`).
+fn synthCoalesce(c: borrow mut Checker, leftSyntax: u32, rightSyntax: u32, span: Span) -> Result<u32, AllocError> {
+    let leftSpan = c.front.ast.exprSpans[leftSyntax as usize];
+    let rightSpan = c.front.ast.exprSpans[rightSyntax as usize];
+    let left = synth(c, leftSyntax, none())?;
+    let option = c.typeOf(left);
+    if (c.types.isBottom(option)) {
+        checkExpr(c, rightSyntax, none())?;
+        return c.errorResult(span.start, span.end);
+    }
+    let payload = c.types.optionType(option);
+    if (payload == none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'??' needs an optional value on its left, found ")?;
+        appendQuotedType(mut message, c, option)?;
+        c.error(notAResult(), leftSpan.start, leftSpan.end, message)?;
+        checkExpr(c, rightSyntax, none())?;
+        return c.errorResult(span.start, span.end);
+    }
+    var right = synth(c, rightSyntax, payload)?;
+    var result = payload;
+    if (c.typeOf(right) == option) {
+        result = option; // a chain that ends in an optional
+    } else {
+        right = coerce(c, right, payload, rightSpan)?;
+    }
+    let name = c.intern("coalesced")?;
+    let local = c.hir.addLocal(c.function, name, option, false, false, leftSpan.start, leftSpan.end)?;
+    let declaration = c.hir.addStmt(HirStmt.LocalDecl(local, left), leftSpan.start, leftSpan.end)?;
+    let tested = c.expr(HirExpr.LocalRef(local), option, leftSpan.start, leftSpan.end)?;
+    let reference = c.types.referenceTo(option, false)?;
+    let place = toPlace(c, tested)?;
+    let borrowed = c.expr(HirExpr.Borrow(false, place), reference, leftSpan.start, leftSpan.end)?;
+    let boolType = c.types.boolType;
+    let test = c.expr(HirExpr.IsNull(borrowed, true), boolType, leftSpan.start, leftSpan.end)?;
+    let fallback = yieldBlock(c, right, rightSpan)?;
+    let read = c.expr(HirExpr.LocalRef(local), option, leftSpan.start, leftSpan.end)?;
+    let present = if (result == option) read else c.expr(
+        HirExpr.Unwrap(read),
+        payload,
+        leftSpan.start,
+        leftSpan.end,
+    )?;
+    let presentBlock = yieldBlock(c, present, leftSpan)?;
+    let choice = c.hir.addStmt(HirStmt.If(test, fallback, presentBlock), span.start, span.end)?;
+    let statements = [declaration, choice];
+    let list = c.hir.list(statements[..])?;
+    let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+    return c.expr(HirExpr.StmtValue(block), result, span.start, span.end);
+}
+
 /// `o == null` and `o != null` (SynthNullTest, §22.1): reads the tag through a shared borrow, so the optional is not
 /// consumed.
 fn synthNullTest(

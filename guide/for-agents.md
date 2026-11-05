@@ -136,26 +136,32 @@ main.cee:2:9: error[N0100]: expected identifier, found '('
 
 Declare two variables, or return a struct with named fields.
 
-### Arrays are not compared with `==`
+### Arrays of structs are not compared with `==`
+
+`==` compares arrays and slices of integers, `bool` and fieldless enums. Arrays of structs are a different matter:
 
 <!-- ceesafe: fail N0207 -->
 ```ceesafe
-fn same(a: [u8; 4], b: [u8; 4]) -> bool => a == b;
+struct P { x: i32; }
+
+fn same(a: [P; 2], b: [P; 2]) -> bool => a == b;
 ```
 
 ```text
-main.cee:1:44: error[N0207]: operator '==' cannot be applied to type '[u8; 4]'
+main.cee:3:42: error[N0207]: '==' compares slices and arrays of integers, bools and fieldless enums, not of 'P' (type-system.md §16.2)
   |
-1 | fn same(a: [u8; 4], b: [u8; 4]) -> bool => a == b;
-  |                                            ^^^^^^
+3 | fn same(a: [P; 2], b: [P; 2]) -> bool => a == b;
+  |                                          ^^^^^^
 ```
 
 Compare element by element:
 
 ```ceesafe
-fn same(a: [u8; 4], b: [u8; 4]) -> bool {
+struct P { x: i32; }
+
+fn same(a: [P; 2], b: [P; 2]) -> bool {
     for (i in 0..a.length) {
-        if (a[i] != b[i]) { return false; }
+        if (a[i].x != b[i].x) { return false; }
     }
     return true;
 }
@@ -238,30 +244,32 @@ fn sign(x: i32) -> i32 {
 
 ### A temporary is not sliced or measured
 
+A constant array can be measured and indexed directly; the result of a call can't:
+
 <!-- ceesafe: fail N0216 -->
 ```ceesafe
-const TABLE: [u8; 4] = [1, 2, 3, 4];
+fn table() -> [u8; 4] => [1, 2, 3, 4];
 
 fn main() {
-    Console.writeLine(TABLE.length);
+    Console.writeLine(table().length);
 }
 ```
 
 ```text
 main.cee:4:23: error[N0216]: 'length' needs an array variable or field; bind the value to a local first
   |
-4 |     Console.writeLine(TABLE.length);
-  |                       ^^^^^^^^^^^^
+4 |     Console.writeLine(table().length);
+  |                       ^^^^^^^^^^^^^^
 ```
 
 Bind it to a local first, as the message says:
 
 ```ceesafe
-const TABLE: [u8; 4] = [1, 2, 3, 4];
+fn table() -> [u8; 4] => [1, 2, 3, 4];
 
 fn main() {
-    let table = TABLE;
-    Console.writeLine(table.length);
+    let values = table();
+    Console.writeLine(values.length);
 }
 ```
 

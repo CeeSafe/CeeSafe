@@ -628,6 +628,59 @@ fn isFloatMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "bits") || sameText(name, "sqrt") || sameText(name, "abs") || sameText(name, "floor") ||
         sameText(name, "ceil") || sameText(name, "min") || sameText(name, "max");
 
+/// `o.isSome()` and `o.isNull()` (ADR 0072 §2.2): `o != null` and `o == null`, reading `o` through a shared borrow,
+/// so it is not consumed. Other methods are N0234, with a hint naming these, `??` and `match`.
+fn checkOptionalMethod(
+    c: borrow mut Checker,
+    receiver: u32,
+    option: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let isSome = sameText(c.name(memberIdent.symbol), "isSome");
+    let isNull = sameText(c.name(memberIdent.symbol), "isNull");
+    if (!isSome && !isNull) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "an optional ")?;
+        appendQuotedType(mut message, c, option)?;
+        appendText(mut message, " has no method ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(
+            mut message,
+            "; it has 'isSome()' and 'isNull()', 'o ?? fallback' gives the value or a fallback, and 'match' the rest (type-system.md §22.1)",
+        )?;
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, " takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let receiverSpan = Span { start: c.hir.exprSpans[receiver as usize].start, end: memberIdent.start };
+    let reference = c.types.referenceTo(option, false)?;
+    var borrowed = none();
+    if (c.types.is(c.typeOf(receiver), TypeKind.Reference)) {
+        borrowed = c.expr(HirExpr.Reborrow(false, receiver), reference, receiverSpan.start, receiverSpan.end)?;
+    } else {
+        let place = toPlace(c, receiver)?;
+        borrowed = if (place != none()) c.expr(
+            HirExpr.Borrow(false, place),
+            reference,
+            receiverSpan.start,
+            receiverSpan.end,
+        )? else c.expr(HirExpr.BorrowTemp(false, receiver), reference, receiverSpan.start, receiverSpan.end)?;
+    }
+    let boolType = c.types.boolType;
+    return c.expr(HirExpr.IsNull(borrowed, isNull), boolType, span.start, span.end);
+}
+
 /// A method call on a value that is not a struct: the built-in methods of S3 and S4, else N0234.
 fn checkNonStructMethod(
     c: borrow mut Checker,
@@ -646,6 +699,9 @@ fn checkNonStructMethod(
         TypeKind.Reference,
     )) c.types.info(receiverType).pointee else receiverType;
     let isParameter = c.types.is(structType, TypeKind.TypeParameter);
+    if (c.types.optionType(structType) != none()) {
+        return checkOptionalMethod(c, receiver, structType, member, arguments, span);
+    }
     // A `dyn fn` has no methods (§36.5): the general message below. The reference crashes here (the reference compiler 0.5.0's
     // DynMethod dereferences the absent interface); docs/p3-plan.md records the divergence.
     if (c.types.is(structType, TypeKind.Dyn) && c.types.info(structType).dynInterface != none()) {

@@ -171,6 +171,7 @@ fn binaryOpName(op: BinaryOp) -> StringView => match (op) {
     BinaryOp.Multiply => "Multiply",
     BinaryOp.Divide => "Divide",
     BinaryOp.Remainder => "Remainder",
+    BinaryOp.Coalesce => "Coalesce",
 };
 
 fn printNirRvalue(

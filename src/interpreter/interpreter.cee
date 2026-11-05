@@ -485,6 +485,25 @@ fn bytesOf(it: borrow Interp, slice: borrow Value) -> Result<Vector<u8>, Stop> {
     return Ok(value.data);
 }
 
+/// A slice's elements' bytes, `size` bytes each (`bytesOf` is for byte slices and views).
+fn elementBytesOf(it: borrow Interp, slice: borrow Value, size: u64) -> Result<Vector<u8>, Stop> {
+    let pointer = slice.bits(0, 8)?;
+    let count = slice.bits(8, 8)?;
+    if (count == 0 || size == 0) {
+        return Ok(Vector<u8>.create());
+    }
+    if (count > 0x7FFFFFFF / size) {
+        return Err(fault("a slice longer than the interpreter's memory"));
+    }
+    let value = it.memory.load(pointer, (count * size) as usize)?;
+    for (b in value.init.view()) {
+        if (!b) {
+            return Err(fault("use of uninitialised memory"));
+        }
+    }
+    return Ok(value.data);
+}
+
 fn pointerAt(it: borrow Interp, address: u64) -> Result<u64, Stop> => it.memory.loadBits(address, 8);
 
 // ---- Calls and frames (§5.3) ----
@@ -1421,6 +1440,24 @@ fn binary(
         let a = bytesOf(it, left)?;
         let b = bytesOf(it, right)?;
         let equal = sameBytes(a.view(), b.view());
+        return Ok(valueOf(if (equal == (k == 2)) 1 else 0, 1));
+    }
+    if (c.types.isSlice(t) || c.types.is(t, TypeKind.Array)) {
+        // Slices and arrays of integers, bools and fieldless enums: their bytes (ADR 0072 §2.4).
+        var equal = false;
+        if (c.types.is(t, TypeKind.Array)) {
+            equal = left.size() == right.size();
+            for (i in 0..left.size()) {
+                if (equal && left.bits(i, 1)? != right.bits(i, 1)?) {
+                    equal = false;
+                }
+            }
+        } else {
+            let size = typeSize(c, c.types.info(c.types.info(t).pointee).element)? as u64;
+            let a = elementBytesOf(it, left, size)?;
+            let b = elementBytesOf(it, right, size)?;
+            equal = sameBytes(a.view(), b.view());
+        }
         return Ok(valueOf(if (equal == (k == 2)) 1 else 0, 1));
     }
     let resultType = n.rvalueTypes[r as usize];

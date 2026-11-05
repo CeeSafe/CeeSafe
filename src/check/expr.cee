@@ -479,6 +479,9 @@ fn synthBinary(
     span: Span,
 ) -> Result<u32, AllocError> {
     let index = binaryIndex(op);
+    if (index == 18) {
+        return synthCoalesce(c, leftSyntax, rightSyntax, span);
+    }
     let isNullLeft = match (c.front.ast.exprs[leftSyntax as usize]) {
         ExprNode.NullLiteral => true,
         _ => false,
@@ -549,6 +552,12 @@ fn synthBinary(
             return c.errorResult(span.start, span.end);
         }
         return c.expr(HirExpr.Binary(op, leftHir, rightHir), boolType, span.start, span.end); // compares the bytes
+    }
+    if (index == 2 || index == 3) {
+        let compared = checkEquality(c, op, leftHir, rightHir, span)?;
+        if (compared != none()) {
+            return Ok(compared);
+        }
     }
     if (c.types.is(lt, TypeKind.RawPointer) && c.types.is(rt, TypeKind.RawPointer) &&
         c.types.info(lt).pointee == c.types.info(rt).pointee) {

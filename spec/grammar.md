@@ -72,7 +72,7 @@ FloatSuffix = 'f32' | 'f64'
 
 ### 1.7 Punctuation and operators
 ```
-( ) { } [ ] , ; : . .. @ ? -> =>
+( ) { } [ ] , ; : . .. @ ? ?? -> =>
 + - * / % ! & | ^ ~ && || << 
 = == != < <= > >=
 += -= *= /= %= &= |= ^= <<=
@@ -81,6 +81,10 @@ The lexer **never** produces `>>` or `>>=`. It emits single `>` (and `>=`) token
 The parser forms the shift operator `>>` from two *adjacent* `>` tokens, and `>>=` from `>`
 immediately followed by `>=`. That keeps nested generic arguments
 (`A<B<C>>`) unambiguous in later milestones.
+
+`??` is one token (ADR 0072): the fallback operator in an expression (§2.1), and two `?` in a type (`T??`, an
+optional of an optional). The expression `x??`, `?` applied twice, is written `(x?)?`: a `??` that no operand follows
+is N0100 with that hint.
 
 Any other character is N0001 (unexpected character).
 
@@ -164,6 +168,7 @@ Statement = Block
           | Expr AssignOp Expr ';'        (* assignment: a statement, not an expression *)
           | Expr ';'
 LocalDecl = ('let' | 'var') Identifier (':' Type)? ('=' Expr)? ';'
+          | 'let' '_' '=' Expr ';'          (* ADR 0072: evaluates Expr and destroys its value, as `Expr;` *)
 IfStmt    = 'if' '(' Expr ')' Block ('else' (IfStmt | Block))?
 AssignOp  = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>='
 ```
@@ -179,10 +184,11 @@ Notes:
 ### 2.1 Expressions and precedence
 
 From lowest to highest binding. All binary levels are left-associative except
-comparisons, which are **non-associative**: `a < b < c` is error N0103.
+comparisons, which are **non-associative**: `a < b < c` is error N0103, and `??`, which is right-associative.
 
 | Level | Operators | Notes |
 |---|---|---|
+| 0 | `??` | right-assoc, short-circuit (ADR 0072; type-system.md §22.1). An unparenthesised `\|\|` or `&&` operand beside it is N0100 |
 | 1 | `\|\|` | short-circuit |
 | 2 | `&&` | short-circuit |
 | 3 | `== != < <= > >=` | non-associative |

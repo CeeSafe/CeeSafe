@@ -198,6 +198,12 @@ fn checkLocalDecl(
     span: Span,
 ) -> Result<u32, AllocError> {
     let id = c.front.ast.idents[name as usize];
+    if (sameText(c.name(id.symbol), "_")) {
+        // `let _ = e;` (ADR 0072 §2.5): binds nothing; the value is destroyed at the end of the statement. Any
+        // expression may be discarded so, not only a call (N0225 is for expression statements).
+        let value = synth(c, initializerSyntax, none())?;
+        return c.hir.addStmt(HirStmt.Expression(value), span.start, span.end);
+    }
     let isLet = match (kind) {
         LocalKind.Let => true,
         _ => false,

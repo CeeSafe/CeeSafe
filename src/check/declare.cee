@@ -175,6 +175,8 @@ fn checkProgram(
         atomicStructs: Vector<u32>.create(),
         allowImported: false,
         coreAllowImported: false,
+        allowNever: false,
+        coreAllowNever: false,
         layoutUses: Vector<LayoutUse>.create(),
         headers: Vector<Vector<u8>>.create(),
         builtinUses: Vector<u8>.create(),
@@ -578,6 +580,8 @@ fn declareFunctionCore(c: borrow mut Checker, f: u32, owner: u32, environment: R
     var returnType = c.types.voidType;
     if (decl.returnType != none()) {
         c.allowImported = hasAttributeNamed(c, decl.attributes, "constant");
+        // `never` (§15.3) is a plain function's or method's return type: not an async, extern or interface one's.
+        c.allowNever = !decl.isAsync && !decl.isExtern && c.registerNext;
         returnType = c.resolveTypeWith(decl.returnType, true, true)?;
     }
     // A dependency's top-level function is named with its package (c-backend.md §2.1); a C function keeps its own name.

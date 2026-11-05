@@ -1,0 +1,9 @@
+// A function returning `never` (ADR 0074 §2.2, type-system.md §15.3) is `_Noreturn void` in C, and a call of one
+// ends its block (NIR's `Unreachable`).
+fn die(code: i32) -> never { Process.exit(code); }
+
+fn main() -> i32 {
+    let n = Process.argumentCount();
+    let k = if (n < 100) 1 else die(2);
+    return k;
+}

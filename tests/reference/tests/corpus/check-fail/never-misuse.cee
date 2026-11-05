@@ -1,0 +1,41 @@
+// `never` (ADR 0074 §2.2, type-system.md §15.3) is only a function's return type, and a `never` function does not
+// return: its end must be unreachable (N0213), and `return` in it is an error (N0215).
+struct S {
+    x: never; // error[N0226]
+}
+
+interface I {
+    fn f(borrow this) -> never; // error[N0226]
+}
+
+impl I for S {
+    fn f(borrow this) -> never { Process.exit(1); }
+}
+
+fn parameter(x: never) {} // error[N0226]
+
+async fn later() -> never { Process.exit(1); } // error[N0226]
+
+fn callback(f: fn() -> never) {} // error[N0226]
+
+extern "C" {
+    fn c_abort() -> never; // error[N0226]
+}
+
+fn reachable(flag: bool) -> never { // error[N0213]
+    if (flag) {
+        Process.exit(1);
+    }
+}
+
+fn returns() -> never {
+    return; // error[N0215]
+}
+
+fn die() -> never { Process.exit(2); }
+
+fn main() {
+    let a: never = die();                          // error[N0226]
+    let b = die();                                 // error[N0224]
+    let v: Vector<never> = Vector<never>.create(); // error[N0226]@19 // error[N0226]@35
+}

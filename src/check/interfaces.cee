@@ -778,7 +778,7 @@ fn signatureMismatch(
             return appendQuotedType(out, c, at);
         }
     }
-    if (e.returnType != a.returnType) {
+    if (e.returnType != a.returnType && e.returnType != c.types.error) {
         appendText(out, "it must return ")?;
         appendQuotedType(out, c, e.returnType)?;
         appendText(out, ", not ")?;

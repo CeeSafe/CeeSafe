@@ -190,6 +190,14 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
     return synth(c, e, none());
 }
 
+/// May a `let` of this `void` initializer declare a unit local (§20.4)? A `?` or `!`, or a unit value; a call of a
+/// `void` function stays N0224.
+fn declaresUnit(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Try(_) => true,
+    HirExpr.Unwrap(_) => true,
+    _ => isUnitValue(c, e),
+};
+
 fn isCallSyntax(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
     ExprNode.Call(_, _) => true,
     ExprNode.Await(_) => true,
@@ -246,12 +254,27 @@ fn checkLocalDecl(
             let ownType = c.typeOf(initializer);
             initializer = coerce(c, initializer, ownType, initializerSpan)?;
             localType = c.typeOf(initializer);
+            if (c.types.is(localType, TypeKind.Void) && isLet && declaresUnit(c, initializer)) {
+                // `let v = r?;` of a `Result<void, E>`, or `let w = v;` of a unit (§20.4): a unit local, which holds
+                // nothing; the initializer's effects are kept.
+                let statement = if (isUnitValue(c, initializer)) c.hir.addStmt(
+                    HirStmt.Block(emptyRange()),
+                    span.start,
+                    span.end,
+                )? else c.hir.addStmt(HirStmt.Expression(initializer), span.start, span.end)?;
+                declareUnitBinding(c, name)?;
+                return Ok(statement);
+            }
             if (c.types.is(localType, TypeKind.Void)) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "this expression has no value (its type is 'void')")?;
                 c.error(voidValue(), initializerSpan.start, initializerSpan.end, message)?;
                 localType = c.types.error;
             } else if (c.types.is(localType, TypeKind.Never)) {
+                // A call that does not return (§15.3) has no value to bind; the local would have no C type.
+                var message = Vector<u8>.create();
+                appendText(mut message, "this expression does not return (its type is 'never'), so it has no value")?;
+                c.error(voidValue(), initializerSpan.start, initializerSpan.end, message)?;
                 localType = c.types.error;
             }
         }
@@ -371,7 +394,19 @@ fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, Al
         ExprNode.Name(name, _) => {
             let symbol = c.front.ast.idents[name as usize].symbol;
             match (c.lookup(symbol)?) {
-                Entity.Local(_) => {}
+                Entity.Local(local) => {
+                    if (local == unitLocal()) {
+                        var message = Vector<u8>.create();
+                        appendText(mut message, "cannot assign to ")?;
+                        appendQuotedName(mut message, c, symbol)?;
+                        appendText(
+                            mut message,
+                            ": it is bound to a 'void' payload and holds nothing (type-system.md §20.4)",
+                        )?;
+                        c.error(assignToImmutable(), span.start, span.end, message)?;
+                        return Ok(none());
+                    }
+                }
                 Entity.Static(_) => {} // a place behind its address (§39.2), checked below
                 Entity.None => {
                     var message = Vector<u8>.create();
@@ -564,6 +599,17 @@ fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u3
     }
     let returnType = c.hir.functions[c.function as usize].returnType;
     let name = c.hir.functions[c.function as usize].name;
+    if (c.types.is(returnType, TypeKind.Never)) {
+        // A `never` function does not return (§15.3).
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, " returns 'never', so it cannot 'return': end it with a call that does not return")?;
+        c.error(returnValueMismatch(), span.start, span.end, message)?;
+        if (valueSyntax != none()) {
+            synth(c, valueSyntax, none())?;
+        }
+        return c.hir.addStmt(HirStmt.Return(none()), span.start, span.end);
+    }
     if (valueSyntax == none()) {
         if (!c.types.is(returnType, TypeKind.Void) && !c.types.isBottom(returnType)) {
             var message = Vector<u8>.create();
@@ -576,6 +622,9 @@ fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u3
         return c.hir.addStmt(HirStmt.Return(none()), span.start, span.end);
     }
     if (c.types.is(returnType, TypeKind.Void)) {
+        if (namesUnitLocal(c, valueSyntax)) {
+            return c.hir.addStmt(HirStmt.Return(none()), span.start, span.end); // `return v;` of a unit is `return;` (§20.4)
+        }
         let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, name)?;
@@ -590,6 +639,15 @@ fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u3
 
 // ---- FlowAnalysis ----
 
+/// Is the expression a unit local's name, `v` with `Ok(v)` of a `Result<void, E>` (§20.4)?
+fn namesUnitLocal(c: borrow Checker, e: u32) -> bool {
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Name(name, _) => { return c.findLocal(c.front.ast.idents[name as usize].symbol) == unitLocal(); }
+        ExprNode.Paren(inner) => { return namesUnitLocal(c, inner); }
+        _ => { return false; }
+    }
+}
+
 /// N0213 if the end of a non-void body is reachable (FlowAnalysis.Analyze).
 fn analyzeFlow(c: borrow mut Checker, function: u32) -> Result<void, AllocError> {
     var loopExits = Vector<bool>.create();
@@ -602,9 +660,16 @@ fn analyzeFlow(c: borrow mut Checker, function: u32) -> Result<void, AllocError>
         let name = c.hir.functions[function as usize].name;
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, name)?;
-        appendText(mut message, " must return a ")?;
-        appendQuotedType(mut message, c, returnType)?;
-        appendText(mut message, " on every path; the end of its body is reachable")?;
+        if (c.types.is(returnType, TypeKind.Never)) {
+            appendText(
+                mut message,
+                " returns 'never', but the end of its body is reachable: end every path with a call that does not return",
+            )?;
+        } else {
+            appendText(mut message, " must return a ")?;
+            appendQuotedType(mut message, c, returnType)?;
+            appendText(mut message, " on every path; the end of its body is reachable")?;
+        }
         c.error(missingReturn(), id.start, id.end, message)?;
     }
     return Ok();

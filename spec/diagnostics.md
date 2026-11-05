@@ -84,20 +84,20 @@ Semantic checks run only when every file parsed without errors.
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
 | N0211 | Assignment to an immutable binding (`let`, parameter, constant, function) | `param = 3;` |
 | N0212 | Local read before it is definitely assigned | `var x: i32; return x;` |
-| N0213 | End of a non-`void` function is reachable | `fn f() -> i32 { }` |
+| N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3) | `fn f() -> i32 { }` |
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
-| N0215 | `return` with or without a value contradicts the return type | `return 1;` in a `void` function |
+| N0215 | `return` with or without a value contradicts the return type, or `return` in a `never` function | `return 1;` in a `void` function |
 | N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11) | `truncate<i32, u8>(x)` |
 | N0217 | Not a constant expression, or constant evaluation would panic | `const C: u8 = 200 + 100;` |
 | N0218 | Constant depends on itself | `const A: i32 = A + 1;` |
 | N0219 | Invalid `main` signature | `fn main(args: i32)` |
 | N0220 | `let` without initializer | `let a: i32;` |
 | N0221 | `var` without type annotation or initializer | `var c;` |
-| N0222 | A generic's substituted copy does not check for its type arguments, and no other error explains why (type-system §20.4). Today: `void` for a type parameter whose payload the body binds or builds, since `Result<void, E>.Ok` has none | `fn same<T>(r: Result<T, u8>) -> Result<T, u8> => match (r) { Ok(v) => Ok(v), Err(e) => Err(e) };` used with `Result<void, u8>` |
+| N0222 | A generic's substituted copy does not check for its type arguments, and no other error explains why (type-system §20.4) | `fn copyOf<M: Metrics + Copy>(m: borrow M) -> M => m;` used with `dyn Metrics`, which no value holds (ADR 0064 §3.1) |
 | N0223 | *(unassigned)* | |
-| N0224 | Value of type `void` used as a value | `let d = nothing();` |
+| N0224 | Value of type `void` used as a value, or a `let` of a `never` expression | `let d = nothing();` |
 | N0225 | Expression statement that is not a call | `1 + 2;` |
-| N0226 | `void` used other than as a return type | `var e: void;` |
+| N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle | `struct Node { next: Node; }` |
 | N0228 | Duplicate member (field or function) in a struct | `struct D { a: i32; a: i64; }` |
 | N0229 | Struct literal does not initialise every field | `Point { x: 1 }` |

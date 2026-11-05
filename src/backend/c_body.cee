@@ -31,6 +31,9 @@ fn appendSignature(
 ) -> Result<void, AllocError> {
     let function = borrow n.functions[f as usize];
     let source = borrow c.hir.functions[function.source as usize];
+    if (c.types.is(source.returnType, TypeKind.Never)) {
+        e.t("_Noreturn ")?; // a function returning `never` (type-system.md §15.3)
+    }
     appendCTypeName(c, mut e.buf, source.returnType)?;
     e.t(" ")?;
     appendVariantPrefix(mut e.buf, function.variant)?;

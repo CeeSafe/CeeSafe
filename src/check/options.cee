@@ -259,6 +259,35 @@ fn checkResultValue(
         return c.errorResult(span.start, span.end);
     }
     let count = payloadCount(c, variant);
+    if (count == 0 && arguments.count == 1 && isUnitPayload(c, expected, variant)) {
+        // `Ok(e)` of a `Result<void, E>` (§20.4): `e` is a `void` value, erased; its effects are kept.
+        let argument = c.front.ast.at(arguments, 0);
+        let payload = synth(c, argument, none())?;
+        if (c.isBottom(payload) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            return c.errorResult(span.start, span.end);
+        }
+        if (!c.types.is(c.typeOf(payload), TypeKind.Void) && !c.types.is(c.typeOf(payload), TypeKind.Never)) {
+            let argumentSpan = c.front.ast.exprSpans[argument as usize];
+            var message = Vector<u8>.create();
+            appendQuotedName(mut message, c, name)?;
+            appendText(mut message, " of ")?;
+            appendQuotedType(mut message, c, expected)?;
+            appendText(mut message, " takes no value, or a 'void' one, but this has type ")?;
+            appendQuotedType(mut message, c, c.typeOf(payload))?;
+            c.error(argumentCount(), argumentSpan.start, argumentSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let value = c.expr(HirExpr.EnumValue(variant, emptyRange()), expected, span.start, span.end)?;
+        if (isUnitValue(c, payload)) {
+            return Ok(value);
+        }
+        var statements = Vector<u32>.create();
+        statements.push(c.hir.addStmt(HirStmt.Expression(payload), span.start, span.end)?)?;
+        statements.push(c.hir.addStmt(HirStmt.Yield(value), span.start, span.end)?)?;
+        let list = c.hir.list(statements.view())?;
+        let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+        return c.expr(HirExpr.StmtValue(block), expected, span.start, span.end);
+    }
     if (arguments.count as usize != count) {
         var message = Vector<u8>.create();
         appendQuotedName(mut message, c, name)?;

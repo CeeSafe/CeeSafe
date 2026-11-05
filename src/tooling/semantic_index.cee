@@ -364,6 +364,10 @@ fn walkStatement(
             walkExpression(index, c, sources, end)?;
             walkStatement(index, c, sources, body)?;
         }
+        HirStmt.ForNext(_, declaration, _, body) => {
+            walkStatement(index, c, sources, declaration)?; // the call of `next` has no source of its own
+            walkStatement(index, c, sources, body)?;
+        }
         HirStmt.Return(value) => { walkExpression(index, c, sources, value)?; }
         HirStmt.Expression(e) => { walkExpression(index, c, sources, e)?; }
         HirStmt.Yield(e) => { walkExpression(index, c, sources, e)?; }

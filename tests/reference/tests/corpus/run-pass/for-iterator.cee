@@ -1,0 +1,106 @@
+// `for (x in e)` over a value whose type has `fn next(borrow mut this) -> T?` (ADR 0074 §2.8).
+
+/// Counts down from `left`, exclusive, to 0.
+struct Countdown {
+    left: i32;
+
+    fn next(borrow mut this) -> i32? {
+        if (this.left == 0) {
+            return null;
+        }
+        this.left -= 1;
+        return this.left;
+    }
+}
+
+/// Yields owned strings, and says when it is destroyed.
+struct Words {
+    count: i32;
+    made: i32;
+    drop { Console.writeLine("words dropped"); }
+
+    fn next(borrow mut this) -> String? {
+        if (this.made == this.count) {
+            return null;
+        }
+        this.made += 1;
+        var s = String.create();
+        s.append("word")!;
+        s.appendNumber(this.made)!;
+        return s;
+    }
+}
+
+fn words(count: i32) -> Words => Words { count: count, made: 0 };
+
+/// Sums what is left of an iterator it borrows.
+fn sumRest(it: borrow mut Countdown) -> i32 {
+    var total = 0;
+    for (n in it) {
+        total += n;
+    }
+    return total;
+}
+
+fn main() {
+    // lib/core's split, the body reading the iterator's source.
+    let text = "a,b,,c";
+    for (part in text.split(",")) {
+        Console.write("[");
+        Console.write(part);
+        Console.write("] of ");
+        Console.writeLine(text);
+    }
+
+    // A user iterator; break and continue.
+    for (n in Countdown { left: 6 }) {
+        if (n == 4) {
+            continue;
+        }
+        if (n == 1) {
+            break;
+        }
+        Console.writeLine(n);
+    }
+
+    // A temporary iterator with a drop block, destroyed after the loop; owned elements are moved into the variable.
+    for (w in words(2)) {
+        Console.writeLine(w);
+    }
+    Console.writeLine("after the loop");
+    for (w in words(3)) {
+        if (w.length > 0) {
+            break;
+        }
+    }
+    Console.writeLine("after the break");
+
+    // A local iterator, moved into the loop; and one borrowed mutably, which keeps its state.
+    let local = words(1);
+    for (w in local) {
+        Console.writeLine(w);
+    }
+    var countdown = Countdown { left: 5 };
+    let first = countdown.next()!;
+    Console.writeLine(first);
+    Console.writeLine(sumRest(mut countdown));
+    Console.writeLine(countdown.left);
+}
+// expect-stdout: [a] of a,b,,c
+// expect-stdout: [b] of a,b,,c
+// expect-stdout: [] of a,b,,c
+// expect-stdout: [c] of a,b,,c
+// expect-stdout: 5
+// expect-stdout: 3
+// expect-stdout: 2
+// expect-stdout: word1
+// expect-stdout: word2
+// expect-stdout: words dropped
+// expect-stdout: after the loop
+// expect-stdout: words dropped
+// expect-stdout: after the break
+// expect-stdout: word1
+// expect-stdout: words dropped
+// expect-stdout: 4
+// expect-stdout: 6
+// expect-stdout: 0

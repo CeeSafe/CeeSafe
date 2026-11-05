@@ -1,0 +1,38 @@
+// `for` over a struct needs `fn next(borrow mut this) -> T?` (ADR 0074 §2.8).
+struct NoNext {
+    n: i32;
+}
+
+struct SharedNext {
+    n: i32;
+    fn next(borrow this) -> i32? => null;
+}
+
+struct PlainNext {
+    n: i32;
+    fn next(borrow mut this) -> i32 => this.n;
+}
+
+struct ArgumentNext {
+    n: i32;
+    fn next(borrow mut this, step: i32) -> i32? => null;
+}
+
+struct Good {
+    n: i32;
+    fn next(borrow mut this) -> i32? => null;
+}
+
+fn shared(g: borrow Good) {
+    for (x in g) {} // error[N0248]
+}
+
+fn main() {
+    for (x in NoNext { n: 1 }) {}       // error[N0205]
+    for (x in SharedNext { n: 1 }) {}   // error[N0205]
+    for (x in PlainNext { n: 1 }) {}    // error[N0205]
+    for (x in ArgumentNext { n: 1 }) {} // error[N0205]
+    for (x in Good { n: 1 }) {
+        let y: bool = x; // error[N0205]
+    }
+}

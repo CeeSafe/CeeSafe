@@ -507,7 +507,11 @@ fn checkFor(
     var end = none();
     var variableType = c.types.error;
     if (endSyntax == none()) {
-        start = forSequence(c, startSyntax, mut variableType)?;
+        let sequence = synth(c, startSyntax, none())?;
+        if (isIteratorType(c, c.typeOf(sequence))) {
+            return checkForIterator(c, variable, sequence, body, span);
+        }
+        start = forSequence(c, startSyntax, sequence, mut variableType)?;
     } else {
         // The bounds have one integer type; a flexible literal takes the other bound's type.
         if (isFlexible(c, startSyntax) && !isFlexible(c, endSyntax)) {
@@ -556,6 +560,123 @@ fn checkFor(
     c.loopDepth -= 1;
     c.popScope();
     return c.hir.addStmt(HirStmt.For(local, start, end, checkedBody), span.start, span.end);
+}
+
+/// Whether `for` treats a value of this type as an iterator (ADR 0074 §2.8): a struct, or a reference to one.
+fn isIteratorType(c: borrow Checker, typ: u32) -> bool {
+    let held = if (c.types.is(typ, TypeKind.Reference)) c.types.info(typ).pointee else typ;
+    return held != none() && c.types.is(held, TypeKind.Struct) && c.types.info(held).structDef != none();
+}
+
+/// `for (x in e)` over an iterator (CheckForIterator, ADR 0074 §2.8): `e`'s type has `fn next(borrow mut this) -> T?`.
+/// `e` initialises a hidden local of the loop's header; each pass calls `next` on it, and `x` has type `T`.
+fn checkForIterator(
+    c: borrow mut Checker,
+    variable: u32,
+    sequence: u32,
+    body: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let sequenceSpan = c.spanOf(sequence);
+    let sequenceType = c.typeOf(sequence);
+    let isReference = c.types.is(sequenceType, TypeKind.Reference);
+    let structType = if (isReference) c.types.info(sequenceType).pointee else sequenceType;
+    let nextSymbol = c.intern("next")?;
+    let function = findMethod(c, structType, nextSymbol, sequenceSpan)?;
+    var shaped = function != none() && isMethod(c, function) &&
+        c.hir.functions[function as usize].methodTemplate == none() &&
+        c.hir.functions[function as usize].parameters.length == 1;
+    if (shaped) {
+        let syntax = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
+        shaped = match (syntax.receiver) {
+            ReceiverKind.BorrowMut => true,
+            _ => false,
+        };
+    }
+    if (shaped) {
+        let returnType = c.hir.functions[function as usize].returnType;
+        shaped = c.types.optionType(returnType) != none();
+    }
+    var call = none();
+    var iteratorLocal = none();
+    var initializer = none();
+    if (!shaped) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'for' iterates over an array, a slice, a range 'a..b' or an iterator; ")?;
+        if (function == none()) {
+            appendQuotedType(mut message, c, structType)?;
+            appendText(mut message, " has no method 'next'")?;
+        } else {
+            appendText(mut message, "the method 'next' of ")?;
+            appendQuotedType(mut message, c, structType)?;
+            appendText(mut message, " has the wrong shape")?;
+        }
+        appendText(mut message, "; an iterator has 'fn next(borrow mut this) -> T?'")?;
+        c.error(typeMismatch(), sequenceSpan.start, sequenceSpan.end, message)?;
+    } else if (isReference && !c.types.info(sequenceType).mutableReference) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'for' calls 'next(borrow mut this)' on the iterator, but this one is behind a shared reference",
+        )?;
+        c.error(borrowMutOfImmutable(), sequenceSpan.start, sequenceSpan.end, message)?;
+    } else {
+        // A copy of a `borrow mut` iterator is a reborrow (§13.3); a value moves into the header.
+        initializer = coerce(c, sequence, sequenceType, sequenceSpan)?;
+        let name = c.intern("iterator")?;
+        iteratorLocal = c.hir.addLocal(
+            c.function,
+            name,
+            sequenceType,
+            true,
+            false,
+            sequenceSpan.start,
+            sequenceSpan.end,
+        )?;
+        let reference = c.expr(HirExpr.LocalRef(iteratorLocal), sequenceType, sequenceSpan.start, sequenceSpan.end)?;
+        var receiver = none();
+        if (isReference) {
+            receiver = coerce(c, reference, sequenceType, sequenceSpan)?;
+        } else {
+            receiver = borrowReceiver(c, reference, true, sequenceSpan)?;
+        }
+        if (!c.isBottom(receiver)) {
+            let noArguments = Range { start: 0, count: 0 };
+            call = checkUserCallWith(c, function, noArguments, sequenceSpan, receiver)?;
+        }
+    }
+    var variableType = c.types.error;
+    if (call != none() && !c.isBottom(call)) {
+        let element = c.types.optionType(c.typeOf(call));
+        if (element != none()) {
+            variableType = element;
+        }
+    }
+    let id = c.front.ast.idents[variable as usize];
+    if (c.lookupLocal(id.symbol)? != none()) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, id.symbol)?;
+        appendText(mut message, " is already declared in this function; locals cannot be shadowed")?;
+        c.error(localRedeclared(), id.start, id.end, message)?;
+    }
+    c.pushScope()?;
+    let local = c.hir.addLocal(c.function, id.symbol, variableType, false, false, id.start, id.end)?;
+    c.bind(id.symbol, local)?;
+    c.loopDepth += 1;
+    let checkedBody = checkBlock(c, body)?;
+    c.loopDepth -= 1;
+    c.popScope();
+    if (call == none() || c.isBottom(call)) {
+        // An error was reported: the loop is kept for its body's sake, over nothing.
+        let error = c.errorResult(sequenceSpan.start, sequenceSpan.end)?;
+        return c.hir.addStmt(HirStmt.For(local, error, none(), checkedBody), span.start, span.end);
+    }
+    let declaration = c.hir.addStmt(
+        HirStmt.LocalDecl(iteratorLocal, initializer),
+        sequenceSpan.start,
+        sequenceSpan.end,
+    )?;
+    return c.hir.addStmt(HirStmt.ForNext(local, declaration, call, checkedBody), span.start, span.end);
 }
 
 fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u32, AllocError> {
@@ -636,6 +757,13 @@ fn completes(c: borrow Checker, stmt: u32, loopExits: borrow mut Vector<bool>) -
         HirStmt.Loop(body) => { return runLoop(c, body, loopExits); } // only a break leaves a `loop`
         HirStmt.For(_, start, end, body) => {
             if (diverges(c, start, loopExits)? || (end != none() && diverges(c, end, loopExits)?)) {
+                return Ok(false);
+            }
+            runLoop(c, body, loopExits)?;
+            return Ok(true);
+        }
+        HirStmt.ForNext(_, declaration, _, body) => {
+            if (!completes(c, declaration, loopExits)?) {
                 return Ok(false);
             }
             runLoop(c, body, loopExits)?;

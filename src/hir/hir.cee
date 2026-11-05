@@ -165,6 +165,8 @@ enum HirStmt {
     While(u32, u32),
     Loop(u32),
     For(u32, u32, u32, u32), // variable, start, end or none, body
+    // `for` over an iterator (ADR 0074 §2.8): variable, the iterator's LocalDecl, the call of `next` on it, body.
+    ForNext(u32, u32, u32, u32),
     Break,
     Continue,
     Return(u32), // value or none

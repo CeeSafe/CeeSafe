@@ -48,7 +48,8 @@ rvalue    = Use(operand)
                                                  -- the pair (T, dyn I) is in the program's DynTables; loans and moves
                                                  -- flow through it as through any cast
           | Truncate(operand, type)
-          | FloatToInt(operand, Panic | Checked | Saturating, type, span)   -- M11 G7: truncate<T> of a float (§35.4)
+          | FloatToInt(operand, Panic | Checked | Saturating, type, span)   -- M11 G7: truncate<T> of a float (§35.4); Checked and
+                                                 -- Saturating also of an integer (ADR 0074 §2.9)
           | Aggregate(struct, [operand])           -- field values in declaration order (M2a)
           | Ref(Shared | Mut, place)               -- creates a loan (M2b; lifetimes.md)
           | Discriminant(place) | EnumAggregate(V, [operand])   -- M2d enums
@@ -139,6 +140,10 @@ Lowering rules (HIR → NIR, `NirBuilder`):
   argument, evaluated before the explicit arguments.
 - `while` becomes `cond → body → cond`, and `loop` becomes `body → body`. `break` and `continue`
   jump to the innermost loop's exit or head.
+- `for` over an iterator (HIR `ForNext(variable, the iterator's LocalDecl, the call of next, body)`, ADR 0074 §2.8)
+  becomes: the iterator into its local, with the header's temporaries; then `option = next(&mut iterator)` with its
+  own temporaries ended, `Switch(Discriminant(option))`: `null` to the exit, `Some` to `Unpack(option, Some,
+  [variable])`, the body and back to the call. The iterator and the header's temporaries end at the exit.
 - Statements after a `return`, `break`, `continue`, `Process.exit` or never-typed call are
   unreachable and are not lowered. Blocks with no predecessors are not emitted.
 - Constants are already folded in HIR. NIR performs no optimisation in M1.

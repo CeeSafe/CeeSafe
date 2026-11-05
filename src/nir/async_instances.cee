@@ -103,6 +103,7 @@ fn asyncInstanceOf(
         g.locals = o.locals;
         g.returnSources = o.returnSources;
         g.deepSources = o.deepSources;
+        g.resultThrough = o.resultThrough;
         g.mutableFlows = o.mutableFlows;
         g.effectsOfParameters = o.effectsOfParameters;
         g.body = o.body;
@@ -171,6 +172,7 @@ struct HirFunctionFacts {
     locals: Vector<u32>;
     returnSources: Vector<u32>;
     deepSources: Vector<u32>;
+    resultThrough: u32;
     mutableFlows: Vector<u64>;
     effectsOfParameters: Vector<u32>;
     body: u32;
@@ -192,6 +194,7 @@ fn copyHirFunctionFacts(c: borrow Checker, function: u32) -> Result<HirFunctionF
         locals: copyU32s(f.locals.view())?,
         returnSources: copyU32s(f.returnSources.view())?,
         deepSources: copyU32s(f.deepSources.view())?,
+        resultThrough: f.resultThrough,
         mutableFlows: flows,
         effectsOfParameters: copyU32s(f.effectsOfParameters.view())?,
         body: f.body,

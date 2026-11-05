@@ -1,0 +1,35 @@
+// B18: a result `borrow S<r>` of `borrow this` is tied to the receiver, so it may not outlive it; and following a
+// call's result to its argument carries what the argument refers to holds, never less.
+struct Inner<region r> {
+    text: Slice<r, u8>;
+
+    fn first(borrow this) -> Slice<r, u8> => this.text[0..1];
+}
+
+struct Outer<region r> {
+    held: Inner<r>;
+    data: Vector<u8>;
+
+    fn inner(borrow this) -> borrow Inner<r> => borrow this.held;
+
+    // A pointee whose region is elided names none, so it is not followed: the result keeps the outer's loan.
+    fn opaque(borrow this) -> borrow Inner => borrow this.held;
+}
+
+fn take<region r>(o: Outer<r>) {}
+
+fn opaqueFirst<region r>(o: borrow Outer<r>) -> Slice<r, u8> => o.opaque().first(); // error[N0245]
+
+fn main() {
+    let bytes = "xyz".bytes();
+    let o = Outer { held: Inner { text: bytes }, data: Vector<u8>.create() };
+    let i = o.inner();
+    take(o); // error[N0240]
+    Console.writeLine(i.text.length);
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    let p = Outer { held: Inner { text: v.view() }, data: Vector<u8>.create() };
+    let f = p.inner().first();
+    v.push(2)!; // error[N0241]
+    Console.writeLine(f.length);
+}

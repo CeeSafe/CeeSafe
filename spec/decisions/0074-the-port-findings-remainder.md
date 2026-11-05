@@ -394,3 +394,30 @@ merged.
    - N0401 is reported when `X` is a public item of the dependency, without checking that the local's type has `X`
      (the warning is a syntactic pass);
    - `dep.S { … }` struct literals keep naming the package in a shadowing scope.
+
+## 8. Amendment (2026-11-05): a reference result's own region, and deep results through a call (B18)
+
+Found by CeeSafe.Web on 0.18.0 (its `docs/ceesafe-upstream-work.md`, B18). `web_http`'s
+`fn headers(borrow this) -> borrow HeaderList<r> => borrow this.fields` was N0245, and so was every package that
+depends on it.
+
+1. **The callee.** §25.6 elided a result's regions only when none were written. `borrow HeaderList<r>` names `r`
+   inside, so the reference's own region got no flow name. The result named only `this`'s pointee region and was
+   made a deep result of `this`, and `borrow this.fields` is a loan of the receiver's own storage. The result is a
+   reference to the receiver's storage, as Rust's `fn headers(&self) -> &HeaderList<'r>` is. Now a result reference
+   with no sources or regions written on it gets the elided region of the single scoped parameter, also when its
+   pointee names regions, so it is not deep. With several scoped parameters nothing changes: `borrow(p)` names the
+   source.
+2. **The caller.** A deep result's argument contributed less than its loans only as `&p` or a reference parameter.
+   In `o.inner().first()` the receiver of `first` is a temporary holding `inner`'s result, so it kept `o`'s own loan,
+   and `fn f<region r>(o: borrow Outer<r>) -> Slice<r, u8> => o.inner().first()` was N0245. Now a call's result that
+   passes through one reference parameter (a `borrow T` result tied to it alone, whose pointee names only regions
+   that parameter's referent holds) is followed to that argument (type-system.md §25.6; lifetimes.md §7). What the
+   result refers to holds no more than the argument's referent: the pointee names none of the parameter's own
+   regions, and a referent cannot hold a loan of its own storage. A pointee that names no region yet may hold loans
+   (`-> borrow Inner`) is not followed.
+3. **Tests:** `run-pass/deep-results-through.cee` (both, with `borrow mut`, an optional and `borrow(this)`; 0.18.0
+   refuses it) and `check-fail/deep-results-through.cee` (the result stays tied to the receiver, N0240; a view still
+   blocks a push, N0241; the elided pointee is not followed, N0245).
+4. **Why the release missed it:** 0.18.0 was checked against CeeSafeLibs and CeeSafeApps, which have no result of
+   this shape, and the corpus had none.

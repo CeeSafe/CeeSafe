@@ -623,6 +623,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
     }
     var edges = Vector<LoanEdge>.create();
     let references = referenceDefinitions(n, b)?;
+    let throughs = throughDefinitions(c, n, b)?;
     let blockCount = n.functions[b.function as usize].blocks.length;
     for (position in 0..blockCount) {
         let statementCount = n.functions[b.function as usize].blocks[position].statements.length;
@@ -716,7 +717,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                             }
                             let local = n.places[argument as usize].local;
                             if (containsU32(c.hir.functions[callee as usize].deepSources, index)) {
-                                deepSourceEdge(c, n, b, mut edges, references, local, t.local)?;
+                                deepSourceEdge(c, n, b, mut edges, references, throughs, local, t.local, 0)?;
                             } else if (holdsLoans(c, n, b, local)) {
                                 addEdge(mut edges, local, t.local)?;
                             }
@@ -834,23 +835,80 @@ fn referenceDefinitions(n: borrow NirProgram, b: borrow Borrows) -> Result<Vecto
     return Ok(places);
 }
 
+/// The argument local each local is defined to pass through (its only assignment is `t = f(…)` with a result that
+/// passes through that argument, `resultThrough`, B18), or none.
+fn throughDefinitions(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows) -> Result<Vector<u32>, AllocError> {
+    var locals = Vector<u32>.create();
+    var assigned = Vector<u32>.create();
+    for (k in 0..n.functions[b.function as usize].locals.length) {
+        locals.push(none())?;
+        assigned.push(0)?;
+    }
+    for (block in n.functions[b.function as usize].blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, value) => {
+                    let local = n.places[target as usize].local;
+                    assigned[local as usize] += 1;
+                    if (n.places[target as usize].projections.count == 0) {
+                        match (n.rvalues[value as usize]) {
+                            NirRvalue.Call(callee, arguments) => {
+                                let index = c.hir.functions[callee as usize].resultThrough;
+                                if (index != none() && index < arguments.count) {
+                                    let argument = operandPlace(n, n.at(arguments, index));
+                                    if (argument != none() && n.places[argument as usize].projections.count == 0) {
+                                        locals[local as usize] = n.places[argument as usize].local;
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                NirStatement.Unpack(_, _, targets) => {
+                    for (k in 0..targets.count) {
+                        let payload = n.at(targets, k);
+                        if (payload != none()) {
+                            assigned[payload as usize] += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for (k in 0..locals.length) {
+        if (assigned[k] != 1 || k < b.parameterCount as usize) {
+            locals[k] = none();
+        }
+    }
+    return Ok(locals);
+}
+
 /// A deep result's loans from its argument (ADR 0074 §2.4): what the argument refers to holds, not the argument's own
 /// loan. For `t = &p`, the loans of `p`'s local (less its outer placeholder, when `p` is reached through a reference
-/// parameter); for a reference parameter, its loans less its outer placeholder; otherwise all the argument's loans.
+/// parameter); for a reference parameter, its loans less its outer placeholder; for `t = f(a)` whose result passes
+/// through `a` (B18), what `a` refers to holds, as a deep source of its own; otherwise all the argument's loans.
 fn deepSourceEdge(
     c: borrow Checker,
     n: borrow NirProgram,
     b: borrow Borrows,
     edges: borrow mut Vector<LoanEdge>,
     references: borrow Vector<u32>,
+    throughs: borrow Vector<u32>,
     argument: u32,
     result: u32,
+    depth: u32,
 ) -> Result<void, AllocError> {
     if (hasOuterPlaceholder(c, n, b, argument)) {
         return addDeepEdge(edges, argument, result, argument);
     }
     let borrowed = references[argument as usize];
     if (borrowed == none()) {
+        let through = throughs[argument as usize];
+        if (through != none() && through != argument && depth < 64) {
+            return deepSourceEdge(c, n, b, edges, references, throughs, through, result, depth + 1);
+        }
         return if (holdsLoans(c, n, b, argument)) addEdge(edges, argument, result) else Ok();
     }
     let place = toPlaceRef(n, borrowed);

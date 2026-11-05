@@ -1776,6 +1776,10 @@ Each parameter and the result of a function have **flow names**:
 - for a parameter of scoped type without written regions: a fresh name of its own (elision);
 - for a result of scoped type without written regions: the flow names of the single scoped
   parameter (v0 elision); with several scoped parameters and none written, N0245 (as in v0).
+- for a result `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions written on the
+  reference itself, whose pointee names regions (`-> borrow HeaderList<r>`): the reference's own region is elided
+  as above, when there is a single scoped parameter. So the result is tied to that parameter, and is not a deep
+  result of it (B18). With several scoped parameters it is not elided: write `borrow(p)`.
 - for a result whose written regions are all `static` (`StringView<static>`, `Slice<static, T>`, `S<static>`,
   `borrow(static) T`, or an optional or array of one): none, and no elision (ADR 0068). It borrows from no
   parameter, so the body may return only static data (N0245 for a parameter's loan, N0244 for a local's), and a
@@ -1799,7 +1803,11 @@ parameter without `static`. A function's **flows** are then:
     function names `i`'s own region instead (`-> Slice<u8>`, elided);
   - **caller:** for a deep result, an argument `borrow p` contributes `p`'s loans (what `p` holds), not the new loan
     of `p`; a reference parameter passed on contributes what it refers to. So `let t = lexer.token();
-    lexer.skipSpace();` is accepted, and `t` is tied to the text the lexer views.
+    lexer.skipSpace();` is accepted, and `t` is tied to the text the lexer views. An argument that holds the
+    result of a call `f(a)` whose result passes through `a` contributes what `a` would as that argument (B18): a
+    `borrow T` result tied to one reference parameter alone, whose pointee names only regions that parameter's
+    referent holds (none of its own). So `o.inner().first()` with `inner(borrow this) -> borrow Inner<r>` is tied to
+    `r`, not to `o`. A pointee that names no region but may hold loans (`-> borrow Inner`) is not followed.
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
   with `j`: the callee may store `j`'s loans into what `i` refers to.
 

@@ -565,6 +565,18 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 }
             }
         }
+        // A result reference with no region written on it has an elided region of its own, also when its pointee
+        // names regions (`-> borrow S<r>`): with a single scoped parameter it is tied to that parameter (§25.6, B18),
+        // and so is not a deep result of it.
+        if (!hasSourceList && named && elidedResultPointee(c, decl.returnType) != none()) {
+            let single = singleScopedParameter(c, function);
+            if (single != none()) {
+                if (!containsU32(sources, single)) {
+                    sources.push(single)?;
+                }
+                resolved.push(single)?;
+            }
+        }
         sortU32(mut sources);
         // A deep result of a reference parameter (ADR 0074 §2.4) names none of the reference's own regions (its
         // elided one, or those written on it), only regions of its pointee.
@@ -577,26 +589,45 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 continue;
             }
             var outer = Vector<u64>.create();
-            addName(mut outer, elidedFlowName(i as usize))?;
-            if ((i as usize) >= receiverOffset) {
-                let p = c.front.ast.parameters[c.front.ast.at(
-                    decl.parameters,
-                    truncate<u32>(i as usize - receiverOffset),
-                ) as usize];
-                match (c.front.ast.types[p.typ as usize]) {
-                    TypeNode.Reference(_, _, written, _) => {
-                        for (k in 0..written.count) {
-                            let symbol = c.front.ast.idents[c.front.ast.at(written, k) as usize].symbol;
-                            addName(mut outer, regionFlowName(symbol))?;
-                        }
-                    }
-                    _ => { continue; } // written otherwise (in parentheses): kept outer
-                }
+            if (!outerFlowNames(c, f, i as usize, receiverOffset, mut outer)?) {
+                continue; // written otherwise (in parentheses): kept outer
             }
             if (!overlaps(outer, resultNames)) {
                 deep.push(i)?;
             }
         }
+        // A reference result tied to one reference parameter alone, whose pointee names only regions that the
+        // parameter's referent holds: what it refers to holds no more than that referent does (B18). A deep result
+        // through a temporary holding such a call's result then follows the call's argument (`o.inner().first()`).
+        var through: u32 = none();
+        let pointee = match (c.front.ast.types[decl.returnType as usize]) {
+            TypeNode.Reference(_, _, _, inner) => inner,
+            _ => none(),
+        };
+        if (pointee != none() && sources.length == 1 && containsU32(resolved, sources[0])) {
+            let i = sources[0];
+            let local = c.hir.functions[function as usize].parameters[i as usize];
+            let t = c.hir.locals[local as usize].typ;
+            var outer = Vector<u64>.create();
+            if (c.types.is(t, TypeKind.Reference) && !c.types.isSlice(t) && !c.types.isStringView(t) &&
+                outerFlowNames(c, f, i as usize, receiverOffset, mut outer)?) {
+                var held = Vector<u64>.create();
+                collectFlowNames(c, pointee, function, true, mut held)?;
+                var inside = true;
+                for (n in held.view()) {
+                    var single = Vector<u64>.create();
+                    single.push(n)?;
+                    if (!overlaps(single, c.flowNames[i as usize]) || overlaps(single, outer)) {
+                        inside = false;
+                    }
+                }
+                // A pointee whose regions are all elided (`-> borrow S`) names none, yet may hold loans.
+                if (inside && (held.length > 0 || !mayHoldLoans(c, c.types.info(returnType).pointee))) {
+                    through = i;
+                }
+            }
+        }
+        c.hir.functions[function as usize].resultThrough = through;
         c.hir.functions[function as usize].returnSources = sources;
         c.hir.functions[function as usize].deepSources = deep;
     }
@@ -638,6 +669,61 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     c.flowNames = Vector<Vector<u64>>.create();
     c.flowTypeParameters = Vector<u32>.create();
     return Ok();
+}
+
+/// The pointee of a result written `borrow T` or `borrow mut T` (or an optional of one) with no sources or regions
+/// written on the reference, or none.
+fn elidedResultPointee(c: borrow Checker, syntax: u32) -> u32 {
+    let reference = match (c.front.ast.types[syntax as usize]) {
+        TypeNode.Optional(inner) => inner,
+        _ => syntax,
+    };
+    return match (c.front.ast.types[reference as usize]) {
+        TypeNode.Reference(_, hasSources, _, pointee) => if (hasSources) none() else pointee,
+        _ => none(),
+    };
+}
+
+/// The single parameter of scoped type, or none when there are none or several (v0 elision, §13.5).
+fn singleScopedParameter(c: borrow Checker, function: u32) -> u32 {
+    var found: u32 = none();
+    for (i in 0..c.hir.functions[function as usize].parameters.length) {
+        let local = c.hir.functions[function as usize].parameters[i];
+        if (c.types.isScoped(c.hir.locals[local as usize].typ)) {
+            if (found != none()) {
+                return none();
+            }
+            found = truncate<u32>(i);
+        }
+    }
+    return found;
+}
+
+/// Reference parameter `i`'s outer flow names (ADR 0074 §2.4): its elided name and the regions written on it. False
+/// for a parameter whose reference is written otherwise (in parentheses), which keeps its outer loan.
+fn outerFlowNames(
+    c: borrow Checker,
+    f: u32,
+    i: usize,
+    receiverOffset: usize,
+    outer: borrow mut Vector<u64>,
+) -> Result<bool, AllocError> {
+    addName(outer, elidedFlowName(i))?;
+    if (i < receiverOffset) {
+        return Ok(true);
+    }
+    let decl = c.front.ast.functions[f as usize];
+    let p = c.front.ast.parameters[c.front.ast.at(decl.parameters, truncate<u32>(i - receiverOffset)) as usize];
+    match (c.front.ast.types[p.typ as usize]) {
+        TypeNode.Reference(_, _, written, _) => {
+            for (k in 0..written.count) {
+                let symbol = c.front.ast.idents[c.front.ast.at(written, k) as usize].symbol;
+                addName(outer, regionFlowName(symbol))?;
+            }
+            return Ok(true);
+        }
+        _ => { return Ok(false); }
+    }
 }
 
 /// The flow names a type written in a signature mentions (CollectFlowNames). In a result (`inResult`), `borrow(p)`

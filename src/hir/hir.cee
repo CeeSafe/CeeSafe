@@ -213,6 +213,10 @@ struct HirFunction {
     /// The reference parameters among returnSources whose result is deep (ADR 0074 §2.4): it names only regions of
     /// the pointee, so it carries the pointee's loans and not the loan of the parameter itself.
     deepSources: Vector<u32>;
+    /// The parameter a reference result passes through, or none (B18): the result is tied to that parameter alone,
+    /// and what it refers to holds only what that parameter's referent holds. A deep result through a temporary
+    /// that holds such a call's result follows the call's argument.
+    resultThrough: u32;
     mutableFlows: Vector<u64>; // (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i
     environment: Range;        // its type environment (the checker's envPairs)
     genericEntry: u32;         // for an instance of a generic function: the checker's GenericFunctionEntry, else none
@@ -416,6 +420,7 @@ struct HirProgram {
             instanceError: Vector<u8>.create(),
             returnSources: Vector<u32>.create(),
             deepSources: Vector<u32>.create(),
+            resultThrough: 0xFFFFFFFF,
             mutableFlows: Vector<u64>.create(),
             environment: Range { start: 0, count: 0 },
             genericEntry: 0xFFFFFFFF,

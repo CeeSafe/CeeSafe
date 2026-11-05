@@ -176,7 +176,9 @@ once the view is used after it.
   whose place starts with `Deref` of `p_i` and passes no other reference: the referent's own storage.
 - **Callers** use the signature as the `Call` constraint in §3. For a deep result of parameter `i` whose argument is
   `t = &p` (`&mut p`), the result takes `p`'s local's loans, less `Outer` placeholders of a parameter `p` is reached
-  through, instead of `t`'s; for an argument that is a reference parameter, its loans less its `Outer`.
+  through, instead of `t`'s; for an argument that is a reference parameter, its loans less its `Outer`; for an
+  argument `t = f(a)`, the only assignment of `t`, where `f`'s result passes through its parameter `a`
+  (type-system.md §25.6, B18), what `a` contributes as that argument, followed again if `a` is defined the same way.
 
 ## 8. What the v0 checker deliberately does not do
 

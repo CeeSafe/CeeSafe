@@ -1,0 +1,50 @@
+// B18 (found by CeeSafe.Web on 0.18.0): a result `borrow S<r>` of `borrow this` has an elided region of its own, so
+// it is tied to the receiver (type-system.md §25.6), not a deep result. And a deep result through a temporary that
+// holds such a call's result carries what the call's argument refers to holds (`o.inner().first()`), not its loan.
+struct Inner<region r> {
+    text: Slice<r, u8>;
+
+    fn first(borrow this) -> Slice<r, u8> => this.text[0..1];
+}
+
+struct Outer<region r> {
+    held: Inner<r>;
+    data: Vector<u8>;
+
+    fn inner(borrow this) -> borrow Inner<r> => borrow this.held;
+
+    fn innerMut(borrow mut this) -> borrow mut Inner<r> => borrow mut this.held;
+
+    fn maybe(borrow this) -> (borrow Inner<r>)? => if (this.data.length == 0) Some(borrow this.held) else null;
+
+    fn named(borrow this) -> borrow(this) Inner<r> => borrow this.held;
+}
+
+// The text, through the outer's inner: tied to `r`, not to `o`.
+fn firstOf<region r>(o: borrow Outer<r>) -> Slice<r, u8> => o.inner().first();
+
+fn firstNamed<region r>(o: borrow Outer<r>) -> Slice<r, u8> => o.named().first();
+
+fn main() {
+    let bytes = "xyz".bytes();
+    var o = Outer { held: Inner { text: bytes }, data: Vector<u8>.create() };
+    Console.writeLine(firstOf(o)[0]);
+    Console.writeLine(firstNamed(o)[0]);
+    match (o.maybe()) {
+        Some(i) => { Console.writeLine(i.text.length); }
+        null => { Console.writeLine(0); }
+    }
+    // The first byte outlives a change to the outer: it views the text, not the outer.
+    let f = o.inner().first();
+    o.data.push(1)!;
+    let m = o.innerMut();
+    m.text = bytes[1..];
+    Console.writeLine(f[0]);
+    Console.writeLine(o.inner().first()[0]);
+}
+
+// expect-stdout: 120
+// expect-stdout: 120
+// expect-stdout: 3
+// expect-stdout: 120
+// expect-stdout: 121

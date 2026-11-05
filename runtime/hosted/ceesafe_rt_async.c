@@ -2236,12 +2236,17 @@ static void cee_exec_loop(cee_task *root, uint64_t cancel_at) {
         bool done = t->scope == NULL ? t->resume.root(t->frame) : t->resume.child(t->frame, t->scope);
         cee_exec.current = NULL;
         if (!done) {
-            if (ceesafe_atomic_swap_u64(&t->woken, 0u) != 0u) {
-                if (t->on_wake) {
-                    t->on_wake = false;
-                    t->channel_wait = false;
-                    cee_exec.wake_count -= 1u;
-                }
+            /* A wake counts only when this resume registered a wait on one. Any other is stale: aimed at a wait the
+               task already left (Async.blocking's thread sets `done` before it wakes, so a task that sees `done`
+               first is woken afterwards). Readying it here would leave its real registrations in place: its scope's
+               `waiter` (a returning child then readies it twice, and the ready queue loops), or its `fd` (a later
+               wait on a wake then aborts: "a task waits on a descriptor and a wake at once"). */
+            if (ceesafe_atomic_swap_u64(&t->woken, 0u) != 0u && t->on_wake) {
+                t->on_wake = false;
+                t->channel_wait = false;
+                cee_exec.wake_count -= 1u;
+                t->deadline = UINT64_MAX;
+                t->fd = -1;
                 cee_ready(t); /* woken between its check and its park */
                 continue;
             }

@@ -194,7 +194,7 @@ fn checkResourceMethod(
         let argumentSyntax = c.front.ast.at(arguments, 0);
         argument = checkArgument(c, argumentSyntax, parameter)?;
     }
-    let receiver = borrowPlace(c, resource, mutable, targetSpan)?;
+    let receiver = borrowReceiver(c, resource, mutable, targetSpan)?;
     if (c.isBottom(receiver) || (argument != none() && c.isBottom(argument))) {
         return c.errorResult(span.start, span.end);
     }

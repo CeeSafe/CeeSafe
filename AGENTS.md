@@ -48,10 +48,12 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases or tuples, and no `==` on structs.
 - An optional's fallback is `o ?? value`; `o.isSome()` and `o.isNull()` test it. `let _ = f();` discards a value.
 - Indexes are `usize`; `0..4` is a range of `i32`. Loop with `for (i in 0..values.length)`.
-- `if` and `match` expressions take expressions, not blocks: `let s = if (x < 0) -1 else 1;`.
+- `if` and `match` expressions take expressions, `let s = if (x < 0) -1 else 1;`, or blocks that end with their value
+  without `;`; a statement's block has no value.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.
 - `as` converts only without loss; `truncate<u8>(x)` wraps.
-- Bind a constant or a temporary to a local before slicing it or asking its `.length`.
+- A view of a temporary, `make().view()`, lasts until the end of its statement: to keep it, bind the value to a local.
+- There is no string interpolation: `"x = {x}"` prints `{x}` (warning N0400); write the value in a call of its own.
 - Pass a function or closure as a parameter and call the parameter; a field holding one cannot be called.
 - A `StringView` inside an enum or struct needs a region parameter; for fixed messages, use an enum of reasons.
 - A method cannot have the name of a field.

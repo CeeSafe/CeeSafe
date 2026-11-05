@@ -50,6 +50,7 @@ fn indexesInStmt(c: borrow Checker, s: u32, symbol: u32) -> bool {
             return indexesIn(c, target, symbol, false) || indexesIn(c, value, symbol, false);
         }
         StmtNode.Expression(e) => { return indexesIn(c, e, symbol, false); }
+        StmtNode.Value(e) => { return indexesIn(c, e, symbol, false); }
         StmtNode.Unsafe(block) => { return indexesInStmt(c, block, symbol); }
         _ => { return false; }
     }

@@ -211,70 +211,133 @@ fn fill(values: SliceMut<i32>) {
 }
 ```
 
-### A block is not a value
+### A block has a value only as a branch
+
+A branch of an `if` or `match` expression may be a block that ends with its value, written without `;`:
+
+```ceesafe
+fn sign(x: i32) -> i32 {
+    let s = if (x < 0) {
+        let magnitude = 0 - x;
+        magnitude / magnitude * -1
+    } else 1;
+    return s;
+}
+
+fn main() {
+    Console.writeLine(sign(-4));
+}
+```
+
+```text
+-1
+```
+
+A statement's block has no value: a `match` statement whose arms end in a value is an error.
 
 <!-- ceesafe: fail N0100 -->
 ```ceesafe
-fn sign(x: i32) -> i32 {
-    let s = if (x < 0) { -1 } else { 1 };
+fn sign(x: i32) {
+    match (x < 0) {
+        true => { -1 }
+        false => { 1 }
+    }
+}
+```
+
+```text
+main.cee:3:21: error[N0100]: expected ';', found '}': a block ends in a value only as a branch of an 'if' or 'match' expression (let x = match …)
+  |
+3 |         true => { -1 }
+  |                     ^
+
+main.cee:4:21: error[N0100]: expected ';', found '}': a block ends in a value only as a branch of an 'if' or 'match' expression (let x = match …)
+  |
+4 |         false => { 1 }
+  |                     ^
+```
+
+Make it an expression, `let s = match (x < 0) { … };`, and return its value.
+
+### A view of a temporary lasts until the end of its statement
+
+A call's result can be borrowed, sliced or measured where it is made, `use(make().view())`, but it is destroyed at the
+end of the statement, so a view of it cannot be kept:
+
+<!-- ceesafe: fail N0243 -->
+```ceesafe
+fn make() -> String {
+    var s = String.create();
+    s.append("hello")!;
     return s;
 }
+
+fn main() {
+    let v = make().view();
+    Console.writeLine(v);
+}
 ```
 
 ```text
-main.cee:2:28: error[N0100]: expected ';', found '}'
+main.cee:8:5: error[N0243]: a temporary value is dropped at the end of this statement while still borrowed; bind it to a local first
   |
-2 |     let s = if (x < 0) { -1 } else { 1 };
-  |                            ^
-
-main.cee:2:39: error[N0100]: expected ';', found '}'
-  |
-2 |     let s = if (x < 0) { -1 } else { 1 };
-  |                                       ^
+8 |     let v = make().view();
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  = note: a temporary value is borrowed here (8:5)
+  = note: the borrow is used later here (9:5)
 ```
 
-An `if` or `match` expression's branches are expressions, written without braces:
+Bind the value to a local, and keep the view of the local:
 
 ```ceesafe
-fn sign(x: i32) -> i32 {
-    let s = if (x < 0) -1 else 1;
+fn make() -> String {
+    var s = String.create();
+    s.append("hello")!;
     return s;
 }
-```
-
-### A temporary is not sliced or measured
-
-A constant array can be measured and indexed directly; the result of a call can't:
-
-<!-- ceesafe: fail N0216 -->
-```ceesafe
-fn table() -> [u8; 4] => [1, 2, 3, 4];
 
 fn main() {
-    Console.writeLine(table().length);
+    let text = make();
+    let v = text.view();
+    Console.writeLine(v);
 }
 ```
 
 ```text
-main.cee:4:23: error[N0216]: 'length' needs an array variable or field; bind the value to a local first
+hello
+```
+
+### There is no string interpolation
+
+`{x}` in a string is printed as written. When `x` is a name in scope, the compiler warns (N0400):
+
+<!-- ceesafe: warns N0400 -->
+```ceesafe
+fn main() {
+    let x = 3;
+    Console.writeLine("x = {x}");
+}
+```
+
+```text
+main.cee:3:28: warning[N0400]: this string prints '{x}' as written (there is no string interpolation): write the value in a call of its own, or '\{' to mean the brace
   |
-4 |     Console.writeLine(table().length);
-  |                       ^^^^^^^^^^^^^^
+3 |     Console.writeLine("x = {x}");
+  |                            ^^^
 ```
 
-Bind it to a local first, as the message says:
+Write the value in a call of its own:
 
 ```ceesafe
-fn table() -> [u8; 4] => [1, 2, 3, 4];
-
 fn main() {
-    let values = table();
-    Console.writeLine(values.length);
+    let x = 3;
+    Console.write("x = ");
+    Console.writeLine(x);
 }
 ```
 
 ```text
-4
+x = 3
 ```
 
 ### A function in a field is not called through the field

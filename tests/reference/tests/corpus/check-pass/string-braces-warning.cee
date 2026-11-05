@@ -1,0 +1,36 @@
+// N0400 (ADR 0073 §2.4): `{name}` in a string literal, with `name` bound where the literal stands, is printed as
+// written; CeeSafe has no string interpolation. A warning: the program still checks, builds and runs.
+const LIMIT: i32 = 5;
+
+struct P {
+    x: i32;
+
+    fn show(borrow this) {
+        Console.writeLine("p = {this.x}"); // warning[N0400]
+    }
+}
+
+fn f(n: i32) {
+    Console.writeLine("n = {n}");       // warning[N0400]
+    Console.writeLine("limit {LIMIT}"); // warning[N0400]
+    let text = "and {n.x} too";         // warning[N0400]
+    Console.writeLine(text);
+    for (i in 0..2) {
+        Console.writeLine("i = {i}"); // warning[N0400]
+    }
+    let g = (k: i32) => { Console.writeLine("k = {k}"); }; // warning[N0400]
+    g(1);
+    // None of these warns: an unbound name, a name bound only later, an escaped brace, a \u escape, an unclosed brace,
+    // and a name that is not an identifier.
+    Console.writeLine("unbound {zz}, a git suffix ^{commit}");
+    Console.writeLine("later {late}");
+    let late = 1;
+    Console.writeLine(late);
+    Console.writeLine("escaped \{n} and \u{41} and {n and {1}");
+    Console.writeLine("braces \{ and \}");
+}
+
+fn main() {
+    f(3);
+    P { x: 1 }.show();
+}

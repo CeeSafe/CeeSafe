@@ -27,13 +27,13 @@
       "patterns": [
         {
           "name": "constant.character.escape.ceesafe",
-          "match": "\\\\(?:[nrt0\\\\'\"]|u\\{[0-9a-fA-F]{1,6}\\})"
+          "match": "\\\\(?:[nrt0\\\\'\"{}]|u\\{[0-9a-fA-F]{1,6}\\})"
         }
       ]
     },
     "characters": {
       "name": "string.quoted.single.ceesafe",
-      "match": "'(?:[^'\\\\]|\\\\(?:[nrt0\\\\'\"]|u\\{[0-9a-fA-F]{1,6}\\}))'"
+      "match": "'(?:[^'\\\\]|\\\\(?:[nrt0\\\\'\"{}]|u\\{[0-9a-fA-F]{1,6}\\}))'"
     },
     "numbers": {
       "patterns": [

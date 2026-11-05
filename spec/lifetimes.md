@@ -130,19 +130,30 @@ the statement; the rvalue's own accesses use the loans live before it. This acce
 `a[0] = sum(a[..])`: the slice is dead once `sum` has returned, before `a[0]` is written.
 Rust's MIR gets the same result by writing a call's result in a separate step.
 
-**B5, two-phase borrows (as implemented).** For a method call `e.m(args)` whose receiver is
+**B5, two-phase borrows (as implemented; ADR 0073 §2.2).** For a method call `e.m(args)` whose receiver is
 `borrow mut this` and `e` is a place, the receiver's loan is created **after** `args` are
 evaluated, right before the call. Arguments may therefore read `e` (`v.push(v.len())`), but
-they cannot hold a borrow of `e` across the call. Evaluating a place has no side effects, so
-creating its loan later does not change what the program computes. The loan exists only for the
-call, which is exactly the interval in which it must be exclusive.
+they cannot hold a borrow of `e` across the call. The place itself, with its index values and their bounds
+checks, is found where the receiver stands, left to right: `ps[i].set(bump(mut i))` borrows the element `i` named
+before `bump` ran (before ADR 0073, after). The loan exists only for the call, which is exactly the interval in
+which it must be exclusive.
+
+Every other argument `mut p` (`p` a place) and every `borrow mut` local passed on to a `borrow mut` parameter (B4) is
+two-phase too, in calls of functions, methods, closures and function values: its place is found where it stands, and
+its loan made at the call. Unlike a receiver it is **reserved** in between: when a later argument does more than
+read (a call, a borrow, a move), a shared loan of the place is held from the argument to the call, so a later
+argument may read the place (`fail(mut s, s.count)`) but a write, a move or a mutable borrow of it conflicts (N0240,
+N0241), and so does a shared borrow still live at the call (`f(mut s, s.name.view())`). Reads in later arguments
+of what a reserved loan may cover are taken where they stand, before the loans are made.
 
 ## 6. Temporaries
 
 `f(makeValue())` with a `borrow T` parameter borrows a temporary that dies at the end of the
 statement (`StorageDead`). If the result of `f` is derived from that argument and is stored in a
 reference local used after the statement, the `Dead` access conflicts with the live loan: N0243
-("temporary dropped while still borrowed"). The fix is to bind the value to a local first.
+("temporary dropped while still borrowed"). The fix is to bind the value to a local first. The same holds for a
+temporary made for a receiver or a slice (ADR 0073 §2.1): `make().view()` is valid within its statement, and N0243
+once the view is used after it.
 
 ## 7. Returning references (E1, E2)
 

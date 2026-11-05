@@ -1,0 +1,4 @@
+// A dependency's own warning (N0400) is not reported to the packages that use it (ADR 0073 §2.4).
+public fn greet(name: StringView) {
+    Console.writeLine("hello {name}");
+}

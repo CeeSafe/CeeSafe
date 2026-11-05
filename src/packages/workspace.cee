@@ -493,7 +493,8 @@ struct GitCache {
         arguments.push(copyBytes("cat-file".bytes())?)?;
         arguments.push(copyBytes("-e".bytes())?)?;
         var spec = copyBytes(commit)?;
-        appendText(mut spec, "^{commit}")?;
+        appendText(mut spec, "^{")?; // git's `<rev>^{commit}`, in two pieces: `{commit}` would be N0400 here
+        appendText(mut spec, "commit}")?;
         arguments.push(spec)?;
         return Ok(this.run(database, arguments)? != null);
     }

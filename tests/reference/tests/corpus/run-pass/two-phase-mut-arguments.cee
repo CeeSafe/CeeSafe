@@ -1,0 +1,52 @@
+// Two-phase `mut` arguments (ADR 0073 §2.2): a `mut p` argument's loan starts at the call, so the later arguments may
+// read `p`; its place, indexes included, is found where it stands, left to right. A receiver keeps B5's rule: a later
+// argument may even use it mutably (`v.push(v.pop()!)`).
+struct P {
+    v: i32;
+
+    fn set(borrow mut this, x: i32) { this.v = x; }
+}
+
+struct S {
+    n: [u32; 2];
+    count: u32;
+}
+
+fn bump(i: borrow mut usize) -> i32 {
+    i = i + 1;
+    return 9;
+}
+
+fn fail(s: borrow mut S, line: u32) { s.count = line; }
+
+fn record(r: borrow mut S, extra: u32) { r.count += extra; }
+
+fn main() {
+    var ps = [P { v: 0 }, P { v: 0 }];
+    var i: usize = 0;
+    ps[i].set(bump(mut i)); // the receiver is ps[0]: its index is read before the argument changes it
+    Console.writeLine(ps[0].v);
+    Console.writeLine(ps[1].v);
+    var s = S { n: [7, 8], count: 0 };
+    fail(mut s, s.n[0]); // a read of `s` after `mut s`
+    Console.writeLine(s.count);
+    fail(mut s, s.count + 1);
+    Console.writeLine(s.count);
+    let r = borrow mut s;
+    record(r, r.count); // a reborrowed `borrow mut` local
+    Console.writeLine(s.count);
+    let f = (t: borrow mut S, extra: u32) => { t.count = extra * 2; };
+    f(mut s, s.count); // a closure call
+    Console.writeLine(s.count);
+    var v = Vector<i32>.create();
+    v.push(1)!;
+    v.push(v.pop()!)!;
+    Console.writeLine(v.length);
+}
+// expect-stdout: 9
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 16
+// expect-stdout: 32
+// expect-stdout: 1

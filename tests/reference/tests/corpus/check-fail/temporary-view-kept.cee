@@ -1,0 +1,12 @@
+// A view of a temporary kept after its statement (ADR 0073 §2.1): the temporary is destroyed at the end of the
+// statement, so it is N0243, as for `same(five())`.
+fn make() -> String {
+    var s = String.create();
+    s.append("hello")!;
+    return s;
+}
+
+fn main() {
+    let v = make().view(); // error[N0243]
+    Console.writeLine(v);
+}

@@ -876,6 +876,7 @@ fn fmtWalkStmt(l: borrow mut FmtLayout, ast: borrow Ast, s: u32) -> Result<void,
             fmtWalkExpr(l, ast, value)?;
         }
         StmtNode.Expression(e) => { fmtWalkExpr(l, ast, e)?; }
+        StmtNode.Value(e) => { fmtWalkExpr(l, ast, e)?; }
         StmtNode.Unsafe(body) => { fmtWalkBlock(l, ast, body)?; }
         _ => {}
     }

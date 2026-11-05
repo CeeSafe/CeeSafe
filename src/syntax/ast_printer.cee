@@ -392,6 +392,13 @@ struct AstPrinter {
                 this.text(")")?;
                 this.close()?;
             }
+            StmtNode.Value(expr) => {
+                this.open()?;
+                this.text("(value ")?;
+                this.expr(ast, symbols, expr)?;
+                this.text(")")?;
+                this.close()?;
+            }
             StmtNode.Expression(expr) => {
                 this.open()?;
                 this.text("(expr ")?;

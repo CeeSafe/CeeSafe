@@ -1,0 +1,40 @@
+(program
+  (const LIMIT: i32 = 5:i32)
+  (fn f ((n#0: i32)) -> void
+    (block
+      (expr (Console.writeLine "n = {n}"))
+      (expr (Console.writeLine "limit {LIMIT}"))
+      (let text#1: StringView = "and {n.x} too")
+      (expr (Console.writeLine text#1))
+      (for i#2 in 0:i32 .. 2:i32
+        (block
+          (expr (Console.writeLine "i = {i}"))
+        )
+      )
+      (let g#3: fn(i32) = (closure 668 () (block (expr (Console.writeLine "k = {k}")))):fn(i32))
+      (expr (Process.exit g#3 1:i32))
+      (expr (Console.writeLine "unbound {zz}, a git suffix ^{commit}"))
+      (expr (Console.writeLine "later {late}"))
+      (let late#4: i32 = 1:i32)
+      (expr (Console.writeLine late#4))
+      (expr (Console.writeLine "escaped {n} and A and {n and {1}"))
+      (expr (Console.writeLine "braces { and }"))
+    )
+  )
+  (fn main () -> void
+    (block
+      (expr (call f 3:i32):void)
+      (expr (call P.show (borrow-temp (new P (x 1:i32)))):void)
+    )
+  )
+  (fn P.show ((this#0: borrow P)) -> void
+    (block
+      (expr (Console.writeLine "p = {this.x}"))
+    )
+  )
+  (fn closure ((k#0: i32)) -> void
+    (block
+      (expr (Console.writeLine "k = {k}"))
+    )
+  )
+)

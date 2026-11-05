@@ -320,6 +320,11 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   `this` then has type `borrow S` / `borrow mut S`. In `e.m(…)` the receiver is borrowed
   implicitly, with no marker. For `borrow mut this`, `e` must be a mutable place or a
   `borrow mut S` value (N0248).
+- **A temporary as a receiver** (ADR 0073 §2.1). A receiver of a `borrow this` or `borrow mut this` method that is
+  not a place, `make().view()` or `text.split(",").next()`, is evaluated into a temporary that lives until the end of
+  its statement (§14.5), and the receiver borrows it; so is a field path on one (`holder().name.view()`). A result
+  derived from it may be used within the statement; kept in a `let` used after it, it is N0243. A path through a
+  reference is not copied: it is borrowed as a place. An explicit `borrow e` or `mut e` of a value is still N0247.
 
 ### 13.3 Using references
 - **Auto-deref.** Where a value of type `T` is needed (an operand, a by-value argument, an
@@ -548,15 +553,21 @@ let name = match (shape) {
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'
 ValueArm  = Pattern '=>' Branch
-Branch    = Expr | Block
+Branch    = Expr | Block | ValueBlock
+ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 0073 §2.3 *)
 ```
 - **Where.** In expression position (an initialiser, an operand, an argument, a `return` value, …). An `if` or
   `match` that begins a statement is the statement form (§9, §15.2), as before. An `if` expression needs its
   `else` (N0100 otherwise).
 - **Branches.** A branch is an expression, the value of the whole when that branch is taken, or a block that
   cannot complete (§9): one that ends in `return`, `break`, `continue` or a call of type *never*, such as
-  `{ return; }` or `{ Process.exit(1); }`. A block that can complete has no value: N0235. (A block that ends in a
-  value, as in Rust, is not part of G5.)
+  `{ return; }` or `{ Process.exit(1); }`. A block that can complete has no value: N0235.
+- **Value blocks** (ADR 0073 §2.3). A block branch may end with an expression written without `;`: the branch's
+  value, typed as an expression branch is. An `if` (with its `else`) or `match` that ends a value block, directly
+  before its `}`, is read as an expression. Only branches of `if` and `match` expressions have value blocks: in a
+  function body, a statement-form `if` or `match` or a plain block, a final expression without `;` is N0100. The value
+  is moved out before the block's locals and temporaries are destroyed; a reference to one of them as the value is
+  N0243.
 - **Extent.** An expression branch extends as far right as an expression can: `if (c) 1 else 2 + 3` is
   `if (c) 1 else (2 + 3)`. Write parentheses to use an `if` expression inside a larger one: `(if (c) 1 else 2) + 3`.
   Value arms are separated by commas; a block arm needs none.
@@ -625,7 +636,11 @@ Branch    = Expr | Block
   program **panics**.
 - `borrow mut a[lo..hi]` gives a `SliceMut<T>` and needs `a` to be mutable. As a call argument
   for a `SliceMut<T>` parameter, `mut a[lo..hi]` means the same.
-- Slicing needs a place (N0247): slice a local, not a call result.
+- Slicing a value that is not a place (ADR 0073 §2.1): an array value, or a view or slice value, is held in a
+  temporary until the end of the statement and sliced there (`digest()[0..4]`, `s.view()[1..3]`); a slice of an array
+  temporary cannot be kept after the statement (N0243), a slice of a view keeps the view's loans. A place reached
+  through a reference is sliced as a place. `.length` of an array value is its constant length, the value still
+  evaluated. Anything else that is not a place is N0247.
 - Evaluation order: the array place (with its own indexes), then `lo`, then `hi`. In an assignment
   `a[i] = v`, the target's indexes are evaluated and checked before `v`.
 - The borrow checker treats all elements of an array as **overlapping** (no index reasoning in v0).

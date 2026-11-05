@@ -1,0 +1,27 @@
+// While a `mut` argument is reserved (ADR 0073 §2.2), the later arguments may only read its place: a mutable borrow,
+// a second `mut`, a shared borrow still live at the call, or a move is an error.
+struct S {
+    name: String;
+    count: u32;
+}
+
+fn f(s: borrow mut S, n: u32) { s.count = n; }
+
+fn g(s: borrow mut S) -> u32 {
+    s.count += 1;
+    return s.count;
+}
+
+fn two(a: borrow mut S, b: borrow mut S) {}
+
+fn keep(s: borrow mut S, v: StringView) {}
+
+fn takes(s: borrow mut S, t: S) {}
+
+fn main() {
+    var s = S { name: String.create(), count: 0 };
+    f(mut s, g(mut s));         // error[N0241]
+    two(mut s, mut s);          // error[N0241]
+    keep(mut s, s.name.view()); // error[N0241]
+    takes(mut s, s);            // error[N0250]
+}

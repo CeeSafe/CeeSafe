@@ -247,8 +247,33 @@ negative
 -1
 ```
 
-An `if` expression needs its `else`. A branch can also be a block that leaves, such as `{ return; }`, which is how
-an early exit fits inside an expression.
+An `if` expression needs its `else`. A branch can also be a block. It either ends with its value, written without `;`,
+or it leaves, such as `{ return; }`, which is how an early exit fits inside an expression:
+
+```ceesafe
+fn parse(text: StringView) -> i32 {
+    let n = match (text.parseInt<i32>()) {
+        Some(v) => {
+            let doubled = v * 2;
+            doubled
+        }
+        null => {
+            return -1;
+        }
+    };
+    return n;
+}
+
+fn main() {
+    Console.writeLine(parse("21"));
+    Console.writeLine(parse("x"));
+}
+```
+
+```text
+42
+-1
+```
 
 ## Constants
 

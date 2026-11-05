@@ -1899,6 +1899,22 @@ fn lowerRvalueCore(
             return if (borrowed == none()) Ok(none()) else n.rvalue(NirRvalue.Ref(mutable, borrowed), typ, span);
         }
         HirExpr.Slice(mutable, place, low, high) => { return lowerSlice(c, n, b, e, mutable, place, low, high); }
+        HirExpr.SliceTemp(mutable, value, low, high) => {
+            // The value lives in a temporary until the end of the statement, as BorrowTemp's does (ADR 0073 §2.1).
+            let rvalue = lowerRvalue(c, n, b, value)?;
+            if (rvalue == none()) {
+                return Ok(none());
+            }
+            let valueType = c.hir.exprTypes[value as usize];
+            let storage = newTemp(b, valueType)?;
+            let storagePlace = localPlace(n, storage)?;
+            assign(n, b, storagePlace, rvalue)?;
+            var array = localPlace(n, storage)?;
+            if (c.types.is(valueType, TypeKind.Reference)) {
+                array = projectPlace(n, array, derefProjectionN())?; // a view's elements
+            }
+            return lowerSliceAt(c, n, b, e, mutable, array, low, high);
+        }
         HirExpr.SliceLength(slice) => {
             let place = lowerPlaceExpr(c, n, b, slice)?;
             let usize = c.types.usize;
@@ -2213,44 +2229,14 @@ fn lowerCall(
     let typ = c.hir.exprTypes[e as usize];
     let span = exprSpan(c, e);
     let syntax = c.hir.functions[callee as usize].syntax;
-    // lib/core's VectorBytes functions are `v.pushBE(x)` (ADR 0071 §2.2): two-phase as `push` is, though static. The
-    // name is reserved for lib/core (N0201), so no program's struct has it.
+    // B5 and ADR 0073 §2.2: every mutable borrow of a place among the arguments, the receiver's included (and lib/core's
+    // VectorBytes functions', `v.pushBE(x)`, ADR 0071 §2.2), is two-phase: its place (indexes included) is found where
+    // it stands, and its loan made after the last argument.
     let owner = c.hir.functions[callee as usize].owner;
-    let vectorBytes = owner != none() && sameText(c.typeName(owner), "VectorBytes");
-    let borrowMutReceiver = (receiverIndex(c.front.ast.functions[syntax as usize].receiver) == 3 || vectorBytes) &&
-        arguments.count > 0;
-    if (borrowMutReceiver) {
-        let first = c.hir.at(arguments, 0);
-        let isBorrow = match (c.hir.exprs[first as usize]) {
-            HirExpr.Borrow(_, _) => true,
-            HirExpr.Reborrow(_, reference) => match (c.hir.exprs[reference as usize]) {
-                HirExpr.LocalRef(_) => true,
-                _ => false,
-            },
-            _ => false,
-        };
-        if (isBorrow) {
-            // B5 (lifetimes.md §5): the receiver's mutable loan starts after the arguments are evaluated.
-            let rest = Range { start: arguments.start + 1, count: arguments.count - 1 };
-            var operands = Vector<u32>.create();
-            if (!lowerOperands(c, n, b, rest, mut operands)?) {
-                return Ok(none());
-            }
-            let receiver = lowerOperand(c, n, b, first)?;
-            if (receiver == none()) {
-                return Ok(none());
-            }
-            var all = Vector<u32>.create();
-            all.push(receiver)?;
-            for (o in operands.view()) {
-                all.push(o)?;
-            }
-            let list = n.list(all.view())?;
-            return n.rvalue(NirRvalue.Call(callee, list), typ, span);
-        }
-    }
+    let receiverFirst = receiverIndex(c.front.ast.functions[syntax as usize].receiver) != 0 ||
+        (owner != none() && sameText(c.typeName(owner), "VectorBytes"));
     var operands = Vector<u32>.create();
-    if (!lowerOperands(c, n, b, arguments, mut operands)?) {
+    if (!lowerTwoPhaseOperands(c, n, b, arguments, receiverFirst, mut operands)?) {
         return Ok(none());
     }
     let size = byteOrderAccessSize(c, b, callee);
@@ -2698,7 +2684,13 @@ fn lowerBuiltinCall(
         return n.rvalue(NirRvalue.Builtin(function, list), typ, span);
     }
     var operands = Vector<u32>.create();
-    if (!lowerOperands(c, n, b, arguments, mut operands)?) {
+    if (function == bfCallClosure() || function == bfCallFunction()) {
+        // A closure's or function value's `mut` arguments are two-phase too (ADR 0073 §2.2); a closure's environment
+        // comes first, as a receiver.
+        if (!lowerTwoPhaseOperands(c, n, b, arguments, function == bfCallClosure(), mut operands)?) {
+            return Ok(none());
+        }
+    } else if (!lowerOperands(c, n, b, arguments, mut operands)?) {
         return Ok(none());
     }
     let list = n.list(operands.view())?;
@@ -2715,28 +2707,233 @@ fn lowerOperands(
     out: borrow mut Vector<u32>,
 ) -> Result<bool, AllocError> {
     for (i in 0..exprs.count) {
-        let hoisted105 = c.hir.at(exprs, i);
-        var operand = lowerOperand(c, n, b, hoisted105)?;
+        let operand = lowerArgument(c, n, b, exprs, i)?;
         if (operand == none()) {
             return Ok(false);
         }
-        let place = operandPlace(n, operand);
-        if (place != none() && b.locals[n.places[place as usize].local as usize].name != none()) {
-            var later = false;
-            for (j in (i + 1)..exprs.count) {
-                if (containsCall(c, c.hir.at(exprs, j))) {
-                    later = true;
-                }
-            }
-            if (later) {
-                let temp = newTemp(b, n.operandTypes[operand as usize])?;
-                let tempPlace = localPlace(n, temp)?;
-                let value = useRvalue(n, operand)?;
-                assign(n, b, tempPlace, value)?;
-                operand = readPlace(c, n, b, tempPlace)?;
+        out.push(operand)?;
+    }
+    return Ok(true);
+}
+
+/// Operand `i` of `exprs`, evaluated in order: a named local read before a later operand's call is copied first.
+fn lowerArgument(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    exprs: Range,
+    i: u32,
+) -> Result<u32, AllocError> {
+    let hoisted105 = c.hir.at(exprs, i);
+    var operand = lowerOperand(c, n, b, hoisted105)?;
+    if (operand == none()) {
+        return Ok(none());
+    }
+    let place = operandPlace(n, operand);
+    if (place != none() && b.locals[n.places[place as usize].local as usize].name != none()) {
+        var later = false;
+        for (j in (i + 1)..exprs.count) {
+            if (containsCall(c, c.hir.at(exprs, j))) {
+                later = true;
             }
         }
+        if (later) {
+            let temp = newTemp(b, n.operandTypes[operand as usize])?;
+            let tempPlace = localPlace(n, temp)?;
+            let value = useRvalue(n, operand)?;
+            assign(n, b, tempPlace, value)?;
+            operand = readPlace(c, n, b, tempPlace)?;
+        }
+    }
+    return Ok(operand);
+}
+
+/// Whether an argument after `i` could change, move or lend a reserved place: one that is more than reads of places,
+/// constants and arithmetic on them. Only then is a reservation made; a read is taken where it stands anyway.
+fn laterNonConstant(c: borrow Checker, exprs: Range, i: u32) -> bool {
+    for (j in (i + 1)..exprs.count) {
+        if (!onlyReads(c, c.hir.at(exprs, j))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn onlyReads(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.IntConst(_) => true,
+    HirExpr.BoolConst(_) => true,
+    HirExpr.FloatConst(_) => true,
+    HirExpr.StringConst(_) => true,
+    HirExpr.LocalRef(_) => true,
+    HirExpr.FieldAccess(target, _) => onlyReads(c, target),
+    HirExpr.Deref(reference) => onlyReads(c, reference),
+    HirExpr.Index(target, index) => onlyReads(c, target) && onlyReads(c, index),
+    HirExpr.Unary(_, operand) => onlyReads(c, operand),
+    HirExpr.Binary(_, left, right) => onlyReads(c, left) && onlyReads(c, right),
+    HirExpr.Cast(operand) => onlyReads(c, operand),
+    HirExpr.Truncate(operand) => onlyReads(c, operand),
+    _ => false,
+};
+
+/// Whether the place `read` may overlap a reserved argument's place: it goes through a reference, or its variable is
+/// the root of a reserved `mut p` or the reference a reborrow lends.
+fn mayMeetReserved(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    exprs: Range,
+    read: u32,
+) -> Result<bool, AllocError> {
+    let projections = n.places[read as usize].projections;
+    for (k in 0..projections.count) {
+        let isDeref = match (n.projections[(projections.start + k) as usize].kind) {
+            ProjectionKind.Deref => true,
+            _ => false,
+        };
+        if (isDeref) {
+            return Ok(true);
+        }
+    }
+    let local = n.places[read as usize].local;
+    for (j in 0..exprs.count) {
+        let e = c.hir.at(exprs, j);
+        let root = match (c.hir.exprs[e as usize]) {
+            HirExpr.Borrow(true, p) => c.hir.places[p as usize].root,
+            HirExpr.Reborrow(true, reference) => match (c.hir.exprs[reference as usize]) {
+                HirExpr.LocalRef(l) => l,
+                _ => none(),
+            },
+            _ => none(),
+        };
+        if (root != none() && nirLocalOf(c, root) == local) {
+            return Ok(true);
+        }
+    }
+    return Ok(false);
+}
+
+/// A mutable borrow of a place, or a reborrow of a `borrow mut` local: an argument whose loan waits for the call.
+fn isReservedArgument(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.Borrow(true, _) => true,
+    HirExpr.Reborrow(true, reference) => match (c.hir.exprs[reference as usize]) {
+        HirExpr.LocalRef(_) => true,
+        _ => false,
+    },
+    _ => false,
+};
+
+/// A call's operands with two-phase `mut` arguments (ADR 0073 §2.2, B5): each argument is evaluated where it stands,
+/// left to right, but a mutable borrow of a place (`mut p`, a `borrow mut this` receiver, a reborrowed `borrow mut`
+/// local) only has its place found there, its indexes copied and checked; its loan is made after the last argument.
+///
+/// A `mut` argument other than a receiver is reserved (ADR 0073 §2.2): a shared loan of its place from where it stands
+/// to the call, so the later arguments may only read it (a write, a move or a mutable borrow conflicts), then its
+/// mutable loan. A receiver is not (B5 as before): a later argument may use it mutably, as `v.push(v.pop()!)` does.
+fn lowerTwoPhaseOperands(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    exprs: Range,
+    receiverFirst: bool,
+    out: borrow mut Vector<u32>,
+) -> Result<bool, AllocError> {
+    var reserved = Vector<u32>.create(); // per operand: the place whose loan waits, or none
+    var holds = Vector<u32>.create();    // per operand: the temporary holding its reservation, or none
+    var anyReserved = false;
+    for (i in 0..exprs.count) {
+        if (isReservedArgument(c, c.hir.at(exprs, i))) {
+            anyReserved = true;
+        }
+    }
+    for (i in 0..exprs.count) {
+        let e = c.hir.at(exprs, i);
+        var place = none();
+        var guard = none(); // the place the reservation lends: the place, or a reborrowed reference local itself
+        match (c.hir.exprs[e as usize]) {
+            HirExpr.Borrow(true, p) => {
+                place = lowerHirPlace(c, n, b, p)?;
+                guard = place;
+            }
+            HirExpr.Reborrow(true, reference) => {
+                let isLocal = match (c.hir.exprs[reference as usize]) {
+                    HirExpr.LocalRef(_) => true,
+                    _ => false,
+                };
+                if (isLocal) {
+                    let base = lowerOperand(c, n, b, reference)?;
+                    if (base == none() || operandPlace(n, base) == none()) {
+                        return Ok(false);
+                    }
+                    let basePlace = operandPlace(n, base);
+                    place = projectPlace(n, basePlace, derefProjectionN())?;
+                    guard = basePlace; // lending the reference local covers what it reaches
+                }
+            }
+            _ => {}
+        }
+        if (place != none()) {
+            var hold = none();
+            let lent = placeType(c, n, b, guard);
+            // A reference to an unsized place would be a slice type, which the C declares: not needed for a `mut x`.
+            if ((i > 0 || !receiverFirst) && laterNonConstant(c, exprs, i) && !c.types.isUnsized(lent)) {
+                let e2 = c.hir.at(exprs, i);
+                let shared = c.types.referenceTo(lent, false)?;
+                let reservation = n.rvalue(NirRvalue.Ref(false, guard), shared, exprSpan(c, e2))?;
+                hold = newTemp(b, shared)?;
+                let holdPlace = localPlace(n, hold)?;
+                assign(n, b, holdPlace, reservation)?;
+            }
+            reserved.push(place)?;
+            holds.push(hold)?;
+            out.push(none())?;
+            continue;
+        }
+        var operand = lowerArgument(c, n, b, exprs, i)?;
+        if (operand == none()) {
+            return Ok(false);
+        }
+        let read = operandPlace(n, operand);
+        // Read here, not at the call, what a reserved loan may cover: a place of a reserved place's variable, or one
+        // reached through a reference. Anything else (another variable, this call's own temporaries) is left alone.
+        if (anyReserved && read != none() && mayMeetReserved(c, n, b, exprs, read)?) {
+            // Read here, not at the call: by then the reserved loans exist (`fail(mut s, s.n[0])`).
+            let temp = newTemp(b, n.operandTypes[operand as usize])?;
+            let tempPlace = localPlace(n, temp)?;
+            let value = useRvalue(n, operand)?;
+            assign(n, b, tempPlace, value)?;
+            operand = readPlace(c, n, b, tempPlace)?;
+        }
+        reserved.push(none())?;
+        holds.push(none())?;
         out.push(operand)?;
+    }
+    // The reservations end at the call, used there so that they last until it; then the loans are made.
+    for (i in 0..exprs.count) {
+        let hold = holds[i as usize];
+        if (hold != none()) {
+            let held = localPlace(n, hold)?;
+            let operand = readPlace(c, n, b, held)?;
+            let value = useRvalue(n, operand)?;
+            let end = newTemp(b, n.operandTypes[operand as usize])?;
+            let endPlace = localPlace(n, end)?;
+            assign(n, b, endPlace, value)?;
+        }
+    }
+    for (i in 0..exprs.count) {
+        let place = reserved[i as usize];
+        if (place != none()) {
+            let e = c.hir.at(exprs, i);
+            let typ = c.hir.exprTypes[e as usize];
+            let saved = b.span;
+            b.span = exprSpan(c, e);
+            let loan = n.rvalue(NirRvalue.Ref(true, place), typ, b.span)?;
+            let temp = newTemp(b, typ)?;
+            let tempPlace = localPlace(n, temp)?;
+            assign(n, b, tempPlace, loan)?;
+            let read = localPlace(n, temp)?;
+            out[i as usize] = readPlace(c, n, b, read)?;
+            b.span = saved;
+        }
     }
     return Ok(true);
 }
@@ -2753,6 +2950,10 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.Deref(reference) => { return containsCall(c, reference); }
         HirExpr.Reborrow(_, reference) => { return containsCall(c, reference); }
         HirExpr.BorrowTemp(_, value) => { return containsCall(c, value); }
+        HirExpr.SliceTemp(_, value, low, high) => {
+            return containsCall(c, value) || (low != none() && containsCall(c, low)) ||
+                (high != none() && containsCall(c, high));
+        }
         HirExpr.BorrowPath(_, path) => { return containsCall(c, path); }
         HirExpr.StructLiteral(fields) => {
             for (k in 0..fields.count) {
@@ -2887,11 +3088,25 @@ fn lowerSlice(
     lowExpr: u32,
     highExpr: u32,
 ) -> Result<u32, AllocError> {
-    let typ = c.hir.exprTypes[e as usize];
     let array = lowerHirPlace(c, n, b, place)?;
     if (array == none()) {
         return Ok(none());
     }
+    return lowerSliceAt(c, n, b, e, mutable, array, lowExpr, highExpr);
+}
+
+/// A slice of the NIR place `array` (an array, or a view's elements), bounds checked.
+fn lowerSliceAt(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    mutable: bool,
+    array: u32,
+    lowExpr: u32,
+    highExpr: u32,
+) -> Result<u32, AllocError> {
+    let typ = c.hir.exprTypes[e as usize];
     var exprs = Vector<u32>.create();
     if (lowExpr != none()) {
         exprs.push(lowExpr)?;

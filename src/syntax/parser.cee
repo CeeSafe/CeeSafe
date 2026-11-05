@@ -135,6 +135,8 @@ struct Parser {
     nesting: u32;
     tooDeep: bool;
     semicolonFixable: bool; // false while ending an expression statement that is not a call
+    valueHint: bool;        // a missing ';' before '}' after a value: say where a block may end in one (ADR 0073)
+    valueStatement: bool;   // the next statement is at a value block's top level: it may be the block's value (ADR 0073)
 
     // ---- Token access ----
 
@@ -196,6 +198,12 @@ struct Parser {
         describeKind(mut message, kind)?;
         appendText(mut message, ", found ")?;
         describeKind(mut message, this.current().kind)?;
+        if (semicolon && this.valueHint && this.at(TokenKind.CloseBrace)) {
+            appendText(
+                mut message,
+                ": a block ends in a value only as a branch of an 'if' or 'match' expression (let x = match …)",
+            )?;
+        }
         // A sure fix only after a well-formed statement: not after a lexical or earlier syntax error (tooling.md §5.2).
         if (semicolon && !this.recovering && !this.tooDeep && this.semicolonFixable &&
             !this.front.diagnostics.anyIn(this.file)) {
@@ -1430,7 +1438,11 @@ struct Parser {
 
     // ---- Statements ----
 
-    fn parseBlock(borrow mut this) -> Result<u32, AllocError> {
+    fn parseBlock(borrow mut this) -> Result<u32, AllocError> => this.parseBlockOf(false);
+
+    /// A block; with `values`, a branch's block, whose last expression may be written without `;` as its value (ADR
+    /// 0073 §2.3).
+    fn parseBlockOf(borrow mut this, values: bool) -> Result<u32, AllocError> {
         let start = this.current().start;
         if (!this.at(TokenKind.OpenBrace)) {
             this.expect(TokenKind.OpenBrace)?;
@@ -1441,7 +1453,9 @@ struct Parser {
         var statements = Vector<u32>.create();
         while (!endsBlock(this.current().kind)) {
             let startPos = this.pos;
+            this.valueStatement = values;
             statements.push(this.parseStatement()?)?;
+            this.valueStatement = false;
             this.synchronizeStatement();
             if (this.pos == startPos) {
                 this.advance();
@@ -1497,6 +1511,14 @@ struct Parser {
 
     fn parseStatementLevel(borrow mut this) -> Result<u32, AllocError> {
         let start = this.current().start;
+        // Only this statement may be the value; the statements nested in it may not.
+        let values = this.valueStatement;
+        this.valueStatement = false;
+        if (values && (this.at(TokenKind.IfKeyword) || this.at(TokenKind.MatchKeyword)) && this.endsValueBlock()) {
+            // An `if` or `match` that ends a value block is read as an expression, its value (ADR 0073 §2.3).
+            let value = if (this.at(TokenKind.IfKeyword)) this.parseIfExpr()? else this.parseMatchExpr()?;
+            return this.front.ast.addStmt(StmtNode.Value(value), start, this.endFrom(start));
+        }
         match (this.current().kind) {
             TokenKind.OpenBrace => { return this.parseBlock(); }
             TokenKind.LetKeyword => { return this.parseLocalDecl(); }
@@ -1527,7 +1549,7 @@ struct Parser {
                     let body = this.parseBlock()?;
                     return this.front.ast.addStmt(StmtNode.Unsafe(body), start, this.endFrom(start));
                 }
-                return this.parseExpressionOrAssignment();
+                return this.parseExpressionOrAssignment(values);
             }
             TokenKind.IfKeyword => { return this.parseIf(); }
             TokenKind.WhileKeyword => {
@@ -1570,7 +1592,7 @@ struct Parser {
                 this.expect(TokenKind.Semicolon)?;
                 return this.front.ast.addStmt(StmtNode.Return(value), start, this.endFrom(start));
             }
-            _ => { return this.parseExpressionOrAssignment(); }
+            _ => { return this.parseExpressionOrAssignment(values); }
         }
     }
 
@@ -1725,10 +1747,82 @@ struct Parser {
         return this.front.ast.addExpr(ExprNode.Closure(closure), start, this.endFrom(start));
     }
 
+    /// At an `if` or `match` at a value block's top level: whether it ends right before the block's `}` (ADR 0073
+    /// §2.3), found by skipping balanced groups. Its branches may be blocks, or (for `if`) expressions up to `else`.
+    fn endsValueBlock(borrow this) -> bool {
+        var i = this.pos;
+        let isMatch = sameKind(this.lexed.tokens[i].kind, TokenKind.MatchKeyword);
+        i += 1;
+        i = this.skipGroup(i); // the condition or scrutinee
+        if (isMatch) {
+            i = this.skipGroup(i); // the arms
+            return sameKind(this.kindAt(i), TokenKind.CloseBrace);
+        }
+        var sawElse = false; // an `if` without `else` is a statement: only the expression form has a value
+        loop {
+            // A branch: a block, or an expression up to `else`, `;` or the block's end.
+            if (sameKind(this.kindAt(i), TokenKind.OpenBrace)) {
+                i = this.skipGroup(i);
+            } else {
+                loop {
+                    let kind = this.kindAt(i);
+                    if (sameKind(kind, TokenKind.ElseKeyword) || sameKind(kind, TokenKind.Semicolon) ||
+                        sameKind(kind, TokenKind.CloseBrace) || sameKind(kind, TokenKind.EndOfFile)) {
+                        break;
+                    }
+                    let next = this.skipGroup(i);
+                    i = if (next == i) i + 1 else next;
+                }
+            }
+            if (!sameKind(this.kindAt(i), TokenKind.ElseKeyword)) {
+                return sawElse && sameKind(this.kindAt(i), TokenKind.CloseBrace);
+            }
+            sawElse = true;
+            i += 1;
+            if (sameKind(this.kindAt(i), TokenKind.IfKeyword)) {
+                i += 1;
+                i = this.skipGroup(i);
+            }
+        }
+    }
+
+    fn kindAt(borrow this, i: usize) -> TokenKind {
+        let last = this.lexed.tokens.length - 1;
+        return this.lexed.tokens[if (i < last) i else last].kind;
+    }
+
+    /// Past the balanced group that opens at `i` (`(`, `[` or `{`), or `i` if none opens there.
+    fn skipGroup(borrow this, i: usize) -> usize {
+        let first = this.kindAt(i);
+        if (!sameKind(first, TokenKind.OpenParen) && !sameKind(first, TokenKind.OpenBracket) &&
+            !sameKind(first, TokenKind.OpenBrace)) {
+            return i;
+        }
+        var depth: u32 = 0;
+        var k = i;
+        loop {
+            let kind = this.kindAt(k);
+            if (sameKind(kind, TokenKind.EndOfFile)) {
+                return k;
+            }
+            if (sameKind(kind, TokenKind.OpenParen) || sameKind(kind, TokenKind.OpenBracket) ||
+                sameKind(kind, TokenKind.OpenBrace)) {
+                depth += 1;
+            } else if (sameKind(kind, TokenKind.CloseParen) || sameKind(kind, TokenKind.CloseBracket) ||
+                sameKind(kind, TokenKind.CloseBrace)) {
+                depth -= 1;
+                if (depth == 0) {
+                    return k + 1;
+                }
+            }
+            k += 1;
+        }
+    }
+
     /// A branch of an `if` or `match` expression: a block, or an expression.
     fn parseBranch(borrow mut this) -> Result<u32, AllocError> {
         if (this.at(TokenKind.OpenBrace)) {
-            let block = this.parseBlock()?;
+            let block = this.parseBlockOf(true)?;
             let span = this.front.ast.stmtSpans[block as usize];
             return this.front.ast.addExpr(ExprNode.Block(block), span.start, span.end);
         }
@@ -1894,9 +1988,12 @@ struct Parser {
         return Ok(condition);
     }
 
-    fn parseExpressionOrAssignment(borrow mut this) -> Result<u32, AllocError> {
+    fn parseExpressionOrAssignment(borrow mut this, values: bool) -> Result<u32, AllocError> {
         let start = this.current().start;
         let expr = this.parseExpr()?;
+        if (values && this.at(TokenKind.CloseBrace)) {
+            return this.front.ast.addStmt(StmtNode.Value(expr), start, this.endFrom(start));
+        }
 
         let assign = this.peekAssignOp();
         if (assign.found) {
@@ -1929,7 +2026,9 @@ struct Parser {
             ExprNode.Call(_, _) => true,
             _ => false,
         };
+        this.valueHint = !this.semicolonFixable;
         this.expect(TokenKind.Semicolon)?;
+        this.valueHint = false;
         this.semicolonFixable = true;
         return this.front.ast.addStmt(StmtNode.Expression(expr), start, this.endFrom(start));
     }
@@ -2629,6 +2728,8 @@ fn parseFile(file: u32, lexed: Lexed, front: Frontend) -> Result<Frontend, Alloc
         nesting: 0,
         tooDeep: false,
         semicolonFixable: true,
+        valueHint: false,
+        valueStatement: false,
     };
     parser.parseCompilationUnit()?;
     return Ok(parser.front);

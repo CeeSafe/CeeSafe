@@ -61,6 +61,11 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  doc      write a Markdown page of the files' public items (tooling.md §1): -o <file>,\n")?;
     appendText(out, "           --title <text>; --missing lists the public items without a doc comment\n")?;
     appendText(out, "options:\n")?;
+    appendText(
+        out,
+        "  --deny-warnings   (check, build, test) treat warnings as errors: they are reported as errors and fail\n",
+    )?;
+    appendText(out, "                    the command (ADR 0073 §2.4)\n")?;
     appendText(out, "  --diagnostics-format text|json\n")?;
     appendText(
         out,
@@ -180,6 +185,7 @@ struct Options {
     dumpAst: bool;
     dumpHir: bool;
     noFloat: bool;
+    denyWarnings: bool;          // --deny-warnings (check, build, test): warnings are errors (ADR 0073 §2.4)
     libraryDiagnostics: bool;    // report diagnostics in the libraries' files too (porting gaps there; the reference compiler has none)
     freestanding: bool;          // --profile freestanding (profiles.md §4)
     kernel: bool;                // --kernel cosmoos: lib/kernel, in the freestanding profile (ADR 0025)
@@ -378,6 +384,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.structured = false;
         } else if (arg == "--no-float") {
             options.noFloat = true;
+        } else if (!options.running && arg == "--deny-warnings") {
+            options.denyWarnings = true;
         } else if (arg == "--library-diagnostics") {
             options.libraryDiagnostics = true;
         } else if (arg == "--profile" || arg == "--kernel") {
@@ -672,6 +680,7 @@ fn parseCommand() -> i32 {
         dumpAst: false,
         dumpHir: false,
         noFloat: false,
+        denyWarnings: false,
         libraryDiagnostics: false,
         freestanding: false,
         kernel: false,
@@ -1021,6 +1030,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     dumpAst: false,
     dumpHir: false,
     noFloat: false,
+    denyWarnings: false,
     libraryDiagnostics: false,
     freestanding: false,
     kernel: false,
@@ -1247,6 +1257,16 @@ fn compileFiles(
     if (!checker.front.diagnostics.hasErrors()) {
         nir = analyzeProgram(mut checker)!;
     }
+    if (options.denyWarnings) {
+        checker.front.diagnostics.denyWarnings();
+    }
+    // Warnings when nothing failed (ADR 0073 §2.4): before the work as text, after it as the JSON document. A test
+    // harness's run checks the root package again, so its warnings were reported by `test`'s first step.
+    let warnings = !checker.front.diagnostics.hasErrors() && checker.front.diagnostics.count(false) > 0 &&
+        options.harness.length == 0 && !options.dumpHir;
+    if (warnings && !options.json && (options.testing || options.running || building)) {
+        report(false, checker.front.diagnostics, sources);
+    }
     if (options.dumpHir && !building) {
         var printer = HirPrinter.create();
         printer.printProgram(checker.hir, checker.types, checker.front.symbols)!;
@@ -1263,7 +1283,12 @@ fn compileFiles(
         if (checker.front.diagnostics.hasErrors()) {
             return report(options.json, checker.front.diagnostics, sources);
         }
-        return interpretChecked(options, mut checker, mut nir, sources);
+        let json = options.json;
+        let status = interpretChecked(options, mut checker, mut nir, sources);
+        if (warnings && json) {
+            report(true, checker.front.diagnostics, sources);
+        }
+        return status;
     }
     if (building) {
         if (checker.front.diagnostics.hasErrors()) {
@@ -1340,7 +1365,11 @@ fn compileFiles(
         while (user + 1 < sources.length && checker.fileIsLibrary[user]) {
             user += 1;
         }
-        return buildFiles(options, files, sources[user].path.view());
+        let status = buildFiles(options, files, sources[user].path.view());
+        if (warnings && options.json) {
+            report(true, checker.front.diagnostics, sources);
+        }
+        return status;
     }
     return finish(options, checker.front.diagnostics, sources, inputs);
 }

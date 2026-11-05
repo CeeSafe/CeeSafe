@@ -293,6 +293,38 @@ fn isPathThroughReference(c: borrow Checker, e: u32, mutable: bool) -> Result<bo
     }
 }
 
+/// A method's receiver, borrowed (ADR 0073 §2.1): a place as BorrowPlace borrows it, and otherwise a temporary held to
+/// the end of the statement: a call's result (BorrowTemp), or a path from one, such as its elements or a field
+/// (BorrowPath; lowering spills the root). A path through a reference is never copied: it is BorrowPlace's.
+fn borrowReceiver(c: borrow mut Checker, value: u32, mutable: bool, span: Span) -> Result<u32, AllocError> {
+    if (toPlace(c, value)? != none() || isPathThroughReference(c, value, mutable)? || !rootedInTemporary(c, value)) {
+        return borrowPlace(c, value, mutable, span);
+    }
+    let t = c.types.referenceTo(c.typeOf(value), mutable)?;
+    let isPath = match (c.hir.exprs[value as usize]) {
+        HirExpr.FieldAccess(_, _) => true,
+        HirExpr.Index(_, _) => true,
+        HirExpr.Deref(_) => true,
+        _ => false,
+    };
+    if (isPath) {
+        return c.expr(HirExpr.BorrowPath(mutable, value), t, span.start, span.end);
+    }
+    return c.expr(HirExpr.BorrowTemp(mutable, value), t, span.start, span.end);
+}
+
+/// Whether `e` is a value, or a path of fields, elements and owned contents (a vector's, a box's) from one, with no
+/// local, static or reference on the way (ADR 0073 §2.1).
+fn rootedInTemporary(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(_) => false,
+    HirExpr.StaticAddress(_) => false,
+    HirExpr.Error => false,
+    HirExpr.FieldAccess(target, _) => rootedInTemporary(c, target),
+    HirExpr.Index(target, _) => rootedInTemporary(c, target),
+    HirExpr.Deref(inner) => !c.types.is(c.typeOf(inner), TypeKind.Reference) && rootedInTemporary(c, inner),
+    _ => true,
+};
+
 /// BorrowPlace: `borrow p` or `borrow mut p` of the place a checked expression denotes (N0247, N0248).
 fn borrowPlace(c: borrow mut Checker, value: u32, mutable: bool, span: Span) -> Result<u32, AllocError> {
     match (c.hir.exprs[value as usize]) {

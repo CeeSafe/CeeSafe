@@ -156,6 +156,8 @@ struct Checker {
     reportedQualified: Vector<LayoutUse>;
     packages: Vector<PackageInfo>;    // the root first, then its dependencies (single-file mode: one, unnamed)
     filePackage: Vector<u32>;         // each file's package, none for the libraries
+    blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
+    blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
     declaredOrder: Vector<DeclaredEntry>;
     methodFiles: Vector<MethodFile>; // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)

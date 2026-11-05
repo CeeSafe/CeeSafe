@@ -849,13 +849,22 @@ fn checkBranch(
     let span = c.front.ast.exprSpans[value as usize];
     match (c.front.ast.exprs[value as usize]) {
         ExprNode.Block(block) => {
+            let final = blockValue(c, value);
+            if (final != none()) {
+                // A value block (ADR 0073 §2.3); a flexible or `null` value waits for the type, as a value branch does.
+                if (branches.typ == none() && (isFlexible(c, final) || isNullExpr(c, final))) {
+                    branches.deferred.push(DeferredBranch { index: index, value: value })?;
+                    return c.hir.addStmt(HirStmt.Block(emptyRange()), span.start, span.end);
+                }
+                return checkValueBlock(c, block, branches);
+            }
             let body = checkBlock(c, block)?;
             var loopExits = Vector<bool>.create();
             if (completes(c, body, mut loopExits)?) {
                 var message = Vector<u8>.create();
                 appendText(
                     mut message,
-                    "this block can complete, but it has no value: end it with 'return', 'break' or 'continue', or write the value without braces",
+                    "this block can complete, but it has no value: end it with its value, written without ';', or with 'return', 'break' or 'continue'",
                 )?;
                 c.error(branchCompletes(), span.start, span.end, message)?;
             }
@@ -878,6 +887,50 @@ fn checkBranch(
     return yieldBlock(c, hir, span);
 }
 
+/// A value block's last expression (ADR 0073 §2.3), or none: `e` is a branch.
+fn blockValue(c: borrow Checker, e: u32) -> u32 {
+    let block = match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Block(b) => b,
+        _ => { return none(); }
+    };
+    let statements = match (c.front.ast.stmts[block as usize]) {
+        StmtNode.Block(list) => list,
+        _ => { return none(); }
+    };
+    if (statements.count == 0) {
+        return none();
+    }
+    return match (c.front.ast.stmts[c.front.ast.at(statements, statements.count - 1) as usize]) {
+        StmtNode.Value(v) => v,
+        _ => none(),
+    };
+}
+
+/// What gives a branch its value: the branch itself, a value block's last expression, or none for a block without one.
+fn branchValue(c: borrow Checker, e: u32) -> u32 => if (isBlockExpr(c, e)) blockValue(c, e) else e;
+
+fn isNullExpr(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[unparenthesized(c, e) as usize]) {
+    ExprNode.NullLiteral => true,
+    _ => false,
+};
+
+/// Checks a value block whose value has `branches.typ` when known, and fixes it otherwise (ADR 0073 §2.3). The
+/// block's statements are checked in its scope; its last one, StmtNode.Value, yields.
+fn checkValueBlock(c: borrow mut Checker, block: u32, branches: borrow mut BranchType) -> Result<u32, AllocError> {
+    let savedType = c.blockValueType;
+    let savedResult = c.blockValueResult;
+    c.blockValueType = branches.typ;
+    c.blockValueResult = none();
+    let body = checkBlock(c, block)?;
+    let result = c.blockValueResult;
+    c.blockValueType = savedType;
+    c.blockValueResult = savedResult;
+    if (branches.typ == none() && result != none() && !c.types.is(result, TypeKind.Never)) {
+        branches.typ = result;
+    }
+    return Ok(body);
+}
+
 fn yieldBlock(c: borrow mut Checker, hir: u32, span: Span) -> Result<u32, AllocError> {
     let yielded = c.hir.addStmt(HirStmt.Yield(hir), span.start, span.end)?;
     var statements = Vector<u32>.create();
@@ -897,10 +950,11 @@ fn finishBranches(
         var flexible = false;
         var float = false;
         for (d in branches.deferred.view()) {
-            if (isFlexible(c, d.value)) {
+            let v = branchValue(c, d.value);
+            if (isFlexible(c, v)) {
                 flexible = true;
             }
-            if (hasFloatLiteral(c, d.value)) {
+            if (hasFloatLiteral(c, v)) {
                 float = true;
             }
         }
@@ -910,6 +964,14 @@ fn finishBranches(
     }
     for (k in 0..branches.deferred.length) {
         let d = branches.deferred[k];
+        let block = match (c.front.ast.exprs[d.value as usize]) {
+            ExprNode.Block(b) => b,
+            _ => none(),
+        };
+        if (block != none()) {
+            finished.push(DeferredBranch { index: d.index, value: checkValueBlock(c, block, branches)? })?;
+            continue;
+        }
         let hir = checkExpr(c, d.value, branches.typ)?;
         if (branches.typ == none()) {
             branches.typ = c.typeOf(hir);
@@ -926,8 +988,9 @@ fn flexibleBranches(c: borrow Checker, e: u32) -> bool {
     var anyValue = false;
     match (c.front.ast.exprs[e as usize]) {
         ExprNode.If(_, then, otherwise) => {
-            for (b in [then, otherwise]) {
-                if (!isBlockExpr(c, b)) {
+            for (branch in [then, otherwise]) {
+                let b = branchValue(c, branch);
+                if (b != none()) {
                     if (!isFlexible(c, b)) {
                         return false;
                     }
@@ -937,8 +1000,8 @@ fn flexibleBranches(c: borrow Checker, e: u32) -> bool {
         }
         ExprNode.Match(_, arms) => {
             for (k in 0..arms.count) {
-                let b = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize].value;
-                if (!isBlockExpr(c, b)) {
+                let b = branchValue(c, c.front.ast.valueArms[c.front.ast.at(arms, k) as usize].value);
+                if (b != none()) {
                     if (!isFlexible(c, b)) {
                         return false;
                     }

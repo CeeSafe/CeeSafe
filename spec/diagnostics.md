@@ -286,3 +286,16 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0348 | A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1) | `@test fn t(x: u32) {}` |
 | N0349 | A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2) | `await set.spawn(async move () => { let k = n + 1; return Ok(); })` with `n: borrow u32` |
 | N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |
+
+### Warnings (N0400–N0499)
+
+A warning is reported like an error, `warning[N0400]` in the text format and `"severity": "warning"` in the JSON
+document (counted in `"warnings"`), but it never stops `check`, `build`, `run`, `test` or `fix`, and never changes
+the exit status. `check` reports it with the errors; `build`, `run` and `test` write it to standard error before their
+work, or as the JSON document after it. Warnings are reported for the root package's files only, never for a
+dependency's, lib/core's or lib/std's. `--deny-warnings` (`check`, `build`, `test`) reports every warning as an
+error, and the command fails (ADR 0073 §2.4).
+
+| Code | Meaning | Example |
+|---|---|---|
+| N0400 | A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\{` means the brace and does not warn (`grammar.md` §1.6) | `let x = 3; Console.writeLine("x = {x}");` |

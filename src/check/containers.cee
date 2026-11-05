@@ -183,7 +183,7 @@ fn checkContainerMethod(
         argument = checkExpr(c, argumentSyntax, handle)?;
     }
     let mutable = sameText(text, "insert") || sameText(text, "getMut") || sameText(text, "remove");
-    let receiver = borrowPlace(c, container, mutable, targetSpan)?;
+    let receiver = borrowReceiver(c, container, mutable, targetSpan)?;
     if (c.isBottom(receiver) || c.isBottom(argument)) {
         return c.errorResult(span.start, span.end);
     }
@@ -231,7 +231,7 @@ fn slotMapMember(
         c.error(unknownField(), ident.start, ident.end, message)?;
         return c.errorResult(span.start, span.end);
     }
-    let borrowed = borrowPlace(c, map, false, targetSpan)?;
+    let borrowed = borrowReceiver(c, map, false, targetSpan)?;
     if (c.isBottom(borrowed)) {
         return Ok(borrowed);
     }

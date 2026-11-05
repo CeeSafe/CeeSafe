@@ -13,6 +13,8 @@
 8. dependency-tests: `test` in app lists and runs app's test only, not the `@test` its dependency keeps in src/.
 9. borrowed-listener: `test` of a library that only borrows AsyncTcpListener builds and passes (the C backend once
    panicked on it, then left the listener's drop undefined).
+10. dependency-warnings: `check` in app reports app's N0400 and not its dependency's, and succeeds; with
+    `--deny-warnings` it fails (ADR 0073 §2.4).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -202,7 +204,22 @@ def main():
         if p.returncode != 0:
             problems.append(f"borrowed-listener: test failed: {p.stdout[-400:]}{p.stderr[-400:]}")
 
-    print(f"package_tests: 9 checks; {len(problems)} problems")
+        # 10. Warnings are the root package's only, and never fail a command unless --deny-warnings is given.
+        warnings = os.path.join(work, "dependency-warnings")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "dependency-warnings"), warnings)
+        app = os.path.join(warnings, "app")
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        q = run([compiler, "check", "--deny-warnings"], app)
+        try:
+            document = json.loads(p.stdout)
+            found = [(d["code"], d["severity"], d["file"].replace("\\", "/")) for d in document["diagnostics"]]
+        except (ValueError, KeyError):
+            found = []
+        if p.returncode != 0 or found != [("N0400", "warning", "src/main.cee")] or q.returncode != 1:
+            problems.append(f"dependency-warnings: expected app's one warning, status 0, and 1 with --deny-warnings: "
+                            f"{p.returncode} {found} {q.returncode} {p.stdout[:300]}{p.stderr[:300]}")
+
+    print(f"package_tests: 10 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

@@ -379,7 +379,9 @@ same diagnostics as JSON, and can apply the fixes the compiler is sure of.
 `check`, `build`, `run` and `parse` accept `--diagnostics-format=json` (or `=text`, the default). With `json`,
 diagnostics are not written to standard error; instead one JSON document is written to standard output, as one line,
 after the command's own work. `build` still writes its outputs, and `run` still runs the program, if there are no
-errors; the program's own output then precedes the document. The exit status is unchanged.
+errors; the program's own output then precedes the document. The exit status is unchanged. `"severity"` is `"error"` or `"warning"`,
+and `"warnings"` counts the warnings (`diagnostics.md`, "Warnings"): a successful `build` or `run` writes the document
+only when there are warnings, and a warning never changes the exit status unless `--deny-warnings` is given.
 
 ```json
 {

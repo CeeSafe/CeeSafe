@@ -105,7 +105,7 @@ fn checkVectorRetain(
     targetSpan: Span,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let place = borrowPlace(c, vector, true, targetSpan)?;
+    let place = borrowReceiver(c, vector, true, targetSpan)?;
     let element = c.types.info(c.types.info(c.typeOf(vector)).pointee).element;
     let symbol = c.front.ast.idents[member as usize].symbol;
     let elements = [element];

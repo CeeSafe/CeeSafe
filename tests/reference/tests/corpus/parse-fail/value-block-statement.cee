@@ -1,0 +1,8 @@
+// Only a branch of an `if` or `match` expression ends in a value (ADR 0073 §2.3): in a statement-form `match`, a final
+// expression without `;` is N0100, with a hint.
+fn a(y: i32?) {
+    match (y) {
+        Some(v) => { v } // error[N0100]
+        null => {}
+    }
+}

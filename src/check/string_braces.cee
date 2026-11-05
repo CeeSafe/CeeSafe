@@ -1,0 +1,375 @@
+// N0400 (ADR 0073 §2.4): a string literal whose text has `{name}`, where `name` is bound where the literal stands, is
+// printed as written; CeeSafe has no string interpolation. A syntactic pass over the root package's files, run once
+// after checking: generic bodies are checked once per instance, and speculative checks compare diagnostic counts, so
+// the warning is not reported from the checker itself. Scopes follow the syntax: parameters and `this`, `let`, `var`
+// and `using` locals from their statement on, `for` variables, pattern and closure parameters, and the package's
+// constants and statics.
+
+fn n0400() -> u32 => 400;
+
+/// The names bound at the current point, innermost last.
+struct BraceScope {
+    names: Vector<u32>; // symbol ids
+    constants: Vector<u32>;
+    hasThis: bool;
+}
+
+fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
+    var scope = BraceScope { names: Vector<u32>.create(), constants: Vector<u32>.create(), hasThis: false };
+    for (u in 0..c.front.ast.units.length) {
+        if (isBraceRootFile(c, c.front.ast.units[u].file)) {
+            let items = c.front.ast.units[u].items;
+            for (k in 0..items.count) {
+                let item = c.front.ast.items[c.front.ast.at(items, k) as usize];
+                match (item.kind) {
+                    ItemKind.Const(_, _) => { scope.constants.push(c.front.ast.idents[item.name as usize].symbol)?; }
+                    ItemKind.Static(_, _, _) => {
+                        scope.constants.push(c.front.ast.idents[item.name as usize].symbol)?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for (u in 0..c.front.ast.units.length) {
+        let file = c.front.ast.units[u].file;
+        if (!isBraceRootFile(c, file)) {
+            continue;
+        }
+        let items = c.front.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = c.front.ast.items[c.front.ast.at(items, k) as usize];
+            match (item.kind) {
+                ItemKind.Function(f) => { braceFunction(c, mut scope, file, f)?; }
+                ItemKind.Struct(s) => {
+                    let st = c.front.ast.structs[s as usize];
+                    braceFunctions(c, mut scope, file, st.functions)?;
+                    if (st.dropBlock != none()) {
+                        scope.hasThis = true;
+                        braceStmt(c, mut scope, file, st.dropBlock)?;
+                        scope.hasThis = false;
+                    }
+                }
+                ItemKind.Interface(functions, _) => { braceFunctions(c, mut scope, file, functions)?; }
+                ItemKind.Impl(_, _, functions, _, _) => { braceFunctions(c, mut scope, file, functions)?; }
+                ItemKind.InherentImpl(_, functions, _, _) => { braceFunctions(c, mut scope, file, functions)?; }
+                ItemKind.Const(_, value) => { braceExpr(c, mut scope, file, value)?; }
+                ItemKind.Static(_, _, value) => { braceExpr(c, mut scope, file, value)?; }
+                _ => {}
+            }
+        }
+    }
+    return Ok();
+}
+
+/// A file of the root package (package 0), not a library's.
+fn isBraceRootFile(c: borrow Checker, file: u32) -> bool {
+    if (file == none() || (file as usize) >= c.fileIsLibrary.length || c.fileIsLibrary[file as usize]) {
+        return false;
+    }
+    return packageOfFile(c, file) == 0;
+}
+
+fn braceFunctions(
+    c: borrow mut Checker,
+    scope: borrow mut BraceScope,
+    file: u32,
+    functions: Range,
+) -> Result<void, AllocError> {
+    for (k in 0..functions.count) {
+        let f = c.front.ast.at(functions, k);
+        braceFunction(c, scope, file, f)?;
+    }
+    return Ok();
+}
+
+fn braceFunction(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, f: u32) -> Result<void, AllocError> {
+    let function = c.front.ast.functions[f as usize];
+    if (function.isExtern) {
+        return Ok();
+    }
+    let mark = scope.names.length;
+    let hadThis = scope.hasThis;
+    scope.hasThis = match (function.receiver) {
+        ReceiverKind.None => false,
+        _ => true,
+    };
+    for (k in 0..function.parameters.count) {
+        let p = c.front.ast.parameters[c.front.ast.at(function.parameters, k) as usize];
+        scope.names.push(c.front.ast.idents[p.name as usize].symbol)?;
+    }
+    if (function.body != none()) {
+        braceStmt(c, scope, file, function.body)?;
+    }
+    if (function.expressionBody != none()) {
+        braceExpr(c, scope, file, function.expressionBody)?;
+    }
+    scope.names.truncate(mark);
+    scope.hasThis = hadThis;
+    return Ok();
+}
+
+fn braceStmt(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, s: u32) -> Result<void, AllocError> {
+    if (s == none()) {
+        return Ok();
+    }
+    match (c.front.ast.stmts[s as usize]) {
+        StmtNode.Block(statements) => {
+            let mark = scope.names.length;
+            for (k in 0..statements.count) {
+                let statement = c.front.ast.at(statements, k);
+                braceStmt(c, scope, file, statement)?;
+            }
+            scope.names.truncate(mark);
+        }
+        StmtNode.Local(_, name, _, initializer) => {
+            braceExpr(c, scope, file, initializer)?;
+            if (name != none()) {
+                scope.names.push(c.front.ast.idents[name as usize].symbol)?;
+            }
+        }
+        StmtNode.Defer(body) => { braceStmt(c, scope, file, body)?; }
+        StmtNode.Match(scrutinee, arms) => {
+            braceExpr(c, scope, file, scrutinee)?;
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
+                let mark = scope.names.length;
+                bracePattern(c, scope, arm.pattern)?;
+                braceStmt(c, scope, file, arm.body)?;
+                scope.names.truncate(mark);
+            }
+        }
+        StmtNode.If(condition, then, otherwise) => {
+            braceExpr(c, scope, file, condition)?;
+            braceStmt(c, scope, file, then)?;
+            braceStmt(c, scope, file, otherwise)?;
+        }
+        StmtNode.While(condition, body) => {
+            braceExpr(c, scope, file, condition)?;
+            braceStmt(c, scope, file, body)?;
+        }
+        StmtNode.For(variable, start, end, body) => {
+            braceExpr(c, scope, file, start)?;
+            braceExpr(c, scope, file, end)?;
+            let mark = scope.names.length;
+            if (variable != none()) {
+                scope.names.push(c.front.ast.idents[variable as usize].symbol)?;
+            }
+            braceStmt(c, scope, file, body)?;
+            scope.names.truncate(mark);
+        }
+        StmtNode.Loop(body) => { braceStmt(c, scope, file, body)?; }
+        StmtNode.Return(value) => { braceExpr(c, scope, file, value)?; }
+        StmtNode.Assign(target, _, value) => {
+            braceExpr(c, scope, file, target)?;
+            braceExpr(c, scope, file, value)?;
+        }
+        StmtNode.Expression(e) => { braceExpr(c, scope, file, e)?; }
+        StmtNode.Value(e) => { braceExpr(c, scope, file, e)?; }
+        StmtNode.Unsafe(body) => { braceStmt(c, scope, file, body)?; }
+        _ => {}
+    }
+    return Ok();
+}
+
+/// Binds a pattern's names (a variant's bindings, nested ones included).
+fn bracePattern(c: borrow Checker, scope: borrow mut BraceScope, p: u32) -> Result<void, AllocError> {
+    if (p == none()) {
+        return Ok();
+    }
+    match (c.front.ast.patterns[p as usize]) {
+        PatternNode.Variant(_, _, bindings) => {
+            for (k in 0..bindings.count) {
+                let b = c.front.ast.bindings[c.front.ast.at(bindings, k) as usize];
+                if (b.name != none()) {
+                    scope.names.push(c.front.ast.idents[b.name as usize].symbol)?;
+                }
+                bracePattern(c, scope, b.nested)?;
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
+fn braceExprs(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, list: Range) -> Result<void, AllocError> {
+    for (k in 0..list.count) {
+        let e = c.front.ast.at(list, k);
+        braceExpr(c, scope, file, e)?;
+    }
+    return Ok();
+}
+
+fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: u32) -> Result<void, AllocError> {
+    if (e == none()) {
+        return Ok();
+    }
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.StringLiteral(_) => {
+            let span = c.front.ast.exprSpans[e as usize];
+            braceLiteral(c, scope, file, span)?;
+        }
+        ExprNode.Paren(inner) => { braceExpr(c, scope, file, inner)?; }
+        ExprNode.Unary(_, operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Binary(left, _, right) => {
+            braceExpr(c, scope, file, left)?;
+            braceExpr(c, scope, file, right)?;
+        }
+        ExprNode.Cast(operand, _) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Call(callee, arguments) => {
+            braceExpr(c, scope, file, callee)?;
+            braceExprs(c, scope, file, arguments)?;
+        }
+        ExprNode.Member(target, _) => { braceExpr(c, scope, file, target)?; }
+        ExprNode.Unsafe(inner) => { braceExpr(c, scope, file, inner)?; }
+        ExprNode.If(condition, then, otherwise) => {
+            braceExpr(c, scope, file, condition)?;
+            braceExpr(c, scope, file, then)?;
+            braceExpr(c, scope, file, otherwise)?;
+        }
+        ExprNode.Match(scrutinee, arms) => {
+            braceExpr(c, scope, file, scrutinee)?;
+            for (k in 0..arms.count) {
+                let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
+                let mark = scope.names.length;
+                bracePattern(c, scope, arm.pattern)?;
+                braceExpr(c, scope, file, arm.value)?;
+                scope.names.truncate(mark);
+            }
+        }
+        ExprNode.Closure(index) => {
+            let closure = c.front.ast.closures[index as usize];
+            let mark = scope.names.length;
+            for (k in 0..closure.parameters.count) {
+                let p = c.front.ast.closureParameters[c.front.ast.at(closure.parameters, k) as usize];
+                scope.names.push(c.front.ast.idents[p.name as usize].symbol)?;
+            }
+            braceStmt(c, scope, file, closure.block)?;
+            braceExpr(c, scope, file, closure.body)?;
+            scope.names.truncate(mark);
+        }
+        ExprNode.Block(statement) => { braceStmt(c, scope, file, statement)?; }
+        ExprNode.Borrow(_, operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Move(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.MutArg(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.StructLiteral(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let init = c.front.ast.fieldInits[c.front.ast.at(fields, k) as usize];
+                braceExpr(c, scope, file, init.value)?;
+            }
+        }
+        ExprNode.ArrayLiteral(elements) => { braceExprs(c, scope, file, elements)?; }
+        ExprNode.ArrayRepeat(value, count) => {
+            braceExpr(c, scope, file, value)?;
+            braceExpr(c, scope, file, count)?;
+        }
+        ExprNode.Index(target, index) => {
+            braceExpr(c, scope, file, target)?;
+            braceExpr(c, scope, file, index)?;
+        }
+        ExprNode.Slice(target, low, high) => {
+            braceExpr(c, scope, file, target)?;
+            braceExpr(c, scope, file, low)?;
+            braceExpr(c, scope, file, high)?;
+        }
+        ExprNode.Try(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Unwrap(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Await(operand) => { braceExpr(c, scope, file, operand)?; }
+        _ => {}
+    }
+    return Ok();
+}
+
+fn isNameStart(b: u8) -> bool => (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_';
+
+fn isNamePart(b: u8) -> bool => isNameStart(b) || (b >= '0' && b <= '9');
+
+/// Looks at the literal's source text, between its quotes, for an unescaped `{name(.name)*}` naming a bound name, and
+/// reports the first one.
+fn braceLiteral(c: borrow mut Checker, scope: borrow BraceScope, file: u32, span: Span) -> Result<void, AllocError> {
+    if ((file as usize) >= c.fileTexts.length) {
+        return Ok();
+    }
+    var found = false;
+    var open: usize = 0;
+    var close: usize = 0;
+    {
+        let text = c.fileTexts[file as usize].view();
+        let end = if ((span.end as usize) <= text.length) span.end as usize else text.length;
+        var i = span.start as usize + 1;
+        while (!found && i + 1 < end) {
+            let b = text[i];
+            if (b == '\\') {
+                if (text[i + 1] == 'u') {
+                    i += 2; // `\u{…}`: past its closing brace
+                    while (i < end && text[i] != '}') {
+                        i += 1;
+                    }
+                    i += 1;
+                } else {
+                    i += 2; // `\{` means the brace itself, and any other escape is one character
+                }
+                continue;
+            }
+            if (b == '{' && i + 1 < end && isNameStart(text[i + 1])) {
+                var j = i + 1;
+                while (j < end && isNamePart(text[j])) {
+                    j += 1;
+                }
+                let firstEnd = j;
+                var ok = true;
+                while (ok && j < end && text[j] == '.') {
+                    j += 1;
+                    if (j < end && isNameStart(text[j])) {
+                        while (j < end && isNamePart(text[j])) {
+                            j += 1;
+                        }
+                    } else {
+                        ok = false;
+                    }
+                }
+                if (ok && j < end && text[j] == '}') {
+                    let name = text[(i + 1)..firstEnd];
+                    if (braceBound(c, scope, name)) {
+                        found = true;
+                        open = i;
+                        close = j + 1;
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+    if (!found) {
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "this string prints '")?;
+    appendBytes(mut message, c.fileTexts[file as usize][open..close])?;
+    appendText(mut message, "' as written (there is no string interpolation): write the value in a call of its own, ")?;
+    appendText(mut message, "or '\\{' to mean the brace")?;
+    c.front.diagnostics.warning(n0400(), file, truncate<u32>(open), truncate<u32>(close), message)?;
+    return Ok();
+}
+
+/// Whether `name` is bound where the literal stands: a local, a parameter, `this`, or a constant or static.
+fn braceBound(c: borrow Checker, scope: borrow BraceScope, name: Slice<u8>) -> bool {
+    if (name.length == 4 && name[0] == 't' && name[1] == 'h' && name[2] == 'i' && name[3] == 's') {
+        return scope.hasThis;
+    }
+    let symbol = match (c.front.symbols.find(name)) {
+        Some(s) => s.id,
+        null => { return false; }
+    };
+    for (n in scope.names.view()) {
+        if (n == symbol) {
+            return true;
+        }
+    }
+    for (n in scope.constants.view()) {
+        if (n == symbol) {
+            return true;
+        }
+    }
+    return false;
+}

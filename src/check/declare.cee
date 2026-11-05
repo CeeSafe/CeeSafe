@@ -188,6 +188,8 @@ fn checkProgram(
         reportedQualified: Vector<LayoutUse>.create(),
         packages: packages,
         filePackage: filePackage,
+        blockValueType: none(),
+        blockValueResult: none(),
         packageDeclared: Map<Word, Word>.create(),
         declaredOrder: Vector<DeclaredEntry>.create(),
         methodFiles: Vector<MethodFile>.create(),
@@ -318,6 +320,7 @@ fn checkProgram(
         f += 1;
     }
     checkMain(mut c)?;
+    warnStringBraces(mut c)?; // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
     foldStatics(mut c)?;
     finishFunctionFacts(mut c)?;
     finishAtomicStructs(mut c);

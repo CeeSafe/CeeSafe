@@ -215,6 +215,9 @@ enum StmtNode {
     Assign(u32, AssignOp, u32),
     Expression(u32),
     Unsafe(u32),
+    /// A value block's last expression, written without `;` (ADR 0073 §2.3): the value of the branch of an `if` or
+    /// `match` expression whose block it ends. Only there: the parser makes it nowhere else.
+    Value(u32),
 }
 
 struct MatchArm {

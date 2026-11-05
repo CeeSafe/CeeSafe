@@ -65,8 +65,9 @@ FloatSuffix = 'f32' | 'f64'
 `1.` and `.5` are not float literals. `1..2` lexes as `1` `..` `2`.
 
 ### 1.6 String and char literals
-- `"..."` on one line. Escapes: `\n \r \t \\ \" \' \0 \u{H..H}` (1–6 hex digits,
-  a Unicode scalar value). Other escapes are N0006. A newline or EOF before the closing quote is N0005.
+- `"..."` on one line. Escapes: `\n \r \t \\ \" \' \0 \{ \} \u{H..H}` (1–6 hex digits,
+  a Unicode scalar value). `\{` and `\}` are the braces themselves; `\{` marks braces that are meant as text, so
+  that N0400 does not warn (ADR 0073 §2.4). Other escapes are N0006. A newline or EOF before the closing quote is N0005.
 - `'c'`: exactly one Unicode scalar value or one escape. Otherwise N0007. Its value is the scalar value, as an
   integer literal (`type-system.md` §4, M11); it may also be a pattern.
 
@@ -221,7 +222,8 @@ ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'
 ValueArm  = Pattern '=>' Branch
-Branch    = Expr | Block                             (* a Block branch must not complete *)
+Branch    = Expr | Block | ValueBlock                (* a Block branch must not complete *)
+ValueBlock = '{' Statement* Expr '}'                 (* its last Expr has no ';' (ADR 0073 §2.3) *)
 FieldInits = FieldInit (',' FieldInit)* ','?
 FieldInit  = Identifier ':' Expr
 GenericArgs = '<' Type (',' Type)* '>'      (* only when followed by '(', '.' or '{' — see below *)

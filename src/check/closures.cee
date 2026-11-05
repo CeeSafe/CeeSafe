@@ -212,6 +212,7 @@ fn namesInStmt(c: borrow Checker, s: u32, parameters: borrow Vector<u32>) -> boo
             return namesInExpr(c, target, parameters) || namesInExpr(c, value, parameters);
         }
         StmtNode.Expression(e) => { return namesInExpr(c, e, parameters); }
+        StmtNode.Value(e) => { return namesInExpr(c, e, parameters); }
         StmtNode.Unsafe(block) => { return namesInStmt(c, block, parameters); }
         _ => { return false; }
     }
@@ -1018,6 +1019,15 @@ fn walkExpr(
         HirExpr.EnumValue(_, payload) => { walkList(c, payload, e, walk)?; }
         HirExpr.Borrow(_, place) => { walkPlace(c, place, walk)?; }
         HirExpr.BorrowTemp(_, value) => { walkExpr(c, value, e, parent, walk)?; }
+        HirExpr.SliceTemp(_, value, low, high) => {
+            walkExpr(c, value, e, parent, walk)?;
+            if (low != none()) {
+                walkExpr(c, low, e, parent, walk)?;
+            }
+            if (high != none()) {
+                walkExpr(c, high, e, parent, walk)?;
+            }
+        }
         HirExpr.BorrowPath(_, path) => { walkExpr(c, path, e, parent, walk)?; }
         HirExpr.Reborrow(_, reference) => { walkExpr(c, reference, e, parent, walk)?; }
         HirExpr.Move(place) => { walkPlace(c, place, walk)?; }

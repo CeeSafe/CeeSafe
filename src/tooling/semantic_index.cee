@@ -426,6 +426,15 @@ fn walkExpression(
             }
         }
         HirExpr.BorrowTemp(_, value) => { walkExpression(index, c, sources, value)?; }
+        HirExpr.SliceTemp(_, value, low, high) => {
+            walkExpression(index, c, sources, value)?;
+            if (low != none()) {
+                walkExpression(index, c, sources, low)?;
+            }
+            if (high != none()) {
+                walkExpression(index, c, sources, high)?;
+            }
+        }
         HirExpr.BorrowPath(_, path) => { walkExpression(index, c, sources, path)?; }
         HirExpr.Reborrow(_, reference) => { walkExpression(index, c, sources, reference)?; }
         HirExpr.StaticAddress(s) => { walkExpression(index, c, sources, c.hir.statics[s as usize].value)?; }

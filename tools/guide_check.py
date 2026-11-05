@@ -6,6 +6,7 @@ in the interpreter (no arguments, empty standard input), and a `text` block righ
 comment directly before the block changes that:
 - `<!-- ceesafe: fail N0241 N0205 -->`: the block fails with exactly these codes, and a `text` block after it is exactly
   the compiler's messages;
+- `<!-- ceesafe: warns N0400 -->`: as `fail`, but the codes are warnings: the check still succeeds (ADR 0073 §2.4);
 - `<!-- ceesafe: freestanding -->`: checked with the freestanding profile, not run;
 - `<!-- ceesafe: check -->`: type-checked, not run (it calls C);
 - `<!-- ceesafe: panics -->`, `<!-- ceesafe: exits N -->`: the run's exit status (134 for a panic);
@@ -83,7 +84,9 @@ def check(cee, example):
         with open(os.path.join(work, "main.cee"), "w", encoding="utf-8") as f:
             f.write(code)
         text = subprocess.run([cee, "check", *profile, "main.cee"], cwd=work, capture_output=True, text=True)
-        if words[:1] == ["fail"]:
+        if words[:1] == ["fail"] or words[:1] == ["warns"]:
+            if words[:1] == ["warns"] and text.returncode != 0:
+                return f"{where}: warns, so it must check; it fails:\n{text.stderr}"
             report = subprocess.run([cee, "check", *profile, "--diagnostics-format=json", "main.cee"], cwd=work,
                                     capture_output=True, text=True)
             codes = sorted({d["code"] for d in json.loads(report.stdout)["diagnostics"]})

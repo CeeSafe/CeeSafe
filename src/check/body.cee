@@ -147,6 +147,13 @@ fn checkStmt(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
             return Ok(body);
         }
         StmtNode.Defer(body) => { return checkDefer(c, body, span); }
+        StmtNode.Value(e) => {
+            // A value block's value (ADR 0073 §2.3): moved into the branch's result, as an expression branch's is.
+            let expected = c.blockValueType;
+            let value = checkExpr(c, e, expected)?;
+            c.blockValueResult = c.typeOf(value);
+            return c.hir.addStmt(HirStmt.Yield(value), span.start, span.end);
+        }
     }
     let error = c.errorResult(span.start, span.end)?;
     return c.hir.addStmt(HirStmt.Expression(error), span.start, span.end);
@@ -703,6 +710,10 @@ fn diverges(c: borrow Checker, e: u32, loopExits: borrow mut Vector<bool>) -> Re
         HirExpr.Deref(reference) => { return diverges(c, reference, loopExits); }
         HirExpr.Reborrow(_, reference) => { return diverges(c, reference, loopExits); }
         HirExpr.BorrowTemp(_, value) => { return diverges(c, value, loopExits); }
+        HirExpr.SliceTemp(_, value, low, high) => {
+            return Ok(diverges(c, value, loopExits)? || (low != none() && diverges(c, low, loopExits)?) ||
+                (high != none() && diverges(c, high, loopExits)?));
+        }
         HirExpr.BorrowPath(_, path) => { return diverges(c, path, loopExits); }
         HirExpr.ArrayLiteral(elements) => { return anyDiverges(c, elements, loopExits); }
         HirExpr.ArrayRepeat(value) => { return diverges(c, value, loopExits); }

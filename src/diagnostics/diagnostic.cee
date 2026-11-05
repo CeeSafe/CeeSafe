@@ -90,6 +90,20 @@ struct Diagnostics {
         return Ok();
     }
 
+    /// A warning (ADR 0073 §2.4): reported like an error, but it never makes a command fail.
+    fn warning(
+        borrow mut this,
+        code: u32,
+        file: u32,
+        start: u32,
+        end: u32,
+        message: Vector<u8>,
+    ) -> Result<void, AllocError> {
+        this.error(code, file, start, end, message)?;
+        this.items[this.items.length - 1].isError = false;
+        return Ok();
+    }
+
     /// An error with a fix that replaces [start, end) of the same file with `fixText`.
     fn errorWithFix(
         borrow mut this,
@@ -232,6 +246,13 @@ struct Diagnostics {
             }
         }
         return false;
+    }
+
+    /// --deny-warnings (ADR 0073 §2.4): every warning becomes an error.
+    fn denyWarnings(borrow mut this) {
+        for (i in 0..this.items.length) {
+            this.items[i].isError = true;
+        }
     }
 
     fn hasErrors(borrow this) -> bool {

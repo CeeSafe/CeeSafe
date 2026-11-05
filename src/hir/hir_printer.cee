@@ -774,6 +774,23 @@ struct HirPrinter {
                 this.text(")")?;
                 this.typed(hir, types, id)?;
             }
+            HirExpr.SliceTemp(mutable, value, low, high) => {
+                this.text(if (mutable) "(slice-mut-temp " else "(slice-temp ")?;
+                this.expr(hir, types, symbols, value)?;
+                this.text(" ")?;
+                if (low == none()) {
+                    this.text("_")?;
+                } else {
+                    this.expr(hir, types, symbols, low)?;
+                }
+                this.text(" ")?;
+                if (high == none()) {
+                    this.text("_")?;
+                } else {
+                    this.expr(hir, types, symbols, high)?;
+                }
+                this.text(")")?;
+            }
             HirExpr.Slice(mutable, base, low, high) => {
                 this.text(if (mutable) "(slice-mut " else "(slice ")?;
                 this.place(hir, types, symbols, base)?;

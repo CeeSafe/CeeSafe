@@ -1,0 +1,92 @@
+// Value blocks (ADR 0073 §2.3): a block branch of an `if` or `match` expression may end with its value, written
+// without `;`. An `if` or `match` that ends one is read as an expression. Also `\{` and `\}` (ADR 0073 §2.4).
+struct Kind {
+    big: bool;
+}
+
+fn describe(n: i32) -> Kind => Kind { big: n > 2 };
+
+fn label(n: i32) -> StringView => if (n == 1) "one" else {
+    let rest = describe(n);
+    if (rest.big) "many" else "few"
+};
+
+fn pick(y: i32?) -> i32 {
+    let x = match (y) {
+        Some(v) => {
+            let w = v + 1;
+            w
+        }
+        null => 0,
+    };
+    return x;
+}
+
+fn nested(n: i32) -> i32 {
+    let r = match (n) {
+        0 => {
+            let a = 10;
+            if (a > 5) a else 0
+        }
+        1 => {
+            return -1;
+        }
+        _ => {
+            let b = n * 2;
+            match (b) {
+                4 => { 40 }
+                _ => b,
+            }
+        }
+    };
+    return r;
+}
+
+fn owned(flag: bool) -> String {
+    let s = if (flag) {
+        var t = String.create();
+        t.append("built")!;
+        t
+    } else String.create();
+    return s;
+}
+
+fn flexible(c: bool) -> i64 {
+    let v: i64 = if (c) {
+        let k: i64 = 3;
+        k
+    } else 0;
+    let f = if (c) { 1.5 } else { 2.5 };
+    Console.writeLine(f);
+    return v;
+}
+
+fn main() {
+    Console.writeLine(label(1));
+    Console.writeLine(label(5));
+    Console.writeLine(pick(4));
+    Console.writeLine(pick(null));
+    Console.writeLine(nested(0));
+    Console.writeLine(nested(1));
+    Console.writeLine(nested(2));
+    Console.writeLine(nested(3));
+    let a = owned(true);
+    Console.writeLine(a.view());
+    let b = owned(false);
+    Console.writeLine(b.view().length);
+    Console.writeLine(flexible(true));
+    Console.writeLine("braces: \{x\} and \{");
+}
+// expect-stdout: one
+// expect-stdout: many
+// expect-stdout: 5
+// expect-stdout: 0
+// expect-stdout: 10
+// expect-stdout: -1
+// expect-stdout: 40
+// expect-stdout: 6
+// expect-stdout: built
+// expect-stdout: 0
+// expect-stdout: 1.5
+// expect-stdout: 3
+// expect-stdout: braces: {x} and {

@@ -1,0 +1,14 @@
+// A value block's value cannot borrow one of the block's own locals (ADR 0073 §2.3): the local is destroyed at the
+// block's end, so it is N0243.
+fn b(flag: bool) -> usize {
+    let n = if (flag) {
+        var s = String.create();
+        s.append("x")!;
+        s.view()
+    } else "y"; // error[N0243]
+    return n.length;
+}
+
+fn main() {
+    Console.writeLine(b(true));
+}

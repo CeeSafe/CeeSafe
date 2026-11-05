@@ -107,7 +107,8 @@ function. "At point p" means on entry to the NIR statement at p.
 - **B5 — Two-phase borrows.** For method calls `recv.m(args)` with a
   `borrow mut this` receiver, the mutable loan of `recv` is *reserved* while
   `args` are evaluated (permitting shared reads) and *activated* at the call.
-  Required for `v.push(v.length)`. This is the only two-phase site in v0.
+  Required for `v.push(v.length)`. ADR 0073 §2.2 extends it to every `mut p` argument, whose later arguments may
+  only read `p` (`lifetimes.md` §5).
 
 ### Escape (lifetime) rules
 

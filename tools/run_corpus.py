@@ -57,7 +57,8 @@ EXPLAIN = {
     "frames": ("--explain-frames", ".frames"),  # L1 A3: each async fn's frame (type-system.md §40.6)
 }
 
-ANNOTATION = re.compile(r"// error\[(N\d{4})\](?:@(\d+))?")
+# `// warning[N0400]` too: a check-pass program may expect warnings (ADR 0073 §2.4), which never fail a build.
+ANNOTATION = re.compile(r"// (?:error|warning)\[(N\d{4})\](?:@(\d+))?")
 DIRECTIVE = re.compile(r"// expect-(stdout|exit|panic):(?: (.*))?$")
 ABORT_EXIT = 134  # 128 + SIGABRT
 
@@ -252,7 +253,7 @@ def run_test(runner, family, path, work):
         o = cmd(["check", "--diagnostics-format=json"] + options + [path] + extra)
         found = diagnostics_of(o, path, problems)
         if family == "check-pass":
-            problems += [f"unexpected {c} at {l}:{col}: {m}" for l, c, col, m in found]
+            match_annotations(annotations(text), found, problems)  # only `// warning[…]` ones may be expected
             dump = cmd(["check", "--dump-hir"] + options + [path] + extra)
             compare_snapshot(dump.stdout, stem + ".hir", problems, "HIR dump")
         else:

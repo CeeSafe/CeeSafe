@@ -81,6 +81,9 @@ enum HirExpr {
     StructLiteral(Range),    // Hir.fieldValues
     Borrow(bool, u32),       // mutable, place
     BorrowTemp(bool, u32),
+    /// `make()[lo..hi]` (ADR 0073 §2.1): mutable, a value held in a temporary to the end of the statement (an array,
+    /// or a slice or view whose elements are sliced), low or none, high or none.
+    SliceTemp(bool, u32, u32, u32),
     FunctionAddress(u32),
     BorrowPath(bool, u32),
     Reborrow(bool, u32),

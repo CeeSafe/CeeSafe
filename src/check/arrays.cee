@@ -302,6 +302,22 @@ fn synthSlice(
         return c.errorResult(span.start, span.end);
     }
     let place = toPlace(c, target)?;
+    if (place == none() && slicesTemporary(c, synthesized)) {
+        // A temporary (ADR 0073 §2.1): an array value, or a view or slice value whose elements are sliced.
+        let held = c.typeOf(synthesized);
+        if (mutable && c.types.is(held, TypeKind.Reference) && !c.types.info(held).mutableReference) {
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, held)?;
+            appendText(mut message, " is read-only; it cannot be sliced as mutable")?;
+            c.error(borrowMutOfImmutable(), span.start, span.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let result = if (c.types.info(t).isStr) c.types.stringView else c.types.sliceOf(
+            c.types.info(t).element,
+            mutable,
+        )?;
+        return c.expr(HirExpr.SliceTemp(mutable, synthesized, low, high), result, span.start, span.end);
+    }
     if (place == none()) {
         var message = Vector<u8>.create();
         appendText(
@@ -341,6 +357,22 @@ fn synthSlice(
     let slice = c.types.sliceOf(c.types.info(t).element, mutable)?;
     return c.expr(HirExpr.Slice(mutable, place, low, high), slice, span.start, span.end);
 }
+
+/// Whether `e`, the value sliced, is a temporary that a statement can hold (ADR 0073 §2.1): a view or slice value that
+/// is not a place (its elements are not copied), or an array value reached from a temporary by fields and constant
+/// paths, never through a reference (a copy of an array a reference reaches would not be that array).
+fn slicesTemporary(c: borrow Checker, e: u32) -> bool => isTemporaryValue(c, e);
+
+/// An expression that is no place and is not reached through one: a call, a literal, a field or element of one.
+fn isTemporaryValue(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(_) => false,
+    HirExpr.Deref(_) => false,
+    HirExpr.StaticAddress(_) => false,
+    HirExpr.FieldAccess(target, _) => isTemporaryValue(c, target),
+    HirExpr.Index(target, _) => isTemporaryValue(c, target),
+    HirExpr.Error => false,
+    _ => true,
+};
 
 /// `a.length` and `s.length` (SynthMember's array case), or none when `value` is not an array or slice.
 fn arrayMember(c: borrow mut Checker, value: u32, through: u32, member: u32, span: Span) -> Result<u32, AllocError> {
@@ -394,6 +426,13 @@ fn arrayMember(c: borrow mut Checker, value: u32, through: u32, member: u32, spa
             _ => value,
         };
         return c.expr(HirExpr.SliceLength(reference), usize, span.start, span.end);
+    }
+    if (!isConstantArray(c, value) && isTemporaryValue(c, value)) {
+        // The length of an array value (ADR 0073 §2.1): the value is still evaluated, held for the statement.
+        let element = c.types.info(t).element;
+        let whole = c.types.sliceOf(element, false)?;
+        let slice = c.expr(HirExpr.SliceTemp(false, value, none(), none()), whole, span.start, span.end)?;
+        return c.expr(HirExpr.SliceLength(slice), usize, span.start, span.end);
     }
     if (!isConstantArray(c, value) && toPlace(c, value)? == none()) {
         // The constant would skip evaluating the array (and any calls in it); a constant's has none (ADR 0072 §2.5).

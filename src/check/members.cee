@@ -580,7 +580,7 @@ fn checkMethodCall(
                 c.error(borrowMutOfImmutable(), targetSpan.start, targetSpan.end, message)?;
                 argument = c.errorResult(targetSpan.start, targetSpan.end)?;
             } else {
-                argument = borrowPlace(c, receiver, true, targetSpan)?;
+                argument = borrowReceiver(c, receiver, true, targetSpan)?;
             }
         }
         _ => { argument = autoDeref(c, receiver)?; }

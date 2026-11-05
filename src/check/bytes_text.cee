@@ -183,7 +183,7 @@ fn checkVectorPushBytes(
     let explicit = c.front.ast.typeArgumentsOfMember(member);
     let valueSyntax = c.front.ast.at(arguments, 0);
     let value = checkByteOrderValue(c, text, explicit, valueSyntax, span)?;
-    let receiver = borrowPlace(c, vector, true, targetSpan)?;
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
     if (c.isBottom(value) || c.isBottom(receiver)) {
         return c.errorResult(span.start, span.end);
     }

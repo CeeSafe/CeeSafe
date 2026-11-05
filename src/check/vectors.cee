@@ -200,14 +200,14 @@ fn checkVectorMethod(
         // A string's text, as a view (ADR 0071 §2.4).
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), c.types.info(typ).pointee, s.start, s.end)?;
-        let view = borrowPlace(c, elements, false, targetSpan)?;
+        let view = borrowReceiver(c, elements, false, targetSpan)?;
         return checkBytesTextMethod(c, member, arguments, view, true, targetSpan, span);
     }
     if (!isString && isBytesTextMethod(text)) {
         // The elements, as a slice: mutably for writeBE and writeLE (ADR 0071 §2.2, §2.4).
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), c.types.info(typ).pointee, s.start, s.end)?;
-        let slice = borrowPlace(c, elements, isByteWriter(text), targetSpan)?;
+        let slice = borrowReceiver(c, elements, isByteWriter(text), targetSpan)?;
         return checkBytesTextMethod(c, member, arguments, slice, false, targetSpan, span);
     }
     if (sameText(text, "pushBE") || sameText(text, "pushLE")) {
@@ -255,13 +255,13 @@ fn checkVectorMethod(
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), pointee, s.start, s.end)?;
         let mutable = sameText(text, "swap") || sameText(text, "sortBy") || sameText(text, "splitAtMut");
-        let slice = borrowPlace(c, elements, mutable, targetSpan)?;
+        let slice = borrowReceiver(c, elements, mutable, targetSpan)?;
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
     if (sameText(text, "view") || sameText(text, "bytes") || sameText(text, "viewMut")) {
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), pointee, s.start, s.end)?;
-        let view = borrowPlace(c, elements, sameText(text, "viewMut"), span)?;
+        let view = borrowReceiver(c, elements, sameText(text, "viewMut"), span)?;
         if (sameText(text, "bytes") && !c.isBottom(view)) {
             let u8Type = c.types.u8;
             let bytes = c.types.sliceOf(u8Type, false)?;
@@ -286,7 +286,7 @@ fn checkVectorMethod(
             argument = checkExpr(c, argumentSyntax, usize)?;
         }
     }
-    let receiver = borrowPlace(c, vector, true, targetSpan)?;
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
     if (c.isBottom(receiver) || (argument != none() && c.isBottom(argument))) {
         return c.errorResult(span.start, span.end);
     }
@@ -527,7 +527,7 @@ fn checkStringViewFunction(
 
 /// `v.capacity`: the vector's capacity, read through a shared borrow.
 fn vectorCapacity(c: borrow mut Checker, vector: u32, targetSpan: Span, span: Span) -> Result<u32, AllocError> {
-    let borrowed = borrowPlace(c, vector, false, targetSpan)?;
+    let borrowed = borrowReceiver(c, vector, false, targetSpan)?;
     if (c.isBottom(borrowed)) {
         return Ok(borrowed);
     }
@@ -605,7 +605,7 @@ fn checkVectorBulk(
             values.push(checkExpr(c, second, element)?)?;
         }
     }
-    let receiver = borrowPlace(c, vector, true, targetSpan)?;
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
     values[0] = receiver;
     for (v in values.view()) {
         if (c.isBottom(v)) {

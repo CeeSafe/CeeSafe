@@ -1,0 +1,77 @@
+// A temporary as a receiver, a slice base or a `.length` operand (ADR 0073 §2.1): it lives until the end of its
+// statement, `drop` included, and a view of it can be used inside the statement. --check-leaks requires live=0.
+struct Dropper {
+    n: i32;
+
+    fn value(borrow this) -> i32 => this.n;
+
+    fn bump(borrow mut this) -> i32 {
+        this.n += 1;
+        return this.n;
+    }
+
+    drop {
+        Console.writeLine("drop");
+    }
+}
+
+struct Holder {
+    name: String;
+}
+
+fn make() -> String {
+    var s = String.create();
+    s.append("hello")!;
+    return s;
+}
+
+fn holder() -> Holder => Holder { name: make() };
+
+fn digest(n: u8) -> [u8; 8] {
+    Console.writeLine("digest");
+    return [n, 2, 3, 4, 5, 6, 7, 8];
+}
+
+fn use(v: StringView) -> usize => v.length;
+
+fn main() {
+    Console.writeLine(use(make().view())); // a borrow this method of lib/core's String
+    Console.writeLine(make().view().length);
+    Console.writeLine(holder().name.view());       // a field of a temporary
+    Console.writeLine("a,b,c".split(",").next()!); // a borrow mut this method on a temporary TextSplit
+    Console.writeLine(make().bytes()[1]);
+    Console.writeLine(Dropper { n: 1 }.value()); // destroyed at the end of the statement
+    Console.writeLine(Dropper { n: 1 }.bump());
+    Console.writeLine(digest(1)[2..6].length); // a slice of a temporary array
+    Console.writeLine(digest(1)[2..6][1]);
+    Console.writeLine(digest(9).length); // still evaluated: it prints
+    var s = make();
+    let middle = s.view()[1..3]; // a slice of a view: its loan is of `s`, so it may be kept
+    Console.writeLine(middle);
+    if (make().view().length == 5) {
+        Console.writeLine("in a condition");
+    }
+    let n = if (s.view().length > 1) make().view().length else 0; // in a branch
+    Console.writeLine(n);
+    s.append("!")!;
+    Console.writeLine(s.view());
+}
+// expect-stdout: 5
+// expect-stdout: 5
+// expect-stdout: hello
+// expect-stdout: a
+// expect-stdout: 101
+// expect-stdout: 1
+// expect-stdout: drop
+// expect-stdout: 2
+// expect-stdout: drop
+// expect-stdout: digest
+// expect-stdout: 4
+// expect-stdout: digest
+// expect-stdout: 4
+// expect-stdout: digest
+// expect-stdout: 8
+// expect-stdout: el
+// expect-stdout: in a condition
+// expect-stdout: 5
+// expect-stdout: hello!

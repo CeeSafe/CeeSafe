@@ -1,0 +1,5 @@
+fn main() {
+    let count = 2;
+    Console.writeLine("count = {count}");
+    noisy.greet("x");
+}

@@ -419,7 +419,7 @@ fn regionReceiver(
         return coerce(c, receiver, referenceType, targetSpan);
     }
     if (mutable) {
-        let borrowed = borrowPlace(c, receiver, true, targetSpan)?;
+        let borrowed = borrowReceiver(c, receiver, true, targetSpan)?;
         return Ok(if (c.isBottom(borrowed)) none() else borrowed);
     }
     let place = toPlace(c, receiver)?;

@@ -197,5 +197,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1)",
     349 =>
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
+    400 =>
+        "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     _ => "",
 };

@@ -1,0 +1,69 @@
+// Deep results (ADR 0074 §2.4): a result that names only the regions of a parameter's referent is tied to them, not
+// to the loan of the parameter, so the lexer stays usable while its tokens live.
+struct Lexer<region r> {
+    text: Slice<r, u8>;
+    at: usize;
+
+    fn token(borrow mut this) -> Slice<r, u8> {
+        let start = this.at;
+        this.at += 1;
+        return this.text[start..this.at];
+    }
+
+    fn skipSpace(borrow mut this) {
+        while (this.at < this.text.length && this.text[this.at] == 32) {
+            this.at += 1;
+        }
+    }
+
+    fn peek(borrow this) -> Slice<r, u8> => this.text[this.at..this.at + 1];
+
+    // Through another method's deep result.
+    fn take(borrow mut this) -> Slice<r, u8> {
+        let t = this.peek();
+        this.at += 1;
+        return t;
+    }
+
+    // The elided region: tied to the lexer itself.
+    fn rest(borrow this) -> Slice<u8> => this.text[this.at..];
+}
+
+// A free function's deep result.
+fn next<region r>(lexer: borrow mut Lexer<r>) -> Slice<r, u8> => lexer.token();
+
+// A reference stored in the referent: what it points to is not the holder's storage.
+struct Holder<region r> {
+    values: borrow(r) Vector<u8>;
+
+    fn first(borrow this) -> borrow(r) u8 => borrow this.values[0];
+}
+
+// The holder is local, and the result outlives it: it borrows the vector, not the holder.
+fn firstOf<region r>(values: borrow(r) Vector<u8>) -> borrow(r) u8 {
+    let h = Holder { values: values };
+    return h.first();
+}
+
+fn main() {
+    let bytes = "a bc".bytes();
+    var lexer = Lexer { text: bytes, at: 0 };
+    let t = lexer.token();
+    lexer.skipSpace();
+    let u = next(mut lexer);
+    let w = lexer.take();
+    lexer.skipSpace();
+    Console.writeLine(t[0]);
+    Console.writeLine(u[0]);
+    Console.writeLine(w[0]);
+    Console.writeLine(lexer.rest().length);
+    var v = Vector<u8>.create();
+    v.push(5)!;
+    Console.writeLine(firstOf(v));
+}
+
+// expect-stdout: 97
+// expect-stdout: 98
+// expect-stdout: 99
+// expect-stdout: 0
+// expect-stdout: 5

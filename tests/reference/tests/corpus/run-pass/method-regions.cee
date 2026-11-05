@@ -1,0 +1,39 @@
+// A struct's or an inherent impl's method may declare regions of its own (ADR 0074 §2.4).
+struct Picker {
+    skip: usize;
+
+    fn first<region a>(borrow this, other: borrow(a) Vector<u8>) -> Slice<a, u8> => other[this.skip..this.skip + 1];
+
+    fn longer<region a>(borrow this, x: StringView<a>, y: StringView<a>) -> StringView<a> =>
+        if (x.length >= y.length) x else y;
+}
+
+struct Pane<region r> {
+    text: StringView<r>;
+}
+
+impl<region r> Pane<r> {
+    fn pick<region a>(borrow this, other: StringView<a>) -> StringView<a> => other;
+}
+
+fn main() {
+    var v = Vector<u8>.create();
+    v.push(7)!;
+    v.push(9)!;
+    let p = Picker { skip: 1 };
+    let f = p.first(v);
+    Console.writeLine(f[0]);
+    let s1 = "abc";
+    let s2 = "abcd";
+    Console.writeLine(p.longer(s1, s2));
+    let w = Pane { text: "window" };
+    let o = "other";
+    let picked = w.pick(o);
+    Console.writeLine(picked);
+    Console.writeLine(w.text);
+}
+
+// expect-stdout: 9
+// expect-stdout: abcd
+// expect-stdout: other
+// expect-stdout: window

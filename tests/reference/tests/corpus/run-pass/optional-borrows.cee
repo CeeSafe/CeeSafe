@@ -1,0 +1,80 @@
+// An optional place as an optional borrow (ADR 0074 §2.5): `asBorrow`, `asBorrowMut`, and the implicit conversion of
+// a place of `T?` or of `T` at a `borrow T?` or `(borrow mut T)?` parameter.
+struct Config {
+    port: u32;
+    name: String;
+}
+
+struct Relay {
+    tls: Config?;
+}
+
+fn show(c: borrow Config?) {
+    match (c) {
+        Some(x) => { Console.writeLine(x.port); }
+        null => { Console.writeLine("no tls"); }
+    }
+}
+
+fn bump(c: (borrow mut Config)?) {
+    match (c) {
+        Some(x) => { x.port += 1; }
+        null => {}
+    }
+}
+
+fn throughReference(o: borrow (Config?)) {
+    show(o.asBorrow());
+}
+
+fn throughMutableReference(o: borrow mut (Config?)) {
+    bump(o.asBorrowMut());
+    bump(o.asBorrowMut());
+}
+
+fn named(text: StringView) -> String {
+    var s = String.create();
+    s.append(text)!;
+    return s;
+}
+
+fn main() {
+    var relay = Relay { tls: Config { port: 465, name: named("smtps") } };
+    show(relay.tls);
+    bump(mut relay.tls);
+    show(relay.tls);
+    let shared = relay.tls.asBorrow();
+    show(shared);
+    let mutable = relay.tls.asBorrowMut();
+    match (mutable) {
+        Some(c) => { c.port = 993; }
+        null => {}
+    }
+    show(relay.tls);
+    throughReference(relay.tls);
+    throughMutableReference(mut relay.tls);
+    show(relay.tls);
+    let plain = Relay { tls: null };
+    show(plain.tls);
+    show(plain.tls.asBorrow());
+    var config = Config { port: 25, name: named("smtp") };
+    show(config);
+    bump(mut config);
+    Console.writeLine(config.port);
+    match (relay.tls) {
+        Some(c) => { Console.writeLine(c.name); }
+        null => {}
+    }
+}
+
+// expect-stdout: 465
+// expect-stdout: 466
+// expect-stdout: 466
+// expect-stdout: 993
+// expect-stdout: 993
+// expect-stdout: 995
+// expect-stdout: no tls
+// expect-stdout: no tls
+// expect-stdout: 25
+// expect-stdout: 26
+// expect-stdout: smtps

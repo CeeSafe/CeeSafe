@@ -112,6 +112,16 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
             appendText(mut message, " needs a receiver: this, borrow this or borrow mut this")?;
             c.error(implMismatch(), id.start, id.end, message)?;
         }
+        if (f.regionParameters.count > 0) {
+            // Conformance compares the signatures, which would have to match the region lists (ADR 0074 §2.4).
+            let first = c.front.ast.typeParameters[c.front.ast.at(f.regionParameters, 0) as usize];
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "an interface's methods, and the methods that implement one, cannot declare region parameters of their own; use the type's regions (type-system.md §25.1)",
+            )?;
+            c.error(unsupported(), first.start, first.end, message)?;
+        }
     }
     for (k in 0..methods.count) {
         let method = c.front.ast.at(methods, k);
@@ -484,6 +494,23 @@ fn listIsGeneric(c: borrow Checker, list: Range) -> bool {
     for (k in 0..list.count) {
         if (c.types.isGeneric(c.types.listAt(list, k))) {
             return true;
+        }
+    }
+    return false;
+}
+
+/// Is the function a method of an impl of an interface (ADR 0074 §2.4)?
+fn isInterfaceImplMethod(c: borrow Checker, f: u32) -> bool {
+    for (r in c.impls.view()) {
+        match (c.front.ast.items[r.item as usize].kind) {
+            ItemKind.Impl(_, _, functions, _, _) => {
+                for (k in 0..functions.count) {
+                    if (c.front.ast.at(functions, k) == f) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
         }
     }
     return false;

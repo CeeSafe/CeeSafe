@@ -629,7 +629,8 @@ fn isFloatMethodName(name: Slice<u8>) -> bool =>
         sameText(name, "ceil") || sameText(name, "min") || sameText(name, "max");
 
 /// `o.isSome()` and `o.isNull()` (ADR 0072 §2.2): `o != null` and `o == null`, reading `o` through a shared borrow,
-/// so it is not consumed. Other methods are N0234, with a hint naming these, `??` and `match`.
+/// so it is not consumed; `o.asBorrow()` and `o.asBorrowMut()`, optional borrows (ADR 0074 §2.5). Other methods are
+/// N0234, with a hint naming these, `??` and `match`.
 fn checkOptionalMethod(
     c: borrow mut Checker,
     receiver: u32,
@@ -641,7 +642,9 @@ fn checkOptionalMethod(
     let memberIdent = c.front.ast.idents[member as usize];
     let isSome = sameText(c.name(memberIdent.symbol), "isSome");
     let isNull = sameText(c.name(memberIdent.symbol), "isNull");
-    if (!isSome && !isNull) {
+    let asBorrow = sameText(c.name(memberIdent.symbol), "asBorrow");
+    let asBorrowMut = sameText(c.name(memberIdent.symbol), "asBorrowMut");
+    if (!isSome && !isNull && !asBorrow && !asBorrowMut) {
         var message = Vector<u8>.create();
         appendText(mut message, "an optional ")?;
         appendQuotedType(mut message, c, option)?;
@@ -649,7 +652,7 @@ fn checkOptionalMethod(
         appendQuotedName(mut message, c, memberIdent.symbol)?;
         appendText(
             mut message,
-            "; it has 'isSome()' and 'isNull()', 'o ?? fallback' gives the value or a fallback, and 'match' the rest (type-system.md §22.1)",
+            "; it has 'isSome()', 'isNull()', 'asBorrow()' and 'asBorrowMut()', 'o ?? fallback' gives the value or a fallback, and 'match' the rest (type-system.md §22.1)",
         )?;
         c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -664,6 +667,14 @@ fn checkOptionalMethod(
         return c.errorResult(span.start, span.end);
     }
     let receiverSpan = Span { start: c.hir.exprSpans[receiver as usize].start, end: memberIdent.start };
+    if (asBorrow || asBorrowMut) {
+        // `o.asBorrow()`: `borrow T?`; `o.asBorrowMut()`: `(borrow mut T)?` (ADR 0074 §2.5).
+        let lent = optionalReference(c, receiver, asBorrowMut, receiverSpan)?;
+        if (lent == none()) {
+            return c.errorResult(span.start, span.end);
+        }
+        return optionalBorrow(c, lent, asBorrowMut, span);
+    }
     let reference = c.types.referenceTo(option, false)?;
     var borrowed = none();
     if (c.types.is(c.typeOf(receiver), TypeKind.Reference)) {

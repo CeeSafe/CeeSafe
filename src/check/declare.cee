@@ -556,16 +556,39 @@ fn declareFunctionIn(c: borrow mut Checker, f: u32, owner: u32, environment: Ran
 
 fn declareFunctionCore(c: borrow mut Checker, f: u32, owner: u32, environment: Range) -> Result<u32, AllocError> {
     let decl = c.front.ast.functions[f as usize];
-    if (owner != none() && decl.regionParameters.count > 0) {
+    // A struct's or an inherent impl's method may declare regions of its own (ADR 0074 §2.4); an interface's method,
+    // and one that implements an interface, may not: conformance compares the signatures.
+    // The interface's own methods are reported where it is declared.
+    if (owner != none() && decl.regionParameters.count > 0 && c.registerNext && isInterfaceImplMethod(c, f)) {
         let first = c.front.ast.typeParameters[c.front.ast.at(decl.regionParameters, 0) as usize];
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "methods cannot declare region parameters of their own; use the struct's regions (type-system.md §25.1)",
+            "an interface's methods, and the methods that implement one, cannot declare region parameters of their own; use the type's regions (type-system.md §25.1)",
         )?;
         c.error(unsupported(), first.start, first.end, message)?;
     }
     checkRegionParameters(c, decl.regionParameters, decl.typeParameters)?;
+    if (owner != none()) {
+        // A method's region may not reuse a name of its struct's or impl's regions, which are in scope too.
+        for (k in 0..decl.regionParameters.count) {
+            let p = c.front.ast.typeParameters[c.front.ast.at(decl.regionParameters, k) as usize];
+            let ident = c.front.ast.idents[p.name as usize];
+            var count = 0;
+            for (r in c.regions.view()) {
+                if (r == ident.symbol) {
+                    count += 1;
+                }
+            }
+            if (count > 1) {
+                var message = Vector<u8>.create();
+                appendText(mut message, "the region name ")?;
+                appendQuotedName(mut message, c, ident.symbol)?;
+                appendText(mut message, " is already a region of the method's type")?;
+                c.error(duplicateParameter(), ident.start, ident.end, message)?;
+            }
+        }
+    }
     var env = environment;
     if (owner != none() && decl.typeParameters.count > 0 && c.genericMethod) {
         // A struct method's own type parameters (ADR 0064 §1): bound by the caller's environment, opaque in the generic

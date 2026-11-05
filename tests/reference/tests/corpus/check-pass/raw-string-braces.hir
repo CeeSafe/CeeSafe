@@ -1,0 +1,8 @@
+(program
+  (fn f ((n#0: i32)) -> StringView
+    (block
+      (expr (Console.writeLine n#0))
+      (return "n = {n}, \\{n}")
+    )
+  )
+)

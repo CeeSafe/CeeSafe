@@ -340,6 +340,27 @@ fn appendTypeBound(out: borrow mut Vector<u8>, t: TypeInfo, max: bool) -> Result
     return appendDecimal(out, half);
 }
 
+/// A constant's value where it is named: its folded literal, or the whole array (§10).
+fn namedConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32, AllocError> {
+    let value = evaluateConstant(c, k)?;
+    let isArray = match (c.hir.exprs[value as usize]) {
+        HirExpr.ArrayLiteral(_) => true,
+        HirExpr.ArrayRepeat(_) => true,
+        _ => false,
+    };
+    if (isArray) {
+        return constantArrayAt(c, value, span); // the whole array's value (§10)
+    }
+    let t = c.hir.constants[c.constants[k as usize].hir as usize].typ;
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.IntConst(i) => { return c.expr(HirExpr.IntConst(i), t, span.start, span.end); }
+        HirExpr.BoolConst(b) => { return c.expr(HirExpr.BoolConst(b), t, span.start, span.end); }
+        HirExpr.FloatConst(f) => { return c.expr(HirExpr.FloatConst(f), t, span.start, span.end); }
+        HirExpr.StringConst(text) => { return c.expr(HirExpr.StringConst(text), t, span.start, span.end); }
+        _ => { return c.errorResult(span.start, span.end); }
+    }
+}
+
 fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocError> {
     let symbol = c.front.ast.idents[name as usize].symbol;
     match (c.lookup(symbol)?) {
@@ -353,25 +374,7 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
             let t = c.hir.locals[local as usize].typ;
             return c.expr(HirExpr.LocalRef(local), t, span.start, span.end);
         }
-        Entity.Constant(k) => {
-            let value = evaluateConstant(c, k)?;
-            let isArray = match (c.hir.exprs[value as usize]) {
-                HirExpr.ArrayLiteral(_) => true,
-                HirExpr.ArrayRepeat(_) => true,
-                _ => false,
-            };
-            if (isArray) {
-                return constantArrayAt(c, value, span); // the whole array's value (§10)
-            }
-            let t = c.hir.constants[c.constants[k as usize].hir as usize].typ;
-            match (c.hir.exprs[value as usize]) {
-                HirExpr.IntConst(i) => { return c.expr(HirExpr.IntConst(i), t, span.start, span.end); }
-                HirExpr.BoolConst(b) => { return c.expr(HirExpr.BoolConst(b), t, span.start, span.end); }
-                HirExpr.FloatConst(f) => { return c.expr(HirExpr.FloatConst(f), t, span.start, span.end); }
-                HirExpr.StringConst(text) => { return c.expr(HirExpr.StringConst(text), t, span.start, span.end); }
-                _ => { return c.errorResult(span.start, span.end); }
-            }
-        }
+        Entity.Constant(k) => { return namedConstantValue(c, k, span); }
         Entity.Function(function) => { return functionValue(c, function, span); }
         Entity.GenericFunction(_) => {
             var message = Vector<u8>.create();
@@ -1599,8 +1602,18 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
     match (c.front.ast.exprs[target as usize]) {
         ExprNode.Name(name, typeArguments) => {
             let symbol = c.front.ast.idents[name as usize].symbol;
+            let memberSymbol = c.front.ast.idents[member as usize].symbol;
             match (c.lookup(symbol)?) {
                 Entity.Enum(index) => {
+                    // `Mode.DEFAULT`: an associated constant (ADR 0074 §2.7); no variant has its name (N0228).
+                    let constant = if (typeArguments.count == 0) memberConstantOf(
+                        c,
+                        c.enums[index as usize].item,
+                        memberSymbol,
+                    ) else none();
+                    if (constant != none()) {
+                        return memberConstantValue(c, constant, span);
+                    }
                     // `Shape.Empty`: a variant without payload.
                     let targetSpan = c.front.ast.exprSpans[target as usize];
                     return checkEnumValue(c, index, member, emptyRange(), typeArguments, targetSpan, span, expected);
@@ -1612,7 +1625,11 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
                     Entity.Builtin(_) => {
                         return notAValue(c, symbol, member, span);
                     }
-                    Entity.Struct(_) => {
+                    Entity.Struct(index) => {
+                        let constant = memberConstantOf(c, c.structs[index as usize].item, memberSymbol);
+                        if (constant != none()) {
+                            return memberConstantValue(c, constant, span); // ADR 0074 §2.7
+                        }
                         return notAValue(c, symbol, member, span);
                     }
                     _ => {}

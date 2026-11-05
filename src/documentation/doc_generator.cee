@@ -342,6 +342,14 @@ fn docEntries(
                 docImplements(mut entry, impls)?;
                 let parent = truncate<u32>(out.length);
                 out.push(entry)?;
+                for (m in 0..structure.constants.count) {
+                    let constant = borrow ast.items[ast.at(structure.constants, m) as usize]; // ADR 0074 §2.7
+                    if (isPublic(constant.visibility)) {
+                        let constantFirst = docFirst(file, constant.start);
+                        let signature = docTextOf(file, constantFirst, docLast(file, constant.end) - 1)?;
+                        out.push(docEntry(file, index, 1, constant.name, constantFirst, signature, parent)?)?;
+                    }
+                }
                 for (m in 0..structure.functions.count) {
                     let f = ast.at(structure.functions, m);
                     if (isPublic(ast.functions[f as usize].visibility)) {

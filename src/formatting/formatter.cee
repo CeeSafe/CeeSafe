@@ -56,6 +56,7 @@ struct FmtLine {
     units: u32;    // the code's length in UTF-16 code units, which the reference's widths count
     trailing: u32; // a trailing line comment, or none
     blank: bool;
+    verbatim: bool; // a raw literal's content line: written as it is, not indented or trimmed, and of no width
 }
 
 struct FmtLayout {
@@ -497,20 +498,32 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
                 fmtWalkFunction(l, ast, method, true)?;
             }
         }
-        ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters) => {
+        ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters, constants) => {
             let keyword = l.first(it.start); // `impl S { … }` (ADR 0064 §1)
             fmtWalkTypeParameters(l, ast, keyword, regionParameters, typeParameters)?;
             fmtWalkType(l, ast, forType)?;
             let forLast = l.last(ast.typeSpans[forType as usize].end);
             let open = l.find(forLast, TokenKind.OpenBrace);
             let body = l.addContainer(open, true, false, priorityList())?;
-            for (k in 0..functions.count) {
-                let function = ast.at(functions, k);
-                let first = functionFirst(l, ast, function);
-                let last = l.last(ast.functions[function as usize].end);
-                l.addElement(body, first, last)?;
-                fmtWalkAttributes(l, ast, ast.functions[function as usize].attributes)?;
-                fmtWalkFunction(l, ast, function, false)?;
+            // Functions and constants (ADR 0074 §2.7), in source order.
+            var f: u32 = 0;
+            var k: u32 = 0;
+            while (f < functions.count || k < constants.count) {
+                let function = if (f < functions.count) ast.at(functions, f) else none();
+                let constant = if (k < constants.count) ast.at(constants, k) else none();
+                let functionFirstToken = if (function == none()) none() else functionFirst(l, ast, function);
+                let constantFirst = if (constant == none()) none() else itemFirst(l, ast, constant);
+                if (function != none() && (constant == none() || functionFirstToken < constantFirst)) {
+                    let last = l.last(ast.functions[function as usize].end);
+                    l.addElement(body, functionFirstToken, last)?;
+                    fmtWalkAttributes(l, ast, ast.functions[function as usize].attributes)?;
+                    fmtWalkFunction(l, ast, function, false)?;
+                    f += 1;
+                } else {
+                    l.addElement(body, constantFirst, l.last(ast.items[constant as usize].end))?;
+                    fmtWalkItem(l, ast, constant)?;
+                    k += 1;
+                }
             }
         }
         ItemKind.Impl(interfaceType, forType, functions, typeParameters, regionParameters) => {
@@ -667,6 +680,13 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
         kinds.push(1)?;
         ids.push(function)?;
     }
+    for (k in 0..structure.constants.count) {
+        let constant = ast.at(structure.constants, k); // ADR 0074 §2.7
+        firsts.push(itemFirst(l, ast, constant))?;
+        lasts.push(l.last(ast.items[constant as usize].end))?;
+        kinds.push(4)?;
+        ids.push(constant)?;
+    }
     if (structure.dropBlock != none()) {
         firsts.push(l.first(structure.dropStart))?;
         lasts.push(stmtLast(l, ast, structure.dropBlock))?;
@@ -700,6 +720,8 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
         } else if (kinds[k] == 1) {
             fmtWalkAttributes(l, ast, ast.functions[ids[k] as usize].attributes)?;
             fmtWalkFunction(l, ast, ids[k], false)?;
+        } else if (kinds[k] == 4) {
+            fmtWalkItem(l, ast, ids[k])?;
         } else {
             fmtWalkBlock(l, ast, ids[k])?;
         }
@@ -1323,9 +1345,106 @@ fn appendLineCode(line: borrow mut FmtLine, bytes: Slice<u8>) -> Result<void, Al
 /// Starts a line, after a blank one if `blank` and the last line is not blank already.
 fn startLine(lines: borrow mut Vector<FmtLine>, indent: u32, blank: bool) -> Result<void, AllocError> {
     if (blank && lines.length > 0 && !lines[lines.length - 1].blank) {
-        lines.push(FmtLine { indent: 0, code: Vector<u8>.create(), units: 0, trailing: none(), blank: true })?;
+        lines.push(
+            FmtLine {
+                indent: 0,
+                code: Vector<u8>.create(),
+                units: 0,
+                trailing: none(),
+                blank: true,
+                verbatim: false,
+            },
+        )?;
     }
-    lines.push(FmtLine { indent: indent, code: Vector<u8>.create(), units: 0, trailing: none(), blank: false })?;
+    lines.push(
+        FmtLine {
+            indent: indent,
+            code: Vector<u8>.create(),
+            units: 0,
+            trailing: none(),
+            blank: false,
+            verbatim: false,
+        },
+    )?;
+    return Ok();
+}
+
+fn isRawLiteral(l: borrow FmtLayout, token: Token) -> bool =>
+    sameKind(token.kind, TokenKind.StringLiteral) && isRawLiteralAt(l.source.text.view(), token.start as usize);
+
+fn isRawSpace(b: u8) -> bool => b == ' ' || b == '\t';
+
+/// A raw `"""` literal (grammar.md §1.6, ADR 0074 §2.6): its content lines and closing line move with the opening
+/// line's indentation and are never reflowed. The opening `"""` ends the current line; the closing line is the last
+/// line, where the tokens after the literal follow.
+fn appendRawLiteral(l: borrow FmtLayout, lines: borrow mut Vector<FmtLine>, token: Token) -> Result<void, AllocError> {
+    let text = l.source.text.view();
+    let start = token.start as usize;
+    let end = token.end as usize;
+    appendLineCode(mut lines[lines.length - 1], text[start..(start + 3)])?;
+    // The opening line's indentation in the source, and in the output.
+    var lineStart = start;
+    while (lineStart > 0 && text[lineStart - 1] != '\n') {
+        lineStart -= 1;
+    }
+    var oldIndent: usize = 0;
+    while (lineStart + oldIndent < start && isRawSpace(text[lineStart + oldIndent])) {
+        oldIndent += 1;
+    }
+    // A raw literal's closing line (indent 0) holds its own indentation as code.
+    let current = lines[lines.length - 1].code.view();
+    var leading: usize = 0;
+    while (leading < current.length && current[leading] == ' ') {
+        leading += 1;
+    }
+    let newIndent = (lines[lines.length - 1].indent * 4) as usize + leading;
+    // The closing line's indentation bounds what can be removed: every content line that is not blank starts with it.
+    var closeStart = end - 3;
+    while (closeStart > 0 && text[closeStart - 1] != '\n') {
+        closeStart -= 1;
+    }
+    let closeIndent = end - 3 - closeStart;
+    var remove: usize = 0;
+    var add: usize = 0;
+    if (newIndent >= oldIndent) {
+        add = newIndent - oldIndent;
+    } else {
+        remove = oldIndent - newIndent;
+        if (remove > closeIndent) {
+            remove = closeIndent;
+        }
+    }
+    // The content lines start after the opening line's end.
+    var p = start + 3;
+    while (p < end && text[p] != '\n') {
+        p += 1;
+    }
+    p += 1;
+    while (p < end) {
+        var lineEnd = p;
+        while (lineEnd < end && text[lineEnd] != '\n') {
+            lineEnd += 1;
+        }
+        let closing = lineEnd >= end;
+        let contentEnd = if (!closing && lineEnd > p && text[lineEnd - 1] == '\r') lineEnd - 1 else lineEnd;
+        var ws = p;
+        while (ws < contentEnd && isRawSpace(text[ws])) {
+            ws += 1;
+        }
+        var code = Vector<u8>.create();
+        if (ws < contentEnd) {
+            for (k in 0..add) {
+                code.push(' ')?;
+            }
+            let from = if (p + remove <= ws) p + remove else ws;
+            appendBytes(mut code, text[from..contentEnd])?;
+        }
+        let units = if (closing) utf16Units(code.view()) else 0;
+        lines.push(
+            FmtLine { indent: 0, code: code, units: units, trailing: none(), blank: false, verbatim: !closing },
+        )?;
+        p = lineEnd + 1;
+    }
     return Ok();
 }
 
@@ -1406,7 +1525,11 @@ fn renderLines(l: borrow mut FmtLayout) -> Result<Vector<FmtLine>, AllocError> {
             appendLineCode(mut lines[lines.length - 1], " ".bytes())?;
         }
         let token = l.tokens[i as usize];
-        appendLineCode(mut lines[lines.length - 1], l.source.text[token.start as usize..token.end as usize])?;
+        if (isRawLiteral(l, token)) {
+            appendRawLiteral(l, mut lines, token)?;
+        } else {
+            appendLineCode(mut lines[lines.length - 1], l.source.text[token.start as usize..token.end as usize])?;
+        }
         if (l.commaAfter[i as usize]) {
             appendLineCode(mut lines[lines.length - 1], ",".bytes())?;
         }
@@ -1423,7 +1546,7 @@ fn renderLines(l: borrow mut FmtLayout) -> Result<Vector<FmtLine>, AllocError> {
 fn breakLongLine(l: borrow mut FmtLayout, lines: borrow Vector<FmtLine>) -> bool {
     let n = truncate<u32>(l.tokens.length);
     for (li in 0..lines.length) {
-        if (lines[li].indent * 4 + lines[li].units <= lineWidth()) {
+        if (lines[li].verbatim || lines[li].indent * 4 + lines[li].units <= lineWidth()) {
             continue;
         }
         let line = truncate<u32>(li);
@@ -1490,7 +1613,9 @@ fn finishLines(l: borrow FmtLayout, lines: borrow Vector<FmtLine>) -> Result<Vec
     var units = Vector<u32>.create();
     for (line in lines.view()) {
         var code = Vector<u8>.create();
-        if (!line.blank) {
+        if (line.verbatim) {
+            appendBytes(mut code, line.code.view())?;
+        } else if (!line.blank) {
             for (k in 0..line.indent * 4) {
                 code.push(' ')?;
             }

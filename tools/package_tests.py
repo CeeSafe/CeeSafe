@@ -15,6 +15,12 @@
    panicked on it, then left the listener's drop undefined).
 10. dependency-warnings: `check` in app reports app's N0400 and not its dependency's, and succeeds; with
     `--deny-warnings` it fails (ADR 0073 §2.4).
+11. shadowing: a parameter, local, loop variable, closure parameter and binding named like the dependency `tls`
+    (ADR 0074 §2.10) beside `tls.X` in types and outside their scopes, and associated constants through the package
+    (`tls.TlsConfig.DEFAULT_PORT`, `tls.Version.COUNT`, ADR 0074 §2.7): `check` reports the two N0401 warnings only,
+    and the program prints what it should, in the interpreter and compiled.
+12. shadowing/item: an item named like the dependency is still N0315; shadowing/errors: another package's associated
+    constant that is not public is N0312.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -219,7 +225,42 @@ def main():
             problems.append(f"dependency-warnings: expected app's one warning, status 0, and 1 with --deny-warnings: "
                             f"{p.returncode} {found} {q.returncode} {p.stdout[:300]}{p.stderr[:300]}")
 
-    print(f"package_tests: 10 checks; {len(problems)} problems")
+        # 11. A local may shadow a dependency (ADR 0074 §2.10); associated constants through a package (§2.7).
+        shadowing = os.path.join(work, "shadowing")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "shadowing"), shadowing)
+        app = os.path.join(shadowing, "app")
+        expected = "466\n993\n2\n7\ntrue\n465\n0\n1\n5\n587"
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        try:
+            found = [(d["code"], d["severity"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = []
+        if p.returncode != 0 or found != [("N0401", "warning", 9), ("N0401", "warning", 33)]:
+            problems.append(f"shadowing: expected two N0401 warnings (lines 9 and 33) and status 0: "
+                            f"{p.returncode} {found} {p.stdout[:300]}{p.stderr[:300]}")
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"shadowing: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-300:]}")
+        p = run([compiler, "build"], app)
+        exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+        if p.returncode != 0:
+            problems.append(f"shadowing: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"shadowing: the program printed {out!r}")
+
+        # 12. N0315 for an item; N0312 for a constant that is not public.
+        for name, code in (("item", "N0315"), ("errors", "N0312")):
+            p = run([compiler, "check", "--diagnostics-format=json"], os.path.join(shadowing, name))
+            try:
+                found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+            except (ValueError, KeyError):
+                found = []
+            if p.returncode != 1 or found != [code]:
+                problems.append(f"shadowing/{name}: expected {code} alone: {p.returncode} {found} {p.stderr[:300]}")
+
+    print(f"package_tests: 12 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

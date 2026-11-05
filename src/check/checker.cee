@@ -167,8 +167,9 @@ struct Checker {
     blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
     declaredOrder: Vector<DeclaredEntry>;
-    methodFiles: Vector<MethodFile>; // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
-    fileImports: Vector<FileImport>; // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
+    methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
+    memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)
+    fileImports: Vector<FileImport>;         // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
 
     fn letKeywordOf(borrow this, local: u32) -> u32 {
         for (k in this.letKeywords.view()) {

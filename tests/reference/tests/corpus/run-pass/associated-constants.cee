@@ -1,0 +1,62 @@
+// Associated constants (type-system.md §10, ADR 0074 §2.7): `const` in a struct body and in an inherent `impl`, so
+// enums have them too, reached as `Type.NAME`; one may use another, and a constant array is indexed and measured.
+struct Oid {
+    bytes: [u8; 2];
+    const RSA: [u8; 9] = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01];
+    public const NAME: StringView = "rsaEncryption";
+
+    fn isRsa(borrow this) -> bool => this.bytes[0] == Oid.RSA[0] && this.bytes[1] == Oid.RSA[1];
+}
+
+enum Mode {
+    Plain,
+    Tls,
+}
+
+impl Mode {
+    const DEFAULT_PORT: u32 = 25;
+    const TLS_PORT: u32 = Mode.DEFAULT_PORT + 440;
+}
+
+struct Limits {
+    max: u32;
+}
+
+impl Limits {
+    public const DEFAULT: u32 = 64;
+    const ENABLED: bool = true;
+
+    fn make() -> Limits => Limits { max: Limits.DEFAULT * 2 };
+}
+
+fn port(mode: Mode) -> u32 => match (mode) {
+    Mode.Plain => Mode.DEFAULT_PORT,
+    Mode.Tls => Mode.TLS_PORT,
+};
+
+fn main() {
+    let rsa = Oid.RSA;
+    Console.writeLine(rsa.length);
+    Console.writeLine(Oid.RSA[8]);
+    var sum: u32 = 0;
+    for (b in Oid.RSA) {
+        sum += b as u32;
+    }
+    Console.writeLine(sum);
+    Console.writeLine(Oid.NAME);
+    let oid = Oid { bytes: [0x2A, 0x86] };
+    Console.writeLine(oid.isRsa());
+    Console.writeLine(port(Mode.Plain));
+    Console.writeLine(port(Mode.Tls));
+    Console.writeLine(Limits.make().max);
+    Console.writeLine(Limits.ENABLED);
+}
+// expect-stdout: 9
+// expect-stdout: 1
+// expect-stdout: 645
+// expect-stdout: rsaEncryption
+// expect-stdout: true
+// expect-stdout: 25
+// expect-stdout: 465
+// expect-stdout: 128
+// expect-stdout: true

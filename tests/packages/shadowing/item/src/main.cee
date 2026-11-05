@@ -1,0 +1,6 @@
+// An item named like a dependency keeps N0315 (ADR 0074 §2.10): items share the namespace `tls.X` is resolved in.
+struct tls {
+    x: u32;
+}
+
+fn main() {}

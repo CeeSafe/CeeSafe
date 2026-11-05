@@ -4,6 +4,7 @@
   "scopeName": "source.ceesafe",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#raw-strings" },
     { "include": "#strings" },
     { "include": "#characters" },
     { "include": "#numbers" },
@@ -19,6 +20,11 @@
         { "name": "comment.line.double-slash.ceesafe", "match": "//.*$" },
         { "name": "comment.block.ceesafe", "begin": "/\\*", "end": "\\*/" }
       ]
+    },
+    "raw-strings": {
+      "name": "string.quoted.triple.ceesafe",
+      "begin": "\"\"\"",
+      "end": "^\\s*\"\"\""
     },
     "strings": {
       "name": "string.quoted.double.ceesafe",

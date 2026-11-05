@@ -48,9 +48,16 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   A static function of a generic type of a dependency is called through an import (`Pair<u8>.make()`), since
   `geometry.Pair<u8>.make()` does not parse (grammar.md §2.1: in an expression, generic arguments follow a simple
   name only).
-- **Dependency names are reserved.** In a package, nothing else may have the name of one of its dependencies: no
-  item, parameter, local, loop variable or pattern binding (N0315). So `geometry.x`, with `geometry` a dependency,
-  always means the dependency's item, and the compiler resolves it before type checking (`PackageNames`).
+- **Dependency names and items.** In a package, no item or type parameter may have the name of one of its
+  dependencies (N0315): they share the namespace `geometry.X` is resolved in. A parameter, local, loop variable,
+  closure parameter or pattern binding may (ADR 0074 §2.10):
+  - in its scope, `geometry.x` in an expression is the local's member, and the dependency's values are unreachable;
+  - types and patterns are unaffected (a local is never a type), so `geometry.Point` in a type, a struct literal
+    `geometry.Point { … }` and a pattern `geometry.Shape.Circle(r)` keep naming the package's items;
+  - where `x` is also a public item of the dependency, `geometry.x` is warning N0401, since the item is hidden.
+
+  Elsewhere `geometry.x` means the dependency's item, and the compiler resolves it before type checking
+  (`PackageNames`), with a syntactic scope walk to find the locals.
 - **Imports.** `import geometry;` at the top of a file brings every public item of the dependency `geometry` into
   that file's scope; `import geometry.Point;` brings one (N0311 if it has none of that name, N0312 if it is not
   public). An import applies to its file only. The name before the `.` must be a dependency of the package (N0310).
@@ -70,7 +77,8 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
 - **Lookup order** for a simple name: locals (innermost first), the package's items, the file's imports, `lib/core`,
   built-ins. Two imports that both provide a name are an error where the name is used (N0313), not where it is
   imported. For `a.b`: if `a` is a local or an item of the package or of `lib/core`, `.b` is a member as before;
-  otherwise, `a` being a dependency (and so not a local or item, N0315), `a.b` is that dependency's item `b`.
+  otherwise, `a` being a dependency (and so not an item, N0315), `a.b` is that dependency's item `b`, unless a local
+  `a` is in scope there (ADR 0074 §2.10). `T.NAME`, with `T` a struct or an enum, is its associated constant (§10).
 - **Messages and C names** write an item of a dependency with its package's name, `geometry.Point`; the C backend
   gives it a prefixed name, `ceeT_geometry_Point` (`c-backend.md` §2.1).
 
@@ -241,6 +249,16 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
   N0246.
 - `@export` on a constant makes it C data (§28.4).
+- **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
+  struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`,
+  a block with constants only). They follow the rules above and are reached as `Type.NAME`, and from a dependent
+  package as `dep.Type.NAME` when public (N0312 otherwise). A bare `NAME` does not reach one, inside the type's
+  methods either.
+  - A constant whose name is a field, method or variant of its type, or another of its constants, is N0228.
+  - A generic struct or `impl` has none yet (N0216).
+  - An associated constant takes no attributes (N0290).
+  - Array lengths in types and repeats stay integer literals (§13): `[u8; Oid.LENGTH]` is not accepted, as
+    `[u8; LENGTH]` is not.
 
 ## 11. `main`
 
@@ -1280,13 +1298,13 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
 MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'
 ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
-InherentImpl  = 'impl' TypeParams? Type '{' FunctionDecl* '}'
+InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ```
 - **`impl S { … }`** (an inherent impl, ADR 0064 §1) adds methods and static functions to a struct `S`, as if they
   were written in its body: the same visibility, the same "no member named twice" rule (N0228), and generic methods
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
-  N0267.
+  N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
 - An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
   `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods
   cannot have type parameters of their own, and v0 has no `Self` type.

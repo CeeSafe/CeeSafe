@@ -1,0 +1,8 @@
+// N0400 does not apply to a raw `"""` literal (grammar.md §1.6, ADR 0074 §2.6): `{` is a brace there, and there are
+// no escapes, so `{n}` with `n` in scope is text as written and is not reported.
+fn f(n: i32) -> StringView {
+    Console.writeLine(n);
+    return """
+        n = {n}, \{n}
+        """;
+}

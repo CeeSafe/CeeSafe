@@ -1,0 +1,55 @@
+// Raw `"""` literals (grammar.md §1.6, ADR 0074 §2.6): the closing line's indentation is removed from every content
+// line, blank lines are empty, lines are joined by "\n" with no final newline, and there are no escapes.
+fn show(text: StringView) {
+    Console.writeLine(text);
+    Console.writeLine(text.length);
+}
+
+struct Queries {
+    const BY_ID: StringView = """
+        SELECT id, name
+          FROM users
+         WHERE id = $1
+        """;
+}
+
+fn main() {
+    let query = """
+        SELECT id, name
+        FROM users
+
+        WHERE id = $1
+        """;
+    show(query);
+    // Deeper lines keep the rest of their indentation; a backslash and braces are themselves; `"""` inside a line is
+    // content.
+    show("""
+            {x} \n "quoted" and """ inside
+          two spaces
+        """);
+    // No content lines: the empty string.
+    let empty = """
+        """;
+    Console.writeLine(empty.length);
+    // A closing line with no indentation removes none.
+    let flush = """
+  kept
+""";
+    show(flush);
+    show(Queries.BY_ID);
+}
+// expect-stdout: SELECT id, name
+// expect-stdout: FROM users
+// expect-stdout:
+// expect-stdout: WHERE id = $1
+// expect-stdout: 41
+// expect-stdout:     {x} \n "quoted" and """ inside
+// expect-stdout:   two spaces
+// expect-stdout: 47
+// expect-stdout: 0
+// expect-stdout:   kept
+// expect-stdout: 6
+// expect-stdout: SELECT id, name
+// expect-stdout:   FROM users
+// expect-stdout:  WHERE id = $1
+// expect-stdout: 43

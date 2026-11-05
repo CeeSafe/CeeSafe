@@ -136,6 +136,9 @@ struct AstPrinter {
                 for (k in 0..s.functions.count) {
                     this.printFunction(ast, symbols, ast.at(s.functions, k))?;
                 }
+                for (k in 0..s.constants.count) {
+                    this.printItem(ast, symbols, ast.at(s.constants, k))?;
+                }
                 if (s.dropBlock != none()) {
                     this.line("(drop")?;
                     this.indent += 1;
@@ -211,7 +214,7 @@ struct AstPrinter {
                 this.indent -= 1;
                 this.line(")")?;
             }
-            ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters) => {
+            ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters, constants) => {
                 this.open()?;
                 this.text("(impl ")?;
                 this.typeText(ast, symbols, forType)?;
@@ -220,6 +223,9 @@ struct AstPrinter {
                 this.indent += 1;
                 for (k in 0..functions.count) {
                     this.printFunction(ast, symbols, ast.at(functions, k))?;
+                }
+                for (k in 0..constants.count) {
+                    this.printItem(ast, symbols, ast.at(constants, k))?;
                 }
                 this.indent -= 1;
                 this.line(")")?;

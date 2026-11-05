@@ -42,6 +42,33 @@ fn structItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
     return none();
 }
 
+/// The enum item named `symbol` in package `package`, or none.
+fn enumItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
+    for (u in 0..c.front.ast.units.length) {
+        if (packageOfFile(c, c.front.ast.units[u].file) != package) {
+            continue;
+        }
+        let items = c.front.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = c.front.ast.at(items, k);
+            match (c.front.ast.items[item as usize].kind) {
+                ItemKind.Enum(_, _, _) => {
+                    if (c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol == symbol) {
+                        return item;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return none();
+}
+
+fn enumIsGeneric(c: borrow Checker, item: u32) -> bool => match (c.front.ast.items[item as usize].kind) {
+    ItemKind.Enum(_, typeParameters, regionParameters) => typeParameters.count > 0 || regionParameters.count > 0,
+    _ => false,
+};
+
 /// The symbols of a list of type parameters (Ast.typeParameters), in order.
 fn parameterSymbols(c: borrow Checker, list: Range, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
     for (k in 0..list.count) {
@@ -86,7 +113,7 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
             let item = c.front.ast.at(items, k);
             let entry = c.front.ast.items[item as usize];
             match (entry.kind) {
-                ItemKind.InherentImpl(target, functions, typeParameters, regionParameters) => {
+                ItemKind.InherentImpl(target, functions, typeParameters, regionParameters, constants) => {
                     c.setFile(file);
                     let span = c.front.ast.typeSpans[target as usize];
                     let nameIdent = match (c.front.ast.types[target as usize]) {
@@ -100,6 +127,29 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         symbol,
                         packageOfFile(c, file),
                     );
+                    let enumItem = if (symbol == none() || structItem != none()) none() else enumItemNamed(
+                        c,
+                        symbol,
+                        packageOfFile(c, file),
+                    );
+                    if (enumItem != none() && functions.count == 0) {
+                        // `impl E { const … }`: an enum's constants (ADR 0074 §2.7).
+                        if (typeParameters.count > 0 || regionParameters.count > 0 || enumIsGeneric(c, enumItem)) {
+                            genericConstants(c, constants)?;
+                        } else {
+                            addMemberConstants(c, enumItem, file, constants)?;
+                        }
+                        continue;
+                    }
+                    if (enumItem != none()) {
+                        var message = Vector<u8>.create();
+                        appendText(
+                            mut message,
+                            "an 'impl' without 'for' of an enum holds constants only, not functions (ADR 0074 §2.7)",
+                        )?;
+                        c.error(inherentImplError(), span.start, span.end, message)?;
+                        continue;
+                    }
                     if (structItem == none()) {
                         var message = Vector<u8>.create();
                         appendText(
@@ -136,6 +186,11 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                     }
                     let list = c.front.ast.list(merged)?;
                     c.front.ast.structs[structIndex as usize].functions = list;
+                    if (s.typeParameters.count > 0 || s.regionParameters.count > 0) {
+                        genericConstants(c, constants)?;
+                    } else {
+                        addMemberConstants(c, structItem, file, constants)?;
+                    }
                 }
                 _ => {}
             }

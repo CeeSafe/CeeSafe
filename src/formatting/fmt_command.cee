@@ -8,7 +8,12 @@ struct Formatted {
 /// The token texts other than commas, and the comment texts, of a file: what formatting must keep.
 fn tokenTexts(text: Slice<u8>, lexed: borrow Lexed, out: borrow mut Vector<Vector<u8>>) -> Result<void, AllocError> {
     for (t in lexed.tokens.view()) {
-        if (!sameKind(t.kind, TokenKind.Comma)) {
+        if (sameKind(t.kind, TokenKind.StringLiteral) && isRawLiteralAt(text, t.start as usize)) {
+            // A raw literal moves with its line (ADR 0074 §2.6): its value is what must not change.
+            var value = copyBytes("\"\"\"".bytes())?;
+            appendBytes(mut value, lexed.strings[t.data as usize].view())?;
+            out.push(value)?;
+        } else if (!sameKind(t.kind, TokenKind.Comma)) {
             out.push(copyBytes(text[t.start as usize..t.end as usize])?)?;
         }
     }

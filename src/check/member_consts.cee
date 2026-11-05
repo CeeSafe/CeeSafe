@@ -1,0 +1,173 @@
+// Associated constants (ADR 0074 §2.7, type-system.md §17): `const NAME: T = e;` in a struct body or an inherent
+// `impl` block, reached as `Type.NAME` (and `dep.Type.NAME`). Each is a constant of the constant table, evaluated as a
+// top-level one is (src/check/consts.cee), under the name `Type.NAME`; only the owner's member lookup finds it.
+
+/// One associated constant: its owner (a struct or enum item), its `const` item and file, and the constant once
+/// declared.
+struct MemberConstant {
+    owner: u32; // Ast.items: the struct or the enum
+    item: u32;  // Ast.items: the `const`
+    file: u32;
+    constant: u32; // Checker.constants, or none
+}
+
+/// The constants of every non-generic struct's body (before MergeInherentImpls adds the impls').
+fn collectStructConstants(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (u in 0..c.front.ast.units.length) {
+        let file = c.front.ast.units[u].file;
+        let items = c.front.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = c.front.ast.at(items, k);
+            match (c.front.ast.items[item as usize].kind) {
+                ItemKind.Struct(s) => {
+                    let st = c.front.ast.structs[s as usize];
+                    if (st.constants.count == 0) {
+                        continue;
+                    }
+                    c.setFile(file);
+                    if (st.typeParameters.count > 0 || st.regionParameters.count > 0) {
+                        genericConstants(c, st.constants)?;
+                    } else {
+                        addMemberConstants(c, item, file, st.constants)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    c.setFile(saved);
+    return Ok();
+}
+
+fn addMemberConstants(c: borrow mut Checker, owner: u32, file: u32, constants: Range) -> Result<void, AllocError> {
+    for (k in 0..constants.count) {
+        let item = c.front.ast.at(constants, k);
+        c.memberConstants.push(MemberConstant { owner: owner, item: item, file: file, constant: none() })?;
+    }
+    return Ok();
+}
+
+/// N0216: a generic struct or impl has no constants yet (ADR 0074 §2.7).
+fn genericConstants(c: borrow mut Checker, constants: Range) -> Result<void, AllocError> {
+    for (k in 0..constants.count) {
+        let item = c.front.ast.items[c.front.ast.at(constants, k) as usize];
+        let id = c.front.ast.idents[item.name as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "constant ")?;
+        appendQuotedName(mut message, c, id.symbol)?;
+        appendText(mut message, ": a generic struct or impl cannot have constants yet (ADR 0074 §2.7)")?;
+        c.error(unsupported(), id.start, id.end, message)?;
+    }
+    return Ok();
+}
+
+/// The name of the struct or enum item `owner`.
+fn ownerSymbol(c: borrow Checker, owner: u32) -> u32 =>
+    c.front.ast.idents[c.front.ast.items[owner as usize].name as usize].symbol;
+
+/// Whether the owner already has a member (a field, a method, a variant, or an earlier constant) named `symbol`.
+fn ownerHasMember(c: borrow Checker, owner: u32, symbol: u32, before: usize) -> bool {
+    match (c.front.ast.items[owner as usize].kind) {
+        ItemKind.Struct(s) => {
+            let st = c.front.ast.structs[s as usize];
+            for (k in 0..st.fields.count) {
+                let field = c.front.ast.fields[c.front.ast.at(st.fields, k) as usize];
+                if (c.front.ast.idents[field.name as usize].symbol == symbol) {
+                    return true;
+                }
+            }
+            for (k in 0..st.functions.count) {
+                let f = c.front.ast.functions[c.front.ast.at(st.functions, k) as usize];
+                if (c.front.ast.idents[f.name as usize].symbol == symbol) {
+                    return true;
+                }
+            }
+        }
+        ItemKind.Enum(variants, _, _) => {
+            for (k in 0..variants.count) {
+                let variant = c.front.ast.variants[c.front.ast.at(variants, k) as usize];
+                if (c.front.ast.idents[variant.name as usize].symbol == symbol) {
+                    return true;
+                }
+            }
+        }
+        _ => {}
+    }
+    for (k in 0..before) {
+        let m = c.memberConstants[k];
+        if (m.owner == owner &&
+            c.front.ast.idents[c.front.ast.items[m.item as usize].name as usize].symbol == symbol) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Declares each associated constant in the constant table, as `Type.NAME`; N0228 for a name the type already has.
+fn declareMemberConstants(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.memberConstants.length) {
+        let m = c.memberConstants[k];
+        c.setFile(m.file);
+        let entry = c.front.ast.items[m.item as usize];
+        let id = c.front.ast.idents[entry.name as usize];
+        if (ownerHasMember(c, m.owner, id.symbol, k)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'")?;
+            appendBytes(mut message, c.name(ownerSymbol(c, m.owner)))?;
+            appendText(mut message, "' already has a member named ")?;
+            appendQuotedName(mut message, c, id.symbol)?;
+            c.error(duplicateMember(), id.start, id.end, message)?;
+            continue;
+        }
+        var text = Vector<u8>.create();
+        appendBytes(mut text, c.name(ownerSymbol(c, m.owner)))?;
+        text.push('.')?;
+        appendBytes(mut text, c.name(id.symbol))?;
+        let symbol = c.front.symbols.intern(text.view())?.id;
+        let typ = match (entry.kind) {
+            ItemKind.Const(t, _) => t,
+            _ => none(),
+        };
+        if (typ == none()) {
+            continue;
+        }
+        let constant = declareConstantEntry(c, m.item, typ, symbol)?;
+        c.memberConstants[k].constant = constant;
+    }
+    c.setFile(saved);
+    return Ok();
+}
+
+/// The associated constant `member` (a symbol) of the struct or enum item `owner`: its index in memberConstants, or
+/// none.
+fn memberConstantOf(c: borrow Checker, owner: u32, member: u32) -> u32 {
+    if (owner == none()) {
+        return none();
+    }
+    for (k in 0..c.memberConstants.length) {
+        let m = c.memberConstants[k];
+        if (m.owner == owner && m.constant != none() &&
+            c.front.ast.idents[c.front.ast.items[m.item as usize].name as usize].symbol == member) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// `Type.NAME`: the constant's value; N0312 for another package's constant that is not public.
+fn memberConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32, AllocError> {
+    let m = c.memberConstants[k as usize];
+    if (isOtherPackage(c, m.file) && !itemIsPublic(c, m.item)) {
+        let id = c.front.ast.idents[c.front.ast.items[m.item as usize].name as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, c.name(ownerSymbol(c, m.owner)))?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(id.symbol))?;
+        appendText(mut message, "' is not public: only its own package can use it (type-system.md §2)")?;
+        c.error(notPublic(), span.start, span.end, message)?;
+    }
+    return namedConstantValue(c, m.constant, span);
+}

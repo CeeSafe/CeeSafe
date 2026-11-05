@@ -1,0 +1,4 @@
+// Another package's associated constant that is not public is N0312 (ADR 0074 §2.7).
+fn main() {
+    Console.writeLine(tls.TlsConfig.SECRET);
+}

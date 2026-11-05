@@ -66,6 +66,24 @@ describe("ceesafe.tmLanguage.json", () => {
     );
   });
 
+  test("a raw literal spans lines, with no escapes and no comments in it (grammar.md §1.6)", () => {
+    const lines = ['let q = """', '    a\\n "b" // c', '    """;', "fn"];
+    let stack = textmate.INITIAL;
+    const all = [];
+    for (const line of lines) {
+      const { tokens, ruleStack } = grammar.tokenizeLine(line, stack);
+      stack = ruleStack;
+      all.push(
+        tokens
+          .map((token) => [line.slice(token.startIndex, token.endIndex), token.scopes.at(-1)])
+          .filter(([text]) => text.trim().length > 0),
+      );
+    }
+    expect(all[1].every(([, scope]) => scope === "string.quoted.triple.ceesafe")).toBe(true);
+    expect(all[2][0]).toEqual(['    """', "string.quoted.triple.ceesafe"]);
+    expect(all[3]).toEqual([["fn", "keyword.declaration.ceesafe"]]);
+  });
+
   test("comments", () => {
     expect(scopeOf("/// Docs.", "/// Docs.")).toBe("comment.line.documentation.ceesafe");
     expect(scopeOf("x(); // later", "// later")).toBe("comment.line.double-slash.ceesafe");

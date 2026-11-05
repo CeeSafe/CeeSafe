@@ -836,6 +836,10 @@ fn documentSymbols(document: borrow LspDocument) -> JsonWriter {
                             m += 1;
                         }
                     }
+                    for (ci in 0..structure.constants.count) {
+                        let constant = borrow ast.items[ast.at(structure.constants, ci) as usize]; // ADR 0074 §2.7
+                        leafSymbol(mut json, front, source, constant.name, 14, constant.start, constant.end);
+                    }
                     json.endArray()!;
                     json.endObject()!;
                 }

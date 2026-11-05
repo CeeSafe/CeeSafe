@@ -373,6 +373,10 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
     }
     for (k in 0..s.functions.count) {
         let f = c.front.ast.at(s.functions, k);
+        {
+            let fileToSet = methodFileOf(c, f, entry.file);
+            c.setFile(fileToSet);
+        }
         let id = c.front.ast.idents[c.front.ast.functions[f as usize].name as usize];
         let repeated = containsSymbol(memberNames, id.symbol);
         if (!repeated) {

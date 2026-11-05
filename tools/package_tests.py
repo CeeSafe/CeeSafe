@@ -8,6 +8,8 @@
 3. Without $CEESAFE_TEST_LIBDIR, `build` fails with N0321 naming it.
 4. The package hash (what a git or registry dependency is locked by) changes when wrap's `links` does.
 5. native-errors: `check` reports N0321 for each of its five invalid values.
+6. impl-files: a method merged from an `impl` block in another file (ADR 0064 §1) panics at its own position.
+7. impl-files: diagnostics in that method name its own file and line.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -149,7 +151,37 @@ def main():
         if count != 5:
             problems.append(f"native-errors: {count} N0321 diagnostics, not 5: {p.stdout[:400]}{p.stderr[:400]}")
 
-    print(f"package_tests: 5 checks; {len(problems)} problems")
+        # 6. A method merged from an `impl` block in another file keeps that file (ADR 0064 §1): its bounds check
+        #    reports the method's own position, not an offset into the struct's file.
+        impl_files = os.path.join(work, "impl-files")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "impl-files"), impl_files)
+        p = run([compiler, "build"], impl_files)
+        if p.returncode != 0:
+            problems.append(f"impl-files: build failed: {p.stdout[:400]}{p.stderr[:400]}")
+        else:
+            exe = os.path.join(impl_files, "out", "impl_files" + (".exe" if WINDOWS else ""))
+            p = run([exe], impl_files)
+            if p.returncode == 0 or p.stdout.split() != ["20"] or "src/more/cells.cee:24:" not in p.stderr.replace("\\", "/"):
+                problems.append(f"impl-files: expected 20 then a bounds panic at src/more/cells.cee:24: "
+                                f"{p.returncode} {p.stdout[:200]!r} {p.stderr[:200]!r}")
+
+        # 7. A diagnostic in such a method names its own file and line.
+        cells = os.path.join(impl_files, "src", "more", "cells.cee")
+        with open(cells) as f:
+            text = f.read()
+        with open(cells, "w") as f:
+            f.write(text.replace("let n = this.base;", "let n: bool = this.base;"))
+        p = run([compiler, "check", "--diagnostics-format=json"], impl_files)
+        try:
+            diagnostics = json.loads(p.stdout)["diagnostics"]
+            places = [(d["file"].replace("\\", "/"), d["start"]["line"]) for d in diagnostics]
+        except (ValueError, KeyError):
+            places = []
+        if not places or places[0] != ("src/more/cells.cee", 23) or any(f != "src/more/cells.cee" for f, _ in places):
+            problems.append(f"impl-files: expected diagnostics in src/more/cells.cee, the first at line 23: {places} "
+                            f"{p.stdout[:300]}{p.stderr[:300]}")
+
+    print(f"package_tests: 7 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

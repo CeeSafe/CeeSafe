@@ -4,6 +4,22 @@
 
 fn inherentImplError() -> u32 => 267;
 
+/// A method merged from an `impl S { … }` block, and the file that block is in.
+struct MethodFile {
+    function: u32;
+    file: u32;
+}
+
+/// The file of struct method `f` (an AST function): its `impl` block's when merged from one, else `structFile`.
+fn methodFileOf(c: borrow Checker, f: u32, structFile: u32) -> u32 {
+    for (m in c.methodFiles.view()) {
+        if (m.function == f) {
+            return m.file;
+        }
+    }
+    return structFile;
+}
+
 /// The struct item named `symbol` in package `package`, or none.
 fn structItemNamed(c: borrow Checker, symbol: u32, package: u32) -> u32 {
     for (u in 0..c.front.ast.units.length) {
@@ -113,7 +129,10 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         merged.push(c.front.ast.at(s.functions, j))?;
                     }
                     for (j in 0..functions.count) {
-                        merged.push(c.front.ast.at(functions, j))?;
+                        let f = c.front.ast.at(functions, j);
+                        merged.push(f)?;
+                        // The method keeps its own file: its offsets are into this file, not the struct's.
+                        c.methodFiles.push(MethodFile { function: f, file: file })?;
                     }
                     let list = c.front.ast.list(merged)?;
                     c.front.ast.structs[structIndex as usize].functions = list;

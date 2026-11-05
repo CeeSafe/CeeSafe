@@ -1,0 +1,10 @@
+// A struct whose method is in an `impl` block of another, longer file (ADR 0064 §1).
+public struct Cells {
+    public base: i32;
+}
+
+fn main() {
+    let c = Cells { base: 1 };
+    Console.writeLine(c.at(1));
+    Console.writeLine(c.at(5));
+}

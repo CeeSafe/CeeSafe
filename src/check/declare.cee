@@ -190,6 +190,7 @@ fn checkProgram(
         filePackage: filePackage,
         packageDeclared: Map<Word, Word>.create(),
         declaredOrder: Vector<DeclaredEntry>.create(),
+        methodFiles: Vector<MethodFile>.create(),
         fileImports: Vector<FileImport>.create(),
     };
     // The constructor: the builtins' names, `this`, and a scratch frame's two parts.

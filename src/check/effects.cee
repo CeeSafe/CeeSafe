@@ -561,8 +561,13 @@ fn processConstantAttributes(c: borrow mut Checker, item: u32) -> Result<void, A
 fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocError> {
     let functions = c.front.ast.structs[s as usize].functions;
     var placedCount: u32 = 0;
+    let savedFile = c.file;
     for (k in 0..functions.count) {
         let member = c.front.ast.at(functions, k);
+        {
+            let fileToSet = methodFileOf(c, member, savedFile);
+            c.setFile(fileToSet);
+        }
         let words = "effects effectsOf context placed constant test";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[member as usize].attributes;
@@ -612,6 +617,7 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
             }
         }
     }
+    c.setFile(savedFile);
     return Ok();
 }
 

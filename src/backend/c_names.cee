@@ -259,6 +259,7 @@ fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Res
     match (info.kind) {
         TypeKind.Bool => { appendText(out, "bool")?; }
         TypeKind.Void => { appendText(out, "void")?; }
+        TypeKind.Never => { appendText(out, "void")?; } // a `never` function's result (§15.3)
         TypeKind.Integer => {
             appendText(out, if (info.signed) "int" else "uint")?;
             appendDecimal(out, info.bits as u64)?;

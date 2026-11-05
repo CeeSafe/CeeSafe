@@ -39,6 +39,61 @@ fn payloadType(c: borrow Checker, variant: u32, k: usize) -> u32 {
 
 fn payloadCount(c: borrow Checker, variant: u32) -> usize => c.types.variants[variant as usize].payload.length;
 
+/// Is the variant the `Ok` of a `Result<void, E>`, whose payload is a unit (§20.4)? It has no payload slot, but a
+/// pattern may bind one name to it and a construction may pass one `void` argument.
+fn isUnitPayload(c: borrow Checker, typ: u32, variant: u32) -> bool {
+    if (!c.types.is(typ, TypeKind.Enum)) {
+        return false;
+    }
+    let d = borrow c.types.enums[c.types.info(typ).enumDef as usize];
+    return d.resultOk != none() && c.types.is(d.resultOk, TypeKind.Void) && d.variants.length > 0 &&
+        d.variants[0] == variant;
+}
+
+/// A unit value (§20.4), the read of a unit local: an empty block's value, of type `void`. It holds nothing, and the
+/// places that take a unit (a payload, `return`, a `let`) erase it.
+fn unitValue(c: borrow mut Checker, span: Span) -> Result<u32, AllocError> {
+    let block = c.hir.addStmt(HirStmt.Block(emptyRange()), span.start, span.end)?;
+    let voidType = c.types.voidType;
+    return c.expr(HirExpr.StmtValue(block), voidType, span.start, span.end);
+}
+
+/// Is `e` a unit value (`unitValue`)?
+fn isUnitValue(c: borrow Checker, e: u32) -> bool {
+    if (!c.types.is(c.typeOf(e), TypeKind.Void)) {
+        return false;
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.StmtValue(statement) => {
+            match (c.hir.stmts[statement as usize]) {
+                HirStmt.Block(statements) => { return statements.count == 0; }
+                _ => { return false; }
+            }
+        }
+        _ => { return false; }
+    }
+}
+
+/// A name bound to a unit payload (§20.4): a unit local, after the check `declareBinding` makes.
+fn declareUnitBinding(c: borrow mut Checker, name: u32) -> Result<void, AllocError> {
+    let ident = c.front.ast.idents[name as usize];
+    if (c.lookupLocal(ident.symbol)? != none()) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, ident.symbol)?;
+        appendText(mut message, " is already declared in this function; locals cannot be shadowed")?;
+        c.error(localRedeclared(), ident.start, ident.end, message)?;
+    }
+    return c.bindUnit(ident.symbol);
+}
+
+/// `Ok(v)` binding a unit payload (§20.4): one plain name or `_`, no nested pattern.
+fn bindsUnitPayload(c: borrow Checker, typ: u32, variant: u32, bindings: Range) -> bool {
+    if (bindings.count != 1 || payloadCount(c, variant) != 0 || !isUnitPayload(c, typ, variant)) {
+        return false;
+    }
+    return c.front.ast.bindings[c.front.ast.at(bindings, 0) as usize].nested == none();
+}
+
 /// `E.V` or `E.V(a, b)` (CheckEnumValue) for a non-generic enum.
 fn checkEnumValue(
     c: borrow mut Checker,
@@ -605,6 +660,13 @@ fn checkPattern(
             if (!hasBindings) {
                 return c.hir.addPattern(HirPattern.Variant(variant, false, emptyRange()));
             }
+            if (bindsUnitPayload(c, typ, variant, bindings)) {
+                let name = c.front.ast.bindings[c.front.ast.at(bindings, 0) as usize].name;
+                if (name != none()) {
+                    declareUnitBinding(c, name)?;
+                }
+                return c.hir.addPattern(HirPattern.Variant(variant, false, emptyRange()));
+            }
             let count = payloadCount(c, variant);
             if (bindings.count as usize != count) {
                 payloadArityError(c, typ, variant, bindings.count, span)?;
@@ -675,6 +737,13 @@ fn checkVariantPattern(
     let variant = resolvePatternVariant(c, path, span, typ)?;
     if (variant == none() || !hasBindings) {
         return Ok(variant); // `E.V` ignores the payload
+    }
+    if (bindsUnitPayload(c, typ, variant, bindings)) {
+        let name = c.front.ast.bindings[c.front.ast.at(bindings, 0) as usize].name;
+        if (name != none()) {
+            declareUnitBinding(c, name)?; // a unit local: nothing to bind (§20.4)
+        }
+        return Ok(variant);
     }
     if (bindings.count as usize != payloadCount(c, variant)) {
         payloadArityError(c, typ, variant, bindings.count, span)?;

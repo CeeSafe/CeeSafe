@@ -75,7 +75,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.ceesafe",
-          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|void|str|CChar)\\b"
+          "match": "\\b(i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|void|never|str|CChar)\\b"
         },
         { "name": "entity.name.type.ceesafe", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
       ]

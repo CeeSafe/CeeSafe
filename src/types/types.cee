@@ -579,7 +579,7 @@ struct TypeTable {
         table.cchar = table.simple(TypeKind.CChar, "CChar", 0)?;
         table.tcpListener = table.resourceType(ResourceKind.TcpListener, "TcpListener")?;
         table.tcpStream = table.resourceType(ResourceKind.TcpStream, "TcpStream")?;
-        let named: [u32; 21] = [
+        let named: [u32; 22] = [
             table.i8,
             table.i16,
             table.i32,
@@ -594,6 +594,7 @@ struct TypeTable {
             table.f64,
             table.boolType,
             table.voidType,
+            table.never,
             table.cchar,
             table.arena,
             table.fixedBufferAllocator,

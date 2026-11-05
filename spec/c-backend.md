@@ -121,6 +121,7 @@ relies on) raises the version. Version 1 is the first.
 | CeeSafe | C |
 |---|---|
 | `i8..i64`, `u8..u64` | `int8_t..int64_t`, `uint8_t..uint64_t` |
+| `never` as a function's result (ADR 0074 §2.2, type-system.md §15.3) | `void`, with `_Noreturn` before the function's prototype and definition. A call of one is a statement followed by `ceesafe_panic(CEE_PANIC_UNREACHABLE, loc)`, NIR's `Unreachable` |
 | `isize`/`usize` | the fixed-width type of the target's pointer width (`int64_t`/`uint64_t` on LP64), plus `_Static_assert(sizeof(void *) == 8)`. `ptrdiff_t`/`size_t` are used at FFI boundaries (M8) |
 | `bool` | `bool` (`_Bool`) |
 | `char` | `uint32_t` |

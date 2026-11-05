@@ -13,7 +13,7 @@ codes are listed in `diagnostics.md`.
 | `isize` / `usize` | pointer width of the **target** (64 on every M1 target) | from `TargetInfo`, never the host |
 | `bool` | `true`, `false` | |
 | `void` | no value | function return type only |
-| *never* | no value; the expression does not complete | internal only (`Process.exit`); not nameable |
+| `never` | no value; the expression does not complete | a function's return type only (§15.3, ADR 0074 §2.2) |
 
 Not in M1 (error N0216): floats, `char`, strings as values, user-defined types, references. Floats came in M11
 (`f32`, `f64`, §35); character literals are integers (§4).
@@ -22,6 +22,14 @@ since M6c it is a `StringView` value (§22.2).
 
 `void` may appear only as a return type (writing `-> void` is the same as omitting the
 return type). A *never* expression is accepted wherever any type is expected.
+
+`never` (ADR 0074 §2.2) names the bottom type, and only as the return type of a function or of a struct's method: a
+call of one is a call of type *never* (§9), as `Process.exit` is. Anywhere else (a parameter, a field, a local, a type
+argument, a function type, an `async` function, an interface method, an `extern` function) it is N0226: "'never' can
+only be a function's return type". A `never` function does not return: the end of its body must be unreachable
+(N0213), and `return` in it is N0215. A `let` whose initializer has type *never* has no value to bind (N0224). In C,
+the function is `_Noreturn void` (`c-backend.md`); in NIR, a call of one ends its block with `Unreachable`. `never` is
+a type name, not a keyword: a value named `never` is unaffected.
 
 ## 2. Names and scopes
 
@@ -190,7 +198,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - `truncate<T>(e)`: see §7. Exactly one type argument (N0216 for other generic arguments).
 - An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
 - `break`/`continue` must be inside `while` or `loop` (N0214).
-- `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215).
+- `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
+  unit local is `return;` (§20.4). Neither is allowed in a `never` function (§1), which does not return (N0215).
 
 ## 9. Control flow facts
 
@@ -204,7 +213,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   with no `break` that targets it. A `while` loop may always complete, whatever its condition:
   write `loop` for infinite loops. An `if` or `match` expression (§15.3) cannot complete when none of its
   branches can: its condition or scrutinee does not complete, or every branch is a block that cannot complete.
-- **Missing return.** If the end of a non-`void` function body may be reached, that is N0213.
+- **Missing return.** If the end of a non-`void` function body may be reached, that is N0213. For a function
+  returning `never` (§1), the end must be unreachable too: every path ends in a call of type *never* or a `loop`
+  without `break`.
 
 ## 10. Constants
 
@@ -561,7 +572,8 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
   `else` (N0100 otherwise).
 - **Branches.** A branch is an expression, the value of the whole when that branch is taken, or a block that
   cannot complete (§9): one that ends in `return`, `break`, `continue` or a call of type *never*, such as
-  `{ return; }` or `{ Process.exit(1); }`. A block that can complete has no value: N0235.
+  `{ return; }`, `{ Process.exit(1); }` or `{ die("bad number"); }` with `fn die(m: StringView) -> never` (§1). A
+  block that can complete has no value: N0235.
 - **Value blocks** (ADR 0073 §2.3). A block branch may end with an expression written without `;`: the branch's
   value, typed as an expression branch is. An `if` (with its `else`) or `match` that ends a value block, directly
   before its `}`, is read as an expression. Only branches of `if` and `match` expressions have value blocks: in a
@@ -1200,9 +1212,22 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   (N0227).
 - Instantiation is depth-limited: a chain of more than 64 nested instantiations (polymorphic
   recursion such as `f<T>` calling `f<Box<T>>`) is N0266.
+- **Unit payloads** (ADR 0074 §2.1). `Result<void, E>.Ok` has no payload (§17.1), but a pattern may bind one name
+  to it, and `Ok(e)` may pass one argument of type `void`, so `Ok(v) => Ok(v)` means the same at `T = void` as at
+  any other `T`, in a generic body and written out by hand:
+  - A name bound so is a **unit local**: it has type `void` and holds nothing. `let v = r?;` (or `r!`) with
+    `r: Result<void, E>` declares one too, as does `let w = v;` of one. A `let` of a call of a `void` function is
+    still N0224, and a `var` cannot hold a unit.
+  - Reading a unit local is a unit value. It may be passed where `void` is expected: as `Ok`'s payload, and as
+    `return v;` in a `void` function, which is `return;`. Elsewhere it is a `void` value of the usual rules: N0205
+    where another type is expected, N0211 when assigned.
+  - `Ok(e)` with any `void` `e` evaluates `e` for its effects, then builds the payload-less `Ok`. Any other type is
+    N0209.
+  - The checker erases units: a unit local is no HIR local, a unit read no operand, and nothing is captured, moved,
+    borrowed or destroyed for one. NIR, the C backend and the interpreter never see them.
+  - Not included: user generic enums instantiated at `void` (N0226), and `Some(v)` with `void`.
 - **An instantiation that does not check is an error at its use** (M15 S1). §20.3's checking
-  covers every type argument except `void`, whose values have no payload: `Ok(v)` in a generic
-  body binds and rebuilds a `T`, but `Result<void, E>.Ok` has none (§17.1). A scoped type argument
+  covers every type argument; a `void` one's payloads are unit payloads (above). A scoped type argument
   the body cannot take is N0274 (§25.4). Otherwise the copy's errors are usually explained by an
   error at the use (an unmet bound, N0268; a move of C state, N0294). If, after the ownership
   checks, no error explains them, the copy is N0222 at the use, naming the type arguments and its

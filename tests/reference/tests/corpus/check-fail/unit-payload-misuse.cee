@@ -1,0 +1,32 @@
+// A unit local (ADR 0074 §2.1, type-system.md §20.4) has type `void`: it is not a value of another type, and it holds
+// nothing to assign. A variant without a payload still binds nothing, and `Ok` of a `void` takes no other value.
+enum A { X }
+enum E { P }
+
+fn act() -> Result<void, A> { return Ok(); }
+
+fn take(n: i32) {}
+
+fn use(r: Result<void, A>) -> Result<i32, A> {
+    match (r) {
+        Ok(v) => {
+            take(v);        // error[N0205]
+            let n: i32 = v; // error[N0205]
+            v = 3;          // error[N0211]
+            return Ok(v);   // error[N0205]
+        }
+        Err(e) => { return Err(e); }
+    }
+}
+
+fn bad() -> Result<void, A> => Ok(5); // error[N0209]
+
+fn main() {
+    match (E.P) {
+        E.P(x) => {} // error[N0209]
+    }
+    match (act()) {
+        Ok(a, b) => {} // error[N0209]
+        Err(_) => {}
+    }
+}

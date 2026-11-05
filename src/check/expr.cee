@@ -344,6 +344,9 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
     let symbol = c.front.ast.idents[name as usize].symbol;
     match (c.lookup(symbol)?) {
         Entity.Local(local) => {
+            if (local == unitLocal()) {
+                return unitValue(c, span); // a unit local holds nothing (§20.4)
+            }
             if (c.asyncScopes.length > 0) {
                 checkUseOfCaptured(c, local, span)?;
             }
@@ -850,7 +853,7 @@ fn synthCall(
                     return c.errorResult(span.start, span.end);
                 }
                 Entity.Local(local) => {
-                    let t = c.hir.locals[local as usize].typ;
+                    let t = if (local == unitLocal()) c.types.voidType else c.hir.locals[local as usize].typ;
                     if (c.types.is(t, TypeKind.Function)) {
                         let value = c.expr(HirExpr.LocalRef(local), t, calleeSpan.start, calleeSpan.end)?;
                         return checkFunctionValueCall(c, value, arguments, span);

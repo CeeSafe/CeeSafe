@@ -165,7 +165,9 @@ fn passesAsUsize(c: borrow Checker, callee: u32, arguments: Range, symbol: u32) 
                 ExprNode.Name(name, _) => {
                     let named = c.front.ast.idents[name as usize].symbol;
                     let local = localNamed(c, named);
-                    if (local != none()) {
+                    if (local == unitLocal()) {
+                        // a unit local (§20.4) has no methods
+                    } else if (local != none()) {
                         receiverType = c.hir.locals[local as usize].typ;
                     } else {
                         match (c.item(named)) {

@@ -1,0 +1,52 @@
+// expect-exit: 3
+// `never` as a function's return type (ADR 0074 §2.2, type-system.md §15.3): a call of one diverges, so a branch
+// ending in it needs no value and the code after it is unreachable. A value named `never` is unaffected.
+fn die(message: StringView) -> never {
+    Console.writeLine(message);
+    Process.exit(3);
+}
+
+fn parse(text: StringView) -> Result<u32, u8> {
+    if (text.length == 0) {
+        return Err(1);
+    }
+    return Ok(truncate<u32>(text.length));
+}
+
+// No dead `return` after the call.
+fn pick(flag: bool) -> u32 {
+    if (flag) {
+        return 7;
+    }
+    die("pick: no value");
+}
+
+struct Exit { code: i32; }
+
+impl Exit {
+    fn now(borrow this) -> never { Process.exit(this.code); }
+}
+
+fn main() {
+    let n = match (parse("abc")) {
+        Ok(v) => v,
+        Err(_) => { die("bad number"); }
+    };
+    Console.writeLine(n);
+    let m = if (n > 1) n * 2 else die("too small");
+    Console.writeLine(m);
+    Console.writeLine(pick(true));
+    let never = 5;
+    Console.writeLine(never);
+    if (n == 0) {
+        let e = Exit { code: 9 };
+        e.now();
+    }
+    die("stopping");
+    Console.writeLine("unreachable");
+}
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: 7
+// expect-stdout: 5
+// expect-stdout: stopping

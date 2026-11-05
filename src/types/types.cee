@@ -169,7 +169,8 @@ struct StructDefinition {
     isThreadSafe: bool;
     isClosureEnvironment: bool;
     isMoveEnvironment: bool;
-    capturesLoans: bool; // an `async move` environment that holds a borrow: scoped (ADR 0033 §3.3)
+    capturesLoans: bool;     // an `async move` environment that holds a borrow: scoped (ADR 0033 §3.3)
+    isOnceEnvironment: bool; // a move environment whose body runs at most once: it may move its captures out (ADR 0074 §2.3)
     closureId: u32;
     allocateMethod: u32;
     deallocateMethod: u32;
@@ -1840,6 +1841,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     isClosureEnvironment: false,
     isMoveEnvironment: false,
     capturesLoans: false,
+    isOnceEnvironment: false,
     closureId: 0,
     allocateMethod: none(),
     deallocateMethod: none(),

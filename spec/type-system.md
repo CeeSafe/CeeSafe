@@ -3237,7 +3237,13 @@ fn main() {
   value with region parameters. That is **N0332**: the box would outlive the loan.
 - **Mutation.** A body that assigns to a capture, borrows it mutably or calls a mutating method on it changes the
   closure's own copy. It makes the literal a `dyn mut fn`: where a `dyn fn` is expected, that is N0299. A captured
-  value cannot be moved out of the body (N0251): it belongs to the closure, which may be called again.
+  value cannot be moved out of a boxed body (N0251): it belongs to the closure, which may be called again.
+- **Run-once environments** (ADR 0074 §2.3). An `async move` child (§40.4, §40.5) runs its body at most once, so its
+  body may move each capture out, once: `s.spawn(async move () => await serve(stream))`. A second move is N0250, and
+  a capture whose type has a drop block cannot be partly moved (N0252). The body drops, as it returns, the captures it
+  did not move, as a function drops its locals (§14.5): one that may or may not have been moved has a drop flag. A
+  cancelled body returns along a normal path (§40.6), so it drops them there too; a child that never starts drops its
+  whole environment at once. A field-precise capture (§36.2) is a reference and is never movable.
 - **Calls.** `f(args)` where `f` is a place of type `Box<dyn fn…>`, `borrow dyn fn…`, or a reference to such a box,
   calls the closure. A `dyn mut fn` needs mutable access: a `var` box, or a `borrow mut`, else N0248. A call has the
   effects of the type's effect list, else `sleep` and `alloc` (§36.3).
@@ -3736,7 +3742,12 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `AsyncSignal.create()`, `s.raise()`, `await s.wait()` | `AsyncSignal`, `void`, `Result<void, AsyncError>` | lib/core (ADR 0039): `raise` is `@effects()`, so another thread or an `@context(irq)` handler may call it; `wait` parks the task until a raise, which a raise before the wait satisfies. One task waits at a time; a cancelled wait returns `Err(Cancelled)` |
 
 `race`, `all`, `shield`, `timeout` and `deadline` place their children's frames in the caller's frame, so they never
-allocate. The library
+allocate. A child of `race` or `all`, and the body of `timeout` or `deadline`, may be `async move () => …` (ADR 0074
+§2.3): it owns what it captures, moved into its frame, and as it runs once its body may move a capture out (§36.5).
+`let r = await Async.timeout(ms, E.Timeout, async move () => await TlsStream.accept(stream, cfg));` gives `stream`
+to the body: after the deadline it is gone, dropped as the cancelled body returned. Two children of one `race` or
+`all` may not both capture a local where one changes it (N0241); a local moved into one is moved (N0250 in the
+other). The library
 (`lib/std/async.cee`, Decision 0008) builds everything that waits for the outside world on `park` and `waker`: timers,
 console (`AsyncConsole`), files (`AsyncFiles`: each operation on a worker thread, through `Async.blocking`, since a
 regular file is always ready), sockets (`AsyncTcpListener`, `AsyncTcpStream`, on non-blocking descriptors; and
@@ -3868,8 +3879,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
   - **`async move () => …`** (§3.3) moves every capture into the child's frame, as a `move` literal moves into its
     environment (§36.5): the body cannot use what it moved (N0250), and the child drops what it owns when it returns
     (a cancelled child returns early). A child that cannot be started (no frame) drops it at once. A borrow may be
-    moved in, and is held until the scope returns as a copied one is; it makes the environment scoped (§25). Only
-    `s.spawn` takes `async move`: a race or all child is the caller's (N0209).
+    moved in, and is held until the scope returns as a copied one is; it makes the environment scoped (§25). The
+    child's body runs once, so it may move its captures out (§36.5, ADR 0074 §2.3).
 - **No `Send` or `Share` check** applies to children: they run on the scope's own thread (ADR 0031 §3.5).
 - There is no detached task: every task a program starts has returned before `Async.run` returns.
 

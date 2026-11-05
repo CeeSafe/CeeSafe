@@ -114,6 +114,7 @@ struct Checker {
     closureContexts: Vector<ClosureContext>; // the closures being checked, outermost first
     asyncScopes: Vector<AsyncScopeContext>;  // the `Async.scope` bodies being checked, outermost first (§40.5)
     copyCaptures: bool;                      // a spawned child is being checked: its Copy captures are values (ADR 0033)
+    runOnceLiteral: bool;                    // the move literal being checked is a run-once child (ADR 0074 §2.3)
     asyncAdapter: bool;                      // an @effectsOf argument is being checked: an async fn may be one (ADR 0037)
     sendSpawns: Vector<u32>;                 // the HIR Spawn expressions of `s.spawnSend(…)` (ADR 0038)
     asyncSites: u32;                         // scopes numbered so far, program-wide

@@ -639,6 +639,7 @@ fn checkSetSpawn(
     let argumentSpan = c.front.ast.exprSpans[argument as usize];
     let savedCopy = c.copyCaptures;
     c.copyCaptures = true;
+    c.runOnceLiteral = true;
     let closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
     c.copyCaptures = savedCopy;
     if (c.isBottom(closure)) {
@@ -800,6 +801,7 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, send: bool, s
     if (c.front.ast.closures[literal as usize].isMove) {
         // `async move`: the child owns what it captures, moved into its frame (ADR 0033 §3.3).
         let into = c.types.dynFunctionOf(none0.view(), resultType, maskEffects(), true, false)?;
+        c.runOnceLiteral = true;
         closure = checkClosureWith(c, literal, none(), into, true, argumentSpan)?;
     } else {
         closure = checkClosure(c, literal, expected, argumentSpan)?;
@@ -1130,13 +1132,17 @@ fn checkJoinChild(c: borrow mut Checker, arguments: Range, k: u32, result: u32) 
     }
     let literal = asyncLiteralArgument(c, arguments, k);
     if (c.front.ast.closures[literal as usize].isMove) {
-        var message = Vector<u8>.create();
-        appendText(
-            mut message,
-            "a race or all child is the caller's: write 'async () => …'; 'async move' is for 's.spawn' (type-system.md §40.5)",
-        )?;
-        c.error(argumentCount(), span.start, span.end, message)?;
-        return c.errorResult(span.start, span.end);
+        // `async move`: the child owns what it captures, moved into its frame, and runs once (ADR 0074 §2.3).
+        let none0 = Vector<u32>.create();
+        let into = if (result != none()) c.types.dynFunctionOf(
+            none0.view(),
+            result,
+            maskEffects(),
+            true,
+            false,
+        )? else none();
+        c.runOnceLiteral = true;
+        return checkClosureWith(c, literal, none(), into, true, span);
     }
     return checkClosure(c, literal, closureType, span);
 }
@@ -1248,11 +1254,13 @@ fn checkAsyncJoin(
             let aMutable = match (a.mode) {
                 CaptureMode.Shared => false,
                 CaptureMode.Copy => { continue; },
+                CaptureMode.Move => { continue; }, // moved into an `async move` child: the move checker sees the rest
                 _ => true,
             };
             let bMutable = match (b.mode) {
                 CaptureMode.Shared => false,
                 CaptureMode.Copy => { continue; },
+                CaptureMode.Move => { continue; }, // moved into an `async move` child: the move checker sees the rest
                 _ => true,
             };
             if (a.local == b.local && (aMutable || bMutable)) {

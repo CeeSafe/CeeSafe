@@ -124,6 +124,34 @@ fn isDerefProjectionN(p: NirProjection) -> bool => match (p.kind) {
     _ => false,
 };
 
+/// Is `typ` the reference `env` to a run-once environment (ADR 0074 §2.3)? Its captures are move paths under `*env`,
+/// as a box's contents are: the body may move each out once, and drops at its end what it did not move.
+fn isOnceEnvironmentReference(c: borrow Checker, typ: u32) -> bool {
+    if (!c.types.is(typ, TypeKind.Reference)) {
+        return false;
+    }
+    let pointee = c.types.info(typ).pointee;
+    if (!c.types.is(pointee, TypeKind.Struct)) {
+        return false;
+    }
+    let definition = c.types.info(pointee).structDef;
+    return definition != none() && c.types.structs[definition as usize].isOnceEnvironment;
+}
+
+/// Is `local` a run-once function's `env` (local 0, its first parameter)?
+fn isOnceEnvironmentLocal(c: borrow Checker, locals: borrow Vector<NirLocal>, local: u32) -> bool =>
+    local == 0 && locals.length > 0 && isOnceEnvironmentReference(c, locals[0].typ);
+
+/// Is a deref of `node` a move-path step: a box's contents, or a run-once function's `*env`?
+fn isDerefStep(c: borrow Checker, d: borrow MoveData, node: u32) -> bool {
+    let typ = d.nodes[node as usize].typ;
+    if (c.types.is(typ, TypeKind.Box)) {
+        return true;
+    }
+    return d.nodes[node as usize].parent == none() && d.nodes[node as usize].local == 0 &&
+        isOnceEnvironmentReference(c, typ);
+}
+
 /// The child a projection selects (Child), or none for a projection that is not a move-path step.
 fn moveChild(c: borrow Checker, d: borrow MoveData, node: u32, p: NirProjection) -> u32 {
     if (isFieldProjectionN(p)) {
@@ -134,7 +162,7 @@ fn moveChild(c: borrow Checker, d: borrow MoveData, node: u32, p: NirProjection)
         }
         return none();
     }
-    if (isDerefProjectionN(p) && c.types.is(d.nodes[node as usize].typ, TypeKind.Box)) {
+    if (isDerefProjectionN(p) && isDerefStep(c, d, node)) {
         for (child in d.nodes[node as usize].children.view()) {
             if (d.nodes[child as usize].isBoxContents) {
                 return child;
@@ -145,13 +173,21 @@ fn moveChild(c: borrow Checker, d: borrow MoveData, node: u32, p: NirProjection)
 }
 
 /// Is a place a move path (NirPlace.IsMovePath): fields, and derefs of boxes; no deref of a reference, downcast or
-/// element?
+/// element? A run-once function's `*env` is one (ADR 0074 §2.3).
 fn isMovePath(c: borrow Checker, n: borrow NirProgram, locals: borrow Vector<NirLocal>, place: u32) -> bool {
     let p = n.places[place as usize];
     var typ = locals[p.local as usize].typ;
     for (k in 0..p.projections.count) {
         let projection = n.projections[(p.projections.start + k) as usize];
-        if (!isFieldProjectionN(projection) && !(isDerefProjectionN(projection) && c.types.is(typ, TypeKind.Box))) {
+        let derefStep = isDerefProjectionN(projection) && (c.types.is(
+            typ,
+            TypeKind.Box,
+        ) || (k == 0 && isOnceEnvironmentLocal(
+            c,
+            locals,
+            p.local,
+        )));
+        if (!isFieldProjectionN(projection) && !derefStep) {
             return false;
         }
         typ = applyNirProjection(c, typ, projection);
@@ -246,11 +282,17 @@ fn expandPath(c: borrow Checker, n: borrow NirProgram, d: borrow mut MoveData, p
         let projection = n.projections[(p.projections.start + k) as usize];
         let typ = d.nodes[node as usize].typ;
         let isBoxDeref = isDerefProjectionN(projection) && c.types.is(typ, TypeKind.Box);
-        if (!isFieldProjectionN(projection) && !isBoxDeref) {
+        let isEnvDeref = isDerefProjectionN(projection) && !isBoxDeref && isDerefStep(c, d, node);
+        if (!isFieldProjectionN(projection) && !isBoxDeref && !isEnvDeref) {
             return Ok();
         }
         let local = d.nodes[node as usize].local;
-        if (isLeafNode(d, node) && isBoxDeref) {
+        if (isLeafNode(d, node) && isEnvDeref) {
+            // A run-once environment's contents (ADR 0074 §2.3): one child, as a box's contents without an allocation.
+            let contents = newMoveNode(d, local, node, none(), c.types.info(typ).pointee)?;
+            d.nodes[contents as usize].isBoxContents = true;
+            d.nodes[node as usize].children.push(contents)?;
+        } else if (isLeafNode(d, node) && isBoxDeref) {
             // Contents first, so a partially moved box destroys what is left, then frees the memory.
             let contents = newMoveNode(d, local, node, none(), c.types.info(typ).pointee)?;
             d.nodes[contents as usize].isBoxContents = true;
@@ -284,6 +326,13 @@ fn analyzeMoves(c: borrow Checker, n: borrow NirProgram, function: borrow NirFun
     for (k in 0..function.locals.length) {
         let root = newMoveNode(mut d, truncate<u32>(k), none(), none(), function.locals[k].typ)?;
         d.roots.push(root)?;
+    }
+    if (function.parameterCount > 0 && isOnceEnvironmentLocal(c, function.locals, 0)) {
+        // A run-once environment's contents are always tracked: the body drops what it did not move (ADR 0074 §2.3).
+        let root = d.roots[0];
+        let contents = newMoveNode(mut d, 0, root, none(), c.types.info(function.locals[0].typ).pointee)?;
+        d.nodes[contents as usize].isBoxContents = true;
+        d.nodes[root as usize].children.push(contents)?;
     }
     for (block in function.blocks.view()) {
         for (s in block.statements.view()) {

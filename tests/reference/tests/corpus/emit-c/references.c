@@ -33,8 +33,8 @@ static void ceeF_reset(CEE_UNUSED int64_t * v_v_0) {
 }
 
 static int64_t ceeF_twice(CEE_UNUSED const int64_t * v_v_0) {
-    CEE_UNUSED int64_t t_1 = 0;
-    CEE_UNUSED int64_t t_2 = 0;
+    CEE_TEMP int64_t t_1 = 0;
+    CEE_TEMP int64_t t_2 = 0;
     t_1 = cee_mul_i64((*v_v_0), ((int64_t)2), &ceeL_0);
     t_2 = t_1;
     return t_2;
@@ -43,18 +43,18 @@ static int64_t ceeF_twice(CEE_UNUSED const int64_t * v_v_0) {
 static int32_t ceeF_main(void) {
     CEE_UNUSED int64_t v_x_0 = 0;
     CEE_UNUSED ceeT_Counter v_c_1 = {0};
-    CEE_UNUSED int64_t * t_2 = NULL;
-    CEE_UNUSED const ceeT_Counter * t_3 = NULL;
-    CEE_UNUSED uint32_t t_4 = 0;
-    CEE_UNUSED ceeT_Counter * t_5 = NULL;
-    CEE_UNUSED const int64_t * t_6 = NULL;
-    CEE_UNUSED int64_t t_7 = 0;
-    CEE_UNUSED int64_t t_8 = 0;
-    CEE_UNUSED const int64_t * t_9 = NULL;
-    CEE_UNUSED int64_t t_10 = 0;
-    CEE_UNUSED int64_t t_11 = 0;
-    CEE_UNUSED int32_t t_12 = 0;
-    CEE_UNUSED int32_t t_13 = 0;
+    CEE_TEMP int64_t * t_2 = NULL;
+    CEE_TEMP const ceeT_Counter * t_3 = NULL;
+    CEE_TEMP uint32_t t_4 = 0;
+    CEE_TEMP ceeT_Counter * t_5 = NULL;
+    CEE_TEMP const int64_t * t_6 = NULL;
+    CEE_TEMP int64_t t_7 = 0;
+    CEE_TEMP int64_t t_8 = 0;
+    CEE_TEMP const int64_t * t_9 = NULL;
+    CEE_TEMP int64_t t_10 = 0;
+    CEE_TEMP int64_t t_11 = 0;
+    CEE_TEMP int32_t t_12 = 0;
+    CEE_TEMP int32_t t_13 = 0;
     v_x_0 = ((int64_t)3);
     t_2 = &v_x_0;
     ceeF_reset(t_2);
@@ -80,7 +80,7 @@ static void ceeM_7Counter_bump(CEE_UNUSED ceeT_Counter * v_this_0, CEE_UNUSED ui
 }
 
 static uint32_t ceeM_7Counter_get(CEE_UNUSED const ceeT_Counter * v_this_0) {
-    CEE_UNUSED uint32_t t_1 = 0;
+    CEE_TEMP uint32_t t_1 = 0;
     t_1 = (*v_this_0).f_count;
     return t_1;
 }

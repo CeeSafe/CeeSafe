@@ -833,6 +833,13 @@ Heap (M3b):
   the `.cee` files.
 - Locals keep stable names: `v_<name>_<n>` for a named local, `t_<n>` for a temporary.
   A C debugger therefore shows recognisable variables (`v_count_3`).
+- **Temporaries and debug info.** Without directives, a temporary is declared `CEE_TEMP` (`rt.h`): under clang
+  `__attribute__((unused, nodebug))`, under GCC `unused` (it has no `nodebug` for variables), elsewhere nothing. An
+  optimised build otherwise gives each of a function's temporaries a debug variable with a location list over the
+  whole function, repeated at every inlined call; in CosmoOS's kernel, built `-O2 -g`, the location lists were 4.8
+  bytes per byte of the generated C's code, against 0.6 for its hand-written C, and most of the kernel's 12 MB
+  (2026-11-05). `nodebug` changes no code. With directives (`ceesafec build -g`), temporaries stay `CEE_UNUSED` and
+  visible to a debugger. Named locals are visible either way.
 - Directives never change the code itself. A program with directives must behave exactly like
   one without them. The run corpus is built both ways (§8).
 
@@ -840,8 +847,8 @@ Heap (M3b):
 
 - Every CeeSafe function becomes `static CEE_UNUSED` with a prototype. CeeSafe allows unused functions,
   parameters and locals, and `-Wunused-*` must stay clean under `-Werror`.
-- Locals are declared at the top of the function, zero-initialised as in §5 (scalars only in M1). Only
-  blocks that are jump targets get a label.
+- Locals are declared at the top of the function, zero-initialised as in §5 (scalars only in M1); a temporary is
+  `CEE_TEMP` rather than `CEE_UNUSED` without directives (§7). Only blocks that are jump targets get a label.
 - Runtime files:
   - `ceesafe/rt.h`: freestanding checked helpers `cee_add_i32`, `cee_div_u64`, `cee_shl_u8`,
     `cee_shift_amount_s/u`, `cee_as_iN`, …;

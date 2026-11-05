@@ -17,8 +17,8 @@ static uint64_t ceeF_gcd(CEE_UNUSED uint64_t v_a_0, CEE_UNUSED uint64_t v_b_1) {
     CEE_UNUSED uint64_t v_x_2 = 0;
     CEE_UNUSED uint64_t v_y_3 = 0;
     CEE_UNUSED uint64_t v_t_4 = 0;
-    CEE_UNUSED bool t_5 = false;
-    CEE_UNUSED uint64_t t_6 = 0;
+    CEE_TEMP bool t_5 = false;
+    CEE_TEMP uint64_t t_6 = 0;
     v_x_2 = v_a_0;
     v_y_3 = v_b_1;
     for (;;) {
@@ -35,10 +35,10 @@ static uint64_t ceeF_gcd(CEE_UNUSED uint64_t v_a_0, CEE_UNUSED uint64_t v_b_1) {
 }
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED uint64_t t_0 = 0;
-    CEE_UNUSED uint64_t t_1 = 0;
-    CEE_UNUSED uint64_t t_2 = 0;
-    CEE_UNUSED int32_t t_3 = 0;
+    CEE_TEMP uint64_t t_0 = 0;
+    CEE_TEMP uint64_t t_1 = 0;
+    CEE_TEMP uint64_t t_2 = 0;
+    CEE_TEMP int32_t t_3 = 0;
     t_0 = ceeF_gcd(((uint64_t)1071), ((uint64_t)462));
     ceesafe_write_u64((uint64_t)t_0);
     ceesafe_write_newline();

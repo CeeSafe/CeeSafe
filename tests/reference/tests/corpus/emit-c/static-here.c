@@ -108,9 +108,9 @@ static uint64_t ceeF_bump(void) {
     CEE_UNUSED const ceeT_5Mutex1S5Table * v_static_TABLE_0 = NULL;
     CEE_UNUSED ceeT_10MutexGuard1S5Table v_guard_1 = {0};
     CEE_UNUSED ceeT_Table * v_table_2 = NULL;
-    CEE_UNUSED const ceeT_5Mutex1S5Table * t_3 = NULL;
-    CEE_UNUSED ceeT_10MutexGuard1S5Table * t_4 = NULL;
-    CEE_UNUSED uint64_t t_5 = 0;
+    CEE_TEMP const ceeT_5Mutex1S5Table * t_3 = NULL;
+    CEE_TEMP ceeT_10MutexGuard1S5Table * t_4 = NULL;
+    CEE_TEMP uint64_t t_5 = 0;
     v_static_TABLE_0 = (&ceeS_TABLE);
     t_3 = &(*v_static_TABLE_0);
     v_guard_1 = ceeM_S5Mutex1S5Table_lock(t_3);
@@ -123,9 +123,9 @@ static uint64_t ceeF_bump(void) {
 }
 
 static ceeT_10MutexGuard1S5Table ceeM_S5Mutex1S5Table_lock(CEE_UNUSED const ceeT_5Mutex1S5Table * v_this_0) {
-    CEE_UNUSED struct mutex * t_1 = 0;
-    CEE_UNUSED ceeT_10MutexGuard1S5Table t_2;
-    CEE_UNUSED ceeT_10MutexGuard1S5Table t_3;
+    CEE_TEMP struct mutex * t_1 = 0;
+    CEE_TEMP ceeT_10MutexGuard1S5Table t_2;
+    CEE_TEMP ceeT_10MutexGuard1S5Table t_3;
     t_1 = ceeM_S5Mutex1S5Table_cLock(v_this_0);
     ceeC_mutex_lock(t_1);
     t_2 = ((ceeT_10MutexGuard1S5Table){ .f_lock = v_this_0 });
@@ -134,10 +134,10 @@ static ceeT_10MutexGuard1S5Table ceeM_S5Mutex1S5Table_lock(CEE_UNUSED const ceeT
 }
 
 static struct mutex * ceeM_S5Mutex1S5Table_cLock(CEE_UNUSED const ceeT_5Mutex1S5Table * v_this_0) {
-    CEE_UNUSED const struct mutex * t_1 = NULL;
-    CEE_UNUSED struct mutex * t_2 = 0;
-    CEE_UNUSED struct mutex * t_3 = 0;
-    CEE_UNUSED struct mutex * t_4 = 0;
+    CEE_TEMP const struct mutex * t_1 = NULL;
+    CEE_TEMP struct mutex * t_2 = 0;
+    CEE_TEMP struct mutex * t_3 = 0;
+    CEE_TEMP struct mutex * t_4 = 0;
     t_1 = &(*v_this_0).f_raw;
     t_2 = ((struct mutex *)(uintptr_t)t_1);
     t_3 = ((struct mutex *)(uintptr_t)t_2);
@@ -146,18 +146,18 @@ static struct mutex * ceeM_S5Mutex1S5Table_cLock(CEE_UNUSED const ceeT_5Mutex1S5
 }
 
 static void ceeM_S10MutexGuard1S5Table_drop(CEE_UNUSED ceeT_10MutexGuard1S5Table * v_this_0) {
-    CEE_UNUSED struct mutex * t_1 = 0;
+    CEE_TEMP struct mutex * t_1 = 0;
     t_1 = ceeM_S5Mutex1S5Table_cLock((*v_this_0).f_lock);
     ceeC_mutex_unlock(t_1);
     return;
 }
 
 static ceeT_Table * ceeM_S10MutexGuard1S5Table_data(CEE_UNUSED ceeT_10MutexGuard1S5Table * v_this_0) {
-    CEE_UNUSED const ceeT_Table * t_1 = NULL;
-    CEE_UNUSED ceeT_Table * t_2 = 0;
-    CEE_UNUSED ceeT_Table * t_3 = 0;
-    CEE_UNUSED ceeT_Table * t_4 = NULL;
-    CEE_UNUSED ceeT_Table * t_5 = NULL;
+    CEE_TEMP const ceeT_Table * t_1 = NULL;
+    CEE_TEMP ceeT_Table * t_2 = 0;
+    CEE_TEMP ceeT_Table * t_3 = 0;
+    CEE_TEMP ceeT_Table * t_4 = NULL;
+    CEE_TEMP ceeT_Table * t_5 = NULL;
     t_1 = &(*(*v_this_0).f_lock).f_data;
     t_2 = ((ceeT_Table *)(uintptr_t)t_1);
     t_3 = ((ceeT_Table *)(uintptr_t)t_2);

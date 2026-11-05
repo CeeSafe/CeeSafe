@@ -18,9 +18,9 @@ static _Noreturn void ceeF_die(CEE_UNUSED int32_t v_code_0) {
 static int32_t ceeF_main(void) {
     CEE_UNUSED uint64_t v_n_0 = 0;
     CEE_UNUSED int32_t v_k_1 = 0;
-    CEE_UNUSED int32_t t_2 = 0;
-    CEE_UNUSED bool t_3 = false;
-    CEE_UNUSED int32_t t_4 = 0;
+    CEE_TEMP int32_t t_2 = 0;
+    CEE_TEMP bool t_3 = false;
+    CEE_TEMP int32_t t_4 = 0;
     v_n_0 = ceesafe_arg_count();
     t_3 = (v_n_0 < ((uint64_t)100));
     if (!t_3) {

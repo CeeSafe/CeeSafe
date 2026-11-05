@@ -12,8 +12,8 @@ static CEE_UNUSED uint32_t ceeF_poke(uint32_t *);
 static CEE_UNUSED int32_t ceeF_main(void);
 
 static uint32_t ceeF_poke(CEE_UNUSED uint32_t * v_p_0) {
-    CEE_UNUSED uint32_t t_1 = 0;
-    CEE_UNUSED uint32_t t_2 = 0;
+    CEE_TEMP uint32_t t_1 = 0;
+    CEE_TEMP uint32_t t_2 = 0;
     (*(volatile uint32_t *)v_p_0 = ((uint32_t)1));
     t_1 = (*(volatile uint32_t *)v_p_0);
     t_2 = t_1;
@@ -23,10 +23,10 @@ static uint32_t ceeF_poke(CEE_UNUSED uint32_t * v_p_0) {
 static int32_t ceeF_main(void) {
     CEE_UNUSED uint32_t v_x_0 = 0;
     CEE_UNUSED uint32_t v_r_1 = 0;
-    CEE_UNUSED uint32_t * t_2 = NULL;
-    CEE_UNUSED uint32_t * t_3 = 0;
-    CEE_UNUSED int32_t t_4 = 0;
-    CEE_UNUSED int32_t t_5 = 0;
+    CEE_TEMP uint32_t * t_2 = NULL;
+    CEE_TEMP uint32_t * t_3 = 0;
+    CEE_TEMP int32_t t_4 = 0;
+    CEE_TEMP int32_t t_5 = 0;
     v_x_0 = ((uint32_t)0);
     t_2 = &v_x_0;
     t_3 = ((uint32_t *)(uintptr_t)t_2);

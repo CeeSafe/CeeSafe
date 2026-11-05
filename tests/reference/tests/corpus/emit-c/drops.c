@@ -41,10 +41,10 @@ static void ceeF_consume(CEE_UNUSED ceeT_Res v_r_0) {
 static void ceeF_main(void) {
     CEE_UNUSED ceeT_Pair v_p_0;
     CEE_UNUSED ceeT_Res v_r_1;
-    CEE_UNUSED ceeT_Res t_2;
-    CEE_UNUSED ceeT_Res t_3;
-    CEE_UNUSED bool t_4 = false;
-    CEE_UNUSED bool t_5 = false;
+    CEE_TEMP ceeT_Res t_2;
+    CEE_TEMP ceeT_Res t_3;
+    CEE_TEMP bool t_4 = false;
+    CEE_TEMP bool t_5 = false;
     t_2 = ((ceeT_Res){ .f_id = ((int32_t)1) });
     t_3 = ((ceeT_Res){ .f_id = ((int32_t)2) });
     v_p_0 = ((ceeT_Pair){ .f_a = t_2, .f_b = t_3 });

@@ -156,7 +156,9 @@ fn emitFunction(
         let t = function.locals[k as usize].typ;
         // Zero-initialised: the reference's definite assignment already forbids reading it first (§5).
         let zero = localZero(c, t);
-        var text = copyBytes("CEE_UNUSED ".bytes())?;
+        // A temporary has no name of its own; without #line directives it is left out of the debug info (§7).
+        let temporary = function.locals[k as usize].name == none() && !e.lineDirectives;
+        var text = copyBytes((if (temporary) "CEE_TEMP " else "CEE_UNUSED ").bytes())?;
         appendCTypeName(c, mut text, t)?;
         text.push(' ')?;
         appendLocalName(c, mut text, function, k)?;

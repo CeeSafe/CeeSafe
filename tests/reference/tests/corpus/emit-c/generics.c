@@ -50,13 +50,13 @@ static CEE_UNUSED int32_t ceeG_3get1i32(ceeE_5Maybe1i32, int32_t);
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeT_4Pair1i32 v_p_0;
     CEE_UNUSED ceeT_4Pair1u8 v_q_1;
-    CEE_UNUSED ceeT_4Pair1i32 t_2;
-    CEE_UNUSED ceeT_4Pair1u8 t_3;
-    CEE_UNUSED ceeE_5Maybe1i32 t_4;
-    CEE_UNUSED int32_t t_5 = 0;
-    CEE_UNUSED int32_t t_6 = 0;
-    CEE_UNUSED int32_t t_7 = 0;
-    CEE_UNUSED int32_t t_8 = 0;
+    CEE_TEMP ceeT_4Pair1i32 t_2;
+    CEE_TEMP ceeT_4Pair1u8 t_3;
+    CEE_TEMP ceeE_5Maybe1i32 t_4;
+    CEE_TEMP int32_t t_5 = 0;
+    CEE_TEMP int32_t t_6 = 0;
+    CEE_TEMP int32_t t_7 = 0;
+    CEE_TEMP int32_t t_8 = 0;
     t_2 = ((ceeT_4Pair1i32){ .f_first = ((int32_t)3), .f_second = ((int32_t)4) });
     v_p_0 = ceeG_2id1S4Pair1i32(t_2);
     t_3 = ((ceeT_4Pair1u8){ .f_first = ((uint8_t)1), .f_second = ((uint8_t)2) });
@@ -70,22 +70,22 @@ static int32_t ceeF_main(void) {
 }
 
 static ceeT_4Pair1i32 ceeG_2id1S4Pair1i32(CEE_UNUSED ceeT_4Pair1i32 v_x_0) {
-    CEE_UNUSED ceeT_4Pair1i32 t_1;
+    CEE_TEMP ceeT_4Pair1i32 t_1;
     t_1 = v_x_0;
     return t_1;
 }
 
 static ceeT_4Pair1u8 ceeG_2id1S4Pair1u8(CEE_UNUSED ceeT_4Pair1u8 v_x_0) {
-    CEE_UNUSED ceeT_4Pair1u8 t_1;
+    CEE_TEMP ceeT_4Pair1u8 t_1;
     t_1 = v_x_0;
     return t_1;
 }
 
 static int32_t ceeG_3get1i32(CEE_UNUSED ceeE_5Maybe1i32 v_m_0, CEE_UNUSED int32_t v_d_1) {
     CEE_UNUSED int32_t v_v_2 = 0;
-    CEE_UNUSED uint32_t t_3 = 0;
-    CEE_UNUSED int32_t t_4 = 0;
-    CEE_UNUSED int32_t t_5 = 0;
+    CEE_TEMP uint32_t t_3 = 0;
+    CEE_TEMP int32_t t_4 = 0;
+    CEE_TEMP int32_t t_5 = 0;
     t_3 = (uint32_t)v_m_0.tag;
     switch (t_3) {
     case ((uint32_t)1):

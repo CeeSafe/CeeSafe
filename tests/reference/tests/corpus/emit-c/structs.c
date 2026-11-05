@@ -59,12 +59,12 @@ static int32_t ceeF_main(void) {
     CEE_UNUSED ceeT_Line v_l_0 = {0};
     CEE_UNUSED ceeT_Mixed v_m_1;
     CEE_UNUSED ceeT_Empty v_e_2;
-    CEE_UNUSED ceeT_Point t_3;
-    CEE_UNUSED ceeT_Point t_4;
-    CEE_UNUSED int32_t t_5 = 0;
-    CEE_UNUSED int32_t t_6 = 0;
-    CEE_UNUSED int32_t t_7 = 0;
-    CEE_UNUSED int32_t t_8 = 0;
+    CEE_TEMP ceeT_Point t_3;
+    CEE_TEMP ceeT_Point t_4;
+    CEE_TEMP int32_t t_5 = 0;
+    CEE_TEMP int32_t t_6 = 0;
+    CEE_TEMP int32_t t_7 = 0;
+    CEE_TEMP int32_t t_8 = 0;
     t_3 = ((ceeT_Point){ .f_x = ((int32_t)1), .f_y = ((int32_t)2) });
     t_4 = ceeM_5Point_origin();
     v_l_0 = ((ceeT_Line){ .f_from = t_4, .f_to = t_3 });
@@ -79,16 +79,16 @@ static int32_t ceeF_main(void) {
 }
 
 static int32_t ceeM_5Point_sum(CEE_UNUSED ceeT_Point v_this_0) {
-    CEE_UNUSED int32_t t_1 = 0;
-    CEE_UNUSED int32_t t_2 = 0;
+    CEE_TEMP int32_t t_1 = 0;
+    CEE_TEMP int32_t t_2 = 0;
     t_1 = cee_add_i32(v_this_0.f_x, v_this_0.f_y, &ceeL_1);
     t_2 = t_1;
     return t_2;
 }
 
 static ceeT_Point ceeM_5Point_origin(void) {
-    CEE_UNUSED ceeT_Point t_0;
-    CEE_UNUSED ceeT_Point t_1;
+    CEE_TEMP ceeT_Point t_0;
+    CEE_TEMP ceeT_Point t_1;
     t_0 = ((ceeT_Point){ .f_x = ((int32_t)0), .f_y = ((int32_t)0) });
     t_1 = t_0;
     return t_1;

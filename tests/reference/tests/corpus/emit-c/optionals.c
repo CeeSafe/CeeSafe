@@ -28,13 +28,13 @@ static CEE_UNUSED ceeO_i32 ceeF_quarter(int32_t);
 static CEE_UNUSED void ceeF_main(void);
 
 static ceeO_i32 ceeF_half(CEE_UNUSED int32_t v_n_0) {
-    CEE_UNUSED int32_t t_1 = 0;
-    CEE_UNUSED bool t_2 = false;
-    CEE_UNUSED ceeO_i32 t_3;
-    CEE_UNUSED ceeO_i32 t_4;
-    CEE_UNUSED int32_t t_5 = 0;
-    CEE_UNUSED ceeO_i32 t_6;
-    CEE_UNUSED ceeO_i32 t_7;
+    CEE_TEMP int32_t t_1 = 0;
+    CEE_TEMP bool t_2 = false;
+    CEE_TEMP ceeO_i32 t_3;
+    CEE_TEMP ceeO_i32 t_4;
+    CEE_TEMP int32_t t_5 = 0;
+    CEE_TEMP ceeO_i32 t_6;
+    CEE_TEMP ceeO_i32 t_7;
     t_1 = cee_rem_i32(v_n_0, ((int32_t)2), &ceeL_0);
     t_2 = (t_1 != ((int32_t)0));
     if (t_2) {
@@ -50,12 +50,12 @@ static ceeO_i32 ceeF_half(CEE_UNUSED int32_t v_n_0) {
 
 static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
     CEE_UNUSED int32_t v_h_1 = 0;
-    CEE_UNUSED ceeO_i32 t_2;
-    CEE_UNUSED ceeO_i32 t_3 = {0};
-    CEE_UNUSED uint32_t t_4 = 0;
-    CEE_UNUSED ceeO_i32 t_5;
-    CEE_UNUSED ceeO_i32 t_6;
-    CEE_UNUSED ceeO_i32 t_7;
+    CEE_TEMP ceeO_i32 t_2;
+    CEE_TEMP ceeO_i32 t_3 = {0};
+    CEE_TEMP uint32_t t_4 = 0;
+    CEE_TEMP ceeO_i32 t_5;
+    CEE_TEMP ceeO_i32 t_6;
+    CEE_TEMP ceeO_i32 t_7;
     t_2 = ceeF_half(v_n_0);
     t_3 = t_2;
     t_4 = (uint32_t)t_3.tag;
@@ -73,11 +73,11 @@ static ceeO_i32 ceeF_quarter(CEE_UNUSED int32_t v_n_0) {
 
 static void ceeF_main(void) {
     CEE_UNUSED ceeO_i32 v_q_0 = {0};
-    CEE_UNUSED const ceeO_i32 * t_1 = NULL;
-    CEE_UNUSED uint32_t t_2 = 0;
-    CEE_UNUSED bool t_3 = false;
-    CEE_UNUSED ceeO_i32 t_4 = {0};
-    CEE_UNUSED uint32_t t_5 = 0;
+    CEE_TEMP const ceeO_i32 * t_1 = NULL;
+    CEE_TEMP uint32_t t_2 = 0;
+    CEE_TEMP bool t_3 = false;
+    CEE_TEMP ceeO_i32 t_4 = {0};
+    CEE_TEMP uint32_t t_5 = 0;
     v_q_0 = ceeF_quarter(((int32_t)8));
     t_1 = &v_q_0;
     t_2 = (uint32_t)(*t_1).tag;

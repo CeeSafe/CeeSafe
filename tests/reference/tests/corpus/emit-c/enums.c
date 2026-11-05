@@ -55,12 +55,12 @@ static int64_t ceeF_area(CEE_UNUSED ceeE_Shape v_s_0) {
     CEE_UNUSED int64_t v_r_1 = 0;
     CEE_UNUSED int32_t v_w_2 = 0;
     CEE_UNUSED int64_t v_h_3 = 0;
-    CEE_UNUSED uint32_t t_4 = 0;
-    CEE_UNUSED int64_t t_5 = 0;
-    CEE_UNUSED int64_t t_6 = 0;
-    CEE_UNUSED int64_t t_7 = 0;
-    CEE_UNUSED int64_t t_8 = 0;
-    CEE_UNUSED int64_t t_9 = 0;
+    CEE_TEMP uint32_t t_4 = 0;
+    CEE_TEMP int64_t t_5 = 0;
+    CEE_TEMP int64_t t_6 = 0;
+    CEE_TEMP int64_t t_7 = 0;
+    CEE_TEMP int64_t t_8 = 0;
+    CEE_TEMP int64_t t_9 = 0;
     t_4 = (uint32_t)v_s_0.tag;
     switch (t_4) {
     case ((uint32_t)0):
@@ -84,11 +84,11 @@ static int64_t ceeF_area(CEE_UNUSED ceeE_Shape v_s_0) {
 
 static int32_t ceeF_main(void) {
     CEE_UNUSED ceeE_Holder v_h_0;
-    CEE_UNUSED ceeT_Res t_1;
-    CEE_UNUSED ceeE_Shape t_2;
-    CEE_UNUSED int64_t t_3 = 0;
-    CEE_UNUSED int32_t t_4 = 0;
-    CEE_UNUSED int32_t t_5 = 0;
+    CEE_TEMP ceeT_Res t_1;
+    CEE_TEMP ceeE_Shape t_2;
+    CEE_TEMP int64_t t_3 = 0;
+    CEE_TEMP int32_t t_4 = 0;
+    CEE_TEMP int32_t t_5 = 0;
     t_1 = ((ceeT_Res){ .f_id = ((int32_t)1) });
     v_h_0 = ceeMk_ceeE_Holder_v_One(t_1);
     t_2 = ((ceeE_Shape){ .tag = 2, .u.v_Rect = { .f__0 = ((int32_t)2), .f__1 = ((int64_t)3) } });

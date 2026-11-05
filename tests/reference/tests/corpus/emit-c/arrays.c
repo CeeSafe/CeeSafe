@@ -48,10 +48,10 @@ static CEE_UNUSED int32_t ceeF_main(void);
 static int32_t ceeF_total(CEE_UNUSED ceeSl_i32 v_xs_0) {
     CEE_UNUSED int32_t v_t_1 = 0;
     CEE_UNUSED int32_t v_x_2 = 0;
-    CEE_UNUSED uint64_t t_3 = 0;
-    CEE_UNUSED uint64_t t_4 = 0;
-    CEE_UNUSED bool t_5 = false;
-    CEE_UNUSED int32_t t_6 = 0;
+    CEE_TEMP uint64_t t_3 = 0;
+    CEE_TEMP uint64_t t_4 = 0;
+    CEE_TEMP bool t_5 = false;
+    CEE_TEMP int32_t t_6 = 0;
     v_t_1 = ((int32_t)0);
     t_3 = ((uint64_t)0);
     t_4 = v_xs_0.len;
@@ -69,7 +69,7 @@ static int32_t ceeF_total(CEE_UNUSED ceeSl_i32 v_xs_0) {
 }
 
 static void ceeF_zero(CEE_UNUSED ceeSm_i32 v_xs_0) {
-    CEE_UNUSED uint64_t t_1 = 0;
+    CEE_TEMP uint64_t t_1 = 0;
     t_1 = v_xs_0.len;
     cee_check_index(((uint64_t)0), t_1, &ceeL_1);
     v_xs_0.ptr[((uint64_t)0)] = ((int32_t)0);
@@ -80,13 +80,13 @@ static int32_t ceeF_main(void) {
     CEE_UNUSED ceeA3_i32 v_a_0 = {0};
     CEE_UNUSED ceeT_Pair v_p_1;
     CEE_UNUSED uint64_t v_i_2 = 0;
-    CEE_UNUSED ceeA2_i16 t_3;
-    CEE_UNUSED ceeSm_i32 t_4;
-    CEE_UNUSED uint64_t t_5 = 0;
-    CEE_UNUSED ceeSl_i32 t_6;
-    CEE_UNUSED int32_t t_7 = 0;
-    CEE_UNUSED int32_t t_8 = 0;
-    CEE_UNUSED int32_t t_9 = 0;
+    CEE_TEMP ceeA2_i16 t_3;
+    CEE_TEMP ceeSm_i32 t_4;
+    CEE_TEMP uint64_t t_5 = 0;
+    CEE_TEMP ceeSl_i32 t_6;
+    CEE_TEMP int32_t t_7 = 0;
+    CEE_TEMP int32_t t_8 = 0;
+    CEE_TEMP int32_t t_9 = 0;
     v_a_0 = ((ceeA3_i32){ .e = { ((int32_t)1), ((int32_t)2), ((int32_t)3) } });
     for (uint64_t cee_i = 0; cee_i < 2u; cee_i++) t_3.e[cee_i] = ((int16_t)4);
     v_p_1 = ((ceeT_Pair){ .f_v = t_3 });

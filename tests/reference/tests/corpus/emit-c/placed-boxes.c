@@ -61,14 +61,14 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
     CEE_UNUSED uint64_t v_total_1 = 0;
     CEE_UNUSED uint64_t v_i_2 = 0;
     CEE_UNUSED ceeT_Pair * v_p_3 = NULL;
-    CEE_UNUSED uint64_t t_4 = 0;
-    CEE_UNUSED uint64_t t_5 = 0;
-    CEE_UNUSED bool t_6 = false;
-    CEE_UNUSED ceeR_XS4PairS10SystemHeapE10AllocError t_8;
-    CEE_UNUSED ceeR_XS4PairS10SystemHeapE10AllocError t_9 = {0};
-    CEE_UNUSED uint32_t t_10 = 0;
-    CEE_UNUSED uint64_t t_11 = 0;
-    CEE_UNUSED uint64_t t_12 = 0;
+    CEE_TEMP uint64_t t_4 = 0;
+    CEE_TEMP uint64_t t_5 = 0;
+    CEE_TEMP bool t_6 = false;
+    CEE_TEMP ceeR_XS4PairS10SystemHeapE10AllocError t_8;
+    CEE_TEMP ceeR_XS4PairS10SystemHeapE10AllocError t_9 = {0};
+    CEE_TEMP uint32_t t_10 = 0;
+    CEE_TEMP uint64_t t_11 = 0;
+    CEE_TEMP uint64_t t_12 = 0;
     CEE_UNUSED ceeT_Pair cee_box_0 = {0};
     v_total_1 = ((uint64_t)0);
     t_4 = ((uint64_t)0);
@@ -99,8 +99,8 @@ static uint64_t ceeF_sum(CEE_UNUSED uint64_t v_n_0) {
 }
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED uint64_t t_0 = 0;
-    CEE_UNUSED int32_t t_1 = 0;
+    CEE_TEMP uint64_t t_0 = 0;
+    CEE_TEMP int32_t t_1 = 0;
     t_0 = ceeF_sum(((uint64_t)4));
     ceesafe_write_u64((uint64_t)t_0);
     ceesafe_write_newline();

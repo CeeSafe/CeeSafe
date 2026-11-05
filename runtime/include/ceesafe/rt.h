@@ -45,6 +45,18 @@
 #define CEE_COLD
 #endif
 
+/* A compiler temporary (`t_<n>`, c-backend.md §7): unused-tolerant, and under clang left out of the debug info. An
+   optimised build gives every temporary a variable with a location list, which made the location lists most of a
+   generated program's DWARF (CosmoOS's kernel: 4.8 bytes of them per byte of code, against 0.6 for its C). GCC has no
+   `nodebug` for variables. `ceesafec build -g` (#line directives on) declares them CEE_UNUSED instead, for debuggers. */
+#if defined(__clang__)
+#define CEE_TEMP __attribute__((unused, nodebug))
+#elif defined(__GNUC__)
+#define CEE_TEMP __attribute__((unused))
+#else
+#define CEE_TEMP
+#endif
+
 /*
  * The most-aligned fundamental type: C11's max_align_t, which MSVC's <stddef.h> lacks in C mode; there
  * `double` is the strictest fundamental alignment (8; spec/c-backend.md §1.1).

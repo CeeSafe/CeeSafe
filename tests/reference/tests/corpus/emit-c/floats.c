@@ -31,17 +31,17 @@ static int32_t ceeF_convert(CEE_UNUSED double v_x_0, CEE_UNUSED int64_t v_n_1) {
     CEE_UNUSED double v_wide_3 = 0;
     CEE_UNUSED uint8_t v_saturated_4 = 0;
     CEE_UNUSED int16_t v_v_5 = 0;
-    CEE_UNUSED double t_6 = 0;
-    CEE_UNUSED double t_7 = 0;
-    CEE_UNUSED ceeO_i16 t_8 = {0};
-    CEE_UNUSED uint32_t t_9 = 0;
-    CEE_UNUSED int32_t t_10 = 0;
-    CEE_UNUSED int32_t t_11 = 0;
-    CEE_UNUSED int32_t t_12 = 0;
-    CEE_UNUSED int32_t t_13 = 0;
-    CEE_UNUSED int32_t t_14 = 0;
-    CEE_UNUSED bool t_15 = false;
-    CEE_UNUSED int32_t t_16 = 0;
+    CEE_TEMP double t_6 = 0;
+    CEE_TEMP double t_7 = 0;
+    CEE_TEMP ceeO_i16 t_8 = {0};
+    CEE_TEMP uint32_t t_9 = 0;
+    CEE_TEMP int32_t t_10 = 0;
+    CEE_TEMP int32_t t_11 = 0;
+    CEE_TEMP int32_t t_12 = 0;
+    CEE_TEMP int32_t t_13 = 0;
+    CEE_TEMP int32_t t_14 = 0;
+    CEE_TEMP bool t_15 = false;
+    CEE_TEMP int32_t t_16 = 0;
     t_6 = (v_x_0 * cee_f64_from_bits(UINT64_C(0x4000000000000000)));
     t_7 = (t_6 + cee_f64_from_bits(UINT64_C(0x3FE0000000000000)));
     v_narrow_2 = cee_f64_to_f32(t_7);
@@ -73,7 +73,7 @@ static int32_t ceeF_convert(CEE_UNUSED double v_x_0, CEE_UNUSED int64_t v_n_1) {
 }
 
 static void ceeF_main(void) {
-    CEE_UNUSED int32_t t_0 = 0;
+    CEE_TEMP int32_t t_0 = 0;
     t_0 = ceeF_convert(cee_f64_from_bits(UINT64_C(0x400A000000000000)), ((int64_t)7));
     ceesafe_write_i64((int64_t)t_0);
     ceesafe_write_newline();

@@ -52,8 +52,8 @@ static bool ceeAT_ceeF_add(void *frame) { return ceeAR_ceeF_add((struct ceeAF_ce
 static bool ceeAR_ceeF_add(struct ceeAF_ceeF_add *cee_frame) {
 #define v_a_0 (cee_frame->v_a_0)
 #define v_b_1 (cee_frame->v_b_1)
-    CEE_UNUSED int32_t t_2 = 0;
-    CEE_UNUSED int32_t t_3 = 0;
+    CEE_TEMP int32_t t_2 = 0;
+    CEE_TEMP int32_t t_3 = 0;
     switch (cee_frame->cee_state) {
     default: break;
     }
@@ -77,9 +77,9 @@ static bool ceeAR_ceeF_twice(struct ceeAF_ceeF_twice *cee_frame) {
     CEE_UNUSED int32_t v_i_2 = 0;
 #define t_3 (cee_frame->t_3)
 #define t_4 (cee_frame->t_4)
-    CEE_UNUSED bool t_5 = false;
+    CEE_TEMP bool t_5 = false;
 #define t_6 (cee_frame->t_6)
-    CEE_UNUSED int32_t t_7 = 0;
+    CEE_TEMP int32_t t_7 = 0;
     switch (cee_frame->cee_state) {
     case 1u: goto cee_resume_1;
     default: break;
@@ -116,7 +116,7 @@ static const uint32_t ceeAL_ceeF_twice[] = {6, 9};
 static CEE_UNUSED const ceesafe_frame_info ceeAN_ceeF_twice = {"twice", "emit-c/async-frame.cee", ceeAL_ceeF_twice, 2u};
 
 static void ceeF_main(void) {
-    CEE_UNUSED int32_t t_0 = 0;
+    CEE_TEMP int32_t t_0 = 0;
     {
         struct ceeAF_ceeF_twice cee_root;
         ceeAI_ceeF_twice(&cee_root, ((int32_t)20));

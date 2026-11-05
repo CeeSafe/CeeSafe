@@ -58,12 +58,12 @@ static CEE_UNUSED void ceeD_3Res(ceeT_Res *);
 static CEE_UNUSED void ceeD_RS3ResE4Code(ceeR_S3ResE4Code *);
 
 static ceeR_S3ResE4Code ceeF_make(CEE_UNUSED bool v_ok_0) {
-    CEE_UNUSED ceeT_Res t_1;
-    CEE_UNUSED ceeR_S3ResE4Code t_2;
-    CEE_UNUSED ceeR_S3ResE4Code t_3;
-    CEE_UNUSED ceeE_Code t_4;
-    CEE_UNUSED ceeR_S3ResE4Code t_5;
-    CEE_UNUSED ceeR_S3ResE4Code t_6;
+    CEE_TEMP ceeT_Res t_1;
+    CEE_TEMP ceeR_S3ResE4Code t_2;
+    CEE_TEMP ceeR_S3ResE4Code t_3;
+    CEE_TEMP ceeE_Code t_4;
+    CEE_TEMP ceeR_S3ResE4Code t_5;
+    CEE_TEMP ceeR_S3ResE4Code t_6;
     if (v_ok_0) {
         t_1 = ((ceeT_Res){ .f_id = ((int32_t)1) });
         t_2 = ceeMk_ceeR_S3ResE4Code_v_Ok(t_1);
@@ -78,12 +78,12 @@ static ceeR_S3ResE4Code ceeF_make(CEE_UNUSED bool v_ok_0) {
 
 static ceeR_vE4Code ceeF_use2(void) {
     CEE_UNUSED ceeT_Res v_r_0;
-    CEE_UNUSED ceeR_S3ResE4Code t_1;
-    CEE_UNUSED ceeR_S3ResE4Code t_2 = {0};
-    CEE_UNUSED uint32_t t_3 = 0;
-    CEE_UNUSED ceeR_vE4Code t_4;
-    CEE_UNUSED ceeR_vE4Code t_5;
-    CEE_UNUSED ceeR_vE4Code t_6;
+    CEE_TEMP ceeR_S3ResE4Code t_1;
+    CEE_TEMP ceeR_S3ResE4Code t_2 = {0};
+    CEE_TEMP uint32_t t_3 = 0;
+    CEE_TEMP ceeR_vE4Code t_4;
+    CEE_TEMP ceeR_vE4Code t_5;
+    CEE_TEMP ceeR_vE4Code t_6;
     t_1 = ceeF_make(true);
     t_2 = t_1;
     t_3 = (uint32_t)t_2.tag;
@@ -102,10 +102,10 @@ static ceeR_vE4Code ceeF_use2(void) {
 }
 
 static int32_t ceeF_main(void) {
-    CEE_UNUSED ceeR_vE4Code t_0;
-    CEE_UNUSED ceeR_vE4Code t_1;
-    CEE_UNUSED uint32_t t_2 = 0;
-    CEE_UNUSED int32_t t_3 = 0;
+    CEE_TEMP ceeR_vE4Code t_0;
+    CEE_TEMP ceeR_vE4Code t_1;
+    CEE_TEMP uint32_t t_2 = 0;
+    CEE_TEMP int32_t t_3 = 0;
     t_0 = ceeF_use2();
     t_1 = t_0;
     t_2 = (uint32_t)t_1.tag;

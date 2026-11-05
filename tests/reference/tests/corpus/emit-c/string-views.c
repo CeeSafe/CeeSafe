@@ -20,9 +20,9 @@ static CEE_UNUSED cee_str ceeF_tail(cee_str, uint64_t);
 static CEE_UNUSED void ceeF_main(void);
 
 static cee_str ceeF_tail(CEE_UNUSED cee_str v_s_0, CEE_UNUSED uint64_t v_from_1) {
-    CEE_UNUSED uint64_t t_2 = 0;
-    CEE_UNUSED cee_str t_3;
-    CEE_UNUSED cee_str t_4;
+    CEE_TEMP uint64_t t_2 = 0;
+    CEE_TEMP cee_str t_3;
+    CEE_TEMP cee_str t_4;
     t_2 = v_s_0.len;
     cee_check_str_range(((cee_str){ .ptr = v_s_0.ptr, .len = v_s_0.len }), v_from_1, t_2, &ceeL_0);
     t_3 = ((cee_str){ .ptr = v_s_0.ptr + v_from_1, .len = t_2 - v_from_1 });
@@ -33,9 +33,9 @@ static cee_str ceeF_tail(CEE_UNUSED cee_str v_s_0, CEE_UNUSED uint64_t v_from_1)
 static void ceeF_main(void) {
     CEE_UNUSED cee_str v_s_0;
     CEE_UNUSED cee_str v_t_1;
-    CEE_UNUSED bool t_2 = false;
-    CEE_UNUSED ceeSl_u8 t_3;
-    CEE_UNUSED uint64_t t_4 = 0;
+    CEE_TEMP bool t_2 = false;
+    CEE_TEMP ceeSl_u8 t_3;
+    CEE_TEMP uint64_t t_4 = 0;
     v_s_0 = ((cee_str){ .ptr = (const uint8_t *)"h\303\251llo", .len = 6u });
     v_t_1 = ceeF_tail(v_s_0, ((uint64_t)3));
     t_2 = ceesafe_str_eq(v_t_1, ((cee_str){ .ptr = (const uint8_t *)"llo", .len = 3u }));

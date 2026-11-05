@@ -17,11 +17,11 @@ static CEE_UNUSED uint8_t ceeF_bits(uint64_t, int32_t);
 static CEE_UNUSED int32_t ceeF_main(void);
 
 static int32_t ceeF_classify(CEE_UNUSED int32_t v_n_0) {
-    CEE_UNUSED bool t_1 = false;
-    CEE_UNUSED int32_t t_2 = 0;
-    CEE_UNUSED bool t_3 = false;
-    CEE_UNUSED int32_t t_4 = 0;
-    CEE_UNUSED int32_t t_5 = 0;
+    CEE_TEMP bool t_1 = false;
+    CEE_TEMP int32_t t_2 = 0;
+    CEE_TEMP bool t_3 = false;
+    CEE_TEMP int32_t t_4 = 0;
+    CEE_TEMP int32_t t_5 = 0;
     t_1 = (v_n_0 < ((int32_t)0));
     if (t_1) {
         t_2 = ((int32_t)-1);
@@ -37,9 +37,9 @@ static int32_t ceeF_classify(CEE_UNUSED int32_t v_n_0) {
 }
 
 static uint8_t ceeF_bits(CEE_UNUSED uint64_t v_x_0, CEE_UNUSED int32_t v_n_1) {
-    CEE_UNUSED uint64_t t_2 = 0;
-    CEE_UNUSED uint8_t t_3 = 0;
-    CEE_UNUSED uint8_t t_4 = 0;
+    CEE_TEMP uint64_t t_2 = 0;
+    CEE_TEMP uint8_t t_3 = 0;
+    CEE_TEMP uint8_t t_4 = 0;
     t_2 = cee_shr_u64(v_x_0, cee_shift_amount_s((int64_t)v_n_1, 64u, &ceeL_0));
     t_3 = (uint8_t)t_2;
     t_4 = t_3;
@@ -48,19 +48,19 @@ static uint8_t ceeF_bits(CEE_UNUSED uint64_t v_x_0, CEE_UNUSED int32_t v_n_1) {
 
 static int32_t ceeF_main(void) {
     CEE_UNUSED int32_t v_i_0 = 0;
-    CEE_UNUSED int32_t t_1 = 0;
-    CEE_UNUSED bool t_2 = false;
-    CEE_UNUSED bool t_3 = false;
-    CEE_UNUSED bool t_4 = false;
-    CEE_UNUSED int32_t t_5 = 0;
-    CEE_UNUSED bool t_6 = false;
-    CEE_UNUSED bool t_7 = false;
-    CEE_UNUSED bool t_8 = false;
-    CEE_UNUSED bool t_9 = false;
-    CEE_UNUSED bool t_10 = false;
-    CEE_UNUSED bool t_11 = false;
-    CEE_UNUSED uint8_t t_12 = 0;
-    CEE_UNUSED int32_t t_13 = 0;
+    CEE_TEMP int32_t t_1 = 0;
+    CEE_TEMP bool t_2 = false;
+    CEE_TEMP bool t_3 = false;
+    CEE_TEMP bool t_4 = false;
+    CEE_TEMP int32_t t_5 = 0;
+    CEE_TEMP bool t_6 = false;
+    CEE_TEMP bool t_7 = false;
+    CEE_TEMP bool t_8 = false;
+    CEE_TEMP bool t_9 = false;
+    CEE_TEMP bool t_10 = false;
+    CEE_TEMP bool t_11 = false;
+    CEE_TEMP uint8_t t_12 = 0;
+    CEE_TEMP int32_t t_13 = 0;
     v_i_0 = ((int32_t)0);
     for (;;) {
         v_i_0 = cee_add_i32(v_i_0, ((int32_t)1), &ceeL_1);

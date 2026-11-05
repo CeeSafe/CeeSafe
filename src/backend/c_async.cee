@@ -936,7 +936,9 @@ fn emitAsyncFunction(
         if (!inFrame[k as usize]) {
             // Not live across a suspension point: a C local, zero-initialised as a sync function's (§5).
             let t = function.locals[k as usize].typ;
-            e.t("    CEE_UNUSED ")?;
+            // A temporary is left out of the debug info without #line directives (§7), as in a sync function.
+            let temporary = function.locals[k as usize].name == none() && !e.lineDirectives;
+            e.t(if (temporary) "    CEE_TEMP " else "    CEE_UNUSED ")?;
             appendCTypeName(c, mut e.buf, t)?;
             e.t(" ")?;
             appendLocalName(c, mut e.buf, function, k)?;

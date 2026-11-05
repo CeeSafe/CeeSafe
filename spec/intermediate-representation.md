@@ -100,7 +100,8 @@ suspension changes its blocks or statements.
 - `await Async.race(a, b)` and `all` lower to `t = Builtin(AsyncJoin, [site, 1 for race or 0, a's function, a, b's
   function, b])`, the index (0 or 1) of the child that returned first, then `r0 = Builtin(AsyncJoinResult, [site, 0])`
   and `r1 = …[site, 1]`, which move the children's results out, then the call `settle(t, r0, r1)` of lib/std's
-  `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used.
+  `AsyncRaceJoin<T, E>` or `AsyncAllJoin<E>`, which makes the value and drops what is not used. A child is a
+  reference to its closure's environment, or, for `async move` (ADR 0074 §2.3), the environment itself, moved.
 - `await Async.timeout(ms, timedOut, body)` and `deadline` (ADR 0046) lower to the deadline and `timedOut` in
   temporaries, then a join of kind 2: `Builtin(AsyncJoin, [site, 2, body's function, body, until, at])`, a race whose
   second child is lib/core's `AsyncTimeoutJoin<T, E>.until`, an async fn given the deadline `at` as its argument (for
@@ -170,6 +171,10 @@ Lowering rules (HIR → NIR, `NirBuilder`):
     - what is dropped depends on the state: whole, nothing, a flagged drop, or per field for a
       partially moved struct;
     - one bool flag per leaf is updated after every statement that changes that leaf's state.
+    - In a run-once function (an `async move` child, type-system.md §36.5, ADR 0074 §2.3), `*env` (local 0's
+      referent) is a move path, tracked from the entry as a box's contents are, but without an allocation leaf. At
+      `StorageDead(env)` the captures still initialised are dropped, whole, flagged or field by field; the backends
+      no longer drop the child's environment after the body, only that of a child that never started.
 
     The C backend emits drop glue `ceeD_<len><Name>(T *)`: the `drop` block, then each field that
     needs drop, in declaration order.

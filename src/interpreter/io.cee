@@ -2041,7 +2041,7 @@ fn asyncSetSpawn(
             arguments: values,
             scope: scope,
             environment: environment,
-            environmentDrop: environmentDrop,
+            environmentDrop: if (isRunOnce(c, child)) none() else environmentDrop, // a run-once body drops its own
             joinIndex: none(),
             release: allocator,
             releaseBlock: releaseBlock,
@@ -2342,7 +2342,7 @@ fn asyncSpawn(
             arguments: values,
             scope: scope,
             environment: environment,
-            environmentDrop: environmentDrop,
+            environmentDrop: if (isRunOnce(c, child)) none() else environmentDrop, // a run-once body drops its own
             joinIndex: none(),
             release: release,
             releaseBlock: releaseBlock,
@@ -2813,8 +2813,12 @@ fn asyncJoin(
                 let envType = c.types.info(n.functions[function as usize].locals[0].typ).pointee;
                 let size = typeSize(c, envType)?;
                 environment = it.memory.allocate(allocationLocal(), size, true, "a child's environment".bytes())?;
-                let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
-                it.memory.store(environment, bytes)?;
+                if (c.types.is(n.operandTypes[n.at(arguments, 3 + 2 * k) as usize], TypeKind.Reference)) {
+                    let bytes = it.memory.load(closure.bits(0, 8)?, size)?;
+                    it.memory.store(environment, bytes)?;
+                } else {
+                    it.memory.store(environment, closure)?; // an `async move` child's environment (ADR 0074 §2.3)
+                }
                 values.push(valueOf(environment, 8))!;
             } else if (c.hir.functions[child as usize].parameters.length == 1) {
                 values.push(closure)!; // a timeout's deadline child, given the deadline (ADR 0046)

@@ -250,10 +250,18 @@ fn describeNirPlace(
     out: borrow mut Vector<u8>,
 ) -> Result<void, AllocError> {
     let p = n.places[place as usize];
-    nirLocalName(c, n, m, p.local, out)?;
+    // A run-once function's capture is named by the captured local (ADR 0074 §2.3): `(*env).b` is `b`.
+    let throughEnvironment = isOnceEnvironmentLocal(c, n.functions[m.function as usize].locals, p.local);
+    if (!throughEnvironment) {
+        nirLocalName(c, n, m, p.local, out)?;
+    }
+    var first = throughEnvironment;
     for (k in 0..p.projections.count) {
         let projection = n.projections[(p.projections.start + k) as usize];
-        if (isFieldProjectionN(projection)) {
+        if (isFieldProjectionN(projection) && first) {
+            first = false;
+            appendBytes(out, c.name(c.types.fields[projection.field as usize].name))?;
+        } else if (isFieldProjectionN(projection)) {
             appendText(out, ".")?;
             appendBytes(out, c.name(c.types.fields[projection.field as usize].name))?;
         } else if (!isDerefProjectionN(projection)) {
@@ -280,11 +288,19 @@ fn describeNode(
         }
         current = d.nodes[current as usize].parent;
     }
-    nirLocalName(c, n, m, d.nodes[node as usize].local, out)?;
+    let local = d.nodes[node as usize].local;
+    // A run-once function's capture is named by the captured local (ADR 0074 §2.3).
+    let throughEnvironment = isOnceEnvironmentLocal(c, n.functions[m.function as usize].locals, local) &&
+        fields.length > 0;
+    if (!throughEnvironment) {
+        nirLocalName(c, n, m, local, out)?;
+    }
     var k = fields.length;
     while (k > 0) {
         k -= 1;
-        appendText(out, ".")?;
+        if (!throughEnvironment || k + 1 < fields.length) {
+            appendText(out, ".")?;
+        }
         appendBytes(out, c.name(c.types.fields[fields[k] as usize].name))?;
     }
     return Ok();
@@ -320,10 +336,16 @@ fn checkUse(
     let local = n.places[place as usize].local;
     let hasDeref = !isMovePath(c, n, locals, place); // through a reference, into an element, or into an enum variant
     // Reading through a reference needs the reference; reading a place needs the place.
-    let path = if (hasDeref) d.roots[local as usize] else pathFor(c, n, d, place);
+    // In a run-once function, a read through a capture needs only that capture (ADR 0074 §2.3).
+    let path = if (hasDeref && !isOnceEnvironmentLocal(c, locals, local)) d.roots[local as usize] else pathFor(
+        c,
+        n,
+        d,
+        place,
+    );
     if (!definitelyInit(d, state, path)?) {
         var what = Vector<u8>.create();
-        if (hasDeref) {
+        if (hasDeref && !isOnceEnvironmentLocal(c, locals, local)) {
             nirLocalName(c, n, m, local, mut what)?;
         } else {
             describeNirPlace(c, n, m, place, mut what)?;
@@ -420,8 +442,8 @@ fn checkWrite(
     let locals = borrow n.functions[m.function as usize].locals;
     let local = n.places[target as usize].local;
     if (!isMovePath(c, n, locals, target)) {
-        // As CheckUse of the bare local: it must be initialised.
-        let root = d.roots[local as usize];
+        // As CheckUse of the bare local: it must be initialised (a run-once function's capture: that capture).
+        let root = if (isOnceEnvironmentLocal(c, locals, local)) pathFor(c, n, d, target) else d.roots[local as usize];
         if (!definitelyInit(d, state, root)?) {
             var message = Vector<u8>.create();
             appendText(mut message, "'")?;

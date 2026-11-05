@@ -239,6 +239,9 @@ fn checkClosureWith(
 ) -> Result<u32, AllocError> {
     let literal = c.front.ast.closures[closure as usize];
     let moveLiteral = isMoveLiteral || moveInto != none();
+    // Only the literal its caller names is run-once; literals nested in its body are checked without the mark.
+    let runOnce = c.runOnceLiteral;
+    c.runOnceLiteral = false;
     let expectsClosure = expected != none() && c.types.isClosure(expected);
     let expectsFunction = expected != none() && c.types.is(expected, TypeKind.Function);
     let callable = if (moveInto != none()) moveInto else if (expectsClosure) c.types.info(
@@ -432,7 +435,10 @@ fn checkClosureWith(
             let none0 = Vector<u32>.create();
             into = c.types.dynFunctionOf(none0.view(), returnType, allEffects(), true, false)?;
         }
-        return finishMoveLiteral(c, function, environment, captures.view(), into, effects, span);
+        c.runOnceLiteral = runOnce;
+        let finished = finishMoveLiteral(c, function, environment, captures.view(), into, effects, span);
+        c.runOnceLiteral = false;
+        return finished;
     }
     if (!asClosure) {
         return c.expr(HirExpr.Closure(function, emptyRange()), callableType, span.start, span.end);
@@ -767,6 +773,8 @@ fn finishMoveLiteral(
     let definition = c.types.info(environment).structDef;
     c.types.structs[definition as usize].isMoveEnvironment = true;
     c.types.structs[definition as usize].capturesLoans = holdsLoan;
+    // A child of a scope, a task set, a race, all or timeout runs once: it may move its captures out (ADR 0074 §2.3).
+    c.types.structs[definition as usize].isOnceEnvironment = c.runOnceLiteral;
     let range = finishEnvironment(c, function, environment, moved.view(), effects, span)?;
     // It owns its captures (§36.5): it needs drop if one does, made after ComputeCopyAndDrop has run.
     var needsDrop = false;

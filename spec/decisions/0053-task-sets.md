@@ -53,6 +53,9 @@ await Async.tasks(limit, oom, async (set) => {
 })
 ```
 
+(Note, ADR 0074 §2.3: until 0.18 a child could not move a capture out, and this example was N0251. A child's body
+runs once, so it now may.)
+
 - **The operation.** `await Async.tasks(limit, oom, body)` is `Result<void, E>`:
   - `limit: u32` is the most children live at once;
   - `oom: E` is the result if a child's frame cannot be allocated;

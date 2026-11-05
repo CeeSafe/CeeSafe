@@ -146,6 +146,7 @@ fn checkProgram(
         closureContexts: Vector<ClosureContext>.create(),
         asyncScopes: Vector<AsyncScopeContext>.create(),
         copyCaptures: false,
+        runOnceLiteral: false,
         asyncAdapter: false,
         sendSpawns: Vector<u32>.create(),
         asyncSites: 0,

@@ -1,0 +1,1 @@
+public fn quadruple(x: u32) -> u32 => helper.twice(helper.twice(x));

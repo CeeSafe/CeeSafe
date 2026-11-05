@@ -40,11 +40,15 @@ fn variantPatterns(c: borrow Checker, t: u32) -> Result<Vector<Vector<u8>>, Allo
     return Ok(out);
 }
 
-/// The checker's `@test` functions, in declaration order.
+/// The checker's `@test` functions of the package under test, in declaration order: a dependency's tests are its
+/// own, and private to it (N0312), so the harness cannot call them.
 fn testEntries(c: borrow Checker) -> Result<Vector<TestEntry>, AllocError> {
     var out = Vector<TestEntry>.create();
     for (f in c.testFunctions.view()) {
         let hir = borrow c.hir.functions[f as usize];
+        if (packageOfFile(c, hir.file) != 0) {
+            continue;
+        }
         let parts = resultParts(c, hir.returnType);
         var kind: u32 = 0;
         var variants = Vector<Vector<u8>>.create();

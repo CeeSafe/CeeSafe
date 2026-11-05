@@ -1263,7 +1263,13 @@ fn emitBuiltin(
             NirOperand.String(text) => {
                 let bytes = n.textOf(text);
                 e.t("    ceesafe_write_str(")?;
-                appendCStringLiteral(mut e.buf, bytes)?;
+                let long = longStringId(e, bytes);
+                if (long != none()) {
+                    e.t("(const char *)ceeLS_")?;
+                    e.d(long as u64)?;
+                } else {
+                    appendCStringLiteral(mut e.buf, bytes)?;
+                }
                 e.t(", ")?;
                 e.d(bytes.length as u64)?;
                 e.t("u);")?;
@@ -2613,8 +2619,15 @@ fn appendOperand(
         NirOperand.String(text) => {
             // String literals are static data, so a view of one never dangles (§22.2).
             let bytes = n.textOf(text);
-            appendText(out, "((cee_str){ .ptr = (const uint8_t *)")?;
-            appendCStringLiteral(out, bytes)?;
+            let long = longStringId(e, bytes);
+            if (long != none()) {
+                // Longer than a C compiler must accept as a literal: the byte array emitLongStrings wrote.
+                appendText(out, "((cee_str){ .ptr = ceeLS_")?;
+                appendDecimal(out, long as u64)?;
+            } else {
+                appendText(out, "((cee_str){ .ptr = (const uint8_t *)")?;
+                appendCStringLiteral(out, bytes)?;
+            }
             appendText(out, ", .len = ")?;
             appendDecimal(out, bytes.length as u64)?;
             return appendText(out, "u })");

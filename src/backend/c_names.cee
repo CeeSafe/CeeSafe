@@ -596,6 +596,28 @@ fn appendCStringLiteral(out: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result<
     return out.push('"');
 }
 
+/// The longest C string literal written as one (CStringLimit): C99 and C11 require compilers to accept 4095 bytes
+/// (§5.2.4.1), and clang and GCC warn beyond (-Woverlength-strings, in -Wpedantic); MSVC rejects much longer ones.
+fn cStringLimit() -> usize => 4095;
+
+/// A C brace initialiser of bytes (CByteList), for a char or uint8_t array: `{ 0x41, 0x42 }`, with a final zero when
+/// `terminated`.
+fn appendCByteList(out: borrow mut Vector<u8>, bytes: Slice<u8>, terminated: bool) -> Result<void, AllocError> {
+    out.push('{')?;
+    for (k in 0..bytes.length) {
+        appendText(out, if (k == 0) "0x" else ", 0x")?;
+        let b = bytes[k];
+        let high = b >> 4;
+        let low = b & 15;
+        out.push(if (high < 10) '0' + high else 'A' + high - 10)?;
+        out.push(if (low < 10) '0' + low else 'A' + low - 10)?;
+    }
+    if (terminated) {
+        appendText(out, if (bytes.length == 0) "0" else ", 0")?;
+    }
+    return out.push('}');
+}
+
 /// A `_Static_assert` message (CMessageLiteral): `"`, `\` and `?` escaped, and each UTF-16 unit outside printable ASCII
 /// as `_` (a character beyond the BMP is two).
 fn appendCMessageLiteral(out: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result<void, AllocError> {

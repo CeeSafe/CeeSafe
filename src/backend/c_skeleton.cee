@@ -238,6 +238,7 @@ fn emitProgram(
     emitImportedFieldChecks(e, c)?;
     emitExterns(e, c, n, sources)?;
     emitExportPrototypes(e, c, n)?;
+    emitLongStrings(e, c, n)?;
     if (!e.split) {
         emitExportedConstants(e, c)?;
         emitStatics(e, c, true)?;
@@ -399,7 +400,11 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             e.d(id as u64)?;
             e.t("[] = ")?;
             let text = copyBytes(e.staticStrings[id].view())?;
-            appendCStringLiteral(mut e.buf, text.view())?;
+            if (text.length > cStringLimit()) {
+                appendCByteList(mut e.buf, text.view(), true)?;
+            } else {
+                appendCStringLiteral(mut e.buf, text.view())?;
+            }
             e.t(";")?;
             e.emit()?;
         }
@@ -459,6 +464,74 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
     }
     if (c.hir.statics.length > 0) {
         e.line("")?;
+    }
+    return Ok();
+}
+
+/// The id of a literal over the C limit among the long strings, or none (LongStringId).
+fn longStringId(e: borrow CEmitter, text: Slice<u8>) -> u32 {
+    if (text.length <= cStringLimit()) {
+        return none();
+    }
+    for (k in 0..e.longStrings.length) {
+        if (sameBytes(e.longStrings[k].view(), text)) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+fn addLongString(e: borrow mut CEmitter, text: Slice<u8>) -> Result<void, AllocError> {
+    if (text.length > cStringLimit() && longStringId(e, text) == none()) {
+        e.longStrings.push(copyBytes(text)?)?;
+    }
+    return Ok();
+}
+
+/// The string literals longer than a C compiler must accept (cStringLimit), each once as a byte array that the code
+/// points to instead (EmitLongStrings): the NIR's operands and the statics' values.
+fn emitLongStrings(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    for (o in n.operands.view()) {
+        match (o) {
+            NirOperand.String(text) => { addLongString(e, n.textOf(text))?; }
+            _ => {}
+        }
+    }
+    for (item in c.hir.statics.view()) {
+        collectLongStaticStrings(e, c, item.value)?;
+    }
+    for (id in 0..e.longStrings.length) {
+        e.t("static CEE_UNUSED const uint8_t ceeLS_")?;
+        e.d(id as u64)?;
+        e.t("[] = ")?;
+        let text = copyBytes(e.longStrings[id].view())?;
+        appendCByteList(mut e.buf, text.view(), false)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    return Ok();
+}
+
+fn collectLongStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -> Result<void, AllocError> {
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.StringConst(text) => { addLongString(e, c.hir.textOf(text))?; }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                collectLongStaticStrings(e, c, c.hir.fieldValues[(fields.start + k) as usize].value)?;
+            }
+        }
+        HirExpr.ArrayLiteral(elements) => {
+            for (k in 0..elements.count) {
+                collectLongStaticStrings(e, c, c.hir.at(elements, k))?;
+            }
+        }
+        HirExpr.ArrayRepeat(repeated) => { collectLongStaticStrings(e, c, repeated)?; }
+        HirExpr.Call(_, arguments) => {
+            for (k in 0..arguments.count) {
+                collectLongStaticStrings(e, c, c.hir.at(arguments, k))?;
+            }
+        }
+        _ => {}
     }
     return Ok();
 }
@@ -524,10 +597,19 @@ fn appendStaticInitializer(
             let bytes = c.hir.textOf(text);
             if (c.types.is(t, TypeKind.Array)) {
                 // A C char array member's bytes, which C zero-pads (ADR 0042 §3.4).
+                if (bytes.length > cStringLimit()) {
+                    return appendCByteList(out, bytes, false);
+                }
                 return appendCStringLiteral(out, bytes);
             }
-            appendText(out, "{ .ptr = (const uint8_t *)")?;
-            appendCStringLiteral(out, bytes)?;
+            let long = longStringId(e, bytes);
+            if (long != none()) {
+                appendText(out, "{ .ptr = ceeLS_")?;
+                appendDecimal(out, long as u64)?;
+            } else {
+                appendText(out, "{ .ptr = (const uint8_t *)")?;
+                appendCStringLiteral(out, bytes)?;
+            }
             appendText(out, ", .len = ")?;
             appendDecimal(out, bytes.length as u64)?;
             appendText(out, "u }")?;

@@ -1,0 +1,19 @@
+// A character literal is a `u32` code point, so a byte-order write of one would take four bytes (type-system.md §16.6): it
+// needs the width as a type argument.
+fn run() -> Result<void, AllocError> {
+    var v = Vector<u8>.create();
+    v.pushBE('P')?; // error[N0265]
+    v.pushLE<u8>('Q')?;
+    v.pushBE<u32>('R')?;
+    var bytes = [0u8; 4];
+    bytes[..].writeLE(0, 'S'); // error[N0265]
+    bytes[..].writeBE<u8>(1, 'T');
+    return Ok();
+}
+
+fn main() {
+    match (run()) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

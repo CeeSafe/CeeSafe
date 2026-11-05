@@ -52,6 +52,7 @@ struct CEmitter {
     composites: Vector<u32>;               // Composites
     aggregates: Vector<u32>;               // Aggregates
     staticStrings: Vector<Vector<u8>>;     // the C strings statics point to, in first-use order
+    longStrings: Vector<Vector<u8>>;       // literals over 4095 bytes, emitted as byte arrays (LongStrings)
     splitData: Vector<Vector<u8>>;         // C data split mode renames (sorted)
     function: u32;                         // the NIR function being emitted, or none
     inAsync: bool;                         // it is an async fn's resume function (c-backend.md §3a)
@@ -103,6 +104,7 @@ struct CEmitter {
         composites: Vector<u32>.create(),
         aggregates: Vector<u32>.create(),
         staticStrings: Vector<Vector<u8>>.create(),
+        longStrings: Vector<Vector<u8>>.create(),
         splitData: Vector<Vector<u8>>.create(),
         function: none(),
         inAsync: false,

@@ -356,6 +356,24 @@ fn checkByteOrderValue(
         c.error(cannotInferTypeArguments(), valueSpan.start, valueSpan.end, message)?;
         return c.errorResult(valueSpan.start, valueSpan.end);
     }
+    let character = match (c.front.ast.exprs[valueSyntax as usize]) {
+        ExprNode.CharLiteral(_) => true,
+        _ => false,
+    };
+    if (character) {
+        // A character literal is a `u32` code point: written as is, 'P' would take four bytes (type-system.md §16.6).
+        let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "a character literal is a 'u32' code point, so '")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "' would write four bytes: give the width as a type argument ('")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "<u8>(…)' for one byte, '")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, "<u32>(…)' for four)")?;
+        c.error(cannotInferTypeArguments(), valueSpan.start, valueSpan.end, message)?;
+        return c.errorResult(valueSpan.start, valueSpan.end);
+    }
     let value = synth(c, valueSyntax, none())?;
     return autoDeref(c, value);
 }

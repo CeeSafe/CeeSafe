@@ -213,6 +213,7 @@ fn usedLibraryFunctions(
     n: borrow NirProgram,
     used: borrow mut Vector<bool>,
     usedVariants: borrow mut Vector<u64>,
+    extra: borrow Vector<u64>,
 ) -> Result<void, AllocError> {
     let bodies = nirBodies(n)?;
     for (k in 0..c.hir.functions.length) {
@@ -227,6 +228,10 @@ fn usedLibraryFunctions(
     }
     // A dyn table's entries and its type's drop are reached through the table (§37.4).
     var reached = Vector<u64>.create();
+    // The drops of the types the emitted code mentions (setUpEmitter): their drop glue calls them.
+    for (key in extra.view()) {
+        reached.push(key)?;
+    }
     // A package's own struct is emitted whether or not code uses it, with its drop: so are the drops of the library
     // types it holds (bug B2: a struct holding an AsyncTcpStream the program never touches).
     for (t in c.programStructs.view()) {
@@ -385,6 +390,21 @@ fn usedTypesOf(
             }
         }
     }
+    // A vector's helpers return `Result<void, AllocError>` (ceeVP_, ceeVR_, …), which only library code may have
+    // asked for: a package that only borrows a library type holding a vector.
+    var vectors = false;
+    for (container in containers.view()) {
+        if (c.types.is(container, TypeKind.Vector)) {
+            vectors = true;
+        }
+    }
+    if (vectors) {
+        for (t in c.types.composites.view()) {
+            if (!c.types.isGeneric(t) && isAllocResult(c, t) && c.types.is(resultOkOf(c, t), TypeKind.Void)) {
+                addUsedType(c, used, t)?;
+            }
+        }
+    }
     return Ok();
 }
 
@@ -438,16 +458,8 @@ fn visitHeaderStruct(
     return out.push(t);
 }
 
-/// The trial emission's analyses (the CEmitter constructor); `trial` is none for the trial itself.
-fn setUpEmitter(
-    e: borrow mut CEmitter,
-    c: borrow Checker,
-    n: borrow NirProgram,
-) -> Result<void, AllocError> {
-    headerStructsOf(c, mut e.headerStructs)?;
-    if (e.trial) {
-        usedLibraryFunctions(c, n, mut e.usedLibrary, mut e.usedVariants)?;
-    }
+/// The NIR functions emitted: the package's, and the library's the program reaches (Compiled).
+fn compiledFunctions(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
     for (k in 0..n.functions.length) {
         let source = n.functions[k].source;
         let key = variantKey(source, n.functions[k].variant);
@@ -458,10 +470,50 @@ fn setUpEmitter(
             e.compiled.push(truncate<u32>(k))?;
         }
     }
+    return Ok();
+}
+
+/// The trial emission's analyses (the CEmitter constructor); `trial` is none for the trial itself.
+fn setUpEmitter(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+) -> Result<void, AllocError> {
+    headerStructsOf(c, mut e.headerStructs)?;
     if (e.trial) {
-        var used = Vector<bool>.create();
-        usedTypesOf(c, n, e, mut used)?;
-        e.usedTypes = used;
+        // Every used type that needs a drop gets drop glue, which calls its `drop` methods: a library type the
+        // program only borrows is used without being dropped, so its drops are reached here, until nothing changes.
+        var extra = Vector<u64>.create();
+        while (true) {
+            e.usedLibrary.clear();
+            e.usedVariants.clear();
+            e.compiled.clear();
+            usedLibraryFunctions(c, n, mut e.usedLibrary, mut e.usedVariants, extra)?;
+            compiledFunctions(e, c, n)?;
+            var used = Vector<bool>.create();
+            usedTypesOf(c, n, e, mut used)?;
+            var missing = false;
+            for (t in 0..used.length) {
+                if (used[t]) {
+                    var seen = Vector<bool>.create();
+                    var drops = Vector<u32>.create();
+                    dropFunctions(c, truncate<u32>(t), mut seen, mut drops)?;
+                    for (d in drops.view()) {
+                        let key = variantKey(d, 0);
+                        if (isLibraryFunction(c, d) && !containsU64(e.usedVariants, key) && !containsU64(extra, key)) {
+                            extra.push(key)?;
+                            missing = true;
+                        }
+                    }
+                }
+            }
+            e.usedTypes = used;
+            if (!missing) {
+                break;
+            }
+        }
+    } else {
+        compiledFunctions(e, c, n)?;
     }
     // A library file is named only if code from it is emitted (type-system.md §29.2).
     for (file in 0..c.filePaths.length) {

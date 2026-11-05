@@ -1,0 +1,5 @@
+// A library that keeps a test beside its code, in src/: private to it, so a dependent's harness must not list it.
+public fn twice(x: u32) -> u32 => x * 2;
+
+@test
+fn twiceDoubles() -> Result<void, TestFailure> => Check.isTrue(twice(4) == 8, "twice(4) is 8");

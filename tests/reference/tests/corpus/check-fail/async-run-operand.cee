@@ -1,0 +1,23 @@
+// `Async.run` and `Async.runWorkers` run a call of an async fn (type-system.md §40.4). A scope, join or timeout is a
+// suspension point of the async fn around it: in sync code it once compiled to nothing, so its result never arrived.
+enum Failure { OutOfMemory }
+
+async fn both() -> Result<void, AsyncError> {
+    return await Async.all(async () => Ok(), async () => Ok());
+}
+
+fn main() {
+    var y = 0;
+    let scoped = Async.run(Async.scope(Failure.OutOfMemory, (s) => { // error[N0342]
+        s.spawn(async () => {
+            y = 2;
+            return Ok();
+        });
+    }));
+    let joined = Async.run(Async.all(async () => { return Ok(); }, async () => { return Ok(); }));            // error[N0342]
+    let workers = Async.runWorkers(2, Async.all(async () => { return Ok(); }, async () => { return Ok(); })); // error[N0342]
+    match (Async.run(both())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

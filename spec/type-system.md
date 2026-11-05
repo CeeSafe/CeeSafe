@@ -690,7 +690,8 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
 - `d.writeBE(at, x)` and `d.writeLE(at, x)` write `x` there. The receiver is a `SliceMut<u8>`, a mutable vector's
   elements, or a slicing expression taken mutably (N0211 for a `Slice<u8>`). `x`'s type gives the width: a type
   argument (`writeBE<u32>(at, 5)`) or the value's own type; a literal without a suffix and without a type argument
-  is N0265. They are not two-phase, like `copyFrom` (§16.5).
+  is N0265. So is a character literal without one: it is a `u32` code point, so `'P'` alone would write four bytes
+  (`pushBE<u8>('P')` writes one; 0.15.2). They are not two-phase, like `copyFrom` (§16.5).
 - `v.pushBE(x)` and `v.pushLE(x)` on a `Vector<u8, A>` append `x`'s bytes with one growth: `Result<void, AllocError>`,
   the vector unchanged on failure. The width is chosen as for `writeBE`. They are two-phase (B5), like `push`.
 - A read or write checks `at < length` and `at + size(T) - 1 < length` at the call, before anything is read or
@@ -3684,7 +3685,7 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 
 | Operation | Result | Notes |
 |---|---|---|
-| `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295 |
+| `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295. The operand is a call of an async fn: `Async.scope`, `all`, `race`, `timeout` and the others are awaited inside one, so as the operand they are N0342 (0.15.2) |
 | `Async.runWorkers(n, f(…))` | `T` | `Async.run` with `n` workers, this thread among them (`n: u32`; ADR 0038): `n − 1` more threads, started for the run and joined when it returns, may take its `spawnSend` children (§40.5). A worker that cannot start is skipped: the result is the same. Hosted only |
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
 | `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body |

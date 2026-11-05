@@ -1,0 +1,2 @@
+@test
+fn quadrupleOfThree() -> Result<void, TestFailure> => Check.isTrue(quadruple(3) == 12, "quadruple(3) is 12");

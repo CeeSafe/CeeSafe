@@ -10,6 +10,9 @@
 5. native-errors: `check` reports N0321 for each of its five invalid values.
 6. impl-files: a method merged from an `impl` block in another file (ADR 0064 §1) panics at its own position.
 7. impl-files: diagnostics in that method name its own file and line.
+8. dependency-tests: `test` in app lists and runs app's test only, not the `@test` its dependency keeps in src/.
+9. borrowed-listener: `test` of a library that only borrows AsyncTcpListener builds and passes (the C backend once
+   panicked on it, then left the listener's drop undefined).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -181,7 +184,25 @@ def main():
             problems.append(f"impl-files: expected diagnostics in src/more/cells.cee, the first at line 23: {places} "
                             f"{p.stdout[:300]}{p.stderr[:300]}")
 
-    print(f"package_tests: 7 checks; {len(problems)} problems")
+        # 8. A dependency's `@test` in its src/ is private to it: the dependent's harness lists only its own tests.
+        dependency_tests = os.path.join(work, "dependency-tests")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "dependency-tests"), dependency_tests)
+        app = os.path.join(dependency_tests, "app")
+        p = run([compiler, "test", "--list"], app)
+        q = run([compiler, "test"], app)
+        if p.returncode != 0 or p.stdout.split() != ["quadrupleOfThree"] or q.returncode != 0:
+            problems.append(f"dependency-tests: expected app's one test to be listed and pass: {p.returncode} "
+                            f"{p.stdout[:200]!r} {q.returncode} {q.stdout[-300:]!r}{q.stderr[-300:]!r}")
+
+        # 9. A library that only borrows a listener: its test build has the listener's drop and the vector helpers'
+        #    result type.
+        listener = os.path.join(work, "borrowed-listener")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "borrowed-listener"), listener)
+        p = run([compiler, "test"], listener)
+        if p.returncode != 0:
+            problems.append(f"borrowed-listener: test failed: {p.stdout[-400:]}{p.stderr[-400:]}")
+
+    print(f"package_tests: 9 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

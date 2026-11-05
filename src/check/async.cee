@@ -117,6 +117,28 @@ fn checkTaskOperand(c: borrow mut Checker, operand: u32, expected: u32, what: St
     return Ok(none());
 }
 
+/// A task operand of `Async.run` or `Async.runWorkers` must be a call of an async fn (§40.4): a scope, join or timeout
+/// is a suspension point of the async fn around it, so outside one it has nowhere to run (N0342).
+fn requireTaskCall(c: borrow mut Checker, call: u32, task: u32, what: StringView) -> Result<bool, AllocError> {
+    let isCall = match (c.hir.exprs[call as usize]) {
+        HirExpr.Call(_, _) => true,
+        _ => false,
+    };
+    if (isCall || c.typeOf(call) == c.types.error) {
+        return Ok(isCall);
+    }
+    let taskSpan = c.front.ast.exprSpans[task as usize];
+    var message = Vector<u8>.create();
+    appendText(mut message, "the operand of ")?;
+    appendText(mut message, what)?;
+    appendText(
+        mut message,
+        " must be a call of an async fn; 'Async.scope', 'all', 'race' and 'timeout' are awaited inside one: write an async fn that awaits it and run that (type-system.md §40.4)",
+    )?;
+    c.error(taskNotAwaited(), taskSpan.start, taskSpan.end, message)?;
+    return Ok(false);
+}
+
 /// `await e` (§40.2): only in an async fn's body; `e` a task; the value is the task's result.
 fn checkAwait(c: borrow mut Checker, operand: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
     if (!isAsyncFunction(c, c.function)) {
@@ -236,7 +258,7 @@ fn checkAsyncCall(
     }
     let task = c.front.ast.at(arguments, 0);
     let call = checkTaskOperand(c, task, expected, "'Async.run'")?;
-    if (call == none()) {
+    if (call == none() || !requireTaskCall(c, call, task, "'Async.run'")?) {
         return c.errorResult(span.start, span.end);
     }
     let typ = c.typeOf(call);
@@ -257,7 +279,7 @@ fn checkRunWorkers(c: borrow mut Checker, arguments: Range, expected: u32, span:
     let count = checkExpr(c, countSyntax, u32Type)?;
     let task = c.front.ast.at(arguments, 1);
     let call = checkTaskOperand(c, task, expected, "'Async.runWorkers'")?;
-    if (call == none() || c.isBottom(count)) {
+    if (call == none() || !requireTaskCall(c, call, task, "'Async.runWorkers'")? || c.isBottom(count)) {
         return c.errorResult(span.start, span.end);
     }
     let typ = c.typeOf(call);

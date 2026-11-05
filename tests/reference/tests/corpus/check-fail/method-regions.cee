@@ -1,0 +1,25 @@
+// An interface's methods, and the methods that implement one, keep N0216: conformance compares the signatures
+// (ADR 0074 §2.4). A method's region may not reuse a name of its type's regions.
+interface Named {
+    fn name<region a>(borrow this, other: borrow(a) Vector<u8>) -> Slice<a, u8>; // error[N0216]
+}
+
+interface Sized {
+    fn size(borrow this) -> usize;
+}
+
+struct S {
+    n: usize;
+}
+
+impl Sized for S {
+    fn size<region a>(borrow this) -> usize => this.n; // error[N0216]
+}
+
+struct View<region r> {
+    text: Slice<r, u8>;
+
+    fn pick<region r>(borrow this, other: Slice<r, u8>) -> Slice<r, u8> => other; // error[N0202]
+}
+
+fn main() {}

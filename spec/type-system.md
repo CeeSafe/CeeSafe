@@ -314,6 +314,9 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   - A `borrow mut T` parameter accepts `mut p`, where `p` is a mutable place of type `T`, or a
     `borrow mut T` value (reborrowed).
 
+  - A `borrow T?` parameter accepts a place of type `T?` or `T`, and a `(borrow mut T)?` parameter `mut p` of one
+    (§22.1, ADR 0074 §2.5).
+
   The `mut` marker is required for a plain place and is rejected where the parameter is not
   `borrow mut` (N0249). It makes mutation visible at the call site, as C#'s `ref` does.
 - **Receivers.** `fn m(borrow this)` and `fn m(borrow mut this)` declare reference receivers;
@@ -1342,8 +1345,18 @@ fn main() {
 - **Matching.** Patterns `null`, `Some(x)` and `Some(_)` are written without a type prefix; the
   rules of §15.2 and §18.4 apply.
 - **Comparisons.** `o == null` and `o != null` test for absence, for any `T` (the value is only
-  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s; any other method on an optional
-  is N0234. Other comparisons of optionals are not defined (N0207).
+  read, not consumed). So do `o.isNull()` and `o.isSome()` (ADR 0072), `bool`s. Other comparisons of optionals are
+  not defined (N0207).
+- **Optional borrows** (ADR 0074 §2.5). `o.asBorrow()`, on a place of type `T?` or on a `borrow (T?)`, is a
+  `borrow T?`: `Some` borrows the payload, and `null` is `null`. `o.asBorrowMut()`, on a mutable place of type `T?`
+  or on a `borrow mut (T?)`, is a `(borrow mut T)?` (N0248 otherwise). Either is a shared or mutable loan of the place
+  for as long as the result is used, and is lowered as `match` would be: a tag test, then the payload's address or
+  `null`. Any other method on an optional is N0234.
+- **Optional borrow arguments.** At an argument whose parameter is `borrow T?`, a place of type `T?` is borrowed as
+  by `asBorrow()`, and a place of type `T` as `Some(borrow t)`, as a place of `T` is borrowed for a `borrow T`
+  parameter (§13.2). At a `(borrow mut T)?` parameter the same holds with `mut p` and `asBorrowMut()` (N0249 without
+  `mut`). So `f(relay.tlsConfig)` is accepted for `fn f(c: borrow TlsConfig?)`. A `borrow (T?)` stays a different
+  type: it converts with `asBorrow()`.
 - **`a ?? b`** (ADR 0072) is `a`'s value, or `b` when `a` is `null`. `a` is a `T?` (N0262 otherwise) and `b` is
   checked against `T`; the whole is a `T`. If `b` is itself a `T?` of `a`'s type, the whole is that `T?`, so a
   chain may end in an optional (`find(a) ?? find(b)`). `b` is evaluated only when `a` is `null`, so `?? fail("…")`,
@@ -1640,6 +1653,10 @@ fn split<region r>(line: StringView<r>) -> Result<Vector<StringView<r>>, AllocEr
   followed by a name declares a region; `region` alone is still an ordinary name.
 - A method may use its struct's regions. `static` is the built-in region of static data (string
   literals); it outlives everything.
+- A method of a struct or of an inherent impl may also declare regions of its own (ADR 0074 §2.4), as a free function
+  does: `fn first<region a>(borrow this, other: borrow(a) Vector<u8>) -> Slice<a, u8>`. Its region names may not
+  repeat the struct's or the impl's (N0202). An interface's methods, and the methods of an `impl` of an interface,
+  may not (N0216): conformance compares the signatures, which would have to match the region lists.
 
 ### 25.2 Region arguments
 - A type with region parameters takes region arguments first, then its type arguments:
@@ -1662,7 +1679,7 @@ parameters, an instance of a generic struct or enum with a scoped type argument,
 
 A struct or enum with region parameters implements an interface as `impl<region r> I for S<r> { … }` (ADR 0054): the
 impl's region names are in scope in its target and in its methods' signatures and bodies, as a struct's are in its own
-methods. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is used statically; it does not coerce to
+methods. Such an impl's methods do not declare regions of their own (N0216, §25.1); an inherent impl's may. Such a type satisfies bounds (`fn f<B: Body>(b: borrow mut B)`) and is used statically; it does not coerce to
 `dyn I` (§37.2).
 
 ### 25.4 Where scoped values may be stored
@@ -1708,6 +1725,19 @@ data, and through a function value, a `dyn` method or a bound it could not. A st
 parameter without `static`. A function's **flows** are then:
 - **result ← parameter `i`** iff they share a flow name: the result may carry `i`'s loans (this
   generalises v0's return sources, §13.5);
+- **deep results** (ADR 0074 §2.4). A reference parameter `i` that is not a view (`borrow T`, `borrow mut T`, the
+  receiver included) has an **outer** name of its own: its elided name, or the regions written on the reference
+  (`borrow(a) T`). A result that shares a flow name with `i` but names none of `i`'s outer names, and is not tied to
+  `i` by elision or `borrow(i)`, is a **deep** result of `i`: it names only regions that `i`'s referent holds
+  (`fn token(borrow mut this) -> Slice<r, u8>` in `struct Lexer<region r>`). It carries the referent's loans, not the
+  loan of `i` itself:
+  - **callee:** a deep result may carry what the referent holds (a copy of a view field, a slice of one, a borrow
+    through a reference stored in it), but not a loan of the referent's own storage, a place reached through `i`
+    without passing another reference (`this.buf[0..2]` for a `buf: [u8; 4]`), nor `i` itself: N0245. Such a
+    function names `i`'s own region instead (`-> Slice<u8>`, elided);
+  - **caller:** for a deep result, an argument `borrow p` contributes `p`'s loans (what `p` holds), not the new loan
+    of `p`; a reference parameter passed on contributes what it refers to. So `let t = lexer.token();
+    lexer.skipSpace();` is accepted, and `t` is tied to the text the lexer views.
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
   with `j`: the callee may store `j`'s loans into what `i` refers to.
 

@@ -121,7 +121,7 @@ errors carry notes ("borrowed here", "the borrow is used later here").
 | N0242 | Read of a place while it is mutably borrowed | `let m = borrow mut x; print(x); m = 1;` |
 | N0243 | A place or temporary goes out of scope while borrowed | `let r = same(five()); use(r)` |
 | N0244 | Returning a reference to a local or temporary (E1) | `return borrow x;` with `x` local |
-| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, or a result derived from an unlisted parameter | `fn f(a: borrow T, b: borrow T) -> borrow T` |
+| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
 | N0246 | Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1) | `struct S { r: borrow i64; }` |
 | N0247 | `borrow` of something that is not a place | `borrow 5`, `take(mut five())` |
 | N0248 | `borrow mut` (or a `borrow mut this` call) on an immutable place | `borrow mut param`, `shared.grow()` |
@@ -214,6 +214,8 @@ Generic code (M6a) reuses codes:
 - a generic type without its arguments, or with the wrong number of them, is N0204;
 - a duplicate or shadowing type parameter is N0201;
 - a method with type parameters of its own is N0216;
+- an interface's method, or a method of an `impl` of an interface, with region parameters of its own is N0216 (ADR
+  0074 §2.4);
 - a generic `main` is N0219;
 - naming something that is not an interface as a bound or in an `impl` is N0204;
 - a method on a type parameter that no bound declares is N0234;

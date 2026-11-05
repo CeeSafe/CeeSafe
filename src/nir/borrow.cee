@@ -34,6 +34,9 @@ struct Access {
 struct Loan {
     isMutable: bool;
     hasPlace: bool;
+    /// A reference parameter (not a view) has two placeholders (ADR 0074 §2.4): the loan of the reference itself
+    /// (`outer`), and the loans of what it refers to. A value read through the reference carries only the second.
+    outer: bool;
     place: PlaceRef;
     block: u32; // a block position, or none for a placeholder
     index: u32;
@@ -53,6 +56,7 @@ struct ThroughWrite {
 struct LoanEdge {
     from: u32;
     to: u32;
+    dropOuter: u32; // a parameter whose outer placeholder the edge does not carry (ADR 0074 §2.4), or none
 }
 
 /// A set of locals that enumerates as .NET's HashSet<T> does: entries in slot order, a removed entry's slot reused
@@ -389,7 +393,43 @@ fn addPointsTo(b: borrow mut Borrows, local: u32, loan: u32) -> Result<bool, All
 }
 
 fn addEdge(edges: borrow mut Vector<LoanEdge>, from: u32, to: u32) -> Result<void, AllocError> =>
-    edges.push(LoanEdge { from: from, to: to });
+    edges.push(LoanEdge { from: from, to: to, dropOuter: none() });
+
+/// An edge that carries what parameter `parameter` refers to, not the loan of the parameter itself (ADR 0074 §2.4).
+fn addDeepEdge(edges: borrow mut Vector<LoanEdge>, from: u32, to: u32, parameter: u32) -> Result<void, AllocError> =>
+    edges.push(LoanEdge { from: from, to: to, dropOuter: parameter });
+
+/// Does the parameter have two placeholders, its own loan and its referent's (ADR 0074 §2.4)? A reference parameter
+/// that is not a view: a view's loans are those of the data it views.
+fn hasOuterPlaceholder(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, local: u32) -> bool {
+    if (local >= b.parameterCount) {
+        return false;
+    }
+    let t = localType(n, b, local);
+    return isReferenceType(c, t) && !c.types.isSlice(t) && !c.types.isStringView(t);
+}
+
+/// The reference parameter a place reads through first (`(*p)…`), if it has an outer placeholder; none otherwise.
+fn throughParameter(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, p: PlaceRef) -> u32 =>
+    if (p.projections.count > 0 && isDerefProjectionN(n.projections[p.projections.start as usize]) &&
+        hasOuterPlaceholder(c, n, b, p.local)) p.local else none();
+
+/// Does the place, after its first projection, go through another reference? Then what it names is not stored in
+/// what its root refers to (ADR 0074 §2.4).
+fn beyondReference(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, p: PlaceRef) -> bool {
+    if (p.projections.count == 0) {
+        return false;
+    }
+    var typ = applyNirProjection(c, localType(n, b, p.local), n.projections[p.projections.start as usize]);
+    for (k in 1..p.projections.count) {
+        let projection = n.projections[(p.projections.start + k) as usize];
+        if (isDerefProjectionN(projection) && isReferenceType(c, typ)) {
+            return true;
+        }
+        typ = applyNirProjection(c, typ, projection);
+    }
+    return false;
+}
 
 /// The loan-carrying locals an operand list reads (Carriers): those of operands whose value may hold loans.
 fn carriers(
@@ -521,6 +561,10 @@ fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<vo
             let count = b.pointsTo[edge.from as usize].length;
             for (k in 0..count) {
                 let loan = b.pointsTo[edge.from as usize][k];
+                if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
+                    b.loans[loan as usize].parameterIndex == edge.dropOuter) {
+                    continue;
+                }
                 if (addPointsTo(b, edge.to, loan)?) {
                     changed = true;
                 }
@@ -544,11 +588,13 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
     for (i in 0..b.parameterCount) {
         if (holdsLoans(c, n, b, i)) {
             let isMutable = isMutableReferenceType(c, localType(n, b, i));
+            let outer = hasOuterPlaceholder(c, n, b, i);
             let loan = addLoan(
                 b,
                 Loan {
                     isMutable: isMutable,
                     hasPlace: false,
+                    outer: outer,
                     place: barePlace(i),
                     block: none(),
                     index: none(),
@@ -557,9 +603,26 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                 },
             )?;
             addPointsTo(b, i, loan)?;
+            if (outer) {
+                let deep = addLoan(
+                    b,
+                    Loan {
+                        isMutable: isMutable,
+                        hasPlace: false,
+                        outer: false,
+                        place: barePlace(i),
+                        block: none(),
+                        index: none(),
+                        span: Span { start: 0, end: 0 },
+                        parameterIndex: i,
+                    },
+                )?;
+                addPointsTo(b, i, deep)?;
+            }
         }
     }
     var edges = Vector<LoanEdge>.create();
+    let references = referenceDefinitions(n, b)?;
     let blockCount = n.functions[b.function as usize].blocks.length;
     for (position in 0..blockCount) {
         let statementCount = n.functions[b.function as usize].blocks[position].statements.length;
@@ -617,6 +680,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     Loan {
                         isMutable: loanMutable,
                         hasPlace: true,
+                        outer: false,
                         place: place,
                         block: truncate<u32>(position),
                         index: truncate<u32>(i),
@@ -630,7 +694,13 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                 // reference lives.
                 if (holdsLoans(c, n, b, place.local) &&
                     (derefsReference(c, n, b, place) || c.types.isScoped(placeRefType(c, n, b, place)))) {
-                    addEdge(mut edges, place.local, t.local)?;
+                    let through = throughParameter(c, n, b, place);
+                    if (through != none() && beyondReference(c, n, b, place)) {
+                        // A borrow of what a reference stored in the parameter's referent points to.
+                        addDeepEdge(mut edges, place.local, t.local, through)?;
+                    } else {
+                        addEdge(mut edges, place.local, t.local)?;
+                    }
                 }
                 continue;
             }
@@ -641,8 +711,14 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                         let index = c.hir.functions[callee as usize].returnSources[k];
                         if (index < arguments.count) {
                             let argument = operandPlace(n, n.at(arguments, index));
-                            if (argument != none() && holdsLoans(c, n, b, n.places[argument as usize].local)) {
-                                addEdge(mut edges, n.places[argument as usize].local, t.local)?;
+                            if (argument == none()) {
+                                continue;
+                            }
+                            let local = n.places[argument as usize].local;
+                            if (containsU32(c.hir.functions[callee as usize].deepSources, index)) {
+                                deepSourceEdge(c, n, b, mut edges, references, local, t.local)?;
+                            } else if (holdsLoans(c, n, b, local)) {
+                                addEdge(mut edges, local, t.local)?;
                             }
                         }
                     }
@@ -675,7 +751,14 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                 let p = toPlaceRef(n, place);
                 if (holdsLoans(c, n, b, p.local) &&
                     (c.types.isScoped(n.operandTypes[o as usize]) || derefsReference(c, n, b, p))) {
-                    addEdge(mut edges, p.local, t.local)?;
+                    // A value read through a reference parameter carries what its referent holds, not the
+                    // parameter's own loan (ADR 0074 §2.4).
+                    let through = throughParameter(c, n, b, p);
+                    if (through != none()) {
+                        addDeepEdge(mut edges, p.local, t.local, through)?;
+                    } else {
+                        addEdge(mut edges, p.local, t.local)?;
+                    }
                 }
             }
         }
@@ -708,6 +791,77 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
         }
     }
     return Ok();
+}
+
+/// The place each local is defined to borrow (`t = &p` or `t = &mut p`, its only assignment), or none.
+fn referenceDefinitions(n: borrow NirProgram, b: borrow Borrows) -> Result<Vector<u32>, AllocError> {
+    var places = Vector<u32>.create();
+    var assigned = Vector<u32>.create();
+    for (k in 0..n.functions[b.function as usize].locals.length) {
+        places.push(none())?;
+        assigned.push(0)?;
+    }
+    for (block in n.functions[b.function as usize].blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, value) => {
+                    let local = n.places[target as usize].local;
+                    assigned[local as usize] += 1;
+                    if (n.places[target as usize].projections.count == 0) {
+                        match (n.rvalues[value as usize]) {
+                            NirRvalue.Ref(_, place) => { places[local as usize] = place; }
+                            _ => {}
+                        }
+                    }
+                }
+                NirStatement.Unpack(_, _, targets) => {
+                    for (k in 0..targets.count) {
+                        let payload = n.at(targets, k);
+                        if (payload != none()) {
+                            assigned[payload as usize] += 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    for (k in 0..places.length) {
+        if (assigned[k] != 1 || k < b.parameterCount as usize) {
+            places[k] = none();
+        }
+    }
+    return Ok(places);
+}
+
+/// A deep result's loans from its argument (ADR 0074 §2.4): what the argument refers to holds, not the argument's own
+/// loan. For `t = &p`, the loans of `p`'s local (less its outer placeholder, when `p` is reached through a reference
+/// parameter); for a reference parameter, its loans less its outer placeholder; otherwise all the argument's loans.
+fn deepSourceEdge(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    edges: borrow mut Vector<LoanEdge>,
+    references: borrow Vector<u32>,
+    argument: u32,
+    result: u32,
+) -> Result<void, AllocError> {
+    if (hasOuterPlaceholder(c, n, b, argument)) {
+        return addDeepEdge(edges, argument, result, argument);
+    }
+    let borrowed = references[argument as usize];
+    if (borrowed == none()) {
+        return if (holdsLoans(c, n, b, argument)) addEdge(edges, argument, result) else Ok();
+    }
+    let place = toPlaceRef(n, borrowed);
+    if (!holdsLoans(c, n, b, place.local)) {
+        return Ok();
+    }
+    let through = throughParameter(c, n, b, place);
+    if (through != none()) {
+        return addDeepEdge(edges, place.local, result, through);
+    }
+    return addEdge(edges, place.local, result);
 }
 
 /// The parameter index if the place starts with a deref of a reference parameter; none otherwise (DerefOfParameter).
@@ -1502,6 +1656,8 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
         var ids = copyU32s(b.pointsTo[n.places[place as usize].local as usize].view())?;
         sortU32(mut ids);
         var reportedLocal = false;
+        var reportedDeep = false;
+        var reportedParameters = Vector<u32>.create(); // a reference parameter has two placeholders
         for (id in ids.view()) {
             let loan = borrow b.loans[id as usize];
             if (loan.hasPlace && derefsReference(c, n, b, loan.place) && loan.place.local >= b.parameterCount) {
@@ -1531,7 +1687,40 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                     message,
                     notes,
                 )?;
-            } else if (!containsU32(c.hir.functions[source as usize].returnSources, parameter)) {
+            } else if (containsU32(
+                c.hir.functions[source as usize].deepSources,
+                parameter,
+            ) && (if (loan.hasPlace) !beyondReference(c, n, b, loan.place) else loan.outer)) {
+                // A deep result carries only what the parameter's referent holds (ADR 0074 §2.4); one report per
+                // return, at the borrow when there is one.
+                if (reportedDeep || (!loan.hasPlace && deepPlaceViolation(c, n, b, ids, parameter))) {
+                    continue;
+                }
+                reportedDeep = true;
+                var message = Vector<u8>.create();
+                appendText(mut message, "the returned reference may point into what parameter '")?;
+                appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                appendText(
+                    mut message,
+                    "' refers to, but the return type names only regions that its referent holds; name the parameter's own region instead (e.g. '-> Slice<u8>', elided)",
+                )?;
+                var notes = Vector<DiagnosticNote>.create();
+                if (loan.hasPlace) {
+                    var note = Vector<u8>.create();
+                    appendText(mut note, "borrowed here")?;
+                    notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+                }
+                c.front.diagnostics.errorWithNotes(
+                    returnSourceMismatch(),
+                    b.file,
+                    span.start,
+                    span.end,
+                    message,
+                    notes,
+                )?;
+            } else if (!containsU32(c.hir.functions[source as usize].returnSources, parameter) &&
+                !containsU32(reportedParameters, parameter)) {
+                reportedParameters.push(parameter)?;
                 var message = Vector<u8>.create();
                 appendText(mut message, "the returned reference may be derived from parameter '")?;
                 appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
@@ -1544,6 +1733,28 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
         }
     }
     return Ok();
+}
+
+/// Does a returned loan borrow a place in what parameter `parameter` refers to (ADR 0074 §2.4)?
+fn deepPlaceViolation(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    ids: borrow Vector<u32>,
+    parameter: u32,
+) -> bool {
+    for (id in ids.view()) {
+        let loan = borrow b.loans[id as usize];
+        if (loan.hasPlace && derefOfParameter(c, n, b, loan.place) == parameter && !beyondReference(
+            c,
+            n,
+            b,
+            loan.place,
+        )) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn copyU32s(values: Slice<u32>) -> Result<Vector<u32>, AllocError> {

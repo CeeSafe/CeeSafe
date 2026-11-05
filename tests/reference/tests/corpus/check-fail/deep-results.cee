@@ -1,0 +1,39 @@
+// Deep results (ADR 0074 §2.4): a result naming only the regions of a parameter's referent may not borrow the
+// referent's own storage, and stays tied to those regions.
+struct Buffer<region r> {
+    text: Slice<r, u8>;
+    buf: [u8; 4];
+    count: u32;
+
+    fn ownStorage(borrow mut this) -> Slice<r, u8> => this.buf[0..2]; // error[N0245]
+
+    fn counter(borrow this) -> borrow(r) u32 => borrow this.count; // error[N0245]
+
+    fn itself(borrow this) -> borrow(r) Buffer<r> => this; // error[N0245]
+
+    // Naming the receiver's own (elided) region is accepted.
+    fn ownElided(borrow this) -> Slice<u8> => this.buf[0..2];
+}
+
+struct Lexer<region r> {
+    text: Slice<r, u8>;
+    at: usize;
+
+    fn token(borrow mut this) -> Slice<r, u8> {
+        let start = this.at;
+        this.at += 1;
+        return this.text[start..this.at];
+    }
+}
+
+fn main() {
+    var tokens = Vector<Slice<u8>>.create();
+    {
+        var bytes = Vector<u8>.create();
+        bytes.push(1)!;
+        let view = bytes.view();
+        var lexer = Lexer { text: view, at: 0 };
+        tokens.push(lexer.token())!;
+    } // error[N0243]
+    Console.writeLine(tokens[0].length);
+}

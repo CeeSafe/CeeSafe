@@ -68,6 +68,26 @@ FloatSuffix = 'f32' | 'f64'
 - `"..."` on one line. Escapes: `\n \r \t \\ \" \' \0 \{ \} \u{H..H}` (1–6 hex digits,
   a Unicode scalar value). `\{` and `\}` are the braces themselves; `\{` marks braces that are meant as text, so
   that N0400 does not warn (ADR 0073 §2.4). Other escapes are N0006. A newline or EOF before the closing quote is N0005.
+- `"""` begins a raw literal, which may span lines (ADR 0074 §2.6):
+
+  ```ceesafe
+  let query = """
+      SELECT id, name
+      FROM users
+      """;
+  ```
+
+  - The opening `"""` ends its line: anything but spaces and tabs after it is N0011.
+  - The content is the lines that follow, up to the first line holding only spaces or tabs and then `"""`. That
+    closing line's `"""` ends the literal; tokens may follow it on the line. A content line may hold `"""` among
+    other text.
+  - The closing line's indentation is removed from every content line. A content line that is not blank and does not
+    start with that indentation is N0011. A blank line (only spaces and tabs) is empty.
+  - Content lines are joined by `\n`, also in a CRLF file. There is no final newline: the value above is
+    `SELECT id, name\nFROM users`.
+  - There are no escapes: `\` is a backslash, and `{` is a brace (N0400 does not apply).
+  - EOF before the closing line is N0005.
+  - The token is a string literal, the same as `"..."` after the lexer.
 - `'c'`: exactly one Unicode scalar value or one escape. Otherwise N0007. Its value is the scalar value, as an
   integer literal (`type-system.md` §4, M11); it may also be a pattern.
 
@@ -110,6 +130,7 @@ TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-syste
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'   (* M6b; §21 *)
 MethodSig  = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'   (* attributes: M13 G2, `@effects`; §37.3 *)
 ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* M6b; §21; attributes C7a *)
+           | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
            | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
 MemberCall = Expr '.' Identifier ('<' Type (',' Type)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
 TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
@@ -129,6 +150,7 @@ Param        = Identifier ':' Type
 
 StructDecl   = 'struct' Identifier TypeParams? '{' Member* '}'          (* M2a; TypeParams M6a *)
 Member       = Visibility? FieldDecl | Attribute* Visibility? FunctionDecl | DropBlock   (* method attributes: C7a, type-system.md §32 *)
+             | Visibility? ConstDecl                                (* ADR 0074 §2.7: an associated constant, type-system.md §10 *)
 DropBlock    = 'drop' Block                (* M2c *)
 FieldDecl    = Identifier ':' Type ';'
 FunctionBody = Block | '=>' Expr ';'

@@ -1,0 +1,35 @@
+// The formatter and raw `"""` literals (formatting.md, ADR 0074 §2.6): the content lines and the closing line move
+// with the opening line's indentation and are never reflowed; trailing spaces in them are kept.
+struct Q {
+  const A: StringView = """
+      SELECT 1   
+        FROM t
+
+      """;
+}
+
+fn main() {
+        let q = """
+            a
+              b
+            """;
+   Console.writeLine(q);
+                    Console.writeLine("""
+  flush
+  """);
+    let long = """
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        """;
+    Console.writeLine(long);
+}
+
+fn two(a: StringView, b: i32) -> i32 => b;
+
+fn calls() -> i32 {
+    // A literal that starts on another literal's closing line moves with that line.
+    return two("""
+        text
+        """, 2) + two("""
+            more
+            """, 3);
+}

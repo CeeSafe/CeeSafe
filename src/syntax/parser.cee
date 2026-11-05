@@ -846,6 +846,7 @@ struct Parser {
             return this.addStruct(visibility, name, start, Struct {
                 fields: emptyRange(),
                 functions: emptyRange(),
+                constants: emptyRange(),
                 dropBlock: none(),
                 dropStart: 0,
                 hasDropDoc: false,
@@ -859,6 +860,7 @@ struct Parser {
         }
         var fields = Vector<u32>.create();
         var functions = Vector<u32>.create();
+        var constants = Vector<u32>.create();
         var dropBlock = none();
         var dropStartAt: u32 = 0;
         var dropDoc = noDoc();
@@ -867,6 +869,7 @@ struct Parser {
             return this.addStruct(visibility, name, start, Struct {
                 fields: emptyRange(),
                 functions: emptyRange(),
+                constants: emptyRange(),
                 dropBlock: none(),
                 dropStart: 0,
                 hasDropDoc: false,
@@ -887,6 +890,7 @@ struct Parser {
             return this.addStruct(visibility, name, start, Struct {
                 fields: fieldRange,
                 functions: emptyRange(),
+                constants: emptyRange(),
                 dropBlock: none(),
                 dropStart: 0,
                 hasDropDoc: false,
@@ -936,6 +940,8 @@ struct Parser {
                     dropStartAt = dropStart;
                     dropDoc = docOr(memberDoc, this.docAt(startPos)?);
                 }
+            } else if (this.at(TokenKind.ConstKeyword) && !imported) {
+                constants.push(this.parseConst(memberVisibility, memberStart)?)?; // ADR 0074 §2.7
             } else if (this.atFunction()) {
                 let f = this.parseFunction(memberVisibility, memberStart)?;
                 let function = borrow mut this.front.ast.functions[f as usize];
@@ -967,7 +973,7 @@ struct Parser {
                 })?;
                 fields.push(truncate<u32>(this.front.ast.fields.length - 1))?;
             } else {
-                this.errorFound(expectedMember(), "expected a field or 'fn' in struct, found ", "")?;
+                this.errorFound(expectedMember(), "expected a field, 'fn' or 'const' in struct, found ", "")?;
                 this.advance();
             }
             this.synchronizeMember();
@@ -979,9 +985,11 @@ struct Parser {
         let split = this.splitTypeParameters(typeParameters)?;
         let fieldRange = this.list(fields)?;
         let functionRange = this.list(functions)?;
+        let constantRange = this.list(constants)?;
         return this.addStruct(visibility, name, start, Struct {
             fields: fieldRange,
             functions: functionRange,
+            constants: constantRange,
             dropBlock: dropBlock,
             dropStart: dropStartAt,
             hasDropDoc: dropDoc.found,
@@ -1052,13 +1060,20 @@ struct Parser {
         }
         let forType = if (inherent) interfaceType else this.parseType()?;
         var functions = Vector<u32>.create();
+        var constants = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
-        while (this.atFunction() || this.at(TokenKind.PublicKeyword) || this.at(TokenKind.At)) {
+        while (this.atFunction() || this.at(TokenKind.PublicKeyword) || this.at(TokenKind.At) ||
+            (inherent && (this.at(TokenKind.ConstKeyword) ||
+                (isVisibilityKeyword(this.current().kind) && this.peekIs(1, TokenKind.ConstKeyword))))) {
             let functionStart = this.current().start;
             let docPos = this.pos;
             let doc = this.docAt(docPos)?;            // before the attributes, if any (grammar.md §1.2)
             let attributes = this.parseAttributes()?; // @effects, @context (type-system.md §32)
             let functionVisibility = this.parseVisibility();
+            if (inherent && attributes.count == 0 && this.at(TokenKind.ConstKeyword)) {
+                constants.push(this.parseConst(functionVisibility, functionStart)?)?; // ADR 0074 §2.7
+                continue;
+            }
             let f = this.parseFunction(functionVisibility, functionStart)?;
             let function = borrow mut this.front.ast.functions[f as usize];
             function.attributes = attributes;
@@ -1084,7 +1099,7 @@ struct Parser {
         let functionRange = this.list(functions)?;
         if (inherent) {
             return this.addItem(
-                ItemKind.InherentImpl(forType, functionRange, split.types, split.regions),
+                ItemKind.InherentImpl(forType, functionRange, split.types, split.regions, this.list(constants)?),
                 visibility,
                 name,
                 start,

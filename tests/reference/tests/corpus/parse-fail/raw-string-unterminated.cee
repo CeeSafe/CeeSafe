@@ -1,0 +1,6 @@
+// N0005 (grammar.md §1.6, ADR 0074 §2.6): a raw literal that no line holding only `"""` closes runs to the end of the
+// file, where the statement and the block are unfinished. A line with other text before `"""` does not close it.
+fn f() {
+    let a = /* // error[N0005]@38 */ """
+        text
+        not a close: """ // error[N0100] // error[N0100]

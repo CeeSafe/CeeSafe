@@ -120,6 +120,8 @@ struct Lexer {
                 this.lexIdentifier(text, start, symbols)?;
             } else if (isDecimalDigit(c)) {
                 this.lexNumber(text, start, diagnostics)?;
+            } else if (c == '"' && this.ch(text, 1) == '"' && this.ch(text, 2) == '"') {
+                this.lexRawString(text, start, diagnostics)?;
             } else if (c == '"') {
                 this.lexString(text, start, diagnostics)?;
             } else if (c == '\'') {
@@ -431,6 +433,103 @@ struct Lexer {
                     appendUtf8(mut value, 0xFFFD)?;
                 }
                 this.pos += d.length as usize;
+            }
+        }
+        this.out.strings.push(value)?;
+        return this.add(TokenKind.StringLiteral, start, truncate<u32>(this.out.strings.length - 1));
+    }
+
+    /// A raw literal (grammar.md §1.6, ADR 0074 §2.6): `"""` ends its line; the content is the lines up to one holding
+    /// only whitespace and `"""`, whose indentation is removed from each; blank lines are empty, lines are joined by
+    /// "\n" (also in a CRLF file), there is no final newline and no escape.
+    fn lexRawString(
+        borrow mut this,
+        text: Slice<u8>,
+        start: usize,
+        diagnostics: borrow mut Diagnostics,
+    ) -> Result<void, AllocError> {
+        var p = start + 3;
+        while (p < text.length && (text[p] == ' ' || text[p] == '\t')) {
+            p += 1;
+        }
+        if (p < text.length && text[p] != '\n' && text[p] != '\r') {
+            var end = p;
+            while (end < text.length && text[end] != '\n' && text[end] != '\r') {
+                end += 1;
+            }
+            var message = Vector<u8>.create();
+            appendText(mut message, "a raw string literal's opening '\"\"\"' must end its line")?;
+            this.error(diagnostics, rawStringLayout(), p, end, message)?;
+            p = end;
+        }
+        if (p < text.length && text[p] == '\r') {
+            p += 1;
+        }
+        if (p < text.length && text[p] == '\n') {
+            p += 1;
+        }
+        var lines = Vector<Span>.create(); // each content line, without its line end
+        var indentStart: usize = 0;
+        var indentEnd: usize = 0;
+        var closed = false;
+        while (!closed && p < text.length) {
+            let lineStart = p;
+            var lineEnd = p;
+            while (lineEnd < text.length && text[lineEnd] != '\n') {
+                lineEnd += 1;
+            }
+            let contentEnd = if (lineEnd > lineStart && text[lineEnd - 1] == '\r') lineEnd - 1 else lineEnd;
+            var ws = lineStart;
+            while (ws < contentEnd && (text[ws] == ' ' || text[ws] == '\t')) {
+                ws += 1;
+            }
+            if (ws + 3 <= contentEnd && text[ws] == '"' && text[ws + 1] == '"' && text[ws + 2] == '"') {
+                indentStart = lineStart;
+                indentEnd = ws;
+                p = ws + 3;
+                closed = true;
+            } else {
+                lines.push(Span { start: truncate<u32>(lineStart), end: truncate<u32>(contentEnd) })?;
+                p = if (lineEnd < text.length) lineEnd + 1 else lineEnd;
+            }
+        }
+        this.pos = p;
+        var value = Vector<u8>.create();
+        if (!closed) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "unterminated raw string literal: no line holding only '\"\"\"' closes it")?;
+            this.error(diagnostics, unterminatedString(), start, this.pos, message)?;
+        } else {
+            var reported = false;
+            let indent = text[indentStart..indentEnd];
+            for (k in 0..lines.length) {
+                if (k > 0) {
+                    value.push('\n')?;
+                }
+                let lineStart = lines[k].start as usize;
+                let lineEnd = lines[k].end as usize;
+                var ws = lineStart;
+                while (ws < lineEnd && (text[ws] == ' ' || text[ws] == '\t')) {
+                    ws += 1;
+                }
+                if (ws == lineEnd) {
+                    continue; // a blank line is empty
+                }
+                let line = text[lineStart..lineEnd];
+                if (line.length >= indent.length && sameBytes(line[..indent.length], indent)) {
+                    appendDecoded(mut value, line[indent.length..])?;
+                } else {
+                    if (!reported) {
+                        var message = Vector<u8>.create();
+                        appendText(
+                            mut message,
+                            "this line of a raw string literal is indented less than its closing '\"\"\"'",
+                        )?;
+                        this.error(diagnostics, rawStringLayout(), lineStart, lineEnd, message)?;
+                        reported = true;
+                    }
+                    appendDecoded(mut value, text[ws..lineEnd])?;
+                }
             }
         }
         this.out.strings.push(value)?;

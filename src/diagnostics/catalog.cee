@@ -13,6 +13,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     8 => "Invalid digit for the radix, or no digits after a radix prefix",
     9 => "Unknown literal suffix",
     10 => "Misplaced digit separator `_` (must sit between two digits)",
+    11 =>
+        "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 => "Expected a specific token",
     101 => "Expected an item (`fn` or `const`) at the top level",
     102 => "Expected an expression",
@@ -57,7 +59,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     225 => "Expression statement that is not a call",
     226 => "`void` used other than as a return type",
     227 => "Struct contains itself by value (infinite size); reported at the field that closes the cycle",
-    228 => "Duplicate member (field or function) in a struct",
+    228 =>
+        "Duplicate member (field or function) in a struct, or an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7)",
     229 => "Struct literal does not initialise every field",
     230 => "Unknown field (in a literal or an access), or a function named where a field was expected",
     231 => "Field initialised twice in a literal",
@@ -150,7 +153,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     313 => "A simple name is provided by two imports",
     314 => "A public item's signature names a type that other packages cannot see",
     315 =>
-        "An item, parameter, local, loop variable or pattern binding has the name of one of the package's dependencies",
+        "An item or a type parameter has the name of one of the package's dependencies (a local, parameter, loop variable or binding may, ADR 0074 §2.10)",
     320 => "`ceesafe.toml` or `ceesafe.lock` is not valid in the TOML subset",
     321 => "A manifest field is missing, unknown or invalid, or a dependency is an executable",
     322 => "A path dependency's directory or manifest is missing, or its name differs from its key",
@@ -199,5 +202,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     400 =>
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
+    401 =>
+        "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
     _ => "",
 };

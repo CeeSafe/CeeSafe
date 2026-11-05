@@ -193,6 +193,7 @@ fn checkProgram(
         packageDeclared: Map<Word, Word>.create(),
         declaredOrder: Vector<DeclaredEntry>.create(),
         methodFiles: Vector<MethodFile>.create(),
+        memberConstants: Vector<MemberConstant>.create(),
         fileImports: Vector<FileImport>.create(),
     };
     // The constructor: the builtins' names, `this`, and a scratch frame's two parts.
@@ -211,6 +212,7 @@ fn checkProgram(
     declareFrameFields(mut c)?;
     declareBuiltinItems(mut c)?;
     checkQualifiedNames(mut c)?;
+    collectStructConstants(mut c)?; // ADR 0074 §2.7
     mergeInherentImpls(mut c)?;
 
     // Interfaces, then structs and enums, then every other item, unit by unit (Check()).
@@ -264,11 +266,12 @@ fn checkProgram(
                 ItemKind.Interface(_, _) => {}
                 ItemKind.Struct(_) => {}
                 ItemKind.Enum(_, _, _) => {}
-                ItemKind.InherentImpl(_, _, _, _) => {} // merged into its struct (MergeInherentImpls)
+                ItemKind.InherentImpl(_, _, _, _, _) => {} // merged into its struct (MergeInherentImpls)
                 _ => { declare(mut c, item)?; }
             }
         }
     }
+    declareMemberConstants(mut c)?; // ADR 0074 §2.7
 
     processFunctionAttributes(mut c)?;
     processImpls(mut c)?;
@@ -320,7 +323,8 @@ fn checkProgram(
         f += 1;
     }
     checkMain(mut c)?;
-    warnStringBraces(mut c)?; // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
+    warnStringBraces(mut c)?;    // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
+    warnShadowedMembers(mut c)?; // ADR 0074 §2.10
     foldStatics(mut c)?;
     finishFunctionFacts(mut c)?;
     finishAtomicStructs(mut c);
@@ -448,51 +452,58 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
             ownItem(c, id.symbol, Entity.Function(function))?;
         }
         ItemKind.Const(typ, _) => {
-            var t = c.resolveType(typ, false)?;
-            let span = c.front.ast.typeSpans[typ as usize];
-            if (c.types.is(t, TypeKind.Struct) || (c.types.is(t, TypeKind.Array) && !constElementOk(c, t))) {
-                var message = Vector<u8>.create();
-                appendText(
-                    mut message,
-                    if (c.types.is(
-                        t,
-                        TypeKind.Array,
-                    )) "constant arrays hold integers or bools (type-system.md §10)" else "constants of struct type are not supported yet",
-                )?;
-                c.error(unsupported(), span.start, span.end, message)?;
-                t = c.types.error;
-            } else if (c.types.isScoped(t) && !isConstantView(c, t)) {
-                var message = Vector<u8>.create();
-                appendText(
-                    mut message,
-                    "constants cannot be references; a string view, or an array of them, can (ADR 0064 §2)",
-                )?;
-                c.error(referenceNotAllowed(), span.start, span.end, message)?;
-                t = c.types.error;
-            }
-            c.hir.constants.push(HirConstant {
-                name: qualifiedSymbol(c, id.symbol)?,
-                typ: t,
-                file: c.file,
-                start: entry.start,
-                end: entry.end,
-                value: none(),
-                exported: false,
-                exportName: emptyRange(),
-            })?;
-            c.constants.push(ConstEntry {
-                item: item,
-                file: c.file,
-                hir: truncate<u32>(c.hir.constants.length - 1),
-                state: 0,
-            })?;
-            let constant = truncate<u32>(c.constants.length - 1);
+            let constant = declareConstantEntry(c, item, typ, id.symbol)?;
             ownItem(c, id.symbol, Entity.Constant(constant))?;
         }
         ItemKind.Static(mutable, typ, _) => { declareStatic(c, item, mutable, typ)?; }
         _ => {}
     }
     return Ok();
+}
+
+/// A constant of the constant table for `const` item `item` of type syntax `typ`, named `symbol` (a top-level name, or
+/// `Type.NAME` for an associated constant, ADR 0074 §2.7): its index in Checker.constants.
+fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32) -> Result<u32, AllocError> {
+    let entry = c.front.ast.items[item as usize];
+    var t = c.resolveType(typ, false)?;
+    let span = c.front.ast.typeSpans[typ as usize];
+    if (c.types.is(t, TypeKind.Struct) || (c.types.is(t, TypeKind.Array) && !constElementOk(c, t))) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            if (c.types.is(
+                t,
+                TypeKind.Array,
+            )) "constant arrays hold integers or bools (type-system.md §10)" else "constants of struct type are not supported yet",
+        )?;
+        c.error(unsupported(), span.start, span.end, message)?;
+        t = c.types.error;
+    } else if (c.types.isScoped(t) && !isConstantView(c, t)) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "constants cannot be references; a string view, or an array of them, can (ADR 0064 §2)",
+        )?;
+        c.error(referenceNotAllowed(), span.start, span.end, message)?;
+        t = c.types.error;
+    }
+    c.hir.constants.push(HirConstant {
+        name: qualifiedSymbol(c, symbol)?,
+        typ: t,
+        file: c.file,
+        start: entry.start,
+        end: entry.end,
+        value: none(),
+        exported: false,
+        exportName: emptyRange(),
+    })?;
+    c.constants.push(ConstEntry {
+        item: item,
+        file: c.file,
+        hir: truncate<u32>(c.hir.constants.length - 1),
+        state: 0,
+    })?;
+    return Ok(truncate<u32>(c.constants.length - 1));
 }
 
 fn constElementOk(c: borrow Checker, t: u32) -> bool {

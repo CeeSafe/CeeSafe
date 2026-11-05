@@ -1,0 +1,16 @@
+// A dependency whose name the app also gives to locals (ADR 0074 §2.10), with associated constants (§2.7).
+public struct TlsConfig {
+    public port: u32;
+    public const DEFAULT_PORT: u32 = 465;
+    const SECRET: u32 = 7;
+}
+
+public enum Version { Tls12, Tls13 }
+
+impl Version {
+    public const COUNT: u32 = 2;
+}
+
+public fn port(config: TlsConfig) -> u32 => config.port;
+
+public fn secret() -> u32 => TlsConfig.SECRET;

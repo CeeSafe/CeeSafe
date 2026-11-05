@@ -31,6 +31,10 @@ status is 1. A directory argument means every `.cee` file under it.
   the source has one or more, and not added if it has none.
 - **Line width:** 120 columns, counting the code and not a trailing comment. A line longer than that is broken by §3.4
   where it can be. A line that cannot be broken (a long string literal, a long name) stays long.
+- **Raw literals** (`grammar.md` §1.6, ADR 0074 §2.6): the content lines and the closing line of a `"""` literal move
+  with the line its opening `"""` ends, by the change in that line's indentation, and are never reflowed or trimmed:
+  their trailing spaces are part of the value. Fewer columns are removed than the change when the closing line's
+  indentation is narrower, since removing more would change the value. Their width does not count.
 
 ## 3. Line breaks
 
@@ -136,7 +140,10 @@ The author's breaks of the same kinds (§3.1) are laid out by the same rules.
 - **Same tree:** for every file of the repository that parses (the corpus included), the formatted text parses
   without error to an AST equal to the original's, spans aside.
 - **Comments:** the comments of the formatted text are those of the original, in order.
-- **Fixed point:** formatting the formatted text changes nothing.
+- **Same tokens:** apart from commas, the tokens are the original's; a raw literal is compared by its value, which its
+  re-indentation keeps.
+- **Fixed point:** formatting the formatted text changes nothing. `tools/fmt_snapshots.py` checks the reviewed
+  snapshots in `tests/formatting/` (`NAME.cee` formats to `NAME.formatted.cee`, which formats to itself).
 - **The repository's own code** (`lib/`, `programs/`, `benchmarks/`, `integrations/`, the README's examples) is kept
   formatted: `ceesafec fmt --check` runs over it in the test suite. The test corpus is not reformatted, since its
   annotations name lines and some files test unusual layout; it is the formatter's test input.

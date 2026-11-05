@@ -1,0 +1,343 @@
+// A local may shadow a dependency (ADR 0074 §2.10, type-system.md §2): a parameter, local, loop variable, closure
+// parameter or pattern binding may have a dependency's name, and in its scope `name.x` in an expression is the local's
+// member, not the dependency's item. PackageNames joins `dep.X` syntactically, before anything is checked, so this is
+// a syntactic scope walk over one file's items, as N0400's (src/check/string_braces.cee): parameters from the start of
+// the body, `let`, `var` and `using` locals from their statement on, `for` variables, closure parameters and match
+// bindings in their bodies. Types and patterns are never shadowed: a local is not a type.
+
+fn n0401() -> u32 => 401;
+
+/// The dependency names bound by locals at the current point, innermost last, and the member expressions found
+/// with such a local as their target.
+struct ShadowScope {
+    names: Vector<u32>; // symbol ids
+    found: Vector<u32>; // Ast.exprs: `local.x` members
+}
+
+/// The `name.x` expressions of a unit whose `name` is a local with a dependency's name, in `out`.
+fn shadowedMembers(
+    front: borrow Frontend,
+    unit: u32,
+    dependencies: borrow Vector<Vector<u8>>,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
+    var scope = ShadowScope { names: Vector<u32>.create(), found: Vector<u32>.create() };
+    let items = front.ast.units[unit as usize].items;
+    for (k in 0..items.count) {
+        let item = front.ast.items[front.ast.at(items, k) as usize];
+        match (item.kind) {
+            ItemKind.Function(f) => { shadowFunction(front, dependencies, mut scope, f)?; }
+            ItemKind.Struct(s) => {
+                let st = front.ast.structs[s as usize];
+                shadowFunctions(front, dependencies, mut scope, st.functions)?;
+                shadowStmt(front, dependencies, mut scope, st.dropBlock)?;
+            }
+            ItemKind.Interface(functions, _) => { shadowFunctions(front, dependencies, mut scope, functions)?; }
+            ItemKind.Impl(_, _, functions, _, _) => { shadowFunctions(front, dependencies, mut scope, functions)?; }
+            ItemKind.InherentImpl(_, functions, _, _, _) => {
+                shadowFunctions(front, dependencies, mut scope, functions)?;
+            }
+            _ => {}
+        }
+    }
+    for (e in scope.found.view()) {
+        out.push(e)?;
+    }
+    return Ok();
+}
+
+/// Binds `ident` if it has a dependency's name.
+fn shadowBind(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    ident: u32,
+) -> Result<void, AllocError> {
+    if (ident == none()) {
+        return Ok();
+    }
+    let symbol = front.ast.idents[ident as usize].symbol;
+    if (isDependencyName(front, dependencies, symbol)) {
+        scope.names.push(symbol)?;
+    }
+    return Ok();
+}
+
+fn shadowFunctions(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    functions: Range,
+) -> Result<void, AllocError> {
+    for (k in 0..functions.count) {
+        shadowFunction(front, dependencies, scope, front.ast.at(functions, k))?;
+    }
+    return Ok();
+}
+
+fn shadowFunction(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    f: u32,
+) -> Result<void, AllocError> {
+    let function = front.ast.functions[f as usize];
+    let mark = scope.names.length;
+    for (k in 0..function.parameters.count) {
+        let p = front.ast.parameters[front.ast.at(function.parameters, k) as usize];
+        shadowBind(front, dependencies, scope, p.name)?;
+    }
+    shadowStmt(front, dependencies, scope, function.body)?;
+    shadowExpr(front, dependencies, scope, function.expressionBody)?;
+    scope.names.truncate(mark);
+    return Ok();
+}
+
+fn shadowStmt(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    s: u32,
+) -> Result<void, AllocError> {
+    if (s == none()) {
+        return Ok();
+    }
+    match (front.ast.stmts[s as usize]) {
+        StmtNode.Block(statements) => {
+            let mark = scope.names.length;
+            for (k in 0..statements.count) {
+                shadowStmt(front, dependencies, scope, front.ast.at(statements, k))?;
+            }
+            scope.names.truncate(mark);
+        }
+        StmtNode.Local(_, name, _, initializer) => {
+            shadowExpr(front, dependencies, scope, initializer)?;
+            shadowBind(front, dependencies, scope, name)?;
+        }
+        StmtNode.Defer(body) => { shadowStmt(front, dependencies, scope, body)?; }
+        StmtNode.Match(scrutinee, arms) => {
+            shadowExpr(front, dependencies, scope, scrutinee)?;
+            for (k in 0..arms.count) {
+                let arm = front.ast.matchArms[front.ast.at(arms, k) as usize];
+                let mark = scope.names.length;
+                shadowPattern(front, dependencies, scope, arm.pattern)?;
+                shadowStmt(front, dependencies, scope, arm.body)?;
+                scope.names.truncate(mark);
+            }
+        }
+        StmtNode.If(condition, then, otherwise) => {
+            shadowExpr(front, dependencies, scope, condition)?;
+            shadowStmt(front, dependencies, scope, then)?;
+            shadowStmt(front, dependencies, scope, otherwise)?;
+        }
+        StmtNode.While(condition, body) => {
+            shadowExpr(front, dependencies, scope, condition)?;
+            shadowStmt(front, dependencies, scope, body)?;
+        }
+        StmtNode.For(variable, start, end, body) => {
+            shadowExpr(front, dependencies, scope, start)?;
+            shadowExpr(front, dependencies, scope, end)?;
+            let mark = scope.names.length;
+            shadowBind(front, dependencies, scope, variable)?;
+            shadowStmt(front, dependencies, scope, body)?;
+            scope.names.truncate(mark);
+        }
+        StmtNode.Loop(body) => { shadowStmt(front, dependencies, scope, body)?; }
+        StmtNode.Return(value) => { shadowExpr(front, dependencies, scope, value)?; }
+        StmtNode.Assign(target, _, value) => {
+            shadowExpr(front, dependencies, scope, target)?;
+            shadowExpr(front, dependencies, scope, value)?;
+        }
+        StmtNode.Expression(e) => { shadowExpr(front, dependencies, scope, e)?; }
+        StmtNode.Value(e) => { shadowExpr(front, dependencies, scope, e)?; }
+        StmtNode.Unsafe(body) => { shadowStmt(front, dependencies, scope, body)?; }
+        StmtNode.Break => {}
+        StmtNode.Continue => {}
+    }
+    return Ok();
+}
+
+/// Binds a pattern's names (a variant's bindings, nested ones included).
+fn shadowPattern(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    p: u32,
+) -> Result<void, AllocError> {
+    if (p == none()) {
+        return Ok();
+    }
+    match (front.ast.patterns[p as usize]) {
+        PatternNode.Variant(_, _, bindings) => {
+            for (k in 0..bindings.count) {
+                let b = front.ast.bindings[front.ast.at(bindings, k) as usize];
+                shadowBind(front, dependencies, scope, b.name)?;
+                shadowPattern(front, dependencies, scope, b.nested)?;
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
+fn shadowExprs(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    list: Range,
+) -> Result<void, AllocError> {
+    for (k in 0..list.count) {
+        shadowExpr(front, dependencies, scope, front.ast.at(list, k))?;
+    }
+    return Ok();
+}
+
+fn shadowExpr(
+    front: borrow Frontend,
+    dependencies: borrow Vector<Vector<u8>>,
+    scope: borrow mut ShadowScope,
+    e: u32,
+) -> Result<void, AllocError> {
+    if (e == none()) {
+        return Ok();
+    }
+    match (front.ast.exprs[e as usize]) {
+        ExprNode.Member(target, _) => {
+            match (front.ast.exprs[target as usize]) {
+                ExprNode.Name(name, typeArguments) => {
+                    if (typeArguments.count == 0 && shadowBound(scope, front.ast.idents[name as usize].symbol)) {
+                        scope.found.push(e)?;
+                    }
+                }
+                _ => { shadowExpr(front, dependencies, scope, target)?; }
+            }
+        }
+        ExprNode.Paren(inner) => { shadowExpr(front, dependencies, scope, inner)?; }
+        ExprNode.Unary(_, operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Binary(left, _, right) => {
+            shadowExpr(front, dependencies, scope, left)?;
+            shadowExpr(front, dependencies, scope, right)?;
+        }
+        ExprNode.Cast(operand, _) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Call(callee, arguments) => {
+            shadowExpr(front, dependencies, scope, callee)?;
+            shadowExprs(front, dependencies, scope, arguments)?;
+        }
+        ExprNode.Unsafe(inner) => { shadowExpr(front, dependencies, scope, inner)?; }
+        ExprNode.If(condition, then, otherwise) => {
+            shadowExpr(front, dependencies, scope, condition)?;
+            shadowExpr(front, dependencies, scope, then)?;
+            shadowExpr(front, dependencies, scope, otherwise)?;
+        }
+        ExprNode.Match(scrutinee, arms) => {
+            shadowExpr(front, dependencies, scope, scrutinee)?;
+            for (k in 0..arms.count) {
+                let arm = front.ast.valueArms[front.ast.at(arms, k) as usize];
+                let mark = scope.names.length;
+                shadowPattern(front, dependencies, scope, arm.pattern)?;
+                shadowExpr(front, dependencies, scope, arm.value)?;
+                scope.names.truncate(mark);
+            }
+        }
+        ExprNode.Closure(index) => {
+            let closure = front.ast.closures[index as usize];
+            let mark = scope.names.length;
+            for (k in 0..closure.parameters.count) {
+                let p = front.ast.closureParameters[front.ast.at(closure.parameters, k) as usize];
+                shadowBind(front, dependencies, scope, p.name)?;
+            }
+            shadowStmt(front, dependencies, scope, closure.block)?;
+            shadowExpr(front, dependencies, scope, closure.body)?;
+            scope.names.truncate(mark);
+        }
+        ExprNode.Block(statement) => { shadowStmt(front, dependencies, scope, statement)?; }
+        ExprNode.Borrow(_, operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Move(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.MutArg(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.StructLiteral(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let init = front.ast.fieldInits[front.ast.at(fields, k) as usize];
+                shadowExpr(front, dependencies, scope, init.value)?;
+            }
+        }
+        ExprNode.ArrayLiteral(elements) => { shadowExprs(front, dependencies, scope, elements)?; }
+        ExprNode.ArrayRepeat(value, count) => {
+            shadowExpr(front, dependencies, scope, value)?;
+            shadowExpr(front, dependencies, scope, count)?;
+        }
+        ExprNode.Index(target, index) => {
+            shadowExpr(front, dependencies, scope, target)?;
+            shadowExpr(front, dependencies, scope, index)?;
+        }
+        ExprNode.Slice(target, low, high) => {
+            shadowExpr(front, dependencies, scope, target)?;
+            shadowExpr(front, dependencies, scope, low)?;
+            shadowExpr(front, dependencies, scope, high)?;
+        }
+        ExprNode.Try(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Unwrap(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Await(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        _ => {}
+    }
+    return Ok();
+}
+
+fn shadowBound(scope: borrow ShadowScope, symbol: u32) -> bool {
+    for (n in scope.names.view()) {
+        if (n == symbol) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// N0401 (ADR 0074 §2.10): `name.X`, where the local `name` shadows a dependency that has a public item `X`. The
+/// dependency's item is not reachable there; the warning says so. Run once after checking, for the root package's files.
+fn warnShadowedMembers(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.front.ast.shadowed.length) {
+        let s = c.front.ast.shadowed[k];
+        if (!isBraceRootFile(c, s.file)) {
+            continue;
+        }
+        var name = none();
+        var member = none();
+        match (c.front.ast.exprs[s.expr as usize]) {
+            ExprNode.Member(target, m) => {
+                match (c.front.ast.exprs[target as usize]) {
+                    ExprNode.Name(n, _) => {
+                        name = n;
+                        member = m;
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        if (name == none()) {
+            continue;
+        }
+        var packageName = Vector<u8>.create();
+        appendBytes(mut packageName, c.name(c.front.ast.idents[name as usize].symbol))?;
+        let dependency = dependencyNamed(c, packageOfFile(c, s.file), packageName.view());
+        let memberSymbol = c.front.ast.idents[member as usize].symbol;
+        if (dependency == none() || declaredIn(c, dependency, memberSymbol) != 2) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, packageName.view())?;
+        appendText(mut message, "' is a local here, so this is its member '")?;
+        appendBytes(mut message, c.name(memberSymbol))?;
+        appendText(mut message, "', not the item '")?;
+        appendBytes(mut message, packageName.view())?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(memberSymbol))?;
+        appendText(mut message, "' of the dependency, which the local hides: rename the local to reach the item")?;
+        let span = c.front.ast.exprSpans[s.expr as usize];
+        c.setFile(s.file);
+        c.front.diagnostics.warning(n0401(), s.file, span.start, span.end, message)?;
+    }
+    c.setFile(saved);
+    return Ok();
+}

@@ -1,0 +1,19 @@
+// A raw literal in a CRLF file (grammar.md §1.6, ADR 0074 §2.6): its lines are joined by "\n", not "\r\n".
+fn main() {
+    let s = """
+        a
+
+          b
+        """;
+    Console.writeLine(s.length);
+    for (i in 0..s.length) {
+        if (s.bytes()[i] == 13) {
+            Console.writeLine("CR");
+        }
+    }
+    Console.writeLine(s);
+}
+// expect-stdout: 6
+// expect-stdout: a
+// expect-stdout:
+// expect-stdout:   b

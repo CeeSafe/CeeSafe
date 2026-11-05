@@ -1,0 +1,37 @@
+// A parameter, a local, a loop variable, a closure parameter and a binding named like the dependency `tls`
+// (ADR 0074 §2.10); in a type, `tls.TlsConfig` still names the package's struct.
+struct Session {
+    port: u32;
+    open: bool;
+}
+
+fn describe(tls: tls.TlsConfig) -> u32 {
+    return tls.port + 1; // warning[N0401]: `port` is also a public function of the package
+}
+
+fn session(tls: Session) -> bool => tls.open;
+
+fn main() {
+    let config = tls.TlsConfig { port: tls.TlsConfig.DEFAULT_PORT };
+    Console.writeLine(describe(config));
+    Console.writeLine(tls.port(tls.TlsConfig { port: 993 }));
+    Console.writeLine(tls.Version.COUNT);
+    Console.writeLine(tls.secret());
+    {
+        let tls = Session { port: 25, open: true };
+        Console.writeLine(session(tls));
+    }
+    Console.writeLine(tls.TlsConfig.DEFAULT_PORT);
+    for (tls in 0..2) {
+        Console.writeLine(tls);
+    }
+    let check = (tls: u32) => tls + 1;
+    Console.writeLine(check(4));
+    let found: tls.TlsConfig? = tls.TlsConfig { port: 587 };
+    match (found) {
+        Some(tls) => {
+            Console.writeLine(tls.port); // warning[N0401]
+        }
+        null => {}
+    }
+}

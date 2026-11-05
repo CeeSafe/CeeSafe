@@ -521,12 +521,12 @@ fn declaredName(
 /// One declaration of a dependency's name, for N0315 in source order.
 struct DeclaredName {
     ident: u32;
-    what: u32; // 0 item, 1 type parameter, 2 parameter, 3 local, 4 loop variable, 5 binding
+    what: u32; // 0 item, 1 type parameter
 }
 
-/// PackageNames.Rewrite (type-system.md §2, ADR 0013): each import names a dependency (N0310); with dependencies, a
-/// dependency's name names nothing else (N0315), and `dep.X` becomes the single name `dep.X` in types, expressions and
-/// patterns. The file's nodes are those parsed after `marks`; the joined identifiers extend the file's identifier
+/// PackageNames.Rewrite (type-system.md §2, ADR 0013): each import names a dependency (N0310); with dependencies, no
+/// item or type parameter has a dependency's name (N0315), and `dep.X` becomes the single name `dep.X` in types,
+/// patterns, and expressions where no local named `dep` is in scope (ADR 0074 §2.10). The file's nodes are those parsed after `marks`; the joined identifiers extend the file's identifier
 /// range, and the identifiers they replace are recorded so CheckQualifiedNames skips them.
 fn rewritePackageNames(
     front: borrow mut Frontend,
@@ -571,25 +571,7 @@ fn rewritePackageNames(
     for (k in marks.typeParameters..front.ast.typeParameters.length) {
         declared.push(DeclaredName { ident: front.ast.typeParameters[k].name, what: 1 })?;
     }
-    for (k in marks.parameters..front.ast.parameters.length) {
-        declared.push(DeclaredName { ident: front.ast.parameters[k].name, what: 2 })?;
-    }
-    for (k in marks.closureParameters..front.ast.closureParameters.length) {
-        declared.push(DeclaredName { ident: front.ast.closureParameters[k].name, what: 2 })?;
-    }
-    for (k in marks.stmts..front.ast.stmts.length) {
-        match (front.ast.stmts[k]) {
-            StmtNode.Local(_, name, _, _) => { declared.push(DeclaredName { ident: name, what: 3 })?; }
-            StmtNode.For(variable, _, _, _) => { declared.push(DeclaredName { ident: variable, what: 4 })?; }
-            _ => {}
-        }
-    }
-    for (k in marks.bindings..front.ast.bindings.length) {
-        let b = front.ast.bindings[k];
-        if (b.nested == 0xFFFFFFFF) {
-            declared.push(DeclaredName { ident: b.name, what: 5 })?;
-        }
-    }
+    // Parameters, locals, loop variables and bindings may have a dependency's name (ADR 0074 §2.10).
     for (i in 1..declared.length) {
         var j = i;
         while (j > 0 && declaredStart(front, declared[j].ident) < declaredStart(front, declared[j - 1].ident)) {
@@ -598,14 +580,7 @@ fn rewritePackageNames(
         }
     }
     for (d in declared.view()) {
-        let what = match (d.what) {
-            0 => "an item",
-            1 => "a type parameter",
-            2 => "a parameter",
-            3 => "a local",
-            4 => "a loop variable",
-            _ => "a binding",
-        };
+        let what = if (d.what == 0) "an item" else "a type parameter";
         declaredName(front, dependencies, file, d.ident, what)?;
     }
     // Types and patterns: qualified names.
@@ -631,8 +606,17 @@ fn rewritePackageNames(
             _ => {}
         }
     }
-    // Expressions: `dep.X` (a member of the dependency's name) becomes the name `dep.X`.
+    // Expressions: `dep.X` (a member of the dependency's name) becomes the name `dep.X`, except where a local of that
+    // name is in scope (ADR 0074 §2.10): there it is the local's member.
+    var shadowed = Vector<u32>.create();
+    shadowedMembers(front, unit, dependencies, mut shadowed)?;
+    for (e in shadowed.view()) {
+        front.ast.shadowed.push(ShadowedMember { file: file, expr: e })?;
+    }
     for (k in marks.exprs..front.ast.exprs.length) {
+        if (containsU32(shadowed, truncate<u32>(k))) {
+            continue;
+        }
         match (front.ast.exprs[k]) {
             ExprNode.Member(target, member) => {
                 match (front.ast.exprs[target as usize]) {

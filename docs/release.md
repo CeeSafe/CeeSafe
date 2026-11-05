@@ -43,7 +43,10 @@ One C seed for every platform, so every binary is built from the same C and chec
    must agree, and the tag must name it; the workflow checks both. The version is a constant so that the generated C
    is reproducible. Set the same version in `editors/vscode/package.json`: the workflow checks it too.
 2. Run the contract suite on the commit: `python3 tools/contract_tests.py --ceesafec out/ceesafec` (`spec/testing.md`;
-   it includes the fixed point).
+   it includes the fixed point). Then build the commit as the workflow's seed job does, from the release stage 0:
+   `sh tools/bootstrap_release.sh <ceesafec 0.3.2> HEAD <dir>/ceesafec`. The chain's last compiler is 0.8.0, so the
+   compiler's own sources may use only what 0.8.0 accepts. A newer feature in `src/` (0.18.0's first tag: a two-phase
+   `mut` argument, from 0.17.0) builds with `out/ceesafec` but fails the seed.
 3. Tag and push: `git tag v<version> && git push origin v<version>`. Only such a tag runs the workflow (there is no
    manual or branch trigger); it builds, checks, signs and notarizes everything and publishes only if every job passes.
 4. Move `main` to the next development version (`<next>-dev`).

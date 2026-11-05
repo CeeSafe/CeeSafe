@@ -325,7 +325,8 @@ fn optionalBorrowArgument(
         return Ok(none());
     }
     let operandSpan = c.front.ast.exprSpans[operand as usize];
-    let value = synth(c, operand, integerHint(c, target))?;
+    let hint = integerHint(c, target);
+    let value = synth(c, operand, hint)?;
     let t = c.typeOf(value);
     if (c.types.isBottom(t)) {
         return Ok(value);
@@ -354,7 +355,8 @@ fn optionalBorrowArgument(
             return coerce(c, value, parameterType, span); // reports the mismatch
         }
         let reborrowed = c.expr(HirExpr.Reborrow(mutable, value), lent, span.start, span.end)?;
-        return enumValue(c, variantAt(c, parameterType, 1), reborrowed, parameterType, span);
+        let someVariant = variantAt(c, parameterType, 1);
+        return enumValue(c, someVariant, reborrowed, parameterType, span);
     }
     if (mutable && mutOperand == none() && !c.types.is(t, TypeKind.Reference)) {
         var message = Vector<u8>.create();
@@ -376,7 +378,8 @@ fn optionalBorrowArgument(
         if (c.isBottom(borrowed)) {
             return Ok(borrowed);
         }
-        return enumValue(c, variantAt(c, parameterType, 1), borrowed, parameterType, span);
+        let someVariant = variantAt(c, parameterType, 1);
+        return enumValue(c, someVariant, borrowed, parameterType, span);
     }
     let reference = optionalReference(c, value, mutable, span)?;
     if (reference == none()) {

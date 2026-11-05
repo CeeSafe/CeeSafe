@@ -457,7 +457,8 @@ fn optionalBorrow(c: borrow mut Checker, reference: u32, mutable: bool, span: Sp
     let bindingStart = truncate<u32>(c.hir.armBindings.length);
     c.hir.armBindings.push(HirArmBinding { local: bound, payloadIndex: 0 })?;
     let read = c.expr(HirExpr.LocalRef(bound), lent, span.start, span.end)?;
-    let present = enumValue(c, variantAt(c, result, 1), read, result, span)?;
+    let someVariant = variantAt(c, result, 1);
+    let present = enumValue(c, someVariant, read, result, span)?;
     let presentBody = yieldBlock(c, present, span)?;
     c.hir.arms.push(HirArm {
         kind: HirPatternKind.Variant,

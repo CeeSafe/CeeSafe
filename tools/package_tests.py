@@ -260,7 +260,23 @@ def main():
             if p.returncode != 1 or found != [code]:
                 problems.append(f"shadowing/{name}: expected {code} alone: {p.returncode} {found} {p.stderr[:300]}")
 
-    print(f"package_tests: 12 checks; {len(problems)} problems")
+        # 13. A compiler requirement (ADR 0076): one this ceesafec does not meet is N0321 naming both versions; one it
+        #     meets checks.
+        pinned = os.path.join(work, "compiler-requirement")
+        os.makedirs(os.path.join(pinned, "src"))
+        with open(os.path.join(pinned, "src", "main.cee"), "w") as f:
+            f.write("fn main() {}\n")
+        for requirement, accepted in ((">=999.0.0", False), (">=0.0.1, <999.0.0", True)):
+            with open(os.path.join(pinned, "ceesafe.toml"), "w") as f:
+                f.write(f'[package]\nname = "pinned"\nceesafec = "{requirement}"\n')
+            p = run([compiler, "check"], pinned)
+            needs = f"this package needs ceesafec {requirement}; this is ceesafec "
+            if accepted and p.returncode != 0:
+                problems.append(f"compiler-requirement: {requirement!r} was refused: {p.stderr[:300]}")
+            if not accepted and (p.returncode == 0 or "N0321" not in p.stderr or needs not in p.stderr):
+                problems.append(f"compiler-requirement: {requirement!r} was not N0321 naming it: {p.stderr[:300]}")
+
+    print(f"package_tests: 13 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

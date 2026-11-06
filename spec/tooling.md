@@ -195,6 +195,7 @@ trusted = true               # its types may be declared @threadSafe (ADR 0025 �
 sources = ["src"]
 c = ["src/shim.c"]           # C files compiled and linked with an executable (type-system.md §28.6)
 tests = ["tests"]            # test directories (§10): default "tests"; their files are sources for check and test only
+ceesafec = ">=0.20.0"        # the compiler this package needs (ADR 0076): a requirement, as a dependency's (§4.7)
 links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcrypto; ssl.lib crypto.lib with cl
 lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
 include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files only
@@ -208,6 +209,11 @@ lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev 
 shapes = "2.1"               # from the registry (§4.6): a version requirement
 json = { version = "0.9", index = "https://example.org/my-index.git" }   # from another index
 ```
+
+**The compiler requirement** (ADR 0076). When a manifest is read (the root's, and each dependency's, by every command
+that reads it), a ceesafec whose version does not satisfy `ceesafec` reports N0321 at the value, before anything is
+checked: `this package needs ceesafec >=0.20.0; this is ceesafec 0.19.1`. A development version (`0.20.0-dev`) counts
+as its MAJOR.MINOR.PATCH. A compiler older than the field reports it as an unknown field at the same line.
 
 A dependency's key is its package's `name`: a dependency is known by the name its own manifest gives it. A
 dependency of kind `executable` is N0321: only a library's items are used. Errors in the manifest are N0320 (its

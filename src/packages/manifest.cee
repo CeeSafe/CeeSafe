@@ -367,6 +367,12 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                     manifest.tests.push(copyBytes(s.view())?)?;
                 }
             }
+        } else if (sameText(key, "ceesafec")) {
+            // The compiler this package needs (ADR 0076).
+            valid = v.isString() && parseRequirement(v.text.view())? != null;
+            if (valid) {
+                checkCompilerRequirement(report, file, v.start, v.end, v.text.view())?;
+            }
         } else if (isNativeField(key)) {
             valid = readNativeField(mut manifest, file, key, v, true, report)?;
         } else if (sameText(key, "c")) {
@@ -407,7 +413,10 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
             )) "'c' is an array of C files: [\"src/shim.c\"]" else if (sameText(
                 key,
                 "tests",
-            )) "'tests' is an array of test directories: [\"tests\"] (ADR 0049)" else if (isNativeField(
+            )) "'tests' is an array of test directories: [\"tests\"] (ADR 0049)" else if (sameText(
+                key,
+                "ceesafec",
+            )) "'ceesafec' is a version requirement for the compiler: \">=0.19.1\" (ADR 0076)" else if (isNativeField(
                 key,
             )) nativeFieldShape(
                 key,
@@ -779,4 +788,37 @@ fn sourceFilesOf(
         }
     }
     return Ok();
+}
+
+/// ADR 0076: N0321 at the value when this ceesafec does not satisfy the package's `ceesafec` requirement. A development
+/// version (`0.20.0-dev`) counts as its MAJOR.MINOR.PATCH.
+fn checkCompilerRequirement(
+    report: borrow mut PackageReport,
+    file: u32,
+    start: u32,
+    end: u32,
+    text: Slice<u8>,
+) -> Result<void, AllocError> {
+    let requirement = match (parseRequirement(text)?) {
+        Some(r) => r,
+        null => { return Ok(); }
+    };
+    let full = ceesafeVersion().bytes();
+    var cut = 0usize;
+    while (cut < full.length && full[cut] != '-') {
+        cut += 1;
+    }
+    let version = match (parseVersion(full[0..cut])?) {
+        Some(v) => v,
+        null => { return Ok(); }
+    };
+    if (requirement.isSatisfiedBy(version)) {
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "this package needs ceesafec ")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "; this is ceesafec ")?;
+    appendBytes(mut message, full)?;
+    return manifestError(report, file, start, end, message);
 }

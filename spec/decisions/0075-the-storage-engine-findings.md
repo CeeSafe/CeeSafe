@@ -377,7 +377,7 @@ the interpreter must give the same results.
     times out). It passed in both modes before it was removed, and the 4,096 and 8,193-byte cases still cross many
     blocks.
 
-### Found while building, not fixed here
+### Found while building (fixed after 0.19.0, §8)
 
 - **N0272 false positive.** A value of type parameter `T` taken from `this` by a generic call, or a struct literal of
   `Item<T>` built with a Copy field read through `this`, is reported as "a value borrowed from 'this'". Pushing it
@@ -406,3 +406,33 @@ the interpreter must give the same results.
   say so.
 - `ceesafec check` is clean in all 44 packages of CeeSafeLibs and CeeSafeApps. Their 24 test suites pass, and so
   does CosmoStore's (54 tests).
+
+## 8. Amendment (2026-11-06): the two bugs of §7, fixed after 0.19.0
+
+The owner: "Fix the two bugs first, then migrate CosmoStore".
+
+1. **N0272 on a referent's own contents.**
+   - **Callee.** A result whose type is a type parameter (`fn take<T>(v: borrow mut Vector<T>) -> T`) was tied to
+     `v` by elision, so it carried `v`'s own loan. `T` cannot name the reference's elided region, so each such
+     reference parameter is now a **deep** source: the result carries only what the referent holds
+     (`src/check/references.cee`; type-system.md §25.6).
+   - **Store.** Rule 2 of §25.7 made a write through `borrow mut p` take only loans of parameters that flow into
+     `p`, and a parameter never flows into itself. Now `p`'s deep placeholder may go back into `p`: what the referent
+     held may return to it (`checkParameterWrites`, `src/nir/borrow.cee`). The loan of `p` itself (its outer
+     placeholder) and loans of `p`'s own storage still may not.
+   - **Tests.** run-pass `generic-values-back-into-this.cee` (both of §7's repros; 0.19.0 rejects it) and check-fail
+     `values-into-this-still-checked.cee` (a view of `this.data` stored into `this`, and another parameter's view,
+     still N0272).
+2. **N0212 under the kernel profile.** In a freestanding build, a lib/core function over `Vector` gets error types,
+   and its N0293s are dropped with the libraries' other diagnostics (main.cee). Nothing was then left to stop the
+   ownership analyses, which reported the consequences: `let length = v.length; v.push(x)?; var i = length;` was "may
+   not have been assigned". Library functions with an error inside them are now recorded before those diagnostics are
+   dropped (`markUncheckedLibrary`, `Checker.uncheckedLibrary`), and the NIR checks skip them. Nothing can call them:
+   a caller would have the same type errors. `VectorEditing.insert` is back to that natural form, so the kernel
+   corpus programs (check-pass and check-fail `kernel-library`, `kernel-percpu*`, check-fail `async-recursion`) test
+   it.
+3. **`File`'s durable methods take `borrow this`.** CosmoStore's journal and store read through shared references to
+   their files. `readAt`, `writeAt`, `syncData`, `syncAll`, `length` and `setLength` never move the position that
+   `read` and `write` use, as in Rust's `FileExt::read_at(&self)`, so they no longer need `borrow mut this`. This is a
+   relaxation: code written for 0.19.0 still checks. `AsyncFiles` keeps its `borrow mut File` parameters, since
+   loosening a parameter would make its callers' `mut f` arguments N0249.

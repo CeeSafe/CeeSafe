@@ -244,12 +244,10 @@ public struct OrderedMap<K: OrderKey<K>, V> {
             keys: Vector<K>.withCapacity(OrderedMap<K, V>.most() + 1)?,
             values: Vector<V>.withCapacity(OrderedMap<K, V>.most() + 1)?,
             children: Vector<usize>.withCapacity(OrderedMap<K, V>.most() + 2)?,
-            parent: null,
+            parent: this.free,
         };
         this.nodes.push(node)?;
-        let index = this.nodes.length - 1;
-        this.nodes[index].parent = this.free; // linked here: a literal reading `this.free` would be N0272 (CEESAFE gap)
-        this.free = index;
+        this.free = this.nodes.length - 1;
         this.spare += 1;
         return Ok();
     }

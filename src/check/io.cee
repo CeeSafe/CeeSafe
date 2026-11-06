@@ -165,23 +165,29 @@ fn checkResourceMethod(
         ok = c.types.voidType;
     } else if (isFile && sameText(text, "readAt")) {
         function = bfFileReadAt(); // ADR 0075 §2.1
+        mutable = false;           // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         arity = 2;
         ok = c.types.usize;
     } else if (isFile && sameText(text, "writeAt")) {
         function = bfFileWriteAt();
+        mutable = false; // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         arity = 2;
         ok = c.types.voidType;
     } else if (isFile && sameText(text, "syncData")) {
         function = bfFileSyncData();
+        mutable = false; // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         ok = c.types.voidType;
     } else if (isFile && sameText(text, "syncAll")) {
         function = bfFileSyncAll();
+        mutable = false; // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         ok = c.types.voidType;
     } else if (isFile && sameText(text, "length")) {
         function = bfFileLength();
+        mutable = false; // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         ok = c.types.u64;
     } else if (isFile && sameText(text, "setLength")) {
         function = bfFileSetLength();
+        mutable = false; // positional and whole-file calls leave the position alone: `borrow this` (ADR 0075 §8)
         arity = 1;
         ok = c.types.voidType;
     } else if (isStream && sameText(text, "shutdownWrite")) {

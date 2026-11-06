@@ -173,6 +173,7 @@ struct Checker {
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
     tryConversions: Map<Word, Word>;  // a `?` expression: the `@from` variant its error goes into (ADR 0075 §2.3)
     packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
+    uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks
     declaredOrder: Vector<DeclaredEntry>;
     methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
     memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)

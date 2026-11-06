@@ -975,9 +975,14 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
         for (target in targets.view()) {
             var foreign: u32 = none();
             for (id in stored.view()) {
-                let from = loanOrigin(c, n, b, b.loans[id as usize]);
+                let storedLoan = borrow b.loans[id as usize];
+                let from = loanOrigin(c, n, b, storedLoan);
+                // What the target's referent already holds may go back into it (ADR 0075 §8): its deep placeholder,
+                // never the loan of the reference itself.
+                let ownContents = !storedLoan.hasPlace && !storedLoan.outer && from == target;
                 let flow = (target as u64) << 32 | from as u64;
-                if (from == none() || !containsU64(c.hir.functions[source as usize].mutableFlows, flow)) {
+                if (!ownContents &&
+                    (from == none() || !containsU64(c.hir.functions[source as usize].mutableFlows, flow))) {
                     foreign = id;
                     break;
                 }

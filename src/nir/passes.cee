@@ -8,7 +8,9 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     var n = buildNir(c)?;
     // Generic code is checked once, in its generic version; instantiations repeat it (type-system.md §20.3).
     for (k in 0..n.functions.length) {
-        if (!functionIsInstantiation(c, n.functions[k].source)) {
+        let source = n.functions[k].source;
+        let unchecked = (source as usize) < c.uncheckedLibrary.length && c.uncheckedLibrary[source as usize];
+        if (!functionIsInstantiation(c, source) && !unchecked) {
             checkInPlace(c, n, truncate<u32>(k))?;
             checkMoves(c, n, truncate<u32>(k))?;
             checkBorrows(c, n, truncate<u32>(k))?;

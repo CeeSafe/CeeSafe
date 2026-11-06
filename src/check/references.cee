@@ -617,12 +617,21 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
         sortU32(mut sources);
         // A deep result of a reference parameter (ADR 0074 §2.4) names none of the reference's own regions (its
         // elided one, or those written on it), only regions of its pointee.
+        // A result that is a type parameter (`-> T`) cannot name a reference parameter's own region, which is elided:
+        // what it holds came from a referent, so each reference source is deep (ADR 0075 §8: `take(mut this.a)`).
+        let bareParameter = c.types.is(returnType, TypeKind.TypeParameter);
         var deep = Vector<u32>.create();
         for (i in sources.view()) {
             let local = c.hir.functions[function as usize].parameters[i as usize];
             let t = c.hir.locals[local as usize].typ;
-            if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t) ||
-                containsU32(resolved, i)) {
+            if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t)) {
+                continue;
+            }
+            if (bareParameter) {
+                deep.push(i)?;
+                continue;
+            }
+            if (containsU32(resolved, i)) {
                 continue;
             }
             var outer = Vector<u64>.create();

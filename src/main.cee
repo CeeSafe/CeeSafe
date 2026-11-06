@@ -1258,6 +1258,9 @@ fn compileFiles(
     )!;
     if (!options.libraryDiagnostics) {
         // The reference's libraries check cleanly: what is reported in them here is a porting gap (docs/p3-plan.md S5).
+        // A library function that did not check (one over `Vector` in a freestanding build) is left out of the
+        // ownership analyses, which would only report the type errors' consequences in it.
+        markUncheckedLibrary(mut checker);
         checker.front.diagnostics.removeFiles(checker.fileIsLibrary.view());
     }
     // The ownership analyses run on NIR, after type checking succeeded (lifetimes.md).
@@ -1627,4 +1630,24 @@ fn addHeadersBeside(options: borrow mut Options, path: Slice<u8>) -> i32 {
         }
     }
     return 0;
+}
+
+/// The library functions with an error inside their syntax (Checker.uncheckedLibrary), before the libraries'
+/// diagnostics are dropped.
+fn markUncheckedLibrary(c: borrow mut Checker) {
+    for (f in 0..c.hir.functions.length) {
+        c.uncheckedLibrary.push(false)!;
+        let function = borrow c.hir.functions[f];
+        let file = function.file;
+        if (file == none() || !c.fileIsLibrary[file as usize] || function.syntax == none() || function.isClosure) {
+            continue;
+        }
+        let syntax = borrow c.front.ast.functions[function.syntax as usize];
+        for (d in c.front.diagnostics.items.view()) {
+            if (d.isError && d.file == file && d.start >= syntax.start && d.start < syntax.end) {
+                c.uncheckedLibrary[f] = true;
+                break;
+            }
+        }
+    }
 }

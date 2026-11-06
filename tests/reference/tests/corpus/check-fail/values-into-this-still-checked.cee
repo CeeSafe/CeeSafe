@@ -1,0 +1,16 @@
+// ADR 0075 §8 lets a referent's own contents go back into it; a view of its own storage, or another parameter's loan,
+// still may not.
+struct Holder<region r> {
+    items: Vector<Slice<r, u8>>;
+    data: [u8; 4];
+
+    fn selfRef(borrow mut this) {
+        this.items.push(this.data[..])!; // error[N0272]
+    }
+}
+
+fn keep<region r>(into: borrow mut Vector<Slice<r, u8>>, other: borrow Vector<u8>) {
+    into.push(other.view())!; // error[N0272]
+}
+
+fn main() {}

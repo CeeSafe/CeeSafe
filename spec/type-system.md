@@ -1837,7 +1837,9 @@ parameter without `static`. A function's **flows** are then:
   receiver included) has an **outer** name of its own: its elided name, or the regions written on the reference
   (`borrow(a) T`). A result that shares a flow name with `i` but names none of `i`'s outer names, and is not tied to
   `i` by elision or `borrow(i)`, is a **deep** result of `i`: it names only regions that `i`'s referent holds
-  (`fn token(borrow mut this) -> Slice<r, u8>` in `struct Lexer<region r>`). It carries the referent's loans, not the
+  (`fn token(borrow mut this) -> Slice<r, u8>` in `struct Lexer<region r>`). A result whose type is a type parameter
+  (`fn take<T>(v: borrow mut Vector<T>) -> T`) is a deep result of each reference parameter it would be tied to by
+  elision, since `T` cannot name a reference's elided region (ADR 0075 §8). It carries the referent's loans, not the
   loan of `i` itself:
   - **callee:** a deep result may carry what the referent holds (a copy of a view field, a slice of one, a borrow
     through a reference stored in it), but not a loan of the referent's own storage, a place reached through `i`
@@ -1862,7 +1864,9 @@ With one loan set per value:
 2. Writing it through a reference adds its loans to the reference and to what the reference was
    borrowed from, followed back through reborrows, calls (by their result flows) and region
    allocation. If that reaches a `borrow mut` parameter `p` of the current function, the value's
-   loans must all come from parameters that flow into `p` (§25.6): otherwise N0272.
+   loans must all come from parameters that flow into `p` (§25.6): otherwise N0272. What `p`'s own referent held (its
+   deep loans, not the loan of `p` itself) may always go back into it (ADR 0075 §8): `let x = take(mut this.a);
+   this.b.push(x)!;`.
 3. `push`, `insert` and `append` write their argument through their receiver (rule 2).
 4. At a call, an argument that flows into a `borrow mut` parameter adds its loans to what that
    argument refers to.
@@ -1956,7 +1960,8 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
     clean, so a later successful sync proves nothing about the earlier writes. A program that needs durability treats
     the file as failed.
   - `f.length()`: `u64`; `f.setLength(n: u64)` shrinks the file or extends it with zeros.
-  - Each takes `borrow mut this`; interrupted calls are retried. On Windows, positions go through the handle's
+  - Each takes `borrow this` (since ADR 0075 §8; 0.19.0 took `borrow mut this`): none moves the position `read` and
+    `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, positions go through the handle's
     `OVERLAPPED` offset.
 - `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.

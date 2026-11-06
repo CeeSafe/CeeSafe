@@ -270,9 +270,10 @@ public struct VectorEditing<T> {
     /// Puts `x` at `at`, moving the elements from `at` on one place up. O(length - at). If growing fails, `v` is
     /// unchanged and `x` is destroyed.
     public fn insert(v: borrow mut Vector<T>, at: usize, x: T) -> Result<void, AllocError> {
+        let length = v.length;
         v.push(x)?;
         let s = v.viewMut();
-        var i = s.length - 1;
+        var i = length;
         while (i > at) {
             s.swap(i, i - 1);
             i -= 1;
@@ -306,9 +307,10 @@ public struct VectorEditing<T> {
 
     /// `insert` for a vector of `FailingAllocator`.
     public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x: T) -> Result<void, AllocError> {
+        let length = v.length;
         v.push(x)?;
         let s = v.viewMut();
-        var i = s.length - 1;
+        var i = length;
         while (i > at) {
             s.swap(i, i - 1);
             i -= 1;

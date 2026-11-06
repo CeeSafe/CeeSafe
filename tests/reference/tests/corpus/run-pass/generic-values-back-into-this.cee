@@ -1,0 +1,40 @@
+// A value of a type parameter taken out of `this`, through a generic call or a struct literal with a Copy field read
+// through `this`, may go back into `this` (ADR 0075 §8): what a referent already holds is not a foreign loan. Before
+// 0.19.1 both were N0272.
+fn take<T>(v: borrow mut Vector<T>) -> T => v.pop()!;
+
+struct Item<T> {
+    values: Vector<T>;
+    link: usize?;
+}
+
+struct Two<T> {
+    a: Vector<T>;
+    b: Vector<T>;
+    items: Vector<Item<T>>;
+    next: usize?;
+
+    fn moveOne(borrow mut this) {
+        let x = take(mut this.a);
+        this.b.push(x)!;
+    }
+
+    fn add(borrow mut this) {
+        let item = Item<T> { values: Vector<T>.create(), link: this.next };
+        this.items.push(item)!;
+    }
+}
+
+fn main() {
+    var t = Two<u32> {
+        a: Vector<u32>.create(),
+        b: Vector<u32>.create(),
+        items: Vector<Item<u32>>.create(),
+        next: null,
+    };
+    t.a.push(1)!;
+    t.moveOne();
+    t.add();
+    Console.writeLine(t.b.length + t.items.length);
+}
+// expect-stdout: 2

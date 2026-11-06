@@ -40,6 +40,7 @@
 #endif
 #else
 #include <dirent.h>
+#include <sys/statvfs.h>
 #include <netinet/in.h>
 #include <spawn.h>
 #include <sys/socket.h>
@@ -111,6 +112,10 @@ uint32_t ceesafe_io_kind(int32_t error) {
     case ENOTSUP: return CEE_IO_UNSUPPORTED;
 #endif
     case CEE_ERROR_HOST_NOT_FOUND: return CEE_IO_HOST_NOT_FOUND; /* the resolver's, not an errno (ADR 0060) */
+    case ENOSPC: return CEE_IO_STORAGE_FULL; /* ADR 0077 */
+#ifdef EDQUOT
+    case EDQUOT: return CEE_IO_STORAGE_FULL;
+#endif
     default: return CEE_IO_OTHER;
     }
 }
@@ -147,6 +152,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 1u ? _O_WRONLY | _O_CREAT | _O_TRUNC
                   : mode == 2u ? _O_RDWR
                   : mode == 3u ? _O_RDWR | _O_CREAT
+                  : mode == 5u ? _O_WRONLY | _O_CREAT | _O_APPEND
                                : _O_RDWR | _O_CREAT | _O_EXCL;
         fd = _open(name, flags | _O_BINARY, _S_IREAD | _S_IWRITE);
 #else
@@ -156,6 +162,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 1u ? O_WRONLY | O_CREAT | O_TRUNC
                   : mode == 2u ? O_RDWR
                   : mode == 3u ? O_RDWR | O_CREAT
+                  : mode == 5u ? O_WRONLY | O_CREAT | O_APPEND /* ADR 0077: File.openAppend */
                                : O_RDWR | O_CREAT | O_EXCL;
         fd = open(name, flags | O_CLOEXEC, mode == 1u ? 0644 : 0666);
 #endif
@@ -268,7 +275,9 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
         DWORD n = 0;
         if (!WriteFile(h, bytes + done, (DWORD)chunk, &n, &where)) {
             DWORD error = GetLastError();
-            return ceesafe_io_fail(error == ERROR_DISK_FULL ? ENOSPC : error == ERROR_ACCESS_DENIED ? EACCES : EIO);
+            return ceesafe_io_fail(error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ? ENOSPC
+                               : error == ERROR_ACCESS_DENIED                              ? EACCES
+                                                                                           : EIO);
         }
 #else
         ssize_t n = pwrite(fd, bytes + done, chunk, (off_t)at);
@@ -1561,6 +1570,74 @@ int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t co
                                                                                        : EIO);
 #else
     return rename(source, target) == 0 ? 0 : -(int64_t)errno;
+#endif
+}
+
+/* `Directory.space(path)` (ADR 0077): the bytes of the volume holding `path`: total, free, and available to an
+   unprivileged process. */
+int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available) {
+    char name[4096];
+    *total = 0;
+    *free = 0;
+    *available = 0;
+    if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    ULARGE_INTEGER avail, size, unused;
+    DWORD attributes = GetFileAttributesA(name);
+    if (attributes == INVALID_FILE_ATTRIBUTES) return -(int64_t)ENOENT;
+    if (!GetDiskFreeSpaceExA(name, &avail, &size, &unused)) return -(int64_t)EIO;
+    *total = size.QuadPart;
+    *free = unused.QuadPart;
+    *available = avail.QuadPart;
+    return 0;
+#else
+    struct statvfs st;
+    int r;
+    do {
+        r = statvfs(name, &st);
+    } while (r < 0 && errno == EINTR);
+    if (r < 0) return -(int64_t)errno;
+    uint64_t unit = st.f_frsize != 0 ? (uint64_t)st.f_frsize : (uint64_t)st.f_bsize;
+    *total = (uint64_t)st.f_blocks * unit;
+    *free = (uint64_t)st.f_bfree * unit;
+    *available = (uint64_t)st.f_bavail * unit;
+    return 0;
+#endif
+}
+
+/* `File.modified(path)` (ADR 0077): the last modification time, as seconds and nanoseconds since 1970. */
+int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *seconds, uint32_t *nanoseconds) {
+    char name[4096];
+    *seconds = 0;
+    *nanoseconds = 0;
+    if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    struct _stat64 st;
+    if (_stat64(name, &st) != 0) return -(int64_t)errno;
+    *seconds = (int64_t)st.st_mtime;
+#else
+    struct stat st;
+    if (stat(name, &st) != 0) return -(int64_t)errno;
+#if defined(__APPLE__)
+    *seconds = (int64_t)st.st_mtimespec.tv_sec;
+    *nanoseconds = (uint32_t)st.st_mtimespec.tv_nsec;
+#else
+    *seconds = (int64_t)st.st_mtim.tv_sec;
+    *nanoseconds = (uint32_t)st.st_mtim.tv_nsec;
+#endif
+#endif
+    return 0;
+}
+
+/* `File.setPermissions(path, mode)` (ADR 0077): chmod. Windows has only the read-only attribute: it is set when the
+   owner may not write (mode & 0200 clear). */
+int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode) {
+    char name[4096];
+    if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    return _chmod(name, (mode & 0200u) ? (_S_IREAD | _S_IWRITE) : _S_IREAD) == 0 ? 0 : -(int64_t)errno;
+#else
+    return chmod(name, (mode_t)(mode & 07777u)) == 0 ? 0 : -(int64_t)errno;
 #endif
 }
 

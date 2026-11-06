@@ -1,0 +1,21 @@
+// `Directory.space(path)` (ADR 0077): available <= free <= total, natively; the interpreter answers Unsupported, so a
+// run stays reproducible. A missing path is an error either way.
+fn main() {
+    let dir = Directory.temporary()!;
+    match (Directory.space(dir.view())) {
+        Ok(s) => {
+            Console.writeLine(
+                if (s.available <= s.free && s.free <= s.total && s.total > 0) "space ok" else "space wrong",
+            );
+        }
+        Err(IoError.Unsupported) => { Console.writeLine("space ok"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (Directory.space("/no/such/volume/path")) {
+        Ok(_) => { Console.writeLine("a missing path has space"); }
+        Err(_) => { Console.writeLine("missing path refused"); }
+    }
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: space ok
+// expect-stdout: missing path refused

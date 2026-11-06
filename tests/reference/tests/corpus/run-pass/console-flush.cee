@@ -1,0 +1,10 @@
+// `Console.flush()` (ADR 0077): standard output's buffer is written; the order of the output is unchanged.
+fn main() {
+    Console.write("one");
+    Console.flush();
+    Console.writeLine(" line");
+    Console.flush();
+    Console.writeLine("two");
+}
+// expect-stdout: one line
+// expect-stdout: two

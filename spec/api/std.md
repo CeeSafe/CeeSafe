@@ -21,6 +21,7 @@
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [struct Environment](#struct-environment)
+- [struct VolumeSpace](#struct-volumespace)
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
 - [struct UnixTime](#struct-unixtime)
@@ -1290,13 +1291,24 @@ The value of the variable `name` as static text, or null if it is not set or not
 Safety: the runtime returns getenv's text, which stays valid and unchanged: CeeSafe has no way to change the
 environment (C code that calls setenv breaks this, as it does in C).
 
+## struct VolumeSpace
+
+```ceesafe
+public struct VolumeSpace {
+    public total: u64;
+    public free: u64;
+    public available: u64;
+}
+```
+
+Directories (type-system.md §26.10).
+A volume's bytes (`Directory.space`, ADR 0077).
+
 ## struct Directory
 
 ```ceesafe
 public struct Directory
 ```
-
-Directories (type-system.md §26.10).
 
 ### Directory.create
 
@@ -1315,6 +1327,18 @@ public fn remove(path: StringView) -> Result<void, IoError>
 
 Removes an empty directory.
 Safety: the runtime reads the path's bytes during the call only.
+
+### Directory.space
+
+```ceesafe
+public fn space(path: StringView) -> Result<VolumeSpace, IoError>
+```
+
+The bytes of the volume that holds `path` (ADR 0077): `total`, `free`, and `available` to this process, which
+is at most `free` where the system keeps a reserve for its administrator. POSIX `statvfs`; Windows
+`GetDiskFreeSpaceExA`. A storage engine stops writing before `available` runs out. The interpreter answers
+`Unsupported`.
+Safety: the runtime reads the path's bytes and writes the three values during the call only.
 
 ### Directory.sync
 
@@ -1387,6 +1411,38 @@ public fn kind(path: StringView) -> Result<PathKind?, IoError>
 ```
 
 `File.kind(path)` (type-system.md §26.8): what is at `path`, following symbolic links, or null if nothing is.
+Safety: the runtime reads the path's bytes during the call only.
+
+### HostServices.flush
+
+```ceesafe
+public fn flush()
+```
+
+`Console.flush()` (ADR 0077): writes what standard output holds buffered, so it survives the process being
+killed. Standard error is never buffered.
+Safety: the runtime only flushes the C library's standard output.
+
+### HostServices.modified
+
+```ceesafe
+public fn modified(path: StringView) -> Result<UnixTime, IoError>
+```
+
+`File.modified(path)` (ADR 0077): when the file or directory at `path` was last modified, as a `UnixTime`
+(`stat`'s `st_mtime`, with nanoseconds where the system keeps them). The interpreter answers `Unsupported`.
+Safety: the runtime reads the path's bytes and writes the two values during the call only.
+
+### HostServices.setPermissions
+
+```ceesafe
+public fn setPermissions(path: StringView, mode: u32) -> Result<void, IoError>
+```
+
+`File.setPermissions(path, mode)` (ADR 0077): POSIX `chmod`, the low 12 bits of `mode` (`0o640`: the owner
+reads and writes, the group reads). Windows has only a read-only attribute, set when the owner may not write.
+A file created by `File.createNew` and given its permissions before anything is written to it never holds data
+others could read. The interpreter answers `Unsupported`.
 Safety: the runtime reads the path's bytes during the call only.
 
 ### HostServices.rename

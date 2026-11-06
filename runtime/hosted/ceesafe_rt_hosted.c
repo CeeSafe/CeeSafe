@@ -8,6 +8,7 @@
 #define _CRT_SECURE_NO_WARNINGS /* getenv is not deprecated in standard C */
 #endif
 #include "ceesafe/rt.h"
+#include <errno.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,11 @@ static void ceesafe_binary_streams(void) {
 void ceesafe_platform_write_stdout(const uint8_t *bytes, size_t length) {
     ceesafe_binary_streams();
     (void)fwrite(bytes, 1u, length, stdout);
+}
+
+/* `Console.flush()` (ADR 0077): what standard output holds buffered is written. */
+int64_t ceesafe_host_console_flush(void) {
+    return fflush(stdout) == 0 ? 0 : -(int64_t)EIO;
 }
 
 void ceesafe_platform_write_stderr(const uint8_t *bytes, size_t length) {

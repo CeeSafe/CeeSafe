@@ -2064,14 +2064,15 @@ fn appendBuiltinRvalue(
         appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_remove".bytes(), arguments)?;
         return appendIoCall(c, out, t, call.view());
     }
-    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew()) {
-        // Modes 2, 3 and 4 of ceesafe_file_open (ADR 0075 §2.1).
+    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend()) {
+        // Modes 2, 3, 4 (ADR 0075 §2.1) and 5 (ADR 0077) of ceesafe_file_open.
         var call = Vector<u8>.create();
         appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
         call.pop();
         appendText(
             mut call,
-            if (b == bfFileOpenReadWrite()) ", 2u)" else if (b == bfFileOpenOrCreate()) ", 3u)" else ", 4u)",
+            if (b == bfFileOpenReadWrite()) ", 2u)" else if (b == bfFileOpenOrCreate()) ", 3u)" else if (b ==
+                bfFileOpenAppend()) ", 5u)" else ", 4u)",
         )?;
         return appendIoCall(c, out, t, call.view());
     }

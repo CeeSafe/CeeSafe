@@ -79,6 +79,11 @@ no argument 1000
 | `f.syncData()`, `f.syncAll()` | durable on disk (`F_FULLFSYNC` on Apple systems); after a failed sync the file's durable contents are unknown |
 | `f.length()`, `f.setLength(n)` | `u64`; truncate or zero-extend |
 | `File.rename(from, to)`, `Directory.sync(path)` | atomic replace; make a directory's entries durable |
+| `Directory.space(path)` | the volume's `total`, `free` and `available` bytes (ADR 0077) |
+| `Console.flush()` | write standard output's buffer now, so it survives a kill |
+| `File.openAppend(path)` | write-only, created if missing, every write at the end |
+| `File.modified(path)`, `File.setPermissions(path, 0o640)` | a `UnixTime`; `chmod` |
+| `IoError.StorageFull` | the volume is full (`ENOSPC`, `EDQUOT`) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `TcpStream.connect(address, port)` | `Result<TcpStream, IoError>`; `read`, `write`, `shutdownWrite`, `shutdownRead` |
 | `e.message()` | the `IoError`'s text, a `StringView` |

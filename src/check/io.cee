@@ -24,7 +24,8 @@ fn checkResourceFunction(
     var textBytes = Vector<u8>.create();
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
-    if (owner == builtinFile() && (sameText(text, "kind") || sameText(text, "rename")) && !c.freestanding) {
+    if (owner == builtinFile() && (sameText(text, "kind") || sameText(text, "rename") || sameText(text, "modified") ||
+        sameText(text, "setPermissions")) && !c.freestanding) {
         return checkHostService(c, member, arguments, span); // lib/std's HostServices.kind (§26.8, ADR 0028)
     }
     var function = none();
@@ -43,6 +44,9 @@ fn checkResourceFunction(
         ok = c.types.file;
     } else if (owner == builtinFile() && sameText(text, "createNew")) {
         function = bfFileCreateNew();
+        ok = c.types.file;
+    } else if (owner == builtinFile() && sameText(text, "openAppend")) {
+        function = bfFileOpenAppend(); // ADR 0077
         ok = c.types.file;
     } else if (owner == builtinFile() && sameText(text, "remove")) {
         function = bfFileRemove();
@@ -112,6 +116,9 @@ fn resourceUsage(function: u32) -> StringView {
     }
     if (function == bfFileCreateNew()) {
         return "File.createNew(path)";
+    }
+    if (function == bfFileOpenAppend()) {
+        return "File.openAppend(path)";
     }
     if (function == bfTcpListen()) {
         return "TcpListener.bind(address, port)";

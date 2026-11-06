@@ -462,7 +462,8 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
     16 => "NetworkUnreachable",
     17 => "AddressNotAvailable",
     18 => "Unsupported",
-    _ => "HostNotFound",
+    19 => "HostNotFound",
+    _ => "StorageFull", // ADR 0077
 };
 
 fn addVariant(c: borrow mut Checker, definition: u32, name: u32, start: u32, end: u32) -> Result<u32, AllocError> {
@@ -519,7 +520,7 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
         return Ok();
     }
     if (entry.builtin == 1) {
-        for (k in 0..20usize) {
+        for (k in 0..21usize) {
             let symbol = c.intern(ioErrorVariant(k))?;
             let variant = addVariant(c, definition, symbol, 0, 0)?;
             if (k == 10) {

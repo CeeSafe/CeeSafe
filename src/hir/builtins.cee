@@ -144,8 +144,11 @@ fn bfFileSyncAll() -> u32 => 128;
 fn bfFileLength() -> u32 => 129;
 fn bfFileSetLength() -> u32 => 130;
 
+/// `File.openAppend(path)` (ADR 0077).
+fn bfFileOpenAppend() -> u32 => 131;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
-fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileSetLength();
+fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenAppend();
 
 /// The member's name, by declaration index.
 fn builtinFunctionName(index: u32) -> StringView => match (index) {
@@ -280,6 +283,7 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     128 => "FileSyncAll",
     129 => "FileLength",
     130 => "FileSetLength",
+    131 => "FileOpenAppend",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

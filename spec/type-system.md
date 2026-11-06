@@ -1916,12 +1916,13 @@ A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDen
 `ConnectionRefused`, `AddressInUse`, `OutOfMemory`, `Other(i32)` (the platform's error number), and
 after it (ADR 0044, so the earlier variants keep their tags) the network kinds `ConnectionReset`,
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
-`AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host".
+`AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host",
+and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`.
 `e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
 platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
 "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
 "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
-supported", and "Host not found", which no errno has; `Other`'s is "Input/output error".
+supported", "Host not found", which no errno has, and "No space left on device"; `Other`'s is "Input/output error".
 
 | Variant | POSIX | Winsock |
 |---|---|---|
@@ -1938,7 +1939,8 @@ supported", and "Host not found", which no errno has; `Other`'s is "Input/output
 `IoError.TimedOut` is the kernel's (a connect or keep-alive gave up); `AsyncError.TimedOut` is a
 deadline of the program's. A `match` that names the first eleven variants and has no `_` arm does
 not cover the network kinds (N0256): a source change of 0.7.0; one that names the first nineteen does not cover
-`HostNotFound` (N0256): a source change of ADR 0060's release.
+`HostNotFound` (N0256): a source change of ADR 0060's release; one that names the first twenty does not cover
+`StorageFull`: a source change of ADR 0077's.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
@@ -1963,6 +1965,11 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
   - Each takes `borrow this` (since ADR 0075 §8; 0.19.0 took `borrow mut this`): none moves the position `read` and
     `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, positions go through the handle's
     `OVERLAPPED` offset.
+- `File.openAppend(path)` (ADR 0077): write-only, created if missing, every write at the end (`O_APPEND`).
+- `File.modified(path)` (ADR 0077, lib/std): `Result<UnixTime, IoError>`, the last modification time.
+- `File.setPermissions(path, mode)` (ADR 0077, lib/std): `chmod` of the low 12 bits (`0o640`); on Windows only the
+  read-only attribute, set when the owner may not write. Called on a new, empty file before it is written, it keeps
+  the data private under any umask. The interpreter answers `Unsupported` for this and `File.modified`.
 - `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
   `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.
 - The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
@@ -1974,6 +1981,8 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
   writes raw bytes to standard output, in order with `Console.write`.
 - `Console.writeError(text)` and `Console.writeErrorLine(text)` (`text: StringView`) write to
   standard error; standard output is flushed first, so the two keep their relative order.
+- `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.
+  It is hosted only (lib/std's `HostServices.flush`). Standard error is not buffered.
 
 ### 26.4 TCP sockets
 - `TcpListener.bind(address, port)` (`address: StringView`, IPv4 or IPv6 text without a zone such as
@@ -2057,6 +2066,9 @@ Diagnostics: none new.
     Windows) by trying names until `mkdir` makes one, which is atomic.
   - The caller removes it.
 - `Directory.current()`: `Result<String, IoError>`, the working directory.
+- `Directory.space(path)` (ADR 0077): `Result<VolumeSpace, IoError>`, the bytes of the volume that holds `path`:
+  `total`, `free`, and `available` to this process, which is at most `free` where the system keeps a reserve
+  (`statvfs`; Windows `GetDiskFreeSpaceExA`). The interpreter answers `Unsupported`, so a run stays reproducible.
 - `Directory.sync(path)` (ADR 0075 §2.1): makes the directory's entries (files created, renamed or removed in it)
   durable: `open(O_DIRECTORY)` and `fsync` on POSIX. Windows journals directory entries and cannot flush a directory,
   so there it only checks that `path` is a directory.

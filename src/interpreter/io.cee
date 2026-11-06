@@ -146,6 +146,9 @@ fn errnoOfMessage(text: StringView) -> i64 {
     if (sameText(text.bytes(), ioMessage(19))) {
         return hostNotFound();
     }
+    if (sameText(text.bytes(), ioMessage(20))) {
+        return 28; // ENOSPC on Linux, macOS and MSVC: IoError.StorageFull (ADR 0077)
+    }
     let system = hostErrnos();
     for (k in 11..19u64) {
         if (sameText(text.bytes(), ioMessage(k))) {
@@ -413,6 +416,7 @@ fn ioMessage(kind: u64) -> StringView => match (kind) {
     17 => "Cannot assign requested address",
     18 => "Operation not supported",
     19 => "Host not found",
+    20 => "No space left on device",
     _ => "Input/output error",
 };
 
@@ -441,7 +445,7 @@ fn ioBuiltin(
         let errorType = builtinArgumentType(n, arguments, 0);
         let value = argument(it, c, n, frame, arguments, 0)?;
         var kind = value.bits(0, enumTagSize(c, errorType))?;
-        if (kind > 19) {
+        if (kind > 20) {
             kind = 10;
         }
         let text = ioMessage(kind);
@@ -464,7 +468,7 @@ fn ioBuiltin(
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
         }
     }
-    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew()) {
+    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew() || b == bfFileOpenAppend()) {
         // ADR 0075 §2.1: the file is checked and created here; reads and writes reopen it (HostHandle.PathFile).
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
@@ -495,7 +499,9 @@ fn ioBuiltin(
         }
         var kept = String.create();
         kept.append(text)!;
-        let fd = addHandle(it, HostHandle.PathFile(kept, 0));
+        // An appending file's position is `appendPosition()`: each write goes to the file's end then (ADR 0077).
+        let position: u64 = if (b == bfFileOpenAppend()) appendPosition() else 0;
+        let fd = addHandle(it, HostHandle.PathFile(kept, position));
         return Ok(interpIoResult(c, resultType, fd, 0)?);
     }
     if (isDurableFileBuiltin(b)) {
@@ -575,9 +581,18 @@ fn ioBuiltin(
                     HostHandle.OpenFile(file, _) => { written = file.write(bytes.view()); }
                     HostHandle.Stream(stream) => { written = stream.write(bytes.view()); }
                     HostHandle.PathFile(p, position) => {
-                        written = writeFileAt(p.view(), bytes.view(), position);
+                        var at: u64 = position;
+                        if (position == appendPosition()) {
+                            at = match (wholeFile(p.view())) {
+                                Ok(v) => v.length as u64,
+                                Err(_) => 0,
+                            };
+                        }
+                        written = writeFileAt(p.view(), bytes.view(), at);
                         match (written) {
-                            Ok() => { position = position + (bytes.length as u64); }
+                            Ok() => {
+                                if (position != appendPosition()) { position = position + (bytes.length as u64); }
+                            }
                             Err(_) => {}
                         }
                     }
@@ -885,6 +900,18 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         };
         return Ok(hostResult(kind));
     }
+    if (sameText(name, "ceesafe_host_modified") || sameText(name, "ceesafe_host_set_permissions")) {
+        // ADR 0077: the stage-0 compiler's library can neither stat nor chmod, so the interpreter refuses both.
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
+    }
+    if (sameText(name, "ceesafe_host_space")) {
+        // ADR 0077: the interpreter describes no volume of its own, so a run stays reproducible.
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
+    }
+    if (sameText(name, "ceesafe_host_console_flush")) {
+        flushOutput(it);
+        return Ok(hostResult(0));
+    }
     if (sameText(name, "ceesafe_host_dir_sync")) {
         // ADR 0075 §2.1: nothing to make durable in the interpreter, once the directory is there.
         let path = match (hostPath(it, arguments, 0, 1)?) {
@@ -1096,6 +1123,18 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_dir_sync")) {
         return "Ps:l";
+    }
+    if (sameText(name, "ceesafe_host_space")) {
+        return "PsPPP:l";
+    }
+    if (sameText(name, "ceesafe_host_modified")) {
+        return "PsPP:l";
+    }
+    if (sameText(name, "ceesafe_host_set_permissions")) {
+        return "Psu:l";
+    }
+    if (sameText(name, "ceesafe_host_console_flush")) {
+        return ":l";
     }
     if (sameText(name, "ceesafe_host_rename")) {
         return "PsPs:l";
@@ -3783,3 +3822,6 @@ fn writeFileAt(path: StringView, bytes: Slice<u8>, offset: u64) -> Result<void, 
     }
     return replaceFile(path, contents.view());
 }
+
+/// A PathFile's position that means "at the end": `File.openAppend` (ADR 0077).
+fn appendPosition() -> u64 => 0xFFFFFFFFFFFFFFFF;

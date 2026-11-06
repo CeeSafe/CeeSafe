@@ -1,0 +1,46 @@
+// ADR 0077: `File.openAppend` writes at the end; `File.modified` and `File.setPermissions` work natively and are
+// `Unsupported` in the interpreter; `IoError.StorageFull` has its message.
+fn run(dir: StringView) -> Result<void, IoError> {
+    var path = String.create();
+    path.append(dir)!;
+    path.append("/log")!;
+    {
+        var a = File.openAppend(path.view())?;
+        a.write("one\n".bytes())?;
+    }
+    {
+        var a = File.openAppend(path.view())?;
+        a.write("two\n".bytes())?;
+    }
+    var f = File.open(path.view())?;
+    var buffer = [0u8; 32];
+    let n = f.read(mut buffer[..])?;
+    Console.write(StringView.fromUtf8(buffer[0..n])!);
+    match (File.modified(path.view())) {
+        Ok(t) => { Console.writeLine(if (t.seconds > 0) "modified ok" else "modified wrong"); }
+        Err(IoError.Unsupported) => { Console.writeLine("modified ok"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (File.setPermissions(path.view(), 0o640)) {
+        Ok() => { Console.writeLine("permissions ok"); }
+        Err(IoError.Unsupported) => { Console.writeLine("permissions ok"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    File.remove(path.view())?;
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    match (run(dir.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    Directory.remove(dir.view())!;
+    Console.writeLine(IoError.StorageFull.message());
+}
+// expect-stdout: one
+// expect-stdout: two
+// expect-stdout: modified ok
+// expect-stdout: permissions ok
+// expect-stdout: No space left on device

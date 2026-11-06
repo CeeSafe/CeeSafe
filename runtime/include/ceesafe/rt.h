@@ -1154,6 +1154,8 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
    system's errno uses; ceesafe_io_kind maps it to CEE_IO_HOST_NOT_FOUND. */
 #define CEE_IO_HOST_NOT_FOUND 19u
 #define CEE_ERROR_HOST_NOT_FOUND 65536
+/* ADR 0077: after HostNotFound. ENOSPC, and EDQUOT where the system has it; Windows' ERROR_DISK_FULL. */
+#define CEE_IO_STORAGE_FULL 20u
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);
@@ -1196,6 +1198,10 @@ cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length);
 uint64_t ceesafe_clock_monotonic(void);
 int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength);
 int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length);
+int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available);
+int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *seconds, uint32_t *nanoseconds);
+int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode);
+int64_t ceesafe_host_console_flush(void);
 /* The drop glue of File, TcpListener and TcpStream: closes the descriptor, ignoring errors. */
 void ceesafe_fd_drop(int32_t *fd);
 

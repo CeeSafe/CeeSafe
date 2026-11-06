@@ -1239,6 +1239,9 @@ fn checkBuiltinMemberCall(
     var memberText = Vector<u8>.create();
     appendBytes(mut memberText, c.name(memberIdent.symbol))?;
     let m = memberText.view();
+    if (owner == builtinConsole() && sameText(m, "flush") && !c.freestanding) {
+        return checkHostService(c, member, arguments, span); // lib/std's HostServices.flush (ADR 0077)
+    }
     if (owner == builtinProcess() && sameText(m, "capture") && !c.freestanding) {
         return checkHostService(c, member, arguments, span); // lib/std's HostServices.capture (§26.7, ADR 0028)
     }

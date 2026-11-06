@@ -11,7 +11,7 @@
           (expr (Console.writeLine "i = {i}"))
         )
       )
-      (let g#3: fn(i32) = (closure 775 () (block (expr (Console.writeLine "k = {k}")))):fn(i32))
+      (let g#3: fn(i32) = (closure 783 () (block (expr (Console.writeLine "k = {k}")))):fn(i32))
       (expr (Process.exit g#3 1:i32))
       (expr (Console.writeLine "unbound {zz}, a git suffix ^{commit}"))
       (expr (Console.writeLine "later {late}"))

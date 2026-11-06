@@ -22,6 +22,14 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_host_dir_sync(path: *u8, length: u64) -> i64;
     @effects(sleep)
+    fn ceesafe_host_space(path: *u8, length: u64, total: *mut u64, free: *mut u64, available: *mut u64) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_console_flush() -> i64;
+    @effects(sleep)
+    fn ceesafe_host_modified(path: *u8, length: u64, seconds: *mut i64, nanoseconds: *mut u32) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_set_permissions(path: *u8, length: u64, mode: u32) -> i64;
+    @effects(sleep)
     fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_dir_open(path: *u8, length: u64, error: *mut i32) -> *mut void;
@@ -86,6 +94,16 @@ public struct Environment {
 }
 
 /// Directories (type-system.md §26.10).
+/// A volume's bytes (`Directory.space`, ADR 0077).
+public struct VolumeSpace {
+    /// The volume's size.
+    public total: u64;
+    /// The bytes no file uses.
+    public free: u64;
+    /// The bytes this process may still write: at most `free`.
+    public available: u64;
+}
+
 public struct Directory {
     /// Makes one directory; `AlreadyExists` if something is there already.
     /// Safety: the runtime reads the path's bytes during the call only.
@@ -99,6 +117,30 @@ public struct Directory {
     public fn remove(path: StringView) -> Result<void, IoError> {
         let result = unsafe { ceesafe_host_dir_remove(path.ptr, path.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
+    }
+
+    /// The bytes of the volume that holds `path` (ADR 0077): `total`, `free`, and `available` to this process, which
+    /// is at most `free` where the system keeps a reserve for its administrator. POSIX `statvfs`; Windows
+    /// `GetDiskFreeSpaceExA`. A storage engine stops writing before `available` runs out. The interpreter answers
+    /// `Unsupported`.
+    /// Safety: the runtime reads the path's bytes and writes the three values during the call only.
+    public fn space(path: StringView) -> Result<VolumeSpace, IoError> {
+        var total: u64 = 0;
+        var free: u64 = 0;
+        var available: u64 = 0;
+        let result = unsafe {
+            ceesafe_host_space(
+                path.ptr,
+                path.length as u64,
+                borrow mut total as *mut u64,
+                borrow mut free as *mut u64,
+                borrow mut available as *mut u64,
+            )
+        };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(VolumeSpace { total: total, free: free, available: available });
     }
 
     /// Makes the directory's entries durable: the files created, renamed or removed in it survive a power cut once
@@ -209,6 +251,43 @@ public struct HostServices {
             2 => Ok(PathKind.Directory),
             _ => if (kind < 0) Err(HostServices.hostError(kind)) else Ok(PathKind.Other),
         };
+    }
+
+    /// `Console.flush()` (ADR 0077): writes what standard output holds buffered, so it survives the process being
+    /// killed. Standard error is never buffered.
+    /// Safety: the runtime only flushes the C library's standard output.
+    public fn flush() {
+        let _ = unsafe { ceesafe_host_console_flush() };
+    }
+
+    /// `File.modified(path)` (ADR 0077): when the file or directory at `path` was last modified, as a `UnixTime`
+    /// (`stat`'s `st_mtime`, with nanoseconds where the system keeps them). The interpreter answers `Unsupported`.
+    /// Safety: the runtime reads the path's bytes and writes the two values during the call only.
+    public fn modified(path: StringView) -> Result<UnixTime, IoError> {
+        var seconds: i64 = 0;
+        var nanoseconds: u32 = 0;
+        let result = unsafe {
+            ceesafe_host_modified(
+                path.ptr,
+                path.length as u64,
+                borrow mut seconds as *mut i64,
+                borrow mut nanoseconds as *mut u32,
+            )
+        };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(UnixTime { seconds: seconds, nanoseconds: nanoseconds });
+    }
+
+    /// `File.setPermissions(path, mode)` (ADR 0077): POSIX `chmod`, the low 12 bits of `mode` (`0o640`: the owner
+    /// reads and writes, the group reads). Windows has only a read-only attribute, set when the owner may not write.
+    /// A file created by `File.createNew` and given its permissions before anything is written to it never holds data
+    /// others could read. The interpreter answers `Unsupported`.
+    /// Safety: the runtime reads the path's bytes during the call only.
+    public fn setPermissions(path: StringView, mode: u32) -> Result<void, IoError> {
+        let result = unsafe { ceesafe_host_set_permissions(path.ptr, path.length as u64, mode) };
+        return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
     /// `File.rename(from, to)` (ADR 0075 §2.1): gives the file at `from` the name `to`, atomically replacing a file
@@ -378,6 +457,7 @@ public struct HostServices {
             17 => IoError.AddressNotAvailable,
             18 => IoError.Unsupported,
             19 => IoError.HostNotFound,
+            20 => IoError.StorageFull,
             _ => IoError.Other(error),
         };
     }

@@ -355,9 +355,11 @@ fn usedTypesOf(
             addUsedType(c, used, t)?;
         }
     }
-    // Every static is emitted, used or not (§39), so its type is too.
-    for (item in c.hir.statics.view()) {
-        addUsedType(c, used, item.typ)?;
+    // Every static the program emits (staticEmitted) has its type emitted too.
+    for (k in 0..c.hir.statics.length) {
+        if (staticEmitted(e, k)) {
+            addUsedType(c, used, c.hir.statics[k].typ)?;
+        }
     }
     // A composite the program asked for is emitted even where its use was unreachable code.
     for (t in c.types.composites.view()) {
@@ -470,8 +472,34 @@ fn compiledFunctions(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirPro
             e.compiled.push(truncate<u32>(k))?;
         }
     }
+    // A program's own statics are emitted, used or not (§39); a library's only where compiled code takes its address,
+    // so a program does not carry lib/std's tables it never reads (ADR 0075 §2.5).
+    e.usedStatics.clear();
+    for (item in c.hir.statics.view()) {
+        e.usedStatics.push(item.file == none() || !c.fileIsLibrary[item.file as usize])?;
+    }
+    for (f in e.compiled.view()) {
+        for (block in n.functions[f as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                let r = match (n.statements[s as usize]) {
+                    NirStatement.Assign(_, value) => value,
+                    NirStatement.Eval(value) => value,
+                    _ => none(),
+                };
+                if (r != none()) {
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.StaticAddress(k) => { e.usedStatics[k as usize] = true; }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
     return Ok();
 }
+
+/// Whether static `k` is emitted: the program's own always, the library's when compiled code uses it.
+fn staticEmitted(e: borrow CEmitter, k: usize) -> bool => k >= e.usedStatics.length || e.usedStatics[k];
 
 /// The trial emission's analyses (the CEmitter constructor); `trial` is none for the trial itself.
 fn setUpEmitter(

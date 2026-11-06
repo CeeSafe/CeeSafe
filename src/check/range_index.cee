@@ -109,6 +109,7 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
         ExprNode.Block(block) => { return indexesInStmt(c, block, symbol); }
         ExprNode.Borrow(_, operand) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.Move(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Deref(operand) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.MutArg(operand) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.StructLiteral(_, fields, _) => {
             for (k in 0..fields.count) {

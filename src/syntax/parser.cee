@@ -178,6 +178,15 @@ struct Parser {
     fn nameIs(borrow this, token: Token, text: StringView) -> bool =>
         sameText(this.front.symbols.name(Symbol { id: token.data }), text);
 
+    /// Whether `token` names a primitive type (`u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `f32`, `f64`, `bool`,
+    /// `char`), which never takes type arguments (ADR 0075 §2.13).
+    fn isPrimitiveTypeName(borrow this, token: Token) -> bool =>
+        this.nameIs(token, "u8") || this.nameIs(token, "u16") || this.nameIs(token, "u32") ||
+            this.nameIs(token, "u64") || this.nameIs(token, "i8") || this.nameIs(token, "i16") ||
+            this.nameIs(token, "i32") || this.nameIs(token, "i64") || this.nameIs(token, "usize") ||
+            this.nameIs(token, "isize") || this.nameIs(token, "f32") || this.nameIs(token, "f64") ||
+            this.nameIs(token, "bool") || this.nameIs(token, "char");
+
     fn intern(borrow mut this, text: StringView) -> Result<u32, AllocError> {
         let symbol = this.front.symbols.intern(text.bytes())?;
         return Ok(symbol.id);
@@ -1119,8 +1128,19 @@ struct Parser {
         let typeParameters = this.parseTypeParameters()?;
         var variants = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
-        while (this.at(TokenKind.Identifier)) {
+        while (this.at(TokenKind.Identifier) || this.at(TokenKind.At)) {
             let variantStart = this.current().start;
+            var isFrom = false;
+            if (this.at(TokenKind.At)) {
+                // `@from V(E)` (ADR 0075 §2.3): the only attribute a variant takes.
+                this.advance();
+                if (this.at(TokenKind.Identifier) && this.nameIs(this.current(), "from")) {
+                    this.advance();
+                    isFrom = true;
+                } else {
+                    this.errorFound(expectedToken(), "a variant takes only '@from', found ", "")?;
+                }
+            }
             let variantName = this.parseIdentifier()?;
             var payload = Vector<u32>.create();
             if (this.eat(TokenKind.OpenParen)) {
@@ -1138,6 +1158,7 @@ struct Parser {
                 payload: payloadRange,
                 start: variantStart,
                 end: this.endFrom(variantStart),
+                isFrom: isFrom,
             })?;
             variants.push(truncate<u32>(this.front.ast.variants.length - 1))?;
             if (!this.eat(TokenKind.Comma)) {
@@ -1439,8 +1460,10 @@ struct Parser {
             return this.front.ast.addType(TypeNode.Dyn(interfaceType, isMutable, isSend), start, this.endFrom(start));
         }
         if (this.at(TokenKind.Identifier)) {
+            // A primitive type takes no type arguments, so `a as u64 < b` compares (ADR 0075 §2.13).
+            let primitive = !sameKind(this.peek(1).kind, TokenKind.Dot) && this.isPrimitiveTypeName(this.current());
             let name = this.parseQualifiedName()?;
-            if (this.at(TokenKind.Less)) {
+            if (this.at(TokenKind.Less) && !primitive) {
                 let arguments = this.parseGenericArguments()?;
                 return this.front.ast.addType(TypeNode.Generic(name, arguments), name.start, this.endFrom(name.start));
             }
@@ -2012,7 +2035,13 @@ struct Parser {
 
         let assign = this.peekAssignOp();
         if (assign.found) {
-            let assignable = match (this.front.ast.exprs[expr as usize]) {
+            // `*r = v` assigns through `r`, as `r = v` does (ADR 0075 §2.14).
+            var target = expr;
+            match (this.front.ast.exprs[expr as usize]) {
+                ExprNode.Deref(operand) => { target = operand; }
+                _ => {}
+            }
+            let assignable = match (this.front.ast.exprs[target as usize]) {
                 ExprNode.Name(_, _) => true,
                 ExprNode.Member(_, _) => true,
                 ExprNode.Index(_, _) => true,
@@ -2033,7 +2062,7 @@ struct Parser {
             }
             let value = this.parseExpr()?;
             this.expect(TokenKind.Semicolon)?;
-            return this.front.ast.addStmt(StmtNode.Assign(expr, assign.op, value), start, this.endFrom(start));
+            return this.front.ast.addStmt(StmtNode.Assign(target, assign.op, value), start, this.endFrom(start));
         }
 
         // Only a call is a statement (N0225): a `;` after anything else is not a sure fix (tooling.md §5.2).
@@ -2245,6 +2274,12 @@ struct Parser {
             let isMutable = this.eat(TokenKind.MutKeyword);
             let operand = this.parseUnary()?;
             return this.front.ast.addExpr(ExprNode.Borrow(isMutable, operand), start, this.endFrom(start));
+        }
+        if (this.at(TokenKind.Star)) {
+            // `*r`: reading the Copy value a reference refers to (ADR 0075 §2.14).
+            this.advance();
+            let operand = this.parseUnary()?;
+            return this.front.ast.addExpr(ExprNode.Deref(operand), start, this.endFrom(start));
         }
         if (this.at(TokenKind.MoveKeyword)) {
             this.advance();
@@ -2490,6 +2525,14 @@ struct Parser {
             }
             TokenKind.OpenBracket => {
                 this.advance();
+                if (this.eat(TokenKind.CloseBracket)) {
+                    // `[]`: an empty slice where a slice is expected (ADR 0075 §2.9).
+                    return this.front.ast.addExpr(
+                        ExprNode.ArrayLiteral(emptyRange()),
+                        token.start,
+                        this.endFrom(token.start),
+                    );
+                }
                 let first = this.parseExpr()?;
                 if (this.eat(TokenKind.Semicolon)) {
                     let count = this.parsePrimary()?;

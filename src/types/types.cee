@@ -196,6 +196,7 @@ struct EnumVariant {
     start: u32;
     end: u32;
     payload: Vector<u32>; // TypeTable.fields
+    isFrom: bool;         // `@from`: `?` converts its payload's type into the enum (ADR 0075 §2.3)
 }
 
 struct EnumDefinition {
@@ -776,7 +777,7 @@ struct TypeTable {
             })?;
             fields.push(truncate<u32>(this.fields.length - 1))?;
         }
-        this.variants.push(EnumVariant { name: name, index: index, start: 0, end: 0, payload: fields })?;
+        this.variants.push(EnumVariant { name: name, index: index, start: 0, end: 0, payload: fields, isFrom: false })?;
         return Ok(truncate<u32>(this.variants.length - 1));
     }
 

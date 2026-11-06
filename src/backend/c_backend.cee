@@ -108,6 +108,7 @@ fn generateC(
     emitter.inPlaceResults = trial.inPlaceResults;
     emitter.zeroedResults = trial.zeroedResults;
     emitter.usedLibrary = trial.usedLibrary;
+    emitter.usedStatics = trial.usedStatics;
     emitter.usedVariants = trial.usedVariants;
     if (o.placement) {
         // Placement acts on the NIR the C is made from (memory-model.md §5, rule 4).

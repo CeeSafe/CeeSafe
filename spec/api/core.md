@@ -26,10 +26,13 @@
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
 - [struct NumberParsing](#struct-numberparsing)
+- [struct ResultMethods](#struct-resultmethods)
+- [struct OptionalResults](#struct-optionalresults)
 - [struct SliceHalves](#struct-slicehalves)
 - [struct SliceHalvesMut](#struct-slicehalvesmut)
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
+- [struct VectorEditing](#struct-vectorediting)
 - [struct TextHalves](#struct-texthalves)
 - [struct ByteHalves](#struct-bytehalves)
 - [struct TextSplit](#struct-textsplit)
@@ -1853,6 +1856,62 @@ public fn parseF32(s: Slice<u8>) -> f32?
 
 Text as an `f32`, correctly rounded (once: not through an `f64`), or null; the grammar of parseF64.
 
+## struct ResultMethods
+
+```ceesafe
+public struct ResultMethods<T, E>
+```
+
+`Result<T, E>`'s methods.
+
+### ResultMethods.isOk
+
+```ceesafe
+public fn isOk(r: borrow Result<T, E>) -> bool
+```
+
+Whether `r` is `Ok`.
+
+### ResultMethods.isErr
+
+```ceesafe
+public fn isErr(r: borrow Result<T, E>) -> bool
+```
+
+Whether `r` is `Err`.
+
+### ResultMethods.ok
+
+```ceesafe
+public fn ok(r: Result<T, E>) -> T?
+```
+
+The `Ok` value, or null; an `Err` value is destroyed.
+
+### ResultMethods.err
+
+```ceesafe
+public fn err(r: Result<T, E>) -> E?
+```
+
+The `Err` value, or null; an `Ok` value is destroyed.
+
+## struct OptionalResults
+
+```ceesafe
+public struct OptionalResults<T, E>
+```
+
+`o.okOr(e)`: an optional as a `Result`.
+
+### OptionalResults.okOr
+
+```ceesafe
+public fn okOr(o: T?, e: E) -> Result<T, E>
+```
+
+`Ok` with the value, or `Err(e)` for null; `e` is destroyed when there is a value.
+
 ## struct SliceHalves
 
 ```ceesafe
@@ -1960,6 +2019,66 @@ public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
 
 Moves the elements for which `keep` returns true to the front, in order, calling it once on each element in
 index order; returns how many there are. `v.retain(keep)` then truncates the vector to that length.
+
+## struct VectorEditing
+
+```ceesafe
+public struct VectorEditing<T>
+```
+
+`v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12). The index is checked at the call, so a
+panic names the program's line: `at <= length` for `insert`, `at < length` for the others. The elements move by
+`swap`, so they may be of any type. A vector's allocator is `SystemHeap` or `FailingAllocator` (type-system.md
+§23.1); the `…Failing` functions are the latter's.
+
+### VectorEditing.insert
+
+```ceesafe
+public fn insert(v: borrow mut Vector<T>, at: usize, x: T) -> Result<void, AllocError>
+```
+
+Puts `x` at `at`, moving the elements from `at` on one place up. O(length - at). If growing fails, `v` is
+unchanged and `x` is destroyed.
+
+### VectorEditing.remove
+
+```ceesafe
+public fn remove(v: borrow mut Vector<T>, at: usize) -> T
+```
+
+Takes the element at `at` out, moving the later elements one place down. O(length - at).
+
+### VectorEditing.swapRemove
+
+```ceesafe
+public fn swapRemove(v: borrow mut Vector<T>, at: usize) -> T
+```
+
+Takes the element at `at` out and puts the last element in its place. O(1); the order is not kept.
+
+### VectorEditing.insertFailing
+
+```ceesafe
+public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x: T) -> Result<void, AllocError>
+```
+
+`insert` for a vector of `FailingAllocator`.
+
+### VectorEditing.removeFailing
+
+```ceesafe
+public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+```
+
+`remove` for a vector of `FailingAllocator`.
+
+### VectorEditing.swapRemoveFailing
+
+```ceesafe
+public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+```
+
+`swapRemove` for a vector of `FailingAllocator`.
 
 ## struct TextHalves
 

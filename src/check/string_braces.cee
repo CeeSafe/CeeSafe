@@ -272,6 +272,7 @@ fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: 
         ExprNode.Block(statement) => { braceStmt(c, scope, file, statement)?; }
         ExprNode.Borrow(_, operand) => { braceExpr(c, scope, file, operand)?; }
         ExprNode.Move(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Deref(operand) => { braceExpr(c, scope, file, operand)?; }
         ExprNode.MutArg(operand) => { braceExpr(c, scope, file, operand)?; }
         ExprNode.StructLiteral(_, fields, _) => {
             for (k in 0..fields.count) {

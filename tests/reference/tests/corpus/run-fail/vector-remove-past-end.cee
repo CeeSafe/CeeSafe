@@ -1,0 +1,8 @@
+// `v.remove(at)` checks `at < length` at the call (ADR 0075 §2.12).
+fn main() {
+    var v = Vector<u32>.create();
+    v.push(1)!;
+    Console.writeLine(v.remove(0));
+    let gone = v.remove(0); // expect-panic: index out of bounds
+}
+// expect-stdout: 1

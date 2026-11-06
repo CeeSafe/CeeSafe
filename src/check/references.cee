@@ -118,6 +118,35 @@ fn synthMove(c: borrow mut Checker, operandSyntax: u32, span: Span) -> Result<u3
     return c.expr(HirExpr.Move(place), t, span.start, span.end);
 }
 
+/// `*e` (ADR 0075 §2.14): the Copy value the reference `e` refers to. A raw pointer is read with `p.read()`.
+fn synthDeref(c: borrow mut Checker, operandSyntax: u32, span: Span) -> Result<u32, AllocError> {
+    let operand = synth(c, operandSyntax, none())?;
+    if (c.isBottom(operand)) {
+        return Ok(operand);
+    }
+    let t = c.typeOf(operand);
+    if (!c.types.is(t, TypeKind.Reference) || c.types.isClosure(t)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'*' reads through a reference, and this is a ")?;
+        appendQuotedType(mut message, c, t)?;
+        if (c.types.is(t, TypeKind.RawPointer)) {
+            appendText(mut message, "; read a raw pointer with 'p.read()' in an 'unsafe' block")?;
+        }
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let pointee = c.types.info(t).pointee;
+    if (!c.types.isCopy(pointee)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'*' copies the value, and ")?;
+        appendQuotedType(mut message, c, pointee)?;
+        appendText(mut message, " is not Copy; borrow it, or take it with 'replace(mut place, value)'")?;
+        c.error(moveOutOfReference(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return c.expr(HirExpr.Deref(operand), pointee, span.start, span.end);
+}
+
 /// `mut e` outside an argument list.
 fn misplacedMutArgument(c: borrow mut Checker, span: Span) -> Result<u32, AllocError> {
     var message = Vector<u8>.create();
@@ -148,6 +177,14 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
     if (parameterType == none()) {
         synth(c, if (mutOperand != none()) mutOperand else argument, none())?;
         return c.errorResult(span.start, span.end);
+    }
+    match (c.front.ast.exprs[argument as usize]) {
+        ExprNode.ArrayLiteral(elements) => {
+            if (elements.count == 0) {
+                return emptySlice(c, parameterType, span); // `[]` (ADR 0075 §2.9)
+            }
+        }
+        _ => {}
     }
     // A closure parameter takes a closure (or a function value), never a borrow of the argument (§36.2).
     if (c.types.isClosure(parameterType) && mutOperand == none()) {

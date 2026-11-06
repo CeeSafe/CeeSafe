@@ -10,6 +10,11 @@
 - [struct Channel](#struct-channel)
 - [struct AsyncMutex](#struct-asyncmutex)
 - [struct AsyncMutexGuard](#struct-asyncmutexguard)
+- [struct Crc32c](#struct-crc32c)
+- [struct Crc64Nvme](#struct-crc64nvme)
+- [struct Md5](#struct-md5)
+- [struct Sha256](#struct-sha256)
+- [struct HmacSha256](#struct-hmacsha256)
 - [interface HashKey](#interface-hashkey)
 - [struct Hasher](#struct-hasher)
 - [struct HashMap](#struct-hashmap)
@@ -31,6 +36,9 @@
 - [struct UdpReceived](#struct-udpreceived)
 - [struct UdpMessage](#struct-udpmessage)
 - [struct AsyncDns](#struct-asyncdns)
+- [interface OrderKey](#interface-orderkey)
+- [struct OrderedCursor](#struct-orderedcursor)
+- [struct OrderedMap](#struct-orderedmap)
 - [struct Mutex](#struct-mutex)
 - [struct MutexGuard](#struct-mutexguard)
 - [struct Arc](#struct-arc)
@@ -626,6 +634,94 @@ public async fn write(file: borrow mut File, bytes: Slice<u8>) -> Result<void, A
 
 Writes every byte.
 
+### AsyncFiles.openReadWrite
+
+```ceesafe
+public async fn openReadWrite(path: StringView) -> Result<File, AsyncError>
+```
+
+Opens an existing `path` for reading and writing (ADR 0075 §2.1).
+
+### AsyncFiles.openOrCreate
+
+```ceesafe
+public async fn openOrCreate(path: StringView) -> Result<File, AsyncError>
+```
+
+Opens `path` for reading and writing, creating it if missing; never truncates (ADR 0075 §2.1).
+
+### AsyncFiles.createNew
+
+```ceesafe
+public async fn createNew(path: StringView) -> Result<File, AsyncError>
+```
+
+Creates `path` for reading and writing; `AlreadyExists` if it exists (ADR 0075 §2.1).
+
+### AsyncFiles.readAt
+
+```ceesafe
+public async fn readAt(file: borrow mut File, buffer: SliceMut<u8>, offset: u64) -> Result<usize, AsyncError>
+```
+
+One read at `offset` into `buffer`: the count, 0 at or past the end (ADR 0075 §2.1).
+
+### AsyncFiles.length
+
+```ceesafe
+public async fn length(file: borrow mut File) -> Result<u64, AsyncError>
+```
+
+The file's length in bytes (ADR 0075 §2.1).
+
+### AsyncFiles.writeAt
+
+```ceesafe
+public async fn writeAt(file: borrow mut File, bytes: Slice<u8>, offset: u64) -> Result<void, AsyncError>
+```
+
+Writes every byte at `offset` (ADR 0075 §2.1).
+
+### AsyncFiles.syncData
+
+```ceesafe
+public async fn syncData(file: borrow mut File) -> Result<void, AsyncError>
+```
+
+Makes the data, and the metadata needed to read it, durable (ADR 0075 §2.1). After a failure the durable contents are unknown.
+
+### AsyncFiles.syncAll
+
+```ceesafe
+public async fn syncAll(file: borrow mut File) -> Result<void, AsyncError>
+```
+
+`syncData` with all metadata (ADR 0075 §2.1).
+
+### AsyncFiles.setLength
+
+```ceesafe
+public async fn setLength(file: borrow mut File, length: u64) -> Result<void, AsyncError>
+```
+
+Truncates or zero-extends the file to `length` bytes (ADR 0075 §2.1).
+
+### AsyncFiles.rename
+
+```ceesafe
+public async fn rename(from: StringView, to: StringView) -> Result<void, AsyncError>
+```
+
+Renames `from` to `to`, atomically replacing it (ADR 0075 §2.1).
+
+### AsyncFiles.syncDirectory
+
+```ceesafe
+public async fn syncDirectory(path: StringView) -> Result<void, AsyncError>
+```
+
+Makes a directory's entries durable (ADR 0075 §2.1).
+
 ## enum SendError
 
 ```ceesafe
@@ -792,6 +888,212 @@ public fn data(borrow mut this) -> borrow mut T
 
 Safety: the guard holds the token, so no other task or thread reaches the data, and the loan ends before the
 guard's drop.
+
+## struct Crc32c
+
+```ceesafe
+public struct Crc32c
+```
+
+CRC-32C (Castagnoli: polynomial 0x1EDC6F41, reflected, initial value and final XOR all ones), the checksum of
+iSCSI, ext4, Btrfs and the S3 `x-amz-checksum-crc32c` header. `Crc32c.of("123456789".bytes())` is 0xE3069283.
+
+### Crc32c.create
+
+```ceesafe
+public fn create() -> Crc32c
+```
+
+A checksum of no bytes yet.
+
+### Crc32c.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`: eight at a time through the slicing tables, then the rest one at a time.
+
+### Crc32c.finish
+
+```ceesafe
+public fn finish(borrow this) -> u32
+```
+
+The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Crc32c.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> u32
+```
+
+The checksum of `bytes`, in one call.
+
+## struct Crc64Nvme
+
+```ceesafe
+public struct Crc64Nvme
+```
+
+CRC-64/NVME (polynomial 0xAD93D23594C93659, reflected, initial value and final XOR all ones), the checksum of the
+S3 `x-amz-checksum-crc64nvme` header. `Crc64Nvme.of("123456789".bytes())` is 0xAE8B14860A799888.
+
+### Crc64Nvme.create
+
+```ceesafe
+public fn create() -> Crc64Nvme
+```
+
+A checksum of no bytes yet.
+
+### Crc64Nvme.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`: eight at a time through the slicing tables, then the rest one at a time.
+
+### Crc64Nvme.finish
+
+```ceesafe
+public fn finish(borrow this) -> u64
+```
+
+The checksum of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Crc64Nvme.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> u64
+```
+
+The checksum of `bytes`, in one call.
+
+## struct Md5
+
+```ceesafe
+public struct Md5
+```
+
+MD5 (RFC 1321): a 16-byte digest. **MD5 is broken as a signature**: collisions are cheap to make, so it must
+never authenticate anything or stand for a value an attacker chooses. It is here for S3 ETags and `Content-MD5`
+only, which detect accidental corruption. For anything else use Sha256 or HmacSha256.
+
+### Md5.create
+
+```ceesafe
+public fn create() -> Md5
+```
+
+A digest of no bytes yet.
+
+### Md5.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`. Whole blocks are compressed straight from `bytes`; only a partial block is copied.
+
+### Md5.finish
+
+```ceesafe
+public fn finish(borrow this) -> [u8; 16]
+```
+
+The digest of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Md5.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> [u8; 16]
+```
+
+The digest of `bytes`, in one call.
+
+## struct Sha256
+
+```ceesafe
+public struct Sha256
+```
+
+SHA-256 (FIPS 180-4): a 32-byte digest.
+
+### Sha256.create
+
+```ceesafe
+public fn create() -> Sha256
+```
+
+A digest of no bytes yet.
+
+### Sha256.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes`. Whole blocks are compressed straight from `bytes`; only a partial block is copied.
+
+### Sha256.finish
+
+```ceesafe
+public fn finish(borrow this) -> [u8; 32]
+```
+
+The digest of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### Sha256.of
+
+```ceesafe
+public fn of(bytes: Slice<u8>) -> [u8; 32]
+```
+
+The digest of `bytes`, in one call.
+
+## struct HmacSha256
+
+```ceesafe
+public struct HmacSha256
+```
+
+HMAC-SHA-256 (RFC 2104, FIPS 198-1): a 32-byte message authentication code under a key of any length. A key longer
+than SHA-256's 64-byte block is first replaced by its SHA-256. Compare two codes in constant time, not with an
+early exit, where an attacker can time the comparison.
+
+### HmacSha256.create
+
+```ceesafe
+public fn create(key: Slice<u8>) -> HmacSha256
+```
+
+A code under `key` of no bytes yet.
+
+### HmacSha256.update
+
+```ceesafe
+public fn update(borrow mut this, bytes: Slice<u8>)
+```
+
+Feeds `bytes` of the message.
+
+### HmacSha256.finish
+
+```ceesafe
+public fn finish(borrow this) -> [u8; 32]
+```
+
+The code of the bytes fed so far. It does not change the state: more bytes may be fed after it.
+
+### HmacSha256.of
+
+```ceesafe
+public fn of(key: Slice<u8>, bytes: Slice<u8>) -> [u8; 32]
+```
+
+The code of `bytes` under `key`, in one call.
 
 ## interface HashKey
 
@@ -1014,6 +1316,17 @@ public fn remove(path: StringView) -> Result<void, IoError>
 Removes an empty directory.
 Safety: the runtime reads the path's bytes during the call only.
 
+### Directory.sync
+
+```ceesafe
+public fn sync(path: StringView) -> Result<void, IoError>
+```
+
+Makes the directory's entries durable: the files created, renamed or removed in it survive a power cut once
+this returns (ADR 0075 §2.1). POSIX: `fsync` of the directory, `F_FULLFSYNC` on Apple systems. Windows journals
+directory entries and cannot flush a directory: there it checks the path is a directory and does nothing else.
+Safety: the runtime reads the path's bytes during the call only.
+
 ### Directory.list
 
 ```ceesafe
@@ -1076,6 +1389,17 @@ public fn kind(path: StringView) -> Result<PathKind?, IoError>
 `File.kind(path)` (type-system.md §26.8): what is at `path`, following symbolic links, or null if nothing is.
 Safety: the runtime reads the path's bytes during the call only.
 
+### HostServices.rename
+
+```ceesafe
+public fn rename(from: StringView, to: StringView) -> Result<void, IoError>
+```
+
+`File.rename(from, to)` (ADR 0075 §2.1): gives the file at `from` the name `to`, atomically replacing a file
+there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`). The new
+name is durable once its directory is synced (`Directory.sync`).
+Safety: the runtime reads both paths' bytes during the call only.
+
 ## struct UnixTime
 
 ```ceesafe
@@ -1122,6 +1446,17 @@ public fn unixMillis() -> i64
 ```
 
 Now, in milliseconds since 1970.
+
+### Clock.monotonicNanos
+
+```ceesafe
+public fn monotonicNanos() -> u64
+```
+
+Nanoseconds on the monotonic clock, from an arbitrary start (ADR 0075 §2.6): for measuring durations and
+latencies, never for the date. It never decreases within a process (`CLOCK_MONOTONIC`; `CLOCK_UPTIME_RAW` on
+Apple systems; `QueryPerformanceCounter` on Windows). The interpreter answers its virtual clock.
+Safety: the runtime only reads the clock.
 
 ## struct Random
 
@@ -1391,6 +1726,184 @@ to its thread. Errors are `AsyncError.Io`: `HostNotFound` (no such name, or no a
 reserved `.invalid` ones).
 Safety: the runtime copies the name during the start; the lookup's record is the runtime's, ended once by
 `DnsLookup`'s drop, so no path leaves it or ends it twice.
+
+## interface OrderKey
+
+```ceesafe
+public interface OrderKey<K> {
+    fn compareKey(borrow this, other: borrow K) -> i32;
+}
+```
+
+A key of an OrderedMap (ADR 0075 §2.4): `K: OrderKey<K>`, since an interface has no `Self`. The order must be total
+and consistent: `a.compareKey(b)` is negative, zero or positive as `b.compareKey(a)` is positive, zero or negative.
+
+## struct OrderedCursor
+
+```ceesafe
+public struct OrderedCursor
+```
+
+A position in an OrderedMap: a node, a slot in it, and the map's version when the cursor was made. A cursor is
+read through its map (`keyAt`, `valueAt`); one used after the map changed panics.
+
+## struct OrderedMap
+
+```ceesafe
+public struct OrderedMap<K: OrderKey<K>, V>
+```
+
+A map whose iteration order is its keys' order (ADR 0075 §2.4): a B-tree of minimum degree 16 (at most 31 entries
+a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. Ordered access is through
+cursors (`first`, `last`, `seek`, `seekAfter`, `next`, `previous`); a put, a removal or a clear changes the map's
+version, and a cursor made before it panics when used ("ordered map changed under a cursor"). Only `put`
+allocates; a failed `put` leaves the map as it was.
+
+### OrderedMap.create
+
+```ceesafe
+public fn create() -> OrderedMap<K, V>
+```
+
+An empty map. It allocates nothing until the first put.
+
+### OrderedMap.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+How many entries.
+
+### OrderedMap.isEmpty
+
+```ceesafe
+public fn isEmpty(borrow this) -> bool
+```
+
+Whether there are none.
+
+### OrderedMap.get
+
+```ceesafe
+public fn get(borrow this, key: borrow K) -> borrow(this) V?
+```
+
+The value of `key`, if it is there.
+
+### OrderedMap.getMut
+
+```ceesafe
+public fn getMut(borrow mut this, key: borrow K) -> borrow mut(this) V?
+```
+
+The same, to change it. Changing a value does not change the map's version.
+
+### OrderedMap.contains
+
+```ceesafe
+public fn contains(borrow this, key: borrow K) -> bool
+```
+
+Whether `key` is there.
+
+### OrderedMap.put
+
+```ceesafe
+public fn put(borrow mut this, key: K, value: V) -> Result<V?, AllocError>
+```
+
+Puts `value` at `key`: the old value if the key was there, else null. A failure leaves the map as it was. The
+nodes a put may need are allocated before anything changes.
+
+### OrderedMap.remove
+
+```ceesafe
+public fn remove(borrow mut this, key: borrow K) -> V?
+```
+
+Takes `key` out: its value, or null. The descent keeps every node it enters above the minimum, borrowing from a
+sibling or else merging (CLRS's B-TREE-DELETE), so the tree stays balanced. Nothing allocates.
+
+### OrderedMap.clear
+
+```ceesafe
+public fn clear(borrow mut this)
+```
+
+Takes every entry out and frees the nodes.
+
+### OrderedMap.first
+
+```ceesafe
+public fn first(borrow this) -> OrderedCursor?
+```
+
+The least entry, or null if the map is empty.
+
+### OrderedMap.last
+
+```ceesafe
+public fn last(borrow this) -> OrderedCursor?
+```
+
+The greatest entry, or null if the map is empty.
+
+### OrderedMap.seek
+
+```ceesafe
+public fn seek(borrow this, key: borrow K) -> OrderedCursor?
+```
+
+The first entry whose key is not before `key`, or null if there is none.
+
+### OrderedMap.seekAfter
+
+```ceesafe
+public fn seekAfter(borrow this, key: borrow K) -> OrderedCursor?
+```
+
+The first entry whose key comes after `key`, or null if there is none.
+
+### OrderedMap.next
+
+```ceesafe
+public fn next(borrow this, at: OrderedCursor) -> OrderedCursor?
+```
+
+The entry after `at`'s, or null at the end.
+
+### OrderedMap.previous
+
+```ceesafe
+public fn previous(borrow this, at: OrderedCursor) -> OrderedCursor?
+```
+
+The entry before `at`'s, or null at the start.
+
+### OrderedMap.keyAt
+
+```ceesafe
+public fn keyAt(borrow this, at: OrderedCursor) -> borrow(this) K
+```
+
+The key at `at`.
+
+### OrderedMap.valueAt
+
+```ceesafe
+public fn valueAt(borrow this, at: OrderedCursor) -> borrow(this) V
+```
+
+The value at `at`.
+
+### OrderedMap.valueAtMut
+
+```ceesafe
+public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
+```
+
+The value at `at`, to change it. Changing a value does not change the map's version.
 
 ## struct Mutex
 

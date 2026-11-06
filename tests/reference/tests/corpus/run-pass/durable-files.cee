@@ -1,0 +1,69 @@
+// The durable file API (ADR 0075 §2.1): opening without truncating, positional I/O, syncs, length and truncation,
+// rename and directory sync.
+fn run(dir: StringView) -> Result<void, IoError> {
+    var path = String.create();
+    path.append(dir)!;
+    path.append("/journal")!;
+    var moved = String.create();
+    moved.append(dir)!;
+    moved.append("/journal.final")!;
+    match (File.openReadWrite(path.view())) {
+        Ok(_) => { Console.writeLine("opened a missing file"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    {
+        var f = File.createNew(path.view())?;
+        f.writeAt("hello world".bytes(), 0)?;
+        f.writeAt("HELLO".bytes(), 0)?;
+        f.writeAt("!".bytes(), 20)?;
+        f.syncData()?;
+        Console.writeLine(f.length()?);
+    }
+    match (File.createNew(path.view())) {
+        Ok(_) => { Console.writeLine("created twice"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    {
+        var f = File.openOrCreate(path.view())?;
+        f.setLength(11)?;
+        f.syncAll()?;
+        var buffer = [0u8; 32];
+        let n = f.readAt(mut buffer[..], 6)?;
+        Console.writeLine(StringView.fromUtf8(buffer[0..n])!);
+        Console.writeLine(f.readAt(mut buffer[..], 11)?);
+        var head = [0u8; 5];
+        let k = f.read(mut head[..])?;
+        Console.writeLine(StringView.fromUtf8(head[0..k])!);
+        f.write("+".bytes())?;
+    }
+    File.rename(path.view(), moved.view())?;
+    Directory.sync(dir)?;
+    Console.writeLine(if (File.kind(path.view())? == null) "old name gone" else "old name kept");
+    var g = File.openReadWrite(moved.view())?;
+    var all = [0u8; 32];
+    let m = g.readAt(mut all[..], 0)?;
+    Console.writeLine(StringView.fromUtf8(all[0..m])!);
+    File.remove(moved.view())?;
+    return Ok();
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    match (run(dir.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    Directory.remove(dir.view())!;
+    let t0 = Clock.monotonicNanos();
+    let t1 = Clock.monotonicNanos();
+    Console.writeLine(if (t1 >= t0) "monotonic" else "went back");
+}
+// expect-stdout: No such file or directory
+// expect-stdout: 21
+// expect-stdout: File exists
+// expect-stdout: world
+// expect-stdout: 0
+// expect-stdout: HELLO
+// expect-stdout: old name gone
+// expect-stdout: HELLO+world
+// expect-stdout: monotonic

@@ -415,10 +415,13 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
         // Each static is declared before any is defined, so one may hold another's address, in any order (C11
         // §6.9.2: a tentative definition).
         for (k in 0..c.hir.statics.length) {
-            if (!staticHoldsAddress(c, c.hir.statics[k].value)) {
+            if (!staticEmitted(e, k) || !staticHoldsAddress(c, c.hir.statics[k].value)) {
                 continue;
             }
             for (j in 0..c.hir.statics.length) {
+                if (!staticEmitted(e, j)) {
+                    continue;
+                }
                 if (!e.split) {
                     e.t("static CEE_UNUSED ")?;
                 } else {
@@ -435,7 +438,12 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             break;
         }
     }
+    var emitted: usize = 0;
     for (k in 0..c.hir.statics.length) {
+        if (!staticEmitted(e, k)) {
+            continue;
+        }
+        emitted += 1;
         let item = c.hir.statics[k];
         var name = Vector<u8>.create();
         appendStaticName(c, mut name, truncate<u32>(k))?;
@@ -462,7 +470,7 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
         e.t(";")?;
         e.emit()?;
     }
-    if (c.hir.statics.length > 0) {
+    if (emitted > 0) {
         e.line("")?;
     }
     return Ok();

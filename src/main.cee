@@ -225,6 +225,7 @@ struct Options {
     testJobs: u32;              // test --jobs
     testTimeout: u64;           // test --timeout, in seconds
     testSweep: u32;             // test --sweep: 0 none, 1 alloc, 2 cancel
+    testSweepStrict: bool;      // test --sweep-strict (ADR 0075 §2.16)
     testJson: bool;             // test --format json
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
     files: Vector<String>;
@@ -425,6 +426,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             }
         } else if (arg == "--dump-tokens") {
             options.dumpTokens = true;
+        } else if (options.testing && arg == "--sweep-strict") {
+            options.testSweepStrict = true; // ADR 0075 §2.16: a test's own unwraps fail the sweep too
         } else if (options.testing && (arg == "--list" || arg == "--interp")) {
             if (arg == "--list") {
                 options.testList = true;
@@ -723,6 +726,7 @@ fn parseCommand() -> i32 {
         testJobs: 1,
         testTimeout: 60,
         testSweep: 0,
+        testSweepStrict: false,
         testJson: false,
         defaultOutput: Vector<u8>.create(),
         files: Vector<String>.create(),
@@ -890,6 +894,9 @@ fn loadPackage(
             }
             let status = addCFile(mut options, path.view());
             if (status != 0) {
+                return 1;
+            }
+            if (addHeadersBeside(mut options, path.view()) != 0) {
                 return 1;
             }
         }
@@ -1073,6 +1080,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     testJobs: 1,
     testTimeout: 60,
     testSweep: 0,
+    testSweepStrict: false,
     testJson: false,
     defaultOutput: Vector<u8>.create(),
     files: Vector<String>.create(),
@@ -1277,7 +1285,7 @@ fn compileFiles(
         if (checker.front.diagnostics.hasErrors()) {
             return report(options.json, checker.front.diagnostics, sources);
         }
-        return writeHarness(options, checker);
+        return writeHarness(options, checker, borrow sources);
     }
     if (options.running) {
         if (checker.front.diagnostics.hasErrors()) {
@@ -1571,5 +1579,52 @@ fn addCFile(options: borrow mut Options, path: Slice<u8>) -> i32 {
     };
     options.cNames.push(name)!;
     options.cTexts.push(text)!;
+    return 0;
+}
+
+/// The headers beside a package's C file go with it into the build's `c/` directory (ADR 0075 §2.16), so its
+/// `#include "x.h"` finds them, in `--emit c`'s output too. Two different headers of one name are an error; the same
+/// header twice (two C files of one directory) is copied once.
+fn addHeadersBeside(options: borrow mut Options, path: Slice<u8>) -> i32 {
+    var end = path.length;
+    while (end > 0 && path[end - 1] != '/' && path[end - 1] != '\\') {
+        end -= 1;
+    }
+    var directory = Vector<u8>.create();
+    appendBytes(mut directory, if (end > 0) path[0..(end - 1)] else ".".bytes())!;
+    let names = match (Directory.list(StringView.fromUtf8(directory.view())!)) {
+        Ok(found) => found,
+        Err(_) => { return 0; }
+    };
+    for (name in names.view()) {
+        let bytes = name.view().bytes();
+        if (bytes.length < 3 || bytes[bytes.length - 2] != '.' || bytes[bytes.length - 1] != 'h') {
+            continue;
+        }
+        var full = Vector<u8>.create();
+        appendBytes(mut full, directory.view())!;
+        full.push('/')!;
+        appendBytes(mut full, bytes)!;
+        let text = match (readFile(StringView.fromUtf8(full.view())!)) {
+            Ok(t) => t,
+            Err(_) => { continue; }
+        };
+        var known = false;
+        for (k in 0..options.cNames.length) {
+            if (sameBytes(options.cNames[k].view(), bytes)) {
+                if (!sameBytes(options.cTexts[k].view(), text.view())) {
+                    var message = copyBytes("two different C headers are named '".bytes())!;
+                    appendBytes(mut message, bytes)!;
+                    message.push('\'')!;
+                    return failBytes(message.view());
+                }
+                known = true;
+            }
+        }
+        if (!known) {
+            options.cNames.push(copyBytes(bytes)!)!;
+            options.cTexts.push(text)!;
+        }
+    }
     return 0;
 }

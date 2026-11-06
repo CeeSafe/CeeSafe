@@ -26,6 +26,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_FLOAT_RANGE: return "float out of range";
     case CEE_PANIC_ASYNC: return "async executor: every task waits with nothing to wake it";
     case CEE_PANIC_FRAME_STACK: return "async frame stack: out of memory";
+    case CEE_PANIC_EXPLICIT: return "explicit panic";
     default: return "unknown panic";
     }
 }
@@ -88,6 +89,11 @@ static void *fba_alloc(cee_fba *f, uint64_t size, uint64_t align) {
 }
 
 #ifdef CEE_FREESTANDING
+/* The environment reports panics by kind only (profiles.md §4.2). */
+_Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
+    (void)message;
+    ceesafe_panic(CEE_PANIC_EXPLICIT, loc);
+}
 /* Only fixed buffers exist without a heap (profiles.md §4.1). */
 void *ceesafe_region_alloc(void *region, uint32_t kind, uint64_t size, uint64_t align) {
     return kind == CEE_REGION_FBA ? fba_alloc((cee_fba *)region, size, align) : NULL;
@@ -211,6 +217,20 @@ _Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
     const char *reason = ceesafe_panic_reason(kind);
     write_err_cstr("ceesafe panic: ");
     write_err_cstr(reason);
+    write_err_cstr(" at ");
+    write_err_cstr(loc.file);
+    write_err_cstr(":");
+    write_err_u32(loc.line);
+    write_err_cstr(":");
+    write_err_u32(loc.column);
+    write_err_cstr("\n");
+    ceesafe_platform_abort();
+}
+
+/* Message format as ceesafe_panic's, with the program's text as the reason (ADR 0075 §2.8). */
+_Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
+    write_err_cstr("ceesafe panic: ");
+    ceesafe_platform_write_stderr(message.ptr, (size_t)message.len);
     write_err_cstr(" at ");
     write_err_cstr(loc.file);
     write_err_cstr(":");

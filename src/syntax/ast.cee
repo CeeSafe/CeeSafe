@@ -135,6 +135,8 @@ enum ExprNode {
     Block(u32),   // a block statement as a branch
     Borrow(bool, u32),
     Move(u32),
+    /// `*e`: the Copy value a reference refers to (ADR 0075 §2.14).
+    Deref(u32),
     MutArg(u32),
     /// `S<T> { f: e, … }`: the type name (an identifier), field initialisers, type arguments.
     StructLiteral(u32, Range, Range),
@@ -295,6 +297,7 @@ struct Variant {
     payload: Range; // types
     start: u32;
     end: u32;
+    isFrom: bool; // `@from V(E)`: `?` wraps an `E` in it (ADR 0075 §2.3)
 }
 
 enum ItemKind {

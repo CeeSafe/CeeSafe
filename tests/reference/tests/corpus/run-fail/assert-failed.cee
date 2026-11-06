@@ -1,0 +1,8 @@
+// A failed `assert(condition)` panics with "assertion failed" (ADR 0075 §2.8).
+fn main() {
+    let n: u32 = 3;
+    assert(n == 3);
+    Console.writeLine("held");
+    assert(n == 4); // expect-panic: assertion failed
+}
+// expect-stdout: held

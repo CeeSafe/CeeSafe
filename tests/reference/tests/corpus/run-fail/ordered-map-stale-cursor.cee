@@ -1,0 +1,11 @@
+// A cursor made before an OrderedMap changed panics when used (ADR 0075 §2.4).
+fn main() {
+    var m = OrderedMap<u64, u64>.create();
+    m.put(1, 10)!;
+    let c = m.first()!;
+    Console.writeLine(m.keyAt(c));
+    m.put(2, 20)!;
+    let k = m.keyAt(c);
+}
+// expect-stdout: 1
+// expect-library-panic: ordered map changed under a cursor

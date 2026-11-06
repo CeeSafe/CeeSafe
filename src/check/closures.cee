@@ -130,6 +130,7 @@ fn namesInExpr(c: borrow Checker, e: u32, parameters: borrow Vector<u32>) -> boo
         ExprNode.Block(block) => { return namesInStmt(c, block, parameters); }
         ExprNode.Borrow(_, operand) => { return namesInExpr(c, operand, parameters); }
         ExprNode.Move(operand) => { return namesInExpr(c, operand, parameters); }
+        ExprNode.Deref(operand) => { return namesInExpr(c, operand, parameters); }
         ExprNode.MutArg(operand) => { return namesInExpr(c, operand, parameters); }
         ExprNode.StructLiteral(_, fields, _) => {
             for (k in 0..fields.count) {

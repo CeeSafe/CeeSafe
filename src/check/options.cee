@@ -388,6 +388,13 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
         tryInDefer(c, span)?;
     } else {
         let returnsResult = returnType != none() && isResultType(c, returnType);
+        let conversion = if (returnsResult) fromVariant(c, resultErr(c, returnType), err) else none();
+        if (conversion != none()) {
+            // `?` wraps the error in the return type's `@from` variant (ADR 0075 §2.3).
+            let tried = c.expr(HirExpr.Try(operand), ok, span.start, span.end)?;
+            c.tryConversions.put(Word { value: tried as u64 }, Word { value: conversion as u64 })?;
+            return Ok(tried);
+        }
         if (!returnsResult || resultErr(c, returnType) != err) {
             if (returnType == none() || !c.types.isBottom(returnType)) {
                 var message = Vector<u8>.create();
@@ -398,7 +405,13 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
                     appendFunctionName(mut message, c)?;
                     appendText(mut message, " returns errors of type ")?;
                     appendQuotedType(mut message, c, resultErr(c, returnType))?;
-                    appendText(mut message, " (the types must be the same in v0)")?;
+                    appendText(
+                        mut message,
+                        "; mark a variant of the function's error enum '@from' to convert, as in '@from ",
+                    )?;
+                    appendText(mut message, "Variant(")?;
+                    appendBytes(mut message, c.typeName(err))?;
+                    appendText(mut message, ")'")?;
                 } else {
                     appendText(mut message, "'?' returns 'Err' from the function, so ")?;
                     appendFunctionName(mut message, c)?;

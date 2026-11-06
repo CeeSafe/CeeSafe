@@ -32,7 +32,7 @@ fn mmioNeedsUnsafe() -> usize {
 
 fn addressesDoNotMix(p: PhysAddr) -> VirtAddr => p; // error[N0205]
 
-struct PhysAddr { x: u8; } // error[N0201]
+struct PhysAddr { x: u8; } // shadows lib/core's PhysAddr: no error since ADR 0075 §5 (was N0201)
 
 @align(3) // error[N0290]
 struct OddAlign { a: u8; }

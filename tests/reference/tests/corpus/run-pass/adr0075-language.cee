@@ -1,0 +1,118 @@
+// ADR 0075's language changes: `as T <` (§2.13), `*r` (§2.14), `replace` and `swap` (§2.11), an array's slice
+// methods (§2.10), a field of a returned reference (§2.7), `[]` (§2.9), Result methods and `@from` (§2.3), Vector
+// editing (§2.12), static tables of atomics (§2.15) and `assert` (§2.8).
+static SLOTS: [AtomicU64; 4] = [AtomicU64.constant(0); 4];
+
+enum StoreError {
+    @from Alloc(AllocError),
+    Corrupt,
+}
+
+struct Key {
+    name: Vector<u8>;
+}
+
+struct Holder {
+    key: Key;
+
+    fn get(borrow this) -> borrow Key => borrow this.key;
+}
+
+struct Writer {
+    inline: Vector<u8>;
+
+    fn finish(borrow mut this) -> Vector<u8> => replace(mut this.inline, Vector<u8>.create());
+}
+
+fn below(a: usize, b: u64) -> bool => a as u64 < b;
+
+fn bump(r: borrow mut u64) {
+    * r = * r + 1;
+}
+
+fn count(s: Slice<u8>) -> usize => s.length;
+
+fn build(n: usize) -> Result<Vector<u8>, StoreError> {
+    var v = Vector<u8>.create();
+    for (i in 0..n) {
+        v.push(truncate<u8>(i))?; // an AllocError becomes StoreError.Alloc
+    }
+    if (n == 0) {
+        return Err(StoreError.Corrupt);
+    }
+    return Ok(v);
+}
+
+fn main() {
+    Console.writeLine(if (below(3, 4)) "below" else "not below");
+    var x: u64 = 41;
+    bump(mut x);
+    let r = borrow x;
+    let copy = * r;
+    Console.writeLine(copy);
+    let old = replace(mut x, 7);
+    Console.writeLine(old + x);
+    var w = Writer { inline: Vector<u8>.create() };
+    w.inline.push(1)!;
+    w.inline.push(2)!;
+    let taken = w.finish();
+    Console.writeLine(taken.length * 10 + w.inline.length);
+    var a = String.create();
+    a.append("left")!;
+    var b = String.create();
+    b.append("right")!;
+    swap(mut a, mut b);
+    Console.writeLine(a.view());
+    var header = [0u8; 8];
+    header.writeLE(0, 0x01020304u32);
+    Console.writeLine(header.readLE<u32>(0));
+    var order = [3u32, 1, 2];
+    order.sortBy((p, q) => if (* p < * q) -1 else if (* p > * q) 1 else 0);
+    Console.writeLine(order[0] * 100 + order[1] * 10 + order[2]);
+    var name = Vector<u8>.create();
+    name.push(9)!;
+    let h = Holder { key: Key { name: name } };
+    Console.writeLine(h.get().name.view()[0]);
+    Console.writeLine(count([]));
+    let built = build(3);
+    Console.writeLine(if (built.isOk()) "ok" else "err");
+    Console.writeLine(match (build(0).err()) {
+        Some(StoreError.Corrupt) => "corrupt",
+        _ => "other",
+    });
+    let found: u32? = null;
+    Console.writeLine(if (found.okOr(StoreError.Corrupt).isErr()) "none" else "some");
+    var v = Vector<u32>.create();
+    for (i in 0..5u32) {
+        v.insert(0, i)!;
+    }
+    let second = v.remove(1);
+    let first = v.swapRemove(0);
+    Console.writeLine(second * 10 + first);
+    for (e in v.view()) {
+        Console.write(e);
+    }
+    Console.writeLine("");
+    SLOTS[1].fetchAdd(5);
+    SLOTS[3].fetchAdd(1);
+    Console.writeLine(SLOTS[1].load() + SLOTS[3].load());
+    assert(x == 7);
+    assert(v.length == 3, "three left");
+    Console.writeLine("done");
+}
+// expect-stdout: below
+// expect-stdout: 42
+// expect-stdout: 49
+// expect-stdout: 20
+// expect-stdout: right
+// expect-stdout: 16909060
+// expect-stdout: 123
+// expect-stdout: 9
+// expect-stdout: 0
+// expect-stdout: ok
+// expect-stdout: corrupt
+// expect-stdout: none
+// expect-stdout: 34
+// expect-stdout: 021
+// expect-stdout: 6
+// expect-stdout: done

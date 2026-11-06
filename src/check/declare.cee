@@ -57,7 +57,11 @@ fn builtinName(k: u32) -> StringView => match (k) {
     25 => "Cpu",
     26 => "Target",
     27 => "Thread",
-    _ => "Async",
+    28 => "Async",
+    29 => "assert",
+    30 => "panic",
+    31 => "replace",
+    _ => "swap",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -173,6 +177,7 @@ fn checkProgram(
         usedUnsafe: false,
         allowCChar: false,
         inStaticInitializer: false,
+        inStaticType: false,
         atomicStructs: Vector<u32>.create(),
         allowImported: false,
         coreAllowImported: false,
@@ -194,6 +199,8 @@ fn checkProgram(
         blockValueType: none(),
         blockValueResult: none(),
         packageDeclared: Map<Word, Word>.create(),
+        tryConversions: Map<Word, Word>.create(),
+        packageSymbols: Map<Word, Word>.create(),
         declaredOrder: Vector<DeclaredEntry>.create(),
         methodFiles: Vector<MethodFile>.create(),
         memberConstants: Vector<MemberConstant>.create(),
@@ -385,7 +392,10 @@ fn isDeclared(c: borrow Checker, symbol: u32) -> bool {
     if (isLibraryFile(c)) {
         return c.coreItems.find(key) != null;
     }
-    return c.packageItems.find(packageKey(currentPackage(c), symbol)) != null || c.coreItems.find(key) != null;
+    // A package's item may have a library item's name: it shadows it in the package, and the library's own code still
+    // finds its own (packageItem looks in the package first; a library file only in the libraries). So a name added
+    // to lib/core or lib/std is not a source change (ADR 0075 §5).
+    return c.packageItems.find(packageKey(currentPackage(c), symbol)) != null;
 }
 
 fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, AllocError> {
@@ -394,6 +404,7 @@ fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, A
         c.coreItems.put(key, entity)?;
     } else {
         c.packageItems.put(packageKey(currentPackage(c), symbol), entity)?;
+        c.packageSymbols.put(key, key)?;
     }
     return Ok();
 }

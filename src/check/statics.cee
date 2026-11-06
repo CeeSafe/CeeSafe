@@ -32,7 +32,9 @@ fn declareStatic(c: borrow mut Checker, item: u32, mutable: bool, typeSyntax: u3
     let entry = c.front.ast.items[item as usize];
     let id = c.front.ast.idents[entry.name as usize];
     c.allowImported = true;
+    c.inStaticType = true;
     let typ = c.resolveType(typeSyntax, false)?;
+    c.inStaticType = false;
     let file = c.file;
     let qualified = qualifiedSymbol(c, id.symbol)?;
     c.hir.statics.push(

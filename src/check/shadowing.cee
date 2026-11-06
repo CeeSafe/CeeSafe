@@ -253,6 +253,7 @@ fn shadowExpr(
         ExprNode.Block(statement) => { shadowStmt(front, dependencies, scope, statement)?; }
         ExprNode.Borrow(_, operand) => { shadowExpr(front, dependencies, scope, operand)?; }
         ExprNode.Move(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Deref(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
         ExprNode.MutArg(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
         ExprNode.StructLiteral(_, fields, _) => {
             for (k in 0..fields.count) {

@@ -8,6 +8,8 @@ extern "C" {
     @effects()
     fn ceesafe_clock_realtime(seconds: *mut i64, nanoseconds: *mut u32);
     @effects()
+    fn ceesafe_clock_monotonic() -> u64;
+    @effects()
     fn ceesafe_random_fill(out: *mut u8, length: u64) -> i64;
     @effects()
     fn ceesafe_host_env(name: *u8, length: u64, value: *mut (*u8), valueLength: *mut u64) -> i64;
@@ -17,6 +19,10 @@ extern "C" {
     fn ceesafe_host_dir_create(path: *u8, length: u64) -> i64;
     @effects(sleep)
     fn ceesafe_host_dir_remove(path: *u8, length: u64) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_dir_sync(path: *u8, length: u64) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_dir_open(path: *u8, length: u64, error: *mut i32) -> *mut void;
     @effects(sleep)
@@ -92,6 +98,15 @@ public struct Directory {
     /// Safety: the runtime reads the path's bytes during the call only.
     public fn remove(path: StringView) -> Result<void, IoError> {
         let result = unsafe { ceesafe_host_dir_remove(path.ptr, path.length as u64) };
+        return if (result < 0) Err(HostServices.hostError(result)) else Ok();
+    }
+
+    /// Makes the directory's entries durable: the files created, renamed or removed in it survive a power cut once
+    /// this returns (ADR 0075 §2.1). POSIX: `fsync` of the directory, `F_FULLFSYNC` on Apple systems. Windows journals
+    /// directory entries and cannot flush a directory: there it checks the path is a directory and does nothing else.
+    /// Safety: the runtime reads the path's bytes during the call only.
+    public fn sync(path: StringView) -> Result<void, IoError> {
+        let result = unsafe { ceesafe_host_dir_sync(path.ptr, path.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
@@ -194,6 +209,15 @@ public struct HostServices {
             2 => Ok(PathKind.Directory),
             _ => if (kind < 0) Err(HostServices.hostError(kind)) else Ok(PathKind.Other),
         };
+    }
+
+    /// `File.rename(from, to)` (ADR 0075 §2.1): gives the file at `from` the name `to`, atomically replacing a file
+    /// there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`). The new
+    /// name is durable once its directory is synced (`Directory.sync`).
+    /// Safety: the runtime reads both paths' bytes during the call only.
+    public fn rename(from: StringView, to: StringView) -> Result<void, IoError> {
+        let result = unsafe { ceesafe_host_rename(from.ptr, from.length as u64, to.ptr, to.length as u64) };
+        return if (result < 0) Err(HostServices.hostError(result)) else Ok();
     }
 
     /// Safety: `texts` holds a view per argument and outlives the call; the runtime reads it and the paths during
@@ -385,6 +409,12 @@ public struct Clock {
 
     /// Now, in milliseconds since 1970.
     public fn unixMillis() -> i64 => Clock.now().millis();
+
+    /// Nanoseconds on the monotonic clock, from an arbitrary start (ADR 0075 §2.6): for measuring durations and
+    /// latencies, never for the date. It never decreases within a process (`CLOCK_MONOTONIC`; `CLOCK_UPTIME_RAW` on
+    /// Apple systems; `QueryPerformanceCounter` on Windows). The interpreter answers its virtual clock.
+    /// Safety: the runtime only reads the clock.
+    public fn monotonicNanos() -> u64 => unsafe { ceesafe_clock_monotonic() };
 }
 
 /// Random bytes from the system's cryptographic source (ADR 0060): `getrandom` (or `/dev/urandom`) on Linux,

@@ -268,9 +268,10 @@ fn isPathThroughReference(c: borrow Checker, e: u32, mutable: bool) -> Result<bo
         }
         HirExpr.Deref(reference) => {
             let t = c.typeOf(reference);
-            if (c.types.is(t, TypeKind.Box)) {
+            if (c.types.is(t, TypeKind.Box) || c.types.is(t, TypeKind.Vector) || c.types.is(t, TypeKind.StableVector)) {
                 // A box's contents are reached as the box is (bug B11: a `borrow Box<dyn I>` from a call was copied
-                // to a temporary of type `dyn I` before its method call).
+                // to a temporary of type `dyn I` before its method call), and a vector's elements as the vector is
+                // (ADR 0075 §2.7: `m.keyAt(0).name.view()`).
                 return isPathThroughReference(c, reference, mutable);
             }
             if (!c.types.is(t, TypeKind.Reference) || (mutable && !c.types.info(t).mutableReference)) {

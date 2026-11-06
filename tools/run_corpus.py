@@ -59,7 +59,7 @@ EXPLAIN = {
 
 # `// warning[N0400]` too: a check-pass program may expect warnings (ADR 0073 §2.4), which never fail a build.
 ANNOTATION = re.compile(r"// (?:error|warning)\[(N\d{4})\](?:@(\d+))?")
-DIRECTIVE = re.compile(r"// expect-(stdout|exit|panic):(?: (.*))?$")
+DIRECTIVE = re.compile(r"// expect-(stdout|exit|panic|library-panic):(?: (.*))?$")
 ABORT_EXIT = 134  # 128 + SIGABRT
 
 
@@ -111,6 +111,9 @@ def expectations(text):
             stdout.append(value + "\n")
         elif kind == "exit":
             exit_code = int(value)
+        elif kind == "library-panic":
+            # A panic raised in an embedded library (ADR 0075 §4): reported at the library's line, under lib/.
+            panic, panic_line, exit_code = value, 0, ABORT_EXIT
         else:
             panic, panic_line, exit_code = value, number, ABORT_EXIT
     return "".join(stdout), exit_code, panic, panic_line
@@ -294,7 +297,8 @@ def run_test(runner, family, path, work):
                 run.stderr = re.sub(re.escape("ceesafe alloc: ") + r"attempts=\d+ live=\d+\n?", "", run.stderr)
             if run.status != exit_code:
                 problems.append(f"exit {run.status}, expected {exit_code}; stderr: {run.stderr.strip()[:300]}")
-            if panic is not None and not run.stderr.startswith(f"ceesafe panic: {panic} at {path}:{panic_line}:"):
+            where = "lib/" if panic_line == 0 else f"{path}:{panic_line}:"
+            if panic is not None and not run.stderr.startswith(f"ceesafe panic: {panic} at {where}"):
                 problems.append(f"panic message differs: {run.stderr.strip()[:300]}")
         if family == "ffi":
             out = os.path.join(work, "c")

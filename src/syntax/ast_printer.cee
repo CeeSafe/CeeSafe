@@ -666,6 +666,7 @@ struct AstPrinter {
             }
             ExprNode.MutArg(operand) => { this.unary(ast, symbols, "(mut-arg ", operand)?; }
             ExprNode.Move(operand) => { this.unary(ast, symbols, "(move ", operand)?; }
+            ExprNode.Deref(operand) => { this.unary(ast, symbols, "(deref ", operand)?; }
             ExprNode.StructLiteral(typeName, fields, typeArguments) => {
                 this.text("(new ")?;
                 this.name(ast, symbols, typeName)?;

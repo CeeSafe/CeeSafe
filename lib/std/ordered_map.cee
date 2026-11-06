@@ -1,0 +1,704 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// OrderedMap<K, V> (ADR 0075 §2.4): a B-tree over an arena of nodes linked by index, in safe CeeSafe, and its keys' OrderKey.
+
+/// A key of an OrderedMap (ADR 0075 §2.4): `K: OrderKey<K>`, since an interface has no `Self`. The order must be total
+/// and consistent: `a.compareKey(b)` is negative, zero or positive as `b.compareKey(a)` is positive, zero or negative.
+public interface OrderKey<K> {
+    /// Negative if this key comes before `other`, zero if it is the same key, positive if it comes after.
+    fn compareKey(borrow this, other: borrow K) -> i32;
+}
+
+impl OrderKey<u8> for u8 {
+    fn compareKey(borrow this, other: borrow u8) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<u16> for u16 {
+    fn compareKey(borrow this, other: borrow u16) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<u32> for u32 {
+    fn compareKey(borrow this, other: borrow u32) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<u64> for u64 {
+    fn compareKey(borrow this, other: borrow u64) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<usize> for usize {
+    fn compareKey(borrow this, other: borrow usize) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<i8> for i8 {
+    fn compareKey(borrow this, other: borrow i8) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<i16> for i16 {
+    fn compareKey(borrow this, other: borrow i16) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<i32> for i32 {
+    fn compareKey(borrow this, other: borrow i32) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<i64> for i64 {
+    fn compareKey(borrow this, other: borrow i64) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<isize> for isize {
+    fn compareKey(borrow this, other: borrow isize) -> i32 => if (this < other) -1 else if (this > other) 1 else 0;
+}
+
+impl OrderKey<bool> for bool {
+    /// `false` before `true`.
+    fn compareKey(borrow this, other: borrow bool) -> i32 => if (this == other) 0 else if (this) 1 else -1;
+}
+
+impl OrderKey<String> for String {
+    /// Bytewise (UTF-8, so code point order), a prefix before the longer text.
+    fn compareKey(borrow this, other: borrow String) -> i32 => orderBytes(this.view().bytes(), other.view().bytes());
+}
+
+impl OrderKey<Vector<u8>> for Vector<u8> {
+    /// Bytewise, a prefix before the longer vector.
+    fn compareKey(borrow this, other: borrow Vector<u8>) -> i32 => orderBytes(this.view(), other.view());
+}
+
+/// The bytewise order of `a` and `b`, a prefix first.
+fn orderBytes(a: Slice<u8>, b: Slice<u8>) -> i32 {
+    let n = if (a.length < b.length) a.length else b.length;
+    for (k in 0..n) {
+        if (a[k] != b[k]) {
+            return if (a[k] < b[k]) -1 else 1;
+        }
+    }
+    return if (a.length < b.length) -1 else if (a.length > b.length) 1 else 0;
+}
+
+/// A node of an OrderedMap: its entries in key order and, unless it is a leaf, one more child than entries. Its
+/// vectors are allocated once, with room for one entry more than a node holds, so nothing in a node allocates after
+/// that.
+struct OrderedNode<K, V> {
+    keys: Vector<K>;
+    values: Vector<V>;
+    children: Vector<usize>; // empty for a leaf
+    parent: usize?;          // null for the root; for a free node, the next free one
+
+    fn isLeaf(borrow this) -> bool => this.children.length == 0;
+}
+
+// The shifts within a node, in one place to replace with `Vector.insert` and `remove` (ADR 0075 §2.12). A node's
+// vectors are made with room for one element more than it holds, so the pushes never allocate and cannot fail. A
+// removal moves the element to the end and the caller pops it: a generic function that returned the element would tie
+// it to the vector's loan (type-system.md §25.6), and the map could not store it again.
+
+/// Puts `x` at `at`, moving the elements from `at` on up by one.
+fn orderedInsert<T>(v: borrow mut Vector<T>, at: usize, x: T) {
+    v.push(x)!;
+    var k = v.length - 1;
+    while (k > at) {
+        v.swap(k - 1, k);
+        k -= 1;
+    }
+}
+
+/// Moves the element at `at` to the end, the later ones down by one, so that a `pop` takes it out.
+fn orderedToEnd<T>(v: borrow mut Vector<T>, at: usize) {
+    for (k in at..(v.length - 1)) {
+        v.swap(k, k + 1);
+    }
+}
+
+/// Puts `x` at `at` and the element that was there at the end, so that a `pop` takes it out.
+fn orderedExchange<T>(v: borrow mut Vector<T>, at: usize, x: T) {
+    v.push(x)!;
+    let last = v.length - 1;
+    v.swap(at, last);
+}
+
+/// Reverses `v` in place.
+fn orderedReverse<T>(v: borrow mut Vector<T>) {
+    if (v.length < 2) {
+        return;
+    }
+    var i: usize = 0;
+    var j = v.length - 1;
+    while (i < j) {
+        v.swap(i, j);
+        i += 1;
+        j -= 1;
+    }
+}
+
+/// A position in an OrderedMap: a node, a slot in it, and the map's version when the cursor was made. A cursor is
+/// read through its map (`keyAt`, `valueAt`); one used after the map changed panics.
+public struct OrderedCursor {
+    node: usize;
+    slot: usize;
+    version: u64;
+}
+
+/// A map whose iteration order is its keys' order (ADR 0075 §2.4): a B-tree of minimum degree 16 (at most 31 entries
+/// a node), its nodes in one arena vector and linked by index, so it needs no `unsafe`. Ordered access is through
+/// cursors (`first`, `last`, `seek`, `seekAfter`, `next`, `previous`); a put, a removal or a clear changes the map's
+/// version, and a cursor made before it panics when used ("ordered map changed under a cursor"). Only `put`
+/// allocates; a failed `put` leaves the map as it was.
+public struct OrderedMap<K: OrderKey<K>, V> {
+    nodes: Vector<OrderedNode<K, V>>; // the arena; nodes[root] is the root once a put made it
+    root: usize;
+    free: usize?; // the first free node, the others linked by `parent`
+    spare: usize; // how many nodes are free
+    count: usize;
+    version: u64;
+
+    /// An empty map. It allocates nothing until the first put.
+    public fn create() -> OrderedMap<K, V> => OrderedMap {
+        nodes: Vector<OrderedNode<K, V>>.create(),
+        root: 0,
+        free: null,
+        spare: 0,
+        count: 0,
+        version: 0,
+    };
+
+    /// How many entries.
+    public fn length(borrow this) -> usize => this.count;
+
+    /// Whether there are none.
+    public fn isEmpty(borrow this) -> bool => this.count == 0;
+
+    // The most entries a node holds (2B − 1, B = 16), the fewest a node other than the root holds (B − 1), and the
+    // room each node's vectors are made with: one entry and one child more, for the shifts.
+    fn most() -> usize => 31;
+    fn fewest() -> usize => 15;
+
+    /// The first slot of `node` whose key is not before `key`, and whether that key is `key`.
+    fn lowerBound(borrow this, node: usize, key: borrow K, found: borrow mut bool) -> usize {
+        let keys = borrow this.nodes[node].keys;
+        var lo: usize = 0;
+        var hi = keys.length;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            if (keys[mid].compareKey(key) < 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        found = lo < keys.length && keys[lo].compareKey(key) == 0;
+        return lo;
+    }
+
+    /// The first slot of `node` whose key comes after `key`.
+    fn upperBound(borrow this, node: usize, key: borrow K) -> usize {
+        let keys = borrow this.nodes[node].keys;
+        var lo: usize = 0;
+        var hi = keys.length;
+        while (lo < hi) {
+            let mid = lo + (hi - lo) / 2;
+            if (keys[mid].compareKey(key) <= 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    /// Where `key` is, if it is there.
+    fn find(borrow this, key: borrow K) -> OrderedCursor? {
+        if (this.count == 0) {
+            return null;
+        }
+        var node = this.root;
+        loop {
+            var found = false;
+            let slot = this.lowerBound(node, key, mut found);
+            if (found) {
+                return OrderedCursor { node: node, slot: slot, version: this.version };
+            }
+            if (this.nodes[node].isLeaf()) {
+                return null;
+            }
+            node = this.nodes[node].children[slot];
+        }
+    }
+
+    /// The value of `key`, if it is there.
+    public fn get(borrow this, key: borrow K) -> borrow(this) V? {
+        let at = this.find(key)?;
+        return borrow this.nodes[at.node].values[at.slot];
+    }
+
+    /// The same, to change it. Changing a value does not change the map's version.
+    public fn getMut(borrow mut this, key: borrow K) -> borrow mut(this) V? {
+        let at = this.find(key)?;
+        return borrow mut this.nodes[at.node].values[at.slot];
+    }
+
+    /// Whether `key` is there.
+    public fn contains(borrow this, key: borrow K) -> bool => this.find(key) != null;
+
+    /// A new free node, its vectors allocated.
+    fn grow(borrow mut this) -> Result<void, AllocError> {
+        let node = OrderedNode<K, V> {
+            keys: Vector<K>.withCapacity(OrderedMap<K, V>.most() + 1)?,
+            values: Vector<V>.withCapacity(OrderedMap<K, V>.most() + 1)?,
+            children: Vector<usize>.withCapacity(OrderedMap<K, V>.most() + 2)?,
+            parent: null,
+        };
+        this.nodes.push(node)?;
+        let index = this.nodes.length - 1;
+        this.nodes[index].parent = this.free; // linked here: a literal reading `this.free` would be N0272 (CEESAFE gap)
+        this.free = index;
+        this.spare += 1;
+        return Ok();
+    }
+
+    /// A free node, taken off the free list; there is one.
+    fn take(borrow mut this) -> usize {
+        let node = this.free!;
+        this.free = this.nodes[node].parent;
+        this.spare -= 1;
+        this.nodes[node].parent = null;
+        return node;
+    }
+
+    /// Puts an emptied node on the free list.
+    fn release(borrow mut this, node: usize) {
+        this.nodes[node].children.clear();
+        this.nodes[node].parent = this.free;
+        this.free = node;
+        this.spare += 1;
+    }
+
+    /// Splits `parent`'s full child `i`: its upper B − 1 entries (and B children) go to a new node, child `i + 1`, and
+    /// its middle entry up into `parent` at `i`, which has room.
+    fn split(borrow mut this, parent: usize, i: usize) {
+        let left = this.nodes[parent].children[i];
+        let right = this.take();
+        let keep = OrderedMap<K, V>.fewest(); // entries left keeps, and right gets
+        while (this.nodes[left].keys.length > keep + 1) {
+            let key = this.nodes[left].keys.pop()!;
+            this.nodes[right].keys.push(key)!;
+            let value = this.nodes[left].values.pop()!;
+            this.nodes[right].values.push(value)!;
+        }
+        orderedReverse(mut this.nodes[right].keys);
+        orderedReverse(mut this.nodes[right].values);
+        if (!this.nodes[left].isLeaf()) {
+            while (this.nodes[left].children.length > keep + 1) {
+                let child = this.nodes[left].children.pop()!;
+                this.nodes[right].children.push(child)!;
+                this.nodes[child].parent = right;
+            }
+            orderedReverse(mut this.nodes[right].children);
+        }
+        this.nodes[right].parent = parent;
+        let key = this.nodes[left].keys.pop()!;
+        let value = this.nodes[left].values.pop()!;
+        orderedInsert(mut this.nodes[parent].keys, i, key);
+        orderedInsert(mut this.nodes[parent].values, i, value);
+        orderedInsert(mut this.nodes[parent].children, i + 1, right);
+    }
+
+    /// Puts `value` at `key`: the old value if the key was there, else null. A failure leaves the map as it was. The
+    /// nodes a put may need are allocated before anything changes.
+    public fn put(borrow mut this, key: K, value: V) -> Result<V?, AllocError> {
+        if (this.nodes.length == 0) {
+            this.grow()?;
+            this.root = this.take();
+        }
+        // The key's path: the entry if it is there, else how many full nodes the descent splits.
+        var needed: usize = 0;
+        var node = this.root;
+        loop {
+            var found = false;
+            let slot = this.lowerBound(node, borrow key, mut found);
+            if (found) {
+                orderedExchange(mut this.nodes[node].values, slot, value);
+                this.version += 1;
+                return Ok(this.nodes[node].values.pop());
+            }
+            if (this.nodes[node].keys.length == OrderedMap<K, V>.most()) {
+                needed += 1;
+            }
+            if (this.nodes[node].isLeaf()) {
+                break;
+            }
+            node = this.nodes[node].children[slot];
+        }
+        if (this.nodes[this.root].keys.length == OrderedMap<K, V>.most()) {
+            needed += 1; // a new root above the old one
+        }
+        while (this.spare < needed) {
+            this.grow()?;
+        }
+        // Nothing allocates from here on. A full root gets a new root above it, then each full node on the path is
+        // split before the descent enters it, so a split always has room in its parent (CLRS's B-TREE-INSERT).
+        if (this.nodes[this.root].keys.length == OrderedMap<K, V>.most()) {
+            let old = this.root;
+            let top = this.take();
+            this.nodes[top].children.push(old)!;
+            this.nodes[old].parent = top;
+            this.root = top;
+            this.split(top, 0);
+        }
+        node = this.root;
+        loop {
+            var found = false;
+            var slot = this.lowerBound(node, borrow key, mut found);
+            if (this.nodes[node].isLeaf()) {
+                orderedInsert(mut this.nodes[node].keys, slot, key);
+                orderedInsert(mut this.nodes[node].values, slot, value);
+                break;
+            }
+            let child = this.nodes[node].children[slot];
+            if (this.nodes[child].keys.length == OrderedMap<K, V>.most()) {
+                this.split(node, slot);
+                if (this.nodes[node].keys[slot].compareKey(borrow key) < 0) {
+                    slot += 1;
+                }
+            }
+            node = this.nodes[node].children[slot];
+        }
+        this.count += 1;
+        this.version += 1;
+        return Ok(null);
+    }
+
+    /// Merges `parent`'s child `i + 1` and the entry between them into child `i`, which then holds 2B − 1 entries; the
+    /// emptied node is freed, and so is `parent` if it was the root and is now empty, child `i` becoming the root.
+    fn merge(borrow mut this, parent: usize, i: usize) {
+        let left = this.nodes[parent].children[i];
+        let right = this.nodes[parent].children[i + 1];
+        orderedToEnd(mut this.nodes[parent].keys, i);
+        let key = this.nodes[parent].keys.pop()!;
+        orderedToEnd(mut this.nodes[parent].values, i);
+        let value = this.nodes[parent].values.pop()!;
+        orderedToEnd(mut this.nodes[parent].children, i + 1);
+        let gone = this.nodes[parent].children.pop();
+        this.nodes[left].keys.push(key)!;
+        this.nodes[left].values.push(value)!;
+        orderedReverse(mut this.nodes[right].keys);
+        orderedReverse(mut this.nodes[right].values);
+        orderedReverse(mut this.nodes[right].children);
+        while (this.nodes[right].keys.length > 0) {
+            let k = this.nodes[right].keys.pop()!;
+            this.nodes[left].keys.push(k)!;
+            let v = this.nodes[right].values.pop()!;
+            this.nodes[left].values.push(v)!;
+        }
+        while (this.nodes[right].children.length > 0) {
+            let child = this.nodes[right].children.pop()!;
+            this.nodes[left].children.push(child)!;
+            this.nodes[child].parent = left;
+        }
+        this.release(right);
+        if (parent == this.root && this.nodes[parent].keys.length == 0) {
+            this.root = left;
+            this.nodes[left].parent = null;
+            this.release(parent);
+        }
+    }
+
+    /// Makes `parent`'s child `i` hold at least B entries before a removal descends into it: it borrows an entry
+    /// through `parent` from a sibling that can spare one, else merges with a sibling. The node to descend into.
+    fn fill(borrow mut this, parent: usize, i: usize) -> usize {
+        let child = this.nodes[parent].children[i];
+        let fewest = OrderedMap<K, V>.fewest();
+        if (this.nodes[child].keys.length > fewest) {
+            return child;
+        }
+        let last = this.nodes[parent].children.length - 1;
+        if (i > 0 && this.nodes[this.nodes[parent].children[i - 1]].keys.length > fewest) {
+            // From the left sibling: its last entry up into `parent`, the entry between them down to `child`'s front.
+            let left = this.nodes[parent].children[i - 1];
+            let key = this.nodes[left].keys.pop()!;
+            let value = this.nodes[left].values.pop()!;
+            orderedExchange(mut this.nodes[parent].keys, i - 1, key);
+            let down = this.nodes[parent].keys.pop()!;
+            orderedExchange(mut this.nodes[parent].values, i - 1, value);
+            let downValue = this.nodes[parent].values.pop()!;
+            orderedInsert(mut this.nodes[child].keys, 0, down);
+            orderedInsert(mut this.nodes[child].values, 0, downValue);
+            if (!this.nodes[left].isLeaf()) {
+                let moved = this.nodes[left].children.pop()!;
+                orderedInsert(mut this.nodes[child].children, 0, moved);
+                this.nodes[moved].parent = child;
+            }
+            return child;
+        }
+        if (i < last && this.nodes[this.nodes[parent].children[i + 1]].keys.length > fewest) {
+            // From the right sibling: its first entry up into `parent`, the entry between them down to `child`'s end.
+            let right = this.nodes[parent].children[i + 1];
+            orderedToEnd(mut this.nodes[right].keys, 0);
+            let key = this.nodes[right].keys.pop()!;
+            orderedToEnd(mut this.nodes[right].values, 0);
+            let value = this.nodes[right].values.pop()!;
+            orderedExchange(mut this.nodes[parent].keys, i, key);
+            let down = this.nodes[parent].keys.pop()!;
+            orderedExchange(mut this.nodes[parent].values, i, value);
+            let downValue = this.nodes[parent].values.pop()!;
+            this.nodes[child].keys.push(down)!;
+            this.nodes[child].values.push(downValue)!;
+            if (!this.nodes[right].isLeaf()) {
+                orderedToEnd(mut this.nodes[right].children, 0);
+                let moved = this.nodes[right].children.pop()!;
+                this.nodes[child].children.push(moved)!;
+                this.nodes[moved].parent = child;
+            }
+            return child;
+        }
+        if (i < last) {
+            this.merge(parent, i);
+            return child;
+        }
+        let left = this.nodes[parent].children[i - 1];
+        this.merge(parent, i - 1);
+        return left;
+    }
+
+    /// Takes the greatest entry of the subtree at `node` (which holds at least B entries, or is the root) out and puts
+    /// it in `into`'s slot `slot`: the value that was there.
+    fn replaceWithLast(borrow mut this, node: usize, into: usize, slot: usize) -> V {
+        var at = node;
+        while (!this.nodes[at].isLeaf()) {
+            at = this.fill(at, this.nodes[at].children.length - 1);
+        }
+        let key = this.nodes[at].keys.pop()!;
+        let value = this.nodes[at].values.pop()!;
+        return this.exchange(into, slot, key, value);
+    }
+
+    /// Puts `key` and `value` in `node`'s slot `slot`: the value that was there (the key is dropped).
+    fn exchange(borrow mut this, node: usize, slot: usize, key: K, value: V) -> V {
+        orderedExchange(mut this.nodes[node].keys, slot, key);
+        let oldKey = this.nodes[node].keys.pop();
+        orderedExchange(mut this.nodes[node].values, slot, value);
+        return this.nodes[node].values.pop()!;
+    }
+
+    /// The same with the least entry.
+    fn replaceWithFirst(borrow mut this, node: usize, into: usize, slot: usize) -> V {
+        var at = node;
+        while (!this.nodes[at].isLeaf()) {
+            at = this.fill(at, 0);
+        }
+        orderedToEnd(mut this.nodes[at].keys, 0);
+        let key = this.nodes[at].keys.pop()!;
+        orderedToEnd(mut this.nodes[at].values, 0);
+        let value = this.nodes[at].values.pop()!;
+        return this.exchange(into, slot, key, value);
+    }
+
+    /// Takes `key` out: its value, or null. The descent keeps every node it enters above the minimum, borrowing from a
+    /// sibling or else merging (CLRS's B-TREE-DELETE), so the tree stays balanced. Nothing allocates.
+    public fn remove(borrow mut this, key: borrow K) -> V? {
+        if (this.find(key) == null) {
+            return null;
+        }
+        var node = this.root;
+        let fewest = OrderedMap<K, V>.fewest();
+        loop {
+            var found = false;
+            let slot = this.lowerBound(node, key, mut found);
+            if (found && this.nodes[node].isLeaf()) {
+                orderedToEnd(mut this.nodes[node].keys, slot);
+                let gone = this.nodes[node].keys.pop();
+                orderedToEnd(mut this.nodes[node].values, slot);
+                let value = this.nodes[node].values.pop();
+                this.count -= 1;
+                this.version += 1;
+                return value;
+            }
+            if (found) {
+                let left = this.nodes[node].children[slot];
+                let right = this.nodes[node].children[slot + 1];
+                if (this.nodes[left].keys.length > fewest) {
+                    let value = this.replaceWithLast(left, node, slot);
+                    this.count -= 1;
+                    this.version += 1;
+                    return value;
+                }
+                if (this.nodes[right].keys.length > fewest) {
+                    let value = this.replaceWithFirst(right, node, slot);
+                    this.count -= 1;
+                    this.version += 1;
+                    return value;
+                }
+                this.merge(node, slot); // the key moves down into `left`
+                node = left;
+            } else {
+                node = this.fill(node, slot);
+            }
+        }
+    }
+
+    /// Takes every entry out and frees the nodes.
+    public fn clear(borrow mut this) {
+        this.nodes.clear();
+        this.root = 0;
+        this.free = null;
+        this.spare = 0;
+        this.count = 0;
+        this.version += 1;
+    }
+
+    /// Panics if `at` was made before the map last changed.
+    fn check(borrow this, at: OrderedCursor) {
+        if (at.version != this.version) {
+            panic("ordered map changed under a cursor");
+        }
+    }
+
+    fn cursor(borrow this, node: usize, slot: usize) -> OrderedCursor => OrderedCursor {
+        node: node,
+        slot: slot,
+        version: this.version,
+    };
+
+    /// The leftmost leaf under `node`.
+    fn leftmost(borrow this, node: usize) -> usize {
+        var at = node;
+        while (!this.nodes[at].isLeaf()) {
+            at = this.nodes[at].children[0];
+        }
+        return at;
+    }
+
+    /// The rightmost leaf under `node`.
+    fn rightmost(borrow this, node: usize) -> usize {
+        var at = node;
+        while (!this.nodes[at].isLeaf()) {
+            at = this.nodes[at].children[this.nodes[at].children.length - 1];
+        }
+        return at;
+    }
+
+    /// The slot of `parent`'s children that holds `child`.
+    fn childSlot(borrow this, parent: usize, child: usize) -> usize {
+        var i: usize = 0;
+        while (this.nodes[parent].children[i] != child) {
+            i += 1;
+        }
+        return i;
+    }
+
+    /// The least entry, or null if the map is empty.
+    public fn first(borrow this) -> OrderedCursor? {
+        if (this.count == 0) {
+            return null;
+        }
+        return this.cursor(this.leftmost(this.root), 0);
+    }
+
+    /// The greatest entry, or null if the map is empty.
+    public fn last(borrow this) -> OrderedCursor? {
+        if (this.count == 0) {
+            return null;
+        }
+        let leaf = this.rightmost(this.root);
+        return this.cursor(leaf, this.nodes[leaf].keys.length - 1);
+    }
+
+    /// The first entry whose key is not before `key`, or null if there is none.
+    public fn seek(borrow this, key: borrow K) -> OrderedCursor? {
+        if (this.count == 0) {
+            return null;
+        }
+        var best: OrderedCursor? = null;
+        var node = this.root;
+        loop {
+            var found = false;
+            let slot = this.lowerBound(node, key, mut found);
+            if (found) {
+                return this.cursor(node, slot);
+            }
+            if (slot < this.nodes[node].keys.length) {
+                best = this.cursor(node, slot);
+            }
+            if (this.nodes[node].isLeaf()) {
+                return best;
+            }
+            node = this.nodes[node].children[slot];
+        }
+    }
+
+    /// The first entry whose key comes after `key`, or null if there is none.
+    public fn seekAfter(borrow this, key: borrow K) -> OrderedCursor? {
+        if (this.count == 0) {
+            return null;
+        }
+        var best: OrderedCursor? = null;
+        var node = this.root;
+        loop {
+            let slot = this.upperBound(node, key);
+            if (slot < this.nodes[node].keys.length) {
+                best = this.cursor(node, slot);
+            }
+            if (this.nodes[node].isLeaf()) {
+                return best;
+            }
+            node = this.nodes[node].children[slot];
+        }
+    }
+
+    /// The entry after `at`'s, or null at the end.
+    public fn next(borrow this, at: OrderedCursor) -> OrderedCursor? {
+        this.check(at);
+        if (!this.nodes[at.node].isLeaf()) {
+            return this.cursor(this.leftmost(this.nodes[at.node].children[at.slot + 1]), 0);
+        }
+        if (at.slot + 1 < this.nodes[at.node].keys.length) {
+            return this.cursor(at.node, at.slot + 1);
+        }
+        var node = at.node;
+        loop {
+            let parent = this.nodes[node].parent?;
+            let i = this.childSlot(parent, node);
+            if (i < this.nodes[parent].keys.length) {
+                return this.cursor(parent, i);
+            }
+            node = parent;
+        }
+    }
+
+    /// The entry before `at`'s, or null at the start.
+    public fn previous(borrow this, at: OrderedCursor) -> OrderedCursor? {
+        this.check(at);
+        if (!this.nodes[at.node].isLeaf()) {
+            let leaf = this.rightmost(this.nodes[at.node].children[at.slot]);
+            return this.cursor(leaf, this.nodes[leaf].keys.length - 1);
+        }
+        if (at.slot > 0) {
+            return this.cursor(at.node, at.slot - 1);
+        }
+        var node = at.node;
+        loop {
+            let parent = this.nodes[node].parent?;
+            let i = this.childSlot(parent, node);
+            if (i > 0) {
+                return this.cursor(parent, i - 1);
+            }
+            node = parent;
+        }
+    }
+
+    /// The key at `at`.
+    public fn keyAt(borrow this, at: OrderedCursor) -> borrow(this) K {
+        this.check(at);
+        return borrow this.nodes[at.node].keys[at.slot];
+    }
+
+    /// The value at `at`.
+    public fn valueAt(borrow this, at: OrderedCursor) -> borrow(this) V {
+        this.check(at);
+        return borrow this.nodes[at.node].values[at.slot];
+    }
+
+    /// The value at `at`, to change it. Changing a value does not change the map's version.
+    public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V {
+        this.check(at);
+        return borrow mut this.nodes[at.node].values[at.slot];
+    }
+}

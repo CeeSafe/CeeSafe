@@ -1051,6 +1051,7 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
         ExprNode.Block(block) => { fmtWalkBlock(l, ast, block)?; }
         ExprNode.Borrow(_, operand) => { fmtWalkExpr(l, ast, operand)?; }
         ExprNode.Move(operand) => { fmtWalkExpr(l, ast, operand)?; }
+        ExprNode.Deref(operand) => { fmtWalkExpr(l, ast, operand)?; }
         ExprNode.MutArg(operand) => { fmtWalkExpr(l, ast, operand)?; }
         ExprNode.StructLiteral(typeName, fields, typeArguments) => {
             let nameToken = identLast(l, ast, typeName);

@@ -73,7 +73,7 @@ Semantic checks run only when every file parsed without errors.
 | Code | Meaning | Example |
 |---|---|---|
 | N0200 | Name not found (variable, function, or built-in member) | `missing`, `Console.print(1)` |
-| N0201 | Item defined twice in the package | two `fn twice()` |
+| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it) | two `fn twice()` |
 | N0202 | Parameter declared twice | `fn f(a: i32, a: i32)` |
 | N0203 | Local redeclares a local or parameter in scope (no shadowing of locals) | `let x = 1; let x = 2;` |
 | N0204 | Unknown type name | `fn f(a: int)` |
@@ -136,14 +136,14 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | Code | Meaning | Example |
 |---|---|---|
 | N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole | `consume(r); consume(r);` |
-| N0251 | Move out of a place reached through a reference | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
+| N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
 | N0252 | Move of a field out of a value whose type has a `drop` block | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |
 | N0254 | `return`, `break`, `continue` or `defer` inside a deferred statement | `defer return 1;` |
 | N0256 | `match` that does not cover every value (add the missing variants or `_`) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_` | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
-| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize` | `[Res; 2]`, `[i32; 0]` |
+| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
 
 Arrays and slices otherwise reuse codes: indexing or slicing a non-array, a non-`usize` index,
 or a bad `for` sequence or range is N0205; writing an element of a `let` array or through a
@@ -200,10 +200,10 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | Code | Meaning | Example |
 |---|---|---|
 | N0260 | `Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected | `let a = Ok(1);`, `let p = Pool.create(SystemHeap {}, 4u32);`, `let n = null;` |
-| N0261 | `?` in a function that does not return a `Result` with the same error type; `?` on an optional in a function that does not return an optional (M6c) | `?` on `Result<i32, F>` in a function returning `Result<i32, E>` |
-| N0262 | `?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional | `n?` with `n: i32` |
+| N0261 | `?` in a function that does not return a `Result` with the same error type, or an enum with an `@from` variant for it (ADR 0075 §2.3; the message names the variant to add); `?` on an optional in a function that does not return an optional (M6c) | `?` on `Result<i32, F>` in a function returning `Result<i32, E>` |
+| N0262 | `?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional; an `@from` variant without exactly one payload, or two `@from` variants of one payload type (ADR 0075 §2.3) | `n?` with `n: i32`, `@from A` |
 | N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
-| N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter | `let d = Maybe.Nothing;`, `let e = make();` |
+| N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep (polymorphic recursion) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }` |
 | N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing or extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide | `impl Shape for Square { fn area(this) -> i64 … }` |
 | N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), or a type with region parameters coerced to `dyn I` (ADR 0054) | `total(plain)` with `fn total<S: Shape>(…)` |

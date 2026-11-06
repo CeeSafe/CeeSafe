@@ -74,6 +74,11 @@ no argument 1000
 | `File.remove(path)` | `Result<void, IoError>` |
 | `f.read(mut buffer)` | `Result<usize, IoError>`, `0` at the end; `buffer: SliceMut<u8>` |
 | `f.write(bytes)` | `Result<void, IoError>`: all of them or an error |
+| `File.openReadWrite(path)`, `File.openOrCreate(path)`, `File.createNew(path)` | `Result<File, IoError>` for reading and writing, never truncated: an existing file; created if missing; a new one (`AlreadyExists` otherwise) |
+| `f.readAt(mut buffer, offset)`, `f.writeAt(bytes, offset)` | positional: `usize` (0 past the end); every byte or an error |
+| `f.syncData()`, `f.syncAll()` | durable on disk (`F_FULLFSYNC` on Apple systems); after a failed sync the file's durable contents are unknown |
+| `f.length()`, `f.setLength(n)` | `u64`; truncate or zero-extend |
+| `File.rename(from, to)`, `Directory.sync(path)` | atomic replace; make a directory's entries durable |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `TcpStream.connect(address, port)` | `Result<TcpStream, IoError>`; `read`, `write`, `shutdownWrite`, `shutdownRead` |
 | `e.message()` | the `IoError`'s text, a `StringView` |
@@ -152,6 +157,9 @@ hi
 | `v.pop()` | `T?` |
 | `v.length`, `v.capacity`, `v[i]` | `usize`; an element place |
 | `v.clear()`, `v.truncate(n)`, `v.swap(i, j)` | |
+| `v.insert(at, x)`, `v.remove(at)`, `v.swapRemove(at)` | `Result<void, AllocError>`; `T`; `T` (the last element fills the gap); the index is checked at the call |
+| `[]` | the empty `Slice<T>` or `SliceMut<T>`, where one is expected |
+| `a.writeLE(0, x)` on an array | an array's methods are its slice's: `a[..].writeLE(0, x)` |
 | `v.view()`, `v.viewMut()` | `Slice<T>`, `SliceMut<T>` |
 | `[x; N]`, `[a, b, c]`, `a[lo..hi]`, `borrow mut a[lo..hi]` | an array; a `Slice<T>`; a `SliceMut<T>` |
 | `d.copyFrom(s)`, `d.fill(v)` | bulk writes into a `SliceMut<T>` |
@@ -244,7 +252,12 @@ Medium
 | `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)`, `x.wrappingShr(n)` | unsigned types; `n: u32`, taken modulo the width |
 | `x.leadingZeros()`, `x.trailingZeros()`, `x.countOnes()` | unsigned types; a `u32` (the width for 0) |
 | `x.byteSwap()` | every integer type: the bytes in the other order |
-| `x as T` | only conversions that never lose information |
+| `x as T` | only conversions that never lose information; `a as u64 < b` compares |
+| `*r` | the Copy value `r` refers to; `*r = v` writes through a `borrow mut` |
+| `replace(mut place, v)`, `swap(mut a, mut b)` | the old value, which nothing is left without; exchange two places |
+| `assert(cond)`, `assert(cond, message)`, `panic(message)` | panic when false; always (`never`) |
+| `r.isOk()`, `r.isErr()`, `r.ok()`, `r.err()`, `o.okOr(e)` | a `Result`'s tests and conversions; an optional as a `Result` |
+| `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |
 | `checkedTruncate<T>(f)`, `saturatingTruncate<T>(f)` | a float to an integer: `T?` (`null` where `truncate` would panic); the nearest bound (NaN gives 0) |
 | `round<T>(x)` | to a float type, rounding to nearest |

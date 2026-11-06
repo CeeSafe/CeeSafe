@@ -88,7 +88,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_LENGTH = 12,
     CEE_PANIC_FLOAT_RANGE = 13,
     CEE_PANIC_ASYNC = 14, /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
-    CEE_PANIC_FRAME_STACK = 15 /* a task's frame stack could not grow (ADR 0056 §3.3) */
+    CEE_PANIC_FRAME_STACK = 15, /* a task's frame stack could not grow (ADR 0056 §3.3) */
+    CEE_PANIC_EXPLICIT = 16 /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -706,6 +707,10 @@ static inline void cee_slice_fill_byte(void *destination, uint8_t value, uint64_
 /* `StringView`: UTF-8 bytes, laid out like a `Slice<u8>`. */
 typedef struct cee_str { const uint8_t *ptr; uint64_t len; } cee_str;
 
+/* `panic(message)` and a failed `assert` (ADR 0075 §2.8): hosted, "ceesafe panic: <message> at <location>"; in a
+   freestanding package, the environment's ceesafe_panic with CEE_PANIC_EXPLICIT (the message is not shown). */
+CEE_COLD _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc);
+
 /* True if `index` is not inside a UTF-8 multi-byte sequence (the end counts as a boundary). */
 static inline bool cee_str_boundary(cee_str text, uint64_t index) {
     return index >= text.len || (text.ptr[index] & 0xC0u) != 0x80u;
@@ -1174,13 +1179,23 @@ int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity);
 int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const *input, uint64_t input_length,
                         uint8_t const *output, uint64_t output_length, uint8_t const *errors, uint64_t errors_length);
 
-/* Files: `mode` 0 opens for reading, 1 creates or truncates for writing; `value` is the descriptor. */
+/* Files: `mode` 0 opens for reading, 1 creates or truncates for writing; 2 opens for reading and writing, 3 also
+   creates a missing file, 4 creates a new one (ADR 0075 §2.1); `value` is the descriptor. */
 cee_io_result ceesafe_file_open(cee_str path, uint32_t mode);
 cee_io_result ceesafe_file_remove(cee_str path);
 /* Reads up to `length` bytes (0 at the end); retries interrupted calls. */
 cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length);
 /* Writes all `length` bytes, or fails. */
 cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length);
+/* Positional I/O, syncs, length (ADR 0075 §2.1); `all` 1 syncs all metadata. */
+cee_io_result ceesafe_fd_read_at(int32_t fd, uint8_t *buffer, uint64_t length, uint64_t offset);
+cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t length, uint64_t offset);
+cee_io_result ceesafe_fd_sync(int32_t fd, uint32_t all);
+cee_io_result ceesafe_fd_length(int32_t fd);
+cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length);
+uint64_t ceesafe_clock_monotonic(void);
+int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength);
+int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length);
 /* The drop glue of File, TcpListener and TcpStream: closes the descriptor, ignoring errors. */
 void ceesafe_fd_drop(int32_t *fd);
 

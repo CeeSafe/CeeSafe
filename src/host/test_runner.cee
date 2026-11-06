@@ -165,7 +165,7 @@ fn testDirectory(options: borrow Options) -> Vector<u8> {
 }
 
 /// After `test`'s check (ADR 0049 §3.3): the harness and the list of tests, written to the test directory.
-fn writeHarness(options: borrow Options, c: borrow Checker) -> i32 {
+fn writeHarness(options: borrow Options, c: borrow Checker, sources: borrow Vector<SourceText>) -> i32 {
     let tests = testEntries(c)!;
     let directory = testDirectory(options);
     match (makeDirectories(directory.view())) {
@@ -177,6 +177,27 @@ fn writeHarness(options: borrow Options, c: borrow Checker) -> i32 {
     for (t in tests.view()) {
         appendBytes(mut list, t.name.view())!;
         list.push('\n')!;
+    }
+    // Where each test function is, so a sweep can tell its own unwraps from the code's (ADR 0075 §2.16).
+    var spans = Vector<u8>.create();
+    for (f in c.testFunctions.view()) {
+        let hir = borrow c.hir.functions[f as usize];
+        if (packageOfFile(c, hir.file) != 0 || (hir.file as usize) >= sources.length) {
+            continue;
+        }
+        let source = borrow sources[hir.file as usize];
+        let syntax = borrow c.front.ast.functions[hir.syntax as usize];
+        appendBytes(mut spans, source.path.view())!;
+        spans.push('\t')!;
+        appendDecimal(mut spans, (source.lineIndex(syntax.start as usize) + 1) as u64)!;
+        spans.push('\t')!;
+        appendDecimal(mut spans, (source.lineIndex(syntax.end as usize) + 1) as u64)!;
+        spans.push('\n')!;
+    }
+    let spansPath = joinPath(directory.view(), "test-spans.txt".bytes())!;
+    match (writeFile(StringView.fromUtf8(spansPath.view())!, spans.view())) {
+        Ok() => {}
+        Err(e) => { return fail(e.message()); }
     }
     let harnessPath = joinPath(directory.view(), "harness.cee".bytes())!;
     let listPath = joinPath(directory.view(), "tests.txt".bytes())!;
@@ -586,6 +607,12 @@ fn testCommand() -> i32 {
     runTests(borrow options, exe.view(), harness.view(), borrow names, 0, names.length, options.testJobs, mut outcomes);
     var sweepFailures = Vector<Vector<u8>>.create();
     var sweepRuns: u64 = 0;
+    var sweepUnwrapped: u64 = 0;
+    let spansPath = joinPath(directory.view(), "test-spans.txt".bytes())!;
+    let testSpans = match (readFile(StringView.fromUtf8(spansPath.view())!)) {
+        Ok(t) => t,
+        Err(_) => Vector<u8>.create(),
+    };
     for (index in 0..names.length) {
         let n = borrow names[index];
         let first = borrow outcomes[index];
@@ -603,6 +630,11 @@ fn testCommand() -> i32 {
                     0,
                 ) else runTest(options, exe.view(), harness.view(), n.view(), 0, k);
                 // Under a failed allocation or a cancellation a test may fail; it may not panic, crash, hang or leak.
+                if (swept.outcome == 2 && options.testSweep == 1 && !options.testSweepStrict &&
+                    unwrapInTest(swept.message.view(), testSpans.view())) {
+                    sweepUnwrapped += 1; // the test's own `!` or `?` met the failure (ADR 0075 §2.16)
+                    continue;
+                }
                 if (swept.outcome != 0 && swept.outcome != 1) {
                     var what = copyBytes(n.view())!;
                     appendText(
@@ -671,6 +703,8 @@ fn testCommand() -> i32 {
         json.endArray()!;
         json.name("sweepRuns")!;
         json.number(truncate<i64>(sweepRuns))!;
+        json.name("sweepUnwrappedByTest")!;
+        json.number(truncate<i64>(sweepUnwrapped))!;
         json.name("passed")!;
         json.number(truncate<i64>(passed))!;
         json.name("failed")!;
@@ -720,8 +754,80 @@ fn testCommand() -> i32 {
             appendText(mut summary, " sweep failure(s) in ")!;
             appendDecimal(mut summary, sweepRuns)!;
             appendText(mut summary, " sweep run(s)")!;
+            if (sweepUnwrapped > 0) {
+                appendText(mut summary, " (")!;
+                appendDecimal(mut summary, sweepUnwrapped)!;
+                appendText(mut summary, " unwrapped by the test itself)")!;
+            }
         }
         Console.writeLine(StringView.fromUtf8(summary.view())!);
     }
     return if (failed == 0 && sweepFailures.length == 0) 0 else 1;
+}
+
+/// Whether a sweep's panic `message` ("unwrapped an Err value at f.cee:12:5", or "unwrapped null at …") is in a file
+/// that declares a test function (test-spans.txt: each test's path, first and last line, tab-separated): the tests'
+/// own `!` or `?`, in a test or one of its helpers, met the injected failure, which is the tests' business, not a fault
+/// of the code under test (ADR 0075 §2.16).
+fn unwrapInTest(message: Slice<u8>, spans: Slice<u8>) -> bool {
+    if (!containsText(message, "unwrapped an Err value") && !containsText(message, "unwrapped null")) {
+        return false;
+    }
+    // The location after the last " at ": path, ':', line, ':', column.
+    var at = message.length;
+    var found = false;
+    while (at >= 4) {
+        at -= 1;
+        if (message[at - 3] == ' ' && message[at - 2] == 'a' && message[at - 1] == 't' && message[at] == ' ') {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        return false;
+    }
+    let location = message[(at + 1)..];
+    var colon = location.length;
+    var colons: u32 = 0;
+    while (colon > 0 && colons < 2) {
+        colon -= 1;
+        if (location[colon] == ':') {
+            colons += 1;
+        }
+    }
+    if (colons < 2) {
+        return false;
+    }
+    let path = location[0..colon];
+    var line: u64 = 0;
+    var p = colon + 1;
+    while (p < location.length && location[p] >= '0' && location[p] <= '9') {
+        line = line * 10 + ((location[p] - '0') as u64);
+        p += 1;
+    }
+    var start: usize = 0;
+    while (start < spans.length) {
+        var end = start;
+        while (end < spans.length && spans[end] != '\n') {
+            end += 1;
+        }
+        let entry = spans[start..end];
+        start = end + 1;
+        var tab = 0usize;
+        while (tab < entry.length && entry[tab] != '\t') {
+            tab += 1;
+        }
+        if (tab >= entry.length) {
+            continue;
+        }
+        let file = entry[0..tab];
+        let sameFile = sameBytes(file, path) || (file.length > path.length &&
+            sameBytes(file[(file.length - path.length)..], path)) || (path.length > file.length &&
+            sameBytes(path[(path.length - file.length)..], file));
+        if (sameFile && line > 0) {
+            // A file that declares @test functions is test code: its helpers' unwraps are the tests' own too.
+            return true;
+        }
+    }
+    return false;
 }

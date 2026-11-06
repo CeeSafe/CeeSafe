@@ -761,6 +761,7 @@ fn typeArgumentsFor(
         return Ok(true);
     }
     var found = Vector<Found>.create();
+    var erroneous = false;
     for (p in pairs) {
         let value = match (c.front.ast.exprs[p.value as usize]) {
             ExprNode.MutArg(operand) => operand,
@@ -768,6 +769,9 @@ fn typeArgumentsFor(
         };
         let mark = diagnosticsMark(c);
         let actual = synth(c, value, none())?;
+        if (diagnosticsMark(c) > mark || c.isBottom(actual)) {
+            erroneous = true;
+        }
         dropDiagnosticsSince(c, mark);
         unify(c, p.declared, c.typeOf(actual), parameters, mut found)?;
     }
@@ -776,6 +780,11 @@ fn typeArgumentsFor(
         if (foundFor(found, p) == none()) {
             missing.push(p)?;
         }
+    }
+    if (missing.length > 0 && erroneous) {
+        // An argument has an error of its own, reported when the arguments are checked: inferring from it would
+        // only add a misleading N0265 (ADR 0075 §2.16, G17).
+        return Ok(false);
     }
     if (missing.length > 0) {
         var message = Vector<u8>.create();

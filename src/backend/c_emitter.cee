@@ -39,6 +39,7 @@ struct CEmitter {
     sites: Map<PairKey, u32>;              // (file << 32 | line, column) → id
     siteList: Vector<CSite>;               // by id
     usedLibrary: Vector<bool>;             // by HIR function: library code that compiled code reaches (§29.2)
+    usedStatics: Vector<bool>;             // by static: the program's own, and the library's that compiled code uses
     usedVariants: Vector<u64>;             // the library (function, variant) pairs reached (variantKey)
     placements: Vector<FunctionPlacement>; // by NIR function: its stack-placed boxes (empty with --no-placement)
     checks: CheckResults;                  // index and overflow checks proved not to fail (optimisations.md §2–§3)
@@ -87,6 +88,7 @@ struct CEmitter {
         sites: Map<PairKey, u32>.create(),
         siteList: Vector<CSite>.create(),
         usedLibrary: Vector<bool>.create(),
+        usedStatics: Vector<bool>.create(),
         usedVariants: Vector<u64>.create(),
         placements: Vector<FunctionPlacement>.create(),
         checks: CheckResults {

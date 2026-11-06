@@ -1,0 +1,122 @@
+// The built-in functions of ADR 0075: `assert` and `panic` (§2.8), `replace` and `swap` (§2.11). Each is a
+// HirExpr.BuiltinCall; a user item of the same name shadows it (Lookup finds package items first).
+
+/// `assert(condition)` or `assert(condition, message)`: void; panics when the condition is false.
+fn checkAssert(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 1 && arguments.count != 2) {
+        return builtinArity(c, arguments, span, "write 'assert(condition)' or 'assert(condition, message)'");
+    }
+    var values = Vector<u32>.create();
+    let boolType = c.types.boolType;
+    let conditionSyntax = c.front.ast.at(arguments, 0);
+    values.push(checkExpr(c, conditionSyntax, boolType)?)?;
+    if (arguments.count == 2) {
+        let view = c.types.stringView;
+        let messageSyntax = c.front.ast.at(arguments, 1);
+        values.push(checkExpr(c, messageSyntax, view)?)?;
+    }
+    for (v in values.view()) {
+        if (c.isBottom(v)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    let list = c.hir.list(values.view())?;
+    let voidType = c.types.voidType;
+    return c.expr(HirExpr.BuiltinCall(bfAssert(), list), voidType, span.start, span.end);
+}
+
+/// `panic(message)`: never returns.
+fn checkPanic(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 1) {
+        return builtinArity(c, arguments, span, "write 'panic(message)'");
+    }
+    let view = c.types.stringView;
+    let messageSyntax = c.front.ast.at(arguments, 0);
+    let message = checkExpr(c, messageSyntax, view)?;
+    if (c.isBottom(message)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [message];
+    let list = c.hir.list(values[..])?;
+    let never = c.types.never;
+    return c.expr(HirExpr.BuiltinCall(bfPanic(), list), never, span.start, span.end);
+}
+
+/// `replace(mut place, value) -> T` and `swap(mut a, mut b)`: the place is never left empty, so neither changes a
+/// move rule. Both lower to an exchange of two referents (bfSwap).
+fn checkReplaceOrSwap(c: borrow mut Checker, builtin: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let isReplace = builtin == builtinReplace();
+    if (arguments.count != 2) {
+        return builtinArity(
+            c,
+            arguments,
+            span,
+            if (isReplace) "write 'replace(mut place, value)'" else "write 'swap(mut a, mut b)'",
+        );
+    }
+    let first = c.front.ast.at(arguments, 0);
+    let second = c.front.ast.at(arguments, 1);
+    let place = mutablePlaceArgument(c, first)?;
+    if (c.isBottom(place)) {
+        checkArgumentsLoosely(c, Range { start: arguments.start + 1, count: 1 })?;
+        return c.errorResult(span.start, span.end);
+    }
+    let typ = c.types.info(c.typeOf(place)).pointee;
+    var other = none();
+    if (isReplace) {
+        other = checkExpr(c, second, typ)?;
+    } else {
+        other = mutablePlaceArgument(c, second)?;
+        if (!c.isBottom(other) && c.types.info(c.typeOf(other)).pointee != typ) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'swap' exchanges two places of one type: ")?;
+            appendQuotedType(mut message, c, typ)?;
+            appendText(mut message, " and ")?;
+            appendQuotedType(mut message, c, c.types.info(c.typeOf(other)).pointee)?;
+            let s = c.front.ast.exprSpans[second as usize];
+            c.error(typeMismatch(), s.start, s.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    if (c.isBottom(other)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [place, other];
+    let list = c.hir.list(values[..])?;
+    let result = if (isReplace) typ else c.types.voidType;
+    return c.expr(HirExpr.BuiltinCall(if (isReplace) bfReplace() else bfSwap(), list), result, span.start, span.end);
+}
+
+/// `mut p` as an argument of `replace` or `swap`: a mutable borrow of the place `p` (N0247 if it is not one, N0249
+/// without `mut`).
+fn mutablePlaceArgument(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocError> {
+    let span = c.front.ast.exprSpans[syntax as usize];
+    let operand = match (c.front.ast.exprs[syntax as usize]) {
+        ExprNode.MutArg(o) => o,
+        _ => none(),
+    };
+    if (operand == none()) {
+        let value = synth(c, syntax, none())?;
+        if (c.isBottom(value)) {
+            return Ok(value);
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "this argument is a place the call changes; write 'mut' before it")?;
+        c.error(mutArgumentMismatch(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let value = synth(c, operand, none())?;
+    if (c.isBottom(value)) {
+        return Ok(value);
+    }
+    let operandSpan = c.front.ast.exprSpans[operand as usize];
+    return borrowPlace(c, value, true, operandSpan);
+}
+
+fn builtinArity(c: borrow mut Checker, arguments: Range, span: Span, usage: StringView) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, usage)?;
+    c.error(argumentCount(), span.start, span.end, message)?;
+    checkArgumentsLoosely(c, arguments)?;
+    return c.errorResult(span.start, span.end);
+}

@@ -101,12 +101,14 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
             } else if (isInstanceType(c, t)) {
                 let base = baseNameOf(c, t);
                 out.push('S')?;
+                appendShadowMark(c, out, t)?;
                 appendDecimal(out, base.length as u64)?;
                 appendId(out, base)?;
                 appendMangledArguments(c, out, s.typeArguments)?;
             } else {
                 let name = c.types.name(t);
                 out.push('S')?;
+                appendShadowMark(c, out, t)?;
                 appendDecimal(out, name.length as u64)?;
                 appendId(out, name)?;
             }
@@ -123,12 +125,14 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
             } else if (isInstanceType(c, t)) {
                 let base = baseNameOf(c, t);
                 out.push('E')?;
+                appendShadowMark(c, out, t)?;
                 appendDecimal(out, base.length as u64)?;
                 appendId(out, base)?;
                 appendMangledArguments(c, out, e.typeArguments)?;
             } else {
                 let name = c.types.name(t);
                 out.push('E')?;
+                appendShadowMark(c, out, t)?;
                 appendDecimal(out, name.length as u64)?;
                 appendId(out, name)?;
             }
@@ -278,6 +282,7 @@ fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Res
                 appendMangleTail(c, out, t)?;
             } else {
                 appendText(out, "ceeT_")?;
+                appendShadowMark(c, out, t)?;
                 appendId(out, c.types.name(t))?;
             }
         }
@@ -294,6 +299,7 @@ fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Res
                 appendMangleTail(c, out, t)?;
             } else {
                 appendText(out, "ceeE_")?;
+                appendShadowMark(c, out, t)?;
                 appendId(out, c.types.name(t))?;
             }
         }
@@ -475,6 +481,7 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
             appendMangle(c, out, f.owner)?;
         } else {
             let owner = c.types.name(f.owner);
+            appendShadowMark(c, out, f.owner)?;
             appendDecimal(out, owner.length as u64)?;
             appendId(out, owner)?;
         }
@@ -486,11 +493,12 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         }
         return appendBytes(out, name);
     }
+    let shadowed = f.file != none() && c.fileIsLibrary[f.file as usize] && isPackageSymbol(c, f.name);
     if (f.typeArguments.count == 0) {
-        appendText(out, "ceeF_")?;
+        appendText(out, if (shadowed) "ceeF_lib_" else "ceeF_")?;
         return appendId(out, name);
     }
-    appendText(out, "ceeG_")?;
+    appendText(out, if (shadowed) "ceeG_lib_" else "ceeG_")?;
     appendDecimal(out, name.length as u64)?;
     appendId(out, name)?;
     return appendMangledArguments(c, out, f.typeArguments);
@@ -658,4 +666,35 @@ fn appendVariantPrefix(out: borrow mut Vector<u8>, variant: u32) -> Result<void,
     appendText(out, "ceeXS")?;
     appendDecimal(out, variant as u64)?;
     return out.push('_');
+}
+
+/// `lib_` before the name of a library struct or enum that a package also names (ADR 0075 §5): a package's item may
+/// shadow a library's, and the two must not meet in C.
+fn appendShadowMark(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> {
+    let info = c.types.info(t);
+    var file = none();
+    if (info.structDef != none()) {
+        file = c.types.structs[info.structDef as usize].file;
+    } else if (info.enumDef != none()) {
+        file = c.types.enums[info.enumDef as usize].file;
+    }
+    if (file == none() || !c.fileIsLibrary[file as usize]) {
+        return Ok();
+    }
+    let name = if (isInstanceType(c, t)) baseNameOf(c, t) else c.types.name(t);
+    match (c.front.symbols.find(name)) {
+        Some(symbol) => {
+            if (isPackageSymbol(c, symbol.id)) {
+                appendText(out, "lib_")?;
+            }
+        }
+        null => {}
+    }
+    return Ok();
+}
+
+/// Whether a package declares an item named `symbol`.
+fn isPackageSymbol(c: borrow Checker, symbol: u32) -> bool {
+    let key = Word { value: symbol as u64 };
+    return c.packageSymbols.find(borrow key) != null;
 }

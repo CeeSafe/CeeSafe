@@ -7,6 +7,9 @@
 enum HostHandle {
     Closed,
     OpenFile(File, String), // the file, and its path (ADR 0051: a read at an offset reopens it)
+    // A file opened for reading and writing (ADR 0075 §2.1): its path and position. Each operation reopens the file,
+    // as ADR 0051's read at an offset does, so the stage-0 compiler's File serves.
+    PathFile(String, u64),
     Listener(TcpListener),
     Stream(TcpStream),
 }
@@ -299,6 +302,7 @@ fn readAt(it: borrow mut Interp, arguments: borrow Vector<Value>) -> Result<Valu
         Some(k) => {
             match (borrow it.runtime.handles[k]) {
                 HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                HostHandle.PathFile(p, _) => { path.append(p.view())!; }
                 _ => {}
             }
         }
@@ -460,6 +464,43 @@ fn ioBuiltin(
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
         }
     }
+    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew()) {
+        // ADR 0075 §2.1: the file is checked and created here; reads and writes reopen it (HostHandle.PathFile).
+        requireHostIo(it)?;
+        let pathValue = argument(it, c, n, frame, arguments, 0)?;
+        let path = bytesOf(it, pathValue)?;
+        let text = StringView.fromUtf8(path.view())!;
+        var exists = false;
+        match (File.kind(text)) {
+            Ok(found) => {
+                match (found) {
+                    Some(PathKind.Directory) => { return Ok(interpIoResult(c, resultType, 0, 21)?); }
+                    Some(_) => { exists = true; }
+                    null => {}
+                }
+            }
+            Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
+        }
+        if (exists && b == bfFileCreateNew()) {
+            return Ok(interpIoResult(c, resultType, 0, 17)?);
+        }
+        if (!exists && b == bfFileOpenReadWrite()) {
+            return Ok(interpIoResult(c, resultType, 0, 2)?);
+        }
+        if (!exists) {
+            match (File.create(text)) {
+                Ok(_) => {}
+                Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
+            }
+        }
+        var kept = String.create();
+        kept.append(text)!;
+        let fd = addHandle(it, HostHandle.PathFile(kept, 0));
+        return Ok(interpIoResult(c, resultType, fd, 0)?);
+    }
+    if (isDurableFileBuiltin(b)) {
+        return durableFileBuiltin(it, c, n, frame, b, arguments, resultType);
+    }
     if (b == bfFileRemove()) {
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
@@ -480,6 +521,13 @@ fn ioBuiltin(
                 match (borrow mut it.runtime.handles[k]) {
                     HostHandle.OpenFile(file, _) => { read = file.read(mut buffer[..]); }
                     HostHandle.Stream(stream) => { read = stream.read(mut buffer[..]); }
+                    HostHandle.PathFile(p, position) => {
+                        read = readFileAt(p.view(), mut buffer, position);
+                        match (read) {
+                            Ok(count) => { position = position + (count as u64); }
+                            Err(_) => {}
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -526,6 +574,13 @@ fn ioBuiltin(
                 match (borrow mut it.runtime.handles[k]) {
                     HostHandle.OpenFile(file, _) => { written = file.write(bytes.view()); }
                     HostHandle.Stream(stream) => { written = stream.write(bytes.view()); }
+                    HostHandle.PathFile(p, position) => {
+                        written = writeFileAt(p.view(), bytes.view(), position);
+                        match (written) {
+                            Ok() => { position = position + (bytes.length as u64); }
+                            Err(_) => {}
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -830,6 +885,45 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         };
         return Ok(hostResult(kind));
     }
+    if (sameText(name, "ceesafe_host_dir_sync")) {
+        // ADR 0075 §2.1: nothing to make durable in the interpreter, once the directory is there.
+        let path = match (hostPath(it, arguments, 0, 1)?) {
+            Some(p) => p,
+            null => { return Ok(hostFailure(errnoInvalid())); }
+        };
+        return match (File.kind(StringView.fromUtf8(path.view())!)) {
+            Ok(found) => match (found) {
+                Some(PathKind.Directory) => Ok(hostResult(0)),
+                Some(_) => Ok(hostFailure(20)),
+                null => Ok(hostFailure(2)),
+            },
+            Err(e) => Ok(hostFailure(errnoOf(e))),
+        };
+    }
+    if (sameText(name, "ceesafe_host_rename")) {
+        // ADR 0075 §2.1: a copy and a removal; the stage-0 compiler's library has no rename.
+        let from = match (hostPath(it, arguments, 0, 1)?) {
+            Some(p) => p,
+            null => { return Ok(hostFailure(errnoInvalid())); }
+        };
+        let to = match (hostPath(it, arguments, 2, 3)?) {
+            Some(p) => p,
+            null => { return Ok(hostFailure(errnoInvalid())); }
+        };
+        let source = StringView.fromUtf8(from.view())!;
+        let contents = match (wholeFile(source)) {
+            Ok(v) => v,
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        };
+        match (replaceFile(StringView.fromUtf8(to.view())!, contents.view())) {
+            Ok() => {}
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        }
+        return match (File.remove(source)) {
+            Ok() => Ok(hostResult(0)),
+            Err(e) => Ok(hostFailure(errnoOf(e))),
+        };
+    }
     if (sameText(name, "ceesafe_host_dir_create") || sameText(name, "ceesafe_host_dir_remove")) {
         let path = match (hostPath(it, arguments, 0, 1)?) {
             Some(p) => p,
@@ -999,6 +1093,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_dir_create")) {
         return "Ps:l";
+    }
+    if (sameText(name, "ceesafe_host_dir_sync")) {
+        return "Ps:l";
+    }
+    if (sameText(name, "ceesafe_host_rename")) {
+        return "PsPs:l";
     }
     if (sameText(name, "ceesafe_host_dir_remove")) {
         return "Ps:l";
@@ -1189,6 +1289,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_clock_realtime")) {
         return "PP:-";
+    }
+    if (sameText(name, "ceesafe_clock_monotonic")) {
+        return ":s";
     }
     if (sameText(name, "ceesafe_window_open")) {
         return "PsuuP:P";
@@ -1489,6 +1592,10 @@ fn callC(
     }
     if (sameText(n0, "ceesafe_file_read_at")) {
         return readAt(it, arguments);
+    }
+    if (sameText(n0, "ceesafe_clock_monotonic")) {
+        // ADR 0075 §2.6: the virtual clock, in nanoseconds, so a run stays reproducible.
+        return Ok(valueOf(it.asyncClock * 1000000, 8));
     }
     if (sameText(n0, "ceesafe_clock_realtime")) {
         // Wall-clock time (ADR 0055): 2000-01-01T00:00:00Z plus the virtual clock, so a run stays reproducible.
@@ -3546,4 +3653,133 @@ fn asyncOpStep(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         return Ok(valueOf(pending, 8));
     }
     return Ok(valueOf(value, 8));
+}
+
+/// `f.readAt`, `f.writeAt`, `f.syncData`, `f.syncAll`, `f.length` and `f.setLength` (ADR 0075 §2.1), by reopening the
+/// file at its path. A sync is done once the call returns: the interpreter has no crash to survive.
+fn durableFileBuiltin(
+    it: borrow mut Interp,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    frame: borrow mut Frame,
+    b: u32,
+    arguments: Range,
+    resultType: u32,
+) -> Result<Value?, Stop> {
+    requireHostIo(it)?;
+    let fd = descriptorArgument(it, c, n, frame, arguments, 0)?;
+    var path = String.create();
+    match (handleIndex(it, fd)) {
+        Some(k) => {
+            match (borrow it.runtime.handles[k]) {
+                HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                HostHandle.PathFile(p, _) => { path.append(p.view())!; }
+                _ => {}
+            }
+        }
+        null => {}
+    }
+    if (path.view().length == 0) {
+        return Ok(interpIoResult(c, resultType, 0, 9)?); // EBADF
+    }
+    if (b == bfFileSyncData() || b == bfFileSyncAll()) {
+        return Ok(interpIoResult(c, resultType, 0, 0)?);
+    }
+    if (b == bfFileReadAt()) {
+        let slice = argument(it, c, n, frame, arguments, 1)?;
+        let offset = argumentInteger(it, c, n, frame, arguments, 2)?.magnitude;
+        var buffer = readBuffer(it, slice)?;
+        match (readFileAt(path.view(), mut buffer, offset)) {
+            Ok(count) => {
+                storeRead(it, slice, buffer, count)?;
+                return Ok(interpIoResult(c, resultType, truncate<i64>(count), 0)?);
+            }
+            Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
+        }
+    }
+    if (b == bfFileWriteAt()) {
+        let value = argument(it, c, n, frame, arguments, 1)?;
+        let bytes = bytesOf(it, value)?;
+        let offset = argumentInteger(it, c, n, frame, arguments, 2)?.magnitude;
+        return match (writeFileAt(path.view(), bytes.view(), offset)) {
+            Ok() => Ok(interpIoResult(c, resultType, 0, 0)?),
+            Err(e) => Ok(interpIoResult(c, resultType, 0, errnoOf(e))?),
+        };
+    }
+    var contents = match (wholeFile(path.view())) {
+        Ok(v) => v,
+        Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
+    };
+    if (b == bfFileLength()) {
+        return Ok(interpIoResult(c, resultType, truncate<i64>(contents.length), 0)?);
+    }
+    let length = argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
+    if ((contents.length as u64) > length) {
+        contents.truncate(length as usize);
+    }
+    while ((contents.length as u64) < length) {
+        contents.push(0)!;
+    }
+    return match (replaceFile(path.view(), contents.view())) {
+        Ok() => Ok(interpIoResult(c, resultType, 0, 0)?),
+        Err(e) => Ok(interpIoResult(c, resultType, 0, errnoOf(e))?),
+    };
+}
+
+/// The whole file at `path`.
+fn wholeFile(path: StringView) -> Result<Vector<u8>, IoError> {
+    var file = File.open(path)?;
+    var out = Vector<u8>.create();
+    var chunk = [0u8; 4096];
+    loop {
+        let count = file.read(mut chunk[..])?;
+        if (count == 0) {
+            break;
+        }
+        for (i in 0..count) {
+            out.push(chunk[i])!;
+        }
+    }
+    return Ok(out);
+}
+
+/// Writes `bytes` as the whole file at `path`.
+fn replaceFile(path: StringView, bytes: Slice<u8>) -> Result<void, IoError> {
+    var file = File.create(path)?;
+    return file.write(bytes);
+}
+
+/// Up to `buffer.length` bytes of the file at `path`, from `offset`; 0 at or past the end.
+fn readFileAt(path: StringView, buffer: borrow mut Vector<u8>, offset: u64) -> Result<usize, IoError> {
+    let contents = wholeFile(path)?;
+    let size = contents.length as u64;
+    if (offset >= size) {
+        return Ok(0);
+    }
+    let start = offset as usize;
+    var count = contents.length - start;
+    if (count > buffer.length) {
+        count = buffer.length;
+    }
+    for (i in 0..count) {
+        buffer[i] = contents[start + i];
+    }
+    return Ok(count);
+}
+
+/// Writes `bytes` at `offset` of the file at `path`, zero-filling a gap after its end.
+fn writeFileAt(path: StringView, bytes: Slice<u8>, offset: u64) -> Result<void, IoError> {
+    var contents = wholeFile(path)?;
+    while ((contents.length as u64) < offset) {
+        contents.push(0)!;
+    }
+    let start = offset as usize;
+    for (i in 0..bytes.length) {
+        if (start + i < contents.length) {
+            contents[start + i] = bytes[i];
+        } else {
+            contents.push(bytes[i])!;
+        }
+    }
+    return replaceFile(path, contents.view());
 }

@@ -62,6 +62,8 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   - `// expect-exit: N`: the exit status (default 0).
   - `// expect-panic: reason`: placed on the line where the panic must be reported. The test requires exit status
     134 (SIGABRT) and `ceesafe panic: <reason> at <file>:<line>:` on standard error.
+  - `// expect-library-panic: reason`: the same for a panic an embedded library raises at its own line (ADR 0075
+    §4: an OrderedMap cursor used after a change), so `ceesafe panic: <reason> at lib/`.
 - `ffi/` programs are linked with their C harness (`NAME.c`, and `NAME.types.h` for imported C types,
   `type-system.md` §31); `freestanding/` programs with their environment.
 - `emit-c/*.cee` have reviewed snapshots of the generated `main.c`; `placement/`, `bounds-checks/`,

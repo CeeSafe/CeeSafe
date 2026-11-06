@@ -68,8 +68,10 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   `impl I for T` applies wherever `I` and `T` are both visible.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
   `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
-- **`lib/core`** is in scope in every package, unqualified, and no package may redeclare one of its names (N0201,
-  §29.2).
+- **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
+  one of their names (ADR 0075 §5; before it, N0201): the package's item shadows the library's in that package, while
+  the libraries' own code still finds its own. So a name a release adds to a library is not a source change. In C
+  the library's item is then emitted as `ceeT_lib_…`, `ceeF_lib_…` and the like.
 - **Function scope.** Parameters, then nested block scopes. A local is visible from the end of
   its declaration to the end of its block.
 - **No shadowing of locals.** Declaring a local or parameter whose name is already a local or
@@ -210,6 +212,17 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     literal. `writeLine()` with no argument writes a newline. Both return `void`.
   - `Process.exit(code: i32)`: has type *never*.
   - `truncate<T>(e)`: see §7. Exactly one type argument (N0216 for other generic arguments).
+  - `panic(message: StringView)` (ADR 0075 §2.8): has type *never*. It panics with the program's message:
+    `ceesafe panic: <message> at <file>:<line>:<column>`. In a freestanding program the environment's `ceesafe_panic`
+    gets `CEE_PANIC_EXPLICIT` ("explicit panic") and the message is not shown.
+  - `assert(condition)` and `assert(condition, message)`: `void`. When the condition is false, they panic with
+    "assertion failed" or the message. The message is evaluated only then. Assertions are always checked; no build
+    leaves them out.
+  - `replace(mut place, value) -> T` (ADR 0075 §2.11): puts `value` in the place and returns the old value.
+    `swap(mut a, mut b)` exchanges two places of one type (N0205 otherwise). Each argument is `mut` and a place
+    (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`
+    block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up.
+  - A package's own function or item of one of these names shadows the built-in (§2).
 - An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
 - `break`/`continue` must be inside `while` or `loop` (N0214).
 - `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
@@ -380,6 +393,9 @@ The algorithm that enforces these rules is in `lifetimes.md`.
   Its referent must be mutable from where it is used (§13.2): a field reached through a shared
   reference cannot be reborrowed mutably (N0248).
 - References support no operators of their own: `==` compares the referents (via auto-deref).
+- **`*r`** (ADR 0075 §2.14) reads the referent explicitly: `let id = *m.keyAt(0);` declares a `u64`. The referent must be
+  a Copy type (N0251 otherwise: borrow it, or `replace` it); `*` on anything but a reference is N0205, and a raw
+  pointer is read with `p.read()` (§27). `*r = v` and `*r op= v` are `r = v` and `r op= v`.
 
 ### 13.4 Borrow rules (summary of `lifetimes.md`)
 While a loan is live (the reference, or something derived from it, is used later), the borrowed
@@ -653,6 +669,13 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
 - `[e1, …, en]`: all elements have the same type (the expected element type, or the first
   element's), n ≥ 1.
 - `[v; N]`: N copies of `v`.
+- `[]` (ADR 0075 §2.9) is the empty slice, where a `Slice<T>` or `SliceMut<T>` is expected (an initialiser, an
+  argument, a return): no array is behind it, and its address is `T`'s alignment, never null and never read.
+  Elsewhere it is N0259. There is no zero-length array type: C has no zero-sized object, so `[T; 0]` would be laid
+  out differently in C and in CeeSafe (N0259).
+- **An array's methods are its slice's** (ADR 0075 §2.10): `a.m(…)`, for a method an array does not have, is
+  `a[..].m(…)`, mutably for the methods that write or move elements (`writeLE`, `copyFrom`, `fill`, `swap`, `sortBy`,
+  `splitAtMut`, …), which need a mutable place as `borrow mut a[..]` does.
 - `a.length` is a `usize`: the constant `N` for arrays, the stored length for slices. For an
   array, `a` must be a place (a variable, field or element), because the constant would skip
   evaluating it (N0216), unless there is nothing to evaluate: a `const` array (§10) or a literal of constants
@@ -810,7 +833,7 @@ text, written in lib/core (`bytes.cee`, `text.cee`, `numbers.cee`) and reached l
 
 The method names are reserved on these types, as the integer methods are (§6). The lib/core structs that hold them
 (`ByteOrder`, `VectorBytes`, `TextSearch`, `ByteSearch`, `TextHalves`, `ByteHalves`, `TextSplit`, `ByteSplit`,
-`NumberParsing`) are names no program may define (N0201).
+`NumberParsing`) are lib/core items, which a program may shadow (§2) without changing these methods.
 
 ## 17. Results and error propagation (M3a)
 
@@ -865,7 +888,12 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
 ```
 - **`e?` (propagate).**
   - `e` must have a `Result<T, E>` type (N0262). The enclosing function must return
-    `Result<U, E>` with the same `E` (N0261); `From` conversions come in M6.
+    `Result<U, E>` with the same `E`, or `Result<U, F>` where `F` is an enum with an `@from` variant whose payload
+    is `E` (N0261 otherwise, naming the `@from` variant that would fix it).
+  - **`@from`** (ADR 0075 §2.3): `enum F { @from Io(IoError), … }` marks a variant with exactly one payload (N0262
+    otherwise), and an enum has at most one `@from` variant per payload type (N0262). `e?` then returns
+    `Err(F.Io(x))` for `Err(x)`. The conversion is one step, and only `?` makes it: `return Err(x)` still names the
+    variant.
   - If `e` is `Ok(v)`, the value of `e?` is `v` (of type `T`; `void` if `T` is `void`).
   - If `e` is `Err(x)`, the function returns `Err(x)` at once, exactly like a `return`
     statement. The statement's temporaries end, then every scope is left (drops and deferred
@@ -887,7 +915,15 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
   the value was never destroyed: an O4 violation, found while specifying 3a.
 
 Diagnostics: N0260 (no expected `Result` type for `Ok`/`Err`), N0261 (`?` in a function whose
-return type is not a `Result` with the same error type), N0262 (`?` or `!` on a non-`Result`).
+return type is not a `Result` with the same error type or an `@from` variant for it), N0262 (`?` or `!` on a
+non-`Result`, or a misused `@from`).
+
+### 17.6 Methods of `Result<T, E>` (ADR 0075 §2.3)
+- `r.isOk()` and `r.isErr()` (`borrow this`): `bool`.
+- `r.ok()`: `T?`, and `r.err()`: `E?`. Both consume `r`; the other side is destroyed.
+- `o.okOr(e)` on a `T?`: `Result<T, E>`, consuming `o`; `e` is destroyed when there is a value.
+- They are lib/core's ResultMethods<T, E> and OptionalResults<T, E>. `map` and `mapErr` are not provided: they need
+  generic methods of generic structs, which the checker does not have yet.
 
 ## 18. Boxes and allocators (M3b)
 
@@ -1541,6 +1577,12 @@ fn main() -> i32 {
     copies of `fill` up to length `n`, or truncates to `n`; `reserve` makes room for `extra` more elements and
     changes nothing else. `extend` and `resize` need a Copy `T` (N0259). They take `borrow mut this` and are
     two-phase (B5), so `v.resize(v.length + 1, 0)` is allowed; `v.extend(v.view())` is not (N0241);
+  - `v.insert(at, x)`: `Result<void, AllocError>`, puts `x` at index `at` and moves the later elements up (`at ==
+    length` appends); `v.remove(at)`: `T`, takes the element at `at` out and moves the later ones down;
+    `v.swapRemove(at)`: `T`, takes it out and puts the last element in its place (O(1), the order is not kept)
+    (ADR 0075 §2.12). The index is checked at the call, `at <= length` for `insert` and `at < length` for the others,
+    and panics there ("index out of bounds"). They are lib/core's VectorEditing<T>: the elements move by `swap`, so
+    they may be of any type. If `insert` cannot grow the vector, it is unchanged and `x` is destroyed;
   - for a `Vector<u8, A>`, byte order, searching and parsing (§16.6), on its elements;
   - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `retain`): §16.5 and §36.4;
   - `v.view()`: the elements as a `Slice<T>`, and `v.viewMut()` as a `SliceMut<T>`;
@@ -1900,6 +1942,26 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
 - `File.open(path)`: `Result<File, IoError>` for reading; `File.create(path)`: for writing, created
   or truncated; `File.remove(path)`: `Result<void, IoError>`. `path` is a `StringView`; a path that
   contains a zero byte or is longer than 4095 bytes is `InvalidInput`.
+- **Durable files** (ADR 0075 §2.1), each `Result<…, IoError>`:
+  - `File.openReadWrite(path)` opens an existing file for reading and writing (`NotFound` if missing);
+    `File.openOrCreate(path)` creates a missing one; `File.createNew(path)` creates one and is `AlreadyExists` if
+    something is there. None truncates. A created file gets mode 0666 & ~umask.
+  - `f.readAt(mut buffer, offset: u64)`: `usize`, one positional read; 0 at or past the end. It does not move the
+    position `read` and `write` use.
+  - `f.writeAt(bytes, offset: u64)`: writes every byte at `offset`, or fails; it does not move the position.
+  - `f.syncData()`: the data, and the metadata needed to read it back, reach stable storage (`fdatasync` on Linux;
+    `fcntl(F_FULLFSYNC)` on Apple systems, whose `fsync` does not flush the drive's cache, falling back to `fsync`
+    only where the file system refuses it; `FlushFileBuffers` on Windows). `f.syncAll()` includes all metadata.
+    **After a failed sync the file's durable contents are unknown**: Linux may already have marked the dirty pages
+    clean, so a later successful sync proves nothing about the earlier writes. A program that needs durability treats
+    the file as failed.
+  - `f.length()`: `u64`; `f.setLength(n: u64)` shrinks the file or extends it with zeros.
+  - Each takes `borrow mut this`; interrupted calls are retried. On Windows, positions go through the handle's
+    `OVERLAPPED` offset.
+- `File.rename(from, to)` (lib/std): `rename(2)`, which atomically replaces `to`; Windows `MoveFileExW` with
+  `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`. The new name is durable once its directory is synced.
+- The interpreter runs these on the host's files, reopening the file for each positional operation (as ADR 0051's
+  read at an offset does); its sync does nothing, and its rename is a copy and a removal. Its sandbox refuses them.
 - `f.read(mut buffer)` (`buffer: SliceMut<u8>`, `f` taken as `borrow mut this`): `Result<usize,
   IoError>`, the number of bytes read, `0` at the end of the file. Interrupted reads are retried.
 - `f.write(bytes)` (`Slice<u8>`): `Result<void, IoError>`; it writes all the bytes or fails.
@@ -1968,7 +2030,8 @@ Diagnostics: none new.
 - `File.kind(path)`: `Result<PathKind?, IoError>`, following symbolic links: `PathKind.File`, `PathKind.Directory`
   or `PathKind.Other` (lib/std's enum), or `null` if nothing is there.
 - ADR 0028 called this `Path.kind`. It is `File.kind` because `Path` is a common name in programs (the corpus has
-  one), and lib/std's names cannot be redeclared in a hosted package (§38.5).
+  one), and before ADR 0075 lib/std's names could not be redeclared in a hosted package (§2 now lets a package shadow
+  them).
 
 ### 26.9 The environment
 - `Environment.variable(name)`: `StringView?`, the variable's value, or `null` if it is not set or not valid UTF-8.
@@ -1989,6 +2052,9 @@ Diagnostics: none new.
     Windows) by trying names until `mkdir` makes one, which is atomic.
   - The caller removes it.
 - `Directory.current()`: `Result<String, IoError>`, the working directory.
+- `Directory.sync(path)` (ADR 0075 §2.1): makes the directory's entries (files created, renamed or removed in it)
+  durable: `open(O_DIRECTORY)` and `fsync` on POSIX. Windows journals directory entries and cannot flush a directory,
+  so there it only checks that `path` is a directory.
 - **Common rules for §26.7–§26.10.**
   - Paths are `StringView`s, under `File.open`'s rules: a zero byte or more than 4,095 bytes is `InvalidInput`.
   - All of these are hosted-only. In freestanding code, `Process` and `File` are N0293, and `Environment` and
@@ -2007,6 +2073,9 @@ Diagnostics: none new.
 - Hosted only: in freestanding code `Clock` and `UnixTime`, being lib/std's, are not defined (N0200).
 - The interpreter answers 2000-01-01T00:00:00Z (946,684,800 seconds) plus its virtual clock (§40.8), so a run stays
   reproducible. Calendar dates, time zones and formatting are not part of the library.
+- `Clock.monotonicNanos()` (ADR 0075 §2.6): `u64` nanoseconds on the monotonic clock from an arbitrary start, for
+  durations and latencies. It never decreases within a process (`CLOCK_MONOTONIC`; `CLOCK_UPTIME_RAW` on Apple
+  systems; `QueryPerformanceCounter` on Windows). The interpreter answers its virtual clock in nanoseconds.
 
 ### 26.12 Random bytes (ADR 0060)
 - `Random.fill(into)` (lib/std; `into: SliceMut<u8>`) is `Result<void, IoError>`: it fills `into` from the system's
@@ -2423,7 +2492,7 @@ atomics, C7).
 ### 29.2 `lib/core`: CeeSafe sources bundled with the compiler
 Some core types are written in CeeSafe itself, over raw pointers and `unsafe` (ADR 0007 decision 1).
 Their sources live in `lib/core/*.cee`, are embedded in `ceesafec`, and are part of every package, in
-both profiles. Their names are reserved like built-in names (N0201). Code from `lib/core` is
+both profiles. A package may shadow one of their names with its own item (§2, ADR 0075 §5). Code from `lib/core` is
 type-, move- and borrow-checked like user code; functions and types the package does not use are
 not emitted, and `--dump-hir`/`--dump-nir` leave them out.
 
@@ -3583,8 +3652,8 @@ fn main() {
   userland over `cosmo_thread_*` and `cosmo_mutex_*` (`profiles.md`). In a freestanding build their names are
   N0293. The kernel uses lib/kernel's locks (ADR 0025). The atomics and their orderings are in `lib/core`, in every
   profile (ADR 0026).
-- `lib/std/` is the hosted library: compiled into hosted packages only. Like `lib/core` (§29.2), its names cannot be
-  redeclared, and only what a program uses is emitted.
+- `lib/std/` is the hosted library: compiled into hosted packages only. Like `lib/core` (§29.2), a package may shadow
+  its names, and only what a program uses is emitted.
 
 ### 38.6 Fork-join: `Thread.both` (OD-25; ADR 0018)
 - **`Thread.both(a, b)`** runs `a` on a new thread and `b` on the calling thread, waits until both have finished, and
@@ -3674,7 +3743,11 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - a string literal, as a `StringView`;
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
-- an array literal or repeat (`[e; N]`) of static initialisers;
+- an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may
+  be of a non-Copy type with no `drop` block, such as atomics (ADR 0075 §2.15): a static is never moved out of or
+  destroyed, and `[e; N]` there evaluates `e` N times at compile time, so `static SLOTS: [AtomicU64; 4] =
+  [AtomicU64.constant(0); 4];` is a table of shared counters, `SLOTS[i].fetchAdd(1)`. Elsewhere array elements stay
+  Copy (N0259). A library's static is emitted in C only where compiled code uses it;
 - a call of a `@constant` function whose arguments are static initialisers;
 - a call of a C constant macro whose arguments are static initialisers or `here` (below);
 - `layoutOf<T>()` (§30.1).

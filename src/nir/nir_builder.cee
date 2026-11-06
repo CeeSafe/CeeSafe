@@ -2362,6 +2362,10 @@ fn lowerCall(
     if (size > 0) {
         operands[0] = checkByteRange(c, n, b, operands[0], operands[1], size, span)?;
     }
+    let editing = vectorEditingCheck(c, b, callee);
+    if (editing > 0) {
+        operands[0] = checkVectorIndex(c, n, b, operands[0], operands[1], editing == 2, span)?;
+    }
     let list = n.list(operands.view())?;
     if (c.types.is(typ, TypeKind.Never)) {
         // A call of a `never` function (§15.3) ends its block, as `Process.exit` does.
@@ -2372,6 +2376,145 @@ fn lowerCall(
         return Ok(none());
     }
     return n.rvalue(NirRvalue.Call(callee, list), typ, span);
+}
+
+/// `panic(message)` and `assert(condition[, message])` (ADR 0075 §2.8): the message is evaluated only when the
+/// assertion fails. A panic is a `never` builtin statement (bfPanic) that ends its block, as a `never` call does.
+fn lowerAssertion(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    function: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let voidType = c.types.voidType;
+    var okBlock = none();
+    if (function == bfAssert()) {
+        let conditionExpr = c.hir.at(arguments, 0);
+        let condition = lowerOperand(c, n, b, conditionExpr)?;
+        if (condition == none()) {
+            return Ok(none());
+        }
+        okBlock = newBlock(b)?;
+        let failBlock = newBlock(b)?;
+        terminate(n, b, NirTerminator.Branch(condition, okBlock, failBlock))?;
+        b.current = failBlock;
+    }
+    var message = none();
+    if (function == bfPanic() || arguments.count == 2) {
+        let messageExpr = c.hir.at(arguments, if (function == bfPanic()) 0u32 else 1u32);
+        message = lowerOperand(c, n, b, messageExpr)?;
+        if (message == none()) {
+            return Ok(none());
+        }
+    } else {
+        let text = n.addText("assertion failed".bytes())?;
+        let view = c.types.stringView;
+        message = n.operand(NirOperand.String(text), view)?;
+    }
+    let values = [message];
+    let list = n.list(values[..])?;
+    let panic = n.rvalue(NirRvalue.Builtin(bfPanic(), list), voidType, span)?;
+    let saved = b.span;
+    b.span = span;
+    emit(n, b, NirStatement.Eval(panic))?;
+    terminate(n, b, NirTerminator.Unreachable)?;
+    b.span = saved;
+    if (okBlock == none()) {
+        return Ok(none());
+    }
+    b.current = okBlock;
+    let empty = Vector<u32>.create();
+    let nothing = n.list(empty.view())?;
+    return n.rvalue(NirRvalue.Builtin(bfAssert(), nothing), voidType, span); // a no-op: the assertion held
+}
+
+/// `swap(mut a, mut b)`, and `replace(mut place, value)` (ADR 0075 §2.11): the value goes to a temporary, the
+/// temporary and the place exchange their bytes (bfSwap), and the temporary, now the old value, is the result.
+/// Nothing is ever left moved-from, so no move rule is involved.
+fn lowerReplace(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    function: u32,
+    arguments: Range,
+    typ: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var operands = Vector<u32>.create();
+    if (!lowerTwoPhaseOperands(c, n, b, arguments, false, mut operands)?) {
+        return Ok(none());
+    }
+    let voidType = c.types.voidType;
+    if (function == bfSwap()) {
+        let list = n.list(operands.view())?;
+        return n.rvalue(NirRvalue.Builtin(bfSwap(), list), voidType, span);
+    }
+    let temp = newTemp(b, typ)?;
+    let tempPlace = localPlace(n, temp)?;
+    let value = useRvalue(n, operands[1])?;
+    assign(n, b, tempPlace, value)?;
+    let referenceType = c.types.referenceTo(typ, true)?;
+    let reference = newTemp(b, referenceType)?;
+    let referencePlace = localPlace(n, reference)?;
+    let loan = n.rvalue(NirRvalue.Ref(true, tempPlace), referenceType, span)?;
+    assign(n, b, referencePlace, loan)?;
+    let second = readPlace(c, n, b, referencePlace)?;
+    let values = [operands[0], second];
+    let list = n.list(values[..])?;
+    let exchange = n.rvalue(NirRvalue.Builtin(bfSwap(), list), voidType, span)?;
+    let saved = b.span;
+    b.span = span;
+    emit(n, b, NirStatement.Eval(exchange))?;
+    b.span = saved;
+    let old = readPlace(c, n, b, tempPlace)?;
+    return useRvalue(n, old);
+}
+
+/// A call of lib/core's VectorEditing from a program's own code (ADR 0075 §2.12): 2 for `insert` (`at <= length`),
+/// 1 for `remove` and `swapRemove` (`at < length`), else 0. The check is at the call, so a panic names the program's
+/// line.
+fn vectorEditingCheck(c: borrow Checker, b: borrow Lowering, callee: u32) -> u32 {
+    let f = borrow c.hir.functions[callee as usize];
+    let owner = if (f.owner == none()) "".bytes() else c.typeName(f.owner);
+    if (owner.length < 13 || !sameText(owner[0..13], "VectorEditing") ||
+        c.hir.functions[b.function as usize].library) {
+        return 0;
+    }
+    let name = c.name(f.name);
+    return if (name.length >= 6 && sameText(name[0..6], "insert")) 2u32 else 1u32;
+}
+
+/// The bounds check of a VectorEditing call: `at < length`, or `at <= length` (`at < length + 1`) for an insert. The
+/// vector reference is spilled to a place if it is not one.
+fn checkVectorIndex(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    vector: u32,
+    at: u32,
+    inclusive: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let place = slicePlaceOf(c, n, b, vector)?;
+    let saved = b.span;
+    b.span = span;
+    let owned = projectPlace(n, place, derefProjectionN())?;
+    let elements = projectPlace(n, owned, derefProjectionN())?;
+    var length = lengthOf(c, n, b, elements)?;
+    if (inclusive) {
+        let usize = c.types.usize;
+        let one = constOperand(n, 1, usize)?;
+        let bound = newTemp(b, usize)?;
+        let boundPlace = localPlace(n, bound)?;
+        let sum = n.rvalue(NirRvalue.Binary(BinaryOp.Add, length, one), usize, span)?;
+        assign(n, b, boundPlace, sum)?;
+        length = placeOperand(c, n, b, boundPlace)?;
+    }
+    emit(n, b, NirStatement.BoundsCheck(at, length))?;
+    b.span = saved;
+    return Ok(if (operandPlace(n, vector) != none()) vector else readPlace(c, n, b, place)?);
 }
 
 /// The byte count of a call of lib/core's ByteOrder.readU32BE and the like from a program's own code (ADR 0071 §2.2),
@@ -2660,6 +2803,12 @@ fn lowerBuiltinCall(
         emit(n, b, NirStatement.Eval(workers))?;
         let runExpr = c.hir.at(arguments, 1);
         return lowerRvalue(c, n, b, runExpr);
+    }
+    if (function == bfPanic() || function == bfAssert()) {
+        return lowerAssertion(c, n, b, function, arguments, span);
+    }
+    if (function == bfReplace() || function == bfSwap()) {
+        return lowerReplace(c, n, b, function, arguments, typ, span);
     }
     if (function == bfProcessExit()) {
         let hoisted101 = c.hir.at(arguments, 0);
@@ -3188,9 +3337,29 @@ fn lowerResultAccess(
         let err = c.types.enums[definition as usize].variants[1];
         let errField = c.types.variants[err as usize].payload[0];
         let payloadPlaceIndex = payloadPlace(n, result, err, errField)?;
-        let payload = readPlace(c, n, b, payloadPlaceIndex)?;
+        var payload = readPlace(c, n, b, payloadPlaceIndex)?;
         let returnDefinition = c.types.info(returnType).enumDef;
         let errVariant = c.types.enums[returnDefinition as usize].variants[1];
+        let key = Word { value: e as u64 };
+        var conversion = none();
+        match (c.tryConversions.get(borrow key)) {
+            Some(found) => { conversion = truncate<u32>(found.value); }
+            null => {}
+        }
+        if (conversion != none()) {
+            {
+                // The error goes into the return type's `@from` variant first (ADR 0075 §2.3).
+                let from = conversion;
+                let target = c.types.fields[c.types.variants[errVariant as usize].payload[0] as usize].typ;
+                let inner = [payload];
+                let innerList = n.list(inner[..])?;
+                let wrapped = n.rvalue(NirRvalue.EnumAggregate(from, innerList), target, b.span)?;
+                let converted = newTemp(b, target)?;
+                let convertedPlace = localPlace(n, converted)?;
+                assign(n, b, convertedPlace, wrapped)?;
+                payload = readPlace(c, n, b, convertedPlace)?;
+            }
+        }
         let values = [payload];
         let list = n.list(values[..])?;
         let aggregate = n.rvalue(NirRvalue.EnumAggregate(errVariant, list), returnType, b.span)?;

@@ -468,7 +468,7 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
 fn addVariant(c: borrow mut Checker, definition: u32, name: u32, start: u32, end: u32) -> Result<u32, AllocError> {
     let index = truncate<u32>(c.types.enums[definition as usize].variants.length);
     c.types.variants.push(
-        EnumVariant { name: name, index: index, start: start, end: end, payload: Vector<u32>.create() },
+        EnumVariant { name: name, index: index, start: start, end: end, payload: Vector<u32>.create(), isFrom: false },
     )?;
     let variant = truncate<u32>(c.types.variants.length - 1);
     c.types.enums[definition as usize].variants.push(variant)?;
@@ -574,6 +574,9 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
                 regionParameters.count > 0 || entry.template != none(),
             )?;
             addPayload(c, variant, p, typ, typeSpan.start, typeSpan.end)?;
+        }
+        if (v.isFrom) {
+            checkFromVariant(c, definition, variant, v.payload.count, id.start, id.end)?;
         }
     }
     swapRegions(c, savedRegions)?;
@@ -800,4 +803,53 @@ fn visitCopy(c: borrow mut Checker, typ: u32, done: borrow mut Vector<bool>) -> 
         c.types.enums[t.enumDef as usize].isCopy = allCopy;
     }
     return Ok();
+}
+
+/// `@from V(E)` (ADR 0075 §2.3): one payload, and no other `@from` variant of the enum with the same payload type
+/// (N0262).
+fn checkFromVariant(
+    c: borrow mut Checker,
+    definition: u32,
+    variant: u32,
+    payloadCount: u32,
+    start: u32,
+    end: u32,
+) -> Result<void, AllocError> {
+    if (payloadCount != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a '@from' variant has exactly one payload, the error type '?' converts from")?;
+        c.error(notAResult(), start, end, message)?;
+        return Ok();
+    }
+    let payload = c.types.fields[c.types.variants[variant as usize].payload[0] as usize].typ;
+    for (other in c.types.enums[definition as usize].variants.view()) {
+        let o = borrow c.types.variants[other as usize];
+        if (other != variant && o.isFrom && c.types.fields[o.payload[0] as usize].typ == payload) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "two '@from' variants convert from ")?;
+            appendQuotedType(mut message, c, payload)?;
+            appendText(mut message, ": ")?;
+            appendQuotedName(mut message, c, o.name)?;
+            appendText(mut message, " and this one; '?' would not know which to build")?;
+            c.error(notAResult(), start, end, message)?;
+            return Ok();
+        }
+    }
+    c.types.variants[variant as usize].isFrom = true;
+    return Ok();
+}
+
+/// The `@from` variant of the enum `target` whose payload is `source`, or none (ADR 0075 §2.3).
+fn fromVariant(c: borrow Checker, target: u32, source: u32) -> u32 {
+    if (target == none() || !c.types.is(target, TypeKind.Enum)) {
+        return none();
+    }
+    let definition = c.types.info(target).enumDef;
+    for (v in c.types.enums[definition as usize].variants.view()) {
+        let variant = borrow c.types.variants[v as usize];
+        if (variant.isFrom && c.types.fields[variant.payload[0] as usize].typ == source) {
+            return v;
+        }
+    }
+    return none();
 }

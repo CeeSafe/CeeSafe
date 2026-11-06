@@ -14,6 +14,7 @@ struct PendingElement {
     start: u32;
     end: u32;
     file: u32;
+    inStatic: bool; // in a static's type or initialiser (ADR 0075 §2.15)
 }
 
 /// `[T; N]`.
@@ -78,11 +79,19 @@ fn checkElement(c: borrow mut Checker, element: u32, length: i64, span: Span) ->
         c.error(referenceNotAllowed(), span.start, span.end, message)?;
         return Ok(false);
     }
+    let inStatic = c.inStaticType || c.inStaticInitializer;
     if (c.copyKnown) {
-        checkElementCopy(c, element, length, span)?;
+        checkElementCopy(c, element, length, span, inStatic)?;
     } else {
         c.pendingElements.push(
-            PendingElement { element: element, length: length, start: span.start, end: span.end, file: c.file },
+            PendingElement {
+                element: element,
+                length: length,
+                start: span.start,
+                end: span.end,
+                file: c.file,
+                inStatic: inStatic,
+            },
         )?;
     }
     return Ok(true);
@@ -98,15 +107,23 @@ fn checkPendingElements(c: borrow mut Checker) -> Result<void, AllocError> {
             let fileToSet = p.file;
             c.setFile(fileToSet);
         }
-        checkElementCopy(c, p.element, p.length, Span { start: p.start, end: p.end })?;
+        checkElementCopy(c, p.element, p.length, Span { start: p.start, end: p.end }, p.inStatic)?;
     }
     c.setFile(saved);
     return Ok();
 }
 
-fn checkElementCopy(c: borrow mut Checker, element: u32, length: i64, span: Span) -> Result<void, AllocError> {
-    // Arrays own their elements and v0 tracks no per-element moves; slices only view them (§21.3).
-    if (length >= 0 && !c.types.isCopy(element) && !c.types.isCLaidOut(element, 0)) {
+fn checkElementCopy(
+    c: borrow mut Checker,
+    element: u32,
+    length: i64,
+    span: Span,
+    inStatic: bool,
+) -> Result<void, AllocError> {
+    // Arrays own their elements and v0 tracks no per-element moves; slices only view them (§21.3). A static's array
+    // is never moved out of or destroyed, so its elements may be any type without a drop block (ADR 0075 §2.15).
+    let staticTable = inStatic && !c.types.needsDrop(element);
+    if (length >= 0 && !c.types.isCopy(element) && !c.types.isCLaidOut(element, 0) && !staticTable) {
         var message = Vector<u8>.create();
         appendText(mut message, "array and slice elements must be Copy types in v0; ")?;
         appendQuotedType(mut message, c, element)?;
@@ -209,6 +226,9 @@ fn expectedElement(c: borrow Checker, expected: u32) -> u32 {
 
 /// `[a, b, c]`.
 fn synthArrayLiteral(c: borrow mut Checker, elements: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    if (elements.count == 0) {
+        return emptySlice(c, expected, span);
+    }
     let elementExpected = expectedElement(c, expected);
     let firstSyntax = c.front.ast.at(elements, 0);
     let first = arrayElement(c, firstSyntax, elementExpected)?;
@@ -285,16 +305,29 @@ fn synthSlice(
     span: Span,
 ) -> Result<u32, AllocError> {
     let synthesized = synth(c, targetSyntax, none())?;
-    let target = autoDeref(c, synthesized)?;
     let usize = c.types.usize;
     let low = if (lowSyntax == none()) none() else checkExpr(c, lowSyntax, usize)?;
     let high = if (highSyntax == none()) none() else checkExpr(c, highSyntax, usize)?;
+    let targetSpan = c.front.ast.exprSpans[targetSyntax as usize];
+    return sliceOfChecked(c, synthesized, targetSpan, low, high, mutable, span);
+}
+
+/// `e[low..high]` of a checked `e` (synthSlice's rest; ADR 0075 §2.10's array methods start here, with no bounds).
+fn sliceOfChecked(
+    c: borrow mut Checker,
+    synthesized: u32,
+    targetSpan: Span,
+    low: u32,
+    high: u32,
+    mutable: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let target = autoDeref(c, synthesized)?;
     if (c.isBottom(target)) {
         return Ok(target);
     }
     let t = c.typeOf(target);
     if (!c.types.is(t, TypeKind.Array)) {
-        let targetSpan = c.front.ast.exprSpans[targetSyntax as usize];
         var message = Vector<u8>.create();
         appendText(mut message, "only arrays and slices can be sliced; found ")?;
         appendQuotedType(mut message, c, t)?;
@@ -573,4 +606,36 @@ fn constantArrayAt(c: borrow mut Checker, value: u32, span: Span) -> Result<u32,
         HirExpr.ArrayRepeat(element) => { return c.expr(HirExpr.ArrayRepeat(element), typ, span.start, span.end); }
         _ => { return c.errorResult(span.start, span.end); }
     }
+}
+
+/// `[]` (ADR 0075 §2.9): the empty `Slice<T>` or `SliceMut<T>` the context expects, with no array behind it. Its
+/// address is the element type's alignment, never null and never read. There is no zero-length array: C has no
+/// zero-sized object, so its layout would differ from CeeSafe's (N0259).
+fn emptySlice(c: borrow mut Checker, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let isSlice = expected != none() && c.types.isSlice(expected) && !c.types.isStringView(expected);
+    if (!isSlice) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'[]' is an empty slice, and needs a 'Slice<T>' or 'SliceMut<T>' expected here; an array has 1 element or more",
+        )?;
+        c.error(invalidArray(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let element = c.types.info(c.types.info(expected).pointee).element;
+    let mutable = c.types.info(expected).mutableReference;
+    let usize = c.types.usize;
+    let align = c.types.layoutOf(element).align;
+    let address = c.expr(
+        HirExpr.IntConst(IntValue { negative: false, magnitude: align as u64 }),
+        usize,
+        span.start,
+        span.end,
+    )?;
+    let pointerType = c.types.pointerTo(element, mutable)?;
+    let pointer = c.expr(HirExpr.Cast(address), pointerType, span.start, span.end)?;
+    let length = c.expr(HirExpr.IntConst(IntValue { negative: false, magnitude: 0 }), usize, span.start, span.end)?;
+    let values = [pointer, length];
+    let list = c.hir.list(values[..])?;
+    return c.expr(HirExpr.BuiltinCall(bfSliceFromRaw(), list), expected, span.start, span.end);
 }

@@ -950,6 +950,93 @@ public struct AsyncFiles {
             Err(e) => { return Err(AsyncError.Io(e)); }
         }
     }
+    /// Opens an existing `path` for reading and writing (ADR 0075 §2.1).
+    public async fn openReadWrite(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.openReadWrite(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Opens `path` for reading and writing, creating it if missing; never truncates (ADR 0075 §2.1).
+    public async fn openOrCreate(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.openOrCreate(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Creates `path` for reading and writing; `AlreadyExists` if it exists (ADR 0075 §2.1).
+    public async fn createNew(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.createNew(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// One read at `offset` into `buffer`: the count, 0 at or past the end (ADR 0075 §2.1).
+    public async fn readAt(file: borrow mut File, buffer: SliceMut<u8>, offset: u64) -> Result<usize, AsyncError> {
+        match (await Async.blocking(() => file.readAt(mut buffer, offset))) {
+            Ok(n) => { return Ok(n); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// The file's length in bytes (ADR 0075 §2.1).
+    public async fn length(file: borrow mut File) -> Result<u64, AsyncError> {
+        match (await Async.blocking(() => file.length())) {
+            Ok(n) => { return Ok(n); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Writes every byte at `offset` (ADR 0075 §2.1).
+    public async fn writeAt(file: borrow mut File, bytes: Slice<u8>, offset: u64) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => file.writeAt(bytes, offset))) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Makes the data, and the metadata needed to read it, durable (ADR 0075 §2.1). After a failure the durable contents are unknown.
+    public async fn syncData(file: borrow mut File) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => file.syncData())) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// `syncData` with all metadata (ADR 0075 §2.1).
+    public async fn syncAll(file: borrow mut File) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => file.syncAll())) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Truncates or zero-extends the file to `length` bytes (ADR 0075 §2.1).
+    public async fn setLength(file: borrow mut File, length: u64) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => file.setLength(length))) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Renames `from` to `to`, atomically replacing it (ADR 0075 §2.1).
+    public async fn rename(from: StringView, to: StringView) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => File.rename(from, to))) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// Makes a directory's entries durable (ADR 0075 §2.1).
+    public async fn syncDirectory(path: StringView) -> Result<void, AsyncError> {
+        match (await Async.blocking(() => Directory.sync(path))) {
+            Ok() => { return Ok(); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
 }
 
 /// A SocketAddress's fields as the runtime takes them (ADR 0044 §3.1: rt.h's ceesafe_endpoint), and the calls that

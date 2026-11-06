@@ -84,6 +84,11 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             let value = checkClosure(c, closure, expected, span)?;
             return coerce(c, value, expected, span);
         }
+        ExprNode.ArrayLiteral(elements) => {
+            if (elements.count == 0) {
+                return emptySlice(c, expected, span); // `[]` (ADR 0075 §2.9)
+            }
+        }
         _ => {}
     }
     var synthExpected = expected;
@@ -233,6 +238,7 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
         }
         ExprNode.Borrow(mutable, operand) => { return synthBorrow(c, mutable, operand, span); }
         ExprNode.Move(operand) => { return synthMove(c, operand, span); }
+        ExprNode.Deref(operand) => { return synthDeref(c, operand, span); }
         ExprNode.ArrayLiteral(elements) => { return synthArrayLiteral(c, elements, expected, span); }
         ExprNode.ArrayRepeat(value, count) => { return synthArrayRepeat(c, value, count, expected, span); }
         ExprNode.Index(target, index) => { return synthIndex(c, target, index, span); }
@@ -889,6 +895,15 @@ fn synthCall(
                     }
                     if (b == builtinCallerAddress()) {
                         return checkCallerAddress(c, typeArguments, arguments, span);
+                    }
+                    if (b == builtinAssert()) {
+                        return checkAssert(c, arguments, span);
+                    }
+                    if (b == builtinPanic()) {
+                        return checkPanic(c, arguments, span);
+                    }
+                    if (b == builtinReplace() || b == builtinSwap()) {
+                        return checkReplaceOrSwap(c, b, arguments, span);
                     }
                     // Other built-in names are not functions (SynthCall's last case).
                     var message = Vector<u8>.create();

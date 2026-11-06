@@ -216,6 +216,9 @@ fn checkVectorMethod(
     if (!isString && (sameText(text, "extend") || sameText(text, "resize") || sameText(text, "reserve"))) {
         return checkVectorBulk(c, member, arguments, vector, targetSpan, span);
     }
+    if (!isString && (sameText(text, "insert") || sameText(text, "remove") || sameText(text, "swapRemove"))) {
+        return checkVectorEditing(c, member, arguments, vector, targetSpan, span);
+    }
     let arity = vectorMethodArity(isString, text);
     if (arity < 0) {
         var message = Vector<u8>.create();
@@ -224,7 +227,7 @@ fn checkVectorMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         appendText(
             mut message,
-            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'" else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve'",
+            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'" else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'insert', 'remove', 'swapRemove'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -621,4 +624,67 @@ fn checkVectorBulk(
         "extend",
     )) bfVectorExtend() else if (resize) bfVectorResize() else bfVectorReserve();
     return c.expr(HirExpr.BuiltinCall(function, list), voidResult, span.start, span.end);
+}
+
+/// `v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12): lib/core's VectorEditing<T>. The index
+/// and the value are checked before the vector's mutable loan starts (two-phase, B5), as for `push`; the lowering
+/// checks the index at the call (vectorEditingCheck).
+fn checkVectorEditing(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let isInsert = sameText(text, "insert");
+    let arity: u32 = if (isInsert) 2 else 1;
+    if (arguments.count != arity) {
+        var message = Vector<u8>.create();
+        appendText(mut message, if (isInsert) "write 'v.insert(at, x)'" else "write 'v.")?;
+        if (!isInsert) {
+            appendBytes(mut message, text)?;
+            appendText(mut message, "(at)'")?;
+        }
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let vectorType = c.typeOf(vector);
+    let element = c.types.info(c.types.info(vectorType).pointee).element;
+    let usize = c.types.usize;
+    let atSyntax = c.front.ast.at(arguments, 0);
+    let at = checkExpr(c, atSyntax, usize)?;
+    var value = none();
+    if (isInsert) {
+        let valueSyntax = c.front.ast.at(arguments, 1);
+        value = checkExpr(c, valueSyntax, element)?;
+    }
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
+    if (c.isBottom(at) || c.isBottom(receiver) || (value != none() && c.isBottom(value))) {
+        return c.errorResult(span.start, span.end);
+    }
+    var name = Vector<u8>.create();
+    appendBytes(mut name, text)?;
+    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
+        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
+    }
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
+    let elements = [element];
+    let function = libraryFunction(c, "VectorEditing", elements[..], symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0075")?;
+        return c.errorResult(span.start, span.end);
+    }
+    var values = Vector<u32>.create();
+    values.push(receiver)?;
+    values.push(at)?;
+    if (value != none()) {
+        values.push(value)?;
+    }
+    return libraryCall(c, function, values.view(), span);
 }

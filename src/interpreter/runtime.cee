@@ -806,6 +806,35 @@ fn builtin(
         }
         _ => {}
     }
+    if (b == bfAssert()) {
+        return Ok(null); // the assertion held (ADR 0075 §2.8)
+    }
+    if (b == bfPanic()) {
+        let op = n.at(arguments, 0);
+        var message = Vector<u8>.create();
+        match (n.operands[op as usize]) {
+            NirOperand.String(text) => { message = copyBytes(n.textOf(text))!; }
+            _ => {
+                let value = operand(it, c, n, frame, op)?;
+                message = bytesOf(it, value)?;
+            }
+        }
+        let location = rvalueLocation(it, c, n, frame, r);
+        return Err(Stop { kind: 1, message: message, location: location, hasLocation: true, code: 0 });
+    }
+    if (b == bfSwap()) {
+        // Two referents exchange their bytes (ADR 0075 §2.11).
+        let first = argument(it, c, n, frame, arguments, 0)?;
+        let second = argument(it, c, n, frame, arguments, 1)?;
+        let size = typeSize(c, pointeeOf(c, builtinArgumentType(n, arguments, 0)))?;
+        let a = first.bits(0, 8)?;
+        let bAddress = second.bits(0, 8)?;
+        let x = it.memory.load(a, size)?;
+        let y = it.memory.load(bAddress, size)?;
+        it.memory.store(a, y)?;
+        it.memory.store(bAddress, x)?;
+        return Ok(null);
+    }
     if (b == bfAsyncPark()) {
         return asyncPark(it);
     }

@@ -41,8 +41,12 @@ fn builtinSliceMut() -> u32 => 23;
 fn builtinCpu() -> u32 => 25;
 fn builtinTarget() -> u32 => 26;
 fn builtinThread() -> u32 => 27;
-fn builtinAsync() -> u32 => 28; // type-system.md §40.4
-fn builtinCount() -> u32 => 29;
+fn builtinAsync() -> u32 => 28;  // type-system.md §40.4
+fn builtinAssert() -> u32 => 29; // ADR 0075 §2.8
+fn builtinPanic() -> u32 => 30;
+fn builtinReplace() -> u32 => 31; // ADR 0075 §2.11
+fn builtinSwap() -> u32 => 32;
+fn builtinCount() -> u32 => 33;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).
@@ -145,6 +149,7 @@ struct Checker {
     usedUnsafe: bool;                                // the body has an `unsafe` block or expression
     allowCChar: bool;                                // the next resolution is a pointer's pointee (§28.3)
     inStaticInitializer: bool;                       // checking a static's initialiser (S7c)
+    inStaticType: bool;                              // resolving a static's declared type (ADR 0075 §2.15)
     atomicStructs: Vector<u32>;                      // Ast.items of structs declared `@context(atomic)`
     allowImported: bool;                             // the next resolution may be an imported C type (§31.2)
     coreAllowImported: bool;                         // resolveTypeWith's allowImported, for resolveTypeCore
@@ -166,6 +171,8 @@ struct Checker {
     blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
     blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
+    tryConversions: Map<Word, Word>;  // a `?` expression: the `@from` variant its error goes into (ADR 0075 §2.3)
+    packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
     declaredOrder: Vector<DeclaredEntry>;
     methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
     memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)

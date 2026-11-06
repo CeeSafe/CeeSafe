@@ -261,3 +261,82 @@ public struct SliceAlgorithms<T> {
         return kept;
     }
 }
+
+/// `v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12). The index is checked at the call, so a
+/// panic names the program's line: `at <= length` for `insert`, `at < length` for the others. The elements move by
+/// `swap`, so they may be of any type. A vector's allocator is `SystemHeap` or `FailingAllocator` (type-system.md
+/// §23.1); the `…Failing` functions are the latter's.
+public struct VectorEditing<T> {
+    /// Puts `x` at `at`, moving the elements from `at` on one place up. O(length - at). If growing fails, `v` is
+    /// unchanged and `x` is destroyed.
+    public fn insert(v: borrow mut Vector<T>, at: usize, x: T) -> Result<void, AllocError> {
+        v.push(x)?;
+        let s = v.viewMut();
+        var i = s.length - 1;
+        while (i > at) {
+            s.swap(i, i - 1);
+            i -= 1;
+        }
+        return Ok();
+    }
+
+    /// Takes the element at `at` out, moving the later elements one place down. O(length - at).
+    public fn remove(v: borrow mut Vector<T>, at: usize) -> T {
+        let length = v.length;
+        {
+            let s = v.viewMut();
+            var i = at;
+            while (i + 1 < length) {
+                s.swap(i, i + 1);
+                i += 1;
+            }
+        }
+        return v.pop()!;
+    }
+
+    /// Takes the element at `at` out and puts the last element in its place. O(1); the order is not kept.
+    public fn swapRemove(v: borrow mut Vector<T>, at: usize) -> T {
+        let last = v.length - 1;
+        {
+            let s = v.viewMut();
+            s.swap(at, last);
+        }
+        return v.pop()!;
+    }
+
+    /// `insert` for a vector of `FailingAllocator`.
+    public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x: T) -> Result<void, AllocError> {
+        v.push(x)?;
+        let s = v.viewMut();
+        var i = s.length - 1;
+        while (i > at) {
+            s.swap(i, i - 1);
+            i -= 1;
+        }
+        return Ok();
+    }
+
+    /// `remove` for a vector of `FailingAllocator`.
+    public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T {
+        let length = v.length;
+        {
+            let s = v.viewMut();
+            var i = at;
+            while (i + 1 < length) {
+                s.swap(i, i + 1);
+                i += 1;
+            }
+        }
+        return v.pop()!;
+    }
+
+    /// `swapRemove` for a vector of `FailingAllocator`.
+    public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T {
+        let last = v.length - 1;
+        {
+            let s = v.viewMut();
+            s.swap(at, last);
+        }
+        return v.pop()!;
+    }
+}

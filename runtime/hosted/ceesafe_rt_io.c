@@ -143,10 +143,21 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
     int fd;
     do {
 #ifdef _WIN32
-        fd = mode == 0u ? _open(name, _O_RDONLY | _O_BINARY)
-                        : _open(name, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, _S_IREAD | _S_IWRITE);
+        int flags = mode == 0u ? _O_RDONLY
+                  : mode == 1u ? _O_WRONLY | _O_CREAT | _O_TRUNC
+                  : mode == 2u ? _O_RDWR
+                  : mode == 3u ? _O_RDWR | _O_CREAT
+                               : _O_RDWR | _O_CREAT | _O_EXCL;
+        fd = _open(name, flags | _O_BINARY, _S_IREAD | _S_IWRITE);
 #else
-        fd = mode == 0u ? open(name, O_RDONLY) : open(name, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        /* Modes 2-4 (ADR 0075 §2.1): read and write; 3 creates a missing file; 4 creates and fails if one exists.
+           A created file gets 0666 & ~umask. */
+        int flags = mode == 0u ? O_RDONLY
+                  : mode == 1u ? O_WRONLY | O_CREAT | O_TRUNC
+                  : mode == 2u ? O_RDWR
+                  : mode == 3u ? O_RDWR | O_CREAT
+                               : O_RDWR | O_CREAT | O_EXCL;
+        fd = open(name, flags | O_CLOEXEC, mode == 1u ? 0644 : 0666);
 #endif
     } while (fd < 0 && errno == EINTR);
     return fd < 0 ? ceesafe_io_errno() : ceesafe_io_ok(fd);
@@ -208,6 +219,125 @@ cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length
         done += (uint64_t)n;
     }
     return ceesafe_io_ok(0);
+}
+
+/* ---- Durable files (ADR 0075 §2.1) ------------------------------------------------------- */
+
+/* One read of up to `length` bytes at `offset`, not moving the file position; 0 at or past the end. */
+cee_io_result ceesafe_fd_read_at(int32_t fd, uint8_t *buffer, uint64_t length, uint64_t offset) {
+    size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
+    OVERLAPPED at = { 0 };
+    at.Offset = (DWORD)offset;
+    at.OffsetHigh = (DWORD)(offset >> 32);
+    DWORD n = 0;
+    if (!ReadFile(h, buffer, (DWORD)chunk, &n, &at)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_HANDLE_EOF) return ceesafe_io_ok(0);
+        return ceesafe_io_fail(error == ERROR_ACCESS_DENIED ? EACCES : EIO);
+    }
+    return ceesafe_io_ok((int64_t)n);
+#else
+    if (offset > (uint64_t)INT64_MAX) return ceesafe_io_fail(EINVAL);
+    ssize_t n;
+    do {
+        n = pread(fd, buffer, chunk, (off_t)offset);
+    } while (n < 0 && errno == EINTR);
+    return n < 0 ? ceesafe_io_errno() : ceesafe_io_ok((int64_t)n);
+#endif
+}
+
+/* Writes all `length` bytes at `offset`, not moving the file position, or fails. */
+cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t length, uint64_t offset) {
+    if (offset > (uint64_t)INT64_MAX || length > (uint64_t)INT64_MAX - offset) return ceesafe_io_fail(EINVAL);
+    uint64_t done = 0;
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
+#endif
+    while (done < length) {
+        uint64_t rest = length - done;
+        size_t chunk = rest > (1u << 30) ? (size_t)1u << 30 : (size_t)rest;
+        uint64_t at = offset + done;
+#ifdef _WIN32
+        OVERLAPPED where = { 0 };
+        where.Offset = (DWORD)at;
+        where.OffsetHigh = (DWORD)(at >> 32);
+        DWORD n = 0;
+        if (!WriteFile(h, bytes + done, (DWORD)chunk, &n, &where)) {
+            DWORD error = GetLastError();
+            return ceesafe_io_fail(error == ERROR_DISK_FULL ? ENOSPC : error == ERROR_ACCESS_DENIED ? EACCES : EIO);
+        }
+#else
+        ssize_t n = pwrite(fd, bytes + done, chunk, (off_t)at);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) return ceesafe_io_errno();
+#endif
+        if (n == 0) return ceesafe_io_fail(EIO);
+        done += (uint64_t)n;
+    }
+    return ceesafe_io_ok(0);
+}
+
+/* `all` 0: the data and the metadata needed to read it back (fdatasync); 1: all metadata too (fsync). Apple systems
+   use F_FULLFSYNC, because their fsync does not flush the drive's cache, and fall back to fsync only where the file
+   system refuses it. After a failure the file's durable contents are unknown (type-system.md §26.3). */
+cee_io_result ceesafe_fd_sync(int32_t fd, uint32_t all) {
+#ifdef _WIN32
+    (void)all;
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
+    return FlushFileBuffers(h) ? ceesafe_io_ok(0) : ceesafe_io_fail(EIO);
+#elif defined(__APPLE__)
+    (void)all;
+    if (fcntl(fd, F_FULLFSYNC) == 0) return ceesafe_io_ok(0);
+    if (errno != ENOTSUP && errno != EINVAL) return ceesafe_io_errno();
+    int r;
+    do {
+        r = fsync(fd);
+    } while (r < 0 && errno == EINTR);
+    return r < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+#else
+    int r;
+    do {
+#if defined(__linux__)
+        r = all ? fsync(fd) : fdatasync(fd);
+#else
+        (void)all;
+        r = fsync(fd);
+#endif
+    } while (r < 0 && errno == EINTR);
+    return r < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+#endif
+}
+
+/* The file's size in bytes. */
+cee_io_result ceesafe_fd_length(int32_t fd) {
+#ifdef _WIN32
+    struct _stat64 st;
+    if (_fstat64(fd, &st) != 0) return ceesafe_io_errno();
+#else
+    struct stat st;
+    if (fstat(fd, &st) != 0) return ceesafe_io_errno();
+#endif
+    return ceesafe_io_ok((int64_t)st.st_size);
+}
+
+/* Shrinks the file to `length` bytes, or extends it with zeros. */
+cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length) {
+    if (length > (uint64_t)INT64_MAX) return ceesafe_io_fail(EINVAL);
+#ifdef _WIN32
+    errno_t r = _chsize_s(fd, (__int64)length);
+    return r != 0 ? ceesafe_io_fail(r) : ceesafe_io_ok(0);
+#else
+    int r;
+    do {
+        r = ftruncate(fd, (off_t)length);
+    } while (r < 0 && errno == EINTR);
+    return r < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+#endif
 }
 
 void ceesafe_fd_drop(int32_t *fd) {
@@ -1417,6 +1547,44 @@ int64_t ceesafe_host_dir_create(uint8_t const *path, uint64_t length) {
 #endif
 }
 
+/* `File.rename(from, to)` (ADR 0075 §2.1): replaces `to` atomically where the system can. */
+int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength) {
+    char source[4096];
+    char target[4096];
+    if (!ceesafe_c_path(ceesafe_host_text(from, fromLength), source)) return -(int64_t)EINVAL;
+    if (!ceesafe_c_path(ceesafe_host_text(to, toLength), target)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    if (MoveFileExA(source, target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
+    DWORD error = GetLastError();
+    return -(int64_t)(error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ENOENT
+                      : error == ERROR_ACCESS_DENIED                                   ? EACCES
+                                                                                       : EIO);
+#else
+    return rename(source, target) == 0 ? 0 : -(int64_t)errno;
+#endif
+}
+
+/* `Directory.sync(path)` (ADR 0075 §2.1): makes the directory's entries durable. Windows journals them, and a
+   directory cannot be flushed there: 0 once the path is checked to be a directory. */
+int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length) {
+    char name[4096];
+    if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
+#ifdef _WIN32
+    DWORD attributes = GetFileAttributesA(name);
+    if (attributes == INVALID_FILE_ATTRIBUTES) return -(int64_t)ENOENT;
+    return (attributes & FILE_ATTRIBUTE_DIRECTORY) ? 0 : -(int64_t)ENOTDIR;
+#else
+    int fd;
+    do {
+        fd = open(name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) return -(int64_t)errno;
+    cee_io_result r = ceesafe_fd_sync(fd, 1u);
+    (void)close(fd);
+    return r.error != 0 ? -(int64_t)r.error : 0;
+#endif
+}
+
 int64_t ceesafe_host_dir_remove(uint8_t const *path, uint64_t length) {
     char name[4096];
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
@@ -1821,6 +1989,25 @@ void ceesafe_random_key(uint64_t *key) {
 #if !defined(_WIN32)
 #include <time.h>
 #endif
+
+/* `Clock.monotonicNanos()` (ADR 0075 §2.6): nanoseconds from an arbitrary start, never decreasing in a process. */
+uint64_t ceesafe_clock_monotonic(void) {
+#if defined(_WIN32)
+    static LARGE_INTEGER frequency;
+    if (frequency.QuadPart == 0) (void)QueryPerformanceFrequency(&frequency);
+    LARGE_INTEGER now;
+    (void)QueryPerformanceCounter(&now);
+    uint64_t ticks = (uint64_t)now.QuadPart;
+    uint64_t per = (uint64_t)frequency.QuadPart;
+    return (ticks / per) * UINT64_C(1000000000) + (ticks % per) * UINT64_C(1000000000) / per;
+#elif defined(__APPLE__)
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#else
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
+#endif
+}
 
 void ceesafe_clock_realtime(int64_t *seconds, uint32_t *nanoseconds) {
     *seconds = 0;

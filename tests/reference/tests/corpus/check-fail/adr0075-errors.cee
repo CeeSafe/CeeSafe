@@ -1,0 +1,35 @@
+// ADR 0075's diagnostics: `*` on a non-Copy referent or a non-reference, `[]` without an expected slice, `swap` of two
+// types, `@from` misuse, `?` without one, and an array of atomics outside a static.
+enum A {
+    X,
+}
+
+enum B {
+    @from P(A),
+    @from Q(A), // error[N0262]
+    @from R,    // error[N0262]
+}
+
+enum C {
+    Y,
+}
+
+fn f() -> Result<u32, C> => Err(C.Y);
+
+fn g() -> Result<u32, A> {
+    let v = f()?; // error[N0261]
+    return Ok(v);
+}
+
+fn main() {
+    var s = String.create();
+    let r = borrow s;
+    let t = * r; // error[N0251]
+    let n: u32 = 4;
+    let u = * n; // error[N0205]
+    let e = [];  // error[N0259]
+    var a: u32 = 1;
+    var b: u64 = 2;
+    swap(mut a, mut b);                     // error[N0205]
+    let table = [AtomicU64.constant(0); 2]; // error[N0259]
+}

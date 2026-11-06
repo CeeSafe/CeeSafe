@@ -3,7 +3,7 @@ fn f() {
     let b = (1 + 2; // error[N0100]
     let c = g(1, ; // error[N0102]
     let d = 1 +; // error[N0102]
-    let e = * 2; // error[N0102]
+    let e = / 2; // error[N0102] (`* 2` is a dereference since ADR 0075 §2.14, a check error)
     let ok = 1;
 }
 fn postfix() {

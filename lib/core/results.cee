@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// The methods of `Result<T, E>` and an optional's `okOr` (ADR 0075 §2.3): `r.isOk()`, `r.isErr()`, `r.ok()`,
+// `r.err()` and `o.okOr(e)` are calls of these, instantiated with the types (src/check/members.cee).
+
+/// `Result<T, E>`'s methods.
+public struct ResultMethods<T, E> {
+    /// Whether `r` is `Ok`.
+    public fn isOk(r: borrow Result<T, E>) -> bool => match (r) {
+        Ok(_) => true,
+        Err(_) => false,
+    };
+
+    /// Whether `r` is `Err`.
+    public fn isErr(r: borrow Result<T, E>) -> bool => match (r) {
+        Ok(_) => false,
+        Err(_) => true,
+    };
+
+    /// The `Ok` value, or null; an `Err` value is destroyed.
+    public fn ok(r: Result<T, E>) -> T? => match (r) {
+        Ok(v) => Some(v),
+        Err(_) => null,
+    };
+
+    /// The `Err` value, or null; an `Ok` value is destroyed.
+    public fn err(r: Result<T, E>) -> E? => match (r) {
+        Ok(_) => null,
+        Err(e) => Some(e),
+    };
+}
+
+/// `o.okOr(e)`: an optional as a `Result`.
+public struct OptionalResults<T, E> {
+    /// `Ok` with the value, or `Err(e)` for null; `e` is destroyed when there is a value.
+    public fn okOr(o: T?, e: E) -> Result<T, E> => match (o) {
+        Some(v) => Ok(v),
+        null => Err(e),
+    };
+}

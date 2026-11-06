@@ -434,6 +434,19 @@ fn checkMethodCall(
             _ => {}
         }
     }
+    if (c.types.is(readType, TypeKind.Array) && !c.types.isUnsized(readType)) {
+        // An array's methods are its slice's (ADR 0075 §2.10): `a.m(…)` is `a[..].m(…)`, borrowed mutably for the
+        // methods that write or move elements.
+        let name = c.name(memberIdent.symbol);
+        let mutable = isByteWriter(name) || sameText(name, "copyFrom") || sameText(name, "fill") ||
+            sameText(name, "swap") || sameText(name, "sortBy") || sameText(name, "splitAtMut");
+        let slice = sliceOfChecked(c, receiver, targetSpan, none(), none(), mutable, targetSpan)?;
+        if (c.isBottom(slice)) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return checkSliceMethod(c, member, arguments, slice, targetSpan, span);
+    }
     var vector = receiver;
     loop {
         let t = c.typeOf(vector);
@@ -640,6 +653,9 @@ fn checkOptionalMethod(
     span: Span,
 ) -> Result<u32, AllocError> {
     let memberIdent = c.front.ast.idents[member as usize];
+    if (sameText(c.name(memberIdent.symbol), "okOr")) {
+        return checkOkOr(c, receiver, option, member, arguments, span); // ADR 0075 §2.3
+    }
     let isSome = sameText(c.name(memberIdent.symbol), "isSome");
     let isNull = sameText(c.name(memberIdent.symbol), "isNull");
     let asBorrow = sameText(c.name(memberIdent.symbol), "asBorrow");
@@ -652,7 +668,7 @@ fn checkOptionalMethod(
         appendQuotedName(mut message, c, memberIdent.symbol)?;
         appendText(
             mut message,
-            "; it has 'isSome()', 'isNull()', 'asBorrow()' and 'asBorrowMut()', 'o ?? fallback' gives the value or a fallback, and 'match' the rest (type-system.md §22.1)",
+            "; it has 'isSome()', 'isNull()', 'asBorrow()', 'asBorrowMut()' and 'okOr(e)', 'o ?? fallback' gives the value or a fallback, and 'match' the rest (type-system.md §22.1)",
         )?;
         c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -728,6 +744,10 @@ fn checkNonStructMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    if (c.types.is(structType, TypeKind.Enum) &&
+        c.types.enums[c.types.info(structType).enumDef as usize].resultOk != none()) {
+        return checkResultMethod(c, receiver, structType, member, arguments, span); // ADR 0075 §2.3
+    }
     var message = Vector<u8>.create();
     let isNumber = c.types.is(structType, TypeKind.Integer) || c.types.is(structType, TypeKind.Float);
     if (isNumber) {
@@ -788,4 +808,104 @@ fn byteStringMember(c: borrow mut Checker, value: u32, fieldType: u32) -> Result
     }
     let stored = c.hir.addText(c.front.ast.textOf(text))?;
     return c.expr(HirExpr.StringConst(stored), fieldType, span.start, span.end);
+}
+
+/// `r.isOk()`, `r.isErr()` (through a shared borrow), `r.ok()` and `r.err()` (consuming `r`) on a `Result<T, E>`: lib/core's
+/// ResultMethods<T, E> (ADR 0075 §2.3).
+fn checkResultMethod(
+    c: borrow mut Checker,
+    receiver: u32,
+    resultType: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let name = c.name(memberIdent.symbol);
+    let borrows = sameText(name, "isOk") || sameText(name, "isErr");
+    let consumes = sameText(name, "ok") || sameText(name, "err");
+    if (!borrows && !consumes) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, resultType)?;
+        appendText(mut message, " has no method ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(
+            mut message,
+            "; it has 'isOk()', 'isErr()', 'ok()' and 'err()', and 'match', '?' and '!' do the rest (type-system.md §17)",
+        )?;
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, " takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let definition = c.types.info(resultType).enumDef;
+    let types = [c.types.enums[definition as usize].resultOk, c.types.enums[definition as usize].resultErr];
+    let function = libraryFunction(c, "ResultMethods", types[..], memberIdent.symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0075")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let receiverSpan = Span { start: c.hir.exprSpans[receiver as usize].start, end: memberIdent.start };
+    var value = none();
+    if (borrows) {
+        value = sharedBorrowOf(c, receiver, resultType, receiverSpan)?;
+    } else {
+        value = autoDeref(c, receiver)?;
+    }
+    let values = [value];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// `o.okOr(e)` on a `T?`: lib/core's OptionalResults<T, E>, E being `e`'s type (ADR 0075 §2.3).
+fn checkOkOr(
+    c: borrow mut Checker,
+    receiver: u32,
+    option: u32,
+    member: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (arguments.count != 1) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "write 'o.okOr(error)'")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let errorSyntax = c.front.ast.at(arguments, 0);
+    let error = synth(c, errorSyntax, none())?;
+    if (c.isBottom(error)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let symbol = c.front.ast.idents[member as usize].symbol;
+    let types = [c.types.optionType(option), c.typeOf(error)];
+    let function = libraryFunction(c, "OptionalResults", types[..], symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0075")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let value = autoDeref(c, receiver)?;
+    let values = [value, error];
+    return libraryCall(c, function, values[..], span);
+}
+
+/// A shared borrow of `receiver`, a value or a reference to one of type `typ`: reborrowed, borrowed in place, or
+/// held in a temporary.
+fn sharedBorrowOf(c: borrow mut Checker, receiver: u32, typ: u32, span: Span) -> Result<u32, AllocError> {
+    let reference = c.types.referenceTo(typ, false)?;
+    if (c.types.is(c.typeOf(receiver), TypeKind.Reference)) {
+        return c.expr(HirExpr.Reborrow(false, receiver), reference, span.start, span.end);
+    }
+    let place = toPlace(c, receiver)?;
+    if (place != none()) {
+        return c.expr(HirExpr.Borrow(false, place), reference, span.start, span.end);
+    }
+    return c.expr(HirExpr.BorrowTemp(false, receiver), reference, span.start, span.end);
 }

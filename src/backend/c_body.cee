@@ -1096,7 +1096,8 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfVectorExtend() || b == bfVectorResize() || b == bfVectorReserve() ||
         b == bfVectorClear() || b == bfVectorWithCapacity() || b == bfStableVectorPush() || b == bfSlotMapInsert() ||
         b == bfSlotMapGet() || b == bfSlotMapRemove() || b == bfSlotMapContains() || b == bfFileOpen() ||
-        b == bfFileCreate() || b == bfFileRemove() || b == bfResourceRead() || b == bfResourceWrite() ||
+        b == bfFileCreate() || b == bfFileRemove() || isDurableFileBuiltin(b) || b == bfResourceRead() ||
+        b == bfResourceWrite() ||
         b == bfConsoleRead() || b == bfTcpListen() || b == bfTcpConnect() || b == bfTcpPort() || b == bfTcpAccept() ||
         b == bfTcpShutdownWrite() || b == bfTcpShutdownRead() || isTcpOptionBuiltin(
         b,
@@ -1125,6 +1126,44 @@ fn emitBuiltin(
         NirRvalue.Builtin(_, a) => a,
         _ => emptyRange(),
     };
+    if (b == bfAssert()) {
+        return Ok(); // the assertion held: its check is a branch before this (ADR 0075 §2.8)
+    }
+    if (b == bfPanic()) {
+        let message = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        var location = Vector<u8>.create();
+        appendLocation(
+            e,
+            mut location,
+            sources,
+            c.hir.functions[nirFunctionSource(n, f) as usize].file,
+            n.rvalueSpans[r as usize].start,
+        )?;
+        e.t("    ceesafe_panic_text(")?;
+        e.b(message.view())?;
+        e.t(", ")?;
+        e.b(location.view())?;
+        e.t(");")?;
+        return e.emit();
+    }
+    if (b == bfSwap()) {
+        // Two referents exchange their bytes, whatever their type (ADR 0075 §2.11).
+        let first = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let second = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        let pointee = c.types.info(n.operandTypes[n.at(arguments, 0) as usize]).pointee;
+        e.t("    { ")?;
+        appendCTypeName(c, mut e.buf, pointee)?;
+        e.t(" cee_t = *")?;
+        e.b(first.view())?;
+        e.t("; *")?;
+        e.b(first.view())?;
+        e.t(" = *")?;
+        e.b(second.view())?;
+        e.t("; *")?;
+        e.b(second.view())?;
+        e.t(" = cee_t; }")?;
+        return e.emit();
+    }
     if (isRvalueBuiltin(b)) {
         var value = Vector<u8>.create();
         appendRvalue(e, c, n, sources, f, mut value, r)?;
@@ -2023,6 +2062,49 @@ fn appendBuiltinRvalue(
     if (b == bfFileRemove()) {
         var call = Vector<u8>.create();
         appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_remove".bytes(), arguments)?;
+        return appendIoCall(c, out, t, call.view());
+    }
+    if (b == bfFileOpenReadWrite() || b == bfFileOpenOrCreate() || b == bfFileCreateNew()) {
+        // Modes 2, 3 and 4 of ceesafe_file_open (ADR 0075 §2.1).
+        var call = Vector<u8>.create();
+        appendBuiltinCall(e, c, n, sources, f, mut call, "ceesafe_file_open".bytes(), arguments)?;
+        call.pop();
+        appendText(
+            mut call,
+            if (b == bfFileOpenReadWrite()) ", 2u)" else if (b == bfFileOpenOrCreate()) ", 3u)" else ", 4u)",
+        )?;
+        return appendIoCall(c, out, t, call.view());
+    }
+    if (isDurableFileBuiltin(b)) {
+        // f.readAt(buffer, offset), f.writeAt(bytes, offset), f.syncData(), f.syncAll(), f.length(), f.setLength(n).
+        let resource = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        var call = Vector<u8>.create();
+        appendText(
+            mut call,
+            if (b ==
+                bfFileReadAt()) "ceesafe_fd_read_at(*" else if (b ==
+                bfFileWriteAt()) "ceesafe_fd_write_at(*" else if (b ==
+                bfFileSetLength()) "ceesafe_fd_set_length(*" else if (b ==
+                bfFileLength()) "ceesafe_fd_length(*" else "ceesafe_fd_sync(*",
+        )?;
+        appendBytes(mut call, resource.view())?;
+        if (b == bfFileReadAt() || b == bfFileWriteAt()) {
+            let buffer = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+            let offset = operandText(e, c, n, sources, f, n.at(arguments, 2))?;
+            appendText(mut call, ", ")?;
+            appendBytes(mut call, buffer.view())?;
+            appendText(mut call, ".ptr, ")?;
+            appendBytes(mut call, buffer.view())?;
+            appendText(mut call, ".len, ")?;
+            appendBytes(mut call, offset.view())?;
+        } else if (b == bfFileSetLength()) {
+            let length = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+            appendText(mut call, ", ")?;
+            appendBytes(mut call, length.view())?;
+        } else if (b == bfFileSyncData() || b == bfFileSyncAll()) {
+            appendText(mut call, if (b == bfFileSyncAll()) ", 1u" else ", 0u")?;
+        }
+        call.push(')')?;
         return appendIoCall(c, out, t, call.view());
     }
     if (b == bfResourceRead() || b == bfResourceWrite() || b == bfConsoleRead()) {

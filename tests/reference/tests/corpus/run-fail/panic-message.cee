@@ -1,0 +1,13 @@
+// `panic(message)` (ADR 0075 §2.8) reports the program's message.
+fn check(n: u32) {
+    if (n > 2) {
+        panic("too many retries"); // expect-panic: too many retries
+    }
+}
+fn main() {
+    check(1);
+    Console.writeLine("first");
+    check(3);
+    Console.writeLine("after");
+}
+// expect-stdout: first

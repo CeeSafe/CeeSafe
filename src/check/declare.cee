@@ -187,6 +187,7 @@ fn checkProgram(
         headers: Vector<Vector<u8>>.create(),
         builtinUses: Vector<u8>.create(),
         programStructs: Vector<u32>.create(),
+        importedEnums: Vector<ImportedEnum>.create(),
         dynSignatures: Vector<DynSignature>.create(),
         trackLibraryTypes: true,
         statics: Vector<StaticEntry>.create(),
@@ -257,6 +258,7 @@ fn checkProgram(
                         for (s in 0..structs.count) {
                             let imported = c.front.ast.at(structs, s);
                             declareImportedStruct(mut c, imported)?;
+                            declareImportedEnum(mut c, imported)?;
                         }
                     }
                 }

@@ -392,6 +392,12 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
             c.error(notCallable(), span.start, span.end, message)?;
         }
         Entity.Static(entry) => { return staticUse(c, entry, span); }
+        Entity.Type(_) => {
+            var message = Vector<u8>.create();
+            appendQuotedName(mut message, c, symbol)?;
+            appendText(mut message, " is a type, not a value")?;
+            c.error(notCallable(), span.start, span.end, message)?;
+        }
         Entity.Struct(_) => {
             var message = Vector<u8>.create();
             appendQuotedName(mut message, c, symbol)?;

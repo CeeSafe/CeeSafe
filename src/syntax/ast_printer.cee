@@ -173,6 +173,17 @@ struct AstPrinter {
                 this.indent -= 1;
                 this.line(")")?;
             }
+            ItemKind.ImportedEnum(typ) => {
+                this.open()?;
+                this.text("(imported-enum ")?;
+                this.text(visibility)?;
+                this.text(" ")?;
+                this.name(ast, symbols, item.name)?;
+                this.text(" ")?;
+                this.typeText(ast, symbols, typ)?;
+                this.text(")")?;
+                this.close()?;
+            }
             ItemKind.Const(typ, value) => {
                 this.open()?;
                 this.text("(const ")?;

@@ -512,7 +512,7 @@ struct Parser {
         var structs = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
         while (this.atFunction() || this.at(TokenKind.StructKeyword) || this.atUnion(TokenKind.Identifier) ||
-            this.at(TokenKind.At) || isVisibilityKeyword(this.current().kind)) {
+            this.at(TokenKind.EnumKeyword) || this.at(TokenKind.At) || isVisibilityKeyword(this.current().kind)) {
             let memberStart = this.current().start;
             let memberDocPos = this.pos;
             let memberDoc = this.docAt(memberDocPos)?; // before the attributes, if any (grammar.md §1.2)
@@ -527,6 +527,18 @@ struct Parser {
                 )?;
                 this.front.ast.items[s as usize].attributes = attributes;
                 structs.push(s)?;
+                continue;
+            }
+            if (this.at(TokenKind.EnumKeyword)) {
+                // `enum name: I;`, an imported C enum (ADR 0079; grammar.md §2's ExternEnum).
+                this.advance();
+                let enumName = this.parseIdentifier()?;
+                this.expect(TokenKind.Colon)?;
+                let base = this.parseType()?;
+                this.expect(TokenKind.Semicolon)?;
+                let e = this.addItem(ItemKind.ImportedEnum(base), memberVisibility, enumName, memberStart)?;
+                this.front.ast.items[e as usize].attributes = attributes;
+                structs.push(e)?;
                 continue;
             }
             if (!this.atFunction()) {

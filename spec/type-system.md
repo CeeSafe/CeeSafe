@@ -2772,6 +2772,31 @@ Diagnostics: N0290 (a misplaced attribute, a block without `@header`, a bad head
 an imported struct cannot have), N0291 (a field type C and CeeSafe do not both spell), N0292 (a C name),
 N0294 (an imported type used where CeeSafe would need its size, or a borrow of a pointer or size field).
 
+### 31.6 Imported enums (ADR 0079)
+- Inside an `extern "C"` block, `enum name: I;` imports a **C enum type** (grammar.md §2's `ExternEnum`), where `I` is
+  `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32` or `i64`: the integer type the C compiler gives the enum. Any other
+  type is N0291. Its C spelling is `enum name`, or with `@ctype("cname")` (its one attribute; any other is N0290)
+  `cname`, for a typedef. Both names must be valid, unreserved C identifiers (N0292). The block needs a `@header`
+  (N0290). The name is declared in the item scope as a struct's is; its visibility is a struct's.
+- **It is an integer type of its own**: `I`'s width and signedness, and every rule of integers (§13: literals,
+  arithmetic, comparison, the checked, wrapping and saturating operations, integer patterns), but a type distinct
+  from `I` and from every other. `as` converts between it and integers under §13's rules, so `v as u32` and
+  `n as vnode_type` are lossless for `I = u32`. It is `Copy` and may appear wherever an integer may.
+- Enumerators are not imported: a value is an integer constant of the type (`const VNODE_DIR: vnode_type = 2;`).
+- It is FFI-safe wherever `I` is (§28.3) and is spelled with its C spelling in prototypes, `@export` and `@callback`
+  definitions, `extern "C" fn` types, imported struct fields (whose `_Generic` check names it) and locals. A function
+  pointer type of C's with an enum parameter is therefore the same C type as CeeSafe's, which a call through a pointer
+  needs (UBSan's `-fsanitize=function` refuses a call whose pointer type names `unsigned int` where the function's
+  says `enum`, though C calls the two compatible).
+- **Lowering.** A generated C file that uses the type asserts, once and before its first use,
+  `_Static_assert(sizeof(T) == sizeof(CI) && _Generic((T)0, CI: 1, default: 0), "…")` for its C spelling `T` and
+  `I`'s C type `CI`, with a message naming the type and the declaration's file and line. A header whose enum the C
+  compiler lays out as another integer fails to compile. Its mangled name is its own (`N`, the length, the name).
+- The interpreter runs it as an integer of `I`'s width.
+
+Diagnostics: N0290 (an attribute other than `@ctype`, a block without `@header`), N0291 (an integer type C does not give
+an enum), N0292 (a C name).
+
 ## 32. Context effects (C7a; ADR 0009)
 
 ```ceesafe

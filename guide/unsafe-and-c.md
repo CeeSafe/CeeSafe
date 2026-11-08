@@ -184,6 +184,38 @@ fn isEsp(table: borrow gpt_table, i: usize) -> bool {
 This is how CosmoOS's GPT parser is written (`integrations/cosmoos/c9.py` checks it; the rules are
 [ADR 0014](../spec/decisions/0014-c9-c-arrays-and-exported-constants.md)).
 
+### C enums
+
+A header that types a parameter or a member with an enum is imported with `enum name: I;`, where `I` is the integer the C
+compiler gives the enum (usually `u32`). The type is an integer of its own: `as` converts it to and from `I`, and its
+values are constants of the type. CeeSafe spells it `enum name` (or a typedef's name, with `@ctype`) everywhere C sees it,
+so a function pointer type whose C type names the enum, such as an operation table's entry, is the same C type as the
+CeeSafe function's. With `u32` in its place, C would accept the call, but UBSan's `-fsanitize=function` refuses a call
+through a pointer of another type.
+
+<!-- ceesafe: check -->
+```ceesafe
+@header("kernel/vfs.h")
+extern "C" {
+    enum vnode_type: u32;
+    struct vnode {
+        @cname("type")
+        kind: vnode_type;
+    }
+}
+
+const VNODE_DIR: vnode_type = 2;
+
+fn isDirectory(vn: borrow vnode) -> bool => vn.kind == VNODE_DIR;
+
+/// A readdir callback: its type, `vfs_dirent_cb`, takes the enum.
+@callback
+fn emit(arg: *mut void, name: *CChar, len: usize, ino: u64, kind: vnode_type) -> i32 => if (kind == VNODE_DIR) 1 else 0;
+```
+
+The C compiler checks that the enum is the integer declared. The rules are
+[ADR 0079](../spec/decisions/0079-imported-c-enums.md).
+
 ## C code that allocates
 
 A package's C files can allocate through CeeSafe's allocator, so the allocation-failure sweep reaches their

@@ -1,0 +1,31 @@
+// Imported C enums (ADR 0079, type-system.md §31.6): the integer is one C gives an enum (N0291), `@ctype` is the one
+// attribute (N0290), both names are C identifiers (N0292), the block needs a `@header` (N0290), and the name is a
+// type of its own: declared once, not a value, and not an integer of another type without a conversion.
+@header("t.h")
+extern "C" {
+    enum wide: usize; // error[N0291]
+    enum truth: bool; // error[N0291]
+    @repr("x")        // error[N0290]
+    enum tagged: u32;
+    enum int: u32;     // error[N0292]
+    @ctype("bad name") // error[N0292]
+    enum spelled: u32;
+    enum twice: u32;
+    enum twice: u32; // error[N0201]
+}
+
+extern "C" {
+    enum headerless: u32; // error[N0290]
+}
+
+fn value() -> u32 {
+    let x = twice; // error[N0210]
+    return 0;
+}
+
+fn mixed(v: twice) -> u32 {
+    let y: u32 = v; // error[N0205]
+    return y;
+}
+
+fn main() {}

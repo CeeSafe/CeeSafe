@@ -239,6 +239,16 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
             }
         }
         TypeKind.Void => { out.push('v')?; }
+        TypeKind.Integer => {
+            if (info.cSpelling.count > 0) {
+                let name = c.types.name(t); // an imported C enum: its own name, never an integer's (ADR 0079)
+                out.push('N')?;
+                appendDecimal(out, name.length as u64)?;
+                appendId(out, name)?;
+            } else {
+                appendBytes(out, c.types.name(t))?;
+            }
+        }
         _ => { appendBytes(out, c.types.name(t))?; }
     }
     return Ok();
@@ -265,9 +275,13 @@ fn appendCTypeName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Res
         TypeKind.Void => { appendText(out, "void")?; }
         TypeKind.Never => { appendText(out, "void")?; } // a `never` function's result (§15.3)
         TypeKind.Integer => {
-            appendText(out, if (info.signed) "int" else "uint")?;
-            appendDecimal(out, info.bits as u64)?;
-            appendText(out, "_t")?;
+            if (info.cSpelling.count > 0) {
+                appendBytes(out, c.types.rangeText(info.cSpelling))?; // an imported C enum (ADR 0079)
+            } else {
+                appendText(out, if (info.signed) "int" else "uint")?;
+                appendDecimal(out, info.bits as u64)?;
+                appendText(out, "_t")?;
+            }
         }
         TypeKind.Float => { appendText(out, if (info.bits == 32) "float" else "double")?; }
         TypeKind.Struct => {

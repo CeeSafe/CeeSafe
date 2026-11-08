@@ -523,6 +523,75 @@ fn declareImportedStruct(c: borrow mut Checker, item: u32) -> Result<void, Alloc
     return Ok();
 }
 
+/// `enum name: I;` in an `extern "C"` block (ADR 0079, §31.6): an imported C enum, an integer type of its own.
+fn declareImportedEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
+    let entry = c.front.ast.items[item as usize];
+    let base = match (entry.kind) {
+        ItemKind.ImportedEnum(t) => t,
+        _ => { return Ok(); }
+    };
+    let id = c.front.ast.idents[entry.name as usize];
+    var name = Vector<u8>.create();
+    appendBytes(mut name, c.name(id.symbol))?;
+    let nameIsC = checkCName(c, name.view(), Span { start: id.start, end: id.end }, "an imported C enum's name")?;
+    var spelling = Vector<u8>.create();
+    appendText(mut spelling, "enum ")?;
+    appendBytes(mut spelling, name.view())?;
+    var known = Vector<u32>.create();
+    knownAttributes(c, entry.attributes, "an imported C enum", "ctype", mut known)?;
+    for (attribute in known.view()) {
+        let a = c.front.ast.attributes[attribute as usize];
+        var text = Range { start: 0, count: 0xFFFFFFFF };
+        if (a.arguments.count == 1) {
+            match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                ExprNode.StringLiteral(t) => { text = t; }
+                _ => {}
+            }
+        }
+        if (text.count == 0xFFFFFFFF) {
+            attributeError(c, attribute, "'@ctype' takes the C type's name as a string: '@ctype(\"name_t\")'")?;
+            continue;
+        }
+        var cname = Vector<u8>.create();
+        appendBytes(mut cname, c.front.ast.textOf(text))?;
+        if (checkCName(c, cname.view(), Span { start: a.start, end: a.end }, "the C type name")?) {
+            spelling = cname;
+        }
+    }
+    let resolved = c.resolveType(base, false)?;
+    let integer = resolved == c.types.u8 || resolved == c.types.u16 || resolved == c.types.u32 ||
+        resolved == c.types.u64 || resolved == c.types.i8 || resolved == c.types.i16 || resolved == c.types.i32 ||
+        resolved == c.types.i64;
+    if (!integer) {
+        if (resolved != c.types.error) {
+            let span = c.front.ast.typeSpans[base as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "an imported C enum is one of the integers C gives an enum: 'u8', 'u16', 'u32', ")?;
+            appendText(mut message, "'u64', 'i8', 'i16', 'i32' or 'i64' (type-system.md §31.6)")?;
+            c.error(notFfiSafe(), span.start, span.end, message)?;
+        }
+        return Ok();
+    }
+    if (!nameIsC) {
+        return Ok();
+    }
+    if (isReservedName(c, entry.name)?) {
+        return Ok();
+    }
+    if (isDeclared(c, id.symbol)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, name.view())?;
+        appendText(mut message, "' is already defined")?;
+        c.error(duplicateItem(), id.start, id.end, message)?;
+        return Ok();
+    }
+    let t = c.types.importedEnum(name.view(), resolved, spelling)?;
+    ownItem(c, id.symbol, Entity.Type(t))?;
+    c.importedEnums.push(ImportedEnum { typ: t, file: c.file, start: id.start })?;
+    return Ok();
+}
+
 // ---- CheckForeignInterfaces (§28.2–§28.5) ----
 
 /// One C name claimed by a C function or export.

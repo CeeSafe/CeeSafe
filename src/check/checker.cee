@@ -19,6 +19,14 @@ enum Entity {
     GenericFunction(u32), // Checker.genericFunctions
     Interface(u32),       // Checker.interfaces
     Static(u32),          // Checker.statics
+    Type(u32),            // a type a name declares directly: an imported C enum (ADR 0079)
+}
+
+/// An imported C enum's declaration (ADR 0079): its type, and where it is declared, for the C's layout assertion.
+struct ImportedEnum {
+    typ: u32;
+    file: u32;
+    start: u32;
 }
 
 /// The scope entry of a unit local (§20.4): a name bound to a `void` payload, with no HIR local. `lookup` finds it as
@@ -157,6 +165,7 @@ struct Checker {
     coreAllowNever: bool;                            // resolveTypeWith's allowNever, for resolveTypeCore
     layoutUses: Vector<LayoutUse>;                   // struct types used by value before members are known
     headers: Vector<Vector<u8>>;                     // `@header`s of extern blocks, each once, in order (§31.3)
+    importedEnums: Vector<ImportedEnum>;             // in declaration order (ADR 0079)
     builtinUses: Vector<u8>;                         // per built-in item (AllocError, IoError, SystemHeap, FailingAllocator): 1 used, 2 by a library
     programStructs: Vector<u32>;                     // HirProgram.Structs: the emitted struct, environment and enum types, in order
     dynSignatures: Vector<DynSignature>;             // HirProgram.DynSignatures
@@ -499,6 +508,7 @@ struct Checker {
                     match (this.item(ident.symbol)) {
                         Entity.Struct(s) => { found = useStructEntry(this, s); }
                         Entity.Enum(e) => { found = useEnumEntry(this, e); }
+                        Entity.Type(t) => { found = t; }
                         _ => {}
                     }
                 }

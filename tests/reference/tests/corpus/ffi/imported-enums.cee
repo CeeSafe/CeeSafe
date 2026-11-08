@@ -1,0 +1,67 @@
+// Imported C enums (ADR 0079): `enum name: I;` is C's `enum name`, an integer of `I`'s width that is a type of its own.
+// It is spelled with the enum in prototypes, in function pointer types and in an imported struct's member, so a call
+// through a pointer whose C type names the enum calls a function whose C type names it too.
+
+@header("imported-enums.types.h")
+extern "C" {
+    enum color: u32;
+    @ctype("size_kind_t")
+    enum size_kind: u32;
+    struct paint {
+        c: color;
+        amount: i32;
+    }
+    struct painter_ops {
+        mix: extern "C" fn(color, size_kind) -> i32;
+    }
+    fn c_main() -> i32;
+    fn c_ops() -> *painter_ops;
+    fn c_each(cb: extern "C" fn(*mut void, color) -> i32, arg: *mut void) -> i32;
+}
+
+const GREEN: color = 2;
+const BIG: size_kind = 9;
+
+/// The operation table's entry: C points `mix` at this.
+@export("paint_mix")
+fn mix(a: color, s: size_kind) -> i32 => truncate<i32>(a as u32 * 10 + s as u32);
+
+/// A member of the enum's type, read and written.
+/// Safety: `p` is a live paint.
+@export("paint_repaint")
+unsafe fn repaint(p: *mut paint) -> i32 {
+    let x = Ptr.toBorrowMut(p);
+    let was = x.c;
+    x.c = GREEN;
+    return x.amount + truncate<i32>(was as u32);
+}
+
+/// What the callback adds to.
+struct Tally {
+    sum: i32;
+}
+
+/// A callback whose parameter is the enum: C calls it through `color_cb`.
+/// Safety: `arg` is a live Tally.
+@callback
+unsafe fn count(arg: *mut void, c: color) -> i32 {
+    let tally = Ptr.toBorrowMut(arg as *mut Tally);
+    tally.sum = tally.sum + truncate<i32>(c as u32);
+    return 0;
+}
+
+/// CeeSafe's half: a call through C's table, and C calling back.
+/// Safety: c_ops returns C's table; c_each calls `count` with the i32 given.
+@export("paint_side")
+unsafe fn side() -> i32 {
+    let ops = c_ops();
+    let viaTable = Ptr.toBorrow(ops).mix(GREEN, BIG);
+    var tally = Tally { sum: 0 };
+    let _ = c_each(count, borrow mut tally as *mut Tally as *mut void);
+    let same = if (GREEN == 2 as color) 1 else 0;
+    return viaTable * 1000 + tally.sum * 10 + same;
+}
+
+/// Safety: c_main calls the exports above.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: 29 12 29061 1

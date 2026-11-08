@@ -121,6 +121,9 @@ struct TypeInfo {
     typeParameter: u32; // TypeTable.typeParameters
     libraryUse: bool;
     usedOutsideHostedLibrary: bool;
+    /// An imported C enum's C spelling (ADR 0079), in TypeTable.names: an integer type with this is one; empty
+    /// otherwise.
+    cSpelling: Range;
 }
 
 /// An interface bound `I<Args>` (InterfaceBound): the checker's interface entry and the arguments.
@@ -629,6 +632,21 @@ struct TypeTable {
         info.signed = signed;
         return this.add(info);
     }
+
+    /// An imported C enum (ADR 0079): an integer type of `base`'s width and signedness named `name`, distinct from
+    /// every other type, spelled `spelling` in C. Not interned, and not in `byName`: the item scope names it.
+    fn importedEnum(borrow mut this, name: Slice<u8>, base: u32, spelling: Vector<u8>) -> Result<u32, AllocError> {
+        var text = Vector<u8>.create();
+        appendBytes(mut text, name)?;
+        var info = blankType(TypeKind.Integer, this.addName(text)?);
+        info.bits = this.types[base as usize].bits;
+        info.signed = this.types[base as usize].signed;
+        info.cSpelling = this.addName(spelling)?;
+        return this.add(info);
+    }
+
+    /// Whether `t` is an imported C enum (ADR 0079).
+    fn isImportedEnum(borrow this, t: u32) -> bool => this.types[t as usize].cSpelling.count > 0;
 
     fn simple(borrow mut this, kind: TypeKind, text: StringView, bits: u32) -> Result<u32, AllocError> {
         var info = blankType(kind, this.nameOf(text)?);
@@ -1827,6 +1845,7 @@ fn blankType(kind: TypeKind, name: Range) -> TypeInfo => TypeInfo {
     typeParameter: none(),
     libraryUse: false,
     usedOutsideHostedLibrary: false,
+    cSpelling: emptyRange(),
 };
 
 fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinition => StructDefinition {

@@ -571,6 +571,7 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
                 }
             }
         }
+        ItemKind.ImportedEnum(typ) => { fmtWalkType(l, ast, typ)?; } // `enum name: I;` (ADR 0079)
         ItemKind.Const(typ, value) => {
             fmtWalkType(l, ast, typ)?;
             let first = exprFirst(l, ast, value);

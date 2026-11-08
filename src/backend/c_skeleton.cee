@@ -1258,9 +1258,39 @@ fn appendEnumConstructor(
 }
 
 /// Every declared field of an imported C type has exactly its declared type and size in the header
-/// (EmitImportedFieldChecks, §31.3).
+/// (EmitImportedFieldChecks, §31.3), and every imported C enum is the integer it is declared as (ADR 0079, §31.6).
 fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
     var any = false;
+    for (imported in c.importedEnums.view()) {
+        any = true;
+        let spelling = c.types.rangeText(c.types.info(imported.typ).cSpelling);
+        var integer = Vector<u8>.create();
+        appendText(mut integer, if (c.types.info(imported.typ).signed) "int" else "uint")?;
+        appendDecimal(mut integer, c.types.info(imported.typ).bits as u64)?;
+        appendText(mut integer, "_t")?;
+        e.t("_Static_assert(sizeof(")?;
+        e.b(spelling)?;
+        e.t(") == sizeof(")?;
+        e.b(integer.view())?;
+        e.t(") && _Generic((")?;
+        e.b(spelling)?;
+        e.t(")0, ")?;
+        e.b(integer.view())?;
+        e.t(": 1, default: 0), ")?;
+        var message = Vector<u8>.create();
+        appendText(mut message, "ceesafec import: ")?;
+        appendBytes(mut message, spelling)?;
+        appendText(mut message, " is not ")?;
+        appendBytes(mut message, integer.view())?;
+        appendText(mut message, " (")?;
+        appendBytes(mut message, c.filePaths[imported.file as usize].view())?;
+        message.push(':')?;
+        appendDecimal(mut message, lineOfOffset(c.fileTexts[imported.file as usize], imported.start))?;
+        message.push(')')?;
+        appendCMessageLiteral(mut e.buf, message.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
     for (t in c.programStructs.view()) {
         let s = c.types.info(t).structDef;
         if (s == none() || !c.types.structs[s as usize].isImported || c.types.structs[s as usize].fields.length == 0) {

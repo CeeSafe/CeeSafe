@@ -302,7 +302,7 @@ struct Variant {
 
 enum ItemKind {
     Function(u32), // functions
-    /// `extern "C" { … }`: the ABI's text, functions, structs (items).
+    /// `extern "C" { … }`: the ABI's text, functions, and its structs, unions and enums (items).
     Extern(Range, Range, Range),
     Struct(u32), // structs
     /// variants, type parameters, region parameters.
@@ -316,6 +316,8 @@ enum ItemKind {
     InherentImpl(u32, Range, Range, Range, Range),
     Const(u32, u32),        // type, value
     Static(bool, u32, u32), // mutable, type, value
+    /// `enum name: I;` in an `extern "C"` block (ADR 0079): an imported C enum, of the integer type `I` (a type).
+    ImportedEnum(u32),
 }
 
 struct Struct {

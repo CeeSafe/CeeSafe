@@ -14,7 +14,7 @@ extern "C" {
     fn ceeF_main(); // error[N0292]
     fn __reserved(); // error[N0292]
     fn int(); // error[N0292]
-    fn takesCChar(c: CChar); // error[N0281]
+    fn takesCChar(c: CChar); // C's `char` by value since ADR 0080 §3.5, no longer an error
 }
 
 extern "C" {

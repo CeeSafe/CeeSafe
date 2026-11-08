@@ -236,12 +236,13 @@ impl Key<PairKey> for PairKey {
 
 fn pairKey(a: u64, b: u64) -> PairKey => PairKey { a: a, b: b };
 
-/// Layout facts that depend on the target (TargetInfo): only `isize`/`usize`.
+/// Layout facts that depend on the target (TargetInfo): `isize`/`usize`, and C's `long` (CLong, ADR 0080 §3.5).
 struct TargetInfo {
     pointerBits: u32;
+    longBits: u32;
 }
 
-fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64 };
+fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64, longBits: 64 };
 
 struct SizeAlign {
     size: i64; // -1 for the unsized [T], as the reference computes it
@@ -283,6 +284,8 @@ struct TypeTable {
     scratchFrame: u32;
     file: u32;
     cchar: u32;
+    clong: u32;  // C's `long` (ADR 0080 §3.5)
+    culong: u32; // C's `unsigned long`
     tcpListener: u32;
     tcpStream: u32;
     stringView: u32;
@@ -530,6 +533,8 @@ struct TypeTable {
             scratchFrame: 0,
             file: 0,
             cchar: 0,
+            clong: 0,
+            culong: 0,
             tcpListener: 0,
             tcpStream: 0,
             stringView: 0,
@@ -582,9 +587,18 @@ struct TypeTable {
         table.scratchFrame = table.regionType(RegionKind.ScratchFrame, "ScratchFrame")?;
         table.file = table.resourceType(ResourceKind.File, "File")?;
         table.cchar = table.simple(TypeKind.CChar, "CChar", 0)?;
+        // C's `long` and `unsigned long` (ADR 0080 §3.5): integers of the target's width, spelled as C spells them.
+        let longBase = table.integer("<long>", target.longBits, true)?;
+        var clongSpelling = Vector<u8>.create();
+        appendText(mut clongSpelling, "long")?;
+        table.clong = table.importedEnum("CLong".bytes(), longBase, clongSpelling)?;
+        let ulongBase = table.integer("<unsigned long>", target.longBits, false)?;
+        var culongSpelling = Vector<u8>.create();
+        appendText(mut culongSpelling, "unsigned long")?;
+        table.culong = table.importedEnum("CULong".bytes(), ulongBase, culongSpelling)?;
         table.tcpListener = table.resourceType(ResourceKind.TcpListener, "TcpListener")?;
         table.tcpStream = table.resourceType(ResourceKind.TcpStream, "TcpStream")?;
-        let named: [u32; 22] = [
+        let named: [u32; 24] = [
             table.i8,
             table.i16,
             table.i32,
@@ -601,6 +615,8 @@ struct TypeTable {
             table.voidType,
             table.never,
             table.cchar,
+            table.clong,
+            table.culong,
             table.arena,
             table.fixedBufferAllocator,
             table.scratchFrame,
@@ -1562,6 +1578,11 @@ struct TypeTable {
         }
         let f = this.types[from as usize];
         let t = this.types[to as usize];
+        // C's `char` and a byte (ADR 0080 §3.5): the same 8 bits, whatever `char`'s signedness.
+        if (isKind(f.kind, TypeKind.CChar) || isKind(t.kind, TypeKind.CChar)) {
+            return (isKind(f.kind, TypeKind.CChar) && isKind(t.kind, TypeKind.Integer) && t.bits == 8 && !t.signed) ||
+                (isKind(t.kind, TypeKind.CChar) && isKind(f.kind, TypeKind.Integer) && f.bits == 8 && !f.signed);
+        }
         if (isKind(f.kind, TypeKind.Bool)) {
             return isKind(t.kind, TypeKind.Integer);
         }

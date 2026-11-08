@@ -25,7 +25,7 @@ fn processTypeAttributes(c: borrow mut Checker) -> Result<void, AllocError> {
                 ItemKind.Const(_, _) => {}
                 ItemKind.Static(_, _, _) => {
                     var known = Vector<u32>.create();
-                    knownAttributes(c, attributes, "a static", "", mut known)?;
+                    knownAttributes(c, attributes, "a static", "export", mut known)?; // read by exportStatic
                 }
                 _ => {
                     var known = Vector<u32>.create();

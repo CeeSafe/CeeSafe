@@ -120,10 +120,12 @@ QualifiedName   = Identifier ('.' Identifier)*
 Item       = Attribute* Visibility? (FunctionDecl | ConstDecl | StaticDecl | StructDecl | EnumDecl | ExternBlock)
 Attribute  = '@' Identifier ('(' AttributeArg (',' AttributeArg)* ')')?   (* M8b; type-system.md §28.1 *)
 AttributeArg = Identifier | StringLiteral | IntLiteral
-ExternBlock = 'extern' StringLiteral '{' (ExternFn | ExternStruct | ExternUnion | ExternEnum)* '}'  (* M8b; §28.2 *)
+ExternBlock = 'extern' StringLiteral '{' (ExternFn | ExternStruct | ExternUnion | ExternEnum | ExternConst | ExternStatic)* '}'  (* M8b; §28.2 *)
 ExternStruct = Attribute* Visibility? 'struct' Identifier ('{' (ExternField | AnonymousUnion)* '}' | ';')   (* C6b; type-system.md §31 *)
 ExternUnion = Attribute* Visibility? 'union' Identifier ('{' ExternField+ '}' | ';')   (* ADR 0041; type-system.md §31.1 *)
 ExternEnum = Attribute* Visibility? 'enum' Identifier ':' Type ';'   (* ADR 0079; type-system.md §31.6 *)
+ExternConst = Attribute* Visibility? 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0080; type-system.md §28.2 *)
+ExternStatic = Attribute* Visibility? 'static' 'mut'? Identifier ':' Type ';'   (* ADR 0080; type-system.md §39.6 *)
 AnonymousUnion = 'union' '{' ExternField+ '}'                               (* ADR 0041: a C11 anonymous union member *)
 ExternField = Attribute* FieldDecl                                           (* C9: @cname; type-system.md §31.1 *)
 ExternFn   = Attribute* Visibility? 'fn' Identifier '(' (Param (',' Param)* (',' '...')? ','?)? ')' ('->' Type)? ';'   (* `...`: ADR 0041 *)

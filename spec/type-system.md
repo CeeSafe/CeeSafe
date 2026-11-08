@@ -2335,8 +2335,9 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 
 | Attribute | On | Meaning |
 |---|---|---|
-| `@export`, `@export("symbol")` | a top-level, non-generic function; a constant (C9) | callable from C under `symbol` (default: the function's name); for a constant, C data under that name, §28.4 |
-| `@cname("name")` | a field of an imported C struct (C9) | its C member name, when that is not a CeeSafe identifier, §31.1 |
+| `@export`, `@export("symbol")` | a top-level, non-generic function; a constant (C9); a static (ADR 0080) | callable from C under `symbol` (default: the function's name); for a constant or a static, C data under that name, §28.4, §39.6 |
+| `@cname("name")` | a field of an imported C struct (C9); an `extern "C"` function or static (ADR 0080) | its C member name, when that is not a CeeSafe identifier, §31.1; the C symbol of a function or static, §28.2, §39.6 |
+| `@cvalue("expression")` | a constant of an `extern "C"` block (ADR 0080) | the C constant expression whose value C asserts, §28.2 |
 | `@repr(C)` | a non-generic struct | a C-compatible struct, §28.5 |
 | `@repr(u8)` … `@repr(i64)` | a non-generic enum without payloads | passed to and from C as that integer type, §28.5 |
 | `@effects(…)` | a function, method or `extern` function | the effects it may have (§32.2) |
@@ -2362,6 +2363,18 @@ attribute twice is N0290.
   `cee` and an uppercase letter; c-backend §2.1): N0292.
   Two declarations, or a declaration and an `@export`, with one C name are N0201.
 - Parameter and result types must be **FFI-safe** (§28.3), or N0291.
+- **`@cname("symbol")`** on an extern function (ADR 0080 §3.5) gives its C symbol when its CeeSafe name must differ,
+  as when a struct has the name (`struct cosmofs_stats` and `cosmofs_stats()`). The symbol follows the rules above.
+- **C constants** (ADR 0080 §3.1; grammar.md §2's `ExternConst`). In a block with a `@header`:
+  - `const NAME: T = v;` is an ordinary constant (§10) with that value, which the generated C asserts equal to C's
+    `NAME` (an object-like macro or an enumerator): `_Static_assert((NAME) == v, "…")`, naming the declaration's file
+    and line. `T` is an integer type (an imported enum among them) or `bool` (N0291). `@cvalue("expression")` names a C
+    constant expression in `NAME`'s place: `@cvalue("sizeof(struct stat)") const STAT_SIZE: usize = 144;`, or an
+    `offsetof`. The string holds no quote, backslash or line break (N0290); it appears only in the assertion. `NAME`,
+    without `@cvalue`, is a valid, unreserved C identifier (N0292).
+  - `const NAME: T;` imports C's value: a read-only static (§39) whose C initialiser is `NAME` (or the `@cvalue`
+    expression), so it is read at run time and is not a constant expression. `T` is an integer, `bool` or `*CChar` (a
+    string macro; N0291). The interpreter cannot run a program that has one (a fault at start).
 - A function that a `@header` defines `static inline` may be declared and called (ADR 0030): the generated prototype
   has no storage class, so it takes the definition's internal linkage (C11 §6.2.2p4–5). CosmoOS's `list.h` helpers are
   called so (lib/kernel's `List`).
@@ -2393,6 +2406,8 @@ attribute twice is N0290.
 |---|---|
 | `i8`…`i64`, `u8`…`u64` | `int8_t`…`int64_t`, `uint8_t`…`uint64_t` |
 | `usize`, `isize` | `size_t`, `ptrdiff_t` |
+| `CLong`, `CULong` (ADR 0080) | `long`, `unsigned long` |
+| `CChar` (ADR 0080) | `char` |
 | `bool` | `bool` |
 | `*T`, `*mut T` | `T const *`, `T *`, where `T` is an integer, `bool`, a `@repr(C)` struct, or (recursively) such a pointer |
 | `*void`, `*mut void` | `const void *`, `void *` |
@@ -2406,9 +2421,15 @@ structs and enums are N0291. (Arrays and imported C types may be fields of a `@r
 CeeSafe value crosses as `*void`.) A `@repr` enum crosses by value only, not behind a pointer or as a
 field of a `@repr(C)` struct: inside CeeSafe it is not a plain integer.
 
-`CChar` is C's `char`, whose signedness differs between targets. It may only be a pointee
-(`*CChar`), never a value (N0281); `p as *u8` and `q as *CChar` convert. It exists so that
-declarations of C library functions match the C library's own prototypes exactly.
+`CChar` is C's `char`, whose signedness differs between targets. Since ADR 0080 §3.5 it is also a value: a parameter,
+result, local or field of C's `char`, 8 bits with no arithmetic. `b as CChar` (from `u8`) and `c as u8` convert it
+(C's conversion, modulo 256 on every target), `==` and `!=` compare it, and nothing else applies (N0207, N0208); `p as
+*u8` and `q as *CChar` convert pointers. It exists so that declarations of C library functions match the C library's own
+prototypes exactly.
+
+`CLong` and `CULong` (ADR 0080 §3.5) are C's `long` and `unsigned long`: integer types of their own, of the target's
+width (64 bits on every target ceesafec supports today), spelled `long` and `unsigned long` in C. A generated C file
+that uses one asserts `sizeof(long)`, so a target whose `long` is another width fails to compile.
 
 ### 28.4 Exports
 - `@export` makes a top-level, non-generic, non-method function callable from C, with the C types of
@@ -2681,8 +2702,10 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
 - Fields are declared with their C member names, in any order, and only those CeeSafe uses. Their types
   must be integers, `bool`, raw pointers whose pointee C can name (§28.3, including imported types),
   (since C7b, §33.1) imported types, for embedded members, (since C9) **arrays** `[E; N]` of integers,
-  `bool` or imported types, for C array members `CE name[N]`, or (ADR 0041) `AtomicU32`, `AtomicU64` or
-  `AtomicUSize` for a `uint32_t`, `uint64_t` or `size_t` member; otherwise N0291. An embedded member is checked
+  `bool`, imported types or (ADR 0080 §3.5) raw pointers and `extern "C" fn` types, for C array members `CE name[N]`
+  (`struct dev *spare[4]` is `spare: [*mut dev; 4]`; its elements are read and assigned), or (ADR 0041) `AtomicU32`,
+  `AtomicU64` or `AtomicUSize` for a `uint32_t`, `uint64_t` or `size_t` member, and (ADR 0080 §3.5) `AtomicU8` for a
+  `uint8_t` one; otherwise N0291. An embedded member is checked
   with `_Generic` only, since CeeSafe has no size for it. A field's declared type must be exactly the member's C type, under §28.3's mapping (`u32`
   is `uint32_t`, `usize` is `size_t`, `*CChar` is `const char *`, `*mut T` is `T *`, `[u8; 16]` is `uint8_t[16]`).
   This is checked when the C is compiled (§31.3), not by ceesafec. A C `char`, `signed char` or `unsigned char`
@@ -3871,6 +3894,23 @@ and other `@constant` bodies, called anywhere else is N0338, and it is never com
 Diagnostics: N0337 (a static whose type is not `Share`, or one that is generic or local), N0338 (an initialiser or
 `@constant` body that is not a static initialiser, or a C constant macro used elsewhere), N0280 (a use of a
 `static mut` outside an unsafe context).
+
+### 39.6 C data (ADR 0080 §3.2)
+- **Exported statics.** `@export` or `@export("symbol")` on a `static` or `static mut` makes it C data with external
+  linkage under `symbol` (default: its name), declared in `ceesafe_exports.h`. Its type is one C spells (§28.5's member
+  types: integers, `bool`, `CChar`, atomics, raw pointers, `extern "C" fn` types, `@repr(C)` and imported C types; N0291
+  otherwise); an array is not supported yet (N0216). The symbol follows §28.4's rules (N0292, N0201).
+  - A `static mut` is C's `T symbol = …;`: C may read and write it, and every CeeSafe use stays unsafe (§39.3).
+  - A plain `static` holding no atomic is C's `const T symbol = …;`, matching a header's `extern const struct ops
+    data_ops;`, and may be of an imported C type (which §39.3 otherwise refuses): neither side writes it.
+- **Imported statics.** In an `extern "C"` block, `static NAME: T;` and `static mut NAME: T;` declare data its headers
+  define (`extern T NAME;`), named `NAME` in C or its `@cname("symbol")`, of a type as above; arrays included
+  (`static names: [*CChar; 8];` for `extern const char *const names[8];`). A `static mut` is used as one (unsafe); a
+  plain `static` is read-only, for `const` C data and for data C changes only atomically (an atomic type).
+- **Lowering.** The C object is named by its symbol instead of `ceeS_<name>`. No definition is emitted for an imported
+  static. A use takes its address through `uintptr_t` to CeeSafe's pointer type, as for a C array member (§31.3), which
+  also drops a `const`.
+- The interpreter has none of C's data: a program with an imported static, or with a `const NAME: T;`, faults at start.
 
 ## 40. Async functions and structured concurrency (L1; ADR 0031)
 

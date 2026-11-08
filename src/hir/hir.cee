@@ -247,6 +247,10 @@ struct HirConstant {
     value: u32; // an expression, or none ("?")
     exported: bool;
     exportName: Range; // Hir.text
+    /// A constant of an `extern "C"` block (ADR 0080 §3.1): C asserts that `cExpression` (Hir.text: the constant's C
+    /// name, or its `@cvalue`) has this value.
+    checked: bool;
+    cExpression: Range;
 }
 
 struct HirStatic {
@@ -257,6 +261,13 @@ struct HirStatic {
     start: u32;
     end: u32;
     value: u32;
+    /// C data (ADR 0080 §3.2): the C symbol of an `@export` static or of one an `extern "C"` block imports (Hir.text;
+    /// empty for `ceeS_<name>`), whether C defines it (imported: no definition is emitted), whether CeeSafe defines it
+    /// with external linkage (exported), and the C initialiser of a `const NAME: T;` that C gives (a macro's name).
+    cName: Range;
+    imported: bool;
+    exported: bool;
+    cInitializer: Range;
 }
 
 struct HirProgram {

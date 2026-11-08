@@ -1762,7 +1762,7 @@ fn appendRvalue(
             if (isVariadicFunction(c, callee)) {
                 // A C variadic function (ADR 0041 §3.3): called directly, each argument converted to its C type,
                 // the parameters' as the wrapper of another C function would, and a further one's as its own.
-                var call = copyBytes(c.name(function.name))?;
+                var call = copyBytes(externSymbol(c, callee))?;
                 call.push('(')?;
                 let count = function.parameters.length;
                 for (k in 0..arguments.count) {
@@ -1797,6 +1797,15 @@ fn appendRvalue(
             return out.push(')');
         }
         NirRvalue.StaticAddress(item) => {
+            if (staticIsConst(c, item) || c.hir.statics[item as usize].imported) {
+                // C data (ADR 0080 §3.2): a `const` object CeeSafe only reads, or one whose C type is C's own (a C
+                // array is CeeSafe's array struct, as for an array member, §31.3): the pointer's type is CeeSafe's.
+                appendText(out, "((")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")(uintptr_t)&")?;
+                appendStaticName(c, out, item)?;
+                return out.push(')');
+            }
             appendText(out, "(&")?;
             appendStaticName(c, out, item)?;
             return out.push(')');
@@ -1860,7 +1869,7 @@ fn appendRvalue(
                 return appendCFunctionName(c, out, function); // a function value (§36.1) or a closure's code (§36.2)
             }
             if (isExternFunction(c, function)) {
-                return appendBytes(out, c.name(c.hir.functions[function as usize].name));
+                return appendBytes(out, externSymbol(c, function));
             }
             if (c.hir.functions[function as usize].exported) {
                 return appendBytes(out, c.hir.textOf(c.hir.functions[function as usize].exportName));

@@ -19,7 +19,7 @@ extern "C" {
         parts: [part; 4];
         pairs: [Pair; 2]; // error[N0291]
         grid: [[u8; 2]; 2]; // error[N0291]
-        links: [*mut part; 2]; // error[N0291]
+        links: [*mut part; 2]; // an array of pointers, allowed since ADR 0080 §3.5
     }
 }
 

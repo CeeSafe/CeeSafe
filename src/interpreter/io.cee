@@ -1423,6 +1423,21 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_atomic_load_u32")) {
         return "P:u";
     }
+    if (sameText(name, "ceesafe_atomic_load_u8") || sameText(name, "ceesafe_atomic_load_ord_u8")) {
+        return if (sameText(name, "ceesafe_atomic_load_u8")) "P:y" else "Pi:y"; // ADR 0080 §3.5
+    }
+    if (sameText(name, "ceesafe_atomic_store_u8")) {
+        return "Py:-";
+    }
+    if (sameText(name, "ceesafe_atomic_store_ord_u8")) {
+        return "Pyi:-";
+    }
+    if (sameText(name, "ceesafe_atomic_swap_u8")) {
+        return "Py:y";
+    }
+    if (sameText(name, "ceesafe_atomic_cas_u8")) {
+        return "Pyy:y";
+    }
     if (sameText(name, "ceesafe_atomic_store_u32")) {
         return "Pu:-";
     }
@@ -1496,6 +1511,7 @@ fn fitsShape(c: borrow Checker, t: u32, shape: u8) -> bool {
     return match (shape) {
         'i' => integer && info.bits == 32 && info.signed,
         'u' => integer && info.bits == 32 && !info.signed,
+        'y' => integer && info.bits == 8 && !info.signed,
         'l' => integer && info.bits == 64 && info.signed,
         _ => integer && info.bits == 64 && !info.signed,
     };
@@ -1727,11 +1743,13 @@ fn callC(
         return Ok(if (sameText(n0, "ceesafe_host_dir_close")) null else result);
     }
     // ceesafe_atomic_*: one thread runs at a time (§5), so every operation is atomic; the width is the name's suffix.
-    let size: usize = if (sameText(n0[n0.length - 3..], "u64")) 8 else 4;
-    let mask: u64 = if (size == 8) 0xFFFFFFFFFFFFFFFF else 0xFFFFFFFF;
+    let byte = sameText(n0[n0.length - 3..], "_u8"); // AtomicU8 (ADR 0080 §3.5)
+    let size: usize = if (byte) 1 else if (sameText(n0[n0.length - 3..], "u64")) 8 else 4;
+    let mask: u64 = if (size == 8) 0xFFFFFFFFFFFFFFFF else if (size == 1) 0xFF else 0xFFFFFFFF;
     let at = arguments[0].bits(0, 8)?;
     let old = it.memory.loadBits(at, size)?;
-    let operation = n0[15..n0.length - 4];
+    let suffix: usize = if (byte) 3 else 4;
+    let operation = n0[15..n0.length - suffix];
     let ordered = operation.length > 4 && sameText(operation[operation.length - 4..], "_ord");
     let plain = operation[0..(if (ordered) operation.length - 4 else operation.length)];
     if (sameText(plain, "store")) {

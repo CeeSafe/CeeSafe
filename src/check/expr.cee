@@ -645,10 +645,10 @@ fn checkOperatorApplies(c: borrow mut Checker, op: BinaryOp, typ: u32, span: Spa
         TypeKind.Bool,
     ) ||
         c.types.is(typ, TypeKind.Handle) || c.types.is(typ, TypeKind.RawPointer) ||
-        c.types.is(
-            typ,
-            TypeKind.FunctionPointer,
-        ) else if (isComparison(op)) integer || float else c.types.is(typ, TypeKind.Bool);
+        c.types.is(typ, TypeKind.CChar) || c.types.is(
+        typ,
+        TypeKind.FunctionPointer,
+    ) else if (isComparison(op)) integer || float else c.types.is(typ, TypeKind.Bool);
     if (!ok) {
         var message = Vector<u8>.create();
         appendText(mut message, "operator '")?;

@@ -874,6 +874,15 @@ static inline uint64_t ceesafe_atomic_or_ord_u64(uint64_t *p, uint64_t v, int32_
 static inline uint64_t ceesafe_atomic_and_ord_u64(uint64_t *p, uint64_t v, int32_t o) { (void)o; return ceesafe_atomic_and_u64(p, v); }
 static inline uint32_t ceesafe_atomic_or_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_or_u32(p, v); }
 static inline uint32_t ceesafe_atomic_and_ord_u32(uint32_t *p, uint32_t v, int32_t o) { (void)o; return ceesafe_atomic_and_u32(p, v); }
+/* AtomicU8, for a byte member C reads and writes atomically (ADR 0080 §3.5). */
+static inline uint8_t ceesafe_atomic_load_u8(uint8_t *p) { return (uint8_t)_InterlockedCompareExchange8((volatile char *)p, 0, 0); }
+static inline void ceesafe_atomic_store_u8(uint8_t *p, uint8_t v) { (void)_InterlockedExchange8((volatile char *)p, (char)v); }
+static inline uint8_t ceesafe_atomic_swap_u8(uint8_t *p, uint8_t v) { return (uint8_t)_InterlockedExchange8((volatile char *)p, (char)v); }
+static inline uint8_t ceesafe_atomic_cas_u8(uint8_t *p, uint8_t expected, uint8_t desired) {
+    return (uint8_t)_InterlockedCompareExchange8((volatile char *)p, (char)desired, (char)expected);
+}
+static inline uint8_t ceesafe_atomic_load_ord_u8(uint8_t *p, int32_t o) { (void)o; return ceesafe_atomic_load_u8(p); }
+static inline void ceesafe_atomic_store_ord_u8(uint8_t *p, uint8_t v, int32_t o) { (void)o; ceesafe_atomic_store_u8(p, v); }
 #else
 static inline uint64_t ceesafe_atomic_load_u64(uint64_t *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
 static inline void ceesafe_atomic_store_u64(uint64_t *p, uint64_t v) { __atomic_store_n(p, v, __ATOMIC_SEQ_CST); }
@@ -891,6 +900,14 @@ static inline uint32_t ceesafe_atomic_cas_u32(uint32_t *p, uint32_t expected, ui
     return expected;
 }
 static inline uint32_t ceesafe_atomic_add_u32(uint32_t *p, uint32_t v) { return __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST); }
+/* AtomicU8, for a byte member C reads and writes atomically (ADR 0080 §3.5). */
+static inline uint8_t ceesafe_atomic_load_u8(uint8_t *p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
+static inline void ceesafe_atomic_store_u8(uint8_t *p, uint8_t v) { __atomic_store_n(p, v, __ATOMIC_SEQ_CST); }
+static inline uint8_t ceesafe_atomic_swap_u8(uint8_t *p, uint8_t v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+static inline uint8_t ceesafe_atomic_cas_u8(uint8_t *p, uint8_t expected, uint8_t desired) {
+    (void)__atomic_compare_exchange_n(p, &expected, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+    return expected;
+}
 /* fetchOr and fetchAnd (ADR 0041). */
 static inline uint64_t ceesafe_atomic_or_u64(uint64_t *p, uint64_t v) { return __atomic_fetch_or(p, v, __ATOMIC_SEQ_CST); }
 static inline uint64_t ceesafe_atomic_and_u64(uint64_t *p, uint64_t v) { return __atomic_fetch_and(p, v, __ATOMIC_SEQ_CST); }
@@ -951,6 +968,8 @@ CEE_RMW_ORD(uint32_t, u32, add, __atomic_fetch_add)
 CEE_RMW_ORD(uint32_t, u32, or, __atomic_fetch_or)
 CEE_RMW_ORD(uint32_t, u32, and, __atomic_fetch_and)
 CEE_CAS_ORD(uint32_t, u32)
+CEE_LOAD_ORD(uint8_t, u8)
+CEE_STORE_ORD(uint8_t, u8)
 #undef CEE_LOAD_ORD
 #undef CEE_STORE_ORD
 #undef CEE_RMW_ORD

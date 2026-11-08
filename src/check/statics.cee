@@ -46,13 +46,77 @@ fn declareStatic(c: borrow mut Checker, item: u32, mutable: bool, typeSyntax: u3
             start: entry.start,
             end: entry.end,
             value: none(),
+            cName: emptyRange(),
+            imported: false,
+            exported: false,
+            cInitializer: emptyRange(),
         },
     )?;
     let hir = truncate<u32>(c.hir.statics.length - 1);
+    exportStatic(c, item, hir, typ)?;
     c.statics.push(StaticEntry { item: item, file: file, hir: hir, checked: none() })?;
     let index = truncate<u32>(c.statics.length - 1);
     return ownItem(c, id.symbol, Entity.Static(index));
 }
+
+/// `@export` or `@export("symbol")` on a static (ADR 0080 §3.2): C data with external linkage under that symbol, of a
+/// type C can spell (§28.5's member types).
+fn exportStatic(c: borrow mut Checker, item: u32, hir: u32, typ: u32) -> Result<void, AllocError> {
+    let entry = c.front.ast.items[item as usize];
+    for (k in 0..entry.attributes.count) {
+        let attribute = c.front.ast.at(entry.attributes, k);
+        if (!sameText(attributeName(c, attribute), "export")) {
+            continue;
+        }
+        let a = c.front.ast.attributes[attribute as usize];
+        var symbol = Vector<u8>.create();
+        if (a.arguments.count == 0) {
+            appendBytes(mut symbol, c.name(c.front.ast.idents[entry.name as usize].symbol))?;
+        } else {
+            match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                ExprNode.StringLiteral(t) => { appendBytes(mut symbol, c.front.ast.textOf(t))?; }
+                _ => {}
+            }
+            if (symbol.length == 0 || a.arguments.count > 1) {
+                attributeError(c, attribute, "'@export' takes the C symbol as one string: '@export(\"name\")'")?;
+                return Ok();
+            }
+        }
+        if (!checkCName(c, symbol.view(), Span { start: a.start, end: a.end }, "an exported static's symbol")?) {
+            return Ok();
+        }
+        if (c.types.is(typ, TypeKind.Array)) {
+            let span = c.front.ast.typeSpans[staticTypeSyntax(c, item) as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "an exported static array is not supported yet: export each element, or a C ")?;
+            appendText(mut message, "struct holding the array (ADR 0080 §3.2)")?;
+            c.error(unsupported(), span.start, span.end, message)?;
+            return Ok();
+        }
+        if (typ != c.types.error && !isFfiSafe(c, typ, false, true)) {
+            let span = c.front.ast.typeSpans[staticTypeSyntax(c, item) as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "an exported static is C data, so its type must be one C can spell: an integer, ")?;
+            appendText(
+                mut message,
+                "'bool', an atomic, a raw pointer, an 'extern \"C\" fn', a C type or an array of ",
+            )?;
+            appendText(mut message, "these (ADR 0080 §3.2; type-system.md §28.5)")?;
+            c.error(notFfiSafe(), span.start, span.end, message)?;
+            return Ok();
+        }
+        c.hir.statics[hir as usize].exported = true;
+        c.hir.statics[hir as usize].cName = c.hir.addText(symbol.view())?;
+    }
+    return Ok();
+}
+
+/// The type syntax of a static item, or of a `const NAME: T;` that C gives (ADR 0080 §3.1).
+fn staticTypeSyntax(c: borrow Checker, item: u32) -> u32 => match (c.front.ast.items[item as usize].kind) {
+    ItemKind.Static(_, t, _) => t,
+    ItemKind.Const(t, _) => t,
+    _ => none(),
+};
 
 /// A static's name in an expression (StaticUse, §39.2): `*S`, with `S` a hidden local of the current function holding
 /// the static's address, a `borrow(static) T`, declared at the function's start.
@@ -153,10 +217,17 @@ fn declareStaticLocals(c: borrow mut Checker, function: u32) -> Result<void, All
     return Ok();
 }
 
+/// A static C defines, or one whose C initialiser is a C constant (ADR 0080 §3.1–§3.2): it has no CeeSafe initialiser.
+fn isCData(c: borrow Checker, hir: u32) -> bool =>
+    c.hir.statics[hir as usize].imported || c.hir.statics[hir as usize].cInitializer.count > 0;
+
 /// Type-checks each static's type and initialiser (CheckStaticInitializers, §39.1–§39.4); FoldStatics evaluates them.
 fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
     for (k in 0..c.statics.length) {
         let entry = c.statics[k];
+        if (isCData(c, entry.hir)) {
+            continue; // C gives its value (ADR 0080 §3.1–§3.2)
+        }
         let item = c.front.ast.items[entry.item as usize];
         var typeSyntax = none();
         var valueSyntax = none();
@@ -184,7 +255,10 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
         let typeSpan = c.front.ast.typeSpans[typeSyntax as usize];
         // Views of static string data are the one reference a static may hold, and they are safe to share: a view,
         // or in a static that is never written, an array of views (ADR 0066).
-        if (!s.mutable && typ != c.types.error && !c.types.isShare(typ)? && !isConstantView(c, typ)) {
+        // An exported plain static of a C type is C's `const` object, which neither side writes (ADR 0080 §3.2).
+        let constCData = s.exported && c.types.is(typ, TypeKind.Struct) &&
+            c.types.structs[c.types.info(typ).structDef as usize].isImported;
+        if (!s.mutable && !constCData && typ != c.types.error && !c.types.isShare(typ)? && !isConstantView(c, typ)) {
             var message = Vector<u8>.create();
             appendText(mut message, "a static is shared by every thread, so its type must be 'Share', and ")?;
             appendQuotedType(mut message, c, typ)?;
@@ -233,6 +307,9 @@ fn foldStatics(c: borrow mut Checker) -> Result<void, AllocError> {
         {
             let fileToSet = entry.file;
             c.setFile(fileToSet);
+        }
+        if (isCData(c, entry.hir)) {
+            continue; // no initialiser to fold: C's (ADR 0080 §3.1–§3.2)
         }
         var value = none();
         if (entry.checked != none()) {

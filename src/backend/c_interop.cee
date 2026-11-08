@@ -249,6 +249,12 @@ fn appendBoundaryParameters(
 }
 
 /// Each extern function's C prototype, and a static wrapper with the reference's types that converts (EmitExterns).
+/// An extern function's C symbol (ADR 0080 §3.5): its `@cname`, or its name.
+fn externSymbol(c: borrow Checker, function: u32) -> Slice<u8> {
+    let symbol = c.hir.functions[function as usize].exportName;
+    return if (symbol.count > 0) c.hir.textOf(symbol) else c.name(c.hir.functions[function as usize].name);
+}
+
 fn emitExterns(
     e: borrow mut CEmitter,
     c: borrow Checker,
@@ -259,11 +265,12 @@ fn emitExterns(
     emittedExterns(c, e, mut externs)?;
     for (function in externs.view()) {
         let name = c.name(c.hir.functions[function as usize].name);
+        let symbol = externSymbol(c, function);
         let returnType = c.hir.functions[function as usize].returnType;
         let count = c.hir.functions[function as usize].parameters.length;
         appendBoundaryType(c, mut e.buf, returnType, false)?;
         e.t(" ")?;
-        e.b(name)?;
+        e.b(symbol)?;
         e.t("(")?;
         appendBoundaryParameters(c, mut e.buf, function, false, false)?;
         if (isVariadicFunction(c, function)) {
@@ -292,7 +299,7 @@ fn emitExterns(
         }
         e.t(") {")?;
         e.emit()?;
-        var call = copyBytes(name)?;
+        var call = copyBytes(symbol)?;
         call.push('(')?;
         for (k in 0..count) {
             if (k > 0) {
@@ -827,7 +834,13 @@ fn exportsHeader(
             constants.push(truncate<u32>(k))?;
         }
     }
-    if (structs.length == 0 && enums.length == 0 && exports.length == 0 && constants.length == 0) {
+    var data = Vector<u32>.create();
+    for (k in 0..c.hir.statics.length) {
+        if (c.hir.statics[k].exported) {
+            data.push(truncate<u32>(k))?; // ADR 0080 §3.2
+        }
+    }
+    if (structs.length == 0 && enums.length == 0 && exports.length == 0 && constants.length == 0 && data.length == 0) {
         return Ok(false);
     }
     var guard = Vector<u8>.create();
@@ -919,6 +932,13 @@ fn exportsHeader(
     }
     for (k in constants.view()) {
         appendExportedConstantDeclarator(c, out, k)?;
+        appendText(out, ";\n")?;
+    }
+    for (k in data.view()) {
+        appendText(out, if (staticIsConst(c, k)) "extern const " else "extern ")?;
+        appendCTypeName(c, out, c.hir.statics[k as usize].typ)?;
+        out.push(' ')?;
+        appendStaticName(c, out, k)?;
         appendText(out, ";\n")?;
     }
     appendText(out, "\n#endif\n")?;

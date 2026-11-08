@@ -512,7 +512,9 @@ struct Parser {
         var structs = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
         while (this.atFunction() || this.at(TokenKind.StructKeyword) || this.atUnion(TokenKind.Identifier) ||
-            this.at(TokenKind.EnumKeyword) || this.at(TokenKind.At) || isVisibilityKeyword(this.current().kind)) {
+            this.at(TokenKind.EnumKeyword) || this.at(TokenKind.ConstKeyword) || this.at(TokenKind.StaticKeyword) ||
+            this.at(TokenKind.At) ||
+            isVisibilityKeyword(this.current().kind)) {
             let memberStart = this.current().start;
             let memberDocPos = this.pos;
             let memberDoc = this.docAt(memberDocPos)?; // before the attributes, if any (grammar.md §1.2)
@@ -539,6 +541,43 @@ struct Parser {
                 let e = this.addItem(ItemKind.ImportedEnum(base), memberVisibility, enumName, memberStart)?;
                 this.front.ast.items[e as usize].attributes = attributes;
                 structs.push(e)?;
+                continue;
+            }
+            if (this.at(TokenKind.ConstKeyword)) {
+                // `const NAME: T = v;`, a C constant whose value C checks, or `const NAME: T;`, one C gives (ADR 0080
+                // §3.1; grammar.md §2's ExternConst).
+                this.advance();
+                let constName = this.parseIdentifier()?;
+                this.expect(TokenKind.Colon)?;
+                let constType = this.parseType()?;
+                var constValue = none();
+                if (this.at(TokenKind.Equals)) {
+                    this.advance();
+                    constValue = this.parseExpr()?;
+                }
+                this.expect(TokenKind.Semicolon)?;
+                let k = this.addItem(ItemKind.Const(constType, constValue), memberVisibility, constName, memberStart)?;
+                this.front.ast.items[k as usize].attributes = attributes;
+                structs.push(k)?;
+                continue;
+            }
+            if (this.at(TokenKind.StaticKeyword)) {
+                // `static NAME: T;` or `static mut NAME: T;`: C data the headers define (ADR 0080 §3.2; grammar.md
+                // §2's ExternStatic).
+                this.advance();
+                let mutable = this.eat(TokenKind.MutKeyword);
+                let staticName = this.parseIdentifier()?;
+                this.expect(TokenKind.Colon)?;
+                let staticType = this.parseType()?;
+                this.expect(TokenKind.Semicolon)?;
+                let d = this.addItem(
+                    ItemKind.Static(mutable, staticType, none()),
+                    memberVisibility,
+                    staticName,
+                    memberStart,
+                )?;
+                this.front.ast.items[d as usize].attributes = attributes;
+                structs.push(d)?;
                 continue;
             }
             if (!this.atFunction()) {

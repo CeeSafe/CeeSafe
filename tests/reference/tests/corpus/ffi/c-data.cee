@@ -1,0 +1,97 @@
+// C data (ADR 0080 §3.1, §3.2, §3.5): constants whose values C asserts, a value C gives, a `const` table and a
+// variable CeeSafe defines for C to name, data C defines, `char` by value, `@cname`, a member array of pointers, an
+// `AtomicU8` member, and C's `unsigned long`.
+
+@header("c-data.types.h")
+extern "C" {
+    enum node_kind: u32;
+    const EIO: i32 = 5;
+    const NODE_DIR: node_kind = 2;
+    @cvalue("sizeof(struct pool)")
+    const POOL_SIZE: usize = 64;
+    @cvalue("offsetof(struct pool, tags)")
+    const POOL_TAGS: usize = 40;
+    const DATA_VERSION: *CChar;
+    const PAGE_SHIFT: u32;
+
+    struct dev {
+        id: u32;
+    }
+    struct stats {
+        reads: u64;
+    }
+    struct pool {
+        count: u32;
+        spare: [*mut dev; 4];
+        tags: [*CChar; 2];
+        dumpable: AtomicU8;
+    }
+    struct ops {
+        twice: extern "C" fn(i32) -> i32;
+        flags: u32;
+    }
+
+    static data_names: [*CChar; 2];
+    static mut g_data_counter: u32;
+
+    fn c_main() -> i32;
+    fn data_mac(domain: CChar, p: *u8) -> i32;
+    fn data_pool() -> *mut pool;
+    @cname("stats")
+    fn readStats(out: *mut stats);
+    fn data_loadavg(out: *mut CULong);
+    fn strlen(s: *CChar) -> usize;
+    fn malloc(size: usize) -> *mut void;
+    fn free(p: *mut void);
+}
+
+@export("data_twice")
+fn twice(x: i32) -> i32 => x * 2;
+
+/// `extern const struct ops data_ops;` in C.
+@export("data_ops")
+static OPS: ops = ops { twice: twice, flags: 5 };
+
+/// `extern uint32_t g_data_rate;`: C writes it.
+@export("g_data_rate")
+static mut RATE: u32 = 1;
+
+/// CeeSafe's half, after C has run.
+/// Safety: C runs this on one thread; the pool and the strings are C's, live and zero-terminated.
+@export("data_side")
+unsafe fn side() -> i32 {
+    g_data_counter += 2;
+    Console.writeLine(RATE as u64 + g_data_counter as u64 + (1u64 << PAGE_SHIFT));
+    Console.writeLine(strlen(DATA_VERSION) + strlen(data_names[1]));
+    let byte: u8 = 77;
+    let domain = byte as CChar;
+    let data = [3u8];
+    Console.writeLine(data_mac(domain, borrow data[0] as *u8));
+    let pool = Ptr.toBorrow(data_pool() as *pool);
+    let spare = Ptr.toBorrow(pool.spare[3] as *dev);
+    Console.writeLine(spare.id as u64 + pool.count as u64 + strlen(pool.tags[1]) as u64 + pool.dumpable.load() as u64);
+    let s = malloc(POOL_SIZE) as *mut stats;
+    readStats(s);
+    Console.writeLine(Ptr.toBorrow(s as *stats).reads + POOL_TAGS as u64);
+    free(s as *mut void);
+    var avg: [CULong; 3] = [0; 3];
+    data_loadavg(borrow mut avg[0] as *mut CULong);
+    Console.writeLine(avg[0] as u64 + avg[1] as u64 + avg[2] as u64);
+    let same = if (domain == byte as CChar && NODE_DIR == 2 as node_kind) 1 else 0;
+    return same - EIO;
+}
+
+/// Safety: c_main calls the exports above.
+fn main() -> i32 {
+    let rc = unsafe { c_main() };
+    Console.writeLine(rc);
+    return 0;
+}
+// expect-stdout: 42 5
+// expect-stdout: 4145
+// expect-stdout: 12
+// expect-stdout: 7703
+// expect-stdout: 17
+// expect-stdout: 51
+// expect-stdout: 356
+// expect-stdout: -4

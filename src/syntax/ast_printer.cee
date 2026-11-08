@@ -192,8 +192,10 @@ struct AstPrinter {
                 this.name(ast, symbols, item.name)?;
                 this.text(" ")?;
                 this.typeText(ast, symbols, typ)?;
-                this.text(" ")?;
-                this.expr(ast, symbols, value)?;
+                if (value != none()) {
+                    this.text(" ")?;
+                    this.expr(ast, symbols, value)?;
+                }
                 this.text(")")?;
                 this.close()?;
             }
@@ -205,8 +207,10 @@ struct AstPrinter {
                 this.name(ast, symbols, item.name)?;
                 this.text(" ")?;
                 this.typeText(ast, symbols, typ)?;
-                this.text(" ")?;
-                this.expr(ast, symbols, value)?;
+                if (value != none()) {
+                    this.text(" ")?;
+                    this.expr(ast, symbols, value)?;
+                }
                 this.text(")")?;
                 this.close()?;
             }

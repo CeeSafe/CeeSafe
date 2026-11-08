@@ -513,6 +513,8 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
         value: none(),
         exported: false,
         exportName: emptyRange(),
+        checked: false,
+        cExpression: emptyRange(),
     })?;
     c.constants.push(ConstEntry {
         item: item,

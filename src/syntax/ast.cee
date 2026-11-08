@@ -302,7 +302,7 @@ struct Variant {
 
 enum ItemKind {
     Function(u32), // functions
-    /// `extern "C" { … }`: the ABI's text, functions, and its structs, unions and enums (items).
+    /// `extern "C" { … }`: the ABI's text, functions, and its structs, unions, enums and constants (items; ADR 0080).
     Extern(Range, Range, Range),
     Struct(u32), // structs
     /// variants, type parameters, region parameters.

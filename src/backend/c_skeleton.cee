@@ -381,11 +381,31 @@ fn isFloatConstant(c: borrow Checker, n: borrow NirProgram, operand: u32) -> boo
 
 /// A static item's C object (StaticName): `ceeS_` and its name, other characters as `_`.
 fn appendStaticName(c: borrow Checker, out: borrow mut Vector<u8>, item: u32) -> Result<void, AllocError> {
+    let symbol = c.hir.statics[item as usize].cName;
+    if (symbol.count > 0) {
+        return appendBytes(out, c.hir.textOf(symbol)); // C data's own symbol (ADR 0080 §3.2)
+    }
     appendText(out, "ceeS_")?;
     for (b in c.name(c.hir.statics[item as usize].name)) {
         out.push(if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) b else '_')?;
     }
     return Ok();
+}
+
+/// Is static `k` C's `const` object (ADR 0080 §3.2)? An exported `static` that holds no atomic: C may not write it.
+fn isCDataStatic(c: borrow Checker, k: usize) -> bool =>
+    c.hir.statics[k].imported || c.hir.statics[k].cInitializer.count > 0;
+
+fn staticIsConst(c: borrow Checker, k: u32) -> bool {
+    let s = c.hir.statics[k as usize];
+    return s.exported && !s.mutable && !typeHoldsAtomic(c, s.typ);
+}
+
+fn typeHoldsAtomic(c: borrow Checker, t: u32) -> bool {
+    if (c.types.is(t, TypeKind.Array)) {
+        return typeHoldsAtomic(c, c.types.info(t).element);
+    }
+    return c.types.is(t, TypeKind.Struct) && atomicFieldInteger(c, t) != none();
 }
 
 /// The statics' definitions with their initialisers (EmitStatics); split mode's declarations are S2's.
@@ -415,17 +435,20 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
         // Each static is declared before any is defined, so one may hold another's address, in any order (C11
         // §6.9.2: a tentative definition).
         for (k in 0..c.hir.statics.length) {
-            if (!staticEmitted(e, k) || !staticHoldsAddress(c, c.hir.statics[k].value)) {
+            if (!staticEmitted(e, k) || isCDataStatic(c, k) || !staticHoldsAddress(c, c.hir.statics[k].value)) {
                 continue;
             }
             for (j in 0..c.hir.statics.length) {
-                if (!staticEmitted(e, j)) {
+                if (!staticEmitted(e, j) || c.hir.statics[j].imported) {
                     continue;
                 }
-                if (!e.split) {
+                if (!e.split && !c.hir.statics[j].exported) {
                     e.t("static CEE_UNUSED ")?;
                 } else {
                     e.t("extern ")?;
+                }
+                if (staticIsConst(c, truncate<u32>(j))) {
+                    e.t("const ")?;
                 }
                 appendCTypeName(c, mut e.buf, c.hir.statics[j].typ)?;
                 e.t(" ")?;
@@ -440,15 +463,16 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
     }
     var emitted: usize = 0;
     for (k in 0..c.hir.statics.length) {
-        if (!staticEmitted(e, k)) {
-            continue;
+        if (!staticEmitted(e, k) || c.hir.statics[k].imported) {
+            continue; // C defines an imported static, and its header declares it (ADR 0080 §3.2)
         }
         emitted += 1;
         let item = c.hir.statics[k];
         var name = Vector<u8>.create();
         appendStaticName(c, mut name, truncate<u32>(k))?;
+        let isConst = staticIsConst(c, truncate<u32>(k));
         if (!definitions) {
-            e.t("extern ")?;
+            e.t(if (isConst) "extern const " else "extern ")?;
             appendCTypeName(c, mut e.buf, item.typ)?;
             e.t(" ")?;
             e.b(name.view())?;
@@ -457,15 +481,27 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             insertSorted(mut e.splitData, name)?;
             continue;
         }
-        if (!e.split) {
+        if (!e.split && !item.exported) {
             e.t("static CEE_UNUSED ")?;
+        }
+        if (isConst) {
+            e.t("const ")?;
         }
         appendCTypeName(c, mut e.buf, item.typ)?;
         e.t(" ")?;
         e.b(name.view())?;
         e.t(" = ")?;
         var initializer = Vector<u8>.create();
-        appendStaticInitializer(e, c, mut initializer, item.value, item.typ, name.view(), false)?;
+        if (item.cInitializer.count > 0) {
+            // `const NAME: T;` (ADR 0080 §3.1): C's constant, converted to the type CeeSafe reads.
+            initializer.push('(')?;
+            appendCTypeName(c, mut initializer, item.typ)?;
+            appendText(mut initializer, ")(")?;
+            appendBytes(mut initializer, c.hir.textOf(item.cInitializer))?;
+            initializer.push(')')?;
+        } else {
+            appendStaticInitializer(e, c, mut initializer, item.value, item.typ, name.view(), false)?;
+        }
         e.b(initializer.view())?;
         e.t(";")?;
         e.emit()?;
@@ -521,6 +557,9 @@ fn emitLongStrings(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
 }
 
 fn collectLongStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -> Result<void, AllocError> {
+    if (value == none()) {
+        return Ok(); // C data, initialised by C (ADR 0080 §3.1–§3.2)
+    }
     match (c.hir.exprs[value as usize]) {
         HirExpr.StringConst(text) => { addLongString(e, c.hir.textOf(text))?; }
         HirExpr.StructLiteral(fields) => {
@@ -555,6 +594,9 @@ fn staticStringId(e: borrow CEmitter, text: Slice<u8>) -> u32 {
 
 /// The C strings statics point to, each once, in first-use order (CollectStaticStrings).
 fn collectStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -> Result<void, AllocError> {
+    if (value == none()) {
+        return Ok(); // C data, initialised by C (ADR 0080 §3.1–§3.2)
+    }
     match (c.hir.exprs[value as usize]) {
         HirExpr.StaticCString(text) => {
             let bytes = c.hir.textOf(text);
@@ -732,7 +774,7 @@ fn appendStaticInitializer(
         HirExpr.FunctionAddress(function) => {
             // A C function's address (ADR 0042 §3.3): the extern's own name, the export's symbol or the callback's.
             if (isExternFunction(c, function)) {
-                appendBytes(out, c.name(c.hir.functions[function as usize].name))?;
+                appendBytes(out, externSymbol(c, function))?;
             } else if (c.hir.functions[function as usize].exported) {
                 appendBytes(out, c.hir.textOf(c.hir.functions[function as usize].exportName))?;
             } else {
@@ -1261,6 +1303,44 @@ fn appendEnumConstructor(
 /// (EmitImportedFieldChecks, §31.3), and every imported C enum is the integer it is declared as (ADR 0079, §31.6).
 fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
     var any = false;
+    for (k in c.hir.constants.view()) {
+        if (!k.checked || k.value == none()) {
+            continue;
+        }
+        // A C constant (ADR 0080 §3.1): C's value is the one CeeSafe compiles with.
+        any = true;
+        var value = Vector<u8>.create();
+        appendExportedScalar(c, mut value, k.value)?;
+        e.t("_Static_assert((")?;
+        e.b(c.hir.textOf(k.cExpression))?;
+        e.t(") == ")?;
+        e.b(value.view())?;
+        e.t(", ")?;
+        var message = Vector<u8>.create();
+        appendText(mut message, "ceesafec import: ")?;
+        appendBytes(mut message, c.hir.textOf(k.cExpression))?;
+        appendText(mut message, " is not the value CeeSafe declares (")?;
+        appendBytes(mut message, c.filePaths[k.file as usize].view())?;
+        message.push(':')?;
+        appendDecimal(mut message, lineOfOffset(c.fileTexts[k.file as usize], k.start))?;
+        message.push(')')?;
+        appendCMessageLiteral(mut e.buf, message.view())?;
+        e.t(");")?;
+        e.emit()?;
+    }
+    for (t in [c.types.clong, c.types.culong]) {
+        if (t as usize >= e.usedTypes.length || !e.usedTypes[t as usize]) {
+            continue;
+        }
+        // CLong and CULong (ADR 0080 §3.5): C's `long` is the width CeeSafe gives it.
+        any = true;
+        e.t("_Static_assert(sizeof(")?;
+        e.b(c.types.rangeText(c.types.info(t).cSpelling))?;
+        e.t(") == ")?;
+        e.d((c.types.info(t).bits / 8) as u64)?;
+        e.t(", \"ceesafec: C's long is not the width of CeeSafe's CLong on this target\");")?;
+        e.emit()?;
+    }
     for (imported in c.importedEnums.view()) {
         any = true;
         let spelling = c.types.rangeText(c.types.info(imported.typ).cSpelling);

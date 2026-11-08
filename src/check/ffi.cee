@@ -117,8 +117,9 @@ fn isVolatileCell(c: borrow Checker, typ: u32) -> bool {
 fn isFfiSafe(c: borrow Checker, typ: u32, isResult: bool, inStruct: bool) -> bool {
     let t = c.types.info(typ);
     if (c.types.is(typ, TypeKind.Integer) || c.types.is(typ, TypeKind.Float) || c.types.is(typ, TypeKind.Bool) ||
-        c.types.is(typ, TypeKind.Error) || c.types.is(typ, TypeKind.FunctionPointer)) {
-        return true;
+        c.types.is(typ, TypeKind.Error) || c.types.is(typ, TypeKind.FunctionPointer) ||
+        c.types.is(typ, TypeKind.CChar)) {
+        return true; // `CChar` by value: C's `char` (ADR 0080 §3.5)
     }
     if (c.types.is(typ, TypeKind.RawPointer)) {
         return isCPointee(c, t.pointee);
@@ -392,15 +393,19 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "an 'extern' block that imports C types needs '@header(\"…\")' naming the headers that define them (type-system.md §31.1)",
+            "an 'extern' block that imports C types or constants needs '@header(\"…\")' naming the headers that define them (type-system.md §31.1)",
         )?;
         c.error(invalidAttribute(), id.start, id.end, message)?;
+    }
+    for (k in 0..structs.count) {
+        declareExternConstant(c, c.front.ast.at(structs, k))?;
+        declareExternStatic(c, c.front.ast.at(structs, k))?;
     }
     for (k in 0..functions.count) {
         let f = c.front.ast.at(functions, k);
         let decl = c.front.ast.functions[f as usize];
         var fnKnown = Vector<u32>.create();
-        knownAttributes(c, decl.attributes, "a C function", "effects constant", mut fnKnown)?;
+        knownAttributes(c, decl.attributes, "a C function", "effects constant cname", mut fnKnown)?;
         readEffectAttributes(c, f, fnKnown.view())?;
         var problem: u32 = 0;
         if (decl.body != none() || decl.expressionBody != none()) {
@@ -446,6 +451,25 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         }
         let function = declareFunction(c, f, none())?;
         ownItem(c, id.symbol, Entity.Function(function))?;
+        // `@cname("symbol")` (ADR 0080 §3.5): its C symbol, when its CeeSafe name must differ (a struct of that name).
+        for (attribute in fnKnown.view()) {
+            if (!sameText(attributeName(c, attribute), "cname")) {
+                continue;
+            }
+            let a = c.front.ast.attributes[attribute as usize];
+            var text = Range { start: 0, count: 0xFFFFFFFF };
+            if (a.arguments.count == 1) {
+                match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                    ExprNode.StringLiteral(t) => { text = t; }
+                    _ => {}
+                }
+            }
+            if (text.count == 0xFFFFFFFF || text.count == 0) {
+                attributeError(c, attribute, "'@cname' takes the C function's name as a string: '@cname(\"name\")'")?;
+                continue;
+            }
+            c.hir.functions[function as usize].exportName = c.hir.addText(c.front.ast.textOf(text))?;
+        }
     }
     return Ok();
 }
@@ -524,6 +548,181 @@ fn declareImportedStruct(c: borrow mut Checker, item: u32) -> Result<void, Alloc
 }
 
 /// `enum name: I;` in an `extern "C"` block (ADR 0079, §31.6): an imported C enum, an integer type of its own.
+/// `const NAME: T = v;` in an `extern "C"` block (ADR 0080 §3.1, type-system.md §28.2): an ordinary constant, whose
+/// value the generated C asserts against C's `NAME`, or against the C expression of its `@cvalue`.
+fn declareExternConstant(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
+    let entry = c.front.ast.items[item as usize];
+    var typ = none();
+    var value = none();
+    match (entry.kind) {
+        ItemKind.Const(t, v) => {
+            typ = t;
+            value = v;
+        }
+        _ => { return Ok(); }
+    }
+    let id = c.front.ast.idents[entry.name as usize];
+    var known = Vector<u32>.create();
+    knownAttributes(c, entry.attributes, "a C constant", "cvalue", mut known)?;
+    var expression = Vector<u8>.create();
+    appendBytes(mut expression, c.name(id.symbol))?;
+    var byName = true;
+    for (attribute in known.view()) {
+        let a = c.front.ast.attributes[attribute as usize];
+        var text = Range { start: 0, count: 0xFFFFFFFF };
+        if (a.arguments.count == 1) {
+            match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                ExprNode.StringLiteral(t) => { text = t; }
+                _ => {}
+            }
+        }
+        var bad = text.count == 0xFFFFFFFF || text.count == 0;
+        if (!bad) {
+            for (b in c.front.ast.textOf(text)) {
+                if (b == '"' || b == '\\' || b == '\n' || b == '\r') {
+                    bad = true;
+                }
+            }
+        }
+        if (bad) {
+            attributeError(
+                c,
+                attribute,
+                "'@cvalue' takes a C constant expression as a string, without quotes, backslashes or line breaks: '@cvalue(\"sizeof(struct stat)\")' (ADR 0080 §3.1)",
+            )?;
+            return Ok();
+        }
+        expression = Vector<u8>.create();
+        appendBytes(mut expression, c.front.ast.textOf(text))?;
+        byName = false;
+    }
+    if (byName && !checkCName(c, expression.view(), Span { start: id.start, end: id.end }, "a C constant's name")?) {
+        return Ok();
+    }
+    if (value == none()) {
+        // `const NAME: T;`: C's value, read at run time (ADR 0080 §3.1). It is a read-only static whose C initialiser
+        // is the macro (or the `@cvalue` expression), a C constant expression.
+        if (isReservedName(c, entry.name)? || reportDuplicate(c, id)?) {
+            return Ok();
+        }
+        let before = c.hir.statics.length;
+        declareStatic(c, item, false, typ)?;
+        if (c.hir.statics.length == before) {
+            return Ok();
+        }
+        let k = c.hir.statics.length - 1;
+        c.hir.statics[k].cInitializer = c.hir.addText(expression.view())?; // C data, even if refused below
+        let t = c.hir.statics[k].typ;
+        let pointer = c.types.is(t, TypeKind.RawPointer) && c.types.is(c.types.info(t).pointee, TypeKind.CChar);
+        if (!c.types.is(t, TypeKind.Integer) && !c.types.is(t, TypeKind.Bool) && !pointer && t != c.types.error) {
+            let span = c.front.ast.typeSpans[typ as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "a C constant without a value is an integer, 'bool' or '*CChar' (a string ")?;
+            appendText(mut message, "macro) (ADR 0080 §3.1)")?;
+            c.error(notFfiSafe(), span.start, span.end, message)?;
+        }
+        return Ok();
+    }
+    let before = c.hir.constants.length;
+    declare(c, item)?;
+    if (c.hir.constants.length == before) {
+        return Ok(); // a duplicate or reserved name, reported
+    }
+    let k = c.hir.constants.length - 1;
+    let t = c.hir.constants[k].typ;
+    if (!c.types.is(t, TypeKind.Integer) && !c.types.is(t, TypeKind.Bool) && t != c.types.error) {
+        let span = c.front.ast.typeSpans[typ as usize];
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a C constant is an integer (an imported C enum among them) or 'bool' (ADR 0080 §3.1)",
+        )?;
+        c.error(notFfiSafe(), span.start, span.end, message)?;
+        return Ok();
+    }
+    c.hir.constants[k].checked = true;
+    c.hir.constants[k].cExpression = c.hir.addText(expression.view())?;
+    return Ok();
+}
+
+/// Reports `id` already declared (N0201), as Declare does: true when it is.
+fn reportDuplicate(c: borrow mut Checker, id: Ident) -> Result<bool, AllocError> {
+    if (!isDeclared(c, id.symbol)) {
+        return Ok(false);
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "'")?;
+    appendBytes(mut message, c.name(id.symbol))?;
+    appendText(mut message, "' is already defined")?;
+    c.error(duplicateItem(), id.start, id.end, message)?;
+    return Ok(true);
+}
+
+/// `static NAME: T;` and `static mut NAME: T;` in an `extern "C"` block (ADR 0080 §3.2): C data its headers define,
+/// named `NAME` in C or its `@cname`, of a type C can spell.
+fn declareExternStatic(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
+    let entry = c.front.ast.items[item as usize];
+    var mutable = false;
+    var typ = none();
+    match (entry.kind) {
+        ItemKind.Static(m, t, _) => {
+            mutable = m;
+            typ = t;
+        }
+        _ => { return Ok(); }
+    }
+    let id = c.front.ast.idents[entry.name as usize];
+    var known = Vector<u32>.create();
+    knownAttributes(c, entry.attributes, "a C static", "cname", mut known)?;
+    var symbol = Vector<u8>.create();
+    appendBytes(mut symbol, c.name(id.symbol))?;
+    var span = Span { start: id.start, end: id.end };
+    for (attribute in known.view()) {
+        let a = c.front.ast.attributes[attribute as usize];
+        var text = Range { start: 0, count: 0xFFFFFFFF };
+        if (a.arguments.count == 1) {
+            match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+                ExprNode.StringLiteral(t) => { text = t; }
+                _ => {}
+            }
+        }
+        if (text.count == 0xFFFFFFFF) {
+            attributeError(c, attribute, "'@cname' takes the C symbol as a string: '@cname(\"g_name\")'")?;
+            return Ok();
+        }
+        symbol = Vector<u8>.create();
+        appendBytes(mut symbol, c.front.ast.textOf(text))?;
+        span = Span { start: a.start, end: a.end };
+    }
+    if (!checkCName(c, symbol.view(), span, "a C static's name")?) {
+        return Ok();
+    }
+    if (isReservedName(c, entry.name)? || reportDuplicate(c, id)?) {
+        return Ok();
+    }
+    let before = c.hir.statics.length;
+    declareStatic(c, item, mutable, typ)?;
+    if (c.hir.statics.length == before) {
+        return Ok();
+    }
+    let k = c.hir.statics.length - 1;
+    c.hir.statics[k].imported = true; // C data, even if refused below
+    c.hir.statics[k].cName = c.hir.addText(symbol.view())?;
+    let t = c.hir.statics[k].typ;
+    if (t != c.types.error && !isFfiSafe(c, t, false, true)) {
+        let typeSpan = c.front.ast.typeSpans[typ as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "a C static is C data, so its type must be one C can spell: an integer, 'bool', an ")?;
+        appendText(
+            mut message,
+            "atomic, a raw pointer, an 'extern \"C\" fn', a C type or an array of these (ADR 0080 ",
+        )?;
+        appendText(mut message, "§3.2; type-system.md §28.5)")?;
+        c.error(notFfiSafe(), typeSpan.start, typeSpan.end, message)?;
+    }
+    return Ok();
+}
+
 fn declareImportedEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     let base = match (entry.kind) {
@@ -726,6 +925,9 @@ fn atomicFieldInteger(c: borrow Checker, t: u32) -> u32 {
     if (sameText(name, "AtomicUSize")) {
         return c.types.usize;
     }
+    if (sameText(name, "AtomicU8")) {
+        return c.types.u8; // a byte member (ADR 0080 §3.5)
+    }
     return none();
 }
 
@@ -896,10 +1098,12 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             let element = if (isArray) c.types.info(t).element else none();
             if (element != none()) {
                 let elementDef = c.types.info(element).structDef;
+                let pointerElement = (c.types.is(element, TypeKind.RawPointer) &&
+                    isCPointee(c, c.types.info(element).pointee)) || c.types.is(element, TypeKind.FunctionPointer);
                 if (c.types.is(element, TypeKind.Integer) || c.types.is(element, TypeKind.Bool) ||
-                    c.types.is(element, TypeKind.Error) ||
+                    c.types.is(element, TypeKind.Error) || pointerElement ||
                     (elementDef != none() && c.types.structs[elementDef as usize].isImported)) {
-                    continue; // a C array member (C9, §31.1)
+                    continue; // a C array member (C9, §31.1), of pointers too (ADR 0080 §3.5)
                 }
             }
             let fieldDef = c.types.info(t).structDef;
@@ -976,8 +1180,8 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             c.setFile(fileToSet);
         }
         var name = Vector<u8>.create();
-        if (exported) {
-            appendBytes(mut name, c.hir.textOf(c.hir.functions[k].exportName))?;
+        if (exported || (decl.isExtern && c.hir.functions[k].exportName.count > 0)) {
+            appendBytes(mut name, c.hir.textOf(c.hir.functions[k].exportName))?; // an export's symbol, or a `@cname`
         } else {
             appendBytes(mut name, c.name(c.hir.functions[k].name))?;
         }

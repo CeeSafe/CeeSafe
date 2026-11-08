@@ -574,6 +574,9 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
         ItemKind.ImportedEnum(typ) => { fmtWalkType(l, ast, typ)?; } // `enum name: I;` (ADR 0079)
         ItemKind.Const(typ, value) => {
             fmtWalkType(l, ast, typ)?;
+            if (value == none()) {
+                return Ok(); // `const NAME: T;` in an `extern "C"` block (ADR 0080 §3.1)
+            }
             let first = exprFirst(l, ast, value);
             let last = exprLast(l, ast, value);
             l.addContinuation(first - 1, false, last, priorityInitializer())?;
@@ -581,6 +584,9 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
         }
         ItemKind.Static(_, typ, value) => {
             fmtWalkType(l, ast, typ)?;
+            if (value == none()) {
+                return Ok(); // `static NAME: T;` in an `extern "C"` block (ADR 0080 §3.2)
+            }
             let first = exprFirst(l, ast, value);
             let last = exprLast(l, ast, value);
             l.addContinuation(first - 1, false, last, priorityInitializer())?;

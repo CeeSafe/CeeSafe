@@ -460,7 +460,6 @@ struct Checker {
         let span = this.front.ast.typeSpans[typ as usize];
         let dynAllowed = this.dynAllowed;
         this.dynAllowed = false;
-        let allowCChar = this.allowCChar;
         this.allowCChar = false;
         let allowImported = this.coreAllowImported;
         this.coreAllowImported = false;
@@ -533,15 +532,7 @@ struct Checker {
                     this.error(voidNotAllowed(), span.start, span.end, message)?;
                     return Ok(this.types.error);
                 }
-                if (this.types.is(found, TypeKind.CChar) && !allowCChar) {
-                    var message = Vector<u8>.create();
-                    appendText(
-                        mut message,
-                        "'CChar' is C's 'char' and can only be pointed to: use '*CChar' (type-system.md §28.3)",
-                    )?;
-                    this.error(invalidPointee(), span.start, span.end, message)?;
-                    return Ok(this.types.error);
-                }
+                // `CChar` by value is C's `char` (ADR 0080 §3.5): `b as CChar` and `c as u8` convert.
                 return Ok(found);
             }
             TypeNode.Missing => { return Ok(this.types.error); }

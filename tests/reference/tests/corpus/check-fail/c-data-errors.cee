@@ -1,0 +1,28 @@
+// C data (ADR 0080 §3.1, §3.2, §3.5): a C constant is an integer or `bool` (N0291), a valueless one also `*CChar`
+// (N0291); `@cvalue` is one string (N0290); names are C identifiers (N0292); C data has a type C spells (N0291);
+// an exported array waits (N0216); `CChar` has `==` and `as u8`, not arithmetic (N0207) or other conversions (N0208).
+@header("t.h")
+extern "C" {
+    const RATIO: f64 = 1.5; // error[N0291]
+    const NAME: StringView; // error[N0291]
+    @cvalue(3)              // error[N0290]
+    const BAD: u32 = 3;
+    const int: u32 = 1;     // error[N0292]
+    @cname("not a name")    // error[N0292]
+    static mut g_x: u32;
+    static g_view: StringView; // error[N0291]
+}
+
+@export("table")
+static TABLE: [u32; 2] = [1, 2]; // error[N0216]
+
+@export("g_text")
+static TEXT: StringView = "x"; // error[N0291]
+
+fn chars(c: CChar) -> u32 {
+    let d = c + c; // error[N0207]
+    let w = c as u32; // error[N0208]
+    return 0;
+}
+
+fn main() {}

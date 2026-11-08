@@ -597,7 +597,7 @@ fn cfgConditionText(c: borrow mut Checker, condition: u32) -> Result<Vector<u8>,
         _ => {}
     }
     let span = c.front.ast.exprSpans[argument as usize];
-    let switchMacro = if (text.length > 0 && text[0] == '!') text.view()[1..] else text.view();
+    let switchMacro = withoutBang(text.view());
     if (!checkCName(c, switchMacro, Span { start: span.start, end: span.end }, "the configuration macro")?) {
         return Ok(Vector<u8>.create());
     }

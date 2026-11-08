@@ -1643,7 +1643,8 @@ fn lowerIf(
     }
     let thenBlock = newBlock(b)?;
     if (configured.length > 0) {
-        b.cfg = joinedCfg(outer.view(), negatedCfgText(configured.view())?.view())?;
+        let negated = negatedCfgText(configured.view())?;
+        b.cfg = joinedCfg(outer.view(), negated.view())?;
     }
     let elseBlock = if (otherwise == none()) none() else newBlock(b)?;
     b.cfg = copyBytes(outer.view())?;
@@ -1665,7 +1666,8 @@ fn lowerIf(
         joinReached = true;
     }
     if (configured.length > 0) {
-        b.cfg = joinedCfg(outer.view(), negatedCfgText(configured.view())?.view())?;
+        let negated = negatedCfgText(configured.view())?;
+        b.cfg = joinedCfg(outer.view(), negated.view())?;
     }
     if (elseBlock != none()) {
         b.current = elseBlock;

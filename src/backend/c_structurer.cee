@@ -811,7 +811,8 @@ fn printTree(
             // `if (cfg("X"))` (ADR 0080 §3.3): only the builds where X holds compile the then-part.
             mapTo(e, c, n, sources, node.start, node.end);
             e.t("#if ")?;
-            e.b(s.texts[node.text as usize].view()[1..])?;
+            let condition = s.texts[node.text as usize].view();
+            e.b(condition[1..])?;
             e.emitNoCode()?;
             printTree(e, c, n, sources, s, node.first, depth)?;
             if (s.lists[node.second as usize].length > 0) {

@@ -456,7 +456,7 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
             if (sameText(attributeName(c, attribute), "cfg")) {
                 // `@cfg("X")` (ADR 0080 §3.3): a C function some builds lack; its uses must be where `X` holds.
                 let cfgText = attributeString(c, attribute)?;
-                let switchMacro = if (cfgText.length > 0 && cfgText[0] == '!') cfgText.view()[1..] else cfgText.view();
+                let switchMacro = withoutBang(cfgText.view());
                 let a = c.front.ast.attributes[attribute as usize];
                 if (cfgText.length == 0) {
                     attributeError(
@@ -665,6 +665,9 @@ fn declareExternConstant(c: borrow mut Checker, item: u32) -> Result<void, Alloc
     c.hir.constants[k].cExpression = c.hir.addText(expression.view())?;
     return Ok();
 }
+
+/// A `cfg` condition's macro: `X` of `!X` (ADR 0080 §3.3).
+fn withoutBang(text: Slice<u8>) -> Slice<u8> => if (text.length > 0 && text[0] == '!') text[1..] else text;
 
 /// The one string argument of an attribute, or empty.
 fn attributeString(c: borrow Checker, attribute: u32) -> Result<Vector<u8>, AllocError> {
@@ -1082,8 +1085,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
                 if (sameText(attributeName(c, attribute), "cfg")) {
                     // `@cfg("X")` (ADR 0080 §3.3): a member some builds' C struct lacks; used only where `X` holds.
                     let cfgText = attributeString(c, attribute)?;
-                    let switchMacro =
-                        if (cfgText.length > 0 && cfgText[0] == '!') cfgText.view()[1..] else cfgText.view();
+                    let switchMacro = withoutBang(cfgText.view());
                     if (cfgText.length == 0) {
                         attributeError(
                             c,

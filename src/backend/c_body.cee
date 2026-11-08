@@ -1850,7 +1850,7 @@ fn appendRvalue(
             return out.push(')');
         }
         NirRvalue.StaticAddress(item) => {
-            if (staticIsConst(c, item) || c.hir.statics[item as usize].imported) {
+            if (staticIsConst(c, item) || c.hir.statics[item as usize].imported || staticIsCAtomic(c, item)) {
                 // C data (ADR 0080 §3.2): a `const` object CeeSafe only reads, or one whose C type is C's own (a C
                 // array is CeeSafe's array struct, as for an array member, §31.3): the pointer's type is CeeSafe's.
                 appendText(out, "((")?;

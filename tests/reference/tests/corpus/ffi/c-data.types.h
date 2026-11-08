@@ -33,6 +33,8 @@ extern const struct ops data_ops; /* CeeSafe's */
 extern uint32_t g_data_rate;      /* CeeSafe's; C writes it */
 extern const char *const data_names[2];
 extern uint32_t g_data_counter;
+extern uint32_t g_data_hits;     /* CeeSafe's atomic; C adds to it with __atomic_* */
+extern uint32_t g_data_flags;    /* C's, which CeeSafe reads atomically */
 
 int32_t c_main(void);
 int32_t data_mac(char domain, const uint8_t *p);

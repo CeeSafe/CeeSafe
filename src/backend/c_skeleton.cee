@@ -393,6 +393,20 @@ fn appendStaticName(c: borrow Checker, out: borrow mut Vector<u8>, item: u32) ->
 }
 
 /// Is static `k` C's `const` object (ADR 0080 §3.2)? An exported `static` that holds no atomic: C may not write it.
+/// A static's C type (ADR 0080 §3.2): an exported or imported atomic is C's integer, which C reads with `__atomic_*`;
+/// anything else is its type's.
+fn appendStaticCType(c: borrow Checker, out: borrow mut Vector<u8>, k: u32) -> Result<void, AllocError> {
+    let s = c.hir.statics[k as usize];
+    let integer = if (s.exported || s.imported) atomicFieldInteger(c, s.typ) else none();
+    return appendCTypeName(c, out, if (integer != none()) integer else s.typ);
+}
+
+/// Is static `k` C data whose C type is not CeeSafe's (an atomic as its integer, ADR 0080 §3.2)?
+fn staticIsCAtomic(c: borrow Checker, k: u32) -> bool {
+    let s = c.hir.statics[k as usize];
+    return (s.exported || s.imported) && atomicFieldInteger(c, s.typ) != none();
+}
+
 fn isCDataStatic(c: borrow Checker, k: usize) -> bool =>
     c.hir.statics[k].imported || c.hir.statics[k].cInitializer.count > 0;
 
@@ -450,7 +464,7 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
                 if (staticIsConst(c, truncate<u32>(j))) {
                     e.t("const ")?;
                 }
-                appendCTypeName(c, mut e.buf, c.hir.statics[j].typ)?;
+                appendStaticCType(c, mut e.buf, truncate<u32>(j))?;
                 e.t(" ")?;
                 var declared = Vector<u8>.create();
                 appendStaticName(c, mut declared, truncate<u32>(j))?;
@@ -473,7 +487,7 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
         let isConst = staticIsConst(c, truncate<u32>(k));
         if (!definitions) {
             e.t(if (isConst) "extern const " else "extern ")?;
-            appendCTypeName(c, mut e.buf, item.typ)?;
+            appendStaticCType(c, mut e.buf, truncate<u32>(k))?;
             e.t(" ")?;
             e.b(name.view())?;
             e.t(";")?;
@@ -487,7 +501,7 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
         if (isConst) {
             e.t("const ")?;
         }
-        appendCTypeName(c, mut e.buf, item.typ)?;
+        appendStaticCType(c, mut e.buf, truncate<u32>(k))?;
         e.t(" ")?;
         e.b(name.view())?;
         e.t(" = ")?;
@@ -499,6 +513,19 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             appendText(mut initializer, ")(")?;
             appendBytes(mut initializer, c.hir.textOf(item.cInitializer))?;
             initializer.push(')')?;
+        } else if (staticIsCAtomic(c, truncate<u32>(k))) {
+            // An atomic as C's integer (ADR 0080 §3.2): the value of its one field.
+            var value = item.value;
+            match (c.hir.exprs[item.value as usize]) {
+                HirExpr.StructLiteral(fields) => {
+                    if (fields.count == 1) {
+                        value = c.hir.fieldValues[fields.start as usize].value;
+                    }
+                }
+                _ => {}
+            }
+            let integer = atomicFieldInteger(c, item.typ);
+            appendStaticInitializer(e, c, mut initializer, value, integer, name.view(), false)?;
         } else {
             appendStaticInitializer(e, c, mut initializer, item.value, item.typ, name.view(), false)?;
         }

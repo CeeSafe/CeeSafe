@@ -33,6 +33,7 @@ extern "C" {
 
     static data_names: [*CChar; 2];
     static mut g_data_counter: u32;
+    static g_data_flags: AtomicU32;
 
     fn c_main() -> i32;
     fn data_mac(domain: CChar, p: *u8) -> i32;
@@ -56,6 +57,10 @@ static OPS: ops = ops { twice: twice, flags: 5 };
 @export("g_data_rate")
 static mut RATE: u32 = 1;
 
+/// `extern uint32_t g_data_hits;`: C adds to it atomically.
+@export("g_data_hits")
+static HITS: AtomicU32 = AtomicU32.constant(12);
+
 /// CeeSafe's half, after C has run.
 /// Safety: C runs this on one thread; the pool and the strings are C's, live and zero-terminated.
 @export("data_side")
@@ -77,6 +82,7 @@ unsafe fn side() -> i32 {
     var avg: [CULong; 3] = [0; 3];
     data_loadavg(borrow mut avg[0] as *mut CULong);
     Console.writeLine(avg[0] as u64 + avg[1] as u64 + avg[2] as u64);
+    Console.writeLine(HITS.load() + g_data_flags.load());
     let same = if (domain == byte as CChar && NODE_DIR == 2 as node_kind) 1 else 0;
     return same - EIO;
 }
@@ -94,4 +100,5 @@ fn main() -> i32 {
 // expect-stdout: 17
 // expect-stdout: 51
 // expect-stdout: 356
+// expect-stdout: 48
 // expect-stdout: -4

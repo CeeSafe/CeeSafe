@@ -939,7 +939,7 @@ fn exportsHeader(
     }
     for (k in data.view()) {
         appendText(out, if (staticIsConst(c, k)) "extern const " else "extern ")?;
-        appendCTypeName(c, out, c.hir.statics[k as usize].typ)?;
+        appendStaticCType(c, out, k)?;
         out.push(' ')?;
         appendStaticName(c, out, k)?;
         appendText(out, ";\n")?;

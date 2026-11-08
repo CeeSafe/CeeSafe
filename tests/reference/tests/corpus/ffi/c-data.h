@@ -13,5 +13,6 @@ int32_t data_twice(int32_t);
 int32_t data_side(void);
 extern const struct ops data_ops;
 extern uint32_t g_data_rate;
+extern uint32_t g_data_hits;
 
 #endif

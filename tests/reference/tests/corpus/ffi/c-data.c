@@ -5,6 +5,7 @@
 
 const char *const data_names[2] = { "alpha", "beta" };
 uint32_t g_data_counter = 40;
+uint32_t g_data_flags = 6;
 
 static struct dev d1 = { 7 }, d2 = { 9 };
 static struct pool the_pool;
@@ -34,6 +35,7 @@ void data_loadavg(unsigned long out[3]) {
 
 int32_t c_main(void) {
     g_data_rate = 7;
+    __atomic_fetch_add(&g_data_hits, 30, __ATOMIC_SEQ_CST);
     printf("%d %u\n", (int)data_ops.twice(21), (unsigned)data_ops.flags);
     return data_side();
 }

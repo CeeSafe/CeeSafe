@@ -42,7 +42,23 @@ fn run() -> i32 {
     return r;
 }
 
+/// A `cfg` block that returns: the structurer inverts the test, which stays the preprocessor's.
+fn early(on: bool) -> i32 {
+    if (on) {
+        if (cfg("CFG_ON")) {
+            return 3;
+        }
+        return 4;
+    }
+    if (cfg("CFG_OFF")) {
+        return 1;
+    }
+    return 2;
+}
+
 fn main() {
     Console.writeLine(run());
+    Console.writeLine(early(true) * 10 + early(false));
 }
 // expect-stdout: 1711
+// expect-stdout: 32

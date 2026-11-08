@@ -622,6 +622,16 @@ fn isCIdentifier(text: Slice<u8>) -> bool {
 
 /// The negated condition (Negate): `!x` for an identifier, `x` for `!x`, else `!(…)`.
 fn negateCondition(condition: Slice<u8>, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    if (isCfgText(condition)) {
+        // A `cfg` condition (ADR 0080 §3.3) stays one, its macro test negated: `#if !X` for `#if X`.
+        out.push(cfgMark())?;
+        let test = condition[1..];
+        if (test.length > 0 && test[0] == '!') {
+            return appendBytes(out, test[1..]);
+        }
+        out.push('!')?;
+        return appendBytes(out, test);
+    }
     if (condition.length > 0 && condition[0] == '!' && isCIdentifier(condition[1..])) {
         return appendBytes(out, condition[1..]);
     }

@@ -530,7 +530,7 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
                     conditions.push(test)?;
                     c.cfgStack.push(copyBytes(configured.view())?)?;
                     thens.push(checkBlock(c, then)?)?;
-                    let _ = c.cfgStack.pop();
+                    c.cfgStack.truncate(c.cfgStack.length - 1);
                     c.cfgStack.push(negatedCfg(configured.view())?)?;
                     negated += 1;
                 } else {
@@ -555,7 +555,7 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
     }
     var popped: u32 = 0;
     while (popped < negated) {
-        let _ = c.cfgStack.pop();
+        c.cfgStack.truncate(c.cfgStack.length - 1);
         popped += 1;
     }
     var k = starts.length;

@@ -1,7 +1,8 @@
 # ADR 0078 — `sendFile` never raises SIGPIPE; an open file's time and kind, and `File.openRegular`
 
-- Status: **Proposed**, 2026-11-08, for the owner. Raised by CeeSafe.Web: bug B19 and request U22
-  (`CeeSafe.Web/docs/ceesafe-upstream-work.md`), for its M9 milestone. The owner asked for both to be fixed here.
+- Status: **Accepted** by the owner, 2026-11-08 ("Go ahead and release CeeSafe"). Raised by CeeSafe.Web: bug B19 and
+  request U22 (`CeeSafe.Web/docs/ceesafe-upstream-work.md`), for its M9 milestone. The owner asked for both to be fixed
+  here.
 - Scope: the hosted runtime (`ceesafe_rt_async.c`, `ceesafe_rt_io.c`, `rt.h`), lib/std (`host.cee`, `async.cee`), the
   checker's File members, the C backend, the interpreter, type-system.md §26.3 and §40's sending files,
   guide/builtins.md, the corpus.

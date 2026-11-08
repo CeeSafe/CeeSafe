@@ -24,6 +24,7 @@
 - [struct VolumeSpace](#struct-volumespace)
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
+- [struct FileMetadata](#struct-filemetadata)
 - [struct UnixTime](#struct-unixtime)
 - [struct Clock](#struct-clock)
 - [struct Random](#struct-random)
@@ -610,6 +611,31 @@ public async fn open(path: StringView) -> Result<File, AsyncError>
 ```
 
 Opens `path` for reading.
+
+### AsyncFiles.openRegular
+
+```ceesafe
+public async fn openRegular(path: StringView) -> Result<File, AsyncError>
+```
+
+Opens `path` for reading if it is a regular file (ADR 0078 §3): never waits on a FIFO; `IsDirectory` for a
+directory, `InvalidInput` for anything else that is not a regular file.
+
+### AsyncFiles.modified
+
+```ceesafe
+public async fn modified(file: borrow mut File) -> Result<UnixTime, AsyncError>
+```
+
+The open file's last modification time, read from the file (ADR 0078 §3).
+
+### AsyncFiles.kind
+
+```ceesafe
+public async fn kind(file: borrow mut File) -> Result<PathKind, AsyncError>
+```
+
+What the open file is, read from the file (ADR 0078 §3).
 
 ### AsyncFiles.create
 
@@ -1455,6 +1481,36 @@ public fn rename(from: StringView, to: StringView) -> Result<void, IoError>
 there (POSIX `rename`; Windows `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`). The new
 name is durable once its directory is synced (`Directory.sync`).
 Safety: the runtime reads both paths' bytes during the call only.
+
+## struct FileMetadata
+
+```ceesafe
+public struct FileMetadata
+```
+
+An open file's metadata (ADR 0078 §3), read from the file (`fstat`), not its path: it describes the file that is
+read, even if another has been renamed into its place since it was opened. `f.modified()` and `f.kind()` are the
+checker's names for FileMetadata.modified(f) and FileMetadata.kind(f).
+
+### FileMetadata.modified
+
+```ceesafe
+public fn modified(file: borrow File) -> Result<UnixTime, IoError>
+```
+
+`f.modified()`: when the open file was last modified, with nanoseconds where the system keeps them. The
+interpreter answers `Unsupported`, as for `File.modified(path)`.
+Safety: the runtime reads the file's descriptor and writes the two values during the call only.
+
+### FileMetadata.kind
+
+```ceesafe
+public fn kind(file: borrow File) -> Result<PathKind, IoError>
+```
+
+`f.kind()`: what the open file is. A directory opened for reading is `Directory`; a device, FIFO or socket is
+`Other`.
+Safety: the runtime reads the file's descriptor during the call only.
 
 ## struct UnixTime
 

@@ -1200,6 +1200,10 @@ int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t co
 int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length);
 int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available);
 int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *seconds, uint32_t *nanoseconds);
+/* ADR 0078 §3: an open File's (its first field is the descriptor) modification time, and kind (1 regular file,
+   2 directory, 3 other), from fstat; negated errno on failure. */
+int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t *nanoseconds);
+int64_t ceesafe_host_file_kind(void const *file);
 int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode);
 int64_t ceesafe_host_console_flush(void);
 /* The drop glue of File, TcpListener and TcpStream: closes the descriptor, ignoring errors. */

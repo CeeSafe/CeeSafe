@@ -1967,6 +1967,14 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
     `OVERLAPPED` offset.
 - `File.openAppend(path)` (ADR 0077): write-only, created if missing, every write at the end (`O_APPEND`).
 - `File.modified(path)` (ADR 0077, lib/std): `Result<UnixTime, IoError>`, the last modification time.
+- `File.openRegular(path)` (ADR 0078 §3): opens `path` for reading if it is a regular file, never waiting on a FIFO
+  (POSIX `O_NONBLOCK | O_NOCTTY`, then `fstat`, then `O_NONBLOCK` cleared); a directory is `IsDirectory`, anything
+  else that is not a regular file `InvalidInput`.
+- `f.modified()` and `f.kind()` (ADR 0078 §3, lib/std's `FileMetadata`; `borrow this`): the open file's
+  `Result<UnixTime, IoError>` and `Result<PathKind, IoError>`, from `fstat` (`_fstat64` on Windows), not its path, so
+  they describe the file that is read even if another was renamed into its place. `kind` is `File`, `Directory`, or
+  `Other` for a device, FIFO or socket. The interpreter answers `Unsupported` for `modified`, and takes `kind` and
+  `openRegular`'s check from the path.
 - `File.setPermissions(path, mode)` (ADR 0077, lib/std): `chmod` of the low 12 bits (`0o640`); on Windows only the
   read-only attribute, set when the owner may not write. Called on a new, empty file before it is written, it keeps
   the data private under any umask. The interpreter answers `Unsupported` for this and `File.modified`.
@@ -4006,6 +4014,9 @@ empty.
 - Where the system has no file send for the socket and the file (the runtime's `CEE_ASYNC_NO_SENDFILE`), a step reads
   at most 64 KiB at the offset on a worker thread (`Async.blocking`) and writes them: the same results, through a
   copy. Errors and cancellation are `write`'s (§40.7).
+- A send to a connection the peer has reset is an error (`BrokenPipe` or `ConnectionReset`), never a signal
+  (ADR 0078 §2): on Linux, where `sendfile` has no `MSG_NOSIGNAL`, the runtime blocks SIGPIPE on the thread for each
+  call and takes one the call raised, whatever the call returned. The process's disposition of SIGPIPE is unchanged.
 
 **UDP** (lib/std, ADR 0050):
 

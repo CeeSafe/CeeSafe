@@ -83,6 +83,8 @@ no argument 1000
 | `Console.flush()` | write standard output's buffer now, so it survives a kill |
 | `File.openAppend(path)` | write-only, created if missing, every write at the end |
 | `File.modified(path)`, `File.setPermissions(path, 0o640)` | a `UnixTime`; `chmod` |
+| `File.openRegular(path)` | read-only, only a regular file: never waits on a FIFO; `IsDirectory`, or `InvalidInput` for a device (ADR 0078) |
+| `f.modified()`, `f.kind()` | the open file's time and `PathKind`, from the file, not its path |
 | `IoError.StorageFull` | the volume is full (`ENOSPC`, `EDQUOT`) |
 | `TcpListener.bind(address, port)` | `Result<TcpListener, IoError>`; then `port()`, `accept()` |
 | `TcpStream.connect(address, port)` | `Result<TcpStream, IoError>`; `read`, `write`, `shutdownWrite`, `shutdownRead` |

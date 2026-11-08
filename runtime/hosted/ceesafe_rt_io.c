@@ -61,6 +61,9 @@
 #if !defined(COSMO_AF_INET) && !defined(_WIN32)
 extern char **environ;
 #endif
+#if !defined(_WIN32) && !defined(O_NOCTTY)
+#define O_NOCTTY 0 /* a system without controlling terminals (ADR 0078's File.openRegular) */
+#endif
 
 /* ---- Program arguments ------------------------------------------------------------------ */
 
@@ -142,6 +145,25 @@ static bool ceesafe_c_path(cee_str path, char buffer[4096]) {
     return true;
 }
 
+/* An open descriptor's kind (ADR 0078 §3): 1 a regular file, 2 a directory, 3 anything else, or a negated errno. */
+static int64_t cee_fd_kind(int fd) {
+#ifdef _WIN32
+    struct _stat64 st;
+    if (_fstat64(fd, &st) != 0) return -(int64_t)errno;
+    unsigned type = (unsigned)st.st_mode & _S_IFMT;
+    return type == _S_IFDIR ? 2 : type == _S_IFREG ? 1 : 3;
+#else
+    struct stat st;
+    if (fstat(fd, &st) != 0) return -(int64_t)errno;
+#ifdef COSMO_AF_INET
+    /* CosmoOS's S_ISDIR and S_ISREG test the record's DT_* type, st_type, not st_mode (its sys/stat.h). */
+    return S_ISDIR(st.st_type) ? 2 : S_ISREG(st.st_type) ? 1 : 3;
+#else
+    return S_ISDIR(st.st_mode) ? 2 : S_ISREG(st.st_mode) ? 1 : 3;
+#endif
+#endif
+}
+
 cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
     char name[4096];
     if (!ceesafe_c_path(path, name)) return ceesafe_io_fail(EINVAL);
@@ -153,6 +175,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 2u ? _O_RDWR
                   : mode == 3u ? _O_RDWR | _O_CREAT
                   : mode == 5u ? _O_WRONLY | _O_CREAT | _O_APPEND
+                  : mode == 6u ? _O_RDONLY /* ADR 0078: File.openRegular; opening never waits on Windows */
                                : _O_RDWR | _O_CREAT | _O_EXCL;
         fd = _open(name, flags | _O_BINARY, _S_IREAD | _S_IWRITE);
 #else
@@ -163,11 +186,46 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 2u ? O_RDWR
                   : mode == 3u ? O_RDWR | O_CREAT
                   : mode == 5u ? O_WRONLY | O_CREAT | O_APPEND /* ADR 0077: File.openAppend */
+                  /* ADR 0078: File.openRegular. O_NONBLOCK so that opening a FIFO never waits for a writer, O_NOCTTY
+                     so that a terminal never becomes the controlling one; cleared below for a regular file. */
+                  : mode == 6u ? O_RDONLY | O_NONBLOCK | O_NOCTTY
                                : O_RDWR | O_CREAT | O_EXCL;
         fd = open(name, flags | O_CLOEXEC, mode == 1u ? 0644 : 0666);
 #endif
     } while (fd < 0 && errno == EINTR);
-    return fd < 0 ? ceesafe_io_errno() : ceesafe_io_ok(fd);
+#ifdef _WIN32
+    if (fd < 0 && mode == 6u && errno == EACCES) {
+        /* Windows refuses to open a directory (EACCES); File.openRegular reports IsDirectory there, as elsewhere. No
+           file is read, so asking the path after the failed open races with nothing. */
+        struct _stat64 st;
+        if (_stat64(name, &st) == 0 && ((unsigned)st.st_mode & _S_IFMT) == _S_IFDIR) return ceesafe_io_fail(EISDIR);
+        errno = EACCES;
+    }
+#endif
+    if (fd < 0) return ceesafe_io_errno();
+    if (mode == 6u) {
+        /* ADR 0078 §3: only a regular file is kept; the kind is the open file's (fstat), so nothing renamed into the
+           path between a check and the open is ever read. A directory is IsDirectory, anything else InvalidInput. */
+        int64_t kind = cee_fd_kind(fd);
+        if (kind != 1) {
+            int error = kind < 0 ? (int)-kind : kind == 2 ? EISDIR : EINVAL;
+#ifdef _WIN32
+            (void)_close(fd);
+#else
+            (void)close(fd);
+#endif
+            return ceesafe_io_fail(error);
+        }
+#ifndef _WIN32
+        int status = fcntl(fd, F_GETFL);
+        if (status < 0 || fcntl(fd, F_SETFL, status & ~O_NONBLOCK) < 0) {
+            int error = errno;
+            (void)close(fd);
+            return ceesafe_io_fail(error);
+        }
+#endif
+    }
+    return ceesafe_io_ok(fd);
 }
 
 cee_io_result ceesafe_file_remove(cee_str path) {
@@ -1627,6 +1685,35 @@ int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *sec
 #endif
 #endif
     return 0;
+}
+
+/* `f.modified()` (ADR 0078 §3): the open file's last modification time (fstat), so it describes the file that is
+   read, whatever the path names now. `file` is a File, whose first field is its descriptor. */
+int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t *nanoseconds) {
+    int fd = *(const int32_t *)file;
+    *seconds = 0;
+    *nanoseconds = 0;
+#ifdef _WIN32
+    struct _stat64 st;
+    if (_fstat64(fd, &st) != 0) return -(int64_t)errno;
+    *seconds = (int64_t)st.st_mtime;
+#else
+    struct stat st;
+    if (fstat(fd, &st) != 0) return -(int64_t)errno;
+#if defined(__APPLE__)
+    *seconds = (int64_t)st.st_mtimespec.tv_sec;
+    *nanoseconds = (uint32_t)st.st_mtimespec.tv_nsec;
+#else
+    *seconds = (int64_t)st.st_mtim.tv_sec;
+    *nanoseconds = (uint32_t)st.st_mtim.tv_nsec;
+#endif
+#endif
+    return 0;
+}
+
+/* `f.kind()` (ADR 0078 §3): 1 a regular file, 2 a directory, 3 anything else, or a negated errno. */
+int64_t ceesafe_host_file_kind(void const *file) {
+    return cee_fd_kind(*(const int32_t *)file);
 }
 
 /* `File.setPermissions(path, mode)` (ADR 0077): chmod. Windows has only the read-only attribute: it is set when the

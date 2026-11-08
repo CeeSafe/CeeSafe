@@ -1,0 +1,172 @@
+// ADR 0078 §3: `File.openRegular` opens only a regular file, never waiting on a FIFO; `f.kind()` and `f.modified()`
+// read the open file, so they still answer after its path is gone. Expected values come from the files the test makes,
+// and from `File.modified(path)` (stat, ADR 0077), the path-based oracle for the open file's time. Platform branches
+// print the same line: where the system has no answer of its own (the interpreter's `Unsupported` time, Windows,
+// which neither removes an open file nor has mkfifo), the step's line is printed as the step is skipped.
+
+fn line(ok: bool, what: StringView) {
+    Console.write(what);
+    Console.writeLine(if (ok) " ok" else " wrong");
+}
+
+fn kindName(k: PathKind) -> StringView => match (k) {
+    PathKind.File => "file",
+    PathKind.Directory => "directory",
+    PathKind.Other => "other",
+};
+
+fn errorName(r: Result<File, IoError>) -> StringView => match (r) {
+    Ok(_) => "opened",
+    Err(IoError.IsDirectory) => "IsDirectory",
+    Err(IoError.InvalidInput) => "InvalidInput",
+    Err(IoError.NotFound) => "NotFound",
+    Err(_) => "another error",
+};
+
+fn regular(dir: StringView) -> Result<void, IoError> {
+    var path = String.create();
+    path.append(dir)!;
+    path.append("/body")!;
+    {
+        var w = File.create(path.view())?;
+        w.write("twelve bytes".bytes())?;
+    }
+    var f = File.openRegular(path.view())?;
+    var buffer = [0u8; 32];
+    let n = f.read(mut buffer[..])?;
+    line(n == 12, "read");
+    Console.writeLine(kindName(f.kind()?));
+    match (f.modified()) {
+        Ok(t) => {
+            let byPath = File.modified(path.view())?;
+            line(t.seconds == byPath.seconds && t.nanoseconds == byPath.nanoseconds, "modified");
+        }
+        Err(IoError.Unsupported) => { line(true, "modified"); } // the interpreter
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    match (File.remove(path.view())) {
+        Ok() => {
+            // The path is gone; the open file is not. Natively both answer from the file. The interpreter reopens its
+            // files by path for each call (ADR 0075 §2.1's model), so it has nothing to answer from; its sign is the
+            // `Unsupported` time, and the step's lines are printed as the step is skipped.
+            match (f.modified()) {
+                Ok(_) => {
+                    Console.writeLine(kindName(f.kind()?));
+                    line(true, "removed, modified");
+                }
+                Err(IoError.Unsupported) => {
+                    Console.writeLine("file");
+                    line(true, "removed, modified");
+                }
+                Err(e) => { Console.writeLine(e.message()); }
+            }
+        }
+        Err(IoError.PermissionDenied) => {
+            // Windows: an open file cannot be removed; main removes it once it is closed.
+            Console.writeLine("file");
+            line(true, "removed, modified");
+        }
+        Err(e) => { return Err(e); }
+    }
+    return Ok();
+}
+
+fn others(dir: StringView) {
+    Console.writeLine(errorName(File.openRegular(dir)));
+    // Windows' NUL is a device in every directory; elsewhere it is a missing name, and /dev/null is the device. (On
+    // Windows, /dev/null is C:\dev\null, which may be a regular file.)
+    var device = File.openRegular("NUL");
+    match (device) {
+        Err(IoError.NotFound) => { device = File.openRegular("/dev/null"); }
+        _ => {}
+    }
+    Console.writeLine(errorName(device));
+    var missing = String.create();
+    missing.append(dir)!;
+    missing.append("/missing")!;
+    Console.writeLine(errorName(File.openRegular(missing.view())));
+}
+
+/// A FIFO with no writer: opening it for reading would wait for one; openRegular refuses it at once.
+fn fifo(dir: StringView) {
+    var path = String.create();
+    path.append(dir)!;
+    path.append("/fifo")!;
+    var arguments = Vector<StringView>.create();
+    arguments.push(path.view())!;
+    let made = match (Process.capture("mkfifo", arguments, null)) {
+        Ok(out) => out.status == 0,
+        Err(_) => false,
+    };
+    if (!made) {
+        Console.writeLine("InvalidInput"); // no mkfifo (Windows): no FIFO to open
+        return;
+    }
+    Console.writeLine(errorName(File.openRegular(path.view())));
+    File.remove(path.view())!;
+}
+
+/// What the async calls saw: the file's kind, whether its time was answered, and the directory's error.
+struct Seen {
+    kind: PathKind;
+    modified: bool;
+    directory: bool;
+}
+
+async fn later(path: StringView, dir: StringView) -> Result<Seen, AsyncError> {
+    {
+        var w = await AsyncFiles.create(path)?;
+        await AsyncFiles.write(mut w, "x".bytes())?;
+    }
+    var f = await AsyncFiles.openRegular(path)?;
+    let kind = await AsyncFiles.kind(mut f)?;
+    let modified = match (await AsyncFiles.modified(mut f)) {
+        Ok(_) => true,
+        Err(AsyncError.Io(IoError.Unsupported)) => true, // the interpreter
+        Err(_) => false,
+    };
+    let directory = match (await AsyncFiles.openRegular(dir)) {
+        Err(AsyncError.Io(IoError.IsDirectory)) => true,
+        _ => false,
+    };
+    return Ok(Seen { kind: kind, modified: modified, directory: directory });
+}
+
+fn main() {
+    let dir = Directory.temporary()!;
+    match (regular(dir.view())) {
+        Ok() => {}
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    others(dir.view());
+    fifo(dir.view());
+    var asyncPath = String.create();
+    asyncPath.append(dir.view())!;
+    asyncPath.append("/async")!;
+    match (Async.run(later(asyncPath.view(), dir.view()))) {
+        Ok(seen) => {
+            Console.writeLine(kindName(seen.kind));
+            line(seen.modified, "async modified");
+            Console.writeLine(if (seen.directory) "IsDirectory" else "another error");
+        }
+        Err(_) => { Console.writeLine("async failed"); }
+    }
+    let _ = File.remove(asyncPath.view());
+    var body = String.create();
+    body.append(dir.view())!;
+    body.append("/body")!;
+    let _ = File.remove(body.view()); // Windows: removed here, once closed
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: read ok
+// expect-stdout: file
+// expect-stdout: modified ok
+// expect-stdout: file
+// expect-stdout: removed, modified ok
+// expect-stdout: IsDirectory
+// expect-stdout: InvalidInput
+// expect-stdout: NotFound
+// expect-stdout: InvalidInput
+// expect-stdout: file
+// expect-stdout: async modified ok
+// expect-stdout: IsDirectory

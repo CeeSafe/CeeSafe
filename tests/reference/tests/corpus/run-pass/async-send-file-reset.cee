@@ -1,0 +1,108 @@
+// lib/std's sendFileAll to a connection the peer has reset (ADR 0078 §2): an error, never a signal. On Linux, before
+// ADR 0078, sendfile raised SIGPIPE and the process ended with status 141 (CeeSafe.Web's B19). Two ways in, each in
+// rounds whose sends must all fail, since the peer goes before the file is sent:
+// - "after a read": the server writes 64 KiB; the client reads one byte and closes with the rest unread, so its kernel
+//   answers with a reset; the server reads until the reset (Linux reports it once, then answers sends with EPIPE),
+//   then sends the file: sendfile fails with EPIPE.
+// - "mid-send": the client reads part of the file, then closes, while the server sends all of it. A sendfile that
+//   moved some pieces before the reset raises SIGPIPE for the next piece and returns the count of those before it
+//   (Linux 6.1, under epoll and io_uring, with a runtime that took the signal only after a failed call). Whether a
+//   send fails depends on how much the socket buffers hold, so the line counts the rounds finished: a signal ends the
+//   process before it.
+
+/// The client: reads `keep` bytes (the server's 64 KiB block or the file), then closes with the rest unread.
+async fn client(port: u16, keep: usize) -> Result<void, AsyncError> {
+    let conn = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    var buf = [0u8; 65536];
+    var got: usize = 0;
+    while (got < keep) {
+        let n = await conn.read(mut buf[..])?;
+        if (n == 0) {
+            return Ok();
+        }
+        got += n;
+    }
+    return Ok();
+}
+
+async fn round(
+    listener: borrow AsyncTcpListener,
+    port: u16,
+    path: StringView,
+    keep: usize,
+    afterRead: bool,
+    failed: borrow Arc<AtomicU64>,
+) -> Result<void, AsyncError> {
+    return await Async.tasks(4, AsyncError.Cancelled, async (set) => {
+        await set.spawn(async move () => await client(port, keep))?; // an error, not a hang, if its frame cannot be had
+        let conn = await listener.accept()?;
+        let file = match (await AsyncFiles.open(path)) {
+            Ok(f) => f,
+            Err(_) => { return Err(AsyncError.Cancelled); },
+        };
+        if (afterRead) {
+            var block = [120u8; 65536];
+            await conn.write(block[..])?;
+            // The client sends nothing, so a read ends only with the reset, or an end of stream.
+            var buf = [0u8; 16];
+            var reading = true;
+            while (reading) {
+                match (await conn.read(mut buf[..])) {
+                    Ok(0) => { reading = false; }
+                    Ok(_) => {}
+                    Err(_) => { reading = false; }
+                }
+            }
+        }
+        match (await conn.sendFileAll(file, 0, 8388608)) {
+            Ok() => {}
+            Err(_) => { let _ = failed.get().fetchAdd(1); }
+        }
+        return Ok();
+    });
+}
+
+async fn trial(path: StringView, afterRead: bool) -> Result<u64, AsyncError> {
+    let listener = match (AsyncTcpListener.bind("127.0.0.1", 0)) {
+        Ok(l) => l,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let port = match (listener.port()) {
+        Ok(p) => p,
+        Err(e) => { return Err(AsyncError.Io(e)); },
+    };
+    let failed = Arc<AtomicU64>.create(AtomicU64.create(0))!;
+    var keep: usize = if (afterRead) 1 else 65536;
+    let rounds: u64 = if (afterRead) 10 else 6;
+    var done: u64 = 0;
+    while (done < rounds) {
+        await round(listener, port, path, keep, afterRead, failed)?;
+        done += 1;
+        if (!afterRead) {
+            keep += 131072; // up to 0.7 MiB of the 8 MiB file
+        }
+    }
+    return Ok(if (afterRead) failed.get().load() else done);
+}
+
+fn main() {
+    let root = Directory.temporary()!;
+    var path = String.create();
+    path.append(root.view())!;
+    path.append("/sent")!;
+    {
+        let file = File.create(path.view())!; // closed before the sends open it, and before its removal
+        file.setLength(8388608)!;
+    }
+    for (afterRead in [true, false]) {
+        Console.write(if (afterRead) "after a read: failed sends " else "mid-send: rounds ");
+        match (Async.run(trial(path.view(), afterRead))) {
+            Ok(failures) => { Console.writeLine(failures); }
+            Err(_) => { Console.writeLine("error"); }
+        }
+    }
+    File.remove(path.view())!;
+    Directory.remove(root.view())!;
+}
+// expect-stdout: after a read: failed sends 10
+// expect-stdout: mid-send: rounds 6

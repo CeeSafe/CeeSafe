@@ -927,6 +927,31 @@ public struct AsyncFiles {
         }
     }
 
+    /// Opens `path` for reading if it is a regular file (ADR 0078 §3): never waits on a FIFO; `IsDirectory` for a
+    /// directory, `InvalidInput` for anything else that is not a regular file.
+    public async fn openRegular(path: StringView) -> Result<File, AsyncError> {
+        match (await Async.blocking(() => File.openRegular(path))) {
+            Ok(file) => { return Ok(file); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// The open file's last modification time, read from the file (ADR 0078 §3).
+    public async fn modified(file: borrow mut File) -> Result<UnixTime, AsyncError> {
+        match (await Async.blocking(() => file.modified())) {
+            Ok(t) => { return Ok(t); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
+    /// What the open file is, read from the file (ADR 0078 §3).
+    public async fn kind(file: borrow mut File) -> Result<PathKind, AsyncError> {
+        match (await Async.blocking(() => file.kind())) {
+            Ok(k) => { return Ok(k); }
+            Err(e) => { return Err(AsyncError.Io(e)); }
+        }
+    }
+
     /// Creates or truncates `path` for writing.
     public async fn create(path: StringView) -> Result<File, AsyncError> {
         match (await Async.blocking(() => File.create(path))) {

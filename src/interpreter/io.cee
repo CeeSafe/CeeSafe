@@ -452,12 +452,23 @@ fn ioBuiltin(
         let pointer = literal(it, text.bytes())?;
         return Ok(viewValue(pointer, text.bytes().length as u64));
     }
-    if (b == bfFileOpen() || b == bfFileCreate()) {
+    if (b == bfFileOpen() || b == bfFileCreate() || b == bfFileOpenRegular()) {
         requireHostIo(it)?;
         let pathValue = argument(it, c, n, frame, arguments, 0)?;
         let path = bytesOf(it, pathValue)?;
         let text = StringView.fromUtf8(path.view())!;
-        let opened = if (b == bfFileOpen()) File.open(text) else File.create(text);
+        if (b == bfFileOpenRegular()) {
+            // ADR 0078 §3: only a regular file opens. The interpreter checks the path first; nothing else runs between
+            // the check and the open, which the runtime makes from the open file instead.
+            match (File.kind(text)) {
+                Ok(Some(PathKind.File)) => {}
+                Ok(Some(PathKind.Directory)) => { return Ok(interpIoResult(c, resultType, 0, 21)?); } // EISDIR
+                Ok(Some(_)) => { return Ok(interpIoResult(c, resultType, 0, errnoInvalid())?); }
+                Ok(null) => { return Ok(interpIoResult(c, resultType, 0, 2)?); } // ENOENT
+                Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
+            }
+        }
+        let opened = if (b == bfFileCreate()) File.create(text) else File.open(text);
         var kept = String.create();
         kept.append(text)!;
         match (opened) {
@@ -904,6 +915,38 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         // ADR 0077: the stage-0 compiler's library can neither stat nor chmod, so the interpreter refuses both.
         return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
     }
+    if (sameText(name, "ceesafe_host_file_modified")) {
+        // ADR 0078 §3: as for ceesafe_host_modified, the stage-0 compiler's library cannot stat.
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
+    }
+    if (sameText(name, "ceesafe_host_file_kind")) {
+        // ADR 0078 §3: the kind of the open file's path. The interpreter's files are opened by path, and nothing
+        // renames them while it runs.
+        let fd = truncate<i32>(truncate<u32>(it.memory.loadBits(arguments[0].bits(0, 8)?, 4)?));
+        var path = String.create();
+        match (handleIndex(it, fd)) {
+            Some(k) => {
+                match (borrow it.runtime.handles[k]) {
+                    HostHandle.OpenFile(_, p) => { path.append(p.view())!; }
+                    HostHandle.PathFile(p, _) => { path.append(p.view())!; }
+                    HostHandle.Stream(_) => { return Ok(hostResult(3)); }
+                    _ => {}
+                }
+            }
+            null => {}
+        }
+        if (path.view().length == 0) {
+            return Ok(hostFailure(9)); // EBADF, 9 on every host
+        }
+        let kind: i64 = match (File.kind(path.view())) {
+            Ok(Some(PathKind.File)) => 1,
+            Ok(Some(PathKind.Directory)) => 2,
+            Ok(Some(_)) => 3,
+            Ok(null) => 0 - 2, // ENOENT: removed since it was opened
+            Err(e) => 0 - errnoOf(e),
+        };
+        return Ok(hostResult(kind));
+    }
     if (sameText(name, "ceesafe_host_space")) {
         // ADR 0077: the interpreter describes no volume of its own, so a run stays reproducible.
         return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
@@ -1129,6 +1172,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_modified")) {
         return "PsPP:l";
+    }
+    if (sameText(name, "ceesafe_host_file_modified")) {
+        return "PPP:l";
+    }
+    if (sameText(name, "ceesafe_host_file_kind")) {
+        return "P:l";
     }
     if (sameText(name, "ceesafe_host_set_permissions")) {
         return "Psu:l";

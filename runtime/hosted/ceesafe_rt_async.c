@@ -79,6 +79,7 @@
 #endif
 #endif
 #if defined(__linux__)
+#include <signal.h>       /* pthread_sigmask, sigtimedwait: sendfile's SIGPIPE (ADR 0078 §2) */
 #include <sys/sendfile.h> /* sendfile (ADR 0051) */
 #endif
 #include <unistd.h>
@@ -4147,6 +4148,37 @@ uint32_t ceesafe_async_msg_flags(void *op) {
 /* ---- Sending a file (ADR 0051): sendfile, or TransmitFile on IOCP; CEE_ASYNC_NO_SENDFILE where neither applies. ---- */
 
 #if !defined(_WIN32) && !defined(CEE_COSMOOS)
+#if defined(__linux__)
+/* One sendfile that never raises SIGPIPE (ADR 0078 §2). sendfile(2) has no MSG_NOSIGNAL, so a send to a connection the
+   peer has reset (Linux reports the reset once, to whichever call comes first, then EPIPE) would end the process. The
+   signal can come with a partial count too: sendfile moves the file in pieces, and a piece after the reset raises
+   SIGPIPE while the call returns the bytes of the pieces before it. SIGPIPE from a send is directed at the calling
+   thread, so it is blocked on this thread for the call; if one became pending during the call, whatever the call
+   returned, it is taken with a zero-timeout sigtimedwait, and the thread's mask is restored. The process's disposition
+   of SIGPIPE is never changed. A thread that already blocks SIGPIPE keeps whatever the call leaves pending, as it
+   would after any write of its own. */
+static ssize_t cee_sendfile_quiet(int socket, int file, off_t *at, size_t count) {
+    sigset_t pipe, old, pending;
+    (void)sigemptyset(&pipe);
+    (void)sigaddset(&pipe, SIGPIPE);
+    if (pthread_sigmask(SIG_BLOCK, &pipe, &old) != 0) {
+        return sendfile(socket, file, at, count);
+    }
+    int blocked = sigismember(&old, SIGPIPE) == 1;
+    int before = sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1;
+    ssize_t n = sendfile(socket, file, at, count);
+    int error = errno;
+    if (!blocked && !before && sigpending(&pending) == 0 && sigismember(&pending, SIGPIPE) == 1) {
+        struct timespec zero = { 0, 0 };
+        while (sigtimedwait(&pipe, NULL, &zero) < 0 && errno == EINTR) {
+        }
+    }
+    (void)pthread_sigmask(SIG_SETMASK, &old, NULL);
+    errno = error;
+    return n;
+}
+#endif
+
 /* A readiness step: one sendfile, or the wait for writability. */
 static int64_t cee_ready_sendfile(int32_t socket, int32_t file, uint64_t offset, uint64_t length) {
 #if defined(__linux__)
@@ -4154,7 +4186,7 @@ static int64_t cee_ready_sendfile(int32_t socket, int32_t file, uint64_t offset,
     off_t at = (off_t)offset;
     ssize_t n;
     do {
-        n = sendfile(socket, file, &at, count);
+        n = cee_sendfile_quiet(socket, file, &at, count);
     } while (n < 0 && errno == EINTR);
     if (n < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {

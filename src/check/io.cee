@@ -48,6 +48,9 @@ fn checkResourceFunction(
     } else if (owner == builtinFile() && sameText(text, "openAppend")) {
         function = bfFileOpenAppend(); // ADR 0077
         ok = c.types.file;
+    } else if (owner == builtinFile() && sameText(text, "openRegular")) {
+        function = bfFileOpenRegular(); // ADR 0078 §3
+        ok = c.types.file;
     } else if (owner == builtinFile() && sameText(text, "remove")) {
         function = bfFileRemove();
         ok = c.types.voidType;
@@ -120,6 +123,9 @@ fn resourceUsage(function: u32) -> StringView {
     if (function == bfFileOpenAppend()) {
         return "File.openAppend(path)";
     }
+    if (function == bfFileOpenRegular()) {
+        return "File.openRegular(path)";
+    }
     if (function == bfTcpListen()) {
         return "TcpListener.bind(address, port)";
     }
@@ -158,6 +164,9 @@ fn checkResourceMethod(
     var textBytes = Vector<u8>.create();
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
+    if (isFile && (sameText(text, "modified") || sameText(text, "kind")) && !c.freestanding) {
+        return checkFileMetadata(c, member, arguments, resource, targetSpan, span);
+    }
     var function = none();
     var arity: u32 = 0;
     var mutable = true;
@@ -283,6 +292,31 @@ fn checkResourceMethod(
     }
     let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
+}
+
+/// `f.modified()` and `f.kind()` (ADR 0078 §3): lib/std's FileMetadata function of that name, called with `f` borrowed.
+fn checkFileMetadata(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    resource: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let symbol = c.front.ast.idents[member as usize].symbol;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "FileMetadata", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this file method", "S5")?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let receiver = borrowReceiver(c, resource, false, targetSpan)?;
+    if (c.isBottom(receiver)) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return checkUserCallWith(c, function, arguments, span, receiver);
 }
 
 /// TcpStream's option setters (ADR 0044 §3.6), or none.

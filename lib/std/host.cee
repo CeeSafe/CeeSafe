@@ -30,6 +30,10 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_host_set_permissions(path: *u8, length: u64, mode: u32) -> i64;
     @effects(sleep)
+    fn ceesafe_host_file_modified(file: *void, seconds: *mut i64, nanoseconds: *mut u32) -> i64;
+    @effects(sleep)
+    fn ceesafe_host_file_kind(file: *void) -> i64;
+    @effects(sleep)
     fn ceesafe_host_rename(from: *u8, fromLength: u64, to: *u8, toLength: u64) -> i64;
     @effects(sleep, alloc)
     fn ceesafe_host_dir_open(path: *u8, length: u64, error: *mut i32) -> *mut void;
@@ -459,6 +463,42 @@ public struct HostServices {
             19 => IoError.HostNotFound,
             20 => IoError.StorageFull,
             _ => IoError.Other(error),
+        };
+    }
+}
+
+/// An open file's metadata (ADR 0078 §3), read from the file (`fstat`), not its path: it describes the file that is
+/// read, even if another has been renamed into its place since it was opened. `f.modified()` and `f.kind()` are the
+/// checker's names for FileMetadata.modified(f) and FileMetadata.kind(f).
+public struct FileMetadata {
+    /// `f.modified()`: when the open file was last modified, with nanoseconds where the system keeps them. The
+    /// interpreter answers `Unsupported`, as for `File.modified(path)`.
+    /// Safety: the runtime reads the file's descriptor and writes the two values during the call only.
+    public fn modified(file: borrow File) -> Result<UnixTime, IoError> {
+        var seconds: i64 = 0;
+        var nanoseconds: u32 = 0;
+        let result = unsafe {
+            ceesafe_host_file_modified(
+                file as *File as *void,
+                borrow mut seconds as *mut i64,
+                borrow mut nanoseconds as *mut u32,
+            )
+        };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(UnixTime { seconds: seconds, nanoseconds: nanoseconds });
+    }
+
+    /// `f.kind()`: what the open file is. A directory opened for reading is `Directory`; a device, FIFO or socket is
+    /// `Other`.
+    /// Safety: the runtime reads the file's descriptor during the call only.
+    public fn kind(file: borrow File) -> Result<PathKind, IoError> {
+        let kind = unsafe { ceesafe_host_file_kind(file as *File as *void) };
+        return match (kind) {
+            1 => Ok(PathKind.File),
+            2 => Ok(PathKind.Directory),
+            _ => if (kind < 0) Err(HostServices.hostError(kind)) else Ok(PathKind.Other),
         };
     }
 }

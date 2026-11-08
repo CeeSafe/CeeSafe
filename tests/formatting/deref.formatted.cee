@@ -1,0 +1,13 @@
+// `*r` (ADR 0075 §2.14) is written with the `*` against its operand: in an expression, and as the target of an
+// assignment, where the parser keeps `r` as the target.
+
+/// Safety: `total` and `p` are live.
+unsafe fn add(total: *mut u64, p: *u64) -> u64 {
+    *total = 1;
+    *total += *p;
+    *total -= 1;
+    let x = *p + *p * 2;
+    return x;
+}
+
+fn main() {}

@@ -892,6 +892,11 @@ fn fmtWalkStmt(l: borrow mut FmtLayout, ast: borrow Ast, s: u32) -> Result<void,
             }
         }
         StmtNode.Assign(target, _, value) => {
+            // `*r = v` (ADR 0075 §2.14): the parser keeps `r` as the target, so the `*` before it is glued here.
+            let star = stmtFirst(l, ast, s);
+            if (star < exprFirst(l, ast, target) && sameKind(l.kindAt(star), TokenKind.Star)) {
+                l.glueAfterAt(star);
+            }
             fmtWalkExpr(l, ast, target)?;
             let first = exprFirst(l, ast, value);
             let last = exprLast(l, ast, value);
@@ -1052,7 +1057,12 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
         ExprNode.Block(block) => { fmtWalkBlock(l, ast, block)?; }
         ExprNode.Borrow(_, operand) => { fmtWalkExpr(l, ast, operand)?; }
         ExprNode.Move(operand) => { fmtWalkExpr(l, ast, operand)?; }
-        ExprNode.Deref(operand) => { fmtWalkExpr(l, ast, operand)?; }
+        ExprNode.Deref(operand) => {
+            // `*x` (ADR 0075 §2.14): the operator is glued to its operand, as a unary one is.
+            let first = exprFirst(l, ast, e);
+            l.glueAfterAt(first);
+            fmtWalkExpr(l, ast, operand)?;
+        }
         ExprNode.MutArg(operand) => { fmtWalkExpr(l, ast, operand)?; }
         ExprNode.StructLiteral(typeName, fields, typeArguments) => {
             let nameToken = identLast(l, ast, typeName);

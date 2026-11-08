@@ -510,7 +510,8 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             // `const NAME: T;` (ADR 0080 §3.1): C's constant, converted to the type CeeSafe reads.
             initializer.push('(')?;
             appendCTypeName(c, mut initializer, item.typ)?;
-            appendText(mut initializer, ")(")?;
+            // A string macro's pointer through uintptr_t, as for pointer members (§31.3): its C type may be const.
+            appendText(mut initializer, if (c.types.is(item.typ, TypeKind.RawPointer)) ")(uintptr_t)(" else ")(")?;
             appendBytes(mut initializer, c.hir.textOf(item.cInitializer))?;
             initializer.push(')')?;
         } else if (staticIsCAtomic(c, truncate<u32>(k))) {

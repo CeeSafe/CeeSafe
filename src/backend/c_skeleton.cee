@@ -1299,6 +1299,16 @@ fn appendEnumConstructor(
     return appendBytes(out, variantName);
 }
 
+/// A configured member's condition (ADR 0080 §3.3), or empty.
+fn fieldCfgText(c: borrow Checker, field: u32) -> Slice<u8> {
+    for (k in 0..c.fieldCfgs.length) {
+        if (c.fieldCfgs[k].field == field) {
+            return c.fieldCfgs[k].text.view();
+        }
+    }
+    return "".bytes();
+}
+
 /// Every declared field of an imported C type has exactly its declared type and size in the header
 /// (EmitImportedFieldChecks, §31.3), and every imported C enum is the integer it is declared as (ADR 0079, §31.6).
 fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
@@ -1381,6 +1391,13 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
         let file = c.types.structs[s as usize].file;
         for (f in c.types.structs[s as usize].fields.view()) {
             let field = c.types.fields[f as usize];
+            let cfgText = fieldCfgText(c, f);
+            if (cfgText.length > 0) {
+                // A configured member (ADR 0080 §3.3): only some builds' struct has it.
+                e.t("#if ")?;
+                e.b(cfgText)?;
+                e.emit()?;
+            }
             var member = Vector<u8>.create();
             appendText(mut member, "(((")?;
             appendBytes(mut member, spelling)?;
@@ -1454,6 +1471,9 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
                 appendCMessageLiteral(mut e.buf, layoutMessage.view())?;
                 e.t(");")?;
                 e.emit()?;
+                if (cfgText.length > 0) {
+                    e.line("#endif")?;
+                }
                 continue;
             }
             var cType = Vector<u8>.create();
@@ -1499,6 +1519,9 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
                 appendCMessageLiteral(mut e.buf, sizeMessage.view())?;
                 e.t(");")?;
                 e.emit()?;
+            }
+            if (cfgText.length > 0) {
+                e.line("#endif")?;
             }
         }
     }

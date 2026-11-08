@@ -43,6 +43,11 @@ struct Structurer {
     root: u32;                        // the tree's list
 }
 
+/// The first byte of an if node's text that is a `cfg` condition (ADR 0080 §3.3), which no C expression starts with.
+fn cfgMark() -> u8 => 1;
+
+fn isCfgText(text: Slice<u8>) -> bool => text.length > 0 && text[0] == cfgMark();
+
 fn newList(s: borrow mut Structurer) -> Result<u32, AllocError> {
     s.lists.push(Vector<u32>.create())?;
     return Ok(truncate<u32>(s.lists.length - 1));
@@ -312,7 +317,14 @@ fn bodyOf(
             appendList(s, list, branch)?;
         }
         NirTerminator.Branch(condition, then, otherwise) => {
-            let operand = operandText(e, c, n, sources, f, condition)?;
+            var operand = operandText(e, c, n, sources, f, condition)?;
+            let configured = borrow n.functions[f as usize].blocks[block as usize].branchCfg;
+            if (configured.length > 0) {
+                // `if (cfg("X"))` (ADR 0080 §3.3): the preprocessor's `#if X`, marked for printTree.
+                operand = Vector<u8>.create();
+                operand.push(cfgMark())?;
+                appendBytes(mut operand, configured.view())?;
+            }
             let text = newText(s, operand.view())?;
             let thenListIndex = blockIndexIn(s.flow, then);
             let thenList = branchTo(e, c, n, sources, s, block, thenListIndex, span.start, span.end)?;
@@ -795,6 +807,20 @@ fn printTree(
             appendIndent(mut e.buf, depth)?;
             e.t(if (node.kind == nodeBreak()) "break;" else "continue;")?;
             e.emit()?;
+        } else if (node.kind == nodeIf() && isCfgText(s.texts[node.text as usize].view())) {
+            // `if (cfg("X"))` (ADR 0080 §3.3): only the builds where X holds compile the then-part.
+            mapTo(e, c, n, sources, node.start, node.end);
+            e.t("#if ")?;
+            e.b(s.texts[node.text as usize].view()[1..])?;
+            e.emitNoCode()?;
+            printTree(e, c, n, sources, s, node.first, depth)?;
+            if (s.lists[node.second as usize].length > 0) {
+                e.t("#else")?;
+                e.emitNoCode()?;
+                printTree(e, c, n, sources, s, node.second, depth)?;
+            }
+            e.t("#endif")?;
+            e.emitNoCode()?;
         } else if (node.kind == nodeIf()) {
             mapTo(e, c, n, sources, node.start, node.end);
             appendIndent(mut e.buf, depth)?;
@@ -806,7 +832,8 @@ fn printTree(
             loop {
                 printTree(e, c, n, sources, s, current.first, depth + 1)?;
                 let otherwise = borrow s.lists[current.second as usize];
-                if (otherwise.length == 1 && s.nodes[otherwise[0] as usize].kind == nodeIf()) {
+                if (otherwise.length == 1 && s.nodes[otherwise[0] as usize].kind == nodeIf() &&
+                    !isCfgText(s.texts[s.nodes[otherwise[0] as usize].text as usize].view())) {
                     let nested = s.nodes[otherwise[0] as usize];
                     mapTo(e, c, n, sources, nested.start, nested.end);
                     appendIndent(mut e.buf, depth)?;

@@ -103,7 +103,7 @@ In an `extern "C"` block:
   `cfg` with a string literal. It is emitted as `#if NAME` … `#else` … `#endif`. Both blocks are checked. It is a
   statement only, not an expression, and `cfg` elsewhere is N0290.
 - **The rule that makes one check enough**: a configured item may be used only where its condition holds: inside a
-  function or static with the same `@cfg`, or inside a `cfg` block of that condition (N0349, new). A configured field
+  function or static with the same `@cfg`, or inside a `cfg` block of that condition (N0350, new). A configured field
   is used under the same rule. So every build's C compiles: what one build lacks is used only inside its `#if`.
 - The interpreter runs every `cfg` as false unless `--cfg NAME` is given, and refuses a call to an extern function as
   it does today.
@@ -149,7 +149,7 @@ The CeeSafe rule (CosmoOS's roadmap 2.0) counts these as the named C floor.
 ## 4. Consequences
 
 - Of the 40 SA7 floors, all but blk_floor.c's export table can go; the C left is headers and module export lines.
-- New diagnostics: N0349 (a configured item used where its condition does not hold). N0290–N0294 and N0337–N0338
+- New diagnostics: N0350 (a configured item used where its condition does not hold). N0290–N0294 and N0337–N0338
   cover the rest.
 - `ceesafe_exports.h` gains data declarations and `#if` lines; generated C gains `_Static_assert`s.
 - The compiler's own sources must still build with 0.8.0, the seed chain's last compiler (docs/release.md), so none of
@@ -177,3 +177,31 @@ Spec first (grammar.md, type-system.md, c-backend.md), then in this order, each 
 halves, check-fail for every new diagnostic) and the contract suite: §3.1 constants; §3.2 exported and imported
 statics; §3.5's small items; §3.4 C locals; §3.3 configured code (an ffi test built twice, the macro set and unset);
 the guide; a release. Then CosmoOS: the pin, §5's port-side work, and the floors with §3's features.
+
+## 8. Implementation notes (2026-11-08, ceesafec 0.24.0)
+
+What the release has, and where it differs from §3 (each a narrowing; the floors need nothing more):
+
+- §3.1 as decided. A `const` C checks is an ordinary constant, so it is usable wherever one is, but an array length is
+  still a literal (§16). The C assertion is emitted once per program, beside the imported fields' (§31.3). A
+  zero-parameter `@constant` extern stays the function-like macro form; `const NAME: T;` is the object-like one.
+- §3.2 as decided, except that an exported static may not be an array yet (N0216): C's `T name[N]` is not CeeSafe's
+  array struct. No floor exports an array (ramfs's operation tables are CeeSafe's alone). An imported or `const`
+  static's address is taken through `uintptr_t` to CeeSafe's pointer type, as for a C array member.
+- §3.3, narrowed to what C needs: `@cfg` (and `@cfg("!X")`) on exports, on extern functions and on imported fields,
+  and `cfg` blocks. `@cfg` on other functions and on statics, and a pair of functions sharing a name, are not needed: a
+  stand-in is the export's `else` block, and "A and B" is a nested block. N0350 (not N0349, which task sets have)
+  applies to configured C functions and fields; an export's own `@cfg` does not open its body to them, since ADR
+  0043 compiles that body in every build. `cfg` as a value is N0200, an unknown function, not N0290. The structurer
+  emits the blocks as `#if`; a block left unstructured is wrapped in `#if` with its label kept. The interpreter takes
+  every macro as 0.
+- §3.4 as decided: `var s: T;` zero-fills with `s = (T){0};` where it is declared (no `memset`, so no library is
+  needed). A closure may borrow one as any local; a move of it, a moving capture included, is the in-place checker's
+  N0294.
+- §3.5: `CChar`, `@cname`, pointer arrays, `AtomicU8` (load, store, swap, compareExchange and the ordered load and
+  store: what C's byte flags need) and `CLong`/`CULong` (asserted `sizeof(long)` where used) as decided. **An
+  imported struct by value as a parameter is not implemented.** Its one use, `cfs_set_extent`, is an internal
+  cosmofs function that only a C host test calls with a struct; CosmoOS's port changes it to take a pointer.
+- Corpus: ffi `c-data`, ffi `cfg-code`, check-fail `c-data-errors` and `cfg-code-errors`. Two expectations changed
+  where this ADR allows what they refused (`ffi-declarations.cee:17`, a `CChar` parameter; `c-arrays.cee:22`, an
+  array of pointers), and three HIR snapshots' closure ids moved with lib/core.

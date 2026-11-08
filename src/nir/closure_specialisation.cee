@@ -354,7 +354,14 @@ fn rewriteFunction(
             successors.push(target)?;
         }
         blocks.push(
-            NirBlock { id: block.id, statements: statements, terminator: block.terminator, successors: successors },
+            NirBlock {
+                id: block.id,
+                statements: statements,
+                terminator: block.terminator,
+                successors: successors,
+                cfg: copyBytes(block.cfg.view())?,
+                branchCfg: copyBytes(block.branchCfg.view())?,
+            },
         )?;
     }
     var bound = Vector<u64>.create();

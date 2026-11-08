@@ -18,6 +18,7 @@
 - [enum Ordering](#enum-ordering)
 - [struct AtomicU64](#struct-atomicu64)
 - [struct AtomicU32](#struct-atomicu32)
+- [struct AtomicU8](#struct-atomicu8)
 - [struct AtomicUSize](#struct-atomicusize)
 - [struct AtomicBool](#struct-atomicbool)
 - [struct ByteOrder](#struct-byteorder)
@@ -712,6 +713,84 @@ public fn fetchAndWith(borrow this, value: u32, order: Ordering) -> u32
 ```
 
 fetchAnd, with an ordering.
+Safety: as load.
+
+## struct AtomicU8
+
+```ceesafe
+@threadSafe
+@noncopy
+public struct AtomicU8
+```
+
+A u8 that threads may read and change at once, as AtomicU32: for a byte member that C reads and writes atomically
+(ADR 0080 §3.5), such as a process's flag.
+
+### AtomicU8.create
+
+```ceesafe
+public fn create(value: u8) -> AtomicU8
+```
+
+A new atomic holding `value`.
+
+### AtomicU8.constant
+
+```ceesafe
+@constant
+public fn constant(value: u8) -> AtomicU8
+```
+
+The same as create, in a static's initialiser (type-system.md §39.4).
+
+### AtomicU8.load
+
+```ceesafe
+public fn load(borrow this) -> u8
+```
+
+Safety: as AtomicU64.load.
+
+### AtomicU8.store
+
+```ceesafe
+public fn store(borrow this, value: u8)
+```
+
+Safety: as AtomicU64.load.
+
+### AtomicU8.swap
+
+```ceesafe
+public fn swap(borrow this, value: u8) -> u8
+```
+
+Safety: as AtomicU64.load.
+
+### AtomicU8.compareExchange
+
+```ceesafe
+public fn compareExchange(borrow this, expected: u8, desired: u8) -> Result<u8, u8>
+```
+
+Safety: as AtomicU64.load.
+
+### AtomicU8.loadWith
+
+```ceesafe
+public fn loadWith(borrow this, order: LoadOrdering) -> u8
+```
+
+load, with an ordering (ADR 0021).
+Safety: as load.
+
+### AtomicU8.storeWith
+
+```ceesafe
+public fn storeWith(borrow this, value: u8, order: StoreOrdering)
+```
+
+store, with an ordering.
 Safety: as load.
 
 ## struct AtomicUSize

@@ -57,6 +57,17 @@ fn resolveField(c: borrow mut Checker, typ: u32, name: u32) -> Result<u32, Alloc
     let field = findField(c, definition, ident.symbol);
     if (field != none()) {
         checkPrivate(c, definition, field, span)?;
+        for (k in 0..c.fieldCfgs.length) {
+            if (c.fieldCfgs[k].field == field) {
+                // A configured member (ADR 0080 §3.3): only where its condition holds.
+                let condition = copyBytes(c.fieldCfgs[k].text.view())?;
+                var what = Vector<u8>.create();
+                appendText(mut what, "the field '")?;
+                appendBytes(mut what, c.name(ident.symbol))?;
+                appendText(mut what, "'")?;
+                checkCfgUse(c, condition.view(), what.view(), span)?;
+            }
+        }
         return Ok(field);
     }
     var message = Vector<u8>.create();

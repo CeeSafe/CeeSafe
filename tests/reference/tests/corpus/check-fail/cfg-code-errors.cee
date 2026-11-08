@@ -1,0 +1,30 @@
+// Configured code (ADR 0080 §3.3): a configured member or C function is used only inside a `cfg` block of its
+// condition (N0350); the condition names a C macro (N0292); `cfg` is a statement's condition, not a value (N0200).
+@header("t.h")
+extern "C" {
+    struct engine {
+        @cfg("CFG_ON")
+        armed: u32;
+    }
+    @cfg("CFG_ON")
+    fn on_only(x: i32) -> i32;
+    @cfg("not a macro") // error[N0292]
+    fn other();
+}
+
+/// Safety: e is live.
+unsafe fn uses(e: *mut engine) -> i32 {
+    let r = Ptr.toBorrowMut(e);
+    r.armed = 1; // error[N0350]
+    if (cfg("!CFG_ON")) {
+        let x = on_only(1); // error[N0350]
+    }
+    if (cfg("CFG_ON")) {
+        r.armed = 2;
+        let y = on_only(2);
+    }
+    let z = if (cfg("CFG_ON")) 1 else 2; // error[N0200]
+    return 0;
+}
+
+fn main() {}

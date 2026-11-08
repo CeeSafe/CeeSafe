@@ -149,7 +149,14 @@ fn asyncInstanceOf(
             successors.push(t)?;
         }
         blocks.push(
-            NirBlock { id: block.id, statements: statements, terminator: block.terminator, successors: successors },
+            NirBlock {
+                id: block.id,
+                statements: statements,
+                terminator: block.terminator,
+                successors: successors,
+                cfg: copyBytes(block.cfg.view())?,
+                branchCfg: copyBytes(block.branchCfg.view())?,
+            },
         )?;
     }
     let parameterCount = source.parameterCount;

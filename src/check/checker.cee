@@ -23,6 +23,12 @@ enum Entity {
 }
 
 /// An imported C enum's declaration (ADR 0079): its type, and where it is declared, for the C's layout assertion.
+/// A field of an imported struct that some builds' C struct lacks (ADR 0080 §3.3): `@cfg("X")`.
+struct FieldCfg {
+    field: u32;
+    text: Vector<u8>;
+}
+
 struct ImportedEnum {
     typ: u32;
     file: u32;
@@ -166,6 +172,8 @@ struct Checker {
     layoutUses: Vector<LayoutUse>;                   // struct types used by value before members are known
     headers: Vector<Vector<u8>>;                     // `@header`s of extern blocks, each once, in order (§31.3)
     importedEnums: Vector<ImportedEnum>;             // in declaration order (ADR 0079)
+    cfgStack: Vector<Vector<u8>>;                    // the `cfg` conditions holding where the checker is (ADR 0080 §3.3)
+    fieldCfgs: Vector<FieldCfg>;                     // configured fields of imported structs (ADR 0080 §3.3)
     builtinUses: Vector<u8>;                         // per built-in item (AllocError, IoError, SystemHeap, FailingAllocator): 1 used, 2 by a library
     programStructs: Vector<u32>;                     // HirProgram.Structs: the emitted struct, environment and enum types, in order
     dynSignatures: Vector<DynSignature>;             // HirProgram.DynSignatures

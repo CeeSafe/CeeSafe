@@ -1,0 +1,48 @@
+// Code that exists only in some builds (ADR 0080 §3.3): `if (cfg("X"))` is C's `#if X`, so a member or a C function
+// that only some builds have is used where it exists; `@cfg` on them puts their checks and prototypes there too. Both
+// blocks are checked in every build. CFG_ON is 1 and CFG_OFF 0 (cfg-code.types.h).
+
+@header("cfg-code.types.h")
+extern "C" {
+    struct engine {
+        blocks: u32;
+        @cfg("CFG_ON")
+        armed: u32;
+        @cfg("CFG_OFF")
+        never: u32;
+    }
+    fn the_engine() -> *mut engine;
+    @cfg("CFG_ON")
+    fn on_only(x: i32) -> i32;
+    @cfg("CFG_OFF")
+    fn off_only(x: i32) -> i32;
+}
+
+/// Safety: the_engine returns C's engine.
+fn run() -> i32 {
+    let engine = unsafe { Ptr.toBorrowMut(the_engine()) };
+    var r = truncate<i32>(engine.blocks);
+    if (cfg("CFG_ON")) {
+        engine.armed = 7;
+        r += unsafe { on_only(truncate<i32>(engine.armed)) };
+        if (cfg("!CFG_OFF")) {
+            r += 1;
+        }
+    } else {
+        r = -1;
+    }
+    if (cfg("CFG_OFF")) {
+        engine.never = 1;
+        r += unsafe { off_only(1) };
+    } else if (cfg("!CFG_ON")) {
+        r = -2;
+    } else {
+        r += 1000;
+    }
+    return r;
+}
+
+fn main() {
+    Console.writeLine(run());
+}
+// expect-stdout: 1711

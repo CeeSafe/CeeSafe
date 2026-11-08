@@ -301,5 +301,6 @@ error, and the command fails (ADR 0073 §2.4).
 
 | Code | Meaning | Example |
 |---|---|---|
+| N0350 | A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg("X")` used outside `if (cfg("X")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3) | `fields.debugOnly` outside `if (cfg("CONFIG_DEBUG"))` |
 | N0400 | A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\{` means the brace and does not warn (`grammar.md` §1.6) | `let x = 3; Console.writeLine("x = {x}");` |
 | N0401 | `name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10) | `fn f(tls: Conn) { tls.connect(); }` with a dependency `tls` that has `public fn connect` |

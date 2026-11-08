@@ -2441,9 +2441,22 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   its line in `ceesafe_exports.h` inside `#if NAME` … `#endif`: the symbol exists in the builds where the C macro `NAME`
   is non-zero, as C's `#if NAME` around a definition would have it, and a header may define a stub of that name in the
   others. The CeeSafe function is compiled and checked in every build, and CeeSafe code may call it in any. `NAME` is
-  the macro's name as a string, a valid C identifier (N0292); `@cfg` without it, or on anything but an `@export`
-  function, is N0290. Code that differs between builds inside a function reads the switch through a C constant macro
-  instead (§39.4): `static DEBUG: bool = CONFIG_DEBUG_ON();`, which the C compiler folds.
+  the macro's name as a string, a valid C identifier (N0292), or `"!NAME"` for the builds where it is zero (ADR 0080);
+  `@cfg` without it is N0290.
+- **Configured code** (ADR 0080 §3.3). What only some builds' C has is used only where it exists:
+  - `@cfg("NAME")` (or `"!NAME"`) on an `extern "C"` function, for one a header declares only in some builds: its
+    prototype and wrapper are emitted inside `#if NAME`. On a field of an imported struct or union, for a member only
+    some builds' struct has: its `_Generic` and `sizeof` checks (§31.3) are inside `#if NAME`.
+  - `if (cfg("NAME")) { … } else { … }`, whose condition is the call `cfg` of one string literal (`"NAME"` or
+    `"!NAME"`, a C identifier: N0292) while nothing the program declares is named `cfg`, is C's `#if NAME` … `#else` …
+    `#endif`: the blocks are compiled in the builds where the condition holds, or does not. `else if (cfg(…))` chains
+    and `cfg` blocks nest. It is a statement: `cfg` as a value (`let x = if (cfg("X")) 1 else 2;`) is an unknown
+    function (N0200). Both blocks are checked in every build, as one program.
+  - A configured C function or field may be used only inside a `cfg` block of its own condition (N0350), so every
+    build's C compiles. A configured export is not configured CeeSafe code: its CeeSafe function exists in every build.
+  - The interpreter takes every macro as 0: `cfg("NAME")` is false, `cfg("!NAME")` true.
+  - A switch read at run time through a C constant macro (§39.4, `static DEBUG: bool = CONFIG_DEBUG_ON();`) remains
+    for code every build can compile.
 - **`callerAddress()`** (ADR 0030), valid only in an `@export` function's own body (N0340; not in a closure inside it),
   is a `usize`: the address the exported symbol's call returns to, as C's `__builtin_return_address(0)` in the
   export's wrapper (MSVC: `_ReturnAddress()`), passed to the body as a hidden argument so that inlining cannot change
@@ -2710,7 +2723,7 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   is `uint32_t`, `usize` is `size_t`, `*CChar` is `const char *`, `*mut T` is `T *`, `[u8; 16]` is `uint8_t[16]`).
   This is checked when the C is compiled (§31.3), not by ceesafec. A C `char`, `signed char` or `unsigned char`
   member is declared `u8`, and an array of them `[u8; N]` (ADR 0034): C lets any object be read and written as
-  bytes, and a byte's value does not depend on `char`'s signedness. `CChar` itself stays a pointee only (§28.3). The
+  bytes, and a byte's value does not depend on `char`'s signedness. (A `char` parameter or result is `CChar`, §28.3.) The
   address of a `u8` member, when it is borrowed, converts to `uint8_t *` in the C.
 - **Unions** (ADR 0041 §3.2). Inside an imported struct, `union { a: T; b: U; }` declares the members of a C11
   anonymous union member, reached as `r.a` and `r.b` (C's `p->a`). In the block, `union name { … }` declares an
@@ -2998,6 +3011,11 @@ fn make(name: *CChar) -> Result<Box<SpinLock<u64>, KernelHeap>, AllocError> =>
 - The only way to make one is a **struct literal given directly to `Box.create` or `Box.createIn`**, or
   nested as a field of such a literal. Fields of imported type are left out of the literal and are
   **zero-filled** (C's `{0}`). Writing one is N0294: CeeSafe has no values of imported types.
+- **C locals** (ADR 0080 §3.4). `var s: T;`, with no initialiser, of an imported C type or of a C-laid-out struct, is
+  C's zero-filled object on the stack (`s = (T){0};` where it is declared), at a fixed place for its scope. It is
+  borrowed, its fields used and its address taken (`borrow mut s as *mut T`) as any place; it is never moved, copied
+  or assigned whole (N0294, as above), and not in an `async` function, whose frame moves (N0294). The interpreter
+  cannot make one (a fault, as for any C state, §33.4).
 - A C-laid-out value lives in its box until the box is dropped. Its contents are borrowed (`borrow`,
   `borrow mut`, through `Ptr.toBorrow` of a pointer to them) but never moved out. Dropping the box runs the
   contents' drop glue in place, then frees them.

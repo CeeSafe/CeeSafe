@@ -183,6 +183,8 @@ struct HirLocal {
     mutable: bool;
     parameter: bool;
     isUsing: bool;
+    /// `var s: T;` of a C type (ADR 0080 §3.4): C's zeroed object on the stack, never moved.
+    cLocal: bool;
     start: u32;
     end: u32;
 }
@@ -253,6 +255,12 @@ struct HirConstant {
     cExpression: Range;
 }
 
+/// `if (cfg("X"))` (ADR 0080 §3.3): the condition's HIR expression and its macro text (`X` or `!X`, Hir.text).
+struct HirCfg {
+    expr: u32;
+    text: Range;
+}
+
 struct HirStatic {
     name: u32;
     typ: u32;
@@ -290,6 +298,8 @@ struct HirProgram {
     registeredFunctions: u32; // the reference's _functions.Count: ids count registered functions only
     constants: Vector<HirConstant>;
     statics: Vector<HirStatic>;
+    /// The conditions of `if (cfg("X"))` statements (ADR 0080 §3.3): each a `false` HIR condition and its macro text.
+    cfgConditions: Vector<HirCfg>;
 
     fn create() -> HirProgram => HirProgram {
         lists: Vector<u32>.create(),
@@ -311,6 +321,7 @@ struct HirProgram {
         registeredFunctions: 0,
         constants: Vector<HirConstant>.create(),
         statics: Vector<HirStatic>.create(),
+        cfgConditions: Vector<HirCfg>.create(),
     };
 
     fn list(borrow mut this, ids: Slice<u32>) -> Result<Range, AllocError> {
@@ -370,6 +381,7 @@ struct HirProgram {
             mutable: mutable,
             parameter: parameter,
             isUsing: false,
+            cLocal: false,
             start: start,
             end: end,
         })?;
@@ -388,6 +400,7 @@ struct HirProgram {
             mutable: false,
             parameter: false,
             isUsing: false,
+            cLocal: false,
             start: start,
             end: end,
         })?;

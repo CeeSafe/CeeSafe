@@ -63,7 +63,8 @@ Everything else in an unsafe block is checked exactly as in safe code.
 ## Calling C
 
 C functions are declared in an `extern "C"` block and called inside `unsafe`, since CeeSafe cannot check what C does.
-Their types are C's: integers, `bool`, raw pointers, `*CChar` for C strings, and `@repr(C)` structs.
+Their types are C's: integers, `bool`, raw pointers, `*CChar` for C strings, `CChar` for a `char`, and `@repr(C)`
+structs.
 
 <!-- ceesafe: check -->
 ```ceesafe
@@ -215,6 +216,104 @@ fn emit(arg: *mut void, name: *CChar, len: usize, ino: u64, kind: vnode_type) ->
 
 The C compiler checks that the enum is the integer declared. The rules are
 [ADR 0079](../spec/decisions/0079-imported-c-enums.md).
+
+## C constants, C data and configured code
+
+A port of a C file keeps using what the C side defines: its constants, its globals, its build switches. The
+[C data rules](../spec/decisions/0080-the-kernel-floors.md) let CeeSafe name each of them without a C file of its own.
+
+**Constants C checks.** A constant written in an `extern "C"` block is an ordinary CeeSafe constant, and the C compiler
+asserts that the header agrees. `@cvalue` asserts a C expression instead, such as a size or an offset. `const NAME: T;`
+with no value reads C's own value at run time, for a string macro:
+
+<!-- ceesafe: check -->
+```ceesafe
+@header("kernel/vfs.h")
+extern "C" {
+    const EINVAL: i32 = 22;
+    @cvalue("sizeof(struct cosmo_stat)")
+    const STAT_SIZE: usize = 144;
+    const COSMO_VERSION: *CChar;
+}
+
+fn invalid() -> i32 => -EINVAL;
+```
+
+**Data C names, and data C defines.** `@export` on a static makes it C data under that symbol: a plain `static` of a
+C type is C's `const` object, such as an operation table a header declares `extern const`, and a `static mut` is a
+variable C may write, such as a sysctl's. In an `extern "C"` block, `static NAME: T;` reads data C defines:
+
+<!-- ceesafe: check -->
+```ceesafe
+@header("kernel/storage.h")
+extern "C" {
+    struct fs_type {
+        flags: u32;
+    }
+    static procnet_names: [*CChar; 8];
+}
+
+/// `extern const struct fs_type pool_fs_type;` in C.
+@export("pool_fs_type")
+static POOL_FS: fs_type = fs_type { flags: 1 };
+
+/// `extern uint32_t g_pool_rate;`: the sysctl writes it.
+@export("g_pool_rate")
+static mut RATE: u32 = 100;
+```
+
+**C locals.** `var s: T;` of a C type is C's zero-filled object on the stack, for state a C API keeps in the caller's
+frame, as a hash state is. It is used by its address and never moved:
+
+<!-- ceesafe: check -->
+```ceesafe
+@header("kernel/blake2b.h")
+extern "C" {
+    struct blake2b;
+    fn blake2b_init(s: *mut blake2b, outlen: usize);
+    fn blake2b_final(s: *mut blake2b, out: *mut u8);
+}
+
+/// Safety: the state is a live C local for each call.
+fn digest(out: borrow mut [u8; 32]) {
+    var s: blake2b;
+    unsafe {
+        blake2b_init(borrow mut s as *mut blake2b, 32);
+        blake2b_final(borrow mut s as *mut blake2b, borrow mut out[0] as *mut u8);
+    }
+}
+```
+
+**Code only some builds have.** `if (cfg("CONFIG_DEBUG")) { … } else { … }` is C's `#if CONFIG_DEBUG`. A member or a C
+function that only some builds have is declared `@cfg("CONFIG_DEBUG")` and used only inside such a block, which the
+compiler checks (N0350). Both blocks are checked in every build:
+
+<!-- ceesafe: check -->
+```ceesafe
+@header("kernel/cosmofs.h")
+extern "C" {
+    struct cfs {
+        @cfg("CONFIG_DEBUG")
+        test_armed: bool;
+    }
+    @cfg("CONFIG_DEBUG")
+    fn cfs_debug_note(fs: *mut cfs);
+}
+
+/// Safety: `fs` is a live filesystem.
+@export("cfs_test_arm")
+unsafe fn arm(fs: *mut cfs) {
+    if (cfg("CONFIG_DEBUG")) {
+        let f = Ptr.toBorrowMut(fs);
+        f.test_armed = true;
+        cfs_debug_note(fs);
+    }
+}
+```
+
+`CChar` is C's `char` by value as well as behind a pointer (`b as CChar`, `c as u8`), `CLong` and `CULong` are C's
+`long` and `unsigned long`, an imported struct's member may be an array of pointers, and `AtomicU8` is a byte member C
+changes atomically.
 
 ## C code that allocates
 

@@ -487,7 +487,10 @@ fn processFunctionAttributesOf(c: borrow mut Checker, f: u32) -> Result<void, Al
         }
         var switchName = Vector<u8>.create();
         appendBytes(mut switchName, c.front.ast.textOf(text))?;
-        if (!checkCName(c, switchName.view(), Span { start: a.start, end: a.end }, "the configuration macro")?) {
+        // `@cfg("!X")` for the builds where `X` is zero (ADR 0080 §3.3).
+        let switchMacro =
+            if (switchName.length > 0 && switchName[0] == '!') switchName.view()[1..] else switchName.view();
+        if (!checkCName(c, switchMacro, Span { start: a.start, end: a.end }, "the configuration macro")?) {
             continue;
         }
         match (ownEntity(c, name)) {

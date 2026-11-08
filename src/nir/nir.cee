@@ -97,6 +97,10 @@ struct NirBlock {
     statements: Vector<u32>; // NirProgram.statements
     terminator: u32;         // NirProgram.terminators, or none while it is being filled
     successors: Vector<u32>; // the terminator's targets, in its order (NirTerminator.Successors)
+    /// ADR 0080 §3.3: the C condition under which the block is compiled (empty: always), and, for a block that ends
+    /// in the Branch of `if (cfg("X"))`, `X`, which C's `#if` tests in place of the branch's (false) operand.
+    cfg: Vector<u8>;
+    branchCfg: Vector<u8>;
 }
 
 /// A Call rvalue's role (NirProgram.rvalueTasks): the awaited call of `await f(…)`, or the task of `Async.run(f(…))`.

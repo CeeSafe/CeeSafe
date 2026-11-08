@@ -188,6 +188,8 @@ fn checkProgram(
         builtinUses: Vector<u8>.create(),
         programStructs: Vector<u32>.create(),
         importedEnums: Vector<ImportedEnum>.create(),
+        cfgStack: Vector<Vector<u8>>.create(),
+        fieldCfgs: Vector<FieldCfg>.create(),
         dynSignatures: Vector<DynSignature>.create(),
         trackLibraryTypes: true,
         statics: Vector<StaticEntry>.create(),

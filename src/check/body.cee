@@ -231,7 +231,20 @@ fn checkLocalDecl(
         LocalKind.Var => true,
         _ => false,
     };
+    // `var s: T;` of a C type is a C local (ADR 0080 §3.4): C's zeroed object, made in place on the stack.
+    let cLocalSyntax = isMutable && initializerSyntax == none() && typ != none();
+    if (cLocalSyntax) {
+        c.allowImported = true;
+    }
     let declared = if (typ == none()) none() else c.resolveType(typ, false)?;
+    c.allowImported = false;
+    let isCLocal = cLocalSyntax && declared != c.types.error && c.types.isCLaidOut(declared, 0);
+    if (isCLocal && isAsyncFunction(c, c.function)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a C local cannot be in an async function, whose frame moves: box it ")?;
+        appendText(mut message, "('Box.createIn') (ADR 0080 §3.4)")?;
+        c.error(importedTypeByValue(), id.start, id.end, message)?;
+    }
     if (!isMutable && initializerSyntax == none()) {
         var message = Vector<u8>.create();
         appendText(mut message, "'let ")?;
@@ -313,6 +326,7 @@ fn checkLocalDecl(
     // Declared after the initializer is checked: `let x = x;` does not see the new `x`.
     let local = c.hir.addLocal(c.function, id.symbol, localType, isMutable || isUsing, false, id.start, id.end)?;
     c.hir.locals[local as usize].isUsing = isUsing;
+    c.hir.locals[local as usize].cLocal = isCLocal;
     if (isLet) {
         c.letKeywords.push(LetKeyword { local: local, start: span.start })?;
     }
@@ -499,12 +513,30 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
     var current = stmt;
     var otherwise = none();
     let boolType = c.types.boolType;
+    var negated: u32 = 0; // `!X` conditions pushed for the rest of a `cfg` chain
     loop {
         match (c.front.ast.stmts[current as usize]) {
             StmtNode.If(condition, then, elseBranch) => {
                 starts.push(c.front.ast.stmtSpans[current as usize])?;
-                conditions.push(checkExpr(c, condition, boolType)?)?;
-                thens.push(checkBlock(c, then)?)?;
+                let configured = cfgConditionText(c, condition)?;
+                if (configured.length > 0) {
+                    // `if (cfg("X"))` (ADR 0080 §3.3): C's `#if X`. The HIR condition is what the interpreter takes,
+                    // where every macro is 0: false for `X`, true for `!X`. Both blocks are checked, the then-block
+                    // where the condition holds and what follows where it does not.
+                    let span = c.front.ast.exprSpans[condition as usize];
+                    let test = c.expr(HirExpr.BoolConst(configured[0] == '!'), boolType, span.start, span.end)?;
+                    let text = c.hir.addText(configured.view())?;
+                    c.hir.cfgConditions.push(HirCfg { expr: test, text: text })?;
+                    conditions.push(test)?;
+                    c.cfgStack.push(copyBytes(configured.view())?)?;
+                    thens.push(checkBlock(c, then)?)?;
+                    let _ = c.cfgStack.pop();
+                    c.cfgStack.push(negatedCfg(configured.view())?)?;
+                    negated += 1;
+                } else {
+                    conditions.push(checkExpr(c, condition, boolType)?)?;
+                    thens.push(checkBlock(c, then)?)?;
+                }
                 if (elseBranch == none()) {
                     break;
                 }
@@ -521,6 +553,11 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
             _ => { break; }
         }
     }
+    var popped: u32 = 0;
+    while (popped < negated) {
+        let _ = c.cfgStack.pop();
+        popped += 1;
+    }
     var k = starts.length;
     while (k > 0) {
         k -= 1;
@@ -529,6 +566,74 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
     }
     return Ok(otherwise);
 }
+
+/// `cfg("X")` or `cfg("!X")` as an `if` statement's whole condition (ADR 0080 §3.3), when nothing the program declares
+/// is named `cfg`: the text, or empty. `X` must be a C identifier (N0292).
+fn cfgConditionText(c: borrow mut Checker, condition: u32) -> Result<Vector<u8>, AllocError> {
+    var text = Vector<u8>.create();
+    var callee = none();
+    var arguments = emptyRange();
+    match (c.front.ast.exprs[condition as usize]) {
+        ExprNode.Call(f, a) => {
+            callee = f;
+            arguments = a;
+        }
+        _ => { return Ok(text); }
+    }
+    let name = match (c.front.ast.exprs[callee as usize]) {
+        ExprNode.Name(ident, typeArguments) => if (typeArguments.count == 0) ident else none(),
+        _ => none(),
+    };
+    if (name == none() || arguments.count != 1) {
+        return Ok(text);
+    }
+    let id = c.front.ast.idents[name as usize];
+    if (!sameText(c.name(id.symbol), "cfg") || c.lookupLocal(id.symbol)? != none() || isDeclared(c, id.symbol)) {
+        return Ok(text);
+    }
+    let argument = c.front.ast.at(arguments, 0);
+    match (c.front.ast.exprs[argument as usize]) {
+        ExprNode.StringLiteral(t) => { appendBytes(mut text, c.front.ast.textOf(t))?; }
+        _ => {}
+    }
+    let span = c.front.ast.exprSpans[argument as usize];
+    let switchMacro = if (text.length > 0 && text[0] == '!') text.view()[1..] else text.view();
+    if (!checkCName(c, switchMacro, Span { start: span.start, end: span.end }, "the configuration macro")?) {
+        return Ok(Vector<u8>.create());
+    }
+    return Ok(text);
+}
+
+/// The condition that holds where `text` does not: `X` for `!X`, `!X` for `X`.
+fn negatedCfg(text: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    if (text.length > 0 && text[0] == '!') {
+        return copyBytes(text[1..]);
+    }
+    var negated = Vector<u8>.create();
+    negated.push('!')?;
+    appendBytes(mut negated, text)?;
+    return Ok(negated);
+}
+
+/// A configured item (ADR 0080 §3.3) used at `span`: N0350 unless its condition `text` holds there, inside a `cfg`
+/// block of that condition. (An export's own `@cfg` does not count: its body is compiled in every build, ADR 0043.)
+fn checkCfgUse(c: borrow mut Checker, text: Slice<u8>, what: Slice<u8>, span: Span) -> Result<void, AllocError> {
+    for (held in c.cfgStack.view()) {
+        if (sameBytes(held.view(), text)) {
+            return Ok();
+        }
+    }
+    var message = Vector<u8>.create();
+    appendBytes(mut message, what)?;
+    appendText(mut message, " exists only in builds where '")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "' holds, so it is used only inside 'if (cfg(\"")?;
+    appendBytes(mut message, text)?;
+    appendText(mut message, "\")) { … }' (ADR 0080 §3.3)")?;
+    return c.error(configuredUse(), span.start, span.end, message);
+}
+
+fn configuredUse() -> u32 => 350;
 
 fn checkFor(
     c: borrow mut Checker,

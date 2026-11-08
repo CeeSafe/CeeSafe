@@ -518,6 +518,16 @@ fn emitFlatBody(
                 e.writeLine(label.view(), true)?;
             }
         }
+        if (block.cfg.length > 0) {
+            // A block of `if (cfg("X"))` (ADR 0080 §3.3): compiled only where its condition holds. Its label stays,
+            // with an empty statement, so the label is never followed by the directive.
+            if (inSet(targeted, block.id)) {
+                e.line("    ;")?;
+            }
+            e.t("#if ")?;
+            e.b(block.cfg.view())?;
+            e.emit()?;
+        }
         for (s in block.statements.view()) {
             let span = n.statementSpans[s as usize];
             mapTo(e, c, n, sources, span.start, span.end);
@@ -525,7 +535,35 @@ fn emitFlatBody(
         }
         let span = n.terminatorSpans[block.terminator as usize];
         mapTo(e, c, n, sources, span.start, span.end);
-        emitTerminator(e, c, n, sources, f, block.terminator)?;
+        var configuredBranch = false;
+        if (block.branchCfg.length > 0) {
+            match (n.terminators[block.terminator as usize]) {
+                NirTerminator.Branch(_, then, otherwise) => {
+                    // `if (cfg("X"))`: C's preprocessor chooses the branch (ADR 0080 §3.3).
+                    configuredBranch = true;
+                    e.t("#if ")?;
+                    e.b(block.branchCfg.view())?;
+                    e.emit()?;
+                    e.t("    goto bb")?;
+                    e.d(then as u64)?;
+                    e.t(";")?;
+                    e.emit()?;
+                    e.line("#else")?;
+                    e.t("    goto bb")?;
+                    e.d(otherwise as u64)?;
+                    e.t(";")?;
+                    e.emit()?;
+                    e.line("#endif")?;
+                }
+                _ => {}
+            }
+        }
+        if (!configuredBranch) {
+            emitTerminator(e, c, n, sources, f, block.terminator)?;
+        }
+        if (block.cfg.length > 0) {
+            e.line("#endif")?;
+        }
     }
     return Ok();
 }
@@ -685,6 +723,21 @@ fn emitStatement(
             }
             if (isInPlaceConstruction(e, s)) {
                 return Ok(); // built in the box's memory by its Box.create (below)
+            }
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Use(o) => {
+                    if (isZeroOperand(n, o)) {
+                        // A C local (ADR 0080 §3.4): zero-filled where it is declared.
+                        let place = appendPlaceIn(e, c, n, sources, f, target)?;
+                        e.t("    ")?;
+                        e.b(place.view())?;
+                        e.t(" = (")?;
+                        appendCTypeName(c, mut e.buf, n.rvalueTypes[r as usize])?;
+                        e.t("){0};")?;
+                        return e.emit();
+                    }
+                }
+                _ => {}
             }
             match (n.rvalues[r as usize]) {
                 NirRvalue.ArrayRepeat(_) => {

@@ -46,6 +46,7 @@ struct Lowering {
     results: Vector<u32>; // the result locals of the `if` and `match` expressions being lowered
     current: u32;         // a block, or none
     span: Span;
+    cfg: Vector<u8>; // the `cfg` conditions holding where lowering is (ADR 0080 §3.3), as one C expression
 }
 
 /// NirBuilder.Build: every function but the C functions and the compile-time-only ones, in creation order.
@@ -85,6 +86,7 @@ fn buildNirFunction(c: borrow mut Checker, n: borrow mut NirProgram, f: u32) -> 
         results: Vector<u32>.create(),
         current: none(),
         span: Span { start: 0, end: 0 },
+        cfg: Vector<u8>.create(),
     };
     // HIR locals keep their ids; temporaries are appended after them.
     for (local in c.hir.functions[f as usize].locals.view()) {
@@ -202,7 +204,14 @@ fn finishFunction(f: u32, b: Lowering, parameterCount: u32) -> Result<NirFunctio
 fn newBlock(b: borrow mut Lowering) -> Result<u32, AllocError> {
     let id = truncate<u32>(b.blocks.length);
     b.blocks.push(
-        NirBlock { id: id, statements: Vector<u32>.create(), terminator: none(), successors: Vector<u32>.create() },
+        NirBlock {
+            id: id,
+            statements: Vector<u32>.create(),
+            terminator: none(),
+            successors: Vector<u32>.create(),
+            cfg: copyBytes(b.cfg.view())?,
+            branchCfg: Vector<u8>.create(),
+        },
     )?;
     return Ok(id);
 }
@@ -524,6 +533,14 @@ fn lowerStmt(
         }
         HirStmt.LocalDecl(local, initializer) => {
             addToScope(b, nirLocalOf(c, local))?;
+            if (initializer == none() && c.hir.locals[local as usize].cLocal) {
+                // A C local (ADR 0080 §3.4): zero-filled where it is declared, as C's `T s = {0};`.
+                let typ = c.hir.locals[local as usize].typ;
+                let target = localPlace(n, nirLocalOf(c, local))?;
+                let zero = n.operand(NirOperand.Zero, typ)?;
+                let rvalue = n.rvalue(NirRvalue.Use(zero), typ, stmtSpan(c, s))?;
+                emit(n, b, NirStatement.Assign(target, rvalue))?;
+            }
             if (initializer != none()) {
                 let saved = beginStatementTemps(b)?;
                 let target = localPlace(n, nirLocalOf(c, local))?;
@@ -1613,18 +1630,42 @@ fn lowerIf(
     if (test == none()) {
         return Ok();
     }
+    // `if (cfg("X"))` (ADR 0080 §3.3): the then-blocks are compiled where X holds, the else-blocks where it does not.
+    var configured = Vector<u8>.create();
+    for (k in 0..c.hir.cfgConditions.length) {
+        if (c.hir.cfgConditions[k].expr == condition) {
+            configured = copyBytes(c.hir.textOf(c.hir.cfgConditions[k].text))?;
+        }
+    }
+    let outer = copyBytes(b.cfg.view())?;
+    if (configured.length > 0) {
+        b.cfg = joinedCfg(outer.view(), configured.view())?;
+    }
     let thenBlock = newBlock(b)?;
+    if (configured.length > 0) {
+        b.cfg = joinedCfg(outer.view(), negatedCfgText(configured.view())?.view())?;
+    }
     let elseBlock = if (otherwise == none()) none() else newBlock(b)?;
+    b.cfg = copyBytes(outer.view())?;
     let join = newBlock(b)?;
     let thenTarget = endOnEntry(n, b, thenBlock, ending.view())?;
     let elseTarget = endOnEntry(n, b, if (elseBlock == none()) join else elseBlock, ending.view())?;
+    if (configured.length > 0 && b.current != none()) {
+        b.blocks[b.current as usize].branchCfg = copyBytes(configured.view())?;
+    }
     terminate(n, b, NirTerminator.Branch(test, thenTarget, elseTarget))?;
     var joinReached = elseBlock == none();
     b.current = thenBlock;
+    if (configured.length > 0) {
+        b.cfg = joinedCfg(outer.view(), configured.view())?;
+    }
     lowerStmt(c, n, b, then)?;
     if (b.current != none()) {
         terminate(n, b, NirTerminator.Goto(join))?;
         joinReached = true;
+    }
+    if (configured.length > 0) {
+        b.cfg = joinedCfg(outer.view(), negatedCfgText(configured.view())?.view())?;
     }
     if (elseBlock != none()) {
         b.current = elseBlock;
@@ -1634,8 +1675,31 @@ fn lowerIf(
             joinReached = true;
         }
     }
+    b.cfg = outer;
     b.current = if (joinReached) join else none();
     return Ok();
+}
+
+/// `outer && inner`, as one C `#if` expression (ADR 0080 §3.3).
+fn joinedCfg(outer: Slice<u8>, inner: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    if (outer.length == 0) {
+        return copyBytes(inner);
+    }
+    var joined = copyBytes(outer)?;
+    appendText(mut joined, " && ")?;
+    appendBytes(mut joined, inner)?;
+    return Ok(joined);
+}
+
+/// `!X` for `X`, `X` for `!X`.
+fn negatedCfgText(text: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    if (text.length > 0 && text[0] == '!') {
+        return copyBytes(text[1..]);
+    }
+    var negated = Vector<u8>.create();
+    negated.push('!')?;
+    appendBytes(mut negated, text)?;
+    return Ok(negated);
 }
 
 // ---- Closures ----

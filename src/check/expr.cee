@@ -381,7 +381,10 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
             return c.expr(HirExpr.LocalRef(local), t, span.start, span.end);
         }
         Entity.Constant(k) => { return namedConstantValue(c, k, span); }
-        Entity.Function(function) => { return functionValue(c, function, span); }
+        Entity.Function(function) => {
+            checkFunctionCfg(c, function, span)?;
+            return functionValue(c, function, span);
+        }
         Entity.GenericFunction(_) => {
             var message = Vector<u8>.create();
             appendText(mut message, "generic function ")?;
@@ -850,6 +853,7 @@ fn synthCall(
                         appendText(mut message, "a test is run by 'ceesafec test', not called (ADR 0049 §3.1)")?;
                         c.error(testShape(), calleeSpan.start, calleeSpan.end, message)?;
                     }
+                    checkFunctionCfg(c, function, Span { start: calleeSpan.start, end: calleeSpan.end })?;
                     if (typeArguments.count == 0) {
                         return checkUserCall(c, function, arguments, span);
                     }
@@ -1476,6 +1480,20 @@ fn anyArmHasFloatLiteral(c: borrow Checker, arms: Range) -> bool {
         }
     }
     return false;
+}
+
+/// A configured C function (`@cfg` in an `extern "C"` block, ADR 0080 §3.3) named where its condition must hold (N0350).
+fn checkFunctionCfg(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    let text = c.hir.functions[function as usize].cfgName;
+    if (text.count == 0 || !c.front.ast.functions[c.hir.functions[function as usize].syntax as usize].isExtern) {
+        return Ok(); // an export's CeeSafe function exists in every build (ADR 0043); a C function's may not
+    }
+    var what = Vector<u8>.create();
+    appendText(mut what, "'")?;
+    appendBytes(mut what, c.name(c.hir.functions[function as usize].name))?;
+    appendText(mut what, "'")?;
+    let condition = copyBytes(c.hir.textOf(text))?;
+    return checkCfgUse(c, condition.view(), what.view(), span);
 }
 
 /// `e as T` (SynthCast): only conversions that never lose information (§7).

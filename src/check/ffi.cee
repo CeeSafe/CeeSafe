@@ -405,7 +405,7 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         let f = c.front.ast.at(functions, k);
         let decl = c.front.ast.functions[f as usize];
         var fnKnown = Vector<u32>.create();
-        knownAttributes(c, decl.attributes, "a C function", "effects constant cname", mut fnKnown)?;
+        knownAttributes(c, decl.attributes, "a C function", "effects constant cname cfg", mut fnKnown)?;
         readEffectAttributes(c, f, fnKnown.view())?;
         var problem: u32 = 0;
         if (decl.body != none() || decl.expressionBody != none()) {
@@ -453,6 +453,27 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         ownItem(c, id.symbol, Entity.Function(function))?;
         // `@cname("symbol")` (ADR 0080 §3.5): its C symbol, when its CeeSafe name must differ (a struct of that name).
         for (attribute in fnKnown.view()) {
+            if (sameText(attributeName(c, attribute), "cfg")) {
+                // `@cfg("X")` (ADR 0080 §3.3): a C function some builds lack; its uses must be where `X` holds.
+                let cfgText = attributeString(c, attribute)?;
+                let switchMacro = if (cfgText.length > 0 && cfgText[0] == '!') cfgText.view()[1..] else cfgText.view();
+                let a = c.front.ast.attributes[attribute as usize];
+                if (cfgText.length == 0) {
+                    attributeError(
+                        c,
+                        attribute,
+                        "'@cfg' takes the C macro's name as a string: '@cfg(\"CONFIG_DEBUG\")'",
+                    )?;
+                } else if (checkCName(
+                    c,
+                    switchMacro,
+                    Span { start: a.start, end: a.end },
+                    "the configuration macro",
+                )?) {
+                    c.hir.functions[function as usize].cfgName = c.hir.addText(cfgText.view())?;
+                }
+                continue;
+            }
             if (!sameText(attributeName(c, attribute), "cname")) {
                 continue;
             }
@@ -643,6 +664,19 @@ fn declareExternConstant(c: borrow mut Checker, item: u32) -> Result<void, Alloc
     c.hir.constants[k].checked = true;
     c.hir.constants[k].cExpression = c.hir.addText(expression.view())?;
     return Ok();
+}
+
+/// The one string argument of an attribute, or empty.
+fn attributeString(c: borrow Checker, attribute: u32) -> Result<Vector<u8>, AllocError> {
+    var text = Vector<u8>.create();
+    let a = c.front.ast.attributes[attribute as usize];
+    if (a.arguments.count == 1) {
+        match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {
+            ExprNode.StringLiteral(t) => { appendBytes(mut text, c.front.ast.textOf(t))?; }
+            _ => {}
+        }
+    }
+    return Ok(text);
 }
 
 /// Reports `id` already declared (N0201), as Declare does: true when it is.
@@ -1042,9 +1076,30 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             appendBytes(mut cName, c.name(c.types.fields[field as usize].name))?;
             var cNameSpan = identSpan(c, syntax.name);
             var known = Vector<u32>.create();
-            knownAttributes(c, syntax.attributes, "a field", "cname", mut known)?;
+            knownAttributes(c, syntax.attributes, "a field", "cname cfg", mut known)?;
             for (attribute in known.view()) {
                 let a = c.front.ast.attributes[attribute as usize];
+                if (sameText(attributeName(c, attribute), "cfg")) {
+                    // `@cfg("X")` (ADR 0080 §3.3): a member some builds' C struct lacks; used only where `X` holds.
+                    let cfgText = attributeString(c, attribute)?;
+                    let switchMacro =
+                        if (cfgText.length > 0 && cfgText[0] == '!') cfgText.view()[1..] else cfgText.view();
+                    if (cfgText.length == 0) {
+                        attributeError(
+                            c,
+                            attribute,
+                            "'@cfg' takes the C macro's name as a string: '@cfg(\"CONFIG_DEBUG\")'",
+                        )?;
+                    } else if (checkCName(
+                        c,
+                        switchMacro,
+                        Span { start: a.start, end: a.end },
+                        "the configuration macro",
+                    )?) {
+                        c.fieldCfgs.push(FieldCfg { field: field, text: cfgText })?;
+                    }
+                    continue;
+                }
                 var text = Range { start: 0, count: 0xFFFFFFFF };
                 if (a.arguments.count == 1) {
                     match (c.front.ast.exprs[c.front.ast.at(a.arguments, 0) as usize]) {

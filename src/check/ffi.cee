@@ -398,8 +398,9 @@ fn declareExternBlock(c: borrow mut Checker, item: u32) -> Result<void, AllocErr
         c.error(invalidAttribute(), id.start, id.end, message)?;
     }
     for (k in 0..structs.count) {
-        declareExternConstant(c, c.front.ast.at(structs, k))?;
-        declareExternStatic(c, c.front.ast.at(structs, k))?;
+        let member = c.front.ast.at(structs, k);
+        declareExternConstant(c, member)?;
+        declareExternStatic(c, member)?;
     }
     for (k in 0..functions.count) {
         let f = c.front.ast.at(functions, k);

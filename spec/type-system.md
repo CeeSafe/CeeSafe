@@ -3700,13 +3700,15 @@ fn main() {
   that does not own, through any path of fields, payloads, elements or box contents, a value that changes through a
   shared reference (ReachesSharedChange):
   - a `StableVector<T, A>`, whose `push` takes `borrow this` (§24.2);
+  - a `RawCell<T>` (§41.1), so every cell (`Cell<T>`, `RefCell<T>`) and every type holding one (ADR 0084 §2.2);
   - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value;
   - a type parameter without a `Share` bound.
 
   The walk stops at the library's thread-safe types (§38.3), which are `Share` by design: `Mutex<StableVector<T>>` is
   `Share`. `Thread<T>` is not `Send`, so not `Share`. (Until 2026-11-09, every `Send` type was `Share`, which let two
-  threads push to one shared `StableVector`, or share a `dyn` box, in safe code: a data race. ADR 0084 generalises
-  this rule to cells.)
+  threads push to one shared `StableVector`, or share a `dyn` box, in safe code: a data race. ADR 0084 added the
+  cells.) A type that holds a cell is still `Send` when its contents are: a cell may move to another thread, not be
+  used from two at once.
 - Inference is structural and recursive. A recursive type is `Send` unless a path through it reaches a type that is
   not. Generic code knows only its bounds: a `T` is `Send` only under a `T: Send` bound.
 
@@ -3731,7 +3733,9 @@ fn main() {
 - **`Mutex<T: Send>`**: mutual exclusion.
   - `Mutex.create(v)` returns `Result<Mutex<T>, AllocError>`; the platform lock is allocated.
   - `m.lock()` waits for the lock and returns a `MutexGuard<T>`, scoped to `m` like C7's guards. Its `data()` lends
-    `borrow mut T`, and its drop unlocks.
+    `borrow mut T`, and its drop unlocks. The data is held in a `RawCell<T>` (§41.1), since the guard changes it while
+    the mutex is shared. `T: Send` already refuses every loan-holding `T`, so N0351 cannot arise there.
+
   - `lock` has the `sleep` effect.
 - **Atomics**: `AtomicU32`, `AtomicU64`, `AtomicUSize` and `AtomicBool`, in every profile (ADR 0026). Each operation
   is a static inline function of the runtime header, so it compiles to the machine's atomic instructions.
@@ -4261,3 +4265,33 @@ or an operand of `await` that is not a task), N0343 (recursion through `await`),
 the scope body's own locals), N0345 (`Async.park` or `Async.waker` outside the library); N0295 (blocking in async
 code, `await` while a `@context(atomic)` value is live, `Async.run` in async code); N0241 (conflicting captures of a
 scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend`'s captures, error type and allocator).
+
+## 41. Interior mutability: `RawCell`, `Cell` and `RefCell` (ADR 0084)
+
+A shared loan freezes the value it borrows (`ownership.md` B2), with one exception: the contents of a `RawCell`. The
+three cells are lib/core types (`lib/core/cells.cee`), in every profile. A type that reaches a cell is `Send` when its
+contents are, never `Share` unless the path to the cell passes through a library `@threadSafe` type (§38.1): so a
+cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Share`, N0334) and
+`static C: Cell<u32>` (N0337, §39.2) are refused.
+
+### 41.1 `RawCell<T>`: the primitive
+- A struct declared `@interiorMutable` and `@noncopy` in lib/core. `@interiorMutable` is accepted only in lib/core's
+  own files (N0290 elsewhere), and user code may not claim `@threadSafe` for a type holding one. A `RawCell<T>` has
+  `T`'s size and alignment (one field).
+- **Never Copy.** A cell, and every struct or enum holding one, is a move type (`@noncopy`, §14.1): a copy would read
+  the contents behind a live guard's back. A copy of a `Cell` is `Cell<T>.create(c.get())`.
+- `RawCell<T>.create(v)`; `c.pointer()` (`borrow this`) returns `*mut T`, safe to take and `unsafe` to use;
+  `c.getMut()` (`borrow mut this`) returns `borrow mut T`; `c.intoInner()` (`this`) returns `T`.
+- **The rule it changes** (amending `ownership.md` B2, `unsafe.md` §2's `p.write` and `Ptr.toBorrowMut` rows and its
+  pointers made from references, and ADR 0010): the `T` inside a `RawCell` may be read and written through
+  `c.pointer()` while shared loans of the cell, or of a value that holds it, are live. A `borrow mut` of the cell still
+  excludes every other access (B1). Unsafe code still must not make two live `borrow mut T` from the pointer, nor
+  write while a `borrow T` made from it is live.
+- `T` may not hold loans (a reference, view, closure or other scoped type, §19.1): **N0351**, "a cell of a
+  loan-holding type", reported at the type that names the cell, also when the cell is inside a generic struct
+  instantiated with such a type. The raw-pointer rule of §27.1 already forbids the pointer; refusing at the type avoids
+  needing variance for regions.
+- **C.** A `borrow T` stays a `const T *`, which C allows to be written through when the object is not `const`; no
+  value that holds a `RawCell` in its own storage is declared `const` (an exported immutable static, §39.5), and a
+  cell is never a tracked local (`optimisations.md` §2.3).
+- In the interpreter a cell is ordinary memory.

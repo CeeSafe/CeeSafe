@@ -94,7 +94,9 @@ function. "At point p" means on entry to the NIR statement at p.
   `a[i]` overlaps `a[j]` (no index disjointness in v0).
 - **B2 — Loan validity.** While a loan L of P is live (inside its region),
   P must not be moved, dropped, go out of scope, or be assigned. If L is
-  shared, P must also not be mutated or mutably borrowed. If L is `mut`,
+  shared, P must also not be mutated or mutably borrowed, except for the
+  contents of a `RawCell` in P, which unsafe code may change through the
+  cell's pointer (type-system.md §41.1; ADR 0084). If L is `mut`,
   P must not be accessed at all except through L.
 - **B3 — Liveness regions (NLL).** A loan's region is the smallest set of
   CFG points containing every point at which some reference derived from the
@@ -181,8 +183,10 @@ E1–E4 deliberately trade expressiveness for an implementation of tractable siz
 - **T2 — Sharing is through `Arc` of `Share` types.** The only safe way for two threads to reach the same memory is
   an `Arc<T>` with `T: Share`, which lends only `borrow T`. A v1 type can be changed through a shared reference only
   if it is one of the library's `@threadSafe` types: `Mutex<T>` (whose guard lends `borrow mut T` to one thread at a
-  time) and the atomics (whose operations are atomic). So two threads can write the same memory only through a
-  mutex or an atomic: there is no data race in safe code.
+  time) and the atomics (whose operations are atomic), or holds a `RawCell` or a `StableVector`, and such a type is
+  not `Share` (type-system.md §38.1, §41). So two threads can write the same memory only through a mutex or an
+  atomic: there is no data race in safe code.
+
 - **T3 — The library's `@threadSafe` types** keep T2 in their `unsafe` code. `Mutex.lock` takes the platform lock
   before lending. The guard's drop releases it, after the guard's loan has ended (B-rules). `Arc`'s count changes
   only by atomic operations, and only the owner that drops it to zero destroys the value. A spawned thread is

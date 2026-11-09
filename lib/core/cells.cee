@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Interior mutability (type-system.md §41; ADR 0084): RawCell, the one type whose contents may change while shared
+// loans of it are live, and the checked cells over it. A type that reaches a RawCell is Send when its contents are, but
+// not Share (§38.1), so a cell is used from one thread at a time. Their unsafe code keeps ownership.md T1–T3.
+
+/// The primitive (§41.1): a `T` that may be read and written through `pointer()` while shared loans of the cell, or of
+/// a value holding it, are live. It has `T`'s size and alignment. `T` may not hold loans (N0351).
+@interiorMutable
+@noncopy
+public struct RawCell<T> {
+    private value: T;
+
+    /// A cell holding `value`.
+    public fn create(value: T) -> RawCell<T> => RawCell { value: value };
+
+    /// The contents' address: safe to take, `unsafe` to use. Unsafe code must not make two live `borrow mut T` from
+    /// it, nor write while a `borrow T` it made is live (unsafe.md §2).
+    public fn pointer(borrow this) -> *mut T => borrow this.value as *T as *mut T;
+
+    /// The contents, for as long as the cell is borrowed exclusively: no other loan of it can be live.
+    public fn getMut(borrow mut this) -> borrow mut T => borrow mut this.value;
+
+    /// The contents, the cell consumed.
+    public fn intoInner(this) -> T => this.value;
+}

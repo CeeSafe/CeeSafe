@@ -8,6 +8,7 @@ fn instantiationTooDeep() -> u32 => 266;
 fn boundNotSatisfied() -> u32 => 268;
 fn scopedTypeArgument() -> u32 => 274;
 fn notSend() -> u32 => 334;
+fn cellOfLoans() -> u32 => 351;
 
 /// A type parameter's name and what it stands for: itself in a generic version, a type in an instance.
 struct EnvPair {
@@ -250,10 +251,22 @@ fn endInstance(
     }
     let failed = first != none();
     var firstMessage = Vector<u8>.create();
+    var firstCode: u32 = 0;
     if (failed) {
         appendBytes(mut firstMessage, c.front.diagnostics.items[first as usize].message.view())?;
+        firstCode = c.front.diagnostics.items[first as usize].code;
     }
     dropDiagnosticsSince(c, mark);
+    if (failed && firstCode == cellOfLoans()) {
+        // A cell of a loan-holding type inside the instance is the use's error (ADR 0084 §2.1).
+        for (r in c.scopedInstanceReports.view()) {
+            if (r.file == file && r.start == span.start && r.end == span.end) {
+                return Ok();
+            }
+        }
+        c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
+        return c.front.diagnostics.error(cellOfLoans(), file, span.start, span.end, firstMessage);
+    }
     var scoped = none();
     for (a in arguments) {
         if (scoped == none() && c.types.isScoped(a)) {
@@ -431,6 +444,21 @@ fn instantiateStruct(
     var parameterTypes = Vector<u32>.create();
     listTypes(c, parameters, mut parameterTypes)?;
     checkBounds(c, parameterTypes.view(), arguments, span)?;
+    if (c.types.structs[definition as usize].isInteriorMutable) {
+        for (a in arguments) {
+            if (c.types.isScoped(a)) {
+                // The raw-pointer rule of §27.1 at the type: a cell's contents never hold loans (ADR 0084 §2.1).
+                var message = Vector<u8>.create();
+                appendText(mut message, "a cell cannot hold ")?;
+                appendQuotedType(mut message, c, a)?;
+                appendText(
+                    mut message,
+                    ", which holds loans; hold a raw pointer or an owned value instead (type-system.md §41.1; ADR 0084 §2.1)",
+                )?;
+                c.error(cellOfLoans(), span.start, span.end, message)?;
+            }
+        }
+    }
     for (k in 0..c.structs.length) {
         let s = c.structs[k];
         if (s.template == template && sameTypes(
@@ -453,6 +481,9 @@ fn instantiateStruct(
     let list = c.types.addList(arguments)?;
     c.types.structs[instanceDefinition as usize].typeArguments = list;
     c.types.structs[instanceDefinition as usize].isThreadSafe = c.types.structs[definition as usize].isThreadSafe;
+    c.types.structs[instanceDefinition as usize].isInteriorMutable =
+        c.types.structs[definition as usize].isInteriorMutable;
+
     var pairs = Vector<EnvPair>.create();
     zipEnvironment(c, itemTypeParameters(c, entry.item), arguments, mut pairs)?;
     let env = storeEnvironment(c, pairs.view())?;

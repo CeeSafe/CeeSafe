@@ -203,6 +203,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     350 =>
         "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3)",
+    351 =>
+        "A cell of a loan-holding type: `RawCell<T>`, `Cell<T>` or `RefCell<T>`, directly or inside a generic struct, with a `T` that holds loans (a reference, view, closure or other scoped type), whose contents could then outlive what they borrow (`type-system.md` §41.1, ADR 0084 §2.1)",
     355 => "a guard moves, assigns or `mut`-lends the scrutinee or a binding, or awaits",
     356 => "alternatives of an or-pattern bind different names, types or `var`-ness",
     357 => "an empty range pattern",

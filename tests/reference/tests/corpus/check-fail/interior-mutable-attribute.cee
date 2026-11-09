@@ -1,0 +1,8 @@
+// `@interiorMutable` is lib/core's, for RawCell only (type-system.md §41.1; ADR 0084 §2.1): user code cannot make a
+// type of its own whose contents change through shared loans.
+@interiorMutable // error[N0290]
+struct Mine {
+    x: u32;
+}
+
+fn main() {}

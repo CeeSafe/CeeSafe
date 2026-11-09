@@ -1,0 +1,15 @@
+// A RawCell is never Copy, nor is anything holding one (type-system.md §41.1; ADR 0084 §2.1): a copy would read the
+// contents behind a live guard's back.
+struct Timer {
+    flags: RawCell<u32>;
+    id: u32;
+}
+
+fn main() {
+    let rc = RawCell<u32>.create(1);
+    let a = rc;
+    let b = rc; // error[N0250]
+    let t = Timer { flags: RawCell<u32>.create(0), id: 1 };
+    let u = t;
+    let v = t; // error[N0250]
+}

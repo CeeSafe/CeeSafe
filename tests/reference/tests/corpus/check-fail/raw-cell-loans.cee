@@ -1,0 +1,20 @@
+// A cell's contents may not hold loans (type-system.md §41.1; ADR 0084 §2.1, N0351), directly or inside a generic
+// struct instantiated with a loan-holding type. A cell of an owned value or of a raw pointer is fine.
+struct Wrap<T> {
+    c: RawCell<T>;
+}
+
+struct Holder<region r> {
+    view: RawCell<StringView>; // error[N0351]
+}
+
+fn main() {
+    let text = "abc";
+    let a = RawCell<StringView>.create(text); // error[N0351]
+    let n: u32 = 4;
+    let w: Wrap<borrow u32>? = null;       // error[N0351]
+    let c = RawCell<borrow u32>.create(n); // error[N0351]
+
+    let p = RawCell<*u32>.create(borrow n as *u32);
+    let v = Wrap<u64> { c: RawCell<u64>.create(9) };
+}

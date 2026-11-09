@@ -1,0 +1,38 @@
+// A type that reaches a RawCell is Send but not Share (type-system.md §38.1, §41; ADR 0084 §2.2): a struct holding a
+// cell three levels deep cannot be read from both Thread.both children, nor put in an Arc, nor be a static. It may
+// still move to another thread (the spawn has no error), and behind a Mutex it is Share (the last call has no error).
+struct Inner {
+    c: RawCell<u32>;
+}
+
+struct Middle {
+    i: Inner;
+}
+
+struct Outer {
+    m: Middle;
+}
+
+static C: RawCell<u32> =    // error[N0337]
+    RawCell<u32>.create(0); // error[N0338]
+
+fn look(o: borrow Outer) -> bool => o.m.i.c.pointer().isNull();
+
+fn lookLocked(m: borrow Mutex<Outer>) -> bool {
+    var g = m.lock();
+    return g.data().m.i.c.pointer().isNull();
+}
+
+fn main() {
+    let o = Outer { m: Middle { i: Inner { c: RawCell<u32>.create(0) } } };
+    let r = Thread.both(
+        () => look(o), // error[N0334]
+        () => look(o), // error[N0334]
+    );
+    let a = Arc<Inner>.create(Inner { c: RawCell<u32>.create(1) })!; // error[N0334]
+    let moved = Outer { m: Middle { i: Inner { c: RawCell<u32>.create(2) } } };
+    let t = Thread.spawn(move () => look(moved))!;
+    let seen = t.join();
+    let m = Mutex<Outer>.create(Outer { m: Middle { i: Inner { c: RawCell<u32>.create(3) } } })!;
+    Thread.both(() => { lookLocked(m); }, () => { lookLocked(m); });
+}

@@ -18,7 +18,7 @@ extern "C" {
 @noncopy
 public struct Mutex<T: Send> {
     private raw: *mut void;
-    private data: T;
+    private data: RawCell<T>; // changed through the guard while the mutex is shared (type-system.md §41.1)
 
     /// A mutex holding `data`; its platform lock is allocated.
     /// Safety: a null lock is reported, never stored.
@@ -27,7 +27,7 @@ public struct Mutex<T: Send> {
         if (raw.isNull()) {
             return Err(AllocError.OutOfMemory);
         }
-        return Ok(Mutex { raw: raw, data: data });
+        return Ok(Mutex { raw: raw, data: RawCell<T>.create(data) });
     }
 
     /// Waits for the lock; the guard lends the data until it is dropped.
@@ -47,9 +47,9 @@ public struct Mutex<T: Send> {
 public struct MutexGuard<region r, T: Send> {
     private lock: borrow(r) Mutex<T>;
 
-    /// Safety: the guard holds the lock, so no other thread reaches the data, and the loan ends before the guard's drop.
-    public fn data(borrow mut this) -> borrow mut T =>
-        unsafe { Ptr.toBorrowMut(borrow this.lock.data as *T as *mut T) };
+    /// Safety: the guard holds the lock, so no other thread reaches the cell's contents, and the loan ends before the
+    /// guard's drop (a RawCell's contents may change while the mutex is shared, §41.1).
+    public fn data(borrow mut this) -> borrow mut T => unsafe { Ptr.toBorrowMut(this.lock.data.pointer()) };
 
     /// Safety: the guard took the lock in Mutex.lock and releases it once.
     drop {

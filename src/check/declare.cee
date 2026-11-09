@@ -465,6 +465,7 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
                         parameters: list,
                         owner: none(),
                         ownerEnvironment: emptyRange(),
+                        signatureOnly: false,
                     },
                 )?;
                 let index = truncate<u32>(c.genericFunctions.length - 1);

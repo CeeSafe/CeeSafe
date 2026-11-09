@@ -23,6 +23,7 @@ struct GenericFunctionEntry {
     parameters: Range;       // its type parameters, in TypeTable.lists
     owner: u32;              // a generic method's struct type (ADR 0064 §1), else none
     ownerEnvironment: Range; // that struct's type environment (Checker.envPairs), else empty
+    signatureOnly: bool;     // a bound's generic interface method (ADR 0086 §2.3): instances are signatures, not compiled
 }
 
 /// A diagnostics mark for CheckInstance and Quietly: diagnostics after it are dropped when the trial ends.
@@ -593,7 +594,13 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     let mark = diagnosticsMark(c);
     let savedGenericMethod = c.genericMethod;
     c.genericMethod = entry.owner != none();
-    let instance = declareFunctionIn(c, entry.syntax, entry.owner, env)?;
+    // A bound's generic interface method is instantiated as a signature only (ADR 0086 §2.3).
+    let instance = if (entry.signatureOnly) declareSignature(c, entry.syntax, entry.owner, env)? else declareFunctionIn(
+        c,
+        entry.syntax,
+        entry.owner,
+        env,
+    )?;
     c.genericMethod = savedGenericMethod;
     endInstance(c, mark, arguments, text.view(), savedFile, span, none())?;
     c.setFile(savedFile);
@@ -605,6 +612,44 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     c.hir.functions[instance as usize].siteEnd = span.end;
     c.hir.functions[instance as usize].genericEntry = g;
     return Ok(instance);
+}
+
+/// A method with type parameters of its own (ADR 0064 §1, ADR 0086 §2.3), of an impl, an interface's default or a
+/// bound: its generic version, declared with its own parameters opaque after `ownerEnvironment`'s, and the
+/// GenericFunctionEntry its calls instantiate (HirFunction.methodTemplate). `signatureOnly` for a bound's signature.
+fn declareGenericMethod(
+    c: borrow mut Checker,
+    f: u32,
+    owner: u32,
+    ownerEnvironment: Range,
+    signatureOnly: bool,
+) -> Result<u32, AllocError> {
+    var parameters = Vector<u32>.create();
+    var pairs = Vector<EnvPair>.create();
+    for (k in 0..ownerEnvironment.count) {
+        pairs.push(c.envPairs[(ownerEnvironment.start + k) as usize])?;
+    }
+    let saved = enterEnvironment(c, ownerEnvironment)?;
+    let ownSyntax = c.front.ast.functions[f as usize].typeParameters;
+    declareTypeParameters(c, ownSyntax, mut parameters, mut pairs)?;
+    restoreEnvironment(c, saved);
+    let env = storeEnvironment(c, pairs.view())?;
+    let list = c.types.addList(parameters.view())?;
+    let savedGenericMethod = c.genericMethod;
+    c.genericMethod = true;
+    let function = if (signatureOnly) declareSignature(c, f, owner, env)? else declareFunctionIn(c, f, owner, env)?;
+    c.genericMethod = savedGenericMethod;
+    c.genericFunctions.push(GenericFunctionEntry {
+        syntax: f,
+        file: c.file,
+        generic: function,
+        parameters: list,
+        owner: owner,
+        ownerEnvironment: ownerEnvironment,
+        signatureOnly: signatureOnly,
+    })?;
+    c.hir.functions[function as usize].methodTemplate = truncate<u32>(c.genericFunctions.length - 1);
+    return Ok(function);
 }
 
 // ---- inference ----

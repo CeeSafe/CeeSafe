@@ -104,15 +104,8 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
     c.interfaces[index as usize].parameters = c.types.addList(parameters.view())?;
     let methods = interfaceMethods(c, index);
     for (k in 0..methods.count) {
+        // A method without a receiver is a static function (ADR 0086 §2.3).
         let f = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-        if (receiverIndex(f.receiver) == 0) {
-            let id = c.front.ast.idents[f.name as usize];
-            var message = Vector<u8>.create();
-            appendText(mut message, "interface method ")?;
-            appendQuotedName(mut message, c, id.symbol)?;
-            appendText(mut message, " needs a receiver: this, borrow this or borrow mut this")?;
-            c.error(implMismatch(), id.start, id.end, message)?;
-        }
         if (f.regionParameters.count > 0) {
             // Conformance compares the signatures, which would have to match the region lists (ADR 0074 §2.4).
             let first = c.front.ast.typeParameters[c.front.ast.at(f.regionParameters, 0) as usize];
@@ -702,7 +695,14 @@ fn implementFor(
             c.error(duplicateMember(), id.start, id.end, message)?;
             continue;
         }
-        let hir = declareFunctionIn(c, f, forType, implEnvironment)?;
+        // A method with type parameters of its own is a generic method, instantiated per call (ADR 0086 §2.3).
+        let hir = if (decl.typeParameters.count > 0) declareGenericMethod(
+            c,
+            f,
+            forType,
+            implEnvironment,
+            false,
+        )? else declareFunctionIn(c, f, forType, implEnvironment)?;
         if (implMethodFor(c, forType, id.symbol) != none() || containsU32(implemented, id.symbol)) {
             var message = Vector<u8>.create();
             appendQuotedType(mut message, c, forType)?;
@@ -713,9 +713,16 @@ fn implementFor(
         }
         c.implMethods.push(ImplMethod { typ: forType, name: id.symbol, function: hir })?;
         implemented.push(id.symbol)?;
-        let expected = declareSignature(c, signature, forType, environment)?;
         var problem = Vector<u8>.create();
-        signatureMismatch(c, expected, hir, mut problem)?;
+        let ownCount = c.front.ast.functions[signature as usize].typeParameters.count;
+        if (ownCount != decl.typeParameters.count) {
+            appendText(mut problem, "it must have ")?;
+            appendDecimal(mut problem, ownCount as u64)?;
+            appendText(mut problem, " type parameter(s) of its own")?;
+        } else {
+            let expected = expectedSignature(c, signature, forType, environment, hir)?;
+            signatureMismatch(c, expected, hir, mut problem)?;
+        }
         if (problem.length > 0) {
             var message = Vector<u8>.create();
             appendQuotedName(mut message, c, id.symbol)?;
@@ -804,7 +811,13 @@ fn inheritDefault(
         let fileToSet = c.interfaces[interfaceEntry as usize].file;
         c.setFile(fileToSet);
     }
-    let function = declareFunctionIn(c, method, forType, environment)?;
+    let function = if (c.front.ast.functions[method as usize].typeParameters.count > 0) declareGenericMethod(
+        c,
+        method,
+        forType,
+        environment,
+        false,
+    )? else declareFunctionIn(c, method, forType, environment)?;
     c.setFile(savedFile);
     let only = [forType];
     let list = c.types.addList(only[..])?;
@@ -873,7 +886,9 @@ fn declareInterfaceDefaults(c: borrow mut Checker) -> Result<void, AllocError> {
         let environment = interfaceEnvironment(c, entry)?;
         for (k in 0..methods.count) {
             let method = c.front.ast.at(methods, k);
-            if (hasDefault(c, method)) {
+            if (hasDefault(c, method) && c.front.ast.functions[method as usize].typeParameters.count > 0) {
+                declareGenericMethod(c, method, selfType, environment, false)?;
+            } else if (hasDefault(c, method)) {
                 declareFunctionIn(c, method, selfType, environment)?;
             }
         }
@@ -896,8 +911,38 @@ fn implMethodFor(c: borrow Checker, typ: u32, name: u32) -> u32 {
 fn receiverText(kind: ReceiverKind) -> StringView => match (kind) {
     ReceiverKind.Borrow => "'borrow this'",
     ReceiverKind.BorrowMut => "'borrow mut this'",
+    ReceiverKind.None => "none (a static function)",
     _ => "'this'",
 };
+
+/// The interface's signature `signature` for an impl's method `actual` on `forType`: a generic method's own type
+/// parameters are the impl method's, by position, so the two compare (ADR 0086 §2.3).
+fn expectedSignature(
+    c: borrow mut Checker,
+    signature: u32,
+    forType: u32,
+    environment: Range,
+    actual: u32,
+) -> Result<u32, AllocError> {
+    let ownParameters = c.front.ast.functions[signature as usize].typeParameters;
+    let template = c.hir.functions[actual as usize].methodTemplate;
+    if (ownParameters.count == 0 || template == none()) {
+        return declareSignature(c, signature, forType, environment);
+    }
+    var pairs = Vector<EnvPair>.create();
+    for (k in 0..environment.count) {
+        pairs.push(c.envPairs[(environment.start + k) as usize])?;
+    }
+    var arguments = Vector<u32>.create();
+    listTypes(c, c.genericFunctions[template as usize].parameters, mut arguments)?;
+    zipEnvironment(c, ownParameters, arguments.view(), mut pairs)?;
+    let env = storeEnvironment(c, pairs.view())?;
+    let savedGenericMethod = c.genericMethod;
+    c.genericMethod = true;
+    let function = declareSignature(c, signature, forType, env)?;
+    c.genericMethod = savedGenericMethod;
+    return Ok(function);
+}
 
 /// Empty if `actual` has the interface's signature `expected`; else what differs (SignatureMismatch).
 fn signatureMismatch(
@@ -923,12 +968,13 @@ fn signatureMismatch(
         appendText(out, ", not ")?;
         return appendText(out, receiverText(as2.receiver));
     }
+    let first: usize = if (receiverIndex(es.receiver) == 0) 0 else 1; // a static function has no receiver
     if (e.parameters.length != a.parameters.length) {
         appendText(out, "it must take ")?;
-        appendDecimal(out, truncate<u64>(e.parameters.length - 1))?;
-        return appendText(out, " parameter(s) besides the receiver");
+        appendDecimal(out, truncate<u64>(e.parameters.length - first))?;
+        return appendText(out, if (first == 0) " parameter(s)" else " parameter(s) besides the receiver");
     }
-    for (i in 1..e.parameters.length) {
+    for (i in first..e.parameters.length) {
         let et = c.hir.locals[e.parameters[i] as usize].typ;
         let at = c.hir.locals[a.parameters[i] as usize].typ;
         if (et != at) {
@@ -1050,7 +1096,14 @@ fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<
         let fileToSet = entry.file;
         c.setFile(fileToSet);
     }
-    let function = declareSignature(c, signatures[0], typ, environment)?;
+    let ownParameters = c.front.ast.functions[signatures[0] as usize].typeParameters.count;
+    let function = if (ownParameters > 0) declareGenericMethod(
+        c,
+        signatures[0],
+        typ,
+        environment,
+        true,
+    )? else declareSignature(c, signatures[0], typ, environment)?;
     c.setFile(savedFile);
     c.boundMethods.push(BoundMethod { typ: typ, bound: bound, name: name, function: function })?;
     return Ok(function);

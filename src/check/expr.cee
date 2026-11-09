@@ -992,6 +992,21 @@ fn synthCall(
                             return checkStaticCall(c, owner, member, arguments, calleeSpan, span);
                         }
                         Entity.Enum(index) => {
+                            let enumType = c.enums[index as usize].typ;
+                            let memberSymbol = c.front.ast.idents[member as usize].symbol;
+                            if (typeArguments.count == 0 && implMethodFor(c, enumType, memberSymbol) != none()) {
+                                // An impl's static function of the enum (ADR 0086 §2.3).
+                                return checkTypeCall(
+                                    c,
+                                    enumType,
+                                    target,
+                                    member,
+                                    arguments,
+                                    expected,
+                                    calleeSpan,
+                                    span,
+                                );
+                            }
                             let targetSpan = c.front.ast.exprSpans[target as usize];
                             return checkEnumValue(
                                 c,

@@ -1335,7 +1335,7 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 ### 21.1 Declarations
 ```text
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
-MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? (';' | FunctionBody)
+MethodSig     = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
 ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
 InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ```
@@ -1344,9 +1344,13 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
   N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
-- An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
-  `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods cannot have type parameters
-  of their own.
+- An **interface** lists method signatures. An interface may be generic (`interface Comparable<T>`).
+- **Static functions and generic methods** (ADR 0086 §2.3). A method has a receiver (`this`, `borrow this`,
+  `borrow mut this`), or none: a **static function** (`fn create(options: borrow Options) -> Self;`), with or without
+  a default. Through a bound it is called as `T.create(o)`, in a default as `Self.create(o)`, and on a concrete type
+  as `Rule.create(o)`. A method may have **type parameters of its own** (§20.1): an impl's method has as many, in the
+  same order, and they are compared by position (N0267). Through a bound and on a concrete type, it is instantiated
+  per call, as a struct's generic method is (ADR 0064 §1).
 - **Default methods** (ADR 0086 §2.1). A signature ends with `;`, or has a body (a block or `=> e;`): the method's
   **default**. An impl may define the method (an **override**, with the same signature: N0267 otherwise) or leave it
   out and **inherit** the default; a method without a default that an impl leaves out is N0267.
@@ -3596,10 +3600,13 @@ fn main() {
   - Anywhere else, `dyn I` is **N0330**: a local, parameter or result of type `dyn I`, a field, an array or vector
     element, an optional, a type argument (`Vector<dyn I>`; `Vector<Box<dyn I>>` is fine), or an element of a slice
     type.
-- **Dyn-compatible interfaces.** `dyn I` is allowed only if every method of `I` takes `borrow this` or
-  `borrow mut this`. A method that takes `this` by value makes the interface incompatible: `dyn I` is then
-  **N0331**, which names that method. A generic interface is checked once its type arguments are given. An async
-  method does not make an interface incompatible (§40.1, ADR 0036).
+- **Dyn-compatible interfaces** (amended by ADR 0086 §2.3). `dyn I` is **N0331**, naming the member, if a method of
+  `I` takes `this` by value, has no receiver (a static function), has type parameters of its own, or names `Self`
+  outside its receiver. Defaults do not matter: a default is in the table like any method. The rule keeps `T = dyn I`
+  sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`, which no table answers, and
+  every member it lets through is a method with a reference receiver, which the table holds. A generic interface is
+  checked once its type arguments are given. An async method does not make an interface incompatible (§40.1, ADR
+  0036).
 - `dyn` is a keyword in types only (grammar.md §2). `dyn I` binds tighter than `borrow`, so `borrow dyn I` is a
   reference to a `dyn I`.
 

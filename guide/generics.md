@@ -166,6 +166,9 @@ log
 - A type has one method of each name: an inherited default whose name the type already has is an error at the impl.
 - In an `impl` block and in a struct's or enum's body, `Self` is the type itself, with its parameters:
   `Self { … }`, `Self.make()` and `Self.MAX` work as with the type's name.
+- A method without a receiver is a static function: `fn create(options: borrow Options) -> Self;` is called as
+  `T.create(o)` through a bound `T`, as `Self.create(o)` in a default and as `Rule.create(o)` on a type. A method may
+  also have type parameters of its own, `fn visit<T: Copy>(borrow mut this, value: T)`, instantiated per call.
 
 ## Generic impls
 
@@ -284,7 +287,9 @@ square: 16
 
 - A `borrow T` or a `Box<T>` converts to the `dyn` type where one is expected, if `T` implements the interface.
   There is no way back to `T`.
-- Every method of the interface must take `borrow this` or `borrow mut this`. Async methods are allowed:
+- Every method of the interface must take `borrow this` or `borrow mut this`, have no type parameters of its own and
+  not name `Self` except as its receiver: a static function or a generic method has no place in a table. Defaults are
+  fine. Async methods are allowed:
   `await shape.load()` through `dyn` waits for the value's own method, in room the compiler makes for the largest
   of the types converted to that `dyn` type.
 - A call through `dyn` cannot be inlined. Prefer a bound when one type is enough.

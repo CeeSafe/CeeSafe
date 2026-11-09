@@ -70,25 +70,95 @@ fn resolveDynType(
         return Ok(c.types.error);
     }
     let entry = c.types.bounds[bound as usize].interfaceEntry;
+    var reason = Vector<u8>.create();
+    let member = dynBlocker(c, entry, mut reason)?;
+    if (member != none()) {
+        var message = Vector<u8>.create();
+        quotedBound(mut message, c, bound)?;
+        appendText(mut message, " cannot be used as 'dyn ")?;
+        boundText(mut message, c, bound)?;
+        appendText(mut message, "': ")?;
+        appendBytes(mut message, reason.view())?;
+        appendText(mut message, " (type-system.md §37.1)")?;
+        c.error(dynIncompatible(), span.start, span.end, message)?;
+        return Ok(c.types.error);
+    }
+    return c.types.dynOf(bound, send);
+}
+
+/// The member that keeps `dyn I` from existing (§37.1, ADR 0086 §2.3), with why in `reason`; none if `I` is
+/// dyn-compatible. A table holds one function per method, called with the value behind a pointer, so every method
+/// must take `borrow this` or `borrow mut this`, have no type parameters of its own and not name `Self` outside its
+/// receiver; generic code may also read `T.NAME` or call `T.create(…)` with `T = dyn I`, which no table answers.
+/// Defaults do not matter.
+fn dynBlocker(c: borrow mut Checker, entry: u32, reason: borrow mut Vector<u8>) -> Result<u32, AllocError> {
     let methods = interfaceMethods(c, entry);
     for (k in 0..methods.count) {
         let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-        if (receiverIndex(m.receiver) == 1) {
-            var message = Vector<u8>.create();
-            quotedBound(mut message, c, bound)?;
-            appendText(mut message, " cannot be used as 'dyn ")?;
-            boundText(mut message, c, bound)?;
-            appendText(mut message, "': its method ")?;
-            appendQuotedName(mut message, c, c.front.ast.idents[m.name as usize].symbol)?;
-            appendText(
-                mut message,
-                " takes 'this' by value, which a call through a table cannot pass (type-system.md §37.1)",
-            )?;
-            c.error(dynIncompatible(), span.start, span.end, message)?;
-            return Ok(c.types.error);
+        let name = c.front.ast.idents[m.name as usize].symbol;
+        let why = if (receiverIndex(m.receiver) == 1) " takes 'this' by value, which a call through a table cannot pass"
+            else if (receiverIndex(m.receiver) == 0) " is a static function, which has no value to find a table in"
+            else if (m.typeParameters.count >
+                0) " has type parameters of its own, and a table holds one function per method"
+            else if (signatureNamesSelf(
+                c,
+                m,
+            )) " names 'Self' outside its receiver, and a 'dyn' value's type is not known"
+            else "";
+        if (why.length > 0) {
+            appendText(reason, "its method ")?;
+            appendQuotedName(reason, c, name)?;
+            appendText(reason, why)?;
+            return Ok(name);
         }
     }
-    return c.types.dynOf(bound, send);
+    return Ok(none());
+}
+
+/// Does a method's signature name `Self` in a parameter or its result (ADR 0086 §2.3)?
+fn signatureNamesSelf(c: borrow Checker, m: Function) -> bool {
+    for (k in 0..m.parameters.count) {
+        if (typeNamesSelf(c, c.front.ast.parameters[c.front.ast.at(m.parameters, k) as usize].typ, 0)) {
+            return true;
+        }
+    }
+    return m.returnType != none() && typeNamesSelf(c, m.returnType, 0);
+}
+
+fn typeNamesSelf(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (t == none() || depth > 64) {
+        return false;
+    }
+    return match (c.front.ast.types[t as usize]) {
+        TypeNode.Named(q) => c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol == c.selfSymbol,
+        TypeNode.Generic(q, arguments) => c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol ==
+            c.selfSymbol || listNamesSelf(c, arguments, depth),
+        TypeNode.Reference(_, _, _, pointee) => typeNamesSelf(c, pointee, depth + 1),
+        TypeNode.Optional(inner) => typeNamesSelf(c, inner, depth + 1),
+        TypeNode.Pointer(_, pointee) => typeNamesSelf(c, pointee, depth + 1),
+        TypeNode.Array(element, _) => typeNamesSelf(c, element, depth + 1),
+        TypeNode.Dyn(inner, _, _) => typeNamesSelf(c, inner, depth + 1),
+        TypeNode.Function(_, parameters, result) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
+            c,
+            result,
+            depth + 1,
+        ),
+        TypeNode.FunctionPointer(_, parameters, result) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
+            c,
+            result,
+            depth + 1,
+        ),
+        TypeNode.Missing => false,
+    };
+}
+
+fn listNamesSelf(c: borrow Checker, list: Range, depth: u32) -> bool {
+    for (k in 0..list.count) {
+        if (typeNamesSelf(c, c.front.ast.at(list, k), depth + 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// A reference's pointee or a box's contents (ResolvePointee): the only types that may be a `dyn I` (§37.1).

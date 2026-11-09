@@ -111,7 +111,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
-        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide",
+        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), or a method call that two bounds both provide",
     268 =>
         "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), or a type with region parameters coerced to `dyn I` (ADR 0054)",
     270 => "A scoped field or payload in a struct or enum without region parameters",
@@ -168,7 +168,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     329 => "No versions satisfy the requirements: the conflicting requirements and where each came from (§4.7)",
     330 =>
         "`dyn I` where it is not behind a reference or a `Box`: a local, parameter, field, element, optional or type argument",
-    331 => "`dyn I` for an interface that is not dyn-compatible: one of its methods takes `this` by value",
+    331 =>
+        "`dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver",
     332 =>
         "A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5)",
     333 => "A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>`",

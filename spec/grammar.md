@@ -136,7 +136,7 @@ ExternField = Attribute* FieldDecl                                           (* 
 ExternFn   = Attribute* Visibility? 'fn' Identifier '(' (Param (',' Param)* (',' '...')? ','?)? ')' ('->' Type)? ';'   (* `...`: ADR 0041 *)
 TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-system.md §20 *)
 InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'   (* M6b; §21 *)
-MethodSig  = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? (';' | FunctionBody)
+MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
                                             (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
 ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* M6b; §21; attributes C7a *)
            | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)

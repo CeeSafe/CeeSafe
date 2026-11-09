@@ -412,6 +412,7 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
                 parameters: list,
                 owner: entry.typ,
                 ownerEnvironment: entry.environment,
+                signatureOnly: false,
             })?;
             c.hir.functions[function as usize].methodTemplate = truncate<u32>(c.genericFunctions.length - 1);
         } else {

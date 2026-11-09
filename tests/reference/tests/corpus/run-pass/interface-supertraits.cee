@@ -1,0 +1,95 @@
+// Supertraits (ADR 0086 §2.6): `interface Shape: Named` makes a bound `S: Shape` imply `S: Named`, so its methods
+// and defaults are reachable through it and a `Shape` bound meets a `Named` one; `Copy` as a supertrait makes the
+// bound Copy; a generic interface's supertrait; `dyn Shape`'s table holds `Named`'s methods after its own.
+interface Named {
+    fn name(borrow this) -> StringView;
+    fn shout(borrow this) -> u32 => 1;
+}
+
+interface Shape: Named {
+    fn area(borrow this) -> u32;
+    fn describe(borrow this) -> u32 => this.area() + this.shout();
+}
+
+interface Pointish: Copy {
+    fn x(borrow this) -> i32;
+}
+
+interface Holder<T>: Named {
+    fn get(borrow this) -> T;
+}
+
+struct Square {
+    side: u32;
+}
+
+impl Named for Square {
+    fn name(borrow this) -> StringView => "square";
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+}
+
+impl Holder<u32> for Square {
+    fn get(borrow this) -> u32 => this.side;
+}
+
+struct P {
+    v: i32;
+}
+
+impl Pointish for P {
+    fn x(borrow this) -> i32 => this.v;
+}
+
+fn report<S: Shape>(s: borrow S) {
+    Console.write(s.name());
+    Console.write(" ");
+    Console.writeLine(s.describe());
+}
+
+fn needsNamed<N: Named>(n: borrow N) -> StringView => n.name();
+
+fn viaShape<S: Shape>(s: borrow S) -> StringView => needsNamed(s);
+
+fn twice<Q: Pointish>(q: Q) -> i32 {
+    let a = q;
+    return a.x() + q.x();
+}
+
+fn held<H: Holder<u32>>(h: borrow H) -> u32 {
+    Console.writeLine(h.name());
+    return h.get();
+}
+
+fn main() {
+    let sq = Square { side: 3 };
+    report(sq);
+    Console.writeLine(viaShape(sq));
+    Console.writeLine(twice(P { v: 4 }));
+    Console.writeLine(held(sq));
+    let d: borrow dyn Shape = borrow sq;
+    Console.writeLine(d.name());
+    Console.writeLine(d.describe());
+    Console.writeLine(d.shout());
+    Console.writeLine(needsNamed(d));
+    var shapes = Vector<Box<dyn Shape>>.create();
+    shapes.push(Box.create(Square { side: 2 })!)!;
+    for (s in shapes) {
+        Console.writeLine(s.name());
+        Console.writeLine(s.area());
+    }
+}
+
+// expect-stdout: square 10
+// expect-stdout: square
+// expect-stdout: 8
+// expect-stdout: square
+// expect-stdout: 3
+// expect-stdout: square
+// expect-stdout: 10
+// expect-stdout: 1
+// expect-stdout: square
+// expect-stdout: square
+// expect-stdout: 4

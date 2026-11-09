@@ -8,8 +8,10 @@ fn implMismatch() -> u32 => 267;
 struct InterfaceEntry {
     item: u32;
     file: u32;
-    parameters: Range; // its type parameters, in TypeTable.lists
-    selfType: u32;     // `Self` in its defaults (ADR 0086 §2.1): a type parameter bounded by the interface, or none
+    parameters: Range;  // its type parameters, in TypeTable.lists
+    selfType: u32;      // `Self` in its defaults (ADR 0086 §2.1): a type parameter bounded by the interface, or none
+    supertraits: Range; // TypeTable.bounds, in TypeTable.lists, over its own parameters (ADR 0086 §2.6)
+    copySuper: bool;    // `Copy` is one of its supertraits
 }
 
 /// An impl block waiting for ProcessImpls.
@@ -95,20 +97,20 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
         ItemKind.Interface(_, t) => t,
         _ => emptyRange(),
     };
-    c.interfaces.push(InterfaceEntry { item: item, file: c.file, parameters: emptyRange(), selfType: none() })?;
+    c.interfaces.push(InterfaceEntry {
+        item: item,
+        file: c.file,
+        parameters: emptyRange(),
+        selfType: none(),
+        supertraits: emptyRange(),
+        copySuper: false,
+    })?;
     let index = truncate<u32>(c.interfaces.length - 1);
     ownItem(c, ident.symbol, Entity.Interface(index))?;
     var parameters = Vector<u32>.create();
     var pairs = Vector<EnvPair>.create();
     declareTypeParameters(c, typeParameters, mut parameters, mut pairs)?;
     c.interfaces[index as usize].parameters = c.types.addList(parameters.view())?;
-    let parts = c.front.ast.partsOf(item);
-    if (parts.supertraits.count > 0) {
-        let span = c.front.ast.typeSpans[c.front.ast.at(parts.supertraits, 0) as usize];
-        var message = Vector<u8>.create();
-        appendText(mut message, "supertraits are not supported yet (ADR 0086 §2.6)")?;
-        c.error(unsupported(), span.start, span.end, message)?;
-    }
     let methods = interfaceMethods(c, index);
     for (k in 0..methods.count) {
         // A method without a receiver is a static function (ADR 0086 §2.3).
@@ -232,15 +234,55 @@ fn implements(c: borrow Checker, typ: u32, bound: u32) -> bool {
         // `dyn I` implements `I` (ADR 0064 §3.1): each method calls through the value's table. Only behind a reference,
         // since `dyn I` is unsized; a generic that needs `T` by value fails its instance (N0222).
         let dynBound = c.types.info(typ).dynInterface;
-        if (dynBound != none()) {
-            let o = c.types.bounds[dynBound as usize];
-            if (o.interfaceEntry == b.interfaceEntry && sameLists(c, o.arguments, b.arguments)) {
-                return true;
-            }
+        if (dynBound != none() && boundImplies(c, dynBound, bound, 0)) {
+            return true; // `dyn B` implements B's supertraits too (ADR 0086 §2.6)
         }
     }
     for (i in c.implementations.view()) {
         if (i.typ == typ && i.interfaceEntry == b.interfaceEntry && sameLists(c, i.arguments, b.arguments)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Does `have` imply `want`: the same instantiation, or one of its supertraits' (ADR 0086 §2.6)? A supertrait's
+/// argument is compared when it is one of the interface's parameters or a type without parameters.
+fn boundImplies(c: borrow Checker, have: u32, want: u32, depth: u32) -> bool {
+    let h = c.types.bounds[have as usize];
+    let w = c.types.bounds[want as usize];
+    if (h.interfaceEntry == w.interfaceEntry && sameLists(c, h.arguments, w.arguments)) {
+        return true;
+    }
+    if (depth > 32) {
+        return false;
+    }
+    let supers = c.interfaces[h.interfaceEntry as usize].supertraits;
+    let parameters = c.interfaces[h.interfaceEntry as usize].parameters;
+    for (k in 0..supers.count) {
+        let s = c.types.bounds[c.types.listAt(supers, k) as usize];
+        if (s.interfaceEntry == w.interfaceEntry && s.arguments.count == w.arguments.count) {
+            var same = true;
+            for (a in 0..s.arguments.count) {
+                var argument = c.types.listAt(s.arguments, a);
+                for (p in 0..parameters.count) {
+                    if (c.types.listAt(parameters, p) == argument) {
+                        argument = c.types.listAt(h.arguments, p);
+                    }
+                }
+                if (argument != c.types.listAt(w.arguments, a)) {
+                    same = false;
+                }
+            }
+            if (same) {
+                return true;
+            }
+        }
+    }
+    for (k in 0..supers.count) {
+        let s = c.types.listAt(supers, k);
+        let sameParameters = c.types.bounds[s as usize].arguments.count == 0;
+        if (sameParameters && boundImplies(c, s, want, depth + 1)) {
             return true;
         }
     }
@@ -437,6 +479,7 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         }
     }
     let implEnvironment = storeEnvironment(c, pairs.view())?;
+    requireSupertraits(c, forType, bound, span)?; // ADR 0086 §2.6
     if (parameters.length > 0) {
         let list = c.types.addList(parameters.view())?;
         c.implTemplates.push(
@@ -853,6 +896,7 @@ fn interfaceSelf(c: borrow mut Checker, index: u32) -> Result<u32, AllocError> {
     let ownBound = c.types.addBound(index, name.view(), arguments.view())?;
     let info = c.types.info(selfType).typeParameter;
     c.types.typeParameters[info as usize].bounds.push(ownBound)?;
+    closeBounds(c, info)?; // its supertraits (ADR 0086 §2.6)
     return Ok(selfType);
 }
 

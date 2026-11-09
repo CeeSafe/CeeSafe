@@ -152,7 +152,8 @@ struct Checker {
     implTypes: Vector<ImplType>;                   // ADR 0086 §2.5
     projections: Vector<Projection>;               // `P.Name` for type parameters (ADR 0086 §2.5)
     boundConstants: Vector<BoundMethod>;           // `T.NAME` in generic code (ADR 0086 §2.4)
-    pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5
+    pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5, §2.6
+    supertraitsReady: bool;                        // resolveSupertraits has run (ADR 0086 §2.6)
     pendingBounds: Vector<PendingBounds>;
     pendingAllocators: Vector<PendingAllocator>;
     pendingElements: Vector<PendingElement>;

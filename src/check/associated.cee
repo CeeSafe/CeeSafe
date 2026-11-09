@@ -29,6 +29,7 @@ struct PendingAssocBound {
     file: u32;
     start: u32;
     end: u32;
+    requiredBy: u32; // for a supertrait (ADR 0086 §2.6): the impl's bound; else none
 }
 
 fn interfaceParts(c: borrow Checker, entry: u32) -> InterfaceParts =>
@@ -175,6 +176,7 @@ fn implementAssociated(
                     file: savedFile,
                     start: typeSpan.start,
                     end: typeSpan.end,
+                    requiredBy: none(),
                 })?;
             }
             c.setFile(savedFile);
@@ -344,11 +346,17 @@ fn checkPendingAssocBounds(c: borrow mut Checker) -> Result<void, AllocError> {
             var message = Vector<u8>.create();
             appendQuotedType(mut message, c, p.assigned)?;
             if (p.bound == none()) {
-                appendText(mut message, " is not Copy, but the associated type must be ('Copy')")?;
+                appendText(mut message, " is not Copy, which ")?;
             } else {
                 appendText(mut message, " does not implement ")?;
                 quotedBound(mut message, c, p.bound)?;
-                appendText(mut message, ", which the associated type requires")?;
+                appendText(mut message, ", which ")?;
+            }
+            if (p.requiredBy != none()) {
+                quotedBound(mut message, c, p.requiredBy)?;
+                appendText(mut message, " requires as a supertrait (ADR 0086 §2.6)")?;
+            } else {
+                appendText(mut message, "the associated type requires (ADR 0086 §2.5)")?;
             }
             c.error(boundNotSatisfied(), p.start, p.end, message)?;
         }
@@ -516,6 +524,7 @@ fn resolveProjection(c: borrow mut Checker, owner: u32, nameIdent: Ident, span: 
             c.types.typeParameters[info as usize].bounds.push(resolved)?;
         }
     }
+    closeBounds(c, info)?;
     c.setFile(savedFile);
     return Ok(typ);
 }

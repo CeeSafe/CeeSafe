@@ -1335,7 +1335,7 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 
 ### 21.1 Declarations
 ```text
-InterfaceDecl = 'interface' Identifier TypeParams? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
+InterfaceDecl = 'interface' Identifier TypeParams? (':' Type ('+' Type)*)? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
 MethodSig     = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
 InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'
 AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'
@@ -1393,6 +1393,14 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   - There are no defaults for associated types, no bounds that fix one (`E: Encoding<Unit = u16>`) and no associated
     types with parameters of their own: an interface whose callers fix a type takes it as a parameter, as
     `Iterator<T>` does (§16.4).
+- **Supertraits** (ADR 0086 §2.6). `interface B: A + Copy { … }`: every supertrait is an interface instantiation,
+  which may use `B`'s parameters but not `Self`, or `Copy`. `impl B for T` requires `T` to implement each supertrait
+  (N0268, at the impl). A bound `T: B` implies `T: A` (and `T: Copy`): the methods, defaults, constants and
+  associated types of `A` are reachable through it, it meets a bound `A`, and the ambiguity rule of §21.2 applies to
+  the union. A cycle of supertraits is N0227. `dyn B`'s table holds `A`'s methods after `B`'s, in declaration order
+  (each interface once), so they can be called through it, and `dyn B` implements `A` for bounds as well as `B`
+  (§37.2); there is no conversion from `dyn B` to `dyn A`. `B` is dyn-compatible only if its supertraits are, and
+  not if it requires `Copy` (N0331). `Sized`, `Send` and `Sync` are not supertraits.
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
   type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
   `impl<T: B, U> I<…> for C<…T…, …U…> { … }`, implements `I` for every instance of the generic struct or enum `C` that
@@ -3624,8 +3632,8 @@ fn main() {
     type.
 - **Dyn-compatible interfaces** (amended by ADR 0086 §2.3). `dyn I` is **N0331**, naming the member, if a method of
   `I` takes `this` by value, has no receiver (a static function), has type parameters of its own, or names `Self`
-  outside its receiver, or if `I` has an associated type or a constant. Defaults do not matter: a default is in the
-  table like any method. The rule keeps `T = dyn I`
+  outside its receiver, or if `I` has an associated type or a constant, or requires `Copy`; and the same for each of
+  its supertraits (§21.1). Defaults do not matter: a default is in the table like any method. The rule keeps `T = dyn I`
   sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`, which no table answers, and
   every member it lets through is a method with a reference receiver, which the table holds. A generic interface is
   checked once its type arguments are given. An async method does not make an interface incompatible (§40.1, ADR

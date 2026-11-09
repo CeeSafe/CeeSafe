@@ -101,7 +101,7 @@ Semantic checks run only when every file parsed without errors.
 | N0224 | Value of type `void` used as a value, or a `let` of a `never` expression | `let d = nothing();` |
 | N0225 | Expression statement that is not a call | `1 + 2;` |
 | N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
-| N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle | `struct Node { next: Node; }` |
+| N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6) | `struct Node { next: Node; }` |
 | N0228 | Duplicate member (field or function) in a struct, or an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7) | `struct D { a: i32; a: i64; }` |
 | N0229 | Struct literal does not initialise every field | `Point { x: 1 }` |
 | N0230 | Unknown field (in a literal or an access), or a function named where a field was expected | `p.z`, `p.sum` |
@@ -213,7 +213,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep (polymorphic recursion) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }` |
 | N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), or a method call, constant or associated type `T.Name` that two bounds both provide | `impl Shape for Square { fn area(this) -> i64 … }` |
-| N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), or a type with region parameters coerced to `dyn I` (ADR 0054) | `total(plain)` with `fn total<S: Shape>(…)` |
+| N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), an impl's target that does not implement a supertrait of its interface (ADR 0086 §2.6), or a type with region parameters coerced to `dyn I` (ADR 0054) | `total(plain)` with `fn total<S: Shape>(…)` |
 | N0264 | A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray` | `arena.alloc(Res { id: 1 })`, `arena.alloc(someReference)` |
 
 Generic code (M6a) reuses codes:
@@ -286,7 +286,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | Code | Meaning | Example |
 |---|---|---|
 | N0330 | `dyn I` where it is not behind a reference or a `Box`: a local, parameter, field, element, optional or type argument | `fn f(s: dyn Shape)`, `Vector<dyn Shape>` |
-| N0331 | `dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant | `interface Sink { fn close(this); }` then `borrow dyn Sink` |
+| N0331 | `dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant, or requires `Copy`; or the same holds for a supertrait | `interface Sink { fn close(this); }` then `borrow dyn Sink` |
 | N0332 | A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5) | `let v = s.view(); Box.create(move () => v.length)` |
 | N0333 | A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>` | `let f = move (x: u64) => x;` |
 | N0334 | A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038) | `Thread.spawn(move () => view.length)` with `view: StringView` |

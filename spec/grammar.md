@@ -135,7 +135,8 @@ AnonymousUnion = 'union' '{' ExternField+ '}'                               (* A
 ExternField = Attribute* FieldDecl                                           (* C9: @cname; type-system.md §31.1 *)
 ExternFn   = Attribute* Visibility? 'fn' Identifier '(' (Param (',' Param)* (',' '...')? ','?)? ')' ('->' Type)? ';'   (* `...`: ADR 0041 *)
 TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-system.md §20 *)
-InterfaceDecl = 'interface' Identifier TypeParams? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'   (* M6b; §21 *)
+InterfaceDecl = 'interface' Identifier TypeParams? (':' Type ('+' Type)*)? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
+                                            (* M6b; §21; supertraits: ADR 0086 §2.6 *)
 InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4: the value is a default *)
 AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
 MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)

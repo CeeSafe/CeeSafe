@@ -161,6 +161,7 @@ fn declareTypeParameters(
                 }
             }
         }
+        closeBounds(c, parameterInfo)?; // the bounds' supertraits (ADR 0086 §2.6)
     }
     restoreEnvironment(c, saved);
     return Ok();

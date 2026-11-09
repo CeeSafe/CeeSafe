@@ -242,6 +242,11 @@ ucs-2 reads 2 byte(s)
   `Iterator<u8>` rather than an associated type.
 - An interface with constants, associated types or static functions has no `dyn` type.
 
+An interface can build on others, its **supertraits**: `interface Shape: Named { … }`. Every `impl Shape` needs an
+`impl Named` for the same type, and a bound `S: Shape` gives `Named`'s methods too: inside a generic function over
+`S: Shape`, `s.name()` works, and `s` can be passed where a `Named` is wanted. `dyn Shape` holds both interfaces'
+methods. `Copy` can be a supertrait as well, making every bound by the interface a Copy one.
+
 ## Generic impls
 
 An impl can have type parameters of its own. A wrapper then implements an interface for every inner type that has it:

@@ -1,0 +1,36 @@
+// Supertraits (ADR 0086 §2.6): `impl B for T` needs `T` to implement each supertrait, `Copy` included (N0268, at the
+// impl); a cycle of supertraits is N0227; `dyn B` is N0331 when a supertrait's member keeps it from a table, or when
+// `B` requires `Copy`.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+interface Shape: Named {
+    fn area(borrow this) -> u32;
+}
+interface Cyc1: Cyc2 { // error[N0227]
+    fn a(borrow this);
+}
+interface Cyc2: Cyc1 {
+    fn b(borrow this);
+}
+interface Made {
+    fn make() -> u32;
+}
+interface Built: Made {
+    fn get(borrow this) -> u32;
+}
+interface Pointish: Copy {
+    fn x(borrow this) -> i32;
+}
+struct S {
+    v: Vector<u8>;
+}
+impl Shape for S { // error[N0268]
+    fn area(borrow this) -> u32 => 1;
+}
+impl Pointish for S { // error[N0268]
+    fn x(borrow this) -> i32 => 1;
+}
+fn a(b: borrow dyn Built) {}    // error[N0331]
+fn c(p: borrow dyn Pointish) {} // error[N0331]
+fn main() {}

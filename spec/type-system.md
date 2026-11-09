@@ -270,6 +270,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - A constant whose name is a field, method or variant of its type, or another of its constants, is N0228.
   - A generic struct or `impl` has none yet (N0216).
   - An associated constant takes no attributes (N0290).
+  - An interface's constants (§21.1, ADR 0086 §2.4) become associated constants of each impl's target.
   - Array lengths in types and repeats stay integer literals (§13): `[u8; Oid.LENGTH]` is not accepted, as
     `[u8; LENGTH]` is not.
 
@@ -1334,9 +1335,11 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 
 ### 21.1 Declarations
 ```text
-InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
+InterfaceDecl = 'interface' Identifier TypeParams? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
 MethodSig     = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
-ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
+InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'
+AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'
+ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' (FunctionDecl | ConstDecl | 'type' Identifier '=' Type ';')* '}'
 InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ```
 - **`impl S { … }`** (an inherent impl, ADR 0064 §1) adds methods and static functions to a struct `S`, as if they
@@ -1371,6 +1374,25 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   parameters (`Pair<T>`, `View<r>`), valid wherever that type's name is: a type, a struct literal
   (`Self { first: a, second: b }`), a static call (`Self.make()`) and a constant (`Self.MAX`). Elsewhere it is N0105
   in a type and N0200 in an expression. Declaring an item, a type parameter or a local named `Self` is N0100.
+- **Constants** (ADR 0086 §2.4). An interface may declare `const NAME: T;` or `const NAME: T = v;` (a default). An
+  impl gives `const NAME: T = v;` with the declared type (N0267 otherwise); a missing constant without a default, or
+  one the interface does not declare, is N0267. The value is a constant expression (§10); a default may not use
+  `Self`. Each becomes an associated constant of the target, read as `Type.NAME`; a name the target already has as a
+  constant is N0228. In generic code and defaults it is read as `T.NAME` or `Self.NAME`: there it is a value, not a
+  constant expression (not an array length or a pattern), since it is known only per instance; each instance reads
+  the constant, so `if (H.HAS_ON_DATA) { … }` costs nothing at run time. A generic impl cannot define one (N0216),
+  but its instances get the interface's defaults.
+- **Associated types** (ADR 0086 §2.5). An interface may declare `type Name;` or `type Name: B1 + B2;` (bounds as in
+  §21.2). Each impl defines `type Name = T;` (N0267 if it is missing, or the interface has no such type); the impl's
+  type and region parameters may appear in `T` (`impl<region r> Source for Words<r> { type Item = StringView<r>; }`),
+  and `T` must meet the bounds (N0268, at the impl).
+  - **Projection.** In a type, `P.Name` names the associated type, where `P` is `Self` inside the interface or a type
+    parameter whose bounds declare exactly one associated type `Name`: none is N0200, two or more N0267 (ambiguous,
+    as for bound methods). In generic code `P.Name` is an opaque type with the declared bounds (§20.3); an instance
+    substitutes the impl's type. Where `P` is a concrete type (`Self` in an impl), `P.Name` is the impl's type.
+  - There are no defaults for associated types, no bounds that fix one (`E: Encoding<Unit = u16>`) and no associated
+    types with parameters of their own: an interface whose callers fix a type takes it as a parameter, as
+    `Iterator<T>` does (§16.4).
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
   type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
   `impl<T: B, U> I<…> for C<…T…, …U…> { … }`, implements `I` for every instance of the generic struct or enum `C` that
@@ -3602,7 +3624,8 @@ fn main() {
     type.
 - **Dyn-compatible interfaces** (amended by ADR 0086 §2.3). `dyn I` is **N0331**, naming the member, if a method of
   `I` takes `this` by value, has no receiver (a static function), has type parameters of its own, or names `Self`
-  outside its receiver. Defaults do not matter: a default is in the table like any method. The rule keeps `T = dyn I`
+  outside its receiver, or if `I` has an associated type or a constant. Defaults do not matter: a default is in the
+  table like any method. The rule keeps `T = dyn I`
   sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`, which no table answers, and
   every member it lets through is a method with a reference receiver, which the table holds. A generic interface is
   checked once its type arguments are given. An async method does not make an interface incompatible (§40.1, ADR

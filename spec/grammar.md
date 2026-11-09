@@ -135,10 +135,14 @@ AnonymousUnion = 'union' '{' ExternField+ '}'                               (* A
 ExternField = Attribute* FieldDecl                                           (* C9: @cname; type-system.md §31.1 *)
 ExternFn   = Attribute* Visibility? 'fn' Identifier '(' (Param (',' Param)* (',' '...')? ','?)? ')' ('->' Type)? ';'   (* `...`: ADR 0041 *)
 TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-system.md §20 *)
-InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'   (* M6b; §21 *)
+InterfaceDecl = 'interface' Identifier TypeParams? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'   (* M6b; §21 *)
+InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4: the value is a default *)
+AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
 MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
                                             (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
-ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* M6b; §21; attributes C7a *)
+ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
+                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5 *)
+AssocTypeDef = 'type' Identifier '=' Type ';'
            | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
            | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
 MemberCall = Expr '.' Identifier ('<' Type (',' Type)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)

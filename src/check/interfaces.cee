@@ -102,6 +102,13 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
     var pairs = Vector<EnvPair>.create();
     declareTypeParameters(c, typeParameters, mut parameters, mut pairs)?;
     c.interfaces[index as usize].parameters = c.types.addList(parameters.view())?;
+    let parts = c.front.ast.partsOf(item);
+    if (parts.supertraits.count > 0) {
+        let span = c.front.ast.typeSpans[c.front.ast.at(parts.supertraits, 0) as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "supertraits are not supported yet (ADR 0086 §2.6)")?;
+        c.error(unsupported(), span.start, span.end, message)?;
+    }
     let methods = interfaceMethods(c, index);
     for (k in 0..methods.count) {
         // A method without a receiver is a static function (ADR 0086 §2.3).
@@ -650,6 +657,7 @@ fn implementFor(
     var pairs = Vector<EnvPair>.create();
     zipEnvironment(c, interfaceParameters, arguments.view(), mut pairs)?;
     let environment = storeEnvironment(c, pairs.view())?;
+    implementAssociated(c, item, forType, bound, environment, implEnvironment, first)?; // ADR 0086 §2.4, §2.5
     let interfaceSyntax = match (c.front.ast.items[item as usize].kind) {
         ItemKind.Impl(i, _, _, _, _) => i,
         _ => none(),

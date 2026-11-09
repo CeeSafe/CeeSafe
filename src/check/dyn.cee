@@ -112,6 +112,21 @@ fn dynBlocker(c: borrow mut Checker, entry: u32, reason: borrow mut Vector<u8>) 
             return Ok(name);
         }
     }
+    let parts = c.front.ast.partsOf(c.interfaces[entry as usize].item);
+    if (parts.types.count > 0) {
+        let name = assocName(c, c.front.ast.at(parts.types, 0));
+        appendText(reason, "its associated type ")?;
+        appendQuotedName(reason, c, name)?;
+        appendText(reason, " differs by type, and a 'dyn' value's type is not known")?;
+        return Ok(name);
+    }
+    if (parts.constants.count > 0) {
+        let name = constantName(c, c.front.ast.at(parts.constants, 0));
+        appendText(reason, "its constant ")?;
+        appendQuotedName(reason, c, name)?;
+        appendText(reason, " differs by type, and a table holds no constants")?;
+        return Ok(name);
+    }
     return Ok(none());
 }
 

@@ -148,6 +148,11 @@ struct Checker {
     implTemplates: Vector<ImplTemplate>; // generic impls (ADR 0054)
     implMethods: Vector<ImplMethod>;
     boundMethods: Vector<BoundMethod>;
+    implConstants: Vector<ImplConstant>;           // ADR 0086 §2.4
+    implTypes: Vector<ImplType>;                   // ADR 0086 §2.5
+    projections: Vector<Projection>;               // `P.Name` for type parameters (ADR 0086 §2.5)
+    boundConstants: Vector<BoundMethod>;           // `T.NAME` in generic code (ADR 0086 §2.4)
+    pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5
     pendingBounds: Vector<PendingBounds>;
     pendingAllocators: Vector<PendingAllocator>;
     pendingElements: Vector<PendingElement>;
@@ -477,6 +482,15 @@ struct Checker {
         this.coreAllowNever = false;
         match (this.front.ast.types[typ as usize]) {
             TypeNode.Named(q) => {
+                if (q.parts.count == 2) {
+                    // `P.Name`: an associated type (ADR 0086 §2.5), where `P` is `Self` or a type parameter.
+                    let ownerIdent = this.front.ast.idents[this.front.ast.at(q.parts, 0) as usize];
+                    let owner = environmentType(this, ownerIdent.symbol);
+                    if (owner != none()) {
+                        let nameIdent = this.front.ast.idents[this.front.ast.at(q.parts, 1) as usize];
+                        return resolveProjection(this, owner, nameIdent, span);
+                    }
+                }
                 if (q.parts.count > 1) {
                     var message = Vector<u8>.create();
                     appendText(mut message, "qualified type names are not supported yet")?;

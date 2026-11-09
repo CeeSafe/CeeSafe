@@ -162,6 +162,11 @@ fn checkProgram(
         implTemplates: Vector<ImplTemplate>.create(),
         implMethods: Vector<ImplMethod>.create(),
         boundMethods: Vector<BoundMethod>.create(),
+        implConstants: Vector<ImplConstant>.create(),
+        implTypes: Vector<ImplType>.create(),
+        projections: Vector<Projection>.create(),
+        boundConstants: Vector<BoundMethod>.create(),
+        pendingAssocBounds: Vector<PendingAssocBound>.create(),
         pendingBounds: Vector<PendingBounds>.create(),
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
@@ -299,6 +304,7 @@ fn checkProgram(
     checkLayoutUses(mut c)?;
     checkStructRecursion(mut c)?;
     computeCopyAndDrop(mut c)?;
+    checkPendingAssocBounds(mut c)?; // ADR 0086 §2.5
     checkForeignInterfaces(mut c)?;
     checkPublicSignatures(mut c)?;
     checkPendingElements(mut c)?;

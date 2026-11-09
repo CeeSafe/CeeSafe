@@ -81,6 +81,17 @@ fn checkTypeMember(
     if (constant != none()) {
         return memberConstantValue(c, constant, span);
     }
+    let implemented = implConstantFor(c, typ, memberIdent.symbol); // an interface's constant (ADR 0086 §2.4)
+    if (implemented != none()) {
+        return namedConstantValue(c, implemented, span);
+    }
+    if (c.types.is(typ, TypeKind.TypeParameter)) {
+        let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+        let accessor = boundConstant(c, typ, memberIdent.symbol, memberSpan)?;
+        if (accessor != none()) {
+            return checkUserCall(c, accessor, emptyRange(), span);
+        }
+    }
     let enumEntry = enumEntryOfType(c, typ);
     if (enumEntry != none()) {
         let targetSpan = c.front.ast.exprSpans[target as usize];

@@ -111,9 +111,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
-        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), or a method call that two bounds both provide",
+        "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), or a method call, constant or associated type `T.Name` that two bounds both provide",
     268 =>
-        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), or a type with region parameters coerced to `dyn I` (ADR 0054)",
+        "A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), or a type with region parameters coerced to `dyn I` (ADR 0054)",
     270 => "A scoped field or payload in a struct or enum without region parameters",
     272 =>
         "Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067)",
@@ -169,7 +169,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     330 =>
         "`dyn I` where it is not behind a reference or a `Box`: a local, parameter, field, element, optional or type argument",
     331 =>
-        "`dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver",
+        "`dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant",
     332 =>
         "A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5)",
     333 => "A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>`",

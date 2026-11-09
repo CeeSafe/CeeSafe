@@ -508,16 +508,13 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
         ItemKind.Interface(methods, typeParameters) => {
             let name = identLast(l, ast, it.name);
             fmtWalkTypeParameters(l, ast, name, emptyRange(), typeParameters)?;
+            let parts = ast.partsOf(item);
+            for (k in 0..parts.supertraits.count) {
+                fmtWalkType(l, ast, ast.at(parts.supertraits, k))?; // ADR 0086 §2.6
+            }
             let open = l.find(name, TokenKind.OpenBrace);
             let body = l.addContainer(open, true, false, priorityList())?;
-            for (k in 0..methods.count) {
-                let method = ast.at(methods, k);
-                let first = functionFirst(l, ast, method);
-                let last = l.last(ast.functions[method as usize].end);
-                l.addElement(body, first, last)?;
-                fmtWalkAttributes(l, ast, ast.functions[method as usize].attributes)?;
-                fmtWalkFunction(l, ast, method, true)?;
-            }
+            fmtWalkMembers(l, ast, body, methods, parts, true)?;
         }
         ItemKind.InherentImpl(forType, functions, typeParameters, regionParameters, constants) => {
             let keyword = l.first(it.start); // `impl S { … }` (ADR 0064 §1)
@@ -555,14 +552,8 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
             let forLast = l.last(ast.typeSpans[forType as usize].end);
             let open = l.find(forLast, TokenKind.OpenBrace);
             let body = l.addContainer(open, true, false, priorityList())?;
-            for (k in 0..functions.count) {
-                let function = ast.at(functions, k);
-                let first = functionFirst(l, ast, function);
-                let last = l.last(ast.functions[function as usize].end);
-                l.addElement(body, first, last)?;
-                fmtWalkAttributes(l, ast, ast.functions[function as usize].attributes)?;
-                fmtWalkFunction(l, ast, function, false)?;
-            }
+            let parts = ast.partsOf(item);
+            fmtWalkMembers(l, ast, body, functions, parts, false)?;
         }
         ItemKind.Extern(_, functions, structs) => {
             let start = l.first(it.start);
@@ -612,6 +603,52 @@ fn fmtWalkItem(l: borrow mut FmtLayout, ast: borrow Ast, item: u32) -> Result<vo
             let last = exprLast(l, ast, value);
             l.addContinuation(first - 1, false, last, priorityInitializer())?;
             fmtWalkExpr(l, ast, value)?;
+        }
+    }
+    return Ok();
+}
+
+/// The members of an interface or an impl of one, in source order: functions, constants and associated types (ADR
+/// 0086 §2.4, §2.5).
+fn fmtWalkMembers(
+    l: borrow mut FmtLayout,
+    ast: borrow Ast,
+    body: u32,
+    functions: Range,
+    parts: InterfaceParts,
+    inInterface: bool,
+) -> Result<void, AllocError> {
+    var f: u32 = 0;
+    var k: u32 = 0;
+    var t: u32 = 0;
+    while (f < functions.count || k < parts.constants.count || t < parts.types.count) {
+        let functionStart = if (f < functions.count) ast.functions[ast.at(functions, f) as usize].start else none();
+        let constantStart = if (k < parts.constants.count) ast.items[ast.at(parts.constants, k) as usize].start
+            else none();
+        let typeStart = if (t < parts.types.count) ast.assocTypes[ast.at(parts.types, t) as usize].start else none();
+        if (functionStart <= constantStart && functionStart <= typeStart) {
+            let function = ast.at(functions, f);
+            let first = functionFirst(l, ast, function);
+            let last = l.last(ast.functions[function as usize].end);
+            l.addElement(body, first, last)?;
+            fmtWalkAttributes(l, ast, ast.functions[function as usize].attributes)?;
+            fmtWalkFunction(l, ast, function, inInterface)?;
+            f += 1;
+        } else if (constantStart <= typeStart) {
+            let constant = ast.at(parts.constants, k);
+            l.addElement(body, itemFirst(l, ast, constant), l.last(ast.items[constant as usize].end))?;
+            fmtWalkItem(l, ast, constant)?;
+            k += 1;
+        } else {
+            let assoc = ast.assocTypes[ast.at(parts.types, t) as usize];
+            l.addElement(body, l.first(assoc.start), l.last(assoc.end))?;
+            for (b in 0..assoc.bounds.count) {
+                fmtWalkType(l, ast, ast.at(assoc.bounds, b))?;
+            }
+            if (assoc.typ != none()) {
+                fmtWalkType(l, ast, assoc.typ)?;
+            }
+            t += 1;
         }
     }
     return Ok();

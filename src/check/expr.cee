@@ -1684,6 +1684,14 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
                     if (constant != none()) {
                         return memberConstantValue(c, constant, span);
                     }
+                    let implemented = if (typeArguments.count == 0) implConstantFor(
+                        c,
+                        c.enums[index as usize].typ,
+                        memberSymbol,
+                    ) else none();
+                    if (implemented != none()) {
+                        return namedConstantValue(c, implemented, span); // ADR 0086 §2.4
+                    }
                     // `Shape.Empty`: a variant without payload.
                     let targetSpan = c.front.ast.exprSpans[target as usize];
                     return checkEnumValue(c, index, member, emptyRange(), typeArguments, targetSpan, span, expected);
@@ -1699,6 +1707,10 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
                         let constant = memberConstantOf(c, c.structs[index as usize].item, memberSymbol);
                         if (constant != none()) {
                             return memberConstantValue(c, constant, span); // ADR 0074 §2.7
+                        }
+                        let implemented = implConstantFor(c, c.structs[index as usize].typ, memberSymbol);
+                        if (implemented != none()) {
+                            return namedConstantValue(c, implemented, span); // ADR 0086 §2.4
                         }
                         return notAValue(c, symbol, member, span);
                     }

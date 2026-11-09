@@ -170,6 +170,78 @@ log
   `T.create(o)` through a bound `T`, as `Self.create(o)` in a default and as `Rule.create(o)` on a type. A method may
   also have type parameters of its own, `fn visit<T: Copy>(borrow mut this, value: T)`, instantiated per call.
 
+## Constants and associated types
+
+An interface can declare constants, with or without a default, and associated types, which each impl chooses:
+
+```ceesafe
+interface Encoding {
+    const NAME: StringView;
+    const WIDTH: usize = 1;
+    type Unit: Copy;
+
+    fn decode(borrow this, bytes: Slice<u8>) -> Self.Unit?;
+}
+
+struct Latin1 {
+    unused: u8;
+}
+
+impl Encoding for Latin1 {
+    const NAME: StringView = "latin-1";
+    type Unit = u8;
+
+    fn decode(borrow this, bytes: Slice<u8>) -> u8? => if (bytes.length > 0) bytes[0] else null;
+}
+
+struct Ucs2 {
+    unused: u8;
+}
+
+impl Encoding for Ucs2 {
+    const NAME: StringView = "ucs-2";
+    const WIDTH: usize = 2;
+    type Unit = u16;
+
+    fn decode(borrow this, bytes: Slice<u8>) -> u16? {
+        if (bytes.length < 2) {
+            return null;
+        }
+        return (bytes[0] as u16) * 256 + (bytes[1] as u16);
+    }
+}
+
+fn first<E: Encoding>(e: borrow E, bytes: Slice<u8>) -> E.Unit? {
+    Console.write(E.NAME);
+    Console.write(" reads ");
+    Console.write(E.WIDTH);
+    Console.writeLine(" byte(s)");
+    return e.decode(bytes);
+}
+
+fn main() {
+    let bytes = [1u8, 2u8];
+    Console.writeLine(first(Latin1 { unused: 0 }, bytes[..]) ?? 0);
+    Console.writeLine(first(Ucs2 { unused: 0 }, bytes[..]) ?? 0);
+    Console.writeLine(Ucs2.WIDTH);
+}
+```
+
+```text
+latin-1 reads 1 byte(s)
+1
+ucs-2 reads 2 byte(s)
+258
+2
+```
+
+- `E.NAME` and `E.Unit` name the constant and the type of whatever `E` is; each instance reads its impl's, so a test
+  of a constant such as `if (H.HAS_ON_DATA)` costs nothing at run time.
+- An associated type's bounds (`Copy` here) are checked at each impl, and are all that generic code knows of it.
+- When callers need to fix a type (an iterator's item, say), make it an interface parameter instead:
+  `Iterator<u8>` rather than an associated type.
+- An interface with constants, associated types or static functions has no `dyn` type.
+
 ## Generic impls
 
 An impl can have type parameters of its own. A wrapper then implements an interface for every inner type that has it:

@@ -1,0 +1,577 @@
+// Interface constants and associated types (ADR 0086 §2.4, §2.5, type-system.md §21.4): what each impl gives its
+// target, `T.NAME` and `P.Name` through a bound, and the checks of an impl's constants and types.
+
+/// A constant an impl gives its target (ADR 0086 §2.4): its own, or the interface's default.
+struct ImplConstant {
+    typ: u32;
+    name: u32;     // a symbol
+    constant: u32; // Checker.constants
+}
+
+/// An associated type an impl gives its target (ADR 0086 §2.5).
+struct ImplType {
+    typ: u32;
+    name: u32; // a symbol
+    assigned: u32;
+}
+
+/// `P.Name` for a type parameter `P` (ADR 0086 §2.5): an opaque type with the declared bounds, one per pair.
+struct Projection {
+    owner: u32;
+    name: u32;
+    typ: u32;
+}
+
+/// An associated type's bound, checked once every impl is known and Copy is computed (ADR 0086 §2.5).
+struct PendingAssocBound {
+    assigned: u32;
+    bound: u32; // TypeTable.bounds, or none for `Copy`
+    file: u32;
+    start: u32;
+    end: u32;
+}
+
+fn interfaceParts(c: borrow Checker, entry: u32) -> InterfaceParts =>
+    c.front.ast.partsOf(c.interfaces[entry as usize].item);
+
+fn constantName(c: borrow Checker, item: u32) -> u32 =>
+    c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol;
+
+fn constantTypeSyntax(c: borrow Checker, item: u32) -> u32 => match (c.front.ast.items[item as usize].kind) {
+    ItemKind.Const(t, _) => t,
+    _ => none(),
+};
+
+fn constantHasValue(c: borrow Checker, item: u32) -> bool => match (c.front.ast.items[item as usize].kind) {
+    ItemKind.Const(_, v) => v != none(),
+    _ => false,
+};
+
+fn assocName(c: borrow Checker, assoc: u32) -> u32 =>
+    c.front.ast.idents[c.front.ast.assocTypes[assoc as usize].name as usize].symbol;
+
+/// The constant an impl gave `typ` named `name` (a Checker.constants index), or none.
+fn implConstantFor(c: borrow Checker, typ: u32, name: u32) -> u32 {
+    for (k in c.implConstants.view()) {
+        if (k.typ == typ && k.name == name) {
+            return k.constant;
+        }
+    }
+    return none();
+}
+
+/// The associated type an impl gave `typ` named `name`, or none.
+fn implTypeFor(c: borrow Checker, typ: u32, name: u32) -> u32 {
+    for (t in c.implTypes.view()) {
+        if (t.typ == typ && t.name == name) {
+            return t.assigned;
+        }
+    }
+    return none();
+}
+
+/// Resolves a type with `environment` as the type environment and `selfType` as `Self`.
+fn resolveTypeIn(c: borrow mut Checker, syntax: u32, environment: Range, selfType: u32) -> Result<u32, AllocError> {
+    let savedEnvironment = enterEnvironment(c, environment)?;
+    let savedSelf = c.selfType;
+    c.selfType = selfType;
+    let t = c.resolveType(syntax, false)?;
+    c.selfType = savedSelf;
+    restoreEnvironment(c, savedEnvironment);
+    return Ok(t);
+}
+
+/// An impl's associated types and constants for `forType` (ADR 0086 §2.4, §2.5), before its methods, whose
+/// signatures may name `Self.Item`: each of the interface's must be given (or, for a constant, have a default), and no
+/// other (N0267). `environment` is the interface's parameters with the impl's arguments; `implEnvironment` the impl's
+/// own parameters.
+fn implementAssociated(
+    c: borrow mut Checker,
+    item: u32,
+    forType: u32,
+    bound: u32,
+    environment: Range,
+    implEnvironment: Range,
+    first: bool,
+) -> Result<void, AllocError> {
+    let interfaceEntry = c.types.bounds[bound as usize].interfaceEntry;
+    let declared = interfaceParts(c, interfaceEntry);
+    let given = c.front.ast.partsOf(item);
+    let interfaceSyntax = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Impl(i, _, _, _, _) => i,
+        _ => none(),
+    };
+    let regionSyntax = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Impl(_, _, _, _, r) => r,
+        _ => emptyRange(),
+    };
+    let span = c.front.ast.typeSpans[interfaceSyntax as usize];
+    var regionNames = Vector<u32>.create();
+    pushRegionNames(c, regionSyntax, mut regionNames)?;
+    let savedRegions = swapRegions(c, regionNames)?;
+    // Associated types: the impl's, resolved with its own parameters and regions in scope.
+    for (k in 0..given.types.count) {
+        let assoc = c.front.ast.at(given.types, k);
+        let name = assocName(c, assoc);
+        var found = none();
+        for (j in 0..declared.types.count) {
+            if (assocName(c, c.front.ast.at(declared.types, j)) == name) {
+                found = c.front.ast.at(declared.types, j);
+            }
+        }
+        let id = c.front.ast.idents[c.front.ast.assocTypes[assoc as usize].name as usize];
+        if (found == none()) {
+            var message = Vector<u8>.create();
+            quotedBound(mut message, c, bound)?;
+            appendText(mut message, " has no associated type ")?;
+            appendQuotedName(mut message, c, name)?;
+            c.error(implMismatch(), id.start, id.end, message)?;
+            continue;
+        }
+        if (implTypeFor(c, forType, name) != none()) {
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, forType)?;
+            appendText(mut message, " already has an associated type named ")?;
+            appendQuotedName(mut message, c, name)?;
+            c.error(duplicateMember(), id.start, id.end, message)?;
+            continue;
+        }
+        let typeSyntax = c.front.ast.assocTypes[assoc as usize].typ;
+        let assigned = resolveTypeIn(c, typeSyntax, implEnvironment, forType)?;
+        if (c.types.isBottom(assigned)) {
+            continue;
+        }
+        c.implTypes.push(ImplType { typ: forType, name: name, assigned: assigned })?;
+        if (first) {
+            let typeSpan = c.front.ast.typeSpans[typeSyntax as usize];
+            let bounds = c.front.ast.assocTypes[found as usize].bounds;
+            let savedFile = c.file;
+            {
+                let fileToSet = c.interfaces[interfaceEntry as usize].file;
+                c.setFile(fileToSet);
+            }
+            for (b in 0..bounds.count) {
+                let boundSyntax = c.front.ast.at(bounds, b);
+                let marker = singleName(c, boundSyntax);
+                let isCopy = marker != none() && sameText(c.name(marker), "Copy") && match (c.item(marker)) {
+                    Entity.None => true,
+                    _ => false,
+                };
+                var resolved = none();
+                if (!isCopy) {
+                    let saved = enterEnvironment(c, environment)?;
+                    let savedSelf = c.selfType;
+                    c.selfType = forType;
+                    resolved = resolveInterface(c, boundSyntax)?;
+                    c.selfType = savedSelf;
+                    restoreEnvironment(c, saved);
+                    if (resolved == none()) {
+                        continue;
+                    }
+                }
+                c.pendingAssocBounds.push(PendingAssocBound {
+                    assigned: assigned,
+                    bound: resolved,
+                    file: savedFile,
+                    start: typeSpan.start,
+                    end: typeSpan.end,
+                })?;
+            }
+            c.setFile(savedFile);
+        }
+    }
+    for (j in 0..declared.types.count) {
+        let name = assocName(c, c.front.ast.at(declared.types, j));
+        if (implTypeFor(c, forType, name) == none() && !assocGiven(c, given.types, name)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'impl ")?;
+            boundText(mut message, c, bound)?;
+            appendText(mut message, " for ")?;
+            appendBytes(mut message, c.typeName(forType))?;
+            appendText(mut message, "' is missing associated type ")?;
+            appendQuotedName(mut message, c, name)?;
+            appendText(mut message, ": write 'type ")?;
+            appendBytes(mut message, c.name(name))?;
+            appendText(mut message, " = …;' (ADR 0086 §2.5)")?;
+            c.error(implMismatch(), span.start, span.end, message)?;
+            let error = c.types.error;
+            c.implTypes.push(ImplType { typ: forType, name: name, assigned: error })?; // no cascade at `Self.Item`
+        }
+    }
+    swapRegions(c, savedRegions)?;
+    // Constants: the impl's own, then the interface's defaults for the others.
+    var givenNames = Vector<u32>.create();
+    for (k in 0..given.constants.count) {
+        let constItem = c.front.ast.at(given.constants, k);
+        let name = constantName(c, constItem);
+        let id = c.front.ast.idents[c.front.ast.items[constItem as usize].name as usize];
+        var found = none();
+        for (j in 0..declared.constants.count) {
+            if (constantName(c, c.front.ast.at(declared.constants, j)) == name) {
+                found = c.front.ast.at(declared.constants, j);
+            }
+        }
+        givenNames.push(name)?;
+        if (found == none()) {
+            var message = Vector<u8>.create();
+            quotedBound(mut message, c, bound)?;
+            appendText(mut message, " has no constant ")?;
+            appendQuotedName(mut message, c, name)?;
+            c.error(implMismatch(), id.start, id.end, message)?;
+            continue;
+        }
+        if (first && c.types.isGeneric(forType)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "constant ")?;
+            appendQuotedName(mut message, c, name)?;
+            appendText(
+                mut message,
+                ": a generic impl cannot have constants yet; its instances get the interface's defaults (ADR 0086 §2.4)",
+            )?;
+            c.error(unsupported(), id.start, id.end, message)?;
+            continue;
+        }
+        if (!first && c.types.isGeneric(forType)) {
+            continue;
+        }
+        if (constantClashes(c, forType, name, id)?) {
+            continue;
+        }
+        let constant = declareImplConstant(c, constItem, forType, implEnvironment)?;
+        let declaredSyntax = constantTypeSyntax(c, found);
+        let declaredType = resolveTypeIn(c, declaredSyntax, environment, forType)?;
+        let actualType = c.hir.constants[c.constants[constant as usize].hir as usize].typ;
+        if (declaredType != actualType && !c.types.isBottom(declaredType) && !c.types.isBottom(actualType)) {
+            var message = Vector<u8>.create();
+            appendQuotedName(mut message, c, name)?;
+            appendText(mut message, " does not match ")?;
+            quotedBound(mut message, c, bound)?;
+            appendText(mut message, ": it must have type ")?;
+            appendQuotedType(mut message, c, declaredType)?;
+            appendText(mut message, ", not ")?;
+            appendQuotedType(mut message, c, actualType)?;
+            c.error(implMismatch(), id.start, id.end, message)?;
+        }
+        c.implConstants.push(ImplConstant { typ: forType, name: name, constant: constant })?;
+    }
+    for (j in 0..declared.constants.count) {
+        let constItem = c.front.ast.at(declared.constants, j);
+        let name = constantName(c, constItem);
+        if (containsU32(givenNames, name)) {
+            continue;
+        }
+        if (!constantHasValue(c, constItem)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'impl ")?;
+            boundText(mut message, c, bound)?;
+            appendText(mut message, " for ")?;
+            appendBytes(mut message, c.typeName(forType))?;
+            appendText(mut message, "' is missing constant ")?;
+            appendQuotedName(mut message, c, name)?;
+            c.error(implMismatch(), span.start, span.end, message)?;
+            continue;
+        }
+        let id = Ident { symbol: name, start: span.start, end: span.end, missing: false };
+        if (constantClashes(c, forType, name, id)?) {
+            continue;
+        }
+        // The default, in the interface's file and environment; it may not use `Self` (ADR 0086 §2.4).
+        let savedFile = c.file;
+        {
+            let fileToSet = c.interfaces[interfaceEntry as usize].file;
+            c.setFile(fileToSet);
+        }
+        let constant = declareImplConstant(c, constItem, forType, environment)?;
+        c.setFile(savedFile);
+        c.implConstants.push(ImplConstant { typ: forType, name: name, constant: constant })?;
+    }
+    return Ok();
+}
+
+fn assocGiven(c: borrow Checker, types: Range, name: u32) -> bool {
+    for (k in 0..types.count) {
+        if (assocName(c, c.front.ast.at(types, k)) == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// N0228 if `forType` already has a constant named `name`: its own (ADR 0074 §2.7), or another impl's.
+fn constantClashes(c: borrow mut Checker, forType: u32, name: u32, id: Ident) -> Result<bool, AllocError> {
+    let owner = declarationOf(c, forType);
+    if (memberConstantOf(c, owner, name) == none() && implConstantFor(c, forType, name) == none()) {
+        return Ok(false);
+    }
+    var message = Vector<u8>.create();
+    appendQuotedType(mut message, c, forType)?;
+    appendText(mut message, " already has a constant named ")?;
+    appendQuotedName(mut message, c, name)?;
+    c.error(duplicateMember(), id.start, id.end, message)?;
+    return Ok(true);
+}
+
+/// A constant of the constant table for `forType`, named `Type.NAME`, with its type resolved in `environment`.
+fn declareImplConstant(
+    c: borrow mut Checker,
+    constItem: u32,
+    forType: u32,
+    environment: Range,
+) -> Result<u32, AllocError> {
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.typeName(forType))?;
+    text.push('.')?;
+    appendBytes(mut text, c.name(constantName(c, constItem)))?;
+    let symbol = c.front.symbols.intern(text.view())?.id;
+    let savedEnvironment = enterEnvironment(c, environment)?;
+    let savedSelf = c.selfType;
+    c.selfType = none();
+    let typeSyntax = constantTypeSyntax(c, constItem);
+    let constant = declareConstantEntry(c, constItem, typeSyntax, symbol)?;
+    c.selfType = savedSelf;
+    restoreEnvironment(c, savedEnvironment);
+    return Ok(constant);
+}
+
+/// Checks the associated types' bounds, once every impl is known and Copy is computed (ADR 0086 §2.5): N0268.
+fn checkPendingAssocBounds(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.pendingAssocBounds.length) {
+        let p = c.pendingAssocBounds[k];
+        c.setFile(p.file);
+        let met = if (p.bound == none()) c.types.isCopy(p.assigned) else implements(c, p.assigned, p.bound);
+        if (!met) {
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, p.assigned)?;
+            if (p.bound == none()) {
+                appendText(mut message, " is not Copy, but the associated type must be ('Copy')")?;
+            } else {
+                appendText(mut message, " does not implement ")?;
+                quotedBound(mut message, c, p.bound)?;
+                appendText(mut message, ", which the associated type requires")?;
+            }
+            c.error(boundNotSatisfied(), p.start, p.end, message)?;
+        }
+    }
+    c.pendingAssocBounds.truncate(0);
+    c.setFile(saved);
+    return Ok();
+}
+
+/// The bounds of a type parameter that declare a member named `name` (with `declares`), as TypeTable.bounds, and
+/// their supertraits' (ADR 0086 §2.6).
+fn boundsDeclaring(
+    c: borrow mut Checker,
+    typ: u32,
+    name: u32,
+    kind: u32,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
+    var all = Vector<u32>.create();
+    for (b in c.types.typeParameters[c.types.info(typ).typeParameter as usize].bounds.view()) {
+        all.push(b)?;
+    }
+    for (b in all.view()) {
+        let entry = c.types.bounds[b as usize].interfaceEntry;
+        let parts = interfaceParts(c, entry);
+        var declares = false;
+        if (kind == 0) {
+            for (k in 0..parts.constants.count) {
+                if (constantName(c, c.front.ast.at(parts.constants, k)) == name) {
+                    declares = true;
+                }
+            }
+        } else {
+            for (k in 0..parts.types.count) {
+                if (assocName(c, c.front.ast.at(parts.types, k)) == name) {
+                    declares = true;
+                }
+            }
+        }
+        if (declares) {
+            out.push(b)?;
+        }
+    }
+    return Ok();
+}
+
+/// The syntax of the member `name` of the interface `entry`: a constant item (kind 0) or an associated type (1).
+fn declaredMember(c: borrow Checker, entry: u32, name: u32, kind: u32) -> u32 {
+    let parts = interfaceParts(c, entry);
+    if (kind == 0) {
+        for (k in 0..parts.constants.count) {
+            if (constantName(c, c.front.ast.at(parts.constants, k)) == name) {
+                return c.front.ast.at(parts.constants, k);
+            }
+        }
+        return none();
+    }
+    for (k in 0..parts.types.count) {
+        if (assocName(c, c.front.ast.at(parts.types, k)) == name) {
+            return c.front.ast.at(parts.types, k);
+        }
+    }
+    return none();
+}
+
+/// The environment of a bound's interface: its parameters with the bound's arguments.
+fn boundEnvironment(c: borrow mut Checker, bound: u32) -> Result<Range, AllocError> {
+    let b = c.types.bounds[bound as usize];
+    let item = c.interfaces[b.interfaceEntry as usize].item;
+    let interfaceParameters = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Interface(_, t) => t,
+        _ => emptyRange(),
+    };
+    var arguments = Vector<u32>.create();
+    listTypes(c, b.arguments, mut arguments)?;
+    var pairs = Vector<EnvPair>.create();
+    zipEnvironment(c, interfaceParameters, arguments.view(), mut pairs)?;
+    return storeEnvironment(c, pairs.view());
+}
+
+/// The one bound of `typ` that declares `name` (kind 0 a constant, 1 an associated type), or none: N0267 if two do
+/// (reported at `span`).
+fn uniqueBoundDeclaring(c: borrow mut Checker, typ: u32, name: u32, kind: u32, span: Span) -> Result<u32, AllocError> {
+    var candidates = Vector<u32>.create();
+    boundsDeclaring(c, typ, name, kind, mut candidates)?;
+    if (candidates.length > 1) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, " is ambiguous: both ")?;
+        quotedBound(mut message, c, candidates[0])?;
+        appendText(mut message, " and ")?;
+        quotedBound(mut message, c, candidates[1])?;
+        appendText(mut message, " declare it")?;
+        c.error(implMismatch(), span.start, span.end, message)?;
+    }
+    return Ok(if (candidates.length == 0) none() else candidates[0]);
+}
+
+/// `P.Name` in a type (ADR 0086 §2.5): for a type parameter `P` (or `Self` in an interface), the associated type its
+/// one bound declaring `Name` has, opaque with that type's bounds; for a concrete type, what its impl gives it.
+fn resolveProjection(c: borrow mut Checker, owner: u32, nameIdent: Ident, span: Span) -> Result<u32, AllocError> {
+    let name = nameIdent.symbol;
+    if (!c.types.is(owner, TypeKind.TypeParameter)) {
+        let assigned = implTypeFor(c, owner, name);
+        if (assigned != none()) {
+            return Ok(assigned);
+        }
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, owner)?;
+        appendText(mut message, " has no associated type ")?;
+        appendQuotedName(mut message, c, name)?;
+        c.error(undefinedName(), span.start, span.end, message)?;
+        return Ok(c.types.error);
+    }
+    for (p in c.projections.view()) {
+        if (p.owner == owner && p.name == name) {
+            return Ok(p.typ);
+        }
+    }
+    let bound = uniqueBoundDeclaring(c, owner, name, 1, span)?;
+    if (bound == none()) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, owner)?;
+        appendText(mut message, " has no associated type ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, ": no bound of it declares one (ADR 0086 §2.5)")?;
+        c.error(undefinedName(), span.start, span.end, message)?;
+        return Ok(c.types.error);
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.typeName(owner))?;
+    text.push('.')?;
+    appendBytes(mut text, c.name(name))?;
+    let typ = c.types.createTypeParameter(text.view())?;
+    c.projections.push(Projection { owner: owner, name: name, typ: typ })?;
+    // Its bounds, from the declaration, with the bound's arguments and `Self` = the owner.
+    let entry = c.types.bounds[bound as usize].interfaceEntry;
+    let assoc = declaredMember(c, entry, name, 1);
+    let bounds = c.front.ast.assocTypes[assoc as usize].bounds;
+    let environment = boundEnvironment(c, bound)?;
+    let savedFile = c.file;
+    {
+        let fileToSet = c.interfaces[entry as usize].file;
+        c.setFile(fileToSet);
+    }
+    let info = c.types.info(typ).typeParameter;
+    for (b in 0..bounds.count) {
+        let boundSyntax = c.front.ast.at(bounds, b);
+        let marker = singleName(c, boundSyntax);
+        let isCopy = marker != none() && sameText(c.name(marker), "Copy") && match (c.item(marker)) {
+            Entity.None => true,
+            _ => false,
+        };
+        if (isCopy) {
+            c.types.typeParameters[info as usize].copyBound = true;
+            continue;
+        }
+        let saved = enterEnvironment(c, environment)?;
+        let savedSelf = c.selfType;
+        c.selfType = owner;
+        let resolved = resolveInterface(c, boundSyntax)?;
+        c.selfType = savedSelf;
+        restoreEnvironment(c, saved);
+        if (resolved != none()) {
+            c.types.typeParameters[info as usize].bounds.push(resolved)?;
+        }
+    }
+    c.setFile(savedFile);
+    return Ok(typ);
+}
+
+/// `T.NAME` for a type parameter `T` (ADR 0086 §2.4): in generic code, a value of the constant's type that the
+/// instance replaces with the constant; a call of an unregistered function without a body, as a bound's static
+/// function is. None if no bound declares it.
+fn boundConstant(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<u32, AllocError> {
+    for (m in c.boundConstants.view()) {
+        if (m.typ == typ && m.name == name) {
+            return Ok(m.function);
+        }
+    }
+    let bound = uniqueBoundDeclaring(c, typ, name, 0, span)?;
+    if (bound == none()) {
+        return Ok(none());
+    }
+    let entry = c.types.bounds[bound as usize].interfaceEntry;
+    let constItem = declaredMember(c, entry, name, 0);
+    let environment = boundEnvironment(c, bound)?;
+    let savedFile = c.file;
+    {
+        let fileToSet = c.interfaces[entry as usize].file;
+        c.setFile(fileToSet);
+    }
+    let typeSyntax = constantTypeSyntax(c, constItem);
+    let constantType = resolveTypeIn(c, typeSyntax, environment, typ)?;
+    // A signature `fn NAME() -> T` with no body: never compiled, as generic code is not.
+    let nameIdent = c.front.ast.items[constItem as usize].name;
+    let at = c.front.ast.items[constItem as usize].start;
+    c.front.ast.functions.push(Function {
+        visibility: Visibility.Default,
+        name: nameIdent,
+        receiver: ReceiverKind.None,
+        receiverStart: at,
+        receiverEnd: at,
+        parameters: emptyRange(),
+        returnType: none(),
+        body: none(),
+        expressionBody: none(),
+        typeParameters: emptyRange(),
+        regionParameters: emptyRange(),
+        isUnsafe: false,
+        isAsync: false,
+        hasDoc: false,
+        doc: emptyRange(),
+        isExtern: false,
+        variadicStart: none(),
+        attributes: emptyRange(),
+        start: at,
+        end: at,
+    })?;
+    let syntax = truncate<u32>(c.front.ast.functions.length - 1);
+    let library = isLibraryFile(c);
+    let function = c.hir.addFunction(name, typ, constantType, c.file, syntax, library, false)?;
+    c.setFile(savedFile);
+    c.boundConstants.push(BoundMethod { typ: typ, bound: bound, name: name, function: function })?;
+    return Ok(function);
+}

@@ -23,6 +23,12 @@
 - [struct AtomicBool](#struct-atomicbool)
 - [struct ByteOrder](#struct-byteorder)
 - [struct VectorBytes](#struct-vectorbytes)
+- [struct RawCell](#struct-rawcell)
+- [struct Cell](#struct-cell)
+- [struct RefCell](#struct-refcell)
+- [struct RefCellTaking](#struct-refcelltaking)
+- [struct CellRef](#struct-cellref)
+- [struct CellRefMut](#struct-cellrefmut)
 - [struct TextWriter](#struct-textwriter)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -1573,6 +1579,242 @@ public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -
 ```
 
 Appends `x` as 8 bytes, little-endian, in two's complement.
+
+## struct RawCell
+
+```ceesafe
+@interiorMutable
+@noncopy
+public struct RawCell<T>
+```
+
+The primitive (§41.1): a `T` that may be read and written through `pointer()` while shared loans of the cell, or of
+a value holding it, are live. It has `T`'s size and alignment. `T` may not hold loans (N0351).
+
+### RawCell.create
+
+```ceesafe
+public fn create(value: T) -> RawCell<T>
+```
+
+A cell holding `value`.
+
+### RawCell.pointer
+
+```ceesafe
+public fn pointer(borrow this) -> *mut T
+```
+
+The contents' address: safe to take, `unsafe` to use. Unsafe code must not make two live `borrow mut T` from
+it, nor write while a `borrow T` it made is live (unsafe.md §2).
+
+### RawCell.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> borrow mut T
+```
+
+The contents, for as long as the cell is borrowed exclusively: no other loan of it can be live.
+
+### RawCell.intoInner
+
+```ceesafe
+public fn intoInner(this) -> T
+```
+
+The contents, the cell consumed.
+
+## struct Cell
+
+```ceesafe
+public struct Cell<T: Copy>
+```
+
+A `Copy` value that may be read and replaced through a shared reference (§41.2): `get` copies it out, `set` stores
+a new one. No method lends a reference to the contents, so no change can be seen through a stale one, and a call
+between two methods (a re-entrant callback) is harmless. `==` and `!=` compare the contents when `T` has them.
+
+### Cell.create
+
+```ceesafe
+public fn create(value: T) -> Cell<T>
+```
+
+A cell holding `value`.
+
+### Cell.get
+
+```ceesafe
+public fn get(borrow this) -> T
+```
+
+A copy of the contents.
+Safety: no reference to the contents is ever lent, so nothing writes them during the read; `T` is Copy.
+
+### Cell.set
+
+```ceesafe
+public fn set(borrow this, value: T)
+```
+
+Stores `value`; the old contents need no drop (`T` is Copy), so no user code runs.
+Safety: as get; nothing reads the contents during the write.
+
+### Cell.replace
+
+```ceesafe
+public fn replace(borrow this, value: T) -> T
+```
+
+Stores `value` and returns the old contents.
+Safety: as set.
+
+### Cell.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> borrow mut T
+```
+
+The contents, for as long as the cell is borrowed exclusively.
+
+### Cell.intoInner
+
+```ceesafe
+public fn intoInner(this) -> T
+```
+
+The contents, the cell consumed.
+
+## struct RefCell
+
+```ceesafe
+public struct RefCell<T>
+```
+
+A value lent through a shared reference with checked access (§41.3): any number of `read` guards, or one `write`
+guard, at a time. A conflict panics ("cell already borrowed"); `tryRead` and `tryWrite` return null instead. The
+state is one word: 0 free, n > 0 readers, -1 writing.
+
+### RefCell.create
+
+```ceesafe
+public fn create(value: T) -> RefCell<T>
+```
+
+A cell holding `value`, free.
+
+### RefCell.read
+
+```ceesafe
+public fn read(borrow this) -> CellRef<T>
+```
+
+Shared access until the guard is dropped; panics while a `write` guard is live.
+
+### RefCell.tryRead
+
+```ceesafe
+public fn tryRead(borrow this) -> CellRef<T>?
+```
+
+As read, or null while a `write` guard is live.
+
+### RefCell.write
+
+```ceesafe
+public fn write(borrow this) -> CellRefMut<T>
+```
+
+Exclusive access until the guard is dropped; panics while any guard is live.
+
+### RefCell.tryWrite
+
+```ceesafe
+public fn tryWrite(borrow this) -> CellRefMut<T>?
+```
+
+As write, or null while any guard is live.
+
+### RefCell.replace
+
+```ceesafe
+public fn replace(borrow this, value: T) -> T
+```
+
+Stores `value` and returns the old contents, moved out before the return: their drop runs in the caller, with
+no guard live. Panics while any guard is live.
+Safety: no guard is live, so no reference to the contents is; the old value is read out before the write.
+
+### RefCell.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> borrow mut T
+```
+
+The contents, for as long as the cell is borrowed exclusively: no guard can be live.
+
+### RefCell.intoInner
+
+```ceesafe
+public fn intoInner(this) -> T
+```
+
+The contents, the cell consumed.
+
+## struct RefCellTaking
+
+```ceesafe
+public struct RefCellTaking<T>
+```
+
+`RefCell.take` on a `RefCell<T?>` (§41.3): the contents, leaving null.
+
+### RefCellTaking.take
+
+```ceesafe
+public fn take(cell: borrow RefCell<T?>) -> T?
+```
+
+Panics while any guard is live, as replace.
+
+## struct CellRef
+
+```ceesafe
+public struct CellRef<region r, T> {
+    drop { … }
+}
+```
+
+A `read` guard of a RefCell (§41.3): `data()` lends the contents shared; dropping it gives the access back.
+
+### CellRef.data
+
+```ceesafe
+public fn data(borrow this) -> borrow T
+```
+
+The contents, for as long as the guard is borrowed.
+
+## struct CellRefMut
+
+```ceesafe
+public struct CellRefMut<region r, T> {
+    drop { … }
+}
+```
+
+A `write` guard of a RefCell (§41.3): `data()` lends the contents exclusively; dropping it gives the access back.
+
+### CellRefMut.data
+
+```ceesafe
+public fn data(borrow mut this) -> borrow mut T
+```
+
+The contents, for as long as the guard is borrowed exclusively.
+Safety: the guard set the state to -1, so no other guard is live and none can be made while it is; the loan
+ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
+shared, type-system.md §41.1).
 
 ## struct TextWriter
 

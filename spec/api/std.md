@@ -2063,7 +2063,8 @@ Holding a Mutex: `data()` lends the protected value; dropping the guard unlocks.
 public fn data(borrow mut this) -> borrow mut T
 ```
 
-Safety: the guard holds the lock, so no other thread reaches the data, and the loan ends before the guard's drop.
+Safety: the guard holds the lock, so no other thread reaches the cell's contents, and the loan ends before the
+guard's drop (a RawCell's contents may change while the mutex is shared, §41.1).
 
 ## struct Arc
 

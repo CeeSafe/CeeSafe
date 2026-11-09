@@ -114,8 +114,8 @@ and scratch frames are built in, and allocations from a region borrow it, so the
 **Checks in every build.** Integer overflow panics in release builds too; there is no `--release` that turns it off.
 Bounds and overflow checks the compiler proves unnecessary are removed, and `--explain-bounds-checks` shows which.
 
-**No traits as types.** Interfaces are bounds and nothing else: no `dyn`, no default methods, no associated types, no
-blanket `impl<T>`. Heterogeneous collections are enums.
+**Interfaces are traits without the corners.** Interfaces have default methods and `Self`; there are no blanket
+`impl<T: A> B for T`. A collection of different types is an enum or holds `Box<dyn I>`.
 
 **Closures do not escape.** A closure borrows what it captures and has a reference type (`borrow fn(i32) -> bool`,
 `borrow mut fn(i32)`), so it cannot be returned or stored. There is no `move` closure, `Fn`/`FnMut`/`FnOnce` trait or

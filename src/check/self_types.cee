@@ -1,0 +1,95 @@
+// A type named in an expression (ADR 0086 §2.2, §2.3): `Self.create(…)`, `Self.MAX`, `T.create(…)` and `T.NAME`,
+// where `Self` is the type the method or body belongs to and `T` a type parameter in scope.
+
+/// The type a name in an expression's target stands for, if it names one: `Self`, or a type parameter in scope (or
+/// what an instance gives it); none for a local or anything else.
+fn typeNamedInExpression(c: borrow Checker, symbol: u32) -> u32 {
+    if (c.findLocal(symbol) != none()) {
+        return none();
+    }
+    return environmentType(c, symbol);
+}
+
+/// `X.f(args)` where `X` names the type `typ` (ADR 0086 §2.3): a struct's static function (its own or an impl's), an
+/// enum's variant or an impl's static function, or for a type parameter, a static function of its bounds.
+fn checkTypeCall(
+    c: borrow mut Checker,
+    typ: u32,
+    target: u32,
+    member: u32,
+    arguments: Range,
+    expected: u32,
+    calleeSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let memberSpan = Span { start: memberIdent.start, end: memberIdent.end };
+    let structEntry = structEntryOfType(c, typ);
+    if (structEntry != none()) {
+        return checkStaticCall(c, structEntry, member, arguments, calleeSpan, span);
+    }
+    var function = implMethodFor(c, typ, memberIdent.symbol);
+    let enumEntry = enumEntryOfType(c, typ);
+    if (function == none() && enumEntry != none()) {
+        let targetSpan = c.front.ast.exprSpans[target as usize];
+        return checkEnumValue(c, enumEntry, member, arguments, emptyRange(), targetSpan, span, expected);
+    }
+    if (function == none() && c.types.is(typ, TypeKind.TypeParameter)) {
+        function = findMethod(c, typ, memberIdent.symbol, memberSpan)?;
+    }
+    if (function == none()) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, typ)?;
+        appendText(mut message, " has no function named ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (isMethod(c, function)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, c.typeName(typ))?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(memberIdent.symbol))?;
+        appendText(mut message, "' is a method; call it on a value: value.")?;
+        appendBytes(mut message, c.name(memberIdent.symbol))?;
+        appendText(mut message, "(...)")?;
+        c.error(methodCallKind(), calleeSpan.start, calleeSpan.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (!noMemberTypeArguments(c, member, span)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    return checkUserCall(c, function, arguments, span);
+}
+
+/// `X.NAME` without a call, where `X` names the type `typ`: an associated constant (ADR 0074 §2.7), or an enum's
+/// variant without payload.
+fn checkTypeMember(
+    c: borrow mut Checker,
+    typ: u32,
+    target: u32,
+    member: u32,
+    span: Span,
+    expected: u32,
+) -> Result<u32, AllocError> {
+    let memberIdent = c.front.ast.idents[member as usize];
+    let constant = memberConstantOf(c, declarationOf(c, typ), memberIdent.symbol);
+    if (constant != none()) {
+        return memberConstantValue(c, constant, span);
+    }
+    let enumEntry = enumEntryOfType(c, typ);
+    if (enumEntry != none()) {
+        let targetSpan = c.front.ast.exprSpans[target as usize];
+        return checkEnumValue(c, enumEntry, member, emptyRange(), emptyRange(), targetSpan, span, expected);
+    }
+    var message = Vector<u8>.create();
+    appendQuotedType(mut message, c, typ)?;
+    appendText(mut message, " has no constant named ")?;
+    appendQuotedName(mut message, c, memberIdent.symbol)?;
+    c.error(undefinedName(), memberIdent.start, memberIdent.end, message)?;
+    return c.errorResult(span.start, span.end);
+}

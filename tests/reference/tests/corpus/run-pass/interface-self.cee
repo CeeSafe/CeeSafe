@@ -1,0 +1,59 @@
+// `Self` (ADR 0086 §2.2): in an interface, the implementing type; in an impl and in a struct's body, the target type
+// with its parameters, as a type, a struct literal, a static call and a constant.
+interface Copyable {
+    fn copyOf(borrow this) -> Self;
+}
+
+struct Point {
+    x: i32;
+    y: i32;
+    const ORIGIN_Y: i32 = 3;
+
+    fn make(x: i32) -> Self => Self { x: x, y: Self.ORIGIN_Y };
+
+    fn sum(borrow this) -> i32 => this.x + this.y;
+}
+
+impl Copyable for Point {
+    fn copyOf(borrow this) -> Self => Self.make(this.x + 1);
+}
+
+struct Pair<T> {
+    a: T;
+    b: T;
+
+    fn swap(this) -> Self => Self { a: this.b, b: this.a };
+}
+
+struct Node {
+    value: i32;
+    next: Box<Self>?;
+}
+
+struct Holder {
+    s: i32;
+}
+
+impl Holder {
+    const LIMIT: i32 = 0;
+
+    fn above(borrow this) -> bool => this.s > Self.LIMIT;
+}
+
+fn dup<T: Copyable>(x: borrow T) -> T => x.copyOf();
+
+fn main() {
+    let p = Point.make(1);
+    let q = dup(p);
+    Console.writeLine(q.sum()); // (2, 3)
+    let r = Pair<u8> { a: 1, b: 2 }.swap();
+    Console.writeLine(r.a);
+    let n = Node { value: 4, next: null };
+    Console.writeLine(n.value);
+    Console.writeLine(Holder { s: 3 }.above());
+}
+
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: 4
+// expect-stdout: true

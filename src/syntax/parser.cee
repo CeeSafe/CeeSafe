@@ -745,23 +745,8 @@ struct Parser {
         var body = none();
         var expressionBody = none();
         if (this.parsingSignatures && this.eat(TokenKind.Semicolon)) {
-            // An interface method: a signature without a body (type-system.md §21.1).
-        } else if (this.parsingSignatures && !this.parsingExtern &&
-            (this.at(TokenKind.OpenBrace) || this.at(TokenKind.FatArrow))) {
-            // A body on an interface method: §21.1's MethodSig ends with ';'. It was parsed and then never checked or
-            // used, so an ill-typed body compiled. Report it, and parse the body only to recover.
-            this.errorFound(
-                expectedToken(),
-                "expected ';' after an interface method's signature, found ",
-                ": an interface method has no body (type-system.md §21.1)",
-            )?;
-            if (this.at(TokenKind.OpenBrace)) {
-                this.parseBlock()?;
-            } else {
-                this.advance();
-                this.parseExpr()?;
-                this.expect(TokenKind.Semicolon)?;
-            }
+            // An interface method without a default, or a C function: a signature (type-system.md §21.1). An interface
+            // method with a body is a default (ADR 0086 §2.1).
         } else if (this.at(TokenKind.OpenBrace)) {
             body = this.parseBlock()?;
         } else if (this.eat(TokenKind.FatArrow)) {
@@ -1326,7 +1311,11 @@ struct Parser {
     fn parseQualifiedName(borrow mut this) -> Result<QualifiedName, AllocError> {
         let start = this.current().start;
         var parts = Vector<u32>.create();
-        parts.push(this.parseIdentifier()?)?;
+        if (this.at(TokenKind.SelfTypeKeyword)) {
+            parts.push(this.keywordIdent("Self")?)?; // `Self` and `Self.Item` (ADR 0086 §2.2, §2.5)
+        } else {
+            parts.push(this.parseIdentifier()?)?;
+        }
         while (this.at(TokenKind.Dot) && this.peekIs(1, TokenKind.Identifier)) {
             this.advance();
             parts.push(this.parseIdentifier()?)?;
@@ -1526,7 +1515,7 @@ struct Parser {
             }
             return this.front.ast.addType(TypeNode.Dyn(interfaceType, isMutable, isSend), start, this.endFrom(start));
         }
-        if (this.at(TokenKind.Identifier)) {
+        if (this.at(TokenKind.Identifier) || this.at(TokenKind.SelfTypeKeyword)) {
             // A primitive type takes no type arguments, so `a as u64 < b` compares (ADR 0075 §2.13).
             let primitive = !sameKind(this.peek(1).kind, TokenKind.Dot) && this.isPrimitiveTypeName(this.current());
             let name = this.parseQualifiedName()?;
@@ -2585,6 +2574,14 @@ struct Parser {
             TokenKind.ThisKeyword => {
                 this.advance();
                 return this.front.ast.addExpr(ExprNode.This, token.start, token.end);
+            }
+            TokenKind.SelfTypeKeyword => {
+                // `Self.create(…)`, `Self.MAX`, `Self { … }` (ADR 0086 §2.2): a name the checker resolves.
+                let name = this.keywordIdent("Self")?;
+                if (this.at(TokenKind.OpenBrace)) {
+                    return this.parseStructLiteral(name, token.start, emptyRange());
+                }
+                return this.front.ast.addExpr(ExprNode.Name(name, emptyRange()), token.start, token.end);
             }
             TokenKind.NullKeyword => {
                 this.advance();

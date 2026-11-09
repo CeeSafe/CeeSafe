@@ -42,6 +42,9 @@ fn environmentType(c: borrow Checker, symbol: u32) -> u32 {
             return c.typeEnvironment[k].typ;
         }
     }
+    if (symbol == c.selfSymbol) {
+        return c.selfType; // `Self` (ADR 0086 §2.2): the method's owner, or the struct or enum being declared
+    }
     return none();
 }
 
@@ -88,8 +91,11 @@ fn functionIsGeneric(c: borrow Checker, function: u32) -> bool {
 }
 
 /// HirFunction.IsInstantiation: a monomorphised copy of generic code.
+/// An interface default's instance for an impl that inherits it is one too (ADR 0086 §2.1): its generic version, at
+/// the interface, reports.
 fn functionIsInstantiation(c: borrow Checker, function: u32) -> bool =>
-    c.hir.functions[function as usize].environment.count > 0 && !functionIsGeneric(c, function);
+    c.hir.functions[function as usize].inheritedDefault ||
+        (c.hir.functions[function as usize].environment.count > 0 && !functionIsGeneric(c, function));
 
 /// The type parameters of a declaration (DeclareTypeParameters): each a new type, with its marker bounds; interface
 /// bounds are S4c's. `env` gets the outer environment's pairs and then these.

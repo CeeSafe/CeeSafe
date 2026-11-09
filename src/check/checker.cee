@@ -104,6 +104,8 @@ struct Checker {
     constants: Vector<ConstEntry>;
     reserved: Vector<u32>; // symbols of the reserved names (s_reservedNames)
     thisSymbol: u32;
+    selfSymbol: u32; // `Self` (ADR 0086 §2.2)
+    selfType: u32;   // what `Self` means where the checker is: a method's owner, a struct's or enum's type, or none
     // The body being checked.
     file: u32;
     function: u32;
@@ -485,6 +487,15 @@ struct Checker {
                 let parameter = environmentType(this, ident.symbol);
                 if (parameter != none()) {
                     return Ok(parameter); // a type parameter in scope, or what it is instantiated with (§20)
+                }
+                if (ident.symbol == this.selfSymbol) {
+                    var message = Vector<u8>.create();
+                    appendText(
+                        mut message,
+                        "'Self' names a type only in an interface, an impl, or a struct's or enum's body (ADR 0086 §2.2)",
+                    )?;
+                    this.error(105, span.start, span.end, message)?;
+                    return Ok(this.types.error);
                 }
                 var text = Vector<u8>.create();
                 appendBytes(mut text, this.name(ident.symbol))?;

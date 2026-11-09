@@ -109,6 +109,64 @@ square: 9
 - Several bounds are joined with `+`: `<T: Shape + Copy>`.
 - An interface can itself be generic: `interface Comparable<T> { fn compare(borrow this, other: borrow T) -> i32; }`.
 
+## Default methods and `Self`
+
+An interface method can have a body: its **default**. An impl that leaves the method out inherits the default; one
+that writes it overrides it. Inside an interface, `Self` is the implementing type.
+
+```ceesafe
+interface Watcher {
+    fn onError(borrow mut this, code: u32);
+
+    fn onWatchError(borrow mut this, code: u32) {
+        this.onError(code + 100);
+    }
+
+    fn label(borrow this) -> StringView => "watcher";
+
+    fn copyOf(borrow this) -> Self;
+}
+
+struct Log {
+    total: u32;
+}
+
+impl Watcher for Log {
+    fn onError(borrow mut this, code: u32) {
+        this.total += code;
+    }
+
+    fn label(borrow this) -> StringView => "log";
+
+    fn copyOf(borrow this) -> Self => Self { total: this.total };
+}
+
+fn report<W: Watcher>(w: borrow mut W) {
+    w.onWatchError(1);
+    Console.writeLine(w.label());
+}
+
+fn main() {
+    var log = Log { total: 0 };
+    log.onWatchError(5);
+    report(mut log);
+    Console.writeLine(log.copyOf().total);
+}
+```
+
+```text
+log
+206
+```
+
+- A default is checked once, where the interface is, with `Self` unknown: it can call the interface's methods but
+  not use fields. An error in it is reported there, even if no impl inherits it.
+- An impl that inherits a default gets its own copy, compiled for the target type: a call on the type, through a
+  bound or through `dyn` calls it directly or through the table, as for a method the impl writes.
+- A type has one method of each name: an inherited default whose name the type already has is an error at the impl.
+- In an `impl` block and in a struct's or enum's body, `Self` is the type itself, with its parameters:
+  `Self { … }`, `Self.make()` and `Self.MAX` work as with the type's name.
+
 ## Generic impls
 
 An impl can have type parameters of its own. A wrapper then implements an interface for every inner type that has it:

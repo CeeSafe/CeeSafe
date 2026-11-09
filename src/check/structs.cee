@@ -308,7 +308,10 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
         let field = c.front.ast.fields[astField as usize];
         let typeSpan = c.front.ast.typeSpans[field.typ as usize];
         c.allowImported = true; // C state by value (§33.1)
+        let savedSelf = c.selfType;
+        c.selfType = entry.typ; // `Self` in the body (ADR 0086 §2.2)
         let resolved = c.resolveType(field.typ, false)?;
+        c.selfType = savedSelf;
         let typ = checkMemberType(c, resolved, typeSpan, "a struct field", "struct", declarationName, hasRegions)?;
         let id = c.front.ast.idents[field.name as usize];
         if (containsSymbol(memberNames, id.symbol)) {
@@ -564,7 +567,10 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
         for (p in 0..v.payload.count) {
             let typeSyntax = c.front.ast.at(v.payload, p);
             let typeSpan = c.front.ast.typeSpans[typeSyntax as usize];
+            let savedSelf = c.selfType;
+            c.selfType = entry.typ; // `Self` in the body (ADR 0086 §2.2)
             let resolved = c.resolveType(typeSyntax, false)?;
+            c.selfType = savedSelf;
             let typ = checkMemberType(
                 c,
                 resolved,

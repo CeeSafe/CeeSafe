@@ -8,6 +8,7 @@ fn checkFunctionBody(c: borrow mut Checker, function: u32) -> Result<void, Alloc
         c.setFile(fileToSet);
     }
     c.function = function;
+    c.selfType = c.hir.functions[function as usize].owner; // `Self` (ADR 0086 §2.2)
     var scope = Vector<u32>.create();
     regionScope(c, c.hir.functions[function as usize].syntax, c.hir.functions[function as usize].owner, mut scope)?;
     c.regions = scope;

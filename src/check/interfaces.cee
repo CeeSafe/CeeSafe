@@ -9,6 +9,7 @@ struct InterfaceEntry {
     item: u32;
     file: u32;
     parameters: Range; // its type parameters, in TypeTable.lists
+    selfType: u32;     // `Self` in its defaults (ADR 0086 §2.1): a type parameter bounded by the interface, or none
 }
 
 /// An impl block waiting for ProcessImpls.
@@ -94,7 +95,7 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
         ItemKind.Interface(_, t) => t,
         _ => emptyRange(),
     };
-    c.interfaces.push(InterfaceEntry { item: item, file: c.file, parameters: emptyRange() })?;
+    c.interfaces.push(InterfaceEntry { item: item, file: c.file, parameters: emptyRange(), selfType: none() })?;
     let index = truncate<u32>(c.interfaces.length - 1);
     ownItem(c, ident.symbol, Entity.Interface(index))?;
     var parameters = Vector<u32>.create();
@@ -729,11 +730,14 @@ fn implementFor(
     let methods = interfaceMethods(c, interfaceEntry);
     let interfaceSpan = c.front.ast.typeSpans[interfaceSyntax as usize];
     for (k in 0..methods.count) {
-        let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
+        let method = c.front.ast.at(methods, k);
+        let m = c.front.ast.functions[method as usize];
         let name = c.front.ast.idents[m.name as usize].symbol;
         let reserved = (c.types.is(forType, TypeKind.Integer) && integerMethod(c.name(name)) != none()) ||
             (c.types.is(forType, TypeKind.Float) && isReservedFloatName(c.name(name)));
-        if (!containsU32(implemented, name) && !reserved) {
+        if (!containsU32(implemented, name) && !reserved && hasDefault(c, method)) {
+            inheritDefault(c, method, forType, bound, environment, interfaceSpan)?;
+        } else if (!containsU32(implemented, name) && !reserved) {
             var message = Vector<u8>.create();
             appendText(mut message, "'impl ")?;
             boundText(mut message, c, bound)?;
@@ -744,6 +748,137 @@ fn implementFor(
             c.error(implMismatch(), interfaceSpan.start, interfaceSpan.end, message)?;
         }
     }
+    return Ok();
+}
+
+/// Does the interface method (an Ast.functions index) have a body, a default (ADR 0086 §2.1)?
+fn hasDefault(c: borrow Checker, method: u32) -> bool {
+    let f = c.front.ast.functions[method as usize];
+    return f.body != none() || f.expressionBody != none();
+}
+
+/// Does the struct `typ` declare a function named `name` in its body or an inherent impl (merged into it)?
+fn ownsFunctionNamed(c: borrow Checker, typ: u32, name: u32) -> bool {
+    let item = declarationOf(c, typ);
+    if (item == none() || !c.types.is(typ, TypeKind.Struct)) {
+        return false;
+    }
+    let functions = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Struct(k) => c.front.ast.structs[k as usize].functions,
+        _ => emptyRange(),
+    };
+    for (k in 0..functions.count) {
+        let f = c.front.ast.functions[c.front.ast.at(functions, k) as usize];
+        if (c.front.ast.idents[f.name as usize].symbol == name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// An impl that leaves out a default inherits it (ADR 0086 §2.1): the default is instantiated with `Self` = the
+/// target, as an ordinary method of the target, recorded as the impl's methods are. Its generic version, at the
+/// interface, reports the body's errors; an instance that does not check is N0222 at the impl.
+fn inheritDefault(
+    c: borrow mut Checker,
+    method: u32,
+    forType: u32,
+    bound: u32,
+    environment: Range,
+    span: Span,
+) -> Result<void, AllocError> {
+    let name = c.front.ast.idents[c.front.ast.functions[method as usize].name as usize].symbol;
+    if (implMethodFor(c, forType, name) != none() || ownsFunctionNamed(c, forType, name)) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, forType)?;
+        appendText(mut message, " already has a method named ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, ", which the impl would inherit as the default of ")?;
+        quotedBound(mut message, c, bound)?;
+        appendText(mut message, ": a type has one method of each name (ADR 0086 §2.1)")?;
+        return c.error(duplicateMember(), span.start, span.end, message);
+    }
+    let interfaceEntry = c.types.bounds[bound as usize].interfaceEntry;
+    let savedFile = c.file;
+    {
+        let fileToSet = c.interfaces[interfaceEntry as usize].file;
+        c.setFile(fileToSet);
+    }
+    let function = declareFunctionIn(c, method, forType, environment)?;
+    c.setFile(savedFile);
+    let only = [forType];
+    let list = c.types.addList(only[..])?;
+    c.hir.functions[function as usize].inheritedDefault = true;
+    c.hir.functions[function as usize].typeArguments = list;
+    c.hir.functions[function as usize].siteFile = savedFile;
+    c.hir.functions[function as usize].siteStart = span.start;
+    c.hir.functions[function as usize].siteEnd = span.end;
+    return c.implMethods.push(ImplMethod { typ: forType, name: name, function: function });
+}
+
+/// `Self` in an interface's defaults (ADR 0086 §2.1): a type parameter bounded by the interface, with its own
+/// parameters as arguments; made once.
+fn interfaceSelf(c: borrow mut Checker, index: u32) -> Result<u32, AllocError> {
+    if (c.interfaces[index as usize].selfType != none()) {
+        return Ok(c.interfaces[index as usize].selfType);
+    }
+    let selfType = c.types.createTypeParameter("Self".bytes())?;
+    c.interfaces[index as usize].selfType = selfType;
+    let item = c.interfaces[index as usize].item;
+    var name = Vector<u8>.create();
+    appendBytes(mut name, c.name(c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol))?;
+    var arguments = Vector<u32>.create();
+    listTypes(c, c.interfaces[index as usize].parameters, mut arguments)?;
+    let ownBound = c.types.addBound(index, name.view(), arguments.view())?;
+    let info = c.types.info(selfType).typeParameter;
+    c.types.typeParameters[info as usize].bounds.push(ownBound)?;
+    return Ok(selfType);
+}
+
+/// The type environment of an interface's own declaration: its type parameters, opaque.
+fn interfaceEnvironment(c: borrow mut Checker, index: u32) -> Result<Range, AllocError> {
+    let item = c.interfaces[index as usize].item;
+    let typeParameters = match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Interface(_, t) => t,
+        _ => emptyRange(),
+    };
+    var arguments = Vector<u32>.create();
+    listTypes(c, c.interfaces[index as usize].parameters, mut arguments)?;
+    var pairs = Vector<EnvPair>.create();
+    zipEnvironment(c, typeParameters, arguments.view(), mut pairs)?;
+    return storeEnvironment(c, pairs.view());
+}
+
+/// Every interface default, checked once at the interface (ADR 0086 §2.1): a generic body whose `Self` is opaque,
+/// bounded by the interface; never compiled.
+fn declareInterfaceDefaults(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (index in 0..c.interfaces.length) {
+        let entry = truncate<u32>(index);
+        let methods = interfaceMethods(c, entry);
+        var any = false;
+        for (k in 0..methods.count) {
+            if (hasDefault(c, c.front.ast.at(methods, k))) {
+                any = true;
+            }
+        }
+        if (!any) {
+            continue;
+        }
+        {
+            let fileToSet = c.interfaces[index].file;
+            c.setFile(fileToSet);
+        }
+        let selfType = interfaceSelf(c, entry)?;
+        let environment = interfaceEnvironment(c, entry)?;
+        for (k in 0..methods.count) {
+            let method = c.front.ast.at(methods, k);
+            if (hasDefault(c, method)) {
+                declareFunctionIn(c, method, selfType, environment)?;
+            }
+        }
+    }
+    c.setFile(saved);
     return Ok();
 }
 

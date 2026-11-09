@@ -55,7 +55,7 @@ diagnostics, so any cascade fails the test.
 | N0102 | Expected an expression | `let a = ;` |
 | N0103 | Comparison operators chained | `a < b < c` |
 | N0104 | Invalid assignment target | `1 = 2;`, `f() = 3;` |
-| N0105 | Expected a type | `fn f(x: ) {}` |
+| N0105 | Expected a type, or `Self` where it names no type (outside an interface, an `impl` or a struct's or enum's body, ADR 0086 §2.2) | `fn f(x: ) {}` |
 | N0106 | Namespace declaration not first in the file | `fn a() {}` then `namespace X;` |
 | N0107 | Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2) | `struct A { 42; }` |
 | N0108 | Expected a `match` pattern (`_`, a literal, or `E.V(…)`) | `match (n) { + => { } }` |
@@ -212,7 +212,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
 | N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep (polymorphic recursion) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }` |
-| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing or extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide | `impl Shape for Square { fn area(this) -> i64 … }` |
+| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide | `impl Shape for Square { fn area(this) -> i64 … }` |
 | N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), or a type with region parameters coerced to `dyn I` (ADR 0054) | `total(plain)` with `fn total<S: Shape>(…)` |
 | N0264 | A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray` | `arena.alloc(Res { id: 1 })`, `arena.alloc(someReference)` |
 
@@ -227,7 +227,12 @@ Generic code (M6a) reuses codes:
 - a generic `main` is N0219;
 - naming something that is not an interface as a bound or in an `impl` is N0204;
 - a method on a type parameter that no bound declares is N0234;
-- an `impl` method clashing with a type's own method is N0228.
+- an `impl` method clashing with a type's own method is N0228, and so is an inherited interface default whose name
+  the target already has, reported at the impl (ADR 0086 §2.1);
+- an interface default is checked at the interface, with `Self` opaque: a field of `Self` is N0234, and an inherited
+  instance that does not check for its target is N0222 at the impl (ADR 0086 §2.1);
+- `Self` outside an interface, an `impl` block or a struct's or enum's body is N0105 in a type and N0200 in an
+  expression (ADR 0086 §2.2).
 
 Region values reuse codes:
 - assigning a `using` binding as a whole is N0211;

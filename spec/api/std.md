@@ -17,6 +17,7 @@
 - [struct HmacSha256](#struct-hmacsha256)
 - [interface HashKey](#interface-hashkey)
 - [struct Hasher](#struct-hasher)
+- [fn deriveHash](#fn-derivehash)
 - [struct HashMap](#struct-hashmap)
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
@@ -39,6 +40,7 @@
 - [struct UdpMessage](#struct-udpmessage)
 - [struct AsyncDns](#struct-asyncdns)
 - [interface OrderKey](#interface-orderkey)
+- [fn deriveCompare](#fn-derivecompare)
 - [struct OrderedCursor](#struct-orderedcursor)
 - [struct OrderedMap](#struct-orderedmap)
 - [struct Mutex](#struct-mutex)
@@ -1175,6 +1177,15 @@ public fn finish(borrow this) -> u64
 
 The hash of what was fed.
 
+## fn deriveHash
+
+```ceesafe
+public fn deriveHash<K: HashKey<K>>(key: borrow K, h: borrow mut Hasher)
+```
+
+Feeds `key` to `h` through its `HashKey`: what a derived `hash` does for each field (ADR 0087 §2.3). A field type
+without one is N0268 at the `@derive`.
+
 ## struct HashMap
 
 ```ceesafe
@@ -1849,6 +1860,15 @@ public interface OrderKey<K> {
 
 A key of an OrderedMap (ADR 0075 §2.4): `K: OrderKey<K>`, since an interface has no `Self`. The order must be total
 and consistent: `a.compareKey(b)` is negative, zero or positive as `b.compareKey(a)` is positive, zero or negative.
+
+## fn deriveCompare
+
+```ceesafe
+public fn deriveCompare<K: OrderKey<K>>(a: borrow K, b: borrow K) -> i32
+```
+
+`a.compareKey(b)`: what a derived `compareKey` does for each field (ADR 0087 §2.3). A field type without an
+`OrderKey` is N0268 at the `@derive`.
 
 ## struct OrderedCursor
 

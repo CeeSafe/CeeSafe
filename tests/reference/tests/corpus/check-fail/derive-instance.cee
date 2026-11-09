@@ -1,0 +1,17 @@
+// A generic type's derived `==` is checked for each instance, at its first use (ADR 0087 §2.3, type-system.md §20.4):
+// `Wrap<Plain>` compares a `Plain`, which has no `==` (N0222). `Wrap<u32>` is fine.
+struct Plain {
+    n: u32;
+}
+
+@derive(Equal)
+struct Wrap<T> {
+    value: T;
+}
+
+fn main() {
+    let a = Wrap<u32> { value: 1 };
+    let b = Wrap<Plain> { value: Plain { n: 1 } };
+    Console.writeLine(a == a);
+    Console.writeLine(b == b); // error[N0222]
+}

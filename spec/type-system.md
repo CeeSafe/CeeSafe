@@ -143,7 +143,7 @@ conversions.
 | `/ %` | integer | same | zero divisor → panic. `MIN / -1` → panic (overflow). `/` truncates toward zero, `%` has the sign of the dividend, and `MIN % -1` is `0` |
 | `& \| ^` | **unsigned** integer | same | |
 | `<< >>` | left: **unsigned** integer; right: any integer type | left type | amount `< 0` or `≥ bit width` → panic. `>>` is logical |
-| `== !=` | integer or `bool` | `bool` | |
+| `== !=` | integer or `bool`; also floats, views, pointers, fieldless enums, slices and arrays (§16.2), `String` (its text), and a type `@derive(Equal)` gave equality (§28.7) | `bool` | |
 | `< <= > >=` | integer | `bool` | |
 | `&& \|\|` | `bool` | `bool` | short-circuit |
 | unary `-` | **signed** integer | same | `-MIN` → panic |
@@ -1885,7 +1885,9 @@ Diagnostics: none new. The errors reuse N0205, N0209, N0240–N0251, N0260 and N
 
 - **Keys.** `K: HashKey<K>`, a lib/std interface: `hash(borrow this, h: borrow mut Hasher)` feeds what identifies the
   key, and `sameAs(borrow this, other: borrow K)` compares two keys. lib/std implements it for the integer types,
-  `bool`, `String` and `Vector<u8>`; a program implements it for its own types. A key type without it is N0268.
+  `bool`, `String` and `Vector<u8>`; a program implements it for its own types, or derives it (`@derive(Equal,
+  HashKey)`, §28.7, through `deriveHash<K: HashKey<K>>(key: borrow K, h: borrow mut Hasher)`). A key type without it
+  is N0268.
 - **The hash.** `Hasher` is SipHash-1-3 keyed by 128 bits. `HashMap.create()` uses a key read once per process from the
   system's random source (`getrandom`, `arc4random_buf`, `rand_s`; fixed in the interpreter and CosmoOS userland), so
   colliding keys cannot be chosen against a map. `HashMap.withSeed(k0, k1)` fixes the key.
@@ -2512,6 +2514,7 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@noncopy` | a struct | a move type even if every field is Copy (OD-7; M8d) |
 | `@cfg("NAME")` | an `@export` function | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043), §28.4 |
 | `@test` | a top-level function with no parameters, not generic, not exported, returning `void` or `Result<void, E>` | a test that `ceesafec test` runs (ADR 0049; tooling.md §10); `build` leaves it out, and only the generated harness may call it (**N0348** otherwise) |
+| `@derive(Equal, HashKey, OrderKey)` | a struct or enum | one or more of these, each once: `==` and `!=`, a `HashKey` impl, an `OrderKey` impl (ADR 0087 §2.3, §28.7) |
 
 An unknown attribute, a known one in the wrong place or with the wrong arguments, or the same
 attribute twice is N0290.
@@ -2698,6 +2701,63 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
 Diagnostics: N0290 (attribute or extern declaration misuse), N0291 (a type that is not FFI-safe),
 N0292 (a C name that is invalid, a C keyword, or reserved). Calls to extern functions outside an
 unsafe context are N0280.
+
+### 28.7 `@derive` (ADR 0087 §2.3)
+
+`@derive(…)` on a struct or enum names one or more of `Equal`, `HashKey` and `OrderKey`, each once, and no others
+(N0290). Each writes an `impl`, ordinary code that is checked as written (`--dump-hir` shows it) and whose diagnostics
+point at the derive's name in the attribute. A generic type's impl has the type's own parameters; for `HashKey` and
+`OrderKey`, each type parameter is also bounded by that interface.
+
+- **`Equal`** writes `impl DerivedEqual<S> for S` (lib/core). `derivedEqual(borrow this, other: borrow S) -> bool`
+  compares the fields in declaration order, joined by `&&`; for an enum, the variant, then its payloads. `a == b` on
+  `S` is `a.derivedEqual(b)` and `a != b` its negation, both lending their operands. Each field's type must have
+  `==` (N0207 at the attribute, naming the field): what §6 and §16.2 give `==` (integers, `bool`, fieldless enums,
+  slices, vectors and arrays of them, `StringView`, raw pointers), floats (IEEE: `NaN != NaN`), `String` (its text),
+  another `Equal` type, a cell whose contents have it (§41.2), and through `borrow T` and `Box<T>` the referent. A
+  field written `T?` compares as two `null`s being equal, or two payloads compared through borrows. A generic type
+  has `==` for the instances whose arguments have it, checked at the first `==` on an instance (N0222); in generic
+  code over an opaque `T`, `==` stays N0207. `DerivedEqual` is implemented only by `@derive(Equal)`: an `impl` of it
+  in source is N0290, so `==` keeps one meaning (language-spec.md §6: no operator overloading).
+- **`HashKey`** writes `impl HashKey<S> for S` (§24.3) and needs `Equal` (N0290 otherwise). `hash` feeds each field
+  in order through lib/std's `deriveHash(field, mut h)`, which needs the field's type to implement `HashKey` (N0268);
+  an enum's variant index, as a `u32`, comes before its payloads. `sameAs` is `derivedEqual`.
+- **`OrderKey`** writes `impl OrderKey<S> for S` (lib/std, ADR 0075 §2.4): `compareKey` compares the fields
+  lexicographically, in declaration order, through `deriveCompare(a, b)` (N0268 for a field type without `OrderKey`);
+  an enum compares its variant index first. Declaration order is the order the author asks for; there is still no
+  `<` on the type.
+
+For a two-field struct, `@derive(Equal, HashKey, OrderKey) struct Point { x: i32; y: i32; }` writes:
+
+```ceesafe
+impl DerivedEqual<Point> for Point {
+    fn derivedEqual(borrow this, other: borrow Point) -> bool => this.x == other.x && this.y == other.y;
+}
+impl HashKey<Point> for Point {
+    fn hash(borrow this, h: borrow mut Hasher) {
+        deriveHash(this.x, mut h);
+        deriveHash(this.y, mut h);
+    }
+    fn sameAs(borrow this, other: borrow Point) -> bool => this.derivedEqual(other);
+}
+impl OrderKey<Point> for Point {
+    fn compareKey(borrow this, other: borrow Point) -> i32 {
+        let c0 = deriveCompare(this.x, other.x);
+        if (c0 != 0) {
+            return c0;
+        }
+        let c1 = deriveCompare(this.y, other.y);
+        if (c1 != 0) {
+            return c1;
+        }
+        return 0;
+    }
+}
+```
+
+Diagnostics: N0290 (a derive that is not one of the three, repeated, HashKey without Equal, `@derive` on anything but
+a struct or enum, a hand-written `impl DerivedEqual`), N0207 (a field without `==`), N0268 (a field type without the
+interface), N0222 (a generic instance whose field type has no `==`).
 
 ## 29. Systems capabilities (M8d)
 

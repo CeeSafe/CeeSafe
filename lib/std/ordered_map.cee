@@ -63,6 +63,10 @@ impl OrderKey<Vector<u8>> for Vector<u8> {
     fn compareKey(borrow this, other: borrow Vector<u8>) -> i32 => orderBytes(this.view(), other.view());
 }
 
+/// `a.compareKey(b)`: what a derived `compareKey` does for each field (ADR 0087 §2.3). A field type without an
+/// `OrderKey` is N0268 at the `@derive`.
+public fn deriveCompare<K: OrderKey<K>>(a: borrow K, b: borrow K) -> i32 => a.compareKey(b);
+
 /// The bytewise order of `a` and `b`, a prefix first.
 fn orderBytes(a: Slice<u8>, b: Slice<u8>) -> i32 {
     let n = if (a.length < b.length) a.length else b.length;

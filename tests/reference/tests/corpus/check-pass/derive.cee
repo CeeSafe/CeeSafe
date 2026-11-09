@@ -1,0 +1,20 @@
+// `@derive` (ADR 0087 §2.3) writes ordinary impls, which the HIR shows: `DerivedEqual` (fields joined by `&&`; an
+// enum's variant, then its payloads), `HashKey` (each field through `deriveHash`, an enum's index first; `sameAs` is
+// `derivedEqual`) and `OrderKey` (fields in order through `deriveCompare`). `==` and `!=` call `derivedEqual`.
+@derive(Equal, HashKey, OrderKey)
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+@derive(Equal, HashKey)
+enum Move {
+    Step(Point),
+    Stay,
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    Console.writeLine(a == a);
+    Console.writeLine(Move.Step(a) != Move.Stay);
+}

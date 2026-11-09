@@ -1,0 +1,38 @@
+// `@derive` (ADR 0087 §2.3) takes Equal, HashKey and OrderKey, on a struct or an enum, each once; HashKey needs Equal,
+// since `sameAs` is `==`. `DerivedEqual` is implemented only by `@derive(Equal)`. Each is N0290.
+@derive(Clone) // error[N0290]
+struct Cloned {
+    n: u32;
+}
+
+@derive(HashKey) // error[N0290]
+struct Unequal {
+    n: u32;
+}
+
+@derive(Equal, Equal) // error[N0290]
+struct Twice {
+    n: u32;
+}
+
+@derive // error[N0290]
+struct Bare {
+    n: u32;
+}
+
+@derive(Equal) // error[N0290]
+fn notAType() {}
+
+struct Plain {
+    n: u32;
+}
+
+impl DerivedEqual<Plain> for Plain { // error[N0290]
+    fn derivedEqual(borrow this, other: borrow Plain) -> bool => true;
+}
+
+@derive(Equal, OrderKey)
+enum Fine {
+    A,
+    B(u32),
+}

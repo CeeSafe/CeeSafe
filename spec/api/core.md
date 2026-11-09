@@ -30,6 +30,7 @@
 - [struct CellRef](#struct-cellref)
 - [struct CellRefMut](#struct-cellrefmut)
 - [struct CStr](#struct-cstr)
+- [interface DerivedEqual](#interface-derivedequal)
 - [struct TextWriter](#struct-textwriter)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
@@ -1866,6 +1867,18 @@ public fn bytesWithNul(borrow this) -> Slice<r, u8>
 ```
 
 The text and its NUL: `length + 1` bytes.
+
+## interface DerivedEqual
+
+```ceesafe
+public interface DerivedEqual<T> {
+    fn derivedEqual(borrow this, other: borrow T) -> bool;
+}
+```
+
+The equality `@derive(Equal)` gives a struct or enum: `a == b` on the type calls `a.derivedEqual(b)`, and `a != b`
+negates it. Only the compiler implements it: an `impl` written by hand is N0290, so `==` keeps one meaning
+(language-spec.md §6).
 
 ## struct TextWriter
 

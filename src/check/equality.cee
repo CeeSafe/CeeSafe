@@ -117,6 +117,10 @@ fn checkEquality(
         return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
     }
 
+    let derived = derivedEquality(c, op, left, right, span)?; // `@derive(Equal)`, and strings (ADR 0087 §2.3)
+    if (derived != none()) {
+        return Ok(derived);
+    }
     if (lt == rt && c.types.is(lt, TypeKind.Enum) && c.types.optionType(lt) == none() &&
         c.types.info(lt).enumDef != none() && c.types.enums[c.types.info(lt).enumDef as usize].resultOk == none()) {
         if (isFieldlessEnum(c, lt)) {

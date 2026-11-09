@@ -81,7 +81,7 @@ Semantic checks run only when every file parsed without errors.
 | N0204 | Unknown type name | `fn f(a: int)` |
 | N0205 | Type mismatch against the expected type | `let a: bool = 1;`, `if (n) {}` |
 | N0206 | Integer literal out of range for its type | `256u8`, `let c: i8 = 128;` |
-| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
+| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
 | N0208 | `as` conversion that can lose information | `a as u32` with `a: i32` |
 | N0209 | Wrong number of arguments | `two(1)` |
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
@@ -179,7 +179,7 @@ N0271 is unassigned: destroying a value that holds loans while their referents a
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0290 | An unknown attribute, an attribute in the wrong place or with wrong arguments, a repeated attribute, an ABI other than `"C"`, or an extern declaration with a body, receiver or type parameters; `@export` on `main`; an effect name other than `sleep`, `alloc` and `suspend`; `async` on an extern, interface or `@constant` function (`type-system.md` §40.1) | `@inline fn f() {}`, `@repr(C) enum E { A }`, `extern "Rust" { … }` |
+| N0290 | An unknown attribute, an attribute in the wrong place or with wrong arguments, a repeated attribute, an ABI other than `"C"`, or an extern declaration with a body, receiver or type parameters; `@export` on `main`; a `@derive` of anything but `Equal`, `HashKey` and `OrderKey` on a struct or enum, `HashKey` without `Equal`, or an `impl DerivedEqual` written by hand (ADR 0087 §2.3); an effect name other than `sleep`, `alloc` and `suspend`; `async` on an extern, interface or `@constant` function (`type-system.md` §40.1) | `@inline fn f() {}`, `@repr(C) enum E { A }`, `extern "Rust" { … }` |
 | N0291 | A type that cannot cross the C boundary in an extern declaration, an export, or a `@repr(C)` struct's field; a `drop` on a `@repr(C)` struct that holds C state (ADR 0029) | `fn f(s: Slice<u8>);` in `extern "C"`, `@export fn g() -> Box<i32>` |
 | N0292 | A C name that is not a valid C identifier, is a C keyword (or `bool`, `true`, `false`, `NULL`, `main`), is reserved by C, or starts with `ceesafe_`, `cee_`, `CEE_` or `cee` and an uppercase letter | `@export("int")`, `fn ceesafe_alloc();` in `extern "C"`, `@repr(C) struct S { default: i32; }` |
 | N0293 | A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1) | `Console.writeLine(1);`, `let b = Box.create(5)!;` |

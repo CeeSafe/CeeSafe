@@ -126,6 +126,12 @@ public struct Hasher {
     }
 }
 
+/// Feeds `key` to `h` through its `HashKey`: what a derived `hash` does for each field (ADR 0087 §2.3). A field type
+/// without one is N0268 at the `@derive`.
+public fn deriveHash<K: HashKey<K>>(key: borrow K, h: borrow mut Hasher) {
+    key.hash(mut h);
+}
+
 impl HashKey<u8> for u8 {
     fn hash(borrow this, h: borrow mut Hasher) { h.u64(this as u64); }
     fn sameAs(borrow this, other: borrow u8) -> bool => this == other;

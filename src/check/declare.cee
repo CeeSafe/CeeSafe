@@ -99,8 +99,9 @@ fn checkProgram(
     filePackage: Vector<u32>,
     entryName: Vector<u8>,
 ) -> Result<Checker, AllocError> {
+    let expanded = expandDerives(front, fileTexts)?; // `@derive` (ADR 0087 §2.3)
     var c = Checker {
-        front: front,
+        front: expanded,
         types: TypeTable.create(lp64())?,
         hir: HirProgram.create(),
         fileIsLibrary: fileIsLibrary,

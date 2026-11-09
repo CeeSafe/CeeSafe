@@ -1,0 +1,92 @@
+// `@derive(Equal)` (ADR 0087 §2.3): `==` and `!=` compare the fields in declaration order, an enum its variant and
+// then its payloads. Fields of other derived types, strings, views, byte vectors, floats (IEEE: NaN is unequal to
+// itself), optionals (two nulls are equal), generic instances and types with regions compare; nothing is moved
+// or leaked.
+@derive(Equal)
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+@derive(Equal)
+enum Shape {
+    Dot(Point),
+    Segment(Point, Point),
+    Label(String),
+    Nothing,
+}
+
+@derive(Equal)
+struct Entry<region r> {
+    name: String;
+    key: StringView<r>;
+    bytes: Vector<u8>;
+    weight: f64;
+    parent: Point?;
+    note: String?;
+}
+
+@derive(Equal)
+struct Pair<T> {
+    left: T;
+    right: T;
+}
+
+fn text(s: StringView) -> String {
+    var out = String.create();
+    out.append(s)!;
+    return out;
+}
+
+fn entry(name: StringView, weight: f64, parent: Point?) -> Entry<static> {
+    var bytes = Vector<u8>.create();
+    bytes.push(7)!;
+    return Entry { name: text(name), key: "k", bytes: bytes, weight: weight, parent: parent, note: null };
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = Point { x: 1, y: 3 };
+    Console.writeLine(a == a);
+    Console.writeLine(a == b);
+    Console.writeLine(a != b);
+    Console.writeLine(Shape.Segment(a, b) == Shape.Segment(a, b));
+    Console.writeLine(Shape.Segment(a, b) == Shape.Segment(b, a));
+    Console.writeLine(Shape.Dot(a) == Shape.Nothing);
+    Console.writeLine(Shape.Label(text("x")) == Shape.Label(text("x")));
+    Console.writeLine(Shape.Nothing == Shape.Nothing);
+    let e1 = entry("one", 0.5, a);
+    let e2 = entry("one", 0.5, a);
+    Console.writeLine(e1 == e2);
+    Console.writeLine(e1 == entry("two", 0.5, a));
+    Console.writeLine(e1 == entry("one", 0.5, null));
+    Console.writeLine(entry("one", 0.5, null) == entry("one", 0.5, null));
+    let nan = 0.0 / 0.0;
+    let odd = entry("one", nan, null);
+    Console.writeLine(odd == odd);
+    let p = Pair<u32> { left: 1, right: 2 };
+    Console.writeLine(p == Pair<u32> { left: 1, right: 2 });
+    Console.writeLine(Pair<Point> { left: a, right: b } != Pair<Point> { left: a, right: a });
+    var s1 = text("same");
+    let s2 = text("same");
+    Console.writeLine(s1 == s2);
+    s1.append("!")!;
+    Console.writeLine(s1 == s2);
+}
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false

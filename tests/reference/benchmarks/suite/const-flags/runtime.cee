@@ -1,0 +1,56 @@
+// const-flags with run-time flags (guide/performance.md, "Const parameters"): main.cee's scanner with `ts` and `jsx`
+// as ordinary `bool` parameters, for comparison. Not a workload of run.py.
+struct Scan {
+    pos: usize;
+    types: u64;
+    jsx: u64;
+}
+
+fn scan(s: borrow mut Scan, text: Slice<u8>, ts: bool, jsx: bool, depth: u32) -> u64 {
+    var sum = 0u64;
+    while (s.pos < text.length) {
+        let c = text[s.pos];
+        s.pos += 1;
+        if (c == '(') {
+            if (depth < 40) {
+                sum += scan(mut s, text, ts, jsx, depth + 1);
+            }
+        } else if (c == ')' && depth > 0) {
+            return sum;
+        } else if (c == ':' && ts) {
+            s.types += 1;
+        } else if (c == '<' && jsx) {
+            s.jsx += 1;
+        } else if (ts && c == '?') {
+            s.types += 2;
+        } else {
+            sum += c as u64;
+        }
+    }
+    return sum;
+}
+
+fn main() -> i32 {
+    var text = Vector<u8>.create();
+    var seed = 12345u64;
+    for (i in 0..10000000) {
+        seed = (seed * 1103515245u64 + 12345u64) % 2147483648u64;
+        let r = (seed >> 16) % 16u64;
+        let c: u8 =
+            if (r == 0u64) '('
+                else if (r == 1u64) ')'
+                else if (r == 2u64) ':'
+                else if (r == 3u64) '<'
+                else if (r == 4u64) '?'
+                else 'a';
+        text.push(c)!;
+    }
+    var total = 0u64;
+    for (k in 0..100) {
+        var s = Scan { pos: 0, types: 0, jsx: 0 };
+        let found = scan(mut s, text.view(), k % 2 == 0, true, 0);
+        total += found + s.types + s.jsx;
+    }
+    Console.writeLine(total);
+    return 0;
+}

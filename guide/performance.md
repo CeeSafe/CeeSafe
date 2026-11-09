@@ -63,6 +63,24 @@ single-file programs, since it runs the C compiler after its own work.
   `ceesafe_alloc`, which counts allocations (for `CEESAFE_ALLOC_REPORT` and fault injection) before calling `malloc`.
   Calling `malloc` directly measured 12% faster on both.
 
+## Const parameters
+
+`const-flags` (ADR 0083 §1.3) is a recursive scanner over 10 MB of pseudo-random bytes, run 100 times, with three
+flag tests per byte; its flags are const parameters (`fn scan<const TS: bool, const JSX: bool>`), so each instance
+keeps only its own tests. It is a workload of `run.py`, measured on its own and not in the table above, whose sixteen
+workloads were measured with an older ceesafec. Measured 2026-11-09 on the same kind of machine (Apple arm64, Apple
+clang 21, rustc 1.99.1, ceesafec 0.26.0-dev), on a machine shared with other work, so the spread is wider than usual:
+
+| Version | Time |
+|---|---:|
+| CeeSafe, const parameters (`main.cee`) | 1.05× Rust (2.67 s against 2.55 s, `run.py`, median of 5) |
+| Rust, const generics (`main.rs`) | 1.00 |
+| CeeSafe, the same flags as `bool` parameters (`runtime.cee`) | 1.19× CeeSafe's const version (3.68 s against 3.10 s user time, 3 runs each) |
+
+At `-O2` clang does not clone a recursive function for a constant argument, so a run-time flag keeps every test;
+the const parameter removes them, as Rust's const generics do. `main.c` takes the flags as arguments (C has no const
+parameters), and in the same three runs took 3.27–3.67 s.
+
 ## Run it yourself
 
 ```sh

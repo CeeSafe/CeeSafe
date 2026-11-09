@@ -1,0 +1,60 @@
+// const-flags (benchmarks/README.md; ADR 0083 §1.3): a recursive scanner over 10 MB of pseudo-random bytes, run 100
+// times, whose language flags are const parameters, so each instance keeps only its own tests.
+struct Scan {
+    pos: usize;
+    types: u64;
+    jsx: u64;
+}
+
+fn scan<const TS: bool, const JSX: bool>(s: borrow mut Scan, text: Slice<u8>, depth: u32) -> u64 {
+    var sum = 0u64;
+    while (s.pos < text.length) {
+        let c = text[s.pos];
+        s.pos += 1;
+        if (c == '(') {
+            if (depth < 40) {
+                sum += scan<TS, JSX>(mut s, text, depth + 1);
+            }
+        } else if (c == ')' && depth > 0) {
+            return sum;
+        } else if (c == ':' && TS) {
+            s.types += 1;
+        } else if (c == '<' && JSX) {
+            s.jsx += 1;
+        } else if (TS && c == '?') {
+            s.types += 2;
+        } else {
+            sum += c as u64;
+        }
+    }
+    return sum;
+}
+
+fn main() -> i32 {
+    var text = Vector<u8>.create();
+    var seed = 12345u64;
+    for (i in 0..10000000) {
+        seed = (seed * 1103515245u64 + 12345u64) % 2147483648u64;
+        let r = (seed >> 16) % 16u64;
+        let c: u8 =
+            if (r == 0u64) '('
+                else if (r == 1u64) ')'
+                else if (r == 2u64) ':'
+                else if (r == 3u64) '<'
+                else if (r == 4u64) '?'
+                else 'a';
+        text.push(c)!;
+    }
+    var total = 0u64;
+    for (k in 0..100) {
+        var s = Scan { pos: 0, types: 0, jsx: 0 };
+        let found = if (k % 2 == 0) scan<true, true>(mut s, text.view(), 0) else scan<false, true>(
+            mut s,
+            text.view(),
+            0,
+        );
+        total += found + s.types + s.jsx;
+    }
+    Console.writeLine(total);
+    return 0;
+}

@@ -38,6 +38,7 @@ CHECKSUMS = {
     "numeric": 2433654612000,
     "data-oriented": 999040128,
     "nbody": 169075164169077842,
+    "const-flags": 70687936750,
 }
 
 LANGS = ["cee", "rust", "rust-checked", "c"]

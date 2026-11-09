@@ -2,7 +2,7 @@
 
 The latest results and what they mean: [`guide/performance.md`](../guide/performance.md).
 
-Sixteen workloads, each written in CeeSafe (`main.cee`), Rust (`main.rs`) and C (`main.c`, the baseline). Every
+Seventeen workloads, each written in CeeSafe (`main.cee`), Rust (`main.rs`) and C (`main.c`, the baseline). Every
 version implements the **same algorithm with the same data structures** and prints one checksum line, which must be
 identical across languages (`run.py` checks it). The CeeSafe programs are built from the corpus,
 `tests/reference/benchmarks/suite/<workload>/main.cee`, and the Rust and C ones are here,
@@ -33,6 +33,7 @@ last table divides each language's time by Rust's, with the geometric mean over 
 | `numeric` | a sieve and an integer matrix product |
 | `data-oriented` | struct-of-arrays particle updates |
 | `nbody` | the Benchmarks Game's n-body, in `f64` |
+| `const-flags` | a recursive scanner whose language flags are const parameters (ADR 0083): Rust's const generics; C's run-time flags |
 
 Builds:
 

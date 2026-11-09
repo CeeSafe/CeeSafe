@@ -256,7 +256,10 @@ fn endInstance(
 ) -> Result<void, AllocError> {
     var first = none();
     for (k in mark..c.front.diagnostics.items.length) {
-        if (first == none() && c.front.diagnostics.items[k].isError) {
+        // An arm one instance cannot reach (`_` after `[x, ..]` on a `[T; N]`) is no error of the instance: the
+        // generic version's coverage stands (ADR 0083 §7).
+        let item = borrow c.front.diagnostics.items[k];
+        if (first == none() && item.isError && item.code != unreachableArm()) {
             first = truncate<u32>(k);
         }
     }
@@ -320,6 +323,31 @@ fn endInstance(
             ": it needs an unscoped type there (for example, it puts the value in a 'Box' or an array; type-system.md §25.4)",
         )?;
         return c.front.diagnostics.error(scopedTypeArgument(), file, span.start, span.end, message);
+    }
+    let owner = if (instance != none()) c.hir.functions[instance as usize].owner else none();
+    if (failed && instance != none() && arguments.length == 0 && owner != none()) {
+        // A method of a struct or enum instance (§20.4): the instance names the arguments.
+        var text = Vector<u8>.create();
+        appendText(mut text, "'")?;
+        appendBytes(mut text, c.typeName(owner))?;
+        appendText(mut text, ".")?;
+        appendBytes(mut text, generic)?;
+        appendText(mut text, "' cannot be used: for these arguments its body has an error: ")?;
+        appendBytes(mut text, firstMessage.view())?;
+        appendText(mut text, " (type-system.md §20.4)")?;
+        let f = borrow mut c.hir.functions[instance as usize];
+        f.hasInstanceError = true;
+        f.instanceError = text;
+        if (f.callFile != none()) {
+            f.siteFile = f.callFile;
+            f.siteStart = f.callStart;
+            f.siteEnd = f.callEnd;
+        } else if (f.siteFile == none()) {
+            f.siteFile = file;
+            f.siteStart = span.start;
+            f.siteEnd = span.end;
+        }
+        return Ok();
     }
     if (failed && instance != none()) {
         var text = Vector<u8>.create();
@@ -1056,12 +1084,86 @@ fn checkGenericCall(
         span,
         mut found,
     )?;
+    if (ok && found.length == 1 && isFieldlessEnum(c, found[0]) && isDerivedKeyHelper(c, g, nameSymbol) &&
+        !boundsHold(c, parameterTypes[0], found[0])?) {
+        return derivedIndexCall(c, g, arguments, span); // a fieldless-enum field without its own derive
+    }
     let instance = if (ok) instantiateFunction(c, g, found.view(), span)? else none();
     if (instance == none()) {
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
     return checkUserCall(c, instance, arguments, span);
+}
+
+/// Is `g` lib/std's `deriveHash` or `deriveCompare`, which the derived `HashKey` and `OrderKey` call per field?
+fn isDerivedKeyHelper(c: borrow Checker, g: u32, nameSymbol: u32) -> bool {
+    let file = c.genericFunctions[g as usize].file;
+    if ((file as usize) >= c.filePaths.length || !startsWithText(c.filePaths[file as usize].view(), "lib/std/")) {
+        return false;
+    }
+    return sameText(c.name(nameSymbol), "deriveHash") || sameText(c.name(nameSymbol), "deriveCompare");
+}
+
+/// Does `argument` satisfy the interface bounds of type parameter `parameter` (as checkBounds, without reporting)?
+fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32) -> Result<bool, AllocError> {
+    var mapping = Vector<TypeMapping>.create();
+    mapping.push(TypeMapping { from: parameter, to: argument })?;
+    let boundCount = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.length;
+    for (b in 0..boundCount) {
+        let bound = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds[b];
+        let original = c.types.bounds[bound as usize];
+        var substituted = Vector<u32>.create();
+        for (a in 0..original.arguments.count) {
+            let argumentType = c.types.listAt(original.arguments, a);
+            substituted.push(substitute(c, argumentType, mapping.view())?)?;
+        }
+        var boundName = Vector<u8>.create();
+        appendBytes(mut boundName, c.types.rangeText(original.name))?;
+        let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
+        if (!implements(c, argument, required)) {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
+/// `deriveHash(this.mode, mut h)` or `deriveCompare(l0, r0)` on a fieldless enum without `HashKey` or `OrderKey`
+/// (ADR 0087 §2.3): its variant index as a `u32` is hashed or compared, through the `u32` instance.
+fn derivedIndexCall(c: borrow mut Checker, g: u32, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    let u32Type = c.types.u32;
+    let types = [u32Type];
+    let instance = instantiateFunction(c, g, types[..], span)?;
+    if (instance == none()) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let reference = c.types.referenceTo(u32Type, false)?;
+    var values = Vector<u32>.create();
+    for (k in 0..arguments.count) {
+        let argument = c.front.ast.at(arguments, k);
+        let local = c.hir.functions[instance as usize].parameters[k as usize];
+        let parameterType = c.hir.locals[local as usize].typ;
+        if (parameterType != reference) {
+            values.push(checkArgument(c, argument, parameterType)?)?;
+            continue;
+        }
+        let value = synth(c, argument, none())?;
+        let argumentSpan = c.spanOf(value);
+        let lent = if (c.types.is(c.typeOf(value), TypeKind.Reference)) value else borrowOperand(c, value)?;
+        let lentList = [lent];
+        let list = c.hir.list(lentList[..])?;
+        let index = c.expr(
+            HirExpr.BuiltinCall(bfVariantIndex(), list),
+            u32Type,
+            argumentSpan.start,
+            argumentSpan.end,
+        )?;
+        values.push(c.expr(HirExpr.BorrowTemp(false, index), reference, argumentSpan.start, argumentSpan.end)?)?;
+    }
+    let returnType = c.hir.functions[instance as usize].returnType;
+    let list = c.hir.list(values.view())?;
+    return c.expr(HirExpr.Call(instance, list), returnType, span.start, span.end);
 }
 
 /// A generic method's instance for a call (ADR 0064 §1): the type arguments written, or inferred from `arguments`

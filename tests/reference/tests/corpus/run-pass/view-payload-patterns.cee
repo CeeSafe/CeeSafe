@@ -1,0 +1,38 @@
+// A string or slice pattern on a payload that is a view (ADR 0085 §2.7) may be an or-pattern of them or `name @` one:
+// they test the view's elements, and `name` binds the view itself.
+fn bytes(o: Slice<u8>?) -> u32 => match (o) {
+    Some([1] | [2, ..]) => 1,
+    _ => 0,
+};
+
+fn word(o: StringView?) -> u32 => match (o) {
+    Some("x" | "y") => 1,
+    Some(s @ ("zz" | "zzz")) => truncate<u32>(s.length),
+    _ => 0,
+};
+
+fn twice(o: StringView?) -> bool => o is Some(s @ "zz") && s.length == 2;
+
+fn main() {
+    let one = [1u8];
+    let two = [2u8, 5];
+    let three = [3u8];
+    Console.writeLine(bytes(Some(one[..])));
+    Console.writeLine(bytes(Some(two[..])));
+    Console.writeLine(bytes(Some(three[..])));
+    Console.writeLine(bytes(null));
+    Console.writeLine(word(Some("y")));
+    Console.writeLine(word(Some("zzz")));
+    Console.writeLine(word(Some("w")));
+    Console.writeLine(twice(Some("zz")));
+    Console.writeLine(twice(Some("z")));
+}
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: false

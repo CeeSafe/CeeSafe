@@ -1,0 +1,36 @@
+// `debugAssert` may not change control flow (ADR 0087 §2.5, N0360): release builds leave it out, so a `break` or
+// `continue` inside it, or a process exit through a call, would happen in debug builds only.
+fn exitNow() -> bool {
+    Process.exit(3);
+    return true;
+}
+
+fn exitsLater(n: u32) -> bool => if (n > 10) exitNow() else true;
+
+fn main() {
+    var i = 0u32;
+    while (i < 3) {
+        i += 1;
+        debugAssert(if (i == 2) { break; } else true); // error[N0360]
+    }
+    var j = 0u32;
+    while (j < 3) {
+        j += 1;
+        debugAssert(if (j == 2) { continue; } else true); // error[N0360]
+        Console.writeLine(j);
+    }
+    debugAssert(exitNow());     // error[N0360]
+    debugAssert(exitsLater(i)); // error[N0360]
+    // A loop of its own inside the assertion may break and continue.
+    debugAssert(if (true) {
+        var k = 0u32;
+        while (true) {
+            k += 1;
+            if (k < 3) {
+                continue;
+            }
+            break;
+        }
+        k == 3
+    } else false);
+}

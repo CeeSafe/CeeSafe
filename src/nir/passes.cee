@@ -4,15 +4,109 @@
 
 fn invalidInstantiation() -> u32 => 222;
 
+/// The HIR function a NIR function's statement `s` calls, or none.
+fn calleeOf(n: borrow NirProgram, s: u32) -> u32 {
+    let value = match (n.statements[s as usize]) {
+        NirStatement.Assign(_, v) => v,
+        NirStatement.Eval(v) => v,
+        _ => none(),
+    };
+    if (value == none()) {
+        return none();
+    }
+    return match (n.rvalues[value as usize]) {
+        NirRvalue.Call(callee, _) => callee,
+        _ => none(),
+    };
+}
+
+fn isUnchecked(c: borrow Checker, function: u32) -> bool =>
+    (function as usize) < c.uncheckedLibrary.length && c.uncheckedLibrary[function as usize];
+
+/// A library function whose body did not check (one over `Vector` in a freestanding build: its errors are the
+/// library's, and dropped) cannot be compiled, nor can a library function that calls one. A call of one from the
+/// program is an error there: N0293 in the freestanding profile, else N0222. Without it the backend would compile
+/// a body that never checked.
+fn refuseUncheckedLibraryCalls(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (function in n.functions.view()) {
+            let source = function.source;
+            let file = c.hir.functions[source as usize].file;
+            if (isUnchecked(c, source) || file == none() || !c.fileIsLibrary[file as usize]) {
+                continue;
+            }
+            for (block in function.blocks.view()) {
+                for (s in block.statements.view()) {
+                    let callee = calleeOf(n, s);
+                    if (callee != none() && isUnchecked(c, callee) && (source as usize) < c.uncheckedLibrary.length) {
+                        c.uncheckedLibrary[source as usize] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+    for (function in n.functions.view()) {
+        let source = function.source;
+        let file = c.hir.functions[source as usize].file;
+        if (file == none() || c.fileIsLibrary[file as usize]) {
+            continue;
+        }
+        for (block in function.blocks.view()) {
+            for (s in block.statements.view()) {
+                let callee = calleeOf(n, s);
+                if (callee == none() || !isUnchecked(c, callee)) {
+                    continue;
+                }
+                let span = n.statementSpans[s as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "'")?;
+                let owner = c.hir.functions[callee as usize].owner;
+                if (owner != none()) {
+                    appendBytes(mut message, c.typeName(owner))?;
+                    appendText(mut message, ".")?;
+                }
+                appendBytes(mut message, c.name(c.hir.functions[callee as usize].name))?;
+                if (c.freestanding) {
+                    appendText(
+                        mut message,
+                        "' needs the hosted runtime and is not available with --profile freestanding (profiles.md §4.1)",
+                    )?;
+                    c.front.diagnostics.error(hostedOnlyCode(), file, span.start, span.end, message)?;
+                } else {
+                    appendText(mut message, "' cannot be used: its library body has an error")?;
+                    c.front.diagnostics.error(invalidInstantiation(), file, span.start, span.end, message)?;
+                }
+            }
+        }
+    }
+    return Ok();
+}
+
 fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     var n = buildNir(c)?;
+    refuseUncheckedLibraryCalls(c, n)?;
     // Generic code is checked once, in its generic version; instantiations repeat it (type-system.md §20.3).
     for (k in 0..n.functions.length) {
         let source = n.functions[k].source;
         let unchecked = (source as usize) < c.uncheckedLibrary.length && c.uncheckedLibrary[source as usize];
         if (!functionIsInstantiation(c, source) && !unchecked) {
             checkInPlace(c, n, truncate<u32>(k))?;
+            let before = c.front.diagnostics.items.length;
             checkMoves(c, n, truncate<u32>(k))?;
+            var movedUse = false;
+            for (i in before..c.front.diagnostics.items.length) {
+                if (c.front.diagnostics.items[i].code == useOfMoved()) {
+                    movedUse = true;
+                }
+            }
+            if (movedUse) {
+                // A use after a move inside a `debugAssert` is N0360 there too, the cause (ADR 0087 §2.5): N0250
+                // stops the effect checker that reports it otherwise.
+                checkDebugAssertMoves(c, n, truncate<u32>(k))?;
+            }
             checkBorrows(c, n, truncate<u32>(k))?;
         }
     }
@@ -22,9 +116,10 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
             let f = borrow c.hir.functions[function.source as usize];
             if (f.hasInstanceError) {
                 let message = copyBytes(f.instanceError.view())?;
-                let file = f.siteFile;
-                let start = f.siteStart;
-                let end = f.siteEnd;
+                // A method of a struct or enum instance at its first call, if any (§20.4).
+                let file = if (f.callFile != none()) f.callFile else f.siteFile;
+                let start = if (f.callFile != none()) f.callStart else f.siteStart;
+                let end = if (f.callFile != none()) f.callEnd else f.siteEnd;
                 c.front.diagnostics.error(invalidInstantiation(), file, start, end, message)?;
             }
         }

@@ -358,11 +358,12 @@ fn useful(
     if (!useful(c, wildcard, rest, q[1..], types[1..], mut inner)?) {
         return Ok(false);
     }
-    // A constructor no row names, if the type has a finite set; otherwise any value.
+    // A constructor no row names, if the type has a finite set and some row names one; otherwise any value: a
+    // position no arm constrains is `_` (ADR 0085 §7).
     var first = Vector<u8>.create();
     var missing = false;
     for (k in all.view()) {
-        if (!missing && !containsConstructor(c, used, k)) {
+        if (!missing && used.length > 0 && !containsConstructor(c, used, k)) {
             var arguments = Vector<Vector<u8>>.create();
             for (unused in 0..k.arity) {
                 var underscore = Vector<u8>.create();
@@ -706,7 +707,7 @@ fn slicePieces(
     out: borrow mut Vector<SlicePiece>,
 ) -> Result<void, AllocError> {
     let arrayLength = c.types.info(typ).arrayLength;
-    if (arrayLength >= 0) {
+    if (arrayLength >= 0 && c.types.info(typ).lengthParameter == none()) { // `[T; N]` in generic code: as a slice
         let n = truncate<usize>(arrayLength);
         return out.push(SlicePiece { variable: false, length: n, prefix: 0, suffix: 0 });
     }

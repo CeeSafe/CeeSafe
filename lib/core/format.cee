@@ -6,9 +6,9 @@
 /// always zero-terminated in a buffer of at least one byte (so `cText` can be handed to C), and `wanted` counts every
 /// byte asked for, as `snprintf`'s result does, so a caller can tell that the text was cut.
 public struct TextWriter<region r> {
-    buffer: SliceMut<r, u8>;
-    used: usize;  // bytes written: at most buffer.length - 1, followed by a zero
-    asked: usize; // bytes asked for, written or not
+    private buffer: SliceMut<r, u8>;
+    private used: usize;  // bytes written: at most buffer.length - 1, followed by a zero
+    private asked: usize; // bytes asked for, written or not
 
     /// A writer at the start of `buffer`, which it empties (a zero first byte, if it has one).
     public fn create(buffer: SliceMut<r, u8>) -> TextWriter<r> {

@@ -31,6 +31,7 @@
 - [struct CellRefMut](#struct-cellrefmut)
 - [struct CStr](#struct-cstr)
 - [interface DerivedEqual](#interface-derivedequal)
+- [struct DerivedEqualElements](#struct-derivedequalelements)
 - [struct TextWriter](#struct-textwriter)
 - [enum TextAlign](#enum-textalign)
 - [struct Formatted](#struct-formatted)
@@ -1920,6 +1921,23 @@ public interface DerivedEqual<T> {
 The equality `@derive(Equal)` gives a struct or enum: `a == b` on the type calls `a.derivedEqual(b)`, and `a != b`
 negates it. Only the compiler implements it: an `impl` written by hand is N0290, so `==` keeps one meaning
 (language-spec.md §6).
+
+## struct DerivedEqualElements
+
+```ceesafe
+public struct DerivedEqualElements<T: DerivedEqual<T>>
+```
+
+`==` on slices, arrays and vectors of a type `@derive(Equal)` gave equality (ADR 0087 §2.3): the same length, and
+each element equal to the other's, in order. The compiler calls it for `a == b`; a program has no need to.
+
+### DerivedEqualElements.equal
+
+```ceesafe
+public fn equal(a: Slice<T>, b: Slice<T>) -> bool
+```
+
+Whether `a` and `b` have the same length and equal elements.
 
 ## struct TextWriter
 

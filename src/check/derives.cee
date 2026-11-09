@@ -172,6 +172,7 @@ struct DeriveShape {
     regions: Vector<Vector<u8>>;        // `region r`
     typeParameters: Vector<Vector<u8>>; // each type parameter's source, bounds included
     typeNames: Vector<Vector<u8>>;      // each type parameter's name
+    constParameters: Vector<bool>;      // whether each is a const parameter (ADR 0083), which takes no bound
     fields: Vector<Vector<u8>>;         // a struct's field names
     optionalFields: Vector<bool>;       // whether each field's type is written `T?`
     optionalPayloads: Vector<bool>;     // whether each payload's type is, every variant's in order
@@ -221,6 +222,7 @@ fn expandItem(
         regions: Vector<Vector<u8>>.create(),
         typeParameters: Vector<Vector<u8>>.create(),
         typeNames: Vector<Vector<u8>>.create(),
+        constParameters: Vector<bool>.create(),
         fields: Vector<Vector<u8>>.create(),
         optionalFields: Vector<bool>.create(),
         optionalPayloads: Vector<bool>.create(),
@@ -241,6 +243,7 @@ fn expandItem(
         let text = borrow fileTexts[file as usize];
         shape.typeParameters.push(copyBytes(text[p.start as usize..p.end as usize])?)?;
         shape.typeNames.push(copyBytes(identText(f, p.name))?)?;
+        shape.constParameters.push(p.valueType != none())?;
         names.push(copyBytes(identText(f, p.name))?)?;
     }
     if (names.length > 0) {
@@ -353,7 +356,7 @@ fn appendImplHeader(
             }
             first = false;
             appendBytes(out, shape.typeParameters[k].view())?;
-            if (extra.length > 0) {
+            if (extra.length > 0 && !shape.constParameters[k]) {
                 var bounded = false;
                 for (b in shape.typeParameters[k].view()) {
                     if (b == ':') {
@@ -670,10 +673,14 @@ fn derivedEquality(
     }
     let method =
         if (c.types.is(lt, TypeKind.Struct) || c.types.is(lt, TypeKind.Enum)) derivedEqualMethod(c, lt)? else none();
-    if (method == none()) {
+    let sequence = sequenceElement(c, lt) != none() || (c.types.is(lt, TypeKind.Array) && !c.types.isUnsized(lt));
+    if (method == none() && !sequence) { // checkEquality compares slices, arrays and vectors element by element
         if (inDerivedEqual(c) && !hasPlainEquality(c, lt)) {
             return noFieldEquality(c, left, lt, span);
         }
+        return Ok(none());
+    }
+    if (method == none()) {
         return Ok(none());
     }
     if (functionIsInstantiation(c, method) && c.hir.functions[method as usize].siteFile == none()) {
@@ -759,6 +766,16 @@ fn noFieldEquality(c: borrow mut Checker, left: u32, t: u32, span: Span) -> Resu
         mut message,
         " has no '==': derive Equal for it too, or compare the type in a method of its own (ADR 0087 §2.3)",
     )?;
-    c.error(invalidOperandTypes(), span.start, span.end, message)?;
+    // A generic type's derived impl is checked as its generic version and again where it is attached: one report.
+    var reported = false;
+    for (d in c.front.diagnostics.items.view()) {
+        if (d.code == invalidOperandTypes() && d.file == c.file && d.start == span.start &&
+            sameBytes(d.message.view(), message.view())) {
+            reported = true;
+        }
+    }
+    if (!reported) {
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+    }
     return c.errorResult(span.start, span.end);
 }

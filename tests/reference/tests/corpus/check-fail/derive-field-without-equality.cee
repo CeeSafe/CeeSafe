@@ -1,0 +1,13 @@
+// A field without `==` in a generic type's `@derive(Equal)` (ADR 0087 §2.3) is N0207 once, at the attribute, though
+// the derived impl is checked as its generic version and again where it is attached.
+struct NoEqual {
+    v: u32;
+}
+
+@derive(Equal) // error[N0207]
+struct Holder<T> {
+    plain: NoEqual;
+    other: T;
+}
+
+fn main() {}

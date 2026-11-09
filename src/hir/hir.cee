@@ -239,6 +239,9 @@ struct HirFunction {
     siteFile: u32; // where an instance was made, or none
     siteStart: u32;
     siteEnd: u32;
+    callFile: u32; // a method of a struct or enum instance: where it is first called, or none (§20.4)
+    callStart: u32;
+    callEnd: u32;
     registered: bool;                 // false for a signature only (an interface method's): not in the reference's _functions
     closureCaptures: Range;           // a closure's captures (Hir.captures), once its environment is finished
     declaredEffects: u32;             // `@effects(…)` bits, or none (type-system.md §32.2)
@@ -477,6 +480,9 @@ struct HirProgram {
             siteFile: 0xFFFFFFFF,
             siteStart: 0,
             siteEnd: 0,
+            callFile: 0xFFFFFFFF,
+            callStart: 0,
+            callEnd: 0,
             registered: registered,
             closureCaptures: Range { start: 0, count: 0 },
             declaredEffects: 0xFFFFFFFF,

@@ -140,7 +140,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     292 =>
         "A C name that is not a valid C identifier, is a C keyword (or `bool`, `true`, `false`, `NULL`, `main`), is reserved by C, or starts with `ceesafe_`, `cee_`, `CEE_` or `cee` and an uppercase letter",
     293 =>
-        "A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1)",
+        "A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) a call of a library function whose signature names one, or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1)",
     294 =>
         "An imported C type (type-system.md §31), or a C-laid-out type (§33), used where CeeSafe would need its size or would move it: as a local, parameter, result, field, element, optional or type argument, in a struct literal, or with `read`, `write`, `add`, `sub`, `offset` or `fromRaw` through a pointer; or a borrow of a pointer, `usize` or `isize` field of one",
     295 =>
@@ -229,7 +229,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     359 =>
         "An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8)",
     360 =>
-        "A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5)",
+        "A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), a `break` or `continue` out of the arguments, a process exit, or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5)",
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     400 =>

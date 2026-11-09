@@ -1,0 +1,25 @@
+// A value branch whose value is an untyped literal is checked once a later branch fixes the type (§15.3), with the
+// names in scope where it is written: a match arm's or a condition's `is` bindings.
+fn pick(o: u32?) -> u32 {
+    let a = match (o) {
+        Some(v) => {
+            Console.writeLine(v);
+            3
+        }
+        null => 0u32,
+    };
+    let b = if (o is Some(w)) {
+        Console.writeLine(w + 1);
+        4
+    } else 5u32;
+    return a + b;
+}
+
+fn main() {
+    Console.writeLine(pick(Some(9)));
+    Console.writeLine(pick(null));
+}
+// expect-stdout: 9
+// expect-stdout: 10
+// expect-stdout: 7
+// expect-stdout: 5

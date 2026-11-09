@@ -41,11 +41,13 @@ fn bindsIntoTemporary(c: borrow Checker, e: u32) -> bool {
     }
 }
 
+/// Is `e` a place that outlives the condition: a local, a referent, or a field or element of one? A field of a
+/// temporary (`mkH(5).arr`) is the temporary's, as the temporary itself is.
 fn isPlaceExpr(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
     HirExpr.LocalRef(_) => true,
-    HirExpr.FieldAccess(_, _) => true,
+    HirExpr.FieldAccess(base, _) => isPlaceExpr(c, base),
     HirExpr.Deref(_) => true,
-    HirExpr.Index(_, _) => true,
+    HirExpr.Index(base, _) => isPlaceExpr(c, base),
     _ => false,
 };
 
@@ -192,8 +194,42 @@ fn lowerIsValue(
 }
 
 /// `left && right` as a value whose `left` has an `is` test (`x is Some(v) && v > 3`): `right` is evaluated where
-/// `left` held, with its bindings made.
+/// `left` held, with its bindings made. Outside an `if` or `while` condition the bindings end with the statement,
+/// as its temporaries do (type-system.md §15.4): a guard bound in `let ok = c.tryRead() is Some(g) && …;` is
+/// released before the next statement.
 fn lowerIsAnd(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    leftExpr: u32,
+    rightExpr: u32,
+) -> Result<u32, AllocError> {
+    let depth = b.scopes.length;
+    b.scopes.push(Vector<ScopeItem>.create())?;
+    let value = lowerIsAndIn(c, n, b, leftExpr, rightExpr)?;
+    // The bindings join the statement's temporaries (drop elaboration drops those made on the path taken).
+    var made = Vector<u32>.create();
+    for (item in b.scopes[depth].view()) {
+        if (!item.isDefer) {
+            made.push(item.value)?;
+        }
+    }
+    b.scopes.truncate(depth);
+    if (b.statementTemps != none()) {
+        for (local in made.view()) {
+            b.tempLists[b.statementTemps as usize].push(local)?;
+        }
+    } else if (b.current != none()) {
+        var i = made.length;
+        while (i > 0) {
+            i -= 1;
+            emit(n, b, NirStatement.StorageDead(made[i]))?;
+        }
+    }
+    return Ok(value);
+}
+
+fn lowerIsAndIn(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
     b: borrow mut Lowering,

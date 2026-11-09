@@ -1,0 +1,54 @@
+// A field or payload whose type is a fieldless enum without a derive of its own (ADR 0087 §2.3): a derived `HashKey`
+// hashes, and a derived `OrderKey` compares, its variant index as a `u32`.
+enum Mode {
+    Read,
+    Write,
+    Append,
+}
+
+@derive(Equal, HashKey, OrderKey)
+struct Access {
+    mode: Mode;
+    level: u32;
+}
+
+@derive(Equal, HashKey, OrderKey)
+enum Request {
+    Plain(Mode),
+    Nothing,
+}
+
+fn main() {
+    var counts = HashMap<Access, u32>.create();
+    counts.put(Access { mode: Mode.Write, level: 1 }, 10)!;
+    counts.put(Access { mode: Mode.Read, level: 1 }, 20)!;
+    counts.put(Access { mode: Mode.Write, level: 1 }, 30)!;
+    Console.writeLine(counts.length());
+    match (counts.get(Access { mode: Mode.Write, level: 1 })) {
+        Some(v) => { Console.writeLine(v); }
+        null => { Console.writeLine("absent"); }
+    }
+    var ordered = OrderedMap<Access, u32>.create();
+    ordered.put(Access { mode: Mode.Append, level: 0 }, 1)!;
+    ordered.put(Access { mode: Mode.Read, level: 9 }, 2)!;
+    ordered.put(Access { mode: Mode.Write, level: 5 }, 3)!;
+    ordered.put(Access { mode: Mode.Read, level: 2 }, 4)!;
+    var at = ordered.first();
+    while (at != null) {
+        Console.writeLine(ordered.keyAt(at!).level);
+        at = ordered.next(at!);
+    }
+    let a = Request.Plain(Mode.Write);
+    Console.writeLine(a.compareKey(Request.Plain(Mode.Read)));
+    Console.writeLine(a.compareKey(Request.Plain(Mode.Append)));
+    Console.writeLine(a.compareKey(Request.Nothing));
+}
+// expect-stdout: 2
+// expect-stdout: 30
+// expect-stdout: 2
+// expect-stdout: 9
+// expect-stdout: 5
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: -1
+// expect-stdout: -1

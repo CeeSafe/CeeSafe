@@ -225,7 +225,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     `#if CEE_DEBUG_ASSERTIONS`, which the program defines as 0 or 1. A failure panics as `assert` does. Since the call
     may vanish, its arguments may change nothing that exists before it (N0360):
     - no assignment, `mut` argument or `borrow mut this` call on a place not declared inside the arguments, no move of
-      one (`debugAssert(consume(v))`), and no exit from the function (`?`);
+      one (`debugAssert(consume(v))`), and no way out of the arguments but their end: no exit from the function
+      (`?`), no `break` or `continue` to a loop outside them, and no process exit (`Process.exit`), directly or
+      through a call. A move of a place used after the call is N0360 at the call as well as N0250 at the use;
     - no write through a raw pointer or to a `static mut` (reading one is allowed);
     - no `sleep` or `suspend` effect (§32.1): no I/O, no `await`. Allocating is allowed, and so is freeing what the
       arguments allocated;
@@ -630,13 +632,14 @@ and `E.V…` there are patterns.
   type (a match on a `StringView` needs `_` or a binding); a repeated one is N0257.
 - **Slice patterns** (ADR 0085 §2.7). `[]`, `[a, b]`, `[first, ..]`, `[.., last]`, `[x, rest @ ..]`,
   `['"', inner @ .., '"']` match a `Slice<T>`, an array or a reference to one, and a payload that is a slice or a
-  `StringView` (`Some([a, ..])`, `Some("yes")`). Each item is a pattern on one element; `..` matches any number of
+  `StringView` (`Some([a, ..])`, `Some("yes")`; also an or-pattern of these, `Some("x" | "y")`, or `name @` one,
+  `Some(s @ "zz")`, which binds the view itself). Each item is a pattern on one element; `..` matches any number of
   elements, at most once per pattern (N0100). Without `..`, the pattern matches exactly as many elements as it has
   items; with it, at least that many. `rest @ ..` binds the elements `..` matched as a `Slice<T>` of the same region.
   - **Bindings.** A slice is a view, so a slice pattern never moves: an element binding of a Copy type is a copy, and
     of any other type a `borrow T` (which cannot be `var`). On an array held by value, the elements bind only by copy.
   - **Arrays.** An array's length is part of its type: a pattern of more items than it has, or without `..` of a
-    different count, is N0205.
+    different count, is N0205. A `[T; N]` whose N is a const parameter is matched as a slice in generic code (§20.5).
 - **Bindings.** A variant pattern binds each named payload to a new immutable local in the arm:
   - **Scrutinee of type `E` (a value):** the binding is a *copy* of the payload. Since M3c a
     non-Copy payload is moved out, and the match consumes its scrutinee (§18.4).
@@ -777,12 +780,15 @@ while (parts.next() is Some(part)) { handle(part); }
   false `g` destroys `v` there.
 - **Temporaries.** The condition's temporaries end with the condition, before the then-branch, the `else` branch or
   the loop body runs (§14.5), unless a binding borrows from them: a test of a reference or view that is not a place
-  (`c.read().data().view() is [first, ..]`), or `rest @ ..` on an array that is not a place. Then they live to the
+  (`c.read().data().view() is [first, ..]`), or `rest @ ..` on an array that is not a place (a field of a
+  temporary, `make().arr`, is the temporary's, not a place). Then they live to the
   end of the then-branch or of this pass of the body, and still never into the `else` branch or the next test (Rust
   2024's `if let` scope, applied to `while` too). So a `RefCell` guard (§41.3) used to copy a value out is gone before
   the body, and a `.write()` in the body or in `else` does not panic. A `while` evaluates the scrutinee again on each
   pass.
 - Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
+  They end at the end of that statement, with its temporaries: in `let ok = c.tryRead() is Some(g) && g.data() == 5;`
+  the guard `g` is released before the next statement, so a `tryWrite()` there succeeds.
 
 ## 16. Arrays, slices and `for` (M2d)
 
@@ -1513,7 +1519,11 @@ fn parse(ts: bool) -> usize => if (ts) run<true>() else run<false>();
   `if (TS) { return 1; }` stays reachable. A closure reads `N` without capturing it. A bare `N` in a pattern is
   N0358: test it in a guard, `x if (x == N) =>` (§15.2).
 - **Array lengths.** A `usize` const parameter may be an array length, `[T; N]` and `[v; N]` (§16.1). In the generic
-  item `[T; N]` is equal only to `[T; N]` with the same parameter (`[T; M]` is N0205), and `a.length` is `N`.
+  item `[T; N]` is equal only to `[T; N]` with the same parameter (`[T; M]` is N0205), and `a.length` is `N`. Its
+  length is unknown there, so slice and array patterns on it (§15.2) are checked as on a slice: covering it needs a
+  `_` or `..` arm (N0256). Each instance checks them against its length: a pattern that length cannot have
+  (`[x, y, ..]` when N is 1, `[]` when N is 3) is N0222 at the use, while an arm the instance cannot reach (`_` after
+  `[x, ..]`) is no error of the instance.
 - **Arguments** are written where type arguments are, and evaluated at compile time (§10) to a value of the
   parameter's type; out of its range is N0217. An argument is `true`, `false`, an integer literal (typed by the
   parameter: `Grouped<3>` is a `usize`), the name of a constant (an associated one, `Tags.COUNT`, included), an
@@ -1827,6 +1837,9 @@ lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after i
 - `CStr.fromBytesWithNul<region r>(b: Slice<r, u8>) -> CStr<r>?` takes bytes whose last byte is their only NUL and
   whose text before it is UTF-8 (as `view()` returns a `StringView`); otherwise it is `null`. The `CStr` is a view of
   `b`: returning one made from a local `Vector`'s bytes is N0244, as for any view.
+- Its fields are private to lib/core (N0296): only `c"…"` and `fromBytesWithNul` make one, so its NUL is always
+  there. lib/core's `TextWriter`, whose `cText()` relies on the zero after what it wrote, keeps its fields private
+  for the same reason.
 - A struct field of type `CStr` needs a region parameter, as a `StringView`'s does (N0270).
 - Like a `StringView`, a `CStr` may be a constant's type (§10) and a static's (§39.2), initialised by a `c"…"`.
 - `"…\0".ptr as *CChar` stays valid, but nothing checks that its `\0` is there, and its view's length counts it.
@@ -2861,24 +2874,28 @@ unsafe context are N0280.
 `@derive(…)` on a struct or enum names one or more of `Equal`, `HashKey` and `OrderKey`, each once, and no others
 (N0290). Each writes an `impl`, ordinary code that is checked as written (`--dump-hir` shows it) and whose diagnostics
 point at the derive's name in the attribute. A generic type's impl has the type's own parameters; for `HashKey` and
-`OrderKey`, each type parameter is also bounded by that interface.
+`OrderKey`, each type parameter (not a const parameter, §20.5) is also bounded by that interface.
 
 - **`Equal`** writes `impl DerivedEqual<S> for S` (lib/core). `derivedEqual(borrow this, other: borrow S) -> bool`
   compares the fields in declaration order, joined by `&&`; for an enum, the variant, then its payloads. `a == b` on
   `S` is `a.derivedEqual(b)` and `a != b` its negation, both lending their operands. Each field's type must have
   `==` (N0207 at the attribute, naming the field): what §6 and §16.2 give `==` (integers, `bool`, fieldless enums,
   slices, vectors and arrays of them, `StringView`, raw pointers), floats (IEEE: `NaN != NaN`), `String` (its text),
-  another `Equal` type, a cell whose contents have it (§41.2), and through `borrow T` and `Box<T>` the referent. A
+  another `Equal` type and slices, arrays and vectors of one (the same length and equal elements in order, through
+  lib/core's `DerivedEqualElements<T>`; `==` on them works outside derives too), a cell whose contents have it
+  (§41.2), and through `borrow T` and `Box<T>` the referent. A
   field written `T?` compares as two `null`s being equal, or two payloads compared through borrows. A generic type
   has `==` for the instances whose arguments have it, checked at the first `==` on an instance (N0222); in generic
-  code over an opaque `T`, `==` stays N0207. `DerivedEqual` is implemented only by `@derive(Equal)`: an `impl` of it
+  code over an opaque `T`, `==` stays N0207, and so does a `[T; 2]` or `Vector<T>` field's, each instance checking
+  its element type. `DerivedEqual` is implemented only by `@derive(Equal)`: an `impl` of it
   in source is N0290, so `==` keeps one meaning (language-spec.md §6: no operator overloading).
 - **`HashKey`** writes `impl HashKey<S> for S` (§24.3) and needs `Equal` (N0290 otherwise). `hash` feeds each field
-  in order through lib/std's `deriveHash(field, mut h)`, which needs the field's type to implement `HashKey` (N0268);
-  an enum's variant index, as a `u32`, comes before its payloads. `sameAs` is `derivedEqual`.
+  in order through lib/std's `deriveHash(field, mut h)`, which needs the field's type to implement `HashKey` (N0268),
+  except for a fieldless enum without one, whose variant index is hashed as a `u32`; an enum's variant index, as a
+  `u32`, comes before its payloads. `sameAs` is `derivedEqual`.
 - **`OrderKey`** writes `impl OrderKey<S> for S` (lib/std, ADR 0075 §2.4): `compareKey` compares the fields
-  lexicographically, in declaration order, through `deriveCompare(a, b)` (N0268 for a field type without `OrderKey`);
-  an enum compares its variant index first. Declaration order is the order the author asks for; there is still no
+  lexicographically, in declaration order, through `deriveCompare(a, b)` (N0268 for a field type without `OrderKey`,
+  but a fieldless enum without one compares its variant index); an enum compares its variant index first. Declaration order is the order the author asks for; there is still no
   `<` on the type.
 
 For a two-field struct, `@derive(Equal, HashKey, OrderKey) struct Point { x: i32; y: i32; }` writes:

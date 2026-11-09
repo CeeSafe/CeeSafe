@@ -142,6 +142,18 @@ fn checkEquality(
         return Ok(none()); // the general rules report the mismatch
     }
     let element = if (arrays) c.types.info(lt).element else le;
+    if (c.types.is(element, TypeKind.TypeParameter) && inDerivedEqual(c)) {
+        // `[T; 2]` or `Vector<T>` in a generic `derivedEqual`: never compiled, each instance checks its own (§28.7).
+        return c.expr(HirExpr.BoolConst(false), boolType, span.start, span.end);
+    }
+    let elementMethod = if (isEqualityElement(c, element)) none() else if (c.types.is(element, TypeKind.Struct) ||
+        c.types.is(element, TypeKind.Enum)) derivedEqualMethod(c, element)? else none();
+    if (elementMethod != none()) {
+        return derivedElementsEquality(c, op, left, right, element, span);
+    }
+    if (!isEqualityElement(c, element) && inDerivedEqual(c)) {
+        return noFieldEquality(c, left, lt, span);
+    }
     if (!isEqualityElement(c, element)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
@@ -165,6 +177,52 @@ fn checkEquality(
         return c.errorResult(span.start, span.end);
     }
     return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+}
+
+/// `a == b` on slices, arrays or vectors of a type `@derive(Equal)` gave equality (ADR 0087 §2.3): lib/core's
+/// `DerivedEqualElements<T>.equal(a, b)`, negated for `!=`, each operand lent as a `Slice<T>`.
+fn derivedElementsEquality(
+    c: borrow mut Checker,
+    op: BinaryOp,
+    left: u32,
+    right: u32,
+    element: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let boolType = c.types.boolType;
+    let slice = c.types.sliceOf(element, false)?;
+    let l = wholeSlice(c, left, slice)?;
+    let r = wholeSlice(c, right, slice)?;
+    if (c.isBottom(l) || c.isBottom(r)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let elements = [element];
+    let name = c.intern("equal")?;
+    let function = libraryFunction(c, "DerivedEqualElements", elements[..], name, span)?;
+    if (function == none()) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [l, r];
+    let list = c.hir.list(values[..])?;
+    let call = c.expr(HirExpr.Call(function, list), boolType, span.start, span.end)?;
+    if (binaryIndex(op) == 3) {
+        return c.expr(HirExpr.Unary(UnaryOp.Not, call), boolType, span.start, span.end);
+    }
+    return Ok(call);
+}
+
+/// An array, slice or vector operand as a `Slice<T>` of all its elements: `a[..]` for an array.
+fn wholeSlice(c: borrow mut Checker, e: u32, slice: u32) -> Result<u32, AllocError> {
+    let t = c.typeOf(e);
+    if (!c.types.is(t, TypeKind.Array) || c.types.isUnsized(t)) {
+        return lendAsSlice(c, e, slice);
+    }
+    let span = c.spanOf(e);
+    let place = toPlace(c, e)?;
+    if (place != none()) {
+        return c.expr(HirExpr.Slice(false, place, none(), none()), slice, span.start, span.end);
+    }
+    return c.expr(HirExpr.SliceTemp(false, e, none(), none()), slice, span.start, span.end);
 }
 
 /// A slice operand as a `Slice<T>` (a `SliceMut<T>` reborrowed), or a vector's elements lent as one, as `v.view()`.

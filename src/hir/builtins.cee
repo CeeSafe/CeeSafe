@@ -153,6 +153,10 @@ fn bfFileOpenRegular() -> u32 => 132;
 /// `debugAssert(condition[, message])` (ADR 0087 §2.5): HIR only; NIR lowers it to a configured `assert`.
 fn bfDebugAssert() -> u32 => 133;
 
+/// A fieldless enum's variant index as a `u32`, from a `borrow E` (ADR 0087 §2.3): HIR only, made for a derived
+/// `HashKey` or `OrderKey` over a fieldless-enum field; NIR lowers it to the place's discriminant.
+fn bfVariantIndex() -> u32 => 134;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
 
@@ -292,6 +296,7 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     131 => "FileOpenAppend",
     132 => "FileOpenRegular",
     133 => "DebugAssert",
+    134 => "VariantIndex",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

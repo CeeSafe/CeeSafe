@@ -208,6 +208,65 @@ fn reportDebugAssert(
     return c.front.diagnostics.error(debugAssertWrites(), d.file, d.span.start, d.span.end, message);
 }
 
+/// "this assigns 'x', which exists before the call", after the message's start.
+fn appendFinding(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    function: u32,
+    found: DebugFinding,
+    message: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    appendDebugAssertStart(message)?;
+    appendText(
+        message,
+        if (found.what == 1) "assigns "
+            else if (found.what == 2) "lends as 'mut' "
+            else if (found.what == 3) "moves "
+            else "drops ",
+    )?;
+    let name = n.functions[function as usize].locals[found.local as usize].name;
+    if (name != none()) {
+        appendQuotedName(message, c, name)?;
+    } else {
+        appendText(message, "a value")?;
+    }
+    return appendText(message, ", which exists before the call");
+}
+
+/// N0360 for each `debugAssert` of NIR function `only` that moves a place declared before it, when the move checker
+/// found a use after a move there: N0250 at the use would otherwise be all that is reported, since it stops the
+/// effect checker, which finds the other refusals (checkDebugAsserts).
+fn checkDebugAssertMoves(c: borrow mut Checker, n: borrow NirProgram, only: u32) -> Result<void, AllocError> {
+    for (index in 0..n.debugAsserts.length) {
+        let d = n.debugAsserts[index];
+        let function = d.function;
+        if (function != only) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        let blockCount = n.functions[function as usize].blocks.length;
+        for (position in 0..blockCount) {
+            let id = n.functions[function as usize].blocks[position].id;
+            if (message.length > 0 || id < d.firstBlock || id >= d.endBlock) {
+                continue;
+            }
+            let statementCount = n.functions[function as usize].blocks[position].statements.length;
+            for (i in 0..statementCount) {
+                let s = n.functions[function as usize].blocks[position].statements[i];
+                let found = statementFinding(c, n, d, n.functions[function as usize].locals, s);
+                if (found.what == 3) {
+                    appendFinding(c, n, function, found, mut message)?;
+                    break;
+                }
+            }
+        }
+        if (message.length > 0) {
+            c.front.diagnostics.error(debugAssertWrites(), d.file, d.span.start, d.span.end, message)?;
+        }
+    }
+    return Ok();
+}
+
 /// N0360 for each `debugAssert` of a compiled function: its first refused operation.
 fn checkDebugAsserts(c: borrow mut Checker, n: borrow NirProgram, e: borrow mut Effects) -> Result<void, AllocError> {
     for (index in 0..n.debugAsserts.length) {
@@ -233,21 +292,7 @@ fn checkDebugAsserts(c: borrow mut Checker, n: borrow NirProgram, e: borrow mut 
                 let s = n.functions[function as usize].blocks[position].statements[i];
                 let found = statementFinding(c, n, d, n.functions[function as usize].locals, s);
                 if (found.what != 0) {
-                    appendDebugAssertStart(mut message)?;
-                    appendText(
-                        mut message,
-                        if (found.what == 1) "assigns "
-                            else if (found.what == 2) "lends as 'mut' "
-                            else if (found.what == 3) "moves "
-                            else "drops ",
-                    )?;
-                    let name = n.functions[function as usize].locals[found.local as usize].name;
-                    if (name != none()) {
-                        appendQuotedName(mut message, c, name)?;
-                    } else {
-                        appendText(mut message, "a value")?;
-                    }
-                    appendText(mut message, ", which exists before the call")?;
+                    appendFinding(c, n, function, found, mut message)?;
                     break;
                 }
                 var ops = Vector<EffectOp>.create();
@@ -276,6 +321,17 @@ fn checkDebugAsserts(c: borrow mut Checker, n: borrow NirProgram, e: borrow mut 
                         appendText(mut message, "exits the process")?;
                     }
                     _ => {}
+                }
+            }
+            if (message.length == 0) {
+                // Its only way out is its normal end, the join block made just before its first block: a `break` or
+                // `continue` would change the control flow when release builds leave it out.
+                for (target in n.functions[function as usize].blocks[position].successors.view()) {
+                    if (target + 1 != d.firstBlock && (target < d.firstBlock || target >= d.endBlock)) {
+                        appendDebugAssertStart(mut message)?;
+                        appendText(mut message, "leaves the assertion ('break' or 'continue')")?;
+                        break;
+                    }
                 }
             }
         }

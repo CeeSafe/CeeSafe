@@ -236,6 +236,7 @@ fn synthAll(c: borrow mut Checker, arguments: Range) -> Result<void, AllocError>
 struct BranchType {
     typ: u32; // or none
     deferred: Vector<DeferredBranch>;
+    scopes: Vector<Vector<ScopeEntry>>; // each deferred branch's names in scope, its arm's or `is` bindings included
 }
 
 /// A flexible or `null` branch met before the type was known.
@@ -244,7 +245,23 @@ struct DeferredBranch {
     value: u32; // an expression
 }
 
-fn branchType(expected: u32) -> BranchType => BranchType { typ: expected, deferred: Vector<DeferredBranch>.create() };
+fn branchType(expected: u32) -> BranchType =>
+    BranchType {
+        typ: expected,
+        deferred: Vector<DeferredBranch>.create(),
+        scopes: Vector<Vector<ScopeEntry>>.create(),
+    };
+
+/// Defers a branch until a later one fixes the type, with the names in scope where it is: its arm's bindings and the
+/// condition's `is` bindings, which are out of scope by the time it is checked.
+fn deferBranch(c: borrow Checker, branches: borrow mut BranchType, index: u32, value: u32) -> Result<void, AllocError> {
+    var names = Vector<ScopeEntry>.create();
+    for (entry in c.scopes.view()) {
+        names.push(entry)?;
+    }
+    branches.scopes.push(names)?;
+    return branches.deferred.push(DeferredBranch { index: index, value: value });
+}
 
 fn armPattern(c: borrow Checker, arms: Range, k: u32, isValue: bool) -> u32 {
     let arm = c.front.ast.at(arms, k);
@@ -1016,7 +1033,8 @@ fn isStringLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.expr
 };
 
 /// Is the pattern a string or slice pattern on a payload that is a view (`Some("get")` on a `StringView?`, ADR 0085
-/// §2.7)? It tests the view's elements, so the reference payload is not a reason to refuse it.
+/// §2.7)? It tests the view's elements, so the reference payload is not a reason to refuse it. So are alternatives
+/// that all are (`Some("x" | "y")`), and `name @ P` with P one (`Some(s @ "zz")`), which binds the view itself.
 fn viewPattern(c: borrow Checker, pattern: u32, typ: u32) -> bool {
     if (!c.types.isSlice(typ) && !c.types.isStringView(typ)) {
         return false;
@@ -1024,6 +1042,15 @@ fn viewPattern(c: borrow Checker, pattern: u32, typ: u32) -> bool {
     match (c.front.ast.patterns[pattern as usize]) {
         PatternNode.Slice(_) => { return true; }
         PatternNode.Literal(literal) => { return isStringLiteral(c, literal); }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (!viewPattern(c, c.front.ast.at(alternatives, k), typ)) {
+                    return false;
+                }
+            }
+            return alternatives.count > 0;
+        }
+        PatternNode.At(_, inner) => { return viewPattern(c, inner, typ); }
         _ => { return false; }
     }
 }
@@ -1129,7 +1156,9 @@ fn checkSlicePattern(
         trees.push(tree)?;
     }
     let length = c.types.info(array).arrayLength;
-    if (length >= 0) {
+    // `[T; N]` with N a const parameter: its length is unknown in the generic version, which matches it as a slice;
+    // each instance checks the counts against its length (ADR 0083 §7).
+    if (length >= 0 && c.types.info(array).lengthParameter == none()) {
         let count = truncate<i64>(trees.length);
         if ((restAt == none() && count != length) || (restAt != none() && count > length)) {
             var message = Vector<u8>.create();
@@ -1626,7 +1655,7 @@ fn checkBranch(
             if (final != none()) {
                 // A value block (ADR 0073 §2.3); a flexible or `null` value waits for the type, as a value branch does.
                 if (branches.typ == none() && (isFlexible(c, final) || isNullExpr(c, final))) {
-                    branches.deferred.push(DeferredBranch { index: index, value: value })?;
+                    deferBranch(c, branches, index, value)?;
                     return c.hir.addStmt(HirStmt.Block(emptyRange()), span.start, span.end);
                 }
                 return checkValueBlock(c, block, branches);
@@ -1650,7 +1679,7 @@ fn checkBranch(
         _ => false,
     };
     if (branches.typ == none() && (isFlexible(c, value) || isNull)) {
-        branches.deferred.push(DeferredBranch { index: index, value: value })?; // checked once a later branch fixes it
+        deferBranch(c, branches, index, value)?; // checked once a later branch fixes it
         return c.hir.addStmt(HirStmt.Block(emptyRange()), span.start, span.end);
     }
     let hir = checkExpr(c, value, branches.typ)?;
@@ -1737,15 +1766,25 @@ fn finishBranches(
     }
     for (k in 0..branches.deferred.length) {
         let d = branches.deferred[k];
+        // The names the branch saw: those in scope now are a prefix of them.
+        c.pushScope()?;
+        let seen = c.scopes.length;
+        for (i in seen..branches.scopes[k].length) {
+            let entry = branches.scopes[k][i];
+            c.bind(entry.symbol, entry.local)?;
+        }
         let block = match (c.front.ast.exprs[d.value as usize]) {
             ExprNode.Block(b) => b,
             _ => none(),
         };
         if (block != none()) {
-            finished.push(DeferredBranch { index: d.index, value: checkValueBlock(c, block, branches)? })?;
+            let value = checkValueBlock(c, block, branches)?;
+            c.popScope();
+            finished.push(DeferredBranch { index: d.index, value: value })?;
             continue;
         }
         let hir = checkExpr(c, d.value, branches.typ)?;
+        c.popScope();
         if (branches.typ == none()) {
             branches.typ = c.typeOf(hir);
         }

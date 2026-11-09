@@ -1,0 +1,9 @@
+// A `debugAssert` that moves a value used after it (ADR 0087 §2.5): N0360 at the assertion, the cause, as well as
+// N0250 at the use, which release builds would not have.
+fn take(s: String) -> bool => s.length > 0;
+
+fn main() {
+    let name = String.create();
+    debugAssert(take(name));        // error[N0360]
+    Console.writeLine(name.length); // error[N0250]
+}

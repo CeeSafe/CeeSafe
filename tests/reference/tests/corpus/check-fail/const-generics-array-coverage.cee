@@ -1,0 +1,15 @@
+// Slice and array patterns on `[T; N]` with N a const parameter (ADR 0083 §7, ADR 0085 §2.7): in the generic version
+// the length is unknown, so the patterns are checked as on a slice, and covering needs a `_` or `..` arm (N0256).
+fn onlyEmpty<const N: usize>(a: [i32; N]) -> i32 => match (a) { // error[N0256]
+    [] => 7,
+};
+
+fn lastOrNone<const N: usize>(a: [i32; N]) -> i32 => match (a) {
+    [.., z] => z,
+    [] => -1,
+};
+
+fn main() {
+    Console.writeLine(onlyEmpty([1, 2, 3]));
+    Console.writeLine(lastOrNone([1, 2, 3]));
+}

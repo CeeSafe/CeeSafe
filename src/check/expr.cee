@@ -1152,6 +1152,49 @@ fn variadicArgument() -> u32 => 347;
 fn checkUserCall(c: borrow mut Checker, function: u32, arguments: Range, span: Span) -> Result<u32, AllocError> =>
     checkUserCallWith(c, function, arguments, span, none());
 
+/// Is `function` a library function whose signature did not resolve: in the freestanding profile, one that takes or
+/// returns a hosted-only type (profiles.md §4.1)?
+fn libraryFunctionNeedsHost(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    if (f.file == none() || !c.fileIsLibrary[f.file as usize]) {
+        return false;
+    }
+    if (mentionsErrorType(c, f.returnType, 0)) {
+        return true;
+    }
+    for (local in f.parameters.view()) {
+        if (mentionsErrorType(c, c.hir.locals[local as usize].typ, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Does the type, or a type it is made of (an optional's, a `Result`'s, a reference's), fail to resolve?
+fn mentionsErrorType(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (t == c.types.error) {
+        return true;
+    }
+    if (t == none() || depth > 8) {
+        return false;
+    }
+    let option = c.types.optionType(t);
+    if (option != none()) {
+        return mentionsErrorType(c, option, depth + 1);
+    }
+    let info = c.types.info(t);
+    if (c.types.is(t, TypeKind.Enum) && info.enumDef != none()) {
+        let e = borrow c.types.enums[info.enumDef as usize];
+        if (e.resultOk != none()) {
+            return mentionsErrorType(c, e.resultOk, depth + 1) || mentionsErrorType(c, e.resultErr, depth + 1);
+        }
+    }
+    if (info.pointee != none()) {
+        return mentionsErrorType(c, info.pointee, depth + 1);
+    }
+    return false;
+}
+
 /// CheckUserCall: for a method, `receiver` is the already-checked `this` argument, before the explicit ones.
 fn checkUserCallWith(
     c: borrow mut Checker,
@@ -1160,6 +1203,26 @@ fn checkUserCallWith(
     span: Span,
     receiver: u32,
 ) -> Result<u32, AllocError> {
+    if (c.hir.functions[function as usize].owner != none() && c.hir.functions[function as usize].callFile == none() &&
+        functionIsInstantiation(c, function)) {
+        // A method of a struct or enum instance: an error of its body (N0222) is reported at its first call (§20.4).
+        c.hir.functions[function as usize].callFile = c.file;
+        c.hir.functions[function as usize].callStart = span.start;
+        c.hir.functions[function as usize].callEnd = span.end;
+    }
+    if (c.freestanding && !isLibraryFile(c) && libraryFunctionNeedsHost(c, function)) {
+        // Its signature names a hosted-only type, which the library's own (dropped) diagnostics refused.
+        var what = Vector<u8>.create();
+        appendText(mut what, "'")?;
+        let owner = c.hir.functions[function as usize].owner;
+        if (owner != none()) {
+            appendBytes(mut what, c.typeName(owner))?;
+            appendText(mut what, ".")?;
+        }
+        appendBytes(mut what, c.name(c.hir.functions[function as usize].name))?;
+        appendText(mut what, "'")?;
+        hostedOnly(c, span, what.view())?;
+    }
     let f = borrow c.hir.functions[function as usize];
     let skip: usize = if (receiver == none()) 0 else 1;
     let parameterCount = f.parameters.length - skip;

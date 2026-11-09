@@ -1,0 +1,22 @@
+// Slice and array patterns on `[T; N]` with N a const parameter (ADR 0083 §7, ADR 0085 §2.7): each instance checks
+// the counts against its own length, and a pattern that length cannot have is N0222 at the use.
+fn firstTwo<const N: usize>(a: [u8; N]) -> u32 => match (a) {
+    [x, y, ..] => (x as u32) * 10 + (y as u32),
+    _ => 99,
+};
+
+struct Grid<const N: usize> {
+    cells: [u64; N];
+
+    fn isEmpty(borrow this) -> bool => match (this.cells) {
+        [] => true,
+        _ => false,
+    };
+}
+
+fn main() {
+    Console.writeLine(firstTwo([1u8, 2u8, 3u8]));
+    Console.writeLine(firstTwo([7u8])); // error[N0222]
+    let g = Grid<3> { cells: [1u64, 2, 3] };
+    Console.writeLine(g.isEmpty()); // error[N0222]
+}

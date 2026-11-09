@@ -17,6 +17,7 @@ struct SemanticEntry {
 struct SemanticIndex {
     file: u32;
     entries: Vector<SemanticEntry>;
+    function: u32; // the HIR function being indexed, or none
 }
 
 /// Whitespace runs as one space, then trimmed (the reference's Spaces regex and Trim).
@@ -343,6 +344,7 @@ fn indexFunction(
     sources: borrow Vector<SourceText>,
     f: u32,
 ) -> Result<void, AllocError> {
+    index.function = f;
     let source = borrow sources[index.file as usize];
     let function = borrow c.hir.functions[f as usize];
     for (local in function.locals.view()) {
@@ -608,6 +610,75 @@ fn indexExpression(
     }
 }
 
+/// The declaration of const parameter `symbol` (ADR 0083) that the function being indexed sees: among its own
+/// parameters or its struct's or enum's; none if neither has it.
+fn constParameterDeclaration(index: borrow SemanticIndex, c: borrow Checker, symbol: u32) -> u32 {
+    if (index.function == none()) {
+        return none();
+    }
+    let function = borrow c.hir.functions[index.function as usize];
+    if (function.syntax != none()) {
+        let declared = findConstParameter(c, c.front.ast.functions[function.syntax as usize].typeParameters, symbol);
+        if (declared != none()) {
+            return declared;
+        }
+    }
+    let owner = function.owner;
+    if (owner == none()) {
+        return none();
+    }
+    var item = none();
+    if (c.types.is(owner, TypeKind.Struct)) {
+        item = c.types.structs[c.types.info(owner).structDef as usize].item;
+    } else if (c.types.is(owner, TypeKind.Enum)) {
+        item = c.types.enums[c.types.info(owner).enumDef as usize].item;
+    }
+    if (item == none()) {
+        return none();
+    }
+    return match (c.front.ast.items[item as usize].kind) {
+        ItemKind.Struct(k) => findConstParameter(c, c.front.ast.structs[k as usize].typeParameters, symbol),
+        ItemKind.Enum(_, typeParameters, _) => findConstParameter(c, typeParameters, symbol),
+        _ => none(),
+    };
+}
+
+fn findConstParameter(c: borrow Checker, typeParameters: Range, symbol: u32) -> u32 {
+    for (k in 0..typeParameters.count) {
+        let p = c.front.ast.at(typeParameters, k);
+        let parameter = borrow c.front.ast.typeParameters[p as usize];
+        if (parameter.valueType != none() && c.front.ast.idents[parameter.name as usize].symbol == symbol) {
+            return p;
+        }
+    }
+    return none();
+}
+
+/// A read of a const parameter (a call of its accessor): `const N: usize`, defined at its declaration.
+fn addConstParameter(
+    index: borrow mut SemanticIndex,
+    c: borrow Checker,
+    sources: borrow Vector<SourceText>,
+    span: Span,
+    callee: u32,
+) -> Result<void, AllocError> {
+    let symbol = c.hir.functions[callee as usize].name;
+    let declaration = constParameterDeclaration(index, c, symbol);
+    let indexFile = index.file;
+    let source = borrow sources[indexFile as usize];
+    if (declaration == none()) {
+        var text = copyBytes("const ".bytes())?;
+        appendBytes(mut text, c.name(symbol))?;
+        appendText(mut text, ": ")?;
+        c.types.appendName(mut text, c.hir.functions[callee as usize].returnType)?;
+        return addEntry(index, source, span.start, span.end, codeBlock(text.view())?, false, 0, 0);
+    }
+    let parameter = borrow c.front.ast.typeParameters[declaration as usize];
+    let name = c.front.ast.idents[parameter.name as usize];
+    let text = signatureOf(source, parameter.start, parameter.end)?;
+    return addEntry(index, source, span.start, span.end, codeBlock(text.view())?, true, name.start, name.end);
+}
+
 fn addCallee(
     index: borrow mut SemanticIndex,
     c: borrow Checker,
@@ -615,6 +686,9 @@ fn addCallee(
     span: Span,
     callee: u32,
 ) -> Result<void, AllocError> {
+    if (accessorParameter(c, callee) != none()) {
+        return addConstParameter(index, c, sources, span, callee);
+    }
     let function = borrow c.hir.functions[callee as usize];
     let signature = functionSignatureOf(c, sources, function.file, function.syntax)?;
     var defined = false;
@@ -645,7 +719,7 @@ fn buildSemanticIndex(
     sources: borrow Vector<SourceText>,
     file: u32,
 ) -> Result<SemanticIndex, AllocError> {
-    var index = SemanticIndex { file: file, entries: Vector<SemanticEntry>.create() };
+    var index = SemanticIndex { file: file, entries: Vector<SemanticEntry>.create(), function: none() };
     for (u in c.front.ast.units.view()) {
         if (u.file == file) {
             indexSyntax(mut index, c, sources, u)?;

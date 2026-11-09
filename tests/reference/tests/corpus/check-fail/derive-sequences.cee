@@ -1,0 +1,15 @@
+// `@derive(Equal)` on a generic type with a `[T; 2]` field (ADR 0087 §2.3): each instance's element must have `==`
+// (type-system.md §28.7), else N0222 at the first `==`.
+struct NoEqual {
+    v: u32;
+}
+
+@derive(Equal)
+struct Pair<T: Copy> {
+    items: [T; 2];
+}
+
+fn main() {
+    let p = Pair<NoEqual> { items: [NoEqual { v: 1 }, NoEqual { v: 2 }] };
+    Console.writeLine(p == p); // error[N0222]
+}

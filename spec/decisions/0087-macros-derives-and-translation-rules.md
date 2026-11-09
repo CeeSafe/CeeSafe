@@ -228,7 +228,7 @@ let fd = unsafe { open(c"/dev/null".ptr(), 0) };
 - `c"…"` takes §1.6's escapes. Its type is **`CStr<static>`**: `CStr<region r>` is a Copy view of text with a NUL byte
   after its end, valid for region `r` like `StringView<r>` (§25). The compiler appends the NUL; a `\0` inside the
   literal is N0006.
-- `CStr<r>` has `ptr() -> *CChar`, `view() -> StringView<r>` and `length` (both without the NUL), and
+- `CStr<r>` has `ptr() -> *CChar`, `view() -> StringView<r>` and `length()` (both without the NUL), and
   `CStr.fromBytesWithNul<region r>(b: Slice<r, u8>) -> CStr<r>?`, which requires one final NUL and no other. The view
   cannot outlive `b`: returning one made from a local `Vector`'s bytes is N0244, as for any view (probed on 0.24.2 with
   a library-level `CStr<region r>`). A `CStr` field in a struct needs a region parameter, as a `StringView` does.
@@ -385,3 +385,40 @@ Released with the set's plan: 0.24.3 (ADRs 0081, 0082 stage A); 0.25.0 (0086, 00
 they use 0084's cells and benefit from `is`; **0.27.0, step 2**: constant `+` (§2.7) and `embed` (§2.8). New codes:
 N0360, a write or move in `debugAssert`'s condition or message; N0361, an `embedText` file that is not UTF-8; N0362,
 an `embed` path that is missing or outside the package and roots.
+
+## 8. Implementation notes (step 1, 0.26.0)
+
+Step 1 (§2.3, §2.4, §2.5 and §2.9) is implemented as written, with these precisions and the fixes after its review
+(2026-11-09):
+
+- **`CStr`.** `length()` is a method, beside `ptr()`, `view()` and `bytesWithNul()`, not a field. `fromBytesWithNul`
+  also requires the text before the NUL to be UTF-8, since `view()` returns a `StringView`. The fields `text` and
+  `bytes` are private to lib/core (N0296): a struct literal in a program could otherwise pair any text with bytes
+  that have no NUL, and `ptr()` would hand C a string that never ends. lib/core's `TextWriter`, whose `cText()` relies
+  on the zero after what was written, has private fields for the same reason. No other type this release adds keeps
+  an invariant in public fields (`Formatted` has none, `TextAlign` is an enum, `DerivedEqualElements` has none).
+- **`DerivedEqual<T>`** is an internal interface of lib/core: `@derive(Equal)` writes its impl, a hand-written one is
+  N0290, and `a == b` on a derived type calls it. Programs do not name it.
+- **`String == String`** compares the text everywhere, not only inside a derived `derivedEqual`, as `a.view() ==
+  b.view()` does.
+- **N0360 and statics.** Reading a `static mut` in a `debugAssert` is allowed; writing one, or lending it `mut`, is
+  N0360.
+- **N0360 and control flow.** The arguments' only way out is their end: `?` and `return`, a `break` or `continue` to
+  a loop outside them, and a process exit (`Process.exit`, directly or through any call, which the write fact now
+  counts) are N0360; a loop inside the arguments may break and continue. When a move inside the arguments is
+  followed by a use, N0360 is reported at the assertion as well as N0250 at the use, since N0250 stops the effect
+  checker that finds N0360 otherwise.
+- **Sequences of derived types** (§2.3's "slices, arrays and vectors of one"). `==` and `!=` on a slice, array or
+  vector whose element type `@derive(Equal)` gave equality call lib/core's `DerivedEqualElements<T>.equal(a, b)`:
+  the same length and equal elements in order. This holds outside derives too (`a[..] == b[..]` on `Slice<P>`). In a
+  generic type's `derivedEqual`, a `[T; 2]`, `[T; N]` or `Vector<T>` field compares as the instance's element type
+  allows: N0222 at the first `==` on an instance whose element has no `==` (type-system.md §28.7). A field without
+  `==` is reported once, though a generic type's impl is checked twice.
+- **Fieldless enums in `HashKey` and `OrderKey`.** A field or payload whose type is a fieldless enum without its own
+  `HashKey` (or `OrderKey`) is hashed (or compared) by its variant index as a `u32`, as §2.3 says for `HashKey`;
+  `OrderKey` does the same, so `@derive(OrderKey)` on a struct with such a field needs no derive on the enum. The
+  checker calls the `u32` instance of `deriveHash` or `deriveCompare` with the index.
+- **Const parameters.** On a type with const parameters (ADR 0083), the `HashKey` and `OrderKey` impls bound only its
+  type parameters: `impl<T: Copy + OrderKey<T>, const N: usize> OrderKey<Buf<T, N>> for Buf<T, N>`.
+- **Not added:** `==` on a `CStr` field (a struct with one is N0207 under `@derive(Equal)`; compare `view()`s in a
+  method), and `HashKey` or `OrderKey` for arrays, optionals, boxes and floats, which §2.3 does not list.

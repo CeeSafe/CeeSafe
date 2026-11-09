@@ -5,8 +5,8 @@
 /// A view of UTF-8 text with a NUL byte after its end, valid for region `r` as a `StringView<r>` is: what a C
 /// function taking a `const char *` needs. Copy; a field of this type needs a region parameter, as a view's does.
 public struct CStr<region r> {
-    text: StringView<r>; // the text, without the NUL
-    bytes: Slice<r, u8>; // the text and its NUL, which is its only one
+    private text: StringView<r>; // the text, without the NUL
+    private bytes: Slice<r, u8>; // the text and its NUL, which is its only one
 
     /// Bytes ending in a NUL that is their only one, as valid UTF-8 text before it; else null.
     public fn fromBytesWithNul(b: Slice<r, u8>) -> CStr<r>? {

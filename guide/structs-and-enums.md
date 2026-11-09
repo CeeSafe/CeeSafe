@@ -140,11 +140,13 @@ true
 ```
 
 Every field needs `==` itself: numbers, `bool`, strings and views, fieldless enums, byte vectors and slices, optionals
-of these (two `null`s are equal), and other types that derive `Equal`. Floats compare as IEEE values, so a `NaN` field
+of these (two `null`s are equal), and other types that derive `Equal`, with arrays, slices and vectors of them (`==`
+works on those anywhere: same length, equal elements). Floats compare as IEEE values, so a `NaN` field
 makes a value unequal to itself. A field without `==` is an error at the attribute that names it; write a method of
 your own for such a type. The derived code is ordinary CeeSafe that `ceesafec check --dump-hir` prints: for `Point`,
 `impl DerivedEqual<Point> for Point { fn derivedEqual(borrow this, other: borrow Point) -> bool => this.x == other.x
-&& this.y == other.y; }`, and `a == b` calls it.
+&& this.y == other.y; }`, and `a == b` calls it. For `HashKey` and `OrderKey`, a field whose type is a fieldless enum
+needs no derive of its own: its variant's position in the declaration is hashed and compared.
 
 ## `match`
 
@@ -447,7 +449,8 @@ true
 ```
 
 Nowhere else is the test known to be true, so a pattern that binds under `!` or `||`, or as a whole `let`
-initialiser, is an error (N0359). A test that binds a payload that is not Copy moves the value only when it succeeds:
+initialiser, is an error (N0359). In a chain outside a condition, `let big = find(5) is Some(v) && v > 20;`, the
+names end with the statement, so a `RefCell` guard bound that way is released before the next one. A test that binds a payload that is not Copy moves the value only when it succeeds:
 after `if (t is Token.Word(w)) { … } else { … }`, the `else` branch still has `t`.
 
 ## Optionals

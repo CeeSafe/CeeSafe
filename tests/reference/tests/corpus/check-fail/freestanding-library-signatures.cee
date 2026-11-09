@@ -1,0 +1,10 @@
+// profile: freestanding
+// A library function whose signature names a hosted-only type (a `Vector`) did not resolve in the freestanding
+// profile, and its diagnostics are the library's, which are dropped: a call of it is N0293 at the call
+// (profiles.md §4.1), instead of a call the checker cannot type and the backend cannot compile.
+@export("probe_entry")
+fn probeEntry() -> u32 {
+    let n = 0u32;
+    VectorBytes.pushU8BE(n, 1); // error[N0293]
+    return n;
+}

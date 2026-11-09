@@ -1,0 +1,82 @@
+// `==` on arrays, slices and vectors of an `@derive(Equal)` type (ADR 0087 §2.3): the same length and equal elements
+// in order, through lib/core's `DerivedEqualElements`. A generic type's derived `==` over `[T; 2]`, `[T; N]` and
+// `Vector<T>` fields is checked per instance (type-system.md §28.7), and derives on a type with const parameters
+// bound only its type parameters.
+@derive(Equal)
+struct P {
+    x: i32;
+}
+
+@derive(Equal)
+enum Shape {
+    Dot,
+    Line(P, P),
+}
+
+@derive(Equal)
+struct Pair<T: Copy> {
+    items: [T; 2];
+}
+
+@derive(Equal)
+struct Row<T: Copy, const N: usize> {
+    cells: [T; N];
+}
+
+@derive(Equal)
+struct Bag<T> {
+    items: Vector<T>;
+}
+
+@derive(Equal, HashKey, OrderKey)
+struct Tagged<const N: u32> {
+    v: u32;
+}
+
+fn sameShapes(a: Slice<Shape>, b: Slice<Shape>) -> bool => a == b;
+
+fn main() {
+    let a = [P { x: 1 }, P { x: 2 }];
+    let b = [P { x: 1 }, P { x: 2 }];
+    let c = [P { x: 1 }, P { x: 3 }];
+    Console.writeLine(a == b);
+    Console.writeLine(a != c);
+    Console.writeLine(a[..] == b[..]);
+    Console.writeLine(a[..1] == c[..1]);
+    Console.writeLine(a[..] == c[..2]);
+    var v = Vector<P>.create();
+    v.push(P { x: 1 })!;
+    v.push(P { x: 2 })!;
+    Console.writeLine(v == v);
+    let shapes = [Shape.Dot, Shape.Line(P { x: 0 }, P { x: 1 })];
+    let others = [Shape.Dot, Shape.Line(P { x: 0 }, P { x: 2 })];
+    Console.writeLine(sameShapes(shapes[..], shapes[..]));
+    Console.writeLine(sameShapes(shapes[..], others[..]));
+    Console.writeLine(Pair<u8> { items: [1, 2] } == Pair<u8> { items: [1, 2] });
+    Console.writeLine(Pair<P> { items: a } == Pair<P> { items: c });
+    Console.writeLine(Row<i32, 3> { cells: [1, 2, 3] } == Row<i32, 3> { cells: [1, 2, 3] });
+    Console.writeLine(Row<P, 2> { cells: a } == Row<P, 2> { cells: b });
+    var w = Vector<P>.create();
+    w.push(P { x: 1 })!;
+    let bag = Bag<P> { items: v };
+    let other = Bag<P> { items: w };
+    Console.writeLine(bag == other);
+    let t = Tagged<4> { v: 9 };
+    Console.writeLine(t == Tagged<4> { v: 9 });
+    Console.writeLine(t.compareKey(Tagged<4> { v: 10 }));
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: -1

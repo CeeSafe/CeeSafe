@@ -1,0 +1,24 @@
+// `CStr`'s fields are private to lib/core (ADR 0087 §2.4, N0296): a struct literal could otherwise pair any text with
+// bytes that have no NUL, and `ptr()` would hand C a string that never ends. Only `c"…"` and `fromBytesWithNul` make
+// one. `TextWriter`'s fields are private for the same reason: `cText()` relies on the zero after what was written.
+fn forge(buffer: SliceMut<u8>) -> usize {
+    let w = TextWriter {
+        buffer: buffer, // error[N0296]
+        used: 3,        // error[N0296]
+        asked: 3,       // error[N0296]
+    };
+    return w.length();
+}
+
+fn main() {
+    var v = Vector<u8>.create();
+    v.push('a')!;
+    let s = CStr {
+        text: "a",       // error[N0296]
+        bytes: v.view(), // error[N0296]
+    };
+    Console.writeLine(s.length());
+    Console.writeLine(c"ab".bytes.length); // error[N0296]
+    var buffer: [u8; 4] = [0; 4];
+    Console.writeLine(forge(mut buffer[..]));
+}

@@ -1,0 +1,14 @@
+// N0256 names a missing value with `_` where no arm constrains a position (ADR 0085 §7): `[K.B, _, ..]` here.
+enum K {
+    A,
+    B,
+}
+
+fn f(s: Slice<K>) -> u32 => match (s) { // error[N0256]
+    [K.A, ..] | [] => 1,
+    [K.B] => 2,
+};
+
+fn main() {
+    Console.writeLine(f([K.A][..]));
+}

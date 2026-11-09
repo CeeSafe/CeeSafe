@@ -1994,6 +1994,15 @@ fn lengthOf(
 ) -> Result<u32, AllocError> {
     let typ = placeType(c, n, b, array);
     let usize = c.types.usize;
+    if (!c.types.isUnsized(typ) && c.types.info(typ).lengthParameter != none()) {
+        // `[T; N]` in a generic version, which is analysed, never compiled: a length that is no constant.
+        let unknown = newTemp(b, usize)?;
+        let unknownPlace = localPlace(n, unknown)?;
+        let zero = constOperand(n, 0, usize)?;
+        let zeroValue = n.rvalue(NirRvalue.Use(zero), usize, b.span)?;
+        assign(n, b, unknownPlace, zeroValue)?;
+        return placeOperand(c, n, b, unknownPlace);
+    }
     if (!c.types.isUnsized(typ)) {
         return constOperand(n, c.types.info(typ).arrayLength, usize);
     }
@@ -3663,6 +3672,17 @@ fn lowerBuiltinCall(
             terminate(n, b, NirTerminator.Exit(code))?;
         }
         return Ok(none());
+    }
+    if (function == bfVariantIndex()) {
+        // The discriminant of the enum `(*r)` (ADR 0087 §2.3).
+        let referenceExpr = c.hir.at(arguments, 0);
+        let reference = lowerOperand(c, n, b, referenceExpr)?;
+        if (reference == none() || operandPlace(n, reference) == none()) {
+            return Ok(none());
+        }
+        let referencePlace = operandPlace(n, reference);
+        let place = projectPlace(n, referencePlace, derefProjectionN())?;
+        return n.rvalue(NirRvalue.Discriminant(place), typ, span);
     }
     if (function == bfPtrRead()) {
         // A copy from the place `(*p)` (§27.5).

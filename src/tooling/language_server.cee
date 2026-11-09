@@ -408,7 +408,7 @@ fn updateDocument(server: borrow mut LanguageServer, uri: Slice<u8>, text: Slice
         file = truncate<u32>(compiled.firstUser);
     }
     var hasIndex = false;
-    var index = SemanticIndex { file: file, entries: Vector<SemanticEntry>.create() };
+    var index = SemanticIndex { file: file, entries: Vector<SemanticEntry>.create(), function: none() };
     match (borrow compiled.checker) {
         Some(checker) => {
             // A document that does not parse has no typed tree; hover and definition then answer null (§2.2).

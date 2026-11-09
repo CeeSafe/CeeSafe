@@ -1,0 +1,36 @@
+// What `is` binds outside an `if` or `while` condition ends with its statement, as the statement's temporaries do
+// (type-system.md §15.4, ADR 0085 §7): a guard bound in `let ok = …;` is released before the next statement. In a
+// condition, it lives to the end of the then-branch. A field of a temporary is the temporary's: `rest @ ..` on it
+// keeps the temporary for the then-branch, as on the temporary itself.
+struct Holder {
+    arr: [u64; 3];
+}
+
+fn makeHolder(k: u64) -> Holder => Holder { arr: [k, 2, 3] };
+
+fn three() -> [u64; 3] => [4, 5, 6];
+
+fn main() {
+    let cell = RefCell<u32>.create(5);
+    {
+        let ok = cell.tryRead() is Some(g) && g.data() == 5;
+        Console.writeLine(ok);
+        Console.writeLine(cell.tryWrite() == null);
+    }
+    if (cell.tryRead() is Some(g) && g.data() == 5) {
+        Console.writeLine(cell.tryWrite() == null);
+    }
+    Console.writeLine(cell.tryWrite() == null);
+    if (three() is [_, rest @ ..]) {
+        Console.writeLine(rest[1]);
+    }
+    if (makeHolder(5).arr is [first, rest @ ..]) {
+        Console.writeLine(first + rest[1]);
+    }
+}
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 6
+// expect-stdout: 8

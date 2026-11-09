@@ -169,6 +169,9 @@ Async tasks run (ADR 0039): `Async.run`, `await`, `Async.scopeIn` with a user al
 `shield`, cancellation, `Async.boxed` with a user allocator, lib/core's `Timer` and `AsyncSignal`. The `IoError` type
 may be named, since `AsyncError` carries it, but no value of it can be made.
 
+A library function that takes or returns one of these (lib/core's `VectorBytes.pushU8BE`, which takes a `Vector`) is
+N0293 at its call too: its signature names a hosted type, and the library's own diagnostics are not reported.
+
 Exempt, since they need no runtime: `Box.createIn` with a user allocator (C5, type-system §30) and `Box.intoRaw` / `Box.fromRaw`
 (C7d, type-system §34.2).
 

@@ -939,6 +939,7 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
             14 => "writes through a raw pointer",
             15 => "assigns through a raw pointer",
             16 => "writes a 'static mut'",
+            17 => "exits the process",
             _ => "calls through a C function pointer, which may do anything (type-system.md §32.1)",
         };
         return appendText(out, text);
@@ -1038,6 +1039,17 @@ fn explainOp(
 
 // ---- Inference (§32.1) ----
 
+/// Does the terminator end the process (`Process.exit`)?
+fn exitsProcess(n: borrow NirProgram, terminator: u32) -> bool {
+    if (terminator == none()) {
+        return false;
+    }
+    return match (n.terminators[terminator as usize]) {
+        NirTerminator.Exit(_) => true,
+        _ => false,
+    };
+}
+
 fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) -> Result<void, AllocError> {
     for (k in e.functions.view()) {
         e.inferred[n.functions[k as usize].source as usize].present = true;
@@ -1080,6 +1092,16 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                             inferred.write = op;
                         }
                         inferred.effects = inferred.effects | op.effects;
+                    }
+                }
+                if (exitsProcess(n, block.terminator)) {
+                    // A process exit skips everything after it, so through a call it writes (ADR 0087 §2.5).
+                    let inferred = borrow mut e.inferred[source as usize];
+                    if (!inferred.hasWrite) {
+                        changed = true;
+                        inferred.hasWrite = true;
+                        inferred.write = textOp(writeEffect(), 17);
+                        inferred.effects = inferred.effects | writeEffect();
                     }
                 }
             }

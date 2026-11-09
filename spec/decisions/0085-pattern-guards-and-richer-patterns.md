@@ -371,3 +371,25 @@ the guard wording of §2.2.
 7. **Release in two steps:** 0.25.0 with guards, or-patterns, ranges, `@`, constants and top-level bindings (§2.2–§2.6,
    what the lexers need); 0.26.0 with strings, slices and `is` (§2.7–§2.8). **Recommended: yes**: the first step is
    mostly parser and usefulness work, the second touches scoping and new scrutinee types.
+
+## 7. Implementation notes (step 2, 0.26.0)
+
+Step 2 (§2.7, §2.8 and their parts of §2.10, §2.11 and §5) is implemented as written, with these precisions:
+
+- **`&&` chains outside a condition.** An operand's bindings are in scope in the chain's later operands, so
+  `let big = x is Some(v) && v > 3;` is allowed; the last operand's bindings would have no scope and are N0359, as are
+  those under `!` or `||`, of a whole `let` initialiser and of an argument. Parentheses around a chain's operand do not
+  change its place in the chain.
+- **Temporaries.** When a binding borrows from what a condition's temporaries hold (a test of a reference or view
+  that is not a place, such as `c.read().data().view() is [first, ..]`, or `rest @ ..` on an array that is not a
+  place), all of that condition's temporaries live to the end of the then-branch or of the body's pass; otherwise all
+  end with the condition. In both cases none lives into the `else` branch or the next test (ADR 0084 §41.3).
+- **`var` on a slice element that is not Copy** is N0246, the existing code for `var` on a binding by reference.
+- **Arrays.** String patterns apply to `StringView` and `Slice<u8>` only, not to `[u8; N]` (match on `a[..]`). Arrays
+  of non-Copy elements do not exist yet (N0259, type-system.md §16.1), so §2.7's rule for element bindings of such an
+  array held by value is checked but cannot arise.
+- **Witnesses.** N0256 writes `_` for a position no arm constrains (a slice's elements: `[_, _, ..]`) rather than the
+  lowest value of its type.
+- **Known gap, older than this ADR.** A value branch whose value is a flexible literal (a value block ending in `3`)
+  is checked after the other branches, when its arm's or then-branch's bindings are out of scope; a block that uses
+  them before that literal reports N0200. Writing the literal with its type (`3u32`) avoids it.

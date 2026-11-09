@@ -348,7 +348,25 @@ fn main() {
 ```
 
 Strings never cover their type, so a match on a `StringView` ends with `_` or a binding. Slice patterns cover by
-length: `[]` and `[_, ..]` together match every slice, and a missing case is reported with one, such as `[_, _, ..]`.
+length: `[]` and `[_, ..]` together match every slice, and a missing case is reported with one:
+
+<!-- ceesafe: fail N0256 -->
+```ceesafe
+fn size(s: Slice<i32>) -> u32 => match (s) {
+    [] => 0,
+    [_] => 1,
+};
+
+fn main() {}
+```
+
+```text
+main.cee:1:41: error[N0256]: this match does not cover [_, _, ..]; add the missing arms or a '_' arm
+  |
+1 | fn size(s: Slice<i32>) -> u32 => match (s) {
+  |                                         ^
+```
+
 A slice pattern never moves an element: one of a Copy type is copied, any other is bound as a `borrow T`.
 
 ### Patterns as conditions

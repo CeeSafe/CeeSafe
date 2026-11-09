@@ -19,6 +19,48 @@ enum Token {
 
 fn find(k: u32) -> u32? => if (k > 2) Some(k * 10) else null;
 
+enum Pair {
+    Two(u32, u32),
+    One(u32),
+}
+
+fn three() -> [u32; 3] => [1, 2, 3];
+
+fn noisy(k: u32) -> Noisy? => if (k > 0) Some(Noisy { id: k }) else null;
+
+/// Or-patterns, parentheses, a test in a guard, `break` and `continue` ending the bindings of a `while`'s pass,
+/// `rest @ ..` on a temporary array, and a test in a closure.
+fn more() {
+    let p = Pair.Two(1, 7);
+    if (p is Pair.Two(a, 1) | Pair.Two(1, a) | Pair.One(a)) {
+        Console.writeLine(a);
+    }
+    let o: u32? = Some(4);
+    if ((o is Some(x)) && x > 1) {
+        Console.writeLine(x);
+    }
+    match (o) {
+        Some(n) if (o is Some(4)) => { Console.writeLine(n); }
+        _ => {}
+    }
+    var k = 3u32;
+    while (noisy(k) is Some(z)) {
+        k -= 1;
+        if (z.id == 2) {
+            continue;
+        }
+        if (z.id == 1) {
+            break;
+        }
+        Console.writeLine(z.id);
+    }
+    if (three() is [first, rest @ ..]) {
+        Console.writeLine(first + rest[1]);
+    }
+    let inRange = (q: u32?) => q is Some(10..=20);
+    Console.writeLine(inRange(Some(15)));
+}
+
 fn kind(c: u8) -> u32 {
     if (c is 'a'..='z' | 'A'..='Z') {
         return 1;
@@ -109,6 +151,7 @@ fn main() {
     } else {
         Console.writeLine(cell.tryWrite() == null);
     }
+    more();
 }
 
 // expect-stdout: true
@@ -131,3 +174,12 @@ fn main() {
 // expect-stdout: true
 // expect-stdout: false
 // expect-stdout: false
+// expect-stdout: 7
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 3
+// expect-stdout: drop 3
+// expect-stdout: drop 2
+// expect-stdout: drop 1
+// expect-stdout: 4
+// expect-stdout: true

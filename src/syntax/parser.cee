@@ -1515,16 +1515,21 @@ struct Parser {
             let start = this.advance().start;
             let isMutable = this.eat(TokenKind.MutKeyword);
             let interfaceType = this.parseTypeCore()?;
-            // `dyn I + Send` (type-system.md §38.4); `Send` is the only marker a dyn type takes.
-            let isSend = this.at(TokenKind.Plus) && this.peekIs(1, TokenKind.Identifier) && this.nameIs(
-                this.peek(1),
-                "Send",
-            );
-            if (isSend) {
+            // `dyn I + Send` (type-system.md §38.4) and `dyn I + Share`, or `+ Send + Share` (ADR 0084 §2.5): the
+            // markers a dyn type takes.
+            var marker: u32 = 0;
+            while (this.at(TokenKind.Plus) && this.peekIs(1, TokenKind.Identifier) &&
+                (this.nameIs(this.peek(1), "Send") || this.nameIs(this.peek(1), "Share"))) {
                 this.advance();
+                let isShare = this.nameIs(this.current(), "Share");
                 this.advance();
+                if (isShare) {
+                    marker = 2;
+                } else if (marker == 0) {
+                    marker = 1;
+                }
             }
-            return this.front.ast.addType(TypeNode.Dyn(interfaceType, isMutable, isSend), start, this.endFrom(start));
+            return this.front.ast.addType(TypeNode.Dyn(interfaceType, isMutable, marker), start, this.endFrom(start));
         }
         if (this.at(TokenKind.Identifier)) {
             // A primitive type takes no type arguments, so `a as u64 < b` compares (ADR 0075 §2.13).
@@ -2744,7 +2749,8 @@ struct Parser {
                     TokenKind.Question => true,
                     TokenKind.QuestionQuestion => true,
                     TokenKind.Plus => sawDyn && this.peekIs(i + 1, TokenKind.Identifier) &&
-                        this.nameIs(this.peek(i + 1), "Send"),
+                        (this.nameIs(this.peek(i + 1), "Send") || this.nameIs(this.peek(i + 1), "Share")),
+
                     _ => false,
                 };
                 if (!allowed) {

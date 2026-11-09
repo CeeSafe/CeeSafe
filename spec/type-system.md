@@ -3686,8 +3686,7 @@ fn main() {
   - `Box<T>`, `Vector<T>`, `String`, `SlotMap<T>`, `StableVector<T>` and `Handle<T>`, with `T: Send` and the system
     heap (or `FailingAllocator`);
   - `File`, `TcpListener`, `TcpStream`;
-  - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>` (§38.4);
-
+  - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>`, and with `+ Share` (§38.4);
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
   - references, slices, views and every other scoped type (§19.1);
@@ -3702,7 +3701,8 @@ fn main() {
   shared reference (ReachesSharedChange):
   - a `StableVector<T, A>`, whose `push` takes `borrow this` (§24.2);
   - a `RawCell<T>` (§41.1), so every cell (`Cell<T>`, `RefCell<T>`) and every type holding one (ADR 0084 §2.2);
-  - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value;
+  - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value
+    (a `dyn … + Share` box is not, §38.4: the walk stops there);
   - a type parameter without a `Share` bound.
 
   The walk stops at the library's thread-safe types (§38.3), which are `Share` by design: `Mutex<StableVector<T>>` is
@@ -3766,6 +3766,12 @@ fn main() {
   coercion to one needs `T: Send`, which for a move literal means `Send` captures (N0334). A `dyn … + Send` converts to
   the same `dyn` type without `+ Send` (the same value: they share their C representation and tables), never the
   other way. `Thread.spawn(f)` with `f: Box<dyn mut fn() -> T + Send>` runs a closure made elsewhere.
+- **`dyn … + Share`** (ADR 0084 §2.5): `dyn I + Share` and `dyn fn(…) -> R + Share` (and with `mut`) are `dyn` types
+  whose boxes are `Send` and `Share`; `+ Share` implies `+ Send`, as `Share` implies `Send`, and `+ Send + Share` is
+  the same type. A coercion to one needs `T: Share` (N0334 otherwise: a value holding a cell, §41, or a closure
+  capturing one, cannot become one). ReachesSharedChange stops at such a box, so `Arc<Box<dyn I + Share>>` is allowed
+  and both `Thread.both` children may read one. It converts to `dyn I + Send` and to `dyn I` (the same value and
+  tables), never the other way.
 
 
 ### 38.5 Profiles

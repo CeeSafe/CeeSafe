@@ -100,7 +100,7 @@ fn formatSource(
 fn copyDiagnostic(d: borrow Diagnostic) -> Result<Diagnostic, AllocError> {
     var notes = Vector<DiagnosticNote>.create();
     for (n in d.notes.view()) {
-        notes.push(DiagnosticNote { start: n.start, end: n.end, message: copyBytes(n.message.view())? })?;
+        notes.push(DiagnosticNote { file: n.file, start: n.start, end: n.end, message: copyBytes(n.message.view())? })?;
     }
     return Ok(
         Diagnostic {
@@ -304,7 +304,7 @@ fn fmtCommand(arguments: borrow Vector<Vector<u8>>, json: bool) -> i32 {
                 if (!json) {
                     var text = Vector<u8>.create();
                     for (k in reported..diagnostics.items.length) {
-                        render(mut text, diagnostics.items[k], sources[index])!;
+                        render(mut text, diagnostics.items[k], sources[index], sources)!;
                     }
                     Console.writeError(StringView.fromUtf8(text.view())!);
                 }

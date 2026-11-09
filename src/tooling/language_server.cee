@@ -374,6 +374,9 @@ fn writeDiagnostic(json: borrow mut JsonWriter, uri: Slice<u8>, d: borrow Diagno
         json.name("relatedInformation")!;
         json.startArray()!;
         for (note in d.notes.view()) {
+            if (note.file != d.file) {
+                continue; // in another document, whose text this request lacks; the message names its package
+            }
             json.startObject()!;
             json.name("location")!;
             json.startObject()!;

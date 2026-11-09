@@ -1,0 +1,12 @@
+// A second declaration of the C name `strlen`, in a later file: N0201 here, with a note at src/a.cee's (ADR 0081
+// §2.2; package_tests.py §15).
+extern "C" {
+    @cname("strlen")
+    fn length(s: *CChar) -> usize;
+}
+
+/// Safety: the literal ends in a zero byte.
+fn main() {
+    let text = "hello\0";
+    Console.writeLine(unsafe { length(text.ptr as *CChar) });
+}

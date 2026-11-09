@@ -21,6 +21,13 @@
     and the program prints what it should, in the interpreter and compiled.
 12. shadowing/item: an item named like the dependency is still N0315; shadowing/errors: another package's associated
     constant that is not public is N0312.
+13. A `ceesafec` requirement in the manifest this ceesafec does not meet is N0321 (ADR 0076).
+14. qualified-generics: `dep.f<T>(…)` and `dep.S<T>.m(…)` keep their type arguments.
+15. c-names (ADR 0081 §2.2, §5): one C name declared by `sys` and again by a dependant is N0201 at the dependant's
+    declaration, with a note at sys's and the hint to use `sys.strlen` (owned), or to make sys's declaration `public`
+    (hidden); two files of one package give N0201 at the later file (two-files); `ceesafec fix` removes the
+    declaration identical to sys's and leaves one with another parameter type or `@cname` (fix); a dependant calls
+    sys's `public` externs and a wrapper with a `borrow` parameter, in the interpreter and compiled (run).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -298,7 +305,66 @@ def main():
             if out != expected:
                 problems.append(f"qualified-generics: the program printed {out!r}")
 
-    print(f"package_tests: 14 checks; {len(problems)} problems")
+        # 15. One owner per C name (ADR 0081): N0201 at the declaration that clashes, its note and hint, its fix.
+        c_names = os.path.join(work, "c-names")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "c-names"), c_names)
+
+        def n0201s(directory, command="check"):
+            p = run([compiler, command, "--diagnostics-format=json"], directory)
+            try:
+                return p.returncode, [d for d in json.loads(p.stdout)["diagnostics"] if d["code"] == "N0201"]
+            except (ValueError, KeyError):
+                return p.returncode, [{"unparsed": p.stdout[:300] + p.stderr[:300]}]
+
+        def where(d):
+            return (d.get("file", "").replace("\\", "/"), d.get("start", {}).get("line"))
+
+        hint = "use `sys.strlen`, which package 'sys' declares; remove this declaration"
+        status, found = n0201s(os.path.join(c_names, "owned"))
+        notes = found[0].get("notes", []) if len(found) == 1 else []
+        if (status != 1 or len(found) != 1 or where(found[0]) != ("src/main.cee", 4)
+                or not found[0]["message"].endswith(hint) or len(found[0].get("fixes", [])) != 1
+                or [(where(n), n["message"]) for n in notes] != [(("lib.cee", 3), "package 'sys' declares it here")]):
+            problems.append(f"c-names/owned: expected N0201 at src/main.cee:4 with sys's note, hint and fix: "
+                            f"{status} {found}")
+        status, found = n0201s(os.path.join(c_names, "hidden"))
+        if (status != 1 or len(found) != 1 or where(found[0]) != ("src/main.cee", 4) or found[0].get("fixes")
+                or "make its declaration `public` in package 'sys', then use `sys.abs`" not in found[0]["message"]
+                or [where(n) for n in found[0].get("notes", [])] != [("lib.cee", 5)]):
+            problems.append(f"c-names/hidden: expected N0201 at src/main.cee:4 with the hint to make sys's abs "
+                            f"public: {status} {found}")
+        status, found = n0201s(os.path.join(c_names, "two-files"))
+        if (status != 1 or len(found) != 1 or where(found[0]) != ("src/main.cee", 5)
+                or [where(n) for n in found[0].get("notes", [])] != [("src/a.cee", 3)]):
+            problems.append(f"c-names/two-files: expected N0201 at src/main.cee:5, the later file, with a note at "
+                            f"src/a.cee:3: {status} {found}")
+        fix = os.path.join(c_names, "fix")
+        status, found = n0201s(fix, "fix")
+        with open(os.path.join(fix, "src", "main.cee")) as f:
+            fixed = f.read()
+        if (status != 1 or sorted(where(d) for d in found) != [("src/main.cee", 5), ("src/main.cee", 8)]
+                or "fn strlen(" in fixed or "Identical to sys's" in fixed
+                or "fn memcmp(a: *u8, b: *u8, n: usize) -> i32;" not in fixed or '@cname("strlen")' not in fixed):
+            problems.append(f"c-names/fix: expected strlen's declaration removed and memcmp's and length's kept: "
+                            f"{status} {found} {fixed!r}")
+        app = os.path.join(c_names, "run")
+        expected = "5\ntrue\n2\n7"
+        p = run([compiler, "check"], app)
+        if p.returncode != 0:
+            problems.append(f"c-names/run: check failed: {p.stderr[:600]}")
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"c-names/run: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-300:]}")
+        p = run([compiler, "build"], app)
+        exe = os.path.join(app, "out", "run.exe" if WINDOWS else "run")
+        if p.returncode != 0:
+            problems.append(f"c-names/run: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"c-names/run: the program printed {out!r}")
+
+    print(f"package_tests: 15 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

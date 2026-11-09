@@ -1004,7 +1004,7 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
                 appendQuotedPlace(c, n, b, loan.place, mut message)?;
                 var note = Vector<u8>.create();
                 appendText(mut note, "borrowed here")?;
-                notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+                notes.push(DiagnosticNote { file: b.file, start: loan.span.start, end: loan.span.end, message: note })?;
             }
             appendText(mut message, " into what '")?;
             appendBytes(mut message, name.view())?;
@@ -1079,7 +1079,7 @@ fn checkStaticWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
             appendQuotedPlace(c, n, b, loan.place, mut message)?;
             var note = Vector<u8>.create();
             appendText(mut note, "borrowed here")?;
-            notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+            notes.push(DiagnosticNote { file: b.file, start: loan.span.start, end: loan.span.end, message: note })?;
         }
         appendText(mut message, " into static '")?;
         appendBytes(mut message, c.name(c.hir.statics[index as usize].name))?;
@@ -1633,12 +1633,12 @@ fn reportConflict(
     appendText(mut first, " is ")?;
     appendText(mut first, borrowKind)?;
     appendText(mut first, " here")?;
-    notes.push(DiagnosticNote { start: loanSpan.start, end: loanSpan.end, message: first })?;
+    notes.push(DiagnosticNote { file: b.file, start: loanSpan.start, end: loanSpan.end, message: first })?;
     let later = findLaterUse(c, n, b, loan, position, index)?;
     if (later.start != none()) {
         var second = Vector<u8>.create();
         appendText(mut second, "the borrow is used later here")?;
-        notes.push(DiagnosticNote { start: later.start, end: later.end, message: second })?;
+        notes.push(DiagnosticNote { file: b.file, start: later.start, end: later.end, message: second })?;
     }
     return c.front.diagnostics.errorWithNotes(code, b.file, span.start, span.end, message, notes);
 }
@@ -1741,7 +1741,7 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 var notes = Vector<DiagnosticNote>.create();
                 var note = Vector<u8>.create();
                 appendText(mut note, "borrowed here")?;
-                notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+                notes.push(DiagnosticNote { file: b.file, start: loan.span.start, end: loan.span.end, message: note })?;
                 c.front.diagnostics.errorWithNotes(
                     returnsLocalReference(),
                     b.file,
@@ -1771,7 +1771,9 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 if (loan.hasPlace) {
                     var note = Vector<u8>.create();
                     appendText(mut note, "borrowed here")?;
-                    notes.push(DiagnosticNote { start: loan.span.start, end: loan.span.end, message: note })?;
+                    notes.push(
+                        DiagnosticNote { file: b.file, start: loan.span.start, end: loan.span.end, message: note },
+                    )?;
                 }
                 c.front.diagnostics.errorWithNotes(
                     returnSourceMismatch(),

@@ -2362,7 +2362,14 @@ attribute twice is N0290.
   `true`, `false`, `NULL`, `main`), not reserved by C (starting with `__`, or `_` and an uppercase
   letter), and not owned by the runtime and generated code (starting with `ceesafe_`, `cee_`, `CEE_`, or
   `cee` and an uppercase letter; c-backend §2.1): N0292.
-  Two declarations, or a declaration and an `@export`, with one C name are N0201.
+  Two declarations, or a declaration and an `@export`, with one C name are N0201, even in different packages: a C
+  name has one declaration, which other packages call through its package (`sys.strlen`) when it is `public` (ADR
+  0081 §2.1). N0201 is reported at the declaration that clashes: a dependant's own, or the later one in a package's
+  file order (tooling.md §4). A note gives the other declaration's package and position. When that package is a
+  dependency and both are extern declarations, the message says to call `sys.strlen` and remove this declaration, or,
+  when sys's is not `public`, to make it `public` there; and if the two are identical in CeeSafe (the same parameter
+  and result types, variadic-ness and attributes, `@cname` and `@effects` among them; an identical C signature is not
+  enough), a fix removes this declaration. The fix does not change its call sites (ADR 0081 §2.2).
 - Parameter and result types must be **FFI-safe** (§28.3), or N0291.
 - **`@cname("symbol")`** on an extern function (ADR 0080 §3.5) gives its C symbol when its CeeSafe name must differ,
   as when a struct has the name (`struct cosmofs_stats` and `cosmofs_stats()`). The symbol follows the rules above.

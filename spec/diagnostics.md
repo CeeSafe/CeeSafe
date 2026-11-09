@@ -189,7 +189,12 @@ N0271 is unassigned: destroying a value that holds loans while their referents a
 | N0299 | A closure of the wrong kind: a `borrow mut fn` where a `borrow fn` is expected, or a capturing closure where a plain `fn` is expected (type-system.md §36.2); a function or closure value whose type's effects are not in the expected type's effect list (§36.3) | `let f: fn(i32) -> i32 = (x) => x + k;` |
 
 Calling an extern function outside an unsafe context is N0280; two extern declarations or exports
-with one C name are N0201. (`CChar` as a value type was N0281 until ADR 0080 §3.5, type-system.md §28.3.)
+with one C name are N0201, even in different packages. It is reported at the declaration that clashes (a dependant's
+own, or the later in the package's file order), with a note at the other one, which names its package; for a
+dependency's extern, the message says to call it through the package (``use `sys.strlen`, which package 'sys'
+declares; remove this declaration``) or to make it `public` there, and an identical declaration has a fix that
+removes it (type-system.md §28.2; ADR 0081 §2.2). (`CChar` as a value type was N0281 until ADR 0080 §3.5,
+type-system.md §28.3.)
 
 Raw pointers reuse codes: an invalid pointer cast is N0208, ordering comparisons on pointers are
 N0207, a constant of

@@ -99,6 +99,59 @@ extern "C" {
 }
 ```
 
+## Sharing C declarations between packages
+
+A C function has one declaration in a program, so its CeeSafe types can't drift apart: a second declaration with the
+same C name is N0201, even in another package, and so is an `@export` with that name. One package owns the
+declaration and makes it `public`, and the others call it through that package
+([ADR 0081](../spec/decisions/0081-c-declarations-shared-between-packages.md)):
+
+<!-- ceesafe: skip -->
+```ceesafe
+// sys/src/lib.cee, a library
+extern "C" {
+    public fn strlen(s: *CChar) -> usize;
+}
+```
+
+<!-- ceesafe: skip -->
+```ceesafe
+// app/src/main.cee, which depends on sys
+/// Safety: the literal ends in a zero byte, as strlen needs.
+fn main() {
+    let text = "hello\0";
+    Console.writeLine(unsafe { sys.strlen(text.ptr as *CChar) });
+}
+```
+
+If `app` declares `strlen` too, N0201 is reported at `app`'s declaration, with a note at the one `sys` owns. The
+message says what to do: ``use `sys.strlen`, which package 'sys' declares; remove this declaration``, or, when the
+declaration in `sys` isn't `public`, to make it `public` there. When the two declarations are identical in CeeSafe
+(the same parameter and result types, variadic-ness and attributes), `ceesafec fix` removes the redundant one. It
+doesn't change the calls, which still need `sys.` in front.
+
+To give a C function a stronger type, such as a `borrow` instead of a raw pointer, write a wrapper in the package that
+wants it, rather than a second declaration. The wrapper calls the owner's declaration and says in its `Safety:` line
+why that call is sound. Within one package, two declarations with one C name are N0201 too, reported at the later
+one in the package's file order:
+
+<!-- ceesafe: fail N0201 -->
+```ceesafe
+extern "C" {
+    fn strlen(s: *CChar) -> usize;
+    @cname("strlen")
+    fn length(s: *CChar) -> usize;
+}
+```
+
+```text
+main.cee:4:8: error[N0201]: the C name 'strlen' of C function 'strlen' is already used by another C function or export (type-system.md §28.2)
+  |
+4 |     fn length(s: *CChar) -> usize;
+  |        ^^^^^^
+  = note: the other declaration is here (2:8)
+```
+
 ## Being called from C
 
 `@export` makes a CeeSafe function callable from C, and `@repr(C)` gives a struct C's layout. `ceesafec` writes

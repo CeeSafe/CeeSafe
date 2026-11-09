@@ -1,0 +1,13 @@
+// A dependant calls its dependency's `public` extern through the package, and a wrapper with a `borrow` parameter
+// (ADR 0081 §2.1, §2.3; package_tests.py §15).
+
+/// Safety: the literal ends in a zero byte, as strlen needs, and both texts have the 5 bytes memcmp reads.
+fn main() {
+    let text = "hello\0";
+    Console.writeLine(unsafe { sys.strlen(text.ptr as *CChar) });
+    let same = unsafe { sys.memcmp(text.ptr as *void, "hello".ptr as *void, 5) };
+    Console.writeLine(same == 0);
+    let bytes = [104u8, 105, 0, 33, 0, 0, 0, 0];
+    Console.writeLine(sys.lengthOf(bytes));
+    Console.writeLine(sys.magnitude(-7));
+}

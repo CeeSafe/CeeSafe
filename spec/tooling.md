@@ -433,6 +433,7 @@ diagnostic and introduces none at the edited place. The kinds:
 | N0211 | assignment to a `let` local declared in the function | `let` → `var` at its declaration |
 | N0248 | `borrow mut` (or a `borrow mut this` call) of a `let` local declared in the function | `let` → `var` at its declaration |
 | N0208 | `e as T` between integer types that can lose information | `truncate<T>(e)` (wrap-around, as the message says) |
+| N0201 | an extern declaration whose C name a dependency's `public` extern declaration has, identical to it in CeeSafe (type-system.md §28.2; ADR 0081 §2.2) | remove the declaration, with its doc comment and attributes; its call sites are left as they are |
 | N0100 | `expected ';'`, with no earlier error in the file, after a declaration, assignment, `return`, or a call statement (not after an expression that cannot be a statement, N0225) | insert `;` after the previous token |
 
 ### 5.3 `ceesafec fix`

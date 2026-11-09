@@ -1,0 +1,20 @@
+// The one owner of the C names its dependants use (ADR 0081 §2.1; package_tests.py §15).
+extern "C" {
+    public fn strlen(s: *CChar) -> usize;
+    public fn memcmp(a: *void, b: *void, n: usize) -> i32;
+    fn abs(n: i32) -> i32;
+}
+
+/// The length of the C string in `bytes`: up to its first zero byte, or the whole array without one.
+/// Safety: strlen reads only up to the first zero byte, and the loop has found one inside the array.
+public fn lengthOf(bytes: borrow [u8; 8]) -> usize {
+    for (i in 0..bytes.length) {
+        if (bytes[i] == 0) {
+            return unsafe { strlen(borrow bytes[0] as *u8 as *CChar) };
+        }
+    }
+    return bytes.length;
+}
+
+/// Safety: abs only reads its argument.
+public fn magnitude(n: i32) -> i32 => unsafe { abs(n) };

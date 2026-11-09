@@ -49,8 +49,10 @@ struct Diagnostic {
     notes: Vector<DiagnosticNote>;
 }
 
-/// A note on a diagnostic, in the same file (DiagnosticNote).
+/// A note on a diagnostic (DiagnosticNote): in the diagnostic's file, or in another one, as N0201's note at the other
+/// package's declaration (ADR 0081 §2.2).
 struct DiagnosticNote {
+    file: u32; // the index of its SourceText, as Diagnostic.file
     start: u32;
     end: u32;
     message: Vector<u8>;
@@ -354,11 +356,14 @@ fn diagnosticsJson(
         json.name("notes")?;
         json.startArray()?;
         for (note in d.notes.view()) {
+            let noteSource =
+                if (note.file != d.file && (note.file as usize) < sources.length) borrow sources[note.file as usize]
+                    else source;
             json.startObject()?;
             json.name("file")?;
-            json.stringBytes(source.path.view())?;
-            writePosition(mut json, "start", source, note.start)?;
-            writePosition(mut json, "end", source, note.end)?;
+            json.stringBytes(noteSource.path.view())?;
+            writePosition(mut json, "start", noteSource, note.start)?;
+            writePosition(mut json, "end", noteSource, note.end)?;
             json.name("message")?;
             json.stringBytes(note.message.view())?;
             json.endObject()?;

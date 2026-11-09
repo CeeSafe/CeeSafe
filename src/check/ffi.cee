@@ -831,30 +831,291 @@ fn declareImportedEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocEr
 
 // ---- CheckForeignInterfaces (§28.2–§28.5) ----
 
-/// One C name claimed by a C function or export.
+/// One C name claimed by a C function or export, where it is claimed.
 struct CNameClaim {
     name: Vector<u8>;
+    function: u32; // the HIR function, or none for an exported constant
+    file: u32;
+    start: u32;
+    end: u32;
+    what: Vector<u8>; // "C function 'strlen'", as the message names it
 }
 
 fn claimCName(
-    c: borrow mut Checker,
+    c: borrow Checker,
     claims: borrow mut Vector<CNameClaim>,
     name: Slice<u8>,
+    function: u32,
     span: Span,
     what: Slice<u8>,
 ) -> Result<void, AllocError> {
-    for (claim in claims.view()) {
-        if (sameBytes(claim.name.view(), name)) {
-            var message = Vector<u8>.create();
-            appendText(mut message, "the C name '")?;
-            appendBytes(mut message, name)?;
-            appendText(mut message, "' of ")?;
-            appendBytes(mut message, what)?;
-            appendText(mut message, " is already used by another C function or export (type-system.md §28.2)")?;
-            return c.error(duplicateItem(), span.start, span.end, message);
+    return claims.push(CNameClaim {
+        name: copyBytes(name)?,
+        function: function,
+        file: c.file,
+        start: span.start,
+        end: span.end,
+        what: copyBytes(what)?,
+    });
+}
+
+/// Does package `from` depend on package `to`, directly or through other packages?
+fn packageReaches(c: borrow Checker, from: u32, to: u32) -> Result<bool, AllocError> {
+    var seen = Vector<bool>.create();
+    for (k in 0..c.packages.length) {
+        seen.push(false)?;
+    }
+    var pending = Vector<u32>.create();
+    pending.push(from)?;
+    seen[from as usize] = true;
+    while (pending.length > 0) {
+        let p = pending[pending.length - 1];
+        pending.truncate(pending.length - 1);
+        for (d in c.packages[p as usize].dependencies.view()) {
+            let index = packageNamed(c, d.view());
+            if (index == none() || seen[index as usize]) {
+                continue;
+            }
+            if (index == to) {
+                return Ok(true);
+            }
+            seen[index as usize] = true;
+            pending.push(index)?;
         }
     }
-    return claims.push(CNameClaim { name: copyBytes(name)? });
+    return Ok(false);
+}
+
+/// Does claim `a` own its C name before claim `b` (ADR 0081 §2.2)? A library's declaration owns it before a package's,
+/// a dependency's before its dependant's, and within one package the earlier in the package's file order; between
+/// packages neither of which depends on the other, the later package of the build (the root is first).
+fn ownsBefore(c: borrow Checker, a: borrow CNameClaim, b: borrow CNameClaim) -> Result<bool, AllocError> {
+    let pa = packageOfFile(c, a.file);
+    let pb = packageOfFile(c, b.file);
+    if (pa == pb) {
+        return Ok(a.file < b.file || (a.file == b.file && a.start < b.start));
+    }
+    if (pa == none() || pb == none()) {
+        return Ok(pa == none());
+    }
+    if (packageReaches(c, pb, pa)?) {
+        return Ok(true);
+    }
+    if (packageReaches(c, pa, pb)?) {
+        return Ok(false);
+    }
+    return Ok(pa > pb);
+}
+
+/// An attribute's text without white space, to compare two declarations' attributes.
+fn attributeKey(c: borrow Checker, file: u32, attribute: u32) -> Result<Vector<u8>, AllocError> {
+    var key = Vector<u8>.create();
+    let a = c.front.ast.attributes[attribute as usize];
+    if ((file as usize) >= c.fileTexts.length || (a.end as usize) > c.fileTexts[file as usize].length) {
+        return Ok(key);
+    }
+    for (b in c.fileTexts[file as usize][(a.start as usize)..(a.end as usize)]) {
+        if (b != ' ' && b != '\t' && b != '\n' && b != '\r') {
+            key.push(b)?;
+        }
+    }
+    return Ok(key);
+}
+
+/// Are two extern declarations identical in CeeSafe (ADR 0081 §2.2): the same parameter and result types,
+/// variadic-ness and attributes? An identical C signature is not enough: `*void` and `*X509` are one C type.
+fn identicalExterns(c: borrow Checker, f: u32, g: u32) -> Result<bool, AllocError> {
+    let a = c.front.ast.functions[c.hir.functions[f as usize].syntax as usize];
+    let b = c.front.ast.functions[c.hir.functions[g as usize].syntax as usize];
+    if (!a.isExtern || !b.isExtern || (a.variadicStart == none()) != (b.variadicStart == none())) {
+        return Ok(false);
+    }
+    let pf = borrow c.hir.functions[f as usize].parameters;
+    let pg = borrow c.hir.functions[g as usize].parameters;
+    if (pf.length != pg.length || c.hir.functions[f as usize].returnType != c.hir.functions[g as usize].returnType) {
+        return Ok(false);
+    }
+    for (k in 0..pf.length) {
+        let t = c.hir.locals[pf[k] as usize].typ;
+        if (t != c.hir.locals[pg[k] as usize].typ || t == c.types.error) {
+            return Ok(false);
+        }
+    }
+    if (a.attributes.count != b.attributes.count) {
+        return Ok(false);
+    }
+    let fileA = c.hir.functions[f as usize].file;
+    let fileB = c.hir.functions[g as usize].file;
+    var used = Vector<bool>.create();
+    for (k in 0..b.attributes.count) {
+        used.push(false)?;
+    }
+    for (k in 0..a.attributes.count) {
+        let key = attributeKey(c, fileA, c.front.ast.at(a.attributes, k))?;
+        var found = false;
+        for (j in 0..b.attributes.count) {
+            if (!used[j as usize] &&
+                sameBytes(key.view(), attributeKey(c, fileB, c.front.ast.at(b.attributes, j))?.view())) {
+                used[j as usize] = true;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
+/// The bytes a fix removes with a declaration: from the start of its first line (its doc comment's and attributes'
+/// lines among them) to the end of its last, when nothing else is on those lines; otherwise the declaration alone.
+fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
+    let decl = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
+    var start = decl.start;
+    for (k in 0..decl.attributes.count) {
+        let a = c.front.ast.attributes[c.front.ast.at(decl.attributes, k) as usize];
+        if (a.start < start) {
+            start = a.start;
+        }
+    }
+    let text = c.fileTexts[file as usize].view();
+    var end = decl.end;
+    var lineStart = start;
+    while (lineStart > 0 && (text[(lineStart - 1) as usize] == ' ' || text[(lineStart - 1) as usize] == '\t')) {
+        lineStart -= 1;
+    }
+    var lineEnd = end;
+    while ((lineEnd as usize) < text.length && (text[lineEnd as usize] == ' ' || text[lineEnd as usize] == '\t' ||
+        text[lineEnd as usize] == '\r')) {
+        lineEnd += 1;
+    }
+    if ((lineStart > 0 && text[(lineStart - 1) as usize] != '\n') ||
+        ((lineEnd as usize) < text.length && text[lineEnd as usize] != '\n')) {
+        return Span { start: start, end: end };
+    }
+    if ((lineEnd as usize) < text.length) {
+        lineEnd += 1; // the line break
+    }
+    // The doc comment's lines above (`///`), which belong to the declaration.
+    loop {
+        if (lineStart == 0) {
+            break;
+        }
+        var previous = lineStart - 1; // the line break ending the line above
+        while (previous > 0 && text[(previous - 1) as usize] != '\n') {
+            previous -= 1;
+        }
+        var first = previous;
+        while ((first as usize) < text.length && (text[first as usize] == ' ' || text[first as usize] == '\t')) {
+            first += 1;
+        }
+        if ((first as usize) + 3 > text.length || text[first as usize] != '/' || text[(first + 1) as usize] != '/' ||
+            text[(first + 2) as usize] != '/') {
+            break;
+        }
+        lineStart = previous;
+    }
+    return Span { start: lineStart, end: lineEnd };
+}
+
+/// N0201 for each claim of a C name that another claim owns (type-system.md §28.2; ADR 0081 §2.2): reported at the
+/// declaration that clashes (a dependant's own, or the later in a package's file order), with a note at the owner's.
+/// When the owner is an extern declaration of a dependency, a hint says to call it through its package, and a fix
+/// removes this declaration if the two are identical.
+fn reportCNameClashes(c: borrow mut Checker, claims: borrow Vector<CNameClaim>) -> Result<void, AllocError> {
+    for (i in 0..claims.length) {
+        var owner = none64();
+        for (j in 0..claims.length) {
+            if (!sameBytes(claims[j].name.view(), claims[i].name.view())) {
+                continue;
+            }
+            if (owner == none64() || ownsBefore(c, claims[j], claims[owner])?) {
+                owner = j;
+            }
+        }
+        if (owner == i) {
+            continue;
+        }
+        let mine = borrow claims[i];
+        let theirs = borrow claims[owner];
+        let myPackage = packageOfFile(c, mine.file);
+        let ownerPackage = packageOfFile(c, theirs.file);
+        let otherPackage = ownerPackage != none() && ownerPackage != myPackage;
+        var message = Vector<u8>.create();
+        appendText(mut message, "the C name '")?;
+        appendBytes(mut message, mine.name.view())?;
+        appendText(mut message, "' of ")?;
+        appendBytes(mut message, mine.what.view())?;
+        var note = Vector<u8>.create();
+        if (otherPackage) {
+            appendText(mut message, " is already declared by package '")?;
+            appendBytes(mut message, c.packages[ownerPackage as usize].name.view())?;
+            appendText(mut message, "' (type-system.md §28.2)")?;
+            appendText(mut note, "package '")?;
+            appendBytes(mut note, c.packages[ownerPackage as usize].name.view())?;
+            appendText(mut note, "' declares it here")?;
+        } else {
+            appendText(mut message, " is already used by another C function or export (type-system.md §28.2)")?;
+            if (ownerPackage == none() && myPackage != none()) {
+                appendText(mut note, "a library declares it here")?;
+            } else {
+                appendText(mut note, "the other declaration is here")?;
+            }
+        }
+        // The hint: a dependency's extern declaration is called through its package (ADR 0081 §2.1).
+        var fixable = false;
+        let bothExtern = mine.function != none() && theirs.function != none() &&
+            c.front.ast.functions[c.hir.functions[mine.function as usize].syntax as usize].isExtern &&
+            c.front.ast.functions[c.hir.functions[theirs.function as usize].syntax as usize].isExtern;
+        if (otherPackage && bothExtern &&
+            dependencyNamed(c, myPackage, c.packages[ownerPackage as usize].name.view()) == ownerPackage) {
+            let ownerDecl = c.front.ast.functions[c.hir.functions[theirs.function as usize].syntax as usize];
+            var qualified = Vector<u8>.create();
+            appendBytes(mut qualified, c.packages[ownerPackage as usize].name.view())?;
+            qualified.push('.')?;
+            appendBytes(mut qualified, c.name(c.hir.functions[theirs.function as usize].name))?;
+            if (isPublicVisibility(ownerDecl.visibility)) {
+                appendText(mut message, ": use `")?;
+                appendBytes(mut message, qualified.view())?;
+                appendText(mut message, "`, which package '")?;
+                appendBytes(mut message, c.packages[ownerPackage as usize].name.view())?;
+                appendText(mut message, "' declares; remove this declaration")?;
+                fixable = identicalExterns(c, mine.function, theirs.function)?;
+            } else {
+                appendText(mut message, ": make its declaration `public` in package '")?;
+                appendBytes(mut message, c.packages[ownerPackage as usize].name.view())?;
+                appendText(mut message, "', then use `")?;
+                appendBytes(mut message, qualified.view())?;
+                appendText(mut message, "` and remove this declaration")?;
+            }
+        }
+        var notes = Vector<DiagnosticNote>.create();
+        notes.push(DiagnosticNote { file: theirs.file, start: theirs.start, end: theirs.end, message: note })?;
+        if (fixable) {
+            let lines = declarationLines(c, mine.file, mine.function);
+            var title = Vector<u8>.create();
+            appendText(mut title, "remove this declaration: package '")?;
+            appendBytes(mut title, c.packages[ownerPackage as usize].name.view())?;
+            appendText(mut title, "' declares it identically")?;
+            c.front.diagnostics.errorWithEdit(
+                duplicateItem(),
+                mine.file,
+                mine.start,
+                mine.end,
+                message,
+                title,
+                lines.start,
+                lines.end,
+                Vector<u8>.create(),
+            )?;
+            let last = c.front.diagnostics.items.length - 1;
+            c.front.diagnostics.items[last].notes = notes;
+        } else {
+            c.front.diagnostics.errorWithNotes(duplicateItem(), mine.file, mine.start, mine.end, message, notes)?;
+        }
+    }
+    return Ok();
 }
 
 /// A function whose signature crosses to C (CheckSignatureIsFfiSafe, N0291).
@@ -1255,7 +1516,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
         let span = if (decl.isExtern) identSpan(c, decl.name) else attributeSpanNamed(c, decl.attributes, "export");
         // `_` and a lowercase letter is allowed: platforms' entry symbols (`_start`, §29.6) and C library names.
         if (checkCName(c, name.view(), span, if (decl.isExtern) "the C function name" else "the exported symbol")?) {
-            claimCName(c, mut claims, name.view(), span, what.view())?;
+            claimCName(c, mut claims, name.view(), function, span, what.view())?;
         }
         checkSignatureIsFfiSafe(c, function, what.view())?;
         if (decl.isExtern && decl.variadicStart != none() &&
@@ -1289,7 +1550,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             appendText(mut what, "exported constant '")?;
             appendBytes(mut what, c.name(c.front.ast.idents[item.name as usize].symbol))?;
             appendText(mut what, "'")?;
-            claimCName(c, mut claims, name.view(), span, what.view())?;
+            claimCName(c, mut claims, name.view(), none(), span, what.view())?;
         }
         let t = hir.typ;
         if (!(c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Bool) || c.types.is(t, TypeKind.Array) ||
@@ -1306,6 +1567,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
             c.error(notFfiSafe(), typeSpan.start, typeSpan.end, message)?;
         }
     }
+    reportCNameClashes(c, claims)?;
     c.setFile(saved);
     return Ok();
 }

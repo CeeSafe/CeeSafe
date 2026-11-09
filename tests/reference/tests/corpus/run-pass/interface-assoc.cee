@@ -1,0 +1,97 @@
+// Interface constants and associated types (ADR 0086 §2.4, §2.5): a constant with or without a default, read as
+// `H.NAME` through a bound (a compile-time switch once instantiated) and as `Type.NAME`; an associated type with a
+// bound, named `Self.Unit` in the interface and `E.Unit` in generic code, which each instance replaces by the impl's
+// type.
+interface Handler {
+    const HAS_ON_DATA: bool = false;
+    const ID: u32;
+    fn handle(borrow this) -> u32;
+}
+
+struct Plain {
+    x: u32;
+}
+
+impl Handler for Plain {
+    const ID: u32 = 1;
+    fn handle(borrow this) -> u32 => this.x;
+}
+
+struct Data {
+    y: u32;
+}
+
+impl Handler for Data {
+    const HAS_ON_DATA: bool = true;
+    const ID: u32 = 2;
+    fn handle(borrow this) -> u32 => this.y * 2;
+}
+
+fn dispatch<H: Handler>(h: borrow H) -> u32 {
+    if (H.HAS_ON_DATA) {
+        return h.handle() + H.ID * 100;
+    }
+    return H.ID;
+}
+
+interface Encoding {
+    type Unit: Copy;
+    fn decode(borrow this, bytes: Slice<u8>) -> Self.Unit?;
+}
+
+struct Utf8 {
+    unused: u8;
+}
+
+impl Encoding for Utf8 {
+    type Unit = u8;
+    fn decode(borrow this, bytes: Slice<u8>) -> u8? => if (bytes.length > 0) bytes[0] else null;
+}
+
+struct Wide {
+    unused: u8;
+}
+
+impl Encoding for Wide {
+    type Unit = u16;
+    fn decode(borrow this, bytes: Slice<u8>) -> Self.Unit? {
+        if (bytes.length < 2) {
+            return null;
+        }
+        return (bytes[0] as u16) * 256 + (bytes[1] as u16);
+    }
+}
+
+fn first<E: Encoding>(e: borrow E, b: Slice<u8>) -> E.Unit? => e.decode(b);
+
+fn twice<E: Encoding>(e: borrow E, b: Slice<u8>) -> u32 {
+    var n: u32 = 0;
+    let a: E.Unit? = first(e, b);
+    let c = a;
+    if (a != null) {
+        n += 1;
+    }
+    if (c != null) {
+        n += 1;
+    }
+    return n;
+}
+
+fn main() {
+    Console.writeLine(dispatch(Plain { x: 5 }));
+    Console.writeLine(dispatch(Data { y: 5 }));
+    Console.writeLine(Plain.ID);
+    Console.writeLine(Data.HAS_ON_DATA);
+    let bytes = [1u8, 2u8];
+    Console.writeLine(first(Utf8 { unused: 0 }, bytes[..]) ?? 0);
+    Console.writeLine(first(Wide { unused: 0 }, bytes[..]) ?? 0);
+    Console.writeLine(twice(Wide { unused: 0 }, bytes[..]));
+}
+
+// expect-stdout: 1
+// expect-stdout: 210
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: 1
+// expect-stdout: 258
+// expect-stdout: 2

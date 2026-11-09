@@ -1,8 +1,9 @@
-// Interfaces, impls and bounds (type-system.md §21).
+// Interfaces, impls and bounds (type-system.md §21). A method without a receiver is a static function (ADR 0086
+// §2.3; N0267 before 0.25.0).
 interface Shape { fn area(borrow this) -> i64; }
 interface Named { fn name(borrow this) -> i32; fn area(borrow this) -> i64; }
 interface Pairwise<T> { fn with(borrow this, other: T) -> T; }
-interface NoReceiver { fn make() -> i32; } // error[N0267]
+interface NoReceiver { fn make() -> i32; }
 struct Square { side: i64; }
 struct Circle { r: i64; fn area(borrow this) -> i64 => this.r; } // error[N0228]
 struct NotShape { x: i32; }

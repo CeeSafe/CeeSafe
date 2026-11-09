@@ -932,6 +932,11 @@ fn synthCall(
             match (c.front.ast.exprs[target as usize]) {
                 ExprNode.Name(targetName, typeArguments) => {
                     let targetSymbol = c.front.ast.idents[targetName as usize].symbol;
+                    // `Self.create(…)` and `T.create(…)` (ADR 0086 §2.2, §2.3).
+                    let namedType = if (typeArguments.count == 0) typeNamedInExpression(c, targetSymbol) else none();
+                    if (namedType != none()) {
+                        return checkTypeCall(c, namedType, target, member, arguments, expected, calleeSpan, span);
+                    }
                     if (c.asyncScopes.length > 0 && typeArguments.count == 0) {
                         // `s.spawn(…)` in an `Async.scope` body: `s` is not a local (§40.5).
                         let scope = scopeNamed(c, targetSymbol);
@@ -987,6 +992,21 @@ fn synthCall(
                             return checkStaticCall(c, owner, member, arguments, calleeSpan, span);
                         }
                         Entity.Enum(index) => {
+                            let enumType = c.enums[index as usize].typ;
+                            let memberSymbol = c.front.ast.idents[member as usize].symbol;
+                            if (typeArguments.count == 0 && implMethodFor(c, enumType, memberSymbol) != none()) {
+                                // An impl's static function of the enum (ADR 0086 §2.3).
+                                return checkTypeCall(
+                                    c,
+                                    enumType,
+                                    target,
+                                    member,
+                                    arguments,
+                                    expected,
+                                    calleeSpan,
+                                    span,
+                                );
+                            }
                             let targetSpan = c.front.ast.exprSpans[target as usize];
                             return checkEnumValue(
                                 c,
@@ -1648,6 +1668,11 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
         ExprNode.Name(name, typeArguments) => {
             let symbol = c.front.ast.idents[name as usize].symbol;
             let memberSymbol = c.front.ast.idents[member as usize].symbol;
+            // `Self.MAX` and `T.NAME` (ADR 0086 §2.2, §2.4).
+            let namedType = if (typeArguments.count == 0) typeNamedInExpression(c, symbol) else none();
+            if (namedType != none()) {
+                return checkTypeMember(c, namedType, target, member, span, expected);
+            }
             match (c.lookup(symbol)?) {
                 Entity.Enum(index) => {
                     // `Mode.DEFAULT`: an associated constant (ADR 0074 §2.7); no variant has its name (N0228).
@@ -1658,6 +1683,14 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
                     ) else none();
                     if (constant != none()) {
                         return memberConstantValue(c, constant, span);
+                    }
+                    let implemented = if (typeArguments.count == 0) implConstantFor(
+                        c,
+                        c.enums[index as usize].typ,
+                        memberSymbol,
+                    ) else none();
+                    if (implemented != none()) {
+                        return namedConstantValue(c, implemented, span); // ADR 0086 §2.4
                     }
                     // `Shape.Empty`: a variant without payload.
                     let targetSpan = c.front.ast.exprSpans[target as usize];
@@ -1674,6 +1707,10 @@ fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expe
                         let constant = memberConstantOf(c, c.structs[index as usize].item, memberSymbol);
                         if (constant != none()) {
                             return memberConstantValue(c, constant, span); // ADR 0074 §2.7
+                        }
+                        let implemented = implConstantFor(c, c.structs[index as usize].typ, memberSymbol);
+                        if (implemented != none()) {
+                            return namedConstantValue(c, implemented, span); // ADR 0086 §2.4
                         }
                         return notAValue(c, symbol, member, span);
                     }

@@ -72,9 +72,8 @@ CeeSafe is **pre-1.0**. Its compiler, `ceesafec`, is written in CeeSafe and comp
 work end to end, and are tested against a corpus of about 550 programs. But nobody has used it in production. What is
 done and what is next are in the repository's `ROADMAP.md`.
 
-Some things it does not have yet: trigonometry and logarithms, iterators
-beyond `for` over arrays, slices and vectors. Each is
-planned, or recorded as an open decision.
+Some things it does not have yet: trigonometry and logarithms, iterator adapters
+(`map`, `filter` and the like; loops do their work). Each is planned, or recorded as an open decision.
 
 ## Where to go next
 

@@ -379,6 +379,25 @@ struct MemberTypeArguments {
     arguments: Range;
 }
 
+/// An associated type (ADR 0086 §2.5): `type Name: B1 + B2;` in an interface, `type Name = T;` in an impl.
+struct AssocType {
+    name: u32;     // Ast.idents
+    bounds: Range; // types: an interface's bounds
+    typ: u32;      // an impl's type, or none
+    start: u32;
+    end: u32;
+}
+
+/// What an interface or an impl of one holds besides methods (ADR 0086 §2.4–§2.6): constants (`const` items, whose
+/// value is none for an interface's constant without a default), associated types and an interface's supertraits.
+/// Kept beside ItemKind.Interface and ItemKind.Impl, which most passes match on.
+struct InterfaceParts {
+    item: u32;          // Ast.items
+    constants: Range;   // Ast.items
+    types: Range;       // Ast.assocTypes
+    supertraits: Range; // types
+}
+
 struct Ast {
     lists: Vector<u32>;
     text: Vector<u8>;
@@ -409,6 +428,19 @@ struct Ast {
     items: Vector<Item>;
     units: Vector<Unit>;
     memberTypeArguments: Vector<MemberTypeArguments>;
+    assocTypes: Vector<AssocType>;
+    interfaceParts: Vector<InterfaceParts>;
+
+    /// The constants, associated types and supertraits of an interface or impl item (empty ranges if none).
+    fn partsOf(borrow this, item: u32) -> InterfaceParts {
+        for (p in this.interfaceParts.view()) {
+            if (p.item == item) {
+                return p;
+            }
+        }
+        let empty = Range { start: 0, count: 0 };
+        return InterfaceParts { item: item, constants: empty, types: empty, supertraits: empty };
+    }
 
     /// The type arguments written after member `member` (an identifier), or an empty range.
     fn typeArgumentsOfMember(borrow this, member: u32) -> Range {
@@ -450,6 +482,8 @@ struct Ast {
         items: Vector<Item>.create(),
         units: Vector<Unit>.create(),
         memberTypeArguments: Vector<MemberTypeArguments>.create(),
+        assocTypes: Vector<AssocType>.create(),
+        interfaceParts: Vector<InterfaceParts>.create(),
     };
 
     /// Appends `ids` to `lists` as one run.

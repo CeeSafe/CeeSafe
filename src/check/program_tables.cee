@@ -116,12 +116,10 @@ fn finishProgramTables(c: borrow mut Checker) -> Result<void, AllocError> {
         if (bound == none()) {
             methods.push(dynFunctionMethod(c, dyn)?)?;
         } else {
-            let entry = c.types.bounds[bound as usize].interfaceEntry;
-            let declared = interfaceMethods(c, entry);
-            for (k in 0..declared.count) {
-                let syntax = c.front.ast.at(declared, k);
-                let name = c.front.ast.idents[c.front.ast.functions[syntax as usize].name as usize].symbol;
-                methods.push(dynMethod(c, dyn, name)?)?;
+            var members = Vector<DynMember>.create();
+            dynMembers(c, bound, mut members)?; // supertraits' methods after the interface's (ADR 0086 §2.6)
+            for (m in members.view()) {
+                methods.push(dynMethod(c, dyn, m.name)?)?;
             }
         }
         let list = c.hir.list(methods.view())?;

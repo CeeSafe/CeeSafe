@@ -1,0 +1,77 @@
+// lib/core's `Iterator<T>` and `for` (ADR 0086 §2.7, type-system.md §16.4): `for` over a type parameter bounded by
+// `Iterator<T>`, over a `borrow mut dyn Iterator<T>` and over a `Box<dyn Iterator<T>>` place; `count(text.split(","))`
+// infers `T` from the bound, since `TextSplit` implements one instantiation of `Iterator`; `TextSplit` through the
+// interface and by its own `next`; a value iterator moves into the loop and is destroyed when it exits (§16.4).
+struct Countdown {
+    n: u32;
+    drop { Console.writeLine("drop countdown"); }
+}
+
+impl Iterator<u32> for Countdown {
+    fn next(borrow mut this) -> u32? {
+        if (this.n == 0) {
+            return null;
+        }
+        this.n -= 1;
+        return this.n;
+    }
+}
+
+fn sum<I: Iterator<u32>>(it: I) -> u32 {
+    var total: u32 = 0;
+    for (x in it) {
+        total += x;
+    }
+    return total;
+}
+
+fn count<T, I: Iterator<T>>(it: I) -> usize {
+    var n: usize = 0;
+    for (x in it) {
+        n += 1;
+    }
+    return n;
+}
+
+fn drain(it: borrow mut dyn Iterator<u32>) -> u32 {
+    var last: u32 = 99;
+    for (x in it) {
+        last = x;
+    }
+    return last;
+}
+
+fn main() {
+    Console.writeLine(sum(Countdown { n: 4 }));
+    Console.writeLine(count(Countdown { n: 3 }));
+    let text = "a,b,,c";
+    Console.writeLine(count(text.split(",")));
+    var c = Countdown { n: 2 };
+    Console.writeLine(drain(mut c));
+    var boxed: Box<dyn Iterator<u32>> = Box.create(Countdown { n: 3 })!;
+    for (x in boxed) {
+        Console.writeLine(x);
+    }
+    var parts = text.split(",");
+    let first = parts.next() ?? "none";
+    Console.writeLine(first);
+    for (p in parts) {
+        Console.write(p);
+        Console.write(";");
+    }
+    Console.writeLine("");
+}
+
+// expect-stdout: drop countdown
+// expect-stdout: 6
+// expect-stdout: drop countdown
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: a
+// expect-stdout: b;;c;
+// expect-stdout: drop countdown
+// expect-stdout: drop countdown

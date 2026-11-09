@@ -23,6 +23,7 @@ struct GenericFunctionEntry {
     parameters: Range;       // its type parameters, in TypeTable.lists
     owner: u32;              // a generic method's struct type (ADR 0064 §1), else none
     ownerEnvironment: Range; // that struct's type environment (Checker.envPairs), else empty
+    signatureOnly: bool;     // a bound's generic interface method (ADR 0086 §2.3): instances are signatures, not compiled
 }
 
 /// A diagnostics mark for CheckInstance and Quietly: diagnostics after it are dropped when the trial ends.
@@ -41,6 +42,9 @@ fn environmentType(c: borrow Checker, symbol: u32) -> u32 {
         if (c.typeEnvironment[k].symbol == symbol) {
             return c.typeEnvironment[k].typ;
         }
+    }
+    if (symbol == c.selfSymbol) {
+        return c.selfType; // `Self` (ADR 0086 §2.2): the method's owner, or the struct or enum being declared
     }
     return none();
 }
@@ -88,8 +92,11 @@ fn functionIsGeneric(c: borrow Checker, function: u32) -> bool {
 }
 
 /// HirFunction.IsInstantiation: a monomorphised copy of generic code.
+/// An interface default's instance for an impl that inherits it is one too (ADR 0086 §2.1): its generic version, at
+/// the interface, reports.
 fn functionIsInstantiation(c: borrow Checker, function: u32) -> bool =>
-    c.hir.functions[function as usize].environment.count > 0 && !functionIsGeneric(c, function);
+    c.hir.functions[function as usize].inheritedDefault ||
+        (c.hir.functions[function as usize].environment.count > 0 && !functionIsGeneric(c, function));
 
 /// The type parameters of a declaration (DeclareTypeParameters): each a new type, with its marker bounds; interface
 /// bounds are S4c's. `env` gets the outer environment's pairs and then these.
@@ -154,6 +161,7 @@ fn declareTypeParameters(
                 }
             }
         }
+        closeBounds(c, parameterInfo)?; // the bounds' supertraits (ADR 0086 §2.6)
     }
     restoreEnvironment(c, saved);
     return Ok();
@@ -587,7 +595,13 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     let mark = diagnosticsMark(c);
     let savedGenericMethod = c.genericMethod;
     c.genericMethod = entry.owner != none();
-    let instance = declareFunctionIn(c, entry.syntax, entry.owner, env)?;
+    // A bound's generic interface method is instantiated as a signature only (ADR 0086 §2.3).
+    let instance = if (entry.signatureOnly) declareSignature(c, entry.syntax, entry.owner, env)? else declareFunctionIn(
+        c,
+        entry.syntax,
+        entry.owner,
+        env,
+    )?;
     c.genericMethod = savedGenericMethod;
     endInstance(c, mark, arguments, text.view(), savedFile, span, none())?;
     c.setFile(savedFile);
@@ -599,6 +613,44 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     c.hir.functions[instance as usize].siteEnd = span.end;
     c.hir.functions[instance as usize].genericEntry = g;
     return Ok(instance);
+}
+
+/// A method with type parameters of its own (ADR 0064 §1, ADR 0086 §2.3), of an impl, an interface's default or a
+/// bound: its generic version, declared with its own parameters opaque after `ownerEnvironment`'s, and the
+/// GenericFunctionEntry its calls instantiate (HirFunction.methodTemplate). `signatureOnly` for a bound's signature.
+fn declareGenericMethod(
+    c: borrow mut Checker,
+    f: u32,
+    owner: u32,
+    ownerEnvironment: Range,
+    signatureOnly: bool,
+) -> Result<u32, AllocError> {
+    var parameters = Vector<u32>.create();
+    var pairs = Vector<EnvPair>.create();
+    for (k in 0..ownerEnvironment.count) {
+        pairs.push(c.envPairs[(ownerEnvironment.start + k) as usize])?;
+    }
+    let saved = enterEnvironment(c, ownerEnvironment)?;
+    let ownSyntax = c.front.ast.functions[f as usize].typeParameters;
+    declareTypeParameters(c, ownSyntax, mut parameters, mut pairs)?;
+    restoreEnvironment(c, saved);
+    let env = storeEnvironment(c, pairs.view())?;
+    let list = c.types.addList(parameters.view())?;
+    let savedGenericMethod = c.genericMethod;
+    c.genericMethod = true;
+    let function = if (signatureOnly) declareSignature(c, f, owner, env)? else declareFunctionIn(c, f, owner, env)?;
+    c.genericMethod = savedGenericMethod;
+    c.genericFunctions.push(GenericFunctionEntry {
+        syntax: f,
+        file: c.file,
+        generic: function,
+        parameters: list,
+        owner: owner,
+        ownerEnvironment: ownerEnvironment,
+        signatureOnly: signatureOnly,
+    })?;
+    c.hir.functions[function as usize].methodTemplate = truncate<u32>(c.genericFunctions.length - 1);
+    return Ok(function);
 }
 
 // ---- inference ----
@@ -775,6 +827,7 @@ fn typeArgumentsFor(
         dropDiagnosticsSince(c, mark);
         unify(c, p.declared, c.typeOf(actual), parameters, mut found)?;
     }
+    inferFromBounds(c, parameters, mut found)?; // ADR 0086 §2.7
     var missing = Vector<u32>.create();
     for (p in parameters) {
         if (foundFor(found, p) == none()) {
@@ -807,6 +860,88 @@ fn typeArgumentsFor(
         out.push(foundFor(found, p))?;
     }
     return Ok(true);
+}
+
+/// Infers type parameters the arguments left open from a bound (§20.2, ADR 0086 §2.7): for `I: J<…T…>` where `I` is
+/// known, if `I`'s type implements exactly one instantiation of `J`, its arguments give `T`. Repeated while it finds
+/// more.
+fn inferFromBounds(
+    c: borrow mut Checker,
+    parameters: Slice<u32>,
+    found: borrow mut Vector<Found>,
+) -> Result<void, AllocError> {
+    for (round in 0..parameters.length) {
+        let before = found.length;
+        for (p in parameters) {
+            let actual = foundFor(found, p);
+            if (actual == none() || !c.types.is(p, TypeKind.TypeParameter)) {
+                continue;
+            }
+            var bounds = Vector<u32>.create();
+            for (b in c.types.typeParameters[c.types.info(p).typeParameter as usize].bounds.view()) {
+                bounds.push(b)?;
+            }
+            for (bound in bounds.view()) {
+                let b = c.types.bounds[bound as usize];
+                var instantiations = Vector<Range>.create();
+                instantiationsOf(c, actual, b.interfaceEntry, mut instantiations)?;
+                if (instantiations.length != 1) {
+                    continue;
+                }
+                for (a in 0..b.arguments.count) {
+                    let declared = c.types.listAt(b.arguments, a);
+                    let given = c.types.listAt(instantiations[0], a);
+                    unify(c, declared, given, parameters, found)?;
+                }
+            }
+        }
+        if (found.length == before) {
+            break;
+        }
+    }
+    return Ok();
+}
+
+/// The argument lists of the instantiations of interface `entry` that `typ` implements: its impls', a `dyn`'s
+/// interface and supertraits, or a type parameter's bounds; each once.
+fn instantiationsOf(
+    c: borrow mut Checker,
+    typ: u32,
+    entry: u32,
+    out: borrow mut Vector<Range>,
+) -> Result<void, AllocError> {
+    var candidates = Vector<Range>.create();
+    for (i in c.implementations.view()) {
+        if (i.typ == typ && i.interfaceEntry == entry) {
+            candidates.push(i.arguments)?;
+        }
+    }
+    var bounds = Vector<u32>.create();
+    if (c.types.isDyn(typ) && c.types.info(typ).dynInterface != none()) {
+        let dynBound = c.types.info(typ).dynInterface;
+        boundWithSupers(c, dynBound, mut bounds)?;
+    } else if (c.types.is(typ, TypeKind.TypeParameter)) {
+        for (b in c.types.typeParameters[c.types.info(typ).typeParameter as usize].bounds.view()) {
+            bounds.push(b)?;
+        }
+    }
+    for (b in bounds.view()) {
+        if (c.types.bounds[b as usize].interfaceEntry == entry) {
+            candidates.push(c.types.bounds[b as usize].arguments)?;
+        }
+    }
+    for (candidate in candidates.view()) {
+        var seen = false;
+        for (o in out.view()) {
+            if (sameLists(c, o, candidate)) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            out.push(candidate)?;
+        }
+    }
+    return Ok();
 }
 
 /// `f(args)` or `f<T>(args)` for a generic function (CheckGenericCall, §20.2): infer, instantiate, check.

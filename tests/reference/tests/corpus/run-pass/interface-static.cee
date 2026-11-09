@@ -1,0 +1,115 @@
+// Static functions and generic methods in interfaces (ADR 0086 §2.3): a static function, with or without a default,
+// is called as `T.create(o)` through a bound, `Self.base()` in a default and `Small.create(o)` on a concrete type
+// (an enum's impl included); a generic interface method is instantiated per call, through a bound and on the concrete
+// type, and a generic default calls it.
+struct Options {
+    level: u32;
+}
+
+interface Rule {
+    fn create(options: borrow Options) -> Self;
+    fn name() -> StringView => "rule";
+    fn check(borrow this, x: u32) -> bool;
+    fn describe() -> u32 => Self.base() + 1;
+    fn base() -> u32;
+}
+
+struct Small {
+    limit: u32;
+}
+
+impl Rule for Small {
+    fn create(options: borrow Options) -> Self => Self { limit: options.level };
+    fn check(borrow this, x: u32) -> bool => x < this.limit;
+    fn base() -> u32 => 10;
+}
+
+struct Big {
+    unused: u8;
+}
+
+impl Rule for Big {
+    fn create(options: borrow Options) -> Self => Big { unused: 0 };
+    fn name() -> StringView => "big";
+    fn check(borrow this, x: u32) -> bool => x > 100;
+    fn base() -> u32 => 20;
+}
+
+enum Mode {
+    Fast,
+    Slow,
+}
+
+interface Default {
+    fn byDefault() -> Self;
+}
+
+impl Default for Mode {
+    fn byDefault() -> Self => Self.Slow;
+}
+
+fn run<R: Rule>(o: borrow Options, x: u32) -> bool {
+    let r = R.create(o);
+    Console.writeLine(R.name());
+    Console.writeLine(R.describe());
+    return r.check(x);
+}
+
+interface Visitor {
+    fn visit<T: Copy>(borrow mut this, value: T) -> T;
+    fn twice<T: Copy>(borrow mut this, value: T) -> T {
+        let a = this.visit(value);
+        return this.visit(a);
+    }
+}
+
+struct Counter {
+    n: u32;
+}
+
+impl Visitor for Counter {
+    fn visit<T: Copy>(borrow mut this, value: T) -> T {
+        this.n += 1;
+        return value;
+    }
+}
+
+fn walk<V: Visitor>(v: borrow mut V) {
+    let a = v.visit(3u8);
+    let b = v.visit(true);
+    let c = v.twice(7i64);
+    Console.writeLine(a);
+    Console.writeLine(b);
+    Console.writeLine(c);
+}
+
+fn main() {
+    let o = Options { level: 5 };
+    Console.writeLine(run<Small>(o, 3));
+    Console.writeLine(run<Big>(o, 3));
+    Console.writeLine(Small.create(o).limit);
+    Console.writeLine(Small.name());
+    match (Mode.byDefault()) {
+        Mode.Slow => { Console.writeLine("slow"); }
+        Mode.Fast => { Console.writeLine("fast"); }
+    }
+    var counter = Counter { n: 0 };
+    walk(mut counter);
+    Console.writeLine(counter.visit(9u16));
+    Console.writeLine(counter.n);
+}
+
+// expect-stdout: rule
+// expect-stdout: 11
+// expect-stdout: true
+// expect-stdout: big
+// expect-stdout: 21
+// expect-stdout: false
+// expect-stdout: 5
+// expect-stdout: rule
+// expect-stdout: slow
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: 7
+// expect-stdout: 9
+// expect-stdout: 5

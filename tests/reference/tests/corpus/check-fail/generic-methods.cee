@@ -1,6 +1,6 @@
-// Generic methods and inherent impls (ADR 0064 §1): bounds are checked per call, interface methods stay monomorphic,
-// type arguments need type parameters, and an inherent impl names a struct of its package with the struct's own
-// parameters.
+// Generic methods and inherent impls (ADR 0064 §1): bounds are checked per call, an impl's method has the interface
+// method's type parameters (N0267, ADR 0086 §2.3; N0216 before 0.25.0, when interface methods had none), type
+// arguments need type parameters, and an inherent impl names a struct of its package with the struct's own parameters.
 interface Shape {
     fn area(borrow this) -> i64;
 }
@@ -10,7 +10,7 @@ struct Square {
 }
 
 impl Shape for Square {
-    fn area<T>(borrow this) -> i64 => this.side; // error[N0216]
+    fn area<T>(borrow this) -> i64 => this.side; // error[N0267]
 }
 
 struct Plain {

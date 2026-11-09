@@ -1,0 +1,101 @@
+// Interface default methods (ADR 0086 §2.1, type-system.md §21.1): an impl that leaves a default out inherits it,
+// instantiated with `Self` = the target; an override wins; a default may call required methods and other defaults;
+// a generic impl's instances inherit; the same calls work through a bound and through a `dyn` table, whose slot
+// holds the inherited instance; a default that takes `this` by value drops a move-type `Self`.
+interface Watcher {
+    fn onError(borrow mut this, code: u32);
+
+    fn onWatchError(borrow mut this, code: u32) {
+        this.onError(code + 100);
+    }
+
+    fn twice(borrow mut this, code: u32) {
+        this.onWatchError(code);
+        this.onWatchError(code);
+    }
+
+    fn label(borrow this) -> u32 => 7;
+}
+
+struct Log {
+    total: u32;
+}
+
+impl Watcher for Log {
+    fn onError(borrow mut this, code: u32) {
+        this.total += code;
+    }
+
+    fn label(borrow this) -> u32 => 9; // an override
+}
+
+struct Echo<T> {
+    tag: T;
+}
+
+impl<T> Watcher for Echo<T> {
+    fn onError(borrow mut this, code: u32) {
+        Console.writeLine(code);
+    }
+}
+
+fn run<W: Watcher>(w: borrow mut W) {
+    w.twice(1);
+    Console.writeLine(w.label());
+}
+
+interface Resource {
+    fn id(borrow this) -> u32;
+
+    fn finish(this) -> u32 {
+        let n = this.id();
+        return n * 10;
+    }
+}
+
+struct Socket {
+    n: u32;
+    drop { Console.writeLine("drop socket"); }
+}
+
+impl Resource for Socket {
+    fn id(borrow this) -> u32 => this.n;
+}
+
+fn close<R: Resource>(r: R) -> u32 => r.finish();
+
+fn main() {
+    var log = Log { total: 0 };
+    log.onWatchError(5);
+    Console.writeLine(log.total);
+    run(mut log);
+    Console.writeLine(log.total);
+    var echo = Echo<u8> { tag: 1 };
+    echo.onWatchError(2);
+    run(mut echo);
+    let d: borrow mut dyn Watcher = borrow mut echo;
+    d.twice(3);
+    Console.writeLine(d.label());
+    var boxed: Box<dyn Watcher> = Box.create(Log { total: 1 })!;
+    boxed.onWatchError(4);
+    Console.writeLine(boxed.label());
+    let h = Socket { n: 4 };
+    Console.writeLine(h.finish());
+    Console.writeLine(close(Socket { n: 5 }));
+}
+
+// expect-stdout: 105
+// expect-stdout: 9
+// expect-stdout: 307
+// expect-stdout: 102
+// expect-stdout: 101
+// expect-stdout: 101
+// expect-stdout: 7
+// expect-stdout: 103
+// expect-stdout: 103
+// expect-stdout: 7
+// expect-stdout: 9
+// expect-stdout: drop socket
+// expect-stdout: 40
+// expect-stdout: drop socket
+// expect-stdout: 50

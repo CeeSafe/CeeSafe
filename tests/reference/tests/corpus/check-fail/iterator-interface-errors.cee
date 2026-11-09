@@ -1,0 +1,26 @@
+// `for` over an `Iterator<T>` (ADR 0086 §2.7): a shared `dyn` iterator cannot be advanced (N0248), nor a `Box<dyn
+// Iterator<T>>` in a `let` (N0248); a type parameter without a bound declaring `next` is not an iterator (N0205); a
+// type argument that no argument or unique bound determines is N0265.
+fn shared(it: borrow dyn Iterator<u32>) {
+    for (x in it) {} // error[N0248]
+}
+fn plain<T>(t: T) {
+    for (x in t) {} // error[N0205]
+}
+fn amb<T, I: Iterator<T>>(it: I) -> usize => 0;
+struct Two {
+    n: u32;
+}
+
+struct Countdown {
+    n: u32;
+}
+
+impl Iterator<u32> for Countdown {
+    fn next(borrow mut this) -> u32? => null;
+}
+fn noBound(two: Two) -> usize => amb(two); // error[N0265]
+fn main() {
+    let b: Box<dyn Iterator<u32>> = Box.create(Countdown { n: 1 })!;
+    for (x in b) {} // error[N0248]
+}

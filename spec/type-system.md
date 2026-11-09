@@ -270,6 +270,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - A constant whose name is a field, method or variant of its type, or another of its constants, is N0228.
   - A generic struct or `impl` has none yet (N0216).
   - An associated constant takes no attributes (N0290).
+  - An interface's constants (§21.1, ADR 0086 §2.4) become associated constants of each impl's target.
   - Array lengths in types and repeats stay integer literals (§13): `[u8; Oid.LENGTH]` is not accepted, as
     `[u8; LENGTH]` is not.
 
@@ -795,8 +796,16 @@ struct literal.
     not change it while the iterator lives (N0241).
   - On `Some(v)`, `x` takes `v` (moved: `x` owns a non-Copy `T`), with type `T` and the region of `next`'s result.
   - `continue` proceeds to the next call of `next`; `break` leaves the loop.
-  - No interface is involved: the method's shape is the rule. A struct without such a `next`, or whose `next` has
+  - No interface is needed: the method's shape is the rule. A struct without such a `next`, or whose `next` has
     another shape, is N0205, naming the expected signature. A shared reference to an iterator is N0248.
+- **`Iterator<T>`** (ADR 0086 §2.7). lib/core declares `public interface Iterator<T> { fn next(borrow mut this) -> T?; }`,
+  and lib/core's iterators (`TextSplit`, `ByteSplit`) implement it. Beyond the structural rule, which stays, `for (x in
+  e)` accepts an `e` of type `I` (or `borrow mut I`), where `I` is a type parameter whose bound declares such a `next`
+  (`I: Iterator<T>`), a `borrow mut dyn Iterator<T>`, and a mutable place of `Box<dyn Iterator<T>>`, iterated in
+  place through `borrow mut` of its contents (N0248 if the place is not mutable). `x` has type `T`; the header,
+  borrowing and destruction rules are the ones above. The item is a parameter, not an associated type: callers fix it
+  directly (`I: Iterator<u8>`), and `dyn Iterator<T>` is dyn-compatible. There is no `IntoIterator` and no adapter
+  library.
 
 - The loop variable is immutable. It has the bounds' type for a range, and the element type
   for a sequence (or `borrow T`, above), and `next`'s payload type for an iterator. Like every local, it cannot shadow another (N0203).
@@ -1303,8 +1312,8 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   parameters opaque (§20.3) and instantiated per call (§20.4), as a top-level generic function is. Its type
   arguments are inferred from the arguments after the receiver, or written after the name: `canvas.add<Square>(s)`,
   `Pair<i32>.make<u8>(…)`. Type arguments on a call of a function without type parameters of its own are N0209.
-  An interface's methods, and so an `impl I for T` block's, cannot have type parameters (N0216): a `dyn` table
-  holds one function per method.
+  An interface's methods may have type parameters too (ADR 0086 §2.3, §21.1), but then the interface has no `dyn`
+  type (N0331): a `dyn` table holds one function per method.
 - Names must be distinct, and must not shadow items or built-in types (N0201).
 
 ### 20.2 Using generic items
@@ -1318,6 +1327,11 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.
 - **Static functions:** `Pair<i32>.make(…)`.
+
+- **Inference from a bound** (ADR 0086 §2.7). A type parameter that the arguments do not determine is inferred from a
+  bound `I: J<…T…>` when `I`'s argument implements exactly one instantiation of `J` (its impls; for a `dyn` type, its
+  interface and supertraits; for a type parameter, its bounds). Otherwise it is N0265, as before. So
+  `fn count<T, I: Iterator<T>>(it: I) -> usize` is called as `count(text.split(","))`.
 
 ### 20.3 Checking generic code once
 - A generic declaration is checked **once, for all type arguments**. Each type parameter is an
@@ -1387,9 +1401,11 @@ fn total<S: Shape>(shapes: Slice<S>) -> i64 {
 
 ### 21.1 Declarations
 ```text
-InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'
-MethodSig     = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'
-ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' FunctionDecl* '}'
+InterfaceDecl = 'interface' Identifier TypeParams? (':' Type ('+' Type)*)? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
+MethodSig     = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
+InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'
+AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'
+ImplDecl      = 'impl' TypeParams? Type 'for' Type '{' (FunctionDecl | ConstDecl | 'type' Identifier '=' Type ';')* '}'
 InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 ```
 - **`impl S { … }`** (an inherent impl, ADR 0064 §1) adds methods and static functions to a struct `S`, as if they
@@ -1397,9 +1413,60 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
   N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
-- An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
-  `borrow mut this`). A signature ends with `;`: a body, a block or `=> e`, is N0100 (there are no default methods). An interface may be generic (`interface Comparable<T>`). Its methods
-  cannot have type parameters of their own, and v0 has no `Self` type.
+- An **interface** lists method signatures. An interface may be generic (`interface Comparable<T>`).
+- **Static functions and generic methods** (ADR 0086 §2.3). A method has a receiver (`this`, `borrow this`,
+  `borrow mut this`), or none: a **static function** (`fn create(options: borrow Options) -> Self;`), with or without
+  a default. Through a bound it is called as `T.create(o)`, in a default as `Self.create(o)`, and on a concrete type
+  as `Rule.create(o)`. A method may have **type parameters of its own** (§20.1): an impl's method has as many, in the
+  same order, and they are compared by position (N0267). Through a bound and on a concrete type, it is instantiated
+  per call, as a struct's generic method is (ADR 0064 §1).
+- **Default methods** (ADR 0086 §2.1). A signature ends with `;`, or has a body (a block or `=> e;`): the method's
+  **default**. An impl may define the method (an **override**, with the same signature: N0267 otherwise) or leave it
+  out and **inherit** the default; a method without a default that an impl leaves out is N0267.
+  - A default is checked **once, at the interface**, as generic code (§20.3) whose one type parameter is `Self`, the
+    implementing type, bounded by the interface. `this` is `Self`, `borrow Self` or `borrow mut Self`, as the receiver
+    says. The body may call the interface's methods, required or default, but not use fields or other methods of
+    `Self` (N0234). An error in a default is reported there, whether or not an impl inherits it.
+  - An impl that inherits a default gets an **instance** of it with `Self` = the target (once per instance for a
+    generic impl). The instance is an ordinary method of the target: it is called on the concrete type, through a
+    bound and through a `dyn` table (whose slot holds the instance), and dispatch stays static. An instance that does
+    not check for its target is N0222 at the impl. If the target already has a method of the inherited name (its own,
+    or another impl's), that is N0228 at the impl: a type has one method of each name.
+  - The interface's `@effects` list bounds a default as it bounds every impl (§37.3). There is no call from an
+    override to the default it replaces.
+- **`Self`** (ADR 0086 §2.2). In an interface, `Self` is the implementing type: opaque in its signatures and defaults,
+  and the target in each impl, which writes either the target or `Self` where the interface has `Self`. In an `impl`
+  block (inherent or for an interface) and in a struct's or enum's body, `Self` is the target type with its
+  parameters (`Pair<T>`, `View<r>`), valid wherever that type's name is: a type, a struct literal
+  (`Self { first: a, second: b }`), a static call (`Self.make()`) and a constant (`Self.MAX`). Elsewhere it is N0105
+  in a type and N0200 in an expression. Declaring an item, a type parameter or a local named `Self` is N0100.
+- **Constants** (ADR 0086 §2.4). An interface may declare `const NAME: T;` or `const NAME: T = v;` (a default). An
+  impl gives `const NAME: T = v;` with the declared type (N0267 otherwise); a missing constant without a default, or
+  one the interface does not declare, is N0267. The value is a constant expression (§10); a default may not use
+  `Self`. Each becomes an associated constant of the target, read as `Type.NAME`; a name the target already has as a
+  constant is N0228. In generic code and defaults it is read as `T.NAME` or `Self.NAME`: there it is a value, not a
+  constant expression (not an array length or a pattern), since it is known only per instance; each instance reads
+  the constant, so `if (H.HAS_ON_DATA) { … }` costs nothing at run time. A generic impl cannot define one (N0216),
+  but its instances get the interface's defaults.
+- **Associated types** (ADR 0086 §2.5). An interface may declare `type Name;` or `type Name: B1 + B2;` (bounds as in
+  §21.2). Each impl defines `type Name = T;` (N0267 if it is missing, or the interface has no such type); the impl's
+  type and region parameters may appear in `T` (`impl<region r> Source for Words<r> { type Item = StringView<r>; }`),
+  and `T` must meet the bounds (N0268, at the impl).
+  - **Projection.** In a type, `P.Name` names the associated type, where `P` is `Self` inside the interface or a type
+    parameter whose bounds declare exactly one associated type `Name`: none is N0200, two or more N0267 (ambiguous,
+    as for bound methods). In generic code `P.Name` is an opaque type with the declared bounds (§20.3); an instance
+    substitutes the impl's type. Where `P` is a concrete type (`Self` in an impl), `P.Name` is the impl's type.
+  - There are no defaults for associated types, no bounds that fix one (`E: Encoding<Unit = u16>`) and no associated
+    types with parameters of their own: an interface whose callers fix a type takes it as a parameter, as
+    `Iterator<T>` does (§16.4).
+- **Supertraits** (ADR 0086 §2.6). `interface B: A + Copy { … }`: every supertrait is an interface instantiation,
+  which may use `B`'s parameters but not `Self`, or `Copy`. `impl B for T` requires `T` to implement each supertrait
+  (N0268, at the impl). A bound `T: B` implies `T: A` (and `T: Copy`): the methods, defaults, constants and
+  associated types of `A` are reachable through it, it meets a bound `A`, and the ambiguity rule of §21.2 applies to
+  the union. A cycle of supertraits is N0227. `dyn B`'s table holds `A`'s methods after `B`'s, in declaration order
+  (each interface once), so they can be called through it, and `dyn B` implements `A` for bounds as well as `B`
+  (§37.2); there is no conversion from `dyn B` to `dyn A`. `B` is dyn-compatible only if its supertraits are, and
+  not if it requires `Copy` (N0331). `Sized`, `Send` and `Sync` are not supertraits.
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
   type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
   `impl<T: B, U> I<…> for C<…T…, …U…> { … }`, implements `I` for every instance of the generic struct or enum `C` that
@@ -1408,9 +1475,9 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   instantiated per instance like a generic struct's: a call on the concrete type, a call through a bound and a `dyn`
   table all use the instance. A type with region parameters is implemented with them named, `impl<region r> I for
   S<r>` (§25.3), and no other scoped type implements an interface (N0267).
-  - The block must define exactly the interface's methods, each with the same receiver kind,
-    parameter types and return type, after the interface's type arguments are substituted
-    (N0267). It may not define other functions.
+  - The block must define the interface's methods that have no default, and may define those that have one, each
+    with the same receiver kind, parameter types and return type, after the interface's type arguments (and `Self`)
+    are substituted (N0267). It may not define other functions.
   - Each type may implement each interface instantiation at most once (N0267).
   - **Overlap.** Beside a generic impl, no other impl of the same interface may have a target of the same struct or
     enum, generic or not (N0267): `impl I for Wrap<u8>` and `impl<T> I for Wrap<T>` are refused together. There is no
@@ -3629,10 +3696,14 @@ fn main() {
   - Anywhere else, `dyn I` is **N0330**: a local, parameter or result of type `dyn I`, a field, an array or vector
     element, an optional, a type argument (`Vector<dyn I>`; `Vector<Box<dyn I>>` is fine), or an element of a slice
     type.
-- **Dyn-compatible interfaces.** `dyn I` is allowed only if every method of `I` takes `borrow this` or
-  `borrow mut this`. A method that takes `this` by value makes the interface incompatible: `dyn I` is then
-  **N0331**, which names that method. A generic interface is checked once its type arguments are given. An async
-  method does not make an interface incompatible (§40.1, ADR 0036).
+- **Dyn-compatible interfaces** (amended by ADR 0086 §2.3). `dyn I` is **N0331**, naming the member, if a method of
+  `I` takes `this` by value, has no receiver (a static function), has type parameters of its own, or names `Self`
+  outside its receiver, or if `I` has an associated type or a constant, or requires `Copy`; and the same for each of
+  its supertraits (§21.1). Defaults do not matter: a default is in the table like any method. The rule keeps `T = dyn I`
+  sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`, which no table answers, and
+  every member it lets through is a method with a reference receiver, which the table holds. A generic interface is
+  checked once its type arguments are given. An async method does not make an interface incompatible (§40.1, ADR
+  0036).
 - `dyn` is a keyword in types only (grammar.md §2). `dyn I` binds tighter than `borrow`, so `borrow dyn I` is a
   reference to a `dyn I`.
 

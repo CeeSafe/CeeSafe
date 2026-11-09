@@ -98,7 +98,12 @@ fn synthStructLiteral(
 ) -> Result<u32, AllocError> {
     let nameIdent = c.front.ast.idents[typeName as usize];
     let nameSpan = Span { start: nameIdent.start, end: nameIdent.end };
-    let index = match (c.item(nameIdent.symbol)) {
+    // `Self { … }` (ADR 0086 §2.2): the struct the method or body belongs to, with its parameters.
+    let selfEntry = if (nameIdent.symbol == c.selfSymbol && typeArguments.count == 0) structEntryOfType(
+        c,
+        c.selfType,
+    ) else none();
+    let index = if (selfEntry != none()) selfEntry else match (c.item(nameIdent.symbol)) {
         Entity.Struct(s) => s,
         _ => none(),
     };
@@ -143,7 +148,7 @@ fn synthStructLiteral(
     }
     var entry = index;
     let templateItem = c.structs[index as usize].item;
-    if (isGenericItem(c, templateItem)) {
+    if (selfEntry == none() && isGenericItem(c, templateItem)) {
         // `Pair { first: 1, … }` infers T from the fields; `Pair<u8> { … }` gives it (§20.2).
         let template = c.types.info(c.structs[index as usize].typ).structDef;
         var pairs = Vector<InferencePair>.create();
@@ -286,6 +291,32 @@ fn isNone(e: Entity) -> bool => match (e) {
     _ => false,
 };
 
+/// The struct entry whose type is `typ` (a declaration's, or an instance's), or none.
+fn structEntryOfType(c: borrow Checker, typ: u32) -> u32 {
+    if (typ == none()) {
+        return none();
+    }
+    for (k in 0..c.structs.length) {
+        if (c.structs[k].typ == typ) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// The enum entry whose type is `typ`, or none.
+fn enumEntryOfType(c: borrow Checker, typ: u32) -> u32 {
+    if (typ == none()) {
+        return none();
+    }
+    for (k in 0..c.enums.length) {
+        if (c.enums[k].typ == typ) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
 /// `S.f(args)`: a static function of struct S (CheckStaticCall).
 fn checkStaticCall(
     c: borrow mut Checker,
@@ -305,7 +336,10 @@ fn checkStaticCall(
         return checkFailingAllocatorCall(c, failAfter, arguments, span);
     }
     let definition = c.types.info(typ).structDef;
-    let function = findStructFunction(c, definition, memberIdent.symbol);
+    var function = findStructFunction(c, definition, memberIdent.symbol);
+    if (function == none()) {
+        function = implMethodFor(c, typ, memberIdent.symbol); // an impl's static function (ADR 0086 §2.3)
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, typ)?;

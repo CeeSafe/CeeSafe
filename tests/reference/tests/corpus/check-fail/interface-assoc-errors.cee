@@ -1,0 +1,79 @@
+// Interface constants and associated types (ADR 0086 §2.4, §2.5): an impl gives each constant without a default and
+// each associated type, and no other (N0267), with the declared constant type (N0267); a name its type already has is
+// N0228; a generic impl has no constants of its own (N0216); an associated type meets its bounds (N0268); a
+// projection `T.Item` needs exactly one bound declaring `Item` (N0200 for none, N0267 for two); an interface with a
+// constant or an associated type has no `dyn` type (N0331, naming the member).
+interface Sized {
+    const SIZE: usize;
+    type Item: Copy;
+    fn get(borrow this) -> Self.Item;
+}
+
+interface Other {
+    type Item;
+}
+
+interface Limits {
+    const MAX: u32 = 4;
+    fn check(borrow this) -> bool;
+}
+
+interface Source {
+    type Item;
+    fn count(borrow this) -> u32;
+}
+
+struct A {
+    x: u32;
+    const SIZE: usize = 1;
+}
+
+impl Sized for A {         // error[N0267]
+    const SIZE: usize = 4; // error[N0228]
+    fn get(borrow this) -> u32 => this.x;
+}
+
+struct B {
+    v: Vector<u8>;
+}
+
+impl Sized for B {
+    const SIZE: u32 = 4;    // error[N0267]
+    const EXTRA: u32 = 1;   // error[N0267]
+    type Item = Vector<u8>; // error[N0268]
+    type Other = u8;        // error[N0267]
+    fn get(borrow this) -> Vector<u8> => Vector<u8>.create();
+}
+
+struct G<T> {
+    t: T;
+}
+
+impl<T: Copy> Sized for G<T> {
+    const SIZE: usize = 2; // error[N0216]
+    type Item = T;
+    fn get(borrow this) -> T => this.t;
+}
+
+struct C {
+    n: u32;
+}
+
+impl Limits for C {
+    fn check(borrow this) -> bool => true;
+}
+
+interface Ided {
+    const ID: u32;
+}
+
+impl Ided for C { // error[N0267]
+}
+
+fn both<T: Sized + Other>(t: borrow T) -> T.Item? => null; // error[N0267]
+
+fn neither<T>(t: borrow T) -> T.Item? => null; // error[N0200]
+
+fn limited(s: borrow dyn Limits) {} // error[N0331]
+
+fn counted(s: borrow dyn Source) {} // error[N0331]

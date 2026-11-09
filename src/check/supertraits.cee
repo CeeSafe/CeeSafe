@@ -1,0 +1,247 @@
+// Supertraits (ADR 0086 §2.6, type-system.md §21.1): `interface B: A + Copy`. A bound `T: B` implies `T: A` (and
+// `T: Copy`), `impl B for T` requires `T` to implement each supertrait, and `dyn B`'s table holds A's methods after
+// B's.
+
+/// One method of a `dyn` table, in slot order (ADR 0086 §2.6): its name, its signature (Ast.functions) and the
+/// bound, `I` or one of its supertraits with `I`'s arguments substituted, whose interface declares it.
+struct DynMember {
+    name: u32;
+    syntax: u32;
+    bound: u32;
+}
+
+/// Resolves every interface's supertraits, once every interface, struct and enum is declared: each is an interface
+/// instantiation, with the interface's own parameters in scope, or `Copy`. Then N0227 for a cycle, and every type
+/// parameter declared so far gets the bounds its bounds imply.
+fn resolveSupertraits(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (index in 0..c.interfaces.length) {
+        let entry = truncate<u32>(index);
+        let parts = interfaceParts(c, entry);
+        if (parts.supertraits.count == 0) {
+            continue;
+        }
+        {
+            let fileToSet = c.interfaces[index].file;
+            c.setFile(fileToSet);
+        }
+        let environment = interfaceEnvironment(c, entry)?;
+        var resolved = Vector<u32>.create();
+        for (k in 0..parts.supertraits.count) {
+            let syntax = c.front.ast.at(parts.supertraits, k);
+            let marker = singleName(c, syntax);
+            let isCopy = marker != none() && sameText(c.name(marker), "Copy") && match (c.item(marker)) {
+                Entity.None => true,
+                _ => false,
+            };
+            if (isCopy) {
+                c.interfaces[index].copySuper = true;
+                continue;
+            }
+            let savedEnvironment = enterEnvironment(c, environment)?;
+            let savedSelf = c.selfType;
+            c.selfType = none(); // a supertrait's arguments cannot name `Self`
+            let bound = resolveInterface(c, syntax)?;
+            c.selfType = savedSelf;
+            restoreEnvironment(c, savedEnvironment);
+            if (bound != none()) {
+                resolved.push(bound)?;
+            }
+        }
+        c.interfaces[index].supertraits = c.types.addList(resolved.view())?;
+    }
+    for (index in 0..c.interfaces.length) {
+        let entry = truncate<u32>(index);
+        if (reachesInterface(c, entry, entry, 0)) {
+            let parts = interfaceParts(c, entry);
+            let span = c.front.ast.typeSpans[c.front.ast.at(parts.supertraits, 0) as usize];
+            {
+                let fileToSet = c.interfaces[index].file;
+                c.setFile(fileToSet);
+            }
+            let item = c.interfaces[index].item;
+            var message = Vector<u8>.create();
+            appendText(mut message, "interface ")?;
+            appendQuotedName(
+                mut message,
+                c,
+                c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol,
+            )?;
+            appendText(mut message, " is its own supertrait: its supertraits form a cycle (ADR 0086 §2.6)")?;
+            c.error(recursiveStruct(), span.start, span.end, message)?;
+            c.interfaces[index].supertraits = emptyRange(); // no cycle below
+        }
+    }
+    c.supertraitsReady = true;
+    for (k in 0..c.types.typeParameters.length) {
+        closeBounds(c, truncate<u32>(k))?;
+    }
+    c.setFile(saved);
+    return Ok();
+}
+
+/// Does `from`'s supertrait graph reach the interface `target`?
+fn reachesInterface(c: borrow Checker, from: u32, target: u32, depth: u32) -> bool {
+    if (depth > 32) {
+        return false;
+    }
+    let supers = c.interfaces[from as usize].supertraits;
+    for (k in 0..supers.count) {
+        let next = c.types.bounds[c.types.listAt(supers, k) as usize].interfaceEntry;
+        if (next == target || reachesInterface(c, next, target, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The bounds `bound` implies through supertraits (not itself), with its arguments substituted, each once, in
+/// declaration order, depth first.
+fn superBounds(c: borrow mut Checker, bound: u32, out: borrow mut Vector<u32>, depth: u32) -> Result<void, AllocError> {
+    if (depth > 32) {
+        return Ok();
+    }
+    let b = c.types.bounds[bound as usize];
+    let supers = c.interfaces[b.interfaceEntry as usize].supertraits;
+    if (supers.count == 0) {
+        return Ok();
+    }
+    var parameters = Vector<u32>.create();
+    listTypes(c, c.interfaces[b.interfaceEntry as usize].parameters, mut parameters)?;
+    var map = Vector<TypeMapping>.create();
+    for (k in 0..parameters.length) {
+        map.push(TypeMapping { from: parameters[k], to: c.types.listAt(b.arguments, truncate<u32>(k)) })?;
+    }
+    for (k in 0..supers.count) {
+        let s = c.types.bounds[c.types.listAt(supers, k) as usize];
+        var arguments = Vector<u32>.create();
+        for (a in 0..s.arguments.count) {
+            let argument = c.types.listAt(s.arguments, a);
+            arguments.push(substitute(c, argument, map.view())?)?;
+        }
+        var name = Vector<u8>.create();
+        appendBytes(mut name, c.types.rangeText(s.name))?;
+        let implied = c.types.addBound(s.interfaceEntry, name.view(), arguments.view())?;
+        if (!containsBound(c, out, implied)) {
+            out.push(implied)?;
+            superBounds(c, implied, out, depth + 1)?;
+        }
+    }
+    return Ok();
+}
+
+fn containsBound(c: borrow Checker, list: borrow Vector<u32>, bound: u32) -> bool {
+    let b = c.types.bounds[bound as usize];
+    for (o in list.view()) {
+        let other = c.types.bounds[o as usize];
+        if (other.interfaceEntry == b.interfaceEntry && sameLists(c, other.arguments, b.arguments)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether the interface, or one of its supertraits, has `Copy` as a supertrait.
+fn requiresCopy(c: borrow Checker, entry: u32, depth: u32) -> bool {
+    if (c.interfaces[entry as usize].copySuper) {
+        return true;
+    }
+    if (depth > 32) {
+        return false;
+    }
+    let supers = c.interfaces[entry as usize].supertraits;
+    for (k in 0..supers.count) {
+        if (requiresCopy(c, c.types.bounds[c.types.listAt(supers, k) as usize].interfaceEntry, depth + 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Adds to a type parameter (a TypeTable.typeParameters index) the bounds its bounds imply (ADR 0086 §2.6), and
+/// `Copy` if one of them requires it. Before the supertraits are resolved, nothing.
+fn closeBounds(c: borrow mut Checker, info: u32) -> Result<void, AllocError> {
+    if (!c.supertraitsReady) {
+        return Ok();
+    }
+    var declared = Vector<u32>.create();
+    for (b in c.types.typeParameters[info as usize].bounds.view()) {
+        declared.push(b)?;
+    }
+    var all = Vector<u32>.create();
+    for (b in declared.view()) {
+        if (!containsBound(c, all, b)) {
+            all.push(b)?;
+        }
+        superBounds(c, b, mut all, 0)?;
+    }
+    var copy = false;
+    for (b in all.view()) {
+        if (requiresCopy(c, c.types.bounds[b as usize].interfaceEntry, 0)) {
+            copy = true;
+        }
+    }
+    c.types.typeParameters[info as usize].bounds = all;
+    if (copy) {
+        c.types.typeParameters[info as usize].copyBound = true;
+    }
+    return Ok();
+}
+
+/// `bound` and the bounds it implies, in order: what `dyn I` implements (ADR 0086 §2.6).
+fn boundWithSupers(c: borrow mut Checker, bound: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    out.push(bound)?;
+    return superBounds(c, bound, out, 0);
+}
+
+/// The methods of `dyn I`'s table in slot order (ADR 0086 §2.6): `I`'s in declaration order, then each supertrait's
+/// (depth first, each interface once).
+fn dynMembers(c: borrow mut Checker, bound: u32, out: borrow mut Vector<DynMember>) -> Result<void, AllocError> {
+    var bounds = Vector<u32>.create();
+    boundWithSupers(c, bound, mut bounds)?;
+    for (b in bounds.view()) {
+        let methods = interfaceMethods(c, c.types.bounds[b as usize].interfaceEntry);
+        for (k in 0..methods.count) {
+            let syntax = c.front.ast.at(methods, k);
+            let name = c.front.ast.idents[c.front.ast.functions[syntax as usize].name as usize].symbol;
+            var seen = false;
+            for (m in out.view()) {
+                if (m.name == name) {
+                    seen = true;
+                }
+            }
+            if (!seen) {
+                out.push(DynMember { name: name, syntax: syntax, bound: b })?;
+            }
+        }
+    }
+    return Ok();
+}
+
+/// Each supertrait of `bound` that `forType` must implement, checked with the associated types' bounds once every
+/// impl is known (ADR 0086 §2.6): N0268 at the impl.
+fn requireSupertraits(c: borrow mut Checker, forType: u32, bound: u32, span: Span) -> Result<void, AllocError> {
+    var supers = Vector<u32>.create();
+    superBounds(c, bound, mut supers, 0)?;
+    for (s in supers.view()) {
+        c.pendingAssocBounds.push(PendingAssocBound {
+            assigned: forType,
+            bound: s,
+            file: c.file,
+            start: span.start,
+            end: span.end,
+            requiredBy: bound,
+        })?;
+    }
+    if (requiresCopy(c, c.types.bounds[bound as usize].interfaceEntry, 0)) {
+        c.pendingAssocBounds.push(PendingAssocBound {
+            assigned: forType,
+            bound: none(),
+            file: c.file,
+            start: span.start,
+            end: span.end,
+            requiredBy: bound,
+        })?;
+    }
+    return Ok();
+}

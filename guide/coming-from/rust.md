@@ -114,15 +114,18 @@ and scratch frames are built in, and allocations from a region borrow it, so the
 **Checks in every build.** Integer overflow panics in release builds too; there is no `--release` that turns it off.
 Bounds and overflow checks the compiler proves unnecessary are removed, and `--explain-bounds-checks` shows which.
 
-**No traits as types.** Interfaces are bounds and nothing else: no `dyn`, no default methods, no associated types, no
-blanket `impl<T>`. Heterogeneous collections are enums.
+**Interfaces are traits without the corners.** Interfaces have default methods and `Self`; there are no blanket
+`impl<T: A> B for T`. A collection of different types is an enum or holds `Box<dyn I>`.
 
 **Closures do not escape.** A closure borrows what it captures and has a reference type (`borrow fn(i32) -> bool`,
 `borrow mut fn(i32)`), so it cannot be returned or stored. There is no `move` closure, `Fn`/`FnMut`/`FnOnce` trait or
 `impl Fn`. Calls through a closure are indirect.
 
-**No macros, no iterator chains.** `for` walks ranges, arrays, slices and vectors; slices and vectors have `sortBy`,
-`forEach`, `any`, `all` and `retain`. There is no `Iterator` trait yet.
+**No macros, no iterator chains.** `for` walks ranges, arrays, slices, vectors and iterators: lib/core's
+`Iterator<T>` (`fn next(borrow mut this) -> T?`), through a bound `I: Iterator<T>` or a `dyn Iterator<T>`, and any
+struct with such a `next`. The item is an interface parameter, not an associated type: `Iterator<u8>`, not
+`Iterator<Item = u8>`. There are no adapters: a chain of `map`, `filter` and `collect` is the loop's body, and slices
+and vectors have `sortBy`, `forEach`, `any`, `all` and `retain`.
 
 **Through C.** CeeSafe compiles to C11, which any C toolchain or kernel build can take, including MSVC and compilers for
 targets LLVM does not support. The generated C is readable and maps back to CeeSafe lines.

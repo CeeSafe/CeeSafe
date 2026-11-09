@@ -8,6 +8,7 @@ fn checkFunctionBody(c: borrow mut Checker, function: u32) -> Result<void, Alloc
         c.setFile(fileToSet);
     }
     c.function = function;
+    c.selfType = c.hir.functions[function as usize].owner; // `Self` (ADR 0086 §2.2)
     var scope = Vector<u32>.create();
     regionScope(c, c.hir.functions[function as usize].syntax, c.hir.functions[function as usize].owner, mut scope)?;
     c.regions = scope;
@@ -702,10 +703,38 @@ fn checkFor(
     return c.hir.addStmt(HirStmt.For(local, start, end, checkedBody), span.start, span.end);
 }
 
-/// Whether `for` treats a value of this type as an iterator (ADR 0074 §2.8): a struct, or a reference to one.
+/// Whether `for` treats a value of this type as an iterator (ADR 0074 §2.8, ADR 0086 §2.7): a struct, a type
+/// parameter whose bounds declare `next` (`I: Iterator<T>`), a `dyn I` (behind a reference), a reference to one of
+/// these, or a `Box<dyn I>`.
 fn isIteratorType(c: borrow Checker, typ: u32) -> bool {
-    let held = if (c.types.is(typ, TypeKind.Reference)) c.types.info(typ).pointee else typ;
-    return held != none() && c.types.is(held, TypeKind.Struct) && c.types.info(held).structDef != none();
+    let isReference = c.types.is(typ, TypeKind.Reference);
+    var held = if (isReference) c.types.info(typ).pointee else typ;
+    if (held != none() && !isReference && c.types.is(held, TypeKind.Box)) {
+        held = c.types.info(held).pointee;
+        return held != none() && c.types.isDyn(held) && c.types.info(held).dynInterface != none();
+    }
+    if (held == none()) {
+        return false;
+    }
+    if (c.types.is(held, TypeKind.Struct) && c.types.info(held).structDef != none()) {
+        return true;
+    }
+    if (c.types.isDyn(held)) {
+        return c.types.info(held).dynInterface != none();
+    }
+    if (!c.types.is(held, TypeKind.TypeParameter)) {
+        return false;
+    }
+    let nextSymbol = match (c.front.symbols.find("next".bytes())) {
+        Some(s) => s.id,
+        null => none(),
+    };
+    for (bound in c.types.typeParameters[c.types.info(held).typeParameter as usize].bounds.view()) {
+        if (interfaceMethod(c, c.types.bounds[bound as usize].interfaceEntry, nextSymbol) != none()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// `for (x in e)` over an iterator (CheckForIterator, ADR 0074 §2.8): `e`'s type has `fn next(borrow mut this) -> T?`.
@@ -713,11 +742,18 @@ fn isIteratorType(c: borrow Checker, typ: u32) -> bool {
 fn checkForIterator(
     c: borrow mut Checker,
     variable: u32,
-    sequence: u32,
+    iterated: u32,
     body: u32,
     span: Span,
 ) -> Result<u32, AllocError> {
-    let sequenceSpan = c.spanOf(sequence);
+    let sequenceSpan = c.spanOf(iterated);
+    var sequence = iterated;
+    if (c.types.is(c.typeOf(iterated), TypeKind.Box)) {
+        // A place of `Box<dyn I>` is iterated in place, through `borrow mut` of its contents (ADR 0086 §2.7).
+        let contents = c.types.info(c.typeOf(iterated)).pointee;
+        let deref = c.expr(HirExpr.Deref(iterated), contents, sequenceSpan.start, sequenceSpan.end)?;
+        sequence = borrowReceiver(c, deref, true, sequenceSpan)?;
+    }
     let sequenceType = c.typeOf(sequence);
     let isReference = c.types.is(sequenceType, TypeKind.Reference);
     let structType = if (isReference) c.types.info(sequenceType).pointee else sequenceType;
@@ -740,7 +776,9 @@ fn checkForIterator(
     var call = none();
     var iteratorLocal = none();
     var initializer = none();
-    if (!shaped) {
+    if (!shaped && c.types.isBottom(structType)) {
+        // Reported already (a `Box<dyn I>` that cannot be borrowed mutably).
+    } else if (!shaped) {
         var message = Vector<u8>.create();
         appendText(mut message, "'for' iterates over an array, a slice, a range 'a..b' or an iterator; ")?;
         if (function == none()) {

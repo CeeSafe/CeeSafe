@@ -1,0 +1,34 @@
+// Interface defaults and `Self` (ADR 0086 §2.1, §2.2). A default is checked once, at the interface, as generic code
+// whose `Self` is opaque: an ill-typed body is a type error there (until 2026-11-09 such a body was parsed and never
+// checked, then N0100), and a field read is N0234. An override keeps the interface's signature (N0267). An inherited
+// default whose name the target already has is N0228 at the impl. `Self` outside an interface, an impl or a type's
+// body is N0105 in a type and N0200 in an expression.
+interface Named {
+    fn name(borrow this) -> u32;
+
+    fn greet(borrow this) -> u32 {
+        return "not a number"; // error[N0205]
+    }
+
+    fn field(borrow this) -> u32 => this.value; // error[N0234]
+
+    fn same(borrow this) -> u32 => 1;
+
+    fn short(borrow this) -> u32 => 2;
+}
+
+struct A {
+    value: u32;
+
+    fn same(borrow this) -> u32 => 2;
+}
+
+impl Named for A { // error[N0228]
+    fn name(borrow this) -> u32 => 1;
+
+    fn short(borrow this) -> i32 => 2; // error[N0267]
+}
+
+fn outside() -> Self { // error[N0105]
+    return Self.make(); // error[N0200]
+}

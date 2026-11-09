@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: the iterator interface (ADR 0086 §2.7). Bundled with ceesafec and part of every package.
+
+/// A source of values, one at a time: `next()` gives each, then null. `for (x in e)` calls it on a struct that has such
+/// a method (the shape is enough, ADR 0074 §2.8), on a type parameter bounded by `Iterator<T>`, and on a
+/// `borrow mut dyn Iterator<T>` or a `Box<dyn Iterator<T>>` (type-system.md §16.4). The item is a parameter, so callers
+/// fix it directly (`I: Iterator<u8>`) and `dyn Iterator<T>` has a table.
+public interface Iterator<T> {
+    /// The next value, or null when there is none.
+    fn next(borrow mut this) -> T?;
+}

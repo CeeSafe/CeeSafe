@@ -43,6 +43,11 @@ class async await yield macro
 Primitive type names (`i32`, `u64`, `bool`, `void`, …) are **identifiers**,
 resolved by name resolution, not keywords.
 
+`Self` (ADR 0086 §2.2) names a type: in an interface, the implementing type; in an `impl` block and in a struct's or
+enum's body, the target type with its parameters. It is written where a type name is, as the first part of a
+`QualifiedName` in a type (`Self`, `Self.Item`) and as a primary expression (`Self { … }`, `Self.create(…)`,
+`Self.MAX`). Declaring anything named `Self` is N0100, as for every keyword.
+
 ### 1.4 Integer literals
 ```
 IntLiteral = (Decimal | '0x' HexDigits | '0b' BinDigits | '0o' OctDigits) IntSuffix?
@@ -133,9 +138,15 @@ AnonymousUnion = 'union' '{' ExternField+ '}'                               (* A
 ExternField = Attribute* FieldDecl                                           (* C9: @cname; type-system.md §31.1 *)
 ExternFn   = Attribute* Visibility? 'fn' Identifier '(' (Param (',' Param)* (',' '...')? ','?)? ')' ('->' Type)? ';'   (* `...`: ADR 0041 *)
 TypeParams = '<' TypeParam (',' TypeParam)* '>'               (* M6a; type-system.md §20 *)
-InterfaceDecl = 'interface' Identifier TypeParams? '{' MethodSig* '}'   (* M6b; §21 *)
-MethodSig  = Attribute* 'fn' Identifier '(' Receiver (',' Param)* ')' ('->' Type)? ';'   (* attributes: M13 G2, `@effects`; §37.3 *)
-ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* M6b; §21; attributes C7a *)
+InterfaceDecl = 'interface' Identifier TypeParams? (':' Type ('+' Type)*)? '{' (MethodSig | InterfaceConst | AssocTypeDecl)* '}'
+                                            (* M6b; §21; supertraits: ADR 0086 §2.6 *)
+InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4: the value is a default *)
+AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
+MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
+                                            (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
+ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
+                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5 *)
+AssocTypeDef = 'type' Identifier '=' Type ';'
            | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
            | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
 MemberCall = Expr '.' Identifier ('<' Type (',' Type)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)

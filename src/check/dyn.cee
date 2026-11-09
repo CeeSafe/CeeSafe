@@ -69,26 +69,120 @@ fn resolveDynType(
         c.error(dynNotBehindPointer(), span.start, span.end, message)?;
         return Ok(c.types.error);
     }
-    let entry = c.types.bounds[bound as usize].interfaceEntry;
-    let methods = interfaceMethods(c, entry);
-    for (k in 0..methods.count) {
-        let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-        if (receiverIndex(m.receiver) == 1) {
-            var message = Vector<u8>.create();
-            quotedBound(mut message, c, bound)?;
-            appendText(mut message, " cannot be used as 'dyn ")?;
-            boundText(mut message, c, bound)?;
-            appendText(mut message, "': its method ")?;
-            appendQuotedName(mut message, c, c.front.ast.idents[m.name as usize].symbol)?;
-            appendText(
-                mut message,
-                " takes 'this' by value, which a call through a table cannot pass (type-system.md §37.1)",
-            )?;
-            c.error(dynIncompatible(), span.start, span.end, message)?;
-            return Ok(c.types.error);
-        }
+    var reason = Vector<u8>.create();
+    let member = dynBlocker(c, bound, mut reason)?;
+    if (member != none()) {
+        var message = Vector<u8>.create();
+        quotedBound(mut message, c, bound)?;
+        appendText(mut message, " cannot be used as 'dyn ")?;
+        boundText(mut message, c, bound)?;
+        appendText(mut message, "': ")?;
+        appendBytes(mut message, reason.view())?;
+        appendText(mut message, " (type-system.md §37.1)")?;
+        c.error(dynIncompatible(), span.start, span.end, message)?;
+        return Ok(c.types.error);
     }
     return c.types.dynOf(bound, send);
+}
+
+/// The member that keeps `dyn I` from existing (§37.1, ADR 0086 §2.3, §2.6), with why in `reason`; none if `I` is
+/// dyn-compatible. A table holds one function per method, called with the value behind a pointer, so every method of
+/// `I` and of its supertraits must take `borrow this` or `borrow mut this`, have no type parameters of its own and not
+/// name `Self` outside its receiver; generic code may also read `T.NAME`, call `T.create(…)` or name `T.Item` with
+/// `T = dyn I`, which no table answers, or copy a `T: Copy`. Defaults do not matter.
+fn dynBlocker(c: borrow mut Checker, bound: u32, reason: borrow mut Vector<u8>) -> Result<u32, AllocError> {
+    var members = Vector<DynMember>.create();
+    dynMembers(c, bound, mut members)?;
+    for (member in members.view()) {
+        let m = c.front.ast.functions[member.syntax as usize];
+        let name = member.name;
+        let why = if (receiverIndex(m.receiver) == 1) " takes 'this' by value, which a call through a table cannot pass"
+            else if (receiverIndex(m.receiver) == 0) " is a static function, which has no value to find a table in"
+            else if (m.typeParameters.count >
+                0) " has type parameters of its own, and a table holds one function per method"
+            else if (signatureNamesSelf(
+                c,
+                m,
+            )) " names 'Self' outside its receiver, and a 'dyn' value's type is not known"
+            else "";
+        if (why.length > 0) {
+            appendText(reason, "its method ")?;
+            appendQuotedName(reason, c, name)?;
+            appendText(reason, why)?;
+            return Ok(name);
+        }
+    }
+    var bounds = Vector<u32>.create();
+    boundWithSupers(c, bound, mut bounds)?;
+    for (b in bounds.view()) {
+        let entry = c.types.bounds[b as usize].interfaceEntry;
+        let parts = c.front.ast.partsOf(c.interfaces[entry as usize].item);
+        if (parts.types.count > 0) {
+            let name = assocName(c, c.front.ast.at(parts.types, 0));
+            appendText(reason, "its associated type ")?;
+            appendQuotedName(reason, c, name)?;
+            appendText(reason, " differs by type, and a 'dyn' value's type is not known")?;
+            return Ok(name);
+        }
+        if (parts.constants.count > 0) {
+            let name = constantName(c, c.front.ast.at(parts.constants, 0));
+            appendText(reason, "its constant ")?;
+            appendQuotedName(reason, c, name)?;
+            appendText(reason, " differs by type, and a table holds no constants")?;
+            return Ok(name);
+        }
+        if (c.interfaces[entry as usize].copySuper) {
+            appendText(reason, "it requires 'Copy', and a 'dyn' value is not one")?;
+            return Ok(c.selfSymbol);
+        }
+    }
+    return Ok(none());
+}
+
+/// Does a method's signature name `Self` in a parameter or its result (ADR 0086 §2.3)?
+fn signatureNamesSelf(c: borrow Checker, m: Function) -> bool {
+    for (k in 0..m.parameters.count) {
+        if (typeNamesSelf(c, c.front.ast.parameters[c.front.ast.at(m.parameters, k) as usize].typ, 0)) {
+            return true;
+        }
+    }
+    return m.returnType != none() && typeNamesSelf(c, m.returnType, 0);
+}
+
+fn typeNamesSelf(c: borrow Checker, t: u32, depth: u32) -> bool {
+    if (t == none() || depth > 64) {
+        return false;
+    }
+    return match (c.front.ast.types[t as usize]) {
+        TypeNode.Named(q) => c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol == c.selfSymbol,
+        TypeNode.Generic(q, arguments) => c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol ==
+            c.selfSymbol || listNamesSelf(c, arguments, depth),
+        TypeNode.Reference(_, _, _, pointee) => typeNamesSelf(c, pointee, depth + 1),
+        TypeNode.Optional(inner) => typeNamesSelf(c, inner, depth + 1),
+        TypeNode.Pointer(_, pointee) => typeNamesSelf(c, pointee, depth + 1),
+        TypeNode.Array(element, _) => typeNamesSelf(c, element, depth + 1),
+        TypeNode.Dyn(inner, _, _) => typeNamesSelf(c, inner, depth + 1),
+        TypeNode.Function(_, parameters, result) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
+            c,
+            result,
+            depth + 1,
+        ),
+        TypeNode.FunctionPointer(_, parameters, result) => listNamesSelf(c, parameters, depth) || typeNamesSelf(
+            c,
+            result,
+            depth + 1,
+        ),
+        TypeNode.Missing => false,
+    };
+}
+
+fn listNamesSelf(c: borrow Checker, list: Range, depth: u32) -> bool {
+    for (k in 0..list.count) {
+        if (typeNamesSelf(c, c.front.ast.at(list, k), depth + 1)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// A reference's pointee or a box's contents (ResolvePointee): the only types that may be a `dyn I` (§37.1).
@@ -107,13 +201,12 @@ fn dynMethod(c: borrow mut Checker, dynType: u32, name: u32) -> Result<u32, Allo
     if (bound == none()) {
         return Ok(none());
     }
-    let b = c.types.bounds[bound as usize];
-    let methods = interfaceMethods(c, b.interfaceEntry);
+    var members = Vector<DynMember>.create();
+    dynMembers(c, bound, mut members)?; // the interface's methods, then its supertraits' (ADR 0086 §2.6)
     var slot = none();
-    for (k in 0..methods.count) {
-        let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-        if (slot == none() && c.front.ast.idents[m.name as usize].symbol == name) {
-            slot = k;
+    for (k in 0..members.length) {
+        if (slot == none() && members[k].name == name) {
+            slot = truncate<u32>(k);
         }
     }
     if (slot == none()) {
@@ -124,22 +217,14 @@ fn dynMethod(c: borrow mut Checker, dynType: u32, name: u32) -> Result<u32, Allo
             return Ok(m.function);
         }
     }
-    let entry = c.interfaces[b.interfaceEntry as usize];
-    let interfaceParameters = match (c.front.ast.items[entry.item as usize].kind) {
-        ItemKind.Interface(_, t) => t,
-        _ => emptyRange(),
-    };
-    var arguments = Vector<u32>.create();
-    listTypes(c, b.arguments, mut arguments)?;
-    var pairs = Vector<EnvPair>.create();
-    zipEnvironment(c, interfaceParameters, arguments.view(), mut pairs)?;
-    let environment = storeEnvironment(c, pairs.view())?;
+    let member = members[slot as usize];
+    let environment = boundEnvironment(c, member.bound)?;
     let savedFile = c.file;
     {
-        let fileToSet = entry.file;
+        let fileToSet = c.interfaces[c.types.bounds[member.bound as usize].interfaceEntry as usize].file;
         c.setFile(fileToSet);
     }
-    let signature = c.front.ast.at(methods, slot);
+    let signature = member.syntax;
     let function = declareSignature(c, signature, dynType, environment)?;
     c.setFile(savedFile);
     c.hir.functions[function as usize].isDynMethod = true;
@@ -237,11 +322,11 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
     // named the uninstantiated type in C).
     let generic = c.types.isGeneric(implementation) || c.types.isGeneric(dynType);
     if (!recorded && !generic) {
-        let methods = interfaceMethods(c, c.types.bounds[bound as usize].interfaceEntry);
+        var members = Vector<DynMember>.create();
+        dynMembers(c, bound, mut members)?; // in slot order, supertraits' after (ADR 0086 §2.6)
         var functions = Vector<u32>.create();
-        for (k in 0..methods.count) {
-            let m = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
-            functions.push(implMethodFor(c, implementation, c.front.ast.idents[m.name as usize].symbol))?;
+        for (m in members.view()) {
+            functions.push(implMethodFor(c, implementation, m.name))?;
         }
         let list = c.hir.list(functions.view())?;
         c.dynTables.push(DynTable { implementation: implementation, dynType: dynType, methods: list })?;

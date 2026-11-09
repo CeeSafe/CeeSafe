@@ -745,23 +745,8 @@ struct Parser {
         var body = none();
         var expressionBody = none();
         if (this.parsingSignatures && this.eat(TokenKind.Semicolon)) {
-            // An interface method: a signature without a body (type-system.md §21.1).
-        } else if (this.parsingSignatures && !this.parsingExtern &&
-            (this.at(TokenKind.OpenBrace) || this.at(TokenKind.FatArrow))) {
-            // A body on an interface method: §21.1's MethodSig ends with ';'. It was parsed and then never checked or
-            // used, so an ill-typed body compiled. Report it, and parse the body only to recover.
-            this.errorFound(
-                expectedToken(),
-                "expected ';' after an interface method's signature, found ",
-                ": an interface method has no body (type-system.md §21.1)",
-            )?;
-            if (this.at(TokenKind.OpenBrace)) {
-                this.parseBlock()?;
-            } else {
-                this.advance();
-                this.parseExpr()?;
-                this.expect(TokenKind.Semicolon)?;
-            }
+            // An interface method without a default, or a C function: a signature (type-system.md §21.1). An interface
+            // method with a body is a default (ADR 0086 §2.1).
         } else if (this.at(TokenKind.OpenBrace)) {
             body = this.parseBlock()?;
         } else if (this.eat(TokenKind.FatArrow)) {
@@ -1084,10 +1069,31 @@ struct Parser {
         let name = this.parseIdentifier()?;
         let typeParameters = this.parseTypeParameters()?;
         var methods = Vector<u32>.create();
+        var constants = Vector<u32>.create();
+        var types = Vector<u32>.create();
+        var supertraits = Vector<u32>.create();
+        if (this.eat(TokenKind.Colon)) {
+            // `interface B: A + Copy` (ADR 0086 §2.6).
+            loop {
+                supertraits.push(this.parseType()?)?;
+                if (!this.eat(TokenKind.Plus)) {
+                    break;
+                }
+            }
+        }
         this.expect(TokenKind.OpenBrace)?;
         this.parsingSignatures = true;
-        while (this.atFunction() || this.at(TokenKind.At)) {
+        while (this.atFunction() || this.at(TokenKind.At) || this.at(TokenKind.ConstKeyword) ||
+            this.at(TokenKind.TypeKeyword)) {
             let methodStart = this.current().start;
+            if (this.at(TokenKind.ConstKeyword)) {
+                constants.push(this.parseMemberConst(methodStart, true)?)?; // ADR 0086 §2.4
+                continue;
+            }
+            if (this.at(TokenKind.TypeKeyword)) {
+                types.push(this.parseAssocType(true)?)?; // ADR 0086 §2.5
+                continue;
+            }
             let docPos = this.pos;
             let doc = this.docAt(docPos)?;
             let attributes = this.parseAttributes()?; // @effects, bounding every impl (type-system.md §37.3)
@@ -1104,7 +1110,7 @@ struct Parser {
         }
         this.parsingSignatures = false;
         this.expect(TokenKind.CloseBrace)?;
-        var types = Vector<u32>.create();
+        var typeParameterList = Vector<u32>.create();
         for (k in 0..typeParameters.count) {
             let p = this.front.ast.at(typeParameters, k);
             let parameter = this.front.ast.typeParameters[p as usize];
@@ -1116,12 +1122,19 @@ struct Parser {
                     textMessage("interfaces cannot have region parameters")?,
                 )?;
             } else {
-                types.push(p)?;
+                typeParameterList.push(p)?;
             }
         }
         let methodRange = this.list(methods)?;
-        let typeRange = this.list(types)?;
-        return this.addItem(ItemKind.Interface(methodRange, typeRange), visibility, name, start);
+        let typeRange = this.list(typeParameterList)?;
+        let item = this.addItem(ItemKind.Interface(methodRange, typeRange), visibility, name, start)?;
+        let constantRange = this.list(constants)?;
+        let assocRange = this.list(types)?;
+        let superRange = this.list(supertraits)?;
+        this.front.ast.interfaceParts.push(
+            InterfaceParts { item: item, constants: constantRange, types: assocRange, supertraits: superRange },
+        )?;
+        return Ok(item);
     }
 
     /// `impl I for T { fn … }` (type-system.md §21.1).
@@ -1137,11 +1150,21 @@ struct Parser {
         let forType = if (inherent) interfaceType else this.parseType()?;
         var functions = Vector<u32>.create();
         var constants = Vector<u32>.create();
+        var types = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
         while (this.atFunction() || this.at(TokenKind.PublicKeyword) || this.at(TokenKind.At) ||
             (inherent && (this.at(TokenKind.ConstKeyword) ||
-                (isVisibilityKeyword(this.current().kind) && this.peekIs(1, TokenKind.ConstKeyword))))) {
+                (isVisibilityKeyword(this.current().kind) && this.peekIs(1, TokenKind.ConstKeyword)))) ||
+            (!inherent && (this.at(TokenKind.ConstKeyword) || this.at(TokenKind.TypeKeyword)))) {
             let functionStart = this.current().start;
+            if (!inherent && this.at(TokenKind.ConstKeyword)) {
+                constants.push(this.parseMemberConst(functionStart, false)?)?; // ADR 0086 §2.4
+                continue;
+            }
+            if (!inherent && this.at(TokenKind.TypeKeyword)) {
+                types.push(this.parseAssocType(false)?)?; // ADR 0086 §2.5
+                continue;
+            }
             let docPos = this.pos;
             let doc = this.docAt(docPos)?;            // before the attributes, if any (grammar.md §1.2)
             let attributes = this.parseAttributes()?; // @effects, @context (type-system.md §32)
@@ -1181,12 +1204,62 @@ struct Parser {
                 start,
             );
         }
-        return this.addItem(
+        let item = this.addItem(
             ItemKind.Impl(interfaceType, forType, functionRange, split.types, split.regions),
             visibility,
             name,
             start,
-        );
+        )?;
+        let constantRange = this.list(constants)?;
+        let assocRange = this.list(types)?;
+        this.front.ast.interfaceParts.push(
+            InterfaceParts { item: item, constants: constantRange, types: assocRange, supertraits: emptyRange() },
+        )?;
+        return Ok(item);
+    }
+
+    /// `const NAME: T = v;` in an interface or an impl of one (ADR 0086 §2.4); in an interface the value, a default,
+    /// may be left out.
+    fn parseMemberConst(borrow mut this, start: u32, valueOptional: bool) -> Result<u32, AllocError> {
+        this.expect(TokenKind.ConstKeyword)?;
+        let name = this.parseIdentifier()?;
+        this.expect(TokenKind.Colon)?;
+        let typ = this.parseType()?;
+        var value = none();
+        if (this.eat(TokenKind.Equals)) {
+            value = this.parseExpr()?;
+        } else if (!valueOptional) {
+            this.expect(TokenKind.Equals)?;
+        }
+        this.expect(TokenKind.Semicolon)?;
+        return this.addItem(ItemKind.Const(typ, value), Visibility.Default, name, start);
+    }
+
+    /// `type Name: B1 + B2;` in an interface, `type Name = T;` in an impl (ADR 0086 §2.5): an Ast.assocTypes index.
+    fn parseAssocType(borrow mut this, inInterface: bool) -> Result<u32, AllocError> {
+        let start = this.current().start;
+        this.expect(TokenKind.TypeKeyword)?;
+        let name = this.parseIdentifier()?;
+        var bounds = Vector<u32>.create();
+        var typ = none();
+        if (inInterface && this.eat(TokenKind.Colon)) {
+            loop {
+                bounds.push(this.parseType()?)?;
+                if (!this.eat(TokenKind.Plus)) {
+                    break;
+                }
+            }
+        }
+        if (!inInterface) {
+            this.expect(TokenKind.Equals)?;
+            typ = this.parseType()?;
+        }
+        this.expect(TokenKind.Semicolon)?;
+        let boundRange = this.list(bounds)?;
+        this.front.ast.assocTypes.push(
+            AssocType { name: name, bounds: boundRange, typ: typ, start: start, end: this.endFrom(start) },
+        )?;
+        return Ok(truncate<u32>(this.front.ast.assocTypes.length - 1));
     }
 
     fn parseEnum(borrow mut this, visibility: Visibility, start: u32) -> Result<u32, AllocError> {
@@ -1326,7 +1399,11 @@ struct Parser {
     fn parseQualifiedName(borrow mut this) -> Result<QualifiedName, AllocError> {
         let start = this.current().start;
         var parts = Vector<u32>.create();
-        parts.push(this.parseIdentifier()?)?;
+        if (this.at(TokenKind.SelfTypeKeyword)) {
+            parts.push(this.keywordIdent("Self")?)?; // `Self` and `Self.Item` (ADR 0086 §2.2, §2.5)
+        } else {
+            parts.push(this.parseIdentifier()?)?;
+        }
         while (this.at(TokenKind.Dot) && this.peekIs(1, TokenKind.Identifier)) {
             this.advance();
             parts.push(this.parseIdentifier()?)?;
@@ -1526,7 +1603,7 @@ struct Parser {
             }
             return this.front.ast.addType(TypeNode.Dyn(interfaceType, isMutable, isSend), start, this.endFrom(start));
         }
-        if (this.at(TokenKind.Identifier)) {
+        if (this.at(TokenKind.Identifier) || this.at(TokenKind.SelfTypeKeyword)) {
             // A primitive type takes no type arguments, so `a as u64 < b` compares (ADR 0075 §2.13).
             let primitive = !sameKind(this.peek(1).kind, TokenKind.Dot) && this.isPrimitiveTypeName(this.current());
             let name = this.parseQualifiedName()?;
@@ -2683,6 +2760,14 @@ struct Parser {
             TokenKind.ThisKeyword => {
                 this.advance();
                 return this.front.ast.addExpr(ExprNode.This, token.start, token.end);
+            }
+            TokenKind.SelfTypeKeyword => {
+                // `Self.create(…)`, `Self.MAX`, `Self { … }` (ADR 0086 §2.2): a name the checker resolves.
+                let name = this.keywordIdent("Self")?;
+                if (this.at(TokenKind.OpenBrace)) {
+                    return this.parseStructLiteral(name, token.start, emptyRange());
+                }
+                return this.front.ast.addExpr(ExprNode.Name(name, emptyRange()), token.start, token.end);
             }
             TokenKind.NullKeyword => {
                 this.advance();

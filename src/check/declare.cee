@@ -119,6 +119,8 @@ fn checkProgram(
         constants: Vector<ConstEntry>.create(),
         reserved: Vector<u32>.create(),
         thisSymbol: 0,
+        selfSymbol: 0,
+        selfType: none(),
         file: 0,
         function: none(),
         scopes: Vector<ScopeEntry>.create(),
@@ -160,6 +162,12 @@ fn checkProgram(
         implTemplates: Vector<ImplTemplate>.create(),
         implMethods: Vector<ImplMethod>.create(),
         boundMethods: Vector<BoundMethod>.create(),
+        implConstants: Vector<ImplConstant>.create(),
+        implTypes: Vector<ImplType>.create(),
+        projections: Vector<Projection>.create(),
+        boundConstants: Vector<BoundMethod>.create(),
+        pendingAssocBounds: Vector<PendingAssocBound>.create(),
+        supertraitsReady: false,
         pendingBounds: Vector<PendingBounds>.create(),
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
@@ -216,6 +224,7 @@ fn checkProgram(
         c.builtins.put(Word { value: symbol as u64 }, k)?;
     }
     c.thisSymbol = c.intern("this")?;
+    c.selfSymbol = c.intern("Self")?;
     c.intern("memory")?;
     c.intern("allocation")?;
     for (k in 0..reservedNameCount()) {
@@ -268,6 +277,7 @@ fn checkProgram(
             }
         }
     }
+    resolveSupertraits(mut c)?; // ADR 0086 §2.6
     processTypeAttributes(mut c)?;
     for (u in 0..c.front.ast.units.length) {
         {
@@ -289,12 +299,14 @@ fn checkProgram(
     declareMemberConstants(mut c)?; // ADR 0074 §2.7
 
     processFunctionAttributes(mut c)?;
+    declareInterfaceDefaults(mut c)?; // ADR 0086 §2.1
     processImpls(mut c)?;
     resolveAllMembers(mut c)?;
     checkPendingDynInstances(mut c)?;
     checkLayoutUses(mut c)?;
     checkStructRecursion(mut c)?;
     computeCopyAndDrop(mut c)?;
+    checkPendingAssocBounds(mut c)?; // ADR 0086 §2.5
     checkForeignInterfaces(mut c)?;
     checkPublicSignatures(mut c)?;
     checkPendingElements(mut c)?;
@@ -461,6 +473,7 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
                         parameters: list,
                         owner: none(),
                         ownerEnvironment: emptyRange(),
+                        signatureOnly: false,
                     },
                 )?;
                 let index = truncate<u32>(c.genericFunctions.length - 1);
@@ -567,7 +580,10 @@ fn declareFunctionIn(c: borrow mut Checker, f: u32, owner: u32, environment: Ran
     regionScope(c, f, owner, mut scope)?;
     let saved = swapRegions(c, scope)?;
     let savedEnvironment = enterEnvironment(c, environment)?;
+    let savedSelf = c.selfType;
+    c.selfType = owner; // `Self` (ADR 0086 §2.2): the method's owner; none for a function
     let function = declareFunctionCore(c, f, owner, environment)?;
+    c.selfType = savedSelf;
     restoreEnvironment(c, savedEnvironment);
     swapRegions(c, saved)?;
     return Ok(function);

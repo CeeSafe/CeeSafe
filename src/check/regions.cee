@@ -184,8 +184,20 @@ fn resolveRegionItemType(
         return Ok(c.types.error);
     }
     var resolved = Vector<u32>.create();
+    let declared = if (isStruct) c.types.structs[c.types.info(
+        typ,
+    ).structDef as usize].typeArguments else c.types.enums[c.types.info(typ).enumDef as usize].typeArguments;
     for (k in (arguments.count - typeArguments)..arguments.count) {
         let argumentSyntax = c.front.ast.at(arguments, k);
+        let parameter = c.types.listAt(declared, k - (arguments.count - typeArguments));
+        if (c.types.constParameterType(parameter) != none()) {
+            let value = resolveConstArgument(c, parameter, text, argumentSyntax)?; // ADR 0083 §2.4
+            if (c.types.isBottom(value)) {
+                return Ok(c.types.error);
+            }
+            resolved.push(value)?;
+            continue;
+        }
         // A `dyn I` argument is allowed where the instance holds it only behind references (ADR 0064 §3.1), checked
         // on the instance below.
         c.dynAllowed = true;

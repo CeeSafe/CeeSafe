@@ -477,6 +477,10 @@ fn fmtWalkTypeParameters(
             for (b in 0..bounds.count) {
                 fmtWalkType(l, ast, ast.at(bounds, b))?;
             }
+            let valueType = ast.typeParameters[ast.at(range, k) as usize].valueType;
+            if (valueType != none()) {
+                fmtWalkType(l, ast, valueType)?; // `const N: T` (ADR 0083)
+            }
         }
     }
     return Ok();
@@ -841,6 +845,7 @@ fn fmtWalkType(l: borrow mut FmtLayout, ast: borrow Ast, t: u32) -> Result<void,
             fmtWalkType(l, ast, element)?;
             fmtWalkExpr(l, ast, length)?;
         }
+        TypeNode.Constant(value) => { fmtWalkExpr(l, ast, value)?; } // a const argument (ADR 0083)
         TypeNode.Function(attributes, parameters, result) => {
             fmtWalkAttributes(l, ast, attributes)?;
             let fnToken = l.find(core.start, TokenKind.FnKeyword);

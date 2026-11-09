@@ -148,10 +148,12 @@ struct Checker {
     implTemplates: Vector<ImplTemplate>; // generic impls (ADR 0054)
     implMethods: Vector<ImplMethod>;
     boundMethods: Vector<BoundMethod>;
-    implConstants: Vector<ImplConstant>;           // ADR 0086 §2.4
-    implTypes: Vector<ImplType>;                   // ADR 0086 §2.5
-    projections: Vector<Projection>;               // `P.Name` for type parameters (ADR 0086 §2.5)
-    boundConstants: Vector<BoundMethod>;           // `T.NAME` in generic code (ADR 0086 §2.4)
+    implConstants: Vector<ImplConstant>;                   // ADR 0086 §2.4
+    implTypes: Vector<ImplType>;                           // ADR 0086 §2.5
+    projections: Vector<Projection>;                       // `P.Name` for type parameters (ADR 0086 §2.5)
+    boundConstants: Vector<BoundMethod>;                   // `T.NAME` in generic code (ADR 0086 §2.4)
+    pendingConstParameters: Vector<PendingConstParameter>; // ADR 0083 §2.2: typed once the types are declared
+    constParametersReady: bool;
     pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5, §2.6
     supertraitsReady: bool;                        // resolveSupertraits has run (ADR 0086 §2.6)
     pendingBounds: Vector<PendingBounds>;
@@ -500,6 +502,9 @@ struct Checker {
                 }
                 let ident = this.front.ast.idents[this.front.ast.at(q.parts, 0) as usize];
                 let parameter = environmentType(this, ident.symbol);
+                if (parameter != none() && isConstKind(this, parameter)) {
+                    return valueForType(this, span); // a const parameter is a value (ADR 0083 §2.4)
+                }
                 if (parameter != none()) {
                     return Ok(parameter); // a type parameter in scope, or what it is instantiated with (§20)
                 }
@@ -545,6 +550,13 @@ struct Checker {
                         _ => {}
                     }
                 }
+                let isConstant = match (this.item(ident.symbol)) {
+                    Entity.Constant(_) => true,
+                    _ => false,
+                };
+                if (found == none() && isConstant) {
+                    return valueForType(this, span); // N0354 (ADR 0083 §2.4)
+                }
                 if (found == none()) {
                     // A function, constant, static or interface is not a type either.
                     var message = Vector<u8>.create();
@@ -570,6 +582,7 @@ struct Checker {
                 return Ok(found);
             }
             TypeNode.Missing => { return Ok(this.types.error); }
+            TypeNode.Constant(_) => { return valueForType(this, span); } // ADR 0083 §2.4
             TypeNode.Function(attributes, parameters, result) => {
                 return this.resolveFunctionType(attributes, parameters, result, span);
             }

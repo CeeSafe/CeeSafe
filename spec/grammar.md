@@ -150,8 +150,9 @@ ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl | C
 AssocTypeDef = 'type' Identifier '=' Type ';'
            | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
            | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
-MemberCall = Expr '.' Identifier ('<' Type (',' Type)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
+MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
 TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
+           | 'const' Identifier ':' Type                       (* ADR 0083: a const parameter; type-system.md §20.5 *)
            | Identifier (':' Type ('+' Type)*)?                (* bounds: M6b *)
 (* `region` is contextual: only `region` followed by a name declares a region. In a type, a region
    argument is a region name or `static`, written first in the argument list (`Token<src>`,
@@ -178,19 +179,24 @@ StaticDecl = 'static' 'mut'? Identifier ':' Type '=' Expr ';'   (* M14 K1; type-
 
 Type = QualifiedName
      | 'borrow' 'mut'? Sources? Type          (* M2b references; Sources only in return types *)
-     | '[' Type ';' IntLiteral ']'             (* M2d fixed array *)
+     | '[' Type ';' Expr ']'                   (* M2d fixed array; the length: type-system.md §16.1, ADR 0083 §2.7 *)
      | ('Slice' | 'SliceMut') '<' Type '>'     (* M2d slices *)
      | 'Result' '<' Type ',' Type '>'          (* M3a; type-system.md §17 *)
      | Type '?'                                (* M6c: optional; `borrow T?` is an optional reference *)
      | '(' Type ')'                            (* M11 (G6): `borrow (T?)` is a reference to an optional *)
      | Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M11 (G8a): a function value, type-system.md §36.1;
                                                G8b′: `@effects(…)` before `fn`, §36.3 *)
-     | Identifier '<' Type (',' Type)* '>'     (* M6a: an instantiation of a generic struct or enum; also Box, Pool, … *)
+     | Identifier '<' GenericArg (',' GenericArg)* '>'   (* M6a: an instantiation of a generic struct or enum; also
+                                                  Box, Pool, … *)
      | '*' 'mut'? Type                         (* M8a: raw pointer; type-system.md §27 *)
      | 'dyn' Type                              (* M13 G2: an interface instantiation; only behind `borrow` or in
                                                   `Box<…>`; type-system.md §37. `dyn` is a keyword only here *)
      | 'dyn' 'mut'? Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M13 G3: an owning closure's type, §36.5 *)
 Sources = '(' Identifier (',' Identifier)* ')'   (* only if a type follows the ')'; else '(' Type ')' *)
+GenericArg = Type | ConstArg                     (* ADR 0083; type-system.md §20.5 *)
+ConstArg   = 'true' | 'false' | IntLiteral | '(' Expr ')'
+           (* a name or `E.V` parses as a Type; the parameter's kind decides (N0354). `'(' Expr ')'` only in a type:
+              a `(` that a type follows (`(borrow T)`, `(*T)`, `(fn …)`, `(dyn I)`, `(T?)`, `(T)?`) is a Type *)
 
 Block = '{' Statement* '}'
 Statement = Block
@@ -268,7 +274,7 @@ Branch    = Expr | Block | ValueBlock                (* a Block branch must not 
 ValueBlock = '{' Statement* Expr '}'                 (* its last Expr has no ';' (ADR 0073 §2.3) *)
 FieldInits = FieldInit (',' FieldInit)* ','?
 FieldInit  = Identifier ':' Expr
-GenericArgs = '<' Type (',' Type)* '>'      (* only when followed by '(', '.' or '{' — see below *)
+GenericArgs = '<' GenericArg (',' GenericArg)* '>'   (* only when followed by '(', '.' or '{' — see below *)
 Postfix = Primary ( '(' ArgList? ')' | '.' Identifier | '[' IndexOrRange ']'
                   | '?' | '!' )*                     (* M3a: propagate / unwrap a Result *)
 IndexOrRange = Expr | Expr? '..' Expr?               (* M2d: element or slice *)
@@ -288,10 +294,13 @@ operand would take could never type.
 **Generic arguments in expressions** (`truncate<i64>(x)`, and since M6a `id<i32>(x)`,
 `Pair<u8>.make()` and `Pair<u8> { … }`): after an identifier, `<` starts generic arguments if the
 tokens up to the matching `>` can only form types (identifiers, `.`, `,`, `;`, `*` (M8a), `?` (M9a: optional
-types, as in `Vector<Box<Pair>?>.create()`), integer literals, `borrow`, `mut`, and balanced `<…>` and `[…]`) and the `>` is followed by `(`, `.` or `{`, or (since
+types, as in `Vector<Box<Pair>?>.create()`), integer literals, `borrow`, `mut`, and balanced `<…>` and `[…]`), or
+const arguments (ADR 0083: `true` and `false`; not `( … )`), and the `>` is followed by `(`, `.` or `{`, or (since
 C7d, for a generic function's instance as a value, `release<T>`, type-system §34.1) by `)`, `,`, `;`
 or `]`, which cannot follow a comparison's `>` (it needs an operand). Otherwise `<` is the less-than
-operator. Write `(f < T) > (x)` to mean the comparison.
+operator. Write `(f < T) > (x)` to mean the comparison. Since 0.26.0 (ADR 0083 §2.1), `f(i < k, true, j > (k))` is
+the call `i<k, true, j>(k)`, an error where `i` is not generic: write `(i < k)`; `f(i < (k), j > (k))` still
+compares, since `(` cannot be a generic argument in an expression.
 
 **Struct literals** (M2a): in expression position, an identifier *immediately followed by `{`* is
 a struct literal. This is unambiguous in CeeSafe because every `{` that opens a block follows a

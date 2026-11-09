@@ -12,6 +12,7 @@ fn layoutComputable(c: borrow Checker, t: u32, depth: u32) -> bool {
         TypeKind.Error => { return false; }
         TypeKind.Dyn => { return false; }
         TypeKind.TypeParameter => { return false; }
+        TypeKind.ConstValue => { return false; } // a const argument (ADR 0083)
         TypeKind.Array => { return layoutComputable(c, info.element, depth + 1); }
         TypeKind.Struct => {
             let s = borrow c.types.structs[info.structDef as usize];

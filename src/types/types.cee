@@ -30,6 +30,10 @@ enum TypeKind {
     Closure,
     Thread,
     Dyn,
+    /// A const argument (ADR 0083 §2.4): a value of `element`, a bool, integer or fieldless enum type, held in
+    /// `arrayLength` (0/1 for a bool, the variant's index for an enum, the integer's bits). Interned, so two
+    /// arguments name the same instance iff they are equal. Only ever a generic argument, never a value's type.
+    ConstValue,
 }
 
 fn typeKindIndex(kind: TypeKind) -> u32 => match (kind) {
@@ -58,6 +62,7 @@ fn typeKindIndex(kind: TypeKind) -> u32 => match (kind) {
     TypeKind.Closure => 22,
     TypeKind.Thread => 23,
     TypeKind.Dyn => 24,
+    TypeKind.ConstValue => 25,
 };
 
 fn isKind(a: TypeKind, b: TypeKind) -> bool => typeKindIndex(a) == typeKindIndex(b);
@@ -101,10 +106,11 @@ struct TypeInfo {
     name: Range; // in TypeTable.names
     bits: u32;   // integers and floats
     signed: bool;
-    pointee: u32;     // references, raw pointers, boxes; for vectors and stable vectors, the unsized [T] or str
-    element: u32;     // arrays, regions (Pool), slot maps, handles, threads
-    allocator: u32;   // boxes and containers
-    arrayLength: i64; // -1 for the unsized [T]
+    pointee: u32;         // references, raw pointers, boxes; for vectors and stable vectors, the unsized [T] or str
+    element: u32;         // arrays, regions (Pool), slot maps, handles, threads
+    allocator: u32;       // boxes and containers
+    arrayLength: i64;     // -1 for the unsized [T]; a const argument's value (TypeKind.ConstValue)
+    lengthParameter: u32; // `[T; N]` with N a const parameter (ADR 0083 §2.3): N's type parameter; else none
     isStr: bool;
     mutableReference: bool;
     mutablePointer: bool;
@@ -141,6 +147,7 @@ struct TypeParameterInfo {
     copyBound: bool;
     sendBound: bool;
     shareBound: bool;
+    valueType: u32; // a const parameter's type (ADR 0083 §2.2): bool, an integer or a fieldless enum; else none
 }
 
 struct StructField {
@@ -307,6 +314,7 @@ struct TypeTable {
     functionTypes: Map<Bytes, u32>;
     closures: Map<Bytes, u32>;
     dyns: Map<Bytes, u32>;
+    constValues: Map<PairKey, u32>; // (value type, value) → its ConstValue (ADR 0083)
 
     // Creation-order lists for the C backend (deterministic because checking order is).
     composites: Vector<u32>;
@@ -404,7 +412,7 @@ struct TypeTable {
     /// Does the type mention a type parameter (§20.3)?
     fn isGeneric(borrow this, id: u32) -> bool {
         let t = this.types[id as usize];
-        if (isKind(t.kind, TypeKind.TypeParameter)) {
+        if (isKind(t.kind, TypeKind.TypeParameter) || t.lengthParameter != none()) {
             return true;
         }
         if ((t.pointee != none() && this.isGeneric(t.pointee)) || (t.element != none() && this.isGeneric(t.element))) {
@@ -439,7 +447,7 @@ struct TypeTable {
             return false;
         }
         if (isKind(t.kind, TypeKind.TypeParameter)) {
-            return true;
+            return this.typeParameters[t.typeParameter as usize].valueType == none(); // a const parameter holds no loan
         }
         if ((t.pointee != none() && this.mentionsParameterOutsideDyn(t.pointee)) ||
             (t.element != none() && this.mentionsParameterOutsideDyn(t.element))) {
@@ -555,6 +563,7 @@ struct TypeTable {
             functionTypes: Map<Bytes, u32>.create(),
             closures: Map<Bytes, u32>.create(),
             dyns: Map<Bytes, u32>.create(),
+            constValues: Map<PairKey, u32>.create(),
             composites: Vector<u32>.create(),
             functionPointerList: Vector<u32>.create(),
             functionList: Vector<u32>.create(),
@@ -1298,9 +1307,65 @@ struct TypeTable {
             copyBound: false,
             sendBound: false,
             shareBound: false,
+            valueType: none(),
         })?;
         info.typeParameter = truncate<u32>(this.typeParameters.length - 1);
         return this.add(info);
+    }
+
+    /// A const parameter's value type (ADR 0083 §2.2), or none for a type parameter or any other type.
+    fn constParameterType(borrow this, id: u32) -> u32 {
+        let t = this.types[id as usize];
+        if (!isKind(t.kind, TypeKind.TypeParameter)) {
+            return none();
+        }
+        return this.typeParameters[t.typeParameter as usize].valueType;
+    }
+
+    /// Makes a fresh type parameter a const parameter of `valueType`: a value, so Copy, Send and Share (the
+    /// predicates below say so without bounds, which arguments would be checked against).
+    fn makeConstParameter(borrow mut this, id: u32, valueType: u32) {
+        let p = this.types[id as usize].typeParameter as usize;
+        this.typeParameters[p].valueType = valueType;
+    }
+
+    /// The unique const argument of `valueType` with `value` (ADR 0083 §2.4), named `name` (`true`, `5`, `E.V`).
+    fn constValueOf(borrow mut this, valueType: u32, value: i64, name: Slice<u8>) -> Result<u32, AllocError> {
+        let key = pairKey(valueType as u64, truncate<u64>(value));
+        let found = foundIn(this.constValues, key);
+        if (found != none()) {
+            return Ok(found);
+        }
+        let start = truncate<u32>(this.names.length);
+        appendBytes(mut this.names, name)?;
+        var info = blankType(TypeKind.ConstValue, Range { start: start, count: truncate<u32>(name.length) });
+        info.element = valueType;
+        info.arrayLength = value;
+        let id = this.add(info)?;
+        this.constValues.put(key, id)?;
+        return Ok(id);
+    }
+
+    /// `[T; N]` with `N` a `usize` const parameter (ADR 0083 §2.3): equal only to itself, never laid out.
+    fn arrayOfParameter(borrow mut this, element: u32, parameter: u32) -> Result<u32, AllocError> {
+        let key = pairKey(element as u64, 0x8000000000000000 | (parameter as u64));
+        let found = foundIn(this.arrays, key);
+        if (found != none()) {
+            return Ok(found);
+        }
+        var name = Vector<u8>.create();
+        appendText(mut name, "[")?;
+        this.appendName(mut name, element)?;
+        appendText(mut name, "; ")?;
+        this.appendName(mut name, parameter)?;
+        appendText(mut name, "]")?;
+        var info = blankType(TypeKind.Array, this.addName(name)?);
+        info.element = element;
+        info.arrayLength = 0;
+        info.lengthParameter = parameter;
+        let id = this.add(info)?;
+        this.arrays.put(key, id)?;
+        return Ok(id);
     }
 
     /// A new struct type (CreateStruct): once per declaration or instantiation.
@@ -1427,11 +1492,12 @@ struct TypeTable {
             TypeKind.Error => { return false; }
             TypeKind.Dyn => { return false; }
             TypeKind.TypeParameter => { return false; }
+            TypeKind.ConstValue => { return false; }
             TypeKind.Struct => {
                 let s = borrow this.structs[t.structDef as usize];
                 return !s.isRecursive && !s.isImported;
             }
-            TypeKind.Array => { return this.hasLayout(t.element); }
+            TypeKind.Array => { return t.lengthParameter == none() && this.hasLayout(t.element); }
             _ => { return true; }
         }
     }
@@ -1454,7 +1520,10 @@ struct TypeTable {
     fn isCopy(borrow this, id: u32) -> bool {
         let t = this.types[id as usize];
         match (t.kind) {
-            TypeKind.TypeParameter => { return this.typeParameters[t.typeParameter as usize].copyBound; }
+            TypeKind.TypeParameter => {
+                let p = borrow this.typeParameters[t.typeParameter as usize];
+                return p.copyBound || p.valueType != none();
+            }
             TypeKind.Struct => { return this.structs[t.structDef as usize].isCopy; }
             TypeKind.Enum => {
                 let e = borrow this.enums[t.enumDef as usize];
@@ -1481,7 +1550,10 @@ struct TypeTable {
     fn needsDrop(borrow this, id: u32) -> bool {
         let t = this.types[id as usize];
         match (t.kind) {
-            TypeKind.TypeParameter => { return !this.typeParameters[t.typeParameter as usize].copyBound; }
+            TypeKind.TypeParameter => {
+                let p = borrow this.typeParameters[t.typeParameter as usize];
+                return !p.copyBound && p.valueType == none();
+            }
             TypeKind.Box => { return true; }
             TypeKind.Vector => { return true; }
             TypeKind.StableVector => { return true; }
@@ -1665,8 +1737,9 @@ struct TypeTable {
         match (t.kind) {
             TypeKind.TypeParameter => {
                 let p = borrow this.typeParameters[t.typeParameter as usize];
-                return Ok(p.sendBound || p.shareBound);
+                return Ok(p.sendBound || p.shareBound || p.valueType != none());
             }
+            TypeKind.ConstValue => { return Ok(true); }
             TypeKind.Integer => { return Ok(true); }
             TypeKind.Float => { return Ok(true); }
             TypeKind.Bool => { return Ok(true); }
@@ -1744,7 +1817,8 @@ struct TypeTable {
     fn isShare(borrow this, id: u32) -> Result<bool, AllocError> {
         let t = this.types[id as usize];
         if (isKind(t.kind, TypeKind.TypeParameter)) {
-            return Ok(this.typeParameters[t.typeParameter as usize].shareBound);
+            let p = borrow this.typeParameters[t.typeParameter as usize];
+            return Ok(p.shareBound || p.valueType != none());
         }
         var visiting = Vector<u32>.create();
         if (!this.isSend(id, mut visiting)?) {
@@ -1774,7 +1848,10 @@ struct TypeTable {
     fn reachesSharedChangeCore(borrow this, id: u32, path: borrow mut Vector<u32>) -> Result<bool, AllocError> {
         let t = this.types[id as usize];
         match (t.kind) {
-            TypeKind.TypeParameter => { return Ok(!this.typeParameters[t.typeParameter as usize].shareBound); }
+            TypeKind.TypeParameter => {
+                let p = borrow this.typeParameters[t.typeParameter as usize];
+                return Ok(!p.shareBound && p.valueType == none());
+            }
             TypeKind.StableVector => { return Ok(true); }
             TypeKind.Struct => {
                 let s = borrow this.structs[t.structDef as usize];
@@ -2002,6 +2079,7 @@ fn blankType(kind: TypeKind, name: Range) -> TypeInfo => TypeInfo {
     element: none(),
     allocator: none(),
     arrayLength: 0,
+    lengthParameter: none(),
     isStr: false,
     mutableReference: false,
     mutablePointer: false,

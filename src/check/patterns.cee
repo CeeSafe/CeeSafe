@@ -848,6 +848,10 @@ fn checkPattern(
             return checkRangePattern(c, low, high, inclusive, typ, span, failed);
         }
         PatternNode.Binding(name, mutable) => {
+            if (!mutable && constParameterInPattern(c, name, span)?) {
+                failed = true; // N0358 (ADR 0083 §2.3)
+                return c.hir.addPattern(HirPattern.Wildcard);
+            }
             if (!mutable) {
                 let constant = constantNamed(c, name);
                 if (constant != none()) {

@@ -400,7 +400,16 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
             var parameters = Vector<u32>.create();
             var pairs = Vector<EnvPair>.create();
             declareTypeParameters(c, ownTypeParameters, mut parameters, mut pairs)?;
-            let env = storeEnvironment(c, pairs.view())?;
+            // The struct's parameters first, its own after them: a const parameter of the struct is read in the body
+            // through the method's environment (ADR 0083 §2.3).
+            var all = Vector<EnvPair>.create();
+            for (e in 0..entry.environment.count) {
+                all.push(c.envPairs[(entry.environment.start + e) as usize])?;
+            }
+            for (p in pairs.view()) {
+                all.push(p)?;
+            }
+            let env = storeEnvironment(c, all.view())?;
             let list = c.types.addList(parameters.view())?;
             c.genericMethod = true;
             function = declareFunctionIn(c, f, entry.typ, env)?;

@@ -1,0 +1,27 @@
+// The HIR of const parameters (type-system.md §20.5, ADR 0083): in the generic version a read of a parameter is a
+// call of its accessor (`TS.TS`), never compiled; in an instance it is the argument's literal, a `bool`, an integer
+// or an enum variant, so `if (TS)` becomes `if true`, and `g.starts.length` of a `Grouped<3>` is `3`.
+enum Method { Filter, All }
+
+struct Grouped<const N: usize> {
+    starts: [u32; N];
+}
+
+fn pick<const TS: bool, const M: Method>(n: u32) -> u32 {
+    if (TS) {
+        return n;
+    }
+    return match (M) {
+        Method.Filter => n + 1,
+        Method.All => n + 2,
+    };
+}
+
+fn length<const N: usize>(g: borrow Grouped<N>) -> usize => g.starts.length;
+
+fn main() {
+    let a = pick<true, Method.Filter>(1);
+    let b = pick<false, Method.All>(1);
+    let g = Grouped<3> { starts: [0u32; 3] };
+    let n = length(g);
+}

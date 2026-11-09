@@ -1,0 +1,154 @@
+// Const parameters (type-system.md §20.5, ADR 0083): a `bool` flag and its run-time dispatch, a struct with two flags
+// and an inherent impl in four instances, a fieldless-enum parameter with `match`, `[u32; N]` with `a.length` and
+// inference from an argument, a closure reading a flag, an async generic function instantiated twice, an integer
+// argument from a named constant, a negative one, a generic enum with a type and a const parameter, a static
+// function and a generic method of a generic struct reading its parameter, and `f(i < (k), j > (k))`, still two
+// comparisons.
+enum Method { Filter, All }
+
+struct Parser<const TS: bool, const SCAN: bool> {
+    pos: usize;
+}
+
+impl<const TS: bool, const SCAN: bool> Parser<TS, SCAN> {
+    fn step(borrow mut this) {
+        if (TS) {
+            this.pos += 2;
+        } else {
+            this.pos += 1;
+        }
+        if (SCAN) {
+            this.pos += 10;
+        }
+    }
+}
+
+fn run<const TS: bool>() -> usize {
+    var p = Parser<TS, false> { pos: 0 };
+    p.step();
+    return p.pos;
+}
+
+fn parse(ts: bool) -> usize => if (ts) run<true>() else run<false>();
+
+fn hoist<const M: Method>(n: u32) -> u32 => match (M) {
+    Method.Filter => n,
+    Method.All => n + 1,
+};
+
+struct Grouped<const ENDS: usize> {
+    starts: [u32; ENDS];
+
+    fn zeroed() -> Grouped<ENDS> => Grouped { starts: [0u32; ENDS] };
+
+    fn scaled<const K: u32>(borrow this) -> u32 => K * truncate<u32>(ENDS);
+
+    fn total(borrow this) -> u32 {
+        var t: u32 = 0;
+        for (i in 0..ENDS) {
+            t += this.starts[i];
+        }
+        return t;
+    }
+}
+
+fn sum<const N: usize>(a: [u8; N]) -> usize {
+    var t: usize = 0;
+    for (i in 0..a.length) {
+        t += a[i] as usize;
+    }
+    return t * 100 + N;
+}
+
+fn adjust<const UP: bool>(base: u32) -> u32 {
+    let f = (n: u32) => if (UP) n + 1 else n - 1;
+    return f(base);
+}
+
+async fn job<const TS: bool>(n: u32) -> u32 => if (TS) n * 2 else n + 2;
+
+struct Offset<const V: i32> {
+    fn apply(borrow this, x: i32) -> i32 => x + V;
+}
+
+enum ShortList<T: Copy, const N: usize> {
+    Empty,
+    Full([T; N]),
+}
+
+fn capacity<T: Copy, const N: usize>(l: borrow ShortList<T, N>) -> usize => match (l) {
+    ShortList.Empty => 0,
+    ShortList.Full(items) => items.length,
+};
+
+const COUNT: usize = 3;
+
+fn counted<const N: usize>() -> usize => N;
+
+fn both(a: bool, b: bool) -> bool => a && b;
+
+fn main() {
+    Console.writeLine(parse(true));
+    Console.writeLine(parse(false));
+    var p1 = Parser<true, false> { pos: 0 };
+    var p2 = Parser<false, false> { pos: 0 };
+    var p3 = Parser<true, true> { pos: 0 };
+    var p4 = Parser<false, true> { pos: 0 };
+    p1.step();
+    p2.step();
+    p3.step();
+    p4.step();
+    Console.writeLine(p1.pos);
+    Console.writeLine(p2.pos);
+    Console.writeLine(p3.pos);
+    Console.writeLine(p4.pos);
+    Console.writeLine(hoist<Method.Filter>(5));
+    Console.writeLine(hoist<Method.All>(5));
+    let g = Grouped<4> { starts: [1u32, 2, 3, 4] };
+    Console.writeLine(g.starts.length);
+    Console.writeLine(g.total());
+    let inferred: Grouped<2> = Grouped { starts: [7u32; 2] };
+    Console.writeLine(inferred.total());
+    Console.writeLine(sum([1u8, 2, 3]));
+    Console.writeLine(adjust<true>(10));
+    Console.writeLine(adjust<false>(10));
+    Console.writeLine(Async.run(job<true>(5)));
+    Console.writeLine(Async.run(job<false>(5)));
+    Console.writeLine(counted<COUNT>());
+    Console.writeLine(counted<9>());
+    let o: Offset<(-3)> = Offset {};
+    Console.writeLine(o.apply(10));
+    let z = Grouped<5>.zeroed();
+    Console.writeLine(z.total());
+    Console.writeLine(z.scaled<3>());
+    let l: ShortList<u16, 2> = ShortList.Full([1u16, 2]);
+    Console.writeLine(capacity(l));
+    let i = 1;
+    let k = 2;
+    let j = 3;
+    Console.writeLine(both(i < (k), j > (k)));
+}
+
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 12
+// expect-stdout: 11
+// expect-stdout: 5
+// expect-stdout: 6
+// expect-stdout: 4
+// expect-stdout: 10
+// expect-stdout: 14
+// expect-stdout: 603
+// expect-stdout: 11
+// expect-stdout: 9
+// expect-stdout: 10
+// expect-stdout: 7
+// expect-stdout: 3
+// expect-stdout: 9
+// expect-stdout: 7
+// expect-stdout: 0
+// expect-stdout: 15
+// expect-stdout: 2
+// expect-stdout: true

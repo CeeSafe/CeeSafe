@@ -425,10 +425,20 @@ fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, Al
                 Entity.Static(_) => {} // a place behind its address (§39.2), checked below
                 Entity.None => {
                     var message = Vector<u8>.create();
-                    appendText(mut message, "cannot find ")?;
+                    let isConstParameter = namedConstParameter(c, symbol) != none(); // ADR 0083 §2.3
+                    appendText(mut message, if (isConstParameter) "cannot assign to " else "cannot find ")?;
                     appendQuotedName(mut message, c, symbol)?;
-                    appendText(mut message, " in this scope")?;
-                    c.error(undefinedName(), span.start, span.end, message)?;
+                    appendText(
+                        mut message,
+                        if (isConstParameter) ": it is a const parameter, a value and not a place"
+                            else " in this scope",
+                    )?;
+                    c.error(
+                        if (isConstParameter) assignToImmutable() else undefinedName(),
+                        span.start,
+                        span.end,
+                        message,
+                    )?;
                     return Ok(none());
                 }
                 _ => {

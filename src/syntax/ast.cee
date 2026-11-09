@@ -107,6 +107,9 @@ enum TypeNode {
     Generic(QualifiedName, Range),
     /// `borrow T`, `borrow mut (a, b) T`: mutable, whether sources are written, the sources (identifiers), pointee.
     Reference(bool, bool, Range, u32),
+    /// A const argument written as a value (ADR 0083 §2.1): `true`, `false`, an integer literal, or `( Expr )` in a
+    /// type position: the expression. A name or `E.V` stays Named; the parameter's kind decides (§2.4).
+    Constant(u32),
 }
 
 // ---- Expressions ----
@@ -254,6 +257,7 @@ struct TypeParameter {
     name: u32;
     bounds: Range; // types
     isRegion: bool;
+    valueType: u32; // `const N: T` (ADR 0083 §2.1): the type T; none for a type or region parameter
     start: u32;
     end: u32;
 }

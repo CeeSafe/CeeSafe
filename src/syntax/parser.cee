@@ -1565,7 +1565,8 @@ struct Parser {
             let start = this.advance().start;
             let element = this.parseType()?;
             this.expect(TokenKind.Semicolon)?;
-            let length = this.parsePrimary()?;
+            // Any expression parses, so that `[u8; N + 1]` is reported as what it is (ADR 0083 §2.3, N0353).
+            let length = this.parseExpr()?;
             this.expect(TokenKind.CloseBracket)?;
             return this.front.ast.addType(TypeNode.Array(element, length), start, this.endFrom(start));
         }
@@ -2802,7 +2803,7 @@ struct Parser {
                 }
                 let first = this.parseExpr()?;
                 if (this.eat(TokenKind.Semicolon)) {
-                    let count = this.parsePrimary()?;
+                    let count = this.parseExpr()?; // `[v; N + 1]` is N0353, not a syntax error (ADR 0083)
                     this.expect(TokenKind.CloseBracket)?;
                     return this.front.ast.addExpr(
                         ExprNode.ArrayRepeat(first, count),
@@ -2939,6 +2940,8 @@ struct Parser {
                     TokenKind.Comma => true,
                     TokenKind.Semicolon => true,
                     TokenKind.IntLiteral => true,
+                    TokenKind.TrueKeyword => true, // a const argument (ADR 0083 §2.1)
+                    TokenKind.FalseKeyword => true,
                     TokenKind.BorrowKeyword => true,
                     TokenKind.MutKeyword => true,
                     TokenKind.Star => true,
@@ -2955,6 +2958,43 @@ struct Parser {
             }
             i += 1;
         }
+    }
+
+    /// A generic argument (ADR 0083 §2.1): a type, or a const argument written as a value: `true`, `false`, an
+    /// integer literal, or `( Expr )` (an expression's lookahead never lets `(` reach here, so only in a type
+    /// position). A `(` that starts a type (`(borrow T)`, `(*T)`, `(fn …)`, `(dyn I)`) stays one.
+    fn parseGenericArgument(borrow mut this) -> Result<u32, AllocError> {
+        let token = this.current();
+        let isValue = match (token.kind) {
+            TokenKind.TrueKeyword => true,
+            TokenKind.FalseKeyword => true,
+            TokenKind.IntLiteral => true,
+            TokenKind.OpenParen => !this.startsParenthesisedType(),
+            _ => false,
+        };
+        if (!isValue) {
+            return this.parseType();
+        }
+        let value = this.parsePrimary()?;
+        return this.front.ast.addType(TypeNode.Constant(value), token.start, this.endFrom(token.start));
+    }
+
+    /// At `(`: does a type follow, rather than a constant expression?
+    fn startsParenthesisedType(borrow this) -> bool {
+        let next = this.peek(1);
+        return match (next.kind) {
+            TokenKind.BorrowKeyword => true,
+            TokenKind.Star => true,
+            TokenKind.FnKeyword => true,
+            TokenKind.ExternKeyword => true,
+            TokenKind.At => true,
+            TokenKind.OpenParen => this.peekIs(2, TokenKind.BorrowKeyword),
+            // `(dyn I)`, `(T)?`, `(T?)`: a constant expression never ends in `?`.
+            TokenKind.Identifier => this.nameIs(next, "dyn") ||
+                sameKind(this.kindAt(this.skipGroup(this.pos)), TokenKind.Question) ||
+                sameKind(this.kindAt(this.skipGroup(this.pos) - 2), TokenKind.Question),
+            _ => false,
+        };
     }
 
     /// `'<' T (':' Bound ('+' Bound)*)? (',' …)* '>'` after a declaration's name (§20.1, §21). All the parameters,
@@ -2982,9 +3022,15 @@ struct Parser {
                 }
                 this.advance();
             }
+            // `const N: T` declares a const parameter (ADR 0083 §2.1): `const` gains this one position.
+            let isConst = !isRegion && this.eat(TokenKind.ConstKeyword);
             let name = this.parseIdentifier()?;
             var bounds = Vector<u32>.create();
-            if (this.eat(TokenKind.Colon)) {
+            var valueType = none();
+            if (isConst) {
+                this.expect(TokenKind.Colon)?;
+                valueType = this.parseType()?;
+            } else if (this.eat(TokenKind.Colon)) {
                 loop {
                     bounds.push(this.parseType()?)?;
                     if (!this.eat(TokenKind.Plus)) {
@@ -2997,6 +3043,7 @@ struct Parser {
                 name: name,
                 bounds: boundRange,
                 isRegion: isRegion,
+                valueType: valueType,
                 start: start,
                 end: this.endFrom(start),
             })?;
@@ -3016,7 +3063,7 @@ struct Parser {
         this.expect(TokenKind.Less)?;
         var arguments = Vector<u32>.create();
         loop {
-            arguments.push(this.parseType()?)?;
+            arguments.push(this.parseGenericArgument()?)?;
             if (!this.eat(TokenKind.Comma)) {
                 break;
             }

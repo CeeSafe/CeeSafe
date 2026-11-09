@@ -105,7 +105,7 @@ fn dynBlocker(c: borrow mut Checker, bound: u32, reason: borrow mut Vector<u8>) 
         let why = if (receiverIndex(m.receiver) == 1) " takes 'this' by value, which a call through a table cannot pass"
             else if (receiverIndex(m.receiver) == 0) " is a static function, which has no value to find a table in"
             else if (m.typeParameters.count >
-                0) " has type parameters of its own, and a table holds one function per method"
+                0) " has type or const parameters of its own, and a table holds one function per method"
             else if (signatureNamesSelf(
                 c,
                 m,
@@ -179,6 +179,7 @@ fn typeNamesSelf(c: borrow Checker, t: u32, depth: u32) -> bool {
             depth + 1,
         ),
         TypeNode.Missing => false,
+        TypeNode.Constant(_) => false,
     };
 }
 

@@ -27,13 +27,23 @@ fn resolveArrayType(
     // An array of C state is C-laid-out (C9, §33.1) and allowed where its element is.
     c.allowImported = allowImported;
     let element = c.resolveType(elementSyntax, false)?;
-    let length = arrayLength(c, lengthSyntax);
+    let lengthValue = arrayLengthValue(c, lengthSyntax)?; // a literal, a constant or a const parameter (ADR 0083)
+    if (lengthValue.reported) {
+        return Ok(c.types.error);
+    }
+    let elementSpan = c.front.ast.typeSpans[elementSyntax as usize];
+    if (lengthValue.parameter != none()) {
+        if (!checkElement(c, element, 1, elementSpan)?) {
+            return Ok(c.types.error);
+        }
+        return c.types.arrayOfParameter(element, lengthValue.parameter);
+    }
+    let length = lengthValue.length;
     if (length == 0) {
         let span = c.front.ast.exprSpans[lengthSyntax as usize];
         arrayLengthError(c, span)?;
         return Ok(c.types.error);
     }
-    let elementSpan = c.front.ast.typeSpans[elementSyntax as usize];
     return arrayType(c, element, truncate<i64>(length), elementSpan);
 }
 
@@ -49,7 +59,10 @@ fn arrayLength(c: borrow Checker, e: u32) -> u64 => match (c.front.ast.exprs[e a
 
 fn arrayLengthError(c: borrow mut Checker, span: Span) -> Result<void, AllocError> {
     var message = Vector<u8>.create();
-    appendText(mut message, "an array length must be an integer literal from 1 to ")?;
+    appendText(
+        mut message,
+        "an array length must be an integer literal, a 'usize' constant or a const parameter, from 1 to ",
+    )?;
     appendDecimal(mut message, maxArrayLength())?;
     return c.error(invalidArray(), span.start, span.end, message);
 }
@@ -258,15 +271,24 @@ fn synthArrayRepeat(
 ) -> Result<u32, AllocError> {
     let elementExpected = expectedElement(c, expected);
     let value = arrayElement(c, valueSyntax, elementExpected)?;
-    let count = arrayLength(c, countSyntax);
-    if (count == 0) {
+    let countValue = arrayLengthValue(c, countSyntax)?; // ADR 0083 §2.7
+    if (countValue.reported) {
+        return c.errorResult(span.start, span.end);
+    }
+    let count = countValue.length;
+    if (count == 0 && countValue.parameter == none()) {
         let countSpan = c.front.ast.exprSpans[countSyntax as usize];
         arrayLengthError(c, countSpan)?;
         return c.errorResult(span.start, span.end);
     }
     let elementType = if (elementExpected != none()) elementExpected else c.typeOf(value);
     let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
-    let typ = arrayType(c, elementType, truncate<i64>(count), valueSpan)?;
+    let typ = if (countValue.parameter != none()) repeatOfParameter(
+        c,
+        elementType,
+        countValue.parameter,
+        valueSpan,
+    )? else arrayType(c, elementType, truncate<i64>(count), valueSpan)?;
     if (c.types.isBottom(typ)) {
         return c.errorResult(span.start, span.end);
     }
@@ -474,6 +496,9 @@ fn arrayMember(c: borrow mut Checker, value: u32, through: u32, member: u32, spa
         c.error(unsupported(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
+    if (c.types.info(t).lengthParameter != none()) {
+        return parameterLength(c, t, span); // `N` (ADR 0083 §2.3)
+    }
     let length = c.types.info(t).arrayLength;
     return c.expr(
         HirExpr.IntConst(IntValue { negative: false, magnitude: truncate<u64>(length) }),
@@ -638,4 +663,12 @@ fn emptySlice(c: borrow mut Checker, expected: u32, span: Span) -> Result<u32, A
     let values = [pointer, length];
     let list = c.hir.list(values[..])?;
     return c.expr(HirExpr.BuiltinCall(bfSliceFromRaw(), list), expected, span.start, span.end);
+}
+
+/// `[v; N]` with `N` a const parameter (ADR 0083 §2.3).
+fn repeatOfParameter(c: borrow mut Checker, element: u32, parameter: u32, span: Span) -> Result<u32, AllocError> {
+    if (!checkElement(c, element, 1, span)?) {
+        return Ok(c.types.error);
+    }
+    return c.types.arrayOfParameter(element, parameter);
 }

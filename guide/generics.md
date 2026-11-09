@@ -306,6 +306,62 @@ fn main() {
   RequestBody<r> { … }`, and is used through bounds; it does not convert to `dyn Body`, since a `dyn` value holds no
   loans.
 
+## Const parameters
+
+A generic item may also take **values**: `const N: T`, with `T` a `bool`, an integer type or a fieldless enum. Each
+distinct value compiles to its own copy, so a flag or a size known at compile time costs nothing at run time.
+
+```ceesafe
+enum Mode { Plain, Shout }
+
+struct Buffer<const N: usize> {
+    bytes: [u8; N];
+    used: usize;
+}
+
+fn render<const UPPER: bool>(c: u8) -> u8 {
+    if (UPPER && c >= 'a' && c <= 'z') {
+        return c - 32;
+    }
+    return c;
+}
+
+fn greet<const M: Mode>() -> StringView => match (M) { Mode.Plain => "hello", Mode.Shout => "HELLO" };
+
+fn sum<const N: usize>(values: [u32; N]) -> u32 {
+    var total: u32 = 0;
+    for (v in values) {
+        total += v;
+    }
+    return total;
+}
+
+fn main() {
+    let b = Buffer<16> { bytes: [0u8; 16], used: 0 };
+    Console.writeLine(b.bytes.length);
+    let shout = true;
+    let c = if (shout) render<true>('q') else render<false>('q'); // the instance is chosen at run time
+    Console.writeLine(c);
+    Console.writeLine(greet<Mode.Shout>());
+    Console.writeLine(sum([1u32, 2, 3]));                         // N = 3, inferred from the argument
+}
+```
+
+```text
+16
+81
+HELLO
+6
+```
+
+- Inside the generic item, a const parameter is a value of its type: `if (UPPER)`, `match (M)`, `[u8; N]`. Both
+  branches of `if (UPPER)` are checked, and each copy keeps only its own.
+- An argument is `true`, `false`, an integer literal, a constant (`Buffer<SIZE>`), an enum variant
+  (`greet<Mode.Shout>()`) or the caller's own const parameter. A run-time value is not one: choose the instance with
+  an `if`, as above.
+- An array length may also name a `usize` constant: `const SIZE: usize = 64;` then `[u8; SIZE]`.
+- Expressions over a parameter (`[u8; N + 1]`, `render<!UPPER>`) are refused; name a constant, or add a parameter.
+
 ## Dynamic dispatch
 
 A bound is resolved at compile time, so a `Slice<S>` holds shapes of one type. For a collection of different types
@@ -364,9 +420,9 @@ square: 16
 
 - A `borrow T` or a `Box<T>` converts to the `dyn` type where one is expected, if `T` implements the interface.
   There is no way back to `T`.
-- Every method of the interface must take `borrow this` or `borrow mut this`, have no type parameters of its own and
-  not name `Self` except as its receiver: a static function or a generic method has no place in a table. Defaults are
-  fine. Async methods are allowed:
+- Every method of the interface must take `borrow this` or `borrow mut this`, have no type or const parameters of
+  its own and not name `Self` except as its receiver: a static function or a generic method has no place in a table.
+  Defaults are fine. Async methods are allowed:
   `await shape.load()` through `dyn` waits for the value's own method, in room the compiler makes for the largest
   of the types converted to that `dyn` type.
 - A call through `dyn` cannot be inlined. Prefer a bound when one type is enough.

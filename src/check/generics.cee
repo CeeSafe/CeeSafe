@@ -136,6 +136,9 @@ fn declareTypeParameters(
         let typ = c.types.createTypeParameter(text.view())?;
         env.push(EnvPair { symbol: ident.symbol, typ: typ })?;
         parameters.push(typ)?;
+        if (p.valueType != none()) {
+            declareConstParameter(c, p, typ, env.view())?; // ADR 0083 §2.2
+        }
     }
     // Bounds may mention any of the parameters (`T: Comparable<T>`), so they are resolved last.
     let saved = enterEnvironmentPairs(c, env.view())?;
@@ -275,6 +278,25 @@ fn endInstance(
         c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
         return c.front.diagnostics.error(cellOfLoans(), file, span.start, span.end, firstMessage);
     }
+    if (failed && firstCode == invalidArray() && instance == none() && startsWithBytesText(
+        firstMessage.view(),
+        "an array length",
+    )) {
+        // A struct's or enum's array length from a const argument (ADR 0083 §2.6): the use's error.
+        for (r in c.scopedInstanceReports.view()) {
+            if (r.file == file && r.start == span.start && r.end == span.end) {
+                return Ok();
+            }
+        }
+        c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendInstanceName(mut message, c, generic, arguments)?;
+        appendText(mut message, "' cannot be instantiated: ")?;
+        appendBytes(mut message, firstMessage.view())?;
+        appendText(mut message, " (type-system.md §20.5)")?;
+        return c.front.diagnostics.error(invalidArray(), file, span.start, span.end, message);
+    }
     var scoped = none();
     for (a in arguments) {
         if (scoped == none() && c.types.isScoped(a)) {
@@ -310,7 +332,14 @@ fn endInstance(
             }
             appendQuotedType(mut text, c, arguments[k])?;
         }
-        appendText(mut text, ": for these type arguments its body has an error: ")?;
+        var anyValue = false;
+        for (a in arguments) {
+            if (c.types.is(a, TypeKind.ConstValue)) {
+                anyValue = true; // a const argument (ADR 0083 §2.6)
+            }
+        }
+        appendText(mut text, if (anyValue) ": for these arguments its body has an error: "
+            else ": for these type arguments its body has an error: ")?;
         appendBytes(mut text, firstMessage.view())?;
         appendText(mut text, " (type-system.md §20.4)")?;
         c.hir.functions[instance as usize].hasInstanceError = true;
@@ -703,7 +732,7 @@ fn foundFor(found: borrow Vector<Found>, parameter: u32) -> u32 {
 /// Matches a declared type that mentions `parameters` against an actual type, recording what each parameter must be
 /// (Unify, §20.2). Mismatches are not reported here: the real check follows.
 fn unify(
-    c: borrow Checker,
+    c: borrow mut Checker,
     declared: u32,
     actual: u32,
     parameters: Slice<u32>,
@@ -734,43 +763,46 @@ fn unify(
         return Ok();
     }
     if (c.types.is(declared, TypeKind.Struct)) {
-        let ds = borrow c.types.structs[d.structDef as usize];
-        let actualStruct = borrow c.types.structs[a.structDef as usize];
-        if (ds.item != none() && ds.item == actualStruct.item) {
-            for (k in 0..ds.typeArguments.count) {
-                if (k < actualStruct.typeArguments.count) {
-                    unify(
-                        c,
-                        c.types.listAt(ds.typeArguments, k),
-                        c.types.listAt(actualStruct.typeArguments, k),
-                        parameters,
-                        found,
-                    )?;
+        let declaredItem = c.types.structs[d.structDef as usize].item;
+        let declaredArguments = c.types.structs[d.structDef as usize].typeArguments;
+        let actualItem = c.types.structs[a.structDef as usize].item;
+        let actualArguments = c.types.structs[a.structDef as usize].typeArguments;
+        if (declaredItem != none() && declaredItem == actualItem) {
+            for (k in 0..declaredArguments.count) {
+                if (k < actualArguments.count) {
+                    let declaredArgument = c.types.listAt(declaredArguments, k);
+                    let actualArgument = c.types.listAt(actualArguments, k);
+                    unify(c, declaredArgument, actualArgument, parameters, found)?;
                 }
             }
         }
         return Ok();
     }
     if (c.types.is(declared, TypeKind.Enum)) {
-        let de = borrow c.types.enums[d.enumDef as usize];
-        let ae = borrow c.types.enums[a.enumDef as usize];
-        if (de.resultOk != none() && ae.resultOk != none()) {
-            unify(c, de.resultOk, ae.resultOk, parameters, found)?;
-            return unify(c, de.resultErr, ae.resultErr, parameters, found);
+        let de = d.enumDef as usize;
+        let ae = a.enumDef as usize;
+        let declaredOk = c.types.enums[de].resultOk;
+        let actualOk = c.types.enums[ae].resultOk;
+        if (declaredOk != none() && actualOk != none()) {
+            let declaredErr = c.types.enums[de].resultErr;
+            let actualErr = c.types.enums[ae].resultErr;
+            unify(c, declaredOk, actualOk, parameters, found)?;
+            return unify(c, declaredErr, actualErr, parameters, found);
         }
-        if (de.optionType != none() && ae.optionType != none()) {
-            return unify(c, de.optionType, ae.optionType, parameters, found);
+        let declaredOption = c.types.enums[de].optionType;
+        let actualOption = c.types.enums[ae].optionType;
+        if (declaredOption != none() && actualOption != none()) {
+            return unify(c, declaredOption, actualOption, parameters, found);
         }
-        if (de.item != none() && de.item == ae.item) {
-            for (k in 0..de.typeArguments.count) {
-                if (k < ae.typeArguments.count) {
-                    unify(
-                        c,
-                        c.types.listAt(de.typeArguments, k),
-                        c.types.listAt(ae.typeArguments, k),
-                        parameters,
-                        found,
-                    )?;
+        let declaredItem = c.types.enums[de].item;
+        let declaredArguments = c.types.enums[de].typeArguments;
+        let actualArguments = c.types.enums[ae].typeArguments;
+        if (declaredItem != none() && declaredItem == c.types.enums[ae].item) {
+            for (k in 0..declaredArguments.count) {
+                if (k < actualArguments.count) {
+                    let declaredArgument = c.types.listAt(declaredArguments, k);
+                    let actualArgument = c.types.listAt(actualArguments, k);
+                    unify(c, declaredArgument, actualArgument, parameters, found)?;
                 }
             }
         }
@@ -778,15 +810,22 @@ fn unify(
     }
     if (c.types.is(declared, TypeKind.Vector)) {
         if (c.types.isString(declared) == c.types.isString(actual)) {
-            return unify(c, c.types.info(d.pointee).element, c.types.info(a.pointee).element, parameters, found);
+            let declaredElement = c.types.info(d.pointee).element;
+            let actualElement = c.types.info(a.pointee).element;
+            return unify(c, declaredElement, actualElement, parameters, found);
         }
         return Ok();
     }
     if (c.types.is(declared, TypeKind.StableVector)) {
-        return unify(c, c.types.info(d.pointee).element, c.types.info(a.pointee).element, parameters, found);
+        let declaredElement = c.types.info(d.pointee).element;
+        let actualElement = c.types.info(a.pointee).element;
+        return unify(c, declaredElement, actualElement, parameters, found);
     }
     if (c.types.is(declared, TypeKind.SlotMap) || c.types.is(declared, TypeKind.Handle)) {
         return unify(c, d.element, a.element, parameters, found);
+    }
+    if (c.types.is(declared, TypeKind.Array) && d.lengthParameter != none()) {
+        unifyLength(c, d.lengthParameter, actual, parameters, found)?; // `[T; N]` (ADR 0083 §2.5)
     }
     if (c.types.is(declared, TypeKind.Array) || c.types.is(declared, TypeKind.Box)) {
         let de = if (d.element != none()) d.element else d.pointee;
@@ -831,7 +870,12 @@ fn typeArgumentsFor(
         var bottom = false;
         for (k in 0..explicit.count) {
             let argumentSyntax = c.front.ast.at(explicit, k);
-            let t = c.resolveType(argumentSyntax, false)?;
+            let t = if (c.types.constParameterType(parameters[k as usize]) != none()) resolveConstArgument(
+                c,
+                parameters[k as usize],
+                what,
+                argumentSyntax,
+            )? else c.resolveType(argumentSyntax, false)?;
             if (c.types.isBottom(t)) {
                 bottom = true;
             }
@@ -856,7 +900,8 @@ fn typeArgumentsFor(
             erroneous = true;
         }
         dropDiagnosticsSince(c, mark);
-        unify(c, p.declared, c.typeOf(actual), parameters, mut found)?;
+        let actualType = c.typeOf(actual);
+        unify(c, p.declared, actualType, parameters, mut found)?;
     }
     inferFromBounds(c, parameters, mut found)?; // ADR 0086 §2.7
     var missing = Vector<u32>.create();

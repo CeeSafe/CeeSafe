@@ -193,9 +193,17 @@ fn resolveInterface(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocErro
     }
     var resolved = Vector<u32>.create();
     var bottom = false;
+    var interfaceName = Vector<u8>.create();
+    appendBytes(mut interfaceName, c.name(symbol))?;
     for (k in 0..arguments.count) {
         let argumentSyntax = c.front.ast.at(arguments, k);
-        let t = c.resolveType(argumentSyntax, false)?;
+        let parameter = c.types.listAt(c.interfaces[entry as usize].parameters, k);
+        let t = if (c.types.constParameterType(parameter) != none()) resolveConstArgument(
+            c,
+            parameter,
+            interfaceName.view(),
+            argumentSyntax,
+        )? else c.resolveType(argumentSyntax, false)?;
         if (c.types.isBottom(t)) {
             bottom = true;
         }
@@ -1189,6 +1197,10 @@ fn substitute(c: borrow mut Checker, typ: u32, map: Slice<TypeMapping>) -> Resul
     }
     if (c.types.is(typ, TypeKind.Array)) {
         let e = substitute(c, t.element, map)?;
+        if (t.lengthParameter != none()) {
+            let length = substitute(c, t.lengthParameter, map)?;
+            return substituteLength(c, e, length); // ADR 0083 §2.3
+        }
         return c.types.arrayOf(e, t.arrayLength);
     }
     if (c.types.is(typ, TypeKind.Box)) {

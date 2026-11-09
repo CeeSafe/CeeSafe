@@ -271,8 +271,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - A generic struct or `impl` has none yet (N0216).
   - An associated constant takes no attributes (N0290).
   - An interface's constants (§21.1, ADR 0086 §2.4) become associated constants of each impl's target.
-  - Array lengths in types and repeats stay integer literals (§13): `[u8; Oid.LENGTH]` is not accepted, as
-    `[u8; LENGTH]` is not.
+  - An array length in a type or a repeat may name a `usize` constant, top-level or associated (§16.1, ADR 0083
+    §2.7): `[u8; LENGTH]` and `[u8; Oid.LENGTH]` are accepted.
 
 ## 11. `main`
 
@@ -631,7 +631,8 @@ and `E.V…` there are patterns.
     a constant an `impl` of an interface gives the type, its own or the interface's default (ADR 0086 §2.4):
     `A.CODE =>`. `Self` may start the name (`Self.Idle`, `Self.Busy(n)`, `Self.TAB`) where it names a struct or enum
     (ADR 0086 §2.2). Read through a type parameter (`T.NAME`, or `Self.NAME` in an interface's default method) it is
-    known only per instance, and is N0358: test it in a guard. A misspelt constant becomes a binding that matches
+    known only per instance, and is N0358: test it in a guard. So is a bare name that names a const parameter in
+    scope (§20.5, ADR 0083 §2.3), which is not a binding either. A misspelt constant becomes a binding that matches
     everything, so the arms after it are N0257.
   - **`name @ P`** (ADR 0085 §2.5) binds the value that `P` matched, as a payload binding would (a copy, a move or
     a reference, by the rules above), and tests `P`; it does not change coverage. `@` binds tighter than `|`:
@@ -702,9 +703,11 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
 ## 16. Arrays, slices and `for` (M2d)
 
 ### 16.1 Types
-- `[T; N]` is a fixed array of `N` elements. `N` is an integer literal (no suffix or `usize`) with
-  1 ≤ N ≤ 2^48 − 1, and the array is at most 2^31 − 1 bytes. It is laid out as `N` consecutive `T`s:
-  size `N × size(T)`, the alignment of `T`.
+- `[T; N]` is a fixed array of `N` elements. `N` is an integer literal (no suffix or `usize`), a `usize` constant
+  (`LENGTH`, or an associated one, `Oid.LENGTH`; §10), or a `usize` const parameter in scope (§20.5; ADR 0083 §2.7),
+  with 1 ≤ N ≤ 2^48 − 1 (N0259), and the array is at most 2^31 − 1 bytes. Any other expression is N0259, and one
+  over a const parameter (`[u8; N + 1]`) N0353. It is laid out as `N` consecutive `T`s: size `N × size(T)`, the
+  alignment of `T`. The same holds for the `N` of a repeat `[v; N]` (§16.2).
   - **v0 restriction:** `T` must be a Copy type, so arrays are Copy and never need drop. Arrays of
     move types need element-wise move tracking (future). Slices may have move-type elements
     since M6b (§21.3).
@@ -1304,7 +1307,8 @@ fn main() {
 
 ### 20.1 Declarations
 ```text
-TypeParams = '<' Identifier (',' Identifier)* '>'
+TypeParams = '<' TypeParam (',' TypeParam)* '>'
+TypeParam  = 'region' Identifier | 'const' Identifier ':' Type | Identifier (':' Type ('+' Type)*)?
 FunctionDecl = 'fn' Identifier TypeParams? '(' … ')' …
 StructDecl   = 'struct' Identifier TypeParams? '{' … '}'
 EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
@@ -1318,6 +1322,7 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   `Pair<i32>.make<u8>(…)`. Type arguments on a call of a function without type parameters of its own are N0209.
   An interface's methods may have type parameters too (ADR 0086 §2.3, §21.1), but then the interface has no `dyn`
   type (N0331): a `dyn` table holds one function per method.
+- A **const parameter** `const N: T` (ADR 0083) stands for a value rather than a type: §20.5.
 - Names must be distinct, and must not shadow items or built-in types (N0201).
 
 ### 20.2 Using generic items
@@ -1383,6 +1388,84 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 
 Diagnostics: N0265 (type arguments that cannot be inferred), N0266 (instantiation too deep), N0222
 (the instantiation's body does not check for its type arguments).
+
+### 20.5 Const parameters (ADR 0083)
+
+```ceesafe
+enum Method { Filter, All }
+
+struct Grouped<const ENDS: usize> {
+    starts: [u32; ENDS];
+}
+
+struct Parser<const TS: bool, const SCAN: bool> {
+    pos: usize;
+    fn step(borrow mut this) {
+        if (TS) { this.pos += 2; } else { this.pos += 1; }
+    }
+}
+
+fn hoist<const M: Method>(n: u32) -> u32 => match (M) { Method.Filter => n, Method.All => n + 1 };
+
+fn run<const TS: bool>() -> usize {
+    var p = Parser<TS, false> { pos: 0 };
+    p.step();
+    return p.pos;
+}
+
+fn parse(ts: bool) -> usize => if (ts) run<true>() else run<false>();
+```
+
+- **Declarations.** A function, struct, enum, interface, interface method or impl may declare const parameters,
+  `const N: T`, beside its type parameters: after its region parameters (§25.1), in any order with the type
+  parameters (`fn toJson<W: Writer, const STYLE: Style>`). `const` stays a reserved word; this is its one place in a
+  parameter list. `T` is `bool`, an integer type (`i8`–`i64`, `u8`–`u64`, `isize`, `usize`) or a fieldless enum
+  (§15.1) of the program or a dependency; anything else (a float, `StringView`, a struct, an enum with payloads, an
+  imported C enum, a type parameter) is N0352. These are the types whose values `==` compares exactly, so two
+  arguments name the same instance iff they are equal.
+- **Inside the generic item** (checked once, §20.3), `N` is a value of type `T`, the same in every use: it may be read
+  wherever a run-time value of that type may (`if (TS)`, `match (M)`, operands, arguments). It is not a place:
+  assigning it or lending it `borrow mut` is N0211. Both branches of `if (TS)` are checked, and code after
+  `if (TS) { return 1; }` stays reachable. A closure reads `N` without capturing it. A bare `N` in a pattern is
+  N0358: test it in a guard, `x if (x == N) =>` (§15.2).
+- **Array lengths.** A `usize` const parameter may be an array length, `[T; N]` and `[v; N]` (§16.1). In the generic
+  item `[T; N]` is equal only to `[T; N]` with the same parameter (`[T; M]` is N0205), and `a.length` is `N`.
+- **Arguments** are written where type arguments are, and evaluated at compile time (§10) to a value of the
+  parameter's type; out of its range is N0217. An argument is `true`, `false`, an integer literal (typed by the
+  parameter: `Grouped<3>` is a `usize`), the name of a constant (an associated one, `Tags.COUNT`, included), an
+  enum variant (`hoist<Method.Filter>(n)`), or inside a generic item one of its own const parameters, bare
+  (`Parser<TS, false>`). In a type, a parenthesised constant expression that names no const parameter is one too:
+  `let g: Grouped<(Tags.COUNT + 1)>`. In an expression, `(` cannot start an argument (grammar.md, "Generic arguments
+  in expressions"): name a constant instead, `const ENDS: usize = Tags.COUNT + 1;` then `counted<ENDS>()`.
+- A name in argument position is resolved by the parameter's kind: a value for a const parameter, a type for a type
+  parameter. A type where a value is expected, or a value where a type is, is N0354.
+- A run-time value (a local, a parameter, a call) as an argument or an array length is N0353; its message names the
+  dispatch: `if (ts) run<true>() else run<false>()`. So is an expression over a const parameter (`run<!TS>()`,
+  `[u8; N + 1]`): type equality stays by name. An interface constant read through a type parameter (`H.NAME`,
+  ADR 0086 §2.4) is a value of each instance, not a constant, so it is N0353 there too; on a concrete type,
+  `Ts.NAME` is an associated constant and may be an argument.
+- **Inference** is as for type parameters (§20.2): from the argument types a const parameter appears in
+  (`fn sum<const N: usize>(a: [u8; N])` called with a `[u8; 8]`; `l: borrow Lexer<E>` with a
+  `Lexer<Encoding.Ascii>`), and from an expected type (`let g: Grouped<4> = Grouped { … }`), never from a run-time
+  value; otherwise N0265.
+- **Interfaces and impls.** An interface may have const parameters (`interface Pools<const SSL: bool>`), and so may
+  an interface method, under the rule for generic methods (§20.1): it is instantiated per call through a bound or on
+  a concrete type, and the interface then has no `dyn` type (N0331). A generic impl names its parameters in its
+  target (ADR 0054): `impl<const E: Encoding> CharIter for ShellCharIter<E>`; an inherent impl names the struct's,
+  in order: `impl<const TS: bool, const SCAN: bool> Parser<TS, SCAN>`. A generic impl still has no constants
+  (N0216), so no interface constant is defined from a const parameter; and an impl for one value beside a generic
+  one (`impl I for S<true>` with `impl<const B: bool> I for S<B>`) overlaps (§21.1).
+- **Instantiation** (§20.4). Each distinct argument list is an instance, checked again and compiled to C:
+  `Parser<true, false>` and `Parser<false, false>` are different types. An instance that does not check is an error
+  at its use; an array length that is 0 or too large there is N0259 (inside a function's body, N0222 naming the
+  values). The 64-deep limit (N0266) applies. In the instance, `N` is its literal, so `if (TS)` compiles to `if (1)`
+  or `if (0)`, which the C compiler removes at `-O2`. The C names are in c-backend.md, "Generic code".
+- Not included: default values (`<const X: bool = false>`), parameters of other types, expressions over a parameter
+  in arguments or array lengths, a const parameter as a constant pattern, and `const fn` (functions are not
+  constants, §10).
+
+Diagnostics: N0352 (a const parameter's type), N0353 (an argument or array length that is not a constant), N0354
+(a type where a value is expected, or a value where a type is).
 
 ## 21. Interfaces (M6b)
 
@@ -3703,13 +3786,13 @@ fn main() {
     element, an optional, a type argument (`Vector<dyn I>`; `Vector<Box<dyn I>>` is fine), or an element of a slice
     type.
 - **Dyn-compatible interfaces** (amended by ADR 0086 §2.3). `dyn I` is **N0331**, naming the member, if a method of
-  `I` takes `this` by value, has no receiver (a static function), has type parameters of its own, or names `Self`
-  outside its receiver, or if `I` has an associated type or a constant, or requires `Copy`; and the same for each of
-  its supertraits (§21.1). Defaults do not matter: a default is in the table like any method. The rule keeps `T = dyn I`
-  sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`, which no table answers, and
-  every member it lets through is a method with a reference receiver, which the table holds. A generic interface is
-  checked once its type arguments are given. An async method does not make an interface incompatible (§40.1, ADR
-  0036).
+  `I` takes `this` by value, has no receiver (a static function), has type or const parameters of its own (§20.5),
+  or names `Self` outside its receiver, or if `I` has an associated type or a constant, or requires `Copy`; and the
+  same for each of its supertraits (§21.1). Defaults do not matter: a default is in the table like any method. The
+  rule keeps `T = dyn I` sound (`dyn I` implements `I` for bounds, §37.2): generic code may call `T.create(…)`,
+  which no table answers, and every member it lets through is a method with a reference receiver, which the table
+  holds. A generic interface is checked once its type arguments are given. An async method does not make an
+  interface incompatible (§40.1, ADR 0036).
 - `dyn` is a keyword in types only (grammar.md §2). `dyn I` binds tighter than `borrow`, so `borrow dyn I` is a
   reference to a `dyn I`.
 

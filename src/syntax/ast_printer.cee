@@ -889,6 +889,11 @@ struct AstPrinter {
         match (ast.types[id as usize]) {
             TypeNode.Named(name) => { this.qualifiedName(ast, symbols, name)?; }
             TypeNode.Missing => { this.text("<missing-type>")?; }
+            TypeNode.Constant(value) => {
+                this.text("(const ")?;
+                this.expr(ast, symbols, value)?;
+                this.text(")")?;
+            }
             TypeNode.Optional(_) => {
                 // `T???…` is a chain the parser builds in a loop; print it in one too.
                 var current = id;
@@ -1010,6 +1015,12 @@ struct AstPrinter {
             if (parameter.isRegion) {
                 this.text("(region ")?;
                 this.name(ast, symbols, parameter.name)?;
+                this.text(")")?;
+            } else if (parameter.valueType != none()) {
+                this.text("(const ")?;
+                this.name(ast, symbols, parameter.name)?;
+                this.text(" ")?;
+                this.typeText(ast, symbols, parameter.valueType)?;
                 this.text(")")?;
             } else if (parameter.bounds.count == 0) {
                 this.name(ast, symbols, parameter.name)?;

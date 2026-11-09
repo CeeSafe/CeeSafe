@@ -85,7 +85,7 @@ Semantic checks run only when every file parsed without errors.
 | N0208 | `as` conversion that can lose information | `a as u32` with `a: i32` |
 | N0209 | Wrong number of arguments | `two(1)` |
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
-| N0211 | Assignment to an immutable binding (`let`, parameter, constant, function) | `param = 3;` |
+| N0211 | Assignment to an immutable binding (`let`, parameter, constant, function), or an assignment or `borrow mut` of a const parameter (ADR 0083 §2.3) | `param = 3;` |
 | N0212 | Local read before it is definitely assigned | `var x: i32; return x;` |
 | N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3) | `fn f() -> i32 { }` |
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
@@ -145,7 +145,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
-| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
+| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
 
 Arrays and slices otherwise reuse codes: indexing or slicing a non-array, a non-`usize` index,
 or a bad `for` sequence or range is N0205; writing an element of a `let` array or through a
@@ -286,7 +286,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | Code | Meaning | Example |
 |---|---|---|
 | N0330 | `dyn I` where it is not behind a reference or a `Box`: a local, parameter, field, element, optional or type argument | `fn f(s: dyn Shape)`, `Vector<dyn Shape>` |
-| N0331 | `dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant, or requires `Copy`; or the same holds for a supertrait | `interface Sink { fn close(this); }` then `borrow dyn Sink` |
+| N0331 | `dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type or const parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant, or requires `Copy`; or the same holds for a supertrait | `interface Sink { fn close(this); }` then `borrow dyn Sink` |
 | N0332 | A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5) | `let v = s.view(); Box.create(move () => v.length)` |
 | N0333 | A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>` | `let f = move (x: u64) => x;` |
 | N0334 | A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038) | `Thread.spawn(move () => view.length)` with `view: StringView` |
@@ -305,10 +305,13 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0349 | A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2) | `await set.spawn(async move () => { let k = n + 1; return Ok(); })` with `n: borrow u32` |
 | N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |
 | N0351 | A cell of a loan-holding type: `RawCell<T>`, `Cell<T>` or `RefCell<T>`, directly or inside a generic struct, with a `T` that holds loans (a reference, view, closure or other scoped type), whose contents could then outlive what they borrow (`type-system.md` §41.1, ADR 0084 §2.1) | `RefCell<StringView>`, `Cell<borrow u32>` |
+| N0352 | A const parameter of a type that cannot be one: anything but `bool`, an integer type or a fieldless enum the program or a dependency declares (a float, `StringView`, a struct, an enum with payloads, an imported C enum, a type parameter) (`type-system.md` §20.5, ADR 0083 §2.2) | `fn f<const X: f64>()` |
+| N0353 | A const argument that is not a constant: a run-time value (a local, a parameter, a call), an interface constant read through a type parameter (`H.NAME`), or an expression over a const parameter, as a generic argument or an array length (`type-system.md` §20.5, ADR 0083 §2.3, §2.4) | `run<ts>()` with `ts: bool`; `[u8; N + 1]` |
+| N0354 | A generic argument of the wrong kind: a type for a const parameter, or a value (a literal, a constant, an enum variant, a const parameter) for a type parameter or where a type is expected (`type-system.md` §20.5, ADR 0083 §2.4) | `Grouped<u32>` for `struct Grouped<const N: usize>`; `Vector<true>` |
 | N0355 | A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2) | `Slot.Full(r) if (consume(r)) =>` with `r` not Copy |
 | N0356 | The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3) | `Some(x) \| null =>` |
 | N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
-| N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method (`type-system.md` §15.2, ADR 0085 §2.6) | `HALF =>` with `const HALF: f64` |
+| N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3) | `HALF =>` with `const HALF: f64` |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

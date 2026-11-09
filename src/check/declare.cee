@@ -166,6 +166,8 @@ fn checkProgram(
         implTypes: Vector<ImplType>.create(),
         projections: Vector<Projection>.create(),
         boundConstants: Vector<BoundMethod>.create(),
+        pendingConstParameters: Vector<PendingConstParameter>.create(),
+        constParametersReady: false,
         pendingAssocBounds: Vector<PendingAssocBound>.create(),
         supertraitsReady: false,
         pendingBounds: Vector<PendingBounds>.create(),
@@ -277,7 +279,8 @@ fn checkProgram(
             }
         }
     }
-    resolveSupertraits(mut c)?; // ADR 0086 §2.6
+    resolvePendingConstParameters(mut c)?; // ADR 0083 §2.2
+    resolveSupertraits(mut c)?;            // ADR 0086 §2.6
     processTypeAttributes(mut c)?;
     for (u in 0..c.front.ast.units.length) {
         {

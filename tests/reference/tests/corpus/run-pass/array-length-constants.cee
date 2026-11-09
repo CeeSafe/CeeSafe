@@ -1,0 +1,29 @@
+// Array lengths from named constants (type-system.md §10, §16.1; ADR 0083 §2.7): a `usize` constant, top-level or
+// associated, as the length of an array type and of a repeat, in a local, a field and a parameter.
+const SIZE: usize = 4;
+const DOUBLE: usize = SIZE * 2;
+
+struct Oid {
+    bytes: [u8; Oid.LENGTH];
+
+    const LENGTH: usize = 20;
+
+    fn zero() -> Oid => Oid { bytes: [0u8; Oid.LENGTH] };
+}
+
+fn first(a: [u32; SIZE]) -> u32 => a[0];
+
+fn main() {
+    let a: [u32; SIZE] = [3u32; SIZE];
+    Console.writeLine(a.length);
+    Console.writeLine(first(a));
+    let b = [1u8; DOUBLE];
+    Console.writeLine(b.length);
+    let o = Oid.zero();
+    Console.writeLine(o.bytes.length);
+}
+
+// expect-stdout: 4
+// expect-stdout: 3
+// expect-stdout: 8
+// expect-stdout: 20

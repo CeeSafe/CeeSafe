@@ -42,7 +42,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     208 => "`as` conversion that can lose information",
     209 => "Wrong number of arguments",
     210 => "Not callable, or a function or built-in used as a value",
-    211 => "Assignment to an immutable binding (`let`, parameter, constant, function)",
+    211 =>
+        "Assignment to an immutable binding (`let`, parameter, constant, function), or an assignment or `borrow mut` of a const parameter (ADR 0083 §2.3)",
     212 => "Local read before it is definitely assigned",
     213 => "End of a non-`void` function is reachable (for a `never` function too, type-system §15.3)",
     214 => "`break`/`continue` outside a loop",
@@ -99,7 +100,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
+        "Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
@@ -172,7 +173,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     330 =>
         "`dyn I` where it is not behind a reference or a `Box`: a local, parameter, field, element, optional or type argument",
     331 =>
-        "`dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant, or requires `Copy`; or the same holds for a supertrait",
+        "`dyn I` for an interface that is not dyn-compatible (type-system.md §37.1, ADR 0086 §2.3): one of its methods takes `this` by value, has no receiver, has type or const parameters of its own or names `Self` outside its receiver, or it has an associated type or a constant, or requires `Copy`; or the same holds for a supertrait",
     332 =>
         "A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5)",
     333 => "A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>`",
@@ -210,6 +211,12 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3)",
     351 =>
         "A cell of a loan-holding type: `RawCell<T>`, `Cell<T>` or `RefCell<T>`, directly or inside a generic struct, with a `T` that holds loans (a reference, view, closure or other scoped type), whose contents could then outlive what they borrow (`type-system.md` §41.1, ADR 0084 §2.1)",
+    352 =>
+        "A const parameter of a type that cannot be one: anything but `bool`, an integer type or a fieldless enum the program or a dependency declares (a float, `StringView`, a struct, an enum with payloads, an imported C enum, a type parameter) (`type-system.md` §20.5, ADR 0083 §2.2)",
+    353 =>
+        "A const argument that is not a constant: a run-time value (a local, a parameter, a call), an interface constant read through a type parameter (`H.NAME`), or an expression over a const parameter, as a generic argument or an array length (`type-system.md` §20.5, ADR 0083 §2.3, §2.4)",
+    354 =>
+        "A generic argument of the wrong kind: a type for a const parameter, or a value (a literal, a constant, an enum variant, a const parameter) for a type parameter or where a type is expected (`type-system.md` §20.5, ADR 0083 §2.4)",
     355 =>
         "A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2)",
     356 =>
@@ -217,7 +224,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     357 =>
         "An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4)",
     358 =>
-        "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method (`type-system.md` §15.2, ADR 0085 §2.6)",
+        "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3)",
     359 => "an `is` pattern with bindings where the test is not known true",
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",

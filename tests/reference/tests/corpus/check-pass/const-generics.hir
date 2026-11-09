@@ -1,0 +1,50 @@
+(program
+  (fn pick ((n#0: u32)) -> u32
+    (block
+      (if (call TS.TS):bool
+        (block
+          (return n#0)
+        )
+      )
+      (return (value (match (call M.M):Method (arm Filter (block (yield (+ n#0 1:u32):u32))) (arm All (block (yield (+ n#0 2:u32):u32))))):u32)
+    )
+  )
+  (fn length ((g#0: borrow Grouped<N>)) -> usize
+    (block
+      (return (call N.N):usize)
+    )
+  )
+  (fn main () -> void
+    (block
+      (let a#0: u32 = (call pick 1:u32):u32)
+      (let b#1: u32 = (call pick 1:u32):u32)
+      (let g#2: Grouped<3> = (new Grouped<3> (starts (array-repeat 0:u32):[u32; 3])))
+      (let n#3: usize = (call length (borrow g#2)):usize)
+    )
+  )
+  (fn pick ((n#0: u32)) -> u32
+    (block
+      (if true
+        (block
+          (return n#0)
+        )
+      )
+      (return (value (match (Method.Filter) (arm Filter (block (yield (+ n#0 1:u32):u32))) (arm All (block (yield (+ n#0 2:u32):u32))))):u32)
+    )
+  )
+  (fn pick ((n#0: u32)) -> u32
+    (block
+      (if false
+        (block
+          (return n#0)
+        )
+      )
+      (return (value (match (Method.All) (arm Filter (block (yield (+ n#0 1:u32):u32))) (arm All (block (yield (+ n#0 2:u32):u32))))):u32)
+    )
+  )
+  (fn length ((g#0: borrow Grouped<3>)) -> usize
+    (block
+      (return 3:usize)
+    )
+  )
+)

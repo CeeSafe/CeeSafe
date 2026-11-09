@@ -1,0 +1,795 @@
+// Const generic parameters (ADR 0083, type-system.md §20.5): `<const N: T>` beside type parameters, with `T` a
+// `bool`, an integer type or a fieldless enum. A const parameter is a type parameter whose TypeParameterInfo has a
+// value type; an argument is a ConstValue type, interned by value, so the instance machinery of §20.4 (one copy per
+// distinct argument list, compared by type identity) serves both kinds. In the generic version a read of the
+// parameter is a call of a bodyless accessor, as `T.NAME` is (ADR 0086 §2.4); in an instance it is the literal.
+
+fn constParameterTypeError() -> u32 => 352;
+fn constArgumentError() -> u32 => 353;
+fn genericArgumentKind() -> u32 => 354;
+
+/// A const parameter whose type is resolved once every struct and enum is declared (an enum may come later in the
+/// file than the struct that names it).
+struct PendingConstParameter {
+    parameter: u32; // the type parameter
+    syntax: u32;    // its value type's syntax
+    file: u32;
+    environment: Range; // Checker.envPairs: the declaration's parameters, for N0352 on `const X: T`
+}
+
+/// Is `typ` a const parameter or a const argument (a value standing where generic arguments go)?
+fn isConstKind(c: borrow Checker, typ: u32) -> bool =>
+    c.types.is(typ, TypeKind.ConstValue) || c.types.constParameterType(typ) != none();
+
+/// The value type of a const parameter or const argument; none for anything else.
+fn constTypeOf(c: borrow Checker, typ: u32) -> u32 {
+    if (c.types.is(typ, TypeKind.ConstValue)) {
+        return c.types.info(typ).element;
+    }
+    return c.types.constParameterType(typ);
+}
+
+/// Declares `typ`, a fresh type parameter, as the const parameter `p` (ADR 0083 §2.2): its type is resolved now if
+/// the types are declared, else once they are (resolvePendingConstParameters).
+fn declareConstParameter(
+    c: borrow mut Checker,
+    p: TypeParameter,
+    typ: u32,
+    env: Slice<EnvPair>,
+) -> Result<void, AllocError> {
+    let placeholder = c.types.error;
+    c.types.makeConstParameter(typ, placeholder);
+    let environment = storeEnvironment(c, env)?;
+    let pending = PendingConstParameter { parameter: typ, syntax: p.valueType, file: c.file, environment: environment };
+    if (c.constParametersReady) {
+        return resolveConstParameter(c, pending);
+    }
+    return c.pendingConstParameters.push(pending);
+}
+
+/// The const parameters declared before every struct and enum was (DeclareStruct, DeclareEnum, DeclareInterface).
+fn resolvePendingConstParameters(c: borrow mut Checker) -> Result<void, AllocError> {
+    c.constParametersReady = true;
+    let saved = c.file;
+    for (k in 0..c.pendingConstParameters.length) {
+        let p = c.pendingConstParameters[k];
+        resolveConstParameter(c, p)?;
+    }
+    c.pendingConstParameters.truncate(0);
+    c.setFile(saved);
+    return Ok();
+}
+
+fn resolveConstParameter(c: borrow mut Checker, p: PendingConstParameter) -> Result<void, AllocError> {
+    let savedFile = c.file;
+    {
+        let fileToSet = p.file;
+        c.setFile(fileToSet);
+    }
+    let saved = enterEnvironment(c, p.environment)?;
+    let valueType = c.resolveType(p.syntax, false)?;
+    restoreEnvironment(c, saved);
+    c.setFile(savedFile);
+    if (c.types.isBottom(valueType)) {
+        return Ok();
+    }
+    if (!isConstParameterType(c, valueType)) {
+        let span = c.front.ast.typeSpans[p.syntax as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "a const parameter cannot be of type ")?;
+        appendQuotedType(mut message, c, valueType)?;
+        appendText(
+            mut message,
+            ": it is a 'bool', an integer type or a fieldless enum (type-system.md §20.5, ADR 0083 §2.2)",
+        )?;
+        let file = p.file;
+        return c.front.diagnostics.error(constParameterTypeError(), file, span.start, span.end, message);
+    }
+    c.types.makeConstParameter(p.parameter, valueType);
+    return Ok();
+}
+
+/// `bool`, an integer type (not an imported C enum), or a fieldless enum of the program or a dependency.
+fn isConstParameterType(c: borrow Checker, t: u32) -> bool {
+    if (t == c.types.boolType) {
+        return true;
+    }
+    if (c.types.is(t, TypeKind.Integer)) {
+        return !c.types.isImportedEnum(t);
+    }
+    if (!c.types.is(t, TypeKind.Enum)) {
+        return false;
+    }
+    let e = borrow c.types.enums[c.types.info(t).enumDef as usize];
+    if (e.resultOk != none() || e.optionType != none() || e.typeArguments.count > 0 || e.hasRegionParameters) {
+        return false;
+    }
+    if (e.item == none()) {
+        return false;
+    }
+    return match (c.front.ast.items[e.item as usize].kind) {
+        ItemKind.Enum(variants, _, _) => fieldlessVariants(c, variants),
+        _ => false,
+    };
+}
+
+fn fieldlessVariants(c: borrow Checker, variants: Range) -> bool {
+    for (k in 0..variants.count) {
+        if (c.front.ast.variants[c.front.ast.at(variants, k) as usize].payload.count > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ---- values ----
+
+/// The const argument of `valueType` holding `value` (a bool's 0/1, an enum's variant index, an integer's bits).
+fn constValue(c: borrow mut Checker, valueType: u32, value: i64) -> Result<u32, AllocError> {
+    var name = Vector<u8>.create();
+    if (valueType == c.types.boolType) {
+        appendText(mut name, if (value != 0) "true" else "false")?;
+    } else if (c.types.is(valueType, TypeKind.Enum)) {
+        let e = borrow c.types.enums[c.types.info(valueType).enumDef as usize];
+        let variant = e.variants[truncate<usize>(value)];
+        appendBytes(mut name, c.typeName(valueType))?;
+        appendText(mut name, ".")?;
+        appendBytes(mut name, c.name(c.types.variants[variant as usize].name))?;
+    } else if (value < 0 && c.types.info(valueType).signed) {
+        appendText(mut name, "-")?;
+        appendDecimal(mut name, (0u64).wrappingSub(truncate<u64>(value)))?;
+    } else {
+        appendDecimal(mut name, truncate<u64>(value))?;
+    }
+    return c.types.constValueOf(valueType, value, name.view());
+}
+
+/// A read of a const parameter in an expression: in the generic version a call of its accessor, a value of its type
+/// that is not a constant (§2.3); in an instance, `parameter` is the argument, and this is its literal.
+fn constParameterValue(c: borrow mut Checker, typ: u32, symbol: u32, span: Span) -> Result<u32, AllocError> {
+    if (c.types.is(typ, TypeKind.ConstValue)) {
+        return constLiteral(c, typ, span);
+    }
+    let valueType = c.types.constParameterType(typ);
+    if (c.types.isBottom(valueType)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let accessor = constAccessor(c, typ, symbol, span)?;
+    return checkUserCall(c, accessor, emptyRange(), span);
+}
+
+/// The literal a const argument stands for.
+fn constLiteral(c: borrow mut Checker, typ: u32, span: Span) -> Result<u32, AllocError> {
+    let valueType = c.types.info(typ).element;
+    let value = c.types.info(typ).arrayLength;
+    if (valueType == c.types.boolType) {
+        return c.expr(HirExpr.BoolConst(value != 0), valueType, span.start, span.end);
+    }
+    if (c.types.is(valueType, TypeKind.Enum)) {
+        let variant = c.types.enums[c.types.info(valueType).enumDef as usize].variants[truncate<usize>(value)];
+        return c.expr(HirExpr.EnumValue(variant, emptyRange()), valueType, span.start, span.end);
+    }
+    let negative = value < 0 && c.types.info(valueType).signed;
+    let magnitude = if (negative) truncate<u64>(0 - (value + 1)) + 1 else truncate<u64>(value);
+    return c.expr(
+        HirExpr.IntConst(IntValue { negative: negative, magnitude: magnitude }),
+        valueType,
+        span.start,
+        span.end,
+    );
+}
+
+/// The accessor of a const parameter in generic code: a bodyless function `fn N() -> T` owned by the parameter, so
+/// never compiled (generic code is not), kept with the bound constants (Checker.boundConstants, bound none).
+fn constAccessor(c: borrow mut Checker, typ: u32, symbol: u32, span: Span) -> Result<u32, AllocError> {
+    for (m in c.boundConstants.view()) {
+        if (m.typ == typ && m.bound == none()) {
+            return Ok(m.function);
+        }
+    }
+    let valueType = c.types.constParameterType(typ);
+    let at = span.start;
+    let nameIdent = c.front.ast.addIdent(Ident { symbol: symbol, start: span.start, end: span.end, missing: false })?;
+    c.front.ast.functions.push(Function {
+        visibility: Visibility.Default,
+        name: nameIdent,
+        receiver: ReceiverKind.None,
+        receiverStart: at,
+        receiverEnd: at,
+        parameters: emptyRange(),
+        returnType: none(),
+        body: none(),
+        expressionBody: none(),
+        typeParameters: emptyRange(),
+        regionParameters: emptyRange(),
+        isUnsafe: false,
+        isAsync: false,
+        hasDoc: false,
+        doc: emptyRange(),
+        isExtern: false,
+        variadicStart: none(),
+        attributes: emptyRange(),
+        start: at,
+        end: at,
+    })?;
+    let syntax = truncate<u32>(c.front.ast.functions.length - 1);
+    let library = isLibraryFile(c);
+    let function = c.hir.addFunction(symbol, typ, valueType, c.file, syntax, library, false)?;
+    c.boundConstants.push(BoundMethod { typ: typ, bound: none(), name: symbol, function: function })?;
+    return Ok(function);
+}
+
+/// The const parameter whose accessor `function` is, or none.
+fn accessorParameter(c: borrow Checker, function: u32) -> u32 {
+    for (m in c.boundConstants.view()) {
+        if (m.function == function) {
+            return if (m.bound == none()) m.typ else none();
+        }
+    }
+    return none();
+}
+
+/// Is `function` the accessor of an interface constant read through a type parameter (`H.NAME`, ADR 0086 §2.4)?
+fn isBoundConstantAccessor(c: borrow Checker, function: u32) -> bool {
+    for (m in c.boundConstants.view()) {
+        if (m.function == function) {
+            return m.bound != none();
+        }
+    }
+    return false;
+}
+
+// ---- arguments ----
+
+/// The argument for the const parameter `parameter` of `what` (ADR 0083 §2.4): a ConstValue, one of the enclosing
+/// generic item's ownParameter const parameters, or the error type (reported).
+fn resolveConstArgument(
+    c: borrow mut Checker,
+    parameter: u32,
+    what: Slice<u8>,
+    syntax: u32,
+) -> Result<u32, AllocError> {
+    let valueType = c.types.constParameterType(parameter);
+    let span = c.front.ast.typeSpans[syntax as usize];
+    if (c.types.isBottom(valueType)) {
+        return Ok(c.types.error);
+    }
+    match (c.front.ast.types[syntax as usize]) {
+        TypeNode.Constant(e) => { return constArgumentValue(c, parameter, what, e, span); }
+        TypeNode.Named(q) => {
+            let first = c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize];
+            if (q.parts.count == 1 && c.findLocal(first.symbol) == none()) {
+                let bound = environmentType(c, first.symbol);
+                if (bound != none() && isConstKind(c, bound)) {
+                    if (constTypeOf(c, bound) != valueType && !c.types.isBottom(constTypeOf(c, bound))) {
+                        var message = Vector<u8>.create();
+                        appendText(mut message, "the const parameter ")?;
+                        appendQuotedType(mut message, c, parameter)?;
+                        appendText(mut message, " of '")?;
+                        appendBytes(mut message, what)?;
+                        appendText(mut message, "' is of type ")?;
+                        appendQuotedType(mut message, c, valueType)?;
+                        appendText(mut message, ", but ")?;
+                        appendQuotedName(mut message, c, first.symbol)?;
+                        appendText(mut message, " is of type ")?;
+                        appendQuotedType(mut message, c, constTypeOf(c, bound))?;
+                        c.error(typeMismatch(), span.start, span.end, message)?;
+                        return Ok(c.types.error);
+                    }
+                    return Ok(bound); // passed on bare (§2.3)
+                }
+                if (bound != none() || namesType(c, first.symbol)) {
+                    return typeForValue(c, parameter, what, span);
+                }
+            }
+            if (q.parts.count == 1 && c.findLocal(first.symbol) == none()) {
+                let isTypeName = match (c.item(first.symbol)) {
+                    Entity.None => c.types.lookup(c.name(first.symbol)) != none(),
+                    _ => false,
+                };
+                if (isTypeName) {
+                    return typeForValue(c, parameter, what, span); // `u32`, `bool`
+                }
+            }
+            let e = nameAsExpression(c, q)?;
+            return constArgumentValue(c, parameter, what, e, span);
+        }
+        _ => { return typeForValue(c, parameter, what, span); }
+    }
+}
+
+/// Does `symbol` name a struct, an enum or a type (not a value)?
+fn namesType(c: borrow Checker, symbol: u32) -> bool => match (c.item(symbol)) {
+    Entity.Struct(_) => true,
+    Entity.Enum(_) => true,
+    Entity.Type(_) => true,
+    Entity.Interface(_) => true,
+    _ => false,
+};
+
+/// N0354: a type where the const parameter `parameter` wants a value.
+fn typeForValue(c: borrow mut Checker, parameter: u32, what: Slice<u8>, span: Span) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "the const parameter ")?;
+    appendQuotedType(mut message, c, parameter)?;
+    appendText(mut message, " of '")?;
+    appendBytes(mut message, what)?;
+    appendText(mut message, "' takes a value of type ")?;
+    appendQuotedType(mut message, c, c.types.constParameterType(parameter))?;
+    appendText(mut message, ", not a type (type-system.md §20.5)")?;
+    c.error(genericArgumentKind(), span.start, span.end, message)?;
+    return Ok(c.types.error);
+}
+
+/// N0354: a value (a const argument, a const parameter or a constant) where a type is expected.
+fn valueForType(c: borrow mut Checker, span: Span) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "a value is not a type: a type is expected here, and only a const parameter takes a value (type-system.md §20.5)",
+    )?;
+    c.error(genericArgumentKind(), span.start, span.end, message)?;
+    return Ok(c.types.error);
+}
+
+/// `a`, `a.b` or `a.b.c` written as a generic argument, as an expression (a name or member chain) to check.
+fn nameAsExpression(c: borrow mut Checker, q: QualifiedName) -> Result<u32, AllocError> {
+    let firstIdent = c.front.ast.at(q.parts, 0);
+    let first = c.front.ast.idents[firstIdent as usize];
+    var e = c.front.ast.addExpr(ExprNode.Name(firstIdent, emptyRange()), first.start, first.end)?;
+    for (k in 1..q.parts.count) {
+        let part = c.front.ast.at(q.parts, k);
+        let ident = c.front.ast.idents[part as usize];
+        e = c.front.ast.addExpr(ExprNode.Member(e, part), first.start, ident.end)?;
+    }
+    return Ok(e);
+}
+
+/// The ConstValue a constant expression `e` gives the const parameter `parameter` (§2.4): checked against its type,
+/// then folded (§10); a run-time value, an interface constant read through a type parameter, or an expression over
+/// a const parameter is N0353.
+fn constArgumentValue(
+    c: borrow mut Checker,
+    parameter: u32,
+    what: Slice<u8>,
+    e: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let valueType = c.types.constParameterType(parameter);
+    let literal = literalArgument(c, e);
+    if (literal.found) {
+        return integerArgument(c, parameter, what, literal, span);
+    }
+    let checked = checkExpr(c, e, valueType)?;
+    if (c.isBottom(checked)) {
+        return Ok(c.types.error);
+    }
+    match (c.hir.exprs[checked as usize]) {
+        HirExpr.Call(function, arguments) => {
+            let ownParameter = accessorParameter(c, function);
+            if (ownParameter != none() && arguments.count == 0) {
+                return Ok(ownParameter); // a bare const parameter of the generic item (§2.3)
+            }
+        }
+        _ => {}
+    }
+    match (c.hir.exprs[checked as usize]) {
+        HirExpr.EnumValue(variant, payload) => {
+            if (payload.count == 0 && c.types.is(valueType, TypeKind.Enum)) {
+                let index = c.types.variants[variant as usize].index as i64;
+                return constValue(c, valueType, index);
+            }
+        }
+        _ => {}
+    }
+    let blocker = runTimePart(c, checked);
+    if (blocker != none()) {
+        return notConstantArgument(c, parameter, what, e, blocker, span);
+    }
+    let folded = fold(c, checked)?;
+    match (c.hir.exprs[folded as usize]) {
+        HirExpr.BoolConst(b) => { return constValue(c, valueType, if (b) 1 else 0); }
+        HirExpr.IntConst(i) => {
+            let value = truncate<i64>(if (i.negative) (0u64).wrappingSub(i.magnitude) else i.magnitude);
+            return constValue(c, valueType, value);
+        }
+        HirExpr.EnumValue(variant, payload) => {
+            if (payload.count == 0 && c.types.is(valueType, TypeKind.Enum)) {
+                let index = c.types.variants[variant as usize].index as i64;
+                return constValue(c, valueType, index);
+            }
+        }
+        _ => {}
+    }
+    if (!c.isBottom(folded)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "the argument for the const parameter ")?;
+        appendQuotedType(mut message, c, parameter)?;
+        appendText(mut message, " of '")?;
+        appendBytes(mut message, what)?;
+        appendText(mut message, "' must be a constant (type-system.md §10)")?;
+        c.error(notConstant(), span.start, span.end, message)?;
+    }
+    return Ok(c.types.error);
+}
+
+/// An integer literal argument, possibly negated: checked against the parameter's type here, so that a value out
+/// of its range is N0217 (§2.4) rather than a literal's N0206.
+struct LiteralArgument {
+    found: bool;
+    value: u64;
+    negative: bool;
+    suffix: IntSuffix;
+}
+
+fn literalArgument(c: borrow Checker, e: u32) -> LiteralArgument {
+    let absent = LiteralArgument { found: false, value: 0, negative: false, suffix: IntSuffix.None };
+    return match (c.front.ast.exprs[e as usize]) {
+        ExprNode.IntLiteral(value, suffix) => LiteralArgument {
+            found: true,
+            value: value,
+            negative: false,
+            suffix: suffix,
+        },
+        ExprNode.Paren(inner) => literalArgument(c, inner),
+        ExprNode.Unary(op, operand) => match (op) {
+            UnaryOp.Negate => match (c.front.ast.exprs[operand as usize]) {
+                ExprNode.IntLiteral(value, suffix) => LiteralArgument {
+                    found: true,
+                    value: value,
+                    negative: true,
+                    suffix: suffix,
+                },
+                _ => absent,
+            },
+            UnaryOp.Not => absent,
+        },
+        _ => absent,
+    };
+}
+
+fn integerArgument(
+    c: borrow mut Checker,
+    parameter: u32,
+    what: Slice<u8>,
+    literal: LiteralArgument,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let valueType = c.types.constParameterType(parameter);
+    let suffixType = c.types.forSuffix(literal.suffix);
+    if (!c.types.is(valueType, TypeKind.Integer) || (suffixType != none() && suffixType != valueType)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "the const parameter ")?;
+        appendQuotedType(mut message, c, parameter)?;
+        appendText(mut message, " of '")?;
+        appendBytes(mut message, what)?;
+        appendText(mut message, "' takes a value of type ")?;
+        appendQuotedType(mut message, c, valueType)?;
+        appendText(mut message, ", not an integer")?;
+        if (suffixType != none()) {
+            appendText(mut message, " of type ")?;
+            appendQuotedType(mut message, c, suffixType)?;
+        }
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        return Ok(c.types.error);
+    }
+    let big = BigInt.of(literal.negative && literal.value != 0, BigNat.fromU64(literal.value)?);
+    if (!c.types.fits(valueType, big)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "the argument ")?;
+        if (literal.negative) {
+            appendText(mut message, "-")?;
+        }
+        appendDecimal(mut message, literal.value)?;
+        appendText(mut message, " for the const parameter ")?;
+        appendQuotedType(mut message, c, parameter)?;
+        appendText(mut message, " of '")?;
+        appendBytes(mut message, what)?;
+        appendText(mut message, "' does not fit in ")?;
+        appendQuotedType(mut message, c, valueType)?;
+        appendText(mut message, " (type-system.md §10)")?;
+        c.error(notConstant(), span.start, span.end, message)?;
+        return Ok(c.types.error);
+    }
+    let value = truncate<i64>(if (literal.negative) (0u64).wrappingSub(literal.value) else literal.value);
+    return constValue(c, valueType, value);
+}
+
+/// The first part of a checked constant expression that is not a constant: a local, a call (a const parameter's or
+/// an interface constant's accessor included), or none. Only the shapes `fold` folds are walked.
+fn runTimePart(c: borrow Checker, e: u32) -> u32 => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(_) => e,
+    HirExpr.Call(_, _) => e,
+    HirExpr.BuiltinCall(_, _) => e,
+    HirExpr.FieldAccess(_, _) => e,
+    HirExpr.Index(_, _) => e,
+    HirExpr.Deref(_) => e,
+    HirExpr.Unary(_, operand) => runTimePart(c, operand),
+    HirExpr.Cast(operand) => runTimePart(c, operand),
+    HirExpr.Truncate(operand) => runTimePart(c, operand),
+    HirExpr.Binary(_, left, right) => if (runTimePart(c, left) != none()) runTimePart(c, left) else runTimePart(
+        c,
+        right,
+    ),
+    _ => none(),
+};
+
+/// N0353 (§2.4): its message names the dispatch Bun itself writes for a run-time flag.
+fn notConstantArgument(
+    c: borrow mut Checker,
+    parameter: u32,
+    what: Slice<u8>,
+    e: u32,
+    blocker: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "the argument for the const parameter ")?;
+    appendQuotedType(mut message, c, parameter)?;
+    appendText(mut message, " of '")?;
+    appendBytes(mut message, what)?;
+    appendText(mut message, "' must be a constant: ")?;
+    var described = false;
+    match (c.hir.exprs[blocker as usize]) {
+        HirExpr.Call(function, _) => {
+            let ownParameter = accessorParameter(c, function);
+            if (ownParameter != none()) {
+                appendText(mut message, "an expression over the const parameter ")?;
+                appendQuotedType(mut message, c, ownParameter)?;
+                appendText(
+                    mut message,
+                    " is not one; pass the parameter bare, or name a constant (ADR 0083 §2.3)",
+                )?;
+                described = true;
+            } else if (isBoundConstantAccessor(c, function)) {
+                appendText(
+                    mut message,
+                    "an interface constant read through a type parameter is a value of each instance, not a constant (ADR 0086 §2.4)",
+                )?;
+                described = true;
+            }
+        }
+        HirExpr.LocalRef(local) => {
+            let name = c.hir.locals[local as usize].name;
+            appendQuotedName(mut message, c, name)?;
+            appendText(mut message, " is a run-time value")?;
+            if (c.types.constParameterType(parameter) == c.types.boolType) {
+                appendText(mut message, "; choose the instance at run time: `if (")?;
+                appendBytes(mut message, c.name(name))?;
+                appendText(mut message, ") ")?;
+                appendBytes(mut message, what)?;
+                appendText(mut message, "<true>(…) else ")?;
+                appendBytes(mut message, what)?;
+                appendText(mut message, "<false>(…)`")?;
+            } else {
+                appendText(mut message, "; choose the instance at run time, with one call per value")?;
+            }
+            appendText(mut message, " (type-system.md §20.5)")?;
+            described = true;
+        }
+        _ => {}
+    }
+    if (!described) {
+        appendText(mut message, "this is a run-time value (type-system.md §20.5)")?;
+    }
+    let at = c.front.ast.exprSpans[e as usize];
+    c.error(constArgumentError(), if (at.end > at.start) at.start else span.start, if (at.end > at.start) at.end
+        else span.end, message)?;
+    return Ok(c.types.error);
+}
+
+// ---- array lengths (§2.3, §2.7) ----
+
+/// An array length: an integer literal, a `usize` constant (top-level or associated), or a `usize` const parameter
+/// in scope (ADR 0083 §2.7). `length` is 0 when it is none of these and nothing was reported (N0259 follows).
+struct ArrayLengthValue {
+    length: u64;
+    parameter: u32; // a const parameter of the generic version, else none
+    reported: bool;
+}
+
+fn knownLength(length: u64) -> ArrayLengthValue =>
+    ArrayLengthValue { length: length, parameter: none(), reported: false };
+
+fn reportedLength() -> ArrayLengthValue => ArrayLengthValue { length: 0, parameter: none(), reported: true };
+
+fn arrayLengthValue(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, AllocError> {
+    let literal = arrayLength(c, e);
+    if (literal != 0) {
+        return Ok(knownLength(literal));
+    }
+    let span = c.front.ast.exprSpans[e as usize];
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Paren(inner) => { return arrayLengthValue(c, inner); }
+        ExprNode.Name(ident, typeArguments) => {
+            if (typeArguments.count > 0) {
+                return Ok(knownLength(0));
+            }
+            let symbol = c.front.ast.idents[ident as usize].symbol;
+            let local = c.findLocal(symbol);
+            if (local != none()) {
+                var message = Vector<u8>.create();
+                appendText(mut message, "an array length must be a constant: ")?;
+                appendQuotedName(mut message, c, symbol)?;
+                appendText(mut message, " is a run-time value; use a 'Vector' for a length known only at run time")?;
+                c.error(constArgumentError(), span.start, span.end, message)?;
+                return Ok(reportedLength());
+            }
+            let bound = environmentType(c, symbol);
+            if (bound != none() && isConstKind(c, bound)) {
+                let valueType = constTypeOf(c, bound);
+                if (c.types.isBottom(valueType)) {
+                    return Ok(reportedLength());
+                }
+                if (valueType != c.types.usize) {
+                    var message = Vector<u8>.create();
+                    appendText(mut message, "an array length is a 'usize', but the const parameter ")?;
+                    appendQuotedName(mut message, c, symbol)?;
+                    appendText(mut message, " is of type ")?;
+                    appendQuotedType(mut message, c, valueType)?;
+                    c.error(typeMismatch(), span.start, span.end, message)?;
+                    return Ok(reportedLength());
+                }
+                if (c.types.is(bound, TypeKind.ConstValue)) {
+                    let value = truncate<u64>(c.types.info(bound).arrayLength);
+                    return Ok(knownLength(if (value > maxArrayLength()) 0 else value));
+                }
+                return Ok(ArrayLengthValue { length: 0, parameter: bound, reported: false });
+            }
+            return namedLength(c, e);
+        }
+        ExprNode.Member(_, _) => { return namedLength(c, e); }
+        _ => {}
+    }
+    let parameter = mentionedConstParameter(c, e);
+    if (parameter != none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "an array length cannot be an expression over the const parameter ")?;
+        appendQuotedName(mut message, c, parameter)?;
+        appendText(
+            mut message,
+            ": types stay equal only by name; write the parameter bare, or give the item another const parameter (ADR 0083 §2.3)",
+        )?;
+        c.error(constArgumentError(), span.start, span.end, message)?;
+        return Ok(reportedLength());
+    }
+    return Ok(knownLength(0));
+}
+
+/// A named `usize` constant as an array length (§2.7): checked as an expression and folded.
+fn namedLength(c: borrow mut Checker, e: u32) -> Result<ArrayLengthValue, AllocError> {
+    let usize = c.types.usize;
+    let checked = checkExpr(c, e, usize)?;
+    if (c.isBottom(checked)) {
+        return Ok(reportedLength());
+    }
+    match (c.hir.exprs[checked as usize]) {
+        HirExpr.IntConst(i) => {
+            return Ok(knownLength(if (i.negative || i.magnitude > maxArrayLength()) 0 else i.magnitude));
+        }
+        HirExpr.Call(function, _) => {
+            if (isBoundConstantAccessor(c, function)) {
+                let span = c.front.ast.exprSpans[e as usize];
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "an array length must be a constant: an interface constant read through a type parameter is a value of each instance (ADR 0086 §2.4)",
+                )?;
+                c.error(constArgumentError(), span.start, span.end, message)?;
+                return Ok(reportedLength());
+            }
+        }
+        _ => {}
+    }
+    return Ok(knownLength(0));
+}
+
+/// A const parameter in scope that an expression names, as its symbol, or none.
+fn mentionedConstParameter(c: borrow Checker, e: u32) -> u32 => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Name(ident, _) => namedConstParameter(c, c.front.ast.idents[ident as usize].symbol),
+    ExprNode.Paren(inner) => mentionedConstParameter(c, inner),
+    ExprNode.Unary(_, operand) => mentionedConstParameter(c, operand),
+    ExprNode.Cast(operand, _) => mentionedConstParameter(c, operand),
+    ExprNode.Binary(left, _, right) => if (mentionedConstParameter(c, left) != none()) mentionedConstParameter(
+        c,
+        left,
+    ) else mentionedConstParameter(c, right),
+    _ => none(),
+};
+
+fn namedConstParameter(c: borrow Checker, symbol: u32) -> u32 {
+    if (c.findLocal(symbol) != none()) {
+        return none();
+    }
+    let bound = environmentType(c, symbol);
+    return if (bound != none() && isConstKind(c, bound)) symbol else none();
+}
+
+/// The symbol of a const parameter's name, for its accessor.
+fn parameterSymbol(c: borrow mut Checker, typ: u32) -> Result<u32, AllocError> {
+    var name = Vector<u8>.create();
+    appendBytes(mut name, c.typeName(typ))?;
+    let symbol = c.front.symbols.intern(name.view())?;
+    return Ok(symbol.id);
+}
+
+/// `a.length` of a `[T; N]` whose `N` is a const parameter (§2.3): `N`.
+fn parameterLength(c: borrow mut Checker, arrayType: u32, span: Span) -> Result<u32, AllocError> {
+    let parameter = c.types.info(arrayType).lengthParameter;
+    let symbol = parameterSymbol(c, parameter)?;
+    return constParameterValue(c, parameter, symbol, span);
+}
+
+/// `[T; N]` after substitution (ADR 0083 §2.3): the array of the argument's length, or still a parameter's.
+fn substituteLength(c: borrow mut Checker, element: u32, length: u32) -> Result<u32, AllocError> {
+    if (c.types.is(length, TypeKind.ConstValue)) {
+        let value = c.types.info(length).arrayLength;
+        if (value <= 0 || truncate<u64>(value) > maxArrayLength()) {
+            return Ok(c.types.error); // reported where the instance is checked (N0259)
+        }
+        return c.types.arrayOf(element, value);
+    }
+    if (c.types.constParameterType(length) != none()) {
+        return c.types.arrayOfParameter(element, length);
+    }
+    return Ok(c.types.error);
+}
+
+/// Infers `N` of a declared `[T; N]` from an actual array (§2.5): its length, or the caller's own parameter.
+fn unifyLength(
+    c: borrow mut Checker,
+    parameter: u32,
+    actual: u32,
+    parameters: Slice<u32>,
+    found: borrow mut Vector<Found>,
+) -> Result<void, AllocError> {
+    if (!c.types.is(actual, TypeKind.Array) || c.types.isUnsized(actual) || foundFor(found, parameter) != none()) {
+        return Ok();
+    }
+    var listed = false;
+    for (p in parameters) {
+        if (p == parameter) {
+            listed = true;
+        }
+    }
+    if (!listed) {
+        return Ok();
+    }
+    let a = c.types.info(actual);
+    let usize = c.types.usize;
+    let value = if (a.lengthParameter != none()) a.lengthParameter else constValue(c, usize, a.arrayLength)?;
+    return found.push(Found { parameter: parameter, typ: value });
+}
+
+/// A bare name in a pattern that names a const parameter in scope (§2.3): N0358, with a guard as the way to test it.
+/// It is checked once with the value unknown, so it cannot count as a literal, and a binding would hide it.
+fn constParameterInPattern(c: borrow mut Checker, name: u32, span: Span) -> Result<bool, AllocError> {
+    let symbol = c.front.ast.idents[name as usize].symbol;
+    if (namedConstParameter(c, symbol) == none()) {
+        return Ok(false);
+    }
+    var message = Vector<u8>.create();
+    appendQuotedName(mut message, c, symbol)?;
+    appendText(
+        mut message,
+        " is a const parameter, known only per instance, so it cannot be a pattern; test it in a guard: 'x if (x == ",
+    )?;
+    appendBytes(mut message, c.name(symbol))?;
+    appendText(mut message, ") =>' (ADR 0083 §2.3)")?;
+    c.error(358, span.start, span.end, message)?;
+    return Ok(true);
+}
+
+/// `borrow mut N` for a const parameter `N` (§2.3): N0211, as an assignment is; it is a value, not a place.
+fn constParameterLent(c: borrow mut Checker, name: u32, span: Span) -> Result<bool, AllocError> {
+    let symbol = c.front.ast.idents[name as usize].symbol;
+    if (namedConstParameter(c, symbol) == none()) {
+        return Ok(false);
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "cannot borrow ")?;
+    appendQuotedName(mut message, c, symbol)?;
+    appendText(mut message, " mutably: it is a const parameter, a value and not a place")?;
+    c.error(assignToImmutable(), span.start, span.end, message)?;
+    return Ok(true);
+}

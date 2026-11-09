@@ -419,7 +419,13 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
             appendText(mut message, " is not a value")?;
             c.error(notCallable(), span.start, span.end, message)?;
         }
-        Entity.None => { cannotFind(c, symbol, span)?; }
+        Entity.None => {
+            let bound = environmentType(c, symbol);
+            if (bound != none() && isConstKind(c, bound)) {
+                return constParameterValue(c, bound, symbol, span); // ADR 0083 §2.3
+            }
+            cannotFind(c, symbol, span)?;
+        }
         Entity.Interface(_) => { cannotFind(c, symbol, span)?; }
     }
     return c.errorResult(span.start, span.end);

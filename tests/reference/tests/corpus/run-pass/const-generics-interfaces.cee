@@ -1,0 +1,89 @@
+// Const parameters with interfaces (type-system.md §20.5, ADR 0083 §2.3): a generic impl over a fieldless-enum
+// parameter, a `dyn` made from one of its instances, inference from `borrow Lexer<E>`, an interface with a const
+// parameter, an interface method with a const parameter called through a bound and on a concrete type, and an
+// interface constant of a concrete type as a const argument.
+enum Encoding { Ascii, Utf16 }
+
+interface CharIter {
+    fn width(borrow this) -> usize;
+}
+
+struct Lexer<const E: Encoding> {
+    pos: usize;
+}
+
+impl<const E: Encoding> CharIter for Lexer<E> {
+    fn width(borrow this) -> usize => match (E) {
+        Encoding.Ascii => 1,
+        Encoding.Utf16 => 2,
+    };
+}
+
+fn advance<const E: Encoding>(l: borrow mut Lexer<E>) {
+    l.pos += l.width();
+}
+
+fn describe(c: borrow dyn CharIter) -> usize => c.width() * 10;
+
+interface Pools<const SSL: bool> {
+    fn port(borrow this) -> u32;
+}
+
+struct Conn {
+    base: u32;
+}
+
+impl Pools<true> for Conn {
+    fn port(borrow this) -> u32 => this.base + 443;
+}
+
+fn securePort<P: Pools<true>>(p: borrow P) -> u32 => p.port();
+
+interface Scaler {
+    fn scale<const K: u32>(borrow this, n: u32) -> u32;
+}
+
+struct Twice {}
+
+impl Scaler for Twice {
+    fn scale<const K: u32>(borrow this, n: u32) -> u32 => n * K * 2;
+}
+
+fn useScaler<S: Scaler>(s: borrow S) -> u32 => s.scale<3>(5);
+
+interface Handler {
+    const HAS_ON_DATA: bool;
+}
+
+struct Tls {}
+
+impl Handler for Tls {
+    const HAS_ON_DATA: bool = true;
+}
+
+fn onData<const B: bool>() -> StringView => if (B) "on data" else "no data";
+
+fn main() {
+    var a = Lexer<Encoding.Ascii> { pos: 0 };
+    var u = Lexer<Encoding.Utf16> { pos: 0 };
+    advance(mut a);
+    advance(mut u);
+    advance(mut u);
+    Console.writeLine(a.pos);
+    Console.writeLine(u.pos);
+    Console.writeLine(describe(u));
+    let c = Conn { base: 1000 };
+    Console.writeLine(securePort(c));
+    let t = Twice {};
+    Console.writeLine(useScaler(t));
+    Console.writeLine(t.scale<4>(1));
+    Console.writeLine(onData<Tls.HAS_ON_DATA>());
+}
+
+// expect-stdout: 1
+// expect-stdout: 4
+// expect-stdout: 20
+// expect-stdout: 1443
+// expect-stdout: 30
+// expect-stdout: 8
+// expect-stdout: on data

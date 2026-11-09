@@ -22,6 +22,7 @@ for you. This page assumes you know Rust well.
 | `impl Drop for S` | `drop { … }` inside the struct | |
 | `trait`, `impl Trait for T`, `T: Trait` | `interface`, `impl Interface for T`, `T: Interface` | default methods, `Self`, associated types and constants, supertraits |
 | `Box<dyn Trait>`, `&dyn Trait` | `Box<dyn I>`, `borrow dyn I` | |
+| `fn f<const N: usize>()`, `f::<3>()`, `f::<{ X + 1 }>()` | `fn f<const N: usize>()`, `f<3>()`, `f<Y>()` with `const Y: usize = X + 1;` | `bool`, integer and fieldless-enum values; a `const fn` is an ordinary `fn` |
 | `#[derive(Clone, Copy)]` | automatic | a struct is Copy when all its fields are and it has no `drop` |
 | `x as u8` (truncates) | `truncate<u8>(x)` | `as` only converts where nothing can be lost |
 | `wrapping_add`, `checked_add`, `saturating_add` | `wrappingAdd`, `checkedAdd`, `saturatingAdd` | |

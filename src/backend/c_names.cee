@@ -239,6 +239,20 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
             }
         }
         TypeKind.Void => { out.push('v')?; }
+        TypeKind.ConstValue => {
+            // A const argument (ADR 0083 §2.6): `L`, its type's code, the value in decimal (`n` before a negative
+            // one, 0/1 for a bool, the variant's index for an enum), then `_`.
+            out.push('L')?;
+            appendMangle(c, out, info.element)?;
+            let signed = c.types.info(info.element).signed && c.types.is(info.element, TypeKind.Integer);
+            if (signed && info.arrayLength < 0) {
+                out.push('n')?;
+                appendDecimal(out, truncate<u64>(0 - (info.arrayLength + 1)) + 1)?;
+            } else {
+                appendDecimal(out, truncate<u64>(info.arrayLength))?;
+            }
+            out.push('_')?;
+        }
         TypeKind.Integer => {
             if (info.cSpelling.count > 0) {
                 let name = c.types.name(t); // an imported C enum: its own name, never an integer's (ADR 0079)

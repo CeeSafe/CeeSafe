@@ -83,6 +83,11 @@ fn resolveReferenceType(
 fn synthBorrow(c: borrow mut Checker, mutable: bool, operandSyntax: u32, span: Span) -> Result<u32, AllocError> {
     match (c.front.ast.exprs[operandSyntax as usize]) {
         ExprNode.Slice(target, low, high) => { return synthSlice(c, target, low, high, mutable, span); }
+        ExprNode.Name(name, _) => {
+            if (mutable && constParameterLent(c, name, span)?) {
+                return c.errorResult(span.start, span.end); // N0211 (ADR 0083 §2.3)
+            }
+        }
         _ => {}
     }
     let operand = synth(c, operandSyntax, none())?;

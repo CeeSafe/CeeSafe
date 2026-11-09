@@ -23,6 +23,7 @@ checks on in every build.
 | `+%`, `+\|`, `@addWithOverflow` | `wrappingAdd`, `saturatingAdd`, `checkedAdd` | |
 | `@intCast`, `@truncate` | `as` (lossless only), `truncate<T>` | |
 | `comptime` generics | `<T>` generics with interface bounds | no compile-time execution |
+| `comptime` flags and sizes (`comptime ts: bool`) | const parameters: `fn parse<const TS: bool>()`, `[u8; N]` | `bool`, integer and enum values, one copy per value |
 | `@cImport` | `extern "C"` declarations; C structs imported by `@header` | |
 | `export fn`, `callconv(.C)` | `@export`, `@callback` | |
 | Debug / ReleaseSafe / ReleaseFast | one mode, always checked | proved checks are removed |
@@ -90,7 +91,8 @@ error set. `?` requires the function's error type to match; there are no implici
 
 **Generics, not `comptime`.** CeeSafe's generics are type parameters checked once, for every type argument, against the
 bounds you declare. There is no compile-time evaluation of arbitrary code, no `@typeInfo` and no reflection. Constants
-are evaluated at compile time; functions are not.
+are evaluated at compile time; functions are not. A `comptime` flag or size becomes a const parameter,
+`fn scan<const TS: bool>(…)` or `struct Buffer<const N: usize>`, and `if (TS)` in it is folded in each copy.
 
 **Safety is not a build mode.** There is no ReleaseFast. Overflow and bounds checks are always on, and the compiler
 removes those it proves cannot fail.

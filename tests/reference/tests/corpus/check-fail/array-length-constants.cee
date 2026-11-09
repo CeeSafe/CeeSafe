@@ -1,0 +1,15 @@
+// What an array length may be (type-system.md §16.1, ADR 0083 §2.7): an integer literal, a `usize` constant or a
+// `usize` const parameter, from 1 to 2^48 − 1. A constant of another type is N0205, a run-time value N0353, a
+// constant 0 or any other expression N0259.
+const NARROW: u32 = 4;
+const EMPTY: usize = 0;
+const SIZE: usize = 4;
+
+fn main() {
+    let a: [u8; NARROW] = [0u8; 4]; // error[N0205]
+    let n: usize = 4;
+    let b = [0u8; n];                 // error[N0353]
+    let c: [u8; EMPTY] = [0u8; 1];    // error[N0259]
+    let d: [u8; SIZE + 1] = [0u8; 5]; // error[N0259]
+    let e: [u8; SIZE] = [0u8; SIZE];
+}

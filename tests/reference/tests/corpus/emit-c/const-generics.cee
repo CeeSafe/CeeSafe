@@ -1,0 +1,25 @@
+// C names of const arguments (c-backend.md "Generic code", ADR 0083 §2.6): `L`, the type's code, the value, `_`.
+// Two instances that differ only by a value get distinct names, and so does a value next to a type argument.
+enum Mode { Fast, Safe }
+
+struct Grouped<T: Copy, const N: usize> {
+    items: [T; N];
+}
+
+fn flag<const B: bool>() -> u32 => if (B) 1 else 0;
+
+struct Offset<const V: i32> {
+    fn apply(borrow this, x: i32) -> i32 => x + V;
+}
+
+fn mode<const M: Mode>() -> u32 => match (M) { Mode.Fast => 1, Mode.Safe => 2 };
+
+fn main() {
+    let a = Grouped<u8, 2> { items: [1u8, 2] };
+    let b = Grouped<u16, 2> { items: [1u16, 2] };
+    let c = Grouped<u8, 3> { items: [1u8, 2, 3] };
+    Console.writeLine(flag<true>() + flag<false>());
+    let o: Offset<(-3)> = Offset {};
+    Console.writeLine(o.apply(1));
+    Console.writeLine(mode<Mode.Safe>());
+}

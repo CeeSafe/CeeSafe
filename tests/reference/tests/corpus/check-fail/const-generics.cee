@@ -1,0 +1,72 @@
+// Const parameters (type-system.md §20.5, ADR 0083): their types (N0352), arguments that are not constants
+// (N0353), arguments of the wrong kind (N0354), a value out of the parameter's range (N0217), a parameter that is not
+// a place (N0211) or a pattern (N0358), array lengths over a parameter (N0353), instances whose array length is 0
+// (N0259 for a struct; a function's is in const-generics-instance.cee), `[T; N]` against `[T; M]` (N0205), an
+// interface method with a const parameter, which has no `dyn` type (N0331), and `f(i < k, true, j > (k))`, now a
+// generic call.
+enum Encoding { Ascii, Utf16 }
+enum Shape { Dot, Line(u32) }
+struct Point { x: u32; }
+
+fn f1<const X: f64>() {}        // error[N0352]
+fn f2<const X: Shape>() {}      // error[N0352]
+fn f3<const X: Point>() {}      // error[N0352]
+fn f4<T, const X: T>() {}       // error[N0352]
+fn f5<const X: StringView>() {} // error[N0352]
+
+fn run<const TS: bool>() -> usize => if (TS) 1 else 0;
+fn counted<const N: usize>() -> usize => N;
+fn small<const N: u8>() -> u8 => N;
+fn pick<const E: Encoding>() -> usize => 0;
+struct Grouped<const N: usize> { starts: [u32; N]; }
+struct Holder<T> { value: T; }
+
+fn notPlaces<const N: usize>() -> usize {
+    N = 3;                // error[N0211]
+    let r = borrow mut N; // error[N0211]
+    match (5usize) {
+        N => {} // error[N0358]
+        _ => {}
+    }
+    return 0;
+}
+
+fn overParameter<const N: usize>() -> usize {
+    let a: [u8; N + 1] = [0u8; 2];                           // error[N0353]
+    let b = [0u8; N * 2];                                    // error[N0353]
+    let c: Grouped<(N + 1)> = Grouped { starts: [0u32; 1] }; // error[N0353]
+    return 0;
+}
+
+interface Handler {
+    const HAS_ON_DATA: bool;
+}
+
+fn throughBound<H: Handler>() -> usize => run<H.HAS_ON_DATA>(); // error[N0353]
+
+fn lengths<const N: usize, const M: usize>(a: [u8; N]) -> [u8; M] => a; // error[N0205]
+
+interface Scaler {
+    fn scale<const K: u32>(borrow this, n: u32) -> u32;
+}
+
+fn useDyn(s: borrow dyn Scaler) {} // error[N0331]
+
+// Since ADR 0083 §2.1, `true` and `false` may be generic arguments in an expression: this is the call `i<k, true, j>(k)`.
+fn parsed(i: i32, k: i32, j: i32) -> bool => one(i<k, true, j>(k)); // error[N0210]
+
+fn one(a: bool) -> bool => a;
+
+fn main() {
+    let ts = true;
+    run<ts>(); // error[N0353]
+    let n: usize = 4;
+    let a: [u8; n] = [0u8; 4];                         // error[N0353]
+    counted<u32>();                                    // error[N0354]
+    let v: Vector<true> = Vector<u8>.create();         // error[N0354]
+    let w: Holder<4> = Holder { value: 4 };            // error[N0354]
+    small<300>();                                      // error[N0217]
+    pick<Encoding>();                                  // error[N0354]
+    run<5>();                                          // error[N0205]
+    let g: Grouped<0> = Grouped { starts: [1u32; 1] }; // error[N0259]
+}

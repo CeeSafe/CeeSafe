@@ -1,0 +1,281 @@
+// Match guards (ADR 0085 §2.2, type-system.md §15.2): what a guard may not do to the scrutinee and the arm's bindings
+// (N0355). From the start of the pattern test to the end of the guard the scrutinee carries a shared loan: a guard
+// reads the scrutinee and the bindings, calls functions, and reads and writes other places, but never moves, assigns
+// or `mut`-lends the scrutinee, a place inside it or a binding, and never awaits.
+
+fn guardWrites() -> u32 => 355;
+
+/// The first thing a guard does that it may not (GuardFinding): what (0 for nothing), on which local, and where.
+struct GuardFinding {
+    what: u32; // 0 nothing, 1 moves, 2 assigns, 3 lends as `mut`, 4 awaits
+    local: u32;
+    start: u32;
+    end: u32;
+}
+
+/// The local a place expression starts from (`x`, `x.f`, `x[i]`, `*x`), or none.
+fn rootLocalOf(c: borrow Checker, e: u32) -> u32 {
+    if (e == none()) {
+        return none();
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.LocalRef(local) => { return local; }
+        HirExpr.FieldAccess(target, _) => { return rootLocalOf(c, target); }
+        HirExpr.Index(target, _) => { return rootLocalOf(c, target); }
+        HirExpr.Deref(reference) => { return rootLocalOf(c, reference); }
+        HirExpr.BorrowPath(_, path) => { return rootLocalOf(c, path); }
+        HirExpr.Reborrow(_, reference) => { return rootLocalOf(c, reference); }
+        _ => { return none(); }
+    }
+}
+
+/// The locals a pattern binds, at any depth, appended to `out`.
+fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Binding(local) => { out.push(local)?; }
+        HirPattern.Variant(_, hasPayload, payload) => {
+            if (hasPayload) {
+                for (k in 0..payload.count) {
+                    patternLocals(c, c.hir.at(payload, k), out)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
+/// N0355: the guard `guard` of an arm whose pattern is `pattern`, on a scrutinee rooted at `scrutineeRoot` (or none).
+fn checkGuardWrites(c: borrow mut Checker, guard: u32, pattern: u32, scrutineeRoot: u32) -> Result<void, AllocError> {
+    var guarded = Vector<u32>.create();
+    patternLocals(c, pattern, mut guarded)?;
+    if (scrutineeRoot != none()) {
+        guarded.push(scrutineeRoot)?;
+    }
+    var found = GuardFinding { what: 0, local: none(), start: 0, end: 0 };
+    guardExpr(c, guard, true, guarded.view(), mut found);
+    if (found.what == 0) {
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    if (found.what == 4) {
+        appendText(mut message, "a guard cannot 'await': the match's loan on its value would cross the suspension")?;
+    } else {
+        appendText(mut message, "a guard cannot ")?;
+        appendText(
+            mut message,
+            if (found.what == 1) "move " else if (found.what == 2) "assign " else "lend as 'mut' ",
+        )?;
+        appendQuotedName(mut message, c, c.hir.locals[found.local as usize].name)?;
+        appendText(
+            mut message,
+            ": the guard only reads the matched value and the arm's bindings (the arm moves them once the guard holds)",
+        )?;
+    }
+    return c.error(guardWrites(), found.start, found.end, message);
+}
+
+fn isGuarded(guarded: Slice<u32>, local: u32) -> bool {
+    if (local == none()) {
+        return false;
+    }
+    for (g in guarded) {
+        if (g == local) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn noteGuard(c: borrow Checker, found: borrow mut GuardFinding, what: u32, local: u32, e: u32) {
+    if (found.what != 0) {
+        return;
+    }
+    let span = c.hir.exprSpans[e as usize];
+    found.what = what;
+    found.local = local;
+    found.start = span.start;
+    found.end = span.end;
+}
+
+fn placeRoot(c: borrow Checker, place: u32) -> u32 => c.hir.places[place as usize].root;
+
+fn guardPlaceIndexes(c: borrow Checker, place: u32, guarded: Slice<u32>, found: borrow mut GuardFinding) {
+    let p = c.hir.places[place as usize];
+    for (k in 0..p.projections.count) {
+        let index = c.hir.projections[(p.projections.start + k) as usize].index;
+        if (index != none()) {
+            guardExpr(c, index, true, guarded, found);
+        }
+    }
+}
+
+fn guardList(c: borrow Checker, list: Range, guarded: Slice<u32>, found: borrow mut GuardFinding) {
+    for (k in 0..list.count) {
+        guardExpr(c, c.hir.at(list, k), true, guarded, found);
+    }
+}
+
+/// Looks through a guard's expression `e` for what it may not do; `value` is whether `e`'s value is used as a whole
+/// (moved, if it is not Copy) rather than as the base of a projection or a loan.
+fn guardExpr(c: borrow Checker, e: u32, value: bool, guarded: Slice<u32>, found: borrow mut GuardFinding) {
+    if (e == none() || found.what != 0) {
+        return;
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.LocalRef(local) => {
+            if (value && isGuarded(guarded, local) && !c.types.isCopy(c.typeOf(e))) {
+                noteGuard(c, found, 1, local, e);
+            }
+        }
+        HirExpr.FieldAccess(target, _) => {
+            let root = rootLocalOf(c, target);
+            if (value && isGuarded(guarded, root) && !c.types.isCopy(c.typeOf(e))) {
+                noteGuard(c, found, 1, root, e);
+            }
+            guardExpr(c, target, false, guarded, found);
+        }
+        HirExpr.Index(target, index) => {
+            guardExpr(c, target, false, guarded, found);
+            guardExpr(c, index, true, guarded, found);
+        }
+        HirExpr.Deref(reference) => { guardExpr(c, reference, false, guarded, found); }
+        HirExpr.Borrow(mutable, place) => {
+            if (mutable && isGuarded(guarded, placeRoot(c, place))) {
+                noteGuard(c, found, 3, placeRoot(c, place), e);
+            }
+            guardPlaceIndexes(c, place, guarded, found);
+        }
+        HirExpr.Move(place) => {
+            if (isGuarded(guarded, placeRoot(c, place))) {
+                noteGuard(c, found, 1, placeRoot(c, place), e);
+            }
+            guardPlaceIndexes(c, place, guarded, found);
+        }
+        HirExpr.Slice(mutable, place, low, high) => {
+            if (mutable && isGuarded(guarded, placeRoot(c, place))) {
+                noteGuard(c, found, 3, placeRoot(c, place), e);
+            }
+            guardPlaceIndexes(c, place, guarded, found);
+            guardExpr(c, low, true, guarded, found);
+            guardExpr(c, high, true, guarded, found);
+        }
+        HirExpr.BorrowPath(mutable, path) => {
+            let root = rootLocalOf(c, path);
+            if (mutable && isGuarded(guarded, root)) {
+                noteGuard(c, found, 3, root, e);
+            }
+            guardExpr(c, path, false, guarded, found);
+        }
+        HirExpr.Reborrow(mutable, reference) => {
+            let root = rootLocalOf(c, reference);
+            if (mutable && isGuarded(guarded, root)) {
+                noteGuard(c, found, 3, root, e);
+            }
+            guardExpr(c, reference, false, guarded, found);
+        }
+        HirExpr.BorrowTemp(_, inner) => { guardExpr(c, inner, true, guarded, found); }
+        HirExpr.SliceTemp(_, inner, low, high) => {
+            guardExpr(c, inner, true, guarded, found);
+            guardExpr(c, low, true, guarded, found);
+            guardExpr(c, high, true, guarded, found);
+        }
+        HirExpr.Unary(_, operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Binary(_, left, right) => {
+            guardExpr(c, left, true, guarded, found);
+            guardExpr(c, right, true, guarded, found);
+        }
+        HirExpr.Cast(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Truncate(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.FloatToInt(operand, _) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Call(_, arguments) => { guardList(c, arguments, guarded, found); }
+        HirExpr.BuiltinCall(_, arguments) => { guardList(c, arguments, guarded, found); }
+        HirExpr.EnumValue(_, payload) => { guardList(c, payload, guarded, found); }
+        HirExpr.ArrayLiteral(elements) => { guardList(c, elements, guarded, found); }
+        HirExpr.ArrayRepeat(element) => { guardExpr(c, element, true, guarded, found); }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                guardExpr(c, c.hir.fieldValues[(fields.start + k) as usize].value, true, guarded, found);
+            }
+        }
+        HirExpr.SliceLength(operand) => { guardExpr(c, operand, false, guarded, found); }
+        HirExpr.Try(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Unwrap(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.IsNull(operand, _) => { guardExpr(c, operand, false, guarded, found); }
+        HirExpr.RunTask(task) => { guardExpr(c, task, true, guarded, found); }
+        HirExpr.StmtValue(statement) => { guardStmt(c, statement, guarded, found); }
+        HirExpr.Closure(_, captures) => {
+            for (k in 0..captures.count) {
+                let capture = c.hir.captures[(captures.start + k) as usize];
+                if (isGuarded(guarded, capture.local)) {
+                    match (capture.mode) {
+                        CaptureMode.Move => { noteGuard(c, found, 1, capture.local, e); }
+                        CaptureMode.Mutable => { noteGuard(c, found, 3, capture.local, e); }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        HirExpr.Await(_) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncScope(_, _, _) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncShield(_, _, _) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncJoin(_, _, _, _, _) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncTimeout(_, _, _, _, _, _) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncBlocking(_, _) => { noteGuard(c, found, 4, none(), e); }
+        HirExpr.AsyncBoxed(_, _) => { noteGuard(c, found, 4, none(), e); }
+        _ => {}
+    }
+}
+
+/// A statement inside a guard (a value block's): assignments to the guarded locals, and its expressions.
+fn guardStmt(c: borrow Checker, s: u32, guarded: Slice<u32>, found: borrow mut GuardFinding) {
+    if (s == none() || found.what != 0) {
+        return;
+    }
+    match (c.hir.stmts[s as usize]) {
+        HirStmt.Block(statements) => {
+            for (k in 0..statements.count) {
+                guardStmt(c, c.hir.at(statements, k), guarded, found);
+            }
+        }
+        HirStmt.LocalDecl(_, initializer) => { guardExpr(c, initializer, true, guarded, found); }
+        HirStmt.Assign(place, _, assigned) => {
+            if (isGuarded(guarded, placeRoot(c, place)) && found.what == 0) {
+                let span = c.hir.stmtSpans[s as usize];
+                found.what = 2;
+                found.local = placeRoot(c, place);
+                found.start = span.start;
+                found.end = span.end;
+            }
+            guardPlaceIndexes(c, place, guarded, found);
+            guardExpr(c, assigned, true, guarded, found);
+        }
+        HirStmt.If(condition, then, otherwise) => {
+            guardExpr(c, condition, true, guarded, found);
+            guardStmt(c, then, guarded, found);
+            guardStmt(c, otherwise, guarded, found);
+        }
+        HirStmt.While(condition, body) => {
+            guardExpr(c, condition, true, guarded, found);
+            guardStmt(c, body, guarded, found);
+        }
+        HirStmt.Loop(body) => { guardStmt(c, body, guarded, found); }
+        HirStmt.For(_, start, end, body) => {
+            guardExpr(c, start, true, guarded, found);
+            guardExpr(c, end, true, guarded, found);
+            guardStmt(c, body, guarded, found);
+        }
+        HirStmt.Return(value) => { guardExpr(c, value, true, guarded, found); }
+        HirStmt.Expression(e) => { guardExpr(c, e, true, guarded, found); }
+        HirStmt.Yield(value) => { guardExpr(c, value, true, guarded, found); }
+        HirStmt.Match(scrutinee, arms, _, _) => {
+            guardExpr(c, scrutinee, false, guarded, found);
+            for (k in 0..arms.count) {
+                let arm = c.hir.arms[c.hir.at(arms, k) as usize];
+                guardExpr(c, arm.guard, true, guarded, found);
+                guardStmt(c, arm.body, guarded, found);
+            }
+        }
+        _ => {}
+    }
+}

@@ -116,7 +116,8 @@ fn namesInExpr(c: borrow Checker, e: u32, parameters: borrow Vector<u32>) -> boo
             }
             for (k in 0..arms.count) {
                 let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
-                if (namesInPattern(c, arm.pattern, parameters) || namesInExpr(c, arm.value, parameters)) {
+                if (namesInPattern(c, arm.pattern, parameters) || namesInExpr(c, arm.value, parameters) ||
+                    namesIn(c, arm.guard, parameters)) {
                     return true;
                 }
             }
@@ -191,7 +192,8 @@ fn namesInStmt(c: borrow Checker, s: u32, parameters: borrow Vector<u32>) -> boo
             }
             for (k in 0..arms.count) {
                 let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
-                if (namesInPattern(c, arm.pattern, parameters) || namesInStmt(c, arm.body, parameters)) {
+                if (namesInPattern(c, arm.pattern, parameters) || namesInStmt(c, arm.body, parameters) ||
+                    namesIn(c, arm.guard, parameters)) {
                     return true;
                 }
             }
@@ -931,6 +933,9 @@ fn walkStmt(c: borrow Checker, s: u32, walk: borrow mut FieldWalk) -> Result<voi
             for (k in 0..arms.count) {
                 // HirArm: Kind, Variant, Value, Bindings (value tuples: skipped), Body, ListsPayloads, Pattern.
                 let arm = c.hir.arms[c.hir.at(arms, k) as usize];
+                if (arm.guard != none()) {
+                    walkExpr(c, arm.guard, none(), none(), walk)?;
+                }
                 walkStmt(c, arm.body, walk)?;
             }
         }

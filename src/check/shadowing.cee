@@ -121,6 +121,7 @@ fn shadowStmt(
                 let arm = front.ast.matchArms[front.ast.at(arms, k) as usize];
                 let mark = scope.names.length;
                 shadowPattern(front, dependencies, scope, arm.pattern)?;
+                shadowExpr(front, dependencies, scope, arm.guard)?;
                 shadowStmt(front, dependencies, scope, arm.body)?;
                 scope.names.truncate(mark);
             }
@@ -235,6 +236,7 @@ fn shadowExpr(
                 let arm = front.ast.valueArms[front.ast.at(arms, k) as usize];
                 let mark = scope.names.length;
                 shadowPattern(front, dependencies, scope, arm.pattern)?;
+                shadowExpr(front, dependencies, scope, arm.guard)?;
                 shadowExpr(front, dependencies, scope, arm.value)?;
                 scope.names.truncate(mark);
             }

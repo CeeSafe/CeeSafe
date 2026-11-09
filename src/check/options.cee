@@ -483,6 +483,7 @@ fn optionalBorrow(c: borrow mut Checker, reference: u32, mutable: bool, span: Sp
         end: span.end,
         listsPayloads: true,
         pattern: none(),
+        guard: none(),
     })?;
     let someArm = truncate<u32>(c.hir.arms.length - 1);
     let absent = c.expr(HirExpr.EnumValue(variantAt(c, result, 0), emptyRange()), result, span.start, span.end)?;
@@ -497,6 +498,7 @@ fn optionalBorrow(c: borrow mut Checker, reference: u32, mutable: bool, span: Sp
         end: span.end,
         listsPayloads: false,
         pattern: none(),
+        guard: none(),
     })?;
     let nullArm = truncate<u32>(c.hir.arms.length - 1);
     let armIds = [someArm, nullArm];

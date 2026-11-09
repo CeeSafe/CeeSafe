@@ -90,8 +90,10 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     252 => "Move of a field out of a value whose type has a `drop` block",
     253 => "Move out of a `using` binding",
     254 => "`return`, `break`, `continue` or `defer` inside a deferred statement",
-    256 => "`match` that does not cover every value (add the missing variants or `_`)",
-    257 => "Unreachable `match` arm: a duplicate pattern, or any arm after `_`",
+    256 =>
+        "`match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2)",
+    257 =>
+        "Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does",
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
@@ -203,7 +205,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     350 =>
         "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3)",
-    355 => "a guard moves, assigns or `mut`-lends the scrutinee or a binding, or awaits",
+    355 =>
+        "A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2)",
     356 => "alternatives of an or-pattern bind different names, types or `var`-ness",
     357 => "an empty range pattern",
     358 =>

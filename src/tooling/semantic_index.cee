@@ -399,6 +399,10 @@ fn walkStatement(
         HirStmt.Match(scrutinee, arms, _, _) => {
             walkExpression(index, c, sources, scrutinee)?;
             for (k in 0..arms.count) {
+                let guard = c.hir.arms[c.hir.at(arms, k) as usize].guard;
+                if (guard != none()) {
+                    walkExpression(index, c, sources, guard)?;
+                }
                 walkStatement(index, c, sources, c.hir.arms[c.hir.at(arms, k) as usize].body)?;
             }
         }

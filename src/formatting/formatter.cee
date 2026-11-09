@@ -899,6 +899,9 @@ fn fmtWalkStmt(l: borrow mut FmtLayout, ast: borrow Ast, s: u32) -> Result<void,
                 let last = l.last(arm.end);
                 l.addElement(body, first, last)?;
                 fmtWalkPattern(l, ast, arm.pattern)?;
+                if (arm.guard != none()) {
+                    fmtWalkExpr(l, ast, arm.guard)?;
+                }
                 fmtWalkBlock(l, ast, arm.body)?;
             }
         }
@@ -1079,6 +1082,9 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
                 let last = l.last(arm.end);
                 l.addElement(body, first, last)?;
                 fmtWalkPattern(l, ast, arm.pattern)?;
+                if (arm.guard != none()) {
+                    fmtWalkExpr(l, ast, arm.guard)?;
+                }
                 if (!fmtIsBlockExpr(ast, arm.value)) {
                     let valueFirst = exprFirst(l, ast, arm.value);
                     let valueLast = exprLast(l, ast, arm.value);

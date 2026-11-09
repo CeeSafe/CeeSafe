@@ -247,7 +247,8 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'
-ValueArm  = Pattern '=>' Branch
+ValueArm  = Pattern Guard? '=>' Branch               (* Guard: type-system.md §15.2 *)
+Guard     = 'if' '(' Expr ')'                        (* ADR 0085 §2.2; an `Arm` of a MatchStmt takes one too *)
 Branch    = Expr | Block | ValueBlock                (* a Block branch must not complete *)
 ValueBlock = '{' Statement* Expr '}'                 (* its last Expr has no ';' (ADR 0073 §2.3) *)
 FieldInits = FieldInit (',' FieldInit)* ','?

@@ -251,6 +251,12 @@ fn armPattern(c: borrow Checker, arms: Range, k: u32, isValue: bool) -> u32 {
     return if (isValue) c.front.ast.valueArms[arm as usize].pattern else c.front.ast.matchArms[arm as usize].pattern;
 }
 
+/// An arm's guard (ADR 0085 §2.2): an expression, or none.
+fn armGuard(c: borrow Checker, arms: Range, k: u32, isValue: bool) -> u32 {
+    let arm = c.front.ast.at(arms, k);
+    return if (isValue) c.front.ast.valueArms[arm as usize].guard else c.front.ast.matchArms[arm as usize].guard;
+}
+
 fn armSpan(c: borrow Checker, arms: Range, k: u32, isValue: bool) -> Span {
     let arm = c.front.ast.at(arms, k);
     if (isValue) {
@@ -349,7 +355,7 @@ fn checkMatch(
     }
     if (ok) {
         for (k in 0..arms.count) {
-            if (hasNested(c, armPattern(c, arms, k, isValue))) {
+            if (hasNested(c, armPattern(c, arms, k, isValue)) || armGuard(c, arms, k, isValue) != none()) {
                 return checkNestedMatch(c, scrutineeSyntax, arms, isValue, branches, span, scrutinee, typ, reference);
             }
         }
@@ -471,6 +477,7 @@ fn checkMatch(
             end: armSpanValue.end,
             listsPayloads: listsPayloads(c, pattern),
             pattern: none(),
+            guard: none(),
         })?;
         armIds.push(truncate<u32>(c.hir.arms.length - 1))?;
     }
@@ -522,8 +529,9 @@ fn checkMatch(
     return c.hir.addStmt(HirStmt.Match(scrutinee, list, reference == none() && consumes, false), span.start, span.end);
 }
 
-/// A `match` with nested patterns (CheckNestedMatch, M11): each arm's pattern as a tree, exhaustiveness and unreachable
-/// arms by usefulness.
+/// A `match` with nested patterns (CheckNestedMatch, M11) or guards (ADR 0085 §2.2): each arm's pattern as a tree,
+/// exhaustiveness and unreachable arms by usefulness. A guarded arm is checked for reachability, but never counts
+/// toward coverage.
 fn checkNestedMatch(
     c: borrow mut Checker,
     scrutineeSyntax: u32,
@@ -536,13 +544,22 @@ fn checkNestedMatch(
     reference: u32,
 ) -> Result<u32, AllocError> {
     var armIds = Vector<u32>.create();
-    var earlier = Vector<u32>.create();
+    var earlier = Vector<u32>.create(); // the unguarded arms' patterns
+    var every = Vector<u32>.create();   // every arm's
     var failed = false;
+    let scrutineeRoot = rootLocalOf(c, scrutinee);
     for (index in 0..arms.count) {
         let pattern = armPattern(c, arms, index, isValue);
         let patternSpan = c.front.ast.patternSpans[pattern as usize];
+        let guardSyntax = armGuard(c, arms, index, isValue);
         c.pushScope()?;
         let tree = checkPattern(c, pattern, typ, reference, mut failed)?;
+        var guard = none();
+        if (guardSyntax != none()) {
+            let boolType = c.types.boolType;
+            guard = checkExpr(c, guardSyntax, boolType)?;
+            checkGuardWrites(c, guard, tree, scrutineeRoot)?;
+        }
         let body = checkArmBody(c, arms, index, isValue, branches)?;
         c.popScope();
         if (!failed) {
@@ -553,7 +570,10 @@ fn checkNestedMatch(
                 c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
             }
         }
-        earlier.push(tree)?;
+        if (guard == none()) {
+            earlier.push(tree)?;
+        }
+        every.push(tree)?;
         let armSpanValue = armSpan(c, arms, index, isValue);
         c.hir.arms.push(HirArm {
             kind: HirPatternKind.Wildcard,
@@ -565,6 +585,7 @@ fn checkNestedMatch(
             end: armSpanValue.end,
             listsPayloads: listsPayloads(c, pattern),
             pattern: tree,
+            guard: guard,
         })?;
         armIds.push(truncate<u32>(c.hir.arms.length - 1))?;
     }
@@ -574,16 +595,37 @@ fn checkNestedMatch(
         if (patternWitness(c, earlier.view(), wildcardPattern, typ, mut witness)?) {
             let scrutineeSpan = c.front.ast.exprSpans[scrutineeSyntax as usize];
             var message = Vector<u8>.create();
-            appendText(mut message, "this match does not cover ")?;
-            appendBytes(mut message, witness.view())?;
-            appendText(mut message, "; add the missing arms or a '_' arm")?;
+            var everyWitness = Vector<u8>.create();
+            if (every.length > earlier.length && !patternWitness(
+                c,
+                every.view(),
+                wildcardPattern,
+                typ,
+                mut everyWitness,
+            )?) {
+                // Only the guarded arms match what is missing (ADR 0085 §2.2).
+                appendText(mut message, "this match does not cover ")?;
+                appendBytes(mut message, witness.view())?;
+                appendText(
+                    mut message,
+                    " without its guards: arms with a guard do not count; add '_' or an arm without a guard",
+                )?;
+            } else {
+                appendText(mut message, "this match does not cover ")?;
+                if (everyWitness.length > 0) {
+                    appendBytes(mut message, everyWitness.view())?;
+                } else {
+                    appendBytes(mut message, witness.view())?;
+                }
+                appendText(mut message, "; add the missing arms or a '_' arm")?;
+            }
             c.error(nonExhaustiveMatch(), scrutineeSpan.start, scrutineeSpan.end, message)?;
         }
     }
     // A value scrutinee with a non-Copy payload bound by name, at any depth, is consumed (§18.4).
     var consumes = false;
     if (reference == none()) {
-        for (tree in earlier.view()) {
+        for (tree in every.view()) {
             if (bindsNonCopy(c, tree)) {
                 consumes = true;
             }

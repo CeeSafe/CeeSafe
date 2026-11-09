@@ -165,6 +165,35 @@ the letter a
 something else
 ```
 
+### Guards
+
+An arm can add a condition after its pattern, `if (…)`: the arm is taken only when the pattern matches and the
+condition holds; otherwise the next arm is tried. The guard sees the arm's bindings.
+
+```ceesafe
+fn size(x: u32?) -> StringView => match (x) {
+    Some(n) if (n > 100) => "big",
+    Some(0) => "zero",
+    Some(_) => "small",
+    null => "none",
+};
+
+fn main() {
+    Console.writeLine(size(Some(500)));
+    Console.writeLine(size(Some(7)));
+}
+```
+
+```text
+big
+small
+```
+
+A guarded arm never counts toward exhaustiveness: the compiler cannot know when its condition holds, so the other
+arms must still cover every value. A guard only reads: it cannot move, assign or lend as `mut` the matched value or
+the arm's bindings (N0355). In a match that moves a payload into its binding, the move happens only once the guard
+holds.
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

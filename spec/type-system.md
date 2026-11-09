@@ -551,7 +551,8 @@ fn area(s: Shape) -> i64 {
 ### 15.2 `match`
 ```text
 MatchStmt = 'match' '(' Expr ')' '{' Arm* '}'
-Arm       = Pattern '=>' Block ','?
+Arm       = Pattern Guard? '=>' Block ','?
+Guard     = 'if' '(' Expr ')'                                      -- ADR 0085 §2.2
 Pattern   = '_' | IntLiteral | '-' IntLiteral | 'true' | 'false' | 'null'
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
@@ -559,7 +560,20 @@ Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
 A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err(…)` and `E.V…` there are patterns.
 - This section's `match` is a **statement**; §15.3 has the expression form. Arms are tried in order; the first
-  that matches runs its block.
+  that matches, and whose guard holds, runs its block.
+- **Guards** (ADR 0085 §2.2). `P if (g) => …`: the guard `g` is a `bool` (N0205 otherwise), parenthesised like every
+  condition (§9). For one arm: the pattern is tested; if it matches, its bindings are made, then the guard is
+  evaluated; if it is `false`, the next arm is tried.
+  - The guard sees the arm's bindings. A binding that copies (a Copy payload) or refers (a reference scrutinee) holds
+    its value in the guard. A binding that will move (a non-Copy payload of a consuming match, §18.4) is read in place:
+    the move happens only once the guard is `true`, so an arm whose guard fails has moved nothing.
+  - From the start of the pattern test to the end of the guard, the scrutinee carries a shared loan. The guard may
+    read the scrutinee and the bindings, call functions, and read and write other places. It may not move, assign or
+    `mut`-lend the scrutinee, a place inside it or a binding, and it may not `await` (the loan would cross a
+    suspension): N0355.
+  - A guarded arm never counts toward exhaustiveness: its pattern is not added to the usefulness matrix below. It is
+    still checked for reachability: if earlier unguarded arms match every value it does, it is N0257. When the values
+    a match misses are matched only by guarded arms, N0256 says so ("arms with a guard do not count").
 - **Scrutinee types:**
   - an enum: variant patterns;
   - an integer: literal patterns of that type;
@@ -606,7 +620,7 @@ let name = match (shape) {
 ```text
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'
-ValueArm  = Pattern '=>' Branch
+ValueArm  = Pattern Guard? '=>' Branch      (* Guard: §15.2, ADR 0085 §2.2 *)
 Branch    = Expr | Block | ValueBlock
 ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 0073 §2.3 *)
 ```

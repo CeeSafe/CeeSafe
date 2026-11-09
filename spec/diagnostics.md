@@ -142,8 +142,8 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | N0252 | Move of a field out of a value whose type has a `drop` block | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |
 | N0254 | `return`, `break`, `continue` or `defer` inside a deferred statement | `defer return 1;` |
-| N0256 | `match` that does not cover every value (add the missing variants or `_`) | `match (s) { Shape.Empty => { } }` |
-| N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_` | `1 => { } 1 => { }` |
+| N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2) | `match (s) { Shape.Empty => { } }` |
+| N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
 | N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
 
@@ -296,6 +296,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0348 | A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1) | `@test fn t(x: u32) {}` |
 | N0349 | A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2) | `await set.spawn(async move () => { let k = n + 1; return Ok(); })` with `n: borrow u32` |
 | N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |
+| N0355 | A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2) | `Slot.Full(r) if (consume(r)) =>` with `r` not Copy |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

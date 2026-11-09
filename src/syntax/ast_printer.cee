@@ -441,6 +441,11 @@ struct AstPrinter {
                     this.open()?;
                     this.text("(arm ")?;
                     this.patternText(ast, symbols, arm.pattern)?;
+                    if (arm.guard != none()) {
+                        this.text(" (if ")?;
+                        this.expr(ast, symbols, arm.guard)?;
+                        this.text(")")?;
+                    }
                     this.close()?;
                     this.indent += 1;
                     this.printStmt(ast, symbols, arm.body)?;
@@ -603,6 +608,11 @@ struct AstPrinter {
                     let arm = ast.valueArms[ast.at(arms, k) as usize];
                     this.text(" (arm ")?;
                     this.patternText(ast, symbols, arm.pattern)?;
+                    if (arm.guard != none()) {
+                        this.text(" (if ")?;
+                        this.expr(ast, symbols, arm.guard)?;
+                        this.text(")")?;
+                    }
                     this.text(" ")?;
                     this.expr(ast, symbols, arm.value)?;
                     this.text(")")?;

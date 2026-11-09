@@ -1,0 +1,93 @@
+// Match guards (ADR 0085 §2.2): a guard only reads the scrutinee and the arm's bindings (N0355); a guarded arm never
+// counts toward exhaustiveness (N0256) but can be unreachable (N0257); a guard is a bool (N0205).
+struct Res { id: u32; drop { } }
+enum Slot { Full(Res), Spare }
+
+fn consume(r: Res) -> bool => r.id == 1;
+fn bump(x: borrow mut u32) -> bool {
+    x = x + 1;
+    return true;
+}
+fn look(r: borrow Res) -> bool => r.id == 2;
+fn reset(s: borrow mut Slot) -> bool {
+    s = Slot.Spare;
+    return true;
+}
+
+fn movesBinding(s: Slot) -> u32 {
+    match (s) {
+        Slot.Full(r) if (consume(r)) => { return 1; } // error[N0355]
+        _ => { return 0; }
+    }
+}
+
+fn lendsBinding(o: u32?) -> u32 {
+    var k: u32 = 0;
+    match (o) {
+        Some(var n) if (bump(mut n)) => { return n; } // error[N0355]
+        Some(n) if (bump(mut k)) => { return n + k; }
+        _ => { return 0; }
+    }
+}
+
+fn lendsScrutinee(s: Slot) -> u32 {
+    var t = s;
+    match (t) {
+        Slot.Full(_) if (reset(mut t)) => { return 1; } // error[N0355]
+        _ => { return 0; }
+    }
+}
+
+fn movesInBlock(s: Slot) -> u32 {
+    match (s) {
+        Slot.Full(r) if (if (r.id > 0) { let held = r; held.id > 1 } else false) => { return 1; } // error[N0355]
+        _ => { return 0; }
+    }
+}
+
+fn readsOnly(s: Slot) -> u32 {
+    match (s) {
+        Slot.Full(r) if (look(r) && r.id > 1) => { return r.id; }
+        _ => { return 0; }
+    }
+}
+
+async fn ready() -> bool => true;
+
+async fn awaits(o: u32?) -> u32 {
+    match (o) {
+        Some(n) if (await ready()) => { return n; } // error[N0355]
+        _ => { return 0; }
+    }
+}
+
+fn onlyGuarded(o: u32?) -> u32 {
+    match (o) { // error[N0256]
+        Some(n) if (n > 1) => { return n; }
+        null => { return 0; }
+    }
+}
+
+fn boolGuarded(b: bool) -> u32 {
+    match (b) { // error[N0256]
+        true if (b) => { return 1; }
+        false => { return 0; }
+    }
+}
+
+fn guardedAfterCover(o: u32?) -> u32 {
+    match (o) {
+        Some(_) => { return 1; }
+        Some(n) if (n > 1) => { return n; } // error[N0257]
+        null => { return 0; }
+    }
+}
+
+fn notBool(o: u32?) -> u32 {
+    match (o) {
+        Some(n) if (n) => { return n; } // error[N0205]
+        _ => { return 0; }
+    }
+}
+
+fn main() {}

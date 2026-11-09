@@ -1710,10 +1710,12 @@ struct Parser {
             let armStart = this.current().start;
             let startPos = this.pos;
             let pattern = this.parsePattern()?;
+            let guard = this.parseGuard()?;
             this.expect(TokenKind.FatArrow)?;
             let body = this.parseBlock()?;
             this.front.ast.matchArms.push(MatchArm {
                 pattern: pattern,
+                guard: guard,
                 body: body,
                 start: armStart,
                 end: this.endFrom(armStart),
@@ -1729,6 +1731,14 @@ struct Parser {
         return this.front.ast.addStmt(StmtNode.Match(scrutinee, range), start, this.endFrom(start));
     }
 
+    /// An arm's guard, `if (g)` after its pattern (ADR 0085 §2.2), or none.
+    fn parseGuard(borrow mut this) -> Result<u32, AllocError> {
+        if (!this.eat(TokenKind.IfKeyword)) {
+            return Ok(none());
+        }
+        return this.parseParenthesizedCondition();
+    }
+
     /// `match (e) { p => v, ... }` in expression position (type-system.md §15.3).
     fn parseMatchExpr(borrow mut this) -> Result<u32, AllocError> {
         let start = this.advance().start;
@@ -1739,10 +1749,12 @@ struct Parser {
             let armStart = this.current().start;
             let startPos = this.pos;
             let pattern = this.parsePattern()?;
+            let guard = this.parseGuard()?;
             this.expect(TokenKind.FatArrow)?;
             let value = this.parseBranch()?;
             this.front.ast.valueArms.push(ValueArm {
                 pattern: pattern,
+                guard: guard,
                 value: value,
                 start: armStart,
                 end: this.endFrom(armStart),

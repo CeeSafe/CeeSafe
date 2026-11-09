@@ -155,6 +155,7 @@ struct HirArm {
     end: u32;
     listsPayloads: bool;
     pattern: u32; // a nested match's whole pattern, or none
+    guard: u32;   // `if (g)` (ADR 0085 §2.2): a bool expression, or none
 }
 
 enum HirStmt {

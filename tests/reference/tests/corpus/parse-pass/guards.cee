@@ -1,0 +1,13 @@
+// Match guards (ADR 0085 §2.2): `if (…)` after an arm's pattern, in a match statement and a match expression.
+fn f(o: u32?, b: bool) -> u32 {
+    match (o) {
+        Some(n) if (n > 3 && b) => { return n; }
+        Some(_) if (b) => {}
+        _ => {}
+    }
+    return match (o) {
+        Some(n) if (n == 0) => 1,
+        Some(n) => n,
+        null => 0,
+    };
+}

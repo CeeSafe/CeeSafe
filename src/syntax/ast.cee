@@ -175,6 +175,7 @@ struct FieldInit {
 
 struct ValueArm {
     pattern: u32;
+    guard: u32; // `if (g)` (ADR 0085 §2.2): an expression, or none
     value: u32;
     start: u32;
     end: u32;
@@ -224,7 +225,8 @@ enum StmtNode {
 
 struct MatchArm {
     pattern: u32;
-    body: u32; // a block statement
+    guard: u32; // `if (g)` (ADR 0085 §2.2): an expression, or none
+    body: u32;  // a block statement
     start: u32;
     end: u32;
 }

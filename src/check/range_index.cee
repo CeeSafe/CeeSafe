@@ -27,7 +27,7 @@ fn indexesInStmt(c: borrow Checker, s: u32, symbol: u32) -> bool {
             }
             for (k in 0..arms.count) {
                 let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
-                if (indexesInStmt(c, arm.body, symbol)) {
+                if (indexesInStmt(c, arm.body, symbol) || indexesIn(c, arm.guard, symbol, false)) {
                     return true;
                 }
             }
@@ -95,7 +95,7 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
             }
             for (k in 0..arms.count) {
                 let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
-                if (indexesIn(c, arm.value, symbol, false)) {
+                if (indexesIn(c, arm.value, symbol, false) || indexesIn(c, arm.guard, symbol, false)) {
                     return true;
                 }
             }

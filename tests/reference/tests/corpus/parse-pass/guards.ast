@@ -1,0 +1,20 @@
+(unit
+  (fn default f (params (o (optional u32)) (b bool)) (returns u32)
+    (block
+      (match o
+        (arm (Some n) (if (&& (> n 3) b))
+          (block
+            (return n)
+          )
+        )
+        (arm (Some _) (if b)
+          (block)
+        )
+        (arm _
+          (block)
+        )
+      )
+      (return (match-expr o (arm (Some n) (if (== n 0)) 1) (arm (Some n) n) (arm null 0)))
+    )
+  )
+)

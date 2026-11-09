@@ -156,6 +156,7 @@ fn braceStmt(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, s: 
                 let arm = c.front.ast.matchArms[c.front.ast.at(arms, k) as usize];
                 let mark = scope.names.length;
                 bracePattern(c, scope, arm.pattern)?;
+                braceExpr(c, scope, file, arm.guard)?;
                 braceStmt(c, scope, file, arm.body)?;
                 scope.names.truncate(mark);
             }
@@ -254,6 +255,7 @@ fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: 
                 let arm = c.front.ast.valueArms[c.front.ast.at(arms, k) as usize];
                 let mark = scope.names.length;
                 bracePattern(c, scope, arm.pattern)?;
+                braceExpr(c, scope, file, arm.guard)?;
                 braceExpr(c, scope, file, arm.value)?;
                 scope.names.truncate(mark);
             }

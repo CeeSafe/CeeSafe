@@ -1,0 +1,11 @@
+// Patterns (formatting.md §4, ADR 0085): guards.
+fn f(o: u32?) -> u32 {
+    match (o) {
+        Some(n) if (n > 3) => { return n; }
+        Some(n) if (n == 0) => {
+            return 1;
+        }
+        _ => {}
+    }
+    return match (o) { Some(n) if (n > 1) => n, _ => 0 };
+}

@@ -343,6 +343,10 @@ struct HirPrinter {
                     head.text("arm ")?;
                     if (arm.pattern != none()) {
                         head.patternText(hir, types, symbols, arm.pattern)?; // a nested match (M11)
+                        if (arm.guard != none()) {
+                            head.text(" if ")?;
+                            head.expr(hir, types, symbols, arm.guard)?;
+                        }
                         this.nested(hir, types, symbols, head.out, arm.body)?;
                         continue;
                     }

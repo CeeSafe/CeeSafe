@@ -425,6 +425,11 @@ fn endStatementTemps(n: borrow mut NirProgram, b: borrow mut Lowering, saved: u3
 
 fn addToScope(b: borrow mut Lowering, local: u32) -> Result<void, AllocError> {
     let top = b.scopes.length - 1;
+    for (item in b.scopes[top].view()) {
+        if (!item.isDefer && item.value == local) {
+            return Ok(); // a binding bound before an arm's guard and again by its unpack (ADR 0085 §2.2)
+        }
+    }
     return b.scopes[top].push(ScopeItem { isDefer: false, value: local });
 }
 
@@ -769,7 +774,9 @@ fn lowerMatch(
     }
     let place = if (isReference) projectPlace(n, scrutinee, derefProjectionN())? else scrutinee;
     if (nested) {
-        return lowerNestedMatch(c, n, b, s, arms, consumes, place, isReference);
+        // A guard of a consuming match reads a local scrutinee where the match moved it (ADR 0085 §2.2).
+        let movedLocal = if (consumes) localOfExpr(c, scrutineeExpr) else none();
+        return lowerNestedMatch(c, n, b, s, arms, consumes, place, isReference, movedLocal);
     }
     var value = none();
     if (c.types.is(typ, TypeKind.Enum)) {
@@ -904,8 +911,15 @@ fn payloadPlace(n: borrow mut NirProgram, place: u32, variant: u32, field: u32) 
     return projectPlace(n, downcast, fieldProjectionN(field));
 }
 
+fn localOfExpr(c: borrow Checker, e: u32) -> u32 => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(local) => local,
+    _ => none(),
+};
+
 /// A match with nested patterns (LowerNestedMatch, M11): each arm tests its pattern in order and falls through to the
-/// next arm; the matching arm binds, or in a consuming match unpacks every payload along the pattern (§18.4).
+/// next arm; the matching arm binds, or in a consuming match unpacks every payload along the pattern (§18.4). An arm's
+/// guard (ADR 0085 §2.2) runs after the test, with the bindings that copy or refer already bound and those that move
+/// read in place; when it is false the arm moves nothing and the next arm is tried.
 fn lowerNestedMatch(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
@@ -915,6 +929,7 @@ fn lowerNestedMatch(
     consumes: bool,
     place: u32,
     byReference: bool,
+    movedLocal: u32,
 ) -> Result<void, AllocError> {
     let join = newBlock(b)?;
     var joinReached = false;
@@ -932,12 +947,31 @@ fn lowerNestedMatch(
             HirPattern.Variant(_, listed, _) => listed,
             _ => false,
         };
-        if (unpacks) {
+        var entered = true;
+        if (arm.guard != none()) {
+            let savedCaptures = b.captures.length;
+            if (unpacks) {
+                guardBindPattern(c, n, b, arm.pattern, place)?;
+            } else {
+                bindPattern(c, n, b, arm.pattern, place, byReference)?;
+            }
+            if (consumes && movedLocal != none()) {
+                b.captures.push(CapturePlace { local: movedLocal, field: none(), place: place })?;
+            }
+            lowerGuard(c, n, b, arm.guard, depth, next)?;
+            b.captures.truncate(savedCaptures);
+            entered = b.current != none();
+            if (entered && unpacks) {
+                unpackPattern(c, n, b, arm.pattern, place)?;
+            }
+        } else if (unpacks) {
             unpackPattern(c, n, b, arm.pattern, place)?;
         } else {
             bindPattern(c, n, b, arm.pattern, place, byReference)?;
         }
-        lowerStmt(c, n, b, arm.body)?;
+        if (entered) {
+            lowerStmt(c, n, b, arm.body)?;
+        }
         if (b.current != none()) {
             emitStorageDead(c, n, b, depth)?;
             terminate(n, b, NirTerminator.Goto(join))?;
@@ -951,6 +985,65 @@ fn lowerNestedMatch(
         terminate(n, b, NirTerminator.Unreachable)?;
     }
     b.current = if (joinReached) join else none();
+    return Ok();
+}
+
+/// An arm's guard (LowerGuard, ADR 0085 §2.2): true continues in the arm; false ends what the arm bound so far
+/// (the scopes from `depth`) and goes to `fail`. The guard's temporaries end before either.
+fn lowerGuard(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    guard: u32,
+    depth: u32,
+    fail: u32,
+) -> Result<void, AllocError> {
+    var ending = Vector<u32>.create();
+    let test = lowerCondition(c, n, b, guard, mut ending)?;
+    if (test == none()) {
+        return Ok();
+    }
+    let pass = newBlock(b)?;
+    let failing = newBlock(b)?;
+    let passTarget = endOnEntry(n, b, pass, ending.view())?;
+    let failTarget = endOnEntry(n, b, failing, ending.view())?;
+    terminate(n, b, NirTerminator.Branch(test, passTarget, failTarget))?;
+    b.current = failing;
+    emitStorageDead(c, n, b, depth)?;
+    terminate(n, b, NirTerminator.Goto(fail))?;
+    b.current = pass;
+    return Ok();
+}
+
+/// Before the guard of a consuming match's arm (GuardBindPattern): bindings of Copy values copy, and those that will
+/// move are read in place, where the payload is, until the guard holds.
+fn guardBindPattern(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    pattern: u32,
+    place: u32,
+) -> Result<void, AllocError> {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Binding(hirLocal) => {
+            if (c.types.isCopy(c.hir.locals[hirLocal as usize].typ)) {
+                bindPattern(c, n, b, pattern, place, false)?;
+            } else {
+                b.captures.push(CapturePlace { local: hirLocal, field: none(), place: place })?;
+            }
+        }
+        HirPattern.Variant(variant, listed, payload) => {
+            if (listed) {
+                for (i in 0..payload.count) {
+                    let field = c.types.variants[variant as usize].payload[i as usize];
+                    let inner = payloadPlace(n, place, variant, field)?;
+                    let hoisted = c.hir.at(payload, i);
+                    guardBindPattern(c, n, b, hoisted, inner)?;
+                }
+            }
+        }
+        _ => {}
+    }
     return Ok();
 }
 

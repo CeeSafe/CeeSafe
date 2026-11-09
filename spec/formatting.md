@@ -43,14 +43,16 @@ status is 1. A directory argument means every `.cee` file under it.
 The formatter keeps these choices and only lays out the result:
 - whether a block, struct, enum, interface or impl body, or match is written on one line (`{ return x; }`) or across
   lines (anywhere between its braces);
-- whether a list (arguments, parameters, struct fields, array elements) is broken, and, in a broken list, which
-  elements start a new line (so a literal can keep several fields per line);
+- whether a list (arguments, parameters, struct fields, array elements, attribute arguments) is broken, and, in a
+  broken list, which elements start a new line (so a literal can keep several fields per line);
 - whether an expression body (`=> expr`) starts on the line of the `=>` or on the next one;
-- where a long binary expression or a chain of member calls (a `.` after a call, an index, `!` or `?`) is broken;
+- where a long binary expression or a chain of member calls (a `.` after a call, an index, `!` or `?`) is broken,
+  and which `else`s of an `if` expression (`if (c) a else b`) start a new line;
 - whether an attribute is followed by a line break.
 
 Any other line break in the source is removed: two tokens on different lines that no rule here separates are joined
-with their §4 spacing. In particular `else` always follows the `}` before it on the same line.
+with their §4 spacing. In particular `else` always follows the `}` before it on the same line; only an `if` expression whose value is not a
+block may start an `else` on a new line (§3.4).
 
 A one-line form is kept only if it fits in 120 columns and holds no line comment; otherwise it is broken, as if the
 author had written it across lines.
@@ -84,9 +86,10 @@ author, or by §3.4) is laid out as a block:
   the others follow the element before them after `, `; a list broken by §3.4 has one element per line;
 - the closing delimiter starts its own line at the opening line's indentation;
 - the last element is followed by a comma, where the grammar allows one (grammar.md §2: parameters, arguments, struct
-  field initialisers, array elements, enum variants, and the arms of a match expression, except an arm whose value is
-  a block). The commas between the arms of a match statement are left as written. Type parameters, generic arguments,
-  attribute arguments, closure parameters, function-type parameters and interface method parameters are never broken.
+  field initialisers, array elements, attribute arguments, enum variants, and the arms of a match expression, except
+  an arm whose value is a block). The commas between the arms of a match statement are left as written. Type
+  parameters, generic arguments, closure parameters, function-type parameters and interface method parameters are
+  never broken.
 
 ```ceesafe
 let bodies = [
@@ -107,8 +110,20 @@ outermost:
 2. a list or a one-line block or body (§3.3);
 3. the value of a match arm or a closure (`=> e`), moved to the next line;
 4. an initialiser or an assigned value (`= e`), moved to the next line;
-5. a binary expression: after its operator, with the right operand indented one level;
-6. a chain of member calls: before a `.`, indented one level.
+5. an `if` expression whose then-value is not a block: before each `else` of its chain at once, every `else` one
+   level in (an `else if` chain is indented once, not once per `if`);
+6. a binary expression: after its operator, with the right operand indented one level;
+7. a chain of member calls: before a `.`, indented one level.
+
+```ceesafe
+@header(
+    "kernel/blk.h", "kernel/errno.h", "kernel/gpt.h", "kernel/kmalloc.h", "kernel/page.h", "kernel/part.h",
+    "kernel/ramblk.h",
+)
+let which = if (kind == VNODE_DIR) OPS_DIR
+    else if (kind == VNODE_LNK) OPS_LNK
+    else OPS_FILE;
+```
 
 The author's breaks of the same kinds (§3.1) are laid out by the same rules.
 

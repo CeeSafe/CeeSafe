@@ -10,8 +10,9 @@ fn priorityFunctionBody() -> u32 => 0;
 fn priorityList() -> u32 => 1;
 fn priorityArm() -> u32 => 2;
 fn priorityInitializer() -> u32 => 3;
-fn priorityBinary() -> u32 => 4;
-fn priorityChain() -> u32 => 5;
+fn priorityElse() -> u32 => 4;
+fn priorityBinary() -> u32 => 5;
+fn priorityChain() -> u32 => 6;
 
 /// A delimited list or body that is laid out on one line or broken (formatting.md §3.2–§3.3). A `lines` container
 /// holds statements, members, variants or match arms, one per line when broken; the others (arguments, parameters,
@@ -39,6 +40,7 @@ struct FmtContinuation {
     priority: u32;
     authorBroken: bool;
     broken: bool;
+    elseChain: u32; // the `if` expression chain whose `else`s break together (an index into `elseChains`), or none
 }
 
 /// A comment: its span, and the end of its text (a line comment's without trailing whitespace).
@@ -72,6 +74,10 @@ struct FmtLayout {
     containers: Vector<FmtContainer>;
     groups: Vector<Vector<u32>>;
     continuations: Vector<FmtContinuation>;
+    /// Each `if` expression chain's continuations before its `else`s, outermost first.
+    elseChains: Vector<Vector<u32>>;
+    /// The chain the `if` expression walked next belongs to: its parent's, when it is that `if`'s `else` value.
+    nextElseChain: u32;
     unitElements: Vector<u32>;
     keptBreaks: Vector<u32>; // tokens before which the author's line break is kept: a declaration after an attribute
     newlineBefore: Vector<bool>;
@@ -193,6 +199,7 @@ struct FmtLayout {
                 priority: priority,
                 authorBroken: false,
                 broken: false,
+                elseChain: none(),
             },
         )?;
         return Ok();
@@ -289,6 +296,8 @@ fn newFmtLayout(source: SourceText, lexed: borrow Lexed) -> Result<FmtLayout, Al
             containers: Vector<FmtContainer>.create(),
             groups: Vector<Vector<u32>>.create(),
             continuations: Vector<FmtContinuation>.create(),
+            elseChains: Vector<Vector<u32>>.create(),
+            nextElseChain: none(),
             unitElements: Vector<u32>.create(),
             keptBreaks: Vector<u32>.create(),
             newlineBefore: Vector<bool>.create(),
@@ -415,7 +424,19 @@ fn fmtWalkAttributes(l: borrow mut FmtLayout, ast: borrow Ast, attributes: Range
         }
         if (attribute.hasParentheses) {
             let name = identLast(l, ast, attribute.name);
-            l.glueBeforeAt(name + 1);
+            let open = name + 1;
+            l.glueBeforeAt(open);
+            // The arguments are a list (formatting.md §3.3): `@header("a.h", "b.h")`, broken when too long.
+            if (attribute.arguments.count > 0) {
+                let container = l.addContainer(open, false, true, priorityList())?;
+                for (a in 0..attribute.arguments.count) {
+                    let argument = ast.at(attribute.arguments, a);
+                    let argumentFirst = exprFirst(l, ast, argument);
+                    let argumentLast = exprLast(l, ast, argument);
+                    l.addElement(container, argumentFirst, argumentLast)?;
+                    fmtWalkExpr(l, ast, argument)?;
+                }
+            }
         }
     }
     return Ok();
@@ -713,6 +734,7 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
     for (k in order.view()) {
         l.addElement(body, firsts[k], lasts[k])?;
         if (kinds[k] == 0) {
+            fmtWalkAttributes(l, ast, ast.fields[ids[k] as usize].attributes)?;
             fmtWalkType(l, ast, ast.fields[ids[k] as usize].typ)?;
         } else if (kinds[k] == 3) {
             let members = l.addContainer(firsts[k] + 1, true, false, priorityList())?;
@@ -721,6 +743,7 @@ fn fmtWalkStruct(l: borrow mut FmtLayout, ast: borrow Ast, nameIdent: u32, s: u3
             while (m < structure.fields.count && ast.fields[ast.at(structure.fields, m) as usize].unionGroup == group) {
                 let member = borrow ast.fields[ast.at(structure.fields, m) as usize];
                 l.addElement(members, l.first(member.start), l.last(member.end))?;
+                fmtWalkAttributes(l, ast, member.attributes)?;
                 fmtWalkType(l, ast, member.typ)?;
                 m += 1;
             }
@@ -1020,8 +1043,29 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
         }
         ExprNode.Unsafe(inner) => { fmtWalkExpr(l, ast, inner)?; }
         ExprNode.If(condition, thenValue, elseValue) => {
+            // A chain of `if` expressions may break before each `else` (formatting.md §3.4, rule 5), all of them
+            // together, one level in; a value that is a block keeps its `else` after the `}` (§3.1).
+            var chain = l.nextElseChain;
+            l.nextElseChain = none();
             fmtWalkExpr(l, ast, condition)?;
             fmtWalkExpr(l, ast, thenValue)?;
+            let elseToken = exprLast(l, ast, thenValue) + 1;
+            if (!fmtIsBlockExpr(ast, thenValue) && l.isKind(elseToken, TokenKind.ElseKeyword)) {
+                if (chain == none()) {
+                    chain = truncate<u32>(l.elseChains.length);
+                    l.elseChains.push(Vector<u32>.create())?;
+                }
+                let index = truncate<u32>(l.continuations.length);
+                l.elseChains[chain as usize].push(index)?;
+                let end = exprLast(l, ast, e);
+                l.addContinuation(elseToken, true, end, priorityElse())?;
+                let added = l.continuations.length - 1;
+                l.continuations[added].elseChain = chain;
+                match (ast.exprs[elseValue as usize]) {
+                    ExprNode.If(_, _, _) => { l.nextElseChain = chain; }
+                    _ => {}
+                }
+            }
             fmtWalkExpr(l, ast, elseValue)?;
         }
         ExprNode.Match(scrutinee, arms) => {
@@ -1296,12 +1340,36 @@ fn indentOf(l: borrow FmtLayout, token: u32, comment: bool) -> u32 {
             depth += 1;
         }
     }
-    for (c in l.continuations.view()) {
-        if (c.broken && (if (c.before) c.token <= token else c.token < token) && token <= c.last) {
+    for (k in 0..l.continuations.length) {
+        if (continuationHolds(l, k, token) && outermostOfChain(l, k, token)) {
             depth += 1;
         }
     }
     return depth;
+}
+
+/// Whether continuation k is broken and indents the token.
+fn continuationHolds(l: borrow FmtLayout, k: usize, token: u32) -> bool {
+    let c = borrow l.continuations[k];
+    return c.broken && (if (c.before) c.token <= token else c.token < token) && token <= c.last;
+}
+
+/// Whether continuation k is the outermost of its `if` chain's broken ones that indent the token: a chain indents
+/// its values one level, however many of its `else`s are broken.
+fn outermostOfChain(l: borrow FmtLayout, k: usize, token: u32) -> bool {
+    let chain = l.continuations[k].elseChain;
+    if (chain == none()) {
+        return true;
+    }
+    for (member in l.elseChains[chain as usize].view()) {
+        if (member as usize == k) {
+            return true;
+        }
+        if (continuationHolds(l, member as usize, token)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /// The space between two tokens on one line.
@@ -1618,7 +1686,15 @@ fn breakLongLine(l: borrow mut FmtLayout, lines: borrow Vector<FmtLine>) -> bool
                 }
             }
         } else {
-            l.continuations[best].broken = true;
+            let chain = l.continuations[best].elseChain;
+            if (chain == none()) {
+                l.continuations[best].broken = true;
+            } else {
+                for (m in 0..l.elseChains[chain as usize].length) {
+                    let member = l.elseChains[chain as usize][m] as usize;
+                    l.continuations[member].broken = true;
+                }
+            }
         }
         return true;
     }

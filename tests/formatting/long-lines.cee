@@ -1,0 +1,36 @@
+// Attribute arguments, a field's attribute and `if` expressions (formatting.md §3.1, §3.3, §3.4).
+@header("kernel/aaaaaaaaaaaa.h", "kernel/bbbbbbbbbbbbb.h", "kernel/cccccccccccc.h", "kernel/dddddddddd.h", "kernel/e.h", "kernel/f.h")
+extern "C" {
+    struct vnode {
+        @cname ("type") kind: u32;
+    }
+}
+
+// The author's breaks in a list of attribute arguments: a block, with a trailing comma.
+@header("kernel/blk.h", "kernel/errno.h",
+    "kernel/gpt.h")
+extern "C" {
+    fn blk_find(name: *CChar) -> *mut void;
+}
+
+fn pick(kind: u32) -> u32 {
+    let which = if (kind == 1) 10 else if (kind == 2) 20 else if (kind == 3) 30 else if (kind == 4) 40 else if (kind == 5) 50 else 60;
+    return which;
+}
+
+fn kept(kind: u32) -> u32 {
+    let which = if (kind == 1) 10 else if (kind == 2) 20
+        else 30;
+    return which;
+}
+
+fn returned(kind: u32) -> StringView {
+    return if (kind == 1) "the first kind, which a long message describes at length" else if (kind == 2) "the second kind" else "any other";
+}
+
+fn blocks(c: bool) -> u32 {
+    let v = if (c) { 1 } else { 2 };
+    return v;
+}
+
+fn main() {}

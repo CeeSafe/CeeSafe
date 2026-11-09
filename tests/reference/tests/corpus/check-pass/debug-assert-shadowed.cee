@@ -1,0 +1,14 @@
+// A package function named `debugAssert` shadows the built-in (ADR 0087 §2.5, type-system.md §8): this one counts,
+// which the built-in's arguments could not do (N0360). The built-in is a BuiltinCall in the HIR (`first`, in a file
+// without the shadowing function, is in check-pass/debug-assert.cee).
+fn debugAssert(count: borrow mut u32, ok: bool) {
+    if (ok) {
+        count += 1;
+    }
+}
+
+fn main() {
+    var held: u32 = 0;
+    debugAssert(mut held, 1 + 1 == 2);
+    Console.writeLine(held);
+}

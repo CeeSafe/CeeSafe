@@ -915,6 +915,9 @@ fn synthCall(
                     if (b == builtinAssert()) {
                         return checkAssert(c, arguments, span);
                     }
+                    if (b == builtinDebugAssert()) {
+                        return checkDebugAssert(c, arguments, span);
+                    }
                     if (b == builtinPanic()) {
                         return checkPanic(c, arguments, span);
                     }

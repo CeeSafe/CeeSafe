@@ -1169,6 +1169,7 @@ fn generateCompiled(
         bce: true,
         oce: true,
         structured: true,
+        debugAssertions: false,
     };
     match (borrow mut compiled.checker) {
         Some(checker) => { return generateC(checker, mut compiled.nir, compiled.sources, build, out)!; }
@@ -1220,6 +1221,7 @@ fn runProgramTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32)
         capture: true,
         outputLimit: outputBytes,
         input: input,
+        debugAssertions: true,
     };
     let run = match (borrow compiled.checker) {
         Some(checker) => interpretCaptured(checker, compiled.nir, compiled.sources, options)!,

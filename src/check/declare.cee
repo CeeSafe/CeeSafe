@@ -61,7 +61,8 @@ fn builtinName(k: u32) -> StringView => match (k) {
     29 => "assert",
     30 => "panic",
     31 => "replace",
-    _ => "swap",
+    32 => "swap",
+    _ => "debugAssert",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,

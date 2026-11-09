@@ -1,0 +1,21 @@
+// `debugAssert` (ADR 0087 §2.5) is a void built-in call, checked in every build: its condition reads the parameter and
+// a local the condition declares itself, which it may change.
+fn first(values: Slice<u32>) -> u32 {
+    debugAssert(values.length > 0, "no values");
+    debugAssert(match (values.length) {
+        1 => true,
+        n => {
+            var sum: usize = 0;
+            for (k in 0..n) {
+                sum += k;
+            }
+            sum > 0
+        }
+    });
+    return values[0];
+}
+
+fn main() {
+    let values = [3u32, 4];
+    Console.writeLine(first(values[..]));
+}

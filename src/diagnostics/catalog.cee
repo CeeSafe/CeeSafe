@@ -219,6 +219,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     358 =>
         "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method (`type-system.md` §15.2, ADR 0085 §2.6)",
     359 => "an `is` pattern with bindings where the test is not known true",
+    360 =>
+        "A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5)",
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     400 =>

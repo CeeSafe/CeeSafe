@@ -217,7 +217,28 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     gets `CEE_PANIC_EXPLICIT` ("explicit panic") and the message is not shown.
   - `assert(condition)` and `assert(condition, message)`: `void`. When the condition is false, they panic with
     "assertion failed" or the message. The message is evaluated only then. Assertions are always checked; no build
-    leaves them out.
+    leaves them out (`debugAssert`, below, is the one that release builds leave out).
+  - `debugAssert(condition)` and `debugAssert(condition, message)` (ADR 0087 §2.5): `void`. They are checked in every
+    build, like any call, but evaluated only when debug assertions are on: under `build -g` (unless
+    `--no-debug-assertions`) or `--debug-assertions` (`build`, `run`), under `ceesafec test`, and in the interpreter
+    (unless `run --interp --no-debug-assertions`). When they are off, nothing of the call is compiled: the C is
+    `#if CEE_DEBUG_ASSERTIONS`, which the program defines as 0 or 1. A failure panics as `assert` does. Since the call
+    may vanish, its arguments may change nothing that exists before it (N0360):
+    - no assignment, `mut` argument or `borrow mut this` call on a place not declared inside the arguments, no move of
+      one (`debugAssert(consume(v))`), and no exit from the function (`?`);
+    - no write through a raw pointer or to a `static mut` (reading one is allowed);
+    - no `sleep` or `suspend` effect (§32.1): no I/O, no `await`. Allocating is allowed, and so is freeing what the
+      arguments allocated;
+    - no call of a C function, even one declared `@effects()`, and no call through a closure, a function value or a
+      `dyn` method. lib/core's atomic loads (`AtomicU32.load`, …) and `Cell.get` only read and are allowed; atomic
+      stores, swaps, fetches and compare-exchanges, lock acquisition and `RefCell.read`/`write` are not;
+    - a call is allowed when its callee's body, and everything it calls or drops, keeps these rules, writes through
+      its own `borrow mut` parameters aside (the caller's `mut` argument is what is checked). Drops count: a temporary
+      the arguments make is dropped inside the call, so its `drop` block is checked as a call. The checker infers
+      this per function with §32.1's machinery, as an internal fourth fact that no `@effects` list names.
+
+    To assert through something the rules refuse, bind the value to a local before the call, or put an `assert` in
+    `if (cfg("NAME")) { … }` (ADR 0080 §3.3).
   - `replace(mut place, value) -> T` (ADR 0075 §2.11): puts `value` in the place and returns the old value.
     `swap(mut a, mut b)` exchanges two places of one type (N0205 otherwise). Each argument is `mut` and a place
     (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`

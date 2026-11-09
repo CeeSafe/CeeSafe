@@ -1,0 +1,39 @@
+// `debugAssert` (ADR 0087 §2.5): its arguments only read what exists before it, so the program prints the same
+// whether debug assertions are on (the interpreter) or off (a plain build). The temporaries the arguments make, a
+// vector and a string, end inside the assertion, so neither build leaks them.
+struct Stack {
+    items: Vector<u32>;
+
+    fn top(borrow this) -> u32? => if (this.items.length == 0) null else this.items[this.items.length - 1];
+}
+
+fn digits(n: u32) -> Vector<u32> {
+    var v = Vector<u32>.create();
+    var k = n;
+    while (k > 0) {
+        v.push(k % 10)!;
+        k /= 10;
+    }
+    return v;
+}
+
+fn describe(n: u32) -> String {
+    var s = String.create();
+    s.append("bad count ")!;
+    s.appendNumber(n)!;
+    return s;
+}
+
+fn main() {
+    var stack = Stack { items: Vector<u32>.create() };
+    stack.items.push(4)!;
+    stack.items.push(7)!;
+    debugAssert(stack.top()! == 7);
+    debugAssert(stack.items.length == 2, "two items");
+    debugAssert(digits(472).length == 3);
+    debugAssert(stack.items[0] < stack.items[1], describe(stack.items[0]).view());
+    let total = stack.items[0] + stack.items[1];
+    debugAssert(total == 11);
+    Console.writeLine(total);
+}
+// expect-stdout: 11

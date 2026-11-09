@@ -44,6 +44,7 @@ struct CBuildOptions {
     bce: bool;                   // optimisations.md §2 (off: --no-bce)
     oce: bool;                   // optimisations.md §3 (off: --no-oce)
     structured: bool;            // c-backend.md §3 (off: --flat-c)
+    debugAssertions: bool;       // `debugAssert` compiled in (ADR 0087 §2.5)
 }
 
 fn generateC(
@@ -98,6 +99,7 @@ fn generateC(
     }
     trial.bce = o.bce;
     trial.structured = o.structured;
+    trial.debugAssertions = o.debugAssertions;
     trial.oce = o.oce;
     setUpEmitter(mut trial, c, n)?;
     emitProgram(mut trial, c, n, sources)?;
@@ -121,6 +123,7 @@ fn generateC(
     emitter.checks = trial.checks;
     emitter.bce = o.bce;
     emitter.structured = o.structured;
+    emitter.debugAssertions = o.debugAssertions;
     emitter.oce = o.oce;
     emitter.usedTypes = trial.usedTypes;
     setUpEmitter(mut emitter, c, n)?;

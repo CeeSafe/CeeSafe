@@ -124,6 +124,25 @@ struct NirFunction {
     bindings: Vector<u64>;    // a variant's bound parameters: (index << 32) | the closure's HIR function, by index
 }
 
+/// A `debugAssert` (ADR 0087 §2.5) of NIR function `function`: lowered into the blocks with ids [firstBlock, endBlock),
+/// compiled only where debugAssertMacro() holds. Its own locals are the temporaries [firstTemp, endTemp) and the HIR
+/// locals [firstLocal, endLocal); the HIR locals below `hirLocals` that are not its own existed before it.
+struct NirDebugAssert {
+    function: u32;
+    firstBlock: u32;
+    endBlock: u32;
+    firstTemp: u32;
+    endTemp: u32;
+    firstLocal: u32;
+    endLocal: u32;
+    hirLocals: u32;
+    file: u32;
+    span: Span;
+}
+
+/// The C macro under which `debugAssert` is compiled (ADR 0087 §2.5).
+fn debugAssertMacro() -> StringView => "CEE_DEBUG_ASSERTIONS";
+
 struct NirProgram {
     functions: Vector<NirFunction>;
     lists: Vector<u32>;
@@ -142,6 +161,7 @@ struct NirProgram {
     terminators: Vector<NirTerminator>;
     terminatorSpans: Vector<Span>;
     cases: Vector<NirCase>;
+    debugAsserts: Vector<NirDebugAssert>; // ADR 0087 §2.5
 
     fn create() -> NirProgram => NirProgram {
         functions: Vector<NirFunction>.create(),
@@ -161,6 +181,7 @@ struct NirProgram {
         terminators: Vector<NirTerminator>.create(),
         terminatorSpans: Vector<Span>.create(),
         cases: Vector<NirCase>.create(),
+        debugAsserts: Vector<NirDebugAssert>.create(),
     };
 
     fn list(borrow mut this, ids: Slice<u32>) -> Result<Range, AllocError> {

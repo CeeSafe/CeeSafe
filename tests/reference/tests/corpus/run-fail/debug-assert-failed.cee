@@ -1,0 +1,9 @@
+// option: debug-assertions
+// A failed `debugAssert` panics as `assert` does, with "assertion failed" or its message (ADR 0087 §2.5).
+fn main() {
+    let n: u32 = 3;
+    debugAssert(n == 3);
+    Console.writeLine("held");
+    debugAssert(n == 4, "n is not four"); // expect-panic: n is not four
+}
+// expect-stdout: held

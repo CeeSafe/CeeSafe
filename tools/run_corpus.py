@@ -88,6 +88,11 @@ def compile_options(text):
         options.append("--no-float")
     if "// option: kernel cosmoos" in stripped:
         options += ["--kernel", "cosmoos"]
+    # `debugAssert` (ADR 0087 §2.5): on or off in both the build and the interpreter.
+    if "// option: debug-assertions" in stripped:
+        options.append("--debug-assertions")
+    if "// option: no-debug-assertions" in stripped:
+        options.append("--no-debug-assertions")
     return options
 
 

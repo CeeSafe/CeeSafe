@@ -112,7 +112,15 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(out, "                    cross builds) instead of the C compiler\n")?;
     appendText(out, "  --line-directives (build) map the generated C to CeeSafe lines with #line\n")?;
-    appendText(out, "  -g                (build) debug build: #line directives, C compiled with -g -O0\n")?;
+    appendText(
+        out,
+        "  -g                (build) debug build: #line directives, C compiled with -g -O0, debug assertions on\n",
+    )?;
+    appendText(
+        out,
+        "  --debug-assertions, --no-debug-assertions  (build, run) evaluate debugAssert or not; default: on with -g,\n",
+    )?;
+    appendText(out, "                    under test and in the interpreter (type-system.md §8)\n")?;
     appendText(
         out,
         "  --flat-c          (build) emit the flat form: one label per block, no if/loop reconstruction\n",
@@ -212,6 +220,7 @@ struct Options {
     emitGiven: bool;
     lineDirectives: bool;       // --line-directives or -g (build)
     debug: bool;                // -g (build)
+    debugAssertions: u8;        // --debug-assertions 1, --no-debug-assertions 2, else 0 (build, run; ADR 0087 §2.5)
     split: bool;                // --split (build)
     programName: Vector<u8>;    // --program (build), or the package's name
     cc: Vector<u8>;             // --cc, else $CC (build)
@@ -331,6 +340,10 @@ fn readOptions(options: borrow mut Options) -> i32 {
         } else if (options.building && arg == "-g") {
             options.lineDirectives = true;
             options.debug = true;
+        } else if ((options.building || options.running) && arg == "--debug-assertions") {
+            options.debugAssertions = 1;
+        } else if ((options.building || options.running) && arg == "--no-debug-assertions") {
+            options.debugAssertions = 2;
         } else if (options.building && arg == "--split") {
             options.split = true;
         } else if (options.building && (arg == "--emit" || arg == "-o" || arg == "--exports-header" || arg == "--cc" ||
@@ -730,6 +743,7 @@ fn parseCommand() -> i32 {
         emitGiven: false,
         lineDirectives: false,
         debug: false,
+        debugAssertions: 0,
         split: false,
         programName: Vector<u8>.create(),
         cc: match (Environment.variable("CC")) {
@@ -978,6 +992,7 @@ fn interpretChecked(
         bce: options.bce,
         oce: options.oce,
         structured: options.structured,
+        debugAssertions: false,
     };
     if (!generateC(checker, nir, sources, build, mut files)!) {
         return report(options.json, checker.front.diagnostics, sources);
@@ -1005,6 +1020,7 @@ fn interpretChecked(
         capture: false,
         outputLimit: 0,
         input: Vector<u8>.create(),
+        debugAssertions: options.debugAssertions != 2,
     };
     return interpretProgram(checker, nir, sources, interpreterOptions)!;
 }
@@ -1087,6 +1103,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     emitGiven: false,
     lineDirectives: false,
     debug: false,
+    debugAssertions: 0,
     split: false,
     programName: Vector<u8>.create(),
     cc: match (Environment.variable("CC")) {
@@ -1392,6 +1409,8 @@ fn compileFiles(
             bce: options.bce,
             oce: options.oce,
             structured: options.structured,
+            debugAssertions: options.debugAssertions == 1 ||
+                (options.debugAssertions == 0 && (options.debug || options.testing)),
         };
         if (!generateC(mut checker, mut nir, sources, build, mut files)!) {
             return report(options.json, checker.front.diagnostics, sources);

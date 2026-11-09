@@ -59,6 +59,60 @@ length at main.cee:12
 main at main.cee:18
 ```
 
+## Debug assertions
+
+`debugAssert(condition)` and `debugAssert(condition, message)` check what should always hold, at no cost in a release
+build: they are evaluated only in a debug build (`-g`), under `ceesafec test` and in the interpreter, and a release
+build leaves them out entirely. `--debug-assertions` and `--no-debug-assertions` turn them on or off in any build.
+A false one panics, as `assert` does.
+
+```ceesafe
+fn isSorted(values: Slice<u32>) -> bool {
+    for (k in 1..values.length) {
+        if (values[k - 1] > values[k]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn main() {
+    var scores = Vector<u32>.create();
+    scores.push(3)!;
+    scores.push(8)!;
+    debugAssert(isSorted(scores.view()), "scores out of order");
+    Console.writeLine(scores.length);
+}
+```
+
+```text
+2
+```
+
+Since a release build leaves the call out, the condition and message must not change anything that exists before
+them, or the two builds would behave differently. The compiler checks this, through every function they call: no
+assignment, `mut` argument, move or drop of an outer variable, no I/O, no C call, no call through a closure or `dyn`.
+They may read, allocate, and change their own locals. To assert on something that changes, do the change first:
+
+<!-- ceesafe: fail N0360 -->
+```ceesafe
+fn main() {
+    var queue = Vector<u32>.create();
+    queue.push(3)!;
+    debugAssert(queue.pop() != null);
+}
+```
+
+```text
+main.cee:4:5: error[N0360]: 'debugAssert' must not change what exists before it, since release builds leave it out (ADR 0087 §2.5): this lends as 'mut' 'queue', which exists before the call
+  |
+4 |     debugAssert(queue.pop() != null);
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Here, `let last = queue.pop(); debugAssert(last != null);` pops in every build. `assert` is always evaluated, so it
+has no such rule.
+
 ## When the program panics
 
 A failed check prints the reason and the CeeSafe location, and exits with status 134. Under a debugger, a breakpoint on

@@ -1,0 +1,11 @@
+// `debugAssert(condition)` and `debugAssert(condition, message)` (ADR 0087 §2.5) are checked in every build, as
+// `assert` is: one or two arguments (N0209), a `bool` condition and a `StringView` message (N0205). A user function
+// of the same name shadows the built-in.
+fn main() {
+    let n: u32 = 1;
+    debugAssert(); // error[N0209]
+    debugAssert(n == 1, "a", "b"); // error[N0209]
+    debugAssert(n); // error[N0205]
+    debugAssert(n == 1, n); // error[N0205]
+    assert(n == 1);
+}

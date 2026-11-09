@@ -1,0 +1,10 @@
+// option: no-debug-assertions
+// `debugAssert` with debug assertions off (`--no-debug-assertions`, ADR 0087 §2.5): nothing of the call runs, so a
+// false condition does not panic, and its message is never made.
+fn main() {
+    let n: u32 = 3;
+    debugAssert(n == 4);
+    debugAssert(n == 5, "not five");
+    Console.writeLine("held");
+}
+// expect-stdout: held

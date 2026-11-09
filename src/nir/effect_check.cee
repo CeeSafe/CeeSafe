@@ -6,6 +6,12 @@
 
 fn maxEffectChain() -> u32 => 6;
 
+/// The internal fourth fact (ADR 0087 §2.5): the operation may change something that existed before its function
+/// was called, other than through the function's own `borrow mut` parameters. No `@effects` list names it, and every
+/// check against a list masks it out (maskEffects()); only `debugAssert`'s N0360 reads it.
+fn writeEffect() -> u32 => 8;
+fn inferredEffects() -> u32 => 15; // maskEffects() | writeEffect()
+
 // Operation kinds: what the description says.
 fn opDrop() -> u32 => 0;         // drops a 'T'
 fn opFree() -> u32 => 1;         // frees a 'T'
@@ -52,6 +58,8 @@ struct InferredEffects {
     alloc: EffectOp;
     hasSuspend: bool;
     suspend: EffectOp;
+    hasWrite: bool; // ADR 0087 §2.5
+    write: EffectOp;
 }
 
 struct DropEffect {
@@ -64,7 +72,8 @@ struct Origins {
     computed: bool;
     literalLocals: Vector<u32>;
     literalBodies: Vector<u32>;
-    ownLocals: Vector<bool>; // by local
+    ownLocals: Vector<bool>;    // by local
+    staticLocals: Vector<bool>; // by local: holds a `static mut`'s address (ADR 0087 §2.5)
 }
 
 struct EffectReport {
@@ -98,13 +107,27 @@ fn growTo<T: Copy>(values: borrow mut Vector<T>, length: usize, value: T) -> Res
 fn effectsOf(c: borrow Checker, e: borrow Effects, function: u32) -> u32 {
     let f = borrow c.hir.functions[function as usize];
     if (f.isDynMethod && f.declaredEffects == none() && isAsyncFunction(c, function)) {
-        return suspendEffect() | allocEffect(); // an async body cannot sleep (ADR 0036 §3.3)
+        return suspendEffect() | allocEffect() | writeEffect(); // an async body cannot sleep (ADR 0036 §3.3)
     }
     if (isExternFunction(c, function) || f.isDynMethod) {
-        return if (f.declaredEffects == none()) allEffects() else f.declaredEffects;
+        // C and `dyn` calls may write anything (ADR 0087 §2.5), whatever their list says; lib/core's atomic loads
+        // only read.
+        let writes = if (isAtomicLoad(c, function)) 0u32 else writeEffect();
+        return writes | (if (f.declaredEffects == none()) allEffects() else f.declaredEffects);
     }
     return if ((function as usize) < e.inferred.length &&
         e.inferred[function as usize].present) e.inferred[function as usize].effects else 0;
+}
+
+/// One of lib/core's atomic loads (`ceesafe_atomic_load_…`, lib/core/atomics.cee): a C function that only reads.
+fn isAtomicLoad(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    if (!f.library || !isExternFunction(c, function)) {
+        return false;
+    }
+    let name = c.name(f.name);
+    let prefix = "ceesafe_atomic_load_".bytes();
+    return name.length > prefix.length && sameBytes(name[0..prefix.length], prefix);
 }
 
 /// The effect list of a function or closure type (TypeEffects, §36.3): both effects without one.
@@ -194,7 +217,7 @@ fn dropEffects(c: borrow Checker, e: borrow mut Effects, typ: u32) -> Result<Dro
         }
     }
     for (part in parts.view()) {
-        if ((part.effects & (maskEffects() ^ effects)) != 0 && via == none()) {
+        if ((part.effects & (inferredEffects() ^ effects)) != 0 && via == none()) {
             via = part.via;
         }
         effects = effects | part.effects;
@@ -515,11 +538,13 @@ fn originsOf(
             }
         }
     }
+    let staticLocals = mutableStaticLocals(c, n, function)?;
     e.origins[function as usize] = Origins {
         computed: true,
         literalLocals: literalLocals,
         literalBodies: literalBodies,
         ownLocals: ownLocals,
+        staticLocals: staticLocals,
     };
     return Ok();
 }
@@ -702,18 +727,24 @@ fn builtinOperation(
         return Ok(textOp(suspendEffect(), 13)); // the body's effects are its worker's
     }
     if (function == bfCallPointer()) {
-        return Ok(textOp(sleep | alloc, 6));
+        return Ok(textOp(sleep | alloc | writeEffect(), 6));
+    }
+    if (function == bfPtrWrite() || function == bfPtrWriteVolatile() || function == bfPtrPlace()) {
+        return Ok(textOp(writeEffect(), 14)); // ADR 0087 §2.5
     }
     if (function == bfCallClosure() || function == bfCallFunction()) {
         let argument = n.at(arguments, 0);
-        // A call through the function's own @effectsOf parameter is its callers' effect (§32.5).
+        // A call through the function's own @effectsOf parameter is its callers' effect (§32.5), but for
+        // `debugAssert` a call through any closure or function value may write (ADR 0087 §2.5).
         if (originOwn(n, e, argument)) {
-            return Ok(blankOp());
+            var through = effectOp(writeEffect(), opCallThrough(), n.operandTypes[argument as usize], none(), none());
+            through.builtin = function;
+            return Ok(through);
         }
         // The type's effect list (type-system.md §36.3): every value of the type is checked against it.
         let argumentType = n.operandTypes[argument as usize];
         let typ = if (function == bfCallClosure()) c.types.info(argumentType).pointee else argumentType;
-        var op = effectOp(c.types.info(typ).effects, opCallThrough(), argumentType, none(), none());
+        var op = effectOp(c.types.info(typ).effects | writeEffect(), opCallThrough(), argumentType, none(), none());
         op.builtin = function;
         return Ok(op);
     }
@@ -905,6 +936,9 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
             11 => "waits for a scope's children (type-system.md §40.5)",
             12 => "runs two children and waits for both (type-system.md §40.4)",
             13 => "waits for a worker thread (type-system.md §40.4)",
+            14 => "writes through a raw pointer",
+            15 => "assigns through a raw pointer",
+            16 => "writes a 'static mut'",
             _ => "calls through a C function pointer, which may do anything (type-system.md §32.1)",
         };
         return appendText(out, text);
@@ -916,7 +950,7 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
                 else "calls through a function value of type ",
         )?;
         appendQuotedType(out, c, op.typ)?;
-        if (op.effects == allEffects()) {
+        if ((op.effects & maskEffects()) == allEffects()) {
             appendText(out, ", which has no effect list (type-system.md §36.3)")?;
         }
         return Ok();
@@ -941,7 +975,9 @@ fn explainOp(
         seen.push(next)?;
         if (isExternFunction(c, next)) {
             let declared = c.hir.functions[next as usize].declaredEffects;
-            if (declared != none()) {
+            if (effect == writeEffect()) {
+                appendText(out, ", a C function, which may write anything (ADR 0087 §2.5)")?;
+            } else if (declared != none()) {
                 appendText(out, ", declared @effects(")?;
                 appendEffectNames(out, declared)?;
                 appendText(out, ")")?;
@@ -954,7 +990,12 @@ fn explainOp(
             // A call through `dyn` has the interface method's declared effects, all of them without a list (§37.3):
             // the fix is usually on the interface, not at the call.
             let declared = c.hir.functions[next as usize].declaredEffects;
-            if (declared != none()) {
+            if (effect == writeEffect()) {
+                appendText(
+                    out,
+                    ", an interface method called through 'dyn', which may write anything (ADR 0087 §2.5)",
+                )?;
+            } else if (declared != none()) {
                 appendText(out, ", declared @effects(")?;
                 appendEffectNames(out, declared)?;
                 appendText(out, ")")?;
@@ -973,6 +1014,7 @@ fn explainOp(
         let has =
             if (effect == sleepEffect()) inferred.hasSleep
                 else if (effect == allocEffect()) inferred.hasAlloc
+                else if (effect == writeEffect()) inferred.hasWrite
                 else inferred.hasSuspend;
         if (!has) {
             break;
@@ -984,6 +1026,7 @@ fn explainOp(
         let step =
             if (effect == sleepEffect()) inferred.sleep
                 else if (effect == allocEffect()) inferred.alloc
+                else if (effect == writeEffect()) inferred.write
                 else inferred.suspend;
         appendText(out, ", which ")?;
         appendOpDescription(c, step, out)?;
@@ -1013,9 +1056,10 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                 for (s in block.statements.view()) {
                     var ops = Vector<EffectOp>.create();
                     statementOperations(c, n, e, s, mut ops)?;
+                    writeOperations(c, n, e, s, mut ops)?;
                     for (op in ops.view()) {
                         let inferred = borrow mut e.inferred[source as usize];
-                        if ((op.effects & (maskEffects() ^ inferred.effects)) == 0) {
+                        if ((op.effects & (inferredEffects() ^ inferred.effects)) == 0) {
                             continue;
                         }
                         changed = true;
@@ -1030,6 +1074,10 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                         if ((op.effects & suspendEffect()) != 0 && !inferred.hasSuspend) {
                             inferred.hasSuspend = true;
                             inferred.suspend = op;
+                        }
+                        if ((op.effects & writeEffect()) != 0 && !inferred.hasWrite) {
+                            inferred.hasWrite = true;
+                            inferred.write = op;
                         }
                         inferred.effects = inferred.effects | op.effects;
                     }
@@ -1486,6 +1534,7 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
                 literalLocals: Vector<u32>.create(),
                 literalBodies: Vector<u32>.create(),
                 ownLocals: Vector<bool>.create(),
+                staticLocals: Vector<bool>.create(),
             },
         )?;
     }
@@ -1500,6 +1549,8 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
                 hasSuspend: false,
                 alloc: blankOp(),
                 suspend: blankOp(),
+                hasWrite: false,
+                write: blankOp(),
             },
         )?;
     }
@@ -1508,6 +1559,7 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
         let function = e.functions[k];
         checkFunctionEffects(c, n, mut e, function)?;
     }
+    checkDebugAsserts(c, n, mut e)?; // N0360 (ADR 0087 §2.5)
     return Ok();
 }
 

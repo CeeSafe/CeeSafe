@@ -133,6 +133,12 @@ it with `-g -O0`. A debugger then shows CeeSafe files and lines: breakpoints set
 goes from one CeeSafe statement to the next. A line can take more than one step, since one CeeSafe statement can be several
 C statements (a checked addition, a temporary).
 
+A debug build also turns debug assertions on (ADR 0087 §2.5): `debugAssert(…)` is evaluated, and a false one panics.
+`--no-debug-assertions` turns them off in a `-g` build, `--debug-assertions` on in any `build` or native `run`.
+`ceesafec test` and the interpreter (`run --interp`) evaluate them unless given `--no-debug-assertions`. The C names the
+choice once, `#define CEE_DEBUG_ASSERTIONS 1` (or `0`), in a program that has a `debugAssert`; each assertion is in an
+`#if CEE_DEBUG_ASSERTIONS` block.
+
 | | lldb | gdb |
 |---|---|---|
 | Stop at a CeeSafe line | `breakpoint set -f demo.cee -l 12` (`b demo.cee:12`) | `break demo.cee:12` |

@@ -18,9 +18,10 @@ struct InterpreterOptions {
     memoryLimit: i64;
     sandboxed: bool;
     workingDirectory: Vector<u8>;
-    capture: bool;     // the program's output kept (CappedStream), its input given (ceesafe_run, tooling.md §6.3)
-    outputLimit: u64;  // with capture: bytes of each output kept
-    input: Vector<u8>; // with capture: standard input
+    capture: bool;         // the program's output kept (CappedStream), its input given (ceesafe_run, tooling.md §6.3)
+    outputLimit: u64;      // with capture: bytes of each output kept
+    input: Vector<u8>;     // with capture: standard input
+    debugAssertions: bool; // `debugAssert` evaluated (ADR 0087 §2.5): on unless `run --interp --no-debug-assertions`
 }
 
 /// One call's frame: its locals' allocations, and each placed site's latest slot.
@@ -849,7 +850,11 @@ fn runActivations(
             NirTerminator.Goto(target) => { stack[top].block = it.blockIndex[f as usize][target as usize]; }
             NirTerminator.Branch(condition, thenBlock, elseBlock) => {
                 let value = operand(it, c, n, mut stack[top].frame, condition)?;
-                let taken = if (value.bits(0, 1)? != 0) thenBlock else elseBlock;
+                var taken = if (value.bits(0, 1)? != 0) thenBlock else elseBlock;
+                if (!it.options.debugAssertions &&
+                    sameText(n.functions[f as usize].blocks[block as usize].branchCfg.view(), debugAssertMacro())) {
+                    taken = elseBlock; // `debugAssert` with debug assertions off (ADR 0087 §2.5)
+                }
                 stack[top].block = it.blockIndex[f as usize][taken as usize];
             }
             NirTerminator.Switch(value, cases, otherwise) => {

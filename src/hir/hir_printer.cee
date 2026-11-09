@@ -708,7 +708,10 @@ struct HirPrinter {
             }
             HirExpr.BuiltinCall(builtin, arguments) => {
                 this.text(
-                    if (builtin == 0) "(Console.write" else if (builtin == 1) "(Console.writeLine" else "(Process.exit",
+                    if (builtin == 0) "(Console.write"
+                        else if (builtin == 1) "(Console.writeLine"
+                        else if (builtin == bfDebugAssert()) "(debugAssert"
+                        else "(Process.exit",
                 )?;
                 this.args(hir, types, symbols, arguments)?;
                 this.text(")")?;

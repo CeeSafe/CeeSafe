@@ -1,0 +1,126 @@
+// `debugAssert`'s arguments may change nothing that exists before the call (ADR 0087 §2.5, N0360): release builds
+// leave them out. Each refused shape: an assignment, a `mut` loan (an argument or a `borrow mut this` call, as Bun's
+// `events.next()`), a move, a write through a raw pointer two calls deep, a write to a `static mut`, I/O, a C function even when
+// declared `@effects()` (Bun's `us_nq_vtable_size()`), calls through a closure, a function value and `dyn`, a
+// temporary whose `drop` writes, atomics, a RefCell's `read`, a lock (Bun's `try_lock`) and `?`. Reading, allocating
+// and changing the arguments' own locals are allowed.
+extern "C" {
+    @effects()
+    fn abs(x: i32) -> i32;
+}
+
+static mut HITS: u32 = 0;
+
+struct Res {
+    id: u32;
+
+    drop {}
+}
+
+struct Noisy {
+    id: u32;
+
+    drop {
+        Console.writeLine("dropped");
+    }
+}
+
+interface Probe {
+    fn ready(borrow this) -> bool;
+}
+
+struct Always {}
+
+impl Probe for Always {
+    fn ready(borrow this) -> bool => true;
+}
+
+fn bump(n: borrow mut u32) -> bool {
+    n += 1;
+    return true;
+}
+
+fn consume(r: Res) -> bool => r.id == 1;
+
+/// Safety: `p` points at a live `u32`.
+fn store(p: *mut u32) -> bool {
+    unsafe { p.write(7); }
+    return true;
+}
+
+fn storeVia(p: *mut u32) -> bool => store(p);
+
+/// Safety: `HITS` is used from one thread.
+fn countHit() -> bool {
+    unsafe { HITS += 1; }
+    return true;
+}
+
+fn shout() -> bool {
+    Console.writeLine("checked");
+    return true;
+}
+
+fn noisyId() -> u32 {
+    let n = Noisy { id: 3 };
+    return n.id;
+}
+
+fn allowed(limit: u32) -> bool {
+    var mine: u32 = 0;
+    bump(mut mine);
+    var v = Vector<u32>.create();
+    v.push(mine)!;
+    return v.length <= limit as usize;
+}
+
+fn apply(f: fn(u32) -> bool) -> bool {
+    debugAssert(f(1)); // error[N0360]
+    return true;
+}
+
+fn check(probe: borrow dyn Probe) -> bool {
+    debugAssert(probe.ready()); // error[N0360]
+    return true;
+}
+
+fn copyOf(text: StringView) -> Result<String, AllocError> {
+    var s = String.create();
+    s.append(text)?;
+    return Ok(s);
+}
+
+fn parse(text: StringView) -> Result<u32, AllocError> {
+    debugAssert(copyOf(text)?.view() == text); // error[N0360]
+    return Ok(0);
+}
+
+/// Safety: `abs` reads only its argument, and `HITS` is used from one thread.
+fn main() {
+    var n: u32 = 0;
+    var x: u32 = 0;
+    let p = borrow mut x as *mut u32;
+    let r = Res { id: 1 };
+    let counter = AtomicU32.create(0);
+    let cell = RefCell<u32>.create(5);
+    let words: StringView = "a,b";
+    var parts = words.split(",");
+    let checker = (k: u32) => k > 0;
+    debugAssert(if (x == 0) { n = 1; true } else false); // error[N0360]
+    debugAssert(bump(mut n)); // error[N0360]
+    debugAssert(parts.next() != null); // error[N0360]
+    debugAssert(consume(r)); // error[N0360]
+    debugAssert(storeVia(p)); // error[N0360]
+    debugAssert(countHit()); // error[N0360]
+    debugAssert(shout()); // error[N0360]
+    debugAssert(unsafe { abs(-1) } == 1); // error[N0360]
+    debugAssert(checker(2)); // error[N0360]
+    debugAssert(noisyId() == 3); // error[N0360]
+    debugAssert(Noisy { id: 4 }.id == 4); // error[N0360]
+    debugAssert(counter.fetchAdd(1) == 0); // error[N0360]
+    debugAssert(cell.read().data() == 5); // error[N0360]
+    debugAssert(counter.load() == 0 && allowed(4) && x == 0 && unsafe { HITS } == 0, "reads only");
+    apply((k) => k > 0);
+    check(Always {});
+    parse("ab");
+}

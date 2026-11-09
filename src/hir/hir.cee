@@ -266,6 +266,14 @@ struct HirCfg {
     text: Range;
 }
 
+/// `debugAssert(…)` (ADR 0087 §2.5): its BuiltinCall and the function's locals its arguments declare, ids
+/// [firstLocal, endLocal); every other local, and every parameter, existed before the call.
+struct HirDebugAssert {
+    expr: u32;
+    firstLocal: u32;
+    endLocal: u32;
+}
+
 struct HirStatic {
     name: u32;
     typ: u32;
@@ -305,6 +313,8 @@ struct HirProgram {
     statics: Vector<HirStatic>;
     /// The conditions of `if (cfg("X"))` statements (ADR 0080 §3.3): each a `false` HIR condition and its macro text.
     cfgConditions: Vector<HirCfg>;
+    /// The `debugAssert` calls (ADR 0087 §2.5).
+    debugAsserts: Vector<HirDebugAssert>;
 
     fn create() -> HirProgram => HirProgram {
         lists: Vector<u32>.create(),
@@ -327,6 +337,7 @@ struct HirProgram {
         constants: Vector<HirConstant>.create(),
         statics: Vector<HirStatic>.create(),
         cfgConditions: Vector<HirCfg>.create(),
+        debugAsserts: Vector<HirDebugAssert>.create(),
     };
 
     fn list(borrow mut this, ids: Slice<u32>) -> Result<Range, AllocError> {

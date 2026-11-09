@@ -838,6 +838,23 @@ struct AstPrinter {
                 }
                 this.text(")")?;
             }
+            PatternNode.Slice(items) => {
+                this.text("(slice")?;
+                for (k in 0..items.count) {
+                    this.text(" ")?;
+                    this.patternText(ast, symbols, ast.at(items, k))?;
+                }
+                this.text(")")?;
+            }
+            PatternNode.Rest(name) => {
+                if (name == none()) {
+                    this.text("..")?;
+                } else {
+                    this.text("(@ ")?;
+                    this.name(ast, symbols, name)?;
+                    this.text(" ..)")?;
+                }
+            }
         }
         return Ok();
     }

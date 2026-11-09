@@ -141,6 +141,11 @@ enum HirPattern {
     Or(Range),                 // alternatives (ADR 0085 §2.3), each binding the same locals
     Range(IntValue, IntValue), // `lo..=hi`, both included (ADR 0085 §2.4; `lo..hi` is `lo..=hi - 1`)
     At(u32, u32),              // `name @ P` (ADR 0085 §2.5): the local, the pattern
+    /// `"get"` (ADR 0085 §2.7): the text (Hir.text), and on a `Slice<u8>` its bytes as Literal patterns (for coverage).
+    String(Range, Range),
+    /// `[a, .., z]` (ADR 0085 §2.7): the item patterns (the prefix, then the suffix), where `..` sits (the prefix's
+    /// length) or none without one, the local `rest @ ..` binds or none.
+    Slice(Range, u32, u32),
 }
 
 struct HirArmBinding {

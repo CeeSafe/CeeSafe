@@ -1,0 +1,78 @@
+// String literal patterns (ADR 0085 §2.7): on a StringView they match equal text; on a Slice<u8> its bytes, beside
+// slice patterns of bytes; on a view payload; in or-patterns and with guards.
+
+fn method(m: StringView) -> u32 => match (m) {
+    "GET" | "HEAD" => 1,
+    "POST" => 2,
+    "" => 3,
+    other if (other.length > 6) => 4,
+    _ => 0,
+};
+
+fn extension(name: Slice<u8>) -> u32 => match (name) {
+    "cjs" => 1,
+    "mjs" | "js" => 2,
+    "" => 3,
+    ['.', ..] => 4,
+    "\u{e9}t\u{e9}" => 5,
+    _ => 0,
+};
+
+fn answer(o: StringView?) -> u32 => match (o) {
+    Some("yes") | Some("y") => 1,
+    Some(_) => 2,
+    null => 0,
+};
+
+fn statement(word: StringView) {
+    match (word) {
+        "let" => { Console.writeLine("declaration"); }
+        "if" | "while" => { Console.writeLine("condition"); }
+        w => {
+            Console.write("name ");
+            Console.writeLine(w);
+        }
+    }
+}
+
+fn main() {
+    Console.writeLine(method("GET"));
+    Console.writeLine(method("HEAD"));
+    Console.writeLine(method("POST"));
+    Console.writeLine(method(""));
+    Console.writeLine(method("OPTIONS"));
+    Console.writeLine(method("PUT"));
+    Console.writeLine(extension("cjs".bytes()));
+    Console.writeLine(extension("js".bytes()));
+    Console.writeLine(extension("".bytes()));
+    Console.writeLine(extension(".hidden".bytes()));
+    Console.writeLine(extension("\u{e9}t\u{e9}".bytes()));
+    Console.writeLine(extension("cj".bytes()));
+    Console.writeLine(answer(Some("yes")));
+    Console.writeLine(answer(Some("y")));
+    Console.writeLine(answer(Some("no")));
+    Console.writeLine(answer(null));
+    statement("let");
+    statement("while");
+    statement("count");
+}
+
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 5
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: declaration
+// expect-stdout: condition
+// expect-stdout: name count

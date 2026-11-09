@@ -186,6 +186,16 @@ fn shadowPattern(
             shadowBind(front, dependencies, scope, name)?;
             shadowPattern(front, dependencies, scope, inner)?;
         }
+        PatternNode.Slice(items) => {
+            for (k in 0..items.count) {
+                shadowPattern(front, dependencies, scope, front.ast.at(items, k))?;
+            }
+        }
+        PatternNode.Rest(name) => {
+            if (name != none()) {
+                shadowBind(front, dependencies, scope, name)?;
+            }
+        }
         _ => {}
     }
     return Ok();

@@ -25,7 +25,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     106 => "Namespace declaration not first in the file",
     107 =>
         "Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2)",
-    108 => "Expected a `match` pattern (`_`, a literal or range, a name, `name @ P`, `(P)`, or `E.V(…)`)",
+    108 =>
+        "Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`)",
     109 => "An `import` declaration after an item",
     110 =>
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",

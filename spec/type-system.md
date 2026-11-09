@@ -561,6 +561,9 @@ PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
           | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
+          | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
+          | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
+SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
@@ -587,7 +590,9 @@ and `E.V…` there are patterns.
   - an enum: variant patterns;
   - an integer: literal and range patterns of that type;
   - `bool`: `true`/`false`;
-  - or a reference to one of these.
+  - or a reference to one of these;
+  - a `StringView`: string literal patterns; a `Slice<T>` (or `SliceMut<T>`), an array `[T; N]` or a reference to
+    one: slice patterns, and on a `Slice<u8>` string literal patterns too (ADR 0085 §2.7).
 - **Exhaustiveness** (N0256): enum matches must cover every variant or end with `_`. Integer
   matches must cover every value of the type with their literals and ranges, or end with `_` (ADR 0085 §2.4).
   `bool` matches need both values or `_`. An arm that can never match (a repeated variant or literal, a value an
@@ -596,6 +601,19 @@ and `E.V…` there are patterns.
   expressions do. Both bounds are integer or character literals, typed by the scrutinee (or payload) as §4 types a
   literal, so `'a'..='z'` matches bytes of a `u8`. A range that matches no value (`'z'..='a'`, `5..5`) is N0357.
   Ranges are for integers only: `bool`, floats and other types take none (N0205; a `bool` bound is N0108).
+- **String literal patterns** (ADR 0085 §2.7). On a `StringView`, `"get"` matches equal bytes, as `==` does (§22.2).
+  On a `Slice<u8>`, the same literal matches its UTF-8 bytes: the literal is typed by the value, as `'k'` is, so a
+  byte string is written `"cjs"`. A string pattern on any other type is N0205. String patterns never cover their
+  type (a match on a `StringView` needs `_` or a binding); a repeated one is N0257.
+- **Slice patterns** (ADR 0085 §2.7). `[]`, `[a, b]`, `[first, ..]`, `[.., last]`, `[x, rest @ ..]`,
+  `['"', inner @ .., '"']` match a `Slice<T>`, an array or a reference to one, and a payload that is a slice or a
+  `StringView` (`Some([a, ..])`, `Some("yes")`). Each item is a pattern on one element; `..` matches any number of
+  elements, at most once per pattern (N0100). Without `..`, the pattern matches exactly as many elements as it has
+  items; with it, at least that many. `rest @ ..` binds the elements `..` matched as a `Slice<T>` of the same region.
+  - **Bindings.** A slice is a view, so a slice pattern never moves: an element binding of a Copy type is a copy, and
+    of any other type a `borrow T` (which cannot be `var`). On an array held by value, the elements bind only by copy.
+  - **Arrays.** An array's length is part of its type: a pattern of more items than it has, or without `..` of a
+    different count, is N0205.
 - **Bindings.** A variant pattern binds each named payload to a new immutable local in the arm:
   - **Scrutinee of type `E` (a value):** the binding is a *copy* of the payload. Since M3c a
     non-Copy payload is moved out, and the match consumes its scrutinee (§18.4).
@@ -640,7 +658,8 @@ and `E.V…` there are patterns.
     N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
     first, from the value, and on a reference scrutinee every binding is a reference.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
-    through it is a separate `match` on that reference (N0205 otherwise).
+    through it is a separate `match` on that reference (N0205 otherwise). A slice or `StringView` payload takes string
+    and slice patterns, which test its elements (ADR 0085 §2.7).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision
@@ -650,7 +669,13 @@ and `E.V…` there are patterns.
     their type): a literal is a one-value interval, a range its own, and the type is split into the intervals the
     arms' bounds define, so literals and ranges that together hold every value cover the type (`0x00..=0x7F` and
     `0x80..=0xFF` cover a `u8`). N0256's witness is then a value no arm holds: the lowest, written as a character
-    literal for a printable byte of a `u8` (`'{'`) and in decimal otherwise (`128`).
+    literal for a printable byte of a `u8` (`'{'`) and in decimal otherwise (`128`); a position no arm constrains is
+    `_`. Strings are constructors of which there are infinitely many, so they never cover a `StringView` (ADR 0085
+    §2.7). The constructors of a slice are its lengths: `[p1, …, pk]` covers length k, and a pattern with `..` and k
+    items every length from k on. The check splits the lengths into 0, 1, …, L - 1 and "L or more", L being past the
+    longest pattern without `..` and at least the longest prefix plus the longest suffix of those with it (Rust's
+    algorithm); an array has the one length N. A string on a `Slice<u8>` is the slice of its bytes. N0256's witness
+    names a length and its elements: `[]`, `[_, _, ..]`.
 
 ### 15.3 `if` and `match` expressions (M11, G5)
 ```ceesafe

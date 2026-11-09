@@ -1011,6 +1011,17 @@ fn fmtWalkPattern(l: borrow mut FmtLayout, ast: borrow Ast, p: u32) -> Result<vo
             l.spacedAts.push(nameToken + 1)?;
             fmtWalkPattern(l, ast, inner)?;
         }
+        PatternNode.Slice(items) => {
+            for (k in 0..items.count) {
+                fmtWalkPattern(l, ast, ast.at(items, k))?;
+            }
+        }
+        PatternNode.Rest(name) => {
+            if (name != none()) {
+                let nameToken = l.first(ast.idents[name as usize].start);
+                l.spacedAts.push(nameToken + 1)?;
+            }
+        }
         _ => {}
     }
     return Ok();
@@ -1448,6 +1459,9 @@ fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
     let b = l.kindAt(token);
     if (sameKind(b, TokenKind.DotDot) && sameKind(l.kindAt(previous), TokenKind.Comma)) {
         return true; // `f(a, ...)` (ADR 0041 §3.3), and a range after a comma
+    }
+    if (sameKind(b, TokenKind.DotDot) && containsToken(l.spacedAts.view(), previous)) {
+        return true; // `rest @ ..` (ADR 0085 §2.7)
     }
     if (sameKind(b, TokenKind.CloseParen) || sameKind(b, TokenKind.CloseBracket) || sameKind(b, TokenKind.Comma) ||
         sameKind(b, TokenKind.Semicolon) || sameKind(b, TokenKind.Dot) || sameKind(b, TokenKind.DotDot) ||

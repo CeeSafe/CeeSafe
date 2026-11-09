@@ -182,6 +182,14 @@ fn namesInPattern(c: borrow Checker, p: u32, parameters: borrow Vector<u32>) -> 
             }
             return false;
         }
+        PatternNode.Slice(items) => {
+            for (k in 0..items.count) {
+                if (namesInPattern(c, c.front.ast.at(items, k), parameters)) {
+                    return true;
+                }
+            }
+            return false;
+        }
         _ => { return false; }
     }
 }

@@ -48,6 +48,15 @@ fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -
         HirPattern.Wildcard => {}
         HirPattern.Literal(_) => {}
         HirPattern.Range(_, _) => {}
+        HirPattern.String(_, _) => {}
+        HirPattern.Slice(items, _, restLocal) => {
+            for (k in 0..items.count) {
+                patternLocals(c, c.hir.at(items, k), out)?;
+            }
+            if (restLocal != none()) {
+                out.push(restLocal)?;
+            }
+        }
     }
     return Ok();
 }

@@ -6,13 +6,16 @@
 // so that literals and ranges together can cover the type. Patterns are ids in the HIR's pattern table; a matrix is
 // its rows' cells, row after row.
 
-/// A constructor: a variant, or the integers `value..=high` (one literal: value == high; 0 and 1 for bool).
+/// A constructor: a variant, the integers `value..=high` (one literal: value == high; 0 and 1 for bool), or a string
+/// (ADR 0085 §2.7: `text`, of which there are infinitely many).
 struct Constructor {
     isVariant: bool;
     variant: u32;
     value: IntValue;
     high: IntValue;
     arity: usize;
+    isString: bool;
+    text: Range; // Hir.text
 }
 
 struct Matrix {
@@ -21,13 +24,17 @@ struct Matrix {
     width: usize;
 }
 
-fn sameConstructor(a: Constructor, b: Constructor) -> bool =>
-    a.isVariant == b.isVariant &&
+fn sameConstructor(c: borrow Checker, a: Constructor, b: Constructor) -> bool {
+    if (a.isString || b.isString) {
+        return a.isString && b.isString && sameBytes(c.hir.textOf(a.text), c.hir.textOf(b.text));
+    }
+    return a.isVariant == b.isVariant &&
         (if (a.isVariant) a.variant == b.variant else sameInt(a.value, b.value) && sameInt(a.high, b.high));
+}
 
-fn containsConstructor(list: borrow Vector<Constructor>, k: Constructor) -> bool {
+fn containsConstructor(c: borrow Checker, list: borrow Vector<Constructor>, k: Constructor) -> bool {
     for (x in list.view()) {
-        if (sameConstructor(x, k)) {
+        if (sameConstructor(c, x, k)) {
             return true;
         }
     }
@@ -70,27 +77,42 @@ fn constructorOf(c: borrow Checker, pattern: u32, found: borrow mut Constructor)
                 value: intValue(0),
                 high: intValue(0),
                 arity: payloadCount(c, variant),
+                isString: false,
+                text: emptyRange(),
             };
             return true;
         }
         HirPattern.Literal(value) => {
-            found = Constructor { isVariant: false, variant: none(), value: value, high: value, arity: 0 };
+            found = intervalConstructor(value, value);
             return true;
         }
         HirPattern.Range(low, high) => {
-            found = Constructor { isVariant: false, variant: none(), value: low, high: high, arity: 0 };
+            found = intervalConstructor(low, high);
+            return true;
+        }
+        HirPattern.String(text, _) => {
+            // On a `StringView` (a string pattern on a `Slice<u8>` is a slice pattern: usefulSlice).
+            var k = noConstructor();
+            k.isString = true;
+            k.text = text;
+            found = k;
             return true;
         }
         _ => { return false; }
     }
 }
 
-fn noConstructor() -> Constructor => Constructor {
+fn noConstructor() -> Constructor => intervalConstructor(intValue(0), intValue(0));
+
+/// The integers `low..=high` (a literal: low == high).
+fn intervalConstructor(low: IntValue, high: IntValue) -> Constructor => Constructor {
     isVariant: false,
     variant: none(),
-    value: intValue(0),
-    high: intValue(0),
+    value: low,
+    high: high,
     arity: 0,
+    isString: false,
+    text: emptyRange(),
 };
 
 /// A pattern's arguments for its constructor: its payload patterns, or `_` for each without a list (Arguments).
@@ -139,21 +161,17 @@ fn allConstructors(c: borrow Checker, typ: u32, out: borrow mut Vector<Construct
         let count = c.types.enums[definition as usize].variants.length;
         for (k in 0..count) {
             let v = variantAt(c, typ, k);
-            out.push(
-                Constructor {
-                    isVariant: true,
-                    variant: v,
-                    value: intValue(0),
-                    high: intValue(0),
-                    arity: payloadCount(c, v),
-                },
-            )?;
+            var each = noConstructor();
+            each.isVariant = true;
+            each.variant = v;
+            each.arity = payloadCount(c, v);
+            out.push(each)?;
         }
         return Ok(true);
     }
     if (c.types.is(typ, TypeKind.Bool)) {
-        out.push(Constructor { isVariant: false, variant: none(), value: intValue(0), high: intValue(0), arity: 0 })?;
-        out.push(Constructor { isVariant: false, variant: none(), value: intValue(1), high: intValue(1), arity: 0 })?;
+        out.push(intervalConstructor(intValue(0), intValue(0)))?;
+        out.push(intervalConstructor(intValue(1), intValue(1)))?;
         return Ok(true);
     }
     return Ok(false);
@@ -167,7 +185,7 @@ fn specialize(c: borrow Checker, wildcard: u32, rows: borrow Matrix, k: Construc
         var firstConstructor = noConstructor();
         if (!constructorOf(c, first, mut firstConstructor)) {
             pushWildcards(wildcard, k.arity, mut result.cells)?;
-        } else if (sameConstructor(firstConstructor, k)) {
+        } else if (sameConstructor(c, firstConstructor, k)) {
             pushArguments(c, wildcard, first, firstConstructor, mut result.cells)?;
         } else {
             continue;
@@ -270,9 +288,12 @@ fn useful(
         }
         _ => {}
     }
-    let typ = types[0];
+    let typ = viewTarget(c, types[0]);
     if (c.types.is(typ, TypeKind.Integer)) {
         return usefulInteger(c, wildcard, rows, q, types, witness);
+    }
+    if (c.types.is(typ, TypeKind.Array) && !c.types.info(typ).isStr) {
+        return usefulSlice(c, wildcard, rows, q, types, witness);
     }
     var head = noConstructor();
     if (constructorOf(c, q[0], mut head)) {
@@ -293,7 +314,7 @@ fn useful(
     var used = Vector<Constructor>.create();
     for (r in 0..rows.rows) {
         var k = noConstructor();
-        if (constructorOf(c, rows.cells[r * rows.width], mut k) && !containsConstructor(used, k)) {
+        if (constructorOf(c, rows.cells[r * rows.width], mut k) && !containsConstructor(c, used, k)) {
             used.push(k)?;
         }
     }
@@ -301,7 +322,7 @@ fn useful(
     let finite = allConstructors(c, typ, mut all)?;
     var complete = finite;
     for (k in all.view()) {
-        if (!containsConstructor(used, k)) {
+        if (!containsConstructor(c, used, k)) {
             complete = false;
         }
     }
@@ -341,7 +362,7 @@ fn useful(
     var first = Vector<u8>.create();
     var missing = false;
     for (k in all.view()) {
-        if (!missing && !containsConstructor(used, k)) {
+        if (!missing && !containsConstructor(c, used, k)) {
             var arguments = Vector<Vector<u8>>.create();
             for (unused in 0..k.arity) {
                 var underscore = Vector<u8>.create();
@@ -526,7 +547,7 @@ fn splitIntervals(
     }
     for (i in 0..points.length) {
         let high = if (i + 1 < points.length) intPredecessor(points[i + 1]) else whole.high;
-        out.push(Constructor { isVariant: false, variant: none(), value: points[i], high: high, arity: 0 })?;
+        out.push(intervalConstructor(points[i], high))?;
     }
     return Ok();
 }
@@ -558,25 +579,30 @@ fn usefulInteger(
     witness: borrow mut Vector<Vector<u8>>,
 ) -> Result<bool, AllocError> {
     let typ = types[0];
-    var whole = Constructor {
-        isVariant: false,
-        variant: none(),
-        value: integerBottom(c, typ),
-        high: integerTop(c, typ),
-        arity: 0,
-    };
+    var whole = intervalConstructor(integerBottom(c, typ), integerTop(c, typ));
     var named = noConstructor();
     if (constructorOf(c, q[0], mut named)) {
         whole = named;
     }
     var pieces = Vector<Constructor>.create();
     splitIntervals(c, rows, whole, mut pieces)?;
+    // A column no pattern constrains (a slice's elements, ADR 0085 §2.7) is witnessed by `_`, not by a value.
+    var unconstrained = !constructorOf(c, q[0], mut named);
+    for (r in 0..rows.rows) {
+        if (constructorOf(c, rows.cells[r * rows.width], mut named)) {
+            unconstrained = false;
+        }
+    }
     for (piece in pieces.view()) {
         let specialized = specializeInterval(c, rows, piece)?;
         var inner = Vector<Vector<u8>>.create();
         if (useful(c, wildcard, specialized, q[1..], types[1..], mut inner)?) {
             var first = Vector<u8>.create();
-            appendIntegerWitness(c, typ, piece.value, mut first)?;
+            if (unconstrained) {
+                first.push('_')?;
+            } else {
+                appendIntegerWitness(c, typ, piece.value, mut first)?;
+            }
             witness.push(first)?;
             for (i in 0..inner.length) {
                 witness.push(copyBytes(inner[i].view())?)?;
@@ -585,4 +611,205 @@ fn usefulInteger(
         }
     }
     return Ok(false);
+}
+
+// ---- slices as lengths (ADR 0085 §2.7) ----
+
+/// A slice pattern's shape: `_` (any length), fixed (exactly `prefix` items), or variable (`prefix` items, `..`,
+/// `suffix` items). A string on a `Slice<u8>` is fixed: its bytes.
+struct SliceShape {
+    any: bool;
+    variable: bool;
+    prefix: usize;
+    suffix: usize;
+    items: Range; // Hir.lists: the item patterns, prefix then suffix
+}
+
+/// One constructor of a slice column: the length `length`, or (variable) every length from `prefix + suffix` on,
+/// whose arguments are the first `prefix` and the last `suffix` elements.
+struct SlicePiece {
+    variable: bool;
+    length: usize;
+    prefix: usize;
+    suffix: usize;
+}
+
+fn sliceShape(c: borrow Checker, pattern: u32) -> SliceShape {
+    match (c.hir.patterns[testedPattern(c, pattern) as usize]) {
+        HirPattern.Slice(items, restAt, _) => {
+            if (restAt == none()) {
+                return SliceShape {
+                    any: false,
+                    variable: false,
+                    prefix: items.count as usize,
+                    suffix: 0,
+                    items: items,
+                };
+            }
+            return SliceShape {
+                any: false,
+                variable: true,
+                prefix: restAt as usize,
+                suffix: (items.count - restAt) as usize,
+                items: items,
+            };
+        }
+        HirPattern.String(_, bytes) => {
+            return SliceShape { any: false, variable: false, prefix: bytes.count as usize, suffix: 0, items: bytes };
+        }
+        _ => { return SliceShape { any: true, variable: false, prefix: 0, suffix: 0, items: emptyRange() }; }
+    }
+}
+
+fn pieceArity(piece: SlicePiece) -> usize => if (piece.variable) piece.prefix + piece.suffix else piece.length;
+
+/// Does every slice of `piece` match the shape's length?
+fn shapeCovers(shape: SliceShape, piece: SlicePiece) -> bool {
+    if (shape.any) {
+        return true;
+    }
+    if (!shape.variable) {
+        return !piece.variable && piece.length == shape.prefix;
+    }
+    return piece.length >= shape.prefix + shape.suffix;
+}
+
+/// A shape's arguments for a piece it covers: its prefix, `_` for the elements between, its suffix.
+fn pushShapeArguments(
+    c: borrow Checker,
+    wildcard: u32,
+    shape: SliceShape,
+    piece: SlicePiece,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
+    let arity = pieceArity(piece);
+    if (shape.any) {
+        return pushWildcards(wildcard, arity, out);
+    }
+    for (i in 0..shape.prefix) {
+        out.push(c.hir.at(shape.items, truncate<u32>(i)))?;
+    }
+    pushWildcards(wildcard, arity - shape.prefix - shape.suffix, out)?;
+    for (j in 0..shape.suffix) {
+        out.push(c.hir.at(shape.items, truncate<u32>(shape.prefix + j)))?;
+    }
+    return Ok();
+}
+
+/// The lengths a slice column splits into (Rust's algorithm): an array's one length; for a slice, each length below
+/// L and "L or more", L being past the longest fixed pattern and at least the longest prefix plus the longest suffix.
+fn slicePieces(
+    c: borrow Checker,
+    rows: borrow Matrix,
+    q: u32,
+    typ: u32,
+    out: borrow mut Vector<SlicePiece>,
+) -> Result<void, AllocError> {
+    let arrayLength = c.types.info(typ).arrayLength;
+    if (arrayLength >= 0) {
+        let n = truncate<usize>(arrayLength);
+        return out.push(SlicePiece { variable: false, length: n, prefix: 0, suffix: 0 });
+    }
+    var firstUnfixed = 0usize; // past the longest fixed pattern
+    var prefix = 0usize;
+    var suffix = 0usize;
+    for (r in 0..rows.rows + 1) {
+        let shape = if (r < rows.rows) sliceShape(c, rows.cells[r * rows.width]) else sliceShape(c, q);
+        if (shape.any) {
+            continue;
+        }
+        if (!shape.variable && shape.prefix + 1 > firstUnfixed) {
+            firstUnfixed = shape.prefix + 1;
+        }
+        if (shape.variable && shape.prefix > prefix) {
+            prefix = shape.prefix;
+        }
+        if (shape.variable && shape.suffix > suffix) {
+            suffix = shape.suffix;
+        }
+    }
+    let longest = if (firstUnfixed > prefix + suffix) firstUnfixed else prefix + suffix;
+    for (k in 0..longest) {
+        out.push(SlicePiece { variable: false, length: k, prefix: 0, suffix: 0 })?;
+    }
+    return out.push(SlicePiece { variable: true, length: longest, prefix: longest - suffix, suffix: suffix });
+}
+
+/// Useful for a slice or array column (ADR 0085 §2.7): its lengths split into pieces, as integers into intervals; `q`
+/// is useful when it is for some piece it covers, and that piece, its elements filled in, is the witness (`[]`,
+/// `[_, _, ..]`).
+fn usefulSlice(
+    c: borrow Checker,
+    wildcard: u32,
+    rows: borrow Matrix,
+    q: Slice<u32>,
+    types: Slice<u32>,
+    witness: borrow mut Vector<Vector<u8>>,
+) -> Result<bool, AllocError> {
+    let typ = viewTarget(c, types[0]);
+    let element = c.types.info(typ).element;
+    let qShape = sliceShape(c, q[0]);
+    var pieces = Vector<SlicePiece>.create();
+    slicePieces(c, rows, q[0], typ, mut pieces)?;
+    for (piece in pieces.view()) {
+        if (!shapeCovers(qShape, piece)) {
+            continue;
+        }
+        let arity = pieceArity(piece);
+        var specialized = Matrix { cells: Vector<u32>.create(), rows: 0, width: arity + rows.width - 1 };
+        for (r in 0..rows.rows) {
+            let shape = sliceShape(c, rows.cells[r * rows.width]);
+            if (!shapeCovers(shape, piece)) {
+                continue;
+            }
+            pushShapeArguments(c, wildcard, shape, piece, mut specialized.cells)?;
+            for (i in 1..rows.width) {
+                specialized.cells.push(rows.cells[r * rows.width + i])?;
+            }
+            specialized.rows += 1;
+        }
+        var nq = Vector<u32>.create();
+        pushShapeArguments(c, wildcard, qShape, piece, mut nq)?;
+        appendU32s(mut nq, q[1..])?;
+        var nt = Vector<u32>.create();
+        for (unused in 0..arity) {
+            nt.push(element)?;
+        }
+        appendU32s(mut nt, types[1..])?;
+        var inner = Vector<Vector<u8>>.create();
+        if (useful(c, wildcard, specialized, nq.view(), nt.view(), mut inner)?) {
+            var first = Vector<u8>.create();
+            first.push('[')?;
+            for (i in 0..arity) {
+                if (i > 0) {
+                    appendText(mut first, ", ")?;
+                }
+                if (piece.variable && i == piece.prefix) {
+                    appendText(mut first, "..")?;
+                    if (piece.suffix > 0) {
+                        appendText(mut first, ", ")?;
+                    }
+                }
+                appendBytes(mut first, inner[i].view())?;
+            }
+            if (piece.variable && piece.suffix == 0) {
+                appendText(mut first, if (arity > 0) ", .." else "..")?;
+            }
+            first.push(']')?;
+            witness.push(first)?;
+            for (i in arity..inner.length) {
+                witness.push(copyBytes(inner[i].view())?)?;
+            }
+            return Ok(true);
+        }
+    }
+    return Ok(false);
+}
+
+/// The type a string or slice pattern tests (ADR 0085 §2.7): a slice's or a `StringView`'s elements, else `typ`.
+fn viewTarget(c: borrow Checker, typ: u32) -> u32 {
+    if (c.types.isSlice(typ) || c.types.isStringView(typ)) {
+        return c.types.info(typ).pointee;
+    }
+    return typ;
 }

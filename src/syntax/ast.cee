@@ -198,6 +198,10 @@ enum PatternNode {
     At(u32, u32),
     /// A bare name, `x` or `var x` (ADR 0085 §2.6): a constant in scope, else a binding; the identifier, `var`.
     Binding(u32, bool),
+    /// `[a, b, ..]` (ADR 0085 §2.7): the items, patterns in Ast.lists, at most one of them a Rest.
+    Slice(Range),
+    /// `..` or `name @ ..` in a slice pattern (ADR 0085 §2.7): the name (an identifier), or none.
+    Rest(u32),
 }
 
 /// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.

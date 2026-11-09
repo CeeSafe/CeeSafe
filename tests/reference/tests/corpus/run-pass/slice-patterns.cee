@@ -1,0 +1,122 @@
+// Slice patterns (ADR 0085 §2.7): on slices, arrays and references to arrays; `..` and `rest @ ..` at the start,
+// middle and end; Copy elements bound by copy, others by reference; nested patterns and or-patterns in items;
+// coverage by length with no `_`.
+
+fn ends(s: Slice<i32>) -> i32 => match (s) {
+    [] => 0,
+    [only] => only,
+    [first, .., last] => first + last,
+};
+
+fn middle(s: Slice<i32>) -> usize => match (s) {
+    [_, rest @ .., _] => rest.length,
+    _ => 0,
+};
+
+fn tail(s: Slice<i32>) -> i32 => match (s) {
+    [_, rest @ ..] => ends(rest),
+    [] => -1,
+};
+
+fn front(s: Slice<i32>) -> usize => match (s) {
+    [rest @ .., 0] => rest.length,
+    _ => 99,
+};
+
+fn unquote(text: Slice<u8>) -> Slice<u8> => match (text) {
+    ['"', inner @ .., '"'] => inner,
+    _ => text,
+};
+
+fn triple(a: [u8; 3]) -> u32 => match (a) {
+    [0, _, _] => 0,
+    [x, y, 9] => (x + y) as u32,
+    [.., z] => z as u32,
+};
+
+fn pair(a: borrow [i32; 2]) -> i32 => match (a) {
+    [x, y] => x * y,
+};
+
+fn firstLength(v: Slice<String>) -> usize => match (v) {
+    [first, ..] => first.length,
+    [] => 0,
+};
+
+fn options(s: Slice<u32?>) -> u32 => match (s) {
+    [Some(1 | 2), ..] => 1,
+    [null, Some(n)] | [Some(n), null] => n,
+    [.., Some(n @ 10..=20)] => n,
+    _ => 0,
+};
+
+fn payload(o: Slice<u8>?) -> u32 => match (o) {
+    Some([]) => 1,
+    Some([a, ..]) if (a > 100) => 2,
+    Some(_) => 3,
+    null => 0,
+};
+
+fn main() {
+    let xs = [1, 2, 3, 4];
+    Console.writeLine(ends(xs[..]));
+    Console.writeLine(ends(xs[..1]));
+    Console.writeLine(ends(xs[..0]));
+    Console.writeLine(middle(xs[..]));
+    Console.writeLine(middle(xs[..1]));
+    Console.writeLine(tail(xs[..]));
+    Console.writeLine(tail(xs[..0]));
+    let zs = [5, 6, 0];
+    Console.writeLine(front(zs[..]));
+    Console.writeLine(front(xs[..]));
+    Console.writeLine(unquote("\"abc\"".bytes()).length);
+    Console.writeLine(unquote("abc".bytes()).length);
+    Console.writeLine(triple([0, 1, 2]));
+    Console.writeLine(triple([3, 4, 9]));
+    Console.writeLine(triple([3, 4, 5]));
+    let p = [6, 7];
+    Console.writeLine(pair(borrow p));
+    var names = Vector<String>.create();
+    var s = String.create();
+    s.append("hello")!;
+    names.push(s)!;
+    Console.writeLine(firstLength(names.view()));
+    let none: u32? = null;
+    let os: [u32?; 2] = [Some(2), Some(5)];
+    Console.writeLine(options(os[..]));
+    let ot = [none, Some(7)];
+    Console.writeLine(options(ot[..]));
+    let ou: [u32?; 2] = [Some(3), Some(15)];
+    Console.writeLine(options(ou[..]));
+    Console.writeLine(options(ot[..1]));
+    let bytes = [200u8];
+    Console.writeLine(payload(Some(bytes[..0])));
+    Console.writeLine(payload(Some(bytes[..])));
+    Console.writeLine(payload(Some("a".bytes())));
+    Console.writeLine(payload(null));
+}
+
+// expect-stdout: 5
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 6
+// expect-stdout: -1
+// expect-stdout: 2
+// expect-stdout: 99
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 5
+// expect-stdout: 42
+// expect-stdout: 5
+// expect-stdout: 1
+// expect-stdout: 7
+// expect-stdout: 15
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 0

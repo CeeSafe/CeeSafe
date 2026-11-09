@@ -1,0 +1,6 @@
+// Slice patterns (ADR 0085 §2.7): at most one `..`.
+fn f(s: Slice<u8>) -> u32 => match (s) {
+    [.., 0, ..] => 1, // error[N0100]
+    [a @ .., b @ ..] => 2, // error[N0100]
+    _ => 0,
+};

@@ -309,6 +309,48 @@ arms must still cover every value. A guard only reads: it cannot move, assign or
 the arm's bindings (N0355). In a match that moves a payload into its binding, the move happens only once the guard
 holds.
 
+### Strings and slices
+
+A string literal is a pattern on a `StringView`, and on a `Slice<u8>`, where it matches the text's bytes. A slice
+pattern, `[…]`, matches a slice or an array by its elements: `..` stands for any number of them, and `rest @ ..`
+binds those as a slice.
+
+```ceesafe
+fn command(word: StringView) -> u32 => match (word) {
+    "get" | "head" => 1,
+    "put" => 2,
+    _ => 0,
+};
+
+fn ends(s: Slice<i32>) -> i32 => match (s) {
+    [] => 0,
+    [only] => only,
+    [first, .., last] => first + last,
+};
+
+fn unquote(text: Slice<u8>) -> Slice<u8> => match (text) {
+    ['"', inner @ .., '"'] => inner,
+    _ => text,
+};
+
+fn main() {
+    Console.writeLine(command("head"));
+    let numbers = [3, 5, 8];
+    Console.writeLine(ends(numbers[..]));
+    Console.writeLine(unquote("\"quoted\"".bytes()).length);
+}
+```
+
+```text
+1
+11
+6
+```
+
+Strings never cover their type, so a match on a `StringView` ends with `_` or a binding. Slice patterns cover by
+length: `[]` and `[_, ..]` together match every slice, and a missing case is reported with one, such as `[_, _, ..]`.
+A slice pattern never moves an element: one of a Copy type is copied, any other is bound as a `borrow T`.
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

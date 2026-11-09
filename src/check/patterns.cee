@@ -291,6 +291,9 @@ fn hasNested(c: borrow Checker, pattern: u32) -> bool {
         PatternNode.Range(_, _, _) => { return true; }
         PatternNode.At(_, _) => { return true; }
         PatternNode.Binding(_, _) => { return true; }
+        PatternNode.Slice(_) => { return true; }
+        PatternNode.Rest(_) => { return true; }
+        PatternNode.Literal(literal) => { return isStringLiteral(c, literal); }
         PatternNode.Variant(path, hasBindings, bindings) => {
             if (!hasBindings && path.parts.count >= 2 && !namesVariantPath(c, path)) {
                 return true; // `Type.NAME`: perhaps an associated constant (ADR 0085 §2.6)
@@ -352,7 +355,9 @@ fn checkMatch(
     let typ = if (reference != none()) c.types.info(reference).pointee else scrutineeType;
     let scrutineeSpan = c.front.ast.exprSpans[scrutineeSyntax as usize];
     var ok = !c.types.isBottom(typ);
-    if (ok && !c.types.is(
+    // A `StringView`, a slice or an array (ADR 0085 §2.7): matched by string and slice patterns, on the nested path.
+    let isView = c.types.is(typ, TypeKind.Array);
+    if (ok && !isView && !c.types.is(
         typ,
         TypeKind.Enum,
     ) && !c.types.is(typ, TypeKind.Integer) && !c.types.is(typ, TypeKind.Bool)) {
@@ -363,6 +368,9 @@ fn checkMatch(
         ok = false;
     }
     if (ok) {
+        if (isView) {
+            return checkNestedMatch(c, scrutineeSyntax, arms, isValue, branches, span, scrutinee, typ, reference);
+        }
         // An integer match without `_` too: its literals and ranges may cover the type (ADR 0085 §2.4).
         var nested = c.types.is(typ, TypeKind.Integer);
         for (k in 0..arms.count) {
@@ -402,6 +410,8 @@ fn checkMatch(
             PatternNode.Range(_, _, _) => { patternFailed = true; }
             PatternNode.At(_, _) => { patternFailed = true; }
             PatternNode.Binding(_, _) => { patternFailed = true; }
+            PatternNode.Slice(_) => { patternFailed = true; }
+            PatternNode.Rest(_) => { patternFailed = true; }
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -894,7 +904,16 @@ fn checkPattern(
             }
             return c.hir.addPattern(HirPattern.Variant(variantAt(c, typ, 0), false, emptyRange()));
         }
+        PatternNode.Slice(items) => { return checkSlicePattern(c, items, typ, reference, span, failed, alternatives); }
+        PatternNode.Rest(_) => {
+            // The parser makes `..` only as an item of a slice pattern, which checkSlicePattern reads.
+            failed = true;
+            return c.hir.addPattern(HirPattern.Wildcard);
+        }
         PatternNode.Literal(literal) => {
+            if (isStringLiteral(c, literal)) {
+                return checkStringPattern(c, literal, typ, reference, span, failed);
+            }
             if (!c.types.is(typ, TypeKind.Integer) && !c.types.is(typ, TypeKind.Bool)) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "a literal pattern needs an integer or 'bool', but the value has type ")?;
@@ -949,7 +968,7 @@ fn checkPattern(
                 let t = payloadType(c, variant, i);
                 let binding = c.front.ast.bindings[c.front.ast.at(bindings, truncate<u32>(i)) as usize];
                 if (binding.nested != none()) {
-                    if (c.types.is(t, TypeKind.Reference)) {
+                    if (c.types.is(t, TypeKind.Reference) && !viewPattern(c, binding.nested, t)) {
                         let nestedSpan = c.front.ast.patternSpans[binding.nested as usize];
                         var message = Vector<u8>.create();
                         appendText(mut message, "this payload is a reference (")?;
@@ -981,6 +1000,151 @@ fn checkPattern(
             return c.hir.addPattern(HirPattern.Variant(variant, true, list));
         }
     }
+}
+
+/// The type a message names for a value of `typ` matched through `reference`: the `StringView` or slice itself.
+fn shownType(c: borrow Checker, typ: u32, reference: u32) -> u32 =>
+    if (reference != none() && c.types.info(reference).pointee == typ) reference else typ;
+
+fn isStringLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.StringLiteral(_) => true,
+    _ => false,
+};
+
+/// Is the pattern a string or slice pattern on a payload that is a view (`Some("get")` on a `StringView?`, ADR 0085
+/// §2.7)? It tests the view's elements, so the reference payload is not a reason to refuse it.
+fn viewPattern(c: borrow Checker, pattern: u32, typ: u32) -> bool {
+    if (!c.types.isSlice(typ) && !c.types.isStringView(typ)) {
+        return false;
+    }
+    match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Slice(_) => { return true; }
+        PatternNode.Literal(literal) => { return isStringLiteral(c, literal); }
+        _ => { return false; }
+    }
+}
+
+/// `"get"` (ADR 0085 §2.7): on a `StringView`, its text; on a `Slice<u8>`, its UTF-8 bytes, each also a literal
+/// pattern for coverage. On any other type, N0205.
+fn checkStringPattern(
+    c: borrow mut Checker,
+    literal: u32,
+    typ: u32,
+    reference: u32,
+    span: Span,
+    failed: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let target = viewTarget(c, typ);
+    let isText = c.types.is(target, TypeKind.Array) && c.types.info(target).isStr;
+    let isBytes = c.types.isUnsized(target) && !c.types.info(target).isStr &&
+        c.types.info(target).element == c.types.u8;
+    let astText = match (c.front.ast.exprs[literal as usize]) {
+        ExprNode.StringLiteral(t) => t,
+        _ => emptyRange(),
+    };
+    if (!isText && !isBytes) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a string pattern needs a 'StringView' or a 'Slice<u8>', but the value has type ")?;
+        appendQuotedType(mut message, c, shownType(c, typ, reference))?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    var bytes = Vector<u8>.create();
+    appendBytes(mut bytes, c.front.ast.textOf(astText))?;
+    let text = c.hir.addText(bytes.view())?;
+    var elements = Vector<u32>.create();
+    if (isBytes) {
+        for (b in bytes.view()) {
+            elements.push(c.hir.addPattern(HirPattern.Literal(intValue(b as i64)))?)?;
+        }
+    }
+    let list = c.hir.list(elements.view())?;
+    return c.hir.addPattern(HirPattern.String(text, list));
+}
+
+/// `[a, b]`, `[first, ..]`, `[x, rest @ ..]` (ADR 0085 §2.7) on a slice, an array, or a reference to one. Each item
+/// is a pattern on one element; a Copy element binds a copy, any other a `borrow T`, since a slice never moves;
+/// `rest @ ..` binds the elements `..` matched as a `Slice<T>` of the same region. On an array held by value, an
+/// element binding needs a Copy element (N0205), and the items must fit its length (N0205).
+fn checkSlicePattern(
+    c: borrow mut Checker,
+    items: Range,
+    typ: u32,
+    reference: u32,
+    span: Span,
+    failed: borrow mut bool,
+    alternatives: borrow mut Alternatives,
+) -> Result<u32, AllocError> {
+    let array = viewTarget(c, typ);
+    if (!c.types.is(array, TypeKind.Array) || c.types.info(array).isStr) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a slice pattern needs a slice or an array, but the value has type ")?;
+        appendQuotedType(mut message, c, shownType(c, typ, reference))?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    let element = c.types.info(array).element;
+    let byValue = array == typ && reference == none();
+    let elementCopy = c.types.isCopy(element);
+    let elementReference = if (elementCopy) none() else c.types.referenceTo(element, false)?;
+    var trees = Vector<u32>.create();
+    var restAt = none();
+    var restLocal = none();
+    for (k in 0..items.count) {
+        let item = c.front.ast.at(items, k);
+        let restName = match (c.front.ast.patterns[item as usize]) {
+            PatternNode.Rest(name) => name,
+            _ => 0xFFFFFFFEu32,
+        };
+        if (restName != 0xFFFFFFFEu32) {
+            if (restAt == none()) {
+                restAt = truncate<u32>(trees.length);
+                if (restName != none()) {
+                    let sliceType = c.types.sliceOf(element, false)?;
+                    restLocal = declarePatternBinding(c, restName, false, sliceType, none(), alternatives)?;
+                }
+            }
+            continue;
+        }
+        let tree = checkPattern(c, item, element, elementReference, failed, alternatives)?;
+        if (byValue && !elementCopy) {
+            var bound = Vector<u32>.create();
+            patternLocals(c, tree, mut bound)?;
+            if (bound.length > 0) {
+                let itemSpan = c.front.ast.patternSpans[item as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "an element of an array held by value binds only a Copy element, and ")?;
+                appendQuotedType(mut message, c, element)?;
+                appendText(mut message, " is not Copy; match on a slice of it, 'a[..]' (ADR 0085 §2.7)")?;
+                c.error(typeMismatch(), itemSpan.start, itemSpan.end, message)?;
+                failed = true;
+            }
+        }
+        trees.push(tree)?;
+    }
+    let length = c.types.info(array).arrayLength;
+    if (length >= 0) {
+        let count = truncate<i64>(trees.length);
+        if ((restAt == none() && count != length) || (restAt != none() && count > length)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this pattern matches ")?;
+            if (restAt != none()) {
+                appendText(mut message, "at least ")?;
+            }
+            appendDecimal(mut message, trees.length as u64)?;
+            appendText(mut message, " element(s), but the array ")?;
+            appendQuotedType(mut message, c, array)?;
+            appendText(mut message, " has ")?;
+            appendDecimal(mut message, truncate<u64>(length))?;
+            c.error(typeMismatch(), span.start, span.end, message)?;
+            failed = true;
+            return c.hir.addPattern(HirPattern.Wildcard);
+        }
+    }
+    let list = c.hir.list(trees.view())?;
+    return c.hir.addPattern(HirPattern.Slice(list, restAt, restLocal));
 }
 
 fn emptyRangePattern() -> u32 => 357;

@@ -58,7 +58,7 @@ diagnostics, so any cascade fails the test.
 | N0105 | Expected a type, or `Self` where it names no type (outside an interface, an `impl` or a struct's or enum's body, ADR 0086 §2.2) | `fn f(x: ) {}` |
 | N0106 | Namespace declaration not first in the file | `fn a() {}` then `namespace X;` |
 | N0107 | Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2) | `struct A { 42; }` |
-| N0108 | Expected a `match` pattern (`_`, a literal or range, a name, `name @ P`, `(P)`, or `E.V(…)`) | `match (n) { + => { } }` |
+| N0108 | Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`) | `match (n) { + => { } }` |
 | N0109 | An `import` declaration after an item | `fn a() {}` then `import geometry;` |
 | N0110 | Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed | 1,000 nested parentheses; a sum of 1,001 terms |
 

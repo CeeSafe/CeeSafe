@@ -1,0 +1,55 @@
+// String and slice patterns (ADR 0085 §2.7): strings never cover a StringView (N0256); a repeated string, or a
+// string and the slice of its bytes, is N0257; slices cover by length, and N0256 names a missing length; a string or
+// slice pattern on another type, a count an array's length cannot have, and a reference element bound as `var` are
+// N0205 or N0246.
+fn a(s: StringView) -> u32 => match (s) { // error[N0256]
+    "x" => 1,
+    "y" => 2,
+};
+fn b(s: StringView) -> u32 => match (s) {
+    "x" => 1,
+    "x" => 2, // error[N0257]
+    _ => 3,
+};
+fn c(s: Slice<i32>) -> u32 => match (s) { // error[N0256]
+    [] => 0,
+    [_] => 1,
+};
+fn d(s: Slice<i32>) -> u32 => match (s) {
+    [] => 0,
+    [_, ..] => 1,
+    [_, _] => 2, // error[N0257]
+};
+fn e(s: Slice<i32>) -> u32 => match (s) { // error[N0256]
+    [0, ..] => 0,
+    [.., 0] => 1,
+    [] => 2,
+};
+fn f(x: u32) -> u32 => match (x) {
+    "a" => 1, // error[N0205]
+    [_] => 2, // error[N0205]
+    _ => 3,
+};
+fn g(a: [i32; 2]) -> u32 => match (a) {
+    [_, _, _] => 1, // error[N0205]
+    [_, _, _, ..] => 2, // error[N0205]
+    _ => 3,
+};
+fn h(s: Slice<u8>) -> u32 => match (s) {
+    "ab" => 1,
+    ['a', 'b'] => 2, // error[N0257]
+    _ => 3,
+};
+fn i(a: [bool; 2]) -> u32 => match (a) { // error[N0256]
+    [true, _] => 1,
+    [_, true] => 2,
+};
+fn j(v: Slice<String>) -> usize => match (v) {
+    [var first, ..] => first.length, // error[N0246]
+    _ => 0,
+};
+fn k(s: StringView) -> u32 => match (s) {
+    [_, ..] => 1, // error[N0205]
+    _ => 0,
+};
+fn main() {}

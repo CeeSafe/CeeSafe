@@ -20,16 +20,21 @@ for you. This page assumes you know Rust well.
 | `.unwrap()` | `!` (postfix) | `r!`, `o!` |
 | `panic!` (unwinds by default) | panics always abort | no unwinding, no `catch_unwind` |
 | `impl Drop for S` | `drop { … }` inside the struct | |
-| `trait`, `impl Trait for T`, `T: Trait` | `interface`, `impl Interface for T`, `T: Interface` | bounds only: no `dyn` |
+| `trait`, `impl Trait for T`, `T: Trait` | `interface`, `impl Interface for T`, `T: Interface` | default methods, `Self`, associated types and constants, supertraits |
+| `Box<dyn Trait>`, `&dyn Trait` | `Box<dyn I>`, `borrow dyn I` | |
 | `#[derive(Clone, Copy)]` | automatic | a struct is Copy when all its fields are and it has no `drop` |
 | `x as u8` (truncates) | `truncate<u8>(x)` | `as` only converts where nothing can be lost |
 | `wrapping_add`, `checked_add`, `saturating_add` | `wrappingAdd`, `checkedAdd`, `saturatingAdd` | |
-| `\|x\| x + 1` | `(x) => x + 1` | closures borrow their captures and cannot escape |
+| `\|x\| x + 1` | `(x) => x + 1` | a closure literal borrows its captures and cannot escape |
+| `Box::new(move \|x\| x + n)` | `Box.create(move (x) => x + n)!` | a `Box<dyn fn(u64) -> u64>`, which owns its captures |
 | `match x { A => …, }` | `match (x) { E.A => { … } }` | variants are qualified; statement arms are blocks |
+| `Some(n) if n > 3 =>`, `A \| B`, `0..=9`, `x @ P` | `Some(n) if (n > 3) =>`, `A \| B`, `0..=9`, `x @ P` | the guard is parenthesised |
+| `std::thread::spawn(move \|\| …)` | `Thread.spawn(move () => …)!` | with `Arc`, `Mutex` and atomics |
+| `Send`, `Sync` | `Send`, `Share` | |
 | `println!("{}", x)` | `Console.writeLine(x)` | no macros, no format strings yet |
 | `#![no_std]` | `--profile freestanding` | |
 | `unsafe { }` with a `// SAFETY:` convention | `unsafe { }` with a required `/// Safety:` doc line | the compiler enforces it |
-| Cargo, `Cargo.toml`, `Cargo.lock` | `ceesafec`, `ceesafe.toml`, `ceesafe.lock` | path and git dependencies only; no registry |
+| Cargo, `Cargo.toml`, `Cargo.lock` | `ceesafec`, `ceesafe.toml`, `ceesafe.lock` | path, git and registry dependencies |
 | `rustfmt`, `rustdoc` | `ceesafec fmt`, `ceesafec doc` | |
 
 ## The same program
@@ -55,22 +60,14 @@ fn main() {
 
 ```ceesafe
 fn longestWord<region r>(text: StringView<r>) -> StringView<r>? {
-    var bestStart: usize = 0;
-    var bestLength: usize = 0;
-    var start: usize = 0;
-    for (i in 0..text.length + 1) {
-        if (i == text.length || text[i] == ' ') {
-            if (i - start > bestLength) {
-                bestStart = start;
-                bestLength = i - start;
-            }
-            start = i + 1;
+    var best: StringView<r>? = null;
+    for (word in text.split(" ")) {
+        match (best) {
+            Some(b) if (b.length >= word.length) => {}
+            _ => { best = word; }
         }
     }
-    if (bestLength == 0) {
-        return null;
-    }
-    return text[bestStart..bestStart + bestLength];
+    return best;
 }
 
 fn main() {
@@ -85,9 +82,10 @@ fn main() {
 brownish
 ```
 
-The CeeSafe version has no iterator adaptors (there is no `split` yet), returns explicitly, and its signature says the
-result views the input through the region `r`. With a single reference parameter, as here, the region could also be
-left out: `fn longestWord(text: StringView) -> StringView?` means the same.
+The CeeSafe version loops over the `split` iterator where Rust would call `map_or` (there are no adapters), tests
+with a guard, returns explicitly, and its signature says the result views the input through the region `r`. With a
+single reference parameter, as here, the region could also be left out:
+`fn longestWord(text: StringView) -> StringView?` means the same.
 
 ## Ownership and borrowing: what is the same
 
@@ -114,12 +112,20 @@ and scratch frames are built in, and allocations from a region borrow it, so the
 **Checks in every build.** Integer overflow panics in release builds too; there is no `--release` that turns it off.
 Bounds and overflow checks the compiler proves unnecessary are removed, and `--explain-bounds-checks` shows which.
 
-**Interfaces are traits without the corners.** Interfaces have default methods and `Self`; there are no blanket
-`impl<T: A> B for T`. A collection of different types is an enum or holds `Box<dyn I>`.
+**Interfaces are traits without the corners.** Interfaces have default methods, `Self`, associated types and
+constants, and supertraits, and `impl<T> I for Wrapper<T>` implements one for a generic type; there are no blanket
+`impl<T: A> B for T` and no `impl Trait` in argument or result position. A collection of different types is an enum or
+holds `Box<dyn I>`.
 
-**Closures do not escape.** A closure borrows what it captures and has a reference type (`borrow fn(i32) -> bool`,
-`borrow mut fn(i32)`), so it cannot be returned or stored. There is no `move` closure, `Fn`/`FnMut`/`FnOnce` trait or
-`impl Fn`. Calls through a closure are indirect.
+**Closures borrow, unless they are boxed.** A closure literal borrows what it captures and has a reference type
+(`borrow fn(i32) -> bool`, `borrow mut fn(i32)`), so it cannot be returned or stored. A `move` closure owns its
+captures and is boxed where it is made: `Box.create(move (x: u64) => x + n)!` is a `Box<dyn fn(u64) -> u64>`, and one
+that changes its captures a `Box<dyn mut fn()>`. There is no `Fn`/`FnMut`/`FnOnce` trait or `impl Fn`: a parameter
+takes `borrow fn(…)` or `borrow mut fn(…)`.
+
+**Threads and tasks.** `Thread.spawn(move () => …)` and `Thread.both` run threads; `Arc`, `Mutex` and lib/core's
+atomics share state, and `Send` and `Share` are Rust's `Send` and `Sync`. `async fn` and `await` run tasks on lib/std's
+executor, on one thread or several (type-system.md §38, §40).
 
 **No macros, no iterator chains.** `for` walks ranges, arrays, slices, vectors and iterators: lib/core's
 `Iterator<T>` (`fn next(borrow mut this) -> T?`), through a bound `I: Iterator<T>` or a `dyn Iterator<T>`, and any
@@ -136,7 +142,6 @@ calls, at compile time. Rust has no equivalent in the language.
 ## Things you will miss
 
 `Rc` (CeeSafe has `Arc`, and lib/core's `Cell` and `RefCell`, whose `read()` and `write()` are Rust's `borrow()` and
-`borrow_mut()`: type-system.md §41), threads and `Send`/`Sync` (there are no user threads yet),
-
-`dyn Trait`, iterators, pattern guards (`if` in a match arm), slice patterns, `impl` blocks on generic types, the
-standard library's breadth, and crates.io. Several are planned or recorded as open decisions.
+`borrow_mut()`: type-system.md §41), macros, iterator adapters, blanket impls, `impl Trait`, slice and string
+patterns, shadowing, the standard library's breadth, and crates.io. Several are planned or recorded as open
+decisions.

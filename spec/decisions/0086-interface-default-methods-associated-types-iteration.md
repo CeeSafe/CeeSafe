@@ -1,6 +1,6 @@
 # ADR 0086 — Interfaces: default methods, `Self`, associated types and constants, and an `Iterator<T>` interface
 
-- Status: **Proposed**, 2026-11-09. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0: "default
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0: "default
   interface methods; decide on associated types and an iterator trait"). It rests on three things: counts of Bun
   1.4.4's 540 traits and 5,070 trait impls, measured on 2026-11-09 with small Python scripts (§1.1); probes compiled
   with ceesafec 0.24.2 the same day (§1.2); and the current checker, parser and C backend sources (cited by line).

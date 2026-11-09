@@ -1,6 +1,6 @@
 # ADR 0081 — C declarations shared between packages: one owner per C symbol, typed views as wrappers
 
-- Status: **Proposed**, 2026-11-09. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0). Its compiler
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0). Its compiler
   scale test (`~/dev/CeeSafeApps/bun/analysis/scale/README.md`, finding 1) hit N0201 when every package declared
   `strlen`. The counts below were measured on Bun 1.4.4 (`bun-v1.4.4`, `38afee6c84fc`) on 2026-11-09, with the
   scripts named in each place. Each claim about ceesafec was checked with ceesafec 0.24.2 built from `fe4d0ca`.

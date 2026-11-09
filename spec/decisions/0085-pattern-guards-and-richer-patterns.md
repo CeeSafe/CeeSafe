@@ -1,6 +1,6 @@
 # ADR 0085 — Pattern guards and richer patterns: `if (…)` guards, `|`, ranges, `@`, constants, strings, slices, `is`
 
-- Status: **Proposed**, 2026-11-09. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0): the probe
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0): the probe
   `analysis/probes/g2_guard.cee` (`Some(n) if n > 3 => …`) fails on ceesafec 0.24.2 with N0100 "expected '=>', found
   'if'". Rests on 25 probe programs compiled with ceesafec 0.24.2 on 2026-11-09 (§1.1), and on counts of Bun 1.4.4's
   Rust (`upstream/src`, 3,238 `.rs` files, 1,743,082 lines) made by four Python scripts run with `python3 -I`

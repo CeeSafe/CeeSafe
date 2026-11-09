@@ -1,6 +1,6 @@
 # ADR 0084 — Interior mutability: `RawCell`, `Cell` and a checked `RefCell`
 
-- Status: **Proposed**, 2026-11-09, for ceesafec **0.25.0** (with ADR 0086 and ADR 0085 step 1). Raised by the Bun
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed, for ceesafec **0.25.0** (with ADR 0086 and ADR 0085 step 1). Raised by the Bun
   port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0): Bun 1.4.4 writes `Cell`/`RefCell` about 1,000 times, and its
   probe `analysis/probes/g3_cell.cee` fails on ceesafec 0.24.2 (N0204). The evidence is a census of Bun's hand-written
   Rust (§1.1, Python scripts run with `python3 -I`), eleven probes compiled and run with ceesafec 0.24.2 (§1.3), and a

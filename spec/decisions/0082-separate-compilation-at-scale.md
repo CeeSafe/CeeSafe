@@ -1,6 +1,6 @@
 # ADR 0082 — Separate compilation at scale: units that never merge, per-unit preludes, parallel and cached builds, per-package check
 
-- Status: **Proposed**, 2026-11-09. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0). Its compiler
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0). Its compiler
   scale test (`~/dev/CeeSafeApps/bun/analysis/scale/README.md`, findings 3 and 4; `scale_test.py`) found that the C step,
   not ceesafec, now bounds a Bun-sized build, and that `--split` does not yet help. The evidence: that README's
   measurements (Mac, 8 cores, Apple clang 21; hanan, Debian 12 x86-64, 12 cores, gcc 12.2); probes compiled on

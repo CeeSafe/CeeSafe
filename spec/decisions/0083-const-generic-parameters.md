@@ -1,6 +1,6 @@
 # ADR 0083 — Const generic parameters: `bool`, integer and enum values as generic arguments
 
-- Status: **Proposed**, 2026-11-09; to ship in **0.26.0** (with ADR 0085 step 2 and ADR 0087 step 1), after ADR 0086
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed; to ship in **0.26.0** (with ADR 0085 step 2 and ADR 0087 step 1), after ADR 0086
   (0.25.0), on which §2.3 relies. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0): Bun 1.4.4
   cannot be ported file by file while `fn pick<const TS: bool>(…)` is a syntax error. The evidence: counts measured in
   Bun's `src/` with two Python scripts run with `python3 -I` (§1.1), eight probe programs and one benchmark compiled

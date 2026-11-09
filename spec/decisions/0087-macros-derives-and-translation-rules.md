@@ -1,6 +1,6 @@
 # ADR 0087 — Macros: none in the language; translation rules, `@derive`, `debugAssert`, `c"…"`, `embed`
 
-- Status: **Proposed**, 2026-11-09. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0, "Macro
+- Status: **Accepted** by the owner, 2026-11-09 ("Accept all ADRs as recommended": every question for the owner answered as recommended), the day it was proposed. Raised by the Bun port's M0 (`~/dev/CeeSafeApps/bun/ROADMAP.md` §3, M0, "Macro
   plan"). It rests on a census of Bun 1.4.4's hand-written Rust made for this ADR (§1.1), on the source of Bun's four
   proc-macro crates and its codegen scripts, and on probes compiled with ceesafec 0.24.2 (`out/ceesafec` from main)
   on 2026-11-09.

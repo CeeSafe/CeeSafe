@@ -130,10 +130,6 @@ public struct RefCell<T> {
     /// Safety: only a live guard calls it, and the state it set keeps every writer out while the reference is used.
     fn shared(borrow this) -> borrow T => unsafe { Ptr.toBorrow(this.raw.pointer() as *T) };
 
-    /// The contents as a mutable reference, for the `write` guard.
-    /// Safety: only a live `write` guard calls it; the state -1 keeps every other guard out.
-    fn exclusive(borrow this) -> borrow mut T => unsafe { Ptr.toBorrowMut(this.raw.pointer()) };
-
     /// A `read` guard's drop.
     fn releaseRead(borrow this) {
         this.state.set(this.state.get() - 1);
@@ -168,7 +164,10 @@ public struct CellRefMut<region r, T> {
     private cell: borrow(r) RefCell<T>;
 
     /// The contents, for as long as the guard is borrowed exclusively.
-    public fn data(borrow mut this) -> borrow mut T => this.cell.exclusive();
+    /// Safety: the guard set the state to -1, so no other guard is live and none can be made while it is; the loan
+    /// ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
+    /// shared, type-system.md §41.1).
+    public fn data(borrow mut this) -> borrow mut T => unsafe { Ptr.toBorrowMut(this.cell.raw.pointer()) };
 
     drop {
         this.cell.releaseWrite();

@@ -570,7 +570,11 @@ fn hoist(s: borrow mut Structurer, list: u32) -> Result<void, AllocError> {
             }
             let then = s.nodes[id as usize].first;
             let otherwise = s.nodes[id as usize].second;
-            if (s.lists[otherwise as usize].length > 0) {
+            // A `cfg` test's arms stay its own (ADR 0080 §3.3): an arm moved after `#endif` would be compiled in
+            // the builds the test excludes it from.
+            if (s.lists[otherwise as usize].length > 0 && !isCfgText(
+                s.texts[s.nodes[id as usize].text as usize].view(),
+            )) {
                 var thenEnds = !completesList(s, then);
                 let elseEnds = !completesList(s, otherwise);
                 if (elseEnds && (!thenEnds || sizeOf(s, otherwise) < sizeOf(s, then))) {

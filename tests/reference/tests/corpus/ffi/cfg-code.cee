@@ -56,9 +56,24 @@ fn early(on: bool) -> i32 {
     return 2;
 }
 
+/// A `cfg` block that returns and is larger than the code after it: its arms stay under the `#if`, where moving the
+/// larger one after `#endif` would call off_only in a build without it.
+/// Safety: off_only is C's, in the builds that have it.
+fn guarded() -> i32 {
+    if (cfg("CFG_OFF")) {
+        var r = unsafe { off_only(1) };
+        r += unsafe { off_only(r) };
+        r += unsafe { off_only(r) };
+        return r;
+    }
+    return 5;
+}
+
 fn main() {
     Console.writeLine(run());
     Console.writeLine(early(true) * 10 + early(false));
+    Console.writeLine(guarded());
 }
 // expect-stdout: 1711
 // expect-stdout: 32
+// expect-stdout: 5

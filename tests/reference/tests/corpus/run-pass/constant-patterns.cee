@@ -1,0 +1,84 @@
+// Constant patterns and bindings (ADR 0085 §2.6): a bare name naming a const in scope is that constant, at the top
+// and in a payload; Type.NAME an associated constant; any other bare name binds the value, `var` mutably; `Ok`,
+// `Err` and `Some` alone still name their variant.
+
+const LF: u8 = 10;
+const CR: u8 = 13;
+const QUOTE: u8 = '"';
+const LIMIT: u32 = 3;
+const ON: bool = true;
+
+struct Bytes {
+    x: u8;
+    const TAB: u8 = 9;
+    const SPACE: u8 = ' ';
+}
+
+struct Res { id: u32; drop { Console.write("drop "); Console.writeLine(this.id); } }
+enum Slot { Full(Res), Spare }
+
+fn kind(c: u8) -> StringView => match (c) {
+    LF | CR => "newline",
+    Bytes.TAB | Bytes.SPACE => "blank",
+    QUOTE => "quote",
+    other => if (other < 32) "control" else "text",
+};
+
+fn count(o: u32?) -> u32 => match (o) {
+    Some(LIMIT) => 100,
+    Some(n) => n,
+    null => 0,
+};
+
+fn flag(b: bool) -> u32 => match (b) {
+    ON => 1,
+    false => 0,
+};
+
+fn whole(s: Slot) -> u32 {
+    match (s) {
+        Slot.Spare => { return 0; }
+        var held => {
+            held = Slot.Spare;
+            return 1;
+        }
+    }
+}
+
+fn ok(r: Result<u32, u8>) -> u32 => match (r) {
+    Ok => 1,
+    Err => 2,
+};
+
+fn main() {
+    Console.writeLine(kind(10));
+    Console.writeLine(kind(13));
+    Console.writeLine(kind(9));
+    Console.writeLine(kind(' '));
+    Console.writeLine(kind('"'));
+    Console.writeLine(kind(1));
+    Console.writeLine(kind('a'));
+    Console.writeLine(count(Some(3)));
+    Console.writeLine(count(Some(4)));
+    Console.writeLine(flag(true));
+    Console.writeLine(flag(false));
+    Console.writeLine(whole(Slot.Full(Res { id: 5 })));
+    Console.writeLine(ok(Ok(1)));
+    Console.writeLine(ok(Err(1)));
+}
+
+// expect-stdout: newline
+// expect-stdout: newline
+// expect-stdout: blank
+// expect-stdout: blank
+// expect-stdout: quote
+// expect-stdout: control
+// expect-stdout: text
+// expect-stdout: 100
+// expect-stdout: 4
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: drop 5
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2

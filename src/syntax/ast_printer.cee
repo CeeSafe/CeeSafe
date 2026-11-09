@@ -817,6 +817,12 @@ struct AstPrinter {
                 this.expr(ast, symbols, high)?;
                 this.text(")")?;
             }
+            PatternNode.Binding(name, mutable) => {
+                if (mutable) {
+                    this.text("var ")?;
+                }
+                this.name(ast, symbols, name)?;
+            }
             PatternNode.At(name, inner) => {
                 this.text("(@ ")?;
                 this.name(ast, symbols, name)?;

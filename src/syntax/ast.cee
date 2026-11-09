@@ -195,6 +195,8 @@ enum PatternNode {
     Range(u32, u32, bool),
     /// `name @ P` (ADR 0085 §2.5): the name (an identifier), the pattern.
     At(u32, u32),
+    /// A bare name, `x` or `var x` (ADR 0085 §2.6): a constant in scope, else a binding; the identifier, `var`.
+    Binding(u32, bool),
 }
 
 /// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.

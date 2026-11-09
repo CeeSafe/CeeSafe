@@ -58,7 +58,7 @@ diagnostics, so any cascade fails the test.
 | N0105 | Expected a type | `fn f(x: ) {}` |
 | N0106 | Namespace declaration not first in the file | `fn a() {}` then `namespace X;` |
 | N0107 | Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2) | `struct A { 42; }` |
-| N0108 | Expected a `match` pattern (`_`, a literal, or `E.V(…)`) | `match (n) { + => { } }` |
+| N0108 | Expected a `match` pattern (`_`, a literal or range, a name, `name @ P`, `(P)`, or `E.V(…)`) | `match (n) { + => { } }` |
 | N0109 | An `import` declaration after an item | `fn a() {}` then `import geometry;` |
 | N0110 | Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed | 1,000 nested parentheses; a sum of 1,001 terms |
 
@@ -299,6 +299,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0355 | A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2) | `Slot.Full(r) if (consume(r)) =>` with `r` not Copy |
 | N0356 | The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3) | `Some(x) \| null =>` |
 | N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
+| N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter (`type-system.md` §15.2, ADR 0085 §2.6) | `HALF =>` with `const HALF: f64` |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

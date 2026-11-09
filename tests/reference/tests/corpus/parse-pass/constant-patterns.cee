@@ -1,0 +1,9 @@
+// Bare names in patterns (ADR 0085 §2.6): constants or bindings, decided by the checker; `var x` at the top.
+fn f(c: u8, o: u8?) -> u32 {
+    match (o) {
+        Some(LF) => {}
+        Some(n) => {}
+        null => {}
+    }
+    return match (c) { Bytes.TAB | LF => 1, var other => 0 };
+}

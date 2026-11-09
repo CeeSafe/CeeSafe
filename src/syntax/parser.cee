@@ -1985,6 +1985,12 @@ struct Parser {
                 this.advance();
                 return this.front.ast.addPattern(PatternNode.Null, token.start, token.end);
             }
+            TokenKind.VarKeyword => {
+                // `var x` (ADR 0085 §2.6): a mutable binding of the value.
+                this.advance();
+                let name = this.parseIdentifier()?;
+                return this.front.ast.addPattern(PatternNode.Binding(name, true), start, this.endFrom(start));
+            }
             TokenKind.IntLiteral => { return this.literalPattern(start, false); }
             TokenKind.CharLiteral => { return this.literalPattern(start, false); }
             TokenKind.TrueKeyword => { return this.literalPattern(start, false); }
@@ -2008,6 +2014,11 @@ struct Parser {
                     this.advance();
                     let inner = this.parsePatternLevel()?;
                     return this.front.ast.addPattern(PatternNode.At(name, inner), start, this.endFrom(start));
+                }
+                if (!this.peekIs(1, TokenKind.Dot) && !this.peekIs(1, TokenKind.OpenParen)) {
+                    // A bare name (ADR 0085 §2.6): a constant if one is in scope, else a binding.
+                    let name = this.parseIdentifier()?;
+                    return this.front.ast.addPattern(PatternNode.Binding(name, false), start, this.endFrom(start));
                 }
                 let path = this.parseQualifiedName()?;
                 var hasBindings = false;

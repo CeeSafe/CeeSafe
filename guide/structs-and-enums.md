@@ -198,6 +198,33 @@ true
 3
 ```
 
+### Constants and names
+
+A bare name in a pattern is a constant when a `const` of that name is in scope, and otherwise binds the value at
+that position, at the top of an arm too. `Type.NAME` names an associated constant.
+
+```ceesafe
+const LF: u8 = 10;
+
+fn describe(c: u8) -> StringView => match (c) {
+    LF => "newline",
+    other => if (other < 32) "control" else "text",
+};
+
+fn main() {
+    Console.writeLine(describe(10));
+    Console.writeLine(describe(65));
+}
+```
+
+```text
+newline
+text
+```
+
+A misspelt constant binds instead and matches everything; the compiler then reports the arms after it as
+unreachable.
+
 ### Ranges
 
 `lo..=hi` matches the integers from `lo` to `hi`, both included; `lo..hi` leaves `hi` out. The bounds are integer or

@@ -1,4 +1,4 @@
-// Patterns (formatting.md §4, ADR 0085): guards, or-patterns, ranges, `@`.
+// Patterns (formatting.md §4, ADR 0085): guards, or-patterns, ranges, `@`, names.
 fn f(o: u32?) -> u32 {
     match (o) {
         Some(n) if (n > 3) => { return n; }
@@ -36,3 +36,5 @@ fn k(c: u8, r: Result<u8, u8>) -> u32 {
     }
     return match (c) { q @ ('"' | '\'') => 1, _ => 0 };
 }
+
+fn m(c: u8) -> u32 => match (c) { LF => 1, var other => 0 };

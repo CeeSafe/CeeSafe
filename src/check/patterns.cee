@@ -290,9 +290,14 @@ fn hasNested(c: borrow Checker, pattern: u32) -> bool {
         PatternNode.Or(_) => { return true; }
         PatternNode.Range(_, _, _) => { return true; }
         PatternNode.At(_, _) => { return true; }
-        PatternNode.Variant(_, _, bindings) => {
+        PatternNode.Binding(_, _) => { return true; }
+        PatternNode.Variant(path, hasBindings, bindings) => {
+            if (!hasBindings && path.parts.count >= 2 && !namesVariantPath(c, path)) {
+                return true; // `Type.NAME`: perhaps an associated constant (ADR 0085 §2.6)
+            }
             for (k in 0..bindings.count) {
-                if (c.front.ast.bindings[c.front.ast.at(bindings, k) as usize].nested != none()) {
+                let b = c.front.ast.bindings[c.front.ast.at(bindings, k) as usize];
+                if (b.nested != none() || (b.name != none() && constantNamed(c, b.name) != none())) {
                     return true;
                 }
             }
@@ -396,6 +401,7 @@ fn checkMatch(
             PatternNode.Or(_) => { patternFailed = true; } // the nested path's (hasNested)
             PatternNode.Range(_, _, _) => { patternFailed = true; }
             PatternNode.At(_, _) => { patternFailed = true; }
+            PatternNode.Binding(_, _) => { patternFailed = true; }
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -841,6 +847,21 @@ fn checkPattern(
         PatternNode.Range(low, high, inclusive) => {
             return checkRangePattern(c, low, high, inclusive, typ, span, failed);
         }
+        PatternNode.Binding(name, mutable) => {
+            if (!mutable) {
+                let constant = constantNamed(c, name);
+                if (constant != none()) {
+                    return constantPattern(c, constant, typ, span, failed);
+                }
+                // `Some`, `Ok` and `Err` alone name their variant, payload unlisted, as before ADR 0085.
+                let variant = bareVariant(c, name, typ);
+                if (variant != none()) {
+                    return c.hir.addPattern(HirPattern.Variant(variant, false, emptyRange()));
+                }
+            }
+            let local = declarePatternBinding(c, name, mutable, typ, reference, alternatives)?;
+            return c.hir.addPattern(HirPattern.Binding(local));
+        }
         PatternNode.At(name, inner) => {
             // `name @ P` (ADR 0085 §2.5): binds the value P matched, as a payload binding would.
             let local = declarePatternBinding(c, name, false, typ, reference, alternatives)?;
@@ -893,6 +914,15 @@ fn checkPattern(
             }
         }
         PatternNode.Variant(path, hasBindings, bindings) => {
+            if (!hasBindings && path.parts.count >= 2 && !namesVariantPath(c, path)) {
+                let constant = qualifiedConstant(c, path, span, failed)?;
+                if (constant != none()) {
+                    return constantPattern(c, constant, typ, span, failed);
+                }
+                if (failed) {
+                    return c.hir.addPattern(HirPattern.Wildcard);
+                }
+            }
             let variant = resolvePatternVariant(c, path, span, typ)?;
             if (variant == none()) {
                 failed = true;
@@ -934,6 +964,12 @@ fn checkPattern(
                         continue;
                     }
                     payload.push(checkPattern(c, binding.nested, t, reference, failed, alternatives)?)?;
+                } else if (binding.name != none() && !binding.mutable && constantNamed(c, binding.name) != none()) {
+                    // A payload named like a constant in scope is that constant (ADR 0085 §2.6).
+                    let constant = constantNamed(c, binding.name);
+                    let ident = c.front.ast.idents[binding.name as usize];
+                    let at = Span { start: ident.start, end: ident.end };
+                    payload.push(constantPattern(c, constant, t, at, failed)?)?;
                 } else if (binding.name != none()) {
                     let local = declarePatternBinding(c, binding.name, binding.mutable, t, reference, alternatives)?;
                     payload.push(c.hir.addPattern(HirPattern.Binding(local))?)?;
@@ -948,6 +984,141 @@ fn checkPattern(
 }
 
 fn emptyRangePattern() -> u32 => 357;
+
+fn constantNotPattern() -> u32 => 358;
+
+/// The constant a bare name in a pattern names (ADR 0085 §2.6): a `const` in scope that no local hides, or none.
+fn constantNamed(c: borrow Checker, name: u32) -> u32 {
+    let symbol = c.front.ast.idents[name as usize].symbol;
+    if (c.findLocal(symbol) != none()) {
+        return none();
+    }
+    match (c.item(symbol)) {
+        Entity.Constant(k) => { return k; }
+        _ => { return none(); }
+    }
+}
+
+/// `Some` on an optional, `Ok` or `Err` on a `Result`, written alone: that variant, or none.
+fn bareVariant(c: borrow Checker, name: u32, typ: u32) -> u32 {
+    if (!c.types.is(typ, TypeKind.Enum)) {
+        return none();
+    }
+    let symbol = c.front.ast.idents[name as usize].symbol;
+    let definition = c.types.info(typ).enumDef;
+    if (c.types.enums[definition as usize].resultOk != none()) {
+        return findVariant(c, definition, symbol);
+    }
+    if (c.types.enums[definition as usize].optionType != none() && sameBytes(c.name(symbol), "Some".bytes())) {
+        return variantAt(c, typ, 1);
+    }
+    return none();
+}
+
+/// Does `E.V` name a variant of an enum in scope? (`Type.NAME` may instead name an associated constant.)
+fn namesVariantPath(c: borrow Checker, path: QualifiedName) -> bool {
+    if (path.parts.count != 2) {
+        return true;
+    }
+    let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol;
+    let second = c.front.ast.idents[c.front.ast.at(path.parts, 1) as usize].symbol;
+    match (c.item(first)) {
+        Entity.Enum(index) => {
+            let typ = c.enums[index as usize].typ;
+            return findVariant(c, c.types.info(typ).enumDef, second) != none();
+        }
+        Entity.Type(typ) => {
+            return c.types.is(typ, TypeKind.Enum) && findVariant(c, c.types.info(typ).enumDef, second) != none();
+        }
+        _ => { return false; }
+    }
+}
+
+/// `Type.NAME` naming an associated constant (ADR 0074 §2.7): its constant, or none. Through a type parameter it is
+/// a value known only per instance: N0358, and `failed`.
+fn qualifiedConstant(
+    c: borrow mut Checker,
+    path: QualifiedName,
+    span: Span,
+    failed: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol;
+    let second = c.front.ast.idents[c.front.ast.at(path.parts, 1) as usize].symbol;
+    if (environmentType(c, first) != none()) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, c.name(first))?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(second))?;
+        appendText(
+            mut message,
+            "' is read through a type parameter, so it is known only per instance and cannot be a pattern; test it in a guard: 'c if (c == ",
+        )?;
+        appendBytes(mut message, c.name(first))?;
+        appendText(mut message, ".")?;
+        appendBytes(mut message, c.name(second))?;
+        appendText(mut message, ")' (ADR 0085 §2.6)")?;
+        c.error(constantNotPattern(), span.start, span.end, message)?;
+        failed = true;
+        return Ok(none());
+    }
+    var owner = none();
+    match (c.item(first)) {
+        Entity.Struct(index) => { owner = c.structs[index as usize].item; }
+        Entity.Enum(index) => { owner = c.enums[index as usize].item; }
+        _ => {}
+    }
+    let member = memberConstantOf(c, owner, second);
+    if (member == none()) {
+        return Ok(none());
+    }
+    return Ok(c.memberConstants[member as usize].constant);
+}
+
+/// A constant as a pattern (ADR 0085 §2.6): it matches its value and counts as that literal for coverage. A constant
+/// of a type that cannot be a pattern (anything but an integer or `bool`) is N0358; one of another type than the
+/// value's, N0205.
+fn constantPattern(
+    c: borrow mut Checker,
+    constant: u32,
+    typ: u32,
+    span: Span,
+    failed: borrow mut bool,
+) -> Result<u32, AllocError> {
+    let constType = c.hir.constants[c.constants[constant as usize].hir as usize].typ;
+    if (c.types.isBottom(constType)) {
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    if (!c.types.is(constType, TypeKind.Integer) && !c.types.is(constType, TypeKind.Bool)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a constant of type ")?;
+        appendQuotedType(mut message, c, constType)?;
+        appendText(mut message, " cannot be a pattern: only integer and 'bool' constants can (ADR 0085 §2.6)")?;
+        c.error(constantNotPattern(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    if (constType != typ) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "this constant has type ")?;
+        appendQuotedType(mut message, c, constType)?;
+        appendText(mut message, ", but the value has type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    let value = namedConstantValue(c, constant, span)?;
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.IntConst(v) => { return c.hir.addPattern(HirPattern.Literal(v)); }
+        HirExpr.BoolConst(b) => { return c.hir.addPattern(HirPattern.Literal(intValue(if (b) 1 else 0))); }
+        _ => {
+            failed = true;
+            return c.hir.addPattern(HirPattern.Wildcard);
+        }
+    }
+}
 
 /// N0250's number: use of a moved value, here a value `name @ P` would move twice (ADR 0085 §2.5).
 fn atMovesTwice() -> u32 => 250;

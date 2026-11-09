@@ -557,13 +557,15 @@ Pattern   = '|'? AltPattern ('|' AltPattern)*                     -- or-patterns
 AltPattern = (Identifier '@')? PrimPattern                         -- `name @ P`: ADR 0085 §2.5
 PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | '(' Pattern ')'
+          | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
           | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
-A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err(…)` and `E.V…` there are patterns.
+A payload that is a single identifier is a binding, unless it names a constant (below); `Some(…)`, `Ok(…)`, `Err(…)`
+and `E.V…` there are patterns.
 - This section's `match` is a **statement**; §15.3 has the expression form. Arms are tried in order; the first
   that matches, and whose guard holds, runs its block.
 - **Guards** (ADR 0085 §2.2). `P if (g) => …`: the guard `g` is a `bool` (N0205 otherwise), parenthesised like every
@@ -616,6 +618,16 @@ A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err
     row of its own; an alternative that earlier arms or earlier alternatives already match is N0257, at that
     alternative. With a guard, each alternative that matches, left to right, binds and runs the guard; the first
     `true` wins.
+  - **Constants and bare names** (ADR 0085 §2.6). A bare identifier (no `.`, no parentheses), at the top of an arm
+    or at any depth, is a *constant pattern* when it names a `const` in scope that no local hides: it matches that
+    value and counts as that literal for coverage. The constant must be an integer or `bool` (N0358 otherwise) of
+    the value's type (N0205). Otherwise it is a *binding* of the value at that position, at the top level too:
+    `n => …` binds the scrutinee (a copy, a move that consumes it, or a reference, as a payload binding is), and
+    `var n` a mutable one. `Some` on an optional, and `Ok` or `Err` on a `Result`, written alone at the top, still
+    name their variant with its payload unlisted. A qualified name without parentheses (`Type.NAME`) is a variant
+    pattern when it names a variant, and a constant pattern when it names an associated constant (ADR 0074 §2.7);
+    read through a type parameter (`T.NAME`) it is known only per instance, and is N0358: test it in a guard. A
+    misspelt constant becomes a binding that matches everything, so the arms after it are N0257.
   - **`name @ P`** (ADR 0085 §2.5) binds the value that `P` matched, as a payload binding would (a copy, a move or
     a reference, by the rules above), and tests `P`; it does not change coverage. `@` binds tighter than `|`:
     `d @ ('0' | '1')` needs the parentheses. A value moves at most once: when `name` binds by move (a non-Copy value

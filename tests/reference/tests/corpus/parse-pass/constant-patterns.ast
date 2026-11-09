@@ -1,0 +1,18 @@
+(unit
+  (fn default f (params (c u8) (o (optional u8))) (returns u32)
+    (block
+      (match o
+        (arm (Some LF)
+          (block)
+        )
+        (arm (Some n)
+          (block)
+        )
+        (arm null
+          (block)
+        )
+      )
+      (return (match-expr c (arm (or Bytes.TAB LF) 1) (arm var other 0)))
+    )
+  )
+)

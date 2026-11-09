@@ -1,0 +1,17 @@
+// `e is P` (ADR 0085 §2.8) in the HIR: a test as a value, an `&&` chain whose later operand reads a binding, and a
+// test that moves its scrutinee on success (`is-move`).
+enum Token {
+    Word(String),
+    Number(u32),
+}
+fn f(c: u8, o: u32?, t: Token) -> usize {
+    let digit = c is '0'..='9';
+    if (o is Some(n) && n > 3) {
+        return n as usize;
+    }
+    if (t is Token.Word(w)) {
+        return w.length;
+    }
+    return if (digit) 1 else 0;
+}
+fn main() {}

@@ -1,0 +1,114 @@
+// `e is P` (ADR 0085 §2.8, type-system.md §15.4): a pattern as a boolean test. Its bindings are in scope only where
+// the test is known true: in the later operands of the same `&&` chain, and in the then-branch of the `if` or the
+// body of the `while` whose condition is that chain. Anywhere else a pattern with bindings is N0359.
+
+fn isBindsNowhere() -> u32 => 359;
+
+/// Does the `&&` chain `e` (through parentheses) have an `is` test among its operands?
+fn chainHasIs(c: borrow Checker, e: u32) -> bool {
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Is(_, _) => { return true; }
+        ExprNode.Paren(inner) => { return chainHasIs(c, inner); }
+        ExprNode.Binary(left, op, right) => {
+            return binaryIndex(op) == 1 && (chainHasIs(c, left) || chainHasIs(c, right));
+        }
+        _ => { return false; }
+    }
+}
+
+/// The condition of an `if` or `while` (ADR 0085 §2.8): an `is` chain's bindings go into the current scope, which the
+/// caller opened and closes after the then-branch or the body.
+fn checkCondition(c: borrow mut Checker, condition: u32) -> Result<u32, AllocError> {
+    if (!chainHasIs(c, condition)) {
+        let boolType = c.types.boolType;
+        return checkExpr(c, condition, boolType);
+    }
+    return checkChainOperand(c, condition, true);
+}
+
+/// `left && right` with `is` tests among its operands: `left`'s bindings are seen by `right`; `right`'s are allowed
+/// only when what follows the chain (`tailBinds`) sees them.
+fn checkAndChain(
+    c: borrow mut Checker,
+    leftSyntax: u32,
+    rightSyntax: u32,
+    tailBinds: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let left = checkChainOperand(c, leftSyntax, true)?;
+    let right = checkChainOperand(c, rightSyntax, tailBinds)?;
+    let boolType = c.types.boolType;
+    return c.expr(HirExpr.Binary(BinaryOp.LogicalAnd, left, right), boolType, span.start, span.end);
+}
+
+/// One operand of an `&&` chain: a nested chain, an `is` test whose bindings are allowed when `binds`, or a `bool`.
+fn checkChainOperand(c: borrow mut Checker, e: u32, binds: bool) -> Result<u32, AllocError> {
+    let span = c.front.ast.exprSpans[e as usize];
+    match (c.front.ast.exprs[e as usize]) {
+        ExprNode.Is(operand, pattern) => { return checkIsTest(c, operand, pattern, binds, span); }
+        ExprNode.Paren(inner) => {
+            if (chainHasIs(c, inner)) {
+                return checkChainOperand(c, inner, binds);
+            }
+        }
+        ExprNode.Binary(left, op, right) => {
+            if (binaryIndex(op) == 1) {
+                return checkAndChain(c, left, right, binds, span);
+            }
+        }
+        _ => {}
+    }
+    let boolType = c.types.boolType;
+    return checkExpr(c, e, boolType);
+}
+
+/// `e is P`: `e` evaluated once, then tested as `match (e) { P => true, _ => false }` would (§15.2); a `bool`. The
+/// bindings go into the current scope; when `binds` is false, a pattern that binds is N0359. A success moves a value
+/// scrutinee whose pattern binds a non-Copy payload, as a consuming match does (§18.4); a failure moves nothing.
+fn checkIsTest(
+    c: borrow mut Checker,
+    operandSyntax: u32,
+    patternSyntax: u32,
+    binds: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let boolType = c.types.boolType;
+    let scrutinee = synth(c, operandSyntax, none())?;
+    let scrutineeType = c.typeOf(scrutinee);
+    let reference = if (c.types.is(scrutineeType, TypeKind.Reference)) scrutineeType else none();
+    let typ = if (reference != none()) c.types.info(reference).pointee else scrutineeType;
+    var failed = c.types.isBottom(typ);
+    if (!failed && !c.types.is(typ, TypeKind.Enum) && !c.types.is(typ, TypeKind.Integer) && !c.types.is(
+        typ,
+        TypeKind.Bool,
+    ) && !c.types.is(typ, TypeKind.Array)) {
+        let operandSpan = c.front.ast.exprSpans[operandSyntax as usize];
+        var message = Vector<u8>.create();
+        appendText(mut message, "cannot match on a value of type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(invalidOperandTypes(), operandSpan.start, operandSpan.end, message)?;
+        failed = true;
+    }
+    if (failed) {
+        return c.expr(HirExpr.BoolConst(false), boolType, span.start, span.end);
+    }
+    var alternatives = Alternatives { active: false, names: Vector<AlternativeName>.create() };
+    let tree = checkPattern(c, patternSyntax, typ, reference, mut failed, mut alternatives)?;
+    if (!binds) {
+        var bound = Vector<u32>.create();
+        patternLocals(c, tree, mut bound)?;
+        if (bound.length > 0) {
+            let patternSpan = c.front.ast.patternSpans[patternSyntax as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "this pattern binds ")?;
+            appendQuotedName(mut message, c, c.hir.locals[bound[0] as usize].name)?;
+            appendText(
+                mut message,
+                " where the test is not known true; an 'is' pattern binds only before a later '&&' operand, or in the condition of an 'if' or 'while' for its then-branch or body (ADR 0085 §2.8)",
+            )?;
+            c.error(isBindsNowhere(), patternSpan.start, patternSpan.end, message)?;
+        }
+    }
+    let consumes = reference == none() && bindsNonCopy(c, tree);
+    return c.expr(HirExpr.Is(scrutinee, tree, consumes), boolType, span.start, span.end);
+}

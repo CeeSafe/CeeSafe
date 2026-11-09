@@ -30,6 +30,7 @@ for you. This page assumes you know Rust well.
 | `match x { A => …, }` | `match (x) { E.A => { … } }` | variants are qualified; statement arms are blocks |
 | `Some(n) if n > 3 =>`, `A \| B`, `0..=9`, `x @ P` | `Some(n) if (n > 3) =>`, `A \| B`, `0..=9`, `x @ P` | the guard is parenthesised |
 | `"get" =>`, `b"cjs" =>`, `[first, rest @ ..] =>` | `"get" =>`, `"cjs" =>`, `[first, rest @ ..] =>` | a string pattern is typed by the value: a `StringView` or a `Slice<u8>` |
+| `if let Some(v) = e`, `while let …`, `matches!(e, P)` | `if (e is Some(v))`, `while (e is …)`, `e is P` | one operator; it chains with `&&` |
 | `std::thread::spawn(move \|\| …)` | `Thread.spawn(move () => …)!` | with `Arc`, `Mutex` and atomics |
 | `Send`, `Sync` | `Send`, `Share` | |
 | `println!("{}", x)` | `Console.writeLine(x)` | no macros, no format strings yet |

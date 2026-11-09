@@ -638,6 +638,13 @@ struct HirPrinter {
                 this.expr(hir, types, symbols, closure)?;
                 this.text(")")?;
             }
+            HirExpr.Is(scrutinee, pattern, consumes) => {
+                this.text(if (consumes) "(is-move " else "(is ")?;
+                this.expr(hir, types, symbols, scrutinee)?;
+                this.text(" ")?;
+                this.patternText(hir, types, symbols, pattern)?;
+                this.text(")")?;
+            }
             HirExpr.SetSpawn(record, admitted, closure) => {
                 this.text("(set-spawn ")?;
                 this.expr(hir, types, symbols, record)?;

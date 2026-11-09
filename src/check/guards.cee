@@ -217,6 +217,7 @@ fn guardExpr(c: borrow Checker, e: u32, value: bool, guarded: Slice<u32>, found:
         HirExpr.SliceLength(operand) => { guardExpr(c, operand, false, guarded, found); }
         HirExpr.Try(operand) => { guardExpr(c, operand, true, guarded, found); }
         HirExpr.Unwrap(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Is(scrutinee, _, consumes) => { guardExpr(c, scrutinee, consumes, guarded, found); } // moves on success
         HirExpr.IsNull(operand, _) => { guardExpr(c, operand, false, guarded, found); }
         HirExpr.RunTask(task) => { guardExpr(c, task, true, guarded, found); }
         HirExpr.StmtValue(statement) => { guardStmt(c, statement, guarded, found); }

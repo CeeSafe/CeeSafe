@@ -1,0 +1,21 @@
+// `e is P` (ADR 0085 §2.8): a pattern that binds where the test is not known true is N0359 (under `!` or `||`, in a
+// `let` initialiser, as an argument, as the last operand of a chain outside a condition); its bindings are not in
+// scope after the `if` (N0200); `is` on a type no pattern matches is N0207.
+fn use(b: bool) {}
+fn f(x: u32?, flag: bool) -> u32 {
+    if (!(x is Some(n))) { // error[N0359]
+        return 0;
+    }
+    if (flag || x is Some(m)) { // error[N0359]
+        return 1;
+    }
+    let b = x is Some(k); // error[N0359]
+    use(x is Some(j)); // error[N0359]
+    let d = flag && x is Some(e); // error[N0359]
+    if (x is Some(v)) {
+        return v;
+    }
+    return v; // error[N0200]
+}
+fn g(r: f64) -> bool => r is 1; // error[N0207]
+fn main() {}

@@ -112,11 +112,12 @@ fn checkStmt(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
         StmtNode.Assign(target, op, value) => { return checkAssign(c, target, op, value, span); }
         StmtNode.If(_, _, _) => { return checkIf(c, stmt); }
         StmtNode.While(condition, body) => {
-            let boolType = c.types.boolType;
-            let checkedCondition = checkExpr(c, condition, boolType)?;
+            c.pushScope()?; // what the condition's `is` tests bind, seen by the body (ADR 0085 §2.8)
+            let checkedCondition = checkCondition(c, condition)?;
             c.loopDepth += 1;
             let checkedBody = checkBlock(c, body)?;
             c.loopDepth -= 1;
+            c.popScope();
             return c.hir.addStmt(HirStmt.While(checkedCondition, checkedBody), span.start, span.end);
         }
         StmtNode.Loop(body) => {
@@ -535,8 +536,10 @@ fn checkIf(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
                     c.cfgStack.push(negatedCfg(configured.view())?)?;
                     negated += 1;
                 } else {
-                    conditions.push(checkExpr(c, condition, boolType)?)?;
+                    c.pushScope()?; // what the condition's `is` tests bind, seen by the then-block (ADR 0085 §2.8)
+                    conditions.push(checkCondition(c, condition)?)?;
                     thens.push(checkBlock(c, then)?)?;
+                    c.popScope();
                 }
                 if (elseBranch == none()) {
                     break;
@@ -1064,6 +1067,7 @@ fn diverges(c: borrow Checker, e: u32, loopExits: borrow mut Vector<bool>) -> Re
         HirExpr.SliceLength(slice) => { return diverges(c, slice, loopExits); }
         HirExpr.Try(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.Unwrap(operand) => { return diverges(c, operand, loopExits); }
+        HirExpr.Is(scrutinee, _, _) => { return diverges(c, scrutinee, loopExits); }
         HirExpr.Await(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.RunTask(operand) => { return diverges(c, operand, loopExits); }
         HirExpr.AsyncScope(_, oom, _) => { return diverges(c, oom, loopExits); } // its body cannot leave (§40.5)

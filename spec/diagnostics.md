@@ -309,6 +309,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0356 | The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3) | `Some(x) \| null =>` |
 | N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
 | N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method (`type-system.md` §15.2, ADR 0085 §2.6) | `HALF =>` with `const HALF: f64` |
+| N0359 | An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8) | `if (!(x is Some(n))) { … }` |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

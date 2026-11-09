@@ -582,6 +582,10 @@ fn lowerStmt(
         }
         HirStmt.If(condition, then, otherwise) => { lowerIf(c, n, b, condition, then, otherwise)?; }
         HirStmt.While(condition, body) => {
+            if (hasIsTest(c, condition)) {
+                lowerIsWhile(c, n, b, condition, body)?; // ADR 0085 §2.8
+                return Ok();
+            }
             let head = newBlock(b)?;
             terminate(n, b, NirTerminator.Goto(head))?;
             b.current = head;
@@ -2249,6 +2253,9 @@ fn lowerIf(
     then: u32,
     otherwise: u32,
 ) -> Result<void, AllocError> {
+    if (hasIsTest(c, condition)) {
+        return lowerIsIf(c, n, b, condition, then, otherwise); // ADR 0085 §2.8
+    }
     var ending = Vector<u32>.create();
     let test = lowerCondition(c, n, b, condition, mut ending)?;
     if (test == none()) {
@@ -2986,6 +2993,7 @@ fn lowerRvalueCore(
             }
             return Ok(spawn);
         }
+        HirExpr.Is(scrutinee, pattern, consumes) => { return lowerIsValue(c, n, b, scrutinee, pattern, consumes); }
         HirExpr.SetSpawn(record, admitted, closure) => {
             // A task set's start (ADR 0053): the child's function, the record, the admission code, the closure, in
             // that order of evaluation; the value is the start's code.
@@ -4037,6 +4045,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.AsyncBoxed(_, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }
         HirExpr.SetSpawn(_, _, _) => { return true; }
+        HirExpr.Is(scrutinee, _, _) => { return containsCall(c, scrutinee); }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }
     }
@@ -4224,6 +4233,13 @@ fn lowerShortCircuit(
     leftExpr: u32,
     rightExpr: u32,
 ) -> Result<u32, AllocError> {
+    let andChain = match (op) {
+        BinaryOp.LogicalAnd => true,
+        _ => false,
+    };
+    if (andChain && hasIsTest(c, leftExpr)) {
+        return lowerIsAnd(c, n, b, leftExpr, rightExpr); // ADR 0085 §2.8
+    }
     let left = lowerOperand(c, n, b, leftExpr)?;
     if (left == none()) {
         return Ok(none());

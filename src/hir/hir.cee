@@ -116,6 +116,9 @@ enum HirExpr {
     AsyncBlocking(u32, u32), // `await Async.blocking(() => …)` (§40.4): site, the sync closure
     AsyncBoxed(u32, u32),    // `await Async.boxed(alloc, f(…))` (§40.1): the allocator's type, the task's call
     SetSpawn(u32, u32, u32), // a task set's start (ADR 0053): the record pointer, the admission code, the closure: a u32
+    /// `e is P` (ADR 0085 §2.8): the scrutinee, the pattern (Hir.patterns), whether a success moves the scrutinee
+    /// into the pattern's bindings (a non-Copy payload of a value).
+    Is(u32, u32, bool),
     Error,
 }
 

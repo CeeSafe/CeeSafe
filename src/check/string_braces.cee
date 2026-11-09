@@ -318,6 +318,10 @@ fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: 
         }
         ExprNode.Try(operand) => { braceExpr(c, scope, file, operand)?; }
         ExprNode.Unwrap(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Is(operand, pattern) => {
+            braceExpr(c, scope, file, operand)?;
+            bracePattern(c, scope, pattern)?;
+        }
         ExprNode.Await(operand) => { braceExpr(c, scope, file, operand)?; }
         _ => {}
     }

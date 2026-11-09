@@ -1573,9 +1573,10 @@ fn checkBranching(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, A
     var statement = none();
     match (c.front.ast.exprs[e as usize]) {
         ExprNode.If(conditionSyntax, thenSyntax, elseSyntax) => {
-            let boolType = c.types.boolType;
-            let condition = checkExpr(c, conditionSyntax, boolType)?;
+            c.pushScope()?; // what the condition's `is` tests bind, seen by the then-branch (ADR 0085 §2.8)
+            let condition = checkCondition(c, conditionSyntax)?;
             var then = checkBranch(c, thenSyntax, mut branches, 0)?;
+            c.popScope();
             var otherwise = checkBranch(c, elseSyntax, mut branches, 1)?;
             var finished = Vector<DeferredBranch>.create();
             finishBranches(c, mut branches, mut finished)?;

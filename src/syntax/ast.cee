@@ -150,6 +150,8 @@ enum ExprNode {
     Unwrap(u32),
     /// `await e` (type-system.md §40.2): the operand, a task.
     Await(u32),
+    /// `e is P` (ADR 0085 §2.8): the operand, the pattern.
+    Is(u32, u32),
 }
 
 struct Closure {

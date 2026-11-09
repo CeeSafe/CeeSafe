@@ -1,0 +1,9 @@
+// `e is P` (ADR 0085 §2.8): at the precedence of `==`, under `&&` and `!`, over `+`; `|` after `is` is an
+// or-pattern; `is` stays an identifier elsewhere.
+fn f(c: u8, o: u32?, is: u32) -> bool {
+    let a = c + 1 is 'a'..='z' | '_';
+    let b = o is Some(n) && n > is;
+    let d = !(c is '0') || (c is 'x') | true;
+    while (o is Some(v)) {}
+    return a && b && d && c.is(is);
+}

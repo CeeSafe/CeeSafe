@@ -1244,6 +1244,14 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
             l.glueBeforeAt(last);
         }
         ExprNode.Await(operand) => { fmtWalkExpr(l, ast, operand)?; } // `await` stays spaced from its operand
+        ExprNode.Is(operand, pattern) => {
+            // `e is P` (ADR 0085 §2.8): one space on each side of `is`, a break before it as before a comparison.
+            fmtWalkExpr(l, ast, operand)?;
+            let first = l.first(ast.patternSpans[pattern as usize].start);
+            let last = l.last(ast.patternSpans[pattern as usize].end);
+            l.addContinuation(first - 1, false, last, priorityBinary())?;
+            fmtWalkPattern(l, ast, pattern)?;
+        }
         _ => {}
     }
     return Ok();

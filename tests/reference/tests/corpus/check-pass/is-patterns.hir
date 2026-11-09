@@ -1,0 +1,21 @@
+(program
+  (fn f ((c#0: u8) (o#1: u32?) (t#2: Token)) -> usize
+    (block
+      (let digit#3: bool = (is c#0 48..=57))
+      (if (&& (is o#1 Some((n#4: u32))) (> n#4 3:u32):bool):bool
+        (block
+          (return (as n#4 usize))
+        )
+      )
+      (if (is-move t#2 Word((w#5: String)))
+        (block
+          (return (length w#5):usize)
+        )
+      )
+      (return (value (if digit#3 (block (yield 1:usize)) (else (block (yield 0:usize))))):usize)
+    )
+  )
+  (fn main () -> void
+    (block)
+  )
+)

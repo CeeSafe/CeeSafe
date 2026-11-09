@@ -299,6 +299,11 @@ fn shadowExpr(
         }
         ExprNode.Try(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
         ExprNode.Unwrap(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
+        ExprNode.Is(operand, pattern) => {
+            // `e is P` (ADR 0085 §2.8): the pattern's names are bound for what follows.
+            shadowExpr(front, dependencies, scope, operand)?;
+            shadowPattern(front, dependencies, scope, pattern)?;
+        }
         ExprNode.Await(operand) => { shadowExpr(front, dependencies, scope, operand)?; }
         _ => {}
     }

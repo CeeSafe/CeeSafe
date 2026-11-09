@@ -351,6 +351,41 @@ Strings never cover their type, so a match on a `StringView` ends with `_` or a 
 length: `[]` and `[_, ..]` together match every slice, and a missing case is reported with one, such as `[_, _, ..]`.
 A slice pattern never moves an element: one of a Copy type is copied, any other is bound as a `borrow T`.
 
+### Patterns as conditions
+
+`e is P` tests a value against a pattern and gives a `bool`. In an `if` or `while` condition, the names the pattern
+binds are in scope in the rest of the `&&` chain and in the then-branch or the loop body:
+
+```ceesafe
+fn find(key: u32) -> u32? => if (key > 2) Some(key * 10) else null;
+
+fn main() {
+    let c = 'q';
+    let letter = c is 'a'..='z' | 'A'..='Z';
+    Console.writeLine(letter);
+    if (find(5) is Some(found) && found > 20) {
+        Console.writeLine(found);
+    }
+    var stack = Vector<u32>.create();
+    stack.push(1)!;
+    stack.push(2)!;
+    while (stack.pop() is Some(top)) {
+        Console.writeLine(top);
+    }
+}
+```
+
+```text
+true
+50
+2
+1
+```
+
+Nowhere else is the test known to be true, so a pattern that binds under `!` or `||`, or as a whole `let`
+initialiser, is an error (N0359). A test that binds a payload that is not Copy moves the value only when it succeeds:
+after `if (t is Token.Word(w)) { … } else { … }`, the `else` branch still has `t`.
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

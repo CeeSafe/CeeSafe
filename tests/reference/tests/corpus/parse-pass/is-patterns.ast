@@ -1,0 +1,13 @@
+(unit
+  (fn default f (params (c u8) (o (optional u32)) (is u32)) (returns bool)
+    (block
+      (let a = (is (+ c 1) (or (..= 'a' 'z') '_')))
+      (let b = (&& (is o (Some n)) (> n is)))
+      (let d = (|| (not (paren (is c '0'))) (| (paren (is c 'x')) true)))
+      (while (is o (Some v))
+        (block)
+      )
+      (return (&& (&& (&& a b) d) (call (. c is) is)))
+    )
+  )
+)

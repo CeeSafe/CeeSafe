@@ -1,0 +1,326 @@
+// `e is P` in NIR (ADR 0085 §2.8, §2.10): the pattern's test and bindings as a sequential match lowers them
+// (testPattern, bindPattern, unpackPattern), branching instead of joining wherever the bindings are used, so the move
+// and init checks see them made, and the scrutinee moved, on the true path only. In an `if` or `while` condition the
+// bindings and the condition's temporaries sit in a scope of their own, which ends at the end of the then-branch or
+// of each iteration's body; each false edge ends what that path made so far, before the else-branch or the loop exit.
+
+/// Is `e` an `is` test, or an `&&` chain with one among its operands?
+fn hasIsTest(c: borrow Checker, e: u32) -> bool {
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Is(_, _, _) => { return true; }
+        HirExpr.Binary(op, left, right) => {
+            return binaryIndex(op) == 1 && (hasIsTest(c, left) || hasIsTest(c, right));
+        }
+        _ => { return false; }
+    }
+}
+
+/// Does a test of the chain `e` bind into what the condition's temporaries hold: a reference or view that is not a
+/// place, with a pattern that binds (into its referent, as `c.read().data()` lends from a guard), or `rest @ ..` on
+/// an array that is not a place? Then those temporaries live as long as the bindings, to the end of the then-branch
+/// or of the body's pass, and never into the `else` (ADR 0085 §2.8, ADR 0084 §41.3); otherwise they end with the
+/// condition.
+fn bindsIntoTemporary(c: borrow Checker, e: u32) -> bool {
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Is(scrutinee, pattern, _) => {
+            if (isPlaceExpr(c, scrutinee)) {
+                return false;
+            }
+            if (c.types.is(c.hir.exprTypes[scrutinee as usize], TypeKind.Reference)) {
+                return patternBinds(c, pattern);
+            }
+            return match (c.hir.patterns[pattern as usize]) {
+                HirPattern.Slice(_, _, restLocal) => restLocal != none(),
+                _ => false,
+            };
+        }
+        HirExpr.Binary(op, left, right) => {
+            return binaryIndex(op) == 1 && (bindsIntoTemporary(c, left) || bindsIntoTemporary(c, right));
+        }
+        _ => { return false; }
+    }
+}
+
+fn isPlaceExpr(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(_) => true,
+    HirExpr.FieldAccess(_, _) => true,
+    HirExpr.Deref(_) => true,
+    HirExpr.Index(_, _) => true,
+    _ => false,
+};
+
+/// Where a false edge goes (FailLanding): `target`, after ending what the scopes from `depth` hold now (none: straight
+/// to `target`).
+fn failLanding(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    depth: u32,
+    target: u32,
+) -> Result<u32, AllocError> {
+    if (depth == none()) {
+        return Ok(target);
+    }
+    let landing = newBlock(b)?;
+    let saved = b.current;
+    b.current = landing;
+    emitStorageDead(c, n, b, depth)?;
+    terminate(n, b, NirTerminator.Goto(target))?;
+    b.current = saved;
+    return Ok(landing);
+}
+
+/// Branches on the condition `e` (LowerBranch): to `onTrue` where it holds, to `onFalse` (through failLanding) where it
+/// does not; an `&&` chain operand by operand, an `is` test by its pattern. False when its lowering ended the block.
+fn lowerBranch(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    onTrue: u32,
+    onFalse: u32,
+    depth: u32,
+) -> Result<bool, AllocError> {
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Binary(op, left, right) => {
+            if (binaryIndex(op) == 1 && hasIsTest(c, e)) {
+                let middle = newBlock(b)?;
+                if (!lowerBranch(c, n, b, left, middle, onFalse, depth)?) {
+                    return Ok(false);
+                }
+                b.current = middle;
+                return lowerBranch(c, n, b, right, onTrue, onFalse, depth);
+            }
+        }
+        HirExpr.Is(scrutinee, pattern, consumes) => {
+            if (!lowerIsTest(c, n, b, scrutinee, pattern, consumes, onFalse, depth)?) {
+                return Ok(false);
+            }
+            terminate(n, b, NirTerminator.Goto(onTrue))?;
+            return Ok(true);
+        }
+        _ => {}
+    }
+    let test = lowerOperand(c, n, b, e)?;
+    if (test == none() || b.current == none()) {
+        return Ok(false);
+    }
+    let fail = failLanding(c, n, b, depth, onFalse)?;
+    terminate(n, b, NirTerminator.Branch(test, onTrue, fail))?;
+    return Ok(true);
+}
+
+/// The test of `scrutinee is pattern` (LowerIsTest): a place is tested where it is, anything else in a temporary;
+/// a failure goes to `onFalse` (through failLanding), and the success path, where it continues, has made the
+/// bindings in the current scope: copies, references on a reference, and on a value that `consumes` the payloads
+/// moved out, as a consuming match moves them (§18.4). An or-pattern's alternatives each bind, then join.
+fn lowerIsTest(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    scrutinee: u32,
+    pattern: u32,
+    consumes: bool,
+    onFalse: u32,
+    depth: u32,
+) -> Result<bool, AllocError> {
+    let isReference = c.types.is(c.hir.exprTypes[scrutinee as usize], TypeKind.Reference);
+    let base = lowerPlaceExpr(c, n, b, scrutinee)?;
+    if (base == none() || b.current == none()) {
+        return Ok(false);
+    }
+    let place = if (isReference) projectPlace(n, base, derefProjectionN())? else base;
+    let finalFail = failLanding(c, n, b, depth, onFalse)?; // before this test binds anything
+    var alternatives = Vector<u32>.create();
+    expandAlternatives(c, pattern, mut alternatives)?;
+    let body = if (alternatives.length > 1) newBlock(b)? else none();
+    for (j in 0..alternatives.length) {
+        let alternative = alternatives[j];
+        let fail = if (j + 1 < alternatives.length) newBlock(b)? else finalFail;
+        testPattern(c, n, b, alternative, place, fail)?;
+        let unpacks = consumes && match (c.hir.patterns[alternative as usize]) {
+            HirPattern.Variant(_, listed, _) => listed,
+            _ => false,
+        };
+        if (unpacks) {
+            unpackPattern(c, n, b, alternative, place)?;
+        } else {
+            bindPattern(c, n, b, alternative, place, isReference)?;
+        }
+        if (body != none()) {
+            terminate(n, b, NirTerminator.Goto(body))?;
+        }
+        if (j + 1 < alternatives.length) {
+            b.current = fail;
+        }
+    }
+    if (body != none()) {
+        b.current = body;
+    }
+    return Ok(true);
+}
+
+/// `e is P` as a value (`let digit = c is '0'..='9';`): true on the success path, false on the other.
+fn lowerIsValue(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    scrutinee: u32,
+    pattern: u32,
+    consumes: bool,
+) -> Result<u32, AllocError> {
+    let boolType = c.types.boolType;
+    let result = newTemp(b, boolType)?;
+    let failing = newBlock(b)?;
+    let join = newBlock(b)?;
+    if (!lowerIsTest(c, n, b, scrutinee, pattern, consumes, failing, none())?) {
+        return Ok(none());
+    }
+    let resultPlace = localPlace(n, result)?;
+    let yes = constOperand(n, 1, boolType)?;
+    let yesUse = useRvalue(n, yes)?;
+    assign(n, b, resultPlace, yesUse)?;
+    terminate(n, b, NirTerminator.Goto(join))?;
+    b.current = failing;
+    let no = constOperand(n, 0, boolType)?;
+    let noUse = useRvalue(n, no)?;
+    assign(n, b, resultPlace, noUse)?;
+    terminate(n, b, NirTerminator.Goto(join))?;
+    b.current = join;
+    let read = placeOperand(c, n, b, resultPlace)?;
+    return useRvalue(n, read);
+}
+
+/// `left && right` as a value whose `left` has an `is` test (`x is Some(v) && v > 3`): `right` is evaluated where
+/// `left` held, with its bindings made.
+fn lowerIsAnd(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    leftExpr: u32,
+    rightExpr: u32,
+) -> Result<u32, AllocError> {
+    let boolType = c.types.boolType;
+    let result = newTemp(b, boolType)?;
+    let evaluateRight = newBlock(b)?;
+    let shortCircuit = newBlock(b)?;
+    let join = newBlock(b)?;
+    if (!lowerBranch(c, n, b, leftExpr, evaluateRight, shortCircuit, none())?) {
+        return Ok(none());
+    }
+    let resultPlace = localPlace(n, result)?;
+    b.current = shortCircuit;
+    let no = constOperand(n, 0, boolType)?;
+    let noUse = useRvalue(n, no)?;
+    assign(n, b, resultPlace, noUse)?;
+    terminate(n, b, NirTerminator.Goto(join))?;
+    b.current = evaluateRight;
+    let right = lowerOperand(c, n, b, rightExpr)?;
+    if (b.current != none()) {
+        let rightUse = useRvalue(n, right)?;
+        assign(n, b, resultPlace, rightUse)?;
+        terminate(n, b, NirTerminator.Goto(join))?;
+    }
+    b.current = join;
+    let read = placeOperand(c, n, b, resultPlace)?;
+    return useRvalue(n, read);
+}
+
+/// An `if` whose condition has an `is` test (ADR 0085 §2.8): the condition's bindings and temporaries in a scope of
+/// their own; the temporaries end on entry to the then-branch (or with the bindings, when one refers into them), the
+/// bindings at its end, and each false edge ends what its path made before the else-branch.
+fn lowerIsIf(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    condition: u32,
+    then: u32,
+    otherwise: u32,
+) -> Result<void, AllocError> {
+    let depth = truncate<u32>(b.scopes.length);
+    b.scopes.push(Vector<ScopeItem>.create())?;
+    let saved = beginStatementTemps(b)?;
+    let thenBlock = newBlock(b)?;
+    let elseBlock = if (otherwise == none()) none() else newBlock(b)?;
+    let join = newBlock(b)?;
+    let falseTarget = if (elseBlock == none()) join else elseBlock;
+    let keep = bindsIntoTemporary(c, condition);
+    if (!lowerBranch(c, n, b, condition, thenBlock, falseTarget, depth)?) {
+        b.openTemps.truncate(b.openTemps.length - 1);
+        b.statementTemps = saved;
+        b.scopes.truncate(depth as usize);
+        b.current = none();
+        return Ok();
+    }
+    var joinReached = elseBlock == none();
+    b.current = thenBlock;
+    if (!keep) {
+        endStatementTemps(n, b, saved)?;
+    }
+    lowerStmt(c, n, b, then)?;
+    if (b.current != none()) {
+        emitStorageDead(c, n, b, depth)?;
+        terminate(n, b, NirTerminator.Goto(join))?;
+        joinReached = true;
+    }
+    if (keep) {
+        b.openTemps.truncate(b.openTemps.length - 1);
+        b.statementTemps = saved;
+    }
+    b.scopes.truncate(depth as usize);
+    if (elseBlock != none()) {
+        b.current = elseBlock;
+        lowerStmt(c, n, b, otherwise)?;
+        if (b.current != none()) {
+            terminate(n, b, NirTerminator.Goto(join))?;
+            joinReached = true;
+        }
+    }
+    b.current = if (joinReached) join else none();
+    return Ok();
+}
+
+/// A `while` whose condition has an `is` test (ADR 0085 §2.8): evaluated again each iteration; its bindings live to
+/// the end of that iteration's body, `break` and `continue` end them, and a false edge ends them before the exit.
+fn lowerIsWhile(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    condition: u32,
+    body: u32,
+) -> Result<void, AllocError> {
+    let head = newBlock(b)?;
+    terminate(n, b, NirTerminator.Goto(head))?;
+    b.current = head;
+    let depth = truncate<u32>(b.scopes.length);
+    b.scopes.push(Vector<ScopeItem>.create())?;
+    let saved = beginStatementTemps(b)?;
+    let bodyBlock = newBlock(b)?;
+    let exit = newBlock(b)?;
+    let keep = bindsIntoTemporary(c, condition);
+    if (!lowerBranch(c, n, b, condition, bodyBlock, exit, depth)?) {
+        b.openTemps.truncate(b.openTemps.length - 1);
+        b.statementTemps = saved;
+        b.scopes.truncate(depth as usize);
+        b.current = none();
+        return Ok();
+    }
+    b.current = bodyBlock;
+    if (!keep) {
+        endStatementTemps(n, b, saved)?;
+    }
+    b.loops.push(LoopTarget { head: head, exit: exit, scopeDepth: depth, exitUsed: false })?;
+    lowerStmt(c, n, b, body)?;
+    if (b.current != none()) {
+        emitStorageDead(c, n, b, depth)?;
+        terminate(n, b, NirTerminator.Goto(head))?;
+    }
+    b.loops.truncate(b.loops.length - 1);
+    if (keep) {
+        b.openTemps.truncate(b.openTemps.length - 1);
+        b.statementTemps = saved;
+    }
+    b.scopes.truncate(depth as usize);
+    b.current = exit;
+    return Ok();
+}

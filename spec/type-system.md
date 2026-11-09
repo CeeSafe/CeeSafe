@@ -724,6 +724,42 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
 - **Temporaries** made while evaluating a branch end when the branch ends, as at the end of a statement
   (`lifetimes.md` §6). A reference to one cannot be the branch's value (N0243).
 
+### 15.4 `e is P`: patterns as conditions (ADR 0085 §2.8)
+```text
+IsTest = Operand 'is' Pattern          -- at the precedence of '==', non-associative; 'is' is contextual (grammar.md §1.3)
+```
+One `bool` operator stands for what other languages write as `matches!`, `if let`, `while let` and let chains:
+```ceesafe
+let isDigit = c is '0'..='9';
+if (cache.find(key) is Some(entry) && entry.fresh) { use(entry); }
+while (parts.next() is Some(part)) { handle(part); }
+```
+- **Meaning.** `e is P` is the test of `match (e) { P => true, _ => false }` (§15.2): `e` is evaluated once, any
+  pattern of §15.2 may follow, and testing only reads. After `is` the pattern grammar reads as far as it can, so `|`
+  there is an or-pattern. The scrutinee's type is one a `match` takes (N0207 otherwise).
+- **Bindings** are in scope only where the test is known true: in the later operands of the same top-level `&&`
+  chain, and in the then-branch of the `if` (statement or expression) or the body of the `while` whose condition is
+  that chain. A pattern with bindings anywhere else (under `||` or `!`, as a whole `let` initialiser or an argument,
+  as the last operand of a chain outside a condition) is N0359. Parentheses around an operand of the chain do not
+  change this. Bindings copy, move or refer as a `match`'s do (§15.2).
+- **Moves happen only on success.** `is` moves nothing when the test fails. When it succeeds and its pattern binds a
+  non-Copy payload of a value scrutinee, the scrutinee is consumed at that point, as a consuming `match` consumes it
+  (§18.4: unbound payloads go to hidden locals). The move checker sees a place scrutinee moved on the true path only:
+  `if (e is Some(v)) { A } else { B }` leaves `e` whole in `B`. A later `&&` operand that is false does not undo the
+  move.
+- **Drop points.** The bindings (and hidden locals) live to the end of the then-branch, or of the `while` body for
+  that pass; `break` and `continue` end them. When a later operand of the chain is `false`, those made so far are
+  destroyed at once, in reverse order, before the `else` branch runs or the loop exits: in `x is Some(v) && g`, a
+  false `g` destroys `v` there.
+- **Temporaries.** The condition's temporaries end with the condition, before the then-branch, the `else` branch or
+  the loop body runs (§14.5), unless a binding borrows from them: a test of a reference or view that is not a place
+  (`c.read().data().view() is [first, ..]`), or `rest @ ..` on an array that is not a place. Then they live to the
+  end of the then-branch or of this pass of the body, and still never into the `else` branch or the next test (Rust
+  2024's `if let` scope, applied to `while` too). So a `RefCell` guard (§41.3) used to copy a value out is gone before
+  the body, and a `.write()` in the body or in `else` does not panic. A `while` evaluates the scrutinee again on each
+  pass.
+- Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
+
 ## 16. Arrays, slices and `for` (M2d)
 
 ### 16.1 Types
@@ -4497,8 +4533,8 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   its temporaries ends once the condition is evaluated, before the body or the `else` block runs, and on every pass
   of a `while`. So `if (c.read().data().isEmpty()) { … } else { c.write()… }` does not panic, nor does an `if`
   expression whose branch writes. A `match` scrutinee's temporaries live until the end of the `match` (§18.4), as
-  Rust's do. (`e is P`, ADR 0085, follows the same rule: the guard ends with the condition, or with the block that
-  uses a binding borrowing from it.)
+  Rust's do. `e is P` (§15.4) follows the same rule: a guard made in its condition ends with the condition, or, when
+  a binding borrows from it, with the then-branch or the pass of the `while` body, never in the `else` block.
 - **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
   another task resumed meanwhile panics on the same cell. A local counts if it holds a guard in its own storage or in
   what it owns: a struct or enum field, an optional, an array, a `Box`, a `Vector`, a `StableVector`, a `SlotMap`, or

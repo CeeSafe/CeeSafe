@@ -133,6 +133,7 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
         }
         ExprNode.Try(operand) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.Unwrap(operand) => { return indexesIn(c, operand, symbol, false); }
+        ExprNode.Is(operand, _) => { return indexesIn(c, operand, symbol, false); }
         ExprNode.Await(operand) => { return indexesIn(c, operand, symbol, false); }
         _ => { return false; }
     }

@@ -738,6 +738,13 @@ struct AstPrinter {
             }
             ExprNode.Try(operand) => { this.unary(ast, symbols, "(try ", operand)?; }
             ExprNode.Unwrap(operand) => { this.unary(ast, symbols, "(unwrap ", operand)?; }
+            ExprNode.Is(operand, pattern) => {
+                this.text("(is ")?;
+                this.expr(ast, symbols, operand)?;
+                this.text(" ")?;
+                this.patternText(ast, symbols, pattern)?;
+                this.text(")")?;
+            }
             ExprNode.Await(operand) => { this.unary(ast, symbols, "(await ", operand)?; }
             ExprNode.Index(target, index) => {
                 this.text("(index ")?;

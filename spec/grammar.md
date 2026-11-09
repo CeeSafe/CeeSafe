@@ -43,6 +43,9 @@ class async await yield macro
 Primitive type names (`i32`, `u64`, `bool`, `void`, …) are **identifiers**,
 resolved by name resolution, not keywords.
 
+`is` (ADR 0085 §2.8) is **contextual**: it is the operator of `e is P` (§2.1) only where a complete operand is followed
+by the identifier `is`; everywhere else it is an identifier, so `c.types.is(t, k)` and a local named `is` keep working.
+
 `Self` (ADR 0086 §2.2) names a type: in an interface, the implementing type; in an `impl` block and in a struct's or
 enum's body, the target type with its parameters. It is written where a type name is, as the first part of a
 `QualifiedName` in a type (`Self`, `Self.Item`, also as a type argument: `Vector<Self>.create()`), as a primary
@@ -232,7 +235,7 @@ comparisons, which are **non-associative**: `a < b < c` is error N0103, and `??`
 | 0 | `??` | right-assoc, short-circuit (ADR 0072; type-system.md §22.1). An unparenthesised `\|\|` or `&&` operand beside it is N0100 |
 | 1 | `\|\|` | short-circuit |
 | 2 | `&&` | short-circuit |
-| 3 | `== != < <= > >=` | non-associative |
+| 3 | `== != < <= > >=`, `is` | non-associative. `e is P` (ADR 0085 §2.8; type-system.md §15.4): after `is` the pattern grammar reads as far as it can, so a `\|` there is an or-pattern: `(c is 'a') \| flag` needs the parentheses |
 | 4 | `\|` | |
 | 5 | `^` | |
 | 6 | `&` | |
@@ -259,6 +262,7 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | Identifier GenericArgs? '{' FieldInits? '}'       (* struct literal, M2a; GenericArgs M6a *)
         | '[' Expr (',' Expr)* ','? ']' | '[' Expr ';' IntLiteral ']'   (* array literals, M2d *)
         | '[' ']'                                    (* the empty slice, ADR 0075 §2.9 *)
+IsTest  = Operand 'is' Pattern                       (* level 3; Pattern: type-system.md §15.2, §15.4 *)
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'

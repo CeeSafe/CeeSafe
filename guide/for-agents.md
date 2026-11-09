@@ -380,6 +380,11 @@ b
 c
 ```
 
+lib/core's `Iterator<T>` names that shape as an interface, so generic code and `dyn` can iterate too:
+`fn total<I: Iterator<u32>>(it: I) -> u32 { … for (x in it) { … } … }`, and `for (x in boxed)` over a
+`Box<dyn Iterator<u32>>` in a `var`. Rust's iterator chains (`map`, `filter`, `collect`, …) become the loop's body:
+there is no adapter library.
+
 ### A function that always exits returns `never`
 
 A call of a `never` function ends its branch, so a `match` that gives a value needs no value from that branch:

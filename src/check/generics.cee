@@ -827,6 +827,7 @@ fn typeArgumentsFor(
         dropDiagnosticsSince(c, mark);
         unify(c, p.declared, c.typeOf(actual), parameters, mut found)?;
     }
+    inferFromBounds(c, parameters, mut found)?; // ADR 0086 §2.7
     var missing = Vector<u32>.create();
     for (p in parameters) {
         if (foundFor(found, p) == none()) {
@@ -859,6 +860,88 @@ fn typeArgumentsFor(
         out.push(foundFor(found, p))?;
     }
     return Ok(true);
+}
+
+/// Infers type parameters the arguments left open from a bound (§20.2, ADR 0086 §2.7): for `I: J<…T…>` where `I` is
+/// known, if `I`'s type implements exactly one instantiation of `J`, its arguments give `T`. Repeated while it finds
+/// more.
+fn inferFromBounds(
+    c: borrow mut Checker,
+    parameters: Slice<u32>,
+    found: borrow mut Vector<Found>,
+) -> Result<void, AllocError> {
+    for (round in 0..parameters.length) {
+        let before = found.length;
+        for (p in parameters) {
+            let actual = foundFor(found, p);
+            if (actual == none() || !c.types.is(p, TypeKind.TypeParameter)) {
+                continue;
+            }
+            var bounds = Vector<u32>.create();
+            for (b in c.types.typeParameters[c.types.info(p).typeParameter as usize].bounds.view()) {
+                bounds.push(b)?;
+            }
+            for (bound in bounds.view()) {
+                let b = c.types.bounds[bound as usize];
+                var instantiations = Vector<Range>.create();
+                instantiationsOf(c, actual, b.interfaceEntry, mut instantiations)?;
+                if (instantiations.length != 1) {
+                    continue;
+                }
+                for (a in 0..b.arguments.count) {
+                    let declared = c.types.listAt(b.arguments, a);
+                    let given = c.types.listAt(instantiations[0], a);
+                    unify(c, declared, given, parameters, found)?;
+                }
+            }
+        }
+        if (found.length == before) {
+            break;
+        }
+    }
+    return Ok();
+}
+
+/// The argument lists of the instantiations of interface `entry` that `typ` implements: its impls', a `dyn`'s
+/// interface and supertraits, or a type parameter's bounds; each once.
+fn instantiationsOf(
+    c: borrow mut Checker,
+    typ: u32,
+    entry: u32,
+    out: borrow mut Vector<Range>,
+) -> Result<void, AllocError> {
+    var candidates = Vector<Range>.create();
+    for (i in c.implementations.view()) {
+        if (i.typ == typ && i.interfaceEntry == entry) {
+            candidates.push(i.arguments)?;
+        }
+    }
+    var bounds = Vector<u32>.create();
+    if (c.types.isDyn(typ) && c.types.info(typ).dynInterface != none()) {
+        let dynBound = c.types.info(typ).dynInterface;
+        boundWithSupers(c, dynBound, mut bounds)?;
+    } else if (c.types.is(typ, TypeKind.TypeParameter)) {
+        for (b in c.types.typeParameters[c.types.info(typ).typeParameter as usize].bounds.view()) {
+            bounds.push(b)?;
+        }
+    }
+    for (b in bounds.view()) {
+        if (c.types.bounds[b as usize].interfaceEntry == entry) {
+            candidates.push(c.types.bounds[b as usize].arguments)?;
+        }
+    }
+    for (candidate in candidates.view()) {
+        var seen = false;
+        for (o in out.view()) {
+            if (sameLists(c, o, candidate)) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            out.push(candidate)?;
+        }
+    }
+    return Ok();
 }
 
 /// `f(args)` or `f<T>(args)` for a generic function (CheckGenericCall, §20.2): infer, instantiate, check.

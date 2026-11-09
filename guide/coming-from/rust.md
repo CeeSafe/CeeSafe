@@ -121,8 +121,11 @@ Bounds and overflow checks the compiler proves unnecessary are removed, and `--e
 `borrow mut fn(i32)`), so it cannot be returned or stored. There is no `move` closure, `Fn`/`FnMut`/`FnOnce` trait or
 `impl Fn`. Calls through a closure are indirect.
 
-**No macros, no iterator chains.** `for` walks ranges, arrays, slices and vectors; slices and vectors have `sortBy`,
-`forEach`, `any`, `all` and `retain`. There is no `Iterator` trait yet.
+**No macros, no iterator chains.** `for` walks ranges, arrays, slices, vectors and iterators: lib/core's
+`Iterator<T>` (`fn next(borrow mut this) -> T?`), through a bound `I: Iterator<T>` or a `dyn Iterator<T>`, and any
+struct with such a `next`. The item is an interface parameter, not an associated type: `Iterator<u8>`, not
+`Iterator<Item = u8>`. There are no adapters: a chain of `map`, `filter` and `collect` is the loop's body, and slices
+and vectors have `sortBy`, `forEach`, `any`, `all` and `retain`.
 
 **Through C.** CeeSafe compiles to C11, which any C toolchain or kernel build can take, including MSVC and compilers for
 targets LLVM does not support. The generated C is readable and maps back to CeeSafe lines.

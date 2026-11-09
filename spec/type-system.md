@@ -743,8 +743,16 @@ struct literal.
     not change it while the iterator lives (N0241).
   - On `Some(v)`, `x` takes `v` (moved: `x` owns a non-Copy `T`), with type `T` and the region of `next`'s result.
   - `continue` proceeds to the next call of `next`; `break` leaves the loop.
-  - No interface is involved: the method's shape is the rule. A struct without such a `next`, or whose `next` has
+  - No interface is needed: the method's shape is the rule. A struct without such a `next`, or whose `next` has
     another shape, is N0205, naming the expected signature. A shared reference to an iterator is N0248.
+- **`Iterator<T>`** (ADR 0086 §2.7). lib/core declares `public interface Iterator<T> { fn next(borrow mut this) -> T?; }`,
+  and lib/core's iterators (`TextSplit`, `ByteSplit`) implement it. Beyond the structural rule, which stays, `for (x in
+  e)` accepts an `e` of type `I` (or `borrow mut I`), where `I` is a type parameter whose bound declares such a `next`
+  (`I: Iterator<T>`), a `borrow mut dyn Iterator<T>`, and a mutable place of `Box<dyn Iterator<T>>`, iterated in
+  place through `borrow mut` of its contents (N0248 if the place is not mutable). `x` has type `T`; the header,
+  borrowing and destruction rules are the ones above. The item is a parameter, not an associated type: callers fix it
+  directly (`I: Iterator<u8>`), and `dyn Iterator<T>` is dyn-compatible. There is no `IntoIterator` and no adapter
+  library.
 
 - The loop variable is immutable. It has the bounds' type for a range, and the element type
   for a sequence (or `borrow T`, above), and `next`'s payload type for an iterator. Like every local, it cannot shadow another (N0203).
@@ -1251,8 +1259,8 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   parameters opaque (§20.3) and instantiated per call (§20.4), as a top-level generic function is. Its type
   arguments are inferred from the arguments after the receiver, or written after the name: `canvas.add<Square>(s)`,
   `Pair<i32>.make<u8>(…)`. Type arguments on a call of a function without type parameters of its own are N0209.
-  An interface's methods, and so an `impl I for T` block's, cannot have type parameters (N0216): a `dyn` table
-  holds one function per method.
+  An interface's methods may have type parameters too (ADR 0086 §2.3, §21.1), but then the interface has no `dyn`
+  type (N0331): a `dyn` table holds one function per method.
 - Names must be distinct, and must not shadow items or built-in types (N0201).
 
 ### 20.2 Using generic items
@@ -1266,6 +1274,11 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.
 - **Static functions:** `Pair<i32>.make(…)`.
+
+- **Inference from a bound** (ADR 0086 §2.7). A type parameter that the arguments do not determine is inferred from a
+  bound `I: J<…T…>` when `I`'s argument implements exactly one instantiation of `J` (its impls; for a `dyn` type, its
+  interface and supertraits; for a type parameter, its bounds). Otherwise it is N0265, as before. So
+  `fn count<T, I: Iterator<T>>(it: I) -> usize` is called as `count(text.split(","))`.
 
 ### 20.3 Checking generic code once
 - A generic declaration is checked **once, for all type arguments**. Each type parameter is an

@@ -25,9 +25,11 @@ public struct TextSplit<region r> {
     separator: StringView<r>;
     position: usize; // where the next piece starts
     finished: bool;
+}
 
+impl<region r> Iterator<StringView<r>> for TextSplit<r> {
     /// The next piece, or null after the last.
-    public fn next(borrow mut this) -> StringView<r>? {
+    fn next(borrow mut this) -> StringView<r>? {
         if (this.finished) {
             return null;
         }
@@ -55,9 +57,11 @@ public struct ByteSplit<region r> {
     separator: Slice<r, u8>;
     position: usize;
     finished: bool;
+}
 
+impl<region r> Iterator<Slice<r, u8>> for ByteSplit<r> {
     /// The next piece, or null after the last.
-    public fn next(borrow mut this) -> Slice<r, u8>? {
+    fn next(borrow mut this) -> Slice<r, u8>? {
         if (this.finished) {
             return null;
         }

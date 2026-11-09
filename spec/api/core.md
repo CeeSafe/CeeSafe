@@ -24,6 +24,7 @@
 - [struct ByteOrder](#struct-byteorder)
 - [struct VectorBytes](#struct-vectorbytes)
 - [struct TextWriter](#struct-textwriter)
+- [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
 - [struct NumberParsing](#struct-numberparsing)
@@ -1682,6 +1683,19 @@ public fn cText(borrow this) -> *CChar
 The text as a zero-terminated C string, valid while the writer's buffer is. An empty buffer, which can hold no
 terminator, gives an empty string that is not in it.
 
+## interface Iterator
+
+```ceesafe
+public interface Iterator<T> {
+    fn next(borrow mut this) -> T?;
+}
+```
+
+A source of values, one at a time: `next()` gives each, then null. `for (x in e)` calls it on a struct that has such
+a method (the shape is enough, ADR 0074 §2.8), on a type parameter bounded by `Iterator<T>`, and on a
+`borrow mut dyn Iterator<T>` or a `Box<dyn Iterator<T>>` (type-system.md §16.4). The item is a parameter, so callers
+fix it directly (`I: Iterator<u8>`) and `dyn Iterator<T>` has a table.
+
 ## struct Volatile
 
 ```ceesafe
@@ -2190,13 +2204,7 @@ public struct TextSplit<region r>
 The pieces of a text between separators, in order: `s.split(sep)`. `next()` gives each piece, then null. `"a,,b"`
 split by `","` is `"a"`, `""`, `"b"`; an empty text is one empty piece; an empty separator gives the text whole.
 
-### TextSplit.next
-
-```ceesafe
-public fn next(borrow mut this) -> StringView<r>?
-```
-
-The next piece, or null after the last.
+Implements `Iterator<StringView<r>>`.
 
 ## struct ByteSplit
 
@@ -2206,13 +2214,7 @@ public struct ByteSplit<region r>
 
 The pieces of bytes between separators, in order: `s.split(sep)` on a `Slice<u8>`, as TextSplit.
 
-### ByteSplit.next
-
-```ceesafe
-public fn next(borrow mut this) -> Slice<r, u8>?
-```
-
-The next piece, or null after the last.
+Implements `Iterator<Slice<r, u8>>`.
 
 ## struct TextSearch
 

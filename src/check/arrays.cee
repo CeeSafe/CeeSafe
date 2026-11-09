@@ -550,7 +550,7 @@ fn forSequence(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "'for' iterates over an array, a slice, a range 'a..b' or an iterator (a struct with 'fn next(borrow mut this) -> T?'); found ",
+            "'for' iterates over an array, a slice, a range 'a..b' or an iterator (a struct with 'fn next(borrow mut this) -> T?', or an 'Iterator<T>' bound or 'dyn'); found ",
         )?;
         appendQuotedType(mut message, c, st)?;
         c.error(typeMismatch(), span.start, span.end, message)?;

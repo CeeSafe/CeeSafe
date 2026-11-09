@@ -109,7 +109,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     264 =>
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>
-        "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
+        "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields, expected type or unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
         "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), or a method call, constant or associated type `T.Name` that two bounds both provide",

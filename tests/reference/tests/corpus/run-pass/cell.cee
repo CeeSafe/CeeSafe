@@ -1,0 +1,63 @@
+// Cell<T: Copy> (type-system.md §41.2; ADR 0084 §2.3): a re-entrant callback sets a cell through a second shared
+// reference (the ADR's `fire`), every method, and `==` on cells of integers, enums and floats.
+enum Mode {
+    Idle,
+    Busy,
+}
+
+struct Timer {
+    flags: Cell<u32>;
+    inCallback: Cell<bool>;
+    mode: Cell<Mode>;
+}
+
+fn callIntoScript(t: borrow Timer, depth: u32) {
+    if (depth > 0) {
+        fire(t, depth - 1);
+    }
+}
+
+fn fire(t: borrow Timer, depth: u32) {
+    t.inCallback.set(true);
+    callIntoScript(t, depth);
+    Console.writeLine(t.inCallback.get());
+    t.inCallback.set(false);
+    t.flags.set(t.flags.get() + 1);
+}
+
+fn main() {
+    var t = Timer {
+        flags: Cell<u32>.create(0),
+        inCallback: Cell<bool>.create(false),
+        mode: Cell<Mode>.create(Mode.Idle),
+    };
+    fire(t, 2);
+    Console.writeLine(t.flags.get());
+    Console.writeLine(t.flags.replace(10));
+    let m = t.flags.getMut();
+    m += 5;
+    Console.writeLine(t.flags.get());
+    let a = Cell<u32>.create(3);
+    let b = Cell<u32>.create(3);
+    Console.writeLine(a == b);
+    b.set(4);
+    Console.writeLine(a == b);
+    Console.writeLine(a != b);
+    t.mode.set(Mode.Busy);
+    Console.writeLine(t.mode == Cell<Mode>.create(Mode.Busy));
+    let f = Cell<f64>.create(1.5);
+    Console.writeLine(f == Cell<f64>.create(1.5));
+    Console.writeLine(b.intoInner());
+}
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: 3
+// expect-stdout: 3
+// expect-stdout: 15
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 4

@@ -23,3 +23,38 @@ public struct RawCell<T> {
     /// The contents, the cell consumed.
     public fn intoInner(this) -> T => this.value;
 }
+
+/// A `Copy` value that may be read and replaced through a shared reference (§41.2): `get` copies it out, `set` stores
+/// a new one. No method lends a reference to the contents, so no change can be seen through a stale one, and a call
+/// between two methods (a re-entrant callback) is harmless. `==` and `!=` compare the contents when `T` has them.
+public struct Cell<T: Copy> {
+    private raw: RawCell<T>;
+
+    /// A cell holding `value`.
+    public fn create(value: T) -> Cell<T> => Cell { raw: RawCell<T>.create(value) };
+
+    /// A copy of the contents.
+    /// Safety: no reference to the contents is ever lent, so nothing writes them during the read; `T` is Copy.
+    public fn get(borrow this) -> T => unsafe { this.raw.pointer().read() };
+
+    /// Stores `value`; the old contents need no drop (`T` is Copy), so no user code runs.
+    /// Safety: as get; nothing reads the contents during the write.
+    public fn set(borrow this, value: T) {
+        unsafe { this.raw.pointer().write(value); }
+    }
+
+    /// Stores `value` and returns the old contents.
+    /// Safety: as set.
+    public fn replace(borrow this, value: T) -> T {
+        let p = this.raw.pointer();
+        let old = unsafe { p.read() };
+        unsafe { p.write(value); }
+        return old;
+    }
+
+    /// The contents, for as long as the cell is borrowed exclusively.
+    public fn getMut(borrow mut this) -> borrow mut T => this.raw.getMut();
+
+    /// The contents, the cell consumed.
+    public fn intoInner(this) -> T => this.raw.intoInner();
+}

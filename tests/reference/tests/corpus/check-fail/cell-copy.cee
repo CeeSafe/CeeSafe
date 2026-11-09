@@ -1,0 +1,16 @@
+// A cell, and every struct holding one, is a move type (type-system.md §41.1; ADR 0084 §2.1): a copy would read the
+// contents behind a live guard's back. A copy of a Cell is written `Cell<T>.create(c.get())`.
+struct Timer {
+    flags: Cell<u32>;
+    id: u32;
+}
+
+fn main() {
+    let c = Cell<u32>.create(1);
+    let a = c;
+    let b = c; // error[N0250]
+    let t = Timer { flags: Cell<u32>.create(0), id: 1 };
+    let u = t;
+    let v = t; // error[N0250]
+    let copy = Cell<u32>.create(a.get());
+}

@@ -1,0 +1,32 @@
+// A cell's value is never a tracked fact (optimisations.md §2.3; type-system.md §41; ADR 0084 §2.3): it changes
+// through shared loans, so a test of `i.get()` proves nothing about a later `i.get()`. The first check stays; the
+// second, on a local copied out of the cell, is removed.
+
+fn step(i: borrow Cell<usize>) {
+    i.set(i.get() + 10);
+}
+
+fn fromCell(s: Slice<u8>, i: borrow Cell<usize>) -> u32 {
+    if (i.get() < s.length) {
+        step(i);
+        return s[i.get()] as u32;
+    }
+    return 0;
+}
+
+fn copiedOut(s: Slice<u8>, i: borrow Cell<usize>) -> u32 {
+    let k = i.get();
+    if (k < s.length) {
+        step(i);
+        return s[k] as u32;
+    }
+    return 0;
+}
+
+fn main() {
+    let bytes = [1u8, 2, 3, 4];
+    let i = Cell<usize>.create(1);
+    Console.writeLine(copiedOut(bytes[..], i));
+    let j = Cell<usize>.create(0);
+    Console.writeLine(fromCell(bytes[..], j));
+}

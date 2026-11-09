@@ -4295,3 +4295,17 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   value that holds a `RawCell` in its own storage is declared `const` (an exported immutable static, §39.5), and a
   cell is never a tracked local (`optimisations.md` §2.3).
 - In the interpreter a cell is ordinary memory.
+
+### 41.2 `Cell<T: Copy>`
+- `Cell<T>.create(v)`; `c.get()` returns a copy of the contents; `c.set(v)` stores `v`; `c.replace(v)` stores `v` and
+  returns the old contents; these take `borrow this`, so any number of shared loans of the cell coexist with them.
+  `c.getMut()` (`borrow mut this`) lends `borrow mut T`, and `c.intoInner()` (`this`) returns the contents.
+- `T` is bounded `Copy` on the struct (an inherent impl cannot add a bound, §21.1): `Cell<Box<u32>>` is N0268. A
+  non-Copy value that is replaced or taken through a shared reference is a `RefCell<T?>` (§41.3).
+- No method lends a reference to the contents, so a change is never seen through a stale reference, and a call
+  between two methods, such as a re-entrant callback that sets the cell through a second shared reference, is
+  harmless. A Copy `T` has no `drop`, so `set` runs no user code.
+- **`==` and `!=`.** Two `Cell<T>` compare their contents, `a.get() == b.get()`, when `T` has the operator (numbers,
+  `bool`, fieldless enums, raw pointers, arrays and cells of them): N0207 otherwise.
+- `get` is one load and `set` one store through the cell's pointer, in functions small enough for the C compiler to
+  inline. A cell's value is never a tracked fact (`optimisations.md` §2.3).

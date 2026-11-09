@@ -51,8 +51,44 @@ fn sliceOperand(c: borrow Checker, e: u32) -> u32 {
     return e;
 }
 
-/// `a == b` or `a != b` on enums, slices, vectors and arrays (CheckEquality): the comparison, an error, or none when
-/// these rules do not apply and the general ones decide.
+/// lib/core's `Cell<T>` (type-system.md §41.2): the field of its `RawCell` that holds the contents, or none. A cell is
+/// a library struct named `Cell<…>` whose one field is a `RawCell`.
+fn cellContentsField(c: borrow Checker, t: u32) -> u32 {
+    if (!c.types.is(t, TypeKind.Struct)) {
+        return none();
+    }
+    let definition = c.types.info(t).structDef;
+    let s = borrow c.types.structs[definition as usize];
+    if (s.fields.length != 1 || s.file == none() || !c.fileIsLibrary[s.file as usize]) {
+        return none();
+    }
+    let name = c.typeName(t);
+    if (name.length < 5 || !sameText(name[0..5], "Cell<")) {
+        return none();
+    }
+    let raw = c.types.fields[s.fields[0] as usize].typ;
+    if (!c.types.is(raw, TypeKind.Struct)) {
+        return none();
+    }
+    let inner = borrow c.types.structs[c.types.info(raw).structDef as usize];
+    if (!inner.isInteriorMutable || inner.fields.length != 1) {
+        return none();
+    }
+    return s.fields[0];
+}
+
+/// `a.raw.value` for a `Cell` operand: the contents, read as `a.get()` reads them (a Copy value).
+fn cellContents(c: borrow mut Checker, operand: u32, field: u32) -> Result<u32, AllocError> {
+    let span = c.spanOf(operand);
+    let raw = c.types.fields[field as usize].typ;
+    let rawRead = c.expr(HirExpr.FieldAccess(operand, field), raw, span.start, span.end)?;
+    let valueField = c.types.structs[c.types.info(raw).structDef as usize].fields[0];
+    let valueType = c.types.fields[valueField as usize].typ;
+    return c.expr(HirExpr.FieldAccess(rawRead, valueField), valueType, span.start, span.end);
+}
+
+/// `a == b` or `a != b` on enums, slices, vectors, arrays and cells (CheckEquality): the comparison, an error, or none
+/// when these rules do not apply and the general ones decide.
 fn checkEquality(
     c: borrow mut Checker,
     op: BinaryOp,
@@ -65,6 +101,22 @@ fn checkEquality(
     let lt = c.typeOf(left);
     let rt = c.typeOf(right);
     let boolType = c.types.boolType;
+    let cellField = if (lt == rt) cellContentsField(c, lt) else none();
+    if (cellField != none()) {
+        // Two cells compare their contents, `a.get() == b.get()` (ADR 0084 §2.3), when the contents have `==`.
+        let l = cellContents(c, left, cellField)?;
+        let r = cellContents(c, right, cellField)?;
+        let inner = checkEquality(c, op, l, r, span)?;
+        if (inner != none()) {
+            return Ok(inner);
+        }
+        let contents = c.typeOf(l);
+        if (!checkOperatorApplies(c, op, contents, span)?) {
+            return c.errorResult(span.start, span.end);
+        }
+        return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+    }
+
     if (lt == rt && c.types.is(lt, TypeKind.Enum) && c.types.optionType(lt) == none() &&
         c.types.info(lt).enumDef != none() && c.types.enums[c.types.info(lt).enumDef as usize].resultOk == none()) {
         if (isFieldlessEnum(c, lt)) {

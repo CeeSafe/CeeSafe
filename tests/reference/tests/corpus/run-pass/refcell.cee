@@ -1,0 +1,70 @@
+// RefCell (type-system.md §41.3; ADR 0084 §2.4): every method, guards that end in turn, tryRead and tryWrite while
+// guards are live, and replace and take on a RefCell<Box<Node>?> whose old value's drop reads the same cell (the
+// value is moved out before they return, so no guard is live then).
+struct Node {
+    id: u32;
+    home: *RefCell<Box<Node>?>;
+
+    /// Safety: `home` points to the cell that held this node, which outlives it.
+    drop {
+        let cell = unsafe { Ptr.toBorrow(this.home) };
+        let g = cell.read();
+        Console.writeLine(g.data() == null);
+        Console.writeLine(this.id);
+    }
+}
+
+fn takeFrom(c: borrow RefCell<Box<Node>?>) -> u32 {
+    let old = c.take();
+    return if (old == null) 0u32 else 1u32;
+}
+
+fn main() {
+    let c = RefCell<Vector<u32>>.create(Vector<u32>.create());
+    {
+        var w = c.write();
+        let v = w.data();
+        v.push(1)!;
+        v.push(2)!;
+        Console.writeLine(c.tryRead() == null);
+        Console.writeLine(c.tryWrite() == null);
+    }
+    {
+        let r1 = c.read();
+        let r2 = c.read();
+        Console.writeLine(r1.data().length);
+        Console.writeLine(r2.data()[1]);
+        Console.writeLine(c.tryWrite() == null);
+        Console.writeLine(c.tryRead() == null);
+    }
+    Console.writeLine(c.tryWrite() == null);
+    let old = c.replace(Vector<u32>.create());
+    Console.writeLine(old.length);
+    var owned = RefCell<u32>.create(7);
+    let slot = owned.getMut();
+    slot += 1;
+    Console.writeLine(owned.intoInner());
+    let nodes = RefCell<Box<Node>?>.create(null);
+    let home = borrow nodes as *RefCell<Box<Node>?>;
+    let first = nodes.replace(Box.create(Node { id: 1, home: home })!);
+    Console.writeLine(first == null);
+    let previous = nodes.replace(Box.create(Node { id: 2, home: home })!);
+    Console.writeLine(takeFrom(nodes));
+    Console.writeLine(nodes.take() == null);
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: 2
+// expect-stdout: 8
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 1

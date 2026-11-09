@@ -1,0 +1,9 @@
+// `write` while a `read` guard is live panics at the call (type-system.md §41.3; ADR 0084 §2.4).
+fn main() {
+    let c = RefCell<u32>.create(1);
+    let r = c.read();
+    Console.writeLine(r.data());
+    var w = c.write(); // expect-panic: cell already borrowed
+    Console.writeLine(w.data());
+}
+// expect-stdout: 1

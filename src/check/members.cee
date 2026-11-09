@@ -542,6 +542,12 @@ fn checkMethodCall(
     if (function == none() && (!c.types.is(readType, TypeKind.Struct) || c.types.info(readType).structDef == none())) {
         return checkNonStructMethod(c, receiver, readType, member, arguments, span);
     }
+    if (function == none() && arguments.count == 0 && sameText(c.name(memberIdent.symbol), "take")) {
+        let taken = checkRefCellTake(c, receiver, structType, targetSpan, span)?;
+        if (taken != none()) {
+            return Ok(taken);
+        }
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         if (definition != none() && findField(c, definition, memberIdent.symbol) != none()) {
@@ -919,4 +925,48 @@ fn sharedBorrowOf(c: borrow mut Checker, receiver: u32, typ: u32, span: Span) ->
         return c.expr(HirExpr.Borrow(false, place), reference, span.start, span.end);
     }
     return c.expr(HirExpr.BorrowTemp(false, receiver), reference, span.start, span.end);
+}
+
+/// `c.take()` on lib/core's `RefCell<T?>` (type-system.md §41.3): `RefCellTaking<T>.take(c)`, which leaves null. None
+/// when the receiver is not such a cell, and the general rules report the missing method.
+fn checkRefCellTake(
+    c: borrow mut Checker,
+    receiver: u32,
+    structType: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (!c.types.is(structType, TypeKind.Struct)) {
+        return Ok(none());
+    }
+    let definition = c.types.info(structType).structDef;
+    let file = c.types.structs[definition as usize].file;
+    let name = c.typeName(structType);
+    if (file == none() || !c.fileIsLibrary[file as usize] || name.length <= 8 || !sameText(name[0..8], "RefCell<")) {
+        return Ok(none());
+    }
+    let arguments = c.types.structs[definition as usize].typeArguments;
+    if (arguments.count != 1) {
+        return Ok(none());
+    }
+    let contents = c.types.optionType(c.types.listAt(arguments, 0));
+    if (contents == none()) {
+        return Ok(none());
+    }
+    let symbol = c.intern("take")?;
+    let elements = [contents];
+    let function = libraryFunction(c, "RefCellTaking", elements[..], symbol, span)?;
+    if (function == none()) {
+        return Ok(none());
+    }
+    var cell = receiver;
+    if (c.types.is(c.typeOf(cell), TypeKind.Reference)) {
+        cell = autoDeref(c, cell)?;
+    }
+    let lent = borrowReceiver(c, cell, false, targetSpan)?;
+    if (c.isBottom(lent)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [lent];
+    return libraryCall(c, function, values[..], span);
 }

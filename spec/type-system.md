@@ -3687,6 +3687,7 @@ fn main() {
     heap (or `FailingAllocator`);
   - `File`, `TcpListener`, `TcpStream`;
   - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>` (§38.4);
+
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
   - references, slices, views and every other scoped type (§19.1);
@@ -3765,6 +3766,7 @@ fn main() {
   coercion to one needs `T: Send`, which for a move literal means `Send` captures (N0334). A `dyn … + Send` converts to
   the same `dyn` type without `+ Send` (the same value: they share their C representation and tables), never the
   other way. `Thread.spawn(f)` with `f: Box<dyn mut fn() -> T + Send>` runs a closure made elsewhere.
+
 
 ### 38.5 Profiles
 - Threads, `Arc` and `Mutex` are in the **hosted profile**: hosts with pthreads or Win32 threads, and CosmoOS
@@ -4309,3 +4311,28 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   `bool`, fieldless enums, raw pointers, arrays and cells of them): N0207 otherwise.
 - `get` is one load and `set` one store through the cell's pointer, in functions small enough for the C compiler to
   inline. A cell's value is never a tracked fact (`optimisations.md` §2.3).
+
+### 41.3 `RefCell<T>`: checked shared and exclusive access
+- `RefCell<T>.create(v)`. Its state is one `Cell<isize>` beside the contents: 0 free, `n > 0` readers, −1 writing.
+- `c.read()` returns a `CellRef<T>` and `c.write()` a `CellRefMut<T>` (`borrow` is a reserved word, so Rust's
+  `borrow()` and `borrow_mut()` are `read()` and `write()`). Both take `borrow this`. Each guard is a scoped struct
+  over a region of the cell, written like `MutexGuard` (§38.3): `CellRef`'s `data()` (`borrow this`) lends
+  `borrow T`, `CellRefMut`'s `data()` (`borrow mut this`) lends `borrow mut T`. Dropping a guard gives the access
+  back.
+- **On conflict it panics** with "cell already borrowed": `write` while any guard is live, `read` while a
+  `CellRefMut` is (or when the reader count would pass 2^31 − 1, the same on every target). A program's call is
+  checked at the call, so the panic names the program's line, in both back ends; in a freestanding program it is an
+  explicit panic (`CEE_PANIC_EXPLICIT`). Panic is abort (OD-5).
+- `c.tryRead()` and `c.tryWrite()` return the guard, or `null` in the same cases.
+- `c.replace(v)` stores `v` and returns the old contents, and `c.take()`, on a `RefCell<T?>` only, returns them and
+  leaves `null` (lib/core's `RefCellTaking<T>.take`). Both panic as `write` does. The old value is moved out before
+  they return, so its `drop` runs in the caller with no guard live, and may use the cell again. `c.getMut()`
+  (`borrow mut this`) and `c.intoInner()` (`this`) need no check. `RefCell` has no `==`: it would take a read guard
+  and could panic.
+- **Why it is sound.** A guard is scoped to the cell (§25.4), so it cannot outlive it (N0243), be stored past it, or
+  cross a thread (scoped types are not `Send`). The reference `data()` lends is tied to the guard (§13.5), so the
+  B-rules end it before the guard's drop resets the state. The cell cannot be copied behind a guard's back (§41.1).
+- **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
+  another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures, and
+  a guard is not `Send`.
+- A `RefCell` in a task frame is fine (frames never move, `ownership.md` A1).

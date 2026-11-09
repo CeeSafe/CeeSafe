@@ -1,0 +1,10 @@
+// RefCell's type rules (type-system.md §41.3; ADR 0084 §2.1, §2.4): a cell of a loan-holding type is N0351, `take` is
+// only for a RefCell of an optional, and a RefCell has no `==`.
+fn main() {
+    let text = "abc";
+    let views = RefCell<StringView>.create(text); // error[N0351]
+    let n = RefCell<u32>.create(2);
+    let t = n.take(); // error[N0200]
+    let m = RefCell<u32>.create(2);
+    let same = n == m; // error[N0207]
+}

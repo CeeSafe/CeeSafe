@@ -1,0 +1,33 @@
+(program
+  (fn pause () -> Result<void, AsyncError>
+    (block
+      (expr (try (await (call Timer.sleep 1:u64):Result<void, AsyncError>):Result<void, AsyncError>):void)
+      (return (Result<void, AsyncError>.Ok))
+    )
+  )
+  (fn held ((c#0: borrow RefCell<u32>)) -> Result<u32, AsyncError>
+    (block
+      (let g#1: CellRef<u32> = (call RefCell<u32>.read c#0):CellRef<u32>)
+      (expr (try (await (call pause):Result<void, AsyncError>):Result<void, AsyncError>):void)
+      (return (Result<u32, AsyncError>.Ok (deref (call CellRef<u32>.data (borrow g#1)):borrow u32):u32))
+    )
+  )
+  (fn released ((c#0: borrow RefCell<u32>)) -> Result<u32, AsyncError>
+    (block
+      (var n#1: u32 = 0:u32)
+      (block
+        (let g#2: CellRef<u32> = (call RefCell<u32>.read c#0):CellRef<u32>)
+        (= n#1 (deref (call CellRef<u32>.data (borrow g#2)):borrow u32):u32)
+      )
+      (expr (try (await (call pause):Result<void, AsyncError>):Result<void, AsyncError>):void)
+      (return (Result<u32, AsyncError>.Ok n#1))
+    )
+  )
+  (fn main () -> void
+    (block
+      (let c#0: RefCell<u32> = (call RefCell<u32>.create 4:u32):RefCell<u32>)
+      (let a#1: Result<u32, AsyncError> = (run-task (call held (borrow c#0)):Result<u32, AsyncError>):Result<u32, AsyncError>)
+      (let b#2: Result<u32, AsyncError> = (run-task (call released (borrow c#0)):Result<u32, AsyncError>):Result<u32, AsyncError>)
+    )
+  )
+)

@@ -1,0 +1,15 @@
+// `dep.f<T>(…)` keeps its type arguments (package_tests.py §14): until 2026-11-09 they were dropped when the dotted
+// name was joined, so `gen.pick<u64>(5, 6, true)` inferred `i32` and `gen.nothing<u64>()` could not be inferred.
+import gen.pick;
+
+fn inc(x: u64) -> u64 => x + 1;
+
+fn main() {
+    let a = gen.pick<u64>(5, 6, true);
+    let b = gen.twice<u64>(5, inc);
+    let c = pick<u64>(7, 8, false);
+    let d = gen.nothing<u64>();
+    let e = gen.Cell1<u64>.make(9);
+    Console.writeLine(a + b + c + e.v);
+    Console.writeLine(d.isNull());
+}

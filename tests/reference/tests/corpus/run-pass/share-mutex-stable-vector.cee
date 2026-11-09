@@ -1,0 +1,19 @@
+// Share (type-system.md §38.1): a StableVector is not Share, but a Mutex is Share by design (§38.3), so a
+// Mutex<StableVector<T>> may be read from two threads at once and every push is kept. Until 2026-11-09 the guard's
+// data() made C that discarded a const qualifier (an error under -Werror), and the interpreter read the length at a
+// vector's offset. The unshared form is check-fail/share-shared-change.cee.
+
+fn fill(m: borrow Mutex<StableVector<u32>>) {
+    for (i in 0..1000) {
+        var guard = m.lock();
+        guard.data().push(1)!;
+    }
+}
+
+fn main() {
+    let m = Mutex<StableVector<u32>>.create(StableVector<u32>.create())!;
+    Thread.both(() => { fill(m); }, () => { fill(m); });
+    var guard = m.lock();
+    Console.writeLine(guard.data().length);
+}
+// expect-stdout: 2000

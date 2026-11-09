@@ -1346,7 +1346,13 @@ fn rvalue(
                 for (k in 0..p.projections.count - 1) {
                     outer = applyNirProjection(c, outer, placeProjection(n, place, k));
                 }
-                container = outer;
+                // `(*v).len` with `v` the container itself: the container is `v`'s type. But a dereference of a
+                // reference, raw pointer or box (`(*guard.data()).len`) reaches the container: keep its type, or a
+                // stable vector's length was read at a vector's offset.
+                if (!c.types.is(outer, TypeKind.Reference) && !c.types.is(outer, TypeKind.RawPointer) &&
+                    !c.types.is(outer, TypeKind.Box)) {
+                    container = outer;
+                }
             }
             let addr = address(it, c, n, frame, place, false)?;
             let offset: u64 = if (c.types.is(container, TypeKind.StableVector)) 256 else 8;

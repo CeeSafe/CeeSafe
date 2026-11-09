@@ -635,7 +635,10 @@ fn rewritePackageNames(
                         if (typeArguments.count == 0 &&
                             isDependencyName(front, dependencies, front.ast.idents[package as usize].symbol)) {
                             let joined = joinIdents(front, package, member)?;
-                            front.ast.exprs[k] = ExprNode.Name(joined, emptyRange());
+                            // `dep.f<T>(…)`: the type arguments written after the member go with the joined name;
+                            // they were dropped, so `dep.pick<u64>(5, 6)` inferred `i32`.
+                            let arguments = front.ast.typeArgumentsOfMember(member);
+                            front.ast.exprs[k] = ExprNode.Name(joined, arguments);
                             front.ast.replacedIdents.push(package)?;
                             front.ast.replacedIdents.push(member)?;
                         }

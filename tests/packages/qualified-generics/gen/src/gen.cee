@@ -1,0 +1,17 @@
+// Generic items a dependant calls with explicit type arguments (package_tests.py §14).
+public fn twice<T>(x: T, f: fn(T) -> T) -> T => f(f(x));
+
+public fn pick<T>(a: T, b: T, first: bool) -> T {
+    if (first) {
+        return a;
+    }
+    return b;
+}
+
+public fn nothing<T: Copy>() -> T? => null;
+
+public struct Cell1<T> {
+    public v: T;
+
+    public fn make(v: T) -> Cell1<T> => Cell1 { v: v };
+}

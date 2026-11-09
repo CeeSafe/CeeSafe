@@ -1882,6 +1882,19 @@ fn appendRvalue(
                 let p = n.places[place as usize];
                 return appendPlaceParts(e, c, n, sources, f, out, p.local, p.projections, p.projections.count - 1);
             }
+            let interiorMutable = c.types.is(
+                placeType,
+                TypeKind.Region,
+            ) || c.types.is(placeType, TypeKind.StableVector);
+            if (interiorMutable && n.places[place as usize].projections.count > 0) {
+                // A shared reference to a region or stable vector is not const in C (c_names.cee: their methods
+                // change them through a shared reference, §19.2, §24.2), but a place reached through a shared
+                // reference is: `&lock->data` with `lock` a `const Mutex *`. Drop the qualifier, as a cast does.
+                appendText(out, "(")?;
+                appendCTypeName(c, out, t)?;
+                appendText(out, ")(uintptr_t)&")?;
+                return appendPlace(e, c, n, sources, f, out, place);
+            }
             if (isImportedByteMember(c, n, f, place) || isAtomicMember(c, n, f, place)) {
                 // A `u8` member of an imported struct may be C's `char` (ADR 0034): its address converts, as a
                 // character-type access. An atomic member is its integer in C (ADR 0041 §3.1), laid out exactly as

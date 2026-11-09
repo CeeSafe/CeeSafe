@@ -276,7 +276,29 @@ def main():
             if not accepted and (p.returncode == 0 or "N0321" not in p.stderr or needs not in p.stderr):
                 problems.append(f"compiler-requirement: {requirement!r} was not N0321 naming it: {p.stderr[:300]}")
 
-    print(f"package_tests: 13 checks; {len(problems)} problems")
+        # 14. A dependency's generic items called with explicit type arguments, `dep.f<T>(…)` and `dep.S<T>.m(…)`: the
+        #     arguments go with the joined name (they were dropped until 2026-11-09, so `T` was inferred as i32).
+        qualified = os.path.join(work, "qualified-generics")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "qualified-generics"), qualified)
+        app = os.path.join(qualified, "app")
+        expected = "29\ntrue"
+        p = run([compiler, "check"], app)
+        if p.returncode != 0:
+            problems.append(f"qualified-generics: check failed: {p.stderr[:600]}")
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"qualified-generics: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                            f"{p.stderr[-300:]}")
+        p = run([compiler, "build"], app)
+        exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+        if p.returncode != 0:
+            problems.append(f"qualified-generics: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"qualified-generics: the program printed {out!r}")
+
+    print(f"package_tests: 14 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

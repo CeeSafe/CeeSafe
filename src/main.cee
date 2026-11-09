@@ -143,9 +143,13 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
-        "  --split           (build) write the C as ceesafe_program.h, one .c per CeeSafe file and ceesafe_instances.c,\n",
+        "  --split           (build) write the C as ceesafe_program.h, c/<package>/<path>.c per CeeSafe file and\n",
     )?;
-    appendText(out, "                    so it compiles in parallel (c-backend.md §2.4)\n")?;
+    appendText(out, "                    ceesafe_instances.c, so it compiles in parallel (c-backend.md §2.4)\n")?;
+    appendText(
+        out,
+        "  --jobs <n>        (build --split) compile at most n C files at once; default: the number of CPUs\n",
+    )?;
     appendText(
         out,
         "  --program <name>  (build --split) the name external C names carry; default: the package's, or the\n",
@@ -222,20 +226,22 @@ struct Options {
     harness: Vector<u8>;        // a generated harness file to add to the sources, or empty
     testFilter: Vector<u8>;     // test --filter
     testList: bool;             // test --list
-    testJobs: u32;              // test --jobs
+    testJobs: u32;              // test --jobs, and build --jobs when `jobsGiven`
+    jobsGiven: bool;            // --jobs was given (build: else the number of CPUs, ADR 0082 §2.5)
     testTimeout: u64;           // test --timeout, in seconds
     testSweep: u32;             // test --sweep: 0 none, 1 alloc, 2 cancel
     testSweepStrict: bool;      // test --sweep-strict (ADR 0075 §2.16)
     testJson: bool;             // test --format json
     defaultOutput: Vector<u8>;  // package mode: <package>/out/<name>
     files: Vector<String>;
-    offline: bool;                        // --offline: package mode uses only what is fetched
-    running: bool;                        // `run`
-    interp: bool;                         // run --interp
-    programArguments: Vector<Vector<u8>>; // run: after `--`
-    absolutePaths: bool;                  // package files named by their absolute paths (Workspace.Packages without a mapping)
-    fixing: bool;                         // `fix`: check, then apply the fixes (tooling.md §5.3)
-    dryRun: bool;                         // fix --dry-run
+    offline: bool;                          // --offline: package mode uses only what is fetched
+    running: bool;                          // `run`
+    interp: bool;                           // run --interp
+    programArguments: Vector<Vector<u8>>;   // run: after `--`
+    absolutePaths: bool;                    // package files named by their absolute paths (Workspace.Packages without a mapping)
+    packageDirectories: Vector<Vector<u8>>; // package mode: each package's directory, root first (ADR 0082 §2.1)
+    fixing: bool;                           // `fix`: check, then apply the fixes (tooling.md §5.3)
+    dryRun: bool;                           // fix --dry-run
     fixRound: u32;
 }
 
@@ -436,7 +442,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             }
         } else if ((options.testing &&
             (arg == "--filter" || arg == "--jobs" || arg == "--timeout" || arg == "--sweep" ||
-                arg == "--format")) || (options.running && arg == "--ceesafe-harness")) {
+                arg == "--format")) || (options.running && arg == "--ceesafe-harness") ||
+            (options.building && !options.testing && arg == "--jobs")) {
             let value = match (Process.argument(a)) {
                 Some(v) => v,
                 null => {
@@ -514,6 +521,7 @@ fn readTestOption(options: borrow mut Options, arg: StringView, value: StringVie
         }
         if (arg == "--jobs") {
             options.testJobs = truncate<u32>(n);
+            options.jobsGiven = true;
         } else {
             options.testTimeout = n;
         }
@@ -613,7 +621,7 @@ fn renderAny(
 
 fn render(out: borrow mut Vector<u8>, d: borrow Diagnostic, source: borrow SourceText) -> Result<void, AllocError> {
     let position = source.position(d.start as usize);
-    appendBytes(out, source.path.view())?;
+    appendBytes(out, source.shownPath())?;
     out.push(':')?;
     appendDecimal(out, position.line as u64)?;
     out.push(':')?;
@@ -724,6 +732,7 @@ fn parseCommand() -> i32 {
         testFilter: Vector<u8>.create(),
         testList: false,
         testJobs: 1,
+        jobsGiven: false,
         testTimeout: 60,
         testSweep: 0,
         testSweepStrict: false,
@@ -735,6 +744,7 @@ fn parseCommand() -> i32 {
         interp: false,
         programArguments: Vector<Vector<u8>>.create(),
         absolutePaths: false,
+        packageDirectories: Vector<Vector<u8>>.create(),
         fixing: false,
         dryRun: false,
         fixRound: 0,
@@ -915,6 +925,7 @@ fn loadPackage(
                 trusted: manifest.trusted,
             },
         )!;
+        options.packageDirectories.push(copyBytes(manifest.directory.view())!)!;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)!;
         if (p == 0 && options.includeTests) {
@@ -1078,6 +1089,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     testFilter: Vector<u8>.create(),
     testList: false,
     testJobs: 1,
+    jobsGiven: false,
     testTimeout: 60,
     testSweep: 0,
     testSweepStrict: false,
@@ -1089,6 +1101,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     interp: false,
     programArguments: Vector<Vector<u8>>.create(),
     absolutePaths: false,
+    packageDirectories: Vector<Vector<u8>>.create(),
     fixing: false,
     dryRun: false,
     fixRound: 0,
@@ -1199,8 +1212,31 @@ fn compileFiles(
                         return fail(message.view());
                     }
                 };
-                let name = if (options.absolutePaths) copyBytes(path.bytes())! else sourcePath(path);
-                sources.push(SourceText.create(name.view(), bytes.view())!)!;
+                // A dependency's file is named by its package, `alpha/src/util.cee`, and diagnostics name it by its
+                // path from the working directory (ADR 0082 §2.1).
+                let directory = if (p < options.packageDirectories.length) options.packageDirectories[p].view()
+                    else "".bytes();
+                let inPackage = pathBelow(slashedPath(path.bytes())!.view(), directory)!;
+                var openPath = Vector<u8>.create();
+                var name = Vector<u8>.create();
+                if (options.absolutePaths) {
+                    name = copyBytes(path.bytes())!;
+                } else if (p == 0 || inPackage.length == 0 || packages[p].name.length == 0) {
+                    name = sourcePath(path);
+                } else {
+                    appendBytes(mut name, packages[p].name.view())!;
+                    name.push('/')!;
+                    appendBytes(mut name, inPackage.view())!;
+                    match (currentDirectory()) {
+                        Ok(cwd) => { openPath = pathFrom(cwd.view(), slashedPath(path.bytes())!.view())!; }
+                        Err(_) => {}
+                    }
+                }
+                var source = SourceText.create(name.view(), bytes.view())!;
+                source.package = copyBytes(packages[p].name.view())!;
+                source.packagePath = inPackage;
+                source.openPath = openPath;
+                sources.push(source)!;
                 filePackage.push(truncate<u32>(p))!;
             }
         }
@@ -1212,7 +1248,9 @@ fn compileFiles(
                 Err(_) => { return fail("cannot read the test harness"); }
             };
             let name = sourcePath(path);
-            sources.push(SourceText.create(name.view(), bytes.view())!)!;
+            var source = SourceText.create(name.view(), bytes.view())!;
+            source.package = copyBytes(packages[0].name.view())!;
+            sources.push(source)!;
             filePackage.push(0)!;
         }
     }

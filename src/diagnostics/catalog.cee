@@ -29,7 +29,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     110 =>
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",
     200 => "Name not found (variable, function, or built-in member)",
-    201 => "Item defined twice in the package",
+    201 =>
+        "Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it)",
     202 => "Parameter declared twice",
     203 => "Local redeclares a local or parameter in scope (no shadowing of locals)",
     204 => "Unknown type name",
@@ -85,7 +86,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     249 => "`mut` argument marker missing or misplaced",
     250 =>
         "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole",
-    251 => "Move out of a place reached through a reference",
+    251 => "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy",
     252 => "Move of a field out of a value whose type has a `drop` block",
     253 => "Move out of a `using` binding",
     254 => "`return`, `break`, `continue` or `defer` inside a deferred statement",
@@ -94,19 +95,19 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`",
+        "Invalid array (`type-system.md` §16): a length that is not an integer literal from 1 to 2^48 − 1, an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
-        "`?` in a function that does not return a `Result` with the same error type; `?` on an optional in a function that does not return an optional (M6c)",
+        "`?` in a function that does not return a `Result` with the same error type, or an enum with an `@from` variant for it (ADR 0075 §2.3; the message names the variant to add); `?` on an optional in a function that does not return an optional (M6c)",
     262 =>
-        "`?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional",
+        "`?` or `!` on something that is not a `Result` or optional value (a reference to one included), or `??` with a left operand that is not optional; an `@from` variant without exactly one payload, or two `@from` variants of one payload type (ADR 0075 §2.3)",
     263 =>
         "An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`)",
     264 =>
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>
-        "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter",
+        "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields or expected type do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
         "An `impl` that does not match its interface (receiver, parameter or return type, a missing or extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an interface method without a receiver, or a method call that two bounds both provide",
@@ -201,7 +202,15 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     349 =>
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     350 =>
-        "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so; the C has it only in builds where `X` holds (`type-system.md` §28.4, ADR 0080 §3.3)",
+        "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3)",
+    355 => "a guard moves, assigns or `mut`-lends the scrutinee or a binding, or awaits",
+    356 => "alternatives of an or-pattern bind different names, types or `var`-ness",
+    357 => "an empty range pattern",
+    358 =>
+        "a constant of a type that cannot be a pattern, a const generic parameter, or `T.NAME` through a type parameter",
+    359 => "an `is` pattern with bindings where the test is not known true",
+    363 =>
+        "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     400 =>
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     401 =>

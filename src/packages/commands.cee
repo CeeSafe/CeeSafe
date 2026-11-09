@@ -81,6 +81,7 @@ fn workspaceTypeChecks(workspace: borrow Workspace) -> bool {
                 trusted: manifest.trusted,
             },
         )!;
+        options.packageDirectories.push(copyBytes(manifest.directory.view())!)!;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)!;
         files.push(paths)!;

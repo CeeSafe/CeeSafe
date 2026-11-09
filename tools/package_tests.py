@@ -21,6 +21,15 @@
     and the program prints what it should, in the interpreter and compiled.
 12. shadowing/item: an item named like the dependency is still N0315; shadowing/errors: another package's associated
     constant that is not public is N0312.
+13. A compiler requirement (ADR 0076) is N0321 when not met.
+14. qualified-generics: `dep.f<T>(…)` keeps its type arguments.
+15. same-names (ADR 0082 §2.1, §2.5): app, alpha and beta each have src/util.cee, and alpha has src/a/mod.cee and
+    src/b/mod.cee. `build --split --emit c` writes one unit per file at c/<package>/<path>.c, each with its own
+    functions, and names the dependencies' files by package in the location table; `build --split` with `--jobs 1`
+    and `--jobs 4` makes programs that print the same, from the same C; an error in alpha's util.cee is reported as
+    `../alpha/src/util.cee` with `"package": "alpha"`; two files whose units differ only in letter case are N0363
+    (through two files outside the working directory, named by their file names, so that it runs on a file system that
+    ignores case too; and in a package where the file system keeps `Util.cee` and `util.cee` apart).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -298,7 +307,108 @@ def main():
             if out != expected:
                 problems.append(f"qualified-generics: the program printed {out!r}")
 
-    print(f"package_tests: 14 checks; {len(problems)} problems")
+        # 15. Units that never merge, and parallel C compiles (ADR 0082 §2.1, §2.5).
+        same = os.path.join(work, "same-names")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "same-names"), same)
+        app = os.path.join(same, "app")
+        units = ["c/alpha/src/a/mod.c", "c/alpha/src/b/mod.c", "c/alpha/src/util.c", "c/app/src/main.c",
+                 "c/app/src/util.c", "c/beta/src/util.c"]
+        homes = {"c/alpha/src/util.c": ["ceeF_alpha_helper", "ceeF_alpha_scale"], "c/beta/src/util.c": ["ceeF_beta_helper"],
+                 "c/alpha/src/a/mod.c": ["ceeF_alpha_left"], "c/alpha/src/b/mod.c": ["ceeF_alpha_right"],
+                 "c/app/src/util.c": ["ceeF_helper"], "c/app/src/main.c": ["ceeF_main"]}
+
+        def tree(directory):
+            found = {}
+            for d, _, names in os.walk(directory):
+                for n in names:
+                    path = os.path.join(d, n)
+                    with open(path, "rb") as f:
+                        found[os.path.relpath(path, directory).replace(os.sep, "/")] = f.read()
+            return found
+
+        emitted = []
+        for jobs in ("1", "4"):
+            out = os.path.join(same, "c-jobs" + jobs)
+            p = run([compiler, "build", "--split", "--jobs", jobs, "--emit", "c", "-o", out], app)
+            if p.returncode != 0:
+                problems.append(f"same-names: build --split --emit c failed: {p.stderr[:600]}")
+                break
+            emitted.append(tree(out))
+        if len(emitted) == 2:
+            c = emitted[0]
+            found = sorted(n for n in c if n.startswith("c/"))
+            if found != units:
+                problems.append(f"same-names: expected the units {units}, found {found}")
+            for unit, functions in homes.items():
+                text = c.get(unit, b"").decode()
+                defined = [line.split("(")[0].split()[-1] for line in text.splitlines()
+                           if line.startswith(("int32_t ceeF_", "void ceeF_")) and line.endswith(") {")]
+                if sorted(defined) != sorted(functions):
+                    problems.append(f"same-names: {unit} defines {defined}, not {functions}")
+            header = c.get("ceesafe_program.h", b"").decode()
+            for name in ("src/main.cee", "src/util.cee", "alpha/src/util.cee", "alpha/src/a/mod.cee", "beta/src/util.cee"):
+                if f'[] = "{name}";' not in header:
+                    problems.append(f"same-names: the location table does not name {name!r}")
+            if emitted[0] != emitted[1]:
+                problems.append("same-names: the C of --jobs 1 and --jobs 4 differ")
+        printed = []
+        for jobs in ("1", "4"):
+            exe = os.path.join(same, "app-jobs" + jobs + (".exe" if WINDOWS else ""))
+            p = run([compiler, "build", "--split", "--jobs", jobs, "-o", exe], app)
+            if p.returncode != 0:
+                problems.append(f"same-names: build --split --jobs {jobs} failed: {p.stderr[-600:]}")
+                continue
+            printed.append(run([exe], app).stdout.strip())
+        if printed != ["11\n22\n300\n21"] * 2:
+            problems.append(f"same-names: the programs printed {printed}")
+        util = os.path.join(same, "alpha", "src", "util.cee")
+        with open(util) as f:
+            text = f.read()
+        with open(util, "w") as f:
+            f.write(text.replace("x + 10;", "x + true;"))
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        try:
+            found = [(d["code"], d["file"], d.get("package")) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = []
+        if found != [("N0205", "../alpha/src/util.cee", "alpha")] or not os.path.isfile(os.path.join(app, found[0][1])):
+            problems.append(f"same-names: expected N0205 in ../alpha/src/util.cee of package alpha: {found} "
+                            f"{p.stdout[:300]}{p.stderr[:300]}")
+        with open(util, "w") as f:
+            f.write(text)
+        clash = os.path.join(work, "case-clash")
+        for d, name, body in (("x", "Util.cee", "fn main() { Console.writeLine(twice(2)); }\n"),
+                              ("y", "util.cee", "fn twice(n: i32) -> i32 => n * 2;\n")):
+            os.makedirs(os.path.join(clash, d))
+            with open(os.path.join(clash, d, name), "w") as f:
+                f.write(body)
+        os.makedirs(os.path.join(clash, "here"))
+        files = [os.path.join(clash, "x", "Util.cee"), os.path.join(clash, "y", "util.cee")]
+        p = run([compiler, "build", "--split", "--emit", "c", "--diagnostics-format=json", "-o",
+                 os.path.join(clash, "c"), *files], os.path.join(clash, "here"))
+        try:
+            found = [(d["code"], d["file"]) for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = []
+        if p.returncode != 1 or found != [("N0363", "util.cee")]:
+            problems.append(f"same-names: expected N0363 at util.cee: {p.returncode} {found} {p.stderr[:300]}")
+        p = run([compiler, "build", "--emit", "c", "-o", os.path.join(clash, "one"), *files], os.path.join(clash, "here"))
+        if p.returncode != 0:
+            problems.append(f"same-names: the same files without --split failed: {p.stderr[:300]}")
+        # On a file system that keeps letter case apart (Linux's), the same in a package.
+        with open(os.path.join(app, "src", "Util.cee"), "w") as f:
+            f.write("fn unused() -> i32 => 1;\n")
+        if sorted(n for n in os.listdir(os.path.join(app, "src")) if n.lower() == "util.cee") == ["Util.cee", "util.cee"]:
+            p = run([compiler, "build", "--split", "--emit", "c", "--diagnostics-format=json", "-o",
+                     os.path.join(same, "c-clash")], app)
+            try:
+                found = [(d["code"], d["file"], d.get("package")) for d in json.loads(p.stdout)["diagnostics"]]
+            except (ValueError, KeyError):
+                found = []
+            if p.returncode != 1 or found != [("N0363", "src/util.cee", "app")]:
+                problems.append(f"same-names: expected N0363 at src/util.cee: {p.returncode} {found} {p.stderr[:300]}")
+
+    print(f"package_tests: 15 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

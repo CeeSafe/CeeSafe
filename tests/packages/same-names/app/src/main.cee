@@ -1,0 +1,8 @@
+// Files of three packages with the same names (package_tests.py §15, ADR 0082 §2.1): each is its own C unit with
+// --split, at c/<package>/<path in the package>.c.
+fn main() {
+    Console.writeLine(alpha.helper(1));
+    Console.writeLine(beta.helper(2));
+    Console.writeLine(helper(3));
+    Console.writeLine(alpha.left(4) + alpha.right(5));
+}

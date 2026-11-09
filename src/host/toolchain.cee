@@ -241,6 +241,8 @@ fn compileExecutable(
     userFlags: borrow Vector<Vector<u8>>,
     freestanding: bool,
     native: borrow NativeBuild,
+    split: bool,
+    jobs: u32,
 ) -> Result<ToolOutcome, AllocError> {
     var objects = Vector<Vector<u8>>.create();
     match (compileSeparate(compiler, directory, debug, userFlags, freestanding, native, mut objects)?) {
@@ -258,6 +260,22 @@ fn compileExecutable(
                 )?,
                 error: IoError.Other(0),
             });
+        }
+        if (split) {
+            // Each unit its own object, as for clang and gcc: one cl command would name both `c/alpha/src/util.c`'s
+            // and `c/beta/src/util.c`'s object `util.obj` (ADR 0082 §2.1).
+            return compileUnitsAndLink(
+                compiler,
+                directory,
+                files,
+                output,
+                debug,
+                userFlags,
+                freestanding,
+                native,
+                objects,
+                jobs,
+            );
         }
         var arguments = msvcArguments(directory, files, output, debug, userFlags)?;
         // The objects with the sources (before /Fo:), the libraries after /link.
@@ -277,17 +295,22 @@ fn compileExecutable(
         pushMsvcLinkFlags(mut withObjects, native)?;
         return runCompiler(compiler, directory, withObjects);
     }
+    if (split) {
+        return compileUnitsAndLink(
+            compiler,
+            directory,
+            files,
+            output,
+            debug,
+            userFlags,
+            freestanding,
+            native,
+            objects,
+            jobs,
+        );
+    }
     var arguments = Vector<Vector<u8>>.create();
-    pushCommonFlags(mut arguments, directory, freestanding)?;
-    if (debug) {
-        pushText(mut arguments, "-g")?;
-        pushText(mut arguments, "-O0")?;
-    } else {
-        pushText(mut arguments, "-O2")?;
-    }
-    for (flag in userFlags.view()) {
-        pushBytes(mut arguments, flag.view())?;
-    }
+    pushCompileFlags(mut arguments, directory, debug, userFlags, freestanding)?;
     for (file in files.view()) {
         if (isCSourceName(file.name.view())) {
             arguments.push(joinPath(directory, file.name.view())?)?;
@@ -305,6 +328,325 @@ fn compileExecutable(
     pushText(mut arguments, "-o")?;
     pushBytes(mut arguments, output)?;
     return runCompiler(compiler, directory, arguments);
+}
+
+/// The flags of an executable's compile, for clang and gcc: the common flags, `-g -O0` or `-O2`, the user's.
+fn pushCompileFlags(
+    arguments: borrow mut Vector<Vector<u8>>,
+    directory: Slice<u8>,
+    debug: bool,
+    userFlags: borrow Vector<Vector<u8>>,
+    freestanding: bool,
+) -> Result<void, AllocError> {
+    pushCommonFlags(arguments, directory, freestanding)?;
+    if (debug) {
+        pushText(arguments, "-g")?;
+        pushText(arguments, "-O0")?;
+    } else {
+        pushText(arguments, "-O2")?;
+    }
+    for (flag in userFlags.view()) {
+        pushBytes(arguments, flag.view())?;
+    }
+    return Ok();
+}
+
+/// One unit's compile (ADR 0082 §2.5): its place among the units, in the order of their paths, and its outcome.
+struct UnitCompile {
+    index: usize;
+    outcome: ToolOutcome;
+}
+
+/// Runs the compiles `commands[order[k]]`, for each `k` that `next` hands out, on `workers` threads: Thread.both splits
+/// the workers until each is one, as `ceesafec test --jobs` runs tests (ADR 0049), and each takes the next unit when
+/// it is free. The outcomes go to `out`, in no particular order.
+fn compileUnits(
+    compiler: borrow CCompiler,
+    directory: Slice<u8>,
+    commands: borrow Vector<Vector<Vector<u8>>>,
+    order: borrow Vector<usize>,
+    next: borrow AtomicU64,
+    workers: u32,
+    out: borrow mut Vector<UnitCompile>,
+) {
+    if (workers <= 1) {
+        loop {
+            let k = next.fetchAdd(1) as usize;
+            if (k >= order.length) {
+                return;
+            }
+            let unit = order[k];
+            var response = copyBytes("ceesafec-".bytes())!;
+            appendDecimal(mut response, unit as u64)!;
+            appendText(mut response, ".rsp")!;
+            let outcome = runCompilerWith(compiler, directory, commands[unit], response.view())!;
+            out.push(UnitCompile { index: unit, outcome: outcome })!;
+        }
+    }
+    var left = Vector<UnitCompile>.create();
+    var right = Vector<UnitCompile>.create();
+    let leftWorkers = workers / 2;
+    let rightWorkers = workers - leftWorkers;
+    Thread.both(
+        () => { compileUnits(compiler, directory, commands, order, next, leftWorkers, mut left); },
+        () => { compileUnits(compiler, directory, commands, order, next, rightWorkers, mut right); },
+    );
+    appendUnitCompiles(mut left, out);
+    appendUnitCompiles(mut right, out);
+}
+
+/// Moves every outcome of `from` to the end of `to`.
+fn appendUnitCompiles(from: borrow mut Vector<UnitCompile>, to: borrow mut Vector<UnitCompile>) {
+    loop {
+        match (from.pop()) {
+            Some(u) => { to.push(u)!; }
+            null => { return; }
+        }
+    }
+}
+
+/// A split build's executable (ADR 0082 §2.5): each C file compiled to its own object, at most
+/// `jobs` at once, then the objects linked in the bytewise order of the files' paths. The compilers' output is joined
+/// in that order too, whatever finished first, so it does not depend on `jobs`; `--jobs 1` compiles in that order.
+fn compileUnitsAndLink(
+    compiler: borrow CCompiler,
+    directory: Slice<u8>,
+    files: borrow Vector<CFile>,
+    output: Slice<u8>,
+    debug: bool,
+    userFlags: borrow Vector<Vector<u8>>,
+    freestanding: bool,
+    native: borrow NativeBuild,
+    separate: borrow Vector<Vector<u8>>,
+    jobs: u32,
+) -> Result<ToolOutcome, AllocError> {
+    // The C files, by path.
+    var units = Vector<usize>.create();
+    for (k in 0..files.length) {
+        if (!isCSourceName(files[k].name.view())) {
+            continue;
+        }
+        units.push(k)?;
+        var at = units.length - 1;
+        while (at > 0 && compareBytes(files[units[at - 1]].name.view(), files[k].name.view()) > 0) {
+            units.swap(at - 1, at);
+            at -= 1;
+        }
+    }
+    var commands = Vector<Vector<Vector<u8>>>.create();
+    var objects = Vector<Vector<u8>>.create();
+    for (u in units.view()) {
+        let msvc = compiler.msvc;
+        let source = if (msvc) windowsJoin(
+            directory,
+            files[u].name.view(),
+        )? else joinPath(directory, files[u].name.view())?;
+        var object = copyBytes(source.view())?;
+        appendText(mut object, if (msvc) ".obj" else ".o")?;
+        var arguments = Vector<Vector<u8>>.create();
+        if (msvc) {
+            pushText(mut arguments, "/nologo")?;
+            pushText(mut arguments, "/std:c11")?;
+            pushText(mut arguments, "/W3")?;
+            pushText(mut arguments, "/I")?;
+            pushBytes(mut arguments, directory)?;
+            if (debug) {
+                pushText(mut arguments, "/Zi")?;
+                pushText(mut arguments, "/FS")?; // cl processes at once share the program database
+                pushText(mut arguments, "/Od")?;
+            } else {
+                pushText(mut arguments, "/O2")?;
+                pushText(mut arguments, "/Oi-")?; // msvcArguments says why
+            }
+            for (flag in userFlags.view()) {
+                pushBytes(mut arguments, flag.view())?;
+            }
+            pushText(mut arguments, "/c")?;
+            pushBytes(mut arguments, source.view())?;
+            var out = copyBytes("/Fo:".bytes())?;
+            appendBytes(mut out, object.view())?;
+            arguments.push(out)?;
+        } else {
+            pushCompileFlags(mut arguments, directory, debug, userFlags, freestanding)?;
+            pushText(mut arguments, "-c")?;
+            pushBytes(mut arguments, source.view())?;
+            pushText(mut arguments, "-o")?;
+            pushBytes(mut arguments, object.view())?;
+        }
+        commands.push(arguments)?;
+        objects.push(object)?;
+    }
+    // Started largest first, so that a long unit is not the last to start; with one job, in the order of the paths.
+    var order = Vector<usize>.create();
+    for (k in 0..units.length) {
+        order.push(k)?;
+        if (jobs > 1) {
+            var at = order.length - 1;
+            while (at > 0 && files[units[order[at - 1]]].text.length < files[units[k]].text.length) {
+                order.swap(at - 1, at);
+                at -= 1;
+            }
+        }
+    }
+    let workers = if ((jobs as usize) < units.length) jobs else truncate<u32>(units.length);
+    let next = AtomicU64.create(0);
+    var finished = Vector<UnitCompile>.create();
+    compileUnits(compiler, directory, commands, order, next, workers, mut finished);
+    var place = Vector<usize>.create();
+    for (k in 0..units.length) {
+        place.push(finished.length)?;
+    }
+    for (k in 0..finished.length) {
+        place[finished[k].index] = k;
+    }
+    var stdout = Vector<u8>.create();
+    var stderr = Vector<u8>.create();
+    var status: i32 = 0;
+    for (k in 0..units.length) {
+        let outcome = borrow finished[place[k]].outcome;
+        if (!outcome.started) {
+            return Ok(notStarted(outcome.error));
+        }
+        appendBytes(mut stdout, outcome.stdout.view())?;
+        appendBytes(mut stderr, outcome.stderr.view())?;
+        if (status == 0 && outcome.status != 0) {
+            status = outcome.status;
+        }
+    }
+    if (status != 0) {
+        return Ok(
+            ToolOutcome { started: true, status: status, stdout: stdout, stderr: stderr, error: IoError.Other(0) },
+        );
+    }
+    var link = Vector<Vector<u8>>.create();
+    if (compiler.msvc) {
+        pushText(mut link, "/nologo")?;
+        if (debug) {
+            pushText(mut link, "/Zi")?;
+        }
+        for (flag in userFlags.view()) {
+            pushBytes(mut link, flag.view())?;
+        }
+        for (o in objects.view()) {
+            pushBytes(mut link, o.view())?;
+        }
+        for (o in separate.view()) {
+            pushBytes(mut link, o.view())?;
+        }
+        var executable = copyBytes("/Fe:".bytes())?;
+        appendBytes(mut executable, output)?;
+        link.push(executable)?;
+        pushText(mut link, "/link")?;
+        pushText(mut link, "/STACK:8388608")?;
+        pushMsvcLinkFlags(mut link, native)?;
+        return linkUnits(compiler, directory, link, stdout, stderr, "".bytes());
+    }
+    if (debug) {
+        pushText(mut link, "-g")?;
+    }
+    for (flag in userFlags.view()) {
+        pushBytes(mut link, flag.view())?;
+    }
+    for (o in objects.view()) {
+        pushBytes(mut link, o.view())?;
+    }
+    for (o in separate.view()) {
+        pushBytes(mut link, o.view())?;
+    }
+    pushGnuLinkFlags(mut link, native)?;
+    if (!freestanding && hostIsWindows()) {
+        let gcc = isGccName(compiler.path.view());
+        pushText(mut link, if (gcc) "-Wl,--stack,8388608" else "-Wl,/STACK:8388608")?;
+    }
+    pushText(mut link, "-o")?;
+    pushBytes(mut link, output)?;
+    return linkUnits(compiler, directory, link, stdout, stderr, if (debug) output else "".bytes());
+}
+
+/// The link of a split build's objects: its outcome, after the compiles' output.
+/// `debugOutput`, when not empty, is a debug build's executable: on macOS its debug information stays in the objects,
+/// which go with the build directory, so it is gathered into `<output>.dSYM` by `dsymutil`, as the compiler driver does
+/// when it compiles and links in one command.
+fn linkUnits(
+    compiler: borrow CCompiler,
+    directory: Slice<u8>,
+    link: borrow Vector<Vector<u8>>,
+    compiled: Vector<u8>,
+    compiledErrors: Vector<u8>,
+    debugOutput: Slice<u8>,
+) -> Result<ToolOutcome, AllocError> {
+    var stdout = compiled;
+    var stderr = compiledErrors;
+    let linked = runCompiler(compiler, directory, link)?;
+    appendBytes(mut stdout, linked.stdout.view())?;
+    appendBytes(mut stderr, linked.stderr.view())?;
+    if (linked.started && linked.status == 0 && debugOutput.length > 0 && hostIsMac()) {
+        var arguments = Vector<Vector<u8>>.create();
+        pushBytes(mut arguments, debugOutput)?;
+        let gathered = runTool("dsymutil".bytes(), arguments)?;
+        appendBytes(mut stdout, gathered.stdout.view())?;
+        appendBytes(mut stderr, gathered.stderr.view())?;
+        if (!gathered.started || gathered.status != 0) {
+            appendText(mut stderr, "ceesafec: dsymutil could not gather the debug information\n")?;
+            return Ok(ToolOutcome {
+                started: true,
+                status: if (gathered.started) gathered.status else 1,
+                stdout: stdout,
+                stderr: stderr,
+                error: IoError.Other(0),
+            });
+        }
+    }
+    return Ok(ToolOutcome {
+        started: linked.started,
+        status: linked.status,
+        stdout: stdout,
+        stderr: stderr,
+        error: linked.error,
+    });
+}
+
+/// Whether ceesafec runs on macOS: `uname -s` prints `Darwin` (lib/std has no query for the host system).
+fn hostIsMac() -> bool {
+    if (hostIsWindows()) {
+        return false;
+    }
+    var arguments = Vector<Vector<u8>>.create();
+    pushText(mut arguments, "-s")!;
+    let outcome = runTool("uname".bytes(), arguments)!;
+    return outcome.started && outcome.status == 0 && outcome.stdout.length >= 6 &&
+        sameText(outcome.stdout.view()[..6], "Darwin");
+}
+
+/// The number of CPUs, `build --jobs`'s default (ADR 0082 §2.5): `NUMBER_OF_PROCESSORS` on Windows, elsewhere what
+/// `getconf _NPROCESSORS_ONLN` prints (POSIX: Linux, macOS, the BSDs); 1 when neither answers. lib/std has no query
+/// for it.
+fn processorCount() -> u32 {
+    var text = Vector<u8>.create();
+    if (hostIsWindows()) {
+        match (Environment.variable("NUMBER_OF_PROCESSORS")) {
+            Some(v) => { appendBytes(mut text, v.bytes())!; }
+            null => {}
+        }
+    } else {
+        var arguments = Vector<Vector<u8>>.create();
+        pushText(mut arguments, "_NPROCESSORS_ONLN")!;
+        let outcome = runTool("getconf".bytes(), arguments)!;
+        if (outcome.started && outcome.status == 0) {
+            appendBytes(mut text, outcome.stdout.view())!;
+        }
+    }
+    var n: u64 = 0;
+    var digits = false;
+    for (b in text.view()) {
+        if (b >= '0' && b <= '9' && n < 100000) {
+            n = n * 10 + (b - '0') as u64;
+            digits = true;
+        } else if (digits) {
+            break;
+        }
+    }
+    return if (n == 0) 1 else truncate<u32>(n);
 }
 
 /// Compiles each C file with `-c` and joins the objects into one relocatable object with `-r` (CompileObject,

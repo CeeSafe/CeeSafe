@@ -309,9 +309,13 @@ and rebuild only what changed. Without it the output is one `main.c`, as above, 
   and the per-type helpers that `main.c` defines after its functions: drop glue, the `Box`, vector, container and I/O
   helpers. Each of them is `static`, the per-type helpers `static inline`, so every unit has its own inlinable copy. It
   starts with an include guard named after the program.
-- **One unit per CeeSafe source file**, named after it (`tcp.c`), with as many directories before the name as it takes to
-  make the names distinct (`net_tcp.c`, `vfs_tcp.c`). It holds the functions declared in that file and the closures
-  written in them.
+- **One unit per CeeSafe source file**, at `c/<package>/<path in the package>.c`, its extension replaced (ADR 0082
+  §2.1): `c/alpha/src/util.c` and `c/beta/src/util.c`, `c/alpha/src/a/mod.c` and `c/alpha/src/b/mod.c`. Package names
+  are unique in a build and paths unique in a package, so two units never share a path and never merge. Files given
+  without a manifest are the package named by the program's name (`--program`, below): `c/demo/src/demo.c`. A `..`
+  in such a file's path becomes `__`, so a unit stays under `c/`. A unit holds the functions declared in its file and
+  the closures written in them; lib/core's and lib/std's go to `ceesafe_instances.c`. Two units whose paths differ only
+  in letter case would be one file on macOS's and Windows's file systems: **N0363**.
 - **`ceesafe_instances.c`** holds what is defined once and belongs to no user file: lib/core's functions, generic
   instances, `@export` constants, callbacks, and C's `main`.
 - **Linkage.** Every function defined in a unit or in `ceesafe_instances.c` has external linkage, and its prototype in
@@ -319,8 +323,14 @@ and rebuild only what changed. Without it the output is one `main.c`, as above, 
   ceeF_<program>_main` (the name after the family prefix; `ceeARG` becomes `ceeARG_<program>`), so two CeeSafe programs
   linked into one image never define the same symbol. The program's name is `--program`, the package's, or the first
   file's. `@export` names are not renamed.
-- **Determinism.** The units, their names and each function's placement are a function of the package's file list and
-  the program, and two builds are byte-identical.
+- **Determinism.** The units, their names and each function's placement are a function of the packages' file lists
+  and the program, and two builds are byte-identical.
+- **Compiling** (ADR 0082 §2.5). `ceesafec build --split` compiles each C file of the build (the units,
+  `ceesafe_instances.c`, the runtime's, the packages' own) to its own object with `-c`, at most `--jobs N` at once
+  (default: the number of CPUs), then links the objects in the bytewise order of the files' paths. The C compiler's
+  output is printed in that order too, whatever finishes first; `--jobs 1` compiles in that order. The C and the
+  executable's inputs do not depend on `--jobs`. MSVC's `cl` is run the same way, `/c` and `/Fo:` per file (one
+  `cl` command for every file would give `c/alpha/src/util.c` and `c/beta/src/util.c` one `util.obj`).
 - **Inlining.** A call from one unit to a CeeSafe function in another (lib/core's included) is not inlined without
   link-time optimisation. The helpers in the header are in every unit, so calls to them still inline: with the
   per-type helpers in `ceesafe_instances.c` instead, `vector-growth` and `string-building` ran 1.7–1.9× slower, and with
@@ -826,8 +836,9 @@ Heap (M3b):
     `main.c`.
 - **Paths.** Directives and panic locations name a source by its *source path*. This is the path
   given to the compiler, with `/` separators. The CLI rewrites an absolute path under the current
-  directory to a relative one. Any other absolute path is reduced to its file name. Generated C
-  therefore never contains a host path (`build-integration.md` §6).
+  directory to a relative one. Any other absolute path is reduced to its file name. A dependency's
+  file is named by its package and its path in it, `alpha/src/util.cee` (ADR 0082 §2.1), wherever the
+  package is. Generated C therefore never contains a host path (`build-integration.md` §6).
 - `ceesafec build` runs the C compiler with the current directory as its working directory. The
   debug info's compilation directory then makes the source paths resolve, so a debugger finds
   the `.cee` files.

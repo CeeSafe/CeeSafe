@@ -398,15 +398,16 @@ only when there are warnings, and a warning never changes the exit status unless
     {
       "code": "N0249",
       "severity": "error",
-      "file": "main.cee",
+      "file": "src/main.cee",
+      "package": "app",
       "start": { "line": 7, "column": 10 },
       "end": { "line": 7, "column": 11 },
       "message": "this parameter is 'borrow mut': write 'mut' before the argument to let the call modify it",
       "summary": "`mut` argument marker missing or misplaced",
-      "notes": [ { "file": "main.cee", "start": { … }, "end": { … }, "message": "…" } ],
+      "notes": [ { "file": "src/main.cee", "start": { … }, "end": { … }, "message": "…" } ],
       "fixes": [
         { "title": "write 'mut' before the argument",
-          "edits": [ { "file": "main.cee", "start": { "line": 7, "column": 10 }, "end": { "line": 7, "column": 10 },
+          "edits": [ { "file": "src/main.cee", "start": { "line": 7, "column": 10 }, "end": { "line": 7, "column": 10 },
                        "newText": "mut " } ] }
       ]
     }
@@ -416,7 +417,12 @@ only when there are warnings, and a warning never changes the exit status unless
 
 - `version` is the format's version: fields may be added within a version, never removed or changed.
 - Positions are 1-based lines and columns, columns in UTF-16 code units, as in the text form. `end` is exclusive.
-- `file` is the path as the text form prints it.
+- `file` is the path as the text form prints it: a path given on the command line, or a file of the root package, as
+  given (relative to the current directory when it is under it); a dependency's file as its path from the current
+  directory, `../alpha/src/util.cee`, so that it can be opened (ADR 0082 §2.1).
+- `package` (added in version 1 by ADR 0082 §2.1) is the name of the package the file belongs to, in package mode
+  (`build`, `check` or `run` without file arguments): the root package's or a dependency's. It is left out for a build
+  of files, and for lib/core's and lib/std's files.
 - `summary` is the code's "Meaning" in `diagnostics.md`, which `ceesafec` embeds.
 - Diagnostics are in the order the text form prints them. Keys are written in the order shown.
 
@@ -604,10 +610,19 @@ Visual Studio's "Desktop development with C++" workload (or the Build Tools), or
 
 | Compiler | Flags |
 |---|---|
-| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc |
+| clang, gcc, `cc` | `c-backend.md` §1's: `-std=c11`, the strict warnings, `-ffp-contract=off -fno-math-errno`, `-O2` (or `-g -O0`), `--cflag`s, the C files and the separately compiled packages' objects, the manifests' `-L<dir>` and `-l<name>` (§4.1), `-o <output>`; on Windows also the 8 MiB stack, `-Wl,/STACK:8388608` for clang and `-Wl,--stack,8388608` for gcc. With `--split`, each C file is compiled alone with the same flags and `-c`, at most `--jobs` at once, and the objects are linked with `-g` (for `-g`), the `--cflag`s, the libraries and the stack (`c-backend.md` §2.4) |
 | `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
 
 A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one relocatable object) needs clang or gcc.
+
+`--jobs N` (`build --split`, ADR 0082 §2.5) compiles at most `N` C files at once; the default is the number of CPUs
+(`getconf _NPROCESSORS_ONLN`, or `NUMBER_OF_PROCESSORS` on Windows), and `--jobs 1` compiles them one at a time in the
+bytewise order of their paths. The objects are linked in that order, and the C compiler's output is printed in it,
+whatever finishes first, so neither the C nor the output depends on `N`. With `cl`, each file is compiled with `/c`,
+`/Fo:` its own object and, for `-g`, `/FS`, and the objects are linked by `cl /Fe:`. On macOS a `-g` build's debug
+information is gathered into `<output>.dSYM` by `dsymutil` after the link, as the compiler driver does when it compiles
+and links in one command, since the objects are removed with the build directory. A build without `--split` is one
+`main.c` and the runtime's files in one compiler command, as before.
 
 ### 8.4 The output
 

@@ -318,3 +318,27 @@ and C. Split output becomes the default for package builds after B (Question 2).
    otherwise.
 8. **Order of work:** stages A and D first (the scale test and the agents' queue need them), then B, C, E, F?
    **Proposed: yes.**
+
+## 7. Implementation notes: stage A (2026-11-09, for 0.24.3)
+
+- §2.1 as decided. `nameUnits` (`c_split.cee`) gives each user file the unit `c/<package>/<path in the package>.c`
+  from its `SourceText`'s package and path in the package; a build of files is the package `--program`, and a `..` in
+  a given path becomes `__`. N0363 is checked in `generateC` before any C is made, at the later of the two files.
+  `ceesafe_program.h` and `ceesafe_instances.c` stay at the top as before (no `ceesafe_main.c` yet: C's `main`,
+  callbacks and `@export` constants stay in `ceesafe_instances.c` until stage B's per-package instances).
+- A dependency's source path is `<package>/<path in it>` (the location table, `#line`, panics); its diagnostics name
+  it by its path from the working directory, and the JSON document gains `"package"` for every file of a package build.
+  The root package's paths, and lib/core's and lib/std's (`lib/core/…`), are unchanged.
+- §2.5 as decided, with `cl` too: a split build compiles each C file with `-c` (`cl /c /Fo:`, `/FS` with `-g`), at
+  most `--jobs` at once on Thread.both workers that each take the next file (the largest first), and links the
+  objects in the bytewise order of their paths; the outcomes are joined in that order. The default is the number of
+  CPUs (`getconf _NPROCESSORS_ONLN`, `NUMBER_OF_PROCESSORS` on Windows): lib/std has no query for it. On macOS a `-g`
+  split build runs `dsymutil` after the link (the debugger check's `split` case found the debug information missing
+  without it: it stayed in the removed objects). `--emit obj`
+  and builds without `--split` are unchanged.
+- **Measured** (Mac, 8 cores, Apple clang 21; the 304,176-line scale program, 821 source files): `build --split --emit
+  c` writes 821 units, one per file, plus `ceesafe_instances.c` and three runtime files, in 29.9 s. `build --split
+  --jobs 8` takes **698.7 s** wall (3,724.6 s user CPU) and the program prints `300946541`. Stage A's target, a C step
+  under the hand-run 69 s, is **not met**: the hand run compiled 12 merged units, and each of today's 825 units parses
+  the 54.7 MB `ceesafe_program.h` (§1.2.4), about 4.5 CPU-s each. As §3 predicted for "fix the names only", more units
+  make the build slower until stage B's preludes remove the shared header; stage B is what the C step's target needs.

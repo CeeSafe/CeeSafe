@@ -36,6 +36,8 @@ directory or above. Outside one, give the files.
 | `--cflag <flag>` | an extra C compiler flag (repeatable); the default is `-O2` |
 | `-g` | a debug build: `#line` directives and `-g -O0` (see [Debugging](debugging.md)) |
 | `--line-directives` | `#line` directives without changing the optimisation level |
+| `--split` | the C in one file per CeeSafe source, `c/<package>/<path>.c`, so it compiles in parallel ([C backend](../spec/c-backend.md) §2.4) |
+| `--jobs <n>` | with `--split`: compile at most `n` C files at once; the default is the number of CPUs, and the output is the same for any `n` |
 | `--profile hosted \| freestanding` | the [profile](kernel.md#the-freestanding-profile) |
 | `--no-float` | reject every float type and literal |
 | `--offline` | in a package: never run `git` |

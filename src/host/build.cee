@@ -180,6 +180,8 @@ fn compileIn(
         options.cflags,
         options.freestanding,
         borrow options.native,
+        options.split,
+        if (!options.split) 1 else if (options.jobsGiven) options.testJobs else processorCount(),
     )!;
     if (!outcome.started) {
         var message = copyBytes("cannot run the C compiler '".bytes())!;

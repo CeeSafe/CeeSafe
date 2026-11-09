@@ -1,0 +1,2 @@
+// alpha's b/mod.cee: the unit c/alpha/src/b/mod.c.
+public fn right(x: i32) -> i32 => scale(x) + 2;

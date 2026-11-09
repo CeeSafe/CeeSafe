@@ -1,0 +1,4 @@
+// alpha's util.cee: the unit c/alpha/src/util.c.
+public fn helper(x: i32) -> i32 => x + 10;
+
+fn scale(x: i32) -> i32 => x * 2;

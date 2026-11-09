@@ -619,8 +619,11 @@ A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one rel
 `--jobs N` (`build --split`, ADR 0082 §2.5) compiles at most `N` C files at once; the default is the number of CPUs
 (`getconf _NPROCESSORS_ONLN`, or `NUMBER_OF_PROCESSORS` on Windows), and `--jobs 1` compiles them one at a time in the
 bytewise order of their paths. The objects are linked in that order, and the C compiler's output is printed in it,
-whatever finishes first, so neither the C nor the output depends on `N`. With `cl`, each file is compiled with `/c`,
-`/Fo:` its own object and, for `-g`, `/FS`, and the objects are linked by `cl /Fe:`. On macOS a `-g` build's debug
+whatever finishes first, so neither the C nor the output depends on `N`; an output identical to an earlier file's
+(a bad `--cflag`'s error, printed by every compile) is printed once, then `ceesafec: the C compiler printed the same
+for <n> of the C files`. `--jobs` without `--split` is a usage error (status 2), since the C is then one command.
+With `cl`, each file is compiled with `/c`, `/Fo:` its own object and, for `-g`, `/FS`, and the objects are linked by
+`cl /Fe:`. On macOS a `-g` build's debug
 information is gathered into `<output>.dSYM` by `dsymutil` after the link, as the compiler driver does when it compiles
 and links in one command, since the objects are removed with the build directory. A build without `--split` is one
 `main.c` and the runtime's files in one compiler command, as before.

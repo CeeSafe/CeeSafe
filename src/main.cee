@@ -481,6 +481,10 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.files.push(copyText(arg))!;
         }
     }
+    if (options.building && !options.testing && options.jobsGiven && !options.split) {
+        // Without --split the C is one compile, so a --jobs that did nothing would mislead (ADR 0082 §2.5).
+        return fail("build's --jobs needs --split: without it, the C is compiled in one command");
+    }
     return 0;
 }
 

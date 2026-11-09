@@ -1,0 +1,7 @@
+// cc, mm and zz each declare `strlen`; zz depends on cc. The owner is cc for any order of `[dependencies]`
+// (ADR 0081 §7; package_tests.py §15).
+/// Safety: the literal ends in a zero byte.
+fn main() {
+    let text = "hello\0";
+    Console.writeLine(unsafe { cc.strlen(text.ptr as *CChar) });
+}

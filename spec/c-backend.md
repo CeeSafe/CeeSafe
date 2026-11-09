@@ -311,9 +311,13 @@ and rebuild only what changed. Without it the output is one `main.c`, as above, 
   starts with an include guard named after the program.
 - **One unit per CeeSafe source file**, at `c/<package>/<path in the package>.c`, its extension replaced (ADR 0082
   §2.1): `c/alpha/src/util.c` and `c/beta/src/util.c`, `c/alpha/src/a/mod.c` and `c/alpha/src/b/mod.c`. Package names
-  are unique in a build and paths unique in a package, so two units never share a path and never merge. Files given
-  without a manifest are the package named by the program's name (`--program`, below): `c/demo/src/demo.c`. A `..`
-  in such a file's path becomes `__`, so a unit stays under `c/`. A unit holds the functions declared in its file and
+  are unique in a build and paths unique in a package, so two units of packages never share a path. Files given
+  without a manifest are the package named by the program's name (`--program`, below): `src/demo.cee` of a program
+  `demo` is `c/demo/src/demo.c`. A `..` in such a file's path becomes `__`, so a unit stays under `c/`, and a file
+  outside the current directory is named by its file name (§7). Two such files can then give one path (`/p/util.cee`
+  and `/q/util.cee`; `../x.cee` and `__/x.cee`): the later, in the order of the files, gets `-2` before `.c`
+  (`c/demo/util-2.c`), or the first of `-3`, `-4`, … that no earlier unit has ignoring letter case, so units never
+  merge (ADR 0082 §7). A unit holds the functions declared in its file and
   the closures written in them; lib/core's and lib/std's go to `ceesafe_instances.c`. Two units whose paths differ only
   in letter case would be one file on macOS's and Windows's file systems: **N0363**.
 - **`ceesafe_instances.c`** holds what is defined once and belongs to no user file: lib/core's functions, generic
@@ -841,7 +845,10 @@ Heap (M3b):
   package is. Generated C therefore never contains a host path (`build-integration.md` §6).
 - `ceesafec build` runs the C compiler with the current directory as its working directory. The
   debug info's compilation directory then makes the source paths resolve, so a debugger finds
-  the `.cee` files.
+  the `.cee` files of a build of files and of the root package (run from its directory). It does
+  not find a dependency's: `alpha/src/util.cee` is relative to the root package, not to the current
+  directory, so the debugger needs a source map (lldb's `target.source-map`, gdb's `directory`)
+  until a later stage of ADR 0082 fixes it (ADR 0082 §7).
 - Locals keep stable names: `v_<name>_<n>` for a named local, `t_<n>` for a temporary.
   A C debugger therefore shows recognisable variables (`v_count_3`).
 - **Temporaries and debug info.** Without directives, a temporary is declared `CEE_TEMP` (`rt.h`): under clang

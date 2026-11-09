@@ -2364,12 +2364,19 @@ attribute twice is N0290.
   `cee` and an uppercase letter; c-backend §2.1): N0292.
   Two declarations, or a declaration and an `@export`, with one C name are N0201, even in different packages: a C
   name has one declaration, which other packages call through its package (`sys.strlen`) when it is `public` (ADR
-  0081 §2.1). N0201 is reported at the declaration that clashes: a dependant's own, or the later one in a package's
-  file order (tooling.md §4). A note gives the other declaration's package and position. When that package is a
-  dependency and both are extern declarations, the message says to call `sys.strlen` and remove this declaration, or,
-  when sys's is not `public`, to make it `public` there; and if the two are identical in CeeSafe (the same parameter
-  and result types, variadic-ness and attributes, `@cname` and `@effects` among them; an identical C signature is not
-  enough), a fix removes this declaration. The fix does not change its call sites (ADR 0081 §2.2).
+  0081 §2.1). Of the declarations of one C name, one owns it and N0201 is reported at each of the others, after the
+  other checks of foreign interfaces. A library's declaration (`lib/core`, `std`, `kernel`) owns it before any
+  package's. Otherwise a declaration may own the name when no other declaration of it is in a package its package
+  depends on, directly or not, so a dependency's owns it before its dependant's; of those that may, the owner is the
+  one whose package's name comes first (bytewise; names are unique in a build), and within one package the first in the
+  package's file order (tooling.md §4), then in the file: the choice does not depend on the order of `[dependencies]`
+  (ADR 0081 §7). A note gives the owner's package and position. When the owner's package is a *direct* dependency of
+  this declaration's (one its `[dependencies]` names, which `sys.strlen` needs) and both are extern declarations, the
+  message says to call `sys.strlen` and remove this declaration, or, when sys's is not `public`, to make it `public`
+  there; and if the two are identical in CeeSafe (the same parameter and result types, none of them in error,
+  variadic-ness and attributes, `@cname` and `@effects` among them; an identical C signature is not enough), a fix
+  removes this declaration: its lines, with its doc comment and a trailing `//` comment, and its `extern "C"` block
+  when it was the block's only declaration. The fix does not change its call sites (ADR 0081 §2.2).
 - Parameter and result types must be **FFI-safe** (§28.3), or N0291.
 - **`@cname("symbol")`** on an extern function (ADR 0080 §3.5) gives its C symbol when its CeeSafe name must differ,
   as when a struct has the name (`struct cosmofs_stats` and `cosmofs_stats()`). The symbol follows the rules above.

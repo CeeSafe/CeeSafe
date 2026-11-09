@@ -26,7 +26,9 @@
 15. c-names (ADR 0081 §2.2, §5): one C name declared by `sys` and again by a dependant is N0201 at the dependant's
     declaration, with a note at sys's and the hint to use `sys.strlen` (owned), or to make sys's declaration `public`
     (hidden); two files of one package give N0201 at the later file (two-files); `ceesafec fix` removes the
-    declaration identical to sys's and leaves one with another parameter type or `@cname` (fix); a dependant calls
+    declaration identical to sys's, with its doc lines and trailing comment, and an extern block it was alone in, and
+    leaves one with another parameter type, result type or `@cname` (fix); with cc, mm and zz declaring one name and
+    zz depending on cc, cc owns it for every order of app's `[dependencies]` (order, ADR 0081 §7); a dependant calls
     sys's `public` externs and a wrapper with a `borrow` parameter, in the interpreter and compiled (run).
 16. same-names (ADR 0082 §2.1, §2.5): app, alpha and beta each have src/util.cee, and alpha has src/a/mod.cee and
     src/b/mod.cee. `build --split --emit c` writes one unit per file at c/<package>/<path>.c, each with its own
@@ -34,12 +36,17 @@
     and `--jobs 4` makes programs that print the same, from the same C; an error in alpha's util.cee is reported as
     `../alpha/src/util.cee` with `"package": "alpha"`; two files whose units differ only in letter case are N0363
     (through two files outside the working directory, named by their file names, so that it runs on a file system that
-    ignores case too; and in a package where the file system keeps `Util.cee` and `util.cee` apart).
+    ignores case too; and in a package where the file system keeps `Util.cee` and `util.cee` apart), while two files
+    whose units would be identical (two `util.cee` outside the working directory; `../x.cee` and `__/x.cee`) get
+    `util-2.c` and build (ADR 0082 §7). Through a C compiler that logs its commands (POSIX), `--jobs 4` compiles each
+    unit alone to its own object and links them; a failing compile exits 1 with the output in the units' order; a
+    bad `--cflag`'s message is printed once with a count; `build --jobs` without `--split` is a usage error.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
 
 import argparse
+import itertools
 import json
 import os
 import shutil
@@ -350,11 +357,28 @@ def main():
         status, found = n0201s(fix, "fix")
         with open(os.path.join(fix, "src", "main.cee")) as f:
             fixed = f.read()
-        if (status != 1 or sorted(where(d) for d in found) != [("src/main.cee", 5), ("src/main.cee", 8)]
-                or "fn strlen(" in fixed or "Identical to sys's" in fixed
-                or "fn memcmp(a: *u8, b: *u8, n: usize) -> i32;" not in fixed or '@cname("strlen")' not in fixed):
-            problems.append(f"c-names/fix: expected strlen's declaration removed and memcmp's and length's kept: "
-                            f"{status} {found} {fixed!r}")
+        if (status != 1 or sorted(where(d) for d in found) != [("src/main.cee", 5), ("src/main.cee", 8),
+                                                                ("src/main.cee", 10)]
+                or "fn strlen(" in fixed or "Identical to sys's" in fixed or "with its doc comment" in fixed
+                or "// c" in fixed or "strcmp" in fixed or "extern \"C\" {  }" in fixed
+                or "fn memcmp(a: *u8, b: *u8, n: usize) -> i32;" not in fixed or '@cname("strlen")' not in fixed
+                or "fn atoi(s: *CChar) -> i64;" not in fixed):
+            problems.append(f"c-names/fix: expected strlen's declaration (its doc lines and comment too) and strcmp's "
+                            f"block removed, and memcmp's, length's and atoi's kept: {status} {found} {fixed!r}")
+        # The owner does not depend on the order of `[dependencies]` (ADR 0081 §7): cc, mm and zz declare strlen,
+        # zz depends on cc; cc owns it, and mm and zz get N0201 with a note at cc's, in every order.
+        order = os.path.join(c_names, "order", "app")
+        for names in itertools.permutations(["cc", "mm", "zz"]):
+            with open(os.path.join(order, "ceesafe.toml"), "w") as f:
+                f.write('[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\n'
+                        + "".join(f'{n} = {{ path = "../{n}" }}\n' for n in names))
+            status, found = n0201s(order)
+            got = sorted((where(d), [where(n) for n in d.get("notes", [])]) for d in found)
+            want = [(("../mm/src/lib.cee", 3), [("../cc/src/lib.cee", 3)]),
+                    (("../zz/src/lib.cee", 3), [("../cc/src/lib.cee", 3)])]
+            if status != 1 or got != want:
+                problems.append(f"c-names/order {', '.join(names)}: expected N0201 in mm and zz, owned by cc: "
+                                f"{status} {got}")
         app = os.path.join(c_names, "run")
         expected = "5\ntrue\n2\n7"
         p = run([compiler, "check"], app)
@@ -426,6 +450,55 @@ def main():
             printed.append(run([exe], app).stdout.strip())
         if printed != ["11\n22\n300\n21"] * 2:
             problems.append(f"same-names: the programs printed {printed}")
+        # What --jobs runs (ADR 0082 §2.5, §7), seen through a C compiler that logs its commands (POSIX sh): each C
+        # file compiled alone with -c to its own object, the objects linked. A compile that fails exits 1, with the
+        # compilers' output in the order of the files' paths although the first finish last; one output printed by
+        # every compile (a bad flag's) is printed once, with a count.
+        if not WINDOWS:
+            wrapper = os.path.join(same, "cc-log")
+            log = os.path.join(same, "cc.log")
+            with open(wrapper, "w") as f:
+                f.write('#!/bin/sh\n'
+                        'printf "%s\\n" "$*" >> "$CEESAFE_TEST_CC_LOG"\n'
+                        'if [ -n "$CEESAFE_TEST_CC_FAIL" ]; then\n'
+                        '  for a in "$@"; do case "$a" in\n'
+                        '    */c/alpha/*.c) sleep 1; echo "failed: $a" >&2; exit 1;;\n'
+                        '    *.c) echo "failed: $a" >&2; exit 1;;\n'
+                        '  esac; done\n'
+                        'fi\n'
+                        'exec ${CC:-cc} "$@"\n')
+            os.chmod(wrapper, 0o755)
+            exe = os.path.join(same, "app-logged")
+            p = run([compiler, "build", "--split", "--jobs", "4", "--cc", wrapper, "-o", exe], app,
+                    {"CEESAFE_TEST_CC_LOG": log})
+            commands = open(log).read().splitlines() if os.path.exists(log) else []
+            compiles = [c.split() for c in commands if " -c " in f" {c} "]
+            sources = [next((a for a in c if a.endswith(".c")), "") for c in compiles]
+            objects = [c[c.index("-o") + 1] for c in compiles if "-o" in c]
+            unit_sources = sorted(s[s.rindex("/c/") + 1:] for s in sources if "/c/" in s)
+            links = [c for c in commands if " -c " not in f" {c} " and all(o in c.split() for o in objects)]
+            out = run([exe], app).stdout.strip() if p.returncode == 0 else ""
+            if (p.returncode != 0 or unit_sources != units or len(set(objects)) != len(compiles)
+                    or any(not o.endswith(".o") for o in objects) or len(links) != 1 or out != "11\n22\n300\n21"):
+                problems.append(f"same-names: build --split --jobs 4 should compile each unit alone to its own object "
+                                f"and link them: {p.returncode} {unit_sources} {len(objects)} objects, "
+                                f"{len(links)} links, printed {out!r} {p.stderr[-300:]}")
+            p = run([compiler, "build", "--split", "--jobs", "4", "--cc", wrapper, "-o", exe], app,
+                    {"CEESAFE_TEST_CC_LOG": log, "CEESAFE_TEST_CC_FAIL": "1"})
+            failed = [line[len("failed: "):] for line in p.stderr.splitlines() if line.startswith("failed: ")]
+            names = [os.path.relpath(f, os.path.commonpath(failed)).replace(os.sep, "/") for f in failed] if failed else []
+            if p.returncode != 1 or len(failed) < len(units) or names != sorted(names):
+                problems.append(f"same-names: a failing split build should exit 1 with the compilers' output in the "
+                                f"order of the C files' paths: {p.returncode} {names} {p.stderr[-300:]}")
+            p = run([compiler, "build", "--split", "--jobs", "4", "--cflag", "-fno-such-flag-ceesafe", "-o", exe], app)
+            if p.returncode != 1 or "the C compiler printed the same for " not in p.stderr:
+                problems.append(f"same-names: a bad --cflag should fail the build (1) and its message be printed "
+                                f"once, with a count: {p.returncode} {p.stderr[-400:]}")
+        # build --jobs without --split is a usage error (ADR 0082 §2.5).
+        p = run([compiler, "build", "--jobs", "4", "--emit", "c", "-o", os.path.join(same, "c-nosplit")], app)
+        if p.returncode != 2 or "--jobs needs --split" not in p.stderr:
+            problems.append(f"same-names: build --jobs without --split should be a usage error (2): {p.returncode} "
+                            f"{p.stderr[:200]}")
         util = os.path.join(same, "alpha", "src", "util.cee")
         with open(util) as f:
             text = f.read()
@@ -460,6 +533,32 @@ def main():
         p = run([compiler, "build", "--emit", "c", "-o", os.path.join(clash, "one"), *files], os.path.join(clash, "here"))
         if p.returncode != 0:
             problems.append(f"same-names: the same files without --split failed: {p.stderr[:300]}")
+        # Files whose units would have one path are not N0363 (ADR 0082 §7): two files outside the working directory
+        # with one name, and `../x.cee` beside `__/x.cee`; the later gets `-2`, and the program runs.
+        same_path = os.path.join(work, "same-path")
+        for d, name, body in (("p", "util.cee", "fn helperP() -> i32 => 1;\n"),
+                              ("q", "util.cee", "fn helperQ() -> i32 => 2;\n"),
+                              ("w/sub", "main.cee", "fn main() { Console.writeLine(helperP() + helperQ()); }\n"),
+                              (".", "x.cee", "fn helperA() -> i32 => 3;\n"),
+                              ("w/__", "x.cee", "fn helperB() -> i32 => 4;\n"),
+                              ("w", "main.cee", "fn main() { Console.writeLine(helperA() + helperB()); }\n")):
+            os.makedirs(os.path.join(same_path, d), exist_ok=True)
+            with open(os.path.join(same_path, d, name), "w") as f:
+                f.write(body)
+        w = os.path.join(same_path, "w")
+        for files, want_units, want_out in (
+                ([os.path.join(same_path, "p", "util.cee"), os.path.join(same_path, "q", "util.cee"), "sub/main.cee"],
+                 ["c/util/sub/main.c", "c/util/util-2.c", "c/util/util.c"], "3"),
+                (["main.cee", "../x.cee", "__/x.cee"], ["c/main/__/x-2.c", "c/main/__/x.c", "c/main/main.c"], "7")):
+            cdir = os.path.join(same_path, "c-" + want_out)
+            p = run([compiler, "build", "--split", "--emit", "c", "-o", cdir, *files], w)
+            found = sorted(n for n in tree(cdir) if n.startswith("c/")) if p.returncode == 0 else []
+            exe = os.path.join(same_path, "prog-" + want_out + (".exe" if WINDOWS else ""))
+            q = run([compiler, "build", "--split", "--jobs", "4", "-o", exe, *files], w)
+            out = run([exe], w).stdout.strip() if q.returncode == 0 else ""
+            if found != want_units or out != want_out:
+                problems.append(f"same-names: {files} should make the units {want_units} and print {want_out}: "
+                                f"{found} {out!r} {p.stderr[:300]}{q.stderr[:300]}")
         # On a file system that keeps letter case apart (Linux's), the same in a package.
         with open(os.path.join(app, "src", "Util.cee"), "w") as f:
             f.write("fn unused() -> i32 => 1;\n")

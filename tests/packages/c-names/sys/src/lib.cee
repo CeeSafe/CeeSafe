@@ -3,6 +3,8 @@ extern "C" {
     public fn strlen(s: *CChar) -> usize;
     public fn memcmp(a: *void, b: *void, n: usize) -> i32;
     fn abs(n: i32) -> i32;
+    public fn atoi(s: *CChar) -> i32;
+    public fn strcmp(a: *CChar, b: *CChar) -> i32;
 }
 
 /// The length of the C string in `bytes`: up to its first zero byte, or the whole array without one.

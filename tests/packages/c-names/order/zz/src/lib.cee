@@ -1,0 +1,4 @@
+// Its dependency cc owns `strlen` (ADR 0081 §7), whatever the order of app's `[dependencies]`.
+extern "C" {
+    public fn strlen(s: *CChar) -> usize;
+}

@@ -1830,7 +1830,8 @@ static int64_t ceesafe_host_copy_out(const char *text, uint8_t *buffer, uint64_t
 
 /* A new, empty directory only this user can enter, under the platform's temporary directory; its path goes to
  * (buffer, capacity). A name is tried until mkdir creates it (mkdir fails on an existing name, so this is atomic
- * without mkdtemp, which CosmoOS's libc lacks). */
+ * without mkdtemp, which CosmoOS's libc lacks). The counter is atomic: a split build's compiles call this from several
+ * threads at once (ADR 0082 §2.5). */
 int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     static uint32_t counter;
     char base[4096];
@@ -1852,7 +1853,7 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     for (uint32_t attempt = 0; attempt < 10000u; attempt++) {
         /* base, then "ceesafe-", the process id in decimal, '-' and 8 hex digits (built by hand: n < 4096 - 64). */
         char name[4096];
-        uint32_t k = counter++;
+        uint32_t k = ceesafe_atomic_add_u32(&counter, 1u);
         uint64_t mix = ((uint64_t)id << 32) ^ ((uint64_t)k * 0x9E3779B97F4A7C15u) ^ (uint64_t)(uintptr_t)&counter;
         size_t at = n;
         memcpy(name, base, n);

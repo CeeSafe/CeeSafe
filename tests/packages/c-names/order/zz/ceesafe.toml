@@ -1,0 +1,7 @@
+[package]
+name = "zz"
+version = "0.1.0"
+kind = "library"
+
+[dependencies]
+cc = { path = "../cc" }

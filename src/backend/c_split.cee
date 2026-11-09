@@ -52,8 +52,9 @@ fn appendUnitComponent(out: borrow mut Vector<u8>, part: Slice<u8>) -> Result<vo
 }
 
 /// A user file's unit (ADR 0082 §2.1, c-backend.md §2.4): `c/<package>/<path in the package>.c`, its extension
-/// replaced; a file outside any package (a build of files) is in the package named `program`. Units never merge:
-/// package names are unique in a build and paths unique in a package.
+/// replaced; a file outside any package (a build of files) is in the package named `program`. Package names are unique
+/// in a build and paths unique in a package, but a build of files can give two files one path: `unitPaths` makes them
+/// unique, so that units never merge.
 fn unitPath(source: borrow SourceText, program: Slice<u8>) -> Result<Vector<u8>, AllocError> {
     var out = copyBytes("c/".bytes())?;
     let package = if (source.package.length > 0) source.package.view() else program;
@@ -109,38 +110,86 @@ fn sameIgnoringCase(a: Slice<u8>, b: Slice<u8>) -> bool {
     return true;
 }
 
-/// N0363 (ADR 0082 §2.1): two user files whose units' paths differ only in letter case. Reported at the later file;
-/// true if one was.
+/// Every user file's unit (ADR 0082 §2.1, §7; c-backend.md §2.4), by file, or empty for a library's file; and in
+/// `caseClashes`, by file, the earlier file whose unit differs from it only in letter case, or none. `unitPath` alone
+/// can give two files one path: two files outside the working directory with one name (diagnostics name each by its
+/// file name), or `../x.cee` and `__/x.cee`. A path identical to an earlier file's gets `-2`, `-3`, … before `.c`,
+/// the first that no earlier file's unit has, ignoring letter case: deterministic, in the order of the files.
+fn unitPaths(
+    c: borrow Checker,
+    sources: borrow Vector<SourceText>,
+    program: Slice<u8>,
+    caseClashes: borrow mut Vector<u32>,
+) -> Result<Vector<Vector<u8>>, AllocError> {
+    var paths = Vector<Vector<u8>>.create();
+    for (file in 0..sources.length) {
+        caseClashes.push(none())?;
+        if (file >= c.fileIsLibrary.length || c.fileIsLibrary[file]) {
+            paths.push(Vector<u8>.create())?;
+            continue;
+        }
+        let base = unitPath(sources[file], program)?;
+        var identical = false;
+        var differsInCase = none();
+        for (a in 0..file) {
+            if (paths[a].length == 0 || !sameIgnoringCase(paths[a].view(), base.view())) {
+                continue;
+            }
+            if (sameBytes(paths[a].view(), base.view())) {
+                identical = true;
+            } else if (differsInCase == none()) {
+                differsInCase = truncate<u32>(a);
+            }
+        }
+        if (!identical) {
+            caseClashes[file] = differsInCase;
+            paths.push(base)?;
+            continue;
+        }
+        let stem = base[..(base.length - 2)]; // without ".c"
+        var number: u64 = 2;
+        loop {
+            var path = copyBytes(stem)?;
+            path.push('-')?;
+            appendDecimal(mut path, number)?;
+            appendText(mut path, ".c")?;
+            var taken = false;
+            for (a in 0..file) {
+                if (paths[a].length > 0 && sameIgnoringCase(paths[a].view(), path.view())) {
+                    taken = true;
+                }
+            }
+            if (!taken) {
+                paths.push(path)?;
+                break;
+            }
+            number += 1;
+        }
+    }
+    return Ok(paths);
+}
+
+/// N0363 (ADR 0082 §2.1): two user files whose units' paths differ only in letter case (`unitPaths`). Reported at the
+/// later file; true if one was.
 fn reportUnitCaseClashes(
     c: borrow mut Checker,
     sources: borrow Vector<SourceText>,
     program: Slice<u8>,
 ) -> Result<bool, AllocError> {
-    var paths = Vector<Vector<u8>>.create();
-    for (file in 0..sources.length) {
-        let user = file < c.fileIsLibrary.length && !c.fileIsLibrary[file];
-        paths.push(if (user) unitPath(sources[file], program)? else Vector<u8>.create())?;
-    }
+    var clashes = Vector<u32>.create();
+    let paths = unitPaths(c, sources, program, mut clashes)?;
     var found = false;
     for (b in 0..paths.length) {
-        if (paths[b].length == 0) {
-            continue;
-        }
-        var first = paths.length;
-        for (a in 0..b) {
-            if (first == paths.length && paths[a].length > 0 && sameIgnoringCase(paths[a].view(), paths[b].view())) {
-                first = a;
-            }
-        }
-        if (first == paths.length) {
+        let first = clashes[b];
+        if (first == none()) {
             continue;
         }
         var message = copyBytes("this file's C unit '".bytes())?;
         appendBytes(mut message, paths[b].view())?;
         appendText(mut message, "' and the unit '")?;
-        appendBytes(mut message, paths[first].view())?;
+        appendBytes(mut message, paths[first as usize].view())?;
         appendText(mut message, "' of '")?;
-        appendBytes(mut message, sources[first].shownPath())?;
+        appendBytes(mut message, sources[first as usize].shownPath())?;
         appendText(mut message, "' differ only in letter case, so they would be one file on macOS and Windows")?;
         c.front.diagnostics.error(unitCaseClash(), truncate<u32>(b), 0, 0, message)?;
         found = true;
@@ -150,16 +199,18 @@ fn reportUnitCaseClashes(
 
 fn unitCaseClash() -> u32 => 363;
 
-/// Each user file's unit (NameUnits): its path (`unitPath`), or empty for a file without code.
+/// Each user file's unit (NameUnits): its path (`unitPaths`), or empty for a file without code.
 fn nameUnits(
     e: borrow mut CEmitter,
     c: borrow Checker,
     sources: borrow Vector<SourceText>,
 ) -> Result<void, AllocError> {
+    var clashes = Vector<u32>.create();
+    let paths = unitPaths(c, sources, e.programName.view(), mut clashes)?;
     var names = Vector<Vector<u8>>.create();
     for (file in 0..c.filePaths.length) {
-        let named = e.fileIds[file] != none() && !c.fileIsLibrary[file] && file < sources.length;
-        names.push(if (named) unitPath(sources[file], e.programName.view())? else Vector<u8>.create())?;
+        let named = file < paths.length && e.fileIds[file] != none();
+        names.push(if (named) copyBytes(paths[file].view())? else Vector<u8>.create())?;
     }
     e.unitNames = names;
     return Ok();

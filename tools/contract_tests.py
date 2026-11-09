@@ -3,7 +3,7 @@
 - the fixed point at HEAD, with ceesafec as stage 0 (tools/fixed_point.py);
 - CeeSafe's corpus (tests/reference/tests/corpus) in every family: annotations, AST/HIR/C snapshots, expected output,
   the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under
-  -Werror, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008); the async programs again
+  -Werror, with `--split --jobs 4` at -O2, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008); the async programs again
   on the executor's poll() fallback (CEESAFE_REACTOR_POLL=1);
 - the support library's tests with leak checks, and its allocation-failure sweep;
 - the mutation suite, the fault sweep over the corpus, the cancellation sweep over its async programs, the package
@@ -70,6 +70,9 @@ def main():
             # to every build there: the generated C and the runtime pass -O2 -Wall -Werror with it (Linux only).
             ("run fortify", run_corpus + ["--corpus", corpus] + run_families +
              ["--cc", "gcc", "--cflag=-O2", "--cflag=-D_FORTIFY_SOURCE=2", "--cflag=-Wall", "--cflag=-Werror"]),
+            # Split units (ADR 0082): each program's C files compiled to their own objects, four at once, at -O2.
+            ("run split", run_corpus + ["--corpus", corpus] + run_families +
+             ["--cflag=-O2", "--build-option=--split", "--build-option=--jobs", "--build-option=4"]),
             ("run interp", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--family", "run-fail",
                                          "--interp", "--check-leaks"]),
             ("library", [cee, "check", "--library-diagnostics", empty]),

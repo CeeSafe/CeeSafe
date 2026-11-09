@@ -1,0 +1,4 @@
+// The owner of `strlen` (ADR 0081 §7; package_tests.py §15): zz depends on cc, and cc's name is first.
+extern "C" {
+    public fn strlen(s: *CChar) -> usize;
+}

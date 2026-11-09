@@ -492,7 +492,9 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
             e.b(name.view())?;
             e.t(";")?;
             e.emit()?;
-            insertSorted(mut e.splitData, name)?;
+            if (!item.exported) {
+                insertSorted(mut e.splitData, name)?; // an `@export` keeps its C name (c-backend.md §2.4)
+            }
             continue;
         }
         if (!e.split && !item.exported) {

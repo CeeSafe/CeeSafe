@@ -68,9 +68,10 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
   `type-system.md` §31); `freestanding/` programs with their environment.
 - `emit-c/*.cee` have reviewed snapshots of the generated `main.c`; `placement/`, `bounds-checks/`,
   `overflow-checks/` and `closure-calls/` have snapshots of the `--explain-…` reports (`optimisations.md`).
-- The C configurations: the contract suite builds the run families under the host's `cc` with `-Werror`, and under
-  clang `-O1` with ASan+UBSan, `-fno-sanitize-recover=all` and the runtime's allocation report (`--check-leaks`: a
-  program that exits normally with live allocations fails). On Linux, also under gcc with `-O2 -D_FORTIFY_SOURCE=2
+- The C configurations: the contract suite builds the run families under the host's `cc` with `-Werror`, with
+  `-O2 --split --jobs 4` (each file's unit compiled to its own object, four at once; ADR 0082), and under clang
+  `-O1` with ASan+UBSan, `-fno-sanitize-recover=all` and the runtime's allocation report (`--check-leaks`: a program
+  that exits normally with live allocations fails). On Linux, also under gcc with `-O2 -D_FORTIFY_SOURCE=2
   -Wall -Werror`, the flags Ubuntu's gcc applies by default: glibc's `warn_unused_result` and gcc's own flow warnings
   then reach the runtime and the generated C. Every configuration must meet the expectations, so the run corpus is
   also a differential test.

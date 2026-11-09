@@ -1,0 +1,4 @@
+// Neither cc nor zz depends on mm, nor mm on them: cc owns `strlen`, by package name (ADR 0081 §7).
+extern "C" {
+    public fn strlen(s: *CChar) -> usize;
+}

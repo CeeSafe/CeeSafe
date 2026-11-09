@@ -110,7 +110,8 @@ build tracks that one layout (§2.7).
 - A unit is one CeeSafe source file, at `c/<package>/<path in the package>.c` in the build directory:
   `c/alpha/src/util.c`, `c/beta/src/util.c`. Package names are unique in a build (ADR 0013 D1) and paths are unique
   in a package, so two units never share a path. The embedded libraries are packages `core`, `std`, `kernel`; a build
-  of files without a manifest is the package `--program`.
+  of files without a manifest is the package `--program`. (In a build of files two files can still map to one path:
+  §7 says how they are told apart.)
 - Program-level files stay at the top: `ceesafe_main.c` (C's `main`, callbacks, `@export` constants), the runtime.
 - Two unit paths that differ only in letter case are an error at `build --split`, **N0363** (new), since macOS and
   Windows file systems would merge them.
@@ -324,6 +325,32 @@ and C. Split output becomes the default for package builds after B (Question 2).
 - §2.1 as decided. `nameUnits` (`c_split.cee`) gives each user file the unit `c/<package>/<path in the package>.c`
   from its `SourceText`'s package and path in the package; a build of files is the package `--program`, and a `..` in
   a given path becomes `__`. N0363 is checked in `generateC` before any C is made, at the later of the two files.
+- **Identical unit paths** (after review). In a build of files, two files can give one path: files outside the working
+  directory are named by their file names (so `/p/util.cee` and `/q/util.cee` are both `c/<program>/util.c`), and
+  `../x.cee` and `__/x.cee` are both `c/<program>/__/x.c`. 0.24.3's first build called them N0363, though they do not
+  differ in letter case, and 0.24.2 built them. `unitPaths` now gives a path identical to an earlier file's the suffix
+  `-2`, `-3`, … before `.c` (`c/util/util-2.c`), the first number no earlier unit has, ignoring case: in the order of
+  the files, so deterministic. N0363 stays for paths that differ only in letter case. A package's units cannot be
+  identical (§2.1), so its paths never get a suffix.
+- **`--jobs` without `--split`** is a usage error (status 2): the C is then compiled in one command, and a `--jobs`
+  that did nothing would mislead.
+- **The compilers' output.** Each C file's compiler output is printed in the order of the files' paths; an output
+  identical to an earlier file's (a bad `--cflag` makes every compile print the same error) is printed once, followed
+  by `ceesafec: the C compiler printed the same for N of the C files`. The run corpus is built with `--split --jobs 4`
+  at `-O2` in the contract suite, and `package_tests.py` §16 checks through a logging C compiler that each file is
+  compiled alone to its own object and the objects are linked, and that a failure's output keeps the paths' order.
+- **Exported data in split builds** (found by that configuration; older than stage A). The header renamed every C
+  datum with the program's name, `@export` ones too, so C code naming `data_ops` (`ffi/c-data.cee`) failed to link
+  with `--split`. An exported static now keeps its C name, as an exported function does (c-backend.md §2.4).
+- **The host's temporary directories.** `ceesafe_host_temporary`'s name counter is atomic, since parallel compiles
+  (`cl` on Windows) call it from several threads.
+- **Debuggers and dependencies** (open). `#line` names a dependency's file `alpha/src/util.cee`, by its package,
+  while the C compiler runs in the current directory, which becomes DWARF's `comp_dir`. A debugger therefore finds
+  the root package's files (`src/main.cee` from the package's directory) but looks for a dependency's at
+  `<current directory>/alpha/src/util.cee`, where it is not, unless pointed at it (`settings set target.source-map`
+  in lldb, `directory` in gdb). Emitting the path from the current directory, or an absolute one, would make the C
+  depend on where the build runs, which the reproducible C (c-backend.md §2.4, §7) rules out; a later stage fixes it
+  (each package's units compiled from its own directory, or a source map in the debug information).
   `ceesafe_program.h` and `ceesafe_instances.c` stay at the top as before (no `ceesafe_main.c` yet: C's `main`,
   callbacks and `@export` constants stay in `ceesafe_instances.c` until stage B's per-package instances).
 - A dependency's source path is `<package>/<path in it>` (the location table, `#line`, panics); its diagnostics name

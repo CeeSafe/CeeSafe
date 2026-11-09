@@ -1,0 +1,13 @@
+# Written by ceesafec fetch (spec/tooling.md §4.3). Commit it with ceesafe.toml.
+
+[[package]]
+name = "cc"
+source = "path+../cc"
+
+[[package]]
+name = "mm"
+source = "path+../mm"
+
+[[package]]
+name = "zz"
+source = "path+../zz"

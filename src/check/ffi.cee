@@ -859,52 +859,124 @@ fn claimCName(
     });
 }
 
-/// Does package `from` depend on package `to`, directly or through other packages?
-fn packageReaches(c: borrow Checker, from: u32, to: u32) -> Result<bool, AllocError> {
-    var seen = Vector<bool>.create();
-    for (k in 0..c.packages.length) {
-        seen.push(false)?;
+/// Which packages each package depends on, directly or through others, computed once: `reach[a * n + b]` when
+/// package `a` depends on package `b` (n packages).
+fn packageReachability(c: borrow Checker) -> Result<Vector<bool>, AllocError> {
+    let n = c.packages.length;
+    var reach = Vector<bool>.create();
+    for (k in 0..(n * n)) {
+        reach.push(false)?;
     }
     var pending = Vector<u32>.create();
-    pending.push(from)?;
-    seen[from as usize] = true;
-    while (pending.length > 0) {
-        let p = pending[pending.length - 1];
-        pending.truncate(pending.length - 1);
-        for (d in c.packages[p as usize].dependencies.view()) {
-            let index = packageNamed(c, d.view());
-            if (index == none() || seen[index as usize]) {
-                continue;
+    for (from in 0..n) {
+        pending.push(truncate<u32>(from))?;
+        while (pending.length > 0) {
+            let p = pending[pending.length - 1];
+            pending.truncate(pending.length - 1);
+            for (d in c.packages[p as usize].dependencies.view()) {
+                let index = packageNamed(c, d.view());
+                if (index == none() || reach[from * n + (index as usize)]) {
+                    continue;
+                }
+                reach[from * n + (index as usize)] = true;
+                pending.push(index)?;
             }
-            if (index == to) {
-                return Ok(true);
-            }
-            seen[index as usize] = true;
-            pending.push(index)?;
         }
     }
-    return Ok(false);
+    return Ok(reach);
 }
 
-/// Does claim `a` own its C name before claim `b` (ADR 0081 §2.2)? A library's declaration owns it before a package's,
-/// a dependency's before its dependant's, and within one package the earlier in the package's file order; between
-/// packages neither of which depends on the other, the later package of the build (the root is first).
-fn ownsBefore(c: borrow Checker, a: borrow CNameClaim, b: borrow CNameClaim) -> Result<bool, AllocError> {
+/// Does claim `a` come before claim `b` among the claims that may own a C name (ADR 0081 §7)? A library's first, then
+/// by package name (unique in a build, and independent of the order of `[dependencies]`), then within one package the
+/// earlier file and position.
+fn claimBefore(c: borrow Checker, a: borrow CNameClaim, b: borrow CNameClaim) -> bool {
     let pa = packageOfFile(c, a.file);
     let pb = packageOfFile(c, b.file);
-    if (pa == pb) {
-        return Ok(a.file < b.file || (a.file == b.file && a.start < b.start));
+    if (pa != pb) {
+        if (pa == none() || pb == none()) {
+            return pa == none();
+        }
+        let order = compareBytes(c.packages[pa as usize].name.view(), c.packages[pb as usize].name.view());
+        if (order != 0) {
+            return order < 0;
+        }
+        return pa < pb;
     }
-    if (pa == none() || pb == none()) {
-        return Ok(pa == none());
+    return a.file < b.file || (a.file == b.file && a.start < b.start);
+}
+
+/// The owner of each claim's C name (ADR 0081 §2.2, §7; type-system.md §28.2), by claim: the claims of one name are
+/// grouped; a claim may own it when no other claim's package is a dependency (direct or not) of its package; among
+/// those, `claimBefore`'s first. The choice does not depend on the order of the claims or of `[dependencies]`.
+fn cNameOwners(c: borrow Checker, claims: borrow Vector<CNameClaim>) -> Result<Vector<usize>, AllocError> {
+    let reach = packageReachability(c)?;
+    let n = c.packages.length;
+    // Group the claims by name: `members` holds each group's claims, in claim order, from `firsts[group]`.
+    var names = Map<Bytes, bool>.create();
+    var groupOf = Vector<usize>.create();
+    var counts = Vector<usize>.create();
+    for (claim in claims.view()) {
+        let key = Bytes.from(claim.name.view())?;
+        let group = match (names.find(key)) {
+            Some(g) => g,
+            null => {
+                counts.push(0)?;
+                names.put(key, true)?
+            }
+        };
+        groupOf.push(group)?;
+        counts[group] += 1;
     }
-    if (packageReaches(c, pb, pa)?) {
-        return Ok(true);
+    var firsts = Vector<usize>.create();
+    var filled = Vector<usize>.create();
+    var total: usize = 0;
+    for (count in counts.view()) {
+        firsts.push(total)?;
+        filled.push(0)?;
+        total += count;
     }
-    if (packageReaches(c, pa, pb)?) {
-        return Ok(false);
+    var members = Vector<usize>.create();
+    for (k in 0..claims.length) {
+        members.push(0)?;
     }
-    return Ok(pa > pb);
+    for (i in 0..claims.length) {
+        let group = groupOf[i];
+        members[firsts[group] + filled[group]] = i;
+        filled[group] += 1;
+    }
+    var groupOwner = Vector<usize>.create();
+    for (group in 0..counts.length) {
+        let first = firsts[group];
+        let count = counts[group];
+        var owner = none64();
+        var fallback = none64(); // the first of all, should dependencies form a cycle
+        for (x in first..(first + count)) {
+            let i = members[x];
+            if (fallback == none64() || claimBefore(c, claims[i], claims[fallback])) {
+                fallback = i;
+            }
+            let pi = packageOfFile(c, claims[i].file);
+            var candidate = true;
+            if (pi != none()) {
+                for (y in first..(first + count)) {
+                    let pj = packageOfFile(c, claims[members[y]].file);
+                    if (pj == none() || (pj != pi && reach[(pi as usize) * n + (pj as usize)])) {
+                        candidate = false; // a library's claim, or one of a dependency of this package
+                        break;
+                    }
+                }
+            }
+            if (candidate && (owner == none64() || claimBefore(c, claims[i], claims[owner]))) {
+                owner = i;
+            }
+        }
+        groupOwner.push(if (owner == none64()) fallback else owner)?;
+    }
+    var owners = Vector<usize>.create();
+    for (i in 0..claims.length) {
+        owners.push(groupOwner[groupOf[i]])?;
+    }
+    return Ok(owners);
 }
 
 /// An attribute's text without white space, to compare two declarations' attributes.
@@ -932,7 +1004,8 @@ fn identicalExterns(c: borrow Checker, f: u32, g: u32) -> Result<bool, AllocErro
     }
     let pf = borrow c.hir.functions[f as usize].parameters;
     let pg = borrow c.hir.functions[g as usize].parameters;
-    if (pf.length != pg.length || c.hir.functions[f as usize].returnType != c.hir.functions[g as usize].returnType) {
+    let result = c.hir.functions[f as usize].returnType;
+    if (pf.length != pg.length || result != c.hir.functions[g as usize].returnType || result == c.types.error) {
         return Ok(false);
     }
     for (k in 0..pf.length) {
@@ -968,19 +1041,10 @@ fn identicalExterns(c: borrow Checker, f: u32, g: u32) -> Result<bool, AllocErro
     return Ok(true);
 }
 
-/// The bytes a fix removes with a declaration: from the start of its first line (its doc comment's and attributes'
-/// lines among them) to the end of its last, when nothing else is on those lines; otherwise the declaration alone.
-fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
-    let decl = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
-    var start = decl.start;
-    for (k in 0..decl.attributes.count) {
-        let a = c.front.ast.attributes[c.front.ast.at(decl.attributes, k) as usize];
-        if (a.start < start) {
-            start = a.start;
-        }
-    }
-    let text = c.fileTexts[file as usize].view();
-    var end = decl.end;
+/// The lines of `start..end` in `text`, when nothing else is on them but white space and a trailing `//` comment:
+/// from the start of the first line, with the doc comment's lines above it (`///`), to the end of the last, its line
+/// break and comment among them. Otherwise `start..end` alone.
+fn wholeLines(text: Slice<u8>, start: u32, end: u32) -> Span {
     var lineStart = start;
     while (lineStart > 0 && (text[(lineStart - 1) as usize] == ' ' || text[(lineStart - 1) as usize] == '\t')) {
         lineStart -= 1;
@@ -989,6 +1053,11 @@ fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
     while ((lineEnd as usize) < text.length && (text[lineEnd as usize] == ' ' || text[lineEnd as usize] == '\t' ||
         text[lineEnd as usize] == '\r')) {
         lineEnd += 1;
+    }
+    if ((lineEnd as usize) + 1 < text.length && text[lineEnd as usize] == '/' && text[(lineEnd + 1) as usize] == '/') {
+        while ((lineEnd as usize) < text.length && text[lineEnd as usize] != '\n') {
+            lineEnd += 1; // a trailing comment goes with the line
+        }
     }
     if ((lineStart > 0 && text[(lineStart - 1) as usize] != '\n') ||
         ((lineEnd as usize) < text.length && text[lineEnd as usize] != '\n')) {
@@ -1019,21 +1088,57 @@ fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
     return Span { start: lineStart, end: lineEnd };
 }
 
+/// The extern block holding only the declaration `syntax` of `file`, with no attribute: the item, or none.
+fn soleExternBlock(c: borrow Checker, file: u32, syntax: u32) -> u32 {
+    for (unit in c.front.ast.units.view()) {
+        if (unit.file != file) {
+            continue;
+        }
+        for (k in 0..unit.items.count) {
+            let item = c.front.ast.at(unit.items, k);
+            match (c.front.ast.items[item as usize].kind) {
+                ItemKind.Extern(_, functions, nested) => {
+                    if (functions.count == 1 && nested.count == 0 && c.front.ast.at(functions, 0) == syntax &&
+                        c.front.ast.items[item as usize].attributes.count == 0) {
+                        return item;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return none();
+}
+
+/// The bytes a fix removes with a declaration (`wholeLines`): its lines, its doc comment's and attributes' among them,
+/// or its extern block's when it is the block's only declaration, so that no empty block is left.
+fn declarationLines(c: borrow Checker, file: u32, function: u32) -> Span {
+    let syntax = c.hir.functions[function as usize].syntax;
+    let text = c.fileTexts[file as usize].view();
+    let block = soleExternBlock(c, file, syntax);
+    if (block != none()) {
+        let item = c.front.ast.items[block as usize];
+        return wholeLines(text, item.start, item.end);
+    }
+    let decl = c.front.ast.functions[syntax as usize];
+    var start = decl.start;
+    for (k in 0..decl.attributes.count) {
+        let a = c.front.ast.attributes[c.front.ast.at(decl.attributes, k) as usize];
+        if (a.start < start) {
+            start = a.start;
+        }
+    }
+    return wholeLines(text, start, decl.end);
+}
+
 /// N0201 for each claim of a C name that another claim owns (type-system.md §28.2; ADR 0081 §2.2): reported at the
 /// declaration that clashes (a dependant's own, or the later in a package's file order), with a note at the owner's.
 /// When the owner is an extern declaration of a dependency, a hint says to call it through its package, and a fix
 /// removes this declaration if the two are identical.
 fn reportCNameClashes(c: borrow mut Checker, claims: borrow Vector<CNameClaim>) -> Result<void, AllocError> {
+    let owners = cNameOwners(c, claims)?;
     for (i in 0..claims.length) {
-        var owner = none64();
-        for (j in 0..claims.length) {
-            if (!sameBytes(claims[j].name.view(), claims[i].name.view())) {
-                continue;
-            }
-            if (owner == none64() || ownsBefore(c, claims[j], claims[owner])?) {
-                owner = j;
-            }
-        }
+        let owner = owners[i];
         if (owner == i) {
             continue;
         }

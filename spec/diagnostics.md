@@ -13,7 +13,9 @@ a retired code is never reused. Source of truth in code: `DiagnosticCodes`
   |              ^
 ```
 
-- `<path>` is the path as given on the command line (never made absolute), so output is reproducible.
+- `<path>` is the path as given on the command line (never made absolute), so output is reproducible. A package's
+  files are named by their path from the package's directory, and a dependency's from the current directory
+  (`../alpha/src/util.cee`; ADR 0082 §2.1); the JSON form also names the file's `package`.
 - Line and column are 1-based. Columns count UTF-16 code units (grammar.md §1.1).
 - Diagnostics are emitted in the order they are found. The lexer finishes before the parser starts,
   so all lexical errors of a file come before its syntax errors.
@@ -73,7 +75,7 @@ Semantic checks run only when every file parsed without errors.
 | Code | Meaning | Example |
 |---|---|---|
 | N0200 | Name not found (variable, function, or built-in member) | `missing`, `Console.print(1)` |
-| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it) | two `fn twice()` |
+| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions or exports, even in different packages (`type-system.md` §28.2, ADR 0081 §2.2) | two `fn twice()`; `fn strlen` in two `extern "C"` blocks |
 | N0202 | Parameter declared twice | `fn f(a: i32, a: i32)` |
 | N0203 | Local redeclares a local or parameter in scope (no shadowing of locals) | `let x = 1; let x = 2;` |
 | N0204 | Unknown type name | `fn f(a: int)` |
@@ -189,9 +191,9 @@ N0271 is unassigned: destroying a value that holds loans while their referents a
 | N0299 | A closure of the wrong kind: a `borrow mut fn` where a `borrow fn` is expected, or a capturing closure where a plain `fn` is expected (type-system.md §36.2); a function or closure value whose type's effects are not in the expected type's effect list (§36.3) | `let f: fn(i32) -> i32 = (x) => x + k;` |
 
 Calling an extern function outside an unsafe context is N0280; two extern declarations or exports
-with one C name are N0201, even in different packages. It is reported at the declaration that clashes (a dependant's
-own, or the later in the package's file order), with a note at the other one, which names its package; for a
-dependency's extern, the message says to call it through the package (``use `sys.strlen`, which package 'sys'
+with one C name are N0201, even in different packages. It is reported at each declaration but the one that owns the
+name (type-system.md §28.2 says which: never a dependant's when its dependency declares it too), with a note at the
+owner's, which names its package; for a direct dependency's extern, the message says to call it through the package (``use `sys.strlen`, which package 'sys'
 declares; remove this declaration``) or to make it `public` there, and an identical declaration has a fix that
 removes it (type-system.md §28.2; ADR 0081 §2.2). (`CChar` as a value type was N0281 until ADR 0080 §3.5,
 type-system.md §28.3.)

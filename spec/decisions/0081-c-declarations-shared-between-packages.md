@@ -200,3 +200,25 @@ These are rules for the Bun port. They need nothing more from CeeSafe:
    come back if other ports show many more.
 3. **N0201 at the clashing declaration, with the owner's hint and a fix (§2.2)?** Recommended: yes, in 0.24.3, with
    ADR 0082's stage A. It changes only diagnostics, so no program's meaning changes.
+
+## 7. Implementation notes (2026-11-09)
+
+- **The owner (§2.2), as implemented in 0.24.3 after review.** The first implementation compared claims pairwise: a
+  dependency's before its dependant's, and between unrelated packages the later package of the build. That order is
+  not transitive (with app depending on cc, mm and zz, and zz on cc, it cycled), so the owner depended on the order of
+  `[dependencies]`, and a dependency could get the error while its dependant owned the name. The rule now: a library's
+  declaration owns the name before any package's; otherwise a declaration may own it when no other declaration of
+  the name is in a package its package depends on, directly or not; of those, the first by package name (bytewise,
+  unique in a build), then in the package's file order and position. The choice depends on neither the order of the
+  claims nor `[dependencies]` (type-system.md §28.2; `package_tests.py` §15, c-names/order, in all six orders).
+- **Cost.** The claims are grouped by C name with a map, and package reachability is computed once for the build,
+  not per pair: a group's owner costs the square of its size, which is small, rather than the square of all claims
+  (Bun has about 2,800 externs).
+- **When.** N0201 for C names is reported after the other checks of foreign interfaces (N0291, N0292, …), once all
+  claims are known.
+- **The hint** needs the owner's package to be a *direct* dependency, since `sys.strlen` names one of the package's
+  `[dependencies]`; for an indirect one, only the note is given.
+- **The fix** removes the declaration's whole lines: its doc comment's lines above, its attributes, and a trailing
+  `//` comment on its last line; when it was the only declaration of its `extern "C"` block (and the block has no
+  attribute), the block's lines go too, so no empty block is left. Two identical declarations must also agree that
+  neither result nor parameter type is in error.

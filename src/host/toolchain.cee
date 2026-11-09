@@ -502,15 +502,42 @@ fn compileUnitsAndLink(
     var stdout = Vector<u8>.create();
     var stderr = Vector<u8>.create();
     var status: i32 = 0;
+    var repeats = Vector<u32>.create(); // by unit: how many units printed what this one did first, 1 if none
+    for (k in 0..units.length) {
+        repeats.push(1)?;
+    }
     for (k in 0..units.length) {
         let outcome = borrow finished[place[k]].outcome;
         if (!outcome.started) {
             return Ok(notStarted(outcome.error));
         }
-        appendBytes(mut stdout, outcome.stdout.view())?;
-        appendBytes(mut stderr, outcome.stderr.view())?;
         if (status == 0 && outcome.status != 0) {
             status = outcome.status;
+        }
+        // An output identical to an earlier unit's (a bad flag's message, say) is printed once, with a count.
+        if (outcome.stdout.length + outcome.stderr.length > 0) {
+            for (j in 0..k) {
+                let earlier = borrow finished[place[j]].outcome;
+                if (repeats[j] > 0 && sameBytes(earlier.stdout.view(), outcome.stdout.view()) &&
+                    sameBytes(earlier.stderr.view(), outcome.stderr.view())) {
+                    repeats[j] += 1;
+                    repeats[k] = 0;
+                    break;
+                }
+            }
+        }
+    }
+    for (k in 0..units.length) {
+        if (repeats[k] == 0) {
+            continue;
+        }
+        let outcome = borrow finished[place[k]].outcome;
+        appendBytes(mut stdout, outcome.stdout.view())?;
+        appendBytes(mut stderr, outcome.stderr.view())?;
+        if (repeats[k] > 1) {
+            appendText(mut stderr, "ceesafec: the C compiler printed the same for ")?;
+            appendDecimal(mut stderr, repeats[k] as u64)?;
+            appendText(mut stderr, " of the C files\n")?;
         }
     }
     if (status != 0) {

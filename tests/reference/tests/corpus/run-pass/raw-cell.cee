@@ -1,0 +1,41 @@
+// RawCell (type-system.md §41.1; ADR 0084): its contents change through `pointer()` while shared loans of the cell, and
+// of the struct holding it, are live. `getMut` lends them exclusively; `intoInner` gives them back.
+struct Counter {
+    hits: RawCell<u32>;
+    name: u32;
+}
+
+/// Safety: the contents are read and written through the cell's pointer, and no reference to them is live.
+fn bump(c: borrow Counter) {
+    let p = c.hits.pointer();
+    unsafe { p.write(p.read() + c.name); }
+}
+
+fn main() {
+    var c = Counter { hits: RawCell<u32>.create(0), name: 2 };
+    {
+        let a = borrow c;
+        let b = borrow c;
+        bump(a);
+        bump(b);
+        bump(a);
+        Console.writeLine(c.name);
+    }
+    let slot = c.hits.getMut();
+    slot += 1;
+    Console.writeLine(c.hits.getMut());
+    let total = c.hits.intoInner();
+    Console.writeLine(total);
+    let m = Mutex<u32>.create(5)!;
+    {
+        var g = m.lock();
+        let d = g.data();
+        d += 1;
+    }
+    var g = m.lock();
+    Console.writeLine(g.data());
+}
+// expect-stdout: 2
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 6

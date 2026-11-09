@@ -412,7 +412,7 @@ fn isCDataStatic(c: borrow Checker, k: usize) -> bool =>
 
 fn staticIsConst(c: borrow Checker, k: u32) -> bool {
     let s = c.hir.statics[k as usize];
-    return s.exported && !s.mutable && !typeHoldsAtomic(c, s.typ);
+    return s.exported && !s.mutable && !typeHoldsAtomic(c, s.typ) && !c.types.holdsRawCell(s.typ);
 }
 
 fn typeHoldsAtomic(c: borrow Checker, t: u32) -> bool {

@@ -1,0 +1,10 @@
+// `replace` while a guard is live panics at the call (type-system.md §41.3; ADR 0084 §2.4): it would move the
+// contents out from under the guard's reference.
+fn main() {
+    let c = RefCell<u32>.create(1);
+    let r = c.read();
+    Console.writeLine(r.data());
+    let old = c.replace(2); // expect-panic: cell already borrowed
+    Console.writeLine(old);
+}
+// expect-stdout: 1

@@ -2875,6 +2875,10 @@ fn lowerCall(
     if (editing > 0) {
         operands[0] = checkVectorIndex(c, n, b, operands[0], operands[1], editing == 2, span)?;
     }
+    let access = cellAccessCheck(c, b, callee);
+    if (access > 0) {
+        operands[0] = checkCellAccess(c, n, b, operands[0], access == 1, span)?;
+    }
     let list = n.list(operands.view())?;
     if (c.types.is(typ, TypeKind.Never)) {
         // A call of a `never` function (§15.3) ends its block, as `Process.exit` does.
@@ -2993,6 +2997,83 @@ fn vectorEditingCheck(c: borrow Checker, b: borrow Lowering, callee: u32) -> u32
     }
     let name = c.name(f.name);
     return if (name.length >= 6 && sameText(name[0..6], "insert")) 2u32 else 1u32;
+}
+
+/// A call of lib/core's RefCell `read`, `write` or `replace`, or RefCellTaking's `take`, from a program's own code
+/// (type-system.md §41.3, ADR 0084 §2.4): 1 for `read`, which fails while the cell is written, 2 for the others,
+/// which fail while any guard is live, else 0. The check is at the call, so the panic names the program's line; the
+/// library's own check then passes.
+fn cellAccessCheck(c: borrow Checker, b: borrow Lowering, callee: u32) -> u32 {
+    let f = borrow c.hir.functions[callee as usize];
+    if (f.owner == none() || !f.library || c.hir.functions[b.function as usize].library) {
+        return 0;
+    }
+    let owner = c.typeName(f.owner);
+    let name = c.name(f.name);
+    if (owner.length > 8 && sameText(owner[0..8], "RefCell<")) {
+        if (sameText(name, "read")) {
+            return 1;
+        }
+        return if (sameText(name, "write") || sameText(name, "replace")) 2u32 else 0u32;
+    }
+    if (owner.length > 14 && sameText(owner[0..14], "RefCellTaking<") && sameText(name, "take")) {
+        return 2;
+    }
+    return 0;
+}
+
+/// The access check of a RefCell call: the cell's state (its `state.raw.value`, an `isize`) is 0 for `write`,
+/// `replace` and `take`, and neither negative (written) nor 2^31 - 1 (the most readers, on every target) for
+/// `read`; otherwise the call panics with "cell already borrowed". The cell reference is spilled to a place if it is
+/// not one.
+fn checkCellAccess(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    cell: u32,
+    reading: bool,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let place = slicePlaceOf(c, n, b, cell)?;
+    let saved = b.span;
+    b.span = span;
+    var state = projectPlace(n, place, derefProjectionN())?;
+    for (k in 0..3) {
+        let holder = placeType(c, n, b, state);
+        let definition = c.types.info(holder).structDef;
+        let field = c.types.structs[definition as usize].fields[0];
+        state = projectPlace(n, state, fieldProjectionN(field))?;
+    }
+    let isize = c.types.isize;
+    let boolType = c.types.boolType;
+    let fail = newBlock(b)?;
+    let value = placeOperand(c, n, b, state)?;
+    let zero = constOperand(n, 0, isize)?;
+    if (reading) {
+        let notWritten = n.rvalue(NirRvalue.Binary(BinaryOp.GreaterEqual, value, zero), boolType, span)?;
+        branchOnTest(c, n, b, notWritten, fail)?;
+        let again = placeOperand(c, n, b, state)?;
+        let most = constOperand(n, 0x7FFFFFFF, isize)?;
+        let room = n.rvalue(NirRvalue.Binary(BinaryOp.NotEqual, again, most), boolType, span)?;
+        branchOnTest(c, n, b, room, fail)?;
+    } else {
+        let free = n.rvalue(NirRvalue.Binary(BinaryOp.Equal, value, zero), boolType, span)?;
+        branchOnTest(c, n, b, free, fail)?;
+    }
+    let ok = b.current;
+    b.current = fail;
+    let voidType = c.types.voidType;
+    let text = n.addText("cell already borrowed".bytes())?;
+    let view = c.types.stringView;
+    let message = n.operand(NirOperand.String(text), view)?;
+    let values = [message];
+    let list = n.list(values[..])?;
+    let panic = n.rvalue(NirRvalue.Builtin(bfPanic(), list), voidType, span)?;
+    emit(n, b, NirStatement.Eval(panic))?;
+    terminate(n, b, NirTerminator.Unreachable)?;
+    b.current = ok;
+    b.span = saved;
+    return Ok(if (operandPlace(n, cell) != none()) cell else readPlace(c, n, b, place)?);
 }
 
 /// The bounds check of a VectorEditing call: `at < length`, or `at <= length` (`at < length + 1`) for an insert. The

@@ -208,6 +208,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2)",
     350 =>
         "A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg(\"X\")` used outside `if (cfg(\"X\")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3)",
+    351 =>
+        "A cell of a loan-holding type: `RawCell<T>`, `Cell<T>` or `RefCell<T>`, directly or inside a generic struct, with a `T` that holds loans (a reference, view, closure or other scoped type), whose contents could then outlive what they borrow (`type-system.md` §41.1, ADR 0084 §2.1)",
     355 =>
         "A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2)",
     356 =>
@@ -223,5 +225,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     401 =>
         "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
+    402 =>
+        "A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6)",
     _ => "",
 };

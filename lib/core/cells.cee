@@ -1,0 +1,175 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// Interior mutability (type-system.md §41; ADR 0084): RawCell, the one type whose contents may change while shared
+// loans of it are live, and the checked cells over it. A type that reaches a RawCell is Send when its contents are, but
+// not Share (§38.1), so a cell is used from one thread at a time. Their unsafe code keeps ownership.md T1–T3.
+
+/// The primitive (§41.1): a `T` that may be read and written through `pointer()` while shared loans of the cell, or of
+/// a value holding it, are live. It has `T`'s size and alignment. `T` may not hold loans (N0351).
+@interiorMutable
+@noncopy
+public struct RawCell<T> {
+    private value: T;
+
+    /// A cell holding `value`.
+    public fn create(value: T) -> RawCell<T> => RawCell { value: value };
+
+    /// The contents' address: safe to take, `unsafe` to use. Unsafe code must not make two live `borrow mut T` from
+    /// it, nor write while a `borrow T` it made is live (unsafe.md §2).
+    public fn pointer(borrow this) -> *mut T => borrow this.value as *T as *mut T;
+
+    /// The contents, for as long as the cell is borrowed exclusively: no other loan of it can be live.
+    public fn getMut(borrow mut this) -> borrow mut T => borrow mut this.value;
+
+    /// The contents, the cell consumed.
+    public fn intoInner(this) -> T => this.value;
+}
+
+/// A `Copy` value that may be read and replaced through a shared reference (§41.2): `get` copies it out, `set` stores
+/// a new one. No method lends a reference to the contents, so no change can be seen through a stale one, and a call
+/// between two methods (a re-entrant callback) is harmless. `==` and `!=` compare the contents when `T` has them.
+public struct Cell<T: Copy> {
+    private raw: RawCell<T>;
+
+    /// A cell holding `value`.
+    public fn create(value: T) -> Cell<T> => Cell { raw: RawCell<T>.create(value) };
+
+    /// A copy of the contents.
+    /// Safety: no reference to the contents is ever lent, so nothing writes them during the read; `T` is Copy.
+    public fn get(borrow this) -> T => unsafe { this.raw.pointer().read() };
+
+    /// Stores `value`; the old contents need no drop (`T` is Copy), so no user code runs.
+    /// Safety: as get; nothing reads the contents during the write.
+    public fn set(borrow this, value: T) {
+        unsafe { this.raw.pointer().write(value); }
+    }
+
+    /// Stores `value` and returns the old contents.
+    /// Safety: as set.
+    public fn replace(borrow this, value: T) -> T {
+        let p = this.raw.pointer();
+        let old = unsafe { p.read() };
+        unsafe { p.write(value); }
+        return old;
+    }
+
+    /// The contents, for as long as the cell is borrowed exclusively.
+    public fn getMut(borrow mut this) -> borrow mut T => this.raw.getMut();
+
+    /// The contents, the cell consumed.
+    public fn intoInner(this) -> T => this.raw.intoInner();
+}
+
+/// A value lent through a shared reference with checked access (§41.3): any number of `read` guards, or one `write`
+/// guard, at a time. A conflict panics ("cell already borrowed"); `tryRead` and `tryWrite` return null instead. The
+/// state is one word: 0 free, n > 0 readers, -1 writing.
+public struct RefCell<T> {
+    private state: Cell<isize>;
+    private raw: RawCell<T>;
+
+    /// A cell holding `value`, free.
+    public fn create(value: T) -> RefCell<T> => RefCell { state: Cell<isize>.create(0), raw: RawCell<T>.create(value) };
+
+    /// Shared access until the guard is dropped; panics while a `write` guard is live.
+    public fn read(borrow this) -> CellRef<T> {
+        let state = this.state.get();
+        if (state < 0 || state == 0x7FFFFFFF) {
+            panic("cell already borrowed");
+        }
+        this.state.set(state + 1);
+        return CellRef { cell: this };
+    }
+
+    /// As read, or null while a `write` guard is live.
+    public fn tryRead(borrow this) -> CellRef<T>? {
+        let state = this.state.get();
+        if (state < 0 || state == 0x7FFFFFFF) {
+            return null;
+        }
+        this.state.set(state + 1);
+        return CellRef { cell: this };
+    }
+
+    /// Exclusive access until the guard is dropped; panics while any guard is live.
+    public fn write(borrow this) -> CellRefMut<T> {
+        if (this.state.get() != 0) {
+            panic("cell already borrowed");
+        }
+        this.state.set(-1);
+        return CellRefMut { cell: this };
+    }
+
+    /// As write, or null while any guard is live.
+    public fn tryWrite(borrow this) -> CellRefMut<T>? {
+        if (this.state.get() != 0) {
+            return null;
+        }
+        this.state.set(-1);
+        return CellRefMut { cell: this };
+    }
+
+    /// Stores `value` and returns the old contents, moved out before the return: their drop runs in the caller, with
+    /// no guard live. Panics while any guard is live.
+    /// Safety: no guard is live, so no reference to the contents is; the old value is read out before the write.
+    public fn replace(borrow this, value: T) -> T {
+        if (this.state.get() != 0) {
+            panic("cell already borrowed");
+        }
+        let p = this.raw.pointer();
+        let old = unsafe { p.read() };
+        unsafe { p.write(value); }
+        return old;
+    }
+
+    /// The contents, for as long as the cell is borrowed exclusively: no guard can be live.
+    public fn getMut(borrow mut this) -> borrow mut T => this.raw.getMut();
+
+    /// The contents, the cell consumed.
+    public fn intoInner(this) -> T => this.raw.intoInner();
+
+    /// The contents as a shared reference, for a guard.
+    /// Safety: only a live guard calls it, and the state it set keeps every writer out while the reference is used.
+    fn shared(borrow this) -> borrow T => unsafe { Ptr.toBorrow(this.raw.pointer() as *T) };
+
+    /// A `read` guard's drop.
+    fn releaseRead(borrow this) {
+        this.state.set(this.state.get() - 1);
+    }
+
+    /// A `write` guard's drop.
+    fn releaseWrite(borrow this) {
+        this.state.set(0);
+    }
+}
+
+/// `RefCell.take` on a `RefCell<T?>` (§41.3): the contents, leaving null.
+public struct RefCellTaking<T> {
+    /// Panics while any guard is live, as replace.
+    public fn take(cell: borrow RefCell<T?>) -> T? => cell.replace(null);
+}
+
+/// A `read` guard of a RefCell (§41.3): `data()` lends the contents shared; dropping it gives the access back.
+public struct CellRef<region r, T> {
+    private cell: borrow(r) RefCell<T>;
+
+    /// The contents, for as long as the guard is borrowed.
+    public fn data(borrow this) -> borrow T => this.cell.shared();
+
+    drop {
+        this.cell.releaseRead();
+    }
+}
+
+/// A `write` guard of a RefCell (§41.3): `data()` lends the contents exclusively; dropping it gives the access back.
+public struct CellRefMut<region r, T> {
+    private cell: borrow(r) RefCell<T>;
+
+    /// The contents, for as long as the guard is borrowed exclusively.
+    /// Safety: the guard set the state to -1, so no other guard is live and none can be made while it is; the loan
+    /// ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
+    /// shared, type-system.md §41.1).
+    public fn data(borrow mut this) -> borrow mut T => unsafe { Ptr.toBorrowMut(this.cell.raw.pointer()) };
+
+    drop {
+        this.cell.releaseWrite();
+    }
+}

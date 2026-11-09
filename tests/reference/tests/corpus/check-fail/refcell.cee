@@ -1,0 +1,21 @@
+// RefCell guards are scoped to their cell (type-system.md §41.3; ADR 0084 §2.4): a guard cannot outlive the cell
+// (N0243), and the reference `data()` lends cannot outlive the guard (N0244). A cell is a move type (N0250).
+fn guardOut() -> u32 {
+    var g: CellRef<u32>? = null;
+    {
+        let c = RefCell<u32>.create(1);
+        g = c.read();
+    } // error[N0243]
+    return 0;
+}
+
+fn keep(c: borrow RefCell<u32>) -> borrow u32 {
+    let g = c.read();
+    return g.data(); // error[N0244]
+}
+
+fn main() {
+    let rc = RefCell<u32>.create(1);
+    let a = rc;
+    let b = rc; // error[N0250]
+}

@@ -1364,13 +1364,35 @@ fn checkFunctionEffects(
     if (anyHolder) {
         liveIn = liveHolders(n, function, holders)?;
     }
+    // A RefCell guard live where the task may suspend is N0402 (ADR 0084 §2.6), in the program's own async code.
+    var guards = Vector<bool>.create();
+    var anyGuard = false;
+    if (isAsyncFunction(c, source) && !c.hir.functions[source as usize].library) {
+        for (k in 0..localCount) {
+            let holds = holdsCellGuard(c, n.functions[function as usize].locals[k].typ, 0);
+            guards.push(holds)?;
+            if (holds) {
+                anyGuard = true;
+            }
+        }
+    }
+    var guardsIn = Vector<Vector<bool>>.create();
+    if (anyGuard) {
+        guardsIn = liveHolders(n, function, guards)?;
+    }
     let blockCount = n.functions[function as usize].blocks.length;
     for (position in 0..blockCount) {
         var live = if (anyHolder) copyBools(liveIn[position])? else Vector<bool>.create();
+        var liveGuards = if (anyGuard) copyBools(guardsIn[position])? else Vector<bool>.create();
         let statementCount = n.functions[function as usize].blocks[position].statements.length;
         for (i in 0..statementCount) {
             let s = n.functions[function as usize].blocks[position].statements[i];
+            if (anyGuard) {
+                guardAcrossSuspension(c, n, e, function, s, guards, liveGuards)?;
+                transferHolders(n, mut liveGuards, s, guards)?;
+            }
             var firstLive: u32 = none();
+
             if (anyHolder) {
                 var killed = Vector<u32>.create();
                 killedHolders(n, s, holders, mut killed)?;
@@ -1521,3 +1543,98 @@ fn allocatorOperations(
     out.push(textOp(allocEffect(), 10))?;
     return Ok();
 }
+
+// ---- RefCell guards live across a suspension (ADR 0084 §2.6) ----
+
+/// Does a value of this type hold a lib/core `CellRef` or `CellRefMut` (a RefCell guard, type-system.md §41.3) in its
+/// own storage: the guard itself, or a struct, enum or optional holding one?
+fn holdsCellGuard(c: borrow Checker, typ: u32, depth: u32) -> bool {
+    if (depth > 16) {
+        return false;
+    }
+    let info = c.types.info(typ);
+    if (c.types.is(typ, TypeKind.Struct)) {
+        let definition = info.structDef;
+        let file = c.types.structs[definition as usize].file;
+        let name = c.typeName(typ);
+        if (file != none() && c.fileIsLibrary[file as usize] &&
+            ((name.length > 8 && sameText(name[0..8], "CellRef<")) ||
+                (name.length > 11 && sameText(name[0..11], "CellRefMut<")))) {
+            return true;
+        }
+        for (field in c.types.structs[definition as usize].fields.view()) {
+            if (holdsCellGuard(c, c.types.fields[field as usize].typ, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (c.types.is(typ, TypeKind.Enum)) {
+        let definition = info.enumDef;
+        let option = c.types.enums[definition as usize].optionType;
+        if (option != none()) {
+            return holdsCellGuard(c, option, depth + 1);
+        }
+        for (variant in c.types.enums[definition as usize].variants.view()) {
+            for (field in c.types.variants[variant as usize].payload.view()) {
+                if (holdsCellGuard(c, c.types.fields[field as usize].typ, depth + 1)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    if (c.types.is(typ, TypeKind.Array)) {
+        return holdsCellGuard(c, info.element, depth + 1);
+    }
+    return false;
+}
+
+/// N0402, a warning: statement `s` may suspend the task while a guard local is live, so another task resumed meanwhile
+/// panics on the same cell ("cell already borrowed").
+fn guardAcrossSuspension(
+    c: borrow mut Checker,
+    n: borrow NirProgram,
+    e: borrow mut Effects,
+    function: u32,
+    s: u32,
+    guards: borrow Vector<bool>,
+    live: borrow Vector<bool>,
+) -> Result<void, AllocError> {
+    var killed = Vector<u32>.create();
+    killedHolders(n, s, guards, mut killed)?;
+    var first: u32 = none();
+    for (k in 0..live.length) {
+        if (live[k] && !containsU32(killed, truncate<u32>(k))) {
+            first = truncate<u32>(k);
+            break;
+        }
+    }
+    if (first == none()) {
+        return Ok();
+    }
+    var ops = Vector<EffectOp>.create();
+    statementOperations(c, n, e, s, mut ops)?;
+    var suspends = false;
+    for (op in ops.view()) {
+        if ((op.effects & suspendEffect()) != 0) {
+            suspends = true;
+        }
+    }
+    if (!suspends) {
+        return Ok();
+    }
+    let source = n.functions[function as usize].source;
+    let file = c.hir.functions[source as usize].file;
+    let span = n.statementSpans[s as usize];
+    var message = Vector<u8>.create();
+    appendText(mut message, "a RefCell guard, ")?;
+    appendQuotedType(mut message, c, n.functions[function as usize].locals[first as usize].typ)?;
+    appendText(
+        mut message,
+        ", is live where the task may suspend: another task resumed meanwhile panics on the same cell; drop the guard before the 'await' (type-system.md §41.3; ADR 0084 §2.6)",
+    )?;
+    return c.front.diagnostics.warning(guardAcrossAwait(), file, span.start, span.end, message);
+}
+
+fn guardAcrossAwait() -> u32 => 402;

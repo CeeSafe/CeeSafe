@@ -3810,7 +3810,7 @@ fn main() {
   - `Box<T>`, `Vector<T>`, `String`, `SlotMap<T>`, `StableVector<T>` and `Handle<T>`, with `T: Send` and the system
     heap (or `FailingAllocator`);
   - `File`, `TcpListener`, `TcpStream`;
-  - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>` (§38.4);
+  - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>`, and with `+ Share` (§38.4);
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
   - references, slices, views and every other scoped type (§19.1);
@@ -3824,13 +3824,16 @@ fn main() {
   that does not own, through any path of fields, payloads, elements or box contents, a value that changes through a
   shared reference (ReachesSharedChange):
   - a `StableVector<T, A>`, whose `push` takes `borrow this` (§24.2);
-  - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value;
+  - a `RawCell<T>` (§41.1), so every cell (`Cell<T>`, `RefCell<T>`) and every type holding one (ADR 0084 §2.2);
+  - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value
+    (a `dyn … + Share` box is not, §38.4: the walk stops there);
   - a type parameter without a `Share` bound.
 
   The walk stops at the library's thread-safe types (§38.3), which are `Share` by design: `Mutex<StableVector<T>>` is
   `Share`. `Thread<T>` is not `Send`, so not `Share`. (Until 2026-11-09, every `Send` type was `Share`, which let two
-  threads push to one shared `StableVector`, or share a `dyn` box, in safe code: a data race. ADR 0084 generalises
-  this rule to cells.)
+  threads push to one shared `StableVector`, or share a `dyn` box, in safe code: a data race. ADR 0084 added the
+  cells.) A type that holds a cell is still `Send` when its contents are: a cell may move to another thread, not be
+  used from two at once.
 - Inference is structural and recursive. A recursive type is `Send` unless a path through it reaches a type that is
   not. Generic code knows only its bounds: a `T` is `Send` only under a `T: Send` bound.
 
@@ -3855,7 +3858,9 @@ fn main() {
 - **`Mutex<T: Send>`**: mutual exclusion.
   - `Mutex.create(v)` returns `Result<Mutex<T>, AllocError>`; the platform lock is allocated.
   - `m.lock()` waits for the lock and returns a `MutexGuard<T>`, scoped to `m` like C7's guards. Its `data()` lends
-    `borrow mut T`, and its drop unlocks.
+    `borrow mut T`, and its drop unlocks. The data is held in a `RawCell<T>` (§41.1), since the guard changes it while
+    the mutex is shared. `T: Send` already refuses every loan-holding `T`, so N0351 cannot arise there.
+
   - `lock` has the `sleep` effect.
 - **Atomics**: `AtomicU32`, `AtomicU64`, `AtomicUSize` and `AtomicBool`, in every profile (ADR 0026). Each operation
   is a static inline function of the runtime header, so it compiles to the machine's atomic instructions.
@@ -3885,6 +3890,13 @@ fn main() {
   coercion to one needs `T: Send`, which for a move literal means `Send` captures (N0334). A `dyn … + Send` converts to
   the same `dyn` type without `+ Send` (the same value: they share their C representation and tables), never the
   other way. `Thread.spawn(f)` with `f: Box<dyn mut fn() -> T + Send>` runs a closure made elsewhere.
+- **`dyn … + Share`** (ADR 0084 §2.5): `dyn I + Share` and `dyn fn(…) -> R + Share` (and with `mut`) are `dyn` types
+  whose boxes are `Send` and `Share`; `+ Share` implies `+ Send`, as `Share` implies `Send`, and `+ Send + Share` is
+  the same type. A coercion to one needs `T: Share` (N0334 otherwise: a value holding a cell, §41, or a closure
+  capturing one, cannot become one). ReachesSharedChange stops at such a box, so `Arc<Box<dyn I + Share>>` is allowed
+  and both `Thread.both` children may read one. It converts to `dyn I + Send` and to `dyn I` (the same value and
+  tables), never the other way.
+
 
 ### 38.5 Profiles
 - Threads, `Arc` and `Mutex` are in the **hosted profile**: hosts with pthreads or Win32 threads, and CosmoOS
@@ -4385,3 +4397,79 @@ or an operand of `await` that is not a task), N0343 (recursion through `await`),
 the scope body's own locals), N0345 (`Async.park` or `Async.waker` outside the library); N0295 (blocking in async
 code, `await` while a `@context(atomic)` value is live, `Async.run` in async code); N0241 (conflicting captures of a
 scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend`'s captures, error type and allocator).
+
+## 41. Interior mutability: `RawCell`, `Cell` and `RefCell` (ADR 0084)
+
+A shared loan freezes the value it borrows (`ownership.md` B2), with one exception: the contents of a `RawCell`. The
+three cells are lib/core types (`lib/core/cells.cee`), in every profile. A type that reaches a cell is `Send` when its
+contents are, never `Share` unless the path to the cell passes through a library `@threadSafe` type (§38.1): so a
+cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Share`, N0334) and
+`static C: Cell<u32>` (N0337, §39.2) are refused.
+
+### 41.1 `RawCell<T>`: the primitive
+- A struct declared `@interiorMutable` and `@noncopy` in lib/core. `@interiorMutable` is accepted only in lib/core's
+  own files (N0290 elsewhere), and user code may not claim `@threadSafe` for a type holding one. A `RawCell<T>` has
+  `T`'s size and alignment (one field).
+- **Never Copy.** A cell, and every struct or enum holding one, is a move type (`@noncopy`, §14.1): a copy would read
+  the contents behind a live guard's back. A copy of a `Cell` is `Cell<T>.create(c.get())`.
+- `RawCell<T>.create(v)`; `c.pointer()` (`borrow this`) returns `*mut T`, safe to take and `unsafe` to use;
+  `c.getMut()` (`borrow mut this`) returns `borrow mut T`; `c.intoInner()` (`this`) returns `T`.
+- **The rule it changes** (amending `ownership.md` B2, `unsafe.md` §2's `p.write` and `Ptr.toBorrowMut` rows and its
+  pointers made from references, and ADR 0010): the `T` inside a `RawCell` may be read and written through
+  `c.pointer()` while shared loans of the cell, or of a value that holds it, are live. A `borrow mut` of the cell still
+  excludes every other access (B1). Unsafe code still must not make two live `borrow mut T` from the pointer, nor
+  write while a `borrow T` made from it is live.
+- `T` may not hold loans (a reference, view, closure or other scoped type, §19.1): **N0351**, "a cell of a
+  loan-holding type", reported at the type that names the cell, also when the cell is inside a generic struct
+  instantiated with such a type. The raw-pointer rule of §27.1 already forbids the pointer; refusing at the type avoids
+  needing variance for regions.
+- **C.** A `borrow T` stays a `const T *`, which C allows to be written through when the object is not `const`; no
+  value that holds a `RawCell` in its own storage is declared `const` (an exported immutable static, §39.5), and a
+  cell is never a tracked local (`optimisations.md` §2.3).
+- In the interpreter a cell is ordinary memory.
+
+### 41.2 `Cell<T: Copy>`
+- `Cell<T>.create(v)`; `c.get()` returns a copy of the contents; `c.set(v)` stores `v`; `c.replace(v)` stores `v` and
+  returns the old contents; these take `borrow this`, so any number of shared loans of the cell coexist with them.
+  `c.getMut()` (`borrow mut this`) lends `borrow mut T`, and `c.intoInner()` (`this`) returns the contents.
+- `T` is bounded `Copy` on the struct (an inherent impl cannot add a bound, §21.1): `Cell<Box<u32>>` is N0268. A
+  non-Copy value that is replaced or taken through a shared reference is a `RefCell<T?>` (§41.3).
+- No method lends a reference to the contents, so a change is never seen through a stale reference, and a call
+  between two methods, such as a re-entrant callback that sets the cell through a second shared reference, is
+  harmless. A Copy `T` has no `drop`, so `set` runs no user code.
+- **`==` and `!=`.** Two `Cell<T>` compare their contents, `a.get() == b.get()`, when `T` has the operator (numbers,
+  `bool`, fieldless enums, raw pointers, arrays and cells of them): N0207 otherwise.
+- `get` is one load and `set` one store through the cell's pointer, in functions small enough for the C compiler to
+  inline. A cell's value is never a tracked fact (`optimisations.md` §2.3).
+
+### 41.3 `RefCell<T>`: checked shared and exclusive access
+- `RefCell<T>.create(v)`. Its state is one `Cell<isize>` beside the contents: 0 free, `n > 0` readers, −1 writing.
+- `c.read()` returns a `CellRef<T>` and `c.write()` a `CellRefMut<T>` (`borrow` is a reserved word, so Rust's
+  `borrow()` and `borrow_mut()` are `read()` and `write()`). Both take `borrow this`. Each guard is a scoped struct
+  over a region of the cell, written like `MutexGuard` (§38.3): `CellRef`'s `data()` (`borrow this`) lends
+  `borrow T`, `CellRefMut`'s `data()` (`borrow mut this`) lends `borrow mut T`. Dropping a guard gives the access
+  back.
+- **On conflict it panics** with "cell already borrowed": `write` while any guard is live, `read` while a
+  `CellRefMut` is (or when the reader count would pass 2^31 − 1, the same on every target). A program's call is
+  checked at the call, so the panic names the program's line, in both back ends; in a freestanding program it is an
+  explicit panic (`CEE_PANIC_EXPLICIT`). Panic is abort (OD-5).
+- `c.tryRead()` and `c.tryWrite()` return the guard, or `null` in the same cases.
+- `c.replace(v)` stores `v` and returns the old contents, and `c.take()`, on a `RefCell<T?>` only, returns them and
+  leaves `null` (lib/core's `RefCellTaking<T>.take`). Both panic as `write` does. The old value is moved out before
+  they return, so its `drop` runs in the caller with no guard live, and may use the cell again. `c.getMut()`
+  (`borrow mut this`) and `c.intoInner()` (`this`) need no check. `RefCell` has no `==`: it would take a read guard
+  and could panic.
+- **Why it is sound.** A guard is scoped to the cell (§25.4), so it cannot outlive it (N0243), be stored past it, or
+  cross a thread (scoped types are not `Send`). The reference `data()` lends is tied to the guard (§13.5), so the
+  B-rules end it before the guard's drop resets the state. The cell cannot be copied behind a guard's back (§41.1).
+- **Guards made in a condition.** An `if` or `while` condition is its own statement (§14.5): a guard that is one of
+  its temporaries ends once the condition is evaluated, before the body or the `else` block runs, and on every pass
+  of a `while`. So `if (c.read().data().isEmpty()) { … } else { c.write()… }` does not panic, nor does an `if`
+  expression whose branch writes. A `match` scrutinee's temporaries live until the end of the `match` (§18.4), as
+  Rust's do. (`e is P`, ADR 0085, follows the same rule: the guard ends with the condition, or with the block that
+  uses a binding borrowing from it.)
+- **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
+
+  another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures, and
+  a guard is not `Send`.
+- A `RefCell` in a task frame is fine (frames never move, `ownership.md` A1).

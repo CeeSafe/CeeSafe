@@ -1,0 +1,25 @@
+// A RefCell guard made in an `if` or `while` condition ends with the condition (type-system.md §14.5, §41.3; ADR 0084
+// §2.4), so the `else` block, the loop body and an `if` expression's branch may write the same cell without a panic.
+fn main() {
+    let c = RefCell<Vector<u32>>.create(Vector<u32>.create());
+    if (c.read().data().length > 0) {
+        Console.writeLine(1);
+    } else {
+        var w = c.write();
+        w.data().push(5)!;
+    }
+    while (c.read().data().length < 3) {
+        var w = c.write();
+        w.data().push(6)!;
+    }
+    let n = if (c.read().data()[0] == 5) c.write().data().length else 0;
+    Console.writeLine(n);
+    match (c.tryWrite()) {
+        Some(g) => { Console.writeLine(c.tryRead() == null); }
+        null => { Console.writeLine(0); }
+    }
+    Console.writeLine(c.tryRead() == null);
+}
+// expect-stdout: 3
+// expect-stdout: true
+// expect-stdout: false

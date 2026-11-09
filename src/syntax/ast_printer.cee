@@ -935,9 +935,12 @@ struct AstPrinter {
             TypeNode.Dyn(interfaceType, mutable, send) => {
                 this.text(if (mutable) "(dyn mut " else "(dyn ")?;
                 this.typeText(ast, symbols, interfaceType)?;
-                if (send) {
+                if (send == 1) {
                     this.text(" +Send")?;
+                } else if (send == 2) {
+                    this.text(" +Share")?;
                 }
+
                 this.text(")")?;
             }
             TypeNode.FunctionPointer(abi, parameters, result) => {

@@ -1,0 +1,25 @@
+// ADR 0084 §1.3's probe p5, rewritten safely (§5): two Thread.both children count to 200,000 each through a Mutex and
+// an atomic, where p5 wrote through a user cell from both and lost increments. Cells are not Share, so that program is
+// now refused (check-fail/raw-cell-share.cee, cell.cee); this one is race-free, and the contract suite runs it under
+// ThreadSanitizer ("run tsan share").
+fn count(m: borrow Mutex<u32>, a: borrow AtomicU32) {
+    for (i in 0..200000) {
+        {
+            var g = m.lock();
+            let d = g.data();
+            d += 1;
+        }
+        a.fetchAdd(1);
+    }
+}
+
+fn main() {
+    let m = Mutex<u32>.create(0)!;
+    let a = AtomicU32.create(0);
+    Thread.both(() => { count(m, a); }, () => { count(m, a); });
+    var g = m.lock();
+    Console.writeLine(g.data());
+    Console.writeLine(a.load());
+}
+// expect-stdout: 400000
+// expect-stdout: 400000

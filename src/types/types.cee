@@ -115,7 +115,9 @@ struct TypeInfo {
     effects: u32;
     dynInterface: u32; // an index into TypeTable.bounds for `dyn I`; none for `dyn fn`
     sendDyn: bool;
+    shareDyn: bool; // `dyn … + Share` (ADR 0084 §2.5); sendDyn is set too
     mutableDynFunction: bool;
+
     structDef: u32;     // TypeTable.structs
     enumDef: u32;       // TypeTable.enums
     typeParameter: u32; // TypeTable.typeParameters
@@ -170,6 +172,7 @@ struct StructDefinition {
     isRecursive: bool;
     isReprC: bool;
     isThreadSafe: bool;
+    isInteriorMutable: bool; // lib/core's RawCell: changed through a shared reference (ADR 0084 §2.1)
     isClosureEnvironment: bool;
     isMoveEnvironment: bool;
     capturesLoans: bool;     // an `async move` environment that holds a borrow: scoped (ADR 0033 §3.3)
@@ -1219,6 +1222,34 @@ struct TypeTable {
         return Ok(id);
     }
 
+    /// The `+ Share` form of a `dyn` type (ADR 0084 §2.5): the same interface or signature, `Send` and `Share`. Its
+    /// C representation and tables are the plain type's.
+    fn shareDynOf(borrow mut this, id: u32) -> Result<u32, AllocError> {
+        var numbers = Vector<u64>.create();
+        numbers.push(3)?;
+        numbers.push(id as u64)?;
+        let key = this.numbersKey(numbers.view())?;
+        let found = foundIn(this.dyns, key);
+        if (found != none()) {
+            return Ok(found);
+        }
+        let base = this.types[id as usize];
+        var name = Vector<u8>.create();
+        appendBytes(mut name, this.name(id))?;
+        if (base.sendDyn) {
+            name.truncate(name.length - 7); // " + Send"
+        }
+        appendText(mut name, " + Share")?;
+        var info = base;
+        info.name = this.addName(name)?;
+        info.sendDyn = true;
+        info.shareDyn = true;
+        let added = this.add(info)?;
+        this.dyns.put(key, added)?;
+        this.dynList.push(added)?;
+        return Ok(added);
+    }
+
     /// The unique `dyn fn(…) -> R` or `dyn mut fn(…) -> R` (DynFunctionOf).
     fn dynFunctionOf(
         borrow mut this,
@@ -1724,8 +1755,9 @@ struct TypeTable {
     }
 
     /// Does a value of this type own one that changes through a shared reference (ReachesSharedChange, §38.1)? A
-    /// `StableVector` does (`push` takes `borrow this`, §24.2); so may a `dyn` box's hidden value and a type parameter
-    /// without a `Share` bound. The library's thread-safe types are Share by design (§38.3): the walk stops there.
+    /// `StableVector` does (`push` takes `borrow this`, §24.2), and so does a `RawCell` (ADR 0084 §2.2); so may a
+    /// `dyn` box's hidden value and a type parameter without a `Share` bound. The library's thread-safe types are
+    /// Share by design (§38.3): the walk stops there.
     /// Only owned parts are walked: `isShare` has already required Send, which refuses references and pointers.
     fn reachesSharedChange(borrow this, id: u32, path: borrow mut Vector<u32>) -> Result<bool, AllocError> {
         for (v in path.view()) {
@@ -1748,6 +1780,9 @@ struct TypeTable {
                 let s = borrow this.structs[t.structDef as usize];
                 if (s.isThreadSafe) {
                     return Ok(false);
+                }
+                if (s.isInteriorMutable) {
+                    return Ok(true); // a RawCell's contents change through shared loans (ADR 0084 §2.2)
                 }
                 let skip: usize = if (s.isMoveEnvironment) 1 else 0;
                 for (k in skip..s.fields.length) {
@@ -1779,13 +1814,52 @@ struct TypeTable {
             TypeKind.Array => { return this.reachesSharedChange(t.element, path); }
             TypeKind.Box => {
                 if (this.isDyn(t.pointee)) {
-                    return Ok(true);
+                    return Ok(!this.types[t.pointee as usize].shareDyn); // `dyn … + Share` holds only Share values
                 }
                 return this.reachesSharedChange(t.pointee, path);
             }
             TypeKind.Vector => { return this.reachesSharedChange(this.containerElement(id), path); }
             TypeKind.SlotMap => { return this.reachesSharedChange(t.element, path); }
             _ => { return Ok(false); }
+        }
+    }
+
+    /// Does a value of this type hold a `RawCell` in its own storage (fields, payloads, elements; not behind a box)?
+    /// The C backend never declares such a value `const`, since its cells change through shared loans (ADR 0084 §2.1).
+    fn holdsRawCell(borrow this, id: u32) -> bool {
+        let t = this.types[id as usize];
+        match (t.kind) {
+            TypeKind.Struct => {
+                let s = borrow this.structs[t.structDef as usize];
+                if (s.isInteriorMutable) {
+                    return true;
+                }
+                for (f in s.fields.view()) {
+                    if (this.holdsRawCell(this.fields[f as usize].typ)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            TypeKind.Enum => {
+                let e = borrow this.enums[t.enumDef as usize];
+                if (e.resultOk != none()) {
+                    return this.holdsRawCell(e.resultOk) || this.holdsRawCell(e.resultErr);
+                }
+                if (e.optionType != none()) {
+                    return this.holdsRawCell(e.optionType);
+                }
+                for (v in e.variants.view()) {
+                    for (f in this.variants[v as usize].payload.view()) {
+                        if (this.holdsRawCell(this.fields[f as usize].typ)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+            TypeKind.Array => { return this.holdsRawCell(t.element); }
+            _ => { return false; }
         }
     }
 
@@ -1938,6 +2012,7 @@ fn blankType(kind: TypeKind, name: Range) -> TypeInfo => TypeInfo {
     effects: 3,
     dynInterface: none(),
     sendDyn: false,
+    shareDyn: false,
     mutableDynFunction: false,
     structDef: none(),
     enumDef: none(),
@@ -1958,6 +2033,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     isRecursive: false,
     isReprC: false,
     isThreadSafe: false,
+    isInteriorMutable: false,
     isClosureEnvironment: false,
     isMoveEnvironment: false,
     capturesLoans: false,

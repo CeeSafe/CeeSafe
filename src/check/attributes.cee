@@ -53,7 +53,29 @@ fn processStructAttributes(c: borrow mut Checker, item: u32, s: u32) -> Result<v
     let generic = c.front.ast.structs[s as usize].typeParameters.count > 0 ||
         c.front.ast.structs[s as usize].regionParameters.count > 0;
     var known = Vector<u32>.create();
-    knownAttributes(c, attributes, "a struct", "repr align noncopy context threadSafe", mut known)?;
+    knownAttributes(c, attributes, "a struct", "repr align noncopy context threadSafe interiorMutable", mut known)?;
+    for (attribute in known.view()) {
+        if (!sameText(attributeName(c, attribute), "interiorMutable")) {
+            continue;
+        }
+        // lib/core's RawCell (ADR 0084 §2.1): the one type whose contents change through a shared loan.
+        let inCore = isLibraryFile(c) && startsWithText(c.filePaths[c.file as usize].view(), "lib/core/");
+        if (!inCore || c.front.ast.attributes[attribute as usize].hasParentheses) {
+            attributeError(c, attribute, "'@interiorMutable' is only for lib/core's RawCell (ADR 0084 §2.1)")?;
+        } else {
+            let entry = ownStructEntry(c, item);
+            if (entry != none()) {
+                let definition = c.types.info(c.structs[entry as usize].typ).structDef;
+                c.types.structs[definition as usize].isInteriorMutable = true;
+                for (k in 0..c.structs.length) {
+                    if (c.structs[k].template == entry) {
+                        let instance = c.types.info(c.structs[k].typ).structDef;
+                        c.types.structs[instance as usize].isInteriorMutable = true;
+                    }
+                }
+            }
+        }
+    }
     for (attribute in known.view()) {
         if (!sameText(attributeName(c, attribute), "threadSafe")) {
             continue;

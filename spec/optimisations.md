@@ -49,7 +49,10 @@ A fact may mention only a tracked local:
 A tracked local changes only through an assignment to it, which the analysis sees, or through a mutable loan of its
 own storage: `borrow mut i`, or `push`, `pop`, `clear` and `append`, which take `borrow mut` of a vector. While such a
 loan is live, every other use of the local is rejected (B1–B2), so no new fact about it can be made. After the loan,
-nothing may write the local through a pointer made from it (U2, ADR 0010). A shared loan cannot change it. So facts
+nothing may write the local through a pointer made from it (U2, ADR 0010). A shared loan cannot change it. A cell
+(`RawCell`, `Cell`, `RefCell`, type-system.md §41) is a struct, so never a tracked local, and nothing inside one is a
+fact: its contents change through shared loans. So facts
+
 about a local end at each mutable `Ref` or `Slice` of a place rooted at it without a dereference, and a value or
 length read after that is a new fact.
 

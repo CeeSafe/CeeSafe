@@ -17,10 +17,12 @@ fn resolveDynType(
     c: borrow mut Checker,
     interfaceSyntax: u32,
     mutable: bool,
-    send: bool,
+    marker: u32,
     span: Span,
     allowed: bool,
 ) -> Result<u32, AllocError> {
+    let send = marker != 0;
+    let share = marker == 2;
     match (c.front.ast.types[interfaceSyntax as usize]) {
         TypeNode.Function(attributes, parameters, result) => {
             // `dyn fn(…) -> R` / `dyn mut fn(…) -> R` (§36.5).
@@ -33,7 +35,10 @@ fn resolveDynType(
             listTypes(c, c.types.info(callable).parameters, mut types)?;
             let callableResult = c.types.info(callable).result;
             let callableEffects = c.types.info(callable).effects;
-            let dynFunction = c.types.dynFunctionOf(types.view(), callableResult, callableEffects, mutable, send)?;
+            var dynFunction = c.types.dynFunctionOf(types.view(), callableResult, callableEffects, mutable, send)?;
+            if (share) {
+                dynFunction = c.types.shareDynOf(dynFunction)?;
+            }
             if (!allowed) {
                 var message = Vector<u8>.create();
                 appendQuotedType(mut message, c, dynFunction)?;
@@ -82,7 +87,8 @@ fn resolveDynType(
         c.error(dynIncompatible(), span.start, span.end, message)?;
         return Ok(c.types.error);
     }
-    return c.types.dynOf(bound, send);
+    let sent = c.types.dynOf(bound, send)?;
+    return if (share) c.types.shareDynOf(sent) else Ok(sent);
 }
 
 /// The member that keeps `dyn I` from existing (§37.1, ADR 0086 §2.3, §2.6), with why in `reason`; none if `I` is
@@ -272,11 +278,25 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
         sameDyn(c, pointee, dynType)) {
         return c.expr(HirExpr.Cast(value), expected, span.start, span.end); // forgetting `+ Send` (§38.4)
     }
+    if (fits && c.types.isDyn(pointee) && c.types.info(pointee).shareDyn && !c.types.info(dynType).shareDyn &&
+        sameDyn(c, pointee, dynType)) {
+        return c.expr(HirExpr.Cast(value), expected, span.start, span.end); // forgetting `+ Share` (§38.4)
+    }
     if (!fits || c.types.isDyn(pointee) || c.types.isUnsized(pointee) || c.types.info(pointee).isStr ||
         c.types.isClosure(pointee)) {
         return Ok(none());
     }
     let implementation = pointee;
+    if (c.types.info(dynType).shareDyn && c.types.isSendType(implementation)? &&
+        !c.types.isShare(implementation)?) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, implementation)?;
+        appendText(mut message, " is not Share, so it cannot be a ")?;
+        appendQuotedType(mut message, c, dynType)?;
+        appendText(mut message, ": it may change through a shared reference (type-system.md §38.4, §41)")?;
+        c.error(notSend(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (c.types.info(dynType).sendDyn && !c.types.isSendType(implementation)?) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, implementation)?;

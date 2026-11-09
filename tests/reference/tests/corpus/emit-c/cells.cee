@@ -1,0 +1,16 @@
+// Cell.get and Cell.set (type-system.md §41.2; ADR 0084 §5): each is one load or one store through the cell's pointer,
+// small enough for the C compiler to inline; a cell is never `const` and its value is never a tracked fact.
+struct Timer {
+    flags: Cell<u32>;
+}
+
+fn tick(t: borrow Timer) {
+    t.flags.set(t.flags.get() + 1);
+}
+
+fn main() {
+    let t = Timer { flags: Cell<u32>.create(0) };
+    tick(t);
+    tick(t);
+    Console.writeLine(t.flags.get());
+}

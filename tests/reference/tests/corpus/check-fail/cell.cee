@@ -1,0 +1,33 @@
+// Cell<T: Copy> (type-system.md §41.2; ADR 0084 §2.3): a non-Copy T fails the bound, a loan-holding T is N0351, a cell
+// is not Share (N0334 for Thread.both and Arc, N0337 for a static), and `==` needs contents that have it. That a cell
+// is a move type is check-fail/cell-copy.cee.
+struct Point {
+    x: u32;
+}
+
+struct Timer {
+    flags: Cell<u32>;
+    id: u32;
+}
+
+static C: Cell<u32> =    // error[N0337]
+    Cell<u32>.create(0); // error[N0338]
+
+fn tick(t: borrow Timer) {
+    t.flags.set(t.flags.get() + 1);
+}
+
+fn main() {
+    let boxed = Cell<Box<u32>>.create(Box.create(1u32)!); // error[N0268]
+    let text = "abc";
+    let view = Cell<StringView>.create(text); // error[N0351]
+    let t = Timer { flags: Cell<u32>.create(0), id: 1 };
+    Thread.both(
+        () => { tick(t); }, // error[N0334]
+        () => { tick(t); }, // error[N0334]
+    );
+    let shared = Arc<Cell<u32>>.create(Cell<u32>.create(1))!; // error[N0334]
+    let p = Cell<Point>.create(Point { x: 1 });
+    let q = Cell<Point>.create(Point { x: 1 });
+    let same = p == q; // error[N0207]
+}

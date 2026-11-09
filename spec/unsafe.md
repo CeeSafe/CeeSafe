@@ -27,7 +27,7 @@ Every unsafe operation must be **valid** when it runs:
 | Operation | Requirement |
 |---|---|
 | `p.read()` | `p` is non-null, aligned for `T`, and points to a live, initialised `T` inside one object. For a `T` that is not Copy, the value is moved out (ADR 0027): until the next `p.write`, nothing may read, drop or borrow the `T` at `p`, or the value would have two owners (O1) |
-| `p.write(v)` | `p` is non-null, aligned for `T`, and points to live storage for a `T` inside one object, which nothing currently borrows (no live loan of it, shared or mutable). The old contents are not dropped: if they held a `T` that needs drop, it leaks unless it was read out first |
+| `p.write(v)` | `p` is non-null, aligned for `T`, and points to live storage for a `T` inside one object, which nothing currently borrows (no live loan of it, shared or mutable; a shared loan of a `RawCell`, or of a value holding it, does not count for the cell's contents, type-system.md §41.1). The old contents are not dropped: if they held a `T` that needs drop, it leaks unless it was read out first |
 | `p.add/sub/offset(n)` | always defined (the address wraps); the *result* must meet the requirements above before it is used |
 | `Ptr.toBorrow(p)` | as `read`, for as long as the reference is used; nothing writes the `T` meanwhile (except through the reference itself, for `toBorrowMut`), and for `toBorrowMut` nothing else reads it either |
 | `Slice.fromRaw(p, n)` | as `Ptr.toBorrow`, for each of the `n` elements; `n × size(T)` ≤ 2^63 − 1 |
@@ -38,7 +38,11 @@ Every unsafe operation must be **valid** when it runs:
 `s.ptr` of a slice) may be used to **write** its target, directly or through a reference made from it by
 `Ptr.toBorrowMut` or `SliceMut.fromRaw`, only while the reference's loan could still be live. That is, only until the
 target is next used by anything other than that pointer: read, written, borrowed, moved, or its storage ended. After
-that, such a write is not valid even though the storage is live and nothing borrows it. Optimisations rely on this
+that, such a write is not valid even though the storage is live and nothing borrows it. The one exception is a
+`RawCell`'s contents, reached through `c.pointer()` (type-system.md §41.1; ADR 0084): they may be written while
+shared loans of the cell are live, and a reference made from that pointer by `Ptr.toBorrowMut` is valid while no other
+reference made from it is used. Optimisations rely on this
+
 (`optimisations.md` §2): a vector's length, read directly, stays what it was until the next `borrow mut` of the vector.
 
 "Live" means the object's storage has not ended: the local is in scope (between its

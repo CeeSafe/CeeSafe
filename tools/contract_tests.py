@@ -86,7 +86,12 @@ def main():
             # Work stealing (ADR 0038): the async programs under ThreadSanitizer, which fails a run that races.
             ("run tsan", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "async",
                                        "--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-g", "--cflag=-fsanitize=thread"]),
+            # Cells and shared dyn boxes (ADR 0084): the Thread.both programs over Mutex, atomics and `dyn … + Share`.
+            ("run tsan share", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "share",
+                                             "--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-g",
+                                             "--cflag=-fsanitize=thread"]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
+
              ["--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
               "--cflag=-fno-sanitize-recover=all", "--check-leaks"]),
             ("support", run_corpus + ["--corpus", os.path.join(ROOT, "tests", "support"), "--family", "run-pass",
@@ -127,7 +132,7 @@ def main():
                 print(f"{name:14} skip _FORTIFY_SOURCE and gcc are checked on Linux (glibc)")
                 sys.stdout.flush()
                 continue
-            if name == "run tsan" and platform.system() == "Windows":
+            if name in ("run tsan", "run tsan share") and platform.system() == "Windows":
                 print(f"{name:14} skip ThreadSanitizer is not on Windows' compilers here")
                 sys.stdout.flush()
                 continue
@@ -137,7 +142,8 @@ def main():
             p = subprocess.run(argv, cwd=ROOT, capture_output=True, text=True, env=env)
             lines = [line for line in (p.stdout + p.stderr).splitlines() if line.strip()]
             summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support",
-                                                         "reactor poll", "reactor uring", "run tsan") else (
+                                                         "reactor poll", "reactor uring", "run tsan",
+                                                         "run tsan share") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
             if name == "freestanding" and p.returncode == 2:

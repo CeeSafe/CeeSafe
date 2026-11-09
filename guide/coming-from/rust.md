@@ -135,6 +135,8 @@ calls, at compile time. Rust has no equivalent in the language.
 
 ## Things you will miss
 
-`Rc`/`Arc` and interior mutability (`Cell`, `RefCell`), threads and `Send`/`Sync` (there are no user threads yet),
+`Rc` (CeeSafe has `Arc`, and lib/core's `Cell` and `RefCell`, whose `read()` and `write()` are Rust's `borrow()` and
+`borrow_mut()`: type-system.md §41), threads and `Send`/`Sync` (there are no user threads yet),
+
 `dyn Trait`, iterators, pattern guards (`if` in a match arm), slice patterns, `impl` blocks on generic types, the
 standard library's breadth, and crates.io. Several are planned or recorded as open decisions.

@@ -1,0 +1,41 @@
+// `dyn … + Share` (type-system.md §38.4; ADR 0084 §2.5): a box both Thread.both children read, an Arc of one that a
+// spawned thread reads, a `dyn fn … + Share` both children call, and the conversions to `+ Send` and to plain `dyn`.
+interface Shape {
+    fn area(borrow this) -> u32;
+}
+
+struct Square {
+    side: u32;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+}
+
+fn areaOf(s: borrow Box<dyn Shape + Share>) -> u32 => s.area();
+
+fn plain(s: Box<dyn Shape>) -> u32 => s.area();
+
+fn main() {
+    let b: Box<dyn Shape + Share> = Box.create(Square { side: 3 })!;
+    var low: u32 = 0;
+    var high: u32 = 0;
+    Thread.both(() => { low = areaOf(b); }, () => { high = areaOf(b); });
+    Console.writeLine(low + high);
+    let shared = Arc<Box<dyn Shape + Send + Share>>.create(Box.create(Square { side: 2 })!)!;
+    let other = shared.clone();
+    let t = Thread.spawn(move () => other.get().area())!;
+    Console.writeLine(t.join());
+    let f: Box<dyn fn(u32) -> u32 + Share> = Box.create(move (x: u32) => x + 1)!;
+    var one: u32 = 0;
+    var two: u32 = 0;
+    Thread.both(() => { one = f(1); }, () => { two = f(2); });
+    Console.writeLine(one + two);
+    let sent: Box<dyn Shape + Send> = b;
+    let p: Box<dyn Shape> = sent;
+    Console.writeLine(plain(p));
+}
+// expect-stdout: 18
+// expect-stdout: 4
+// expect-stdout: 5
+// expect-stdout: 9

@@ -1,0 +1,28 @@
+// A RefCell guard live across `await` is warning N0402 (type-system.md §41.3; ADR 0084 §2.6): another task resumed
+// meanwhile would panic on the same cell. A guard dropped before the `await` is fine.
+async fn pause() -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    return Ok();
+}
+
+async fn held(c: borrow RefCell<u32>) -> Result<u32, AsyncError> {
+    let g = c.read();
+    await pause()?; // warning[N0402]
+    return Ok(g.data());
+}
+
+async fn released(c: borrow RefCell<u32>) -> Result<u32, AsyncError> {
+    var n: u32 = 0;
+    {
+        let g = c.read();
+        n = g.data();
+    }
+    await pause()?;
+    return Ok(n);
+}
+
+fn main() {
+    let c = RefCell<u32>.create(4);
+    let a = Async.run(held(c));
+    let b = Async.run(released(c));
+}

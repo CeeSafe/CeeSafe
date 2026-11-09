@@ -98,8 +98,9 @@ enum TypeNode {
     Function(Range, Range, u32),
     /// `*T` or `*mut T`: mutable, pointee.
     Pointer(bool, u32),
-    /// `dyn I`, `dyn mut fn(…)`, `dyn I + Send`: the interface type, mutable, Send.
-    Dyn(u32, bool, bool),
+    /// `dyn I`, `dyn mut fn(…)`, `dyn I + Send`, `dyn I + Share`: the interface type, mutable, the marker (0 none,
+    /// 1 Send, 2 Share; ADR 0084 §2.5).
+    Dyn(u32, bool, u32),
     Optional(u32),
     /// `[T; N]`: element type, length expression.
     Array(u32, u32),

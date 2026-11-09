@@ -826,7 +826,14 @@ fn appendStaticInitializer(
                 HirExpr.BorrowPath(_, p) => p,
                 _ => none(),
             };
-            if (borrowed != none()) {
+            let literal = match (c.hir.exprs[operand as usize]) {
+                HirExpr.StringConst(_) => c.types.isSlice(t),
+                _ => false,
+            };
+            if (literal) {
+                // `c"…"`'s bytes (ADR 0087 §2.4): a string literal as a `Slice<u8>`, laid out as a view is.
+                appendStaticInitializer(e, c, out, operand, t, place, cArray)?;
+            } else if (borrowed != none()) {
                 appendText(out, "((")?;
                 appendCTypeName(c, out, t)?;
                 appendText(out, ")&")?;

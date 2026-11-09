@@ -115,6 +115,7 @@ enum ExprNode {
     IntLiteral(u64, IntSuffix),
     FloatLiteral(Range, FloatSuffix), // the digits without separators
     StringLiteral(Range),             // UTF-8
+    CStringLiteral(Range),            // `c"…"` (ADR 0087 §2.4): UTF-8 without its NUL
     CharLiteral(u32),
     BoolLiteral(bool),
     NullLiteral,

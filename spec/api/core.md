@@ -29,6 +29,7 @@
 - [struct RefCellTaking](#struct-refcelltaking)
 - [struct CellRef](#struct-cellref)
 - [struct CellRefMut](#struct-cellrefmut)
+- [struct CStr](#struct-cstr)
 - [struct TextWriter](#struct-textwriter)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
@@ -1816,6 +1817,55 @@ The contents, for as long as the guard is borrowed exclusively.
 Safety: the guard set the state to -1, so no other guard is live and none can be made while it is; the loan
 ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
 shared, type-system.md §41.1).
+
+## struct CStr
+
+```ceesafe
+public struct CStr<region r>
+```
+
+A view of UTF-8 text with a NUL byte after its end, valid for region `r` as a `StringView<r>` is: what a C
+function taking a `const char *` needs. Copy; a field of this type needs a region parameter, as a view's does.
+
+### CStr.fromBytesWithNul
+
+```ceesafe
+public fn fromBytesWithNul(b: Slice<r, u8>) -> CStr<r>?
+```
+
+Bytes ending in a NUL that is their only one, as valid UTF-8 text before it; else null.
+
+### CStr.ptr
+
+```ceesafe
+public fn ptr(borrow this) -> *CChar
+```
+
+The address of the first byte, for C: the text is followed by its NUL.
+
+### CStr.view
+
+```ceesafe
+public fn view(borrow this) -> StringView<r>
+```
+
+The text, without the NUL.
+
+### CStr.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The text's length in bytes, without the NUL.
+
+### CStr.bytesWithNul
+
+```ceesafe
+public fn bytesWithNul(borrow this) -> Slice<r, u8>
+```
+
+The text and its NUL: `length + 1` bytes.
 
 ## struct TextWriter
 

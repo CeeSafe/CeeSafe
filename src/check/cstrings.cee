@@ -1,0 +1,74 @@
+// `c"…"` (ADR 0087 §2.4, grammar.md §1.6): a lib/core `CStr<static>` over the literal's text and the same text with
+// the NUL the compiler appends. The lexer refused a NUL inside the literal (N0006).
+
+/// The `CStr` struct literal a `c"…"` stands for: `CStr { text: "…", bytes: "…\0" as Slice<u8> }`.
+fn checkCStringLiteral(c: borrow mut Checker, text: Range, span: Span) -> Result<u32, AllocError> {
+    let plain = copyBytes(c.front.ast.textOf(text))?;
+    return cStringValue(c, plain.view(), span);
+}
+
+/// A use of a constant whose value is a `c"…"` (type-system.md §10): the same literal, at the use.
+fn copiedCString(c: borrow mut Checker, value: u32, span: Span) -> Result<u32, AllocError> {
+    var plain = Vector<u8>.create();
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.StructLiteral(fields) => {
+            match (c.hir.exprs[c.hir.fieldValues[fields.start as usize].value as usize]) {
+                HirExpr.StringConst(text) => { plain = copyBytes(c.hir.textOf(text))?; }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    return cStringValue(c, plain.view(), span);
+}
+
+/// `CStr { text: "…", bytes: "…\0" as Slice<u8> }`, the text field first.
+fn cStringValue(c: borrow mut Checker, plain: Slice<u8>, span: Span) -> Result<u32, AllocError> {
+    let name = c.intern("CStr")?;
+    let typ = match (foundEntity(c.coreItems, Word { value: name as u64 })) {
+        Entity.Struct(index) => c.structs[index as usize].typ,
+        _ => none(),
+    };
+    if (typ == none()) {
+        return c.errorResult(span.start, span.end); // lib/core is always there
+    }
+    let definition = c.types.info(typ).structDef;
+    let textName = c.intern("text")?;
+    let bytesName = c.intern("bytes")?;
+    var withNul = copyBytes(plain)?;
+    let textRange = c.hir.addText(plain)?;
+    withNul.push(0)?;
+    let terminated = c.hir.addText(withNul.view())?;
+    let view = c.types.stringView;
+    let textValue = c.expr(HirExpr.StringConst(textRange), view, span.start, span.end)?;
+    let literal = c.expr(HirExpr.StringConst(terminated), view, span.start, span.end)?;
+    let u8Type = c.types.u8;
+    let bytesType = c.types.sliceOf(u8Type, false)?;
+    let bytesValue = c.expr(HirExpr.Cast(literal), bytesType, span.start, span.end)?;
+    let start = truncate<u32>(c.hir.fieldValues.length);
+    c.hir.fieldValues.push(HirFieldValue { field: findField(c, definition, textName), value: textValue })?;
+    c.hir.fieldValues.push(HirFieldValue { field: findField(c, definition, bytesName), value: bytesValue })?;
+    return c.expr(HirExpr.StructLiteral(Range { start: start, count: 2 }), typ, span.start, span.end);
+}
+
+/// Is `t` lib/core's `CStr` (of any region)? Like a `StringView`, a constant or static may hold one: `c"…"` is static
+/// data (type-system.md §10, §39.2).
+fn isCStrType(c: borrow Checker, t: u32) -> bool {
+    if (t == none() || !c.types.is(t, TypeKind.Struct)) {
+        return false;
+    }
+    let file = c.types.structs[c.types.info(t).structDef as usize].file;
+    return (file as usize) < c.filePaths.length && startsWithText(c.filePaths[file as usize].view(), "lib/core/") &&
+        sameText(c.typeName(t), "CStr");
+}
+
+/// A `c"…"` literal's value: the struct literal checkCStringLiteral makes.
+fn isCStringValue(c: borrow Checker, e: u32) -> bool {
+    if (!isCStrType(c, c.hir.exprTypes[e as usize])) {
+        return false;
+    }
+    return match (c.hir.exprs[e as usize]) {
+        HirExpr.StructLiteral(_) => true,
+        _ => false,
+    };
+}

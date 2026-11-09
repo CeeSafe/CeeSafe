@@ -1,0 +1,73 @@
+// `c"…"` and lib/core's `CStr` (ADR 0087 §2.4): the compiler adds the NUL that ends the literal, so `strlen` and
+// `puts` read exactly the text; `view()` and `length()` leave the NUL out. A `CStr` is Copy, may be a constant or a
+// static, and `CStr.fromBytesWithNul` takes bytes that end in their only NUL.
+extern "C" {
+    fn strlen(s: *CChar) -> usize;
+    fn puts(s: *CChar) -> i32;
+}
+
+const DEVICE: CStr = c"/dev/null";
+static BANNER: CStr<static> = c"tab\there";
+
+/// Safety: a `CStr` ends in a NUL, so `strlen` stays inside it.
+fn measured(s: CStr) -> usize => unsafe { strlen(s.ptr()) };
+
+/// Safety: as `measured`.
+fn print(s: CStr) {
+    unsafe { puts(s.ptr()); }
+}
+
+fn bytes(text: StringView, nul: bool) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    for (b in text.bytes()) {
+        v.push(b)!;
+    }
+    if (nul) {
+        v.push(0)!;
+    }
+    return v;
+}
+
+fn main() {
+    let path = c"/tmp/x";
+    let copy = path;
+    Console.writeLine(path.view());
+    Console.writeLine(copy.length());
+    Console.writeLine(measured(path));
+    Console.writeLine(path.bytesWithNul().length);
+    Console.writeLine(measured(c"héllo"));
+    Console.writeLine(c"".length());
+    print(DEVICE);
+    Console.writeLine(measured(DEVICE));
+    print(BANNER);
+    let good = bytes("made", true);
+    match (CStr.fromBytesWithNul(good.view())) {
+        Some(s) => {
+            Console.writeLine(s.view());
+            Console.writeLine(measured(s));
+        }
+        null => { Console.writeLine("refused"); }
+    }
+    let unterminated = bytes("no", false);
+    Console.writeLine(CStr.fromBytesWithNul(unterminated.view()) == null);
+    var inner = bytes("a", true);
+    inner.push('b')!;
+    inner.push(0)!;
+    Console.writeLine(CStr.fromBytesWithNul(inner.view()) == null);
+    let empty = Vector<u8>.create();
+    Console.writeLine(CStr.fromBytesWithNul(empty.view()) == null);
+}
+// expect-stdout: /tmp/x
+// expect-stdout: 6
+// expect-stdout: 6
+// expect-stdout: 7
+// expect-stdout: 6
+// expect-stdout: 0
+// expect-stdout: /dev/null
+// expect-stdout: 9
+// expect-stdout: tab	here
+// expect-stdout: made
+// expect-stdout: 4
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

@@ -2702,6 +2702,11 @@ struct Parser {
             TokenKind.StringLiteral => {
                 this.advance();
                 let value = this.front.ast.addText(this.lexed.strings[token.data as usize].view())?;
+                for (k in this.lexed.cStrings.view()) {
+                    if (k == token.data) {
+                        return this.front.ast.addExpr(ExprNode.CStringLiteral(value), token.start, token.end); // ADR 0087 §2.4
+                    }
+                }
                 return this.front.ast.addExpr(ExprNode.StringLiteral(value), token.start, token.end);
             }
             TokenKind.CharLiteral => {

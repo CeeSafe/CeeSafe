@@ -556,6 +556,10 @@ struct AstPrinter {
                 })?;
             }
             ExprNode.StringLiteral(value) => { quote(mut this.out, ast.textOf(value), '"')?; }
+            ExprNode.CStringLiteral(value) => {
+                this.out.push('c')?;
+                quote(mut this.out, ast.textOf(value), '"')?;
+            }
             ExprNode.CharLiteral(value) => {
                 var encoded = Vector<u8>.create();
                 appendUtf8(mut encoded, value)?;

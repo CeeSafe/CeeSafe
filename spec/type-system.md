@@ -273,6 +273,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217).
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
+- A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is
+  a string literal or a `c"…"`; other struct types are N0216.
 - **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
@@ -1670,6 +1672,22 @@ fn main() {
 
 Diagnostics: none new. `null` without an expected type is N0260; `?` and `!` on non-optional,
 non-result values are N0262.
+
+### 22.3 `CStr<region r>` and `c"…"` (ADR 0087 §2.4)
+
+lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after its end, valid for region `r` as a
+`StringView<r>` is (§25): what a C function taking a `const char *` needs.
+- `c"…"` (`grammar.md` §1.6) is a `CStr<static>`. The compiler appends the NUL; a `\0` inside is N0006.
+- `s.ptr() -> *CChar`, the first byte's address; `s.view() -> StringView<r>` and `s.length() -> usize`, the text
+  without the NUL; `s.bytesWithNul() -> Slice<r, u8>`, the text and its NUL.
+- `CStr.fromBytesWithNul<region r>(b: Slice<r, u8>) -> CStr<r>?` takes bytes whose last byte is their only NUL and
+  whose text before it is UTF-8 (as `view()` returns a `StringView`); otherwise it is `null`. The `CStr` is a view of
+  `b`: returning one made from a local `Vector`'s bytes is N0244, as for any view.
+- A struct field of type `CStr` needs a region parameter, as a `StringView`'s does (N0270).
+- Like a `StringView`, a `CStr` may be a constant's type (§10) and a static's (§39.2), initialised by a `c"…"`.
+- `"…\0".ptr as *CChar` stays valid, but nothing checks that its `\0` is there, and its view's length counts it.
+
+Diagnostics: none new.
 
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
@@ -3987,7 +4005,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   one exception, since they cannot change and outlive everything: `T` may be `StringView`, and in a `static` (not a
   `static mut`) also `[StringView; N]`, whose initialiser is an array of string literals or constant views (ADR 0066).
   Such a table is a place, so unlike a constant table (§10) it is sliced and borrowed where it is named:
-  `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`.
+  `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`. A lib/core `CStr` (§22.3)
+  initialised by a `c"…"` is static string data too (ADR 0087 §2.4).
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:

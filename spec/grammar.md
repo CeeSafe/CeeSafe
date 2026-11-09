@@ -94,6 +94,12 @@ FloatSuffix = 'f32' | 'f64'
   - There are no escapes: `\` is a backslash, and `{` is a brace (N0400 does not apply).
   - EOF before the closing line is N0005.
   - The token is a string literal, the same as `"..."` after the lexer.
+- `c"..."` is a C string (ADR 0087 §2.4): a `"..."` literal with the same escapes, whose value is a lib/core
+  `CStr<static>` (`type-system.md` §22.3). The compiler appends the NUL byte that ends it, so a `\0` in it is N0006.
+  `c` must touch the `"`: `c "x"` is the name `c` followed by a literal.
+- **Literal prefixes.** A single letter immediately before `"`, not part of a longer identifier, is a reserved literal
+  prefix: N0100 for any but `c`, and for `c` before a raw literal (`c"""`). `b"…"` is not defined: string patterns
+  are typed by the scrutinee (ADR 0085 §2.7).
 - `'c'`: exactly one Unicode scalar value or one escape. Otherwise N0007. Its value is the scalar value, as an
   integer literal (`type-system.md` §4, M11); it may also be a pattern.
 

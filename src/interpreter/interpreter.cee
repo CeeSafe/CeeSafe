@@ -1809,6 +1809,10 @@ fn staticValue(it: borrow mut Interp, c: borrow Checker, e: u32, t: u32) -> Resu
             let bytes = copyBytes(c.hir.text[text.start as usize..(text.start + text.count) as usize])!;
             return Ok(valueOf(literal(it, bytes.view())?, 8));
         }
+        HirExpr.Cast(operand) => {
+            // `c"…"`'s bytes (ADR 0087 §2.4): a string literal as a `Slice<u8>`, a view's layout.
+            return staticValue(it, c, operand, t);
+        }
         HirExpr.StructLiteral(fields) => {
             if (fields.count == 0) {
                 return Ok(valueOf(0, 1)); // `cee_empty`

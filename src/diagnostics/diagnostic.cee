@@ -346,7 +346,12 @@ fn diagnosticsJson(
         json.name("severity")?;
         json.string(if (d.isError) "error" else "warning")?;
         json.name("file")?;
-        json.stringBytes(source.path.view())?;
+        json.stringBytes(source.shownPath())?;
+        if (source.package.length > 0) {
+            // A file's package in package mode (ADR 0082 §2.1): which of a build's packages to open.
+            json.name("package")?;
+            json.stringBytes(source.package.view())?;
+        }
         writePosition(mut json, "start", source, d.start)?;
         writePosition(mut json, "end", source, d.end)?;
         json.name("message")?;
@@ -361,7 +366,7 @@ fn diagnosticsJson(
                     else source;
             json.startObject()?;
             json.name("file")?;
-            json.stringBytes(noteSource.path.view())?;
+            json.stringBytes(noteSource.shownPath())?;
             writePosition(mut json, "start", noteSource, note.start)?;
             writePosition(mut json, "end", noteSource, note.end)?;
             json.name("message")?;
@@ -379,7 +384,7 @@ fn diagnosticsJson(
             json.startArray()?;
             json.startObject()?;
             json.name("file")?;
-            json.stringBytes(source.path.view())?;
+            json.stringBytes(source.shownPath())?;
             writePosition(mut json, "start", source, d.fixStart)?;
             writePosition(mut json, "end", source, d.fixEnd)?;
             json.name("newText")?;
@@ -388,7 +393,7 @@ fn diagnosticsJson(
             if (d.hasSecondEdit) {
                 json.startObject()?;
                 json.name("file")?;
-                json.stringBytes(source.path.view())?;
+                json.stringBytes(source.shownPath())?;
                 writePosition(mut json, "start", source, d.secondStart)?;
                 writePosition(mut json, "end", source, d.secondEnd)?;
                 json.name("newText")?;

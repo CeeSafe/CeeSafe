@@ -73,9 +73,12 @@ fn decodeUtf8(bytes: Slice<u8>, i: usize) -> Utf8 {
 }
 
 struct SourceText {
-    path: Vector<u8>;
+    path: Vector<u8>;        // the source path (c-backend.md §7): a dependency's file as `<package>/<path in it>`
     text: Vector<u8>;        // the file's bytes without a leading BOM
     lineStarts: Vector<u32>; // byte offsets; the first is 0
+    package: Vector<u8>;     // its package's name in package mode, else empty (tooling.md §5.1)
+    packagePath: Vector<u8>; // its path in its package (`src/util.cee`), else empty (c-backend.md §2.4)
+    openPath: Vector<u8>;    // the path diagnostics name when not `path`: from the working directory (ADR 0082 §2.1)
 
     fn create(path: Slice<u8>, bytes: Slice<u8>) -> Result<SourceText, AllocError> {
         var skip: usize = 0;
@@ -100,8 +103,18 @@ struct SourceText {
             }
             i += 1;
         }
-        return Ok(SourceText { path: copyBytes(path)?, text: text, lineStarts: starts });
+        return Ok(SourceText {
+            path: copyBytes(path)?,
+            text: text,
+            lineStarts: starts,
+            package: Vector<u8>.create(),
+            packagePath: Vector<u8>.create(),
+            openPath: Vector<u8>.create(),
+        });
     }
+
+    /// The path diagnostics name: `openPath` when it is set, else `path`.
+    fn shownPath(borrow this) -> Slice<u8> => if (this.openPath.length > 0) this.openPath.view() else this.path.view();
 
     fn lineCount(borrow this) -> usize => this.lineStarts.length;
 

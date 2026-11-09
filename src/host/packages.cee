@@ -80,6 +80,28 @@ fn joinPath(directory: Slice<u8>, relative: Slice<u8>) -> Result<Vector<u8>, All
     return Ok(result);
 }
 
+/// `path` below `directory` (both normalised, with `/` separators): the rest of it, or empty when it is not below.
+fn pathBelow(path: Slice<u8>, directory: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var base = directory.length;
+    while (base > 0 && directory[base - 1] == '/') {
+        base -= 1;
+    }
+    if (path.length > base + 1 && sameBytes(path[..base], directory[..base]) && path[base] == '/') {
+        return copyBytes(path[(base + 1)..]);
+    }
+    return Ok(Vector<u8>.create());
+}
+
+/// The path from the directory `from` to `path`, both normalised and absolute (ADR 0082 §2.1: a dependency's file as
+/// diagnostics name it, so that it can be opened); `path` itself when the two have different roots (two Windows drives).
+fn pathFrom(from: Slice<u8>, path: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    let root = rootLength(path);
+    if (root == 0 || root != rootLength(from) || !sameBytes(path[..root], from[..root])) {
+        return copyBytes(path);
+    }
+    return relativePath(from, path);
+}
+
 fn fileExists(path: Slice<u8>) -> bool {
     let text = match (StringView.fromUtf8(path)) {
         Some(t) => t,

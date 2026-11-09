@@ -1,0 +1,2 @@
+// app's util.cee: the unit c/app/src/util.c.
+fn helper(x: i32) -> i32 => x * 100;

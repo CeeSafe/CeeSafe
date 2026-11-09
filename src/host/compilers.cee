@@ -314,6 +314,15 @@ fn runCompiler(
     compiler: borrow CCompiler,
     work: Slice<u8>,
     arguments: borrow Vector<Vector<u8>>,
+) -> Result<ToolOutcome, AllocError> => runCompilerWith(compiler, work, arguments, "ceesafec.rsp".bytes());
+
+/// `runCompiler` with the response file named `response` in `work`: compiles that run at once each have their own
+/// (ADR 0082 §2.5).
+fn runCompilerWith(
+    compiler: borrow CCompiler,
+    work: Slice<u8>,
+    arguments: borrow Vector<Vector<u8>>,
+    response: Slice<u8>,
 ) -> Result<ToolOutcome, AllocError> {
     if (!hostIsWindows()) {
         return runTool(compiler.path.view(), arguments);
@@ -330,7 +339,7 @@ fn runCompiler(
             appendText(mut text, "\n")?;
         }
     }
-    let path = windowsJoin(work, "ceesafec.rsp".bytes())?;
+    let path = windowsJoin(work, response)?;
     match (writeFile(StringView.fromUtf8(path.view())!, text.view())) {
         Ok() => {}
         Err(e) => { return Ok(notStarted(e)); }

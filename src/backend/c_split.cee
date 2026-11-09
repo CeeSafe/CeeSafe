@@ -1,5 +1,6 @@
 // Split mode (the reference's CEmitter: NameUnits, UnitOf, SplitFiles; ADR 0022, c-backend.md §2.4): the C as
-// ceesafe_program.h, one unit per CeeSafe file and ceesafe_instances.c, with external names carrying the program's name.
+// ceesafe_program.h, one unit per CeeSafe file at `c/<package>/<path>.c` (ADR 0082 §2.1) and ceesafe_instances.c, with
+// external names carrying the program's name.
 
 /// Inserts a name into a sorted list (ordinal order), once.
 fn insertSorted(list: borrow mut Vector<Vector<u8>>, name: Vector<u8>) -> Result<void, AllocError> {
@@ -42,61 +43,126 @@ fn appendIdentifierText(out: borrow mut Vector<u8>, text: Slice<u8>) -> Result<v
     return Ok();
 }
 
-/// A unit's name from its file's path: the stem, with `depth` directories before it (NameUnits' Base).
-fn unitBaseName(path: Slice<u8>, depth: usize) -> Result<Vector<u8>, AllocError> {
-    var starts = Vector<usize>.create();
-    var ends = Vector<usize>.create();
+/// Appends one component of a unit's path: `..` as `__`, so that a unit never leaves `c/`.
+fn appendUnitComponent(out: borrow mut Vector<u8>, part: Slice<u8>) -> Result<void, AllocError> {
+    if (sameText(part, "..")) {
+        return appendText(out, "__");
+    }
+    return appendBytes(out, part);
+}
+
+/// A user file's unit (ADR 0082 §2.1, c-backend.md §2.4): `c/<package>/<path in the package>.c`, its extension
+/// replaced; a file outside any package (a build of files) is in the package named `program`. Units never merge:
+/// package names are unique in a build and paths unique in a package.
+fn unitPath(source: borrow SourceText, program: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var out = copyBytes("c/".bytes())?;
+    let package = if (source.package.length > 0) source.package.view() else program;
+    if (package.length == 0 || sameText(package, ".")) {
+        out.push('_')?;
+    } else {
+        appendUnitComponent(mut out, package)?;
+    }
+    let path = if (source.packagePath.length > 0) source.packagePath.view() else source.path.view();
+    var parts = Vector<usize>.create(); // [start, end) of each component kept
     var start: usize = 0;
-    for (k in 0..path.length) {
-        if (path[k] == '/' || path[k] == '\\') {
-            starts.push(start)?;
-            ends.push(k)?;
+    for (k in 0..(path.length + 1)) {
+        if (k == path.length || path[k] == '/' || path[k] == '\\') {
+            let part = path[start..k];
+            if (part.length > 0 && !sameText(part, ".")) {
+                parts.push(start)?;
+                parts.push(k)?;
+            }
             start = k + 1;
         }
     }
-    var joined = Vector<u8>.create();
-    let directories = starts.length;
-    let first = if (directories > depth) directories - depth else 0;
-    for (k in first..directories) {
-        appendBytes(mut joined, path[starts[k]..ends[k]])?;
-        joined.push('_')?;
+    for (p in 0..(parts.length / 2)) {
+        let part = path[parts[p * 2]..parts[p * 2 + 1]];
+        var end = part.length;
+        if (p * 2 + 2 == parts.length) {
+            var dot = part.length;
+            while (dot > 0 && part[dot - 1] != '.') {
+                dot -= 1;
+            }
+            if (dot > 1) {
+                end = dot - 1; // the extension goes
+            }
+        }
+        out.push('/')?;
+        appendUnitComponent(mut out, part[..end])?;
     }
-    appendStem(mut joined, path[start..])?;
-    var name = Vector<u8>.create();
-    appendIdentifierText(mut name, joined.view())?;
-    appendText(mut name, ".c")?;
-    return Ok(name);
+    appendText(mut out, ".c")?;
+    return Ok(out);
 }
 
-/// Each user file's unit (NameUnits): its stem, with as many directories as needed for the names to differ.
-fn nameUnits(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, AllocError> {
-    var depth: usize = 0;
-    loop {
-        var names = Vector<Vector<u8>>.create();
-        for (file in 0..c.filePaths.length) {
-            let named = e.fileIds[file] != none() && !c.fileIsLibrary[file];
-            names.push(if (named) unitBaseName(c.filePaths[file].view(), depth)? else Vector<u8>.create())?;
-        }
-        var clash = false;
-        for (a in 0..names.length) {
-            if (names[a].length == 0) {
-                continue;
-            }
-            if (sameText(names[a].view(), "ceesafe_instances.c")) {
-                clash = true;
-            }
-            for (b in (a + 1)..names.length) {
-                if (sameBytes(names[a].view(), names[b].view())) {
-                    clash = true;
-                }
-            }
-        }
-        if (!clash || depth > 32) {
-            e.unitNames = names;
-            return Ok();
-        }
-        depth += 1;
+fn asciiLower(b: u8) -> u8 => if (b >= 'A' && b <= 'Z') b + 32 else b;
+
+/// Whether two unit paths are the same ignoring ASCII letter case: one file on macOS's and Windows's file systems.
+fn sameIgnoringCase(a: Slice<u8>, b: Slice<u8>) -> bool {
+    if (a.length != b.length) {
+        return false;
     }
+    for (k in 0..a.length) {
+        if (asciiLower(a[k]) != asciiLower(b[k])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// N0363 (ADR 0082 §2.1): two user files whose units' paths differ only in letter case. Reported at the later file;
+/// true if one was.
+fn reportUnitCaseClashes(
+    c: borrow mut Checker,
+    sources: borrow Vector<SourceText>,
+    program: Slice<u8>,
+) -> Result<bool, AllocError> {
+    var paths = Vector<Vector<u8>>.create();
+    for (file in 0..sources.length) {
+        let user = file < c.fileIsLibrary.length && !c.fileIsLibrary[file];
+        paths.push(if (user) unitPath(sources[file], program)? else Vector<u8>.create())?;
+    }
+    var found = false;
+    for (b in 0..paths.length) {
+        if (paths[b].length == 0) {
+            continue;
+        }
+        var first = paths.length;
+        for (a in 0..b) {
+            if (first == paths.length && paths[a].length > 0 && sameIgnoringCase(paths[a].view(), paths[b].view())) {
+                first = a;
+            }
+        }
+        if (first == paths.length) {
+            continue;
+        }
+        var message = copyBytes("this file's C unit '".bytes())?;
+        appendBytes(mut message, paths[b].view())?;
+        appendText(mut message, "' and the unit '")?;
+        appendBytes(mut message, paths[first].view())?;
+        appendText(mut message, "' of '")?;
+        appendBytes(mut message, sources[first].shownPath())?;
+        appendText(mut message, "' differ only in letter case, so they would be one file on macOS and Windows")?;
+        c.front.diagnostics.error(unitCaseClash(), truncate<u32>(b), 0, 0, message)?;
+        found = true;
+    }
+    return Ok(found);
+}
+
+fn unitCaseClash() -> u32 => 363;
+
+/// Each user file's unit (NameUnits): its path (`unitPath`), or empty for a file without code.
+fn nameUnits(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    sources: borrow Vector<SourceText>,
+) -> Result<void, AllocError> {
+    var names = Vector<Vector<u8>>.create();
+    for (file in 0..c.filePaths.length) {
+        let named = e.fileIds[file] != none() && !c.fileIsLibrary[file] && file < sources.length;
+        names.push(if (named) unitPath(sources[file], e.programName.view())? else Vector<u8>.create())?;
+    }
+    e.unitNames = names;
+    return Ok();
 }
 
 /// The unit a function is defined in (UnitOf): its CeeSafe file's, or ceesafe_instances.c for the libraries and instances.

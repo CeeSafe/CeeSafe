@@ -75,6 +75,9 @@ fn generateC(
         c.front.diagnostics.error(missingMain(), file, 0, 0, message)?;
         return Ok(false);
     }
+    if (split && reportUnitCaseClashes(c, sources, programName)?) {
+        return Ok(false);
+    }
     computeLayouts(c);
     if (o.closureSpecialisation) {
         // Calls through known closures become direct (optimisations.md §5).

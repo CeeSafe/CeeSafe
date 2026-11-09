@@ -380,16 +380,71 @@ fn docEntries(
                     first,
                     firstBrace(file, docLast(file, ast.idents[item.name as usize].end)) - 1,
                 )?;
-                var members = Vector<Vector<u8>>.create();
+                // Its associated types, constants and methods (ADR 0086 §2.4, §2.5), in source order: each member's
+                // start offset and kind (0 type, 1 constant, 2 method) and index, sorted by start.
+                let parts = ast.partsOf(id);
+                var starts = Vector<u32>.create();
+                var kinds = Vector<u32>.create();
+                var indexes = Vector<u32>.create();
+                for (m in 0..parts.types.count) {
+                    let assoc = ast.at(parts.types, m);
+                    docAddMember(mut starts, mut kinds, mut indexes, ast.assocTypes[assoc as usize].start, 0, assoc)?;
+                }
+                for (m in 0..parts.constants.count) {
+                    let constant = ast.at(parts.constants, m);
+                    docAddMember(mut starts, mut kinds, mut indexes, ast.items[constant as usize].start, 1, constant)?;
+                }
                 for (m in 0..methods.count) {
-                    let method = borrow ast.functions[ast.at(methods, m) as usize];
-                    let methodFirst = docFirstOf(file, method.start, method.attributes);
-                    members.push(docTextOf(file, methodFirst, docLast(file, method.end))?)?;
+                    let method = ast.at(methods, m);
+                    docAddMember(mut starts, mut kinds, mut indexes, ast.functions[method as usize].start, 2, method)?;
+                }
+                var members = Vector<Vector<u8>>.create();
+                for (m in 0..starts.length) {
+                    let member = indexes[m];
+                    if (kinds[m] == 0) {
+                        let assoc = borrow ast.assocTypes[member as usize];
+                        members.push(docTextOf(file, docFirst(file, assoc.start), docLast(file, assoc.end))?)?;
+                    } else if (kinds[m] == 1) {
+                        let constant = borrow ast.items[member as usize];
+                        members.push(docTextOf(file, docFirst(file, constant.start), docLast(file, constant.end))?)?;
+                    } else {
+                        let method = borrow ast.functions[member as usize];
+                        let methodFirst = docFirstOf(file, method.start, method.attributes);
+                        members.push(docTextOf(file, methodFirst, docLast(file, method.end))?)?;
+                    }
                 }
                 out.push(docEntry(file, index, 5, item.name, first, docMembers(header, members)?, none())?)?;
             }
             _ => {}
         }
+    }
+    return Ok();
+}
+
+/// Adds an interface member (its start offset, kind and index) to three parallel vectors kept sorted by start.
+fn docAddMember(
+    starts: borrow mut Vector<u32>,
+    kinds: borrow mut Vector<u32>,
+    indexes: borrow mut Vector<u32>,
+    start: u32,
+    kind: u32,
+    index: u32,
+) -> Result<void, AllocError> {
+    starts.push(start)?;
+    kinds.push(kind)?;
+    indexes.push(index)?;
+    var at = starts.length - 1;
+    while (at > 0 && starts[at - 1] > starts[at]) {
+        let s = starts[at - 1];
+        starts[at - 1] = starts[at];
+        starts[at] = s;
+        let k = kinds[at - 1];
+        kinds[at - 1] = kinds[at];
+        kinds[at] = k;
+        let i = indexes[at - 1];
+        indexes[at - 1] = indexes[at];
+        indexes[at] = i;
+        at -= 1;
     }
     return Ok();
 }

@@ -41,6 +41,8 @@
     `util-2.c` and build (ADR 0082 §7). Through a C compiler that logs its commands (POSIX), `--jobs 4` compiles each
     unit alone to its own object and links them; a failing compile exits 1 with the output in the units' order; a
     bad `--cflag`'s message is printed once with a count; `build --jobs` without `--split` is a usage error.
+17. doc: `ceesafec doc` lists an interface's associated types and constants with its methods, in source order
+    (ADR 0086 §2.4, §2.5).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -572,7 +574,19 @@ def main():
             if p.returncode != 1 or found != [("N0363", "src/util.cee", "app")]:
                 problems.append(f"same-names: expected N0363 at src/util.cee: {p.returncode} {found} {p.stderr[:300]}")
 
-    print(f"package_tests: 16 checks; {len(problems)} problems")
+        # 17. An interface's associated types and constants in `ceesafec doc`.
+        docs = os.path.join(work, "doc-interface")
+        os.makedirs(docs)
+        with open(os.path.join(docs, "kind.cee"), "w") as f:
+            f.write("/// A kind.\npublic interface Kind {\n    const CODE: u32;\n    type Item: Copy;\n"
+                    "    const FLAG: bool = false;\n    fn id(borrow this) -> u32;\n}\n")
+        p = run([compiler, "doc", "kind.cee"], docs)
+        want = ("public interface Kind {\n    const CODE: u32;\n    type Item: Copy;\n    const FLAG: bool = false;\n"
+                "    fn id(borrow this) -> u32;\n}\n")
+        if p.returncode != 0 or want not in p.stdout:
+            problems.append(f"doc: expected the interface with its constants and types:\n{p.stdout}{p.stderr[:300]}")
+
+    print(f"package_tests: 17 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

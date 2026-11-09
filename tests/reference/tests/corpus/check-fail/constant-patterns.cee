@@ -1,5 +1,6 @@
 // Constant patterns (ADR 0085 §2.6): only integer and bool constants (N0358), of the value's type (N0205); T.NAME
-// through a type parameter is N0358; a misspelt constant binds, so the arms after it are unreachable (N0257).
+// through a type parameter is N0358, and so is Self.NAME in an interface's default method; a misspelt constant binds,
+// so the arms after it are unreachable (N0257).
 const LF: u8 = 10;
 const WIDE: u32 = 10;
 const HALF: f64 = 0.5;
@@ -29,6 +30,15 @@ fn throughParameter<T>(x: u8) -> u32 => match (x) {
     T.TAB => 1, // error[N0358]
     _ => 0,
 };
+
+interface Kind {
+    const CODE: u8;
+
+    fn isMine(borrow this, x: u8) -> bool => match (x) {
+        Self.CODE => true, // error[N0358]
+        _ => false,
+    };
+}
 
 fn misspelt(x: u8) -> u32 => match (x) {
     LFF => 1,

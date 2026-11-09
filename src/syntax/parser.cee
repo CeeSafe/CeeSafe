@@ -2102,41 +2102,52 @@ struct Parser {
                     let name = this.parseIdentifier()?;
                     return this.front.ast.addPattern(PatternNode.Binding(name, false), start, this.endFrom(start));
                 }
-                let path = this.parseQualifiedName()?;
-                var hasBindings = false;
-                var bindings = Vector<u32>.create();
-                if (this.eat(TokenKind.OpenParen)) {
-                    hasBindings = true;
-                    while (!this.at(TokenKind.CloseParen) && !this.at(TokenKind.EndOfFile)) {
-                        if (this.startsNestedPattern()) {
-                            // M11 (G1): a pattern in a payload's position (type-system.md §15.2).
-                            let nested = this.parsePattern()?;
-                            this.front.ast.bindings.push(Binding { name: none(), mutable: false, nested: nested })?;
-                        } else {
-                            let isMutable = this.eat(TokenKind.VarKeyword); // M3c: `var x`
-                            let name = if (!isMutable && this.eat(
-                                TokenKind.Underscore,
-                            )) none() else this.parseIdentifier()?;
-                            this.front.ast.bindings.push(Binding { name: name, mutable: isMutable, nested: none() })?;
-                        }
-                        bindings.push(truncate<u32>(this.front.ast.bindings.length - 1))?;
-                        if (!this.eat(TokenKind.Comma)) {
-                            break;
-                        }
-                    }
-                    this.expect(TokenKind.CloseParen)?;
+                return this.pathPattern(start);
+            }
+            TokenKind.SelfTypeKeyword => {
+                // `Self.Idle`, `Self.Busy(n)`, `Self.TAB` (ADR 0086 §2.2): a path whose first part is `Self`.
+                if (this.peekIs(1, TokenKind.Dot) && this.peekIs(2, TokenKind.Identifier)) {
+                    return this.pathPattern(start);
                 }
-                let range = this.list(bindings)?;
-                return this.front.ast.addPattern(
-                    PatternNode.Variant(path, hasBindings, range),
-                    start,
-                    this.endFrom(start),
-                );
             }
             _ => {}
         }
         this.errorFound(expectedPattern(), "expected a pattern, found ", "")?;
         return this.front.ast.addPattern(PatternNode.Wildcard, start, start);
+    }
+
+    /// `A.B`, `A.B(bindings)` or `A(bindings)`: a variant, or a qualified constant (ADR 0085 §2.6).
+    fn pathPattern(borrow mut this, start: u32) -> Result<u32, AllocError> {
+        let path = this.parseQualifiedName()?;
+        var hasBindings = false;
+        var bindings = Vector<u32>.create();
+        if (this.eat(TokenKind.OpenParen)) {
+            hasBindings = true;
+            while (!this.at(TokenKind.CloseParen) && !this.at(TokenKind.EndOfFile)) {
+                if (this.startsNestedPattern()) {
+                    // M11 (G1): a pattern in a payload's position (type-system.md §15.2).
+                    let nested = this.parsePattern()?;
+                    this.front.ast.bindings.push(Binding { name: none(), mutable: false, nested: nested })?;
+                } else {
+                    let isMutable = this.eat(TokenKind.VarKeyword); // M3c: `var x`
+                    let name = if (!isMutable && this.eat(
+                        TokenKind.Underscore,
+                    )) none() else this.parseIdentifier()?;
+                    this.front.ast.bindings.push(Binding { name: name, mutable: isMutable, nested: none() })?;
+                }
+                bindings.push(truncate<u32>(this.front.ast.bindings.length - 1))?;
+                if (!this.eat(TokenKind.Comma)) {
+                    break;
+                }
+            }
+            this.expect(TokenKind.CloseParen)?;
+        }
+        let range = this.list(bindings)?;
+        return this.front.ast.addPattern(
+            PatternNode.Variant(path, hasBindings, range),
+            start,
+            this.endFrom(start),
+        );
     }
 
     fn literalPattern(borrow mut this, start: u32, negated: bool) -> Result<u32, AllocError> {
@@ -2195,6 +2206,7 @@ struct Parser {
         TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
         TokenKind.Identifier =>
             this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At),
+        TokenKind.SelfTypeKeyword => this.peekIs(1, TokenKind.Dot),
         TokenKind.OpenParen => true,
         _ => false,
     };
@@ -2922,6 +2934,7 @@ struct Parser {
             } else {
                 let allowed = match (kind) {
                     TokenKind.Identifier => true,
+                    TokenKind.SelfTypeKeyword => true, // `Vector<Self>`, `Cell<Self.Item>` (ADR 0086 §2.2, §2.5)
                     TokenKind.Dot => true,
                     TokenKind.Comma => true,
                     TokenKind.Semicolon => true,

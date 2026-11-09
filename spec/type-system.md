@@ -627,9 +627,12 @@ and `E.V…` there are patterns.
     `n => …` binds the scrutinee (a copy, a move that consumes it, or a reference, as a payload binding is), and
     `var n` a mutable one. `Some` on an optional, and `Ok` or `Err` on a `Result`, written alone at the top, still
     name their variant with its payload unlisted. A qualified name without parentheses (`Type.NAME`) is a variant
-    pattern when it names a variant, and a constant pattern when it names an associated constant (ADR 0074 §2.7);
-    read through a type parameter (`T.NAME`) it is known only per instance, and is N0358: test it in a guard. A
-    misspelt constant becomes a binding that matches everything, so the arms after it are N0257.
+    pattern when it names a variant, and a constant pattern when it names an associated constant (ADR 0074 §2.7) or
+    a constant an `impl` of an interface gives the type, its own or the interface's default (ADR 0086 §2.4):
+    `A.CODE =>`. `Self` may start the name (`Self.Idle`, `Self.Busy(n)`, `Self.TAB`) where it names a struct or enum
+    (ADR 0086 §2.2). Read through a type parameter (`T.NAME`, or `Self.NAME` in an interface's default method) it is
+    known only per instance, and is N0358: test it in a guard. A misspelt constant becomes a binding that matches
+    everything, so the arms after it are N0257.
   - **`name @ P`** (ADR 0085 §2.5) binds the value that `P` matched, as a payload binding would (a copy, a move or
     a reference, by the rules above), and tests `P`; it does not change coverage. `@` binds tighter than `|`:
     `d @ ('0' | '1')` needs the parentheses. A value moves at most once: when `name` binds by move (a non-Copy value

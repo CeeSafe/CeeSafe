@@ -186,8 +186,11 @@ Rust's rule for `@` (since 1.56).
 
 A bare identifier (no `.`, no parentheses) in pattern position is:
 
-- a **constant pattern** when it names a `const` in scope of an integer, `bool` or fieldless-enum type. It matches
-  that value and counts as that literal for coverage. A `const` of another type is N0358.
+- a **constant pattern** when it names a `const` in scope of an integer or `bool` type. It matches that value and
+  counts as that literal for coverage. A `const` of another type is N0358.
+  *Amended 2026-11-09:* this read "an integer, `bool` or fieldless-enum type", but a `const` of an enum type cannot
+  be declared (its value is not a constant expression, N0217), so the rule is the narrower one the compiler
+  implements; a fieldless enum's variant is matched as a variant pattern (`Mode.Idle`).
 - a **const generic parameter** (ADR 0083) is N0358 ("a const generic parameter cannot be a pattern; test it in a
   guard: `c if (c == QUOTE)`"), never a binding, until a later ADR; ADR 0083 §4 states the same. Otherwise `QUOTE =>`
   would silently become a catch-all binding, and as a last arm only an unused-binding warning would show it.
@@ -200,9 +203,10 @@ code in one case: a payload binding whose name is also a `const` in scope (`Some
 repositories' corpus for it first (§5).
 
 A qualified name without parentheses (`Type.NAME`, `pkg.Type.NAME`) is a variant pattern when it names a variant, and
-a constant pattern when it names an associated constant (ADR 0074 §2.7) of a type allowed above. Read through a type
-parameter (`T.NAME`, or `Self.NAME` in an interface default, ADR 0086) it is a value known only per instance, not a
-constant, so it is N0358 there too.
+a constant pattern when it names an associated constant (ADR 0074 §2.7) of a type allowed above, or one an `impl` of
+an interface gives the type (ADR 0086 §2.4). `Self` may start it where `Self` is a struct or enum (`Self.TAB`,
+`Self.Idle`). Read through a type parameter (`T.NAME`, or `Self.NAME` in an interface default, ADR 0086) it is a value
+known only per instance, not a constant, so it is N0358 there too.
 
 ### 2.7 Strings and slices
 

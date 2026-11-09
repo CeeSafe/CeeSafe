@@ -1,0 +1,109 @@
+// `Self` in patterns and type arguments, and interface constants as patterns (ADR 0085 §2.6, ADR 0086 §2.2, §2.4):
+// `Self.Idle`, `Self.Busy(n)` and `Self.TAB` in an impl; `A.CODE`, given by `impl Kind for A`, and `A.FLAG`, the
+// interface's default, as patterns; `Vector<Self>` and `Vector<Self.Item>`.
+interface Kind {
+    const CODE: u32;
+    const FLAG: bool = false;
+}
+
+struct A {}
+
+impl Kind for A {
+    const CODE: u32 = 5;
+}
+
+struct B {}
+
+impl Kind for B {
+    const CODE: u32 = 7;
+    const FLAG: bool = true;
+}
+
+fn viaType(x: u32) -> u32 => match (x) {
+    A.CODE => 10,
+    B.CODE | 9 => 20,
+    _ => 30,
+};
+
+fn flag(b: bool) -> u32 => match (b) {
+    B.FLAG => 1,
+    A.FLAG => 2,
+};
+
+interface Coded {
+    fn code(borrow this) -> u32;
+}
+
+enum Mode {
+    Idle,
+    Busy(u32),
+}
+
+impl Coded for Mode {
+    fn code(borrow this) -> u32 => match (this) {
+        Self.Idle => 0,
+        Self.Busy(n) => n,
+    };
+}
+
+struct Bytes {
+    x: u8;
+    const TAB: u8 = 9;
+}
+
+impl Bytes {
+    fn isTab(borrow this) -> bool => match (this.x) {
+        Self.TAB => true,
+        _ => false,
+    };
+
+    fn many(borrow this) -> usize {
+        var v = Vector<Self>.create();
+        v.push(Self { x: this.x })!;
+        v.push(Self { x: 1 })!;
+        return v.length;
+    }
+}
+
+interface Source {
+    type Item: Copy;
+    fn first(borrow this) -> Self.Item;
+
+    fn count(borrow this) -> usize {
+        var v = Vector<Self.Item>.create();
+        v.push(this.first())!;
+        return v.length;
+    }
+}
+
+impl Source for Bytes {
+    type Item = u8;
+    fn first(borrow this) -> u8 => this.x;
+}
+
+fn main() {
+    Console.writeLine(viaType(5));
+    Console.writeLine(viaType(7));
+    Console.writeLine(viaType(9));
+    Console.writeLine(viaType(1));
+    Console.writeLine(flag(true));
+    Console.writeLine(flag(false));
+    Console.writeLine(Mode.Busy(4).code());
+    Console.writeLine(Mode.Idle.code());
+    let b = Bytes { x: 9 };
+    Console.writeLine(b.isTab());
+    Console.writeLine(b.many());
+    Console.writeLine(b.count());
+}
+
+// expect-stdout: 10
+// expect-stdout: 20
+// expect-stdout: 20
+// expect-stdout: 30
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 1

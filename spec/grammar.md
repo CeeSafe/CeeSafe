@@ -45,8 +45,9 @@ resolved by name resolution, not keywords.
 
 `Self` (ADR 0086 §2.2) names a type: in an interface, the implementing type; in an `impl` block and in a struct's or
 enum's body, the target type with its parameters. It is written where a type name is, as the first part of a
-`QualifiedName` in a type (`Self`, `Self.Item`) and as a primary expression (`Self { … }`, `Self.create(…)`,
-`Self.MAX`). Declaring anything named `Self` is N0100, as for every keyword.
+`QualifiedName` in a type (`Self`, `Self.Item`, also as a type argument: `Vector<Self>.create()`), as a primary
+expression (`Self { … }`, `Self.create(…)`, `Self.MAX`) and as the first part of a pattern's qualified name
+(`Self.Idle`, `Self.Busy(n)`, `Self.TAB`). Declaring anything named `Self` is N0100, as for every keyword.
 
 ### 1.4 Integer literals
 ```

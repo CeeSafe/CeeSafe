@@ -1022,6 +1022,12 @@ fn namesVariantPath(c: borrow Checker, path: QualifiedName) -> bool {
     }
     let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol;
     let second = c.front.ast.idents[c.front.ast.at(path.parts, 1) as usize].symbol;
+    if (first == c.selfSymbol) {
+        // `Self.Idle` (ADR 0086 §2.2): `Self` is the enum being declared or implemented.
+        let named = environmentType(c, first);
+        return named != none() && c.types.is(named, TypeKind.Enum) &&
+            findVariant(c, c.types.info(named).enumDef, second) != none();
+    }
     match (c.item(first)) {
         Entity.Enum(index) => {
             let typ = c.enums[index as usize].typ;
@@ -1034,8 +1040,10 @@ fn namesVariantPath(c: borrow Checker, path: QualifiedName) -> bool {
     }
 }
 
-/// `Type.NAME` naming an associated constant (ADR 0074 §2.7): its constant, or none. Through a type parameter it is
-/// a value known only per instance: N0358, and `failed`.
+/// `Type.NAME` naming an associated constant (ADR 0074 §2.7) or a constant an `impl` of an interface gives the type,
+/// its own or the interface's default (ADR 0086 §2.4): the constant, or none. `Self.NAME` is the type's when `Self`
+/// is a struct or enum. Through a type parameter (`T.NAME`, or `Self.NAME` in an interface's default method) it is a
+/// value known only per instance: N0358, and `failed`.
 fn qualifiedConstant(
     c: borrow mut Checker,
     path: QualifiedName,
@@ -1044,15 +1052,21 @@ fn qualifiedConstant(
 ) -> Result<u32, AllocError> {
     let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol;
     let second = c.front.ast.idents[c.front.ast.at(path.parts, 1) as usize].symbol;
-    if (environmentType(c, first) != none()) {
+    let named = environmentType(c, first);
+    if (named != none() && c.types.is(named, TypeKind.TypeParameter)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, c.name(first))?;
         appendText(mut message, ".")?;
         appendBytes(mut message, c.name(second))?;
+        if (first == c.selfSymbol) {
+            appendText(mut message, "' is the implementing type's")?; // in an interface's default method
+        } else {
+            appendText(mut message, "' is read through a type parameter")?;
+        }
         appendText(
             mut message,
-            "' is read through a type parameter, so it is known only per instance and cannot be a pattern; test it in a guard: 'c if (c == ",
+            ", so it is known only per instance and cannot be a pattern; test it in a guard: 'c if (c == ",
         )?;
         appendBytes(mut message, c.name(first))?;
         appendText(mut message, ".")?;
@@ -1063,16 +1077,31 @@ fn qualifiedConstant(
         return Ok(none());
     }
     var owner = none();
-    match (c.item(first)) {
-        Entity.Struct(index) => { owner = c.structs[index as usize].item; }
-        Entity.Enum(index) => { owner = c.enums[index as usize].item; }
-        _ => {}
+    var ownerType = none();
+    if (named != none()) {
+        owner = declarationOf(c, named);
+        ownerType = named;
+    } else {
+        match (c.item(first)) {
+            Entity.Struct(index) => {
+                owner = c.structs[index as usize].item;
+                ownerType = c.structs[index as usize].typ;
+            }
+            Entity.Enum(index) => {
+                owner = c.enums[index as usize].item;
+                ownerType = c.enums[index as usize].typ;
+            }
+            _ => {}
+        }
     }
     let member = memberConstantOf(c, owner, second);
-    if (member == none()) {
+    if (member != none()) {
+        return Ok(c.memberConstants[member as usize].constant);
+    }
+    if (ownerType == none()) {
         return Ok(none());
     }
-    return Ok(c.memberConstants[member as usize].constant);
+    return Ok(implConstantFor(c, ownerType, second)); // an impl's constant or its interface's default
 }
 
 /// A constant as a pattern (ADR 0085 §2.6): it matches its value and counts as that literal for coverage. A constant
@@ -1353,6 +1382,9 @@ fn resolvePatternVariant(c: borrow mut Checker, path: QualifiedName, span: Span,
 
 /// Does `symbol` name the enum: its own name, or an item that is that enum (`geometry.Shape`, §2)?
 fn namesEnum(c: borrow Checker, symbol: u32, typ: u32) -> bool {
+    if (symbol == c.selfSymbol) {
+        return environmentType(c, symbol) == typ; // `Self.Busy(n)` (ADR 0086 §2.2)
+    }
     let item = c.types.enums[c.types.info(typ).enumDef as usize].item;
     if (item == none()) {
         // AllocError and IoError: declared from built-in source, named as written.

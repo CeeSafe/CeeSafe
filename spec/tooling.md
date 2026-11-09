@@ -20,7 +20,8 @@ can be written for code that does not build yet.
 - Every item declared `public`: a function, a constant, a struct, an enum, an interface, and a function in an
   `extern "C"` block.
 - Inside a public struct: its `public` fields, its `public` methods, and whether it has a `drop` block. Inside a public
-  enum: every variant. Inside a public interface: every method.
+  enum: every variant. Inside a public interface: every associated type, constant and method (ADR 0086 §2.4,
+  §2.5), in source order.
 - An `impl I for T` block, listed under `T` as "Implements `I`" when `T` is a public struct or enum of the package.
 
 Nothing else is listed. Items in a `namespace` are listed under their simple names, as the language names them today
@@ -35,7 +36,8 @@ The output is deterministic: the same files give the same bytes.
   item's kind and name (`struct Volatile`, `fn sortBy`).
 - The item's **signature** in a `ceesafe` code block: the item's attributes and its declaration up to its body (the
   `{ … }` or `=> …` of a function, the members of a struct), as `ceesafec fmt` prints them (formatting.md). A struct's
-  block lists its public fields; an enum's, its variants; an interface's, its methods.
+  block lists its public fields; an enum's, its variants; an interface's, its associated types, constants and
+  methods.
 - The item's **doc comment** (grammar.md §1.2): its lines as written, which are Markdown. An item without one has
   only its signature.
 - A struct's public methods follow as level-3 sections (`StructName.method`), each with its signature and doc

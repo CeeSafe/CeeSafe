@@ -440,14 +440,20 @@ fn appendCallbackName(c: borrow Checker, out: borrow mut Vector<u8>, function: u
     return appendBytes(out, text[5..]); // without `ceeF_`
 }
 
+/// A callback's C signature; its prototype is CEE_UNUSED as every function's is (FnProto), since a callback named only
+/// in a `cfg` block is unused in the builds without it (ADR 0080 §3.3).
 fn appendCallbackSignature(
     c: borrow Checker,
     out: borrow mut Vector<u8>,
     function: u32,
     split: bool,
+    prototype: bool,
 ) -> Result<void, AllocError> {
     if (!split) {
         appendText(out, "static ")?;
+    }
+    if (prototype) {
+        appendText(out, "CEE_UNUSED ")?;
     }
     appendBoundaryType(c, out, c.hir.functions[function as usize].returnType, false)?;
     out.push(' ')?;
@@ -524,7 +530,7 @@ fn emitCallbacks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram
     var callbacks = Vector<u32>.create();
     emittedCallbacks(e, c, n, mut callbacks)?;
     for (function in callbacks.view()) {
-        appendCallbackSignature(c, mut e.buf, function, e.split)?;
+        appendCallbackSignature(c, mut e.buf, function, e.split, false)?;
         e.t(" {")?;
         e.emit()?;
         var call = Vector<u8>.create();
@@ -637,7 +643,7 @@ fn emitExportPrototypes(e: borrow mut CEmitter, c: borrow Checker, n: borrow Nir
     var callbacks = Vector<u32>.create();
     emittedCallbacks(e, c, n, mut callbacks)?;
     for (function in callbacks.view()) {
-        appendCallbackSignature(c, mut e.buf, function, e.split)?;
+        appendCallbackSignature(c, mut e.buf, function, e.split, true)?;
         e.t(";")?;
         e.emit()?;
     }

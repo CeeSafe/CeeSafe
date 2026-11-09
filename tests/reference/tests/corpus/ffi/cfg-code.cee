@@ -63,11 +63,16 @@ fn guarded() -> i32 {
     if (cfg("CFG_OFF")) {
         var r = unsafe { off_only(1) };
         r += unsafe { off_only(r) };
-        r += unsafe { off_only(r) };
+        let f: extern "C" fn(i32) -> i32 = triple;
+        r += unsafe { f(r) };
         return r;
     }
     return 5;
 }
+
+/// A callback that only a `cfg` block names: unused in the builds without it, and C must not warn.
+@callback
+fn triple(x: i32) -> i32 => x * 3;
 
 fn main() {
     Console.writeLine(run());

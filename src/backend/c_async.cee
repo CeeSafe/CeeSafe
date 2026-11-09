@@ -545,7 +545,8 @@ fn emitJoinThunks(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgra
         e.t("u;")?;
         e.emit()?;
         e.line(
-            if (isRace) "    ceesafe_async_cancel(scope);" else "    if (f->cee_result.tag != 0) ceesafe_async_cancel(scope);",
+            if (isRace) "    ceesafe_async_cancel(scope);"
+                else "    if (f->cee_result.tag != 0) ceesafe_async_cancel(scope);",
         )?;
         e.line("    return true;")?;
         e.line("}")?;
@@ -1245,7 +1246,8 @@ fn emitSpawn(
     e.t("        struct ")?;
     appendAsyncName(c, mut e.buf, "ceeAF_", child)?;
     e.t(
-        if (send) " *cee_child = ceesafe_async_spawn_send(&cee_frame->cee_s" else " *cee_child = ceesafe_async_spawn(&cee_frame->cee_s",
+        if (send) " *cee_child = ceesafe_async_spawn_send(&cee_frame->cee_s"
+            else " *cee_child = ceesafe_async_spawn(&cee_frame->cee_s",
     )?;
     e.d(site as u64)?;
     e.t(".rt, sizeof(struct ")?;

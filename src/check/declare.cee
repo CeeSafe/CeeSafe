@@ -493,7 +493,8 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
             if (c.types.is(
                 t,
                 TypeKind.Array,
-            )) "constant arrays hold integers or bools (type-system.md §10)" else "constants of struct type are not supported yet",
+            )) "constant arrays hold integers or bools (type-system.md §10)"
+                else "constants of struct type are not supported yet",
         )?;
         c.error(unsupported(), span.start, span.end, message)?;
         t = c.types.error;

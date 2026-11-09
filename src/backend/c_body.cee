@@ -1552,17 +1552,17 @@ fn appendArithmeticCall(
 ) -> Result<void, AllocError> {
     let b = builtinOf(n, r);
     let name =
-        if (b ==
-            bfWrappingAdd()) "cee_wrapping_add_" else if (b ==
-            bfWrappingSub()) "cee_wrapping_sub_" else if (b ==
-            bfWrappingMul()) "cee_wrapping_mul_" else if (b ==
-            bfCheckedAdd()) "cee_try_add_" else if (b ==
-            bfCheckedSub()) "cee_try_sub_" else if (b ==
-            bfCheckedMul()) "cee_try_mul_" else if (b ==
-            bfSaturatingAdd()) "cee_saturating_add_" else if (b ==
-            bfSaturatingSub()) "cee_saturating_sub_" else if (b ==
-            bfIntMin()) "cee_min_" else if (b ==
-            bfIntMax()) "cee_max_" else "cee_saturating_mul_";
+        if (b == bfWrappingAdd()) "cee_wrapping_add_"
+            else if (b == bfWrappingSub()) "cee_wrapping_sub_"
+            else if (b == bfWrappingMul()) "cee_wrapping_mul_"
+            else if (b == bfCheckedAdd()) "cee_try_add_"
+            else if (b == bfCheckedSub()) "cee_try_sub_"
+            else if (b == bfCheckedMul()) "cee_try_mul_"
+            else if (b == bfSaturatingAdd()) "cee_saturating_add_"
+            else if (b == bfSaturatingSub()) "cee_saturating_sub_"
+            else if (b == bfIntMin()) "cee_min_"
+            else if (b == bfIntMax()) "cee_max_"
+            else "cee_saturating_mul_";
     let left = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
     let right = operandText(e, c, n, sources, f, builtinArgument(n, r, 1))?;
     appendText(out, name)?;
@@ -2044,11 +2044,12 @@ fn appendBuiltinRvalue(
         // rt.h's helpers (§35.8): exact portable C, and the hardware square root; never a libm call.
         appendText(
             out,
-            if (b ==
-                bfFloatSqrt()) "cee_sqrt_f" else if (b ==
-                bfFloatAbs()) "cee_abs_f" else if (b ==
-                bfFloatFloor()) "cee_floor_f" else if (b ==
-                bfFloatCeil()) "cee_ceil_f" else if (b == bfFloatMin()) "cee_min_f" else "cee_max_f",
+            if (b == bfFloatSqrt()) "cee_sqrt_f"
+                else if (b == bfFloatAbs()) "cee_abs_f"
+                else if (b == bfFloatFloor()) "cee_floor_f"
+                else if (b == bfFloatCeil()) "cee_ceil_f"
+                else if (b == bfFloatMin()) "cee_min_f"
+                else "cee_max_f",
         )?;
         appendDecimal(out, c.types.info(t).bits as u64)?;
         return appendBuiltinCall(e, c, n, sources, f, out, "".bytes(), arguments);
@@ -2134,8 +2135,11 @@ fn appendBuiltinRvalue(
         call.pop();
         appendText(
             mut call,
-            if (b == bfFileOpenReadWrite()) ", 2u)" else if (b == bfFileOpenOrCreate()) ", 3u)" else if (b ==
-                bfFileOpenAppend()) ", 5u)" else if (b == bfFileOpenRegular()) ", 6u)" else ", 4u)",
+            if (b == bfFileOpenReadWrite()) ", 2u)"
+                else if (b == bfFileOpenOrCreate()) ", 3u)"
+                else if (b == bfFileOpenAppend()) ", 5u)"
+                else if (b == bfFileOpenRegular()) ", 6u)"
+                else ", 4u)",
         )?;
         return appendIoCall(c, out, t, call.view());
     }
@@ -2145,11 +2149,11 @@ fn appendBuiltinRvalue(
         var call = Vector<u8>.create();
         appendText(
             mut call,
-            if (b ==
-                bfFileReadAt()) "ceesafe_fd_read_at(*" else if (b ==
-                bfFileWriteAt()) "ceesafe_fd_write_at(*" else if (b ==
-                bfFileSetLength()) "ceesafe_fd_set_length(*" else if (b ==
-                bfFileLength()) "ceesafe_fd_length(*" else "ceesafe_fd_sync(*",
+            if (b == bfFileReadAt()) "ceesafe_fd_read_at(*"
+                else if (b == bfFileWriteAt()) "ceesafe_fd_write_at(*"
+                else if (b == bfFileSetLength()) "ceesafe_fd_set_length(*"
+                else if (b == bfFileLength()) "ceesafe_fd_length(*"
+                else "ceesafe_fd_sync(*",
         )?;
         appendBytes(mut call, resource.view())?;
         if (b == bfFileReadAt() || b == bfFileWriteAt()) {
@@ -2204,9 +2208,9 @@ fn appendBuiltinRvalue(
         var call = Vector<u8>.create();
         appendText(
             mut call,
-            if (b ==
-                bfTcpPort()) "ceesafe_tcp_port(*" else if (b ==
-                bfTcpAccept()) "ceesafe_tcp_accept(*" else "ceesafe_tcp_shutdown_write(*",
+            if (b == bfTcpPort()) "ceesafe_tcp_port(*"
+                else if (b == bfTcpAccept()) "ceesafe_tcp_accept(*"
+                else "ceesafe_tcp_shutdown_write(*",
         )?;
         appendBytes(mut call, resource.view())?;
         call.push(')')?;
@@ -2229,9 +2233,11 @@ fn appendBuiltinRvalue(
         appendBytes(mut call, resource.view())?;
         appendText(
             mut call,
-            if (b == bfTcpSetNoDelay()) ", 1u, (int64_t)(" else if (b == bfTcpSetKeepAlive()) ", 2u, " else if (b ==
-                bfTcpSetSendBuffer()) ", 3u, (int64_t)(" else if (b ==
-                bfTcpSetRecvBuffer()) ", 4u, (int64_t)(" else ", 5u, ",
+            if (b == bfTcpSetNoDelay()) ", 1u, (int64_t)("
+                else if (b == bfTcpSetKeepAlive()) ", 2u, "
+                else if (b == bfTcpSetSendBuffer()) ", 3u, (int64_t)("
+                else if (b == bfTcpSetRecvBuffer()) ", 4u, (int64_t)("
+                else ", 5u, ",
         )?;
         if (b == bfTcpSetKeepAlive() || b == bfTcpSetLinger()) {
             appendText(mut call, "(")?;
@@ -2330,13 +2336,14 @@ fn appendBuiltinRvalue(
     if (b >= bfIntRotateLeft() && b <= bfIntByteSwap()) {
         // The bit methods (ADR 0071 §2.3): rt.h's helpers, which mask the amount and have no undefined behaviour.
         let name =
-            if (b ==
-                bfIntRotateLeft()) "cee_rotl_" else if (b ==
-                bfIntRotateRight()) "cee_rotr_" else if (b ==
-                bfIntWrappingShl()) "cee_shl_wrap_" else if (b ==
-                bfIntWrappingShr()) "cee_shr_wrap_" else if (b ==
-                bfIntLeadingZeros()) "cee_clz_" else if (b ==
-                bfIntTrailingZeros()) "cee_ctz_" else if (b == bfIntCountOnes()) "cee_popcount_" else "cee_bswap_";
+            if (b == bfIntRotateLeft()) "cee_rotl_"
+                else if (b == bfIntRotateRight()) "cee_rotr_"
+                else if (b == bfIntWrappingShl()) "cee_shl_wrap_"
+                else if (b == bfIntWrappingShr()) "cee_shr_wrap_"
+                else if (b == bfIntLeadingZeros()) "cee_clz_"
+                else if (b == bfIntTrailingZeros()) "cee_ctz_"
+                else if (b == bfIntCountOnes()) "cee_popcount_"
+                else "cee_bswap_";
         let operand = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
         appendText(out, name)?;
         appendSuffix(c, out, n.operandTypes[builtinArgument(n, r, 0) as usize])?;

@@ -221,8 +221,8 @@ fn instanceSite(c: borrow Checker, function: u32, file: u32, span: Span) -> Span
     } else span;
 
 fn instanceSiteFile(c: borrow Checker, function: u32, file: u32) -> u32 =>
-    if (c.hir.functions[function as usize].asyncInstanceOf !=
-        none()) c.hir.functions[function as usize].siteFile else file;
+    if (c.hir.functions[function as usize].asyncInstanceOf != none()) c.hir.functions[function as usize].siteFile
+        else file;
 
 /// Rewrites NIR function `f`: a task call (awaited, run) of a callee with async closures for `@effectsOf`
 /// parameters goes to the callee's instance. In an instance (`bindings` not empty), a call through a bound closure

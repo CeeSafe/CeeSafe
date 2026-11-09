@@ -720,13 +720,19 @@ fn ioBuiltin(
                 match (borrow mut it.runtime.handles[k]) {
                     HostHandle.Stream(stream) => {
                         let seconds: u32? = if (present) Some(truncate<u32>(value)) else null;
-                        done = if (b == bfTcpShutdownRead()) stream.shutdownRead() else if (b ==
-                            bfTcpSetNoDelay()) stream.setNoDelay(value != 0) else if (b ==
-                            bfTcpSetKeepAlive()) stream.setKeepAlive(seconds) else if (b ==
-                            bfTcpSetSendBuffer()) stream.setSendBuffer(truncate<u32>(value)) else if (b ==
-                            bfTcpSetRecvBuffer()) stream.setRecvBuffer(
-                            truncate<u32>(value),
-                        ) else stream.setLinger(seconds);
+                        done =
+                            if (b == bfTcpShutdownRead()) stream.shutdownRead()
+                                else if (b == bfTcpSetNoDelay()) stream.setNoDelay(
+                                    value != 0,
+                                )
+                                else if (b == bfTcpSetKeepAlive()) stream.setKeepAlive(seconds)
+                                else if (b == bfTcpSetSendBuffer()) stream.setSendBuffer(
+                                    truncate<u32>(value),
+                                )
+                                else if (b == bfTcpSetRecvBuffer()) stream.setRecvBuffer(
+                                    truncate<u32>(value),
+                                )
+                                else stream.setLinger(seconds);
                     }
                     _ => {}
                 }

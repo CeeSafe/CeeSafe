@@ -681,9 +681,9 @@ struct Lexer {
             '<' => if (next == '<') (if (this.ch(
                 text,
                 2,
-            ) ==
-                '=') TokenKind.LessLessEquals else TokenKind.LessLess) else if (next ==
-                '=') TokenKind.LessEquals else TokenKind.Less,
+            ) == '=') TokenKind.LessLessEquals else TokenKind.LessLess)
+                else if (next == '=') TokenKind.LessEquals
+                else TokenKind.Less,
             // Never '>>' or '>>=': the parser joins adjacent '>' tokens (grammar.md §1.7).
             '>' => if (next == '=') TokenKind.GreaterEquals else TokenKind.Greater,
             _ => { return Ok(false); }

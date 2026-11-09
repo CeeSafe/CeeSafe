@@ -499,7 +499,8 @@ fn nativeFieldShape(key: Slice<u8>) -> StringView =>
     if (sameText(
         key,
         "links",
-    )) "'links' is an array of library names, letters, digits, '_', '.', '+' and '-', not starting with '-': [\"ssl\", \"crypto\"]" else "'lib-dirs' and 'include-dirs' are arrays of directories, absolute or relative to the package, not starting with '-'; one may start with $NAME or ${NAME}";
+    )) "'links' is an array of library names, letters, digits, '_', '.', '+' and '-', not starting with '-': [\"ssl\", \"crypto\"]"
+        else "'lib-dirs' and 'include-dirs' are arrays of directories, absolute or relative to the package, not starting with '-'; one may start with $NAME or ${NAME}";
 
 /// A library name `links` may hold: letters, digits, `_`, `.`, `+`, `-`, not starting with `-` (no entry is a flag).
 fn isLibraryName(name: Slice<u8>) -> bool {

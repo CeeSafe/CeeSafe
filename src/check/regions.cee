@@ -245,7 +245,8 @@ fn checkPoolElement(c: borrow mut Checker, element: u32, span: Span) -> Result<b
         appendQuotedType(mut message, c, element)?;
         appendText(
             mut message,
-            if (scoped) ": it is scoped (a reference or slice), and pool memory cannot hold loans (E3)" else ": it has no value",
+            if (scoped) ": it is scoped (a reference or slice), and pool memory cannot hold loans (E3)"
+                else ": it has no value",
         )?;
         c.error(notRegionContent(), span.start, span.end, message)?;
         return Ok(false);
@@ -518,8 +519,7 @@ fn checkRegionConstructor(
     } else if (c.types.is(
         derefType,
         TypeKind.Array,
-    ) && !c.types.isUnsized(derefType) && c.types.info(derefType).element ==
-        u8Type) {
+    ) && !c.types.isUnsized(derefType) && c.types.info(derefType).element == u8Type) {
         let place = toPlace(c, deref)?;
         if (place == none()) {
             var message = Vector<u8>.create();

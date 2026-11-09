@@ -139,7 +139,8 @@ fn checkVectorCreate(
             var message = Vector<u8>.create();
             appendText(
                 mut message,
-                if (isString) "'String' takes at most one type argument: 'String<A>'" else "'Vector' takes one or two type arguments: 'Vector<T>' or 'Vector<T, A>'",
+                if (isString) "'String' takes at most one type argument: 'String<A>'"
+                    else "'Vector' takes one or two type arguments: 'Vector<T>' or 'Vector<T, A>'",
             )?;
             c.error(unknownType(), targetSpan.start, targetSpan.end, message)?;
             return c.errorResult(span.start, span.end);
@@ -227,7 +228,8 @@ fn checkVectorMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         appendText(
             mut message,
-            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'" else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'insert', 'remove', 'swapRemove'",
+            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'"
+                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'insert', 'remove', 'swapRemove'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

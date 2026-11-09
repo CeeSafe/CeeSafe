@@ -456,7 +456,8 @@ fn checkAsyncTasks(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (withAllocator) "'Async.tasksIn' takes an allocator, the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)" else "'Async.tasks' takes the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)",
+            if (withAllocator) "'Async.tasksIn' takes an allocator, the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)"
+                else "'Async.tasks' takes the most children at once, the error for a child that cannot be allocated, and a body 'async (set) => …' (ADR 0053)",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -844,7 +845,8 @@ fn checkSpawn(c: borrow mut Checker, scope: u32, arguments: Range, send: bool, s
             appendQuotedName(mut message, c, name)?;
             appendText(
                 mut message,
-                if (mutable) " mutably, but an earlier child of this scope captures it too (type-system.md §40.5)" else ", but an earlier child of this scope changes it (type-system.md §40.5)",
+                if (mutable) " mutably, but an earlier child of this scope captures it too (type-system.md §40.5)"
+                    else ", but an earlier child of this scope changes it (type-system.md §40.5)",
             )?;
             c.error(scopeCaptureConflict(), argumentSpan.start, argumentSpan.end, message)?;
         }
@@ -913,7 +915,8 @@ fn checkSendChild(
             appendQuotedType(mut message, c, t)?;
             appendText(
                 mut message,
-                if (mutably) ", which is not Send: a 'spawnSend' child may change it from another thread (type-system.md §38.6, ADR 0038)" else ", which is not Share: a 'spawnSend' child may read it from another thread (type-system.md §38.6, ADR 0038)",
+                if (mutably) ", which is not Send: a 'spawnSend' child may change it from another thread (type-system.md §38.6, ADR 0038)"
+                    else ", which is not Share: a 'spawnSend' child may read it from another thread (type-system.md §38.6, ADR 0038)",
             )?;
             c.error(notSend(), span.start, span.end, message)?;
             ok = false;
@@ -973,7 +976,8 @@ fn checkCancellationCall(c: borrow mut Checker, member: u32, arguments: Range, s
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (isCheckpoint) "'Async.checkpoint' takes the error to return if the task is cancelled" else "'Async.isCancelled' takes no arguments",
+            if (isCheckpoint) "'Async.checkpoint' takes the error to return if the task is cancelled"
+                else "'Async.isCancelled' takes no arguments",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -1225,7 +1229,8 @@ fn checkAsyncJoin(
         appendText(mut message, what)?;
         appendText(
             mut message,
-            if (isRace) "'s children return a 'Result<T, E>': give the race an expected 'Result<Raced<T>, E>' type, or the first child an expression body (type-system.md §40.4)" else "'s children return a 'Result<void, E>' (type-system.md §40.4)",
+            if (isRace) "'s children return a 'Result<T, E>': give the race an expected 'Result<Raced<T>, E>' type, or the first child an expression body (type-system.md §40.4)"
+                else "'s children return a 'Result<void, E>' (type-system.md §40.4)",
         )?;
         c.error(closureTypeUnknown(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
@@ -1321,7 +1326,8 @@ fn checkAsyncTimeout(
         appendText(mut message, what)?;
         appendText(
             mut message,
-            if (isDeadline) " takes the deadline, the error and an async closure literal: 'Async.deadline(at, timedOut, async () => …)' (type-system.md §40.4)" else " takes the milliseconds, the error and an async closure literal: 'Async.timeout(ms, timedOut, async () => …)' (type-system.md §40.4)",
+            if (isDeadline) " takes the deadline, the error and an async closure literal: 'Async.deadline(at, timedOut, async () => …)' (type-system.md §40.4)"
+                else " takes the milliseconds, the error and an async closure literal: 'Async.timeout(ms, timedOut, async () => …)' (type-system.md §40.4)",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -1446,7 +1452,8 @@ fn checkAsyncBlocking(c: borrow mut Checker, arguments: Range, expected: u32, sp
             appendQuotedType(mut message, c, t)?;
             appendText(
                 mut message,
-                if (mutably) ", which is not Send: a worker thread would change it (type-system.md §40.4)" else ", which is not Share: a worker thread would read it (type-system.md §40.4)",
+                if (mutably) ", which is not Send: a worker thread would change it (type-system.md §40.4)"
+                    else ", which is not Share: a worker thread would read it (type-system.md §40.4)",
             )?;
             c.error(notSend(), syntaxSpan.start, syntaxSpan.end, message)?;
             ok = false;

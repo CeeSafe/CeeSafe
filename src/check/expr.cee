@@ -1080,10 +1080,12 @@ fn checkVariadicArgument(c: borrow mut Checker, value: u32) -> Result<void, Allo
         if (c.types.is(
             t,
             TypeKind.Integer,
-        )) ": C would promote it; widen it with 'as i32' or 'as u32' (ADR 0041 §3.3)" else if (c.types.is(
-            t,
-            TypeKind.Float,
-        )) ": C would promote it; widen it with 'as f64' (ADR 0041 §3.3)" else ": only i32, u32, i64, u64, isize, usize, f64 and raw pointers pass unchanged through '...' (ADR 0041 §3.3)",
+        )) ": C would promote it; widen it with 'as i32' or 'as u32' (ADR 0041 §3.3)"
+            else if (c.types.is(
+                t,
+                TypeKind.Float,
+            )) ": C would promote it; widen it with 'as f64' (ADR 0041 §3.3)"
+            else ": only i32, u32, i64, u64, isize, usize, f64 and raw pointers pass unchanged through '...' (ADR 0041 §3.3)",
     )?;
     return c.error(variadicArgument(), span.start, span.end, message);
 }
@@ -1156,8 +1158,8 @@ fn checkUserCallWith(
     }
     // A C variadic function takes its parameters and then any number of further arguments (ADR 0041 §3.3).
     let variadic = syntax.isExtern && syntax.variadicStart != none();
-    let arityWrong = if (variadic) (arguments.count as usize) < parameterCount else arguments.count as usize !=
-        parameterCount;
+    let arityWrong =
+        if (variadic) (arguments.count as usize) < parameterCount else arguments.count as usize != parameterCount;
     if (arityWrong) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
@@ -1180,8 +1182,7 @@ fn checkUserCallWith(
     var suspending = false;
     for (k in 0..arguments.count) {
         let parameterType =
-            if ((k as usize) <
-                parameterCount) c.hir.locals[c.hir.functions[function as usize].parameters[k as usize +
+            if ((k as usize) < parameterCount) c.hir.locals[c.hir.functions[function as usize].parameters[k as usize +
                 skip] as usize].typ else none();
         let argument = c.front.ast.at(arguments, k);
         let asyncLiteral = match (c.front.ast.exprs[argument as usize]) {

@@ -255,7 +255,8 @@ fn checkThreadBoth(c: borrow mut Checker, arguments: Range, span: Span) -> Resul
                 appendQuotedType(mut message, c, t)?;
                 appendText(
                     mut message,
-                    if (mutably) ", which is not Send: it cannot be changed from another thread (type-system.md §38.6)" else ", which is not Share: it cannot be read from another thread (type-system.md §38.6)",
+                    if (mutably) ", which is not Send: it cannot be changed from another thread (type-system.md §38.6)"
+                        else ", which is not Share: it cannot be read from another thread (type-system.md §38.6)",
                 )?;
                 c.error(notSend(), syntaxSpan.start, syntaxSpan.end, message)?;
                 ok = false;

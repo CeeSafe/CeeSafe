@@ -44,10 +44,13 @@ fn unanalysedAllocation(b: u32) -> u32 =>
         b == bfVectorExtend() || b == bfVectorResize() || b == bfVectorReserve() ||
         b == bfStringAppend() ||
         b == bfStringAppendNumber() ||
-        b ==
-            bfVectorWithCapacity()) 0 else if (b ==
-        bfStableVectorPush()) 1 else if (b == bfSlotMapInsert()) 2 else if (b == bfArenaAlloc() ||
-        b == bfArenaAllocArray()) 3 else if (b == bfPoolTake()) 4 else none();
+        b == bfVectorWithCapacity()) 0
+        else if (b == bfStableVectorPush()) 1
+        else if (b == bfSlotMapInsert()) 2
+        else if (b == bfArenaAlloc() ||
+            b == bfArenaAllocArray()) 3
+        else if (b == bfPoolTake()) 4
+        else none();
 
 fn unanalysedWhat(k: u32) -> StringView => match (k) {
     0 => "vector storage",

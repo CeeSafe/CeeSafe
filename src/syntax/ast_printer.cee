@@ -269,7 +269,10 @@ struct AstPrinter {
         this.open()?;
         this.text(
             if (f.isUnsafe &&
-                f.isAsync) "(unsafe-async-fn " else if (f.isUnsafe) "(unsafe-fn " else if (f.isAsync) "(async-fn " else "(fn ",
+                f.isAsync) "(unsafe-async-fn "
+                else if (f.isUnsafe) "(unsafe-fn "
+                else if (f.isAsync) "(async-fn "
+                else "(fn ",
         )?;
         this.text(visibilityText(f.visibility))?;
         this.text(" ")?;
@@ -611,7 +614,10 @@ struct AstPrinter {
                 let closure = ast.closures[index as usize];
                 this.text(
                     if (closure.isMove &&
-                        closure.isAsync) "(async-move-closure (" else if (closure.isMove) "(move-closure (" else if (closure.isAsync) "(async-closure (" else "(closure (",
+                        closure.isAsync) "(async-move-closure ("
+                        else if (closure.isMove) "(move-closure ("
+                        else if (closure.isAsync) "(async-closure ("
+                        else "(closure (",
                 )?;
                 for (k in 0..closure.parameters.count) {
                     if (k > 0) {

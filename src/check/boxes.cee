@@ -93,7 +93,8 @@ fn checkBoxCreate(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (withAllocator) "'Box.createIn' takes an allocator and a value: 'Box.createIn(allocator, v)'" else "'Box.create' takes one value: 'Box.create(v)'",
+            if (withAllocator) "'Box.createIn' takes an allocator and a value: 'Box.createIn(allocator, v)'"
+                else "'Box.create' takes one value: 'Box.create(v)'",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -206,7 +207,8 @@ fn checkFailingAllocatorCall(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (failAfter) "'FailingAllocator.failAfter' takes one 'u64'" else "'FailingAllocator.reset' takes no arguments",
+            if (failAfter) "'FailingAllocator.failAfter' takes one 'u64'"
+                else "'FailingAllocator.reset' takes no arguments",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

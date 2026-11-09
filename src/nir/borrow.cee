@@ -1234,8 +1234,8 @@ fn accessesAt(
 
 fn spanAt(n: borrow NirProgram, b: borrow Borrows, position: usize, i: usize) -> Span {
     let block = borrow n.functions[b.function as usize].blocks[position];
-    return if (i <
-        block.statements.length) n.statementSpans[block.statements[i] as usize] else n.terminatorSpans[block.terminator as usize];
+    return if (i < block.statements.length) n.statementSpans[block.statements[i] as usize]
+        else n.terminatorSpans[block.terminator as usize];
 }
 
 // ---- §5 Liveness ----

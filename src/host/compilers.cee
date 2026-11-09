@@ -116,7 +116,8 @@ fn visualStudioDirectory() -> Vector<u8>? {
     pushText(mut arguments, "-requires")!;
     pushText(
         mut arguments,
-        if (Target.isAArch64()) "Microsoft.VisualStudio.Component.VC.Tools.ARM64" else "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        if (Target.isAArch64()) "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+            else "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
     )!;
     pushText(mut arguments, "-property")!;
     pushText(mut arguments, "installationPath")!;

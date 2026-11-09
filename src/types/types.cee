@@ -1951,8 +1951,10 @@ fn self_enumLayout(table: borrow mut TypeTable, id: u32) {
     let count = table.enums[e].variants.length;
     let repr = table.enums[e].repr;
     let tagSize: u32 =
-        if (repr !=
-            none()) table.types[repr as usize].bits / 8 else if (count <= 256) 1 else if (count <= 65536) 2 else 4;
+        if (repr != none()) table.types[repr as usize].bits / 8
+            else if (count <= 256) 1
+            else if (count <= 65536) 2
+            else 4;
     var unionSize: u32 = 0;
     var unionAlign: u32 = 1;
     for (k in 0..count) {

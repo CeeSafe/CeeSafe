@@ -275,7 +275,8 @@ fn checkRawConstructor(
         appendBytes(mut message, name)?;
         appendText(
             mut message,
-            if (isPtr) "'; it has 'toBorrow' and 'toBorrowMut' (type-system.md §27.3)" else "'; it has 'fromRaw' (type-system.md §27.3)",
+            if (isPtr) "'; it has 'toBorrow' and 'toBorrowMut' (type-system.md §27.3)"
+                else "'; it has 'fromRaw' (type-system.md §27.3)",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -382,7 +383,8 @@ fn checkBoxRaw(
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            if (fromRaw) "'Box.fromRaw' takes one pointer: 'Box.fromRaw(p)'" else "'Box.intoRaw' takes one box: 'Box.intoRaw(b)'",
+            if (fromRaw) "'Box.fromRaw' takes one pointer: 'Box.fromRaw(p)'"
+                else "'Box.intoRaw' takes one box: 'Box.intoRaw(b)'",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

@@ -243,8 +243,9 @@ fn checkResourceMethod(
         appendBytes(mut message, text)?;
         appendText(
             mut message,
-            if (arity ==
-                0) "' takes no arguments" else if (arity == 1) "' takes one argument" else "' takes two arguments",
+            if (arity == 0) "' takes no arguments"
+                else if (arity == 1) "' takes one argument"
+                else "' takes two arguments",
         )?;
         c.error(argumentCount(), span.start, span.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -268,12 +269,17 @@ fn checkResourceMethod(
     } else if (arity == 1) {
         let u8Type = c.types.u8;
         let u32Type = c.types.u32;
-        let parameter = if (function == bfTcpSetNoDelay()) c.types.boolType else if (function ==
-            bfTcpSetSendBuffer() || function == bfTcpSetRecvBuffer()) u32Type else if (function ==
-            bfTcpSetKeepAlive() || function == bfTcpSetLinger()) optionOf(c, u32Type)? else c.types.sliceOf(
-            u8Type,
-            function == bfResourceRead(),
-        )?;
+        let parameter =
+            if (function == bfTcpSetNoDelay()) c.types.boolType
+                else if (function == bfTcpSetSendBuffer() || function == bfTcpSetRecvBuffer()) u32Type
+                else if (function == bfTcpSetKeepAlive() || function == bfTcpSetLinger()) optionOf(
+                    c,
+                    u32Type,
+                )?
+                else c.types.sliceOf(
+                    u8Type,
+                    function == bfResourceRead(),
+                )?;
         let argumentSyntax = c.front.ast.at(arguments, 0);
         argument = checkArgument(c, argumentSyntax, parameter)?;
     }

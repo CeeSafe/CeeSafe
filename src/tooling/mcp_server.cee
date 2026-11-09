@@ -56,9 +56,10 @@ fn wrongValue(doc: borrow JsonDoc, node: u32, target: StringView) -> McpFailure 
         return internalFailure(copyBytes("The node must be of type 'JsonValue'.".bytes())!);
     }
     let name =
-        if (kind ==
-            jsonNumber()) "Number" else if (kind ==
-            jsonString()) "String" else if (doc.nodes[node as usize].text[0] == 't') "True" else "False";
+        if (kind == jsonNumber()) "Number"
+            else if (kind == jsonString()) "String"
+            else if (doc.nodes[node as usize].text[0] == 't') "True"
+            else "False";
     var message = textOf("An element of type '", name.bytes(), "' cannot be converted to a '");
     appendText(mut message, target)!;
     appendText(mut message, "'.")!;
@@ -1767,8 +1768,8 @@ fn writePromptInfo(json: borrow mut JsonWriter, k: usize) {
     json.string(if (k == 0) "Write CeeSafe" else "Port C to CeeSafe")!;
     json.name("description")!;
     json.string(
-        if (k ==
-            0) "Write CeeSafe code for a task, with the agent guide and the edit-check loop." else "Port a C file to CeeSafe as CosmoOS's components were (C6, C9).",
+        if (k == 0) "Write CeeSafe code for a task, with the agent guide and the edit-check loop."
+            else "Port a C file to CeeSafe as CosmoOS's components were (C6, C9).",
     )!;
     json.name("arguments")!;
     json.startArray()!;
@@ -1878,7 +1879,8 @@ fn getPrompt(doc: borrow JsonDoc, parameters: u32) -> Result<McpAnswer, McpFailu
     json.startObject()!;
     json.name("description")!;
     json.string(
-        if (write) "Write CeeSafe code for a task, with the agent guide and the edit-check loop." else "Port a C file to CeeSafe as CosmoOS's components were (C6, C9).",
+        if (write) "Write CeeSafe code for a task, with the agent guide and the edit-check loop."
+            else "Port a C file to CeeSafe as CosmoOS's components were (C6, C9).",
     )!;
     json.name("messages")!;
     json.startArray()!;

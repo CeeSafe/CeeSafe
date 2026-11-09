@@ -520,7 +520,8 @@ fn loadDependency(
             m.t("' ")?;
             m.b(entry.version.view())?;
             m.t(
-                if (w.fetch) " does not match its hash in the index" else " does not match its hash in the ceesafe.lock",
+                if (w.fetch) " does not match its hash in the index"
+                    else " does not match its hash in the ceesafe.lock",
             )?;
             m.t(": its files differ from what was published")?;
             w.error(report, 325, dependent, spec, m.out)?;

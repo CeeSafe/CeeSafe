@@ -1,0 +1,18 @@
+(unit
+  (fn default f (params (c u8) (o (optional u32))) (returns bool)
+    (block
+      (match o
+        (arm (or (Some (or 1 2)) null)
+          (block)
+        )
+        (arm (or (Some 3) (Some 4))
+          (block)
+        )
+        (arm _
+          (block)
+        )
+      )
+      (return (match-expr c (arm (or ' ' '\t' '\n') true) (arm _ false)))
+    )
+  )
+)

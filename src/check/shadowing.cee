@@ -176,6 +176,11 @@ fn shadowPattern(
                 shadowPattern(front, dependencies, scope, b.nested)?;
             }
         }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                shadowPattern(front, dependencies, scope, front.ast.at(alternatives, k))?;
+            }
+        }
         _ => {}
     }
     return Ok();

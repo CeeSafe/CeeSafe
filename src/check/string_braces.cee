@@ -209,6 +209,11 @@ fn bracePattern(c: borrow Checker, scope: borrow mut BraceScope, p: u32) -> Resu
                 bracePattern(c, scope, b.nested)?;
             }
         }
+        PatternNode.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                bracePattern(c, scope, c.front.ast.at(alternatives, k))?;
+            }
+        }
         _ => {}
     }
     return Ok();

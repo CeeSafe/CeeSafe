@@ -1,0 +1,61 @@
+// Or-patterns (ADR 0085 §2.3): every alternative binds the same names, with the same types and `var`-ness (N0356);
+// an alternative that earlier arms or alternatives already match is N0257, and so is a whole arm.
+struct Res { id: u32; drop { } }
+enum Tok { A(u32), B(u32), C, D(Res), W(u64) }
+
+fn missingName(o: u32?) -> u32 {
+    match (o) {
+        Some(x) | null => { return 0; } // error[N0356]
+    }
+}
+
+fn extraName(t: Tok) -> u32 {
+    match (t) {
+        Tok.C | Tok.A(y) => { return 0; } // error[N0356]
+        _ => { return 1; }
+    }
+}
+
+fn otherType(t: Tok) -> u32 {
+    match (t) {
+        Tok.A(x) | Tok.W(x) => { return 0; } // error[N0356]
+        _ => { return 1; }
+    }
+}
+
+fn otherMutability(t: Tok) -> u32 {
+    match (t) {
+        Tok.A(var x) | Tok.B(x) => { return x; } // error[N0356]
+        _ => { return 1; }
+    }
+}
+
+fn alternativeCovered(t: Tok) -> u32 {
+    match (t) {
+        Tok.A(_) => { return 1; }
+        Tok.B(_) | Tok.A(3) => { return 2; } // error[N0257]
+        _ => { return 0; }
+    }
+}
+
+fn alternativeRepeated(c: u8) -> bool => match (c) {
+    ' ' | '\t' | ' ' => true, // error[N0257]
+    _ => false,
+};
+
+fn armCovered(t: Tok) -> u32 {
+    match (t) {
+        Tok.A(_) | Tok.B(_) => { return 1; }
+        Tok.B(4) | Tok.A(5) => { return 2; } // error[N0257]
+        _ => { return 0; }
+    }
+}
+
+fn missing(t: Tok) -> u32 {
+    match (t) { // error[N0256]
+        Tok.A(_) | Tok.B(_) | Tok.C => { return 1; }
+        Tok.D(_) => { return 2; }
+    }
+}
+
+fn main() {}

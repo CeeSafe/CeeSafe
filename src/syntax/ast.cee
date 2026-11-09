@@ -189,6 +189,8 @@ enum PatternNode {
     Literal(u32),
     /// `E.V` or `E.V(x, var y, _, E.W(z))`: the path, whether there are parentheses, the bindings.
     Variant(QualifiedName, bool, Range),
+    /// `A | B | …` (ADR 0085 §2.3): the alternatives, patterns in Ast.lists.
+    Or(Range),
 }
 
 /// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.

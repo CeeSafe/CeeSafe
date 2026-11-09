@@ -138,6 +138,7 @@ enum HirPattern {
     Binding(u32), // a local
     Literal(IntValue),
     Variant(u32, bool, Range), // variant, whether there is a payload list, payload patterns
+    Or(Range),                 // alternatives (ADR 0085 §2.3), each binding the same locals
 }
 
 struct HirArmBinding {

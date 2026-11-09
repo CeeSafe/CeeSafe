@@ -1,0 +1,77 @@
+// Or-patterns (ADR 0085 §2.3): at the top and nested, with bindings in every alternative, on a reference and in a
+// consuming match, and with a guard, which runs once per matching alternative, left to right.
+
+struct Res { id: u32; drop { Console.write("drop "); Console.writeLine(this.id); } }
+enum Tok { A(u32), B(u32), C, D(Res), E(Res) }
+
+fn space(c: u8) -> bool => match (c) {
+    ' ' | '\t' | '\n' => true,
+    _ => false,
+};
+
+fn val(t: borrow Tok) -> u32 => match (t) {
+    Tok.A(x) | Tok.B(x) => x,
+    Tok.C => 0,
+    Tok.D(r) | Tok.E(r) => r.id,
+};
+
+fn nested(o: Tok?) -> u32 {
+    match (o) {
+        Some(Tok.A(1 | 2) | Tok.B(3)) => { return 12; }
+        Some(Tok.A(x) | Tok.B(x)) if (x > 10) => { return x; }
+        Some(_) => { return 1; }
+        null => { return 0; }
+    }
+}
+
+fn owned(t: Tok) -> u32 {
+    match (t) {
+        Tok.D(r) | Tok.E(r) if (r.id > 5) => { return r.id + 100; }
+        Tok.D(r) | Tok.E(r) => { return r.id; }
+        _ => { return 0; }
+    }
+}
+
+fn guardTwice(t: Tok?) -> u32 {
+    var runs: u32 = 0;
+    let v = match (t) {
+        Some(Tok.A(x)) | Some(Tok.A(x) | Tok.B(x)) if (count(mut runs, x)) => x,
+        _ => 0,
+    };
+    return v * 10 + runs;
+}
+
+fn count(runs: borrow mut u32, x: u32) -> bool {
+    runs += 1;
+    return x == 9 && runs == 2;
+}
+
+fn main() {
+    Console.writeLine(space(' '));
+    Console.writeLine(space('x'));
+    let a = Tok.A(4);
+    let b = Tok.B(5);
+    Console.writeLine(val(a));
+    Console.writeLine(val(b));
+    Console.writeLine(nested(Some(Tok.A(2))));
+    Console.writeLine(nested(Some(Tok.B(3))));
+    Console.writeLine(nested(Some(Tok.B(30))));
+    Console.writeLine(nested(Some(Tok.B(4))));
+    Console.writeLine(owned(Tok.E(Res { id: 9 })));
+    Console.writeLine(owned(Tok.D(Res { id: 2 })));
+    Console.writeLine(guardTwice(Some(Tok.A(9))));
+}
+
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 4
+// expect-stdout: 5
+// expect-stdout: 12
+// expect-stdout: 12
+// expect-stdout: 30
+// expect-stdout: 1
+// expect-stdout: drop 9
+// expect-stdout: 109
+// expect-stdout: drop 2
+// expect-stdout: 2
+// expect-stdout: 92

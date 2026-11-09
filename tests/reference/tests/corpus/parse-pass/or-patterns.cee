@@ -1,0 +1,9 @@
+// Or-patterns (ADR 0085 §2.3): alternatives at the top and nested, a leading '|'.
+fn f(c: u8, o: u32?) -> bool {
+    match (o) {
+        Some(1 | 2) | null => {}
+        | Some(3) | Some(4) => {}
+        _ => {}
+    }
+    return match (c) { ' ' | '\t' | '\n' => true, _ => false };
+}

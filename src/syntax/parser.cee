@@ -1951,9 +1951,26 @@ struct Parser {
             let at = this.current().start;
             return this.front.ast.addPattern(PatternNode.Wildcard, at, at);
         }
-        let result = this.parsePatternLevel();
+        let result = this.parseOrPattern();
         this.nesting -= 1;
         return result;
+    }
+
+    /// `'|'? A ('|' B)*` (ADR 0085 §2.3): one alternative is the pattern itself.
+    fn parseOrPattern(borrow mut this) -> Result<u32, AllocError> {
+        let start = this.current().start;
+        this.eat(TokenKind.Pipe); // a leading `|`
+        let first = this.parsePatternLevel()?;
+        if (!this.at(TokenKind.Pipe)) {
+            return Ok(first);
+        }
+        var alternatives = Vector<u32>.create();
+        alternatives.push(first)?;
+        while (this.eat(TokenKind.Pipe)) {
+            alternatives.push(this.parsePatternLevel()?)?;
+        }
+        let range = this.list(alternatives)?;
+        return this.front.ast.addPattern(PatternNode.Or(range), start, this.endFrom(start));
     }
 
     fn parsePatternLevel(borrow mut this) -> Result<u32, AllocError> {

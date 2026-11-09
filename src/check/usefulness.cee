@@ -157,6 +157,52 @@ fn specialize(c: borrow Checker, wildcard: u32, rows: borrow Matrix, k: Construc
     return Ok(result);
 }
 
+/// The pattern a first column tests, looking through what does not change the test.
+fn testedPattern(c: borrow Checker, pattern: u32) -> u32 => pattern;
+
+/// Does any row start with an or-pattern?
+fn hasOrRow(c: borrow Checker, rows: borrow Matrix) -> bool {
+    for (r in 0..rows.rows) {
+        match (c.hir.patterns[testedPattern(c, rows.cells[r * rows.width]) as usize]) {
+            HirPattern.Or(_) => { return true; }
+            _ => {}
+        }
+    }
+    return false;
+}
+
+/// The rows with each or-pattern in the first column replaced by one row per alternative (ADR 0085 §2.3).
+fn expandOrRows(c: borrow Checker, rows: borrow Matrix, out: borrow mut Matrix) -> Result<void, AllocError> {
+    for (r in 0..rows.rows) {
+        pushExpandedRow(c, rows, r, rows.cells[r * rows.width], out)?;
+    }
+    return Ok();
+}
+
+fn pushExpandedRow(
+    c: borrow Checker,
+    rows: borrow Matrix,
+    r: usize,
+    first: u32,
+    out: borrow mut Matrix,
+) -> Result<void, AllocError> {
+    match (c.hir.patterns[testedPattern(c, first) as usize]) {
+        HirPattern.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                pushExpandedRow(c, rows, r, c.hir.at(alternatives, k), out)?;
+            }
+            return Ok();
+        }
+        _ => {}
+    }
+    out.cells.push(first)?;
+    for (i in 1..rows.width) {
+        out.cells.push(rows.cells[r * rows.width + i])?;
+    }
+    out.rows += 1;
+    return Ok();
+}
+
 /// Useful: is `q` useful against `rows`? If so, `witness` gets a value per column that shows it.
 fn useful(
     c: borrow Checker,
@@ -168,6 +214,30 @@ fn useful(
 ) -> Result<bool, AllocError> {
     if (q.length == 0) {
         return Ok(rows.rows == 0);
+    }
+    if (rows.width > 0 && hasOrRow(c, rows)) {
+        var expanded = Matrix { cells: Vector<u32>.create(), rows: 0, width: rows.width };
+        expandOrRows(c, rows, mut expanded)?;
+        return useful(c, wildcard, expanded, q, types, witness);
+    }
+    match (c.hir.patterns[testedPattern(c, q[0]) as usize]) {
+        HirPattern.Or(alternatives) => {
+            // Useful when some alternative is.
+            for (k in 0..alternatives.count) {
+                var nq = Vector<u32>.create();
+                nq.push(c.hir.at(alternatives, k))?;
+                appendU32s(mut nq, q[1..])?;
+                var inner = Vector<Vector<u8>>.create();
+                if (useful(c, wildcard, rows, nq.view(), types, mut inner)?) {
+                    for (i in 0..inner.length) {
+                        witness.push(copyBytes(inner[i].view())?)?;
+                    }
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        _ => {}
     }
     let typ = types[0];
     var head = noConstructor();

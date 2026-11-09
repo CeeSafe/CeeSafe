@@ -284,8 +284,10 @@ fn checkArmBody(
     return checkBlock(c, body);
 }
 
+/// Does the pattern need the nested path (checkNestedMatch): a nested pattern, or a form of ADR 0085?
 fn hasNested(c: borrow Checker, pattern: u32) -> bool {
     match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Or(_) => { return true; }
         PatternNode.Variant(_, _, bindings) => {
             for (k in 0..bindings.count) {
                 if (c.front.ast.bindings[c.front.ast.at(bindings, k) as usize].nested != none()) {
@@ -380,6 +382,7 @@ fn checkMatch(
         var bindings = Vector<HirArmBinding>.create();
         c.pushScope()?;
         match (c.front.ast.patterns[pattern as usize]) {
+            PatternNode.Or(_) => { patternFailed = true; } // the nested path's (hasNested)
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -553,7 +556,8 @@ fn checkNestedMatch(
         let patternSpan = c.front.ast.patternSpans[pattern as usize];
         let guardSyntax = armGuard(c, arms, index, isValue);
         c.pushScope()?;
-        let tree = checkPattern(c, pattern, typ, reference, mut failed)?;
+        var alternatives = Alternatives { active: false, names: Vector<AlternativeName>.create() };
+        let tree = checkPattern(c, pattern, typ, reference, mut failed, mut alternatives)?;
         var guard = none();
         if (guardSyntax != none()) {
             let boolType = c.types.boolType;
@@ -568,6 +572,8 @@ fn checkNestedMatch(
                 var message = Vector<u8>.create();
                 appendText(mut message, "this arm can never match: earlier arms match every value it does")?;
                 c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
+            } else {
+                unreachableAlternatives(c, earlier.view(), tree, pattern, typ)?;
             }
         }
         if (guard == none()) {
@@ -635,8 +641,47 @@ fn checkNestedMatch(
     return c.hir.addStmt(HirStmt.Match(scrutinee, list, consumes, true), span.start, span.end);
 }
 
+/// N0257 for each alternative of a top-level or-pattern that earlier arms, or its earlier alternatives, already match
+/// (ADR 0085 §2.3); the arm itself is reachable.
+fn unreachableAlternatives(
+    c: borrow mut Checker,
+    earlier: Slice<u32>,
+    tree: u32,
+    pattern: u32,
+    typ: u32,
+) -> Result<void, AllocError> {
+    let hirAlternatives = match (c.hir.patterns[tree as usize]) {
+        HirPattern.Or(list) => list,
+        _ => { return Ok(); }
+    };
+    let astAlternatives = match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Or(list) => list,
+        _ => { return Ok(); }
+    };
+    var rows = Vector<u32>.create();
+    for (p in earlier) {
+        rows.push(p)?;
+    }
+    for (k in 0..hirAlternatives.count) {
+        let alternative = c.hir.at(hirAlternatives, k);
+        var witness = Vector<u8>.create();
+        if (!patternWitness(c, rows.view(), alternative, typ, mut witness)?) {
+            let span = c.front.ast.patternSpans[c.front.ast.at(astAlternatives, k) as usize];
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "this alternative can never match: earlier arms or alternatives match every value it does",
+            )?;
+            c.error(unreachableArm(), span.start, span.end, message)?;
+        }
+        rows.push(alternative)?;
+    }
+    return Ok();
+}
+
 fn bindsNonCopy(c: borrow Checker, pattern: u32) -> bool {
     match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Or(alternatives) => { return bindsNonCopy(c, c.hir.at(alternatives, 0)); }
         HirPattern.Binding(local) => { return !c.types.isCopy(c.hir.locals[local as usize].typ); }
         HirPattern.Variant(_, hasPayload, payload) => {
             if (hasPayload) {
@@ -652,6 +697,119 @@ fn bindsNonCopy(c: borrow Checker, pattern: u32) -> bool {
     }
 }
 
+/// A name the first alternative of an or-pattern binds, which every other alternative must bind alike (ADR 0085
+/// §2.3).
+struct AlternativeName {
+    symbol: u32;
+    local: u32;
+    seen: bool;
+}
+
+/// While a later alternative of an or-pattern is checked (`active`), its bindings are the first alternative's locals.
+struct Alternatives {
+    active: bool;
+    names: Vector<AlternativeName>;
+}
+
+fn alternativesDiffer() -> u32 => 356;
+
+/// `A | B | …` (ADR 0085 §2.3): each alternative checked against `typ`; the later ones bind the first one's locals,
+/// with the same type and `var`-ness (N0356 otherwise).
+fn checkOrPattern(
+    c: borrow mut Checker,
+    list: Range,
+    typ: u32,
+    reference: u32,
+    failed: borrow mut bool,
+    alternatives: borrow mut Alternatives,
+) -> Result<u32, AllocError> {
+    var trees = Vector<u32>.create();
+    let firstSyntax = c.front.ast.at(list, 0);
+    let first = checkPattern(c, firstSyntax, typ, reference, failed, alternatives)?;
+    trees.push(first)?;
+    var locals = Vector<u32>.create();
+    patternLocals(c, first, mut locals)?;
+    var inner = Alternatives { active: true, names: Vector<AlternativeName>.create() };
+    for (local in locals.view()) {
+        inner.names.push(AlternativeName { symbol: c.hir.locals[local as usize].name, local: local, seen: false })?;
+    }
+    for (k in 1..list.count) {
+        for (i in 0..inner.names.length) {
+            inner.names[i].seen = false;
+        }
+        let alternative = c.front.ast.at(list, k);
+        trees.push(checkPattern(c, alternative, typ, reference, failed, mut inner)?)?;
+        for (name in inner.names.view()) {
+            if (!name.seen) {
+                let span = c.front.ast.patternSpans[alternative as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "this alternative does not bind ")?;
+                appendQuotedName(mut message, c, name.symbol)?;
+                appendText(mut message, ", which the first one does: every alternative binds the same names")?;
+                c.error(alternativesDiffer(), span.start, span.end, message)?;
+            }
+        }
+    }
+    let range = c.hir.list(trees.view())?;
+    return c.hir.addPattern(HirPattern.Or(range));
+}
+
+/// A binding in a pattern: a new local, or in a later alternative of an or-pattern the first alternative's local of
+/// that name (N0356 when it differs or is not there).
+fn declarePatternBinding(
+    c: borrow mut Checker,
+    name: u32,
+    mutable: bool,
+    payload: u32,
+    reference: u32,
+    alternatives: borrow mut Alternatives,
+) -> Result<u32, AllocError> {
+    if (!alternatives.active) {
+        return declareBinding(c, name, mutable, payload, reference);
+    }
+    let ident = c.front.ast.idents[name as usize];
+    for (i in 0..alternatives.names.length) {
+        if (alternatives.names[i].symbol != ident.symbol) {
+            continue;
+        }
+        alternatives.names[i].seen = true;
+        let local = alternatives.names[i].local;
+        let bindingType = if (reference == none()) payload else c.types.referenceTo(
+            payload,
+            c.types.info(reference).mutableReference,
+        )?;
+        let l = c.hir.locals[local as usize];
+        let isMutable = mutable && reference == none();
+        if (l.typ != bindingType || l.mutable != isMutable) {
+            var message = Vector<u8>.create();
+            appendQuotedName(mut message, c, ident.symbol)?;
+            if (l.typ != bindingType) {
+                appendText(mut message, " has type ")?;
+                appendQuotedType(mut message, c, bindingType)?;
+                appendText(mut message, " here but ")?;
+                appendQuotedType(mut message, c, l.typ)?;
+                appendText(mut message, " in the first alternative")?;
+            } else {
+                appendText(mut message, if (isMutable) " is 'var' here but not" else " is not 'var' here but is")?;
+                appendText(mut message, " in the first alternative")?;
+            }
+            appendText(mut message, ": every alternative binds each name alike")?;
+            c.error(alternativesDiffer(), ident.start, ident.end, message)?;
+        }
+        return Ok(local);
+    }
+    var message = Vector<u8>.create();
+    appendText(mut message, "this alternative binds ")?;
+    appendQuotedName(mut message, c, ident.symbol)?;
+    appendText(mut message, ", which the first one does not: every alternative binds the same names")?;
+    c.error(alternativesDiffer(), ident.start, ident.end, message)?;
+    let bindingType = if (reference == none()) payload else c.types.referenceTo(
+        payload,
+        c.types.info(reference).mutableReference,
+    )?;
+    return c.hir.addLocal(c.function, ident.symbol, bindingType, false, false, ident.start, ident.end);
+}
+
 /// A pattern for a value of `typ` (CheckPattern, §15.2); a failure is reported and becomes `_`.
 fn checkPattern(
     c: borrow mut Checker,
@@ -659,9 +817,11 @@ fn checkPattern(
     typ: u32,
     reference: u32,
     failed: borrow mut bool,
+    alternatives: borrow mut Alternatives,
 ) -> Result<u32, AllocError> {
     let span = c.front.ast.patternSpans[pattern as usize];
     match (c.front.ast.patterns[pattern as usize]) {
+        PatternNode.Or(list) => { return checkOrPattern(c, list, typ, reference, failed, alternatives); }
         PatternNode.Wildcard => { return c.hir.addPattern(HirPattern.Wildcard); }
         PatternNode.Null => {
             if (c.types.optionType(typ) == none()) {
@@ -734,9 +894,9 @@ fn checkPattern(
                         payload.push(c.hir.addPattern(HirPattern.Wildcard)?)?;
                         continue;
                     }
-                    payload.push(checkPattern(c, binding.nested, t, reference, failed)?)?;
+                    payload.push(checkPattern(c, binding.nested, t, reference, failed, alternatives)?)?;
                 } else if (binding.name != none()) {
-                    let local = declareBinding(c, binding.name, binding.mutable, t, reference)?;
+                    let local = declarePatternBinding(c, binding.name, binding.mutable, t, reference, alternatives)?;
                     payload.push(c.hir.addPattern(HirPattern.Binding(local))?)?;
                 } else {
                     payload.push(c.hir.addPattern(HirPattern.Wildcard)?)?;

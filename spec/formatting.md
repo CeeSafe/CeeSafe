@@ -130,7 +130,8 @@ The author's breaks of the same kinds (§3.1) are laid out by the same rules.
 ## 4. Spaces
 
 - One space around binary operators (`a + b`, `x == y`, `a && b`), around `=` and the compound assignments, around
-  `->` and `=>`, after `,`, `;` (inside a one-line form) and `:` (`x: i32`, `x: 1`).
+  `->` and `=>`, after `,`, `;` (inside a one-line form) and `:` (`x: i32`, `x: 1`). In patterns (ADR 0085), one space
+  around the `|` of an or-pattern (`' ' | '\t'`), and a guard is written `P if (g) =>`.
 - No space around `..` (`0..n`, `a[i..j]`, `a[..]`), `.`, inside parentheses, brackets and generic arguments
   (`f(a)`, `[1, 2]`, `Vector<i32>`), before `(` in a call or declaration, after a unary operator (`-x`, `!b`,
   `*p`), before `?` and `!` (`f()?`, `r!`), or before `,` and `;`.

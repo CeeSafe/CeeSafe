@@ -940,34 +940,54 @@ fn lowerNestedMatch(
         let arm = c.hir.arms[c.hir.at(arms, k) as usize];
         let next = newBlock(b)?;
         b.span = Span { start: arm.start, end: arm.end };
-        testPattern(c, n, b, arm.pattern, place, next)?;
+        // An or-pattern that binds is tried one alternative after another, each binding in its own places, then
+        // the arm's body (ADR 0085 §2.3); with a guard, each matching alternative runs it.
+        var alternatives = Vector<u32>.create();
+        expandAlternatives(c, arm.pattern, mut alternatives)?;
+        let body = if (alternatives.length > 1) newBlock(b)? else none();
         let depth = truncate<u32>(b.scopes.length);
         b.scopes.push(Vector<ScopeItem>.create())?;
-        let unpacks = consumes && match (c.hir.patterns[arm.pattern as usize]) {
-            HirPattern.Variant(_, listed, _) => listed,
-            _ => false,
-        };
-        var entered = true;
-        if (arm.guard != none()) {
-            let savedCaptures = b.captures.length;
-            if (unpacks) {
-                guardBindPattern(c, n, b, arm.pattern, place)?;
+        var entered = false;
+        for (j in 0..alternatives.length) {
+            let alternative = alternatives[j];
+            let fail = if (j + 1 < alternatives.length) newBlock(b)? else next;
+            testPattern(c, n, b, alternative, place, fail)?;
+            let unpacks = consumes && match (c.hir.patterns[alternative as usize]) {
+                HirPattern.Variant(_, listed, _) => listed,
+                _ => false,
+            };
+            if (arm.guard != none()) {
+                let savedCaptures = b.captures.length;
+                if (unpacks) {
+                    guardBindPattern(c, n, b, alternative, place)?;
+                } else {
+                    bindPattern(c, n, b, alternative, place, byReference)?;
+                }
+                if (consumes && movedLocal != none()) {
+                    b.captures.push(CapturePlace { local: movedLocal, field: none(), place: place })?;
+                }
+                lowerGuard(c, n, b, arm.guard, depth, fail)?;
+                b.captures.truncate(savedCaptures);
+                if (b.current != none() && unpacks) {
+                    unpackPattern(c, n, b, alternative, place)?;
+                }
+            } else if (unpacks) {
+                unpackPattern(c, n, b, alternative, place)?;
             } else {
-                bindPattern(c, n, b, arm.pattern, place, byReference)?;
+                bindPattern(c, n, b, alternative, place, byReference)?;
             }
-            if (consumes && movedLocal != none()) {
-                b.captures.push(CapturePlace { local: movedLocal, field: none(), place: place })?;
+            if (b.current != none()) {
+                entered = true;
+                if (body != none()) {
+                    terminate(n, b, NirTerminator.Goto(body))?;
+                }
             }
-            lowerGuard(c, n, b, arm.guard, depth, next)?;
-            b.captures.truncate(savedCaptures);
-            entered = b.current != none();
-            if (entered && unpacks) {
-                unpackPattern(c, n, b, arm.pattern, place)?;
+            if (j + 1 < alternatives.length) {
+                b.current = fail;
             }
-        } else if (unpacks) {
-            unpackPattern(c, n, b, arm.pattern, place)?;
-        } else {
-            bindPattern(c, n, b, arm.pattern, place, byReference)?;
+        }
+        if (body != none()) {
+            b.current = if (entered) body else none();
         }
         if (entered) {
             lowerStmt(c, n, b, arm.body)?;
@@ -986,6 +1006,77 @@ fn lowerNestedMatch(
     }
     b.current = if (joinReached) join else none();
     return Ok();
+}
+
+/// Does the pattern bind a name?
+fn patternBinds(c: borrow Checker, pattern: u32) -> bool {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Binding(_) => { return true; }
+        HirPattern.Variant(_, listed, payload) => {
+            if (listed) {
+                for (i in 0..payload.count) {
+                    if (patternBinds(c, c.hir.at(payload, i))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        HirPattern.Or(alternatives) => { return patternBinds(c, c.hir.at(alternatives, 0)); }
+        _ => { return false; }
+    }
+}
+
+/// The pattern as alternatives tried in order (ExpandAlternatives, ADR 0085 §2.3): each or-pattern that binds is
+/// split, left to right, so that each alternative binds in its own places; one that binds nothing stays, a test.
+fn expandAlternatives(c: borrow mut Checker, pattern: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    if (!patternBinds(c, pattern)) {
+        return out.push(pattern);
+    }
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                let alternative = c.hir.at(alternatives, k);
+                expandAlternatives(c, alternative, out)?;
+            }
+            return Ok();
+        }
+        HirPattern.Variant(variant, listed, payload) => {
+            if (!listed) {
+                return out.push(pattern);
+            }
+            // Every combination of the payloads' alternatives, the first payload's varying slowest.
+            var combinations = Vector<Vector<u32>>.create();
+            combinations.push(Vector<u32>.create())?;
+            for (i in 0..payload.count) {
+                var expanded = Vector<u32>.create();
+                let inner = c.hir.at(payload, i);
+                expandAlternatives(c, inner, mut expanded)?;
+                var grown = Vector<Vector<u32>>.create();
+                for (ci in 0..combinations.length) {
+                    for (e in expanded.view()) {
+                        var longer = Vector<u32>.create();
+                        for (xi in 0..combinations[ci].length) {
+                            longer.push(combinations[ci][xi])?;
+                        }
+                        longer.push(e)?;
+                        grown.push(longer)?;
+                    }
+                }
+                combinations = grown;
+            }
+            if (combinations.length == 1) {
+                return out.push(pattern);
+            }
+            for (ci in 0..combinations.length) {
+                let list = c.hir.list(combinations[ci].view())?;
+                let rebuilt = c.hir.addPattern(HirPattern.Variant(variant, true, list))?;
+                out.push(rebuilt)?;
+            }
+            return Ok();
+        }
+        _ => { return out.push(pattern); }
+    }
 }
 
 /// An arm's guard (LowerGuard, ADR 0085 §2.2): true continues in the arm; false ends what the arm bound so far
@@ -1057,6 +1148,18 @@ fn testPattern(
     fail: u32,
 ) -> Result<void, AllocError> {
     match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Or(alternatives) => {
+            // An or-pattern that binds nothing (ExpandAlternatives split the others): any alternative passes.
+            let pass = newBlock(b)?;
+            for (k in 0..alternatives.count) {
+                let alternative = c.hir.at(alternatives, k);
+                let next = if (k + 1 < alternatives.count) newBlock(b)? else fail;
+                testPattern(c, n, b, alternative, place, next)?;
+                terminate(n, b, NirTerminator.Goto(pass))?;
+                b.current = next;
+            }
+            b.current = pass;
+        }
         HirPattern.Literal(value) => {
             let left = placeOperand(c, n, b, place)?;
             let right = n.operand(NirOperand.Const(value), placeType(c, n, b, place))?;

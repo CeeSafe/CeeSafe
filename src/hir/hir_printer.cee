@@ -423,6 +423,16 @@ struct HirPrinter {
                     this.text(")")?;
                 }
             }
+            HirPattern.Or(alternatives) => {
+                this.text("(")?;
+                for (k in 0..alternatives.count) {
+                    if (k > 0) {
+                        this.text(" | ")?;
+                    }
+                    this.patternText(hir, types, symbols, hir.at(alternatives, k))?;
+                }
+                this.text(")")?;
+            }
         }
         return Ok();
     }

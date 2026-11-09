@@ -553,7 +553,8 @@ fn area(s: Shape) -> i64 {
 MatchStmt = 'match' '(' Expr ')' '{' Arm* '}'
 Arm       = Pattern Guard? '=>' Block ','?
 Guard     = 'if' '(' Expr ')'                                      -- ADR 0085 §2.2
-Pattern   = '_' | IntLiteral | '-' IntLiteral | 'true' | 'false' | 'null'
+Pattern   = '|'? AltPattern ('|' AltPattern)*                     -- or-patterns: ADR 0085 §2.3
+AltPattern = '_' | IntLiteral | '-' IntLiteral | 'true' | 'false' | 'null'
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
@@ -599,6 +600,13 @@ A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err
     left to right and depth first. Testing only reads tags and values: an arm that does not match moves nothing.
   - **Bindings** inside nested patterns follow the rules above. On a value scrutinee they copy, or move (§18.4).
     On a reference scrutinee they are references to the nested payload.
+  - **Or-patterns** (ADR 0085 §2.3). `A | B` matches when either alternative matches; alternatives are tested left
+    to right. A leading `|` is allowed. An or-pattern may stand anywhere a pattern may, `Some('a' | 'b')` included.
+    Every alternative binds the same names, each with the same type and the same `var`-ness (N0356 otherwise); the
+    arm's body sees one binding per name, made by whichever alternative matched. For usefulness each alternative is a
+    row of its own; an alternative that earlier arms or earlier alternatives already match is N0257, at that
+    alternative. With a guard, each alternative that matches, left to right, binds and runs the guard; the first
+    `true` wins.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
     through it is a separate `match` on that reference (N0205 otherwise).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every

@@ -165,6 +165,39 @@ the letter a
 something else
 ```
 
+### Alternatives
+
+`A | B` matches when either pattern does, at the top of an arm or inside a payload. When the alternatives bind
+names, each binds the same ones, with the same types.
+
+```ceesafe
+enum Token {
+    Word(u32),
+    Number(u32),
+    End,
+}
+
+fn isSpace(c: u8) -> bool => match (c) {
+    ' ' | '\t' | '\n' => true,
+    _ => false,
+};
+
+fn length(t: Token) -> u32 => match (t) {
+    Token.Word(n) | Token.Number(n) => n,
+    Token.End => 0,
+};
+
+fn main() {
+    Console.writeLine(isSpace('\t'));
+    Console.writeLine(length(Token.Number(3)));
+}
+```
+
+```text
+true
+3
+```
+
 ### Guards
 
 An arm can add a condition after its pattern, `if (…)`: the arm is taken only when the pattern matches and the

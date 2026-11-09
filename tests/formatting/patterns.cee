@@ -1,4 +1,4 @@
-// Patterns (formatting.md §4, ADR 0085): guards.
+// Patterns (formatting.md §4, ADR 0085): guards, or-patterns.
 fn f(o: u32?) -> u32 {
     match (o) {
         Some(n)   if(n>3)=> { return n; }
@@ -8,4 +8,13 @@ fn f(o: u32?) -> u32 {
         _ => {}
     }
     return match (o) { Some(n) if (n > 1) => n, _ => 0 };
+}
+
+fn g(c: u8, o: u32?) -> bool {
+    match (o) {
+        Some(1|2)|null => {}
+        | Some(3) | Some(4) => {}
+        _ => {}
+    }
+    return match (c) { ' '|'\t'  |  '\n' => true, _ => false };
 }

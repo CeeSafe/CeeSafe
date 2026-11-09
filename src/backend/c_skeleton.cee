@@ -180,6 +180,13 @@ fn emitProgram(
         e.line("#define CEE_FLOATS 1 /* rt.h's IEEE checks and float helpers (type-system.md §35.6) */")?;
     }
     e.line("#include \"ceesafe/rt.h\"")?;
+    if (n.debugAsserts.length > 0) {
+        // Whether `debugAssert` is compiled in (ADR 0087 §2.5): `#if CEE_DEBUG_ASSERTIONS` blocks test it.
+        e.t("#define ")?;
+        e.t(debugAssertMacro())?;
+        e.t(if (e.debugAssertions) " 1" else " 0")?;
+        e.emit()?;
+    }
     // The runtime's ABI version (Decision 0004); in the split form every unit reaches it through the program header.
     e.line("#if CEESAFE_ABI_VERSION != 1")?;
     e.line("#error \"this C was generated for CeeSafe's runtime ABI version 1\"")?;
@@ -820,7 +827,14 @@ fn appendStaticInitializer(
                 HirExpr.BorrowPath(_, p) => p,
                 _ => none(),
             };
-            if (borrowed != none()) {
+            let literal = match (c.hir.exprs[operand as usize]) {
+                HirExpr.StringConst(_) => c.types.isSlice(t),
+                _ => false,
+            };
+            if (literal) {
+                // `c"…"`'s bytes (ADR 0087 §2.4): a string literal as a `Slice<u8>`, laid out as a view is.
+                appendStaticInitializer(e, c, out, operand, t, place, cArray)?;
+            } else if (borrowed != none()) {
                 appendText(out, "((")?;
                 appendCTypeName(c, out, t)?;
                 appendText(out, ")&")?;

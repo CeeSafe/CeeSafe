@@ -477,6 +477,16 @@ fn staticFold(
             if (isStaticAddress(c, operand) && c.types.is(c.hir.exprTypes[e as usize], TypeKind.RawPointer)) {
                 return Ok(e);
             }
+            // A string literal's bytes, inside a `c"…"` (ADR 0087 §2.4).
+            match (c.hir.exprs[operand as usize]) {
+                HirExpr.StringConst(_) => {
+                    let target = c.hir.exprTypes[e as usize];
+                    if (c.types.isSlice(target) && c.types.info(c.types.info(target).pointee).element == c.types.u8) {
+                        return Ok(e);
+                    }
+                }
+                _ => {}
+            }
             // A string literal's address as a C string (§39.4).
             match (c.hir.exprs[operand as usize]) {
                 HirExpr.BuiltinCall(function, arguments) => {

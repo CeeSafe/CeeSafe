@@ -71,8 +71,9 @@ struct CEmitter {
     paths: Vector<Vector<u8>>;     // by source: its path, as #line names it
     unitNames: Vector<Vector<u8>>; // split mode: by source, its unit's name, or empty
     hasPendingLabel: bool;
-    structured: bool; // c-backend.md §3 (off: --flat-c)
-    capturing: bool;  // structured form: statement lines are collected for the tree
+    structured: bool;      // c-backend.md §3 (off: --flat-c)
+    debugAssertions: bool; // `debugAssert` compiled in (ADR 0087 §2.5)
+    capturing: bool;       // structured form: statement lines are collected for the tree
     capture: Vector<Vector<u8>>;
 
     fn create(trial: bool) -> CEmitter => CEmitter {
@@ -126,6 +127,7 @@ struct CEmitter {
         unitNames: Vector<Vector<u8>>.create(),
         hasPendingLabel: false,
         structured: false,
+        debugAssertions: false,
         capturing: false,
         capture: Vector<Vector<u8>>.create(),
     };

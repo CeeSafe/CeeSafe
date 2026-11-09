@@ -84,6 +84,18 @@ fn fold(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
         HirExpr.BoolConst(_) => { return Ok(e); }
         HirExpr.FloatConst(_) => { return Ok(e); }
         HirExpr.StringConst(_) => { return Ok(e); } // static data (ADR 0064 §2)
+        HirExpr.StructLiteral(_) => {
+            if (isCStringValue(c, e)) {
+                return Ok(e); // `c"…"`, static data too (ADR 0087 §2.4)
+            }
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "constant expressions can only contain literals, operators, casts and other constants",
+            )?;
+            c.error(notConstant(), span.start, span.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
         HirExpr.Error => { return Ok(e); }
         HirExpr.Unary(op, operand) => {
             let folded = fold(c, operand)?;

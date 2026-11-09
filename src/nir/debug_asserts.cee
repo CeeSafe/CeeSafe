@@ -1,0 +1,287 @@
+// `debugAssert`'s rule on writes and moves (ADR 0087 §2.5, type-system.md §8; N0360). Release builds leave the call
+// out, so its arguments may change nothing that existed before it: no assignment, `mut` loan, move or drop of a place
+// declared outside them, and no call, drop or operation whose inferred write fact (effect_check.cee's writeEffect())
+// holds: a write through a raw pointer or to a static, a C, `dyn`, closure or function-value call, or a `sleep` or
+// `suspend` effect. Runs on NIR after drop elaboration, with the effect checker's inference.
+
+fn debugAssertWrites() -> u32 => 360;
+
+/// The write operations of statement `s` that statementOperations does not list (WriteOperations): an assignment
+/// through a raw pointer, an assignment to or `mut` loan of a `static mut` (reading one is allowed); and every `sleep`
+/// or `suspend` operation, which is I/O or a suspension, also writes. Needs originsOf for the current function.
+fn writeOperations(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    e: borrow Effects,
+    s: u32,
+    out: borrow mut Vector<EffectOp>,
+) -> Result<void, AllocError> {
+    for (k in 0..out.length) {
+        if ((out[k].effects & (sleepEffect() | suspendEffect())) != 0) {
+            out[k].effects = out[k].effects | writeEffect();
+        }
+    }
+    let locals = borrow n.functions[e.current as usize].locals;
+    let statics = borrow e.origins[e.current as usize].staticLocals;
+    match (n.statements[s as usize]) {
+        NirStatement.Assign(place, value) => {
+            if (derefsRawPointer(c, n, locals, place)) {
+                out.push(textOp(writeEffect(), 15))?;
+            } else if (inMutableStatic(n, statics, place)) {
+                out.push(textOp(writeEffect(), 16))?;
+            }
+            let lent = match (n.rvalues[value as usize]) {
+                NirRvalue.Ref(mutable, from) => if (mutable) from else none(),
+                NirRvalue.Slice(mutable, from, _, _) => if (mutable) from else none(),
+                _ => none(),
+            };
+            if (lent != none() && inMutableStatic(n, statics, lent)) {
+                out.push(textOp(writeEffect(), 16))?;
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
+/// Is the place inside a `static mut` (`*S`, `(*S).f`, through the local holding its address)?
+fn inMutableStatic(n: borrow NirProgram, statics: borrow Vector<bool>, place: u32) -> bool {
+    let local = n.places[place as usize].local;
+    return (local as usize) < statics.length && statics[local as usize] &&
+        n.places[place as usize].projections.count > 0;
+}
+
+/// The locals of NIR function `function` that hold a `static mut`'s address (`_0 = static(S)`, a `borrow mut T`).
+fn mutableStaticLocals(c: borrow Checker, n: borrow NirProgram, function: u32) -> Result<Vector<bool>, AllocError> {
+    var marks = Vector<bool>.create();
+    growTo(mut marks, n.functions[function as usize].locals.length, false)?;
+    for (block in n.functions[function as usize].blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(place, value) => {
+                    match (n.rvalues[value as usize]) {
+                        NirRvalue.StaticAddress(_) => {
+                            let typ = n.rvalueTypes[value as usize];
+                            let local = n.places[place as usize].local;
+                            if (c.types.is(typ, TypeKind.Reference) && c.types.info(typ).mutableReference &&
+                                n.places[place as usize].projections.count == 0) {
+                                marks[local as usize] = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    return Ok(marks);
+}
+
+/// Does the place go through a raw pointer (`(*p).f` with `p: *mut T`)?
+fn derefsRawPointer(c: borrow Checker, n: borrow NirProgram, locals: borrow Vector<NirLocal>, place: u32) -> bool {
+    let p = n.places[place as usize];
+    var typ = locals[p.local as usize].typ;
+    for (k in 0..p.projections.count) {
+        let projection = n.projections[(p.projections.start + k) as usize];
+        let isDeref = match (projection.kind) {
+            ProjectionKind.Deref => true,
+            _ => false,
+        };
+        if (isDeref && c.types.is(typ, TypeKind.RawPointer)) {
+            return true;
+        }
+        typ = applyNirProjection(c, typ, projection);
+    }
+    return false;
+}
+
+/// What a `debugAssert` may not do to a place (DebugFinding): 0 nothing, 1 assigns, 2 lends as `mut`, 3 moves,
+/// 4 drops, 5 leaves the function.
+struct DebugFinding {
+    what: u32;
+    local: u32;
+}
+
+/// Is `local` a place that existed before the `debugAssert` `d`: a HIR local (a parameter included) it did not
+/// declare? Its temporaries, and the drop flags drop elaboration added, are its own.
+fn isOuterLocal(d: borrow NirDebugAssert, local: u32) -> bool =>
+    local < d.hirLocals && (local < d.firstLocal || local >= d.endLocal);
+
+fn notePlace(n: borrow NirProgram, d: borrow NirDebugAssert, place: u32, what: u32, found: borrow mut DebugFinding) {
+    let local = n.places[place as usize].local;
+    if (found.what == 0 && isOuterLocal(d, local)) {
+        found.what = what;
+        found.local = local;
+    }
+}
+
+fn noteMovedOperand(n: borrow NirProgram, d: borrow NirDebugAssert, operand: u32, found: borrow mut DebugFinding) {
+    match (n.operands[operand as usize]) {
+        NirOperand.Place(place, moved) => {
+            if (moved) {
+                notePlace(n, d, place, 3, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn noteMovedOperands(n: borrow NirProgram, d: borrow NirDebugAssert, operands: Range, found: borrow mut DebugFinding) {
+    for (k in 0..operands.count) {
+        noteMovedOperand(n, d, n.at(operands, k), found);
+    }
+}
+
+/// The places a statement of the assertion assigns, lends as `mut`, moves or drops.
+fn statementFinding(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    d: borrow NirDebugAssert,
+    locals: borrow Vector<NirLocal>,
+    s: u32,
+) -> DebugFinding {
+    var found = DebugFinding { what: 0, local: none() };
+    var value: u32 = none();
+    match (n.statements[s as usize]) {
+        NirStatement.Assign(place, v) => {
+            notePlace(n, d, place, 1, mut found);
+            value = v;
+        }
+        NirStatement.Eval(v) => { value = v; }
+        NirStatement.Drop(place, _) => { notePlace(n, d, place, 4, mut found); }
+        NirStatement.BoxFree(place, _) => { notePlace(n, d, place, 4, mut found); }
+        NirStatement.Unpack(source, _, targets) => {
+            for (k in 0..targets.count) {
+                let target = n.at(targets, k);
+                if (target != none() && !c.types.isCopy(locals[target as usize].typ)) {
+                    notePlace(n, d, source, 3, mut found);
+                }
+            }
+        }
+        _ => {}
+    }
+    if (value == none()) {
+        return found;
+    }
+    match (n.rvalues[value as usize]) {
+        NirRvalue.Use(o) => { noteMovedOperand(n, d, o, mut found); }
+        NirRvalue.Ref(mutable, place) => {
+            if (mutable) {
+                notePlace(n, d, place, 2, mut found);
+            }
+        }
+        NirRvalue.Slice(mutable, place, _, _) => {
+            if (mutable) {
+                notePlace(n, d, place, 2, mut found);
+            }
+        }
+        NirRvalue.Call(_, arguments) => { noteMovedOperands(n, d, arguments, mut found); }
+        NirRvalue.Builtin(_, arguments) => { noteMovedOperands(n, d, arguments, mut found); }
+        NirRvalue.Aggregate(fields) => { noteMovedOperands(n, d, fields, mut found); }
+        NirRvalue.EnumAggregate(_, payload) => { noteMovedOperands(n, d, payload, mut found); }
+        NirRvalue.Array(elements) => { noteMovedOperands(n, d, elements, mut found); }
+        NirRvalue.ArrayRepeat(o) => { noteMovedOperand(n, d, o, mut found); }
+        _ => {}
+    }
+    return found;
+}
+
+fn appendDebugAssertStart(message: borrow mut Vector<u8>) -> Result<void, AllocError> =>
+    appendText(
+        message,
+        "'debugAssert' must not change what exists before it, since release builds leave it out (ADR 0087 §2.5): this ",
+    );
+
+fn reportDebugAssert(
+    c: borrow mut Checker,
+    e: borrow mut Effects,
+    d: borrow NirDebugAssert,
+    message: Vector<u8>,
+) -> Result<void, AllocError> {
+    for (r in e.reported.view()) {
+        if (r.file == d.file && r.start == d.span.start && sameBytes(r.message.view(), message.view())) {
+            return Ok();
+        }
+    }
+    e.reported.push(EffectReport { file: d.file, start: d.span.start, message: copyBytes(message.view())? })?;
+    return c.front.diagnostics.error(debugAssertWrites(), d.file, d.span.start, d.span.end, message);
+}
+
+/// N0360 for each `debugAssert` of a compiled function: its first refused operation.
+fn checkDebugAsserts(c: borrow mut Checker, n: borrow NirProgram, e: borrow mut Effects) -> Result<void, AllocError> {
+    for (index in 0..n.debugAsserts.length) {
+        let d = n.debugAsserts[index];
+        let function = d.function;
+        if ((function as usize) >= n.functions.length || functionIsGeneric(c, n.functions[function as usize].source)) {
+            continue; // generic code is checked in its instances
+        }
+        e.current = function;
+        originsOf(c, n, e, function)?;
+        var message = Vector<u8>.create();
+        let blockCount = n.functions[function as usize].blocks.length;
+        for (position in 0..blockCount) {
+            if (message.length > 0) {
+                break;
+            }
+            let id = n.functions[function as usize].blocks[position].id;
+            if (id < d.firstBlock || id >= d.endBlock) {
+                continue;
+            }
+            let statementCount = n.functions[function as usize].blocks[position].statements.length;
+            for (i in 0..statementCount) {
+                let s = n.functions[function as usize].blocks[position].statements[i];
+                let found = statementFinding(c, n, d, n.functions[function as usize].locals, s);
+                if (found.what != 0) {
+                    appendDebugAssertStart(mut message)?;
+                    appendText(
+                        mut message,
+                        if (found.what == 1) "assigns "
+                            else if (found.what == 2) "lends as 'mut' "
+                            else if (found.what == 3) "moves "
+                            else "drops ",
+                    )?;
+                    let name = n.functions[function as usize].locals[found.local as usize].name;
+                    if (name != none()) {
+                        appendQuotedName(mut message, c, name)?;
+                    } else {
+                        appendText(mut message, "a value")?;
+                    }
+                    appendText(mut message, ", which exists before the call")?;
+                    break;
+                }
+                var ops = Vector<EffectOp>.create();
+                statementOperations(c, n, e, s, mut ops)?;
+                writeOperations(c, n, e, s, mut ops)?;
+                for (op in ops.view()) {
+                    if ((op.effects & writeEffect()) != 0) {
+                        appendDebugAssertStart(mut message)?;
+                        explainOp(c, e, op, writeEffect(), mut message)?;
+                        break;
+                    }
+                }
+                if (message.length > 0) {
+                    break;
+                }
+            }
+            if (message.length == 0) {
+                let terminator = n.functions[function as usize].blocks[position].terminator;
+                match (n.terminators[terminator as usize]) {
+                    NirTerminator.Return(_) => {
+                        appendDebugAssertStart(mut message)?;
+                        appendText(mut message, "leaves the function ('?' or 'return')")?;
+                    }
+                    NirTerminator.Exit(_) => {
+                        appendDebugAssertStart(mut message)?;
+                        appendText(mut message, "exits the process")?;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if (message.length > 0) {
+            reportDebugAssert(c, e, d, message)?;
+        }
+    }
+    return Ok();
+}

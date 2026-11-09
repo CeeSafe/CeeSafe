@@ -1,0 +1,764 @@
+// `@derive(Equal, HashKey, OrderKey)` (ADR 0087 §2.3, type-system.md §28.1): before the checker declares anything, each
+// derive on a struct or enum becomes an `impl` written as CeeSafe source and parsed into a unit of its own, so it is
+// ordinary checked code (`--dump-hir` shows it). Its tokens all carry the span of the derive's name in the attribute,
+// so what the checker reports about it points there.
+// - `Equal`: `impl DerivedEqual<S> for S` (lib/core), whose `derivedEqual` compares the fields in declaration order;
+//   `==` and `!=` on the type call it (src/check/equality.cee).
+// - `HashKey`: `impl HashKey<S> for S` (lib/std): `hash` feeds each field through `deriveHash`, an enum's variant index
+//   (a `u32`) first; `sameAs` is `derivedEqual`.
+// - `OrderKey`: `impl OrderKey<S> for S` (lib/std): `compareKey` compares the fields in order through `deriveCompare`,
+//   an enum's variant index first.
+// A generic type's type parameters get the interface as a further bound for HashKey and OrderKey; its `derivedEqual`
+// is checked for each instance, at the use (type-system.md §20.4), since `==` on an opaque `T` is N0207.
+
+fn invalidDerive() -> u32 => 290;
+
+/// The derives one item asks for, and where each is named.
+struct DeriveRequest {
+    equal: bool;
+    hashKey: bool;
+    orderKey: bool;
+    equalStart: u32;
+    equalEnd: u32;
+    hashStart: u32;
+    hashEnd: u32;
+    orderStart: u32;
+    orderEnd: u32;
+}
+
+/// The front end with every `@derive` expanded, and N0290 for a wrong one or an `impl DerivedEqual` written by hand.
+fn expandDerives(front: Frontend, fileTexts: borrow Vector<Vector<u8>>) -> Result<Frontend, AllocError> {
+    var f = front;
+    let unitCount = f.ast.units.length;
+    for (u in 0..unitCount) {
+        let file = f.ast.units[u].file;
+        let items = f.ast.units[u].items;
+        for (k in 0..items.count) {
+            let item = f.ast.at(items, k);
+            f = refuseHandWrittenEquality(f, file, item)?;
+            f = expandItem(f, file, item, fileTexts)?;
+        }
+    }
+    return Ok(f);
+}
+
+fn deriveError(f: borrow mut Frontend, file: u32, start: u32, end: u32, text: StringView) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, text)?;
+    appendText(mut message, " (ADR 0087 §2.3)")?;
+    return f.diagnostics.error(invalidDerive(), file, start, end, message);
+}
+
+fn identText(f: borrow Frontend, ident: u32) -> Slice<u8> =>
+    f.symbols.name(Symbol { id: f.ast.idents[ident as usize].symbol });
+
+/// N0290 for `impl DerivedEqual<…> for …` in source: only `@derive(Equal)` writes one.
+fn refuseHandWrittenEquality(front: Frontend, file: u32, item: u32) -> Result<Frontend, AllocError> {
+    var f = front;
+    let interfaceType = match (f.ast.items[item as usize].kind) {
+        ItemKind.Impl(i, _, _, _, _) => i,
+        _ => none(),
+    };
+    if (interfaceType == none()) {
+        return Ok(f);
+    }
+    let name = match (f.ast.types[interfaceType as usize]) {
+        TypeNode.Named(q) => q,
+        TypeNode.Generic(q, _) => q,
+        _ => QualifiedName { parts: Range { start: 0, count: 0 }, start: 0, end: 0 },
+    };
+    if (name.parts.count == 0) {
+        return Ok(f);
+    }
+    let last = f.ast.at(name.parts, name.parts.count - 1);
+    if (sameText(identText(f, last), "DerivedEqual")) {
+        deriveError(
+            mut f,
+            file,
+            name.start,
+            name.end,
+            "'DerivedEqual' is implemented only by '@derive(Equal)': '==' has one meaning, so it cannot be written by hand",
+        )?;
+    }
+    return Ok(f);
+}
+
+/// The derive request of an item's attributes, with N0290 for what is wrong; none asked for when there is no `@derive`.
+fn deriveRequest(f: borrow mut Frontend, file: u32, item: u32) -> Result<DeriveRequest, AllocError> {
+    var r = DeriveRequest {
+        equal: false,
+        hashKey: false,
+        orderKey: false,
+        equalStart: 0,
+        equalEnd: 0,
+        hashStart: 0,
+        hashEnd: 0,
+        orderStart: 0,
+        orderEnd: 0,
+    };
+    let attributes = f.ast.items[item as usize].attributes;
+    for (k in 0..attributes.count) {
+        let a = f.ast.attributes[f.ast.at(attributes, k) as usize];
+        if (!sameText(identText(f, a.name), "derive")) {
+            continue;
+        }
+        if (a.arguments.count == 0) {
+            deriveError(mut f, file, a.start, a.end, "'@derive' names what it derives: Equal, HashKey or OrderKey")?;
+            continue;
+        }
+        for (j in 0..a.arguments.count) {
+            let argument = f.ast.at(a.arguments, j);
+            let span = f.ast.exprSpans[argument as usize];
+            var ident: u32 = none();
+            match (f.ast.exprs[argument as usize]) {
+                ExprNode.Name(n, typeArguments) => {
+                    if (typeArguments.count == 0) {
+                        ident = n;
+                    }
+                }
+                _ => {}
+            }
+            var which: u32 = 0;
+            if (ident != none()) {
+                let text = identText(f, ident);
+                which = if (sameText(text, "Equal")) 1u32 else if (sameText(text, "HashKey")) 2u32 else if (sameText(
+                    text,
+                    "OrderKey",
+                )) 3u32 else 0u32;
+            }
+            let repeated = (which == 1 && r.equal) || (which == 2 && r.hashKey) || (which == 3 && r.orderKey);
+            if (which == 0) {
+                deriveError(
+                    mut f,
+                    file,
+                    span.start,
+                    span.end,
+                    "'@derive' takes Equal, HashKey and OrderKey; Clone, Default and Debug are written as methods",
+                )?;
+            } else if (repeated) {
+                deriveError(mut f, file, span.start, span.end, "this derive is named twice")?;
+            } else if (which == 1) {
+                r.equal = true;
+                r.equalStart = span.start;
+                r.equalEnd = span.end;
+            } else if (which == 2) {
+                r.hashKey = true;
+                r.hashStart = span.start;
+                r.hashEnd = span.end;
+            } else {
+                r.orderKey = true;
+                r.orderStart = span.start;
+                r.orderEnd = span.end;
+            }
+        }
+    }
+    if (r.hashKey && !r.equal) {
+        deriveError(
+            mut f,
+            file,
+            r.hashStart,
+            r.hashEnd,
+            "'@derive(HashKey)' needs Equal too, since 'sameAs' is '==': write '@derive(Equal, HashKey)'",
+        )?;
+        r.hashKey = false;
+    }
+    return Ok(r);
+}
+
+/// What a derived impl's text needs of its type: its name, `<r, T>` and the header's parameters.
+struct DeriveShape {
+    name: Vector<u8>;
+    arguments: Vector<u8>;              // `<r, T>`, or empty
+    regions: Vector<Vector<u8>>;        // `region r`
+    typeParameters: Vector<Vector<u8>>; // each type parameter's source, bounds included
+    typeNames: Vector<Vector<u8>>;      // each type parameter's name
+    fields: Vector<Vector<u8>>;         // a struct's field names
+    optionalFields: Vector<bool>;       // whether each field's type is written `T?`
+    optionalPayloads: Vector<bool>;     // whether each payload's type is, every variant's in order
+    variants: Vector<Vector<u8>>;       // an enum's variant names
+    payloadCounts: Vector<u32>;         // and their payload counts
+    isEnum: bool;
+}
+
+fn expandItem(
+    front: Frontend,
+    file: u32,
+    item: u32,
+    fileTexts: borrow Vector<Vector<u8>>,
+) -> Result<Frontend, AllocError> {
+    var f = front;
+    var isStruct = false;
+    var isEnum = false;
+    var typeParameters = Range { start: 0, count: 0 };
+    var regionParameters = Range { start: 0, count: 0 };
+    var members = Range { start: 0, count: 0 };
+    match (f.ast.items[item as usize].kind) {
+        ItemKind.Struct(s) => {
+            let decl = f.ast.structs[s as usize];
+            isStruct = !decl.isImported;
+            typeParameters = decl.typeParameters;
+            regionParameters = decl.regionParameters;
+            members = decl.fields;
+        }
+        ItemKind.Enum(variants, tps, rps) => {
+            isEnum = true;
+            typeParameters = tps;
+            regionParameters = rps;
+            members = variants;
+        }
+        _ => {}
+    }
+    if (!isStruct && !isEnum) {
+        return Ok(f); // `@derive` elsewhere is N0290 from the attribute checks
+    }
+    let request = deriveRequest(mut f, file, item)?;
+    if (!request.equal && !request.hashKey && !request.orderKey) {
+        return Ok(f);
+    }
+    var shape = DeriveShape {
+        name: copyBytes(identText(f, f.ast.items[item as usize].name))?,
+        arguments: Vector<u8>.create(),
+        regions: Vector<Vector<u8>>.create(),
+        typeParameters: Vector<Vector<u8>>.create(),
+        typeNames: Vector<Vector<u8>>.create(),
+        fields: Vector<Vector<u8>>.create(),
+        optionalFields: Vector<bool>.create(),
+        optionalPayloads: Vector<bool>.create(),
+        variants: Vector<Vector<u8>>.create(),
+        payloadCounts: Vector<u32>.create(),
+        isEnum: isEnum,
+    };
+    var names = Vector<Vector<u8>>.create();
+    for (k in 0..regionParameters.count) {
+        let p = f.ast.typeParameters[f.ast.at(regionParameters, k) as usize];
+        var region = copyBytes("region ".bytes())?;
+        appendBytes(mut region, identText(f, p.name))?;
+        shape.regions.push(region)?;
+        names.push(copyBytes(identText(f, p.name))?)?;
+    }
+    for (k in 0..typeParameters.count) {
+        let p = f.ast.typeParameters[f.ast.at(typeParameters, k) as usize];
+        let text = borrow fileTexts[file as usize];
+        shape.typeParameters.push(copyBytes(text[p.start as usize..p.end as usize])?)?;
+        shape.typeNames.push(copyBytes(identText(f, p.name))?)?;
+        names.push(copyBytes(identText(f, p.name))?)?;
+    }
+    if (names.length > 0) {
+        shape.arguments.push('<')?;
+        for (k in 0..names.length) {
+            if (k > 0) {
+                appendText(mut shape.arguments, ", ")?;
+            }
+            appendBytes(mut shape.arguments, names[k].view())?;
+        }
+        shape.arguments.push('>')?;
+    }
+    for (k in 0..members.count) {
+        let member = f.ast.at(members, k);
+        if (isEnum) {
+            let v = f.ast.variants[member as usize];
+            shape.variants.push(copyBytes(identText(f, v.name))?)?;
+            shape.payloadCounts.push(v.payload.count)?;
+            for (j in 0..v.payload.count) {
+                shape.optionalPayloads.push(isOptionalSyntax(f, f.ast.at(v.payload, j)))?;
+            }
+        } else {
+            let field = f.ast.fields[member as usize];
+            shape.fields.push(copyBytes(identText(f, field.name))?)?;
+            shape.optionalFields.push(isOptionalSyntax(f, field.typ))?;
+        }
+    }
+    if (request.equal) {
+        let text = equalText(shape)?;
+        f = parseDerived(f, file, text, request.equalStart, request.equalEnd)?;
+    }
+    if (request.hashKey) {
+        let text = hashKeyText(shape)?;
+        f = parseDerived(f, file, text, request.hashStart, request.hashEnd)?;
+    }
+    if (request.orderKey) {
+        let text = orderKeyText(shape)?;
+        f = parseDerived(f, file, text, request.orderStart, request.orderEnd)?;
+    }
+    return Ok(f);
+}
+
+fn isOptionalSyntax(f: borrow Frontend, typ: u32) -> bool => match (f.ast.types[typ as usize]) {
+    TypeNode.Optional(_) => true,
+    _ => false,
+};
+
+/// `a == b`, or for optionals `(a == null && b == null) || (a != null && b != null && a.asBorrow()! == b.asBorrow()!)`:
+/// two nulls are equal, and two payloads compare through borrows, so a payload is never moved (ADR 0087 §2.3).
+fn appendFieldEquality(
+    out: borrow mut Vector<u8>,
+    a: Slice<u8>,
+    b: Slice<u8>,
+    optional: bool,
+) -> Result<void, AllocError> {
+    if (!optional) {
+        appendBytes(out, a)?;
+        appendText(out, " == ")?;
+        return appendBytes(out, b);
+    }
+    appendText(out, "((")?;
+    appendBytes(out, a)?;
+    appendText(out, " == null && ")?;
+    appendBytes(out, b)?;
+    appendText(out, " == null) || (")?;
+    appendBytes(out, a)?;
+    appendText(out, " != null && ")?;
+    appendBytes(out, b)?;
+    appendText(out, " != null && ")?;
+    appendBytes(out, a)?;
+    appendText(out, ".asBorrow()! == ")?;
+    appendBytes(out, b)?;
+    return appendText(out, ".asBorrow()!))");
+}
+
+/// Lexes and parses a derived impl into a unit of `file`, every token at the derive's name.
+fn parseDerived(front: Frontend, file: u32, text: Vector<u8>, start: u32, end: u32) -> Result<Frontend, AllocError> {
+    var f = front;
+    var lexed = lex(text.view(), file, mut f.symbols, mut f.diagnostics)?;
+    for (k in 0..lexed.tokens.length) {
+        lexed.tokens[k].start = start;
+        lexed.tokens[k].end = end;
+    }
+    return parseFile(file, lexed, f);
+}
+
+/// `impl<region r, T: B + Extra> Interface<S<r, T>> for S<r, T> {`, with `extra` (an interface named after `: `, whose
+/// argument is the parameter) added to each type parameter's bounds, unless empty.
+fn appendImplHeader(
+    out: borrow mut Vector<u8>,
+    shape: borrow DeriveShape,
+    interfaceName: StringView,
+    extra: StringView,
+) -> Result<void, AllocError> {
+    appendText(out, "impl")?;
+    let count = shape.regions.length + shape.typeParameters.length;
+    if (count > 0) {
+        out.push('<')?;
+        var first = true;
+        for (r in shape.regions.view()) {
+            if (!first) {
+                appendText(out, ", ")?;
+            }
+            first = false;
+            appendBytes(out, r.view())?;
+        }
+        for (k in 0..shape.typeParameters.length) {
+            if (!first) {
+                appendText(out, ", ")?;
+            }
+            first = false;
+            appendBytes(out, shape.typeParameters[k].view())?;
+            if (extra.length > 0) {
+                var bounded = false;
+                for (b in shape.typeParameters[k].view()) {
+                    if (b == ':') {
+                        bounded = true;
+                    }
+                }
+                appendText(out, if (bounded) " + " else ": ")?;
+                appendText(out, extra)?;
+                out.push('<')?;
+                appendBytes(out, shape.typeNames[k].view())?;
+                out.push('>')?;
+            }
+        }
+        out.push('>')?;
+    }
+    appendText(out, " ")?;
+    appendText(out, interfaceName)?;
+    out.push('<')?;
+    appendSelfType(out, shape)?;
+    appendText(out, "> for ")?;
+    appendSelfType(out, shape)?;
+    return appendText(out, " {\n");
+}
+
+fn appendSelfType(out: borrow mut Vector<u8>, shape: borrow DeriveShape) -> Result<void, AllocError> {
+    appendBytes(out, shape.name.view())?;
+    return appendBytes(out, shape.arguments.view());
+}
+
+/// `E.V(l0, l1)`: a variant's pattern, its payloads bound to `prefix` and their index, or `_` when `prefix` is empty.
+fn appendVariantPattern(
+    out: borrow mut Vector<u8>,
+    shape: borrow DeriveShape,
+    v: usize,
+    prefix: StringView,
+) -> Result<void, AllocError> {
+    appendBytes(out, shape.name.view())?;
+    out.push('.')?;
+    appendBytes(out, shape.variants[v].view())?;
+    let count = shape.payloadCounts[v];
+    if (count > 0) {
+        out.push('(')?;
+        for (k in 0..count) {
+            if (k > 0) {
+                appendText(out, ", ")?;
+            }
+            if (prefix.length == 0) {
+                out.push('_')?;
+            } else {
+                appendText(out, prefix)?;
+                appendDecimal(out, k as u64)?;
+            }
+        }
+        out.push(')')?;
+    }
+    return Ok();
+}
+
+/// `impl DerivedEqual<S> for S`.
+fn equalText(shape: borrow DeriveShape) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    appendImplHeader(mut out, shape, "DerivedEqual", "")?;
+    appendText(mut out, "fn derivedEqual(borrow this, other: borrow ")?;
+    appendSelfType(mut out, shape)?;
+    appendText(mut out, ") -> bool => ")?;
+    if (!shape.isEnum) {
+        if (shape.fields.length == 0) {
+            appendText(mut out, "true")?;
+        }
+        for (k in 0..shape.fields.length) {
+            if (k > 0) {
+                appendText(mut out, " && ")?;
+            }
+            var a = copyBytes("this.".bytes())?;
+            appendBytes(mut a, shape.fields[k].view())?;
+            var b = copyBytes("other.".bytes())?;
+            appendBytes(mut b, shape.fields[k].view())?;
+            appendFieldEquality(mut out, a.view(), b.view(), shape.optionalFields[k])?;
+        }
+        appendText(mut out, ";\n}\n")?;
+        return Ok(out);
+    }
+    if (shape.variants.length == 0) {
+        appendText(mut out, "true;\n}\n")?;
+        return Ok(out);
+    }
+    appendText(mut out, "match (this) {\n")?;
+    var payload: usize = 0;
+    for (v in 0..shape.variants.length) {
+        appendVariantPattern(mut out, shape, v, "l")?;
+        appendText(mut out, " => match (other) {\n")?;
+        appendVariantPattern(mut out, shape, v, "r")?;
+        appendText(mut out, " => ")?;
+        let count = shape.payloadCounts[v];
+        if (count == 0) {
+            appendText(mut out, "true")?;
+        }
+        for (k in 0..count) {
+            if (k > 0) {
+                appendText(mut out, " && ")?;
+            }
+            var a = copyBytes("l".bytes())?;
+            appendDecimal(mut a, k as u64)?;
+            var b = copyBytes("r".bytes())?;
+            appendDecimal(mut b, k as u64)?;
+            appendFieldEquality(mut out, a.view(), b.view(), shape.optionalPayloads[payload])?;
+            payload += 1;
+        }
+        appendText(mut out, ",\n")?;
+        if (shape.variants.length > 1) {
+            appendText(mut out, "_ => false,\n")?;
+        }
+        appendText(mut out, "},\n")?;
+    }
+    appendText(mut out, "};\n}\n")?;
+    return Ok(out);
+}
+
+/// `let tag: u32 = k; deriveHash(tag, mut h);`: an enum's variant index, fed first.
+fn appendVariantTag(out: borrow mut Vector<u8>, v: usize) -> Result<void, AllocError> {
+    appendText(out, "let tag: u32 = ")?;
+    appendDecimal(out, v as u64)?;
+    return appendText(out, ";\nderiveHash(tag, mut h);\n");
+}
+
+/// `impl HashKey<S> for S`.
+fn hashKeyText(shape: borrow DeriveShape) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    appendImplHeader(mut out, shape, "HashKey", "HashKey")?;
+    appendText(mut out, "fn hash(borrow this, h: borrow mut Hasher) {\n")?;
+    if (!shape.isEnum) {
+        for (field in shape.fields.view()) {
+            appendText(mut out, "deriveHash(this.")?;
+            appendBytes(mut out, field.view())?;
+            appendText(mut out, ", mut h);\n")?;
+        }
+    } else if (shape.variants.length > 0) {
+        appendText(mut out, "match (this) {\n")?;
+        for (v in 0..shape.variants.length) {
+            appendVariantPattern(mut out, shape, v, "p")?;
+            appendText(mut out, " => {\n")?;
+            appendVariantTag(mut out, v)?;
+            for (k in 0..shape.payloadCounts[v]) {
+                appendText(mut out, "deriveHash(p")?;
+                appendDecimal(mut out, k as u64)?;
+                appendText(mut out, ", mut h);\n")?;
+            }
+            appendText(mut out, "}\n")?;
+        }
+        appendText(mut out, "}\n")?;
+    }
+    appendText(mut out, "}\nfn sameAs(borrow this, other: borrow ")?;
+    appendSelfType(mut out, shape)?;
+    appendText(mut out, ") -> bool => this.derivedEqual(other);\n}\n")?;
+    return Ok(out);
+}
+
+/// `let cK = deriveCompare(a, b); if (cK != 0) { return cK; }`.
+fn appendCompare(out: borrow mut Vector<u8>, k: usize, left: Slice<u8>, right: Slice<u8>) -> Result<void, AllocError> {
+    appendText(out, "let c")?;
+    appendDecimal(out, k as u64)?;
+    appendText(out, " = deriveCompare(")?;
+    appendBytes(out, left)?;
+    appendText(out, ", ")?;
+    appendBytes(out, right)?;
+    appendText(out, ");\nif (c")?;
+    appendDecimal(out, k as u64)?;
+    appendText(out, " != 0) {\nreturn c")?;
+    appendDecimal(out, k as u64)?;
+    return appendText(out, ";\n}\n");
+}
+
+/// `let side: i32 = match (place) { E.V(_) => 0, … };`: an enum value's variant index.
+fn appendIndexOf(
+    out: borrow mut Vector<u8>,
+    shape: borrow DeriveShape,
+    side: StringView,
+    place: StringView,
+) -> Result<void, AllocError> {
+    appendText(out, "let ")?;
+    appendText(out, side)?;
+    appendText(out, ": i32 = match (")?;
+    appendText(out, place)?;
+    appendText(out, ") {\n")?;
+    for (v in 0..shape.variants.length) {
+        appendVariantPattern(out, shape, v, "")?;
+        appendText(out, " => ")?;
+        appendDecimal(out, v as u64)?;
+        appendText(out, ",\n")?;
+    }
+    return appendText(out, "};\n");
+}
+
+/// `impl OrderKey<S> for S`.
+fn orderKeyText(shape: borrow DeriveShape) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    appendImplHeader(mut out, shape, "OrderKey", "OrderKey")?;
+    appendText(mut out, "fn compareKey(borrow this, other: borrow ")?;
+    appendSelfType(mut out, shape)?;
+    appendText(mut out, ") -> i32 {\n")?;
+    if (!shape.isEnum) {
+        for (k in 0..shape.fields.length) {
+            var left = copyBytes("this.".bytes())?;
+            appendBytes(mut left, shape.fields[k].view())?;
+            var right = copyBytes("other.".bytes())?;
+            appendBytes(mut right, shape.fields[k].view())?;
+            appendCompare(mut out, k, left.view(), right.view())?;
+        }
+    } else if (shape.variants.length > 0) {
+        appendIndexOf(mut out, shape, "li", "this")?;
+        appendIndexOf(mut out, shape, "ri", "other")?;
+        appendText(mut out, "if (li != ri) {\nreturn if (li < ri) -1 else 1;\n}\n")?;
+        appendText(mut out, "match (this) {\n")?;
+        for (v in 0..shape.variants.length) {
+            appendVariantPattern(mut out, shape, v, "l")?;
+            appendText(mut out, " => {\n")?;
+            let count = shape.payloadCounts[v];
+            if (count > 0) {
+                appendText(mut out, "match (other) {\n")?;
+                appendVariantPattern(mut out, shape, v, "r")?;
+                appendText(mut out, " => {\n")?;
+                for (k in 0..count) {
+                    var left = copyBytes("l".bytes())?;
+                    appendDecimal(mut left, k as u64)?;
+                    var right = copyBytes("r".bytes())?;
+                    appendDecimal(mut right, k as u64)?;
+                    appendCompare(mut out, k as usize, left.view(), right.view())?;
+                }
+                appendText(mut out, "}\n")?;
+                if (shape.variants.length > 1) {
+                    appendText(mut out, "_ => {}\n")?;
+                }
+                appendText(mut out, "}\n")?;
+            }
+            appendText(mut out, "}\n")?;
+        }
+        appendText(mut out, "}\n")?;
+    }
+    appendText(mut out, "return 0;\n}\n}\n")?;
+    return Ok(out);
+}
+
+// ---- `==` on derived types (src/check/equality.cee) ----
+
+/// lib/core's `DerivedEqual` method for `typ`, a struct or enum `@derive(Equal)` gave one; else none.
+fn derivedEqualMethod(c: borrow mut Checker, typ: u32) -> Result<u32, AllocError> {
+    var found = false;
+    for (i in c.implementations.view()) {
+        if (i.typ == typ && isDerivedEqualInterface(c, i.interfaceEntry)) {
+            found = true;
+        }
+    }
+    if (!found) {
+        return Ok(none());
+    }
+    let name = c.intern("derivedEqual")?;
+    return Ok(implMethodFor(c, typ, name));
+}
+
+fn isDerivedEqualInterface(c: borrow Checker, entry: u32) -> bool {
+    let interfaceEntry = borrow c.interfaces[entry as usize];
+    let file = interfaceEntry.file;
+    if ((file as usize) >= c.filePaths.length || !startsWithText(c.filePaths[file as usize].view(), "lib/core/")) {
+        return false;
+    }
+    let name = c.front.ast.items[interfaceEntry.item as usize].name;
+    return sameText(c.name(c.front.ast.idents[name as usize].symbol), "DerivedEqual");
+}
+
+/// Is the function being checked a derived `derivedEqual` (its name, and its syntax at a derive's `Equal`)?
+fn inDerivedEqual(c: borrow Checker) -> bool {
+    let function = c.function;
+    if (function == none()) {
+        return false;
+    }
+    let f = borrow c.hir.functions[function as usize];
+    if (!sameText(c.name(f.name), "derivedEqual") || f.syntax == none()) {
+        return false;
+    }
+    let syntax = borrow c.front.ast.functions[f.syntax as usize];
+    let file = f.file;
+    if ((file as usize) >= c.fileTexts.length || (syntax.end as usize) > c.fileTexts[file as usize].length ||
+        syntax.start > syntax.end) {
+        return false;
+    }
+    let text = borrow c.fileTexts[file as usize];
+    return sameText(text[syntax.start as usize..syntax.end as usize], "Equal");
+}
+
+/// `a == b` or `a != b` on a type `@derive(Equal)` gave equality: `a.derivedEqual(b)`, negated for `!=`; none when
+/// the type has none. Inside a generic `derivedEqual`, operands of a type parameter compare as `false`: that version
+/// is never compiled, and each instance is checked with its own types.
+fn derivedEquality(
+    c: borrow mut Checker,
+    op: BinaryOp,
+    left: u32,
+    right: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let lt = c.typeOf(left);
+    let rt = c.typeOf(right);
+    let boolType = c.types.boolType;
+    if (lt != rt) {
+        return Ok(none());
+    }
+    if (c.types.is(lt, TypeKind.TypeParameter) && inDerivedEqual(c)) {
+        return c.expr(HirExpr.BoolConst(false), boolType, span.start, span.end);
+    }
+    if (c.types.isString(lt)) {
+        // Two strings compare their text (ADR 0087 §2.3), as `a.view() == b.view()`.
+        let l = stringText(c, left)?;
+        let r = stringText(c, right)?;
+        return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
+    }
+    let method =
+        if (c.types.is(lt, TypeKind.Struct) || c.types.is(lt, TypeKind.Enum)) derivedEqualMethod(c, lt)? else none();
+    if (method == none()) {
+        if (inDerivedEqual(c) && !hasPlainEquality(c, lt)) {
+            return noFieldEquality(c, left, lt, span);
+        }
+        return Ok(none());
+    }
+    if (functionIsInstantiation(c, method) && c.hir.functions[method as usize].siteFile == none()) {
+        // An instance's error (N0222) is reported at the first `==` that uses it (type-system.md §20.4).
+        c.hir.functions[method as usize].siteFile = c.file;
+        c.hir.functions[method as usize].siteStart = span.start;
+        c.hir.functions[method as usize].siteEnd = span.end;
+    }
+    let l = borrowOperand(c, left)?;
+    let r = borrowOperand(c, right)?;
+    if (c.isBottom(l) || c.isBottom(r)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [l, r];
+    let list = c.hir.list(values[..])?;
+    let call = c.expr(HirExpr.Call(method, list), boolType, span.start, span.end)?;
+    if (binaryIndex(op) == 3) {
+        return c.expr(HirExpr.Unary(UnaryOp.Not, call), boolType, span.start, span.end);
+    }
+    return Ok(call);
+}
+
+/// A `String` operand's text, as `s.view()`.
+fn stringText(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
+    let span = c.spanOf(e);
+    let pointee = c.types.info(c.typeOf(e)).pointee;
+    let text = c.expr(HirExpr.Deref(e), pointee, span.start, span.end)?;
+    return borrowPlace(c, text, false, span);
+}
+
+/// `borrow e` for a place, else a borrow of the temporary.
+fn borrowOperand(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
+    let span = c.spanOf(e);
+    let reference = c.types.referenceTo(c.typeOf(e), false)?;
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Deref(through) => {
+            if (c.typeOf(through) == reference) {
+                return Ok(through); // already a `borrow T`, as `a.asBorrow()!` is
+            }
+        }
+        _ => {}
+    }
+    let place = toPlace(c, e)?;
+    if (place != none()) {
+        return c.expr(HirExpr.Borrow(false, place), reference, span.start, span.end);
+    }
+    return c.expr(HirExpr.BorrowTemp(false, e), reference, span.start, span.end);
+}
+
+/// Does `t` have `==` without a derive: numbers, `bool`, handles, pointers, views, fieldless enums, and slices, vectors
+/// and arrays of integers, bools and fieldless enums (type-system.md §6, §16.2)?
+fn hasPlainEquality(c: borrow Checker, t: u32) -> bool {
+    if (c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Float) || c.types.is(t, TypeKind.Bool) ||
+        c.types.is(t, TypeKind.Handle) || c.types.is(t, TypeKind.RawPointer) || c.types.is(t, TypeKind.CChar) ||
+        c.types.is(t, TypeKind.FunctionPointer) || c.types.isStringView(t) || isFieldlessEnum(c, t) ||
+        c.types.isBottom(t)) {
+        return true;
+    }
+    let element = sequenceElement(c, t);
+    if (element != none()) {
+        return isEqualityElement(c, element);
+    }
+    if (c.types.is(t, TypeKind.Array) && !c.types.isUnsized(t)) {
+        return isEqualityElement(c, c.types.info(t).element);
+    }
+    return false;
+}
+
+/// N0207 in a derived `derivedEqual`: the field or payload whose type has no `==`.
+fn noFieldEquality(c: borrow mut Checker, left: u32, t: u32, span: Span) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "'@derive(Equal)' compares ")?;
+    match (c.hir.exprs[left as usize]) {
+        HirExpr.FieldAccess(_, field) => {
+            appendText(mut message, "field ")?;
+            appendQuotedName(mut message, c, c.types.fields[field as usize].name)?;
+        }
+        _ => { appendText(mut message, "a payload")?; }
+    }
+    appendText(mut message, ", whose type ")?;
+    appendQuotedType(mut message, c, t)?;
+    appendText(
+        mut message,
+        " has no '==': derive Equal for it too, or compare the type in a method of its own (ADR 0087 §2.3)",
+    )?;
+    c.error(invalidOperandTypes(), span.start, span.end, message)?;
+    return c.errorResult(span.start, span.end);
+}

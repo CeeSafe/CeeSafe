@@ -1,0 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0
+// lib/core: what `@derive(Equal)` writes (ADR 0087 §2.3, type-system.md §28.1). Bundled with ceesafec and part of every
+// package.
+
+/// The equality `@derive(Equal)` gives a struct or enum: `a == b` on the type calls `a.derivedEqual(b)`, and `a != b`
+/// negates it. Only the compiler implements it: an `impl` written by hand is N0290, so `==` keeps one meaning
+/// (language-spec.md §6).
+public interface DerivedEqual<T> {
+    /// Whether `other` has the same fields, compared in declaration order; for an enum, the same variant and payloads.
+    fn derivedEqual(borrow this, other: borrow T) -> bool;
+}

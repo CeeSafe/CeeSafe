@@ -150,6 +150,9 @@ fn bfFileOpenAppend() -> u32 => 131;
 /// `File.openRegular(path)` (ADR 0078 §3).
 fn bfFileOpenRegular() -> u32 => 132;
 
+/// `debugAssert(condition[, message])` (ADR 0087 §2.5): HIR only; NIR lowers it to a configured `assert`.
+fn bfDebugAssert() -> u32 => 133;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
 
@@ -288,6 +291,7 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     130 => "FileSetLength",
     131 => "FileOpenAppend",
     132 => "FileOpenRegular",
+    133 => "DebugAssert",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

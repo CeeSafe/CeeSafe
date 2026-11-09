@@ -60,7 +60,8 @@ fn builtinAssert() -> u32 => 29; // ADR 0075 §2.8
 fn builtinPanic() -> u32 => 30;
 fn builtinReplace() -> u32 => 31; // ADR 0075 §2.11
 fn builtinSwap() -> u32 => 32;
-fn builtinCount() -> u32 => 33;
+fn builtinDebugAssert() -> u32 => 33; // ADR 0087 §2.5
+fn builtinCount() -> u32 => 34;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).

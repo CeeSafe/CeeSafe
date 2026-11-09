@@ -143,7 +143,7 @@ conversions.
 | `/ %` | integer | same | zero divisor → panic. `MIN / -1` → panic (overflow). `/` truncates toward zero, `%` has the sign of the dividend, and `MIN % -1` is `0` |
 | `& \| ^` | **unsigned** integer | same | |
 | `<< >>` | left: **unsigned** integer; right: any integer type | left type | amount `< 0` or `≥ bit width` → panic. `>>` is logical |
-| `== !=` | integer or `bool` | `bool` | |
+| `== !=` | integer or `bool`; also floats, views, pointers, fieldless enums, slices and arrays (§16.2), `String` (its text), and a type `@derive(Equal)` gave equality (§28.7) | `bool` | |
 | `< <= > >=` | integer | `bool` | |
 | `&& \|\|` | `bool` | `bool` | short-circuit |
 | unary `-` | **signed** integer | same | `-MIN` → panic |
@@ -217,7 +217,28 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     gets `CEE_PANIC_EXPLICIT` ("explicit panic") and the message is not shown.
   - `assert(condition)` and `assert(condition, message)`: `void`. When the condition is false, they panic with
     "assertion failed" or the message. The message is evaluated only then. Assertions are always checked; no build
-    leaves them out.
+    leaves them out (`debugAssert`, below, is the one that release builds leave out).
+  - `debugAssert(condition)` and `debugAssert(condition, message)` (ADR 0087 §2.5): `void`. They are checked in every
+    build, like any call, but evaluated only when debug assertions are on: under `build -g` (unless
+    `--no-debug-assertions`) or `--debug-assertions` (`build`, `run`), under `ceesafec test`, and in the interpreter
+    (unless `run --interp --no-debug-assertions`). When they are off, nothing of the call is compiled: the C is
+    `#if CEE_DEBUG_ASSERTIONS`, which the program defines as 0 or 1. A failure panics as `assert` does. Since the call
+    may vanish, its arguments may change nothing that exists before it (N0360):
+    - no assignment, `mut` argument or `borrow mut this` call on a place not declared inside the arguments, no move of
+      one (`debugAssert(consume(v))`), and no exit from the function (`?`);
+    - no write through a raw pointer or to a `static mut` (reading one is allowed);
+    - no `sleep` or `suspend` effect (§32.1): no I/O, no `await`. Allocating is allowed, and so is freeing what the
+      arguments allocated;
+    - no call of a C function, even one declared `@effects()`, and no call through a closure, a function value or a
+      `dyn` method. lib/core's atomic loads (`AtomicU32.load`, …) and `Cell.get` only read and are allowed; atomic
+      stores, swaps, fetches and compare-exchanges, lock acquisition and `RefCell.read`/`write` are not;
+    - a call is allowed when its callee's body, and everything it calls or drops, keeps these rules, writes through
+      its own `borrow mut` parameters aside (the caller's `mut` argument is what is checked). Drops count: a temporary
+      the arguments make is dropped inside the call, so its `drop` block is checked as a call. The checker infers
+      this per function with §32.1's machinery, as an internal fourth fact that no `@effects` list names.
+
+    To assert through something the rules refuse, bind the value to a local before the call, or put an `assert` in
+    `if (cfg("NAME")) { … }` (ADR 0080 §3.3).
   - `replace(mut place, value) -> T` (ADR 0075 §2.11): puts `value` in the place and returns the old value.
     `swap(mut a, mut b)` exchanges two places of one type (N0205 otherwise). Each argument is `mut` and a place
     (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`
@@ -252,6 +273,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217).
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
+- A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is
+  a string literal or a `c"…"`; other struct types are N0216.
 - **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
@@ -1794,6 +1817,22 @@ fn main() {
 Diagnostics: none new. `null` without an expected type is N0260; `?` and `!` on non-optional,
 non-result values are N0262.
 
+### 22.3 `CStr<region r>` and `c"…"` (ADR 0087 §2.4)
+
+lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after its end, valid for region `r` as a
+`StringView<r>` is (§25): what a C function taking a `const char *` needs.
+- `c"…"` (`grammar.md` §1.6) is a `CStr<static>`. The compiler appends the NUL; a `\0` inside is N0006.
+- `s.ptr() -> *CChar`, the first byte's address; `s.view() -> StringView<r>` and `s.length() -> usize`, the text
+  without the NUL; `s.bytesWithNul() -> Slice<r, u8>`, the text and its NUL.
+- `CStr.fromBytesWithNul<region r>(b: Slice<r, u8>) -> CStr<r>?` takes bytes whose last byte is their only NUL and
+  whose text before it is UTF-8 (as `view()` returns a `StringView`); otherwise it is `null`. The `CStr` is a view of
+  `b`: returning one made from a local `Vector`'s bytes is N0244, as for any view.
+- A struct field of type `CStr` needs a region parameter, as a `StringView`'s does (N0270).
+- Like a `StringView`, a `CStr` may be a constant's type (§10) and a static's (§39.2), initialised by a `c"…"`.
+- `"…\0".ptr as *CChar` stays valid, but nothing checks that its `\0` is there, and its view's length counts it.
+
+Diagnostics: none new.
+
 ## 23. `Vector<T, A>` and `String<A>` (M6d)
 
 ### 23.1 `Vector<T, A>`
@@ -1899,6 +1938,16 @@ fn main() -> i32 {
     `-` before a negative value and no leading zeros or `+`: `0`, `-128`, `18446744073709551615`. It is
     `Result<void, AllocError>`, two-phase and unchanged on failure, as for `append`. An integer literal argument has
     its usual default type (§4). Any other argument type is N0207;
+  - formatting helpers (lib/core, ADR 0087 §2.9), each `Result<void, AllocError>`: `s.appendHex(n, minWidth, upper)`
+    (`n: u64`; at least `minWidth` hexadecimal digits, zeros before them, uppercase when `upper`; no `0x`),
+    `s.appendOctal(n)`, `s.appendFixed(f, digits)` (`f: f64`; exactly `digits` digits after the point, none and no
+    point for 0, rounded half to even on the exact binary value as Rust's `{:.N}` and C's `%.Nf`; `NaN`, `inf`,
+    `-inf`; a negative zero keeps its `-`), and `s.appendPadded(text, width, align, fill)` (`text` in a field of
+    `width` Unicode scalar values, `align` a `TextAlign` (`Left`, `Right`, `Center`, whose extra fill goes after),
+    `fill` a Unicode scalar value, else a panic). They are lib/core's `AppendFormatted` interface, implemented for
+    `Vector<u8>` in lib/core and for `String` in lib/std (hosted), over lib/core's `Formatted`, which allocates nothing
+    of its own; `VectorBytes.appendHex(mut v, …)` and the others
+    are the same for a byte vector;
   - `s.clear()`, `s.length` (bytes), `s.capacity`;
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;
@@ -1990,7 +2039,9 @@ Diagnostics: none new. The errors reuse N0205, N0209, N0240–N0251, N0260 and N
 
 - **Keys.** `K: HashKey<K>`, a lib/std interface: `hash(borrow this, h: borrow mut Hasher)` feeds what identifies the
   key, and `sameAs(borrow this, other: borrow K)` compares two keys. lib/std implements it for the integer types,
-  `bool`, `String` and `Vector<u8>`; a program implements it for its own types. A key type without it is N0268.
+  `bool`, `String` and `Vector<u8>`; a program implements it for its own types, or derives it (`@derive(Equal,
+  HashKey)`, §28.7, through `deriveHash<K: HashKey<K>>(key: borrow K, h: borrow mut Hasher)`). A key type without it
+  is N0268.
 - **The hash.** `Hasher` is SipHash-1-3 keyed by 128 bits. `HashMap.create()` uses a key read once per process from the
   system's random source (`getrandom`, `arc4random_buf`, `rand_s`; fixed in the interpreter and CosmoOS userland), so
   colliding keys cannot be chosen against a map. `HashMap.withSeed(k0, k1)` fixes the key.
@@ -2617,6 +2668,7 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@noncopy` | a struct | a move type even if every field is Copy (OD-7; M8d) |
 | `@cfg("NAME")` | an `@export` function | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043), §28.4 |
 | `@test` | a top-level function with no parameters, not generic, not exported, returning `void` or `Result<void, E>` | a test that `ceesafec test` runs (ADR 0049; tooling.md §10); `build` leaves it out, and only the generated harness may call it (**N0348** otherwise) |
+| `@derive(Equal, HashKey, OrderKey)` | a struct or enum | one or more of these, each once: `==` and `!=`, a `HashKey` impl, an `OrderKey` impl (ADR 0087 §2.3, §28.7) |
 
 An unknown attribute, a known one in the wrong place or with the wrong arguments, or the same
 attribute twice is N0290.
@@ -2803,6 +2855,63 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
 Diagnostics: N0290 (attribute or extern declaration misuse), N0291 (a type that is not FFI-safe),
 N0292 (a C name that is invalid, a C keyword, or reserved). Calls to extern functions outside an
 unsafe context are N0280.
+
+### 28.7 `@derive` (ADR 0087 §2.3)
+
+`@derive(…)` on a struct or enum names one or more of `Equal`, `HashKey` and `OrderKey`, each once, and no others
+(N0290). Each writes an `impl`, ordinary code that is checked as written (`--dump-hir` shows it) and whose diagnostics
+point at the derive's name in the attribute. A generic type's impl has the type's own parameters; for `HashKey` and
+`OrderKey`, each type parameter is also bounded by that interface.
+
+- **`Equal`** writes `impl DerivedEqual<S> for S` (lib/core). `derivedEqual(borrow this, other: borrow S) -> bool`
+  compares the fields in declaration order, joined by `&&`; for an enum, the variant, then its payloads. `a == b` on
+  `S` is `a.derivedEqual(b)` and `a != b` its negation, both lending their operands. Each field's type must have
+  `==` (N0207 at the attribute, naming the field): what §6 and §16.2 give `==` (integers, `bool`, fieldless enums,
+  slices, vectors and arrays of them, `StringView`, raw pointers), floats (IEEE: `NaN != NaN`), `String` (its text),
+  another `Equal` type, a cell whose contents have it (§41.2), and through `borrow T` and `Box<T>` the referent. A
+  field written `T?` compares as two `null`s being equal, or two payloads compared through borrows. A generic type
+  has `==` for the instances whose arguments have it, checked at the first `==` on an instance (N0222); in generic
+  code over an opaque `T`, `==` stays N0207. `DerivedEqual` is implemented only by `@derive(Equal)`: an `impl` of it
+  in source is N0290, so `==` keeps one meaning (language-spec.md §6: no operator overloading).
+- **`HashKey`** writes `impl HashKey<S> for S` (§24.3) and needs `Equal` (N0290 otherwise). `hash` feeds each field
+  in order through lib/std's `deriveHash(field, mut h)`, which needs the field's type to implement `HashKey` (N0268);
+  an enum's variant index, as a `u32`, comes before its payloads. `sameAs` is `derivedEqual`.
+- **`OrderKey`** writes `impl OrderKey<S> for S` (lib/std, ADR 0075 §2.4): `compareKey` compares the fields
+  lexicographically, in declaration order, through `deriveCompare(a, b)` (N0268 for a field type without `OrderKey`);
+  an enum compares its variant index first. Declaration order is the order the author asks for; there is still no
+  `<` on the type.
+
+For a two-field struct, `@derive(Equal, HashKey, OrderKey) struct Point { x: i32; y: i32; }` writes:
+
+```ceesafe
+impl DerivedEqual<Point> for Point {
+    fn derivedEqual(borrow this, other: borrow Point) -> bool => this.x == other.x && this.y == other.y;
+}
+impl HashKey<Point> for Point {
+    fn hash(borrow this, h: borrow mut Hasher) {
+        deriveHash(this.x, mut h);
+        deriveHash(this.y, mut h);
+    }
+    fn sameAs(borrow this, other: borrow Point) -> bool => this.derivedEqual(other);
+}
+impl OrderKey<Point> for Point {
+    fn compareKey(borrow this, other: borrow Point) -> i32 {
+        let c0 = deriveCompare(this.x, other.x);
+        if (c0 != 0) {
+            return c0;
+        }
+        let c1 = deriveCompare(this.y, other.y);
+        if (c1 != 0) {
+            return c1;
+        }
+        return 0;
+    }
+}
+```
+
+Diagnostics: N0290 (a derive that is not one of the three, repeated, HashKey without Equal, `@derive` on anything but
+a struct or enum, a hand-written `impl DerivedEqual`), N0207 (a field without `==`), N0268 (a field type without the
+interface), N0222 (a generic instance whose field type has no `==`).
 
 ## 29. Systems capabilities (M8d)
 
@@ -4110,7 +4219,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   one exception, since they cannot change and outlive everything: `T` may be `StringView`, and in a `static` (not a
   `static mut`) also `[StringView; N]`, whose initialiser is an array of string literals or constant views (ADR 0066).
   Such a table is a place, so unlike a constant table (§10) it is sliced and borrowed where it is named:
-  `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`.
+  `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`. A lib/core `CStr` (§22.3)
+  initialised by a `c"…"` is static string data too (ADR 0087 §2.4).
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:

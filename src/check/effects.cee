@@ -62,7 +62,7 @@ fn isAttributeWord(name: Slice<u8>) -> bool =>
             name,
             "align",
         ) || sameText(name, "noncopy") || sameText(name, "placed") || sameText(name, "callback") ||
-        sameText(name, "cfg") || sameText(name, "test");
+        sameText(name, "cfg") || sameText(name, "test") || sameText(name, "derive");
 
 /// Reports repeated attributes and unknown ones (N0290), and returns those named in `known` (KnownAttributes).
 fn knownAttributes(

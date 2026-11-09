@@ -152,6 +152,7 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
             let view = c.types.stringView;
             return c.expr(HirExpr.StringConst(value), view, span.start, span.end); // static bytes: no loans (§22.2)
         }
+        ExprNode.CStringLiteral(text) => { return checkCStringLiteral(c, text, span); }
         ExprNode.Paren(inner) => {
             let value = synth(c, inner, expected)?;
             c.hir.exprSpans[value as usize] = span;
@@ -370,6 +371,12 @@ fn namedConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32, 
         HirExpr.BoolConst(b) => { return c.expr(HirExpr.BoolConst(b), t, span.start, span.end); }
         HirExpr.FloatConst(f) => { return c.expr(HirExpr.FloatConst(f), t, span.start, span.end); }
         HirExpr.StringConst(text) => { return c.expr(HirExpr.StringConst(text), t, span.start, span.end); }
+        HirExpr.StructLiteral(_) => {
+            if (isCStringValue(c, value)) {
+                return copiedCString(c, value, span); // ADR 0087 §2.4
+            }
+            return c.errorResult(span.start, span.end);
+        }
         _ => { return c.errorResult(span.start, span.end); }
     }
 }
@@ -934,6 +941,9 @@ fn synthCall(
                     }
                     if (b == builtinAssert()) {
                         return checkAssert(c, arguments, span);
+                    }
+                    if (b == builtinDebugAssert()) {
+                        return checkDebugAssert(c, arguments, span);
                     }
                     if (b == builtinPanic()) {
                         return checkPanic(c, arguments, span);

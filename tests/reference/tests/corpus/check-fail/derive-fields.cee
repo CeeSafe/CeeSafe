@@ -1,0 +1,29 @@
+// What a derive needs of each field (ADR 0087 §2.3): `==` for Equal (N0207, naming the field), an impl of the
+// interface for HashKey and OrderKey (N0268); each reported at the derive's name. `==` on an opaque `T` in generic
+// code stays N0207 (ADR 0072).
+struct Plain {
+    n: u32;
+}
+
+@derive(Equal) // error[N0207]
+struct HasPlain {
+    id: u32;
+    plain: Plain;
+}
+
+@derive(Equal, HashKey) // error[N0268]
+struct Measured {
+    weight: f64;
+}
+
+@derive(Equal, OrderKey) // error[N0268]
+enum Event {
+    At(u32, Plain2),
+}
+
+@derive(Equal)
+struct Plain2 {
+    n: u32;
+}
+
+fn same<T>(a: T, b: T) -> bool => a == b; // error[N0207]

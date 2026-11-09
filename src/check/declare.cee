@@ -61,7 +61,8 @@ fn builtinName(k: u32) -> StringView => match (k) {
     29 => "assert",
     30 => "panic",
     31 => "replace",
-    _ => "swap",
+    32 => "swap",
+    _ => "debugAssert",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -98,8 +99,9 @@ fn checkProgram(
     filePackage: Vector<u32>,
     entryName: Vector<u8>,
 ) -> Result<Checker, AllocError> {
+    let expanded = expandDerives(front, fileTexts)?; // `@derive` (ADR 0087 §2.3)
     var c = Checker {
-        front: front,
+        front: expanded,
         types: TypeTable.create(lp64())?,
         hir: HirProgram.create(),
         fileIsLibrary: fileIsLibrary,
@@ -502,7 +504,8 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
     let entry = c.front.ast.items[item as usize];
     var t = c.resolveType(typ, false)?;
     let span = c.front.ast.typeSpans[typ as usize];
-    if (c.types.is(t, TypeKind.Struct) || (c.types.is(t, TypeKind.Array) && !constElementOk(c, t))) {
+    if ((c.types.is(t, TypeKind.Struct) && !isCStrType(c, t)) ||
+        (c.types.is(t, TypeKind.Array) && !constElementOk(c, t))) {
         var message = Vector<u8>.create();
         appendText(
             mut message,
@@ -555,7 +558,8 @@ fn constElementOk(c: borrow Checker, t: u32) -> bool {
 /// A constant's type that may hold loans but only of static data (ADR 0064 §2): `StringView` or `[StringView; N]`,
 /// whose value is string literals.
 fn isConstantView(c: borrow Checker, t: u32) -> bool =>
-    c.types.isStringView(t) || (c.types.is(t, TypeKind.Array) && c.types.isStringView(c.types.info(t).element));
+    c.types.isStringView(t) || (c.types.is(t, TypeKind.Array) && c.types.isStringView(c.types.info(t).element)) ||
+        isCStrType(c, t); // `c"…"` (ADR 0087 §2.4)
 
 fn receiverIndex(kind: ReceiverKind) -> u32 => match (kind) {
     ReceiverKind.None => 0,

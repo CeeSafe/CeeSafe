@@ -29,7 +29,12 @@
 - [struct RefCellTaking](#struct-refcelltaking)
 - [struct CellRef](#struct-cellref)
 - [struct CellRefMut](#struct-cellrefmut)
+- [struct CStr](#struct-cstr)
+- [interface DerivedEqual](#interface-derivedequal)
 - [struct TextWriter](#struct-textwriter)
+- [enum TextAlign](#enum-textalign)
+- [struct Formatted](#struct-formatted)
+- [interface AppendFormatted](#interface-appendformatted)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -1581,6 +1586,44 @@ public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -
 
 Appends `x` as 8 bytes, little-endian, in two's complement.
 
+### VectorBytes.appendHex
+
+```ceesafe
+public fn appendHex(v: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+```
+
+Appends `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper` (ADR 0087 §2.9).
+
+### VectorBytes.appendOctal
+
+```ceesafe
+public fn appendOctal(v: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError>
+```
+
+Appends `value` in octal (ADR 0087 §2.9).
+
+### VectorBytes.appendFixed
+
+```ceesafe
+public fn appendFixed(v: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError>
+```
+
+Appends `value` with `digits` digits after the point, rounded half to even (ADR 0087 §2.9).
+
+### VectorBytes.appendPadded
+
+```ceesafe
+public fn appendPadded(
+    v: borrow mut Vector<u8>,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> Result<void, AllocError>
+```
+
+Appends `text` in a field `width` characters wide, filled with `fill` where `align` puts it (ADR 0087 §2.9).
+
 ## struct RawCell
 
 ```ceesafe
@@ -1817,6 +1860,67 @@ Safety: the guard set the state to -1, so no other guard is live and none can be
 ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
 shared, type-system.md §41.1).
 
+## struct CStr
+
+```ceesafe
+public struct CStr<region r>
+```
+
+A view of UTF-8 text with a NUL byte after its end, valid for region `r` as a `StringView<r>` is: what a C
+function taking a `const char *` needs. Copy; a field of this type needs a region parameter, as a view's does.
+
+### CStr.fromBytesWithNul
+
+```ceesafe
+public fn fromBytesWithNul(b: Slice<r, u8>) -> CStr<r>?
+```
+
+Bytes ending in a NUL that is their only one, as valid UTF-8 text before it; else null.
+
+### CStr.ptr
+
+```ceesafe
+public fn ptr(borrow this) -> *CChar
+```
+
+The address of the first byte, for C: the text is followed by its NUL.
+
+### CStr.view
+
+```ceesafe
+public fn view(borrow this) -> StringView<r>
+```
+
+The text, without the NUL.
+
+### CStr.length
+
+```ceesafe
+public fn length(borrow this) -> usize
+```
+
+The text's length in bytes, without the NUL.
+
+### CStr.bytesWithNul
+
+```ceesafe
+public fn bytesWithNul(borrow this) -> Slice<r, u8>
+```
+
+The text and its NUL: `length + 1` bytes.
+
+## interface DerivedEqual
+
+```ceesafe
+public interface DerivedEqual<T> {
+    fn derivedEqual(borrow this, other: borrow T) -> bool;
+}
+```
+
+The equality `@derive(Equal)` gives a struct or enum: `a == b` on the type calls `a.derivedEqual(b)`, and `a != b`
+negates it. Only the compiler implements it: an `impl` written by hand is N0290, so `==` keeps one meaning
+(language-spec.md §6).
+
 ## struct TextWriter
 
 ```ceesafe
@@ -1924,6 +2028,84 @@ public fn cText(borrow this) -> *CChar
 
 The text as a zero-terminated C string, valid while the writer's buffer is. An empty buffer, which can hold no
 terminator, gives an empty string that is not in it.
+
+## enum TextAlign
+
+```ceesafe
+public enum TextAlign {
+    Left,
+    Right,
+    Center,
+}
+```
+
+Where `appendPadded` puts text in a wider field (ADR 0087 §2.9): Rust's `{:<w}`, `{:>w}` and `{:^w}`. A centred
+text's extra fill character goes after it.
+
+## struct Formatted
+
+```ceesafe
+public struct Formatted
+```
+
+The formatting helpers of `String` and `VectorBytes` (ADR 0087 §2.9): what Rust's `{:x}`, `{:08X}`, `{:o}`,
+`{:.3}` and `{:>8}` write. Each appends to a byte vector; static functions, the struct is never made.
+
+### Formatted.hex
+
+```ceesafe
+public fn hex(out: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+```
+
+`value` in hexadecimal, at least `minWidth` digits (zeros before it), uppercase when `upper`; no `0x`.
+
+### Formatted.octal
+
+```ceesafe
+public fn octal(out: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError>
+```
+
+`value` in octal; no `0o`.
+
+### Formatted.fixed
+
+```ceesafe
+public fn fixed(out: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError>
+```
+
+`value` in decimal with exactly `digits` digits after the point (none, and no point, for 0), rounded half to
+even on its exact binary value, as Rust's `{:.N}` and C's `%.Nf` round; `NaN`, `inf` and `-inf` as Rust writes
+them. A negative zero keeps its sign.
+
+### Formatted.padded
+
+```ceesafe
+public fn padded(
+    out: borrow mut Vector<u8>,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> Result<void, AllocError>
+```
+
+`text` in a field of `width` characters (Unicode scalar values, as Rust counts them), filled with the
+character `fill` on the side `align` leaves; text at least as wide is appended as it is.
+
+## interface AppendFormatted
+
+```ceesafe
+public interface AppendFormatted {
+    fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>;
+    fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>;
+    fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>;
+    fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>;
+}
+```
+
+`s.appendHex(…)` and the other helpers (ADR 0087 §2.9), through `Formatted`: implemented here for a `Vector<u8>`,
+and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
+UTF-8.
 
 ## interface Iterator
 

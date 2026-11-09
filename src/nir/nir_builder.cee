@@ -3132,6 +3132,70 @@ fn lowerAssertion(
     return n.rvalue(NirRvalue.Builtin(bfAssert(), nothing), voidType, span); // a no-op: the assertion held
 }
 
+/// `debugAssert(condition[, message])` (ADR 0087 §2.5): an `assert` in blocks of their own, entered by a branch C
+/// compiles as `#if CEE_DEBUG_ASSERTIONS` and the interpreter takes when debug assertions are on. The arguments'
+/// temporaries end inside those blocks, so a release build neither makes nor drops them.
+fn lowerDebugAssertion(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    e: u32,
+    arguments: Range,
+    span: Span,
+) -> Result<u32, AllocError> {
+    if (b.current == none()) {
+        return Ok(none());
+    }
+    var firstLocal: u32 = 0;
+    var endLocal: u32 = 0;
+    for (d in c.hir.debugAsserts.view()) {
+        if (d.expr == e) {
+            firstLocal = d.firstLocal;
+            endLocal = d.endLocal;
+        }
+    }
+    let voidType = c.types.voidType;
+    let boolType = c.types.boolType;
+    let outer = copyBytes(b.cfg.view())?;
+    let join = newBlock(b)?;
+    let firstBlock = truncate<u32>(b.blocks.length);
+    let firstTemp = truncate<u32>(b.locals.length);
+    b.cfg = joinedCfg(outer.view(), debugAssertMacro().bytes())?;
+    let body = newBlock(b)?;
+    let on = constOperand(n, 1, boolType)?;
+    b.blocks[b.current as usize].branchCfg = copyBytes(debugAssertMacro().bytes())?;
+    terminate(n, b, NirTerminator.Branch(on, body, join))?;
+    b.current = body;
+    let saved = beginStatementTemps(b)?;
+    let held = lowerAssertion(c, n, b, bfAssert(), arguments, span)?;
+    if (held != none() && b.current != none()) {
+        emit(n, b, NirStatement.Eval(held))?;
+    }
+    endStatementTemps(n, b, saved)?;
+    if (b.current != none()) {
+        terminate(n, b, NirTerminator.Goto(join))?;
+    }
+    n.debugAsserts.push(
+        NirDebugAssert {
+            function: truncate<u32>(n.functions.length),
+            firstBlock: firstBlock,
+            endBlock: truncate<u32>(b.blocks.length),
+            firstTemp: firstTemp,
+            endTemp: truncate<u32>(b.locals.length),
+            firstLocal: firstLocal,
+            endLocal: endLocal,
+            hirLocals: truncate<u32>(c.hir.functions[b.function as usize].locals.length),
+            file: b.file,
+            span: span,
+        },
+    )?;
+    b.cfg = outer;
+    b.current = join;
+    let empty = Vector<u32>.create();
+    let nothing = n.list(empty.view())?;
+    return n.rvalue(NirRvalue.Builtin(bfAssert(), nothing), voidType, span); // a no-op, as a held `assert`
+}
+
 /// `swap(mut a, mut b)`, and `replace(mut place, value)` (ADR 0075 §2.11): the value goes to a temporary, the
 /// temporary and the place exchange their bytes (bfSwap), and the temporary, now the old value, is the result.
 /// Nothing is ever left moved-from, so no move rule is involved.
@@ -3585,6 +3649,9 @@ fn lowerBuiltinCall(
     }
     if (function == bfPanic() || function == bfAssert()) {
         return lowerAssertion(c, n, b, function, arguments, span);
+    }
+    if (function == bfDebugAssert()) {
+        return lowerDebugAssertion(c, n, b, e, arguments, span);
     }
     if (function == bfReplace() || function == bfSwap()) {
         return lowerReplace(c, n, b, function, arguments, typ, span);

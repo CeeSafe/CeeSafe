@@ -25,6 +25,7 @@ struct Lexed {
     chars: Vector<u32>;          // Unicode scalar values
     docs: Vector<DocComment>;    // in token order
     comments: Vector<Span>;      // every comment, in source order (for the formatter)
+    cStrings: Vector<u32>;       // the `strings` that are `c"…"` literals (ADR 0087 §2.4), in order
 }
 
 fn isIdentStart(c: i32) -> bool => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
@@ -117,7 +118,7 @@ struct Lexer {
             let start = this.pos;
             let c = text[this.pos] as i32;
             if (isIdentStart(c)) {
-                this.lexIdentifier(text, start, symbols)?;
+                this.lexIdentifier(text, start, symbols, diagnostics)?;
             } else if (isDecimalDigit(c)) {
                 this.lexNumber(text, start, diagnostics)?;
             } else if (c == '"' && this.ch(text, 1) == '"' && this.ch(text, 2) == '"') {
@@ -201,6 +202,7 @@ struct Lexer {
         text: Slice<u8>,
         start: usize,
         symbols: borrow mut Interner,
+        diagnostics: borrow mut Diagnostics,
     ) -> Result<void, AllocError> {
         while (isIdentContinue(this.ch(text, 0))) {
             this.pos += 1;
@@ -208,6 +210,9 @@ struct Lexer {
         let name = text[start..this.pos];
         if (name.length == 1 && name[0] == '_') {
             return this.add(TokenKind.Underscore, start, 0);
+        }
+        if (name.length == 1 && this.ch(text, 0) == '"') {
+            return this.lexPrefixedString(text, start, diagnostics);
         }
         match (keywordOf(name)) {
             Some(keyword) => { return this.add(keyword, start, 0); }
@@ -437,6 +442,47 @@ struct Lexer {
         }
         this.out.strings.push(value)?;
         return this.add(TokenKind.StringLiteral, start, truncate<u32>(this.out.strings.length - 1));
+    }
+
+    /// A letter right before `"` is a literal prefix (grammar.md §1.6, ADR 0087 §2.4): `c"…"` is a C string, whose text
+    /// may not hold a NUL (N0006); any other letter is reserved (N0100), and its literal is lexed as a plain one.
+    fn lexPrefixedString(
+        borrow mut this,
+        text: Slice<u8>,
+        start: usize,
+        diagnostics: borrow mut Diagnostics,
+    ) -> Result<void, AllocError> {
+        let prefix = text[start];
+        if (prefix != 'c') {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'")?;
+            message.push(prefix)?;
+            appendText(mut message, "\"' is a reserved literal prefix: only 'c\"…\"' (a C string) is defined")?;
+            this.error(diagnostics, expectedToken(), start, start + 1, message)?;
+            return this.lexString(text, start, diagnostics);
+        }
+        if (this.ch(text, 1) == '"' && this.ch(text, 2) == '"') {
+            var message = Vector<u8>.create();
+            appendText(mut message, "a C string is a one-line literal: 'c\"…\"', not a raw literal")?;
+            this.error(diagnostics, expectedToken(), start, start + 1, message)?;
+            let quote = this.pos;
+            return this.lexRawString(text, quote, diagnostics);
+        }
+        this.lexString(text, start, diagnostics)?;
+        let index = truncate<u32>(this.out.strings.length - 1);
+        this.out.cStrings.push(index)?;
+        var nul = false;
+        for (b in this.out.strings[index as usize].view()) {
+            if (b == 0) {
+                nul = true;
+            }
+        }
+        if (nul) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "a C string cannot hold a NUL byte: the compiler adds the one that ends it")?;
+            this.error(diagnostics, invalidEscape(), start, this.pos, message)?;
+        }
+        return Ok();
     }
 
     /// A raw literal (grammar.md §1.6, ADR 0074 §2.6): `"""` ends its line; the content is the lines up to one holding
@@ -749,6 +795,7 @@ fn lex(
             chars: Vector<u32>.create(),
             docs: Vector<DocComment>.create(),
             comments: Vector<Span>.create(),
+            cStrings: Vector<u32>.create(),
         },
         pendingDoc: Vector<Vector<u8>>.create(),
     };

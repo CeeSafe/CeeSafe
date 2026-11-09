@@ -1,0 +1,8 @@
+// A struct holding a `CStr` needs a region parameter, as one holding a `StringView` does (ADR 0087 §2.4, N0270).
+struct Holder {
+    name: CStr; // error[N0270]
+}
+
+struct Named<region r> {
+    name: CStr<r>;
+}

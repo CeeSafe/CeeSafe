@@ -1,0 +1,11 @@
+// A `CStr` made by `CStr.fromBytesWithNul` is a view of its bytes (ADR 0087 §2.4): it cannot outlive them (N0244).
+// One made from borrowed bytes lives as long as they do, and a `c"…"` is static data.
+fn escape() -> CStr<static> {
+    var v = Vector<u8>.create();
+    v.push(0)!;
+    return CStr.fromBytesWithNul(v.view())!; // error[N0244]
+}
+
+fn keep(v: borrow Vector<u8>) -> CStr? => CStr.fromBytesWithNul(v.view());
+
+fn literal() -> CStr<static> => c"static data";

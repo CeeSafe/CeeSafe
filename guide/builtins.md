@@ -116,6 +116,7 @@ No such file or directory
 | `==`, `!=` | compare the bytes |
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
+| `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |
 | `s.indexOf(t)`, `s.lastIndexOf(t)`, `s.indexOfByte(b)` | `usize?` |
 | `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)`, `s.equalsIgnoreAsciiCase(t)` | `bool` |
@@ -263,6 +264,7 @@ Medium
 | `*r` | the Copy value `r` refers to; `*r = v` writes through a `borrow mut` |
 | `replace(mut place, v)`, `swap(mut a, mut b)` | the old value, which nothing is left without; exchange two places |
 | `assert(cond)`, `assert(cond, message)`, `panic(message)` | panic when false; always (`never`) |
+| `debugAssert(cond)`, `debugAssert(cond, message)` | as `assert`, but only in debug builds, tests and the interpreter; may change nothing that exists before it ([Debugging](debugging.md#debug-assertions)) |
 | `r.isOk()`, `r.isErr()`, `r.ok()`, `r.err()`, `o.okOr(e)` | a `Result`'s tests and conversions; an optional as a `Result` |
 | `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |

@@ -395,4 +395,24 @@ public struct VectorBytes {
     /// Appends `x` as 8 bytes, little-endian, in two's complement.
     public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError> =>
         VectorBytes.pushU64LEFailing(v, truncate<u64>(x));
+    /// Appends `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper` (ADR 0087 §2.9).
+    public fn appendHex(v: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError> =>
+        Formatted.hex(v, value, minWidth, upper);
+
+    /// Appends `value` in octal (ADR 0087 §2.9).
+    public fn appendOctal(v: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError> =>
+        Formatted.octal(v, value);
+
+    /// Appends `value` with `digits` digits after the point, rounded half to even (ADR 0087 §2.9).
+    public fn appendFixed(v: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError> =>
+        Formatted.fixed(v, value, digits);
+
+    /// Appends `text` in a field `width` characters wide, filled with `fill` where `align` puts it (ADR 0087 §2.9).
+    public fn appendPadded(
+        v: borrow mut Vector<u8>,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError> => Formatted.padded(v, text, width, align, fill);
 }

@@ -1,0 +1,10 @@
+// `c"…"` (ADR 0087 §2.4) is a lib/core `CStr` struct literal over the text and the text with its NUL, as a
+// `Slice<u8>`; a constant's value is that literal at each use.
+const MODE: CStr = c"rb";
+
+fn mode() -> CStr<static> => MODE;
+
+fn main() {
+    let path = c"a\tb";
+    Console.writeLine(path.length() + mode().length());
+}

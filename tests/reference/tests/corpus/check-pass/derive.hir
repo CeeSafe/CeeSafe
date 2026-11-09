@@ -1,0 +1,71 @@
+(program
+  (fn main () -> void
+    (block
+      (let a#0: Point = (new Point (x 1:i32) (y 2:i32)))
+      (expr (Console.writeLine (call Point.derivedEqual (borrow a#0) (borrow a#0)):bool))
+      (expr (Console.writeLine (not (call Move.derivedEqual (borrow-temp (Move.Step a#0)) (borrow-temp (Move.Stay))):bool):bool))
+    )
+  )
+  (fn Point.derivedEqual ((this#0: borrow Point) (other#1: borrow Point)) -> bool
+    (block
+      (return (&& (== (. (deref this#0):Point x):i32 (. (deref other#1):Point x):i32):bool (== (. (deref this#0):Point y):i32 (. (deref other#1):Point y):i32):bool):bool)
+    )
+  )
+  (fn Point.hash ((this#0: borrow Point) (h#1: borrow mut Hasher)) -> void
+    (block
+      (expr (call deriveHash (borrow (*this#0).x) (reborrow-mut h#1)):void)
+      (expr (call deriveHash (borrow (*this#0).y) (reborrow-mut h#1)):void)
+    )
+  )
+  (fn Point.sameAs ((this#0: borrow Point) (other#1: borrow Point)) -> bool
+    (block
+      (return (call Point.derivedEqual this#0 other#1):bool)
+    )
+  )
+  (fn Point.compareKey ((this#0: borrow Point) (other#1: borrow Point)) -> i32
+    (block
+      (let c0#2: i32 = (call deriveCompare (borrow (*this#0).x) (borrow (*other#1).x)):i32)
+      (if (!= c0#2 0:i32):bool
+        (block
+          (return c0#2)
+        )
+      )
+      (let c1#3: i32 = (call deriveCompare (borrow (*this#0).y) (borrow (*other#1).y)):i32)
+      (if (!= c1#3 0:i32):bool
+        (block
+          (return c1#3)
+        )
+      )
+      (return 0:i32)
+    )
+  )
+  (fn Move.derivedEqual ((this#0: borrow Move) (other#1: borrow Move)) -> bool
+    (block
+      (return (value (match this#0 (arm Step (l0#2: borrow Point = payload 0) (block (yield (value (match other#1 (arm Step (r0#3: borrow Point = payload 0) (block (yield (call Point.derivedEqual l0#2 r0#3):bool))) (arm _ (block (yield false))))):bool))) (arm Stay (block (yield (value (match other#1 (arm Stay (block (yield true))) (arm _ (block (yield false))))):bool))))):bool)
+    )
+  )
+  (fn Move.hash ((this#0: borrow Move) (h#1: borrow mut Hasher)) -> void
+    (block
+      (match this#0
+        (arm Step (p0#2: borrow Point = payload 0)
+          (block
+            (let tag#3: u32 = 0:u32)
+            (expr (call deriveHash (borrow tag#3) (reborrow-mut h#1)):void)
+            (expr (call deriveHash p0#2 (reborrow-mut h#1)):void)
+          )
+        )
+        (arm Stay
+          (block
+            (let tag#4: u32 = 1:u32)
+            (expr (call deriveHash (borrow tag#4) (reborrow-mut h#1)):void)
+          )
+        )
+      )
+    )
+  )
+  (fn Move.sameAs ((this#0: borrow Move) (other#1: borrow Move)) -> bool
+    (block
+      (return (call Move.derivedEqual this#0 other#1):bool)
+    )
+  )
+)

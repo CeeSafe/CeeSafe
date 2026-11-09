@@ -1,0 +1,28 @@
+// option: debug-assertions
+// `debugAssert` with debug assertions on (`--debug-assertions`, ADR 0087 §2.5): built and interpreted, every
+// assertion is evaluated. Its arguments may allocate, and free what they allocated; the message is evaluated only when
+// the condition is false.
+fn squares(n: u32) -> Vector<u32> {
+    var v = Vector<u32>.create();
+    for (k in 0..n) {
+        v.push(k * k)!;
+    }
+    return v;
+}
+
+fn noisy() -> StringView {
+    return "never evaluated";
+}
+
+fn main() {
+    var calls: u32 = 0;
+    for (k in 1..4u32) {
+        debugAssert(squares(k).length == k as usize, noisy());
+        calls += 1;
+    }
+    var text = String.create();
+    text.append("abc")!;
+    debugAssert(text.view() == "abc");
+    Console.writeLine(calls);
+}
+// expect-stdout: 3

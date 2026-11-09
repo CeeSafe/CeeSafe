@@ -1,0 +1,9 @@
+// `c"…"` (ADR 0087 §2.4, grammar.md §1.6): the compiler adds the NUL, so one inside is N0006; any other single
+// letter right before `"` is a reserved literal prefix (N0100). A space makes `c` a name of its own.
+fn f() {
+    let a = c"a\0b"; // error[N0006]
+    let b = b"bytes"; // error[N0100]
+    let x = r"raw"; // error[N0100]
+    let ok = c"fine";
+    let spaced = c "two tokens"; // error[N0100]
+}

@@ -73,16 +73,21 @@ extern "C" {
     fn puts(s: *CChar) -> i32;
 }
 
-/// Safety: the literal ends in a zero byte, as `puts` and `strlen` need.
+/// Safety: a `c"…"` ends in a zero byte, as `puts` and `strlen` need.
 fn main() -> i32 {
-    let text = "hello from C\0";
-    let p = text.ptr as *CChar;
+    let text = c"hello from C";
+    let p = text.ptr();
     unsafe {
         puts(p);
     }
     return truncate<i32>(unsafe { strlen(p) });
 }
 ```
+
+`c"…"` is a C string: the compiler adds the zero byte that ends it, and refuses a `\0` inside. Its type is lib/core's
+`CStr`, a view with `ptr()` for C, `view()` and `length()` for CeeSafe (without the zero byte). It can be a constant or
+a static. `CStr.fromBytesWithNul(bytes)` makes one from bytes that end in their only zero byte, or gives `null`; like
+any view, it cannot outlive those bytes. `"…\0".ptr as *CChar` also works, but nothing checks the `\0` is there.
 
 C files are built with the program: `ceesafec build main.cee helpers.c -o program`, or the `c` list of a package's
 manifest.

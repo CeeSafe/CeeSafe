@@ -1,5 +1,6 @@
-// The built-in functions of ADR 0075: `assert` and `panic` (§2.8), `replace` and `swap` (§2.11). Each is a
-// HirExpr.BuiltinCall; a user item of the same name shadows it (Lookup finds package items first).
+// The built-in functions of ADR 0075: `assert` and `panic` (§2.8), `replace` and `swap` (§2.11); ADR 0087's
+// `debugAssert` (§2.5). Each is a HirExpr.BuiltinCall; a user item of the same name shadows it (Lookup finds package
+// items first).
 
 /// `assert(condition)` or `assert(condition, message)`: void; panics when the condition is false.
 fn checkAssert(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
@@ -23,6 +24,47 @@ fn checkAssert(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u3
     let list = c.hir.list(values.view())?;
     let voidType = c.types.voidType;
     return c.expr(HirExpr.BuiltinCall(bfAssert(), list), voidType, span.start, span.end);
+}
+
+/// `debugAssert(condition)` or `debugAssert(condition, message)` (ADR 0087 §2.5): checked as `assert` is, in every
+/// build; it records the locals its arguments declare, which the effect checker's N0360 lets it change.
+fn checkDebugAssert(c: borrow mut Checker, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 1 && arguments.count != 2) {
+        return builtinArity(
+            c,
+            arguments,
+            span,
+            "write 'debugAssert(condition)' or 'debugAssert(condition, message)'",
+        );
+    }
+    let function = c.function;
+    var firstLocal: u32 = 0;
+    if (function != none()) {
+        firstLocal = truncate<u32>(c.hir.functions[function as usize].locals.length);
+    }
+    var values = Vector<u32>.create();
+    let boolType = c.types.boolType;
+    let conditionSyntax = c.front.ast.at(arguments, 0);
+    values.push(checkExpr(c, conditionSyntax, boolType)?)?;
+    if (arguments.count == 2) {
+        let view = c.types.stringView;
+        let messageSyntax = c.front.ast.at(arguments, 1);
+        values.push(checkExpr(c, messageSyntax, view)?)?;
+    }
+    for (v in values.view()) {
+        if (c.isBottom(v)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    var endLocal = firstLocal;
+    if (function != none()) {
+        endLocal = truncate<u32>(c.hir.functions[function as usize].locals.length);
+    }
+    let list = c.hir.list(values.view())?;
+    let voidType = c.types.voidType;
+    let call = c.expr(HirExpr.BuiltinCall(bfDebugAssert(), list), voidType, span.start, span.end)?;
+    c.hir.debugAsserts.push(HirDebugAssert { expr: call, firstLocal: firstLocal, endLocal: endLocal })?;
+    return Ok(call);
 }
 
 /// `panic(message)`: never returns.

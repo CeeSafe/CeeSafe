@@ -83,7 +83,8 @@ fn main() {
 0
 ```
 
-An enum whose variants have no payloads compares with `==` and `!=`. An enum with payloads compares with `match`.
+An enum whose variants have no payloads compares with `==` and `!=`. An enum with payloads compares with `match`, or
+with `==` once it derives equality (below).
 
 ```ceesafe
 enum Kind { User, Alias, List }
@@ -99,6 +100,51 @@ fn main() {
 true
 true
 ```
+
+### Deriving equality, hashing and ordering
+
+Structs and enums have no `==` of their own. `@derive(Equal)` gives one: the fields are compared in declaration order
+(an enum's variant, then its payloads), and `!=` is the opposite. `@derive(HashKey)` (which needs `Equal`) makes the
+type a `HashMap` key, and `@derive(OrderKey)` an `OrderedMap` key ordered field by field.
+
+```ceesafe
+@derive(Equal, HashKey, OrderKey)
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+@derive(Equal)
+enum Shape {
+    Dot(Point),
+    Box(Point, Point),
+}
+
+fn main() {
+    let a = Point { x: 1, y: 2 };
+    let b = Point { x: 1, y: 5 };
+    Console.writeLine(a == b);
+    Console.writeLine(Shape.Box(a, b) == Shape.Box(a, b));
+    Console.writeLine(a.compareKey(b));
+    var seen = HashMap<Point, u32>.create();
+    seen.put(a, 1)!;
+    Console.writeLine(seen.contains(Point { x: 1, y: 2 }));
+}
+```
+
+```text
+false
+true
+-1
+true
+```
+
+Every field needs `==` itself: numbers, `bool`, strings and views, fieldless enums, byte vectors and slices, optionals
+of these (two `null`s are equal), and other types that derive `Equal`. Floats compare as IEEE values, so a `NaN` field
+makes a value unequal to itself. A field without `==` is an error at the attribute that names it; write a method of
+your own for such a type. The derived code is ordinary CeeSafe that `ceesafec check --dump-hir` prints: for `Point`,
+`impl DerivedEqual<Point> for Point { fn derivedEqual(borrow this, other: borrow Point) -> bool => this.x == other.x
+&& this.y == other.y; }`, and `a == b` calls it.
 
 ## `match`
 

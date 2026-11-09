@@ -53,7 +53,13 @@ fn processStructAttributes(c: borrow mut Checker, item: u32, s: u32) -> Result<v
     let generic = c.front.ast.structs[s as usize].typeParameters.count > 0 ||
         c.front.ast.structs[s as usize].regionParameters.count > 0;
     var known = Vector<u32>.create();
-    knownAttributes(c, attributes, "a struct", "repr align noncopy context threadSafe interiorMutable", mut known)?;
+    knownAttributes(
+        c,
+        attributes,
+        "a struct",
+        "repr align noncopy context threadSafe interiorMutable derive",
+        mut known,
+    )?;
     for (attribute in known.view()) {
         if (!sameText(attributeName(c, attribute), "interiorMutable")) {
             continue;
@@ -220,8 +226,11 @@ fn processEnumAttributes(
 ) -> Result<void, AllocError> {
     let attributes = c.front.ast.items[item as usize].attributes;
     var known = Vector<u32>.create();
-    knownAttributes(c, attributes, "an enum", "repr", mut known)?;
+    knownAttributes(c, attributes, "an enum", "repr derive", mut known)?;
     for (attribute in known.view()) {
+        if (sameText(attributeName(c, attribute), "derive")) {
+            continue; // expanded before the checker (src/check/derives.cee)
+        }
         let a = c.front.ast.attributes[attribute as usize];
         var integer = none();
         if (a.arguments.count == 1) {

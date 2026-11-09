@@ -81,7 +81,7 @@ Semantic checks run only when every file parsed without errors.
 | N0204 | Unknown type name | `fn f(a: int)` |
 | N0205 | Type mismatch against the expected type | `let a: bool = 1;`, `if (n) {}` |
 | N0206 | Integer literal out of range for its type | `256u8`, `let c: i8 = 128;` |
-| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
+| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
 | N0208 | `as` conversion that can lose information | `a as u32` with `a: i32` |
 | N0209 | Wrong number of arguments | `two(1)` |
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
@@ -179,7 +179,7 @@ N0271 is unassigned: destroying a value that holds loans while their referents a
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0290 | An unknown attribute, an attribute in the wrong place or with wrong arguments, a repeated attribute, an ABI other than `"C"`, or an extern declaration with a body, receiver or type parameters; `@export` on `main`; an effect name other than `sleep`, `alloc` and `suspend`; `async` on an extern, interface or `@constant` function (`type-system.md` §40.1) | `@inline fn f() {}`, `@repr(C) enum E { A }`, `extern "Rust" { … }` |
+| N0290 | An unknown attribute, an attribute in the wrong place or with wrong arguments, a repeated attribute, an ABI other than `"C"`, or an extern declaration with a body, receiver or type parameters; `@export` on `main`; a `@derive` of anything but `Equal`, `HashKey` and `OrderKey` on a struct or enum, `HashKey` without `Equal`, or an `impl DerivedEqual` written by hand (ADR 0087 §2.3); an effect name other than `sleep`, `alloc` and `suspend`; `async` on an extern, interface or `@constant` function (`type-system.md` §40.1) | `@inline fn f() {}`, `@repr(C) enum E { A }`, `extern "Rust" { … }` |
 | N0291 | A type that cannot cross the C boundary in an extern declaration, an export, or a `@repr(C)` struct's field; a `drop` on a `@repr(C)` struct that holds C state (ADR 0029) | `fn f(s: Slice<u8>);` in `extern "C"`, `@export fn g() -> Box<i32>` |
 | N0292 | A C name that is not a valid C identifier, is a C keyword (or `bool`, `true`, `false`, `NULL`, `main`), is reserved by C, or starts with `ceesafe_`, `cee_`, `CEE_` or `cee` and an uppercase letter | `@export("int")`, `fn ceesafe_alloc();` in `extern "C"`, `@repr(C) struct S { default: i32; }` |
 | N0293 | A hosted-only name (`Console`, `Process`, `File`, the heap allocators and every collection or box that needs them, …) or a `main` function in a package built with `--profile freestanding` (`profiles.md` §4.1) | `Console.writeLine(1);`, `let b = Box.create(5)!;` |
@@ -313,6 +313,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
 | N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3) | `HALF =>` with `const HALF: f64` |
 | N0359 | An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8) | `if (!(x is Some(n))) { … }` |
+| N0360 | A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5) | `debugAssert(events.next() != null)` with `events` declared before the call |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

@@ -19,7 +19,8 @@ permissions:
 env:
   SIGNING_IDENTITY: "Developer ID Application: Veeran Puthumkara (68PG74DU2D)"
   # The stage-0 compiler (Decision 0009; bootstrap/reference.md, "Release stage 0"): this repository's own release.
-  STAGE0_URL: https://github.com/CeeSafe/CeeSafe/releases/download/v0.3.2/ceesafec-linux-x64.tar.gz
+  STAGE0_TAG: v0.3.2
+  STAGE0_ASSET: ceesafec-linux-x64.tar.gz
   STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
 
 jobs:
@@ -52,9 +53,17 @@ jobs:
         with:
           fetch-depth: 0 # a stage 0's chain (tools/bootstrap_release.sh) may build earlier commits
       - name: ceesafec 0.3.2 (the stage-0 compiler)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Retried: the release-asset download has answered 504 for minutes at a time (run 42567832841).
-          curl -fsSL --retry 10 --retry-delay 30 --retry-all-errors "$STAGE0_URL" -o stage0.tar.gz
+          # Through the API (gh), then the download URL, retried: that URL has answered 504 for minutes at a time
+          # while the API's asset links kept working (run 42567832841).
+          for try in 1 2 3 4 5 6 7 8 9 10; do
+            gh release download "$STAGE0_TAG" -R "$GITHUB_REPOSITORY" -p "$STAGE0_ASSET" -O stage0.tar.gz --clobber && break
+            curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$STAGE0_TAG/$STAGE0_ASSET" -o stage0.tar.gz && break
+            [ "$try" = 10 ] && exit 1
+            echo "stage 0: download failed (try $try), retrying in 30 s"; sleep 30
+          done
           echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -
           mkdir -p stage0 && tar -xzf stage0.tar.gz -C stage0
           stage0/ceesafec --version

@@ -340,3 +340,30 @@ Proposed, for the implementation:
    `const fn` as `fn` until then? Recommended: **yes**.
 6. Use `L<type><value>_` for value arguments in C names (§2.6)? Recommended: **yes**; it is prefix-free with today's
    codes, composes with ADR 0082's package prefix, and is readable in a debugger.
+
+## 7. Implementation notes (0.26.0)
+
+**The release scan (§2.1)**, 2026-11-09: `python3 -I tools/scan_const_arguments.py ROOT…` mirrors the expression
+lookahead (`isGenericArgumentListAhead`, src/syntax/parser.cee) with `true` and `false` allowed, and lists each
+`Name '<' … '>'` that holds one of them and is followed by the lookahead's follow set, in `.cee` files and in the
+`ceesafe` blocks of `.md` files. Over the 0.25.0 tree (`src/`, `lib/`, `tests/`, `guide/`, `spec/`; 1,914 files or
+blocks) it finds 3 sites, all in this ADR's own example (§2.1); over `~/dev/CeeSafeLibs`, none; over
+`~/dev/CeeSafeApps`, 4, all in the Bun port's ADR evidence for this ADR (`analysis/probes/g1_const_generic.cee`,
+`analysis/adr-evidence/0083/p1_const_param.cee`, and the two ambiguity probes `fix/p_ambig3.cee` and
+`fix/p_ambig4.cee`, which test exactly this change). No program changes meaning or stops compiling. After the
+implementation, the further hits are its own tests, spec and guide.
+
+**Deviations and details.**
+- N0353's help is part of its message (`…; choose the instance at run time: `if (ts) run<true>(…) else
+  run<false>(…)``): diagnostics carry notes, not help lines.
+- A run-time value as an array length (`[u8; n]`) is N0353 too, as §2.3's "array length" reads; any other
+  expression that names no const parameter stays N0259.
+- In a struct's or enum's instance, an array length of 0 is N0259 at the use (`'Grouped<0>' cannot be
+  instantiated: …`); in a function's body, N0222 naming the values (§2.6).
+- In the generic version a read of a parameter is a call of a bodyless accessor owned by the parameter, as an
+  interface constant through a bound is (ADR 0086 §2.4); the HIR dump prints it `(call TS.TS)`.
+- ADR 0082 §2.3's package prefix (stage B) is not in the compiler yet, so §5's snapshot covers the names without
+  it; the rule changes only the mangled arguments, so it composes.
+- Two impls of one interface on one type that differ only by a const argument (`impl Pools<true> for C` and
+  `impl Pools<false> for C`) clash on method names (N0228), as they do for type arguments today.
+- §5's Bun ports (`P`, `BoundedArray`) are left to the port's M1.

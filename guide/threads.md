@@ -55,6 +55,10 @@ main.cee:4:26: error[N0334]: this thread's closure captures 'address', a '*u64',
   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
+A value that two threads *read* at once must also be `Share`. Most `Send` types are, but not a `StableVector`, whose
+`push` changes it through a shared reference, nor a `Box<dyn I + Send>`, whose contents the compiler cannot see, nor
+anything that holds one. Put such a value behind a `Mutex` to share it.
+
 `Send` and `Share` can also bound a generic function: `fn run<T: Send>(value: T)`.
 
 ## Sharing: `Arc`, `Mutex` and atomics

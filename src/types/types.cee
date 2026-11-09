@@ -1708,14 +1708,92 @@ struct TypeTable {
         return this.isSend(if (element != none()) element else unsized, visiting);
     }
 
-    /// May shared references be used from several threads (IsShare, §38.1)? In v1, exactly the Send types.
+    /// May shared references be used from several threads (IsShare, §38.1)? A Send type that does not own, through
+    /// any path, a value that changes through a shared reference (ReachesSharedChange).
     fn isShare(borrow this, id: u32) -> Result<bool, AllocError> {
         let t = this.types[id as usize];
         if (isKind(t.kind, TypeKind.TypeParameter)) {
             return Ok(this.typeParameters[t.typeParameter as usize].shareBound);
         }
         var visiting = Vector<u32>.create();
-        return this.isSend(id, mut visiting);
+        if (!this.isSend(id, mut visiting)?) {
+            return Ok(false);
+        }
+        var path = Vector<u32>.create();
+        return Ok(!this.reachesSharedChange(id, mut path)?);
+    }
+
+    /// Does a value of this type own one that changes through a shared reference (ReachesSharedChange, §38.1)? A
+    /// `StableVector` does (`push` takes `borrow this`, §24.2); so may a `dyn` box's hidden value and a type parameter
+    /// without a `Share` bound. The library's thread-safe types are Share by design (§38.3): the walk stops there.
+    /// Only owned parts are walked: `isShare` has already required Send, which refuses references and pointers.
+    fn reachesSharedChange(borrow this, id: u32, path: borrow mut Vector<u32>) -> Result<bool, AllocError> {
+        for (v in path.view()) {
+            if (v == id) {
+                return Ok(false); // a recursive type is decided by its other parts
+            }
+        }
+        path.push(id)?;
+        let result = this.reachesSharedChangeCore(id, path);
+        path.truncate(path.length - 1);
+        return result;
+    }
+
+    fn reachesSharedChangeCore(borrow this, id: u32, path: borrow mut Vector<u32>) -> Result<bool, AllocError> {
+        let t = this.types[id as usize];
+        match (t.kind) {
+            TypeKind.TypeParameter => { return Ok(!this.typeParameters[t.typeParameter as usize].shareBound); }
+            TypeKind.StableVector => { return Ok(true); }
+            TypeKind.Struct => {
+                let s = borrow this.structs[t.structDef as usize];
+                if (s.isThreadSafe) {
+                    return Ok(false);
+                }
+                let skip: usize = if (s.isMoveEnvironment) 1 else 0;
+                for (k in skip..s.fields.length) {
+                    if (this.reachesSharedChange(this.fields[s.fields[k] as usize].typ, path)?) {
+                        return Ok(true);
+                    }
+                }
+                return Ok(false);
+            }
+            TypeKind.Enum => {
+                let e = borrow this.enums[t.enumDef as usize];
+                if (e.resultOk != none()) {
+                    return Ok(
+                        this.reachesSharedChange(e.resultOk, path)? || this.reachesSharedChange(e.resultErr, path)?,
+                    );
+                }
+                if (e.optionType != none()) {
+                    return this.reachesSharedChange(e.optionType, path);
+                }
+                for (v in e.variants.view()) {
+                    for (f in this.variants[v as usize].payload.view()) {
+                        if (this.reachesSharedChange(this.fields[f as usize].typ, path)?) {
+                            return Ok(true);
+                        }
+                    }
+                }
+                return Ok(false);
+            }
+            TypeKind.Array => { return this.reachesSharedChange(t.element, path); }
+            TypeKind.Box => {
+                if (this.isDyn(t.pointee)) {
+                    return Ok(true);
+                }
+                return this.reachesSharedChange(t.pointee, path);
+            }
+            TypeKind.Vector => { return this.reachesSharedChange(this.containerElement(id), path); }
+            TypeKind.SlotMap => { return this.reachesSharedChange(t.element, path); }
+            _ => { return Ok(false); }
+        }
+    }
+
+    /// A vector's elements: its unsized [T]'s element, or str's u8 (as containerIsSend reads them).
+    fn containerElement(borrow this, id: u32) -> u32 {
+        let unsized = this.types[id as usize].pointee;
+        let element = this.types[unsized as usize].element;
+        return if (element != none()) element else unsized;
     }
 
     fn isSendType(borrow this, id: u32) -> Result<bool, AllocError> {

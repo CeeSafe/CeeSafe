@@ -1345,7 +1345,7 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
   N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
 - An **interface** lists method signatures. Every method has a receiver (`this`, `borrow this`,
-  `borrow mut this`). An interface may be generic (`interface Comparable<T>`). Its methods
+  `borrow mut this`). A signature ends with `;`: a body, a block or `=> e`, is N0100 (there are no default methods). An interface may be generic (`interface Comparable<T>`). Its methods
   cannot have type parameters of their own, and v0 has no `Self` type.
 - **`impl I for T { … }`** implements interface `I` (with its type arguments, `I<X>`) for a
   type `T`: a struct, an enum, or a built-in type such as `i32`. A **generic impl** (ADR 0054),
@@ -1711,7 +1711,8 @@ fn main() {
 - No `pop`, `clear`, views or `for` (the elements are not contiguous): iterate with
   `for (i in 0..sv.length)`. A `borrow mut sv[i]` is a mutable loan of `sv`, so `push` is rejected
   while one is live (N0241).
-- Not `Sync` (concurrency is later work). **Layout (v0):** `{ void *chunks[32]; u64 length }` (264
+- `Send` with a `Send` element, but never `Share` (§38.1): one shared `StableVector` cannot be pushed to from two
+  threads. Share it behind a `Mutex`. **Layout (v0):** `{ void *chunks[32]; u64 length }` (264
   bytes); element `i` is in chunk `⌊log2(i + 8)⌋ − 3`. At most `8 · (2³² − 1)` elements; beyond that
   `push` fails with `OutOfMemory`.
 
@@ -3681,9 +3682,17 @@ fn main() {
   - regions and pools;
   - `Thread<T>` (§38.2);
   - `Box<dyn I>` and `Box<dyn fn…>` without `+ Send`.
-- **`Share`**: shared references to a value may be used from several threads at once. It holds for every `Send` type,
-  since no v1 type can be changed through a shared reference except the library's, and those are `Share` by design.
-  The exception is `Thread<T>`.
+- **`Share`**: shared references to a value may be used from several threads at once. It holds for a `Send` type
+  that does not own, through any path of fields, payloads, elements or box contents, a value that changes through a
+  shared reference (ReachesSharedChange):
+  - a `StableVector<T, A>`, whose `push` takes `borrow this` (§24.2);
+  - a `dyn` box, `Box<dyn I + Send>` or `Box<dyn fn… + Send>`: what it holds is not known, and may be such a value;
+  - a type parameter without a `Share` bound.
+
+  The walk stops at the library's thread-safe types (§38.3), which are `Share` by design: `Mutex<StableVector<T>>` is
+  `Share`. `Thread<T>` is not `Send`, so not `Share`. (Until 2026-11-09, every `Send` type was `Share`, which let two
+  threads push to one shared `StableVector`, or share a `dyn` box, in safe code: a data race. ADR 0084 generalises
+  this rule to cells.)
 - Inference is structural and recursive. A recursive type is `Send` unless a path through it reaches a type that is
   not. Generic code knows only its bounds: a `T` is `Send` only under a `T: Send` bound.
 
@@ -3733,7 +3742,8 @@ fn main() {
   own files). Their `unsafe` internals are argued in `ownership.md` T1–T3.
 
 ### 38.4 `dyn … + Send`
-- `dyn I + Send` and `dyn fn(…) -> R + Send` (and with `mut`) are `dyn` types (§37, §36.5) whose boxes are `Send`. A
+- `dyn I + Send` and `dyn fn(…) -> R + Send` (and with `mut`) are `dyn` types (§37, §36.5) whose boxes are `Send`,
+  but not `Share` (§38.1): a box may move to another thread, not be read from two at once. A
   coercion to one needs `T: Send`, which for a move literal means `Send` captures (N0334). A `dyn … + Send` converts to
   the same `dyn` type without `+ Send` (the same value: they share their C representation and tables), never the
   other way. `Thread.spawn(f)` with `f: Box<dyn mut fn() -> T + Send>` runs a closure made elsewhere.

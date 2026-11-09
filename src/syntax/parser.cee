@@ -746,6 +746,22 @@ struct Parser {
         var expressionBody = none();
         if (this.parsingSignatures && this.eat(TokenKind.Semicolon)) {
             // An interface method: a signature without a body (type-system.md §21.1).
+        } else if (this.parsingSignatures && !this.parsingExtern &&
+            (this.at(TokenKind.OpenBrace) || this.at(TokenKind.FatArrow))) {
+            // A body on an interface method: §21.1's MethodSig ends with ';'. It was parsed and then never checked or
+            // used, so an ill-typed body compiled. Report it, and parse the body only to recover.
+            this.errorFound(
+                expectedToken(),
+                "expected ';' after an interface method's signature, found ",
+                ": an interface method has no body (type-system.md §21.1)",
+            )?;
+            if (this.at(TokenKind.OpenBrace)) {
+                let _ = this.parseBlock()?;
+            } else {
+                let _ = this.advance();
+                let _ = this.parseExpr()?;
+                this.expect(TokenKind.Semicolon)?;
+            }
         } else if (this.at(TokenKind.OpenBrace)) {
             body = this.parseBlock()?;
         } else if (this.eat(TokenKind.FatArrow)) {

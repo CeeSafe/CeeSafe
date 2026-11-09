@@ -1,0 +1,58 @@
+// Share (type-system.md §38.1): a Send type that owns a value changed through a shared reference is not Share. A
+// StableVector's push takes `borrow this` (§24.2), and a dyn box may hold anything, so neither may be read from two
+// threads at once, directly or inside another value, nor put in an Arc (N0334). Until 2026-11-09 every Send type
+// was Share, and the first case lost pushes at run time. Behind a Mutex it is Share: the last call has no error.
+
+interface Bump {
+    fn bump(borrow this);
+}
+
+struct Counter {
+    n: u32;
+}
+
+impl Bump for Counter {
+    fn bump(borrow this) {}
+}
+
+struct Holder {
+    names: StableVector<u32>?;
+}
+
+fn fill(sv: borrow StableVector<u32>) {
+    let r = sv.push(1);
+}
+
+fn fillHolder(h: borrow Holder) {
+    match (h.names) {
+        Some(sv) => { let r = sv.push(1); }
+        null => {}
+    }
+}
+
+fn fillLocked(m: borrow Mutex<StableVector<u32>>) {
+    var guard = m.lock();
+    let r = guard.data().push(1);
+}
+
+fn main() {
+    let sv = StableVector<u32>.create();
+    Thread.both(
+        () => { fill(sv); }, // error[N0334]
+        () => { fill(sv); }, // error[N0334]
+    );
+
+    let h = Holder { names: StableVector<u32>.create() };
+    Thread.both(() => { fillHolder(h); }, () => {}); // error[N0334]
+
+    let b: Box<dyn Bump + Send> = Box.create(Counter { n: 0 })!;
+    Thread.both(
+        () => { b.bump(); }, // error[N0334]
+        () => { b.bump(); }, // error[N0334]
+    );
+
+    let shared = Arc<StableVector<u32>>.create(StableVector<u32>.create())!; // error[N0334]
+
+    let locked = Mutex<StableVector<u32>>.create(StableVector<u32>.create())!;
+    Thread.both(() => { fillLocked(locked); }, () => { fillLocked(locked); });
+}

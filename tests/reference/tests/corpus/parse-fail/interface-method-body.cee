@@ -1,0 +1,9 @@
+// An interface method is a signature that ends with ';' (type-system.md §21.1): a body, as a block or after '=>', is
+// N0100. Until 2026-11-09 the body was parsed and then never checked or used, so an ill-typed one compiled.
+interface Named {
+    fn name(borrow this) -> u32;
+    fn greet(borrow this) -> u32 { // error[N0100]
+        return "not a number";
+    }
+    fn short(borrow this) -> u32 => 1; // error[N0100]
+}

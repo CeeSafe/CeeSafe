@@ -1,0 +1,12 @@
+// Range and or-pattern matches (ADR 0085 §2.10): a lexer-style match becomes one switch with a case per value; past
+// 1,024 values the match is sequential tests.
+fn kind(c: u8) -> i32 => match (c) {
+    'a'..='f' | 'A'..='C' | '_' => 1,
+    '0'..='3' => 2,
+    _ => 0,
+};
+fn wide(x: u32) -> i32 => match (x) {
+    0..=1024 => 1,
+    _ => 2,
+};
+fn main() -> i32 => kind('b') + wide(7);

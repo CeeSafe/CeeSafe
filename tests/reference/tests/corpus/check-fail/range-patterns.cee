@@ -1,0 +1,36 @@
+// Range patterns (ADR 0085 §2.4): exhaustiveness splits integers into intervals and names a missing value (N0256);
+// an empty range is N0357; a range or literal that earlier arms cover is N0257.
+fn a(c: u8) -> u32 => match (c) { // error[N0256]
+    0..='z' => 1,
+    0x80..=0xFF => 2,
+};
+fn b(c: u8) -> u32 => match (c) { // error[N0256]
+    0x00..=0x7F => 1,
+};
+fn d(x: i32) -> u32 => match (x) { // error[N0256]
+    0..=100 => 1,
+};
+fn e(c: u8) -> u32 => match (c) {
+    'z'..='a' => 1, // error[N0357]
+    5..5 => 2, // error[N0357]
+    _ => 0,
+};
+fn f(c: u8) -> u32 => match (c) {
+    'a'..='z' => 1,
+    'c'..='d' => 2, // error[N0257]
+    'x' => 3, // error[N0257]
+    _ => 0,
+};
+fn g(o: u8?) -> u32 => match (o) { // error[N0256]
+    Some(0..=200) => 1,
+    null => 0,
+};
+fn i(x: u32) -> u32 => match (x) { // error[N0256]
+    0 => 1,
+    1 => 2,
+};
+fn k(x: u8) -> u32 => match (x) {
+    0..=255 => 1,
+    _ => 2, // error[N0257]
+};
+fn main() {}

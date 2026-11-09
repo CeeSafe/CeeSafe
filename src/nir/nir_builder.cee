@@ -931,6 +931,12 @@ fn lowerNestedMatch(
     byReference: bool,
     movedLocal: u32,
 ) -> Result<void, AllocError> {
+    if (!consumes) {
+        var cases = Vector<NirCase>.create();
+        if (switchCases(c, arms, mut cases)?) {
+            return lowerSwitchMatch(c, n, b, s, arms, place, byReference, cases);
+        }
+    }
     let join = newBlock(b)?;
     var joinReached = false;
     for (k in 0..arms.count) {
@@ -1003,6 +1009,169 @@ fn lowerNestedMatch(
     if (b.current != none()) {
         // The reference's Terminate gives it the current span, not the match's it was made with.
         terminate(n, b, NirTerminator.Unreachable)?;
+    }
+    b.current = if (joinReached) join else none();
+    return Ok();
+}
+
+/// The most cases a range or or-pattern match expands to in one Switch (ADR 0085 §2.10): a fixed number, so the
+/// output is deterministic; past it the match takes the sequential tests.
+fn maxSwitchCases() -> usize => 1024;
+
+/// Appends the values a pattern of a Switch-able match names (SwitchValues): literals, ranges, variants without a
+/// payload list, and or-patterns of these; false for any other pattern, or past maxSwitchCases(). `arm` is the arm's
+/// index, kept in `target` until the blocks are made. A value an earlier arm names is left to that arm.
+fn switchValues(
+    c: borrow Checker,
+    pattern: u32,
+    arm: u32,
+    cases: borrow mut Vector<NirCase>,
+) -> Result<bool, AllocError> {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Literal(value) => { return addSwitchCase(cases, value, arm); }
+        HirPattern.Range(low, high) => {
+            var v = low;
+            loop {
+                if (!addSwitchCase(cases, v, arm)?) {
+                    return Ok(false);
+                }
+                if (compareIntValues(v, high) >= 0) {
+                    return Ok(true);
+                }
+                v = intSuccessor(v);
+            }
+        }
+        HirPattern.Variant(variant, listed, _) => {
+            if (listed) {
+                return Ok(false);
+            }
+            let index = c.types.variants[variant as usize].index;
+            return addSwitchCase(cases, intValue(index as i64), arm);
+        }
+        HirPattern.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (!switchValues(c, c.hir.at(alternatives, k), arm, cases)?) {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
+        _ => { return Ok(false); }
+    }
+}
+
+fn addSwitchCase(cases: borrow mut Vector<NirCase>, value: IntValue, arm: u32) -> Result<bool, AllocError> {
+    for (existing in cases.view()) {
+        if (sameInt(existing.value, value)) {
+            return Ok(true); // an earlier arm's
+        }
+    }
+    if (cases.length >= maxSwitchCases()) {
+        return Ok(false);
+    }
+    cases.push(NirCase { value: value, target: arm })?;
+    return Ok(true);
+}
+
+/// The cases of a match that lowers to one Switch (SwitchCases, ADR 0085 §2.10): no guard, and every arm a
+/// literal, range, variant without a payload list or or-pattern of these, or `_` or a binding (the otherwise). Each
+/// case's target is its arm's index.
+fn switchCases(c: borrow Checker, arms: Range, cases: borrow mut Vector<NirCase>) -> Result<bool, AllocError> {
+    for (k in 0..arms.count) {
+        let arm = c.hir.arms[c.hir.at(arms, k) as usize];
+        if (arm.guard != none()) {
+            return Ok(false);
+        }
+        match (c.hir.patterns[arm.pattern as usize]) {
+            HirPattern.Wildcard => { return Ok(true); }
+            HirPattern.Binding(_) => { return Ok(true); }
+            _ => {}
+        }
+        if (!switchValues(c, arm.pattern, k, cases)?) {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
+}
+
+/// A match lowered to one Switch (LowerSwitchMatch, ADR 0085 §2.10): on the discriminant, or the integer or bool;
+/// the first `_` or binding arm is the otherwise, which a binding arm binds.
+fn lowerSwitchMatch(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    s: u32,
+    arms: Range,
+    place: u32,
+    byReference: bool,
+    cases: borrow Vector<NirCase>,
+) -> Result<void, AllocError> {
+    let typ = placeType(c, n, b, place);
+    var value = none();
+    if (c.types.is(typ, TypeKind.Enum)) {
+        let u32Type = c.types.u32;
+        let tag = newTemp(b, u32Type)?;
+        let tagPlace = localPlace(n, tag)?;
+        let discriminant = n.rvalue(NirRvalue.Discriminant(place), u32Type, b.span)?;
+        assign(n, b, tagPlace, discriminant)?;
+        value = placeOperand(c, n, b, tagPlace)?;
+    } else {
+        value = placeOperand(c, n, b, place)?;
+    }
+    var armBlocks = Vector<u32>.create();
+    var otherwise = none();
+    var count = arms.count;
+    for (k in 0..arms.count) {
+        let block = newBlock(b)?;
+        armBlocks.push(block)?;
+        let arm = c.hir.arms[c.hir.at(arms, k) as usize];
+        let catchAll = match (c.hir.patterns[arm.pattern as usize]) {
+            HirPattern.Wildcard => true,
+            HirPattern.Binding(_) => true,
+            _ => false,
+        };
+        if (catchAll) {
+            otherwise = block;
+            count = k + 1;
+            break;
+        }
+    }
+    if (otherwise == none()) {
+        // Exhaustive without `_`: no other value can occur.
+        otherwise = newBlock(b)?;
+        let saved = b.current;
+        let savedSpan = b.span;
+        b.current = otherwise;
+        b.span = stmtSpan(c, s);
+        terminate(n, b, NirTerminator.Unreachable)?;
+        b.current = saved;
+        b.span = savedSpan;
+    }
+    let start = truncate<u32>(n.cases.length);
+    for (case in cases.view()) {
+        n.cases.push(NirCase { value: case.value, target: armBlocks[case.target as usize] })?;
+    }
+    terminate(
+        n,
+        b,
+        NirTerminator.Switch(value, Range { start: start, count: truncate<u32>(cases.length) }, otherwise),
+    )?;
+    let join = newBlock(b)?;
+    var joinReached = false;
+    for (k in 0..count) {
+        let arm = c.hir.arms[c.hir.at(arms, k) as usize];
+        b.current = armBlocks[k as usize];
+        b.span = Span { start: arm.start, end: arm.end };
+        let depth = truncate<u32>(b.scopes.length);
+        b.scopes.push(Vector<ScopeItem>.create())?;
+        bindPattern(c, n, b, arm.pattern, place, byReference)?;
+        lowerStmt(c, n, b, arm.body)?;
+        if (b.current != none()) {
+            emitStorageDead(c, n, b, depth)?;
+            terminate(n, b, NirTerminator.Goto(join))?;
+            joinReached = true;
+        }
+        b.scopes.truncate(b.scopes.length - 1);
     }
     b.current = if (joinReached) join else none();
     return Ok();
@@ -1166,6 +1335,23 @@ fn testPattern(
             let boolType = c.types.boolType;
             let test = n.rvalue(NirRvalue.Binary(BinaryOp.Equal, left, right), boolType, b.span)?;
             branchOnTest(c, n, b, test, fail)?;
+        }
+        HirPattern.Range(low, high) => {
+            // Two comparisons (ADR 0085 §2.10); a bound at the type's own end needs none.
+            let typ = placeType(c, n, b, place);
+            let boolType = c.types.boolType;
+            if (compareIntValues(low, integerBottom(c, typ)) != 0) {
+                let left = placeOperand(c, n, b, place)?;
+                let right = n.operand(NirOperand.Const(low), typ)?;
+                let test = n.rvalue(NirRvalue.Binary(BinaryOp.GreaterEqual, left, right), boolType, b.span)?;
+                branchOnTest(c, n, b, test, fail)?;
+            }
+            if (compareIntValues(high, integerTop(c, typ)) != 0) {
+                let left = placeOperand(c, n, b, place)?;
+                let right = n.operand(NirOperand.Const(high), typ)?;
+                let test = n.rvalue(NirRvalue.Binary(BinaryOp.LessEqual, left, right), boolType, b.span)?;
+                branchOnTest(c, n, b, test, fail)?;
+            }
         }
         HirPattern.Variant(variant, listed, payload) => {
             let u32Type = c.types.u32;

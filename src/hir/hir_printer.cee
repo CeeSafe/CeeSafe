@@ -423,6 +423,11 @@ struct HirPrinter {
                     this.text(")")?;
                 }
             }
+            HirPattern.Range(low, high) => {
+                appendIntValue(mut this.out, low)?;
+                this.text("..=")?;
+                appendIntValue(mut this.out, high)?;
+            }
             HirPattern.Or(alternatives) => {
                 this.text("(")?;
                 for (k in 0..alternatives.count) {

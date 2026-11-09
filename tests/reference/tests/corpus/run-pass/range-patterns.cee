@@ -1,0 +1,69 @@
+// Range patterns (ADR 0085 §2.4): lo..=hi and lo..hi on integers, with characters as bounds, beside literals and in
+// or-patterns; literals and ranges that together cover the type need no '_'.
+
+fn kind(c: u8) -> u32 => match (c) {
+    'a'..='z' | 'A'..='Z' | '_' => 1,
+    '0'..='9' => 2,
+    ' ' | '\t' | '\n' | '\r' => 3,
+    _ => 0,
+};
+
+fn half(x: u8) -> u32 => match (x) {
+    0x00..=0x7F => 1,
+    0x80..=0xFF => 2,
+};
+
+fn signs(x: i8) -> i32 => match (x) {
+    -128..0 => -1,
+    0 => 0,
+    1..=127 => 1,
+};
+
+fn big(x: u32) -> u32 => match (x) {
+    0..2000 => 1,
+    _ => 2,
+};
+
+fn nested(o: u8?) -> u32 => match (o) {
+    Some(0..=9) => 1,
+    Some(10..=255) => 2,
+    null => 0,
+};
+
+fn main() {
+    Console.writeLine(kind('q'));
+    Console.writeLine(kind('Q'));
+    Console.writeLine(kind('_'));
+    Console.writeLine(kind('7'));
+    Console.writeLine(kind('\t'));
+    Console.writeLine(kind('{'));
+    Console.writeLine(half(127));
+    Console.writeLine(half(128));
+    Console.writeLine(signs(-128));
+    Console.writeLine(signs(-1));
+    Console.writeLine(signs(0));
+    Console.writeLine(signs(127));
+    Console.writeLine(big(1999));
+    Console.writeLine(big(2000));
+    Console.writeLine(nested(Some(9)));
+    Console.writeLine(nested(Some(10)));
+    Console.writeLine(nested(null));
+}
+
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0

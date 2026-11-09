@@ -288,6 +288,7 @@ fn checkArmBody(
 fn hasNested(c: borrow Checker, pattern: u32) -> bool {
     match (c.front.ast.patterns[pattern as usize]) {
         PatternNode.Or(_) => { return true; }
+        PatternNode.Range(_, _, _) => { return true; }
         PatternNode.Variant(_, _, bindings) => {
             for (k in 0..bindings.count) {
                 if (c.front.ast.bindings[c.front.ast.at(bindings, k) as usize].nested != none()) {
@@ -356,10 +357,19 @@ fn checkMatch(
         ok = false;
     }
     if (ok) {
+        // An integer match without `_` too: its literals and ranges may cover the type (ADR 0085 §2.4).
+        var nested = c.types.is(typ, TypeKind.Integer);
         for (k in 0..arms.count) {
             if (hasNested(c, armPattern(c, arms, k, isValue)) || armGuard(c, arms, k, isValue) != none()) {
                 return checkNestedMatch(c, scrutineeSyntax, arms, isValue, branches, span, scrutinee, typ, reference);
             }
+            match (c.front.ast.patterns[armPattern(c, arms, k, isValue) as usize]) {
+                PatternNode.Wildcard => { nested = false; }
+                _ => {}
+            }
+        }
+        if (nested) {
+            return checkNestedMatch(c, scrutineeSyntax, arms, isValue, branches, span, scrutinee, typ, reference);
         }
     }
     var armIds = Vector<u32>.create();
@@ -383,6 +393,7 @@ fn checkMatch(
         c.pushScope()?;
         match (c.front.ast.patterns[pattern as usize]) {
             PatternNode.Or(_) => { patternFailed = true; } // the nested path's (hasNested)
+            PatternNode.Range(_, _, _) => { patternFailed = true; }
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -822,6 +833,9 @@ fn checkPattern(
     let span = c.front.ast.patternSpans[pattern as usize];
     match (c.front.ast.patterns[pattern as usize]) {
         PatternNode.Or(list) => { return checkOrPattern(c, list, typ, reference, failed, alternatives); }
+        PatternNode.Range(low, high, inclusive) => {
+            return checkRangePattern(c, low, high, inclusive, typ, span, failed);
+        }
         PatternNode.Wildcard => { return c.hir.addPattern(HirPattern.Wildcard); }
         PatternNode.Null => {
             if (c.types.optionType(typ) == none()) {
@@ -906,6 +920,66 @@ fn checkPattern(
             return c.hir.addPattern(HirPattern.Variant(variant, true, list));
         }
     }
+}
+
+fn emptyRangePattern() -> u32 => 357;
+
+/// `lo..=hi` or `lo..hi` on an integer (ADR 0085 §2.4): both bounds typed by the value, as literals are (§4); as
+/// `lo..=hi'` with the inclusive upper bound. An empty range is N0357.
+fn checkRangePattern(
+    c: borrow mut Checker,
+    low: u32,
+    high: u32,
+    inclusive: bool,
+    typ: u32,
+    span: Span,
+    failed: borrow mut bool,
+) -> Result<u32, AllocError> {
+    if (!c.types.is(typ, TypeKind.Integer)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a range pattern needs an integer, but the value has type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    let lowHir = checkExpr(c, low, typ)?;
+    let highHir = checkExpr(c, high, typ)?;
+    let lowValue = match (c.hir.exprs[lowHir as usize]) {
+        HirExpr.IntConst(v) => v,
+        _ => {
+            failed = true;
+            return c.hir.addPattern(HirPattern.Wildcard);
+        }
+    };
+    let highValue = match (c.hir.exprs[highHir as usize]) {
+        HirExpr.IntConst(v) => v,
+        _ => {
+            failed = true;
+            return c.hir.addPattern(HirPattern.Wildcard);
+        }
+    };
+    var top = highValue;
+    var empty = false;
+    if (!inclusive) {
+        if (compareIntValues(highValue, integerBottom(c, typ)) == 0) {
+            empty = true;
+        } else {
+            top = intPredecessor(highValue);
+        }
+    }
+    if (empty || compareIntValues(lowValue, top) > 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "this range matches no value: ")?;
+        appendText(
+            mut message,
+            if (inclusive) "'lo..=hi' needs lo <= hi" else "'lo..hi' excludes hi, so it needs lo < hi",
+        )?;
+        c.error(emptyRangePattern(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    return c.hir.addPattern(HirPattern.Range(lowValue, top));
 }
 
 fn payloadArityError(

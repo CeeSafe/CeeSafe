@@ -107,6 +107,7 @@ enum TokenKind {
     CaretEquals,
     LessLessEquals,
     QuestionQuestion, // `??` (ADR 0072): the fallback in an expression, two `?` in a type
+    DotDotEquals,     // `..=` (ADR 0085 §2.4): an inclusive range, in a pattern only
 }
 
 /// The kind's position in the declaration (enums have no `==`; the parser compares kinds by this).
@@ -209,6 +210,7 @@ fn kindIndex(kind: TokenKind) -> u32 => match (kind) {
     TokenKind.CaretEquals => 95,
     TokenKind.LessLessEquals => 96,
     TokenKind.QuestionQuestion => 97,
+    TokenKind.DotDotEquals => 98,
 };
 
 fn sameKind(a: TokenKind, b: TokenKind) -> bool => kindIndex(a) == kindIndex(b);
@@ -419,6 +421,7 @@ fn tokenText(kind: TokenKind) -> StringView => match (kind) {
     TokenKind.CaretEquals => "^=",
     TokenKind.LessLessEquals => "<<=",
     TokenKind.QuestionQuestion => "??",
+    TokenKind.DotDotEquals => "..=",
     TokenKind.EndOfFile => "EndOfFile",
     TokenKind.Identifier => "Identifier",
     TokenKind.IntLiteral => "IntLiteral",
@@ -540,6 +543,7 @@ fn kindName(kind: TokenKind) -> StringView => match (kind) {
     TokenKind.CaretEquals => "CaretEquals",
     TokenKind.LessLessEquals => "LessLessEquals",
     TokenKind.QuestionQuestion => "QuestionQuestion",
+    TokenKind.DotDotEquals => "DotDotEquals",
 };
 
 fn intSuffixName(suffix: IntSuffix) -> StringView => match (suffix) {

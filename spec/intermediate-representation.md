@@ -248,6 +248,13 @@ Lowering rules (HIR → NIR, `NirBuilder`):
     initialised while the box owns its memory.
   - Drop elaboration destroys a partially moved box as: the initialised fields of its contents,
     then `BoxFree` of the box. `BoxFree` is flagged if the allocation is only maybe initialised.
+  - A match whose arms are literals, ranges, variants without a payload list and or-patterns of these (and a final
+    `_` or binding), with no guard, lowers to one `Switch` (ADR 0085 §2.10): ranges and or-patterns expand into one
+    case per value, an earlier arm's value staying with it, while the cases number at most 1,024; past that, and for
+    any other match with nested patterns, guards, `@` or or-patterns that bind, each arm tests its pattern in turn
+    (a range with two comparisons) and falls through to the next. An or-pattern that binds is tried one alternative
+    after another, each binding in its own places, then the arm's body; a guard is a `Branch` after the bindings, to
+    the body or to the next alternative or arm. There are no decision trees.
   - A consuming `match` moves its scrutinee into a temporary. An arm that lists payloads starts
     with one `Unpack`, which moves every payload into its binding or into a hidden local of the
     arm and consumes the temporary as a whole. Other arms leave the value in the temporary, which

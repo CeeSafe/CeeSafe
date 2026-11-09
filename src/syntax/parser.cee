@@ -1669,7 +1669,7 @@ struct Parser {
                 let variable = this.parseIdentifier()?;
                 this.expect(TokenKind.InKeyword)?;
                 let first = this.parseExpr()?;
-                let end = if (this.eat(TokenKind.DotDot)) this.parseExpr()? else none();
+                let end = if (this.eatRangeDots()?) this.parseExpr()? else none();
                 this.expect(TokenKind.CloseParen)?;
                 let body = this.parseBlock()?;
                 return this.front.ast.addStmt(StmtNode.For(variable, first, end, body), start, this.endFrom(start));
@@ -2034,7 +2034,47 @@ struct Parser {
 
     fn literalPattern(borrow mut this, start: u32, negated: bool) -> Result<u32, AllocError> {
         let literal = if (negated) this.parseUnary()? else this.parsePrimary()?;
+        if (this.at(TokenKind.DotDotEquals) || this.at(TokenKind.DotDot)) {
+            // `lo..=hi`, `lo..hi` (ADR 0085 §2.4): the upper bound is a literal too.
+            let inclusive = this.at(TokenKind.DotDotEquals);
+            this.advance();
+            let atBound = match (this.current().kind) {
+                TokenKind.IntLiteral => true,
+                TokenKind.CharLiteral => true,
+                TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
+                _ => false,
+            };
+            if (!atBound) {
+                this.errorFound(
+                    expectedPattern(),
+                    "expected the range's upper bound, an integer or character literal, found ",
+                    "",
+                )?;
+                return this.front.ast.addPattern(PatternNode.Literal(literal), start, this.endFrom(start));
+            }
+            let high = if (this.at(TokenKind.Minus)) this.parseUnary()? else this.parsePrimary()?;
+            return this.front.ast.addPattern(
+                PatternNode.Range(literal, high, inclusive),
+                start,
+                this.endFrom(start),
+            );
+        }
         return this.front.ast.addPattern(PatternNode.Literal(literal), start, this.endFrom(start));
+    }
+
+    /// The `..` of a range expression; `..=` there is reported (it is a pattern's, ADR 0085 §2.4) and read as `..`.
+    fn eatRangeDots(borrow mut this) -> Result<bool, AllocError> {
+        if (this.at(TokenKind.DotDotEquals)) {
+            let token = this.advance();
+            var message = Vector<u8>.create();
+            appendText(
+                mut message,
+                "expected '..', found '..=': ranges in expressions are half-open, written '0..10' (ADR 0085 §2.4)",
+            )?;
+            this.error(expectedToken(), token.start, token.end, message)?;
+            return Ok(true);
+        }
+        return Ok(this.eat(TokenKind.DotDot));
     }
 
     /// Whether a payload position holds a nested pattern rather than a binding: a literal, `null`, or a variant (an
@@ -2499,8 +2539,10 @@ struct Parser {
                 expr = this.front.ast.addExpr(ExprNode.Unwrap(expr), start, this.endFrom(start))?;
             } else if (this.at(TokenKind.OpenBracket)) {
                 this.advance();
-                let low = if (this.at(TokenKind.DotDot)) none() else this.parseExpr()?;
-                if (this.eat(TokenKind.DotDot)) {
+                let low = if (this.at(
+                    TokenKind.DotDot,
+                ) || this.at(TokenKind.DotDotEquals)) none() else this.parseExpr()?;
+                if (this.eatRangeDots()?) {
                     let high = if (this.at(TokenKind.CloseBracket)) none() else this.parseExpr()?;
                     this.expect(TokenKind.CloseBracket)?;
                     expr = this.front.ast.addExpr(ExprNode.Slice(expr, low, high), start, this.endFrom(start))?;

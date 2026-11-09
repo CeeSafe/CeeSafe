@@ -810,6 +810,13 @@ struct AstPrinter {
                 }
                 this.text(")")?;
             }
+            PatternNode.Range(low, high, inclusive) => {
+                this.text(if (inclusive) "(..= " else "(.. ")?;
+                this.expr(ast, symbols, low)?;
+                this.text(" ")?;
+                this.expr(ast, symbols, high)?;
+                this.text(")")?;
+            }
             PatternNode.Or(alternatives) => {
                 this.text("(or")?;
                 for (k in 0..alternatives.count) {

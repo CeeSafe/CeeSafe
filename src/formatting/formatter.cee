@@ -963,6 +963,10 @@ fn fmtWalkPattern(l: borrow mut FmtLayout, ast: borrow Ast, p: u32) -> Result<vo
                 fmtWalkPattern(l, ast, ast.at(alternatives, k))?;
             }
         }
+        PatternNode.Range(low, high, _) => {
+            fmtWalkExpr(l, ast, low)?;
+            fmtWalkExpr(l, ast, high)?;
+        }
         _ => {}
     }
     return Ok();
@@ -1394,12 +1398,12 @@ fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
     }
     if (sameKind(b, TokenKind.CloseParen) || sameKind(b, TokenKind.CloseBracket) || sameKind(b, TokenKind.Comma) ||
         sameKind(b, TokenKind.Semicolon) || sameKind(b, TokenKind.Dot) || sameKind(b, TokenKind.DotDot) ||
-        sameKind(b, TokenKind.Colon)) {
+        sameKind(b, TokenKind.DotDotEquals) || sameKind(b, TokenKind.Colon)) {
         return false;
     }
     let a = l.kindAt(previous);
     if (sameKind(a, TokenKind.OpenParen) || sameKind(a, TokenKind.OpenBracket) || sameKind(a, TokenKind.Dot) ||
-        sameKind(a, TokenKind.DotDot) || sameKind(a, TokenKind.At)) {
+        sameKind(a, TokenKind.DotDot) || sameKind(a, TokenKind.DotDotEquals) || sameKind(a, TokenKind.At)) {
         return false;
     }
     return !(sameKind(a, TokenKind.OpenBrace) && sameKind(b, TokenKind.CloseBrace));

@@ -1,0 +1,9 @@
+// Range patterns (ADR 0085 §2.4): inclusive and half-open, with integer, negative and character bounds.
+fn f(c: u8, x: i32) -> u32 {
+    match (x) {
+        -10..=-1 => {}
+        0..10 => {}
+        _ => {}
+    }
+    return match (c) { 'a'..='z' | '0'..'9' => 1, _ => 0 };
+}

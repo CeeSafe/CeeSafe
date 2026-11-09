@@ -1,0 +1,8 @@
+// Range patterns (ADR 0085 §2.4): bounds are integer or character literals; `..=` is a pattern's only.
+fn f(b: bool, s: Slice<u8>) -> u32 {
+    for (k in 0..=9) {} // error[N0100]
+    let t = s[1..=2]; // error[N0100]
+    return match (b) {
+        false..=true => 1, // error[N0108]
+    };
+}

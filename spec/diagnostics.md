@@ -298,6 +298,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |
 | N0355 | A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2) | `Slot.Full(r) if (consume(r)) =>` with `r` not Copy |
 | N0356 | The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3) | `Some(x) \| null =>` |
+| N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

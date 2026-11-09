@@ -191,6 +191,8 @@ enum PatternNode {
     Variant(QualifiedName, bool, Range),
     /// `A | B | …` (ADR 0085 §2.3): the alternatives, patterns in Ast.lists.
     Or(Range),
+    /// `lo..=hi` or `lo..hi` (ADR 0085 §2.4): the bounds (literal expressions), whether `hi` is included.
+    Range(u32, u32, bool),
 }
 
 /// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.

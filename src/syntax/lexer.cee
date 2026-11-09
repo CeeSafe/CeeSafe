@@ -666,7 +666,8 @@ struct Lexer {
             '@' => TokenKind.At,
             '?' => if (next == '?') TokenKind.QuestionQuestion else TokenKind.Question,
             '~' => TokenKind.Tilde,
-            '.' => if (next == '.') TokenKind.DotDot else TokenKind.Dot,
+            '.' => if (next == '.') (if (this.ch(text, 2) == '=') TokenKind.DotDotEquals else TokenKind.DotDot)
+                else TokenKind.Dot,
             '-' => if (next == '>') TokenKind.Arrow else if (next == '=') TokenKind.MinusEquals else TokenKind.Minus,
             '=' =>
                 if (next == '>') TokenKind.FatArrow else if (next == '=') TokenKind.EqualsEquals else TokenKind.Equals,

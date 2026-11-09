@@ -93,7 +93,7 @@ FloatSuffix = 'f32' | 'f64'
 
 ### 1.7 Punctuation and operators
 ```
-( ) { } [ ] , ; : . .. @ ? ?? -> =>
+( ) { } [ ] , ; : . .. ..= @ ? ?? -> =>
 + - * / % ! & | ^ ~ && || << 
 = == != < <= > >=
 += -= *= /= %= &= |= ^= <<=
@@ -102,6 +102,9 @@ The lexer **never** produces `>>` or `>>=`. It emits single `>` (and `>=`) token
 The parser forms the shift operator `>>` from two *adjacent* `>` tokens, and `>>=` from `>`
 immediately followed by `>=`. That keeps nested generic arguments
 (`A<B<C>>`) unambiguous in later milestones.
+
+`..=` is one token (ADR 0085 §2.4): the inclusive range of a pattern, `'a'..='z'`, and only that. In an expression it
+is N0100 with the hint that ranges there are half-open (`0..10`).
 
 `??` is one token (ADR 0072): the fallback operator in an expression (§2.1), and two `?` in a type (`T??`, an
 optional of an optional). The expression `x??`, `?` applied twice, is written `(x?)?`: a `??` that no operand follows

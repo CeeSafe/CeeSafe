@@ -170,6 +170,9 @@ fn namesInPattern(c: borrow Checker, p: u32, parameters: borrow Vector<u32>) -> 
             }
             return false;
         }
+        PatternNode.Range(low, high, _) => {
+            return namesInExpr(c, low, parameters) || namesInExpr(c, high, parameters);
+        }
         PatternNode.Or(alternatives) => {
             for (k in 0..alternatives.count) {
                 if (namesInPattern(c, c.front.ast.at(alternatives, k), parameters)) {

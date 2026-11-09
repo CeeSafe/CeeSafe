@@ -209,7 +209,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2)",
     356 =>
         "The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3)",
-    357 => "an empty range pattern",
+    357 =>
+        "An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4)",
     358 =>
         "a constant of a type that cannot be a pattern, a const generic parameter, or `T.NAME` through a type parameter",
     359 => "an `is` pattern with bindings where the test is not known true",

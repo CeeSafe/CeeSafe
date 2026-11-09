@@ -198,6 +198,38 @@ true
 3
 ```
 
+### Ranges
+
+`lo..=hi` matches the integers from `lo` to `hi`, both included; `lo..hi` leaves `hi` out. The bounds are integer or
+character literals. Literals and ranges that together hold every value of the type need no `_`.
+
+```ceesafe
+fn kind(c: u8) -> StringView => match (c) {
+    'a'..='z' | 'A'..='Z' | '_' => "letter",
+    '0'..='9' => "digit",
+    _ => "other",
+};
+
+fn half(b: u8) -> u32 => match (b) {
+    0x00..=0x7F => 1,
+    0x80..=0xFF => 2,
+};
+
+fn main() {
+    Console.writeLine(kind('q'));
+    Console.writeLine(kind('7'));
+    Console.writeLine(half(200));
+}
+```
+
+```text
+letter
+digit
+2
+```
+
+A match on literals and ranges compiles to a C `switch`.
+
 ### Guards
 
 An arm can add a condition after its pattern, `if (…)`: the arm is taken only when the pattern matches and the

@@ -554,8 +554,10 @@ MatchStmt = 'match' '(' Expr ')' '{' Arm* '}'
 Arm       = Pattern Guard? '=>' Block ','?
 Guard     = 'if' '(' Expr ')'                                      -- ADR 0085 §2.2
 Pattern   = '|'? AltPattern ('|' AltPattern)*                     -- or-patterns: ADR 0085 §2.3
-AltPattern = '_' | IntLiteral | '-' IntLiteral | 'true' | 'false' | 'null'
+AltPattern = '_' | Literal | 'true' | 'false' | 'null'
+          | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
+Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
@@ -577,12 +579,17 @@ A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err
     a match misses are matched only by guarded arms, N0256 says so ("arms with a guard do not count").
 - **Scrutinee types:**
   - an enum: variant patterns;
-  - an integer: literal patterns of that type;
+  - an integer: literal and range patterns of that type;
   - `bool`: `true`/`false`;
   - or a reference to one of these.
 - **Exhaustiveness** (N0256): enum matches must cover every variant or end with `_`. Integer
-  matches need `_`. `bool` matches need both values or `_`. An arm that can never match (a
-  repeated variant or literal, or anything after `_`) is N0257.
+  matches must cover every value of the type with their literals and ranges, or end with `_` (ADR 0085 §2.4).
+  `bool` matches need both values or `_`. An arm that can never match (a repeated variant or literal, a value an
+  earlier range holds, or anything after `_`) is N0257.
+- **Ranges** (ADR 0085 §2.4). `lo..=hi` matches `lo` to `hi`, both included; `lo..hi` excludes `hi`, as range
+  expressions do. Both bounds are integer or character literals, typed by the scrutinee (or payload) as §4 types a
+  literal, so `'a'..='z'` matches bytes of a `u8`. A range that matches no value (`'z'..='a'`, `5..5`) is N0357.
+  Ranges are for integers only: `bool`, floats and other types take none (N0205; a `bool` bound is N0108).
 - **Bindings.** A variant pattern binds each named payload to a new immutable local in the arm:
   - **Scrutinee of type `E` (a value):** the binding is a *copy* of the payload. Since M3c a
     non-Copy payload is moved out, and the match consumes its scrutinee (§18.4).
@@ -613,8 +620,12 @@ A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision
     is the usefulness algorithm of pattern-matching compilers (Maranget, *Warnings for pattern matching*, 2007), with
-    each enum's variants, `true`/`false`, `null`/`Some` and `Ok`/`Err` as the constructors. Integer literals never
-    cover their type: an integer position needs a binding or `_` somewhere.
+    each enum's variants, `true`/`false`, `null`/`Some` and `Ok`/`Err` as the constructors. For an integer position the
+    constructors are intervals of its values (ADR 0085 §2.4, amending M11's rule that integer literals never cover
+    their type): a literal is a one-value interval, a range its own, and the type is split into the intervals the
+    arms' bounds define, so literals and ranges that together hold every value cover the type (`0x00..=0x7F` and
+    `0x80..=0xFF` cover a `u8`). N0256's witness is then a value no arm holds: the lowest, written as a character
+    literal for a printable byte of a `u8` (`'{'`) and in decimal otherwise (`128`).
 
 ### 15.3 `if` and `match` expressions (M11, G5)
 ```ceesafe

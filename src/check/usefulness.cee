@@ -1,14 +1,17 @@
 // Exhaustiveness and unreachable arms for nested patterns (the reference's PatternUsefulness, M11, type-system.md
 // §15.2): the usefulness algorithm of Maranget, "Warnings for pattern matching" (2007). A pattern vector is useful
 // against a matrix of earlier rows when some value matches it and no earlier row. The constructors of a type are its
-// enum's variants, `true`/`false`, or, for an integer, its literals, which never cover the type. Patterns are ids in
-// the HIR's pattern table; a matrix is its rows' cells, row after row.
+// enum's variants, `true`/`false`, or, for an integer, intervals of its values (ADR 0085 §2.4): a literal is a
+// one-value interval, a range its own, and a column of integers is split into the intervals its rows' bounds define,
+// so that literals and ranges together can cover the type. Patterns are ids in the HIR's pattern table; a matrix is
+// its rows' cells, row after row.
 
-/// A constructor: a variant, or an integer or bool literal (0 and 1 for bool).
+/// A constructor: a variant, or the integers `value..=high` (one literal: value == high; 0 and 1 for bool).
 struct Constructor {
     isVariant: bool;
     variant: u32;
     value: IntValue;
+    high: IntValue;
     arity: usize;
 }
 
@@ -19,7 +22,8 @@ struct Matrix {
 }
 
 fn sameConstructor(a: Constructor, b: Constructor) -> bool =>
-    a.isVariant == b.isVariant && (if (a.isVariant) a.variant == b.variant else sameInt(a.value, b.value));
+    a.isVariant == b.isVariant &&
+        (if (a.isVariant) a.variant == b.variant else sameInt(a.value, b.value) && sameInt(a.high, b.high));
 
 fn containsConstructor(list: borrow Vector<Constructor>, k: Constructor) -> bool {
     for (x in list.view()) {
@@ -64,19 +68,30 @@ fn constructorOf(c: borrow Checker, pattern: u32, found: borrow mut Constructor)
                 isVariant: true,
                 variant: variant,
                 value: intValue(0),
+                high: intValue(0),
                 arity: payloadCount(c, variant),
             };
             return true;
         }
         HirPattern.Literal(value) => {
-            found = Constructor { isVariant: false, variant: none(), value: value, arity: 0 };
+            found = Constructor { isVariant: false, variant: none(), value: value, high: value, arity: 0 };
+            return true;
+        }
+        HirPattern.Range(low, high) => {
+            found = Constructor { isVariant: false, variant: none(), value: low, high: high, arity: 0 };
             return true;
         }
         _ => { return false; }
     }
 }
 
-fn noConstructor() -> Constructor => Constructor { isVariant: false, variant: none(), value: intValue(0), arity: 0 };
+fn noConstructor() -> Constructor => Constructor {
+    isVariant: false,
+    variant: none(),
+    value: intValue(0),
+    high: intValue(0),
+    arity: 0,
+};
 
 /// A pattern's arguments for its constructor: its payload patterns, or `_` for each without a list (Arguments).
 fn pushArguments(
@@ -124,13 +139,21 @@ fn allConstructors(c: borrow Checker, typ: u32, out: borrow mut Vector<Construct
         let count = c.types.enums[definition as usize].variants.length;
         for (k in 0..count) {
             let v = variantAt(c, typ, k);
-            out.push(Constructor { isVariant: true, variant: v, value: intValue(0), arity: payloadCount(c, v) })?;
+            out.push(
+                Constructor {
+                    isVariant: true,
+                    variant: v,
+                    value: intValue(0),
+                    high: intValue(0),
+                    arity: payloadCount(c, v),
+                },
+            )?;
         }
         return Ok(true);
     }
     if (c.types.is(typ, TypeKind.Bool)) {
-        out.push(Constructor { isVariant: false, variant: none(), value: intValue(0), arity: 0 })?;
-        out.push(Constructor { isVariant: false, variant: none(), value: intValue(1), arity: 0 })?;
+        out.push(Constructor { isVariant: false, variant: none(), value: intValue(0), high: intValue(0), arity: 0 })?;
+        out.push(Constructor { isVariant: false, variant: none(), value: intValue(1), high: intValue(1), arity: 0 })?;
         return Ok(true);
     }
     return Ok(false);
@@ -240,6 +263,9 @@ fn useful(
         _ => {}
     }
     let typ = types[0];
+    if (c.types.is(typ, TypeKind.Integer)) {
+        return usefulInteger(c, wildcard, rows, q, types, witness);
+    }
     var head = noConstructor();
     if (constructorOf(c, q[0], mut head)) {
         var nq = Vector<u32>.create();
@@ -379,5 +405,176 @@ fn renderConstructor(
     if (c.types.is(typ, TypeKind.Bool)) {
         return appendText(out, if (k.value.magnitude != 0) "true" else "false");
     }
-    return appendIntValue(out, k.value);
+    return appendIntegerWitness(c, typ, k.value, out);
+}
+
+/// An integer as a witness names it: a printable ASCII byte of a `u8` as a character literal (`'{'`), else decimal.
+fn appendIntegerWitness(
+    c: borrow Checker,
+    typ: u32,
+    value: IntValue,
+    out: borrow mut Vector<u8>,
+) -> Result<void, AllocError> {
+    let info = c.types.info(typ);
+    if (info.bits == 8 && !info.signed && value.magnitude >= 0x20 && value.magnitude <= 0x7E) {
+        out.push('\'')?;
+        let byte = truncate<u8>(value.magnitude);
+        if (byte == '\'' || byte == '\\') {
+            out.push('\\')?;
+        }
+        out.push(byte)?;
+        return out.push('\'');
+    }
+    return appendIntValue(out, value);
+}
+
+// ---- integers as intervals (ADR 0085 §2.4) ----
+
+/// The smallest value of an integer type.
+fn integerBottom(c: borrow Checker, typ: u32) -> IntValue {
+    let info = c.types.info(typ);
+    if (!info.signed) {
+        return intValue(0);
+    }
+    return IntValue { negative: true, magnitude: (1u64) << ((info.bits - 1) as u64) };
+}
+
+/// The largest value of an integer type.
+fn integerTop(c: borrow Checker, typ: u32) -> IntValue {
+    let info = c.types.info(typ);
+    let bits = if (info.signed) info.bits - 1 else info.bits;
+    if (bits >= 64) {
+        return IntValue { negative: false, magnitude: 0xFFFF_FFFF_FFFF_FFFFu64 };
+    }
+    return IntValue { negative: false, magnitude: ((1u64) << (bits as u64)) - 1 };
+}
+
+/// v + 1 (never called on the type's largest value).
+fn intSuccessor(v: IntValue) -> IntValue {
+    if (v.negative && v.magnitude != 0) {
+        return IntValue { negative: v.magnitude != 1, magnitude: v.magnitude - 1 };
+    }
+    return IntValue { negative: false, magnitude: v.magnitude + 1 };
+}
+
+/// v - 1 (never called on the type's smallest value).
+fn intPredecessor(v: IntValue) -> IntValue {
+    if (v.negative || v.magnitude == 0) {
+        return IntValue { negative: true, magnitude: v.magnitude + 1 };
+    }
+    return IntValue { negative: false, magnitude: v.magnitude - 1 };
+}
+
+/// Does `outer` (an interval) contain all of `inner`?
+fn covers(outer: Constructor, inner: Constructor) -> bool =>
+    compareIntValues(outer.value, inner.value) <= 0 && compareIntValues(inner.high, outer.high) <= 0;
+
+fn insertBoundary(points: borrow mut Vector<IntValue>, v: IntValue) -> Result<void, AllocError> {
+    var at = points.length;
+    for (i in 0..points.length) {
+        let order = compareIntValues(points[i], v);
+        if (order == 0) {
+            return Ok();
+        }
+        if (order > 0) {
+            at = i;
+            break;
+        }
+    }
+    points.push(v)?;
+    var i = points.length - 1;
+    while (i > at) {
+        points[i] = points[i - 1];
+        i -= 1;
+    }
+    points[at] = v;
+    return Ok();
+}
+
+/// `whole` split into the intervals the first column's literals and ranges bound: within each piece, every row's
+/// interval contains it or misses it.
+fn splitIntervals(
+    c: borrow Checker,
+    rows: borrow Matrix,
+    whole: Constructor,
+    out: borrow mut Vector<Constructor>,
+) -> Result<void, AllocError> {
+    var points = Vector<IntValue>.create();
+    points.push(whole.value)?;
+    for (r in 0..rows.rows) {
+        var k = noConstructor();
+        if (!constructorOf(c, rows.cells[r * rows.width], mut k)) {
+            continue;
+        }
+        if (compareIntValues(k.high, whole.value) < 0 || compareIntValues(k.value, whole.high) > 0) {
+            continue;
+        }
+        if (compareIntValues(k.value, whole.value) > 0) {
+            insertBoundary(mut points, k.value)?;
+        }
+        if (compareIntValues(k.high, whole.high) < 0) {
+            insertBoundary(mut points, intSuccessor(k.high))?;
+        }
+    }
+    for (i in 0..points.length) {
+        let high = if (i + 1 < points.length) intPredecessor(points[i + 1]) else whole.high;
+        out.push(Constructor { isVariant: false, variant: none(), value: points[i], high: high, arity: 0 })?;
+    }
+    return Ok();
+}
+
+/// The rows that match every value of `piece` in their first column, without it.
+fn specializeInterval(c: borrow Checker, rows: borrow Matrix, piece: Constructor) -> Result<Matrix, AllocError> {
+    var result = Matrix { cells: Vector<u32>.create(), rows: 0, width: rows.width - 1 };
+    for (r in 0..rows.rows) {
+        var k = noConstructor();
+        if (constructorOf(c, rows.cells[r * rows.width], mut k) && !covers(k, piece)) {
+            continue;
+        }
+        for (i in 1..rows.width) {
+            result.cells.push(rows.cells[r * rows.width + i])?;
+        }
+        result.rows += 1;
+    }
+    return Ok(result);
+}
+
+/// Useful for an integer column: the interval `q` names (or the whole type for `_`), split by the rows' bounds; `q`
+/// is useful when it is for some piece, and the lowest such piece's first value is the witness.
+fn usefulInteger(
+    c: borrow Checker,
+    wildcard: u32,
+    rows: borrow Matrix,
+    q: Slice<u32>,
+    types: Slice<u32>,
+    witness: borrow mut Vector<Vector<u8>>,
+) -> Result<bool, AllocError> {
+    let typ = types[0];
+    var whole = Constructor {
+        isVariant: false,
+        variant: none(),
+        value: integerBottom(c, typ),
+        high: integerTop(c, typ),
+        arity: 0,
+    };
+    var named = noConstructor();
+    if (constructorOf(c, q[0], mut named)) {
+        whole = named;
+    }
+    var pieces = Vector<Constructor>.create();
+    splitIntervals(c, rows, whole, mut pieces)?;
+    for (piece in pieces.view()) {
+        let specialized = specializeInterval(c, rows, piece)?;
+        var inner = Vector<Vector<u8>>.create();
+        if (useful(c, wildcard, specialized, q[1..], types[1..], mut inner)?) {
+            var first = Vector<u8>.create();
+            appendIntegerWitness(c, typ, piece.value, mut first)?;
+            witness.push(first)?;
+            for (i in 0..inner.length) {
+                witness.push(copyBytes(inner[i].view())?)?;
+            }
+            return Ok(true);
+        }
+    }
+    return Ok(false);
 }

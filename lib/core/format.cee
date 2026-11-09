@@ -118,3 +118,294 @@ public struct TextWriter<region r> {
         return all.ptr as *CChar;
     }
 }
+
+/// Where `appendPadded` puts text in a wider field (ADR 0087 §2.9): Rust's `{:<w}`, `{:>w}` and `{:^w}`. A centred
+/// text's extra fill character goes after it.
+public enum TextAlign { Left, Right, Center }
+
+/// The formatting helpers of `String` and `VectorBytes` (ADR 0087 §2.9): what Rust's `{:x}`, `{:08X}`, `{:o}`,
+/// `{:.3}` and `{:>8}` write. Each appends to a byte vector; static functions, the struct is never made.
+public struct Formatted {
+    /// `value` in hexadecimal, at least `minWidth` digits (zeros before it), uppercase when `upper`; no `0x`.
+    public fn hex(out: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError> {
+        var digits = [0u8; 16];
+        var count: usize = 0;
+        var v = value;
+        loop {
+            let d = truncate<u8>(v & 15);
+            digits[count] = if (d < 10) d + 48 else if (upper) d + 55 else d + 87;
+            count += 1;
+            v = v >> 4;
+            if (v == 0) {
+                break;
+            }
+        }
+        return Formatted.digitsOut(out, digits[..count], minWidth as usize);
+    }
+
+    /// `value` in octal; no `0o`.
+    public fn octal(out: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError> {
+        var digits = [0u8; 22];
+        var count: usize = 0;
+        var v = value;
+        loop {
+            digits[count] = truncate<u8>(v & 7) + 48;
+            count += 1;
+            v = v >> 3;
+            if (v == 0) {
+                break;
+            }
+        }
+        return Formatted.digitsOut(out, digits[..count], 0);
+    }
+
+    /// Least significant first, as the digit loops make them: at least `width` digits, zeros before.
+    fn digitsOut(out: borrow mut Vector<u8>, reversed: Slice<u8>, width: usize) -> Result<void, AllocError> {
+        var pad = width;
+        while (pad > reversed.length) {
+            out.push(48)?;
+            pad -= 1;
+        }
+        var k = reversed.length;
+        while (k > 0) {
+            k -= 1;
+            out.push(reversed[k])?;
+        }
+        return Ok();
+    }
+
+    /// `value` in decimal with exactly `digits` digits after the point (none, and no point, for 0), rounded half to
+    /// even on its exact binary value, as Rust's `{:.N}` and C's `%.Nf` round; `NaN`, `inf` and `-inf` as Rust writes
+    /// them. A negative zero keeps its sign.
+    public fn fixed(out: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError> {
+        let bits = value.bits();
+        let negative = (bits >> 63) != 0;
+        let exponent = truncate<u32>((bits >> 52) & 0x7FF);
+        let fraction = bits & 0xFFFFFFFFFFFFF;
+        if (exponent == 0x7FF) {
+            if (fraction != 0) {
+                return out.extend("NaN".bytes());
+            }
+            if (negative) {
+                out.push(45)?;
+            }
+            return out.extend("inf".bytes());
+        }
+        // value = m · 2^e exactly; its decimal digits, least significant first, are m · 2^e, or m · 5^k with k of
+        // them after the point (k = -e). With the zeros before the point, at most 1,075 digits (k ≤ 1074).
+        var m = fraction;
+        var e: i64 = -1074;
+        if (exponent != 0) {
+            m = fraction | 0x10000000000000;
+            e = (exponent as i64) - 1075;
+        }
+        if (m == 0) {
+            e = 0; // a zero has no digits to scale
+        }
+        var d = [0u8; 1100];
+        var length: usize = 0;
+        var rest = m;
+        loop {
+            d[length] = truncate<u8>(rest % 10);
+            length += 1;
+            rest = rest / 10;
+            if (rest == 0) {
+                break;
+            }
+        }
+        var point: usize = 0; // how many of the digits are after the decimal point
+        // Scaled 30 twos (2^30) or 13 fives (5^13) at a time, both below 2^31, then by the rest.
+        if (e > 0) {
+            var left = e;
+            while (left > 0) {
+                let step: i64 = if (left > 30) 30 else left;
+                length = Formatted.multiply(mut d[..], length, 1u64 << truncate<u64>(step));
+                left -= step;
+            }
+        } else if (e < 0) {
+            let k = truncate<usize>(0 - e);
+            var left = k;
+            while (left > 0) {
+                let step: usize = if (left > 13) 13 else left;
+                var factor: u64 = 1;
+                for (j in 0..step) {
+                    factor *= 5;
+                }
+                length = Formatted.multiply(mut d[..], length, factor);
+                left -= step;
+            }
+            point = k;
+        }
+        while (length <= point) {
+            d[length] = 0; // a zero before the point, and the leading zeros after it
+            length += 1;
+        }
+        let wanted = digits as usize;
+        if (point > wanted) {
+            // Drop the extra digits, rounding half to even on all of them.
+            let dropped = point - wanted;
+            let first = d[dropped - 1];
+            var below = false;
+            for (k in 0..(dropped - 1)) {
+                if (d[k] != 0) {
+                    below = true;
+                }
+            }
+            let up = first > 5 || (first == 5 && (below || d[dropped] % 2 == 1));
+            for (k in dropped..length) {
+                d[k - dropped] = d[k];
+            }
+            length -= dropped;
+            if (up) {
+                var k: usize = 0;
+                loop {
+                    if (k == length) {
+                        d[length] = 1;
+                        length += 1;
+                        break;
+                    }
+                    if (d[k] == 9) {
+                        d[k] = 0;
+                        k += 1;
+                    } else {
+                        d[k] += 1;
+                        break;
+                    }
+                }
+            }
+            point = wanted;
+        }
+        var top = length;
+        while (top > point + 1 && d[top - 1] == 0) {
+            top -= 1;
+        }
+        if (negative) {
+            out.push(45)?;
+        }
+        var k = top;
+        while (k > point) {
+            k -= 1;
+            out.push(d[k] + 48)?;
+        }
+        if (wanted > 0) {
+            out.push(46)?;
+            while (k > 0) {
+                k -= 1;
+                out.push(d[k] + 48)?;
+            }
+            for (j in point..wanted) {
+                out.push(48)?; // digits past the exact value's last
+            }
+        }
+        return Ok();
+    }
+
+    /// Multiplies the `length` decimal digits of `d` (least significant first) by `factor` (below 2^31, so no sum
+    /// overflows); the new length.
+    fn multiply(d: SliceMut<u8>, length: usize, factor: u64) -> usize {
+        var carry: u64 = 0;
+        for (k in 0..length) {
+            let x = (d[k] as u64) * factor + carry;
+            d[k] = truncate<u8>(x % 10);
+            carry = x / 10;
+        }
+        var n = length;
+        while (carry > 0) {
+            d[n] = truncate<u8>(carry % 10);
+            carry = carry / 10;
+            n += 1;
+        }
+        return n;
+    }
+
+    /// `text` in a field of `width` characters (Unicode scalar values, as Rust counts them), filled with the
+    /// character `fill` on the side `align` leaves; text at least as wide is appended as it is.
+    public fn padded(
+        out: borrow mut Vector<u8>,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError> {
+        var characters: usize = 0;
+        for (b in text.bytes()) {
+            if ((b & 0xC0) != 0x80) {
+                characters += 1;
+            }
+        }
+        let pad = if (width > characters) width - characters else 0;
+        let before = match (align) {
+            TextAlign.Left => 0,
+            TextAlign.Right => pad,
+            TextAlign.Center => pad / 2,
+        };
+        var encoded = [0u8; 4];
+        let size = Formatted.encode(fill, mut encoded[..]);
+        for (k in 0..before) {
+            out.extend(encoded[..size])?;
+        }
+        out.extend(text.bytes())?;
+        for (k in 0..(pad - before)) {
+            out.extend(encoded[..size])?;
+        }
+        return Ok();
+    }
+
+    /// The UTF-8 bytes of `c` in `to`, and how many; panics if `c` is not a Unicode scalar value.
+    fn encode(c: u32, to: SliceMut<u8>) -> usize {
+        assert(c < 0x110000 && (c < 0xD800 || c > 0xDFFF), "the fill is not a Unicode scalar value");
+        if (c < 0x80) {
+            to[0] = truncate<u8>(c);
+            return 1;
+        }
+        if (c < 0x800) {
+            to[0] = truncate<u8>(0xC0 | (c >> 6));
+            to[1] = truncate<u8>(0x80 | (c & 0x3F));
+            return 2;
+        }
+        if (c < 0x10000) {
+            to[0] = truncate<u8>(0xE0 | (c >> 12));
+            to[1] = truncate<u8>(0x80 | ((c >> 6) & 0x3F));
+            to[2] = truncate<u8>(0x80 | (c & 0x3F));
+            return 3;
+        }
+        to[0] = truncate<u8>(0xF0 | (c >> 18));
+        to[1] = truncate<u8>(0x80 | ((c >> 12) & 0x3F));
+        to[2] = truncate<u8>(0x80 | ((c >> 6) & 0x3F));
+        to[3] = truncate<u8>(0x80 | (c & 0x3F));
+        return 4;
+    }
+}
+
+/// `s.appendHex(…)` and the other helpers (ADR 0087 §2.9), through `Formatted`: implemented here for a `Vector<u8>`,
+/// and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
+/// UTF-8.
+public interface AppendFormatted {
+    /// `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper`: Rust's `{:x}`, `{:08X}`.
+    fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>;
+    /// `value` in octal: Rust's `{:o}`.
+    fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>;
+    /// `value` with `digits` digits after the point, rounded half to even: Rust's `{:.N}`.
+    fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>;
+    /// `text` in a field `width` characters wide, filled with `fill` where `align` puts it: Rust's `{:>8}`, `{:*^9}`.
+    fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>;
+}
+
+impl AppendFormatted for Vector<u8> {
+    fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError> =>
+        Formatted.hex(this, value, minWidth, upper);
+
+    fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError> => Formatted.octal(this, value);
+
+    fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError> =>
+        Formatted.fixed(this, value, digits);
+
+    fn appendPadded(
+        borrow mut this,
+        text: StringView,
+        width: usize,
+        align: TextAlign,
+        fill: u32,
+    ) -> Result<void, AllocError> =>
+        Formatted.padded(this, text, width, align, fill);
+}

@@ -126,8 +126,8 @@ fn main() {
     Console.writeLine(a == b);
     Console.writeLine(Shape.Box(a, b) == Shape.Box(a, b));
     Console.writeLine(a.compareKey(b));
-    var seen = HashMap<Point, StringView>.create();
-    seen.put(a, "start")!;
+    var seen = HashMap<Point, u32>.create();
+    seen.put(a, 1)!;
     Console.writeLine(seen.contains(Point { x: 1, y: 2 }));
 }
 ```

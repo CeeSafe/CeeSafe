@@ -144,7 +144,32 @@ true
 - Slicing (`s[lo..hi]`) checks that both ends fall on character boundaries.
 - A `String` can only receive valid UTF-8 (`append` takes a view, which always is), so its contents are always valid
   text.
-- `==` compares bytes.
+- `==` compares bytes, on views and on `String`s.
+
+Numbers in other forms go through lib/core's helpers, which a `String` and a `Vector<u8>` both have (and `VectorBytes`
+as static functions): `appendHex(n, minWidth, upper)`, `appendOctal(n)`, `appendFixed(f, digits)`, rounded half to
+even as Rust's `{:.3}` is, and `appendPadded(text, width, align, fill)` for a field of `width` characters.
+
+```ceesafe
+fn main() {
+    var s = String.create();
+    s.appendHex(48879, 8, true)!;
+    s.append(" ")!;
+    s.appendOctal(8)!;
+    s.append(" ")!;
+    s.appendFixed(2.675, 2)!;
+    s.append(" [")!;
+    s.appendPadded("id", 6, TextAlign.Right, ' ')!;
+    s.append("]")!;
+    Console.writeLine(s.view());
+}
+```
+
+```text
+0000BEEF 10 2.67 [    id]
+```
+
+`2.675` is `2.67499999…` in binary, so it rounds down, as it does in Rust and C.
 
 ## Stable references: `SlotMap` and `StableVector`
 

@@ -116,6 +116,7 @@ No such file or directory
 | `==`, `!=` | compare the bytes |
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
+| `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |
 | `s.indexOf(t)`, `s.lastIndexOf(t)`, `s.indexOfByte(b)` | `usize?` |
 | `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)`, `s.equalsIgnoreAsciiCase(t)` | `bool` |

@@ -1794,6 +1794,16 @@ fn main() -> i32 {
     `-` before a negative value and no leading zeros or `+`: `0`, `-128`, `18446744073709551615`. It is
     `Result<void, AllocError>`, two-phase and unchanged on failure, as for `append`. An integer literal argument has
     its usual default type (§4). Any other argument type is N0207;
+  - formatting helpers (lib/core, ADR 0087 §2.9), each `Result<void, AllocError>`: `s.appendHex(n, minWidth, upper)`
+    (`n: u64`; at least `minWidth` hexadecimal digits, zeros before them, uppercase when `upper`; no `0x`),
+    `s.appendOctal(n)`, `s.appendFixed(f, digits)` (`f: f64`; exactly `digits` digits after the point, none and no
+    point for 0, rounded half to even on the exact binary value as Rust's `{:.N}` and C's `%.Nf`; `NaN`, `inf`,
+    `-inf`; a negative zero keeps its `-`), and `s.appendPadded(text, width, align, fill)` (`text` in a field of
+    `width` Unicode scalar values, `align` a `TextAlign` (`Left`, `Right`, `Center`, whose extra fill goes after),
+    `fill` a Unicode scalar value, else a panic). They are lib/core's `AppendFormatted` interface, implemented for
+    `Vector<u8>` in lib/core and for `String` in lib/std (hosted), over lib/core's `Formatted`, which allocates nothing
+    of its own; `VectorBytes.appendHex(mut v, …)` and the others
+    are the same for a byte vector;
   - `s.clear()`, `s.length` (bytes), `s.capacity`;
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;

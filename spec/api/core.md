@@ -32,6 +32,9 @@
 - [struct CStr](#struct-cstr)
 - [interface DerivedEqual](#interface-derivedequal)
 - [struct TextWriter](#struct-textwriter)
+- [enum TextAlign](#enum-textalign)
+- [struct Formatted](#struct-formatted)
+- [interface AppendFormatted](#interface-appendformatted)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -1583,6 +1586,44 @@ public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -
 
 Appends `x` as 8 bytes, little-endian, in two's complement.
 
+### VectorBytes.appendHex
+
+```ceesafe
+public fn appendHex(v: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+```
+
+Appends `value` in hexadecimal, at least `minWidth` digits, uppercase when `upper` (ADR 0087 §2.9).
+
+### VectorBytes.appendOctal
+
+```ceesafe
+public fn appendOctal(v: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError>
+```
+
+Appends `value` in octal (ADR 0087 §2.9).
+
+### VectorBytes.appendFixed
+
+```ceesafe
+public fn appendFixed(v: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError>
+```
+
+Appends `value` with `digits` digits after the point, rounded half to even (ADR 0087 §2.9).
+
+### VectorBytes.appendPadded
+
+```ceesafe
+public fn appendPadded(
+    v: borrow mut Vector<u8>,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> Result<void, AllocError>
+```
+
+Appends `text` in a field `width` characters wide, filled with `fill` where `align` puts it (ADR 0087 §2.9).
+
 ## struct RawCell
 
 ```ceesafe
@@ -1987,6 +2028,84 @@ public fn cText(borrow this) -> *CChar
 
 The text as a zero-terminated C string, valid while the writer's buffer is. An empty buffer, which can hold no
 terminator, gives an empty string that is not in it.
+
+## enum TextAlign
+
+```ceesafe
+public enum TextAlign {
+    Left,
+    Right,
+    Center,
+}
+```
+
+Where `appendPadded` puts text in a wider field (ADR 0087 §2.9): Rust's `{:<w}`, `{:>w}` and `{:^w}`. A centred
+text's extra fill character goes after it.
+
+## struct Formatted
+
+```ceesafe
+public struct Formatted
+```
+
+The formatting helpers of `String` and `VectorBytes` (ADR 0087 §2.9): what Rust's `{:x}`, `{:08X}`, `{:o}`,
+`{:.3}` and `{:>8}` write. Each appends to a byte vector; static functions, the struct is never made.
+
+### Formatted.hex
+
+```ceesafe
+public fn hex(out: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+```
+
+`value` in hexadecimal, at least `minWidth` digits (zeros before it), uppercase when `upper`; no `0x`.
+
+### Formatted.octal
+
+```ceesafe
+public fn octal(out: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError>
+```
+
+`value` in octal; no `0o`.
+
+### Formatted.fixed
+
+```ceesafe
+public fn fixed(out: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError>
+```
+
+`value` in decimal with exactly `digits` digits after the point (none, and no point, for 0), rounded half to
+even on its exact binary value, as Rust's `{:.N}` and C's `%.Nf` round; `NaN`, `inf` and `-inf` as Rust writes
+them. A negative zero keeps its sign.
+
+### Formatted.padded
+
+```ceesafe
+public fn padded(
+    out: borrow mut Vector<u8>,
+    text: StringView,
+    width: usize,
+    align: TextAlign,
+    fill: u32,
+) -> Result<void, AllocError>
+```
+
+`text` in a field of `width` characters (Unicode scalar values, as Rust counts them), filled with the
+character `fill` on the side `align` leaves; text at least as wide is appended as it is.
+
+## interface AppendFormatted
+
+```ceesafe
+public interface AppendFormatted {
+    fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>;
+    fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>;
+    fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>;
+    fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>;
+}
+```
+
+`s.appendHex(…)` and the other helpers (ADR 0087 §2.9), through `Formatted`: implemented here for a `Vector<u8>`,
+and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
+UTF-8.
 
 ## interface Iterator
 

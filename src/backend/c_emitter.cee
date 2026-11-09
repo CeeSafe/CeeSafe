@@ -52,6 +52,7 @@ struct CEmitter {
     compiled: Vector<u32>;                 // the NIR functions compiled to C (CompiledFunctions)
     composites: Vector<u32>;               // Composites
     aggregates: Vector<u32>;               // Aggregates
+    aggregateEnums: Map<Bytes, u32>;       // C name → the first aggregate enum with it (aggregateEnumNamed)
     staticStrings: Vector<Vector<u8>>;     // the C strings statics point to, in first-use order
     longStrings: Vector<Vector<u8>>;       // literals over 4095 bytes, emitted as byte arrays (LongStrings)
     splitData: Vector<Vector<u8>>;         // C data split mode renames (sorted)
@@ -105,6 +106,7 @@ struct CEmitter {
         compiled: Vector<u32>.create(),
         composites: Vector<u32>.create(),
         aggregates: Vector<u32>.create(),
+        aggregateEnums: Map<Bytes, u32>.create(),
         staticStrings: Vector<Vector<u8>>.create(),
         longStrings: Vector<Vector<u8>>.create(),
         splitData: Vector<Vector<u8>>.create(),

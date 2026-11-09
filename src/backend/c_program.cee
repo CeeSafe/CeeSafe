@@ -35,14 +35,33 @@ fn markType(set: borrow mut Vector<bool>, t: u32) -> Result<bool, AllocError> {
 
 fn inSet(set: borrow Vector<bool>, t: u32) -> bool => (t as usize) < set.length && set[t as usize];
 
+/// A set of types that costs what it holds, for the walks DropFunctions and PlacedFunctions make once per drop, box
+/// and placement site: a fresh `Vector<bool>` by type id costs the number of types each time, which made those walks
+/// quadratic in the program's size (Bun port scale test, 2026-11-09).
+struct TypeSet {
+    marks: Map<Word, u32>;
+
+    fn create() -> TypeSet => TypeSet { marks: Map<Word, u32>.create() };
+
+    /// Adds `t`: false if it was already there (MarkType).
+    fn mark(borrow mut this, t: u32) -> Result<bool, AllocError> {
+        let key = Word { value: t as u64 };
+        if (this.marks.find(borrow key).isSome()) {
+            return Ok(false);
+        }
+        let _ = this.marks.put(key, t)?;
+        return Ok(true);
+    }
+}
+
 /// The `drop` functions destroying a value may run, through its fields and contents (DropFunctions).
 fn dropFunctions(
     c: borrow Checker,
     t: u32,
-    seen: borrow mut Vector<bool>,
+    seen: borrow mut TypeSet,
     out: borrow mut Vector<u32>,
 ) -> Result<void, AllocError> {
-    if (!markType(seen, t)? || !c.types.needsDrop(t)) {
+    if (!seen.mark(t)? || !c.types.needsDrop(t)) {
         return Ok();
     }
     let info = c.types.info(t);
@@ -86,11 +105,11 @@ fn dropFunctions(
 fn placedFunctions(
     c: borrow Checker,
     t: u32,
-    seen: borrow mut Vector<bool>,
+    seen: borrow mut TypeSet,
     out: borrow mut Vector<u32>,
 ) -> Result<void, AllocError> {
     let s = c.types.info(t).structDef;
-    if (s == none() || !markType(seen, t)?) {
+    if (s == none() || !seen.mark(t)?) {
         return Ok();
     }
     let ownFunction = c.types.structs[s as usize].placedMethod;
@@ -118,7 +137,7 @@ fn boxFunctions(c: borrow Checker, box: u32, out: borrow mut Vector<u32>) -> Res
             }
         }
     }
-    var seen = Vector<bool>.create();
+    var seen = TypeSet.create();
     return placedFunctions(c, c.types.info(box).pointee, mut seen, out);
 }
 
@@ -181,7 +200,7 @@ fn callees(
                             if (b == bfPtrPlace()) {
                                 // A raw write's placement runs the contents' @placed methods (ADR 0027).
                                 let pointer = n.operandTypes[n.at(arguments, 0) as usize];
-                                var seen = Vector<bool>.create();
+                                var seen = TypeSet.create();
                                 placedFunctions(c, c.types.info(pointer).pointee, mut seen, mut out)?;
                             }
                         }
@@ -190,7 +209,7 @@ fn callees(
                 }
                 NirStatement.Drop(place, _) => {
                     // A drop runs the `drop` blocks of the value and of everything it owns (§38.3).
-                    var seen = Vector<bool>.create();
+                    var seen = TypeSet.create();
                     dropFunctions(c, nirPlaceType(c, n, f.locals, place), mut seen, mut out)?;
                 }
                 NirStatement.BoxFree(place, _) => {
@@ -236,7 +255,7 @@ fn usedLibraryFunctions(
     // types it holds (bug B2: a struct holding an AsyncTcpStream the program never touches).
     for (t in c.programStructs.view()) {
         if (isAlwaysEmittedStruct(c, t)) {
-            var seen = Vector<bool>.create();
+            var seen = TypeSet.create();
             var drops = Vector<u32>.create();
             dropFunctions(c, t, mut seen, mut drops)?;
             for (d in drops.view()) {
@@ -248,7 +267,7 @@ fn usedLibraryFunctions(
         for (k in 0..table.methods.count) {
             reached.push(variantKey(c.hir.at(table.methods, k), 0))?;
         }
-        var seen = Vector<bool>.create();
+        var seen = TypeSet.create();
         var drops = Vector<u32>.create();
         dropFunctions(c, table.implementation, mut seen, mut drops)?;
         for (d in drops.view()) {
@@ -523,7 +542,7 @@ fn setUpEmitter(
             var missing = false;
             for (t in 0..used.length) {
                 if (used[t]) {
-                    var seen = Vector<bool>.create();
+                    var seen = TypeSet.create();
                     var drops = Vector<u32>.create();
                     dropFunctions(c, truncate<u32>(t), mut seen, mut drops)?;
                     for (d in drops.view()) {
@@ -563,21 +582,15 @@ fn setUpEmitter(
         }
     }
     // Composites: `cee_str` is the runtime's; `dyn I` and `dyn I + Send` share a C type, so each is emitted once.
-    var names = Vector<Vector<u8>>.create();
+    var names = Map<Bytes, u32>.create(); // the mangled names seen, so the test stays linear in the program's size
     for (t in c.types.composites.view()) {
         if (c.types.isGeneric(t) || c.types.isStringView(t) ||
             !(c.types.info(t).usedOutsideHostedLibrary || inSet(e.usedTypes, t))) {
             continue;
         }
-        let m = mangled(c, t)?;
-        var seen = false;
-        for (other in names.view()) {
-            if (!seen && sameBytes(other.view(), m.view())) {
-                seen = true;
-            }
-        }
-        if (!seen) {
-            names.push(m)?;
+        let m = Bytes { data: mangled(c, t)? };
+        if (names.find(borrow m).isNull()) {
+            let _ = names.put(m, t)?;
             e.composites.push(t)?;
         }
     }
@@ -590,6 +603,16 @@ fn setUpEmitter(
     }
     for (t in e.composites.view()) {
         e.aggregates.push(t)?;
+    }
+    // Aggregates is complete: index its enums by C name once, so each variant value finds its enum without naming
+    // every aggregate again (quadratic in the program's size before; Bun port scale test, 2026-11-09).
+    for (t in e.aggregates.view()) {
+        if (c.types.info(t).enumDef != none() && !c.types.isNicheOptional(t)) {
+            let name = Bytes { data: cTypeName(c, t)? };
+            if (e.aggregateEnums.find(borrow name).isNull()) {
+                let _ = e.aggregateEnums.put(name, t)?;
+            }
+        }
     }
     return Ok();
 }

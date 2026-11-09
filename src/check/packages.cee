@@ -20,6 +20,12 @@ fn reportedQualified(c: borrow Checker, start: u32) -> bool {
 /// for the names that matter here), leaving out those PackageNames replaced.
 fn checkQualifiedNames(c: borrow mut Checker) -> Result<void, AllocError> {
     let saved = c.file;
+    // The replaced identifiers as a set by identifier, so each file's walk tests membership in constant time
+    // (a scan of the list per identifier was quadratic in the program's size; Bun port scale test, 2026-11-09).
+    var replaced = Vector<bool>.create();
+    for (r in c.front.ast.replacedIdents.view()) {
+        let _ = markType(mut replaced, r)?;
+    }
     for (u in 0..c.front.ast.units.length) {
         let file = c.front.ast.units[u].file;
         if (c.fileIsLibrary[file as usize]) {
@@ -49,7 +55,7 @@ fn checkQualifiedNames(c: borrow mut Checker) -> Result<void, AllocError> {
             }
         }
         var identifiers = Vector<u32>.create();
-        unitIdentifiers(c, truncate<u32>(u), mut identifiers)?;
+        unitIdentifiers(c, truncate<u32>(u), borrow replaced, mut identifiers)?;
         for (k in identifiers.view()) {
             let id = c.front.ast.idents[k as usize];
             var text = Vector<u8>.create();
@@ -77,11 +83,16 @@ fn checkQualifiedNames(c: borrow mut Checker) -> Result<void, AllocError> {
 }
 
 /// A file's identifiers in source order, without those PackageNames replaced (Identifiers).
-fn unitIdentifiers(c: borrow Checker, unit: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
+fn unitIdentifiers(
+    c: borrow Checker,
+    unit: u32,
+    replaced: borrow Vector<bool>,
+    out: borrow mut Vector<u32>,
+) -> Result<void, AllocError> {
     let identStart = c.front.ast.units[unit as usize].identStart;
     let identEnd = c.front.ast.units[unit as usize].identEnd;
     for (k in identStart..identEnd) {
-        if (!containsU32(c.front.ast.replacedIdents, k) && !c.front.ast.idents[k as usize].missing) {
+        if (!inSet(replaced, k) && !c.front.ast.idents[k as usize].missing) {
             out.push(k)?;
         }
     }

@@ -3,16 +3,13 @@
 // threads. Their prototypes come before the functions and their definitions after.
 
 /// The aggregate enum named `name` (`_enumsByName`): the first in Aggregates with that C name, not a niche optional.
+/// setUpEmitter indexes them in `e.aggregateEnums` once Aggregates is complete.
 fn aggregateEnumNamed(e: borrow CEmitter, c: borrow Checker, name: Slice<u8>) -> Result<u32, AllocError> {
-    for (t in e.aggregates.view()) {
-        if (c.types.info(t).enumDef != none() && !c.types.isNicheOptional(t)) {
-            let candidate = cTypeName(c, t)?;
-            if (sameBytes(candidate.view(), name)) {
-                return Ok(t);
-            }
-        }
-    }
-    return Ok(none());
+    let key = Bytes.from(name)?;
+    return match (e.aggregateEnums.get(borrow key)) {
+        Some(t) => Ok(t),
+        null => Ok(none()),
+    };
 }
 
 /// A value of a variant of the enum whose C name is `enumName`, with one payload field (Variant): by its constructor

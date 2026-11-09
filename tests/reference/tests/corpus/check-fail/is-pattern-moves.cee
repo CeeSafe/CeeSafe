@@ -1,0 +1,22 @@
+// `e is P` (ADR 0085 §2.8): a test that binds a non-Copy payload of a value moves it on success only: the then-branch
+// may not use the scrutinee again (N0250), the else-branch may; a false later operand has still moved it.
+enum Token {
+    Word(String),
+    Number(u32),
+}
+fn take(t: Token) {}
+fn g(t: Token) {
+    if (t is Token.Word(s)) {
+        take(t); // error[N0250]
+    } else {
+        take(t);
+    }
+}
+fn h(t: Token) {
+    if (t is Token.Word(s) && s.length > 3) {
+        Console.writeLine(s);
+    } else {
+        take(t); // error[N0250]
+    }
+}
+fn main() {}

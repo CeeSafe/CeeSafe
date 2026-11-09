@@ -116,6 +116,9 @@ enum HirExpr {
     AsyncBlocking(u32, u32), // `await Async.blocking(() => …)` (§40.4): site, the sync closure
     AsyncBoxed(u32, u32),    // `await Async.boxed(alloc, f(…))` (§40.1): the allocator's type, the task's call
     SetSpawn(u32, u32, u32), // a task set's start (ADR 0053): the record pointer, the admission code, the closure: a u32
+    /// `e is P` (ADR 0085 §2.8): the scrutinee, the pattern (Hir.patterns), whether a success moves the scrutinee
+    /// into the pattern's bindings (a non-Copy payload of a value).
+    Is(u32, u32, bool),
     Error,
 }
 
@@ -141,6 +144,11 @@ enum HirPattern {
     Or(Range),                 // alternatives (ADR 0085 §2.3), each binding the same locals
     Range(IntValue, IntValue), // `lo..=hi`, both included (ADR 0085 §2.4; `lo..hi` is `lo..=hi - 1`)
     At(u32, u32),              // `name @ P` (ADR 0085 §2.5): the local, the pattern
+    /// `"get"` (ADR 0085 §2.7): the text (Hir.text), and on a `Slice<u8>` its bytes as Literal patterns (for coverage).
+    String(Range, Range),
+    /// `[a, .., z]` (ADR 0085 §2.7): the item patterns (the prefix, then the suffix), where `..` sits (the prefix's
+    /// length) or none without one, the local `rest @ ..` binds or none.
+    Slice(Range, u32, u32),
 }
 
 struct HirArmBinding {

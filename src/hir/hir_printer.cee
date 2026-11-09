@@ -445,8 +445,43 @@ struct HirPrinter {
                 }
                 this.text(")")?;
             }
+            HirPattern.String(text, _) => { this.quoted(hir.textOf(text))?; }
+            HirPattern.Slice(items, restAt, restLocal) => {
+                this.text("[")?;
+                for (k in 0..items.count) {
+                    if (k > 0) {
+                        this.text(", ")?;
+                    }
+                    if (k == restAt) {
+                        this.sliceRest(hir, symbols, restLocal)?;
+                        this.text(", ")?;
+                    }
+                    this.patternText(hir, types, symbols, hir.at(items, k))?;
+                }
+                if (restAt != none() && restAt >= items.count) {
+                    if (items.count > 0) {
+                        this.text(", ")?;
+                    }
+                    this.sliceRest(hir, symbols, restLocal)?;
+                }
+                this.text("]")?;
+            }
         }
         return Ok();
+    }
+
+    /// `..`, or `rest#3 @ ..` (ADR 0085 §2.7).
+    fn sliceRest(
+        borrow mut this,
+        hir: borrow HirProgram,
+        symbols: borrow Interner,
+        local: u32,
+    ) -> Result<void, AllocError> {
+        if (local != none()) {
+            this.local(hir, symbols, local)?;
+            this.text(" @ ")?;
+        }
+        return this.text("..");
     }
 
     /// A statement on one line, for an `if` or `match` expression (Inline): its lines trimmed and joined by spaces,
@@ -601,6 +636,13 @@ struct HirPrinter {
                 appendDecimal(mut this.out, site as u64)?;
                 this.text(" ")?;
                 this.expr(hir, types, symbols, closure)?;
+                this.text(")")?;
+            }
+            HirExpr.Is(scrutinee, pattern, consumes) => {
+                this.text(if (consumes) "(is-move " else "(is ")?;
+                this.expr(hir, types, symbols, scrutinee)?;
+                this.text(" ")?;
+                this.patternText(hir, types, symbols, pattern)?;
                 this.text(")")?;
             }
             HirExpr.SetSpawn(record, admitted, closure) => {

@@ -246,6 +246,13 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
         ExprNode.MutArg(_) => { return misplacedMutArgument(c, span); }
         ExprNode.Try(operand) => { return checkTry(c, operand, expected, span); }
         ExprNode.Unwrap(operand) => { return checkUnwrap(c, operand, expected, span); }
+        ExprNode.Is(operand, pattern) => {
+            // Bindings here are N0359: the test is not known true anywhere they could be used (ADR 0085 §2.8).
+            c.pushScope()?;
+            let test = checkIsTest(c, operand, pattern, false, span)?;
+            c.popScope();
+            return Ok(test);
+        }
         ExprNode.Await(operand) => { return checkAwait(c, operand, expected, span); }
         ExprNode.If(_, _, _) => { return checkBranching(c, e, none()); }
         ExprNode.Match(_, _) => { return checkBranching(c, e, none()); }
@@ -521,6 +528,13 @@ fn synthBinary(
         return synthNullTest(c, leftSyntax, rightSyntax, index == 2, isNullLeft, span);
     }
     let boolType = c.types.boolType;
+    if (index == 1 && (chainHasIs(c, leftSyntax) || chainHasIs(c, rightSyntax))) {
+        // `x is Some(v) && v > 3` (ADR 0085 §2.8): the bindings are in scope in the later operands only.
+        c.pushScope()?;
+        let chain = checkAndChain(c, leftSyntax, rightSyntax, false, span)?;
+        c.popScope();
+        return Ok(chain);
+    }
     if (index == 0 || index == 1) {
         let l = checkExpr(c, leftSyntax, boolType)?;
         let r = checkExpr(c, rightSyntax, boolType)?;

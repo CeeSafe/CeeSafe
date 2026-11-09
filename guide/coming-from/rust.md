@@ -30,6 +30,8 @@ for you. This page assumes you know Rust well.
 | `Box::new(move \|x\| x + n)` | `Box.create(move (x) => x + n)!` | a `Box<dyn fn(u64) -> u64>`, which owns its captures |
 | `match x { A => …, }` | `match (x) { E.A => { … } }` | variants are qualified; statement arms are blocks |
 | `Some(n) if n > 3 =>`, `A \| B`, `0..=9`, `x @ P` | `Some(n) if (n > 3) =>`, `A \| B`, `0..=9`, `x @ P` | the guard is parenthesised |
+| `"get" =>`, `b"cjs" =>`, `[first, rest @ ..] =>` | `"get" =>`, `"cjs" =>`, `[first, rest @ ..] =>` | a string pattern is typed by the value: a `StringView` or a `Slice<u8>` |
+| `if let Some(v) = e`, `while let …`, `matches!(e, P)` | `if (e is Some(v))`, `while (e is …)`, `e is P` | one operator; it chains with `&&` |
 | `std::thread::spawn(move \|\| …)` | `Thread.spawn(move () => …)!` | with `Arc`, `Mutex` and atomics |
 | `Send`, `Sync` | `Send`, `Share` | |
 | `println!("{}", x)` | `Console.writeLine(x)` | no macros, no format strings yet |
@@ -143,6 +145,5 @@ calls, at compile time. Rust has no equivalent in the language.
 ## Things you will miss
 
 `Rc` (CeeSafe has `Arc`, and lib/core's `Cell` and `RefCell`, whose `read()` and `write()` are Rust's `borrow()` and
-`borrow_mut()`: type-system.md §41), macros, iterator adapters, blanket impls, `impl Trait`, slice and string
-patterns, shadowing, the standard library's breadth, and crates.io. Several are planned or recorded as open
-decisions.
+`borrow_mut()`: type-system.md §41), macros, iterator adapters, blanket impls, `impl Trait`, shadowing, the
+standard library's breadth, and crates.io. Several are planned or recorded as open decisions.

@@ -738,6 +738,13 @@ struct AstPrinter {
             }
             ExprNode.Try(operand) => { this.unary(ast, symbols, "(try ", operand)?; }
             ExprNode.Unwrap(operand) => { this.unary(ast, symbols, "(unwrap ", operand)?; }
+            ExprNode.Is(operand, pattern) => {
+                this.text("(is ")?;
+                this.expr(ast, symbols, operand)?;
+                this.text(" ")?;
+                this.patternText(ast, symbols, pattern)?;
+                this.text(")")?;
+            }
             ExprNode.Await(operand) => { this.unary(ast, symbols, "(await ", operand)?; }
             ExprNode.Index(target, index) => {
                 this.text("(index ")?;
@@ -837,6 +844,23 @@ struct AstPrinter {
                     this.patternText(ast, symbols, ast.at(alternatives, k))?;
                 }
                 this.text(")")?;
+            }
+            PatternNode.Slice(items) => {
+                this.text("(slice")?;
+                for (k in 0..items.count) {
+                    this.text(" ")?;
+                    this.patternText(ast, symbols, ast.at(items, k))?;
+                }
+                this.text(")")?;
+            }
+            PatternNode.Rest(name) => {
+                if (name == none()) {
+                    this.text("..")?;
+                } else {
+                    this.text("(@ ")?;
+                    this.name(ast, symbols, name)?;
+                    this.text(" ..)")?;
+                }
             }
         }
         return Ok();

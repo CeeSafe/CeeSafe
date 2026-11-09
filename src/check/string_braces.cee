@@ -219,6 +219,16 @@ fn bracePattern(c: borrow Checker, scope: borrow mut BraceScope, p: u32) -> Resu
             scope.names.push(c.front.ast.idents[name as usize].symbol)?;
             bracePattern(c, scope, inner)?;
         }
+        PatternNode.Slice(items) => {
+            for (k in 0..items.count) {
+                bracePattern(c, scope, c.front.ast.at(items, k))?;
+            }
+        }
+        PatternNode.Rest(name) => {
+            if (name != none()) {
+                scope.names.push(c.front.ast.idents[name as usize].symbol)?;
+            }
+        }
         _ => {}
     }
     return Ok();
@@ -308,6 +318,10 @@ fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: 
         }
         ExprNode.Try(operand) => { braceExpr(c, scope, file, operand)?; }
         ExprNode.Unwrap(operand) => { braceExpr(c, scope, file, operand)?; }
+        ExprNode.Is(operand, pattern) => {
+            braceExpr(c, scope, file, operand)?;
+            bracePattern(c, scope, pattern)?;
+        }
         ExprNode.Await(operand) => { braceExpr(c, scope, file, operand)?; }
         _ => {}
     }

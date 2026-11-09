@@ -1,0 +1,13 @@
+(program
+  (fn f ((s#0: Slice<u8>) (w#1: StringView) (v#2: Slice<String>)) -> usize
+    (block
+      (let a#5: usize = (value (match s#0 (arm "ok" (block (yield 1:usize))) (arm [(first#3: u8), rest#4 @ .., 0] (block (yield (+ (as first#3 usize) (length rest#4):usize):usize))) (arm _ (block (yield 0:usize))))):usize)
+      (let b#6: usize = (value (match w#1 (arm ("get" | "put") (block (yield 2:usize))) (arm _ (block (yield 0:usize))))):usize)
+      (let c#8: usize = (value (match v#2 (arm [.., (last#7: borrow String)] (block (yield (length (deref last#7):String):usize))) (arm [] (block (yield 0:usize))))):usize)
+      (return (+ (+ a#5 b#6):usize c#8):usize)
+    )
+  )
+  (fn main () -> void
+    (block)
+  )
+)

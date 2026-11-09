@@ -2083,6 +2083,12 @@ struct Parser {
                     return this.literalPattern(start, true);
                 }
             }
+            TokenKind.StringLiteral => {
+                // `"get"` (ADR 0085 §2.7): typed by the value, a `StringView` or a `Slice<u8>`.
+                let literal = this.parsePrimary()?;
+                return this.front.ast.addPattern(PatternNode.Literal(literal), start, this.endFrom(start));
+            }
+            TokenKind.OpenBracket => { return this.slicePattern(start); }
             TokenKind.OpenParen => {
                 // `( Pattern )` (ADR 0085 §2.1): grouping, as in `quote @ ('"' | '\'')`.
                 this.advance();
@@ -2115,6 +2121,53 @@ struct Parser {
         }
         this.errorFound(expectedPattern(), "expected a pattern, found ", "")?;
         return this.front.ast.addPattern(PatternNode.Wildcard, start, start);
+    }
+
+    /// `[p, q, ..]`, `[first, rest @ ..]` (ADR 0085 §2.7): element patterns, and at most one `..` (N0100 otherwise).
+    fn slicePattern(borrow mut this, start: u32) -> Result<u32, AllocError> {
+        this.advance(); // `[`
+        var items = Vector<u32>.create();
+        var rests = 0u32;
+        while (!this.at(TokenKind.CloseBracket) && !this.at(TokenKind.EndOfFile)) {
+            let itemStart = this.current().start;
+            var item = none();
+            if (this.at(TokenKind.DotDot)) {
+                this.advance();
+                item = this.front.ast.addPattern(PatternNode.Rest(none()), itemStart, this.endFrom(itemStart))?;
+            } else if (this.at(TokenKind.Identifier) && this.peekIs(1, TokenKind.At) && this.peekIs(
+                2,
+                TokenKind.DotDot,
+            )) {
+                let name = this.parseIdentifier()?;
+                this.advance(); // `@`
+                this.advance(); // `..`
+                item = this.front.ast.addPattern(PatternNode.Rest(name), itemStart, this.endFrom(itemStart))?;
+            } else {
+                item = this.parsePattern()?;
+            }
+            match (this.front.ast.patterns[item as usize]) {
+                PatternNode.Rest(_) => {
+                    rests += 1;
+                    if (rests == 2) {
+                        var message = Vector<u8>.create();
+                        appendText(mut message, "a slice pattern has at most one '..' (ADR 0085 §2.7)")?;
+                        if (!this.recovering && !this.tooDeep) {
+                            // Not a loss of sync: the parse goes on, and so do its reports.
+                            let end = this.endFrom(itemStart);
+                            this.front.diagnostics.error(expectedToken(), this.file, itemStart, end, message)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            items.push(item)?;
+            if (!this.eat(TokenKind.Comma)) {
+                break;
+            }
+        }
+        this.expect(TokenKind.CloseBracket)?;
+        let range = this.list(items)?;
+        return this.front.ast.addPattern(PatternNode.Slice(range), start, this.endFrom(start));
     }
 
     /// `A.B`, `A.B(bindings)` or `A(bindings)`: a variant, or a qualified constant (ADR 0085 §2.6).
@@ -2209,6 +2262,8 @@ struct Parser {
             this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At),
         TokenKind.SelfTypeKeyword => this.peekIs(1, TokenKind.Dot),
         TokenKind.OpenParen => true,
+        TokenKind.StringLiteral => true,
+        TokenKind.OpenBracket => true,
         _ => false,
     };
 
@@ -2381,11 +2436,30 @@ struct Parser {
 
         loop {
             let ahead = this.peekBinaryOp();
-            if (this.at(TokenKind.AsKeyword) || (ahead.found && ahead.precedence >= minPrecedence)) {
+            // `e is P` (ADR 0085 §2.8): `is` is the operator only after a complete operand, at the precedence of `==`.
+            let isTest = this.at(TokenKind.Identifier) && this.nameIs(this.current(), "is") &&
+                comparisonPrecedence() >= minPrecedence;
+            if (this.at(TokenKind.AsKeyword) || isTest || (ahead.found && ahead.precedence >= minPrecedence)) {
                 if (!this.nest()?) {
                     return Ok(left);
                 }
                 links += 1;
+            }
+            if (isTest) {
+                if (leftIsComparison) {
+                    let token = this.current();
+                    this.error(
+                        chainedComparison(),
+                        token.start,
+                        token.end,
+                        textMessage("comparison operators cannot be chained; combine the comparisons with '&&'")?,
+                    )?;
+                }
+                this.advance();
+                let pattern = this.parsePattern()?;
+                left = this.front.ast.addExpr(ExprNode.Is(left, pattern), start, this.endFrom(start))?;
+                leftIsComparison = true;
+                continue;
             }
             if (this.at(TokenKind.AsKeyword)) {
                 this.advance();

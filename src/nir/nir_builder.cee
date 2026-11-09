@@ -582,6 +582,10 @@ fn lowerStmt(
         }
         HirStmt.If(condition, then, otherwise) => { lowerIf(c, n, b, condition, then, otherwise)?; }
         HirStmt.While(condition, body) => {
+            if (hasIsTest(c, condition)) {
+                lowerIsWhile(c, n, b, condition, body)?; // ADR 0085 §2.8
+                return Ok();
+            }
             let head = newBlock(b)?;
             terminate(n, b, NirTerminator.Goto(head))?;
             b.current = head;
@@ -931,7 +935,8 @@ fn lowerNestedMatch(
     byReference: bool,
     movedLocal: u32,
 ) -> Result<void, AllocError> {
-    if (!consumes) {
+    // A string, slice or array value (ADR 0085 §2.7) is never a Switch's.
+    if (!consumes && !c.types.is(placeType(c, n, b, place), TypeKind.Array)) {
         var cases = Vector<NirCase>.create();
         if (switchCases(c, arms, mut cases)?) {
             return lowerSwitchMatch(c, n, b, s, arms, place, byReference, cases);
@@ -1197,6 +1202,17 @@ fn patternBinds(c: borrow Checker, pattern: u32) -> bool {
         }
         HirPattern.Or(alternatives) => { return patternBinds(c, c.hir.at(alternatives, 0)); }
         HirPattern.At(_, _) => { return true; }
+        HirPattern.Slice(items, _, restLocal) => {
+            if (restLocal != none()) {
+                return true;
+            }
+            for (i in 0..items.count) {
+                if (patternBinds(c, c.hir.at(items, i))) {
+                    return true;
+                }
+            }
+            return false;
+        }
         _ => { return false; }
     }
 }
@@ -1257,6 +1273,37 @@ fn expandAlternatives(c: borrow mut Checker, pattern: u32, out: borrow mut Vecto
             for (ci in 0..combinations.length) {
                 let list = c.hir.list(combinations[ci].view())?;
                 let rebuilt = c.hir.addPattern(HirPattern.Variant(variant, true, list))?;
+                out.push(rebuilt)?;
+            }
+            return Ok();
+        }
+        HirPattern.Slice(items, restAt, restLocal) => {
+            // Every combination of the items' alternatives, as for a variant's payloads.
+            var combinations = Vector<Vector<u32>>.create();
+            combinations.push(Vector<u32>.create())?;
+            for (i in 0..items.count) {
+                var expanded = Vector<u32>.create();
+                let inner = c.hir.at(items, i);
+                expandAlternatives(c, inner, mut expanded)?;
+                var grown = Vector<Vector<u32>>.create();
+                for (ci in 0..combinations.length) {
+                    for (e in expanded.view()) {
+                        var longer = Vector<u32>.create();
+                        for (xi in 0..combinations[ci].length) {
+                            longer.push(combinations[ci][xi])?;
+                        }
+                        longer.push(e)?;
+                        grown.push(longer)?;
+                    }
+                }
+                combinations = grown;
+            }
+            if (combinations.length == 1) {
+                return out.push(pattern);
+            }
+            for (ci in 0..combinations.length) {
+                let list = c.hir.list(combinations[ci].view())?;
+                let rebuilt = c.hir.addPattern(HirPattern.Slice(list, restAt, restLocal))?;
                 out.push(rebuilt)?;
             }
             return Ok();
@@ -1327,6 +1374,7 @@ fn guardBindPattern(
                 }
             }
         }
+        HirPattern.Slice(_, _, _) => { bindPattern(c, n, b, pattern, place, false)?; } // copies and references only
         _ => {}
     }
     return Ok();
@@ -1398,6 +1446,36 @@ fn testPattern(
                     let hoisted1 = c.hir.at(payload, i);
                     testPattern(c, n, b, hoisted1, inner, fail)?;
                 }
+            }
+        }
+        HirPattern.String(text, _) => {
+            // `==` on the view, as `s == "get"` compares: the lengths, then the bytes (ADR 0085 §2.10).
+            let view = viewPlaceOf(c, n, b, place)?;
+            let viewType = placeType(c, n, b, view);
+            let left = placeOperand(c, n, b, view)?;
+            let copy = n.addText(c.hir.textOf(text))?;
+            let right = n.operand(NirOperand.String(copy), viewType)?;
+            let boolType = c.types.boolType;
+            let test = n.rvalue(NirRvalue.Binary(BinaryOp.Equal, left, right), boolType, b.span)?;
+            branchOnTest(c, n, b, test, fail)?;
+        }
+        HirPattern.Slice(items, restAt, _) => {
+            // A length test (`==` k, or `>=` k with `..`), then each item on its element; the length test proves the
+            // indexes, so they are not checked again (ADR 0085 §2.10).
+            let array = elementsPlaceOf(c, n, b, place)?;
+            let length = lengthOf(c, n, b, array)?;
+            if (!isConstOperand(n, length)) {
+                let usize = c.types.usize;
+                let boolType = c.types.boolType;
+                let count = constOperand(n, items.count as i64, usize)?;
+                let op = if (restAt == none()) BinaryOp.Equal else BinaryOp.GreaterEqual;
+                let test = n.rvalue(NirRvalue.Binary(op, length, count), boolType, b.span)?;
+                branchOnTest(c, n, b, test, fail)?;
+            }
+            for (i in 0..items.count) {
+                let element = sliceItemPlace(c, n, b, array, length, items.count, restAt, i)?;
+                let item = c.hir.at(items, i);
+                testPattern(c, n, b, item, element, fail)?;
             }
         }
         _ => {}
@@ -1478,9 +1556,106 @@ fn bindPattern(
                 }
             }
         }
+        HirPattern.Slice(items, restAt, restLocal) => {
+            // A slice never moves (ADR 0085 §2.7): a Copy element binds a copy, any other a reference.
+            let array = elementsPlaceOf(c, n, b, place)?;
+            let length = lengthOf(c, n, b, array)?;
+            for (i in 0..items.count) {
+                let element = sliceItemPlace(c, n, b, array, length, items.count, restAt, i)?;
+                let elementType = placeType(c, n, b, element);
+                let item = c.hir.at(items, i);
+                let elementByReference = !c.types.isCopy(elementType);
+                bindPattern(c, n, b, item, element, elementByReference)?;
+            }
+            if (restLocal != none()) {
+                // `rest @ ..`: the elements between the prefix and the suffix, a view of the same region.
+                let usize = c.types.usize;
+                let low = constOperand(n, restAt as i64, usize)?;
+                let high = fromEnd(c, n, b, length, items.count - restAt)?;
+                let local = nirLocalOf(c, restLocal);
+                addToScope(b, local)?;
+                let target = localPlace(n, local)?;
+                let localType = c.hir.locals[restLocal as usize].typ;
+                let rvalue = n.rvalue(NirRvalue.Slice(false, array, low, high), localType, b.span)?;
+                assign(n, b, target, rvalue)?;
+            }
+        }
         _ => {}
     }
     return Ok();
+}
+
+/// The elements a slice pattern tests: a slice's (`s.*`, the place a match on a slice already is) or an array's.
+fn elementsPlaceOf(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    place: u32,
+) -> Result<u32, AllocError> {
+    if (c.types.is(placeType(c, n, b, place), TypeKind.Reference)) {
+        return projectPlace(n, place, derefProjectionN()); // a slice payload, `Some([a, ..])`
+    }
+    return Ok(place);
+}
+
+/// The view a string pattern compares: the `StringView` or `Slice<u8>` itself, whose elements `place` may be.
+fn viewPlaceOf(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    place: u32,
+) -> Result<u32, AllocError> {
+    if (c.types.is(placeType(c, n, b, place), TypeKind.Reference)) {
+        return Ok(place);
+    }
+    return parentPlace(n, place);
+}
+
+/// `length - back`, a constant when the length is.
+fn fromEnd(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    length: u32,
+    back: u32,
+) -> Result<u32, AllocError> {
+    let usize = c.types.usize;
+    match (n.operands[length as usize]) {
+        NirOperand.Const(l) => { return constOperand(n, truncate<i64>(l.magnitude - (back as u64)), usize); }
+        _ => {}
+    }
+    if (back == 0) {
+        return Ok(length);
+    }
+    let backOperand = constOperand(n, back as i64, usize)?;
+    let temp = newTemp(b, usize)?;
+    let tempPlace = localPlace(n, temp)?;
+    let difference = n.rvalue(NirRvalue.Binary(BinaryOp.Subtract, length, backOperand), usize, b.span)?;
+    assign(n, b, tempPlace, difference)?;
+    return placeOperand(c, n, b, tempPlace);
+}
+
+/// The element item `i` of a slice pattern tests: index i in the prefix, `length - (count - i)` in the suffix. The
+/// pattern's length test proved it in bounds, so it has no BoundsCheck.
+fn sliceItemPlace(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    array: u32,
+    length: u32,
+    count: u32,
+    restAt: u32,
+    i: u32,
+) -> Result<u32, AllocError> {
+    let usize = c.types.usize;
+    let index = if (restAt == none() || i < restAt) constOperand(n, i as i64, usize)? else fromEnd(
+        c,
+        n,
+        b,
+        length,
+        count - i,
+    )?;
+    return projectPlace(n, array, indexProjectionN(index));
 }
 
 /// A consuming match's matched pattern (UnpackPattern, §18.4): every payload of the variant moves out, into its
@@ -1528,6 +1703,16 @@ fn unpackPattern(
                         _ => {}
                     }
                     target = nirLocalOf(c, hirLocal);
+                    addToScope(b, target)?;
+                }
+            }
+            HirPattern.Slice(_, _, _) => {
+                // An array payload (ADR 0085 §2.7): its element bindings copy (N0205 otherwise), read before the
+                // unpack; a non-Copy array still moves, to a hidden local.
+                let innerPlace = payloadPlace(n, place, variant, field)?;
+                bindPattern(c, n, b, inner, innerPlace, false)?;
+                if (!c.types.isCopy(payloadType)) {
+                    target = newLocal(b, payloadType)?;
                     addToScope(b, target)?;
                 }
             }
@@ -2068,6 +2253,9 @@ fn lowerIf(
     then: u32,
     otherwise: u32,
 ) -> Result<void, AllocError> {
+    if (hasIsTest(c, condition)) {
+        return lowerIsIf(c, n, b, condition, then, otherwise); // ADR 0085 §2.8
+    }
     var ending = Vector<u32>.create();
     let test = lowerCondition(c, n, b, condition, mut ending)?;
     if (test == none()) {
@@ -2805,6 +2993,7 @@ fn lowerRvalueCore(
             }
             return Ok(spawn);
         }
+        HirExpr.Is(scrutinee, pattern, consumes) => { return lowerIsValue(c, n, b, scrutinee, pattern, consumes); }
         HirExpr.SetSpawn(record, admitted, closure) => {
             // A task set's start (ADR 0053): the child's function, the record, the admission code, the closure, in
             // that order of evaluation; the value is the start's code.
@@ -3856,6 +4045,7 @@ fn containsCall(c: borrow Checker, e: u32) -> bool {
         HirExpr.AsyncBoxed(_, _) => { return true; }
         HirExpr.Spawn(_, _) => { return true; }
         HirExpr.SetSpawn(_, _, _) => { return true; }
+        HirExpr.Is(scrutinee, _, _) => { return containsCall(c, scrutinee); }
         HirExpr.IsNull(reference, _) => { return containsCall(c, reference); }
         _ => { return false; }
     }
@@ -4043,6 +4233,13 @@ fn lowerShortCircuit(
     leftExpr: u32,
     rightExpr: u32,
 ) -> Result<u32, AllocError> {
+    let andChain = match (op) {
+        BinaryOp.LogicalAnd => true,
+        _ => false,
+    };
+    if (andChain && hasIsTest(c, leftExpr)) {
+        return lowerIsAnd(c, n, b, leftExpr, rightExpr); // ADR 0085 §2.8
+    }
     let left = lowerOperand(c, n, b, leftExpr)?;
     if (left == none()) {
         return Ok(none());

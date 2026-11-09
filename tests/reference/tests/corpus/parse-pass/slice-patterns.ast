@@ -1,0 +1,27 @@
+(unit
+  (fn default f (params (s (Slice u8)) (o (optional StringView))) (returns u32)
+    (block
+      (match s
+        (arm (or "get" "put")
+          (block)
+        )
+        (arm (slice)
+          (block)
+        )
+        (arm (slice a .. z)
+          (block)
+        )
+        (arm (slice '"' (@ inner ..) '"')
+          (block)
+        )
+        (arm (slice (@ rest ..) 0)
+          (block)
+        )
+        (arm _
+          (block)
+        )
+      )
+      (return (match-expr o (arm (Some "yes") 1) (arm (Some (slice _ ..)) 2) (arm _ 0)))
+    )
+  )
+)

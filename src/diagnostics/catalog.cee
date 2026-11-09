@@ -25,7 +25,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     106 => "Namespace declaration not first in the file",
     107 =>
         "Expected a field or `fn` inside a struct body; an imported union with no member, or a union inside an anonymous union member (ADR 0041 §3.2)",
-    108 => "Expected a `match` pattern (`_`, a literal or range, a name, `name @ P`, `(P)`, or `E.V(…)`)",
+    108 =>
+        "Expected a `match` pattern (`_`, a literal, string or range, a name, `name @ P`, `(P)`, `[…]`, or `E.V(…)`)",
     109 => "An `import` declaration after an item",
     110 =>
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",
@@ -225,7 +226,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4)",
     358 =>
         "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3)",
-    359 => "an `is` pattern with bindings where the test is not known true",
+    359 =>
+        "An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8)",
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     400 =>

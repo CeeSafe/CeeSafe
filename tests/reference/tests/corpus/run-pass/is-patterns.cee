@@ -1,0 +1,185 @@
+// `e is P` (ADR 0085 §2.8): a test in `let`, `if`, `while` and `&&` chains; bindings seen by later operands and the
+// then-branch or body; a consuming test that moves only on success, so the `else` still has the value; a false later
+// operand that destroys a binding before the `else`; RefCell guards made in the condition, which end with it unless a
+// binding borrows from them, and then with the then-branch, never in the `else`.
+
+struct Noisy {
+    id: u32;
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.id);
+    }
+}
+
+enum Token {
+    Word(String),
+    Number(u32),
+    End,
+}
+
+fn find(k: u32) -> u32? => if (k > 2) Some(k * 10) else null;
+
+enum Pair {
+    Two(u32, u32),
+    One(u32),
+}
+
+fn three() -> [u32; 3] => [1, 2, 3];
+
+fn noisy(k: u32) -> Noisy? => if (k > 0) Some(Noisy { id: k }) else null;
+
+/// Or-patterns, parentheses, a test in a guard, `break` and `continue` ending the bindings of a `while`'s pass,
+/// `rest @ ..` on a temporary array, and a test in a closure.
+fn more() {
+    let p = Pair.Two(1, 7);
+    if (p is Pair.Two(a, 1) | Pair.Two(1, a) | Pair.One(a)) {
+        Console.writeLine(a);
+    }
+    let o: u32? = Some(4);
+    if ((o is Some(x)) && x > 1) {
+        Console.writeLine(x);
+    }
+    match (o) {
+        Some(n) if (o is Some(4)) => { Console.writeLine(n); }
+        _ => {}
+    }
+    var k = 3u32;
+    while (noisy(k) is Some(z)) {
+        k -= 1;
+        if (z.id == 2) {
+            continue;
+        }
+        if (z.id == 1) {
+            break;
+        }
+        Console.writeLine(z.id);
+    }
+    if (three() is [first, rest @ ..]) {
+        Console.writeLine(first + rest[1]);
+    }
+    let inRange = (q: u32?) => q is Some(10..=20);
+    Console.writeLine(inRange(Some(15)));
+}
+
+fn kind(c: u8) -> u32 {
+    if (c is 'a'..='z' | 'A'..='Z') {
+        return 1;
+    }
+    return if (c is '0'..='9') 2 else 0;
+}
+
+fn total(xs: Slice<u32>) -> u32 {
+    var i = 0usize;
+    var sum = 0u32;
+    while (xs[i..] is [first, ..] && first != 0) {
+        sum += first;
+        i += 1;
+    }
+    return sum;
+}
+
+fn describe(t: Token) -> u32 {
+    if (t is Token.Word(s) && s.length > 3) {
+        Console.write("long word ");
+        Console.writeLine(s);
+        return 1;
+    }
+    return 0;
+}
+
+fn main() {
+    let c = 'q';
+    let lower = c is 'a'..='z';
+    Console.writeLine(lower);
+    Console.writeLine(c is '0'..='9');
+    Console.writeLine(kind('Q'));
+    Console.writeLine(kind('4'));
+    Console.writeLine(kind('!'));
+    if (find(5) is Some(v) && v > 20) {
+        Console.writeLine(v);
+    }
+    if (find(1) is Some(v)) {
+        Console.writeLine(v);
+    } else {
+        Console.writeLine("none");
+    }
+    let big = find(9) is Some(w) && w > 50;
+    Console.writeLine(big);
+    let first = find(3) is Some(a) && find(4) is Some(b) && a + b == 70;
+    Console.writeLine(first);
+    let xs = [3u32, 4, 0, 9];
+    Console.writeLine(total(xs[..]));
+    // A consuming test moves only on success: the else-branch still has the value.
+    var word = String.create();
+    word.append("hello")!;
+    let t = Token.Word(word);
+    if (t is Token.Number(n)) {
+        Console.writeLine(n);
+    } else if (t is Token.End) {
+        Console.writeLine("end");
+    } else {
+        Console.writeLine(describe(t));
+    }
+    // A false later operand destroys the binding before the else-branch runs.
+    let o: Noisy? = Some(Noisy { id: 1 });
+    if (o is Some(x) && x.id > 5) {
+        Console.writeLine("big");
+    } else {
+        Console.writeLine("else");
+    }
+    // A while loop takes a fresh value each pass.
+    var queue = Vector<u32>.create();
+    queue.push(1)!;
+    queue.push(2)!;
+    while (queue.pop() is Some(item)) {
+        Console.writeLine(item);
+    }
+    // RefCell guards (ADR 0084 §41.3): copied out, the guard ends with the condition, so the body may write.
+    let cell = RefCell<Vector<u32>>.create(Vector<u32>.create());
+    cell.write().data().push(7)!;
+    if (cell.read().data().length is 1) {
+        cell.write().data().push(8)!;
+    }
+    // A binding that borrows from the guard keeps it to the end of the then-branch, and no further.
+    if (cell.read().data().view() is [head, ..]) {
+        Console.writeLine(head);
+        Console.writeLine(cell.tryWrite() == null);
+    }
+    Console.writeLine(cell.tryWrite() == null);
+    if (cell.read().data().view() is [_, _, _, ..]) {
+        Console.writeLine("three");
+    } else {
+        Console.writeLine(cell.tryWrite() == null);
+    }
+    more();
+}
+
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 50
+// expect-stdout: none
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 7
+// expect-stdout: long word hello
+// expect-stdout: 1
+// expect-stdout: drop 1
+// expect-stdout: else
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 7
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: 7
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 3
+// expect-stdout: drop 3
+// expect-stdout: drop 2
+// expect-stdout: drop 1
+// expect-stdout: 4
+// expect-stdout: true

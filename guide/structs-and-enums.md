@@ -309,6 +309,101 @@ arms must still cover every value. A guard only reads: it cannot move, assign or
 the arm's bindings (N0355). In a match that moves a payload into its binding, the move happens only once the guard
 holds.
 
+### Strings and slices
+
+A string literal is a pattern on a `StringView`, and on a `Slice<u8>`, where it matches the text's bytes. A slice
+pattern, `[…]`, matches a slice or an array by its elements: `..` stands for any number of them, and `rest @ ..`
+binds those as a slice.
+
+```ceesafe
+fn command(word: StringView) -> u32 => match (word) {
+    "get" | "head" => 1,
+    "put" => 2,
+    _ => 0,
+};
+
+fn ends(s: Slice<i32>) -> i32 => match (s) {
+    [] => 0,
+    [only] => only,
+    [first, .., last] => first + last,
+};
+
+fn unquote(text: Slice<u8>) -> Slice<u8> => match (text) {
+    ['"', inner @ .., '"'] => inner,
+    _ => text,
+};
+
+fn main() {
+    Console.writeLine(command("head"));
+    let numbers = [3, 5, 8];
+    Console.writeLine(ends(numbers[..]));
+    Console.writeLine(unquote("\"quoted\"".bytes()).length);
+}
+```
+
+```text
+1
+11
+6
+```
+
+Strings never cover their type, so a match on a `StringView` ends with `_` or a binding. Slice patterns cover by
+length: `[]` and `[_, ..]` together match every slice, and a missing case is reported with one:
+
+<!-- ceesafe: fail N0256 -->
+```ceesafe
+fn size(s: Slice<i32>) -> u32 => match (s) {
+    [] => 0,
+    [_] => 1,
+};
+
+fn main() {}
+```
+
+```text
+main.cee:1:41: error[N0256]: this match does not cover [_, _, ..]; add the missing arms or a '_' arm
+  |
+1 | fn size(s: Slice<i32>) -> u32 => match (s) {
+  |                                         ^
+```
+
+A slice pattern never moves an element: one of a Copy type is copied, any other is bound as a `borrow T`.
+
+### Patterns as conditions
+
+`e is P` tests a value against a pattern and gives a `bool`. In an `if` or `while` condition, the names the pattern
+binds are in scope in the rest of the `&&` chain and in the then-branch or the loop body:
+
+```ceesafe
+fn find(key: u32) -> u32? => if (key > 2) Some(key * 10) else null;
+
+fn main() {
+    let c = 'q';
+    let letter = c is 'a'..='z' | 'A'..='Z';
+    Console.writeLine(letter);
+    if (find(5) is Some(found) && found > 20) {
+        Console.writeLine(found);
+    }
+    var stack = Vector<u32>.create();
+    stack.push(1)!;
+    stack.push(2)!;
+    while (stack.pop() is Some(top)) {
+        Console.writeLine(top);
+    }
+}
+```
+
+```text
+true
+50
+2
+1
+```
+
+Nowhere else is the test known to be true, so a pattern that binds under `!` or `||`, or as a whole `let`
+initialiser, is an error (N0359). A test that binds a payload that is not Copy moves the value only when it succeeds:
+after `if (t is Token.Word(w)) { … } else { … }`, the `else` branch still has `t`.
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

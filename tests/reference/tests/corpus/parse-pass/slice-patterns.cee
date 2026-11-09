@@ -1,0 +1,12 @@
+// String and slice patterns (ADR 0085 §2.7): strings, `[]`, items, `..` and `rest @ ..` anywhere, nested in payloads.
+fn f(s: Slice<u8>, o: StringView?) -> u32 {
+    match (s) {
+        "get" | "put" => {}
+        [] => {}
+        [a, .., z] => {}
+        ['"', inner @ .., '"'] => {}
+        [rest @ .., 0] => {}
+        _ => {}
+    }
+    return match (o) { Some("yes") => 1, Some([_, ..]) => 2, _ => 0 };
+}

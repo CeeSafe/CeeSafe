@@ -561,6 +561,9 @@ PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
           | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
+          | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
+          | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
+SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
@@ -587,7 +590,9 @@ and `E.V…` there are patterns.
   - an enum: variant patterns;
   - an integer: literal and range patterns of that type;
   - `bool`: `true`/`false`;
-  - or a reference to one of these.
+  - or a reference to one of these;
+  - a `StringView`: string literal patterns; a `Slice<T>` (or `SliceMut<T>`), an array `[T; N]` or a reference to
+    one: slice patterns, and on a `Slice<u8>` string literal patterns too (ADR 0085 §2.7).
 - **Exhaustiveness** (N0256): enum matches must cover every variant or end with `_`. Integer
   matches must cover every value of the type with their literals and ranges, or end with `_` (ADR 0085 §2.4).
   `bool` matches need both values or `_`. An arm that can never match (a repeated variant or literal, a value an
@@ -596,6 +601,19 @@ and `E.V…` there are patterns.
   expressions do. Both bounds are integer or character literals, typed by the scrutinee (or payload) as §4 types a
   literal, so `'a'..='z'` matches bytes of a `u8`. A range that matches no value (`'z'..='a'`, `5..5`) is N0357.
   Ranges are for integers only: `bool`, floats and other types take none (N0205; a `bool` bound is N0108).
+- **String literal patterns** (ADR 0085 §2.7). On a `StringView`, `"get"` matches equal bytes, as `==` does (§22.2).
+  On a `Slice<u8>`, the same literal matches its UTF-8 bytes: the literal is typed by the value, as `'k'` is, so a
+  byte string is written `"cjs"`. A string pattern on any other type is N0205. String patterns never cover their
+  type (a match on a `StringView` needs `_` or a binding); a repeated one is N0257.
+- **Slice patterns** (ADR 0085 §2.7). `[]`, `[a, b]`, `[first, ..]`, `[.., last]`, `[x, rest @ ..]`,
+  `['"', inner @ .., '"']` match a `Slice<T>`, an array or a reference to one, and a payload that is a slice or a
+  `StringView` (`Some([a, ..])`, `Some("yes")`). Each item is a pattern on one element; `..` matches any number of
+  elements, at most once per pattern (N0100). Without `..`, the pattern matches exactly as many elements as it has
+  items; with it, at least that many. `rest @ ..` binds the elements `..` matched as a `Slice<T>` of the same region.
+  - **Bindings.** A slice is a view, so a slice pattern never moves: an element binding of a Copy type is a copy, and
+    of any other type a `borrow T` (which cannot be `var`). On an array held by value, the elements bind only by copy.
+  - **Arrays.** An array's length is part of its type: a pattern of more items than it has, or without `..` of a
+    different count, is N0205.
 - **Bindings.** A variant pattern binds each named payload to a new immutable local in the arm:
   - **Scrutinee of type `E` (a value):** the binding is a *copy* of the payload. Since M3c a
     non-Copy payload is moved out, and the match consumes its scrutinee (§18.4).
@@ -641,7 +659,8 @@ and `E.V…` there are patterns.
     N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
     first, from the value, and on a reference scrutinee every binding is a reference.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
-    through it is a separate `match` on that reference (N0205 otherwise).
+    through it is a separate `match` on that reference (N0205 otherwise). A slice or `StringView` payload takes string
+    and slice patterns, which test its elements (ADR 0085 §2.7).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every
     value of the scrutinee's type matches some arm: N0256, whose message names one value that matches none, such
     as `Ok(E.B)`. An arm is unreachable when every value it matches is matched by an earlier arm: N0257. The decision
@@ -651,7 +670,13 @@ and `E.V…` there are patterns.
     their type): a literal is a one-value interval, a range its own, and the type is split into the intervals the
     arms' bounds define, so literals and ranges that together hold every value cover the type (`0x00..=0x7F` and
     `0x80..=0xFF` cover a `u8`). N0256's witness is then a value no arm holds: the lowest, written as a character
-    literal for a printable byte of a `u8` (`'{'`) and in decimal otherwise (`128`).
+    literal for a printable byte of a `u8` (`'{'`) and in decimal otherwise (`128`); a position no arm constrains is
+    `_`. Strings are constructors of which there are infinitely many, so they never cover a `StringView` (ADR 0085
+    §2.7). The constructors of a slice are its lengths: `[p1, …, pk]` covers length k, and a pattern with `..` and k
+    items every length from k on. The check splits the lengths into 0, 1, …, L - 1 and "L or more", L being past the
+    longest pattern without `..` and at least the longest prefix plus the longest suffix of those with it (Rust's
+    algorithm); an array has the one length N. A string on a `Slice<u8>` is the slice of its bytes. N0256's witness
+    names a length and its elements: `[]`, `[_, _, ..]`.
 
 ### 15.3 `if` and `match` expressions (M11, G5)
 ```ceesafe
@@ -699,6 +724,42 @@ ValueBlock = '{' Statement* Expr '}'        (* the last Expr without ';', ADR 00
   branch's loans, so the result carries the loans of every branch that can produce it (`lifetimes.md`).
 - **Temporaries** made while evaluating a branch end when the branch ends, as at the end of a statement
   (`lifetimes.md` §6). A reference to one cannot be the branch's value (N0243).
+
+### 15.4 `e is P`: patterns as conditions (ADR 0085 §2.8)
+```text
+IsTest = Operand 'is' Pattern          -- at the precedence of '==', non-associative; 'is' is contextual (grammar.md §1.3)
+```
+One `bool` operator stands for what other languages write as `matches!`, `if let`, `while let` and let chains:
+```ceesafe
+let isDigit = c is '0'..='9';
+if (cache.find(key) is Some(entry) && entry.fresh) { use(entry); }
+while (parts.next() is Some(part)) { handle(part); }
+```
+- **Meaning.** `e is P` is the test of `match (e) { P => true, _ => false }` (§15.2): `e` is evaluated once, any
+  pattern of §15.2 may follow, and testing only reads. After `is` the pattern grammar reads as far as it can, so `|`
+  there is an or-pattern. The scrutinee's type is one a `match` takes (N0207 otherwise).
+- **Bindings** are in scope only where the test is known true: in the later operands of the same top-level `&&`
+  chain, and in the then-branch of the `if` (statement or expression) or the body of the `while` whose condition is
+  that chain. A pattern with bindings anywhere else (under `||` or `!`, as a whole `let` initialiser or an argument,
+  as the last operand of a chain outside a condition) is N0359. Parentheses around an operand of the chain do not
+  change this. Bindings copy, move or refer as a `match`'s do (§15.2).
+- **Moves happen only on success.** `is` moves nothing when the test fails. When it succeeds and its pattern binds a
+  non-Copy payload of a value scrutinee, the scrutinee is consumed at that point, as a consuming `match` consumes it
+  (§18.4: unbound payloads go to hidden locals). The move checker sees a place scrutinee moved on the true path only:
+  `if (e is Some(v)) { A } else { B }` leaves `e` whole in `B`. A later `&&` operand that is false does not undo the
+  move.
+- **Drop points.** The bindings (and hidden locals) live to the end of the then-branch, or of the `while` body for
+  that pass; `break` and `continue` end them. When a later operand of the chain is `false`, those made so far are
+  destroyed at once, in reverse order, before the `else` branch runs or the loop exits: in `x is Some(v) && g`, a
+  false `g` destroys `v` there.
+- **Temporaries.** The condition's temporaries end with the condition, before the then-branch, the `else` branch or
+  the loop body runs (§14.5), unless a binding borrows from them: a test of a reference or view that is not a place
+  (`c.read().data().view() is [first, ..]`), or `rest @ ..` on an array that is not a place. Then they live to the
+  end of the then-branch or of this pass of the body, and still never into the `else` branch or the next test (Rust
+  2024's `if let` scope, applied to `while` too). So a `RefCell` guard (§41.3) used to copy a value out is gone before
+  the body, and a `.write()` in the body or in `else` does not panic. A `while` evaluates the scrutinee again on each
+  pass.
+- Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
 
 ## 16. Arrays, slices and `for` (M2d)
 
@@ -4555,8 +4616,8 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   its temporaries ends once the condition is evaluated, before the body or the `else` block runs, and on every pass
   of a `while`. So `if (c.read().data().isEmpty()) { … } else { c.write()… }` does not panic, nor does an `if`
   expression whose branch writes. A `match` scrutinee's temporaries live until the end of the `match` (§18.4), as
-  Rust's do. (`e is P`, ADR 0085, follows the same rule: the guard ends with the condition, or with the block that
-  uses a binding borrowing from it.)
+  Rust's do. `e is P` (§15.4) follows the same rule: a guard made in its condition ends with the condition, or, when
+  a binding borrows from it, with the then-branch or the pass of the `while` body, never in the `else` block.
 - **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
   another task resumed meanwhile panics on the same cell. A local counts if it holds a guard in its own storage or in
   what it owns: a struct or enum field, an optional, an array, a `Box`, a `Vector`, a `StableVector`, a `SlotMap`, or

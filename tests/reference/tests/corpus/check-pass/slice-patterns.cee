@@ -1,0 +1,19 @@
+// String and slice patterns (ADR 0085 §2.7) in the HIR: a string's text, and on a Slice<u8> its bytes; slice items,
+// where `..` sits and what `rest @ ..` binds; element bindings by copy and by reference.
+fn f(s: Slice<u8>, w: StringView, v: Slice<String>) -> usize {
+    let a = match (s) {
+        "ok" => 1,
+        [first, rest @ .., 0] => first as usize + rest.length,
+        _ => 0,
+    };
+    let b: usize = match (w) {
+        "get" | "put" => 2,
+        _ => 0,
+    };
+    let c = match (v) {
+        [.., last] => last.length,
+        [] => 0,
+    };
+    return a + b + c;
+}
+fn main() {}

@@ -48,6 +48,15 @@ fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -
         HirPattern.Wildcard => {}
         HirPattern.Literal(_) => {}
         HirPattern.Range(_, _) => {}
+        HirPattern.String(_, _) => {}
+        HirPattern.Slice(items, _, restLocal) => {
+            for (k in 0..items.count) {
+                patternLocals(c, c.hir.at(items, k), out)?;
+            }
+            if (restLocal != none()) {
+                out.push(restLocal)?;
+            }
+        }
     }
     return Ok();
 }
@@ -208,6 +217,7 @@ fn guardExpr(c: borrow Checker, e: u32, value: bool, guarded: Slice<u32>, found:
         HirExpr.SliceLength(operand) => { guardExpr(c, operand, false, guarded, found); }
         HirExpr.Try(operand) => { guardExpr(c, operand, true, guarded, found); }
         HirExpr.Unwrap(operand) => { guardExpr(c, operand, true, guarded, found); }
+        HirExpr.Is(scrutinee, _, consumes) => { guardExpr(c, scrutinee, consumes, guarded, found); } // moves on success
         HirExpr.IsNull(operand, _) => { guardExpr(c, operand, false, guarded, found); }
         HirExpr.RunTask(task) => { guardExpr(c, task, true, guarded, found); }
         HirExpr.StmtValue(statement) => { guardStmt(c, statement, guarded, found); }

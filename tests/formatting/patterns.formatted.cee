@@ -1,4 +1,4 @@
-// Patterns (formatting.md §4, ADR 0085): guards, or-patterns, ranges, `@`, names.
+// Patterns (formatting.md §4, ADR 0085): guards, or-patterns, ranges, `@`, names, strings and slices, `is`.
 fn f(o: u32?) -> u32 {
     match (o) {
         Some(n) if (n > 3) => { return n; }
@@ -38,3 +38,22 @@ fn k(c: u8, r: Result<u8, u8>) -> u32 {
 }
 
 fn m(c: u8) -> u32 => match (c) { LF => 1, var other => 0 };
+
+fn n(s: Slice<u8>, w: StringView) -> u32 {
+    match (s) {
+        [] => {}
+        ['"', inner @ .., '"'] => {}
+        [a, .., z] => {}
+        [rest @ .., 0] => {}
+        _ => {}
+    }
+    return match (w) { "get" | "put" => 1, _ => 0 };
+}
+
+fn p(c: u8, o: u32?) -> bool {
+    if (o is Some(n) && n > 3) {
+        return true;
+    }
+    while (o is Some(_)) {}
+    return c is 'a'..='z' | '_';
+}

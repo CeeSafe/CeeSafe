@@ -639,7 +639,8 @@ and `E.V…` there are patterns.
   - **Bindings.** A slice is a view, so a slice pattern never moves: an element binding of a Copy type is a copy, and
     of any other type a `borrow T` (which cannot be `var`). On an array held by value, the elements bind only by copy.
   - **Arrays.** An array's length is part of its type: a pattern of more items than it has, or without `..` of a
-    different count, is N0205. A `[T; N]` whose N is a const parameter is matched as a slice in generic code (§20.5).
+    different count, is N0205. A `[T; N]` whose N is a const parameter is matched as a slice in generic code, and in
+    an instance an arm of a count N cannot have is never taken, not an error (§20.5).
 - **Bindings.** A variant pattern binds each named payload to a new immutable local in the arm:
   - **Scrutinee of type `E` (a value):** the binding is a *copy* of the payload. Since M3c a
     non-Copy payload is moved out, and the match consumes its scrutinee (§18.4).
@@ -1521,9 +1522,9 @@ fn parse(ts: bool) -> usize => if (ts) run<true>() else run<false>();
 - **Array lengths.** A `usize` const parameter may be an array length, `[T; N]` and `[v; N]` (§16.1). In the generic
   item `[T; N]` is equal only to `[T; N]` with the same parameter (`[T; M]` is N0205), and `a.length` is `N`. Its
   length is unknown there, so slice and array patterns on it (§15.2) are checked as on a slice: covering it needs a
-  `_` or `..` arm (N0256). Each instance checks them against its length: a pattern that length cannot have
-  (`[x, y, ..]` when N is 1, `[]` when N is 3) is N0222 at the use, while an arm the instance cannot reach (`_` after
-  `[x, ..]`) is no error of the instance.
+  `_` or `..` arm (N0256). The body is checked once, so an instance adds no pattern error: an arm whose count its N
+  cannot have (`[x, y, ..]` when N is 1, `[]` when N is 3) is never taken, and an arm it cannot reach (`_` after
+  `[x, ..]`) is not N0257.
 - **Arguments** are written where type arguments are, and evaluated at compile time (§10) to a value of the
   parameter's type; out of its range is N0217. An argument is `true`, `false`, an integer literal (typed by the
   parameter: `Grouped<3>` is a `usize`), the name of a constant (an associated one, `Tags.COUNT`, included), an

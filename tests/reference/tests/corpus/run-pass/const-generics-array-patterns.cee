@@ -1,6 +1,6 @@
 // Slice and array patterns on `[T; N]` with N a const parameter (ADR 0083 §7): the generic version matches it as a
-// slice, each instance with its own length. An arm one instance cannot reach (`_` when N is 2) is no error of that
-// instance; a pattern whose count its length cannot have is (check-fail/const-generics-array-patterns.cee).
+// slice of unknown length, checked once. In an instance, an arm whose count its length cannot have is never taken,
+// and is no error: `firstTwo` takes a 1-element array, and `exact` works for every length.
 fn firstTwo<const N: usize>(a: [u8; N]) -> u32 => match (a) {
     [x, y, ..] => (x as u32) * 10 + (y as u32),
     _ => 99,
@@ -8,36 +8,53 @@ fn firstTwo<const N: usize>(a: [u8; N]) -> u32 => match (a) {
 
 fn lastOf<const N: usize>(a: [i32; N]) -> i32 => match (a) {
     [.., z] => z,
-    _ => -1,
+    [] => -1,
 };
 
-fn restLength<const N: usize>(a: [i32; N]) -> usize => match (a[..]) {
+fn restLen<const N: usize>(a: [i32; N]) -> usize => match (a[..]) {
     [_, rest @ ..] => rest.length,
     [] => 0,
 };
 
-fn startsWithOne<const N: usize>(a: [i32; N]) -> bool => a is [1, ..];
+fn hasHead<const N: usize>(a: [i32; N]) -> bool => a is [1, ..];
+
+fn exact<const N: usize>(a: [i32; N]) -> u32 => match (a) {
+    [_, _] => 2,
+    [_, _, _] => 3,
+    _ => 0,
+};
 
 fn ends<const N: usize>(a: [u64; N]) -> u64 => match (a) {
+    [x] => 1000 + x,
     [x, .., y] => x * 10 + y,
     _ => 0,
 };
 
 fn main() {
     Console.writeLine(firstTwo([1u8, 2u8, 3u8]));
-    Console.writeLine(firstTwo([4u8, 5u8]));
+    Console.writeLine(firstTwo([7u8]));
     Console.writeLine(lastOf([4, 5, 6]));
-    Console.writeLine(restLength([4, 5, 6]));
-    Console.writeLine(startsWithOne([1, 2]));
-    Console.writeLine(startsWithOne([2, 1]));
-    Console.writeLine(ends([7u64, 9]));
+    Console.writeLine(restLen([4, 5, 6]));
+    Console.writeLine(hasHead([1, 2]));
+    Console.writeLine(hasHead([2, 1]));
+    Console.writeLine(exact([1, 2]));
+    Console.writeLine(exact([1, 2, 3]));
+    Console.writeLine(exact([1, 2, 3, 4]));
+    Console.writeLine(ends([7u64]));
     Console.writeLine(ends([7u64, 8, 9]));
+    if (hasHead([1]) && [5u8] is [5]) {
+        Console.writeLine("one");
+    }
 }
 // expect-stdout: 12
-// expect-stdout: 45
+// expect-stdout: 99
 // expect-stdout: 6
 // expect-stdout: 2
 // expect-stdout: true
 // expect-stdout: false
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: 1007
 // expect-stdout: 79
-// expect-stdout: 79
+// expect-stdout: one

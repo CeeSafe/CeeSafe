@@ -1156,9 +1156,11 @@ fn checkSlicePattern(
         trees.push(tree)?;
     }
     let length = c.types.info(array).arrayLength;
-    // `[T; N]` with N a const parameter: its length is unknown in the generic version, which matches it as a slice;
-    // each instance checks the counts against its length (ADR 0083 §7).
-    if (length >= 0 && c.types.info(array).lengthParameter == none()) {
+    // `[T; N]` with N a const parameter: its length is unknown in the generic version, which matches it as a slice.
+    // An instance was checked there, once: an arm whose count its length cannot have is never taken (its length test
+    // folds to false), not an error (ADR 0083 §7).
+    let inInstance = c.function != none() && functionIsInstantiation(c, c.function);
+    if (length >= 0 && c.types.info(array).lengthParameter == none() && !inInstance) {
         let count = truncate<i64>(trees.length);
         if ((restAt == none() && count != length) || (restAt != none() && count > length)) {
             var message = Vector<u8>.create();

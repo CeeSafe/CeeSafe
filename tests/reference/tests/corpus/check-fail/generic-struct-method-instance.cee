@@ -1,16 +1,17 @@
-// An error in a method of a struct instance (§20.4) is N0222 at the method's first call, naming the instance.
+// An error in a method of a struct instance (§20.4) is N0222 at the method's first call, naming the instance: here
+// `Grid<0>.scratch` makes a `[u8; 0]` (§16.1).
 struct Grid<const N: usize> {
-    cells: [u64; N];
+    v: u32;
 
-    fn first(borrow this) -> u64 => match (this.cells) {
-        [x] => x,
-        _ => 0,
-    };
+    fn scratch(borrow this) -> usize {
+        let a: [u8; N] = [0; N];
+        return a.length;
+    }
 }
 
 fn main() {
-    let g = Grid<3> { cells: [1u64, 2, 3] };
-    let one = Grid<1> { cells: [4u64] };
-    Console.writeLine(one.first());
-    Console.writeLine(g.first()); // error[N0222]
+    let one = Grid<1> { v: 3 };
+    Console.writeLine(one.scratch());
+    let none = Grid<0> { v: 3 };
+    Console.writeLine(none.scratch()); // error[N0222]
 }

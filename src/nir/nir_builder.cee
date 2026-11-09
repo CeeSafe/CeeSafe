@@ -1464,7 +1464,14 @@ fn testPattern(
             // indexes, so they are not checked again (ADR 0085 §2.10).
             let array = elementsPlaceOf(c, n, b, place)?;
             let length = lengthOf(c, n, b, array)?;
-            if (!isConstOperand(n, length)) {
+            let known = constOperandMagnitude(n, length);
+            let fits = if (restAt == none()) known == (items.count as u64) else known >= (items.count as u64);
+            if (isConstOperand(n, length) && !fits) {
+                // An array of an instance whose length the pattern cannot have (ADR 0083 §7): the test is false. What
+                // follows is in a block nothing reaches, which the function drops.
+                terminate(n, b, NirTerminator.Goto(fail))?;
+                b.current = newBlock(b)?;
+            } else if (!isConstOperand(n, length)) {
                 let usize = c.types.usize;
                 let boolType = c.types.boolType;
                 let count = constOperand(n, items.count as i64, usize)?;
@@ -1611,6 +1618,14 @@ fn viewPlaceOf(
     return parentPlace(n, place);
 }
 
+/// The magnitude of a constant operand, or 0.
+fn constOperandMagnitude(n: borrow NirProgram, operand: u32) -> u64 {
+    match (n.operands[operand as usize]) {
+        NirOperand.Const(v) => { return v.magnitude; }
+        _ => { return 0; }
+    }
+}
+
 /// `length - back`, a constant when the length is.
 fn fromEnd(
     c: borrow mut Checker,
@@ -1621,7 +1636,11 @@ fn fromEnd(
 ) -> Result<u32, AllocError> {
     let usize = c.types.usize;
     match (n.operands[length as usize]) {
-        NirOperand.Const(l) => { return constOperand(n, truncate<i64>(l.magnitude - (back as u64)), usize); }
+        NirOperand.Const(l) => {
+            // Saturating: past a false length test (an instance's array, ADR 0083 §7) the code is unreachable.
+            let rest = if ((back as u64) > l.magnitude) 0u64 else l.magnitude - (back as u64);
+            return constOperand(n, truncate<i64>(rest), usize);
+        }
         _ => {}
     }
     if (back == 0) {

@@ -367,11 +367,12 @@ implementation, the further hits are its own tests, spec and guide.
 - Two impls of one interface on one type that differ only by a const argument (`impl Pools<true> for C` and
   `impl Pools<false> for C`) clash on method names (N0228), as they do for type arguments today.
 - §5's Bun ports (`P`, `BoundedArray`) are left to the port's M1.
-- **Patterns on `[T; N]`** (after review, 2026-11-09). In the generic version N is unknown, so slice and array
-  patterns on a `[T; N]` are checked as on a slice: a match needs a `_` or `..` arm to cover it (N0256), and no count
-  is refused there. Each instance checks the patterns against its length, as any array's: a pattern that length
-  cannot have (`[x, y, ..]` with N = 1, `[]` with N = 3) is N0222 at the use. An arm the instance cannot reach (`_`
-  after `[x, ..]`) is not an instance error, since the generic version's coverage stands.
+- **Patterns on `[T; N]`** (after review, decided 2026-11-10). In the generic version N is unknown, so slice and
+  array patterns on a `[T; N]` are checked as on a slice: a match needs a `_` or `..` arm to cover it (N0256), and no
+  count is refused there. The body is checked once (§2.3), so an instance adds no pattern error: an arm whose count
+  its N cannot have (`[x, y, ..]` with N = 1, `[_, _]` with N = 3) is never taken, its length test folding to false,
+  and is neither N0222 nor N0257; nor is an arm the instance cannot reach (`_` after `[x, ..]`). An array whose
+  length is a literal or a constant keeps N0205 for a count it cannot have.
 - **Methods of a struct or enum instance.** N0222 for such a method's body is reported at its first call and names
   the instance (`'Grid<3>.first' cannot be used: …`), not at an empty location with an empty argument list.
 - **Derives.** `@derive(HashKey)` and `@derive(OrderKey)` bound only the type parameters of a type, not its const

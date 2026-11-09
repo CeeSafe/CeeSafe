@@ -399,4 +399,5 @@ Step 2 (§2.7, §2.8 and their parts of §2.10, §2.11 and §5) is implemented a
   string or slice pattern, an or-pattern of them (`Some("x" | "y")`), or `name @` one (`Some(s @ "zz")`), which binds
   the view itself.
 - **Const-length arrays.** On `[T; N]` with N a const parameter (ADR 0083), the generic version checks slice and
-  array patterns as on a slice; each instance checks the counts against its length (ADR 0083 §7).
+  array patterns as on a slice; in an instance, an arm whose count N cannot have is never taken, not an error
+  (ADR 0083 §7).

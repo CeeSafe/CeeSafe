@@ -1,6 +1,7 @@
 // Closures' captures follow the reference rules (type-system.md §36.2, M11 G8b): a captured variable cannot be changed
 // while a closure reading it is live, nor used while one changing it is; a capture cannot be moved out; a closure
-// cannot be returned. `ok` shows the same code accepted once each closure's last use comes first.
+// cannot be returned. A `borrow mut` variable reborrowed in the body (passed where a `borrow mut` is expected) is
+// captured mutably. `ok` shows the same code accepted once each closure's last use comes first.
 fn take(s: String) { }
 fn run(f: borrow fn(i32) -> bool) -> bool => f(1);
 fn make(k: borrow i32) -> borrow fn(i32) -> i32 => (x) => x + k; // error[N0244]
@@ -23,6 +24,31 @@ fn moves() {
     let s = String.create();
     let f = () => { take(s); }; // error[N0251]
     f();
+}
+
+fn grow(s: borrow mut String) {
+    s.append("more")!;
+}
+
+fn reborrowedParameter(s: borrow mut String) -> usize {
+    // `grow(s)` reborrows `s` as a `borrow mut`: a mutable capture.
+    let k = () => grow(s);
+    let v = s.view(); // error[N0241]
+    k();
+    return v.length;
+}
+
+fn setTo(x: borrow mut u32) -> bool {
+    x = 100;
+    return false;
+}
+
+fn reborrowedInGuard(x: borrow mut u32) -> u32 {
+    let k = () => setTo(x);
+    match (x) {
+        0..=5 if (k()) => { return 1; } // error[N0242]
+        _ => { return 3; }
+    }
 }
 
 fn ok() {

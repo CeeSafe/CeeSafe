@@ -709,6 +709,12 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
             }
         }
         if (x.mutableReference && isLocalRef) {
+            // A `borrow mut` variable used as a `borrow mut` is reborrowed (§13.3): a mutable use of it, so a closure
+            // captures it mutably (§36.2) and holds a mutable loan on what it refers to.
+            match (c.hir.exprs[e as usize]) {
+                HirExpr.LocalRef(local) => { noteMutableUse(c, local); }
+                _ => {}
+            }
             return c.expr(HirExpr.Reborrow(true, e), expected, span.start, span.end);
         }
         return Ok(e);

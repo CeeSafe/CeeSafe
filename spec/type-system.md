@@ -578,7 +578,8 @@ and `E.V…` there are patterns.
   - From the start of the pattern test to the end of the guard, the scrutinee carries a shared loan. The guard may
     read the scrutinee and the bindings, call functions, and read and write other places. It may not move, assign or
     `mut`-lend the scrutinee, a place inside it or a binding, and it may not `await` (the loan would cross a
-    suspension): N0355.
+    suspension): N0355. This holds anywhere in the guard: in its blocks, loops (over ranges or iterators) and `defer`
+    blocks, and in a closure it makes, which `mut`-lends what it captures mutably (§36.2).
   - A guarded arm never counts toward exhaustiveness: its pattern is not added to the usefulness matrix below. It is
     still checked for reachability: if earlier unguarded arms match every value it does, it is N0257. When the values
     a match misses are matched only by guarded arms, N0256 says so ("arms with a guard do not count").
@@ -3459,8 +3460,10 @@ fn main() {
   expected type, or a block body that returns a value without an expected type, is N0236 (a new code).
 - **Captures.** The body may name the enclosing function's locals and parameters, `this` included, also from nested
   closures. Each one named is *captured by reference*:
-  - **mutably** if the body assigns to it or to a place rooted at it, passes it as `mut`, borrows it mutably, or calls
-    a `borrow mut this` method or mutating collection method on it;
+  - **mutably** if the body assigns to it or to a place rooted at it, passes it as `mut`, borrows it mutably, calls
+    a `borrow mut this` method or mutating collection method on it, or, for a `borrow mut` variable or field, uses it
+    where a `borrow mut` is expected, which reborrows it (§13.3): `() => grow(s)` with `s: borrow mut String` captures
+    `s` mutably, so the closure holds a mutable loan on the string while it is live;
   - **shared** otherwise.
   - **Field-precise** (M13 G5): a captured struct local that the body reaches only through its fields (`s.width`,
     `s.items[s.next]`), never whole and not from a nested closure, is captured as one reference per field it names,
@@ -4469,7 +4472,7 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   Rust's do. (`e is P`, ADR 0085, follows the same rule: the guard ends with the condition, or with the block that
   uses a binding borrowing from it.)
 - **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
-
-  another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures, and
-  a guard is not `Send`.
+  another task resumed meanwhile panics on the same cell. A local counts if it holds a guard in its own storage or in
+  what it owns: a struct or enum field, an optional, an array, a `Box`, a `Vector`, a `StableVector`, a `SlotMap`, or
+  a closure's environment. Tasks that cross threads already need `Send` captures, and a guard is not `Send`.
 - A `RefCell` in a task frame is fine (frames never move, `ownership.md` A1).

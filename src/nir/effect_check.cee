@@ -1546,8 +1546,9 @@ fn allocatorOperations(
 
 // ---- RefCell guards live across a suspension (ADR 0084 §2.6) ----
 
-/// Does a value of this type hold a lib/core `CellRef` or `CellRefMut` (a RefCell guard, type-system.md §41.3) in its
-/// own storage: the guard itself, or a struct, enum or optional holding one?
+/// Does a value of this type hold a lib/core `CellRef` or `CellRefMut` (a RefCell guard, type-system.md §41.3): the
+/// guard itself, or a struct (a closure's environment included), enum, optional, array, box, vector or slot map holding
+/// one? A guard reached only through a reference is held by the place the reference points to, a local of its own.
 fn holdsCellGuard(c: borrow Checker, typ: u32, depth: u32) -> bool {
     if (depth > 16) {
         return false;
@@ -1584,8 +1585,15 @@ fn holdsCellGuard(c: borrow Checker, typ: u32, depth: u32) -> bool {
         }
         return false;
     }
-    if (c.types.is(typ, TypeKind.Array)) {
-        return holdsCellGuard(c, info.element, depth + 1);
+    if (c.types.is(typ, TypeKind.Array) || c.types.is(typ, TypeKind.SlotMap)) {
+        return info.element != none() && holdsCellGuard(c, info.element, depth + 1);
+    }
+    if (c.types.is(typ, TypeKind.Box)) {
+        return info.pointee != none() && holdsCellGuard(c, info.pointee, depth + 1);
+    }
+    if ((c.types.is(typ, TypeKind.Vector) || c.types.is(typ, TypeKind.StableVector)) && info.pointee != none()) {
+        let element = c.types.info(info.pointee).element; // the unsized [T]'s T
+        return element != none() && holdsCellGuard(c, element, depth + 1);
     }
     return false;
 }

@@ -45,7 +45,9 @@ fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -
                 }
             }
         }
-        _ => {}
+        HirPattern.Wildcard => {}
+        HirPattern.Literal(_) => {}
+        HirPattern.Range(_, _) => {}
     }
     return Ok();
 }
@@ -216,7 +218,8 @@ fn guardExpr(c: borrow Checker, e: u32, value: bool, guarded: Slice<u32>, found:
                     match (capture.mode) {
                         CaptureMode.Move => { noteGuard(c, found, 1, capture.local, e); }
                         CaptureMode.Mutable => { noteGuard(c, found, 3, capture.local, e); }
-                        _ => {}
+                        CaptureMode.Shared => {}
+                        CaptureMode.Copy => {}
                     }
                 }
             }
@@ -228,11 +231,28 @@ fn guardExpr(c: borrow Checker, e: u32, value: bool, guarded: Slice<u32>, found:
         HirExpr.AsyncTimeout(_, _, _, _, _, _) => { noteGuard(c, found, 4, none(), e); }
         HirExpr.AsyncBlocking(_, _) => { noteGuard(c, found, 4, none(), e); }
         HirExpr.AsyncBoxed(_, _) => { noteGuard(c, found, 4, none(), e); }
-        _ => {}
+        HirExpr.Spawn(_, closure) => { guardExpr(c, closure, true, guarded, found); }
+        HirExpr.SetSpawn(record, admitted, closure) => {
+            guardExpr(c, record, true, guarded, found);
+            guardExpr(c, admitted, true, guarded, found);
+            guardExpr(c, closure, true, guarded, found);
+        }
+        // The leaves: nothing below them to look at. Every form is listed, with no `_` arm, so that a new form is a
+        // compile error here rather than a guard that is not looked into.
+        HirExpr.IntConst(_) => {}
+        HirExpr.BoolConst(_) => {}
+        HirExpr.StringConst(_) => {}
+        HirExpr.FloatConst(_) => {}
+        HirExpr.FunctionAddress(_) => {}
+        HirExpr.StaticAddress(_) => {}
+        HirExpr.StaticCString(_) => {}
+        HirExpr.Here => {}
+        HirExpr.Error => {}
     }
 }
 
-/// A statement inside a guard (a value block's): assignments to the guarded locals, and its expressions.
+/// A statement inside a guard (a value block's, a loop's, a `defer`'s): assignments to the guarded locals, and its
+/// expressions.
 fn guardStmt(c: borrow Checker, s: u32, guarded: Slice<u32>, found: borrow mut GuardFinding) {
     if (s == none() || found.what != 0) {
         return;
@@ -281,6 +301,14 @@ fn guardStmt(c: borrow Checker, s: u32, guarded: Slice<u32>, found: borrow mut G
                 guardStmt(c, arm.body, guarded, found);
             }
         }
-        _ => {}
+        HirStmt.ForNext(_, declaration, next, body) => {
+            guardStmt(c, declaration, guarded, found);
+            guardExpr(c, next, true, guarded, found);
+            guardStmt(c, body, guarded, found);
+        }
+        HirStmt.Defer(body) => { guardStmt(c, body, guarded, found); }
+        // As in guardExpr, every form is listed, with no `_` arm.
+        HirStmt.Break => {}
+        HirStmt.Continue => {}
     }
 }

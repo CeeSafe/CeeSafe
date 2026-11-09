@@ -1,5 +1,7 @@
 // Match guards (ADR 0085 §2.2): a guard only reads the scrutinee and the arm's bindings (N0355); a guarded arm never
-// counts toward exhaustiveness (N0256) but can be unreachable (N0257); a guard is a bool (N0205).
+// counts toward exhaustiveness (N0256) but can be unreachable (N0257); a guard is a bool (N0205). N0355 looks into
+// every statement of a guard's blocks (loops over iterators and `defer` too), and a closure that reborrows a captured
+// `borrow mut` captures it mutably.
 struct Res { id: u32; drop { } }
 enum Slot { Full(Res), Spare }
 
@@ -86,6 +88,41 @@ fn guardedAfterCover(o: u32?) -> u32 {
 fn notBool(o: u32?) -> u32 {
     match (o) {
         Some(n) if (n) => { return n; } // error[N0205]
+        _ => { return 0; }
+    }
+}
+
+fn assignsInForLoop(s: Slot) -> u32 {
+    var t = s;
+    match (t) {
+        Slot.Full(r) if (if (true) {
+            for (p in "x".split(",")) {
+                t = Slot.Spare; // error[N0355]
+            }
+            true
+        } else false) => { return r.id; }
+        _ => { return 0; }
+    }
+}
+
+fn assignsInDefer(s: Slot) -> u32 {
+    var t = s;
+    match (t) {
+        Slot.Full(r) if (if (true) {
+            defer {
+                t = Slot.Spare; // error[N0355]
+            }
+            true
+        } else false) => { return r.id; }
+        _ => { return 0; }
+    }
+}
+
+fn run(k: borrow mut fn() -> bool) -> bool => k();
+
+fn lendsThroughClosure(s: borrow mut Slot) -> u32 {
+    match (s) {
+        Slot.Full(r) if (run(() => reset(s))) => { return r.id; } // error[N0355]
         _ => { return 0; }
     }
 }

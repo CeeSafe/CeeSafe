@@ -554,7 +554,9 @@ MatchStmt = 'match' '(' Expr ')' '{' Arm* '}'
 Arm       = Pattern Guard? '=>' Block ','?
 Guard     = 'if' '(' Expr ')'                                      -- ADR 0085 §2.2
 Pattern   = '|'? AltPattern ('|' AltPattern)*                     -- or-patterns: ADR 0085 §2.3
-AltPattern = '_' | Literal | 'true' | 'false' | 'null'
+AltPattern = (Identifier '@')? PrimPattern                         -- `name @ P`: ADR 0085 §2.5
+PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
+          | '(' Pattern ')'
           | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
@@ -614,6 +616,12 @@ A payload that is a single identifier is a binding; `Some(…)`, `Ok(…)`, `Err
     row of its own; an alternative that earlier arms or earlier alternatives already match is N0257, at that
     alternative. With a guard, each alternative that matches, left to right, binds and runs the guard; the first
     `true` wins.
+  - **`name @ P`** (ADR 0085 §2.5) binds the value that `P` matched, as a payload binding would (a copy, a move or
+    a reference, by the rules above), and tests `P`; it does not change coverage. `@` binds tighter than `|`:
+    `d @ ('0' | '1')` needs the parentheses. A value moves at most once: when `name` binds by move (a non-Copy value
+    of a consuming match, §18.4), no binding under `P` may also move, so `e @ Err(inner)` with a non-Copy payload is
+    N0250 with its own message ("moves the value that `inner` also moves"); bindings under it that copy are made
+    first, from the value, and on a reference scrutinee every binding is a reference.
   - **A payload that is itself a reference** (`borrow E`) takes only a binding or `_`, not a nested pattern. Matching
     through it is a separate `match` on that reference (N0205 otherwise).
   - **Exhaustiveness and unreachable arms** are decided over the whole patterns. A match is exhaustive when every

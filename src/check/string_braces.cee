@@ -214,6 +214,10 @@ fn bracePattern(c: borrow Checker, scope: borrow mut BraceScope, p: u32) -> Resu
                 bracePattern(c, scope, c.front.ast.at(alternatives, k))?;
             }
         }
+        PatternNode.At(name, inner) => {
+            scope.names.push(c.front.ast.idents[name as usize].symbol)?;
+            bracePattern(c, scope, inner)?;
+        }
         _ => {}
     }
     return Ok();

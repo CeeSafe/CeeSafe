@@ -1,0 +1,77 @@
+// `name @ P` (ADR 0085 §2.5): binds the value P matched, by copy, by move (after P's Copy bindings, and in a
+// consuming match only once a guard holds) or by reference; a parenthesised or-pattern under it.
+
+struct Res { id: u32; drop { Console.write("drop "); Console.writeLine(this.id); } }
+enum Slot { Full(Res), Spare }
+enum E { NotFound, Denied(u32) }
+
+fn digit(c: u8) -> u32 => match (c) {
+    d @ '0'..='9' => (d - '0') as u32,
+    q @ ('"' | '\'') => 100 + q as u32,
+    _ => 999,
+};
+
+fn err(r: Result<u32, E>) -> u32 => match (r) {
+    Err(e @ E.Denied(code)) => code + match (e) { E.Denied(_) => 1000, E.NotFound => 0 },
+    Err(E.NotFound) => 1,
+    Ok(n @ 5) => n * 2,
+    Ok(n) => n,
+};
+
+fn whole(s: Slot) -> u32 {
+    match (s) {
+        all @ Slot.Full(_) => { return keep(all); }
+        Slot.Spare => { return 0; }
+    }
+}
+
+fn keep(s: Slot) -> u32 => match (s) {
+    Slot.Full(r) => r.id,
+    Slot.Spare => 0,
+};
+
+fn inner(o: Slot?) -> u32 {
+    match (o) {
+        Some(x @ Slot.Full(_)) if (isFull(x)) => { return keep(x) + 50; }
+        Some(_) => { return 1; }
+        null => { return 0; }
+    }
+}
+
+fn isFull(s: borrow Slot) -> bool => match (s) {
+    Slot.Full(_) => true,
+    Slot.Spare => false,
+};
+
+fn byRef(s: borrow Slot) -> u32 => match (s) {
+    all @ Slot.Full(r) => r.id + if (isFull(all)) 1 else 0,
+    Slot.Spare => 0,
+};
+
+fn main() {
+    Console.writeLine(digit('7'));
+    Console.writeLine(digit('"'));
+    Console.writeLine(digit('x'));
+    Console.writeLine(err(Err(E.Denied(3))));
+    Console.writeLine(err(Err(E.NotFound)));
+    Console.writeLine(err(Ok(5)));
+    Console.writeLine(err(Ok(6)));
+    Console.writeLine(whole(Slot.Full(Res { id: 4 })));
+    Console.writeLine(inner(Some(Slot.Full(Res { id: 6 }))));
+    let s = Slot.Full(Res { id: 8 });
+    Console.writeLine(byRef(s));
+}
+
+// expect-stdout: 7
+// expect-stdout: 134
+// expect-stdout: 999
+// expect-stdout: 1003
+// expect-stdout: 1
+// expect-stdout: 10
+// expect-stdout: 6
+// expect-stdout: drop 4
+// expect-stdout: 4
+// expect-stdout: drop 6
+// expect-stdout: 56
+// expect-stdout: 9
+// expect-stdout: drop 8

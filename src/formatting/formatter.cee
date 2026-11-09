@@ -80,6 +80,7 @@ struct FmtLayout {
     nextElseChain: u32;
     unitElements: Vector<u32>;
     keptBreaks: Vector<u32>; // tokens before which the author's line break is kept: a declaration after an attribute
+    spacedAts: Vector<u32>;  // the `@` tokens of `name @ P` patterns (ADR 0085 §2.5): a space on each side
     newlineBefore: Vector<bool>;
     blankAllowed: Vector<bool>;
     dropped: Vector<bool>;
@@ -300,6 +301,7 @@ fn newFmtLayout(source: SourceText, lexed: borrow Lexed) -> Result<FmtLayout, Al
             nextElseChain: none(),
             unitElements: Vector<u32>.create(),
             keptBreaks: Vector<u32>.create(),
+            spacedAts: Vector<u32>.create(),
             newlineBefore: Vector<bool>.create(),
             blankAllowed: Vector<bool>.create(),
             dropped: Vector<bool>.create(),
@@ -967,6 +969,11 @@ fn fmtWalkPattern(l: borrow mut FmtLayout, ast: borrow Ast, p: u32) -> Result<vo
             fmtWalkExpr(l, ast, low)?;
             fmtWalkExpr(l, ast, high)?;
         }
+        PatternNode.At(name, inner) => {
+            let nameToken = l.first(ast.idents[name as usize].start);
+            l.spacedAts.push(nameToken + 1)?;
+            fmtWalkPattern(l, ast, inner)?;
+        }
         _ => {}
     }
     return Ok();
@@ -1387,6 +1394,15 @@ fn outermostOfChain(l: borrow FmtLayout, k: usize, token: u32) -> bool {
     return true;
 }
 
+fn containsToken(tokens: Slice<u32>, token: u32) -> bool {
+    for (t in tokens) {
+        if (t == token) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// The space between two tokens on one line.
 fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
     if (l.glueAfter[previous as usize] || l.glueBefore[token as usize]) {
@@ -1402,6 +1418,9 @@ fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
         return false;
     }
     let a = l.kindAt(previous);
+    if (sameKind(a, TokenKind.At) && containsToken(l.spacedAts.view(), previous)) {
+        return true; // `name @ P`
+    }
     if (sameKind(a, TokenKind.OpenParen) || sameKind(a, TokenKind.OpenBracket) || sameKind(a, TokenKind.Dot) ||
         sameKind(a, TokenKind.DotDot) || sameKind(a, TokenKind.DotDotEquals) || sameKind(a, TokenKind.At)) {
         return false;

@@ -423,6 +423,13 @@ struct HirPrinter {
                     this.text(")")?;
                 }
             }
+            HirPattern.At(local, inner) => {
+                this.text("(")?;
+                this.local(hir, symbols, local)?;
+                this.text(" @ ")?;
+                this.patternText(hir, types, symbols, inner)?;
+                this.text(")")?;
+            }
             HirPattern.Range(low, high) => {
                 appendIntValue(mut this.out, low)?;
                 this.text("..=")?;

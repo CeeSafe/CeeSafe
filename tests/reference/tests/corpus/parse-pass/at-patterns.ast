@@ -1,0 +1,18 @@
+(unit
+  (fn default f (params (c u8) (r (Result u8 u8))) (returns u32)
+    (block
+      (match r
+        (arm (Ok (@ d (..= '0' '9')))
+          (block)
+        )
+        (arm (@ whole (Err _))
+          (block)
+        )
+        (arm _
+          (block)
+        )
+      )
+      (return (match-expr c (arm (@ q (or '"' '\'')) 1) (arm _ 0)))
+    )
+  )
+)

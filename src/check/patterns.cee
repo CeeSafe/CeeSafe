@@ -289,6 +289,7 @@ fn hasNested(c: borrow Checker, pattern: u32) -> bool {
     match (c.front.ast.patterns[pattern as usize]) {
         PatternNode.Or(_) => { return true; }
         PatternNode.Range(_, _, _) => { return true; }
+        PatternNode.At(_, _) => { return true; }
         PatternNode.Variant(_, _, bindings) => {
             for (k in 0..bindings.count) {
                 if (c.front.ast.bindings[c.front.ast.at(bindings, k) as usize].nested != none()) {
@@ -394,6 +395,7 @@ fn checkMatch(
         match (c.front.ast.patterns[pattern as usize]) {
             PatternNode.Or(_) => { patternFailed = true; } // the nested path's (hasNested)
             PatternNode.Range(_, _, _) => { patternFailed = true; }
+            PatternNode.At(_, _) => { patternFailed = true; }
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -694,6 +696,9 @@ fn bindsNonCopy(c: borrow Checker, pattern: u32) -> bool {
     match (c.hir.patterns[pattern as usize]) {
         HirPattern.Or(alternatives) => { return bindsNonCopy(c, c.hir.at(alternatives, 0)); }
         HirPattern.Binding(local) => { return !c.types.isCopy(c.hir.locals[local as usize].typ); }
+        HirPattern.At(local, inner) => {
+            return !c.types.isCopy(c.hir.locals[local as usize].typ) || bindsNonCopy(c, inner);
+        }
         HirPattern.Variant(_, hasPayload, payload) => {
             if (hasPayload) {
                 for (k in 0..payload.count) {
@@ -836,6 +841,26 @@ fn checkPattern(
         PatternNode.Range(low, high, inclusive) => {
             return checkRangePattern(c, low, high, inclusive, typ, span, failed);
         }
+        PatternNode.At(name, inner) => {
+            // `name @ P` (ADR 0085 §2.5): binds the value P matched, as a payload binding would.
+            let local = declarePatternBinding(c, name, false, typ, reference, alternatives)?;
+            let tree = checkPattern(c, inner, typ, reference, failed, alternatives)?;
+            if (reference == none() && !c.types.isCopy(typ)) {
+                let moved = firstMovingBinding(c, tree);
+                if (moved != none()) {
+                    // A value moves at most once: into `name`, or into what `P` binds, not both.
+                    let ident = c.front.ast.idents[name as usize];
+                    var message = Vector<u8>.create();
+                    appendText(mut message, "'")?;
+                    appendBytes(mut message, c.name(ident.symbol))?;
+                    appendText(mut message, " @ …' moves the value that ")?;
+                    appendQuotedName(mut message, c, c.hir.locals[moved as usize].name)?;
+                    appendText(mut message, " also moves; bind one of them (ADR 0085 §2.5)")?;
+                    c.error(atMovesTwice(), span.start, span.end, message)?;
+                }
+            }
+            return c.hir.addPattern(HirPattern.At(local, tree));
+        }
         PatternNode.Wildcard => { return c.hir.addPattern(HirPattern.Wildcard); }
         PatternNode.Null => {
             if (c.types.optionType(typ) == none()) {
@@ -923,6 +948,37 @@ fn checkPattern(
 }
 
 fn emptyRangePattern() -> u32 => 357;
+
+/// N0250's number: use of a moved value, here a value `name @ P` would move twice (ADR 0085 §2.5).
+fn atMovesTwice() -> u32 => 250;
+
+/// The first binding under a pattern that moves its value (a non-Copy type, on a value scrutinee), or none.
+fn firstMovingBinding(c: borrow Checker, pattern: u32) -> u32 {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Binding(local) => {
+            return if (c.types.isCopy(c.hir.locals[local as usize].typ)) none() else local;
+        }
+        HirPattern.At(local, inner) => {
+            if (!c.types.isCopy(c.hir.locals[local as usize].typ)) {
+                return local;
+            }
+            return firstMovingBinding(c, inner);
+        }
+        HirPattern.Variant(_, listed, payload) => {
+            if (listed) {
+                for (k in 0..payload.count) {
+                    let found = firstMovingBinding(c, c.hir.at(payload, k));
+                    if (found != none()) {
+                        return found;
+                    }
+                }
+            }
+            return none();
+        }
+        HirPattern.Or(alternatives) => { return firstMovingBinding(c, c.hir.at(alternatives, 0)); }
+        _ => { return none(); }
+    }
+}
 
 /// `lo..=hi` or `lo..hi` on an integer (ADR 0085 §2.4): both bounds typed by the value, as literals are (§4); as
 /// `lo..=hi'` with the inclusive upper bound. An empty range is N0357.

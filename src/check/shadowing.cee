@@ -181,6 +181,10 @@ fn shadowPattern(
                 shadowPattern(front, dependencies, scope, front.ast.at(alternatives, k))?;
             }
         }
+        PatternNode.At(name, inner) => {
+            shadowBind(front, dependencies, scope, name)?;
+            shadowPattern(front, dependencies, scope, inner)?;
+        }
         _ => {}
     }
     return Ok();

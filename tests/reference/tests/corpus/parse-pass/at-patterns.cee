@@ -1,0 +1,9 @@
+// `name @ P` (ADR 0085 §2.5): at the top, in a payload, over a parenthesised or-pattern and a range.
+fn f(c: u8, r: Result<u8, u8>) -> u32 {
+    match (r) {
+        Ok(d @ '0'..='9') => {}
+        whole @ Err(_) => {}
+        _ => {}
+    }
+    return match (c) { q @ ('"' | '\'') => 1, _ => 0 };
+}

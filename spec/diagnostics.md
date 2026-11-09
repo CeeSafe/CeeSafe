@@ -137,7 +137,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole | `consume(r); consume(r);` |
+| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5) | `consume(r); consume(r);` |
 | N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
 | N0252 | Move of a field out of a value whose type has a `drop` block | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |

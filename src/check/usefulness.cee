@@ -62,7 +62,7 @@ fn patternWitness(
 
 /// The constructor a pattern names, or false for `_` and bindings (ConstructorOf).
 fn constructorOf(c: borrow Checker, pattern: u32, found: borrow mut Constructor) -> bool {
-    match (c.hir.patterns[pattern as usize]) {
+    match (c.hir.patterns[testedPattern(c, pattern) as usize]) {
         HirPattern.Variant(variant, _, _) => {
             found = Constructor {
                 isVariant: true,
@@ -101,7 +101,7 @@ fn pushArguments(
     k: Constructor,
     out: borrow mut Vector<u32>,
 ) -> Result<void, AllocError> {
-    match (c.hir.patterns[pattern as usize]) {
+    match (c.hir.patterns[testedPattern(c, pattern) as usize]) {
         HirPattern.Variant(_, hasPayload, payload) => {
             if (hasPayload) {
                 for (i in 0..payload.count) {
@@ -180,8 +180,16 @@ fn specialize(c: borrow Checker, wildcard: u32, rows: borrow Matrix, k: Construc
     return Ok(result);
 }
 
-/// The pattern a first column tests, looking through what does not change the test.
-fn testedPattern(c: borrow Checker, pattern: u32) -> u32 => pattern;
+/// The pattern a first column tests, looking through what does not change the test: `name @ P` tests P.
+fn testedPattern(c: borrow Checker, pattern: u32) -> u32 {
+    var p = pattern;
+    loop {
+        match (c.hir.patterns[p as usize]) {
+            HirPattern.At(_, inner) => { p = inner; }
+            _ => { return p; }
+        }
+    }
+}
 
 /// Does any row start with an or-pattern?
 fn hasOrRow(c: borrow Checker, rows: borrow Matrix) -> bool {

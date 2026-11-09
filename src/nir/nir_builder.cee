@@ -964,7 +964,7 @@ fn lowerNestedMatch(
             };
             if (arm.guard != none()) {
                 let savedCaptures = b.captures.length;
-                if (unpacks) {
+                if (consumes) {
                     guardBindPattern(c, n, b, alternative, place)?;
                 } else {
                     bindPattern(c, n, b, alternative, place, byReference)?;
@@ -974,8 +974,12 @@ fn lowerNestedMatch(
                 }
                 lowerGuard(c, n, b, arm.guard, depth, fail)?;
                 b.captures.truncate(savedCaptures);
-                if (b.current != none() && unpacks) {
-                    unpackPattern(c, n, b, alternative, place)?;
+                if (b.current != none() && consumes) {
+                    if (unpacks) {
+                        unpackPattern(c, n, b, alternative, place)?;
+                    } else {
+                        bindPattern(c, n, b, alternative, place, false)?;
+                    }
                 }
             } else if (unpacks) {
                 unpackPattern(c, n, b, alternative, place)?;
@@ -1192,6 +1196,7 @@ fn patternBinds(c: borrow Checker, pattern: u32) -> bool {
             return false;
         }
         HirPattern.Or(alternatives) => { return patternBinds(c, c.hir.at(alternatives, 0)); }
+        HirPattern.At(_, _) => { return true; }
         _ => { return false; }
     }
 }
@@ -1207,6 +1212,18 @@ fn expandAlternatives(c: borrow mut Checker, pattern: u32, out: borrow mut Vecto
             for (k in 0..alternatives.count) {
                 let alternative = c.hir.at(alternatives, k);
                 expandAlternatives(c, alternative, out)?;
+            }
+            return Ok();
+        }
+        HirPattern.At(local, inner) => {
+            var expanded = Vector<u32>.create();
+            expandAlternatives(c, inner, mut expanded)?;
+            if (expanded.length == 1) {
+                return out.push(pattern);
+            }
+            for (e in expanded.view()) {
+                let rebuilt = c.hir.addPattern(HirPattern.At(local, e))?;
+                out.push(rebuilt)?;
             }
             return Ok();
         }
@@ -1292,6 +1309,14 @@ fn guardBindPattern(
                 b.captures.push(CapturePlace { local: hirLocal, field: none(), place: place })?;
             }
         }
+        HirPattern.At(hirLocal, inner) => {
+            if (c.types.isCopy(c.hir.locals[hirLocal as usize].typ)) {
+                bindPattern(c, n, b, pattern, place, false)?;
+            } else {
+                b.captures.push(CapturePlace { local: hirLocal, field: none(), place: place })?;
+                guardBindPattern(c, n, b, inner, place)?;
+            }
+        }
         HirPattern.Variant(variant, listed, payload) => {
             if (listed) {
                 for (i in 0..payload.count) {
@@ -1317,6 +1342,7 @@ fn testPattern(
     fail: u32,
 ) -> Result<void, AllocError> {
     match (c.hir.patterns[pattern as usize]) {
+        HirPattern.At(_, inner) => { testPattern(c, n, b, inner, place, fail)?; }
         HirPattern.Or(alternatives) => {
             // An or-pattern that binds nothing (ExpandAlternatives split the others): any alternative passes.
             let pass = newBlock(b)?;
@@ -1397,6 +1423,30 @@ fn branchOnTest(
     return Ok();
 }
 
+/// Binds one name to the value at `place` (BindLocal): a copy (a move for a value that is not Copy), or a reference.
+fn bindLocal(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    hirLocal: u32,
+    place: u32,
+    byReference: bool,
+) -> Result<void, AllocError> {
+    let local = nirLocalOf(c, hirLocal);
+    addToScope(b, local)?;
+    let target = localPlace(n, local)?;
+    let localType = c.hir.locals[hirLocal as usize].typ;
+    var rvalue = none();
+    if (byReference) {
+        let mutable = c.types.info(localType).mutableReference;
+        rvalue = n.rvalue(NirRvalue.Ref(mutable, place), localType, b.span)?;
+    } else {
+        let read = readPlace(c, n, b, place)?;
+        rvalue = useRvalue(n, read)?;
+    }
+    return assign(n, b, target, rvalue);
+}
+
 /// Binds a matched pattern's names without moving (BindPattern): copies, or references on a reference.
 fn bindPattern(
     c: borrow mut Checker,
@@ -1407,20 +1457,16 @@ fn bindPattern(
     byReference: bool,
 ) -> Result<void, AllocError> {
     match (c.hir.patterns[pattern as usize]) {
-        HirPattern.Binding(hirLocal) => {
-            let local = nirLocalOf(c, hirLocal);
-            addToScope(b, local)?;
-            let target = localPlace(n, local)?;
-            let localType = c.hir.locals[hirLocal as usize].typ;
-            var rvalue = none();
-            if (byReference) {
-                let mutable = c.types.info(localType).mutableReference;
-                rvalue = n.rvalue(NirRvalue.Ref(mutable, place), localType, b.span)?;
+        HirPattern.Binding(hirLocal) => { bindLocal(c, n, b, hirLocal, place, byReference)?; }
+        HirPattern.At(hirLocal, inner) => {
+            // `name @ P` (ADR 0085 §2.5): a value that moves into `name` moves after P's bindings copied from it.
+            if (byReference || c.types.isCopy(c.hir.locals[hirLocal as usize].typ)) {
+                bindLocal(c, n, b, hirLocal, place, byReference)?;
+                bindPattern(c, n, b, inner, place, byReference)?;
             } else {
-                let read = readPlace(c, n, b, place)?;
-                rvalue = useRvalue(n, read)?;
+                bindPattern(c, n, b, inner, place, byReference)?;
+                bindLocal(c, n, b, hirLocal, place, byReference)?;
             }
-            assign(n, b, target, rvalue)?;
         }
         HirPattern.Variant(variant, listed, payload) => {
             if (listed) {
@@ -1469,6 +1515,21 @@ fn unpackPattern(
             HirPattern.Binding(hirLocal) => {
                 target = nirLocalOf(c, hirLocal);
                 addToScope(b, target)?;
+            }
+            HirPattern.At(hirLocal, _) => {
+                // `name @ P` on a payload (ADR 0085 §2.5): P's bindings copy before the unpack, which moves the
+                // payload into `name` (bindings under a moving `@` are Copy, N0250).
+                let innerPlace = payloadPlace(n, place, variant, field)?;
+                if (c.types.isCopy(payloadType)) {
+                    bindPattern(c, n, b, inner, innerPlace, false)?;
+                } else {
+                    match (c.hir.patterns[inner as usize]) {
+                        HirPattern.At(_, under) => { bindPattern(c, n, b, under, innerPlace, false)?; }
+                        _ => {}
+                    }
+                    target = nirLocalOf(c, hirLocal);
+                    addToScope(b, target)?;
+                }
             }
             HirPattern.Variant(_, listed, _) => {
                 if (listed && c.types.isCopy(payloadType)) {

@@ -1994,7 +1994,21 @@ struct Parser {
                     return this.literalPattern(start, true);
                 }
             }
+            TokenKind.OpenParen => {
+                // `( Pattern )` (ADR 0085 §2.1): grouping, as in `quote @ ('"' | '\'')`.
+                this.advance();
+                let inner = this.parsePattern()?;
+                this.expect(TokenKind.CloseParen)?;
+                return Ok(inner);
+            }
             TokenKind.Identifier => {
+                if (this.peekIs(1, TokenKind.At)) {
+                    // `name @ P` (ADR 0085 §2.5).
+                    let name = this.parseIdentifier()?;
+                    this.advance();
+                    let inner = this.parsePatternLevel()?;
+                    return this.front.ast.addPattern(PatternNode.At(name, inner), start, this.endFrom(start));
+                }
                 let path = this.parseQualifiedName()?;
                 var hasBindings = false;
                 var bindings = Vector<u32>.create();
@@ -2086,7 +2100,9 @@ struct Parser {
         TokenKind.FalseKeyword => true,
         TokenKind.NullKeyword => true,
         TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
-        TokenKind.Identifier => this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot),
+        TokenKind.Identifier =>
+            this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At),
+        TokenKind.OpenParen => true,
         _ => false,
     };
 

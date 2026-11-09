@@ -85,7 +85,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     248 => "`borrow mut` (or a `borrow mut this` call) on an immutable place",
     249 => "`mut` argument marker missing or misplaced",
     250 =>
-        "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole",
+        "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5)",
     251 => "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy",
     252 => "Move of a field out of a value whose type has a `drop` block",
     253 => "Move out of a `using` binding",

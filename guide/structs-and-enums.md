@@ -230,6 +230,29 @@ digit
 
 A match on literals and ranges compiles to a C `switch`.
 
+### Naming what matched
+
+`name @ pattern` tests the pattern and binds the value it matched:
+
+```ceesafe
+fn digit(c: u8) -> u32 => match (c) {
+    d @ '0'..='9' => (d - '0') as u32,
+    q @ ('"' | '\'') => 100 + q as u32,
+    _ => 999,
+};
+
+fn main() {
+    Console.writeLine(digit('7'));
+}
+```
+
+```text
+7
+```
+
+A value moves at most once: in a match that moves payloads out, `whole @ Slot.Full(inner)` cannot move the value into
+`whole` and its payload into `inner` too (N0250); bind one of them.
+
 ### Guards
 
 An arm can add a condition after its pattern, `if (…)`: the arm is taken only when the pattern matches and the

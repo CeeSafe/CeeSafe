@@ -817,6 +817,13 @@ struct AstPrinter {
                 this.expr(ast, symbols, high)?;
                 this.text(")")?;
             }
+            PatternNode.At(name, inner) => {
+                this.text("(@ ")?;
+                this.name(ast, symbols, name)?;
+                this.text(" ")?;
+                this.patternText(ast, symbols, inner)?;
+                this.text(")")?;
+            }
             PatternNode.Or(alternatives) => {
                 this.text("(or")?;
                 for (k in 0..alternatives.count) {

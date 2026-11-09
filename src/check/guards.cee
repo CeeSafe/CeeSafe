@@ -33,6 +33,10 @@ fn rootLocalOf(c: borrow Checker, e: u32) -> u32 {
 fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -> Result<void, AllocError> {
     match (c.hir.patterns[pattern as usize]) {
         HirPattern.Binding(local) => { out.push(local)?; }
+        HirPattern.At(local, inner) => {
+            out.push(local)?;
+            patternLocals(c, inner, out)?;
+        }
         HirPattern.Or(alternatives) => { patternLocals(c, c.hir.at(alternatives, 0), out)?; } // all bind the same
         HirPattern.Variant(_, hasPayload, payload) => {
             if (hasPayload) {

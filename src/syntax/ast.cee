@@ -193,6 +193,8 @@ enum PatternNode {
     Or(Range),
     /// `lo..=hi` or `lo..hi` (ADR 0085 §2.4): the bounds (literal expressions), whether `hi` is included.
     Range(u32, u32, bool),
+    /// `name @ P` (ADR 0085 §2.5): the name (an identifier), the pattern.
+    At(u32, u32),
 }
 
 /// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.

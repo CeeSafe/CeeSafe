@@ -1,0 +1,44 @@
+// `name @ P` (ADR 0085 §2.5): a value moves at most once, so a moving `@` may not have a moving binding under it
+// (N0250); on a reference, or with Copy bindings under it, it may. `@` binds tighter than `|`.
+struct Res { id: u32; drop { } }
+enum Slot { Full(Res), Spare }
+
+fn doubleMove(r: Result<Slot, u8>) -> u32 {
+    match (r) {
+        Ok(whole @ Slot.Full(inner)) => { return 1; } // error[N0250]
+        _ => { return 0; }
+    }
+}
+
+fn doubleMoveTop(s: Slot) -> u32 {
+    match (s) {
+        all @ Slot.Full(r) => { return 1; } // error[N0250]
+        Slot.Spare => { return 0; }
+    }
+}
+
+fn copiesUnder(r: Result<u32, u8>) -> u32 {
+    match (r) {
+        whole @ Ok(n) => { return n; }
+        Err(_) => { return 0; }
+    }
+}
+
+fn throughReference(s: borrow Slot) -> u32 {
+    match (s) {
+        all @ Slot.Full(r) => { return r.id; }
+        Slot.Spare => { return 0; }
+    }
+}
+
+fn tighterThanOr(c: u8) -> u32 => match (c) {
+    d @ '0' | '1' => d as u32, // error[N0356]
+    _ => 0,
+};
+
+fn sameName(o: u32?) -> u32 => match (o) {
+    n @ Some(n) => 1, // error[N0203]
+    _ => 0,
+};
+
+fn main() {}

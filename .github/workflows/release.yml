@@ -53,7 +53,8 @@ jobs:
           fetch-depth: 0 # a stage 0's chain (tools/bootstrap_release.sh) may build earlier commits
       - name: ceesafec 0.3.2 (the stage-0 compiler)
         run: |
-          curl -fsSL "$STAGE0_URL" -o stage0.tar.gz
+          # Retried: the release-asset download has answered 504 for minutes at a time (run 42567832841).
+          curl -fsSL --retry 10 --retry-delay 30 --retry-all-errors "$STAGE0_URL" -o stage0.tar.gz
           echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -
           mkdir -p stage0 && tar -xzf stage0.tar.gz -C stage0
           stage0/ceesafec --version

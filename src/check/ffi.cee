@@ -917,13 +917,14 @@ fn cNameOwners(c: borrow Checker, claims: borrow Vector<CNameClaim>) -> Result<V
     var counts = Vector<usize>.create();
     for (claim in claims.view()) {
         let key = Bytes.from(claim.name.view())?;
-        let group = match (names.find(key)) {
-            Some(g) => g,
+        var group: usize = 0;
+        match (names.find(key)) {
+            Some(g) => { group = g; }
             null => {
                 counts.push(0)?;
-                names.put(key, true)?
+                group = names.put(key, true)?;
             }
-        };
+        }
         groupOf.push(group)?;
         counts[group] += 1;
     }
@@ -1027,8 +1028,8 @@ fn identicalExterns(c: borrow Checker, f: u32, g: u32) -> Result<bool, AllocErro
         let key = attributeKey(c, fileA, c.front.ast.at(a.attributes, k))?;
         var found = false;
         for (j in 0..b.attributes.count) {
-            if (!used[j as usize] &&
-                sameBytes(key.view(), attributeKey(c, fileB, c.front.ast.at(b.attributes, j))?.view())) {
+            let other = attributeKey(c, fileB, c.front.ast.at(b.attributes, j))?;
+            if (!used[j as usize] && sameBytes(key.view(), other.view())) {
                 used[j as usize] = true;
                 found = true;
                 break;

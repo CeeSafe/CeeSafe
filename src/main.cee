@@ -1232,7 +1232,8 @@ fn compileFiles(
                 // path from the working directory (ADR 0082 §2.1).
                 let directory = if (p < options.packageDirectories.length) options.packageDirectories[p].view()
                     else "".bytes();
-                let inPackage = pathBelow(slashedPath(path.bytes())!.view(), directory)!;
+                let slashed = slashedPath(path.bytes())!;
+                let inPackage = pathBelow(slashed.view(), directory)!;
                 var openPath = Vector<u8>.create();
                 var name = Vector<u8>.create();
                 if (options.absolutePaths) {
@@ -1244,7 +1245,7 @@ fn compileFiles(
                     name.push('/')!;
                     appendBytes(mut name, inPackage.view())!;
                     match (currentDirectory()) {
-                        Ok(cwd) => { openPath = pathFrom(cwd.view(), slashedPath(path.bytes())!.view())!; }
+                        Ok(cwd) => { openPath = pathFrom(cwd.view(), slashed.view())!; }
                         Err(_) => {}
                     }
                 }

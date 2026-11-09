@@ -24,7 +24,7 @@ fn checkQualifiedNames(c: borrow mut Checker) -> Result<void, AllocError> {
     // (a scan of the list per identifier was quadratic in the program's size; Bun port scale test, 2026-11-09).
     var replaced = Vector<bool>.create();
     for (r in c.front.ast.replacedIdents.view()) {
-        let _ = markType(mut replaced, r)?;
+        markType(mut replaced, r)?;
     }
     for (u in 0..c.front.ast.units.length) {
         let file = c.front.ast.units[u].file;

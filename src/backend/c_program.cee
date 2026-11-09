@@ -46,10 +46,10 @@ struct TypeSet {
     /// Adds `t`: false if it was already there (MarkType).
     fn mark(borrow mut this, t: u32) -> Result<bool, AllocError> {
         let key = Word { value: t as u64 };
-        if (this.marks.find(borrow key).isSome()) {
+        if (this.marks.find(borrow key) != null) {
             return Ok(false);
         }
-        let _ = this.marks.put(key, t)?;
+        this.marks.put(key, t)?;
         return Ok(true);
     }
 }
@@ -589,8 +589,8 @@ fn setUpEmitter(
             continue;
         }
         let m = Bytes { data: mangled(c, t)? };
-        if (names.find(borrow m).isNull()) {
-            let _ = names.put(m, t)?;
+        if (names.find(borrow m) == null) {
+            names.put(m, t)?;
             e.composites.push(t)?;
         }
     }
@@ -609,8 +609,8 @@ fn setUpEmitter(
     for (t in e.aggregates.view()) {
         if (c.types.info(t).enumDef != none() && !c.types.isNicheOptional(t)) {
             let name = Bytes { data: cTypeName(c, t)? };
-            if (e.aggregateEnums.find(borrow name).isNull()) {
-                let _ = e.aggregateEnums.put(name, t)?;
+            if (e.aggregateEnums.find(borrow name) == null) {
+                e.aggregateEnums.put(name, t)?;
             }
         }
     }

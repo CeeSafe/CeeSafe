@@ -756,10 +756,10 @@ struct Parser {
                 ": an interface method has no body (type-system.md §21.1)",
             )?;
             if (this.at(TokenKind.OpenBrace)) {
-                let _ = this.parseBlock()?;
+                this.parseBlock()?;
             } else {
-                let _ = this.advance();
-                let _ = this.parseExpr()?;
+                this.advance();
+                this.parseExpr()?;
                 this.expect(TokenKind.Semicolon)?;
             }
         } else if (this.at(TokenKind.OpenBrace)) {

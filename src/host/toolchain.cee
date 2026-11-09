@@ -641,8 +641,11 @@ fn hostIsMac() -> bool {
     var arguments = Vector<Vector<u8>>.create();
     pushText(mut arguments, "-s")!;
     let outcome = runTool("uname".bytes(), arguments)!;
-    return outcome.started && outcome.status == 0 && outcome.stdout.length >= 6 &&
-        sameText(outcome.stdout.view()[..6], "Darwin");
+    if (!outcome.started || outcome.status != 0 || outcome.stdout.length < 6) {
+        return false;
+    }
+    let text = outcome.stdout.view();
+    return sameText(text[..6], "Darwin");
 }
 
 /// The number of CPUs, `build --jobs`'s default (ADR 0082 §2.5): `NUMBER_OF_PROCESSORS` on Windows, elsewhere what

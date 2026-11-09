@@ -4338,7 +4338,14 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
 - **Why it is sound.** A guard is scoped to the cell (§25.4), so it cannot outlive it (N0243), be stored past it, or
   cross a thread (scoped types are not `Send`). The reference `data()` lends is tied to the guard (§13.5), so the
   B-rules end it before the guard's drop resets the state. The cell cannot be copied behind a guard's back (§41.1).
+- **Guards made in a condition.** An `if` or `while` condition is its own statement (§14.5): a guard that is one of
+  its temporaries ends once the condition is evaluated, before the body or the `else` block runs, and on every pass
+  of a `while`. So `if (c.read().data().isEmpty()) { … } else { c.write()… }` does not panic, nor does an `if`
+  expression whose branch writes. A `match` scrutinee's temporaries live until the end of the `match` (§18.4), as
+  Rust's do. (`e is P`, ADR 0085, follows the same rule: the guard ends with the condition, or with the block that
+  uses a binding borrowing from it.)
 - **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
+
   another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures, and
   a guard is not `Send`.
 - A `RefCell` in a task frame is fine (frames never move, `ownership.md` A1).

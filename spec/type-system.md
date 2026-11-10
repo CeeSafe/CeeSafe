@@ -2381,9 +2381,11 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
     the file as failed.
   - `f.length()`: `u64`; `f.setLength(n: u64)` shrinks the file or extends it with zeros.
   - Each takes `borrow this` (since ADR 0075 §8; 0.19.0 took `borrow mut this`): none moves the position `read` and
-    `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, positions go through the handle's
-    `OVERLAPPED` offset, which also moves the handle's position: it is read before and put back after, so a `read` or
-    `write` on another thread during the call may see it moved.
+    `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, an
+    `OVERLAPPED` offset would move the handle's own position, so `readAt` and `writeAt` transfer through a second
+    handle on the same file (`ReOpenFile`), which has its own position: the descriptor's position never moves, even for
+    a `read` or `write` on another thread during the call. The descriptor must still be open for reading (`readAt`) or
+    writing (`writeAt`), as with `pread` and `pwrite`, and each call opens and closes that second handle.
 - `File.openAppend(path)` (ADR 0077): write-only, created if missing, every write at the end (`O_APPEND`).
 - `File.modified(path)` (ADR 0077, lib/std): `Result<UnixTime, IoError>`, the last modification time.
 - `File.openRegular(path)` (ADR 0078 §3): opens `path` for reading if it is a regular file, never waiting on a FIFO
@@ -2868,6 +2870,20 @@ of the layouts ceesafec computes and asserts, so `[CULong; 3]` is 12 bytes on Wi
 file that uses one asserts `sizeof(long)`, so C generated for one target and compiled for another whose `long` is
 another width fails to compile.
 
+**The width is decided where `check` or `build` runs, not by the C compiler.** ceesafec has no target option, and
+`check` runs no C compiler, so the width is the rule above applied to the host: the target C compiler's `long` only
+when the C is compiled for the host's own kind of system (hosted Windows, or anything else LP64). Two consequences:
+- **A program's validity can depend on the host.** `n as CLong`, with `n` an `i64`, is accepted on macOS and Linux
+  and is N0208 on Windows, where `as` would lose information; a `@repr(C)` struct with a `CLong` field has another
+  size and layout there. Code meant for both converts with `truncate<CLong>` or `checkedTruncate<CLong>` (or from
+  `i32`), and a struct's layout is that of the system it is checked on.
+- **C generated on one kind of host and compiled for the other fails to compile**, at the `_Static_assert(sizeof(long)
+  == …)` every C file that uses `CLong` or `CULong` carries ("C's long is not the width of CeeSafe's CLong on this
+  target"): never a program that runs with the wrong width. Cross-compiling generated C between Windows and an LP64
+  system is not supported for such programs.
+- **A freestanding LLP64 target (UEFI) is not supported**: freestanding builds are LP64 on every host, so C that uses
+  `CLong` stops at the same assertion there.
+
 ### 28.4 Exports
 - `@export` makes a top-level, non-generic, non-method function callable from C, with the C types of
   §28.3 (N0291 otherwise). `main` cannot be exported (N0290). The symbol must be a valid, unreserved
@@ -2960,8 +2976,8 @@ another width fails to compile.
   its `main` in C instead of in CeeSafe.
 - **A program without a CeeSafe `main`** (a C, C++ or Rust host; ADR 0088) is linked from `build --emit lib`'s archive
   (tooling.md §4.1) or `--emit obj`'s object, and starts the runtime with `ceesafe_init` from `ceesafe/embed.h`, which
-  every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` and `--emit obj` beside their output
-  (with the exports header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
+  every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` beside its output (with the exports
+  header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
   allocation report and failure injection (`fail_alloc_at`, `alloc_report`, or the environment's variables with
   `CEESAFE_INIT_ENVIRONMENT`), and a panic hook. `ceesafe_init` must happen before every call into CeeSafe on every
   thread, once; then exports may be called from any host thread at once. `ceesafe_shutdown` prints the report when one

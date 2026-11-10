@@ -827,9 +827,10 @@ extern uint32_t ceesafe_rt_allocated;
 #include "foreign.h" /* beside this header, whatever the include path */
 #include "embed.h"   /* ceesafe_init and ceesafe_shutdown (ADR 0088), which the generated `main` calls */
 #if !defined(CEESAFE_EMBED_FREESTANDING)
-/* ceesafe_init's flag for the generated `main` alone, outside embed.h's: counting starts even when the runtime has
-   already allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. */
-#define CEE_INIT_GENERATED_MAIN 0x80000000u
+/* ceesafe_init for the generated `main` alone, outside embed.h: counting starts even when the runtime has already
+   allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. A host has
+   no way to ask for this: ceesafe_init masks config.flags' reserved bits off. */
+int32_t ceesafe_rt_init_main(const ceesafe_config *config);
 #endif
 
 /*
@@ -1267,6 +1268,7 @@ int64_t ceesafe_host_file_kind(void const *file);
  * - openat: opens the absolute `path` for reading, and only a regular file on a disk;
  * - fcntl: only macOS's F_GETPATH (50), the descriptor's final path into a buffer of 4,096 bytes;
  * - readlink: fails (ENOSYS); pread: reads at an offset;
+ * - getpid: the process's id (GetCurrentProcessId), which ceesafec's `--emit lib` puts in its temporary name;
  * - fstat, pwrite, renameat, unlinkat and syscall, which ceesafec's interface-record cache calls only where it can
  *   read owners and modes (ADR 0082 §2.7), and syscall on macOS only: each fails (ENOSYS). */
 #define realpath ceesafe_win_realpath
@@ -1280,12 +1282,14 @@ int64_t ceesafe_host_file_kind(void const *file);
 #define renameat ceesafe_win_renameat
 #define unlinkat ceesafe_win_unlinkat
 #define syscall ceesafe_win_syscall
+#define getpid ceesafe_win_getpid
 char *ceesafe_win_realpath(const char *path, char *resolved);
 int32_t ceesafe_win_uname(uint8_t *name);
 int32_t ceesafe_win_openat(int32_t directory, char const *path, int32_t flags, ...);
 int32_t ceesafe_win_fcntl(int32_t fd, int32_t command, ...);
 ptrdiff_t ceesafe_win_readlink(char const *path, char *buffer, size_t size);
 ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t offset);
+int32_t ceesafe_win_getpid(void);
 int32_t ceesafe_win_fstat(int32_t fd, uint8_t *buffer);
 ptrdiff_t ceesafe_win_pwrite(int32_t fd, uint8_t const *buffer, size_t size, int64_t offset);
 int32_t ceesafe_win_renameat(int32_t from_directory, char const *from, int32_t to_directory, char const *to);

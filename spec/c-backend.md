@@ -102,6 +102,10 @@ GCC only. What differs:
   passes. The `test-windows` CI job runs the tests on x64. Locally, a Windows 11
   ARM64 VM (MSVC 19.51) runs them. On other hosts they return early.
 
+  **`/bigobj`:** every `cl` compile ceesafec runs passes `/bigobj`, as does the seed's `cl` line (`bootstrap/seed/README.md`,
+  `.github/workflows/release.yml`). A large C file, such as the compiler's own 45 MB `main.c`, has more sections than
+  a plain COFF object holds, and MSVC stops with `C1128` (2026-11-10, ARM64, MSVC 19.51).
+
 ## 1.2 The runtime ABI version
 
 The runtime and the C that `ceesafec` generates are versioned together, and nothing between them is stable across
@@ -824,9 +828,9 @@ Heap (M3b):
   build that writes headers; in a freestanding build its form has only `size` and `flags` (a `#define
   CEESAFE_EMBED_FREESTANDING 1` at its top), and `ceesafe_init` checks the size and keeps no state, since the
   freestanding core has no mutable global (profiles.md §4.4); its `ceesafe_init` ignores `flags`, none being defined.
-  The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN`
-  (the second, from `rt.h`, starts counting even after a C constructor allocated through CeeSafe, as before
-  `ceesafe_init`) and `argc`/`argv`, calls `ceesafe_init` (a failure other than `AGAIN` is a runtime panic), then the
+  The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls
+  `ceesafe_rt_init_main` (`rt.h`'s internal twin of `ceesafe_init`, which starts counting even after a C constructor
+  allocated through CeeSafe, as before `ceesafe_init`; a failure other than `AGAIN` is a runtime panic), then the
   entry, then `ceesafe_shutdown()`, which prints the allocation report if asked, and returns the entry's code.
   `Process.exit` and panics skip the report. A host program calls the same two functions (type-system.md §28.6);
   nothing else starts the runtime.

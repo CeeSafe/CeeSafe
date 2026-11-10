@@ -111,7 +111,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     )?;
     appendText(
         out,
-        "                    C file, for a host program's link (ADR 0088). obj and lib also write the host's\n",
+        "                    C file, for a host program's link (ADR 0088). lib also writes the host's\n",
     )?;
     appendText(
         out,

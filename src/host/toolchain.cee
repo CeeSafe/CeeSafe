@@ -136,6 +136,7 @@ fn compileSeparate(
         if (compiler.msvc) {
             pushText(mut arguments, "/nologo")?;
             pushText(mut arguments, "/std:c11")?;
+            pushText(mut arguments, "/bigobj")?;
             pushText(mut arguments, "/W3")?;
             pushText(mut arguments, "/I")?;
             pushBytes(mut arguments, directory)?;
@@ -447,6 +448,7 @@ fn compileUnitsAndLink(
         if (msvc) {
             pushText(mut arguments, "/nologo")?;
             pushText(mut arguments, "/std:c11")?;
+            pushText(mut arguments, "/bigobj")?;
             pushText(mut arguments, "/W3")?;
             pushText(mut arguments, "/I")?;
             pushBytes(mut arguments, directory)?;
@@ -884,8 +886,11 @@ fn compileObject(
     if (archive) {
         // Made afresh under a temporary name (`ar r` adds to an archive that exists, so an earlier build's members
         // would stay), then renamed over the output: a failed archiver leaves the output as it was.
+        // The process id makes the name this build's own: two builds of one output never share it, and no file of
+        // the user's called `<output>.partial` is removed.
         var partial = copyBytes(output)?;
-        appendText(mut partial, ".partial")?;
+        appendText(mut partial, ".partial.")?;
+        appendDecimal(mut partial, processId())?;
         removeFile(partial.view());
         pushText(mut link, "rcs")?;
         pushBytes(mut link, partial.view())?;
@@ -948,6 +953,16 @@ fn renameFile(from: Slice<u8>, to: Slice<u8>) -> Result<bool, AllocError> {
     }
     let renamed = unsafe { rename(borrow source[0] as *u8 as *CChar, borrow target[0] as *u8 as *CChar) };
     return Ok(renamed == 0);
+}
+
+/// This process's id.
+/// Safety: getpid takes no argument and returns a number.
+fn processId() -> u64 {
+    let id = unsafe { getpid() };
+    if (id < 0) {
+        return 0;
+    }
+    return truncate<u64>(id);
 }
 
 /// Removes a directory and everything under it, ignoring what cannot be removed.

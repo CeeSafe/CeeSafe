@@ -224,6 +224,7 @@ struct Checker {
     recording: bool;                           // make the records of the packages `recordedPackages` marks
     recordedPackages: Vector<bool>;            // by package in this check: its record is made here
     qualifyRoot: bool;                         // name the root's items as a dependent does (qualifiedName)
+    lintAll: bool;                             // N0400 and N0401 for every package's own files (check --all)
     recordOut: Vector<RecordedEffects>;        // the recorded packages' functions, each with its package
     opaquePackages: Vector<bool>;              // by package: a recorded body made what a record cannot hold, or embeds
     effectsRecorded: bool;                     // the effect checker ran, and recordOut holds what it found

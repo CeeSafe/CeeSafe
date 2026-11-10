@@ -121,7 +121,7 @@ jobs:
         shell: cmd
         run: |
           cd ceesafec-${{ needs.version.outputs.version }}-seed
-          cl /nologo /std:c11 /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
+          cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
       - name: Build from the seed alone (cc)
         if: ${{ !matrix.msvc }}
         run: |
@@ -170,7 +170,7 @@ jobs:
         shell: cmd
         run: |
           mkdir objects
-          cl /nologo /std:c11 /O2 /Oi- /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
+          cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I seed seed\*.c /Fo:objects\ /Fe:gen1.exe /link /STACK:8388608
       - name: Generation 1 from the seed (cc)
         if: ${{ !matrix.msvc }}
         run: cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I seed seed/*.c -o gen1

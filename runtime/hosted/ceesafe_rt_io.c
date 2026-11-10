@@ -172,19 +172,58 @@ static int64_t cee_fd_kind(int fd) {
 }
 
 #ifdef _WIN32
-/* An errno for a Windows error code from opening a file, as the C runtime's _open reports them. */
-static int cee_win_open_errno(DWORD code) {
+/* An errno for a Windows error code, by the C runtime's own table (its _dosmaperr, which _open and _read use), so a
+   call made through the Windows API reports what the C runtime's would. Codes the table lacks are EINVAL. */
+static int cee_win_errno(DWORD code) {
     switch (code) {
-    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_INVALID_DRIVE: case ERROR_BAD_NETPATH:
-    case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE: return ENOENT;
-    case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: return EEXIST;
-    case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION: case ERROR_WRITE_PROTECT:
-        return EACCES;
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_INVALID_DRIVE: case ERROR_NO_MORE_FILES:
+    case ERROR_BAD_NETPATH: case ERROR_BAD_NET_NAME: case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE:
+        return ENOENT;
     case ERROR_TOO_MANY_OPEN_FILES: return EMFILE;
-    case ERROR_NOT_ENOUGH_MEMORY: case ERROR_OUTOFMEMORY: return ENOMEM;
-    case ERROR_DISK_FULL: case ERROR_HANDLE_DISK_FULL: return ENOSPC;
-    default: return EINVAL;
+    case ERROR_ACCESS_DENIED: case ERROR_CURRENT_DIRECTORY: case ERROR_NETWORK_ACCESS_DENIED: case ERROR_CANNOT_MAKE:
+    case ERROR_FAIL_I24: case ERROR_DRIVE_LOCKED: case ERROR_SEEK_ON_DEVICE: case ERROR_NOT_LOCKED:
+    case ERROR_LOCK_FAILED:
+        return EACCES;
+    case ERROR_INVALID_HANDLE: case ERROR_INVALID_TARGET_HANDLE: case ERROR_DIRECT_ACCESS_HANDLE: return EBADF;
+    case ERROR_ARENA_TRASHED: case ERROR_NOT_ENOUGH_MEMORY: case ERROR_INVALID_BLOCK: case ERROR_NOT_ENOUGH_QUOTA:
+        return ENOMEM;
+    case ERROR_BAD_ENVIRONMENT: return E2BIG;
+    case ERROR_BAD_FORMAT: return ENOEXEC;
+    case ERROR_NOT_SAME_DEVICE: return EXDEV;
+    case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: return EEXIST;
+    case ERROR_NO_PROC_SLOTS: case ERROR_MAX_THRDS_REACHED: case ERROR_NESTING_NOT_ALLOWED: return EAGAIN;
+    case ERROR_BROKEN_PIPE: return EPIPE;
+    case ERROR_DISK_FULL: return ENOSPC;
+    case ERROR_WAIT_NO_CHILDREN: case ERROR_CHILD_NOT_COMPLETE: return ECHILD;
+    case ERROR_DIR_NOT_EMPTY: return ENOTEMPTY;
+    default:
+        /* The table's two ranges: ERROR_WRITE_PROTECT to ERROR_SHARING_BUFFER_EXCEEDED (sharing and lock violations
+           among them), and the executable-format errors. */
+        if (code >= ERROR_WRITE_PROTECT && code <= ERROR_SHARING_BUFFER_EXCEEDED) return EACCES;
+        if (code >= ERROR_INVALID_STARTING_CODESEG && code <= ERROR_INFLOOP_IN_RELOC_CHAIN) return ENOEXEC;
+        return EINVAL;
     }
+}
+
+/* UTF-8 `text`, ending in NUL, as UTF-16 into `wide` (`size` units, its NUL included); false if it is not UTF-8 or
+ * does not fit. Paths are UTF-8, as every CeeSafe string, so every path goes through the wide calls (CreateFileW,
+ * _wstat64, ...), never the ANSI code page's. */
+static bool cee_win_wide(const char *text, wchar_t *wide, int size) {
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, size) > 0;
+}
+
+/* A path from ceesafe_c_path (at most 4,095 bytes, so at most 4,095 UTF-16 units) as UTF-16; false, with errno
+ * EINVAL, if it is not UTF-8. */
+static bool cee_win_path(const char *name, wchar_t wide[4096]) {
+    if (cee_win_wide(name, wide, 4096)) return true;
+    errno = EINVAL;
+    return false;
+}
+
+/* UTF-16 `wide`, ending in NUL, as UTF-8 into `text` (`size` bytes, its NUL included); false if it does not fit or is
+ * not valid UTF-16. */
+static bool cee_win_narrow(const wchar_t *wide, char *text, int size) {
+    return WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, text, size, NULL, NULL) > 0;
 }
 
 /* _open with the share mode POSIX gives every open file: _open's lacks FILE_SHARE_DELETE, so Windows would refuse to
@@ -192,6 +231,8 @@ static int cee_win_open_errno(DWORD code) {
    system (type-system.md §26.3). The handle is not inherited, as O_CLOEXEC asks elsewhere. -1 with errno set on
    failure. */
 static int cee_win_open(const char *name, int flags) {
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -1;
     int access_mode = flags & (_O_RDONLY | _O_WRONLY | _O_RDWR);
     DWORD access = access_mode == _O_WRONLY ? GENERIC_WRITE
                  : access_mode == _O_RDWR   ? GENERIC_READ | GENERIC_WRITE
@@ -200,10 +241,10 @@ static int cee_win_open(const char *name, int flags) {
                       : (flags & (_O_CREAT | _O_TRUNC)) == (_O_CREAT | _O_TRUNC) ? CREATE_ALWAYS
                       : (flags & _O_CREAT) != 0                                  ? OPEN_ALWAYS
                                                                                  : OPEN_EXISTING;
-    HANDLE h = CreateFileA(name, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
+    HANDLE h = CreateFileW(wide, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
                            FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) {
-        errno = cee_win_open_errno(GetLastError());
+        errno = cee_win_errno(GetLastError());
         return -1;
     }
     int fd = _open_osfhandle((intptr_t)h, (flags & _O_APPEND) | _O_BINARY);
@@ -250,7 +291,10 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
         /* Windows refuses to open a directory (EACCES); File.openRegular reports IsDirectory there, as elsewhere. No
            file is read, so asking the path after the failed open races with nothing. */
         struct _stat64 st;
-        if (_stat64(name, &st) == 0 && ((unsigned)st.st_mode & _S_IFMT) == _S_IFDIR) return ceesafe_io_fail(EISDIR);
+        wchar_t wide[4096];
+        if (cee_win_path(name, wide) && _wstat64(wide, &st) == 0 && ((unsigned)st.st_mode & _S_IFMT) == _S_IFDIR) {
+            return ceesafe_io_fail(EISDIR);
+        }
         errno = EACCES;
     }
 #endif
@@ -284,7 +328,9 @@ cee_io_result ceesafe_file_remove(cee_str path) {
     char name[4096];
     if (!ceesafe_c_path(path, name)) return ceesafe_io_fail(EINVAL);
 #ifdef _WIN32
-    return _unlink(name) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return ceesafe_io_fail(EINVAL);
+    return _wunlink(wide) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
 #else
     return unlink(name) < 0 ? ceesafe_io_errno() : ceesafe_io_ok(0);
 #endif
@@ -341,12 +387,34 @@ cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length
 /* ---- Durable files (ADR 0075 §2.1) ------------------------------------------------------- */
 
 #ifdef _WIN32
-/* ReadFile and WriteFile at an OVERLAPPED offset leave a synchronous handle's file position after the bytes they
-   transferred, where pread and pwrite leave it unchanged: the position is read before and put back after. */
-static bool cee_win_position(HANDLE h, LARGE_INTEGER *at) {
-    LARGE_INTEGER zero;
-    zero.QuadPart = 0;
-    return SetFilePointerEx(h, zero, at, FILE_CURRENT) != 0;
+/* Positional I/O on Windows. ReadFile and WriteFile at an OVERLAPPED offset leave a synchronous handle's file position
+   after the bytes they transferred, where pread and pwrite leave it unchanged; saving the position and putting it
+   back races with every other thread using the descriptor, which readAt allows (it borrows the File). So the transfer
+   goes through a second handle, opened afresh on the same file by ReOpenFile: its file object, and so its position,
+   is its own, and the descriptor's position is never touched. The descriptor's handle first transfers no bytes, which
+   checks that it was opened for reading (or writing), as pread and pwrite check theirs, and moves nothing. The second
+   handle is a fresh open, so it costs an open per call. `*error` gets an errno on failure. */
+static HANDLE cee_win_positional(int32_t fd, bool write, int *error) {
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        *error = EBADF;
+        return INVALID_HANDLE_VALUE;
+    }
+    if (GetFileType(h) != FILE_TYPE_DISK) {
+        *error = ESPIPE;
+        return INVALID_HANDLE_VALUE;
+    }
+    uint8_t none = 0;
+    DWORD n = 0;
+    if (!(write ? WriteFile(h, &none, 0, &n, NULL) : ReadFile(h, &none, 0, &n, NULL))) {
+        DWORD code = GetLastError();
+        *error = code == ERROR_ACCESS_DENIED ? EBADF : cee_win_errno(code);
+        return INVALID_HANDLE_VALUE;
+    }
+    HANDLE second = ReOpenFile(h, write ? GENERIC_WRITE : GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+    if (second == INVALID_HANDLE_VALUE) *error = cee_win_errno(GetLastError());
+    return second;
 }
 #endif
 
@@ -354,17 +422,16 @@ static bool cee_win_position(HANDLE h, LARGE_INTEGER *at) {
 cee_io_result ceesafe_fd_read_at(int32_t fd, uint8_t *buffer, uint64_t length, uint64_t offset) {
     size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
 #ifdef _WIN32
-    HANDLE h = (HANDLE)_get_osfhandle(fd);
-    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
+    int failure = 0;
+    HANDLE h = cee_win_positional(fd, false, &failure);
+    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(failure);
     OVERLAPPED at = { 0 };
     at.Offset = (DWORD)offset;
     at.OffsetHigh = (DWORD)(offset >> 32);
-    LARGE_INTEGER position;
-    if (!cee_win_position(h, &position)) return ceesafe_io_fail(EIO);
     DWORD n = 0;
     BOOL ok = ReadFile(h, buffer, (DWORD)chunk, &n, &at);
     DWORD error = ok ? 0 : GetLastError();
-    (void)SetFilePointerEx(h, position, NULL, FILE_BEGIN);
+    (void)CloseHandle(h);
     if (!ok) {
         if (error == ERROR_HANDLE_EOF) return ceesafe_io_ok(0);
         return ceesafe_io_fail(error == ERROR_ACCESS_DENIED ? EACCES : EIO);
@@ -385,10 +452,9 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
     if (offset > (uint64_t)INT64_MAX || length > (uint64_t)INT64_MAX - offset) return ceesafe_io_fail(EINVAL);
     uint64_t done = 0;
 #ifdef _WIN32
-    HANDLE h = (HANDLE)_get_osfhandle(fd);
-    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
-    LARGE_INTEGER position;
-    if (!cee_win_position(h, &position)) return ceesafe_io_fail(EIO);
+    int failure = 0;
+    HANDLE h = cee_win_positional(fd, true, &failure);
+    if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(failure);
 #endif
     while (done < length) {
         uint64_t rest = length - done;
@@ -401,8 +467,8 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
         DWORD n = 0;
         BOOL ok = WriteFile(h, bytes + done, (DWORD)chunk, &n, &where);
         DWORD error = ok ? 0 : GetLastError();
-        (void)SetFilePointerEx(h, position, NULL, FILE_BEGIN);
         if (!ok) {
+            (void)CloseHandle(h);
             return ceesafe_io_fail(error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ? ENOSPC
                                : error == ERROR_ACCESS_DENIED                              ? EACCES
                                                                                            : EIO);
@@ -412,9 +478,17 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
         if (n < 0 && errno == EINTR) continue;
         if (n < 0) return ceesafe_io_errno();
 #endif
-        if (n == 0) return ceesafe_io_fail(EIO);
+        if (n == 0) {
+#ifdef _WIN32
+            (void)CloseHandle(h);
+#endif
+            return ceesafe_io_fail(EIO);
+        }
         done += (uint64_t)n;
     }
+#ifdef _WIN32
+    (void)CloseHandle(h);
+#endif
     return ceesafe_io_ok(0);
 }
 
@@ -466,7 +540,7 @@ cee_io_result ceesafe_fd_length(int32_t fd) {
 cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length) {
     if (length > (uint64_t)INT64_MAX) return ceesafe_io_fail(EINVAL);
 #ifdef _WIN32
-    errno_t r = _chsize_s(fd, (__int64)length);
+    errno_t r = _chsize_s(fd, (long long)length);
     return r != 0 ? ceesafe_io_fail(r) : ceesafe_io_ok(0);
 #else
     int r;
@@ -1603,8 +1677,32 @@ cee_io_result ceesafe_process_run(cee_str program, const cee_str *arguments, uin
         argv[count + 1u] = NULL;
         (void)fflush(stdout);
 #ifdef _WIN32
-        intptr_t status = _spawnvp(_P_WAIT, argv[0], (const char *const *)argv);
-        result = status < 0 ? ceesafe_io_errno() : ceesafe_io_ok((int64_t)status);
+        /* The program and its arguments are UTF-8: _wspawnvp takes them as UTF-16, never in the ANSI code page. */
+        wchar_t **wide = (wchar_t **)ceesafe_alloc((size_t)(count + 2u) * sizeof(wchar_t *), CEE_ALLOC_SYSTEM);
+        uint64_t widened = 0;
+        int wide_error = wide == NULL ? ENOMEM : 0;
+        for (; wide_error == 0 && widened <= count; widened++) {
+            size_t units = strlen(argv[widened]) + 1u;
+            wide[widened] = (wchar_t *)ceesafe_alloc(units * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+            if (wide[widened] == NULL) {
+                wide_error = ENOMEM;
+            } else if (!cee_win_wide(argv[widened], wide[widened], (int)units)) {
+                ceesafe_free(wide[widened], CEE_ALLOC_SYSTEM);
+                wide_error = EINVAL;
+            }
+            if (wide_error != 0) break;
+        }
+        if (wide_error != 0) {
+            result = ceesafe_io_fail(wide_error);
+        } else {
+            wide[count + 1u] = NULL;
+            intptr_t status = _wspawnvp(_P_WAIT, wide[0], (const wchar_t *const *)wide);
+            result = status < 0 ? ceesafe_io_errno() : ceesafe_io_ok((int64_t)status);
+        }
+        if (wide != NULL) {
+            for (uint64_t i = 0; i < widened; i++) ceesafe_free(wide[i], CEE_ALLOC_SYSTEM);
+            ceesafe_free(wide, CEE_ALLOC_SYSTEM);
+        }
 #else
         pid_t pid;
 #ifdef COSMO_AF_INET
@@ -1659,7 +1757,9 @@ int64_t ceesafe_host_path_kind(uint8_t const *path, uint64_t length) {
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
     struct _stat64 st;
-    if (_stat64(name, &st) != 0) return errno == ENOENT ? 0 : -(int64_t)errno;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    if (_wstat64(wide, &st) != 0) return errno == ENOENT ? 0 : -(int64_t)errno;
     unsigned type = (unsigned)st.st_mode & _S_IFMT;
     return type == _S_IFDIR ? 2 : type == _S_IFREG ? 1 : 3;
 #else
@@ -1678,7 +1778,9 @@ int64_t ceesafe_host_dir_create(uint8_t const *path, uint64_t length) {
     char name[4096];
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
-    return _mkdir(name) == 0 ? 0 : -(int64_t)errno;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    return _wmkdir(wide) == 0 ? 0 : -(int64_t)errno;
 #else
     return mkdir(name, 0777) == 0 ? 0 : -(int64_t)errno;
 #endif
@@ -1688,12 +1790,6 @@ int64_t ceesafe_host_dir_create(uint8_t const *path, uint64_t length) {
 /* ceesafec's `embed` (ADR 0087 §2.8) on Windows: the POSIX calls its sources make, which rt.h names here. Paths are
  * UTF-8, as every CeeSafe string, so they go through the wide calls (CreateFileW, GetFinalPathNameByHandleW), never
  * the ANSI code page's. */
-
-/* UTF-8 `text`, ending in NUL, as UTF-16 into `wide` (`size` units, its NUL included); false if it is not UTF-8 or
- * does not fit. */
-static bool cee_win_wide(const char *text, wchar_t *wide, int size) {
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, size) > 0;
-}
 
 /* The final path of the open handle `h` (every symbolic link and junction resolved) as UTF-8 into `resolved`, which
  * holds 4,096 bytes: without the `\\?\` prefix the call adds, and `\\?\UNC\server\share` as `\\server\share`. NULL
@@ -1794,11 +1890,13 @@ ptrdiff_t ceesafe_win_readlink(char const *path, char *buffer, size_t size) {
     return -1;
 }
 
-/* pread(2): up to `size` bytes at `offset`, without moving the descriptor's position. */
+/* pread(2): up to `size` bytes at `offset`, without moving the descriptor's position (through a second handle, as
+ * ceesafe_fd_read_at). */
 ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t offset) {
-    intptr_t h = _get_osfhandle(fd);
-    if (h == -1) {
-        errno = EBADF;
+    int failure = 0;
+    HANDLE second = cee_win_positional(fd, false, &failure);
+    if (second == INVALID_HANDLE_VALUE) {
+        errno = failure;
         return -1;
     }
     OVERLAPPED at;
@@ -1807,20 +1905,20 @@ ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t of
     at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
     DWORD wanted = size > 0x40000000u ? 0x40000000u : (DWORD)size;
     DWORD got = 0;
-    LARGE_INTEGER position;
-    if (!cee_win_position((HANDLE)h, &position)) {
-        errno = EIO;
-        return -1;
-    }
-    BOOL ok = ReadFile((HANDLE)h, buffer, wanted, &got, &at);
+    BOOL ok = ReadFile(second, buffer, wanted, &got, &at);
     DWORD error = ok ? 0 : GetLastError();
-    (void)SetFilePointerEx((HANDLE)h, position, NULL, FILE_BEGIN);
+    (void)CloseHandle(second);
     if (!ok) {
         if (error == ERROR_HANDLE_EOF) return 0;
         errno = EIO;
         return -1;
     }
     return (ptrdiff_t)got;
+}
+
+/* getpid(2). */
+int32_t ceesafe_win_getpid(void) {
+    return (int32_t)GetCurrentProcessId();
 }
 
 /* The calls of ceesafec's interface-record cache (ADR 0082 §2.7), which reads and writes no record on Windows (it
@@ -1872,7 +1970,10 @@ int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t co
     if (!ceesafe_c_path(ceesafe_host_text(from, fromLength), source)) return -(int64_t)EINVAL;
     if (!ceesafe_c_path(ceesafe_host_text(to, toLength), target)) return -(int64_t)EINVAL;
 #ifdef _WIN32
-    if (MoveFileExA(source, target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
+    wchar_t wide_source[4096];
+    wchar_t wide_target[4096];
+    if (!cee_win_path(source, wide_source) || !cee_win_path(target, wide_target)) return -(int64_t)EINVAL;
+    if (MoveFileExW(wide_source, wide_target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 0;
     DWORD error = GetLastError();
     return -(int64_t)(error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ENOENT
                       : error == ERROR_ACCESS_DENIED                                   ? EACCES
@@ -1892,9 +1993,11 @@ int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
     ULARGE_INTEGER avail, size, unused;
-    DWORD attributes = GetFileAttributesA(name);
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    DWORD attributes = GetFileAttributesW(wide);
     if (attributes == INVALID_FILE_ATTRIBUTES) return -(int64_t)ENOENT;
-    if (!GetDiskFreeSpaceExA(name, &avail, &size, &unused)) return -(int64_t)EIO;
+    if (!GetDiskFreeSpaceExW(wide, &avail, &size, &unused)) return -(int64_t)EIO;
     *total = size.QuadPart;
     *free = unused.QuadPart;
     *available = avail.QuadPart;
@@ -1922,7 +2025,9 @@ int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *sec
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
     struct _stat64 st;
-    if (_stat64(name, &st) != 0) return -(int64_t)errno;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    if (_wstat64(wide, &st) != 0) return -(int64_t)errno;
     *seconds = (int64_t)st.st_mtime;
 #else
     struct stat st;
@@ -1973,7 +2078,9 @@ int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint3
     char name[4096];
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
-    return _chmod(name, (mode & 0200u) ? (_S_IREAD | _S_IWRITE) : _S_IREAD) == 0 ? 0 : -(int64_t)errno;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    return _wchmod(wide, (mode & 0200u) ? (_S_IREAD | _S_IWRITE) : _S_IREAD) == 0 ? 0 : -(int64_t)errno;
 #else
     return chmod(name, (mode_t)(mode & 07777u)) == 0 ? 0 : -(int64_t)errno;
 #endif
@@ -1985,7 +2092,9 @@ int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length) {
     char name[4096];
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
-    DWORD attributes = GetFileAttributesA(name);
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    DWORD attributes = GetFileAttributesW(wide);
     if (attributes == INVALID_FILE_ATTRIBUTES) return -(int64_t)ENOENT;
     return (attributes & FILE_ATTRIBUTE_DIRECTORY) ? 0 : -(int64_t)ENOTDIR;
 #else
@@ -2004,14 +2113,22 @@ int64_t ceesafe_host_dir_remove(uint8_t const *path, uint64_t length) {
     char name[4096];
     if (!ceesafe_c_path(ceesafe_host_text(path, length), name)) return -(int64_t)EINVAL;
 #ifdef _WIN32
-    return _rmdir(name) == 0 ? 0 : -(int64_t)errno;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) return -(int64_t)EINVAL;
+    return _wrmdir(wide) == 0 ? 0 : -(int64_t)errno;
 #else
     return rmdir(name) == 0 ? 0 : -(int64_t)errno;
 #endif
 }
 
 #ifdef _WIN32
-typedef struct ceesafe_host_dir { intptr_t handle; struct _finddata_t entry; int pending; } ceesafe_host_dir;
+/* A listing by _wfindfirst64: `name` holds the current entry's name as UTF-8 (260 UTF-16 units at most, so 780 bytes). */
+typedef struct ceesafe_host_dir {
+    intptr_t handle;
+    struct _wfinddata64_t entry;
+    int pending;
+    char name[1024];
+} ceesafe_host_dir;
 #endif
 
 /* An open directory listing, or NULL with *error set. Close it with ceesafe_host_dir_close. */
@@ -2024,9 +2141,11 @@ void *ceesafe_host_dir_open(uint8_t const *path, uint64_t length, int32_t *error
     if (n > 0u && name[n - 1u] != '\\' && name[n - 1u] != '/') name[n++] = '\\';
     name[n++] = '*';
     name[n] = 0;
+    wchar_t wide[4096];
+    if (!cee_win_path(name, wide)) { *error = EINVAL; return NULL; }
     ceesafe_host_dir *d = (ceesafe_host_dir *)ceesafe_alloc(sizeof *d, CEE_ALLOC_SYSTEM);
     if (d == NULL) { *error = ENOMEM; return NULL; }
-    d->handle = _findfirst(name, &d->entry);
+    d->handle = _wfindfirst64(wide, &d->entry);
     if (d->handle == -1) { *error = errno; ceesafe_free(d, CEE_ALLOC_SYSTEM); return NULL; }
     d->pending = 1;
     return d;
@@ -2044,10 +2163,12 @@ int64_t ceesafe_host_dir_next(void *dir, uint8_t const **name, uint64_t *length)
 #ifdef _WIN32
         ceesafe_host_dir *d = (ceesafe_host_dir *)dir;
         if (!d->pending) {
-            if (_findnext(d->handle, &d->entry) != 0) return errno == ENOENT ? 0 : -(int64_t)errno;
+            if (_wfindnext64(d->handle, &d->entry) != 0) return errno == ENOENT ? 0 : -(int64_t)errno;
         }
         d->pending = 0;
-        entry = d->entry.name;
+        /* A name that is not valid UTF-16 has no UTF-8 form; it is skipped, as ceesafe_host_env skips a value. */
+        if (!cee_win_narrow(d->entry.name, d->name, (int)sizeof d->name)) continue;
+        entry = d->name;
 #else
         errno = 0;
         struct dirent *e = readdir((DIR *)dir);
@@ -2087,9 +2208,10 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
     static uint32_t counter;
     char base[4096];
 #ifdef _WIN32
-    DWORD got = GetTempPathA((DWORD)sizeof base, base);
+    wchar_t wide_base[4096];
+    DWORD got = GetTempPathW(4096u, wide_base);
     if (got == 0u) return -(int64_t)ENOENT;
-    if (got >= sizeof base - 64u) return -(int64_t)ENAMETOOLONG;
+    if (got >= 4096u || !cee_win_narrow(wide_base, base, (int)sizeof base - 64)) return -(int64_t)ENAMETOOLONG;
     unsigned long id = (unsigned long)GetCurrentProcessId();
 #else
     const char *tmp = getenv("TMPDIR");
@@ -2123,7 +2245,8 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
         for (int shift = 28; shift >= 0; shift -= 4) name[at++] = "0123456789abcdef"[(tag >> (unsigned)shift) & 0xFu];
         name[at] = 0;
 #ifdef _WIN32
-        int made = _mkdir(name);
+        wchar_t wide[4096];
+        int made = cee_win_path(name, wide) ? _wmkdir(wide) : -1;
 #else
         int made = mkdir(name, 0700);
 #endif
@@ -2136,7 +2259,9 @@ int64_t ceesafe_host_temporary(uint8_t *buffer, uint64_t capacity) {
 int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity) {
     char name[4096];
 #ifdef _WIN32
-    if (_getcwd(name, (int)sizeof name) == NULL) return -(int64_t)errno;
+    wchar_t wide[4096];
+    if (_wgetcwd(wide, 4096) == NULL) return -(int64_t)errno;
+    if (!cee_win_narrow(wide, name, (int)sizeof name)) return -(int64_t)ERANGE;
 #else
     if (getcwd(name, sizeof name) == NULL) return -(int64_t)errno;
 #endif
@@ -2144,16 +2269,6 @@ int64_t ceesafe_host_current(uint8_t *buffer, uint64_t capacity) {
 }
 
 #ifdef _WIN32
-/* An errno for a Windows error code (enough to tell NotFound and PermissionDenied apart). */
-static int ceesafe_host_win_errno(DWORD code) {
-    switch (code) {
-    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_BAD_PATHNAME: return ENOENT;
-    case ERROR_ACCESS_DENIED: return EACCES;
-    case ERROR_NOT_ENOUGH_MEMORY: case ERROR_OUTOFMEMORY: return ENOMEM;
-    default: return EINVAL;
-    }
-}
-
 /* Appends `argument` to a command line under the C runtime's parsing rules (CommandLineToArgvW). */
 static size_t ceesafe_host_quote(char *line, size_t at, size_t capacity, const char *argument, int *ok) {
     int plain = argument[0] != 0;
@@ -2227,13 +2342,30 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
         } else {
             line[at] = 0;
             SECURITY_ATTRIBUTES inherit = { sizeof inherit, NULL, TRUE };
-            HANDLE in = CreateFileA(in_name, GENERIC_READ, FILE_SHARE_READ, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            HANDLE out = CreateFileA(out_name, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            HANDLE err = CreateFileA(err_name, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            HANDLE in = INVALID_HANDLE_VALUE, out = INVALID_HANDLE_VALUE, err = INVALID_HANDLE_VALUE;
+            /* The names and the command line are UTF-8: the wide calls take them, never the ANSI code page. */
+            wchar_t *wide = (wchar_t *)ceesafe_alloc((3u * 4096u + capacity) * sizeof(wchar_t), CEE_ALLOC_SYSTEM);
+            wchar_t *wide_line = wide == NULL ? NULL : wide + 3u * 4096u;
+            DWORD failure = ERROR_NOT_ENOUGH_MEMORY;
+            if (wide != NULL && cee_win_wide(in_name, wide, 4096) && cee_win_wide(out_name, wide + 4096, 4096)
+                && cee_win_wide(err_name, wide + 2u * 4096u, 4096) && cee_win_wide(line, wide_line, (int)capacity)) {
+                in = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ, &inherit, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+                if (in != INVALID_HANDLE_VALUE) {
+                    out = CreateFileW(wide + 4096, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
+                                      FILE_ATTRIBUTE_NORMAL, NULL);
+                }
+                if (out != INVALID_HANDLE_VALUE) {
+                    err = CreateFileW(wide + 2u * 4096u, GENERIC_WRITE, FILE_SHARE_READ, &inherit, CREATE_ALWAYS,
+                                      FILE_ATTRIBUTE_NORMAL, NULL);
+                }
+                failure = GetLastError();
+            } else if (wide != NULL) {
+                failure = ERROR_INVALID_PARAMETER;
+            }
             if (in == INVALID_HANDLE_VALUE || out == INVALID_HANDLE_VALUE || err == INVALID_HANDLE_VALUE) {
-                result = -(int64_t)ceesafe_host_win_errno(GetLastError());
+                result = -(int64_t)cee_win_errno(failure);
             } else {
-                STARTUPINFOA startup;
+                STARTUPINFOW startup;
                 PROCESS_INFORMATION process;
                 memset(&startup, 0, sizeof startup);
                 startup.cb = sizeof startup;
@@ -2241,8 +2373,8 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
                 startup.hStdInput = in;
                 startup.hStdOutput = out;
                 startup.hStdError = err;
-                if (!CreateProcessA(NULL, line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
-                    result = -(int64_t)ceesafe_host_win_errno(GetLastError());
+                if (!CreateProcessW(NULL, wide_line, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &process)) {
+                    result = -(int64_t)cee_win_errno(GetLastError());
                 } else {
                     DWORD code = 0;
                     (void)WaitForSingleObject(process.hProcess, INFINITE);
@@ -2254,6 +2386,7 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
             if (in != INVALID_HANDLE_VALUE) (void)CloseHandle(in);
             if (out != INVALID_HANDLE_VALUE) (void)CloseHandle(out);
             if (err != INVALID_HANDLE_VALUE) (void)CloseHandle(err);
+            if (wide != NULL) ceesafe_free(wide, CEE_ALLOC_SYSTEM);
         }
         if (line != NULL) ceesafe_free(line, CEE_ALLOC_SYSTEM);
 #else

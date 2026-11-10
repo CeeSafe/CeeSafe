@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Every contract test of ceesafec, against CeeSafe's own expectations only (Decision 0007):
 - the fixed point at HEAD, with ceesafec as stage 0 (tools/fixed_point.py);
-- CeeSafe's corpus (tests/reference/tests/corpus) in every family: annotations, AST/HIR/C snapshots, expected output,
+- CeeSafe's corpus (tests/reference/tests/corpus) in every family (and, on POSIX, ffi/imported-enums with its enums
+  unsigned, `u32`, as before 0.28.0): annotations, AST/HIR/C snapshots, expected output,
   the optimisation reports; run-pass and run-fail again in the interpreter; run-pass, run-fail and ffi again under
   -Werror, with `--split --jobs 4` at -O2, and under ASan+UBSan with leak checks; lib/'s own diagnostics (Decision 0008); the async programs again
   on the executor's poll() fallback (CEESAFE_REACTOR_POLL=1);
@@ -46,6 +47,36 @@ def is_gcc():
     return "Free Software Foundation" in version or version.startswith("gcc")
 
 
+def unsigned_enum_corpus(work):
+    """A corpus of one program, ffi/imported-enums in the form it had before 0.28.0: its header's enums have no
+    negative enumerator, so GCC and Clang on Linux and macOS give them `unsigned int`, and the program declares them
+    `u32` (type-system.md §31.6). The corpus's own form is `int` on every target, so without this no run covers an
+    unsigned imported enum. POSIX only: MSVC gives every enum `int`."""
+    source = os.path.join(ROOT, "tests", "reference", "tests", "corpus", "ffi")
+    target = os.path.join(work, "unsigned-enum", "ffi")
+    os.makedirs(target)
+    edits = {
+        "imported-enums.types.h": [("NO_COLOR = -1, ", ""), ("NO_SIZE = -1, ", "")],
+        "imported-enums.cee": [
+            ("enum color: i32;", "enum color: u32;"),
+            ("enum size_kind: i32;", "enum size_kind: u32;"),
+            ("=> a as i32 * 10 + s as i32;", "=> truncate<i32>(a as u32 * 10 + s as u32);"),
+            ("x.amount + was as i32;", "x.amount + truncate<i32>(was as u32);"),
+            ("tally.sum + c as i32;", "tally.sum + truncate<i32>(c as u32);"),
+        ],
+    }
+    for name in ("imported-enums.cee", "imported-enums.c", "imported-enums.h", "imported-enums.types.h"):
+        with open(os.path.join(source, name), encoding="utf-8") as f:
+            text = f.read()
+        for old, new in edits.get(name, []):
+            if old not in text:
+                raise SystemExit(f"contract_tests: {name} no longer has {old!r}: update unsigned_enum_corpus")
+            text = text.replace(old, new)
+        with open(os.path.join(target, name), "w", encoding="utf-8") as f:
+            f.write(text)
+    return os.path.dirname(target)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ceesafec", required=True)
@@ -66,6 +97,9 @@ def main():
             ("fixed point", py + [f"{HERE}/fixed_point.py", "--stage0", cee, "--work", os.path.join(work, "fp"),
                                   "--manifest", os.path.join(work, "fixed-point.json")]),
             ("corpus", run_corpus + ["--corpus", corpus, "--check-leaks"]),
+            # An imported C enum whose integer is unsigned (`enum color: u32`), built and run (POSIX).
+            ("unsigned enum", run_corpus + ["--corpus", unsigned_enum_corpus(work), "--family", "ffi",
+                                            "--cflag=-Werror"]),
             ("run -Werror", run_corpus + ["--corpus", corpus] + run_families + ["--cflag=-Werror"]),
             # Ubuntu's gcc defines _FORTIFY_SOURCE at -O2, so glibc's warn_unused_result and gcc's flow warnings apply
             # to every build there: the generated C and the runtime pass -O2 -Wall -Werror with it (Linux only).
@@ -132,6 +166,10 @@ def main():
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":
                 print(f"{name:14} skip io_uring is Linux's (ADR 0035)")
+                sys.stdout.flush()
+                continue
+            if name == "unsigned enum" and platform.system() == "Windows":
+                print(f"{name:14} skip MSVC gives every enum `int` (type-system.md §31.6)")
                 sys.stdout.flush()
                 continue
             if name == "run fortify" and platform.system() != "Linux":

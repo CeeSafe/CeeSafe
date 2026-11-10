@@ -264,6 +264,7 @@ fn msvcArguments(
     var arguments = Vector<Vector<u8>>.create();
     pushText(mut arguments, "/nologo")?;
     pushText(mut arguments, "/std:c11")?;
+    pushText(mut arguments, "/bigobj")?;
     pushText(mut arguments, "/W3")?;
     pushText(mut arguments, "/I")?;
     pushBytes(mut arguments, directory)?;

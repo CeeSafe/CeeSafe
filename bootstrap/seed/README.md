@@ -14,10 +14,11 @@ cc -std=c11 -O2 -ffp-contract=off -fno-math-errno -I . *.c -o ceesafec -lm -lpth
 ```
 
 With MSVC, in a Developer Command Prompt (x64 or ARM64). `/Oi-` works around an MSVC optimiser bug
-(`spec/c-backend.md` §1.1), and the compiler needs an 8 MiB stack:
+(`spec/c-backend.md` §1.1), the compiler needs an 8 MiB stack, and `/bigobj` lifts the
+object file's section limit, which the 45 MB `main.c` exceeds:
 
 ```bat
-cl /nologo /std:c11 /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
+cl /nologo /std:c11 /bigobj /O2 /Oi- /MP /I . *.c /Fe:ceesafec.exe /link /STACK:8388608
 ```
 
 ## Check

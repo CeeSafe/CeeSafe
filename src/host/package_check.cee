@@ -58,7 +58,10 @@ struct PackageRun {
     errors: u64; // before --deny-warnings
     warnings: u64;
     phase: u32;
-    failed: Vector<bool>;               // by package index: errors in its own files
+    failed: Vector<bool>;               // by package index: errors in its own source files
+    testFailed: Vector<bool>;           // by package index: errors in its test files (check --all)
+    ownWarnings: Vector<u64>;           // by package index: warnings in its own source files, before any is removed
+    testsChecked: Vector<bool>;         // by package index: its tests are in this check
     effectsRecorded: bool;              // the effect checker ran: what follows holds what it found
     recorded: Vector<bool>;             // by position: its record can be made from this check
     opaque: Vector<bool>;               // by position: its record would be opaque (madeOpaque, an `embed`)
@@ -514,11 +517,15 @@ fn appendTokens(sha: borrow mut Sha256, text: Slice<u8>, spans: borrow Vector<Sp
 fn dependencyFailure() -> u32 => 364;
 
 /// N0364's message for `failed`, a package of the closure with errors, reached through the direct dependency
-/// `through`: where to see them (`check --package`, which works from anywhere in the lock).
+/// `through`: where to see them (`check --package`, which works from anywhere in the lock). When an error of it has
+/// a note in `involved`, another package outside its own closure (two packages' C names that clash, which only a
+/// closure holding both has), `check --package` would find nothing: the message names `involved` and suggests
+/// `check --whole-program` instead.
 fn dependencyFailureMessage(
     data: borrow WorkspaceData,
     failed: usize,
     through: usize,
+    involved: usize,
 ) -> Result<Vector<u8>, AllocError> {
     let name = data.packages[failed].info.name.view();
     var message = copyBytes("the dependency '".bytes())?;
@@ -528,6 +535,17 @@ fn dependencyFailureMessage(
         appendText(mut message, "(through '")?;
         appendBytes(mut message, data.packages[through].info.name.view())?;
         appendText(mut message, "') ")?;
+    }
+    if (involved != none64()) {
+        appendText(mut message, "has errors, one with '")?;
+        appendBytes(mut message, data.packages[involved].info.name.view())?;
+        appendText(mut message, "', which it does not depend on, so 'ceesafec check --package ")?;
+        appendBytes(mut message, name)?;
+        appendText(
+            mut message,
+            "' does not see it: run 'ceesafec check --whole-program' to see them all (ADR 0082 §2.7)",
+        )?;
+        return Ok(message);
     }
     appendText(mut message, "has errors: run 'ceesafec check --package ")?;
     appendBytes(mut message, name)?;
@@ -539,8 +557,10 @@ fn dependencyFailureMessage(
 /// `useRecord` says so (by package index), else in full. `recordWanted` (by package index) marks the packages whose
 /// records this check finds what for. `dependencyMode` is the check that makes a dependency's record: without its
 /// tests or entry function, its files named as a dependent names them. `allTests` checks every package's tests too
-/// (`check --all`), a package with tests is never from its record then. `qualifyRoot` names the first package's items
-/// as its dependents do (a later round of `check --all`, whose first package is not the current directory's).
+/// (`check --all`), a package with tests is never from its record then, and lints every package's own files (N0400,
+/// N0401); `skipTests` (by package index) leaves a package's tests out even so. `qualifyRoot` names the first
+/// package's items as its dependents do (a later round of `check --all`, whose first package is not the current
+/// directory's).
 fn checkPackageRun(
     options: borrow Options,
     data: borrow WorkspaceData,
@@ -551,6 +571,7 @@ fn checkPackageRun(
     recordWanted: borrow Vector<bool>,
     dependencyMode: bool,
     allTests: bool,
+    skipTests: borrow Vector<bool>,
     qualifyRoot: bool,
 ) -> PackageRun {
     var run = PackageRun {
@@ -564,6 +585,9 @@ fn checkPackageRun(
         warnings: 0,
         phase: 0,
         failed: Vector<bool>.create(),
+        testFailed: Vector<bool>.create(),
+        ownWarnings: Vector<u64>.create(),
+        testsChecked: Vector<bool>.create(),
         effectsRecorded: false,
         recorded: Vector<bool>.create(),
         opaque: Vector<bool>.create(),
@@ -578,6 +602,9 @@ fn checkPackageRun(
     }
     while (run.failed.length < data.packages.length) {
         run.failed.push(false)!;
+        run.testFailed.push(false)!;
+        run.ownWarnings.push(0)!;
+        run.testsChecked.push(false)!;
     }
     var packages = Vector<PackageInfo>.create();
     var input = emptyRecordInput();
@@ -604,6 +631,9 @@ fn checkPackageRun(
         }
     }
     input.qualifyRoot = dependencyMode || qualifyRoot;
+    // N0400 and N0401 run over every package checked in full, so that each one's own warnings are counted for its
+    // record (makeRecords); only `check --all` reports a dependency's (finishRun drops them otherwise).
+    input.lintAll = true;
     while (input.fileFromRecord.length < sources.length) {
         input.fileFromRecord.push(false)!;
         input.filePackagePaths.push(Vector<u8>.create())!;
@@ -627,7 +657,10 @@ fn checkPackageRun(
                 null => {}
             }
         }
-        let withTests = !dependencyMode && (position == 0 || (allTests && !fromRecord));
+        let withTests = !dependencyMode && !skipTests[member] && (position == 0 || (allTests && !fromRecord));
+        if (withTests) {
+            run.testsChecked[member] = true;
+        }
         let count = p.sources.length + (if (withTests) p.tests.length else 0);
         for (k in 0..count) {
             let isTest = k >= p.sources.length;
@@ -701,7 +734,7 @@ fn checkPackageRun(
         }
         run.diagnostics = front.diagnostics;
         run.sources = sources;
-        finishRun(mut run, options, dependencyMode);
+        finishRun(mut run, options, dependencyMode, allTests);
         return run;
     }
     var texts = Vector<Vector<u8>>.create();
@@ -763,18 +796,45 @@ fn checkPackageRun(
     }
     run.diagnostics = checker.front.diagnostics;
     run.sources = sources;
-    finishRun(mut run, options, dependencyMode);
+    finishRun(mut run, options, dependencyMode, allTests);
     return run;
 }
 
-/// The end of a check: which packages have errors in their own files, and the counts.
-fn finishRun(run: borrow mut PackageRun, options: borrow Options, dependencyMode: bool) {
+/// The end of a check: which packages have errors in their own source files and which in their tests, each
+/// package's own warnings (counted here, before reportFailedDependencies removes its dependencies'), and the counts.
+/// Unless `allLints` (`check --all`), the lints' warnings in other packages than the one checked are dropped, as its
+/// own check reports none of a dependency's.
+fn finishRun(run: borrow mut PackageRun, options: borrow Options, dependencyMode: bool, allLints: bool) {
     for (d in run.diagnostics.items.view()) {
-        if (d.isError && (d.file as usize) < run.sourcePackage.length) {
+        if ((d.file as usize) < run.sourcePackage.length) {
             let p = run.sourcePackage[d.file as usize];
             if (p != none64()) {
-                run.failed[p] = true;
+                let test = run.sourceIsTest[d.file as usize];
+                if (d.isError && test) {
+                    run.testFailed[p] = true;
+                } else if (d.isError) {
+                    run.failed[p] = true;
+                } else if (!test) {
+                    run.ownWarnings[p] += 1;
+                }
             }
+        }
+    }
+    if (!allLints) {
+        var kept = Vector<Diagnostic>.create();
+        while (run.diagnostics.items.length > 0) {
+            let d = run.diagnostics.items.pop()!;
+            var other = false;
+            if ((d.code == 400 || d.code == 401) && !d.isError && (d.file as usize) < run.sourcePackage.length) {
+                let p = run.sourcePackage[d.file as usize];
+                other = p != none64() && p != run.package;
+            }
+            if (!other) {
+                kept.push(d)!;
+            }
+        }
+        while (kept.length > 0) {
+            run.diagnostics.items.push(kept.pop()!)!;
         }
     }
     run.errors = truncate<u64>(run.diagnostics.count(true));
@@ -848,7 +908,31 @@ fn reportFailedDependencies(run: borrow mut PackageRun, data: borrow WorkspaceDa
         appendBytes(mut note, first.message.view())?;
         var notes = Vector<DiagnosticNote>.create();
         notes.push(DiagnosticNote { file: first.file, start: first.start, end: first.end, message: note })?;
-        let message = dependencyFailureMessage(data, failed, root.dependencies[through] as usize)?;
+        // Another package an error of it involves (a note there), outside its own closure.
+        var involved: usize = none64();
+        let failedClosure = packageClosure(data, failed)?;
+        for (d in run.diagnostics.items.view()) {
+            if (!d.isError ||
+                (d.file as usize) >= run.sourcePackage.length || run.sourcePackage[d.file as usize] != failed) {
+                continue;
+            }
+            for (n in d.notes.view()) {
+                if ((n.file as usize) >= run.sourcePackage.length || involved != none64()) {
+                    continue;
+                }
+                let other = run.sourcePackage[n.file as usize];
+                var inClosure = false;
+                for (c in failedClosure.view()) {
+                    if (c == other) {
+                        inClosure = true;
+                    }
+                }
+                if (other != none64() && !inClosure) {
+                    involved = other;
+                }
+            }
+        }
+        let message = dependencyFailureMessage(data, failed, root.dependencies[through] as usize, involved)?;
         added.errorWithNotes(
             dependencyFailure(),
             manifestFile,
@@ -961,16 +1045,8 @@ fn makeRecords(
                 record.warnings = run.warnings;
                 record.phase = run.phase;
             } else {
-                for (s in 0..run.sources.length) {
-                    if (run.sourcePackage[s] != member) {
-                        continue;
-                    }
-                    for (d in run.diagnostics.items.view()) {
-                        if (d.file as usize == s && !d.isError) {
-                            record.warnings += 1;
-                        }
-                    }
-                }
+                // Counted by finishRun: by now a dependency's diagnostics have been removed from the report.
+                record.warnings = run.ownWarnings[member];
             }
             if (run.effectsRecorded) {
                 for (f in run.functions.view()) {
@@ -1105,7 +1181,20 @@ fn makeMissingRecords(
                 useRecord.push(use)?;
                 recordWanted.push(p == m)?;
             }
-            var run = checkPackageRun(options, data, m, closure, records, useRecord, recordWanted, true, false, false);
+            let noSkip = packageFlags(data, false)?;
+            var run = checkPackageRun(
+                options,
+                data,
+                m,
+                closure,
+                records,
+                useRecord,
+                recordWanted,
+                true,
+                false,
+                noSkip,
+                false,
+            );
             if (run.failure != 0) {
                 return Ok();
             }
@@ -1265,6 +1354,7 @@ fn packageCheckCommand(given: Options) -> i32 {
     if (options.checkAll) {
         return checkAllCommand(options, cache, mut data, members, useCache, records, useRecord, recordWanted);
     }
+    let noSkip = packageFlags(data, false)!;
     var run = checkPackageRun(
         options,
         data,
@@ -1275,6 +1365,7 @@ fn packageCheckCommand(given: Options) -> i32 {
         recordWanted,
         options.recordOnly,
         false,
+        noSkip,
         false,
     );
     if (run.failure != 0) {
@@ -1303,9 +1394,11 @@ fn packageCheckCommand(given: Options) -> i32 {
 
 /// `check --all`: every package of the lock checked together, their tests included, in rounds. The first round
 /// checks them all; where it stopped early (errors before the effect checks, which stop what follows, as in any
-/// check), the next checks again the packages none of whose closure had errors, so that each package's own errors
-/// are found as its own check would find them, and so on. A package's diagnostics are those of the last round that
-/// checked it.
+/// check), the next checks again the packages none of whose closure had errors in its source files, so that each
+/// package's own errors are found as its own check would find them, and so on. Errors in a package's tests do not
+/// leave its dependents out: the next rounds check it without its tests, so that they hide neither its own later
+/// errors nor its dependents'. A package's diagnostics are those of the last round that checked it, and its tests'
+/// those of the last round that checked them.
 fn checkAllCommand(
     options: borrow Options,
     cache: borrow RecordCache,
@@ -1322,6 +1415,7 @@ fn checkAllCommand(
     for (m in members.view()) {
         remaining.push(m)!;
     }
+    var skipTests = packageFlags(data, false)!;
     loop {
         let first = remaining[0];
         let run = checkPackageRun(
@@ -1334,10 +1428,18 @@ fn checkAllCommand(
             recordWanted,
             false,
             true,
+            skipTests,
             first != 0,
         );
         if (run.failure != 0) {
             return run.failure;
+        }
+        var dropped = false;
+        for (p in remaining.view()) {
+            if (run.testFailed[p] && !skipTests[p]) {
+                skipTests[p] = true;
+                dropped = true;
+            }
         }
         var next = Vector<usize>.create();
         for (p in remaining.view()) {
@@ -1354,7 +1456,7 @@ fn checkAllCommand(
         }
         let complete = run.phase == 0 || run.phase == 5;
         runs.push(run)!;
-        if (complete || next.length == 0 || next.length == remaining.length) {
+        if (complete || next.length == 0 || (next.length == remaining.length && !dropped)) {
             break;
         }
         remaining = next;
@@ -1367,6 +1469,15 @@ fn checkAllCommand(
         }
     }
     return status;
+}
+
+/// A flag for every package of the lock, each `value`.
+fn packageFlags(data: borrow WorkspaceData, value: bool) -> Result<Vector<bool>, AllocError> {
+    var flags = Vector<bool>.create();
+    while (flags.length < data.packages.length) {
+        flags.push(value)?;
+    }
+    return Ok(flags);
 }
 
 /// One diagnostic of `check --all`'s report: its round, its index there, and its package (the round's first when its
@@ -1382,13 +1493,18 @@ struct ReportedDiagnostic {
 /// package's errors and warnings, counted by the diagnostics' packages; as text, the diagnostics, then a line per
 /// package with any.
 fn reportAll(options: borrow Options, data: borrow WorkspaceData, runs: borrow Vector<PackageRun>) -> i32 {
-    var last = Vector<usize>.create(); // by package: the last round that checked it
+    var last = Vector<usize>.create();      // by package: the last round that checked it
+    var lastTests = Vector<usize>.create(); // by package: the last round that checked its tests
     while (last.length < data.packages.length) {
         last.push(none64())!;
+        lastTests.push(none64())!;
     }
     for (r in 0..runs.length) {
         for (m in runs[r].members.view()) {
             last[m] = r;
+            if (runs[r].testsChecked[m]) {
+                lastTests[m] = r;
+            }
         }
     }
     var order = Vector<ReportedDiagnostic>.create();
@@ -1397,10 +1513,12 @@ fn reportAll(options: borrow Options, data: borrow WorkspaceData, runs: borrow V
         for (i in 0..run.diagnostics.items.length) {
             let file = run.diagnostics.items[i].file as usize;
             var package = run.package;
+            var test = false;
             if (file < run.sourcePackage.length && run.sourcePackage[file] != none64()) {
                 package = run.sourcePackage[file];
+                test = run.sourceIsTest[file];
             }
-            if (last[package] == r) {
+            if ((test && lastTests[package] == r) || (!test && last[package] == r)) {
                 order.push(ReportedDiagnostic { run: r, index: i, package: package })!;
             }
         }

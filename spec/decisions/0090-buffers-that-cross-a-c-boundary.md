@@ -1,7 +1,8 @@
 # ADR 0090 — Buffers that cross a C boundary: a vector's raw parts, its spare capacity, and blocks a host adopts
 
-- Status: **Proposed**, 2026-11-11; awaiting the owner. Not implemented. Revised the same day after two adversarial
-  reviews (soundness; fit with `bun_zstd`), whose findings are in §7.
+- Status: **Accepted** by the owner, 2026-11-11 (every question of §6 answered as proposed). Not implemented.
+  Proposed the same day and revised after two adversarial reviews (soundness; fit with `bun_zstd`), whose findings
+  are in §7.
   Raised by the Bun port's second crate swap, `bun_zstd` (`~/dev/CeeSafeApps/bun/ROADMAP.md` §2,
   `analysis/trials/csrf/REPORT.md` §7): its `decompress_alloc` returns a `Vec<u8>` that Rust owns, and its streaming
   decoder appends to a `Vec<u8>` the caller owns. ADR 0088 gave CeeSafe and its host one heap (§2.5, stage B, 0.29.0)
@@ -285,6 +286,8 @@ let out = if capacity == 0 { Vec::new() } else { unsafe { Vec::from_raw_parts(po
   debug + ASAN build, where a block freed by the wrong allocator is an ASAN report.
 
 ## 6. Questions for the owner
+
+Decided by the owner, 2026-11-11: accepted as proposed, all seven.
 
 1. **The names** `intoForeign`/`fromForeign` beside `intoRaw`/`fromRaw`, and `VectorParts<T>`. **Proposed: as
    written.**

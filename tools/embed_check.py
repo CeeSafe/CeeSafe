@@ -24,7 +24,8 @@ directly (aborts.c) and boxes.cee, the executable form of one export. Checked:
   threads calling it at once, one 0;
   two threads that call it and then an export at once, with a third calling ceesafe_shutdown, under ThreadSanitizer
   (AGAIN only once the config is published); argv copied (the host's strings overwritten and freed afterwards);
-- the generated `main` starts, and counts when asked, after a C constructor allocated through CeeSafe (0.27.0's);
+- the generated `main` starts, and counts when asked, after a C constructor allocated through CeeSafe (0.27.0's); a
+  thread a constructor started allocates and reads the arguments during its ceesafe_init, under ThreadSanitizer;
 - fail_alloc_at = k for every k of a single-threaded run, against boxes.cee with CEESAFE_FAIL_ALLOC_AT=k: the same
   outcomes; CEESAFE_INIT_ENVIRONMENT with CEESAFE_ALLOC_REPORT=1: the report from ceesafe_shutdown;
 - the panic hook: a bounds panic on the caller's thread, a Thread.spawn thread, an Async.runWorkers child and in a
@@ -322,6 +323,24 @@ def main():
         check.expect("the generated main after a C constructor allocated through CeeSafe: runs, and counts when asked",
                      r1.returncode == 0 and r1.stdout == "ran\n" and r2.returncode == 0 and r2.stdout == "ran\n" and
                      "ceesafe alloc: attempts=1 live=0" in r2.stderr, f"{b.stderr[-300:]} {r1.stderr} {r2.stderr}")
+        # A thread a C constructor starts, allocating and reading the arguments while the generated main's
+        # ceesafe_init writes the counting configuration and the arguments: relaxed atomics, not a data race (ADR 0088
+        # §8; 0.28.0's plain stores were one, on alloc_fail_at).
+        racer = os.path.join(work, "ctor_thread")
+        b = run([cee, "build", "--cc", cc, "--cflag", "-fsanitize=thread", "--cflag", "-g", "--cflag", "-O1",
+                 os.path.join(FIXTURE, "ctor.cee"), os.path.join(FIXTURE, "ctor_thread.c"), "-o", racer], timeout=600)
+        if b.returncode != 0:
+            check.skip("a constructor's thread during the generated main's ceesafe_init, under ThreadSanitizer",
+                       b.stderr.strip()[-200:])
+        else:
+            ok, detail = True, ""
+            for extra in ({}, {"CEESAFE_ALLOC_REPORT": "1"}):
+                for _ in range(5):
+                    r = run([racer, "a", "b"], env=clean_env({"TSAN_OPTIONS": "halt_on_error=1", **extra}))
+                    if r.returncode != 0 or r.stdout != "ran\n" or "ThreadSanitizer" in r.stderr:
+                        ok, detail = False, f"{extra}: {r.stdout} {r.stderr[-800:]}"
+            check.expect("a constructor's thread allocating and reading arguments during the generated main's "
+                         "ceesafe_init, under ThreadSanitizer (5 runs, counting off and on): no report", ok, detail)
         r = run([host, "report"], env=clean_env({"CEESAFE_ALLOC_REPORT": "1"}))
         check.expect("CEESAFE_INIT_ENVIRONMENT: CEESAFE_ALLOC_REPORT=1 reported by ceesafe_shutdown",
                      "ceesafe alloc: attempts=6 live=1" in r.stderr and "live=1" in r.stdout, r.stdout + r.stderr)

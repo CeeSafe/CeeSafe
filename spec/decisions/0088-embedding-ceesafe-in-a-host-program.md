@@ -808,11 +808,17 @@ Branch `impl/0088b`, on `main` after 0.28.0.
   thread-local flag marks the thread running `ceesafe_init`, so a panic of the allocator's during the copy (a
   misaligned block) reaches the host's hook; the first version printed it instead, the state being STARTING
   (review). Other threads read the hook only after STARTED, as before.
-- **Found, not fixed here** (older than this stage; 0.28.0 has it): the review's repro, a C constructor that starts a
-  thread allocating through CeeSafe while the generated `main` runs `ceesafe_init`, still gives one ThreadSanitizer
-  report, on `alloc_fail_at`, which `rt_init` writes while the thread reads it in `alloc_refused`. The ordering
-  contract forbids that thread; `ceesafe_rt_init_main` only tolerates a constructor's allocations before `main`.
-  Writing the counting configuration only when it changes, or relaxed atomics, would silence it: a fix of its own. The copied table and a flag are plain statics, read
+- **A race older than this stage, fixed on the owner's request** (0.28.0 has it, and 0.27.0's `ceesafe_rt_start`
+  had it too): a thread a C constructor starts, allocating through CeeSafe while the generated `main` runs
+  `ceesafe_init`, read `alloc_fail_at` in `alloc_refused` while `rt_init` wrote it (the review's repro, one
+  ThreadSanitizer report), and `Process.argument` read the arguments while they were stored. The counting
+  configuration (`alloc_counting`, `alloc_fail_at`, `alloc_report`) is now read and written with relaxed atomics
+  (`config_u32` and its kin in the core: `__atomic_load_n` relaxed, a volatile access under MSVC), the same `ldr` as
+  before on arm64, the `bool`s now `uint32_t`; the arguments' array is stored first and the count published after it
+  (`ceesafe_atomic_store_u32`, read with `ceesafe_atomic_load_u32`), so a reader that sees a count sees the array. The
+  fixture `ctor_thread.c` (a constructor's thread allocating and reading the arguments, 5 runs with counting off and 5
+  on) gave a report in every run on 0.28.0 and none now. Such a thread may still see counting turn on between an
+  allocation and its free, which only the report notices: the contract has CeeSafe called after `ceesafe_init`. The copied table and a flag are plain statics, read
   without a fence under §2.2's ordering contract. The hook is given at least 1 byte (`malloc(0)` and
   `realloc(p, 0)` differ between C libraries), never NULL to free, and `realloc(NULL, n)` becomes its alloc.
 - **The alignment check** is `CEE_HEAP_ALIGN`, max(16, `_Alignof(cee_max_align_t)`), a new `rt.h` macro;

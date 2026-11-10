@@ -339,11 +339,48 @@ static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
 static uint32_t alloc_foreign_used; /* C has allocated: the report gives alloc_foreign (ceesafe_atomic_*) */
 static uint64_t alloc_fail_at;    /* CEESAFE_FAIL_ALLOC_AT: this attempt fails; 0 = never */
-static bool alloc_report;         /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
+static uint32_t alloc_report;     /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
 /* Whether to count at all (ADR 0059): only a report, CEESAFE_FAIL_ALLOC_AT or `ceesafec test` reads the counters. Decided
    before the program's first allocation and never changed afterwards, so a free never subtracts what its allocation
    did not add. */
-static bool alloc_counting;
+static uint32_t alloc_counting;
+
+/* The three above are written once, by ceesafe_init or ceesafe_test_begin, and read on every allocation, through these:
+   relaxed atomic accesses, a plain load or store on every target (a volatile one under MSVC, whose aligned volatile
+   accesses are not torn). The generated main's ceesafe_init may run while a thread a C constructor started allocates
+   (ceesafe_rt_init_main tolerates a constructor's allocations); plain accesses were a data race there (ADR 0088 §8).
+   Such a thread may see counting turn on between an allocation and its free, which only the report would notice. */
+static inline uint32_t config_u32(const uint32_t *p) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile const uint32_t *)p;
+#else
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+#endif
+}
+
+static inline uint64_t config_u64(const uint64_t *p) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile const uint64_t *)p;
+#else
+    return __atomic_load_n(p, __ATOMIC_RELAXED);
+#endif
+}
+
+static inline void config_set_u32(uint32_t *p, uint32_t v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    *(volatile uint32_t *)p = v;
+#else
+    __atomic_store_n(p, v, __ATOMIC_RELAXED);
+#endif
+}
+
+static inline void config_set_u64(uint64_t *p, uint64_t v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    *(volatile uint64_t *)p = v;
+#else
+    __atomic_store_n(p, v, __ATOMIC_RELAXED);
+#endif
+}
 /* FailingAllocator's countdown (type-system.md §18.1): process-wide, and changed from every thread, so atomic
    (ceesafe_atomic_*). failAfter stores `failing_left` before `failing_armed`, so an allocation that sees the flag sees
    the count it was armed with. */
@@ -356,9 +393,9 @@ uint64_t ceesafe_test_cancel_at;
 bool ceesafe_test_reports;
 
 void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
-    alloc_report = true;
-    alloc_counting = true;
-    alloc_fail_at = fail_alloc_at;
+    config_set_u32(&alloc_report, 1u);
+    config_set_u32(&alloc_counting, 1u);
+    config_set_u64(&alloc_fail_at, fail_alloc_at);
     ceesafe_test_cancel_at = cancel_at;
     ceesafe_test_reports = true;
 }
@@ -367,8 +404,8 @@ void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
  * The counters change from every thread of a threaded program (type-system.md §38), so atomically: every attempt
  * gets its own number, in the order of the increments, and CEESAFE_FAIL_ALLOC_AT fails exactly one. The configuration
  * (alloc_counting, alloc_fail_at, alloc_report) is written only by ceesafe_init and ceesafe_test_begin, which run
- * before any thread calls CeeSafe (ADR 0088 §2.2's ordering contract); a thread's start orders them before everything
- * it does.
+ * before any thread calls CeeSafe (ADR 0088 §2.2's ordering contract), a thread's start ordering them before everything
+ * it does; its accesses are relaxed atomics all the same (config_u32, above), for a C constructor's thread.
  */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
@@ -384,7 +421,7 @@ static bool alloc_refused(uint32_t allocator) {
     if (allocator == CEE_ALLOC_FOREIGN_INIT) {
         return false;
     }
-    uint64_t attempt = alloc_counting ? CEE_COUNT(alloc_attempts, 1u) : 0u;
+    uint64_t attempt = config_u32(&alloc_counting) != 0u ? CEE_COUNT(alloc_attempts, 1u) : 0u;
     if (allocator == CEE_ALLOC_FAILING && ceesafe_atomic_load_u32(&failing_armed) != 0u) {
         /* One success taken from the countdown, or none left: a decrement that never goes below zero. */
         uint64_t left = ceesafe_atomic_load_u64(&failing_left);
@@ -399,18 +436,19 @@ static bool alloc_refused(uint32_t allocator) {
             left = seen;
         }
     }
-    return alloc_fail_at != 0u && attempt == alloc_fail_at;
+    uint64_t fail_at = config_u64(&alloc_fail_at);
+    return fail_at != 0u && attempt == fail_at;
 }
 
 /* One more live block (or one fewer, with UINT64_MAX) when counting, in C's count for CEE_ALLOC_FOREIGN (ADR 0060) and
    CEE_ALLOC_FOREIGN_INIT (ADR 0061), one count for both: a block may be freed under either. */
 static void alloc_count_live(uint32_t allocator, uint64_t delta) {
-    if ((allocator == CEE_ALLOC_FOREIGN || allocator == CEE_ALLOC_FOREIGN_INIT) && alloc_counting) {
+    if ((allocator == CEE_ALLOC_FOREIGN || allocator == CEE_ALLOC_FOREIGN_INIT) && config_u32(&alloc_counting) != 0u) {
         (void)CEE_COUNT(alloc_foreign, delta);
         if (ceesafe_atomic_load_u32(&alloc_foreign_used) == 0u) {
             ceesafe_atomic_store_u32(&alloc_foreign_used, 1u);
         }
-    } else if (alloc_counting) {
+    } else if (config_u32(&alloc_counting) != 0u) {
         (void)CEE_COUNT(alloc_live, delta);
     }
 }
@@ -420,7 +458,7 @@ void *ceesafe_alloc(size_t size, uint32_t allocator) {
         return NULL;
     }
     void *p = ceesafe_platform_alloc(size == 0u ? 1u : size);
-    if (p != NULL && alloc_counting) {
+    if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
     }
     return p;
@@ -431,7 +469,7 @@ void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator) {
         return NULL;
     }
     void *p = ceesafe_platform_alloc_zeroed(size == 0u ? 1u : size);
-    if (p != NULL && alloc_counting) {
+    if (p != NULL && config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, 1u);
     }
     return p;
@@ -452,7 +490,7 @@ void ceesafe_free(void *p, uint32_t allocator) {
     if (p == NULL) {
         return; /* C's free(NULL); CeeSafe's own code never frees NULL */
     }
-    if (alloc_counting) {
+    if (config_u32(&alloc_counting) != 0u) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */
     }
     ceesafe_platform_free(p);
@@ -637,9 +675,9 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
         ceesafe_atomic_store_u32(&rt_state, CEE_RT_UNSTARTED);
         return error;
     }
-    alloc_fail_at = fail_at;
-    alloc_report = report;
-    alloc_counting = report || fail_at != 0u;
+    config_set_u64(&alloc_fail_at, fail_at);
+    config_set_u32(&alloc_report, report ? 1u : 0u);
+    config_set_u32(&alloc_counting, report || fail_at != 0u ? 1u : 0u);
     ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
     ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
     return 0;
@@ -661,8 +699,8 @@ uint64_t ceesafe_shutdown(void) {
     if (ceesafe_atomic_load_u32(&rt_state) != CEE_RT_STARTED) {
         return 0u;
     }
-    uint64_t live = alloc_counting ? ceesafe_atomic_load_u64(&alloc_live) : 0u;
-    if (alloc_report) {
+    uint64_t live = config_u32(&alloc_counting) != 0u ? ceesafe_atomic_load_u64(&alloc_live) : 0u;
+    if (config_u32(&alloc_report) != 0u) {
         write_err_cstr("ceesafe alloc: attempts=");
         write_err_u64(ceesafe_atomic_load_u64(&alloc_attempts));
         write_err_cstr(" live=");

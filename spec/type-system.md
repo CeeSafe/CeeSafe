@@ -291,7 +291,8 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   is a constant view: `a`'s bytes, then `b`'s. `A + B + C` folds left to right, and a constant of another package
   (`dep.PREFIX`) is a constant view like any. With a `c"…"` (or a `CStr` constant) as the right operand, the result is
   a `CStr<static>` whose text is `a`'s then the literal's: a NUL byte in `a` is N0006 at the `+`, as inside a `c"…"`.
-  A `CStr` on the left is N0207. An operand that is not constant is N0217 in a constant and N0338 in a static.
+  A `CStr` on the left is N0207. An operand that is not constant is N0217 in a constant and N0338 in a static, and
+  so is a `+` whose result is longer than 16 MiB (16,777,216 bytes), `embed`'s limit (§10.1).
   Anywhere else, `+` on views stays N0207: text is joined at run time by appending to a `String`.
 - `@export` on a constant makes it C data (§28.4).
 - **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
@@ -322,12 +323,26 @@ item of the same name shadows.
 - **Where it may lead.** The compiler resolves the path fully, every symbolic link and `..`, as the system does
   (`realpath`; on Windows the final path of the opened file), and compares the result byte for byte with the real
   paths of its package's directory (the one holding `ceesafe.toml`) and of each of its `[embed] roots` (`tooling.md`
-  §4.1; a git or registry dependency's roots count only inside its own directory). It must be one of them or below
-  one: a symbolic link is followed only when where it leads is inside. A file given on the command line or to a server
-  outside a package embeds only below its own directory. A path whose real path is outside these, that does not exist,
-  that is a directory or anything but a regular file, or that names a file of more than 16 MiB (16,777,216 bytes), is
-  N0362 at the path. A source with no file on disk (the MCP server's `files`, a library's sources) embeds nothing
-  (N0362).
+  §4.1). It must be one of them or below one: a symbolic link is followed only when where it leads is inside. A file
+  given on the command line or to a server outside a package embeds only below its own directory.
+  - **Code the user does not work on is confined.** A git or registry dependency, every package reached through one
+    (its path dependencies, at any depth), and every package whose directory lies in the package cache
+    (`$CEESAFE_HOME`, `tooling.md` §4.3), even as the root package (the language server going to a definition in a
+    checkout, or `check` run there), embeds only inside that checkout: its roots, its own directory included, count
+    only where their real paths lie inside it.
+  - **The file read is the file checked.** The compiler opens the path first, without waiting (a FIFO cannot hang a
+    check) and without taking a terminal, then checks the open file: its own real path (`F_GETPATH` on macOS,
+    `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW` on Windows) against the directories above, and that it is a
+    regular file; then it reads at most 16 MiB + 1 bytes from it. A symbolic link swapped in between the checks and
+    the read changes nothing.
+  - **N0362 at the path** for: a path that names no file or leads outside these directories, with one message for
+    both that names the path only as written (neither whether a file exists outside nor where a link leads is
+    told); a directory, or anything but a regular file; a file of more than 16 MiB (16,777,216 bytes). A source with
+    no file on disk (the MCP server's `files`, a library's sources) embeds nothing (N0362).
+  - **Hard links are not detected.** A hard link inside the package to a file outside it is a name of that file
+    inside the package, and its real path is inside: it is read. Making one needs write access to the package's
+    directory and to the file, on the same volume; a package fetched by git or from the registry holds none (git
+    stores no hard links).
 - **Letter case.** Real paths are compared byte for byte. On a file system that ignores case, a spelling that names
   the file but differs in case from the directory's real path is refused (it may be outside), never wrongly accepted;
   macOS and Windows give the real path in the stored case, so a package is unaffected unless it spells its own

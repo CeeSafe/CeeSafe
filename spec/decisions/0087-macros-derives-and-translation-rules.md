@@ -432,29 +432,56 @@ Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-sys
 - **Constant `+`.** It folds in the checker, where the operands are already literals: a string literal, a constant
   (another package's too), an `embedText`, a `c"…"` or `CStr` constant on the right, or another `+`. A `CStr` on the
   left, or two `c"…"`, is N0207; an operand that is not constant is N0217 in a constant and N0338 in a static. The
-  N0207 for `+` on views elsewhere now says where it works.
+  N0207 for `+` on views elsewhere now says where it works. A result longer than 16 MiB, `embed`'s limit, is N0217
+  (N0338 in a static), with a message that says so: without a limit, a chain of constants that each double the one
+  before took gigabytes. No code fitted better: N0217 already covers a constant evaluation that cannot be made.
 - **Where `embed` may stand.** Anywhere an expression may, not only in a constant or a static: its value is static
   data like a literal's. A constant and a non-`mut` static may have the type `Slice<u8>` for it (a `static mut` may
   not: N0337); nothing else gives that type a constant value. The path is a string literal or a constant view.
 - **Paths.** Besides §2.8's rules: `\` is refused on every system (a separator on Windows, a name's character
   elsewhere: the same files must give the same program), and so are `:` (a drive, an NTFS stream), `$` and `%`
   (nothing is expanded, so they would name a literal directory, which is surely a mistake) and a leading `~`.
-- **Resolution.** The system's `realpath` (on Windows, `GetFinalPathNameByHandleA` on the opened path, every symbolic
-  link and junction resolved), then a byte-for-byte prefix comparison with the real paths of the package's directory
-  and its roots. Byte comparison may refuse a spelling that a case-insensitive file system would accept, never accept
-  one outside. The file must be a regular file (a FIFO would block `check`), of at most **16 MiB**: Bun's largest is
-  339 kB, and a file is C text about five times its size. A file given alone (no package: the command line, the
-  language server's lone document, the MCP server's `paths`) embeds only below its own directory; a source with no
-  file (the MCP server's `files`, the libraries) embeds nothing.
+- **Resolution.** The system's `realpath` (on Windows, `GetFinalPathNameByHandleW` on the opened path, every
+  symbolic link and junction resolved), then a byte-for-byte prefix comparison with the real paths of the package's
+  directory and its roots. Byte comparison may refuse a spelling that a case-insensitive file system would accept,
+  never accept one outside. The file must be a regular file (a FIFO would block `check`), of at most **16 MiB**: Bun's
+  largest is 339 kB, and a file is C text about five times its size. A file given alone (no package: the command
+  line, the language server's lone document, the MCP server's `paths`) embeds only below its own directory; a source
+  with no file (the MCP server's `files`, the libraries) embeds nothing.
+- **The file read is the file checked** (the review found a race: a symbolic link swapped in between the check of
+  the path and the opening of the real path it gave leaked a file outside in 28 runs of 300, and a FIFO swapped in
+  hung `check`). The path is checked by its real path first, so that nothing outside is opened while nothing races;
+  then it is opened with `O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC`, and the open descriptor is checked: its own
+  path (`fcntl(F_GETPATH)` on macOS, `readlink("/proc/self/fd/N")` on Linux, a removed file's `… (deleted)` refused)
+  against the same directories, and its kind (`stat` of `/dev/fd/N` or `/proc/self/fd/N`, which describe the open
+  file); its bytes are read from it with `pread`, stopping at 16 MiB + 1 however the file grows. Measured after the
+  change: no leak in 400 runs on macOS and 300 on Linux, and no hang with a FIFO swapped in.
+- **One message for missing and outside.** A path that names no file and one that leads outside get the same N0362
+  message, which names the path as written: telling them apart, or printing the real path, told whether a file
+  exists outside the package and where a symbolic link leads.
 - **How the compiler resolves.** The compiler's sources must still build with ceesafec 0.8.0, whose library has no
-  real-path service, so `src/host/embedding.cee` declares libc's `realpath` in an `extern "C"` block. Windows has no
-  `realpath`: the runtime's `rt.h` maps the name to `ceesafe_win_realpath`, which the hosted runtime defines there,
-  so the compiler builds on Windows from its seed. A program may use the same declaration.
+  real-path service and no `File.openRegular` (ADR 0078), and whose runtime cannot gain one, so
+  `src/host/embedding.cee` declares the POSIX calls in an `extern "C"` block: `realpath`, `uname` (to tell macOS
+  from Linux, whose flag values differ), `openat` and `fcntl` (variadic, as C declares them: ADR 0041 §3.3), `readlink`,
+  `pread` and `close`. Windows has none of them but `close`: the runtime's `rt.h` maps each name to the hosted
+  runtime's own (`ceesafe_win_realpath`, `_uname`, `_openat`, `_fcntl` for `F_GETPATH` only, `_readlink`, which fails,
+  and `_pread`), which take UTF-8 paths through the wide calls (`MultiByteToWideChar`, `CreateFileW`,
+  `GetFinalPathNameByHandleW`, `WideCharToMultiByte`), never the ANSI code page's; its `openat` opens only a regular
+  file on a disk (`GetFileType`, the directory attribute). So the compiler builds on Windows from its seed. A program
+  may use the same declarations. Another system is refused (N0362: ceesafec embeds only on Linux, macOS and Windows).
 - **Roots.** Relative to the package, under the path rules (N0321 otherwise). They are resolved when a file is
   embedded: a root that is a symbolic link stands for its target, and one that does not exist yet (a build's
-  generated directory) reaches nothing. Only the root package and path dependencies, whose manifests the user writes,
-  may have roots outside their directory; a git or registry dependency's root counts only if its real path is inside
-  the checkout, so a symbolic link committed in a dependency cannot reach the user's files.
+  generated directory) reaches nothing. Only the root package and the path dependencies it reaches through path
+  dependencies alone, whose manifests the user writes, may have roots outside their directory. A git or registry
+  dependency, and every package reached through one, at any depth, is confined to that checkout: a root, its own
+  directory included, counts only if its real path is inside it, so neither a symbolic link committed in a
+  dependency nor a path dependency it names (`inner = { path = "inner" }` whose roots climb out, which the review
+  found) reaches the user's files. A package reached both ways is the user's. A package whose directory lies in the
+  package cache (`$CEESAFE_HOME`, by real path) is confined to its own directory even as the root package, so the
+  language server going to a definition in a checkout, or `check` run inside it, honours no root the build did not.
+- **Hard links** cannot be detected: a hard link inside the package to a file outside has a real path inside, and is
+  read. Making one needs write access to the package's directory and to the file, on the same volume, and git (so the
+  registry) stores none: a fetched package holds no hard link.
 - **When files are read.** By every command that checks, the language server and the MCP server included; once per
   compilation by real path, so every use agrees; nothing is kept between compilations, so a file changed after
   `check` is what `build` compiles. ADR 0082's object cache and interface records are not implemented yet (stages C
@@ -466,6 +493,3 @@ Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-sys
   interpreter needed nothing: it runs the NIR, which holds the bytes. A static `c"…"` over 4,095 bytes was a C
   literal before; it is an array now too.
 - **Not done.** The language server does not watch embedded files (a change shows at the next check of the document).
-  Between resolving a path and opening it, a file inside the package could be replaced (by a FIFO, or a link): only
-  someone who can already write the package's files could, and the compiler's sources cannot use `File.openRegular`
-  (ADR 0078) while they build with 0.8.0.

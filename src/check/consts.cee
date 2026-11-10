@@ -470,6 +470,17 @@ fn constantConcatenation(c: borrow mut Checker, left: u32, right: u32, span: Spa
         c.error(code, at.start, at.end, message)?;
         return c.errorResult(span.start, span.end);
     }
+    if (leftText.count as usize + rightText.count as usize > embedLimit()) {
+        // A chain of `+` that doubles a constant would otherwise take gigabytes: the limit is `embed`'s.
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "this '+' makes a view longer than 16 MiB (16,777,216 bytes), the most a constant joined when the program is compiled holds, as for 'embed' (ADR 0087 §2.7)",
+        )?;
+        let code = if (c.inConstantInitializer) notConstant() else notStaticInitializer();
+        c.error(code, span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     var bytes = copyBytes(c.hir.textOf(leftText))?;
     if (cRight) {
         for (b in bytes.view()) {

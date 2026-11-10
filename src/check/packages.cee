@@ -427,15 +427,17 @@ fn packageNameReused() -> u32 => 315;
 
 /// A package of the build as the checker takes it (PackageInfo): its name, its dependencies' names, `trusted`; and
 /// where its files may embed from (ADR 0087 §2.8): its directory and its `[embed] roots`, absolute, both empty for
-/// files given alone (each then embeds from its own directory), and whether a root may lie outside the directory
-/// (`embedOutside`: the root package and path dependencies, not a git or registry checkout).
+/// files given alone (each then embeds from its own directory), and `embedBoundary`: empty when the roots may lie
+/// anywhere (the root package and the path dependencies it reaches through path dependencies only, unless one lies in
+/// the package cache), else the directory every root, the package's own included, must lie inside (a git or registry
+/// checkout, the checkout a package was reached through, or the package's own directory in the package cache).
 struct PackageInfo {
     name: Vector<u8>;
     dependencies: Vector<Vector<u8>>;
     trusted: bool;
     directory: Vector<u8>;
     embedRoots: Vector<Vector<u8>>;
-    embedOutside: bool;
+    embedBoundary: Vector<u8>;
 }
 
 /// The one package of files given alone, unnamed.
@@ -445,7 +447,7 @@ fn loosePackage() -> PackageInfo => PackageInfo {
     trusted: false,
     directory: Vector<u8>.create(),
     embedRoots: Vector<Vector<u8>>.create(),
-    embedOutside: false,
+    embedBoundary: Vector<u8>.create(),
 };
 
 /// Where each AST arena stood before a file was parsed: the file's nodes are the ones after (PackageNames.Rewrite

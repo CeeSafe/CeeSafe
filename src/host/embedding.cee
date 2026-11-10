@@ -8,14 +8,59 @@
 // - it must be a regular file of at most embedLimit() bytes.
 // Real paths are compared byte for byte: a spelling the file system would match without regard to letter case, but
 // that its real path does not repeat, is outside (refused, never wrongly accepted).
+//
+// The checks are made on the file that is read, not on a path that names it (readEmbedded): the file is opened
+// first, without waiting (a FIFO cannot hang the check) and without becoming a controlling terminal; then the open
+// descriptor's own path and kind are checked; then the bytes are read from that descriptor, at most embedLimit() + 1
+// of them. A symbolic link swapped in after a check therefore changes nothing. A path that is missing and one that
+// leads outside get the same diagnostic, which names the path only as written: neither whether a file exists outside
+// nor where a link leads is told. A hard link inside the package to a file outside cannot be told from the file's own
+// name, so it is read (type-system.md §10.1).
 
 /// The largest file `embed` and `embedText` read: 16 MiB (ADR 0087 §9).
 fn embedLimit() -> usize => 16777216;
 
 extern "C" {
     // POSIX's realpath(3). On Windows, the runtime's rt.h names its own implementation (ceesafe_win_realpath, over
-    // GetFinalPathNameByHandleA), with the same contract: `resolved` holds at least 4,096 bytes.
+    // GetFinalPathNameByHandleW), with the same contract: `resolved` holds at least 4,096 bytes.
     fn realpath(path: *CChar, resolved: *mut CChar) -> *mut CChar;
+    // The descriptor's checks (readEmbedded): POSIX's calls, which ceesafec 0.8.0's runtime lets the compiler's own
+    // sources use. On Windows, rt.h names the runtime's own uname, openat, fcntl (F_GETPATH only), readlink and pread
+    // (ceesafe_win_*), over the wide calls: CreateFileW, GetFileType and GetFinalPathNameByHandleW.
+    fn uname(name: *mut u8) -> i32;
+    fn openat(directory: i32, path: *CChar, flags: i32, ...) -> i32;
+    fn fcntl(fd: i32, command: i32, ...) -> i32;
+    fn readlink(path: *CChar, buffer: *mut CChar, size: usize) -> isize;
+    fn pread(fd: i32, buffer: *mut u8, size: usize, offset: i64) -> isize;
+    fn close(fd: i32) -> i32;
+}
+
+/// The system ceesafec runs on, by the name uname(3) gives it: 1 macOS, 2 Linux, 3 Windows (rt.h's ceesafe_win_uname
+/// names it so), 0 another, on which nothing is embedded.
+/// Safety: uname writes a struct utsname, whose first member is the system's name, ending in NUL; no system's is
+/// larger than the 2,048 bytes given (1,280 on macOS, 390 on Linux, 8 written on Windows), and it writes during the
+/// call only.
+fn hostSystem() -> u32 {
+    var name = [0u8; 2048];
+    let failed = unsafe { uname(borrow mut name[0] as *mut u8) };
+    if (failed != 0) {
+        return 0;
+    }
+    var length: usize = 0;
+    while (length < 2048 && name[length] != 0) {
+        length += 1;
+    }
+    let system = name[..length];
+    if (sameBytes(system, "Darwin".bytes())) {
+        return 1;
+    }
+    if (sameBytes(system, "Linux".bytes())) {
+        return 2;
+    }
+    if (sameBytes(system, "Windows".bytes())) {
+        return 3;
+    }
+    return 0;
 }
 
 /// Why `written`, an embed path, is refused before any file is looked at; empty when it is not.
@@ -46,11 +91,8 @@ fn embedPathProblem(written: Slice<u8>) -> StringView {
     return "";
 }
 
-/// The real path of `path`, absolute and with `/` separators: every symbolic link, `.` and `..` resolved by the
-/// system; null when nothing is there or it cannot be resolved.
-/// Safety: `input` ends in the NUL pushed here and holds no other; `realpath` writes at most PATH_MAX bytes (4,096 on
-/// Linux, 1,024 on macOS; the Windows runtime's at most 4,096) into `buffer`, which has 4,096, and only during the call.
-fn realPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+/// `path` followed by a NUL, for C; null if it is empty, holds a NUL or is too long for any system's paths.
+fn cPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
     if (path.length == 0 || path.length >= 4096) {
         return Ok(null);
     }
@@ -62,18 +104,17 @@ fn realPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
         input.push(b)?;
     }
     input.push(0)?;
-    var buffer = [0u8; 4096];
-    let resolved = unsafe { realpath(borrow input[0] as *u8 as *CChar, borrow mut buffer[0] as *mut u8 as *mut CChar) };
-    if (resolved == 0 as *mut u8 as *mut CChar) {
-        return Ok(null);
-    }
+    return Ok(input);
+}
+
+/// The path C wrote into `buffer`, up to its NUL, with `/` separators: Windows gives `C:\x` or `\\server\share\x`,
+/// where `/` separates too. A POSIX path starts with `/`, and a `\` in it is part of a name, so it is kept.
+fn slashedResult(buffer: Slice<u8>) -> Result<Vector<u8>, AllocError> {
     var length: usize = 0;
-    while (length < 4096 && buffer[length] != 0) {
+    while (length < buffer.length && buffer[length] != 0) {
         length += 1;
     }
     var out = copyBytes(buffer[..length])?;
-    // Windows gives `C:\x` or `\\server\share\x`: `/` separates there too. A POSIX real path starts with `/`, and a
-    // `\` in it is part of a name, so it is kept.
     if (hasDrive(out.view()) || (out.length >= 2 && out[0] == '\\' && out[1] == '\\')) {
         for (k in 0..out.length) {
             if (out[k] == '\\') {
@@ -81,6 +122,24 @@ fn realPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
             }
         }
     }
+    return Ok(out);
+}
+
+/// The real path of `path`, absolute and with `/` separators: every symbolic link, `.` and `..` resolved by the
+/// system; null when nothing is there or it cannot be resolved.
+/// Safety: `input` ends in the NUL cPath pushed and holds no other; `realpath` writes at most PATH_MAX bytes (4,096 on
+/// Linux, 1,024 on macOS; the Windows runtime's at most 4,096) into `buffer`, which has 4,096, and only during the call.
+fn realPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    let input = match (cPath(path)?) {
+        Some(p) => p,
+        null => { return Ok(null); }
+    };
+    var buffer = [0u8; 4096];
+    let resolved = unsafe { realpath(borrow input[0] as *u8 as *CChar, borrow mut buffer[0] as *mut u8 as *mut CChar) };
+    if (resolved == 0 as *mut u8 as *mut CChar) {
+        return Ok(null);
+    }
+    let out = slashedResult(buffer[..])?;
     return Ok(out);
 }
 
@@ -96,6 +155,27 @@ fn realPathWithin(path: Slice<u8>, directory: Slice<u8>) -> bool {
     return path.length == base || path[base] == '/' || directory[base - 1] == '/';
 }
 
+/// Whether `path` (absolute) lies in the package cache, `$CEESAFE_HOME` or `~/.ceesafe`, which holds every git and
+/// registry checkout (tooling.md §4.3): by its real path, or as written when either cannot be resolved.
+fn inPackageCache(path: Slice<u8>) -> Result<bool, AllocError> {
+    let home = defaultHome()?;
+    if (home.length == 0) {
+        return Ok(false);
+    }
+    let realHome = realPath(home.view())?;
+    let realDirectory = realPath(path)?;
+    if (realHome != null && realDirectory != null) {
+        let h = realHome!;
+        let d = realDirectory!;
+        if (realPathWithin(d.view(), h.view())) {
+            return Ok(true);
+        }
+    }
+    let homeWritten = joinPath("/".bytes(), home.view())?;
+    let pathWritten = joinPath("/".bytes(), path)?;
+    return Ok(isRooted(home.view()) && realPathWithin(pathWritten.view(), homeWritten.view()));
+}
+
 /// What reading an embedded file found: its bytes and real path, or why it cannot be embedded (`problem`).
 struct EmbeddedRead {
     bytes: Vector<u8>;
@@ -105,6 +185,14 @@ struct EmbeddedRead {
 
 fn embedFailure(why: Slice<u8>) -> Result<EmbeddedRead, AllocError> => Ok(
     EmbeddedRead { bytes: Vector<u8>.create(), real: Vector<u8>.create(), problem: copyBytes(why)? },
+);
+
+/// The one answer for a path that names no file and for one that leads outside what may be read (S4 of the review of
+/// ADR 0087 step 2): the two are not told apart, and nothing resolved is named.
+fn missingOrOutside(alone: bool, confined: bool) -> Result<EmbeddedRead, AllocError> => embedFailure(
+    (if (alone) "no file is there, or it is outside the source file's directory (a file given alone embeds only below it)"
+        else if (confined) "no file is there, or it is outside the package's directory (a git or registry package, and every package reached through one or kept in the package cache, embeds only from itself)"
+        else "no file is there, or it is outside the package's directory and its [embed] roots").bytes(),
 );
 
 /// The directory a source file at `source` (absolute, `/`-separated) lies in.
@@ -119,17 +207,97 @@ fn sourceDirectory(source: Slice<u8>) -> Result<Vector<u8>, AllocError> {
     return copyBytes(source[..end]);
 }
 
+/// The descriptor `fd`'s own path, with `/` separators, as the system knows it now (null if it cannot say): F_GETPATH
+/// on macOS, /proc/self/fd on Linux, GetFinalPathNameByHandleW on Windows (rt.h's fcntl). It follows what the
+/// descriptor is open on, whatever its name is now.
+/// Safety: F_GETPATH writes at most MAXPATHLEN (1,024) bytes on macOS, and the Windows runtime's at most 4,096, into
+/// `buffer`, which has 4,096; readlink at most the 4,095 given, and `link` ends in NUL; all during the call only.
+fn descriptorPath(system: u32, fd: i32) -> Result<Vector<u8>?, AllocError> {
+    var buffer = [0u8; 4096];
+    if (system == 1 || system == 3) {
+        let got = unsafe { fcntl(fd, 50, borrow mut buffer[0] as *mut u8 as *mut CChar) }; // F_GETPATH
+        if (got == -1) {
+            return Ok(null);
+        }
+        let out = slashedResult(buffer[..])?;
+        return Ok(out);
+    }
+    var link = copyBytes("/proc/self/fd/".bytes())?;
+    appendDecimal(mut link, truncate<u64>(fd))?;
+    link.push(0)?;
+    let length = unsafe { readlink(
+        borrow link[0] as *u8 as *CChar,
+        borrow mut buffer[0] as *mut u8 as *mut CChar,
+        4095,
+    ) };
+    if (length <= 0 || length >= 4095) {
+        return Ok(null);
+    }
+    let path = copyBytes(buffer[..truncate<usize>(length)])?;
+    // A file removed since it was opened, which Linux names `<old path> (deleted)`: not a name to trust.
+    let deleted = " (deleted)".bytes();
+    if (path.length >= deleted.length && sameBytes(path[(path.length - deleted.length)..], deleted)) {
+        return Ok(null);
+    }
+    return Ok(path);
+}
+
+/// What the open descriptor `fd` is: 1 a regular file, 2 a directory, 3 anything else, 0 unknown. On macOS and Linux,
+/// stat(2) of /dev/fd/N or /proc/self/fd/N, which describe the open file itself; on Windows the runtime's openat
+/// opened nothing but a regular file.
+fn descriptorKind(system: u32, fd: i32) -> Result<u32, AllocError> {
+    if (system == 3) {
+        return Ok(1);
+    }
+    var path = copyBytes((if (system == 1) "/dev/fd/" else "/proc/self/fd/").bytes())?;
+    appendDecimal(mut path, truncate<u64>(fd))?;
+    let text = StringView.fromUtf8(path.view())!;
+    return match (File.kind(text)) {
+        Ok(Some(PathKind.File)) => Ok(1),
+        Ok(Some(PathKind.Directory)) => Ok(2),
+        Ok(Some(_)) => Ok(3),
+        _ => Ok(0),
+    };
+}
+
+/// The bytes of the open regular file `fd`, at most embedLimit() + 1 of them, from its start: more than embedLimit()
+/// means too large, whatever its length was when checked. Null if reading fails.
+/// Safety: pread writes at most the 65,536 bytes asked into `buffer`, which has them, during the call only.
+fn descriptorBytes(fd: i32) -> Result<Vector<u8>?, AllocError> {
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 65536];
+    loop {
+        let n = unsafe { pread(fd, borrow mut buffer[0] as *mut u8, 65536, truncate<i64>(bytes.length)) };
+        if (n < 0) {
+            return Ok(null);
+        }
+        if (n == 0) {
+            break;
+        }
+        let count = truncate<usize>(n);
+        let room = embedLimit() + 1 - bytes.length;
+        appendBytes(mut bytes, buffer[..(if (count < room) count else room)])?;
+        if (bytes.length > embedLimit()) {
+            break;
+        }
+    }
+    return Ok(bytes);
+}
+
 /// The file `written` names for an `embed` in the source file at `source` (absolute; empty when the source is not a
-/// file on disk), which may read inside `roots` (absolute directories: its package's first, then its `[embed] roots`;
-/// empty for a file outside package mode, which may read inside its own directory): its real path, or why it cannot
-/// be embedded. Unless `rootsOutside` (the root package and path dependencies), a root counts only when its real path
-/// is inside the package's: a git or registry checkout reaches nothing outside itself, through a symbolic link it
-/// holds either. Nothing is read yet (readEmbeddedBytes).
-fn resolveEmbedded(
+/// file on disk): its bytes and real path, or why it cannot be embedded. It may be read inside `roots` (absolute
+/// directories: its package's first, then its `[embed] roots`; empty for a file outside package mode, which may read
+/// inside its own directory). Unless `boundary` is empty (the root package and its path dependencies, code the user
+/// works on), a root counts only when its real path is inside the boundary's (a git or registry checkout, or a
+/// package in the package cache): such a package reaches nothing outside its checkout, through a symbolic link it
+/// holds either.
+/// Safety: `path` ends in the NUL cPath pushed and holds no other, and openat reads it during the call only; the
+/// descriptor it opens is closed here, once, after checkAndRead's last use of it.
+fn readEmbedded(
     source: Slice<u8>,
     written: Slice<u8>,
     roots: borrow Vector<Vector<u8>>,
-    rootsOutside: bool,
+    boundary: Slice<u8>,
 ) -> Result<EmbeddedRead, AllocError> {
     let lexical = embedPathProblem(written);
     if (lexical.length > 0) {
@@ -140,94 +308,105 @@ fn resolveEmbedded(
             "the source file is not a file on disk, and an embed path is relative to the file that names it".bytes(),
         );
     }
+    let alone = roots.length == 0;
+    let confined = boundary.length > 0;
     let directory = sourceDirectory(source)?;
-    // The path as written after the directory, not normalised here: the system resolves each `..` after the
-    // symbolic link before it, as opening the file would.
-    var candidate = copyBytes(directory.view())?;
-    if (candidate.length == 0 || candidate[candidate.length - 1] != '/') {
-        candidate.push('/')?;
-    }
-    appendBytes(mut candidate, written)?;
-    let found = realPath(candidate.view())?;
-    if (found == null) {
-        return embedFailure("no file is there".bytes());
-    }
-    let real = found!;
     var allowed = Vector<Vector<u8>>.create();
-    if (roots.length == 0) {
+    if (alone) {
         let itself = realPath(directory.view())?;
         if (itself != null) {
             allowed.push(itself!)?;
         }
     } else {
+        var limit = Vector<u8>.create();
+        if (confined) {
+            match (realPath(boundary)?) {
+                Some(b) => { limit = b; }
+                null => { return missingOrOutside(alone, confined); }
+            }
+        }
         for (k in 0..roots.length) {
             let resolved = realPath(roots[k].view())?;
             if (resolved != null) {
                 let rootDirectory = resolved!;
-                let inPackage = allowed.length > 0 && realPathWithin(rootDirectory.view(), allowed[0].view());
-                if (k == 0 || rootsOutside || inPackage) {
+                if (!confined || realPathWithin(rootDirectory.view(), limit.view())) {
                     allowed.push(rootDirectory)?;
                 }
             }
         }
     }
+    // The path as written after the directory, not normalised here: the system resolves each `..` after the
+    // symbolic link before it, as opening the file does.
+    var candidate = copyBytes(directory.view())?;
+    if (candidate.length == 0 || candidate[candidate.length - 1] != '/') {
+        candidate.push('/')?;
+    }
+    appendBytes(mut candidate, written)?;
+    // First by its name, so that nothing outside is even opened while nothing races; then the open file itself.
+    let named = match (realPath(candidate.view())?) {
+        Some(r) => r,
+        null => { return missingOrOutside(alone, confined); }
+    };
+    var namedInside = false;
+    for (a in allowed.view()) {
+        namedInside = namedInside || realPathWithin(named.view(), a.view());
+    }
+    if (!namedInside) {
+        return missingOrOutside(alone, confined);
+    }
+    let system = hostSystem();
+    if (system == 0) {
+        return embedFailure("ceesafec embeds files only on Linux, macOS and Windows".bytes());
+    }
+    let path = match (cPath(candidate.view())?) {
+        Some(p) => p,
+        null => { return missingOrOutside(alone, confined); }
+    };
+    // O_RDONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC, and AT_FDCWD (the path is absolute, so it is not used): macOS's
+    // values, then Linux's (the same on every architecture ceesafec is released for); Windows's openat takes none.
+    let flags: i32 = if (system == 1) 0x1020004 else if (system == 2) 0x80900 else 0;
+    let here: i32 = if (system == 1) -2 else -100;
+    let fd = unsafe { openat(here, borrow path[0] as *u8 as *CChar, flags) };
+    if (fd < 0) {
+        return missingOrOutside(alone, confined);
+    }
+    let result = checkAndRead(system, fd, borrow allowed, alone, confined)?;
+    unsafe { close(fd); }
+    return Ok(result);
+}
+
+/// readEmbedded's checks of the open descriptor `fd`, and its bytes once they pass.
+fn checkAndRead(
+    system: u32,
+    fd: i32,
+    allowed: borrow Vector<Vector<u8>>,
+    alone: bool,
+    confined: bool,
+) -> Result<EmbeddedRead, AllocError> {
+    let real = match (descriptorPath(system, fd)?) {
+        Some(r) => r,
+        null => { return missingOrOutside(alone, confined); }
+    };
     var inside = false;
     for (a in allowed.view()) {
         inside = inside || realPathWithin(real.view(), a.view());
     }
     if (!inside) {
-        var message = Vector<u8>.create();
-        appendText(mut message, "it is '")?;
-        appendBytes(mut message, real.view())?;
-        appendText(
-            mut message,
-            if (roots.length == 0) "', outside the source file's directory (a file given alone embeds only below it)"
-                else if (rootsOutside) "', outside the package's directory and its [embed] roots"
-                else "', outside the package's directory and its [embed] roots inside it (a git or registry package embeds only from itself)",
-        )?;
-        return embedFailure(message.view());
+        return missingOrOutside(alone, confined);
     }
-    let text = match (StringView.fromUtf8(real.view())) {
-        Some(t) => t,
-        null => { return embedFailure("its real path is not UTF-8".bytes()); }
-    };
-    let kind = match (File.kind(text)) {
-        Ok(k) => k,
-        Err(_) => { return embedFailure("it cannot be read".bytes()); }
-    };
-    match (kind) {
-        Some(PathKind.File) => {}
-        Some(PathKind.Directory) => { return embedFailure("it is a directory".bytes()); }
-        Some(_) => { return embedFailure("it is not a regular file".bytes()); }
-        null => { return embedFailure("no file is there".bytes()); }
+    let kind = descriptorKind(system, fd)?;
+    if (kind == 2) {
+        return embedFailure("it is a directory".bytes());
     }
-    return Ok(EmbeddedRead { bytes: Vector<u8>.create(), real: real, problem: Vector<u8>.create() });
-}
-
-/// The bytes of the file at the real path `real` (resolveEmbedded's), at most embedLimit() of them; or why not.
-fn readEmbeddedBytes(real: Slice<u8>) -> Result<EmbeddedRead, AllocError> {
-    let text = match (StringView.fromUtf8(real)) {
-        Some(t) => t,
-        null => { return embedFailure("its real path is not UTF-8".bytes()); }
-    };
-    var file = match (File.open(text)) {
-        Ok(f) => f,
-        Err(_) => { return embedFailure("it cannot be read".bytes()); }
-    };
-    var bytes = Vector<u8>.create();
-    var buffer = [0u8; 65536];
-    loop {
-        let n = match (file.read(mut buffer[..])) {
-            Ok(n) => n,
-            Err(_) => { return embedFailure("it cannot be read".bytes()); }
-        };
-        if (n == 0) {
-            break;
-        }
-        if (bytes.length + n > embedLimit()) {
-            return embedFailure("it is larger than 16 MiB (16,777,216 bytes), the most a program embeds".bytes());
-        }
-        appendBytes(mut bytes, buffer[..n])?;
+    if (kind != 1) {
+        return embedFailure("it is not a regular file".bytes());
     }
-    return Ok(EmbeddedRead { bytes: bytes, real: copyBytes(real)?, problem: Vector<u8>.create() });
+    let bytes = match (descriptorBytes(fd)?) {
+        Some(b) => b,
+        null => { return embedFailure("it cannot be read".bytes()); }
+    };
+    if (bytes.length > embedLimit()) {
+        return embedFailure("it is larger than 16 MiB (16,777,216 bytes), the most a program embeds".bytes());
+    }
+    return Ok(EmbeddedRead { bytes: bytes, real: real, problem: Vector<u8>.create() });
 }

@@ -259,9 +259,13 @@ directory (the one holding `ceesafe.toml`), and inside each directory `[embed] r
   (yet: a build's generated directory) reaches nothing, and an `embed` below it is N0362 until it does.
 - A root is its real path: every symbolic link in it is followed, so a root that is a symbolic link stands for the
   directory it leads to.
-- **Only the root package and path dependencies may have roots outside their directory.** They are code the user works
-  on, whose manifest the user wrote. A git or registry dependency's root counts only when its real path is inside the
-  dependency's own: a checkout reaches nothing outside itself, through `..` or through a symbolic link it holds.
+- **Only the root package and the path dependencies it reaches through path dependencies alone may have roots
+  outside their directory.** They are code the user works on, whose manifests the user wrote. A git or registry
+  dependency, and every package reached through one (its path dependencies, at any depth), embeds only inside that
+  checkout: a root counts only when its real path is inside it, so a checkout reaches nothing outside itself, through
+  `..`, through a symbolic link it holds, or through a path dependency it names. So does a package whose directory
+  lies in the package cache (`$CEESAFE_HOME`, §4.3), even as the root package: the language server going to a
+  definition in a checkout, or `check` run there, gives it no more than the build that fetched it.
 
 
 From the package being built, every dependency is resolved, and then its dependencies, recursively:

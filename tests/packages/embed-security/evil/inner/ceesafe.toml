@@ -1,0 +1,6 @@
+[package]
+name = "inner"
+kind = "library"
+
+[embed]
+roots = ["../../../../../.."]

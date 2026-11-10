@@ -91,7 +91,7 @@ Semantic checks run only when every file parsed without errors.
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
 | N0215 | `return` with or without a value contradicts the return type, or `return` in a `never` function | `return 1;` in a `void` function |
 | N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11) | `truncate<i32, u8>(x)` |
-| N0217 | Not a constant expression, or constant evaluation would panic | `const C: u8 = 200 + 100;` |
+| N0217 | Not a constant expression, or constant evaluation would panic, or a constant `+` of views longer than 16 MiB (ADR 0087 §2.7) | `const C: u8 = 200 + 100;` |
 | N0218 | Constant depends on itself | `const A: i32 = A + 1;` |
 | N0219 | Invalid `main` signature | `fn main(args: i32)` |
 | N0220 | `let` without initializer | `let a: i32;` |
@@ -315,7 +315,7 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0359 | An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8) | `if (!(x is Some(n))) { … }` |
 | N0360 | A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), a `break` or `continue` out of the arguments, a process exit, or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5) | `debugAssert(events.next() != null)` with `events` declared before the call |
 | N0361 | An `embedText` file whose bytes are not UTF-8 (`type-system.md` §10.1, ADR 0087 §2.8) | `embedText("logo.png")` |
-| N0362 | An `embed` or `embedText` path that cannot be embedded: not a string literal or constant view; empty, absolute, or holding `\`, `:`, `$`, `%` or a leading `~`; no file there; a directory or not a regular file; a real path (every symbolic link resolved) outside the package's directory and its `[embed] roots`; larger than 16 MiB; or a source with no file on disk (`type-system.md` §10.1, ADR 0087 §2.8) | `embed("../../.ssh/id_ed25519")` |
+| N0362 | An `embed` or `embedText` path that cannot be embedded: not a string literal or constant view; empty, absolute, or holding `\`, `:`, `$`, `%` or a leading `~`; no file there, or a real path (every symbolic link resolved, of the file opened) outside the package's directory and its `[embed] roots`, which one message names without telling the two apart; a directory or not a regular file; larger than 16 MiB; or a source with no file on disk (`type-system.md` §10.1, ADR 0087 §2.8) | `embed("../../.ssh/id_ed25519")` |
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 
 ### Warnings (N0400–N0499)

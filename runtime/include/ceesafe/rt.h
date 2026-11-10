@@ -1224,12 +1224,27 @@ int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *sec
 int64_t ceesafe_host_file_modified(void const *file, int64_t *seconds, uint32_t *nanoseconds);
 int64_t ceesafe_host_file_kind(void const *file);
 #if defined(_WIN32)
-/* realpath(3), which Windows lacks (ADR 0087 §2.8, for ceesafec's `embed`): the final path of the file or directory at
- * `path` (every symbolic link and junction resolved, GetFinalPathNameByHandleA), as `C:\dir\name` or
- * `\\server\share\name`, into `resolved`, which holds at least 4,096 bytes; NULL if it cannot be opened or the result
- * does not fit. C code that declares `realpath`, as an `extern "C"` block does, calls this one. */
+/* realpath(3) and the descriptor calls ceesafec's `embed` makes (ADR 0087 §2.8), which Windows lacks; C code that
+ * declares them, as an `extern "C"` block does, calls these, which take UTF-8 paths (the wide calls underneath):
+ * - realpath: the final path of the file or directory at `path` (every symbolic link and junction resolved,
+ *   GetFinalPathNameByHandleW), as `C:\dir\name` or `\\server\share\name`, into `resolved`, which holds at least
+ *   4,096 bytes; NULL if it cannot be opened or the result does not fit;
+ * - uname: writes only the system's name, "Windows";
+ * - openat: opens the absolute `path` for reading, and only a regular file on a disk;
+ * - fcntl: only macOS's F_GETPATH (50), the descriptor's final path into a buffer of 4,096 bytes;
+ * - readlink: fails (ENOSYS); pread: reads at an offset. */
 #define realpath ceesafe_win_realpath
+#define uname ceesafe_win_uname
+#define openat ceesafe_win_openat
+#define fcntl ceesafe_win_fcntl
+#define readlink ceesafe_win_readlink
+#define pread ceesafe_win_pread
 char *ceesafe_win_realpath(const char *path, char *resolved);
+int32_t ceesafe_win_uname(uint8_t *name);
+int32_t ceesafe_win_openat(int32_t directory, char const *path, int32_t flags, ...);
+int32_t ceesafe_win_fcntl(int32_t fd, int32_t command, ...);
+ptrdiff_t ceesafe_win_readlink(char const *path, char *buffer, size_t size);
+ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t offset);
 #endif
 int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode);
 int64_t ceesafe_host_console_flush(void);

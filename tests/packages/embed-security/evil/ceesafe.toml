@@ -1,0 +1,6 @@
+[package]
+name = "evil"
+kind = "library"
+
+[dependencies]
+inner = { path = "inner" }

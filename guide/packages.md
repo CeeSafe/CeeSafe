@@ -56,8 +56,11 @@ To embed what a build generates elsewhere, list the directory:
 roots = ["../build/codegen"]             # relative to the package; no absolute paths or environment variables
 ```
 
-A root may be outside the package in your own package and in a path dependency. A git or registry dependency embeds only
-from its own checkout, whatever its roots say: a symbolic link it holds that leads outside is refused (N0362).
+A root may be outside the package in your own package and in a path dependency you reach through path dependencies
+alone. A git or registry dependency, and every package reached through one, embeds only from that checkout, whatever
+its roots say: a symbolic link it holds, or a path dependency it names, that leads outside is refused (N0362). So is
+any package in the package cache, even when you open its files in the editor or run `check` there. A missing file and
+one outside get the same message, which names the path only as you wrote it.
 
 ## Using a dependency
 

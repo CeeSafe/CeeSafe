@@ -46,32 +46,30 @@ fn checkEmbed(c: borrow mut Checker, asText: bool, arguments: Range, span: Span)
         source = copyBytes(c.fileDiskPaths[file].view())?;
     }
     var roots = Vector<Vector<u8>>.create();
-    var rootsOutside = false;
+    var boundary = Vector<u8>.create();
     if (file < c.filePackage.length) {
         let package = c.filePackage[file] as usize;
         if (package < c.packages.length && c.packages[package].directory.length > 0) {
             roots.push(copyBytes(c.packages[package].directory.view())?)?;
-            rootsOutside = c.packages[package].embedOutside;
+            boundary = copyBytes(c.packages[package].embedBoundary.view())?;
             for (r in c.packages[package].embedRoots.view()) {
                 roots.push(copyBytes(r.view())?)?;
             }
         }
     }
-    let resolved = resolveEmbedded(source.view(), writtenBytes.view(), roots, rootsOutside)?;
-    if (resolved.problem.length > 0) {
-        return embedFailed(c, writtenBytes.view(), resolved.problem.view(), pathSpan, span);
+    // The file is opened and checked at each use, and its bytes are read then; a file read before in this
+    // compilation (the same real path) keeps the bytes it had, so every use of it sees the same ones.
+    let read = readEmbedded(source.view(), writtenBytes.view(), roots, boundary.view())?;
+    if (read.problem.length > 0) {
+        return embedFailed(c, writtenBytes.view(), read.problem.view(), pathSpan, span);
     }
     var text = Range { start: 0, count: 0xFFFFFFFF };
     for (e in c.embeddedFiles.view()) {
-        if (sameBytes(e.real.view(), resolved.real.view())) {
+        if (sameBytes(e.real.view(), read.real.view())) {
             text = e.text;
         }
     }
     if (text.count == 0xFFFFFFFF) {
-        let read = readEmbeddedBytes(resolved.real.view())?;
-        if (read.problem.length > 0) {
-            return embedFailed(c, writtenBytes.view(), read.problem.view(), pathSpan, span);
-        }
         text = c.hir.addText(read.bytes.view())?;
         c.embeddedFiles.push(EmbeddedFile { real: read.real, text: text })?;
     }

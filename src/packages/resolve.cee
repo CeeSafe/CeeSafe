@@ -39,8 +39,11 @@ struct Workspace {
     }
 
     /// Package `p` of the build (0 the root, then the resolved ones) as the checker takes it: its name, its
-    /// dependencies' names, `trusted`, and where its files may embed from (ADR 0087 §2.8). Only the root package and
-    /// path dependencies, code the user works on, may have `[embed] roots` outside their directory.
+    /// dependencies' names, `trusted`, and where its files may embed from (ADR 0087 §2.8). Only code the user works
+    /// on, the root package and what it reaches through path dependencies alone, may have `[embed] roots` outside its
+    /// directory. A git or registry package, and a path dependency reached through one, is kept inside the checkout;
+    /// a package that lies in the package cache inside its own directory, even as the root package (the language
+    /// server going to a definition in a checkout, or `check` run there).
     fn packageInfo(borrow this, p: usize) -> Result<PackageInfo, AllocError> {
         let manifest = this.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
         var dependencies = Vector<Vector<u8>>.create();
@@ -51,7 +54,13 @@ struct Workspace {
         for (r in manifest.embedRoots.view()) {
             roots.push(copyBytes(r.view())?)?;
         }
-        let local = p == 0 || startsWithText(this.resolved[p - 1].entry.source.view(), "path+");
+        var boundary = Vector<u8>.create();
+        if (p > 0) {
+            boundary = copyBytes(this.resolved[p - 1].boundary.view())?;
+        }
+        if (boundary.length == 0 && inPackageCache(manifest.directory.view())?) {
+            boundary = copyBytes(manifest.directory.view())?;
+        }
         return Ok(
             PackageInfo {
                 name: copyBytes(manifest.name.view())?,
@@ -59,7 +68,7 @@ struct Workspace {
                 trusted: manifest.trusted,
                 directory: copyBytes(manifest.directory.view())?,
                 embedRoots: roots,
-                embedOutside: local,
+                embedBoundary: boundary,
             },
         );
     }
@@ -266,8 +275,12 @@ fn drain(
             Some(e) => e,
             null => { continue; }
         };
+        let boundary = reachedBoundary(w, dependent, spec)?;
         match (w.findResolved(spec.name.view())) {
             Some(k) => {
+                if (boundary.length == 0) {
+                    w.resolved[k].boundary.clear(); // the same package, reached from the root by paths alone too
+                }
                 let existing = borrow w.resolved[k].entry;
                 var conflict = !sameBytes(existing.source.view(), entry.source.view()) ||
                     existing.hasCommit != entry.hasCommit || !sameBytes(existing.commit.view(), entry.commit.view());
@@ -303,7 +316,11 @@ fn drain(
         let via = w.dependentName(dependent)?;
         let fromRegistry = entry.hasVersion;
         let version = copyBytes(entry.version.view())?;
-        w.resolved.push(ResolvedPackage { manifest: manifest, entry: entry, via: via })?;
+        var kept = boundary;
+        if (!spec.hasPath) {
+            kept = copyBytes(manifest.directory.view())?; // a git or registry checkout
+        }
+        w.resolved.push(ResolvedPackage { manifest: manifest, entry: entry, via: via, boundary: kept })?;
         let index = truncate<u32>(w.resolved.length - 1);
         for (d in 0..w.resolved[index as usize].manifest.dependencies.length) {
             let following = copyDependency(w.resolved[index as usize].manifest.dependencies[d])?;
@@ -324,6 +341,18 @@ fn drain(
     }
     queue.clear();
     return Ok();
+}
+
+/// The boundary (ResolvedPackage) of a path dependency `spec` of `dependent`: its dependent's, empty for the root's.
+/// A git or registry dependency's is its checkout, known once it is loaded; this gives it as not empty.
+fn reachedBoundary(w: borrow Workspace, dependent: u32, spec: borrow DependencySpec) -> Result<Vector<u8>, AllocError> {
+    if (!spec.hasPath) {
+        return copyBytes("/".bytes());
+    }
+    if (dependent == none()) {
+        return Ok(Vector<u8>.create());
+    }
+    return copyBytes(w.resolved[dependent as usize].boundary.view());
 }
 
 fn lockOutOfDate(

@@ -60,6 +60,17 @@
     dependency whose roots are a committed symbolic link to a directory outside its checkout and `../shared`, gets
     N0362 for each (a git or registry package embeds only from itself). Invalid roots (absolute, `\`, `$`) and an
     unknown field in [embed] are N0321.
+21. embed security (ADR 0087 §2.8, §9), against a secret file outside every package, made here:
+    - evil, a git dependency, has a path dependency inner whose [embed] roots climb out of the checkout; evildeep
+      reaches its deep the same way through two path dependencies. Neither reads the secret: N0362 at the embed, and
+      `run --interp` does not print it (a package reached through a git or registry package embeds only from itself).
+    - evilroots, a git dependency with roots outside its checkout, gets N0362; so does `check` run inside its checkout
+      and the language server opening its file there (a package in the package cache embeds only from itself, even as
+      the root package).
+    - local: a symbolic link to the secret and a missing file get the same N0362 message, which names the path as
+      written and neither the secret's directory nor its name; a FIFO is refused at once (not a regular file), and
+      the language server answers with it there.
+    - A constant `+` past 16 MiB is tests/reference/tests/corpus/check-fail/constant-concatenation-limit.cee.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -104,6 +115,32 @@ def build_library(work):
         if p.returncode != 0:
             sys.exit(f"package_tests: cannot build the C library: {' '.join(step)}\n{p.stdout}{p.stderr}")
     return lib
+
+
+def language_server_diagnostics(compiler, path):
+    """The diagnostics `ceesafec lsp` publishes for the file at `path` once opened, as JSON text; empty on a timeout
+    (a FIFO that hung the check would be one)."""
+    with open(path) as f:
+        text = f.read()
+    uri = "file://" + ("/" if not path.startswith("/") else "") + path.replace(chr(92), "/")
+    messages = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}},
+        {"jsonrpc": "2.0", "method": "initialized", "params": {}},
+        {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
+            "uri": uri, "languageId": "ceesafe", "version": 1, "text": text}}},
+        {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
+        {"jsonrpc": "2.0", "method": "exit"},
+    ]
+    data = b""
+    for m in messages:
+        body = json.dumps(m).encode()
+        data += b"Content-Length: %d\r\n\r\n" % len(body) + body
+    try:
+        p = subprocess.run([compiler, "lsp"], input=data, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return ""
+    out = p.stdout.decode("utf-8", "replace")
+    return "".join(part for part in out.split("Content-Length:") if "publishDiagnostics" in part)
 
 
 def main():
@@ -773,7 +810,84 @@ def main():
         if p.returncode == 0 or found != ["N0321"] * 4:
             problems.append(f"embed roots: expected four N0321 for the invalid roots and field: {found}")
 
-    print(f"package_tests: 20 checks; {len(problems)} problems")
+        # 21. Embed security: nothing outside reaches a package through a git dependency, a checkout, or a race.
+        security = os.path.join(work, "embed-security")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "embed-security"), security)
+        os.makedirs(os.path.join(work, "secret"))
+        with open(os.path.join(work, "secret", "token.txt"), "w") as f:
+            f.write("TOPSECRET\n")
+        def committed(name):
+            directory = os.path.join(security, name)
+            run(git + ["init", "-q"], directory)
+            run(git + ["add", "-A"], directory)
+            run(git + ["commit", "-qm", "one"], directory)
+            commit = run(["git", "rev-parse", "HEAD"], directory).stdout.strip()
+            return f'{{ git = "{directory.replace(chr(92), "/")}", rev = "{commit}" }}'
+        def victim(name, dependency):
+            directory = os.path.join(security, "victim-" + dependency)
+            os.makedirs(os.path.join(directory, "src"))
+            with open(os.path.join(directory, "ceesafe.toml"), "w") as f:
+                f.write(f'[package]\nname = "{name}"\n\n[dependencies]\n{dependency} = {committed(dependency)}\n')
+            with open(os.path.join(directory, "src", "main.cee"), "w") as f:
+                f.write(f"fn main() {{\n    Console.writeLine({dependency}.STOLEN);\n}}\n")
+            run([compiler, "fetch"], directory)
+            return directory
+        def diagnostics(p):
+            try:
+                return [(d["code"], d["message"]) for d in json.loads(p.stdout)["diagnostics"]]
+            except (ValueError, KeyError):
+                return []
+        for dependency in ("evil", "evildeep", "evilroots"):
+            directory = victim("victim", dependency)
+            p = run([compiler, "check", "--diagnostics-format=json"], directory)
+            found = diagnostics(p)
+            if p.returncode != 1 or [c for c, _ in found] != ["N0362"] or "TOPSECRET" in p.stdout + p.stderr:
+                problems.append(f"embed security: {dependency}: expected one N0362: {found} ({p.returncode}) "
+                                f"{p.stderr[:300]}")
+            p = run([compiler, "run", "--interp"], directory)
+            if p.returncode == 0 or "TOPSECRET" in p.stdout + p.stderr:
+                problems.append(f"embed security: {dependency}: run --interp read the secret ({p.returncode})")
+        home = os.environ["CEESAFE_HOME"]
+        checkout = None
+        for top, _, files in os.walk(os.path.join(home, "git", "checkouts")):
+            if "ceesafe.toml" in files and 'name = "evilroots"' in open(os.path.join(top, "ceesafe.toml")).read():
+                checkout = top
+        if checkout is None:
+            problems.append("embed security: evilroots has no checkout in the package cache")
+        else:
+            p = run([compiler, "check", "--diagnostics-format=json"], checkout)
+            found = diagnostics(p)
+            if p.returncode != 1 or [c for c, _ in found] != ["N0362"] or "TOPSECRET" in p.stdout + p.stderr:
+                problems.append(f"embed security: check in the evilroots checkout: expected one N0362: {found} "
+                                f"({p.returncode})")
+            published = language_server_diagnostics(compiler, os.path.join(checkout, "src", "lib.cee"))
+            if "N0362" not in published or "TOPSECRET" in published:
+                problems.append(f"embed security: the language server in the evilroots checkout: {published[:400]}")
+        local = os.path.join(security, "local")
+        secret_directory = os.path.join(work, "secret")
+        made_fifo = False
+        try:
+            os.symlink(os.path.join(secret_directory, "token.txt"), os.path.join(local, "assets", "link.txt"))
+        except (OSError, NotImplementedError):
+            pass  # without the privilege to make links, the line names a missing file: the same N0362
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(os.path.join(local, "assets", "fifo"))
+            made_fifo = True
+        p = run([compiler, "check", "--diagnostics-format=json"], local)
+        found = diagnostics(p)
+        messages = [m for _, m in found]
+        same = len(messages) >= 2 and messages[0].replace("link.txt", "missing.txt") == messages[1]
+        hidden = all("secret" not in m and "token" not in m for m in messages)
+        fifo_refused = not made_fifo or (len(messages) == 3 and "not a regular file" in messages[2])
+        if p.returncode != 1 or [c for c, _ in found] != ["N0362"] * 3 or not same or not hidden or not fifo_refused:
+            problems.append(f"embed security: local: expected three N0362, the first two alike and naming nothing "
+                            f"resolved, the FIFO's not a regular file: {found} ({p.returncode})")
+        if made_fifo:
+            published = language_server_diagnostics(compiler, os.path.join(local, "src", "main.cee"))
+            if published.count("N0362") != 3:
+                problems.append(f"embed security: the language server with a FIFO: {published[:400]}")
+
+    print(f"package_tests: 21 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

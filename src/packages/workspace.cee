@@ -51,6 +51,9 @@ struct ResolvedPackage {
     manifest: Manifest;
     entry: LockEntry;
     via: Vector<u8>;
+    // Where its files may embed from (ADR 0087 §2.8): empty when it was reached from the root package through path
+    // dependencies only, else the checkout of the git or registry package it is, or was reached through.
+    boundary: Vector<u8>;
 }
 
 /// A dependency waiting to be resolved: the manifest that names it (none for the root, else a resolved package's

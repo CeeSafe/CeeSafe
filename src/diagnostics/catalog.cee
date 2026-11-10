@@ -52,7 +52,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     215 => "`return` with or without a value contradicts the return type, or `return` in a `never` function",
     216 =>
         "Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11)",
-    217 => "Not a constant expression, or constant evaluation would panic",
+    217 =>
+        "Not a constant expression, or constant evaluation would panic, or a constant `+` of views longer than 16 MiB (ADR 0087 §2.7)",
     218 => "Constant depends on itself",
     219 => "Invalid `main` signature",
     220 => "`let` without initializer",
@@ -233,7 +234,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), a `break` or `continue` out of the arguments, a process exit, or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5)",
     361 => "An `embedText` file whose bytes are not UTF-8 (`type-system.md` §10.1, ADR 0087 §2.8)",
     362 =>
-        "An `embed` or `embedText` path that cannot be embedded: not a string literal or constant view; empty, absolute, or holding `\\`, `:`, `$`, `%` or a leading `~`; no file there; a directory or not a regular file; a real path (every symbolic link resolved) outside the package's directory and its `[embed] roots`; larger than 16 MiB; or a source with no file on disk (`type-system.md` §10.1, ADR 0087 §2.8)",
+        "An `embed` or `embedText` path that cannot be embedded: not a string literal or constant view; empty, absolute, or holding `\\`, `:`, `$`, `%` or a leading `~`; no file there, or a real path (every symbolic link resolved, of the file opened) outside the package's directory and its `[embed] roots`, which one message names without telling the two apart; a directory or not a regular file; larger than 16 MiB; or a source with no file on disk (`type-system.md` §10.1, ADR 0087 §2.8)",
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     400 =>

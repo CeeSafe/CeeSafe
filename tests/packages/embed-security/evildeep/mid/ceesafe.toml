@@ -1,0 +1,6 @@
+[package]
+name = "mid"
+kind = "library"
+
+[dependencies]
+deep = { path = "deep" }

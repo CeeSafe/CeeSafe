@@ -1,0 +1,6 @@
+[package]
+name = "evildeep"
+kind = "library"
+
+[dependencies]
+mid = { path = "mid" }

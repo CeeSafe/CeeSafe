@@ -1,0 +1,11 @@
+// What a package may not embed, by the file that is opened (ADR 0087 §2.8): tools/package_tests.py check 21 makes the
+// symbolic link to a file outside the package and the FIFO, and expects one N0362 message for the missing file and
+// the link, naming the path as written and nothing it resolves to.
+const LINK: StringView = embedText("../assets/link.txt");
+const MISSING: StringView = embedText("../assets/missing.txt");
+const FIFO: StringView = embedText("../assets/fifo");
+const KEPT: StringView = embedText("../assets/kept.txt");
+
+fn main() {
+    Console.write(KEPT);
+}

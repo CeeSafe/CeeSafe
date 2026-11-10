@@ -21,6 +21,7 @@
 #include "ceesafe/rt.h"
 
 #include <errno.h>
+#include <stdarg.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,7 @@
 #include <io.h>
 #include <process.h>
 #include <sys/stat.h>
+#include <wchar.h>
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -1615,30 +1617,134 @@ int64_t ceesafe_host_dir_create(uint8_t const *path, uint64_t length) {
 }
 
 #ifdef _WIN32
-/* realpath(3) for Windows (rt.h): GetFinalPathNameByHandleA on a handle opened for no access (FILE_FLAG_BACKUP_SEMANTICS
- * opens a directory too), without the `\\?\` prefix the call adds; `\\?\UNC\server\share` becomes `\\server\share`. */
-char *ceesafe_win_realpath(const char *path, char *resolved) {
-    HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    if (h == INVALID_HANDLE_VALUE) return NULL;
-    char final[4104];
-    DWORD n = GetFinalPathNameByHandleA(h, final, (DWORD)sizeof final, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-    CloseHandle(h);
-    if (n == 0 || n >= (DWORD)sizeof final) return NULL;
-    const char *start = final;
-    size_t prefix = 0;
-    if (strncmp(final, "\\\\?\\UNC\\", 8) == 0) {
+/* ceesafec's `embed` (ADR 0087 §2.8) on Windows: the POSIX calls its sources make, which rt.h names here. Paths are
+ * UTF-8, as every CeeSafe string, so they go through the wide calls (CreateFileW, GetFinalPathNameByHandleW), never
+ * the ANSI code page's. */
+
+/* UTF-8 `text`, ending in NUL, as UTF-16 into `wide` (`size` units, its NUL included); false if it is not UTF-8 or
+ * does not fit. */
+static bool cee_win_wide(const char *text, wchar_t *wide, int size) {
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, wide, size) > 0;
+}
+
+/* The final path of the open handle `h` (every symbolic link and junction resolved) as UTF-8 into `resolved`, which
+ * holds 4,096 bytes: without the `\\?\` prefix the call adds, and `\\?\UNC\server\share` as `\\server\share`. NULL
+ * if it does not fit or is not valid UTF-16. */
+static char *cee_win_final_path(HANDLE h, char *resolved) {
+    wchar_t final[4104];
+    DWORD n = GetFinalPathNameByHandleW(h, final, 4104, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= 4104) return NULL;
+    const wchar_t *start = final;
+    int prefix = 0;
+    if (wcsncmp(final, L"\\\\?\\UNC\\", 8) == 0) {
         start = final + 8;
         resolved[0] = '\\';
         resolved[1] = '\\';
         prefix = 2;
-    } else if (strncmp(final, "\\\\?\\", 4) == 0) {
+    } else if (wcsncmp(final, L"\\\\?\\", 4) == 0) {
         start = final + 4;
     }
-    size_t length = strlen(start);
-    if (prefix + length >= 4096) return NULL;
-    memcpy(resolved + prefix, start, length + 1);
-    return resolved;
+    int m = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, start, -1, resolved + prefix, 4096 - prefix, NULL, NULL);
+    return m > 0 ? resolved : NULL;
+}
+
+/* realpath(3): the final path of the file or directory at `path` (FILE_FLAG_BACKUP_SEMANTICS opens a directory too,
+ * and no access is asked), as `C:\dir\name` or `\\server\share\name`. */
+char *ceesafe_win_realpath(const char *path, char *resolved) {
+    wchar_t wide[4104];
+    if (!cee_win_wide(path, wide, 4104)) return NULL;
+    HANDLE h = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    char *result = cee_win_final_path(h, resolved);
+    CloseHandle(h);
+    return result;
+}
+
+/* uname(3): only the system's name, the first member of a struct utsname, which is "Windows". */
+int32_t ceesafe_win_uname(uint8_t *name) {
+    memcpy(name, "Windows", 8);
+    return 0;
+}
+
+/* openat(2) of the absolute `path`, for reading: a descriptor only for a regular file on a disk (no directory, pipe,
+ * console or device), so the caller need not ask what it opened. `directory` and `flags` are not used. */
+int32_t ceesafe_win_openat(int32_t directory, char const *path, int32_t flags, ...) {
+    (void)directory;
+    (void)flags;
+    wchar_t wide[4104];
+    if (!cee_win_wide(path, wide, 4104)) {
+        errno = EINVAL;
+        return -1;
+    }
+    HANDLE h = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        errno = ENOENT;
+        return -1;
+    }
+    BY_HANDLE_FILE_INFORMATION info;
+    if (GetFileType(h) != FILE_TYPE_DISK || !GetFileInformationByHandle(h, &info) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+        CloseHandle(h);
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | _O_BINARY);
+    if (fd < 0) {
+        CloseHandle(h);
+        return -1;
+    }
+    return fd;
+}
+
+/* fcntl(2) with F_GETPATH (50) only, as macOS has it: the descriptor's final path, as UTF-8, into the `char *`
+ * argument, which holds 4,096 bytes. */
+int32_t ceesafe_win_fcntl(int32_t fd, int32_t command, ...) {
+    if (command != 50) {
+        errno = EINVAL;
+        return -1;
+    }
+    va_list arguments;
+    va_start(arguments, command);
+    char *buffer = va_arg(arguments, char *);
+    va_end(arguments);
+    intptr_t h = _get_osfhandle(fd);
+    if (h == -1 || cee_win_final_path((HANDLE)h, buffer) == NULL) {
+        errno = EBADF;
+        return -1;
+    }
+    return 0;
+}
+
+/* readlink(2), which ceesafec calls on Linux only: Windows has no /proc. */
+ptrdiff_t ceesafe_win_readlink(char const *path, char *buffer, size_t size) {
+    (void)path;
+    (void)buffer;
+    (void)size;
+    errno = ENOSYS;
+    return -1;
+}
+
+/* pread(2): up to `size` bytes at `offset`, without moving the descriptor's position. */
+ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t offset) {
+    intptr_t h = _get_osfhandle(fd);
+    if (h == -1) {
+        errno = EBADF;
+        return -1;
+    }
+    OVERLAPPED at;
+    memset(&at, 0, sizeof at);
+    at.Offset = (DWORD)((uint64_t)offset & 0xFFFFFFFFu);
+    at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
+    DWORD wanted = size > 0x40000000u ? 0x40000000u : (DWORD)size;
+    DWORD got = 0;
+    if (!ReadFile((HANDLE)h, buffer, wanted, &got, &at)) {
+        if (GetLastError() == ERROR_HANDLE_EOF) return 0;
+        errno = EIO;
+        return -1;
+    }
+    return (ptrdiff_t)got;
 }
 #endif
 

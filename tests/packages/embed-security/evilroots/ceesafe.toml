@@ -1,0 +1,6 @@
+[package]
+name = "evilroots"
+kind = "library"
+
+[embed]
+roots = ["../../../../.."]

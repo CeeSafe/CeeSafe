@@ -14,12 +14,15 @@ what this module needs.
 |---|---:|---|
 | `mq/src/mq.cee` | 205 | the driver: the queue, its ownership, its locking, the four entry points |
 | `mq/src/linux.cee` | 177 | Linux for CeeSafe: `KernelHeap`, `KBox<T>`, `Mutex<T>`, `SpinLock<T>`, `Log` |
+| `mq/module.c` | 14 | the module as one translation unit: the runtime, the generated C and the glue (why: "Found while doing this") |
 | `mq/glue.c` | 81 | what Linux requires to be C macros: `module_init`, `MODULE_LICENSE`, the `file_operations` table, and the panic binding |
 | `mq/include/ceesafe_linux.h` | 91 | one `static inline` function per kernel macro CeeSafe calls (`mutex_init`, `spin_lock_init`, `GFP_KERNEL`, `pr_info`, the user copies), with their contracts |
 | `mq/include/std*.h`, `float.h` | 64 | the freestanding standard headers in the kernel's own types |
+| `mq/control/sleep_under_spinlock.c` | 38 | a C module with the mistake `mq/negative/` makes, to show what a debug kernel reports at run time |
 
 The kernel build needs no CeeSafe tool. `ceesafec build --emit c -o gen` runs on any host and writes `gen/main.c`,
-`gen/ceesafe_rt_core.c` (the freestanding core runtime) and two headers; Kbuild compiles those like any other C.
+`gen/ceesafe_rt_core.c` (the freestanding core runtime) and two headers; Kbuild compiles those, through `module.c`,
+like any other C.
 
 ## What it shows
 
@@ -51,28 +54,34 @@ On a Linux machine with the kernel's headers and compiler, **one you can afford 
 that has `gen/`:
 
 ```sh
-make                                 # Kbuild: ceesafe_mq.ko
+make                                 # Kbuild: ceesafe_mq.ko (make LLVM=1 on a kernel built with clang)
+(cd control && make)                 # optional: the C control module
 sudo python3 test.py                 # insmod, the device from user space, rmmod, the kernel log
 ```
 
-## Run (2026-11-10)
+## Runs (2026-11-10)
 
-Debian 12 in a Lima VM on macOS arm64 (4 CPUs): Linux `6.1.0-54-cloud-arm64` (Debian 6.1.190-1), gcc 12.2.0,
-`linux-headers-6.1.0-54-cloud-arm64`. The C was generated on the macOS host by `out/ceesafec` 0.28.0.
+The C was generated on a macOS arm64 host by `out/ceesafec` 0.28.0, and is the same for every row. All kernels are
+Linux 6.1.190 (Debian 12's `6.1.0-54`, or built from Debian's `linux-source-6.1`).
 
-| Check | Result |
-|---|---|
-| `ceesafec check`, `ceesafec fmt --check` in `mq/` | no diagnostics, no file listed |
-| `ceesafec check` in `mq/negative/` | N0295 at `sleep-under-spinlock.cee:13:12`, and no other diagnostic |
-| `make` | `ceesafe_mq.ko` built, no warning |
-| `make W=1` (Kbuild's extra warnings: `-Wextra -Wmissing-prototypes -Wmissing-declarations -Wold-style-definition` and more, with the kernel's `-std=gnu11 -nostdinc -mgeneral-regs-only -Wframe-larger-than=2048`) | no warning from `glue.c`, `gen/main.c` or `gen/ceesafe_rt_core.c` |
-| `nm -u ceesafe_mq.ko` | kernel exports only: `__kmalloc`, `kfree`, `__mutex_init`, `mutex_lock`, `mutex_unlock`, `queued_spin_lock_slowpath`, `__arch_copy_from_user`, `__arch_copy_to_user`, `__check_object_size`, `_printk`, `misc_register`, `misc_deregister`, `noop_llseek`, `memcpy`, `memset`, `strlen`, `__stack_chk_fail`, `alt_cb_patch_nops` |
-| `sudo python3 test.py` | 24 checks pass, 0 fail |
+| Machine | Kernel | Compiler | Kernel checkers | `make W=1` | `test.py` |
+|---|---|---|---|---|---|
+| AArch64, Lima VM (Apple `vz`), 8 CPUs | `6.1.0-54-cloud-arm64`, Debian's | gcc 12.2.0 | none | no warning | 24 pass, 0 fail |
+| AArch64, the same VM | `6.1.190-ceesafe-debug`, built here | clang 14.0.6, lld | lockdep (`PROVE_LOCKING`), KASAN (generic), kmemleak, `DEBUG_ATOMIC_SLEEP` | no warning (`LLVM=1`) | 27 pass, 0 fail |
+| x86-64, QEMU (emulated, TCG), 4 CPUs | `6.1.0-54-cloud-amd64`, Debian's | gcc 12.2.0 | none | no warning, objtool included | 24 pass, 0 fail |
+
+On every row: `ceesafec check` and `ceesafec fmt --check` in `mq/` report nothing; `ceesafec check` in
+`mq/negative/` reports N0295 at `sleep-under-spinlock.cee:13:12` and nothing else; `nm -u ceesafe_mq.ko` lists
+kernel exports only. `make W=1` is Kbuild's extra warning set (`-Wextra -Wmissing-prototypes -Wmissing-declarations
+-Wold-style-definition` and more) on top of the kernel's own flags: `-std=gnu11 -nostdinc`, and
+`-mgeneral-regs-only` on AArch64 or `-mno-sse -mno-red-zone -mcmodel=kernel` with return thunks on x86-64.
 
 `test.py`'s checks: an empty queue reads 0 bytes; messages of 5, 14 and 512 bytes come back whole and in order; a
 short read; `EMSGSIZE` over 512 bytes; `ENOSPC` on the 17th message; `EFAULT` for a bad user address on write and on
 read, the failed read leaving its message queued; `rmmod` refused while the device is open; `rmmod` with 14 messages
-queued. Then a second load with four processes writing and reading 5,000 times each. The kernel log of that run:
+queued. Then a second load with four processes writing and reading 5,000 times each. Any line from a kernel checker
+in the log (an oops, a `BUG`, a `WARNING`, a lockdep, KASAN or atomic-sleep report) fails a check. The module's lines
+were the same on all three rows:
 
 ```text
 ceesafe_mq: ready, 16 messages of at most 512 bytes
@@ -83,18 +92,44 @@ ceesafe_mq: written 20000, read 20000, refused 0, freed with the device 0
 ceesafe_mq: unloaded, 0 kernel block(s) live
 ```
 
-The first run of `test.py` failed one check and found a defect in the driver: a read to a bad user address took its
-message off the queue before the copy, so the message was lost. `dequeue` now takes the message off only after the
-copy succeeds, and `test.py` checks it.
+### The debug kernel
+
+`6.1.190-ceesafe-debug` is Debian's 6.1 source with the running configuration trimmed to the loaded modules
+(`localmodconfig`), plus `KASAN`, `KASAN_GENERIC`, `PROVE_LOCKING`, `DEBUG_ATOMIC_SLEEP`, `DEBUG_KMEMLEAK` and
+`LKDTM=m`, built with `make LLVM=1`. Its boot log has `kasan: KernelAddressSanitizer initialized (generic)`, `Lock
+dependency validator` and `kmemleak: Kernel memory leak detector initialized`. The module built for it is
+instrumented: its undefined symbols include `__asan_load8_noabort`, `__kasan_check_write`, `mutex_lock_nested` and
+`__might_fault`.
+
+On it `test.py` makes three more checks:
+
+- **kmemleak** finds no unreferenced block after both runs (two scans). This is the kernel's own count, beside the
+  adapter's "0 kernel block(s) live".
+- **Control, atomic sleep:** `control/sleep_under_spinlock.ko`, the C module that calls `kmalloc(GFP_KERNEL)` with a
+  spinlock held, builds without a warning and is reported when it loads: `BUG: sleeping function called from invalid
+  context`. On the two stock kernels the same module loads and nothing is reported. `mq/negative/` is that mistake in
+  CeeSafe, and it does not compile.
+- **Control, KASAN:** lkdtm's `READ_AFTER_FREE` is reported: `BUG: KASAN: use-after-free in
+  lkdtm_READ_AFTER_FREE`.
+
+The controls run last, and show that a silent log above them means the checkers found nothing, not that they were
+off.
+
+### Earlier, and what the runs found
+
+- The first run of `test.py` (AArch64, gcc) failed one check and found a defect in the driver: a read to a bad user
+  address took its message off the queue before the copy, so the message was lost. `dequeue` now takes the message
+  off only after the copy succeeds, and `test.py` checks it.
+- The first x86-64 build had objtool warnings; see "Found while doing this".
 
 ## Not done, and limits
 
-- **Not run:** x86-64; a kernel with lockdep, KASAN or kmemleak (Debian's cloud kernel has none, so "no block live"
-  is the adapter's own count, and no lock-order checking ran); allocation-failure injection; clang as the kernel's
-  compiler.
+- **Not run:** x86-64 with clang, or with lockdep or KASAN (the x86-64 guest is emulated, and has Debian's kernel
+  only); gcc on the debug kernel; a kernel newer than 6.1; allocation-failure injection; real hardware.
 - **The stress run did not fill the queue** (0 writes refused), so it contends the locks but not the `ENOSPC` path.
 - **One lockdep class per lock type.** `lx_mutex_init` and `lx_spin_lock_init` are single functions, so every lock
-  made through them shares a class. A real binding needs a class per lock, as C gets from the macro.
+  made through them shares a class. Lockdep ran with that, and this module has one lock of each type, so its
+  silence is meaningful here; a real binding needs a class per lock, as C gets from the macro.
 - **A panic is `BUG()`.** A failed bounds or overflow check in the module reports its CeeSafe source line and stops
   the thread. Whether that or an error return is right is the integration's decision (profiles.md §5).
 - **`KBox<T>` is asserted thread-safe** (`@threadSafe`, in a package with `trusted = true`): a box with a user
@@ -105,6 +140,14 @@ copy succeeds, and `test.py` checks it.
   module does not use that yet.
 
 ## Found while doing this
+
+- **objtool and the panic function (x86-64).** Generated code calls `ceesafe_panic`, which never returns, and has
+  nothing after the call. objtool knows that a function does not return only from its own list of names or from
+  seeing the function's body in the same object. With the generated C, the runtime and the glue compiled as three
+  objects, it warned for every caller: `objtool: ceeF_enqueue() falls through to next function ...`. The module
+  worked, but those functions were not validated. `mq/module.c` now makes the three one translation unit, so objtool
+  sees that `ceesafe_panic` ends in `BUG()`: no warning. Rust's kernel support met the same rule and added its
+  functions to objtool's list. A Linux profile needs an answer that does not depend on a single unit.
 
 - `guide/unsafe-and-c.md` showed `@ctype("struct timer")`, which is N0292 (`@ctype` names a typedef; a struct needs
   none). The example was not compiled (`ceesafe: skip`). Corrected there and in `docs/blog/`.

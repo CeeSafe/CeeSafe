@@ -32,6 +32,43 @@ def kernel_log():
     return subprocess.run(["dmesg"], capture_output=True, text=True, check=True).stdout
 
 
+def kernel_has(option):
+    """Whether the running kernel was built with CONFIG_<option>, from /boot/config-<release> or /proc/config.gz."""
+    release = os.uname().release
+    try:
+        with open(f"/boot/config-{release}") as config:
+            return f"CONFIG_{option}=y" in config.read().split()
+    except OSError:
+        return False
+
+
+LOCKDEP = kernel_has("PROVE_LOCKING")
+KASAN = kernel_has("KASAN")
+KMEMLEAK = kernel_has("DEBUG_KMEMLEAK") and os.path.exists("/sys/kernel/debug/kmemleak")
+ATOMIC_SLEEP = kernel_has("DEBUG_ATOMIC_SLEEP")
+with open("/proc/version") as version:
+    print("kernel:", version.read().strip())
+print(f"machine: {os.uname().machine}; lockdep: {LOCKDEP}; KASAN: {KASAN}; kmemleak: {KMEMLEAK}; "
+      f"atomic-sleep checks: {ATOMIC_SLEEP}")
+# What any of the kernel's checkers prints when it finds something.
+REPORTS = ("Oops", "BUG", "WARNING", "panic", "Call trace", "KASAN", "possible circular locking",
+           "inconsistent lock state", "possible recursive locking", "sleeping function called", "kmemleak")
+
+
+def kmemleak_scan():
+    """The unreferenced blocks kmemleak finds now. It reports a block only on the scan after the one that first
+    sees it, so this scans twice."""
+    for _ in range(2):
+        with open("/sys/kernel/debug/kmemleak", "w") as control:
+            control.write("scan")
+    with open("/sys/kernel/debug/kmemleak") as report:
+        return report.read()
+
+
+if KMEMLEAK:
+    with open("/sys/kernel/debug/kmemleak", "w") as control:
+        control.write("clear")
+
 subprocess.run(["dmesg", "-C"], check=True)
 subprocess.run(["insmod", "ceesafe_mq.ko"], check=True)
 try:
@@ -79,7 +116,7 @@ print(log.strip())
 check("the module said it was ready", "ceesafe_mq: ready, 16 messages of at most 512 bytes" in log)
 check("its counters are right", "ceesafe_mq: written 20, read 6, refused 3, freed with the device 14" in log, log)
 check("unloading freed every kernel block", "ceesafe_mq: unloaded, 0 kernel block(s) live" in log)
-check("no oops, BUG or warning", not any(word in log for word in ("Oops", "BUG", "WARNING", "panic", "Call trace")))
+check("no report from the kernel's checkers", not any(word in log for word in REPORTS))
 
 # A second load: four processes write and read at once, on as many CPUs, so the mutex and the spinlock are
 # contended. What was written is either read or freed with the device, and no block is left.
@@ -117,6 +154,23 @@ if counts:
     written, read, refused, freed = (int(n) for n in counts.groups())
     check("every message written was read or freed", written == read + freed and written + refused == 20000, counts.group(0))
 check("the stress run freed every kernel block", "ceesafe_mq: unloaded, 0 kernel block(s) live" in log)
-check("no oops, BUG or warning in the stress run", not any(word in log for word in ("Oops", "BUG", "WARNING", "panic", "Call trace")))
+check("no report from the kernel's checkers in the stress run", not any(word in log for word in REPORTS))
+if KMEMLEAK:
+    leaks = kmemleak_scan()
+    check("kmemleak finds no unreferenced block after both runs", leaks.strip() == "", leaks[:2000])
+
+# Controls: that the checkers which found nothing above do report a mistake when there is one. They run last,
+# since KASAN reports only its first finding.
+if ATOMIC_SLEEP and os.path.exists("control/sleep_under_spinlock.ko"):
+    subprocess.run(["dmesg", "-C"], check=True)
+    subprocess.run(["insmod", "control/sleep_under_spinlock.ko"], check=False)
+    subprocess.run(["rmmod", "sleep_under_spinlock"], check=False)
+    check("control: the C module that allocates under a spinlock is reported at run time",
+          "BUG: sleeping function called from invalid context" in kernel_log())
+if KASAN and subprocess.run(["modprobe", "lkdtm"], capture_output=True).returncode == 0:
+    subprocess.run(["dmesg", "-C"], check=True)
+    with open("/sys/kernel/debug/provoke-crash/DIRECT", "w") as provoke:
+        provoke.write("READ_AFTER_FREE")
+    check("control: KASAN reports lkdtm's read after free", "BUG: KASAN:" in kernel_log())
 print(f"{len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

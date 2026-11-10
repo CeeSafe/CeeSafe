@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# ceesafe_mq.ko: the glue, the C that ceesafec generated from src/*.cee (gen/main.c), and CeeSafe's freestanding
-# core runtime (gen/ceesafe_rt_core.c). Everything is compiled by Kbuild with this kernel's own compiler and flags.
+# ceesafe_mq.ko: module.c, which is the glue, the C that ceesafec generated from src/*.cee (gen/main.c) and CeeSafe's
+# freestanding core runtime (gen/ceesafe_rt_core.c) as one unit. Kbuild compiles it with this kernel's own compiler
+# and flags.
 obj-m := ceesafe_mq.o
-ceesafe_mq-y := glue.o gen/main.o gen/ceesafe_rt_core.o
+ceesafe_mq-y := module.o
 
 # include/: the freestanding standard headers in the kernel's types, and ceesafe_linux.h. gen/: ceesafe/rt.h and
 # ceesafe_exports.h.

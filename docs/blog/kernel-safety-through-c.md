@@ -181,32 +181,27 @@ kernel heap, a mutex and a spinlock that hold their data), and 81 lines of C for
 (`module_init`, the `file_operations` table). `struct mutex` and `spinlock_t` are imported from Linux's headers and
 embedded by value.
 
-Kbuild compiles the generated C with the kernel's own flags. On Debian 12's `6.1.0-54-cloud-arm64` kernel with gcc
-12.2 (2026-11-10), it builds with no warning under `make W=1`, links against kernel exports only, and passes 24
-checks from user space: message order, `EMSGSIZE`, `ENOSPC`, `EFAULT`, four processes writing and reading at once,
-and `rmmod` with 14 messages queued, which frees every block with no cleanup code in the driver. The same sources
-with one allocation moved under the spinlock do not compile:
+Kbuild compiles the generated C with the kernel's own flags. On Linux 6.1.190 (2026-11-10) it builds with no warning
+under `make W=1` and links against kernel exports only, in three configurations: AArch64 with gcc 12.2, x86-64 with
+gcc 12.2 (objtool included), and AArch64 with clang 14 on a kernel built with lockdep, KASAN, kmemleak and
+`DEBUG_ATOMIC_SLEEP`. In each it passes the same checks from user space: message order, `EMSGSIZE`, `ENOSPC`,
+`EFAULT`, four processes writing and reading at once, and `rmmod` with 14 messages queued, which frees every block
+with no cleanup code in the driver. On the debug kernel none of the checkers reports anything, and kmemleak finds no
+unreferenced block.
+
+A control shows what that silence is worth. A C module that calls `kmalloc(GFP_KERNEL)` with a spinlock held
+compiles without a warning. On the two stock kernels it loads and nothing happens; on the debug kernel it is
+reported at run time (`BUG: sleeping function called from invalid context`). The same mistake in CeeSafe, against
+the same Linux declarations, does not compile:
 
 ```text
 error[N0295]: a 'SpinGuard<Latest>' is live here, which makes this an atomic context (type-system.md §32.3), but this may sleep: it calls 'KBox<u64>.create', which allocates a 'Box<Held<u64>, KernelHeap>', which calls 'lx_kmalloc', declared @effects(sleep, alloc)
 ```
 
-It has not run on x86-64 or under lockdep or KASAN, and each kernel macro CeeSafe calls goes through a one-line C
-function, as Rust's kernel helpers do. The directory's README lists the rest of what was not done.
-
-On speed, with every check on, CeeSafe runs sixteen user-space workloads in 0.96× Rust's time (geometric mean) and
-0.88× that of Rust built with overflow checks; hand-written C without checks takes 0.94×. CeeSafe is ahead where
-its compiler removes checks or allocations and behind by up to 1.41× on a hash map whose bounds checks it cannot
-yet remove. [guide/performance.md](../../guide/performance.md) has the table, the method and the losses. These are
-not kernel benchmarks.
-
-## Summary
-
-Rust brings a kernel memory safety and asks it to adopt a compiler. CeeSafe brings the same ownership model, a
-weaker borrow checker and a much smaller ecosystem, and asks the kernel to compile some more C: C that passes its
-warning set, reads its headers, links against a five-symbol runtime, and maps back to source lines in its
-debugger. For a kernel whose build, targets and review process are organised around a C compiler, that is a
-different adoption cost, and it is the one CeeSafe was designed to minimise.
+x86-64 also found something: objtool cannot know that an external function never returns, and warned for every
+caller of CeeSafe's panic function until the module was built as one translation unit. Rust's kernel support met the
+same rule. Each kernel macro CeeSafe calls goes through a one-line C function, as Rust's kernel helpers do, and the
+x86-64 run was emulated, on a stock kernel. The directory's README lists the rest of what was not done.
 
 ## Earlier discussion
 

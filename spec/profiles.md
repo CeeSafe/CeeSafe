@@ -252,12 +252,15 @@ A Linux kernel-module profile is a future integration (not scheduled); it needs 
 `ceesafe_panic`, the build's flags, and the headers, as C4 and C5 did for CosmoOS.
 
 `integrations/linux/mq` demonstrates this without a profile (2026-11-10): a misc-device module whose C is generated
-by `ceesafec build --emit c` in the freestanding profile and compiled by Kbuild, on Linux 6.1 (AArch64, gcc 12.2).
+by `ceesafec build --emit c` in the freestanding profile and compiled by Kbuild, on Linux 6.1: AArch64 with gcc 12.2,
+AArch64 with clang 14 on a kernel with lockdep, KASAN and kmemleak, and x86-64 with gcc 12.2.
 What it had to supply is what a profile would hold:
 - the freestanding standard headers in the kernel's own types (`<stdint.h>`, `<stdbool.h>`, `<stddef.h>` with
   `max_align_t`, an empty `<float.h>`), since Linux builds with `-nostdinc` and defines `int64_t` as `long long`
   where a compiler's `<stdint.h>` may say `long`;
 - `ceesafe_panic` bound to `BUG()`;
-- a C function for each kernel macro CeeSafe calls (`mutex_init`, `spin_lock_init`, `GFP_KERNEL`, `pr_info`).
-Its README records the run and what was not run (x86-64, lockdep, KASAN).
+- a C function for each kernel macro CeeSafe calls (`mutex_init`, `spin_lock_init`, `GFP_KERNEL`, `pr_info`);
+- on x86-64, `ceesafe_panic`'s definition in the same translation unit as its callers, since objtool learns that a
+  function does not return from its body or from its own list of names, and reports every caller otherwise.
+Its README records the runs and what was not run.
 

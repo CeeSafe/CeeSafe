@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "c-arrays.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 uint32_t ca_fill(struct ca_table *, struct ca_part const *, uint32_t);
 bool ca_same_uuid(struct ca_table const *, uint32_t, uint32_t);
@@ -14,5 +18,9 @@ void ca_guid_hex(struct ca_table const *, uint8_t *);
 extern const uint8_t ca_signature[8];
 extern const uint32_t ca_zeros[3];
 extern const uint32_t ca_limit;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

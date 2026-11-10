@@ -94,6 +94,9 @@
     `--emit obj` (linked here with cc), the program prints the same; `--emit c` spells the types by their declared
     names (`struct Point`, `Shade`), never `geo.`. clash: app's `@repr(C)` struct named as its dependency geo's, and
     rival's struct and enum named as geo's (rival and geo unrelated, geo first by name), are N0201 with a note at geo's.
+28. A C++ caller (ADR 0088 §2.6): a C++11 file includes repr-dep's ceesafe_exports.h (its `extern "C"` guards),
+    calls both packages' exports with their `@repr` types, compiles with -Wall -Werror and links with the program,
+    which prints the same.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1295,6 +1298,36 @@ def main():
                                 problems.append(f"repr-dep {label}: {name} names a type with its package: "
                                                 f"{line.strip()[:200]}")
                                 break
+        # 28. A C++ caller includes ceesafe_exports.h and links with the program (ADR 0088 §2.6).
+        cxx = os.environ.get("CXX", "c++")
+        if not WINDOWS and shutil.which(cxx):
+            cdir = os.path.join(work, "repr-dep-c")
+            source = os.path.join(work, "repr-dep-cxx.cpp")
+            with open(source, "w") as f:
+                f.write('#include "ceesafe_exports.h"\n'
+                        "static int32_t sum(struct Point p) { return p.x + p.y; }\n"
+                        'extern "C" int cxx_total(void) {\n'
+                        "    Point p{3, 4};\n"
+                        "    Rect r{{0, 0}, p};\n"
+                        "    return app_measure(p, Shade_Dark) + geo_area(r, Shade_Light) + geo_apply(sum) +\n"
+                        "        (int)geo_corners;\n"
+                        "}\n")
+            objects = os.path.join(work, "repr-dep-cxx")
+            os.makedirs(objects, exist_ok=True)
+            program = os.path.join(objects, "app.o")
+            p = run([compiler, "build", "--emit", "obj", "-o", program], app)
+            q = run([cxx, "-std=c++11", "-Wall", "-Werror", "-I", cdir, "-c", source, "-o",
+                     os.path.join(objects, "cxx.o")], app)
+            if p.returncode != 0 or q.returncode != 0:
+                problems.append(f"repr-dep C++: {p.stderr.strip()[-300:]} {q.stderr.strip()[-600:]}")
+            else:
+                linked = os.path.join(objects, "app")
+                p = run([cxx, program, os.path.join(objects, "cxx.o"), "-o", linked], app)
+                out = run([linked], app).stdout.strip() if p.returncode == 0 else None
+                if p.returncode != 0 or out != expected:
+                    problems.append(f"repr-dep C++: the link failed or the program printed {out!r}: "
+                                    f"{p.stderr.strip()[-600:]}")
+
         clash = os.path.join(repr, "clash")
         p = run([compiler, "check", "--diagnostics-format=json"], clash)
         try:
@@ -1311,7 +1344,7 @@ def main():
 
         interface_records(compiler, work, problems)
 
-    print(f"package_tests: 27 checks; {len(problems)} problems")
+    print(f"package_tests: 28 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

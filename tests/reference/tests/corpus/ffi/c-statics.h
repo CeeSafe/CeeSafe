@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "c-statics.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int32_t (*ceeP_F2MS6cs_devi32i32)(struct cs_dev *, int32_t);
 typedef void (*ceeP_F1MS6cs_devv)(struct cs_dev *);
 
@@ -14,5 +18,9 @@ struct cs_dev * cs_loopback(void);
 int32_t cs_init(void);
 int32_t cs_hook_set(void);
 struct cs_dev * * cs_names(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

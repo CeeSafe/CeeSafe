@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "includes-exports.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ie_box;
 
 struct ie_box {
@@ -17,5 +21,9 @@ struct ie_box {
 void ie_fill(struct ie_box *, uint32_t);
 uint32_t ie_total(struct ie_box const *);
 size_t ie_where(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct Handler;
 typedef int32_t (*ceeP_F1i32i32)(int32_t);
 
@@ -16,5 +20,9 @@ struct Handler {
 
 int32_t cb_triple(int32_t);
 int32_t cb_plus_one(int32_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -7,11 +7,19 @@
 #include <stdint.h>
 #include "imports.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 uint32_t imp_sum_irqs(struct imp_device const *);
 bool imp_claim(struct imp_device *, char const *, char const * *);
 void imp_link(struct imp_device *, struct imp_device *);
 bool imp_same_owner(struct imp_device const *, struct imp_device const *);
 void imp_mid(imp_point const *, imp_point const *, imp_point *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

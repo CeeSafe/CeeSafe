@@ -7,8 +7,16 @@
 #include <stdint.h>
 #include "unions.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 void un_use(void);
 uint32_t un_v4(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

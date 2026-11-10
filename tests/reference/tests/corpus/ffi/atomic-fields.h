@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "atomic-fields.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct af_counters;
 
 struct af_counters {
@@ -20,5 +24,9 @@ void af_use_stats(void);
 struct af_counters const * af_counters_get(void);
 uint64_t af_counters_hit(void);
 void af_report(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

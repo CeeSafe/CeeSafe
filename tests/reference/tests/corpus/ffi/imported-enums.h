@@ -7,11 +7,19 @@
 #include <stdint.h>
 #include "imported-enums.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int32_t (*ceeP_F2MvN5colori32)(void *, enum color);
 typedef int32_t (*ceeP_F2N5colorN9size_kindi32)(enum color, size_kind_t);
 
 int32_t paint_mix(enum color, size_kind_t);
 int32_t paint_repaint(struct paint *);
 int32_t paint_side(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "exported-c-state.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct xs_entry;
 struct xs_table;
 struct Grid;
@@ -35,5 +39,9 @@ void xs_table_init(struct xs_table *, uint32_t);
 int32_t xs_install(struct xs_table *, void *, uint32_t);
 void xs_offsets(size_t *);
 uint32_t xs_grid_sum(struct Grid const *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

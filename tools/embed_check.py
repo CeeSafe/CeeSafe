@@ -276,7 +276,11 @@ def main():
                                      ("callback", 2, None), ("explicit", 16, "embed: deliberate")):
             r = run([host, "hook", where])
             found = hooks(r.stdout)
-            good = (status_of(r) == 134 and len(found) == 1 and int(found[0].group(2)) == kind and
+            # The worker case's 8 children panic on up to 4 workers, each of which may run the hook before the first
+            # abort ends the process (ADR 0088 §2.4: once per thread, possibly at once): every record the same.
+            count_ok = len(found) == 1 or (where == "worker" and 1 <= len(found) <= 4 and
+                                          len({m.group(0)[m.group(0).index(" kind="):] for m in found}) == 1)
+            good = (status_of(r) == 134 and count_ok and int(found[0].group(2)) == kind and
                     found[0].group(4) == "src/lib.cee" and int(found[0].group(5)) > 0 and int(found[0].group(6)) > 0
                     and (message is None or found[0].group(7) == message) and "ceesafe panic" not in r.stderr)
             check.expect(f"the hook: {where}", good, f"status {status_of(r)} {r.stdout} {r.stderr}")

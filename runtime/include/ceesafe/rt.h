@@ -718,22 +718,20 @@ CEE_COLD _Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *m
 /* Every export and every @callback entry calls ceesafe_entry_check first (ADR 0088 §2.4): on a thread that has
    panicked (its hook called CeeSafe, or a host escaped the hook and called in again) it prints that panic's line and
    aborts instead of running on broken state. Hosted only: the generated code of a freestanding build does not call
-   it. Its cost is a thread-local load and an untaken branch, and the load's cost is the target's:
-   - ELF (GCC, clang): the initial-exec model, so a load of the thread pointer's offset from the GOT and the load
-     itself, no call, also in position-independent code. Right for an archive or object linked into an executable,
-     or into a shared library the program loads at start; a shared library loaded later by dlopen needs the C
-     library's spare static TLS, which glibc keeps for this and other C libraries may not have (ADR 0088 §7).
-   - Mach-O: a call through the variable's TLV descriptor (its thunk, after the first call a few loads).
-   - Windows: the TLS index and slot loads. */
+   it. Its cost is a relaxed load of one global and an untaken branch: ceesafe_any_panicked is set at the first panic
+   of any thread, and only then does ceesafe_entry_panicked, out of line, read the thread's own flag. The thread-local
+   load inline would cost more than the call it guards on Mach-O, where it is a call through the variable's TLV
+   descriptor (benchmarks/entry_check.py), and clang evaluates it even when a `&&` before it is false. */
 #if !defined(CEE_FREESTANDING)
-#if defined(__ELF__) && (defined(__GNUC__) || defined(__clang__))
-extern _Thread_local uint8_t ceesafe_thread_panicked __attribute__((tls_model("initial-exec")));
-#else
-extern _Thread_local uint8_t ceesafe_thread_panicked;
-#endif
-CEE_COLD _Noreturn void ceesafe_panic_reentered(void);
+extern uint32_t ceesafe_any_panicked;
+CEE_COLD void ceesafe_entry_panicked(void);
 static inline void ceesafe_entry_check(void) {
-    if (ceesafe_thread_panicked != 0u) ceesafe_panic_reentered();
+#if defined(_MSC_VER) && !defined(__clang__)
+    uint32_t any = *(volatile uint32_t *)&ceesafe_any_panicked; /* not torn: an aligned 32-bit access */
+#else
+    uint32_t any = __atomic_load_n(&ceesafe_any_panicked, __ATOMIC_RELAXED);
+#endif
+    if (any != 0u) ceesafe_entry_panicked();
 }
 #endif
 

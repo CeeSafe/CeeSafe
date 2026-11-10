@@ -231,8 +231,11 @@ static uint32_t rt_state;
 static ceesafe_panic_hook rt_panic_hook; /* written before STARTED is stored, read after it is loaded */
 static void *rt_panic_context;
 
-/* Set before the hook runs (ADR 0088 §2.4); ceesafe_entry_check reads it at every export and @callback entry. */
-_Thread_local uint8_t ceesafe_thread_panicked;
+/* Set before the hook runs (ADR 0088 §2.4): ceesafe_any_panicked for every thread, then the thread's own flag, which
+   ceesafe_entry_panicked reads at an export or @callback entry once the first is set (relaxed: a thread sees its own
+   store, and another thread's panic only sends it here to read its own flag). */
+uint32_t ceesafe_any_panicked;
+static _Thread_local uint8_t ceesafe_thread_panicked;
 /* This thread's first panic, for the line ceesafe_panic_reentered prints. Its message is copied (up to
    CEE_PANIC_KEPT bytes): a runtime-built message lives in the panicking frame, which is gone by the re-entry. */
 #define CEE_PANIC_KEPT 256u
@@ -263,6 +266,11 @@ static void write_panic_line(const ceesafe_panic_info *info) {
    if the hook returns, or on a panic inside it, the printed line and the abort. */
 static _Noreturn void panic_report(const ceesafe_panic_info *info) {
     if (ceesafe_thread_panicked == 0u) {
+#if defined(_MSC_VER) && !defined(__clang__)
+        *(volatile uint32_t *)&ceesafe_any_panicked = 1u;
+#else
+        __atomic_store_n(&ceesafe_any_panicked, 1u, __ATOMIC_RELAXED);
+#endif
         ceesafe_thread_panicked = 1u;
         thread_panic = *info;
         if (info->message != NULL) {
@@ -307,9 +315,16 @@ _Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *message) {
 
 /* An export or @callback entered on a thread that has panicked: that panic's line (its message as kept), and the
    abort; never the hook. */
-_Noreturn void ceesafe_panic_reentered(void) {
+static _Noreturn void ceesafe_panic_reentered(void) {
     write_panic_line(&thread_panic);
     ceesafe_platform_abort();
+}
+
+/* ceesafe_entry_check's slow path, once some thread has panicked: this thread's flag. */
+void ceesafe_entry_panicked(void) {
+    if (ceesafe_thread_panicked != 0u) {
+        ceesafe_panic_reentered();
+    }
 }
 
 /* ---- Heap: accounting and fault injection (type-system.md §18) ---------------------------- */

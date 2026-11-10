@@ -552,7 +552,7 @@ fn emitStatics(e: borrow mut CEmitter, c: borrow Checker, definitions: bool) -> 
 
 /// The id of a literal over the C limit among the long strings, or none (LongStringId).
 fn longStringId(e: borrow CEmitter, text: Slice<u8>) -> u32 {
-    if (text.length <= cStringLimit()) {
+    if (text.length == 0 || (text.length <= cStringLimit() && !e.shortArrays)) {
         return none();
     }
     for (k in 0..e.longStrings.length) {
@@ -570,9 +570,42 @@ fn addLongString(e: borrow mut CEmitter, text: Slice<u8>) -> Result<void, AllocE
     return Ok();
 }
 
+/// Whether `text` is the contents of a file the program embeds (ADR 0087 §2.8), and not empty.
+fn isEmbeddedText(c: borrow Checker, text: Slice<u8>) -> bool {
+    if (text.length == 0) {
+        return false;
+    }
+    for (f in c.embeddedFiles.view()) {
+        if (sameBytes(c.hir.textOf(f.text), text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// The string literals longer than a C compiler must accept (cStringLimit), each once as a byte array that the code
-/// points to instead (EmitLongStrings): the NIR's operands and the statics' values.
+/// points to instead (EmitLongStrings): the NIR's operands and the statics' values. An embedded file's bytes are such
+/// an array whatever their length (c-backend.md §2.6; ADR 0087 §2.8).
 fn emitLongStrings(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgram) -> Result<void, AllocError> {
+    if (c.embeddedFiles.length > 0) {
+        for (o in n.operands.view()) {
+            match (o) {
+                NirOperand.String(text) => {
+                    let bytes = n.textOf(text);
+                    if (bytes.length <= cStringLimit() && isEmbeddedText(c, bytes)) {
+                        e.shortArrays = true;
+                        if (longStringId(e, bytes) == none()) {
+                            e.longStrings.push(copyBytes(bytes)?)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (item in c.hir.statics.view()) {
+            collectEmbeddedStaticStrings(e, c, item.value)?;
+        }
+    }
     for (o in n.operands.view()) {
         match (o) {
             NirOperand.String(text) => { addLongString(e, n.textOf(text))?; }
@@ -594,12 +627,44 @@ fn emitLongStrings(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
     return Ok();
 }
 
+/// A static's embedded bytes (a `Cast` of a string literal, ADR 0087 §2.8), as a byte array whatever their length.
+fn collectEmbeddedStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -> Result<void, AllocError> {
+    if (value == none()) {
+        return Ok();
+    }
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.StringConst(text) => {
+            let bytes = c.hir.textOf(text);
+            if (bytes.length <= cStringLimit() && isEmbeddedText(c, bytes)) {
+                e.shortArrays = true;
+                if (longStringId(e, bytes) == none()) {
+                    e.longStrings.push(copyBytes(bytes)?)?;
+                }
+            }
+        }
+        HirExpr.Cast(inner) => { collectEmbeddedStaticStrings(e, c, inner)?; }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                collectEmbeddedStaticStrings(e, c, c.hir.fieldValues[(fields.start + k) as usize].value)?;
+            }
+        }
+        HirExpr.ArrayLiteral(elements) => {
+            for (k in 0..elements.count) {
+                collectEmbeddedStaticStrings(e, c, c.hir.at(elements, k))?;
+            }
+        }
+        _ => {}
+    }
+    return Ok();
+}
+
 fn collectLongStaticStrings(e: borrow mut CEmitter, c: borrow Checker, value: u32) -> Result<void, AllocError> {
     if (value == none()) {
         return Ok(); // C data, initialised by C (ADR 0080 §3.1–§3.2)
     }
     match (c.hir.exprs[value as usize]) {
         HirExpr.StringConst(text) => { addLongString(e, c.hir.textOf(text))?; }
+        HirExpr.Cast(inner) => { collectLongStaticStrings(e, c, inner)?; } // `c"…"`'s or `embed`'s bytes
         HirExpr.StructLiteral(fields) => {
             for (k in 0..fields.count) {
                 collectLongStaticStrings(e, c, c.hir.fieldValues[(fields.start + k) as usize].value)?;

@@ -55,6 +55,7 @@ struct CEmitter {
     aggregateEnums: Map<Bytes, u32>;       // C name → the first aggregate enum with it (aggregateEnumNamed)
     staticStrings: Vector<Vector<u8>>;     // the C strings statics point to, in first-use order
     longStrings: Vector<Vector<u8>>;       // literals over 4095 bytes, emitted as byte arrays (LongStrings)
+    shortArrays: bool;                     // some byte arrays are shorter: an embedded file's (ADR 0087 §2.8)
     splitData: Vector<Vector<u8>>;         // C data split mode renames (sorted)
     function: u32;                         // the NIR function being emitted, or none
     inAsync: bool;                         // it is an async fn's resume function (c-backend.md §3a)
@@ -110,6 +111,7 @@ struct CEmitter {
         aggregateEnums: Map<Bytes, u32>.create(),
         staticStrings: Vector<Vector<u8>>.create(),
         longStrings: Vector<Vector<u8>>.create(),
+        shortArrays: false,
         splitData: Vector<Vector<u8>>.create(),
         function: none(),
         inAsync: false,

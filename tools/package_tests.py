@@ -50,6 +50,10 @@
     outside it, a link loop, `..` out of the package and a file of 16 MiB + 1; N0361 for `embedText` of Latin-1 bytes;
     and nothing for `embed` of the same bytes, an exactly 16 MiB file, or its manifest. The links and large files are
     made here (on Windows, without the privilege to make links, only what needs none).
+19. embed in C and the interpreter (ADR 0087 §2.8, c-backend.md §2): a program embeds a 3 MiB file of random bytes
+    (made here) through a static, a constant and a local, a 4-byte file and an empty one; it prints the lengths and a
+    checksum, which Python computes, the same compiled and interpreted. `--emit c` holds each non-empty file's bytes
+    once, as a `static const uint8_t` array, the short one too.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -58,6 +62,7 @@ import argparse
 import itertools
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -642,7 +647,55 @@ def main():
         if p.returncode != 1 or found != want:
             problems.append(f"embed: escape: expected {want}, found {found} ({p.returncode}) {p.stderr[:300]}")
 
-    print(f"package_tests: 18 checks; {len(problems)} problems")
+        # 19. Embedded bytes in C and in the interpreter: large, small and empty files.
+        large = os.path.join(work, "embed-large")
+        os.makedirs(os.path.join(large, "src"))
+        rng = random.Random(87)
+        big = bytes(rng.randrange(256) for _ in range(3 * 1024 * 1024 + 17))
+        small = b"\xff\xfe\x00\x01"
+        for name, data in (("big.bin", big), ("small.bin", small), ("empty.bin", b"")):
+            with open(os.path.join(large, "src", name), "wb") as f:
+                f.write(data)
+        with open(os.path.join(large, "ceesafe.toml"), "w") as f:
+            f.write('[package]\nname = "large"\n')
+        with open(os.path.join(large, "src", "main.cee"), "w") as f:
+            f.write('static BIG: Slice<u8> = embed("big.bin");\nconst SAME: Slice<u8> = embed("./big.bin");\n'
+                    'static SMALL: Slice<u8> = embed("small.bin");\nconst EMPTY: Slice<u8> = embed("empty.bin");\n\n'
+                    'fn sum(bytes: Slice<u8>) -> u64 {\n    var total: u64 = 0;\n    for (b in bytes) {\n'
+                    '        total = (total * 31 + b as u64) % 1000000007;\n    }\n    return total;\n}\n\n'
+                    'fn main() {\n    let local = embed("big.bin");\n    Console.writeLine(BIG.length);\n'
+                    '    Console.writeLine(sum(BIG));\n    Console.writeLine(SAME.length == local.length);\n'
+                    '    Console.writeLine(sum(SMALL));\n    Console.writeLine(EMPTY.length);\n}\n')
+        def checksum(data):
+            total = 0
+            for b in data:
+                total = (total * 31 + b) % 1000000007
+            return total
+        expected = f"{len(big)}\n{checksum(big)}\ntrue\n{checksum(small)}\n0"
+        p = run([compiler, "build"], large)
+        exe = os.path.join(large, "out", "large.exe" if WINDOWS else "large")
+        if p.returncode != 0:
+            problems.append(f"embed-large: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], large).stdout.strip()
+            if out != expected:
+                problems.append(f"embed-large: the program printed {out!r}, not {expected!r}")
+        p = run([compiler, "run", "--interp"], large)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"embed-large: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-300:]}")
+        cdir = os.path.join(work, "embed-large-c")
+        p = run([compiler, "build", "--emit", "c", "-o", cdir], large)
+        try:
+            text = open(os.path.join(cdir, "main.c")).read()
+        except OSError:
+            text = ""
+        arrays = [line for line in text.splitlines() if line.startswith("static CEE_UNUSED const uint8_t ceeLS_")]
+        if p.returncode != 0 or len(arrays) != 2 or not any(l.endswith("[] = {0xFF, 0xFE, 0x00, 0x01};")
+                                                            for l in arrays):
+            problems.append(f"embed-large: --emit c: expected two byte arrays, the short one among them: "
+                            f"{[a[:60] for a in arrays]} ({p.returncode}) {p.stderr[-300:]}")
+
+    print(f"package_tests: 19 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

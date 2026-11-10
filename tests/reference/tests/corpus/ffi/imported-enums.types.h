@@ -5,8 +5,10 @@
 
 #include <stdint.h>
 
-enum color { RED = 1, GREEN = 2, BLUE = 3 };
-typedef enum { SMALL = 0, BIG = 9 } size_kind_t;
+/* The negative enumerators make both enums' integer `int` on every target (type-system.md §31.6): without one GCC and
+ * Clang give an enum `unsigned int` on Linux and macOS, and MSVC gives every enum `int` on Windows. */
+enum color { NO_COLOR = -1, RED = 1, GREEN = 2, BLUE = 3 };
+typedef enum { NO_SIZE = -1, SMALL = 0, BIG = 9 } size_kind_t;
 
 struct paint {
     enum color c;

@@ -134,7 +134,7 @@ fn checkProgramWith(
     let expanded = expandDerives(front, fileTexts)?; // `@derive` (ADR 0087 §2.3)
     var c = Checker {
         front: expanded,
-        types: TypeTable.create(lp64())?,
+        types: TypeTable.create(targetFor(freestanding))?,
         hir: HirProgram.create(),
         fileIsLibrary: fileIsLibrary,
         fileTexts: fileTexts,

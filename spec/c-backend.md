@@ -298,7 +298,9 @@ Everything else is unchanged. Heap boxes, and every other site, use the drop glu
   member access. Pointer, `usize` and `isize` fields convert through `uintptr_t` or a cast when read
   and written, as wrappers do. For each declared field, two `_Static_assert`s (on `_Generic` of the
   member, with the field's C type, and on its `sizeof`) make a header that disagrees a C compile error
-  that names the struct, the field and the CeeSafe declaration's file and line.
+  that names the struct, the field and the CeeSafe declaration's file and line. A member of an imported enum spelled
+  `enum name` is matched through its address (`enum name *`), since Clang targeting Windows reads `enum name:` as an
+  enum with a fixed underlying type (type-system.md §31.3).
 - **C arrays in imported types (C9, ADR 0014)**: a field `f: [E; N]` is the member seen as CeeSafe's array
   struct, `(*(ceeA<N>_<E> *)(uintptr_t)&p->f)`: no copy, and every array operation works on it. Its checks are
   `_Generic(&member, CE (*)[N]: 1, default: 0)` (the member itself would decay to a pointer) and equal

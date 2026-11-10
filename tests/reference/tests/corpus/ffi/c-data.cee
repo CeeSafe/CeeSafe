@@ -4,7 +4,7 @@
 
 @header("c-data.types.h")
 extern "C" {
-    enum node_kind: u32;
+    enum node_kind: i32;
     const EIO: i32 = 5;
     const NODE_DIR: node_kind = 2;
     @cvalue("sizeof(struct pool)")

@@ -252,7 +252,7 @@ This is how CosmoOS's GPT parser is written (`integrations/cosmoos/c9.py` checks
 ### C enums
 
 A header that types a parameter or a member with an enum is imported with `enum name: I;`, where `I` is the integer the C
-compiler gives the enum (usually `u32`). The type is an integer of its own: `as` converts it to and from `I`, and its
+compiler gives the enum. The type is an integer of its own: `as` converts it to and from `I`, and its
 values are constants of the type. CeeSafe spells it `enum name` (or a typedef's name, with `@ctype`) everywhere C sees it,
 so a function pointer type whose C type names the enum, such as an operation table's entry, is the same C type as the
 CeeSafe function's. With `u32` in its place, C would accept the call, but UBSan's `-fsanitize=function` refuses a call
@@ -278,8 +278,11 @@ fn isDirectory(vn: borrow vnode) -> bool => vn.kind == VNODE_DIR;
 fn emit(arg: *mut void, name: *CChar, len: usize, ino: u64, kind: vnode_type) -> i32 => if (kind == VNODE_DIR) 1 else 0;
 ```
 
-The C compiler checks that the enum is the integer declared. The rules are
-[ADR 0079](../spec/decisions/0079-imported-c-enums.md).
+The C compiler checks that the enum is the integer declared. That integer depends on the target: GCC and Clang on Linux
+and macOS make an enum without negative values `unsigned int` (`u32`), as this kernel's is, and one with a negative
+value `int` (`i32`), while on Windows every enum is `int`. A header meant for every target gives its enum a negative
+value, so that it is `i32` everywhere. The rules are [ADR 0079](../spec/decisions/0079-imported-c-enums.md) and
+type-system.md §31.6.
 
 ## C constants, C data and configured code
 

@@ -72,3 +72,26 @@
 - **A new kind of type** beside integers. It would need every rule that holds of integers restated for it; the C
   spelling is the only difference that matters.
 - **A type alias** (`type vnode_type = u32;`). CeeSafe has none (§13), and an alias would still be spelled `uint32_t`.
+
+## 5. Amendment (2026-11-10): the integer is the target's
+
+Running the corpus natively on Windows (ADR 0069) showed three gaps. The rule of §2.1 stands: `I` is the integer the C
+compiler gives the enum, and a header that disagrees fails to compile.
+
+1. **The integer depends on the target.** C11 §6.7.2.2 ¶4 leaves an enum's integer to the implementation. GCC and
+   Clang on Linux and macOS give an enum whose enumerators are all non-negative `unsigned int`, and one with a negative
+   enumerator `int`; MSVC, and Clang targeting Windows, give every enum `int`. Values of the type are C's enum in the
+   generated code, so the assertion of the width and the signedness is what keeps C's arithmetic and comparisons on
+   them CeeSafe's; a width-only check was rejected for that reason. A declaration fits every target only where the
+   header's enum has the same integer on all of them, as one with a negative enumerator does (`i32`). The corpus's
+   headers do so (`ffi/imported-enums`, `ffi/c-data`); type-system.md §31.6 and guide/unsafe-and-c.md say it.
+2. **The assertion states the width and the signedness, not the C type.** MSVC makes no enum compatible with any
+   integer type, so §2.4's `_Generic((enum name)0, CI: 1, default: 0)` fails there for every enum. The assertion is
+   now `sizeof(enum name) == sizeof(CI) && (enum name)-1 < (enum name)1` for a signed `I` (`>` for an unsigned one):
+   what CeeSafe's integer rules depend on, on every compiler. It also accepts an enum whose C type is another integer
+   of the same width and signedness (C's `char` for `i8` where `char` is signed, `long long` for `i64` where `int64_t`
+   is `long`), which behave alike.
+3. **A member's check is spelled through its address.** In `_Generic(m, enum color: 1, default: 0)` Clang targeting
+   Windows reads `enum color:` as an enum with a fixed underlying type (a Microsoft extension) and fails. A member
+   whose C type is spelled `enum name` is asserted as `_Generic(&m, enum name *: 1, default: 0)` (type-system.md
+   §31.3).

@@ -254,6 +254,16 @@ struct TargetInfo {
 
 fn lp64() -> TargetInfo => TargetInfo { pointerBits: 64, longBits: 64 };
 
+/// The target a program is checked for (ADR 0080 §3.5). Every target is 64-bit. C's `long` is 32 bits on Windows
+/// (LLP64), the target of a hosted build when ceesafec runs there (ADR 0069), and 64 bits on every other target (LP64),
+/// the freestanding ones included; a generated C file that uses `CLong` asserts `sizeof(long)` against it.
+fn targetFor(freestanding: bool) -> TargetInfo {
+    if (!freestanding && hostIsWindows()) {
+        return TargetInfo { pointerBits: 64, longBits: 32 };
+    }
+    return lp64();
+}
+
 struct SizeAlign {
     size: i64; // -1 for the unsized [T], as the reference computes it
     align: u32;

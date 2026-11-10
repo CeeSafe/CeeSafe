@@ -4,9 +4,9 @@
 
 @header("imported-enums.types.h")
 extern "C" {
-    enum color: u32;
+    enum color: i32;
     @ctype("size_kind_t")
-    enum size_kind: u32;
+    enum size_kind: i32;
     struct paint {
         c: color;
         amount: i32;
@@ -24,7 +24,7 @@ const BIG: size_kind = 9;
 
 /// The operation table's entry: C points `mix` at this.
 @export("paint_mix")
-fn mix(a: color, s: size_kind) -> i32 => truncate<i32>(a as u32 * 10 + s as u32);
+fn mix(a: color, s: size_kind) -> i32 => a as i32 * 10 + s as i32;
 
 /// A member of the enum's type, read and written.
 /// Safety: `p` is a live paint.
@@ -33,7 +33,7 @@ unsafe fn repaint(p: *mut paint) -> i32 {
     let x = Ptr.toBorrowMut(p);
     let was = x.c;
     x.c = GREEN;
-    return x.amount + truncate<i32>(was as u32);
+    return x.amount + was as i32;
 }
 
 /// What the callback adds to.
@@ -46,7 +46,7 @@ struct Tally {
 @callback
 unsafe fn count(arg: *mut void, c: color) -> i32 {
     let tally = Ptr.toBorrowMut(arg as *mut Tally);
-    tally.sum = tally.sum + truncate<i32>(c as u32);
+    tally.sum = tally.sum + c as i32;
     return 0;
 }
 

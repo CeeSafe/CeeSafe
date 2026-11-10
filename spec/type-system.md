@@ -2363,6 +2363,9 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
 - `File.open(path)`: `Result<File, IoError>` for reading; `File.create(path)`: for writing, created
   or truncated; `File.remove(path)`: `Result<void, IoError>`. `path` is a `StringView`; a path that
   contains a zero byte or is longer than 4095 bytes is `InvalidInput`.
+- A file may be removed or renamed while a `File` holds it open, natively on every system: the name goes, and the
+  open `File` keeps reading and writing the file until it is dropped. Windows opens every file sharing delete
+  (`FILE_SHARE_DELETE`), which its C runtime's `_open` does not.
 - **Durable files** (ADR 0075 §2.1), each `Result<…, IoError>`:
   - `File.openReadWrite(path)` opens an existing file for reading and writing (`NotFound` if missing);
     `File.openOrCreate(path)` creates a missing one; `File.createNew(path)` creates one and is `AlreadyExists` if
@@ -2379,7 +2382,8 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
   - `f.length()`: `u64`; `f.setLength(n: u64)` shrinks the file or extends it with zeros.
   - Each takes `borrow this` (since ADR 0075 §8; 0.19.0 took `borrow mut this`): none moves the position `read` and
     `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, positions go through the handle's
-    `OVERLAPPED` offset.
+    `OVERLAPPED` offset, which also moves the handle's position: it is read before and put back after, so a `read` or
+    `write` on another thread during the call may see it moved.
 - `File.openAppend(path)` (ADR 0077): write-only, created if missing, every write at the end (`O_APPEND`).
 - `File.modified(path)` (ADR 0077, lib/std): `Result<UnixTime, IoError>`, the last modification time.
 - `File.openRegular(path)` (ADR 0078 §3): opens `path` for reading if it is a regular file, never waiting on a FIFO
@@ -2858,8 +2862,11 @@ result, local or field of C's `char`, 8 bits with no arithmetic. `b as CChar` (f
 prototypes exactly.
 
 `CLong` and `CULong` (ADR 0080 §3.5) are C's `long` and `unsigned long`: integer types of their own, of the target's
-width (64 bits on every target ceesafec supports today), spelled `long` and `unsigned long` in C. A generated C file
-that uses one asserts `sizeof(long)`, so a target whose `long` is another width fails to compile.
+width, spelled `long` and `unsigned long` in C. The width is 32 bits on Windows (LLP64), the target of a hosted build
+when ceesafec runs there (ADR 0069), and 64 bits on every other target (LP64), freestanding ones included. It is part
+of the layouts ceesafec computes and asserts, so `[CULong; 3]` is 12 bytes on Windows and 24 elsewhere. A generated C
+file that uses one asserts `sizeof(long)`, so C generated for one target and compiled for another whose `long` is
+another width fails to compile.
 
 ### 28.4 Exports
 - `@export` makes a top-level, non-generic, non-method function callable from C, with the C types of
@@ -3309,6 +3316,9 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   naming the struct, the field and the declaration's file and line. Neither expression is
   evaluated. A header that lacks a field, or has it with another type in some configuration, fails
   to compile; it cannot miscompile.
+- A field of an imported enum spelled `enum name` (§31.6) is asserted with `_Generic(&((S *)0)->f, enum name *: 1,
+  default: 0)`: Clang targeting Windows reads `enum name:` in an association as an enum with a fixed underlying type (a
+  Microsoft extension) and refuses it.
 - An array field `f: [E; N]` (C9) is asserted with `_Generic(&((S *)0)->f, CE (*)[N]: 1, default: 0)`, exact
   where `_Generic` of the member itself would see a decayed pointer, and, for integer and `bool` elements, with
   the size of CeeSafe's array. Its place is `(*(A *)(uintptr_t)&(*p).f)` (through `uintptr_t`, as `p` may be a `const` pointer), where `A` is CeeSafe's array struct
@@ -3344,10 +3354,20 @@ N0294 (an imported type used where CeeSafe would need its size, or a borrow of a
   pointer type of C's with an enum parameter is therefore the same C type as CeeSafe's, which a call through a pointer
   needs (UBSan's `-fsanitize=function` refuses a call whose pointer type names `unsigned int` where the function's
   says `enum`, though C calls the two compatible).
-- **Lowering.** A generated C file that uses the type asserts, once and before its first use,
-  `_Static_assert(sizeof(T) == sizeof(CI) && _Generic((T)0, CI: 1, default: 0), "…")` for its C spelling `T` and
-  `I`'s C type `CI`, with a message naming the type and the declaration's file and line. A header whose enum the C
-  compiler lays out as another integer fails to compile. Its mangled name is its own (`N`, the length, the name).
+- **Lowering.** A generated C file that uses the type asserts, once and before its first use, that C gives the enum
+  `I`'s width and signedness: `_Static_assert(sizeof(T) == sizeof(CI) && (T)-1 < (T)1, "…")` for its C spelling `T`
+  and `I`'s C type `CI` when `I` is signed, with `>` when it is unsigned, and a message naming the type and the
+  declaration's file and line. A header whose enum the C compiler lays out as another integer fails to compile.
+  `_Generic` cannot state it: MSVC makes no enum compatible with any integer type. Its mangled name is its own (`N`,
+  the length, the name).
+- **The integer is the target's** (C11 §6.7.2.2 ¶4 leaves it to the implementation), and values of the type are C's
+  enum in the generated code, so C's arithmetic and comparisons on them are CeeSafe's only when it has `I`'s width and
+  signedness. GCC
+  and Clang on Linux and macOS give an enum whose enumerators are all non-negative `unsigned int` (`u32`) and one with a
+  negative enumerator `int` (`i32`); MSVC, and Clang targeting Windows, give every enum `int`. So one declaration fits
+  every target only where the header's enum has the same integer on all of them, as one with a negative enumerator
+  does (`i32`). Elsewhere the assertion stops the build on the target whose integer differs; ceesafec never accepts
+  an integer of the right width but the wrong signedness.
 - The interpreter runs it as an integer of `I`'s width.
 
 Diagnostics: N0290 (an attribute other than `@ctype`, a block without `@header`), N0291 (an integer type C does not give

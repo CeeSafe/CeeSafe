@@ -171,6 +171,51 @@ static int64_t cee_fd_kind(int fd) {
 #endif
 }
 
+#ifdef _WIN32
+/* An errno for a Windows error code from opening a file, as the C runtime's _open reports them. */
+static int cee_win_open_errno(DWORD code) {
+    switch (code) {
+    case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_INVALID_DRIVE: case ERROR_BAD_NETPATH:
+    case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE: return ENOENT;
+    case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: return EEXIST;
+    case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION: case ERROR_WRITE_PROTECT:
+        return EACCES;
+    case ERROR_TOO_MANY_OPEN_FILES: return EMFILE;
+    case ERROR_NOT_ENOUGH_MEMORY: case ERROR_OUTOFMEMORY: return ENOMEM;
+    case ERROR_DISK_FULL: case ERROR_HANDLE_DISK_FULL: return ENOSPC;
+    default: return EINVAL;
+    }
+}
+
+/* _open with the share mode POSIX gives every open file: _open's lacks FILE_SHARE_DELETE, so Windows would refuse to
+   remove or rename a file while any descriptor holds it open, which File.remove and File.rename allow on every other
+   system (type-system.md §26.3). The handle is not inherited, as O_CLOEXEC asks elsewhere. -1 with errno set on
+   failure. */
+static int cee_win_open(const char *name, int flags) {
+    int access_mode = flags & (_O_RDONLY | _O_WRONLY | _O_RDWR);
+    DWORD access = access_mode == _O_WRONLY ? GENERIC_WRITE
+                 : access_mode == _O_RDWR   ? GENERIC_READ | GENERIC_WRITE
+                                            : GENERIC_READ;
+    DWORD disposition = (flags & (_O_CREAT | _O_EXCL)) == (_O_CREAT | _O_EXCL) ? CREATE_NEW
+                      : (flags & (_O_CREAT | _O_TRUNC)) == (_O_CREAT | _O_TRUNC) ? CREATE_ALWAYS
+                      : (flags & _O_CREAT) != 0                                  ? OPEN_ALWAYS
+                                                                                 : OPEN_EXISTING;
+    HANDLE h = CreateFileA(name, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        errno = cee_win_open_errno(GetLastError());
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, (flags & _O_APPEND) | _O_BINARY);
+    if (fd < 0) {
+        int error = errno;
+        (void)CloseHandle(h);
+        errno = error;
+    }
+    return fd;
+}
+#endif
+
 cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
     char name[4096];
     if (!ceesafe_c_path(path, name)) return ceesafe_io_fail(EINVAL);
@@ -184,7 +229,7 @@ cee_io_result ceesafe_file_open(cee_str path, uint32_t mode) {
                   : mode == 5u ? _O_WRONLY | _O_CREAT | _O_APPEND
                   : mode == 6u ? _O_RDONLY /* ADR 0078: File.openRegular; opening never waits on Windows */
                                : _O_RDWR | _O_CREAT | _O_EXCL;
-        fd = _open(name, flags | _O_BINARY, _S_IREAD | _S_IWRITE);
+        fd = cee_win_open(name, flags);
 #else
         /* Modes 2-4 (ADR 0075 §2.1): read and write; 3 creates a missing file; 4 creates and fails if one exists.
            A created file gets 0666 & ~umask. */
@@ -295,6 +340,16 @@ cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length
 
 /* ---- Durable files (ADR 0075 §2.1) ------------------------------------------------------- */
 
+#ifdef _WIN32
+/* ReadFile and WriteFile at an OVERLAPPED offset leave a synchronous handle's file position after the bytes they
+   transferred, where pread and pwrite leave it unchanged: the position is read before and put back after. */
+static bool cee_win_position(HANDLE h, LARGE_INTEGER *at) {
+    LARGE_INTEGER zero;
+    zero.QuadPart = 0;
+    return SetFilePointerEx(h, zero, at, FILE_CURRENT) != 0;
+}
+#endif
+
 /* One read of up to `length` bytes at `offset`, not moving the file position; 0 at or past the end. */
 cee_io_result ceesafe_fd_read_at(int32_t fd, uint8_t *buffer, uint64_t length, uint64_t offset) {
     size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
@@ -304,9 +359,13 @@ cee_io_result ceesafe_fd_read_at(int32_t fd, uint8_t *buffer, uint64_t length, u
     OVERLAPPED at = { 0 };
     at.Offset = (DWORD)offset;
     at.OffsetHigh = (DWORD)(offset >> 32);
+    LARGE_INTEGER position;
+    if (!cee_win_position(h, &position)) return ceesafe_io_fail(EIO);
     DWORD n = 0;
-    if (!ReadFile(h, buffer, (DWORD)chunk, &n, &at)) {
-        DWORD error = GetLastError();
+    BOOL ok = ReadFile(h, buffer, (DWORD)chunk, &n, &at);
+    DWORD error = ok ? 0 : GetLastError();
+    (void)SetFilePointerEx(h, position, NULL, FILE_BEGIN);
+    if (!ok) {
         if (error == ERROR_HANDLE_EOF) return ceesafe_io_ok(0);
         return ceesafe_io_fail(error == ERROR_ACCESS_DENIED ? EACCES : EIO);
     }
@@ -328,6 +387,8 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
 #ifdef _WIN32
     HANDLE h = (HANDLE)_get_osfhandle(fd);
     if (h == INVALID_HANDLE_VALUE) return ceesafe_io_fail(EBADF);
+    LARGE_INTEGER position;
+    if (!cee_win_position(h, &position)) return ceesafe_io_fail(EIO);
 #endif
     while (done < length) {
         uint64_t rest = length - done;
@@ -338,8 +399,10 @@ cee_io_result ceesafe_fd_write_at(int32_t fd, const uint8_t *bytes, uint64_t len
         where.Offset = (DWORD)at;
         where.OffsetHigh = (DWORD)(at >> 32);
         DWORD n = 0;
-        if (!WriteFile(h, bytes + done, (DWORD)chunk, &n, &where)) {
-            DWORD error = GetLastError();
+        BOOL ok = WriteFile(h, bytes + done, (DWORD)chunk, &n, &where);
+        DWORD error = ok ? 0 : GetLastError();
+        (void)SetFilePointerEx(h, position, NULL, FILE_BEGIN);
+        if (!ok) {
             return ceesafe_io_fail(error == ERROR_DISK_FULL || error == ERROR_HANDLE_DISK_FULL ? ENOSPC
                                : error == ERROR_ACCESS_DENIED                              ? EACCES
                                                                                            : EIO);
@@ -1744,8 +1807,16 @@ ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t of
     at.OffsetHigh = (DWORD)((uint64_t)offset >> 32);
     DWORD wanted = size > 0x40000000u ? 0x40000000u : (DWORD)size;
     DWORD got = 0;
-    if (!ReadFile((HANDLE)h, buffer, wanted, &got, &at)) {
-        if (GetLastError() == ERROR_HANDLE_EOF) return 0;
+    LARGE_INTEGER position;
+    if (!cee_win_position((HANDLE)h, &position)) {
+        errno = EIO;
+        return -1;
+    }
+    BOOL ok = ReadFile((HANDLE)h, buffer, wanted, &got, &at);
+    DWORD error = ok ? 0 : GetLastError();
+    (void)SetFilePointerEx((HANDLE)h, position, NULL, FILE_BEGIN);
+    if (!ok) {
+        if (error == ERROR_HANDLE_EOF) return 0;
         errno = EIO;
         return -1;
     }

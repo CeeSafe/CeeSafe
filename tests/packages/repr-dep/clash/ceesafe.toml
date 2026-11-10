@@ -1,0 +1,7 @@
+[package]
+name = "clash"
+version = "0.1.0"
+
+[dependencies]
+geo = { path = "../geo" }
+rival = { path = "../rival" }

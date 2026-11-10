@@ -1,0 +1,91 @@
+// A dependency whose `@repr` types and export cross to C (type-system.md §28.5): in C they keep their declared
+// names, `struct Point` and `Shade`, not the package-qualified `geo.Point`.
+
+/// A point, laid out as C's `struct Point`.
+@repr(C)
+public struct Point {
+    public x: i32;
+    public y: i32;
+}
+
+/// Two points, so the header defines `struct Point` before `struct Rect`.
+@repr(C)
+public struct Rect {
+    public low: Point;
+    public high: Point;
+}
+
+/// Points in a C array member, `struct Point points[2]`.
+@repr(C)
+public struct Path {
+    public points: [Point; 2];
+    public count: i32;
+}
+
+/// The number of corners, as C data.
+@export("geo_corners")
+public const CORNERS: u32 = 4;
+
+/// A shade, a `uint8_t` in C.
+@repr(u8)
+public enum Shade {
+    Light,
+    Dark,
+}
+
+/// An ordinary struct: its C name is `ceeT_geo_Plain`.
+public struct Plain {
+    public n: i32;
+}
+
+/// An ordinary enum with a payload.
+public enum Kind {
+    Small,
+    Large(i32),
+}
+
+/// An ordinary generic struct.
+public struct Pair<T> {
+    public first: T;
+    public second: T;
+}
+
+/// The area of `r`, doubled when it is dark.
+@export("geo_area")
+public fn area(r: Rect, s: Shade) -> i32 {
+    let a = (r.high.x - r.low.x) * (r.high.y - r.low.y);
+    return match (s) {
+        Shade.Light => a,
+        Shade.Dark => 2 * a,
+    };
+}
+
+/// Moves `p` by `d` through a pointer, as C would.
+/// Safety: C passes a valid point that nothing else uses during the call.
+@export("geo_shift")
+public fn shift(p: *mut Point, d: i32) {
+    unsafe {
+        let q = p.read();
+        p.write(Point { x: q.x + d, y: q.y + d });
+    }
+}
+
+/// The sum of the coordinates of `p`'s points.
+@export("geo_path_sum")
+public fn pathSum(p: Path) -> i32 => p.points[0].x + p.points[0].y + p.points[1].x + p.points[1].y + p.count;
+
+/// Calls `f` with the origin moved by one, through a C function pointer.
+/// Safety: C passes a valid function that takes a point.
+@export("geo_apply")
+public fn apply(f: extern "C" fn(Point) -> i32) -> i32 {
+    unsafe {
+        return f(Point { x: 1, y: 1 });
+    }
+}
+
+public fn twice(p: Plain) -> Plain => Plain { n: 2 * p.n };
+
+public fn weigh(k: Kind) -> i32 => match (k) {
+    Kind.Small => 1,
+    Kind.Large(n) => n,
+};

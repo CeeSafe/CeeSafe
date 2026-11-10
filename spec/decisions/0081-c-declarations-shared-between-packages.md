@@ -222,3 +222,20 @@ These are rules for the Bun port. They need nothing more from CeeSafe:
   `//` comment on its last line; when it was the only declaration of its `extern "C"` block (and the block has no
   attribute), the block's lines go too, so no empty block is left. Two identical declarations must also agree that
   neither result nor parameter type is in error.
+
+## 8. `@repr` types of dependencies (2026-11-10)
+
+The CeeBun trial (G1) found that a dependency's `@repr(C)` struct or `@repr` enum, used by its dependant, was spelled
+in C with its CeeSafe name (`struct geo.Point`, `int32_t f(geo.Shade)`), so every build that used one failed in the C
+compiler while `check` passed. §2.1's rule extends to them: a `@repr` type's C name is its declared name in every
+package (`struct Point`, `typedef uint8_t Shade;`), which is what C code that includes `ceesafe_exports.h` names, and
+one C name has one declaration. Two `@repr(C)` structs with one name (C's tag name space), or a `@repr` enum and
+another C declaration with one name (the ordinary one), are N0201, with the owner chosen as in §2.2 and §7, and a
+note at the owner's; there is no hint or fix, since a type cannot be called through its package's C name.
+Ordinary types keep the package in their C names (c-backend.md §2.1). Specified in type-system.md §28.5; checked by
+`package_tests.py` §23 (repr-dep).
+
+The same check of ordinary items across packages found that a dependency's item `geo.Point` and a package's own
+`geo_Point` had one C name, `ceeT_geo_Point` (and `geo.area` and `geo_area` one `ceeF_geo_area`), since `.` was written
+`_`: `check` passed and the C compiler failed. Internal C names now write the package's name after its length,
+`ceeT_3geo_Point`, where no identifier can start (c-backend.md §2.1); `package_tests.py` §23 declares both.

@@ -1,0 +1,14 @@
+// `struct Rect` is geo's, a dependency of this package, so this one is N0201 (type-system.md §28.5); rival's Point
+// and Shade are geo's too.
+
+@repr(C)
+struct Rect {
+    w: i32;
+}
+
+fn main() {
+    let r = Rect { w: 1 };
+    let p = rival.Point { x: 2 };
+    Console.writeLine(r.w + geo.Point { x: 3, y: 4 }.x);
+    Console.writeLine(p.x);
+}

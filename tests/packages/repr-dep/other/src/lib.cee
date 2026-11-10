@@ -1,0 +1,15 @@
+// Ordinary items named as geo's: their C names have their package's (c-backend.md §2.1), so both are in one program.
+
+/// An ordinary struct named as geo's.
+public struct Plain {
+    public n: i64;
+}
+
+/// An ordinary function named as geo's.
+public fn twice(p: Plain) -> Plain => Plain { n: 3 * p.n };
+
+/// A `@repr(C)` struct of its own.
+@repr(C)
+public struct Spot {
+    public at: i64;
+}

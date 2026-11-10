@@ -87,6 +87,13 @@
     writable by others; a change inside a body dependents skip keeps the dependency's interface, so the dependent's
     record still holds. `build` reads no record: it checks the whole program.
 26. The cache: `$CEESAFE_HOME/cache` and its `records` directory are made with mode 0700, and each record 0600.
+27. repr-dep (type-system.md §28.5; ADR 0081 §8): geo declares `@repr(C)` structs (one nested, one with an array
+    member), a `@repr(u8)` enum, exports and an exported constant that use them, and ordinary items; other declares
+    ordinary items with geo's names, and app declares `geo_Plain` and `geo_twice` (c-backend.md §2.1). app uses them in its own exports, in generic instances and through
+    c/caller.c, which includes ceesafe_exports.h and calls both packages' exports. Built as one file, `--split` and
+    `--emit obj` (linked here with cc), the program prints the same; `--emit c` spells the types by their declared
+    names (`struct Point`, `Shade`), never `geo.`. clash: app's `@repr(C)` struct named as its dependency geo's, and
+    rival's struct and enum named as geo's (rival and geo unrelated, geo first by name), are N0201 with a note at geo's.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -759,8 +766,8 @@ def main():
         app = os.path.join(same, "app")
         units = ["c/alpha/src/a/mod.c", "c/alpha/src/b/mod.c", "c/alpha/src/util.c", "c/app/src/main.c",
                  "c/app/src/util.c", "c/beta/src/util.c"]
-        homes = {"c/alpha/src/util.c": ["ceeF_alpha_helper", "ceeF_alpha_scale"], "c/beta/src/util.c": ["ceeF_beta_helper"],
-                 "c/alpha/src/a/mod.c": ["ceeF_alpha_left"], "c/alpha/src/b/mod.c": ["ceeF_alpha_right"],
+        homes = {"c/alpha/src/util.c": ["ceeF_5alpha_helper", "ceeF_5alpha_scale"], "c/beta/src/util.c": ["ceeF_4beta_helper"],
+                 "c/alpha/src/a/mod.c": ["ceeF_5alpha_left"], "c/alpha/src/b/mod.c": ["ceeF_5alpha_right"],
                  "c/app/src/util.c": ["ceeF_helper"], "c/app/src/main.c": ["ceeF_main"]}
 
         def tree(directory):
@@ -1237,9 +1244,74 @@ def main():
             if want not in answered:
                 problems.append(f"hover: {line}:{character} should show {want}: {answered[:300]!r}")
 
+        # 27. A dependency's @repr types keep their declared C names (type-system.md §28.5; ADR 0081 §8).
+        repr = os.path.join(work, "repr-dep")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "repr-dep"), repr)
+        app = os.path.join(repr, "app")
+        expected = "8\n40\n42\n42\n42\n44\n55"
+        p = run([compiler, "check"], app)
+        if p.returncode != 0:
+            problems.append(f"repr-dep: check failed: {p.stderr[:600]}")
+        exe = os.path.join(work, "repr-dep-out", "app.exe" if WINDOWS else "app")
+        builds = [("one file", []), ("--split", ["--split"])]
+        if not WINDOWS:
+            builds.append(("--emit obj", ["--emit", "obj"]))
+        for label, flags in builds:
+            target = exe + (".o" if "obj" in flags else "")
+            p = run([compiler, "build"] + flags + ["-o", target], app)
+            if p.returncode != 0:
+                problems.append(f"repr-dep {label}: build failed: {p.stderr.strip()[-600:]}")
+                continue
+            if "obj" in flags:
+                p = run([os.environ.get("CC", "cc"), target, "-o", exe], app)
+                if p.returncode != 0:
+                    problems.append(f"repr-dep {label}: linking the object failed: {p.stderr.strip()[-600:]}")
+                    continue
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"repr-dep {label}: the program printed {out!r}, not {expected!r}")
+            os.remove(exe)
+        for label, flags in (("--emit c", []), ("--split --emit c", ["--split"])):
+            cdir = os.path.join(work, "repr-dep-c" + "".join(flags))
+            p = run([compiler, "build", "--emit", "c"] + flags + ["-o", cdir], app)
+            if p.returncode != 0:
+                problems.append(f"repr-dep {label}: failed: {p.stderr.strip()[-600:]}")
+                continue
+            with open(os.path.join(cdir, "ceesafe_exports.h")) as f:
+                header = f.read()
+            for want in ("struct Point {", "struct Rect {", "struct Path {", "struct Spot {", "typedef uint8_t Shade;",
+                         "Shade_Dark = 1", "int32_t geo_area(struct Rect, Shade);",
+                         "int32_t app_measure(struct Point, Shade);"):
+                if want not in header:
+                    problems.append(f"repr-dep {label}: ceesafe_exports.h lacks {want!r}")
+            for top, _, files in os.walk(cdir):
+                for name in files:
+                    if not name.endswith((".c", ".h")) or name.startswith("ceesafe_rt") or top.endswith("ceesafe"):
+                        continue
+                    with open(os.path.join(top, name)) as f:
+                        for line in f:
+                            code = line.split('"')[0]  # the layout assertions' messages name geo.Point
+                            if "geo." in code or "other." in code:
+                                problems.append(f"repr-dep {label}: {name} names a type with its package: "
+                                                f"{line.strip()[:200]}")
+                                break
+        clash = os.path.join(repr, "clash")
+        p = run([compiler, "check", "--diagnostics-format=json"], clash)
+        try:
+            found = [d for d in json.loads(p.stdout)["diagnostics"] if d["code"] == "N0201"]
+        except (ValueError, KeyError):
+            found = [{"unparsed": p.stdout[:300] + p.stderr[:300]}]
+        got = sorted((where(d), [where(n) for n in d.get("notes", [])]) for d in found)
+        want = [(("../rival/src/lib.cee", 5), [("../geo/src/lib.cee", 6)]),
+                (("../rival/src/lib.cee", 10), [("../geo/src/lib.cee", 31)]),
+                (("src/main.cee", 5), [("../geo/src/lib.cee", 13)])]
+        if p.returncode != 1 or got != want or not all("§28.5" in d.get("message", "") for d in found):
+            problems.append(f"repr-dep/clash: expected N0201 at rival's Point and Shade and app's Rect, owned by geo: "
+                            f"{p.returncode} {got}")
+
         interface_records(compiler, work, problems)
 
-    print(f"package_tests: 26 checks; {len(problems)} problems")
+    print(f"package_tests: 27 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

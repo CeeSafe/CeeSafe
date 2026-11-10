@@ -839,6 +839,7 @@ struct CNameClaim {
     start: u32;
     end: u32;
     what: Vector<u8>; // "C function 'strlen'", as the message names it
+    isType: bool;     // a `@repr` type's name (type-system.md §28.5)
 }
 
 fn claimCName(
@@ -856,7 +857,27 @@ fn claimCName(
         start: span.start,
         end: span.end,
         what: copyBytes(what)?,
+        isType: false,
     });
+}
+
+/// Claims a `@repr` type's C name (type-system.md §28.5): its declared name, which C code that includes
+/// `ceesafe_exports.h` uses, so one name in two packages is N0201 as for functions.
+fn claimTypeName(
+    c: borrow Checker,
+    claims: borrow mut Vector<CNameClaim>,
+    name: Slice<u8>,
+    span: Span,
+    kind: StringView,
+) -> Result<void, AllocError> {
+    var what = Vector<u8>.create();
+    appendText(mut what, kind)?;
+    appendText(mut what, " '")?;
+    appendBytes(mut what, name)?;
+    appendText(mut what, "'")?;
+    claimCName(c, claims, name, none(), span, what.view())?;
+    claims[claims.length - 1].isType = true;
+    return Ok();
 }
 
 /// Which packages each package depends on, directly or through others, computed once: `reach[a * n + b]` when
@@ -1157,12 +1178,19 @@ fn reportCNameClashes(c: borrow mut Checker, claims: borrow Vector<CNameClaim>) 
         if (otherPackage) {
             appendText(mut message, " is already declared by package '")?;
             appendBytes(mut message, c.packages[ownerPackage as usize].name.view())?;
-            appendText(mut message, "' (type-system.md §28.2)")?;
+            appendText(
+                mut message,
+                if (mine.isType || theirs.isType) "' (type-system.md §28.5)" else "' (type-system.md §28.2)",
+            )?;
             appendText(mut note, "package '")?;
             appendBytes(mut note, c.packages[ownerPackage as usize].name.view())?;
             appendText(mut note, "' declares it here")?;
         } else {
-            appendText(mut message, " is already used by another C function or export (type-system.md §28.2)")?;
+            if (mine.isType || theirs.isType) {
+                appendText(mut message, " is already used by another C type or declaration (type-system.md §28.5)")?;
+            } else {
+                appendText(mut message, " is already used by another C function or export (type-system.md §28.2)")?;
+            }
             if (ownerPackage == none() && myPackage != none()) {
                 appendText(mut note, "a library declares it here")?;
             } else {
@@ -1340,6 +1368,7 @@ fn atomicFieldInteger(c: borrow Checker, t: u32) -> u32 {
 fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
     let saved = c.file;
     var claims = Vector<CNameClaim>.create();
+    var tagClaims = Vector<CNameClaim>.create(); // `struct S` tags, C's other name space
     for (k in 0..c.structs.length) {
         let entry = c.structs[k];
         let definition = c.types.info(entry.typ).structDef;
@@ -1354,7 +1383,9 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
         var name = Vector<u8>.create();
         appendBytes(mut name, c.name(c.front.ast.idents[item.name as usize].symbol))?;
         let nameSpan = identSpan(c, item.name);
-        checkCName(c, name.view(), nameSpan, "the C struct name")?;
+        if (checkCName(c, name.view(), nameSpan, "the C struct name")?) {
+            claimTypeName(c, mut tagClaims, name.view(), nameSpan, "@repr(C) struct")?;
+        }
         let s = match (item.kind) {
             ItemKind.Struct(index) => c.front.ast.structs[index as usize],
             _ => { continue; }
@@ -1413,7 +1444,9 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
         var name = Vector<u8>.create();
         appendBytes(mut name, c.name(c.front.ast.idents[nameIdent as usize].symbol))?;
         let nameSpan = identSpan(c, nameIdent);
-        checkCName(c, name.view(), nameSpan, "the C type name")?;
+        if (checkCName(c, name.view(), nameSpan, "the C type name")?) {
+            claimTypeName(c, mut claims, name.view(), nameSpan, "@repr enum")?;
+        }
     }
     for (k in 0..c.structs.length) {
         let entry = c.structs[k];
@@ -1674,6 +1707,7 @@ fn checkForeignInterfaces(c: borrow mut Checker) -> Result<void, AllocError> {
         }
     }
     reportCNameClashes(c, claims)?;
+    reportCNameClashes(c, tagClaims)?;
     c.setFile(saved);
     return Ok();
 }

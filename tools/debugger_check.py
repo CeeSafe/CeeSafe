@@ -130,7 +130,9 @@ def main():
     for c, name in (("ceeF_length", "length"), ("ceeM_7Counter_bump", "Counter.bump"),
                     ("ceeMG_6Canvas_3add1S6Square", "Canvas.add"),
                     ("ceeM_12SpinLock_u64_create", "SpinLock_u64.create"), ("ceeAR_ceeF_twice", "twice"),
-                    ("ceeAR_ceeCB_250", "async closure"), ("main", "main")):
+                    ("ceeAR_ceeCB_250", "async closure"), ("main", "main"), ("ceeF_3geo_area", "geo.area"),
+                    ("ceeF_geo_area", "geo_area"), ("ceeM_03geo4Rect_width", "geo.Rect.width"),
+                    ("ceeMG_08geometry6Canvas_3add1S6Square", "geometry.Canvas.add")):
         if ceesafe_names.function(c) != name:
             problems.append(f"demangling: {c} gave {ceesafe_names.function(c)!r}, not {name!r}")
     checked = ["demangling"]

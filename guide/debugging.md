@@ -31,7 +31,7 @@ The C names follow fixed rules, so a CeeSafe name is easy to find:
 | a temporary the compiler made | `t_3` |
 | field `x` | `f_x` |
 | struct `Point` | `ceeT_Point` |
-| an item of a dependency `geometry` | `ceeF_geometry_area`, `ceeT_geometry_Point` |
+| an item of a dependency `geometry` | `ceeF_8geometry_area`, `ceeT_8geometry_Point`, `ceeM_08geometry5Point_norm` (the package's name after its length) |
 
 ## CeeSafe names in the debugger
 

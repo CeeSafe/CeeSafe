@@ -17,6 +17,38 @@ _FIELD = re.compile(r"^f_(.+)$")
 _FUNCTION = re.compile(r"^ceeF_(.+)$")
 _METHOD = re.compile(r"^ceeM_(\d+)(.+)$")
 _GENERIC_METHOD = re.compile(r"^ceeMG_(\d+)(.+)$")
+# A dependency's item (c-backend.md section 2.1): `3geo_area` alone, `03geo4Rect` after a length.
+_QUALIFIED = re.compile(r"^([1-9]\d*)(.+)$")
+_LENGTH_QUALIFIED = re.compile(r"^0([1-9]\d*)(.+)$")
+
+
+def _qualified(name):
+    """`3geo_area` is `geo.area`; a name without a package is itself."""
+    match = _QUALIFIED.match(name)
+    if match:
+        length, rest = int(match.group(1)), match.group(2)
+        if len(rest) > length + 1 and rest[length] == "_":
+            return rest[:length] + "." + rest[length + 1:]
+    return name
+
+
+def _length_name(text):
+    """The name at the start of `text` written with its length (`7Counter…`, or `03geo4Rect…` for a dependency's), and
+    what follows it; or None."""
+    match = _LENGTH_QUALIFIED.match(text)
+    if match:
+        package_length, rest = int(match.group(1)), match.group(2)
+        package = rest[:package_length]
+        inner = re.match(r"^(\d+)(.+)$", rest[package_length:])
+        if len(package) == package_length and inner and len(inner.group(2)) >= int(inner.group(1)):
+            length = int(inner.group(1))
+            return package + "." + inner.group(2)[:length], inner.group(2)[length:]
+        return None
+    match = re.match(r"^(\d+)(.+)$", text)
+    if match and len(match.group(2)) >= int(match.group(1)):
+        length = int(match.group(1))
+        return match.group(2)[:length], match.group(2)[length:]
+    return None
 
 
 def local(name):
@@ -45,18 +77,16 @@ def function(name):
                 name = family + name[len(family + _PROGRAM) + 1:]
     match = _FUNCTION.match(name)
     if match:
-        return match.group(1)
-    match = _METHOD.match(name)
-    if match:
-        length, rest = int(match.group(1)), match.group(2)
-        if len(rest) > length + 1 and rest[length] == "_":
-            return rest[:length] + "." + rest[length + 1:]
-    match = _GENERIC_METHOD.match(name)
-    if match:
-        # `ceeMG_6Canvas_3add1S6Square`: the owner, then the method's name by its length; the arguments are dropped.
-        length, rest = int(match.group(1)), match.group(2)
-        if len(rest) > length + 1 and rest[length] == "_":
-            inner = re.match(r"^(\d+)(.+)$", rest[length + 1:])
-            if inner and len(inner.group(2)) >= int(inner.group(1)):
-                return rest[:length] + "." + inner.group(2)[:int(inner.group(1))]
+        return _qualified(match.group(1))
+    for family in ("ceeM_", "ceeMG_"):
+        if name.startswith(family):
+            # `ceeM_7Counter_bump`; `ceeMG_6Canvas_3add1S6Square`, the method's name by its length and the arguments
+            # dropped; a dependency's owner `03geo4Rect`.
+            owner = _length_name(name[len(family):])
+            if owner and owner[1].startswith("_") and len(owner[1]) > 1:
+                if family == "ceeM_":
+                    return owner[0] + "." + owner[1][1:]
+                method = _length_name(owner[1][1:])
+                if method:
+                    return owner[0] + "." + method[0]
     return name

@@ -1,0 +1,58 @@
+// A dependency's `@repr` types in this package's export, its generic instances, its ordinary types and functions,
+// and C (c/caller.c) that includes ceesafe_exports.h and calls both packages' exports.
+
+extern "C" {
+    /// Defined in c/caller.c.
+    fn caller_total() -> i32;
+}
+
+/// The dependency's `@repr(C)` struct and `@repr(u8)` enum in this package's export.
+@export("app_measure")
+fn measure(p: geo.Point, s: geo.Shade) -> i32 {
+    let r = geo.Rect { low: geo.Point { x: 0, y: 0 }, high: p };
+    return geo.area(r, s);
+}
+
+/// Returns the shade C did not pass.
+@export("app_flip")
+fn flip(s: geo.Shade) -> geo.Shade => match (s) {
+    geo.Shade.Light => geo.Shade.Dark,
+    geo.Shade.Dark => geo.Shade.Light,
+};
+
+/// A struct whose C name, `ceeT_geo_Plain`, is not geo's `Plain`'s (c-backend.md §2.1).
+struct geo_Plain {
+    wide: i64;
+}
+
+/// A function whose C name is not geo's `twice`'s.
+fn geo_twice(p: geo_Plain) -> geo_Plain => geo_Plain { wide: 2 * p.wide };
+
+/// Safety: caller_total only calls this program's exports, with valid arguments.
+fn main() {
+    // Generic instances that hold the dependency's types.
+    var points = Vector<geo.Point>.create();
+    points.push(geo.Point { x: 2, y: 3 })!;
+    points.push(geo.Point { x: 4, y: 5 })!;
+    let pair: geo.Pair<geo.Point> = geo.Pair { first: points[0], second: points[1] };
+    let maybe: geo.Rect? = Some(geo.Rect { low: pair.first, high: pair.second });
+    match (maybe) {
+        Some(r) => { Console.writeLine(geo.area(r, geo.Shade.Dark)); }
+        null => { Console.writeLine("none"); }
+    }
+    let shades = [geo.Shade.Light, geo.Shade.Dark];
+    Console.writeLine(measure(points[1], shades[1]));
+    // Ordinary types and functions of the dependency.
+    let plain = geo.twice(geo.Plain { n: 21 });
+    Console.writeLine(plain.n);
+    let plains: geo.Pair<geo.Plain> = geo.Pair { first: plain, second: geo.Plain { n: 1 } };
+    Console.writeLine(geo_twice(geo_Plain { wide: 21 }).wide);
+    let mine = other.twice(other.Plain { n: 14 });
+    let spot = other.Spot { at: mine.n };
+    Console.writeLine(spot.at);
+    Console.writeLine(geo.weigh(geo.Kind.Large(plains.first.n + plains.second.n)) + geo.weigh(geo.Kind.Small));
+    // C calls the exports of both packages through ceesafe_exports.h.
+    unsafe {
+        Console.writeLine(caller_total());
+    }
+}

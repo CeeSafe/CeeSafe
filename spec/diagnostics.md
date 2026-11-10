@@ -75,7 +75,7 @@ Semantic checks run only when every file parsed without errors.
 | Code | Meaning | Example |
 |---|---|---|
 | N0200 | Name not found (variable, function, or built-in member) | `missing`, `Console.print(1)` |
-| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions or exports, even in different packages (`type-system.md` §28.2, ADR 0081 §2.2) | two `fn twice()`; `fn strlen` in two `extern "C"` blocks |
+| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2) | two `fn twice()`; `fn strlen` in two `extern "C"` blocks |
 | N0202 | Parameter declared twice | `fn f(a: i32, a: i32)` |
 | N0203 | Local redeclares a local or parameter in scope (no shadowing of locals) | `let x = 1; let x = 2;` |
 | N0204 | Unknown type name | `fn f(a: int)` |
@@ -195,7 +195,9 @@ with one C name are N0201, even in different packages. It is reported at each de
 name (type-system.md §28.2 says which: never a dependant's when its dependency declares it too), with a note at the
 owner's, which names its package; for a direct dependency's extern, the message says to call it through the package (``use `sys.strlen`, which package 'sys'
 declares; remove this declaration``) or to make it `public` there, and an identical declaration has a fix that
-removes it (type-system.md §28.2; ADR 0081 §2.2). (`CChar` as a value type was N0281 until ADR 0080 §3.5,
+removes it (type-system.md §28.2; ADR 0081 §2.2). Two `@repr(C)` structs, or a `@repr` enum and another C declaration,
+with one C name (their declared names, type-system.md §28.5) are N0201 by the same rule, with the same note and no
+hint. (`CChar` as a value type was N0281 until ADR 0080 §3.5,
 type-system.md §28.3.)
 
 Raw pointers reuse codes: an invalid pointer cast is N0208, ordering comparisons on pointers are

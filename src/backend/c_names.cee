@@ -2,12 +2,51 @@
 // Constant, CStringLiteral, CMessageLiteral). Every function appends to `out`; a name the emitter compares or reuses is
 // built in a vector of its own.
 
-/// `Id`: a CeeSafe name as part of a C identifier, `geometry.Point` written `geometry_Point` (c-backend.md §2.1).
-fn appendId(out: borrow mut Vector<u8>, name: Slice<u8>) -> Result<void, AllocError> {
-    for (b in name) {
-        out.push(if (b == '.') '_' else b)?;
+/// Where a dependency's item's name `geometry.Point` has its package's name end, or none for a package's own.
+fn packageDot(name: Slice<u8>) -> usize {
+    for (k in 0..name.length) {
+        if (name[k] == '.') {
+            return k;
+        }
+    }
+    return none64();
+}
+
+/// `name` from `start` on, each `.` written `_`.
+fn appendIdTail(out: borrow mut Vector<u8>, name: Slice<u8>, start: usize) -> Result<void, AllocError> {
+    for (k in start..name.length) {
+        out.push(if (name[k] == '.') '_' else name[k])?;
     }
     return Ok();
+}
+
+/// `Id`: a CeeSafe name as part of a C identifier (c-backend.md §2.1). A dependency's item `geometry.Point` is
+/// `8geometry_Point`, its package's name after its length: no identifier starts with a digit, so it never meets a
+/// package's own `geometry_Point`, and the length keeps packages `a_b` and `a` apart.
+fn appendId(out: borrow mut Vector<u8>, name: Slice<u8>) -> Result<void, AllocError> {
+    let dot = packageDot(name);
+    if (dot == none64()) {
+        return appendBytes(out, name);
+    }
+    appendDecimal(out, dot as u64)?;
+    appendBytes(out, name[0..dot])?;
+    out.push('_')?;
+    return appendIdTail(out, name, dot + 1);
+}
+
+/// A name with its length, inside a longer C name (c-backend.md §2.1): `5Point`, or for a dependency's item `0`, the
+/// package's name with its length, then the item's: `08geometry5Point`. A length never starts with `0`.
+fn appendLengthId(out: borrow mut Vector<u8>, name: Slice<u8>) -> Result<void, AllocError> {
+    let dot = packageDot(name);
+    if (dot == none64()) {
+        appendDecimal(out, name.length as u64)?;
+        return appendBytes(out, name);
+    }
+    out.push('0')?;
+    appendDecimal(out, dot as u64)?;
+    appendBytes(out, name[0..dot])?;
+    appendDecimal(out, (name.length - dot - 1) as u64)?;
+    return appendIdTail(out, name, dot + 1);
 }
 
 /// An instantiation of a generic struct or enum (IsInstance, §20.4).
@@ -49,6 +88,19 @@ fn isClosureEnvironmentType(c: borrow Checker, t: u32) -> bool {
 fn isImportedStruct(c: borrow Checker, t: u32) -> bool {
     let s = c.types.info(t).structDef;
     return s != none() && c.types.structs[s as usize].isImported;
+}
+
+/// A `@repr` type's C name (type-system.md §28.5): its declared name, without the package's that a dependency's
+/// CeeSafe name has (`dep.Pair` is `struct Pair`), so C code sees the name it was declared with.
+fn reprCName(c: borrow Checker, t: u32) -> Slice<u8> {
+    let name = c.types.name(t);
+    var start: usize = 0;
+    for (k in 0..name.length) {
+        if (name[k] == '.') {
+            start = k + 1;
+        }
+    }
+    return name[start..name.length];
 }
 
 fn isReprCStruct(c: borrow Checker, t: u32) -> bool {
@@ -102,15 +154,13 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
                 let base = baseNameOf(c, t);
                 out.push('S')?;
                 appendShadowMark(c, out, t)?;
-                appendDecimal(out, base.length as u64)?;
-                appendId(out, base)?;
+                appendLengthId(out, base)?;
                 appendMangledArguments(c, out, s.typeArguments)?;
             } else {
                 let name = c.types.name(t);
                 out.push('S')?;
                 appendShadowMark(c, out, t)?;
-                appendDecimal(out, name.length as u64)?;
-                appendId(out, name)?;
+                appendLengthId(out, name)?;
             }
         }
         TypeKind.Enum => {
@@ -126,15 +176,13 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
                 let base = baseNameOf(c, t);
                 out.push('E')?;
                 appendShadowMark(c, out, t)?;
-                appendDecimal(out, base.length as u64)?;
-                appendId(out, base)?;
+                appendLengthId(out, base)?;
                 appendMangledArguments(c, out, e.typeArguments)?;
             } else {
                 let name = c.types.name(t);
                 out.push('E')?;
                 appendShadowMark(c, out, t)?;
-                appendDecimal(out, name.length as u64)?;
-                appendId(out, name)?;
+                appendLengthId(out, name)?;
             }
         }
         TypeKind.Array => {
@@ -222,8 +270,7 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
                 let bound = c.types.bounds[info.dynInterface as usize];
                 let name = c.types.rangeText(bound.name);
                 out.push('D')?;
-                appendDecimal(out, name.length as u64)?;
-                appendId(out, name)?;
+                appendLengthId(out, name)?;
                 appendMangledArguments(c, out, bound.arguments)?;
             }
         }
@@ -257,8 +304,7 @@ fn appendMangle(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result
             if (info.cSpelling.count > 0) {
                 let name = c.types.name(t); // an imported C enum: its own name, never an integer's (ADR 0079)
                 out.push('N')?;
-                appendDecimal(out, name.length as u64)?;
-                appendId(out, name)?;
+                appendLengthId(out, name)?;
             } else {
                 appendBytes(out, c.types.name(t))?;
             }
@@ -474,8 +520,7 @@ fn appendDropGlueName(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> 
         return appendMangle(c, out, t);
     }
     let name = c.types.name(t);
-    appendDecimal(out, name.length as u64)?;
-    return appendId(out, name);
+    return appendLengthId(out, name);
 }
 
 /// A function's C name (FunctionName): `ceeF_name`, members `ceeM_<length><Struct>_name`, instances of generic
@@ -510,13 +555,11 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         } else {
             let owner = c.types.name(f.owner);
             appendShadowMark(c, out, f.owner)?;
-            appendDecimal(out, owner.length as u64)?;
-            appendId(out, owner)?;
+            appendLengthId(out, owner)?;
         }
         out.push('_')?;
         if (genericMethod) {
-            appendDecimal(out, name.length as u64)?;
-            appendId(out, name)?;
+            appendLengthId(out, name)?;
             return appendMangledArguments(c, out, f.typeArguments);
         }
         return appendBytes(out, name);
@@ -527,8 +570,7 @@ fn appendCFunctionName(c: borrow Checker, out: borrow mut Vector<u8>, function: 
         return appendId(out, name);
     }
     appendText(out, if (shadowed) "ceeG_lib_" else "ceeG_")?;
-    appendDecimal(out, name.length as u64)?;
-    appendId(out, name)?;
+    appendLengthId(out, name)?;
     return appendMangledArguments(c, out, f.typeArguments);
 }
 

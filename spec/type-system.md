@@ -82,7 +82,7 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   otherwise, `a` being a dependency (and so not an item, N0315), `a.b` is that dependency's item `b`, unless a local
   `a` is in scope there (ADR 0074 §2.10). `T.NAME`, with `T` a struct or an enum, is its associated constant (§10).
 - **Messages and C names** write an item of a dependency with its package's name, `geometry.Point`; the C backend
-  gives it a prefixed name, `ceeT_geometry_Point` (`c-backend.md` §2.1).
+  gives it a prefixed name, `ceeT_8geometry_Point` (`c-backend.md` §2.1).
 
 ## 3. Bindings and mutability
 
@@ -2909,6 +2909,18 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   with members named as in CeeSafe, of the types CeeSafe uses inside its own C (`usize` is `uint64_t`,
   pointers have no `const`), so that the generated code and C code that includes `ceesafe_exports.h`
   declare the same struct type. It is otherwise an ordinary struct.
+- **C names.** A `@repr(C)` struct's C tag, and a `@repr` enum's C type name (`typedef uint8_t Shade;` and its
+  constants `Shade_Light`, …, in `ceesafe_exports.h`), are the name it is declared with, in every package: a
+  dependency `geo`'s `Point`, which CeeSafe calls `geo.Point`, is `struct Point` in C, in prototypes and in the
+  exports header, as in `geo`'s own build, so C code that includes the header names it as declared. (Its internal
+  name in the generated C, `ceeT_3geo_Point`, has the package's, c-backend.md §2.1.) A C name has one declaration, as
+  for extern functions (§28.2; ADR 0081 §2.1): two `@repr(C)` structs with one name are N0201, even in different
+  packages, and so are two `@repr` enums, or a `@repr` enum and a C function, export or exported constant, with one
+  name (a struct tag is in C's other name space, so a struct and a function may share a name). The owner is chosen as
+  in §28.2 (a dependency's before its dependant's, then by package name), and N0201 is reported at each other
+  declaration, with a note at the owner's. An ordinary struct or enum has no such rule: its C name has its package's,
+  so two packages may each declare one with the same name. Up to 0.27.0 a dependency's `@repr` type was spelled with
+  its CeeSafe name in C (`struct geo.Point`), and every build that used one failed in the C compiler.
 - An atomic field (ADR 0041 §3.1) is its integer member in C: `uint32_t`, `uint64_t`, and `uint64_t` for
   `AtomicUSize`, as for `usize`. CeeSafe reaches it only through the atomic type's methods, which are the
   `__atomic_*` operations on the member's address, so C code that includes `ceesafe_exports.h` shares it by applying

@@ -74,16 +74,19 @@ extern char **environ;
 
 /* ---- Program arguments ------------------------------------------------------------------ */
 
-static int32_t ceesafe_argc;
+/* Set once, by ceesafe_init (ADR 0088 §2.2). The array is stored first and the count published after it, atomically:
+   a thread that loads a count other than 0 sees the array, also a thread a C constructor started that reads
+   Process.argument while the generated main's ceesafe_init runs (ADR 0088 §8; plain stores were a data race). */
+static uint32_t ceesafe_argc;
 static const uint8_t *const *ceesafe_argv;
 
 void ceesafe_args_set(int32_t count, const uint8_t *const *arguments) {
-    ceesafe_argc = count;
     ceesafe_argv = arguments;
+    ceesafe_atomic_store_u32(&ceesafe_argc, count > 0 ? (uint32_t)count : 0u);
 }
 
 uint64_t ceesafe_arg_count(void) {
-    return ceesafe_argc > 0 ? (uint64_t)ceesafe_argc : 0u;
+    return (uint64_t)ceesafe_atomic_load_u32(&ceesafe_argc);
 }
 
 bool ceesafe_arg(uint64_t index, cee_str *out) {

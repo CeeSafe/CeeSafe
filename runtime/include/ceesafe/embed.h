@@ -29,9 +29,10 @@ extern "C" {
 
 /* ceesafe_init's results: 0, or one of these, with nothing changed. */
 #define CEESAFE_INIT_AGAIN 1     /* called before, or concurrently: returned once that call has succeeded */
-#define CEESAFE_INIT_LATE 2      /* counting asked for by the config, and the runtime has already allocated */
+#define CEESAFE_INIT_LATE 2      /* counting or an allocator asked for by the config, and the runtime has already
+                                    allocated: neither can change under live blocks */
 #define CEESAFE_INIT_SIZE 3      /* config is NULL, or its size is not one this runtime knows */
-#define CEESAFE_INIT_ALLOCATOR 4 /* an allocator hook: stage A takes none (ADR 0088 §2.5) */
+#define CEESAFE_INIT_ALLOCATOR 4 /* an allocator hook with a NULL function */
 #define CEESAFE_INIT_MEMORY 5    /* the copy of argv could not be allocated */
 
 #if !defined(CEESAFE_EMBED_FREESTANDING)
@@ -42,7 +43,15 @@ extern "C" {
    counting, says so on stderr, and takes the hook and argv; a config that asks itself gets CEESAFE_INIT_LATE. */
 #define CEESAFE_INIT_ENVIRONMENT 1u
 
-typedef struct ceesafe_allocator {      /* ADR 0088 §2.5, stage B */
+/* The host's allocator (ADR 0088 §2.5), for every block the runtime allocates: CeeSafe's own, the runtime's buffers,
+   and a C library's through ceesafe/foreign.h. It sits under CeeSafe's accounting, so the report, CEESAFE_FAIL_ALLOC_AT
+   and FailingAllocator work with it, and an injected failure never reaches it. malloc's contracts, with one change:
+   every block is aligned to max(16, alignof(max_align_t)) (max_align_t is 8-aligned on macOS arm64 and under MSVC); a
+   block that is not makes the runtime panic, naming the function. NULL on failure. The functions are called from any
+   thread, CeeSafe's or the host's, at once, are never given a size of 0, and must stay valid, with the context, until
+   the process exits. Each side frees what it allocated through its own code: a block CeeSafe hands out comes back
+   through an export, not through this free, even when both sides use one heap. */
+typedef struct ceesafe_allocator {
     void *(*alloc)(void *context, size_t size);                 /* malloc's contract */
     void *(*alloc_zeroed)(void *context, size_t size);          /* calloc(1, size)'s */
     void *(*realloc)(void *context, void *block, size_t size);  /* realloc's; a failure keeps the block */
@@ -72,7 +81,7 @@ typedef struct ceesafe_config {
     const char *const *argv;            /* copied by ceesafe_init */
     uint64_t fail_alloc_at;             /* as CEESAFE_FAIL_ALLOC_AT; the environment's wins when read */
     bool alloc_report;                  /* as CEESAFE_ALLOC_REPORT */
-    const ceesafe_allocator *allocator; /* NULL: the C library's. Stage A: must be NULL */
+    const ceesafe_allocator *allocator; /* NULL: the C library's; copied by ceesafe_init */
     ceesafe_panic_hook panic_hook;      /* NULL: print and abort */
     void *panic_context;
 } ceesafe_config;

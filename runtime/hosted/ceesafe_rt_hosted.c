@@ -85,19 +85,78 @@ static void *ceesafe_note_allocated(void *p) {
     return p;
 }
 
+/* The host's allocator (ADR 0088 §2.5), copied by ceesafe_init (ceesafe_platform_use_allocator) before it publishes
+   STARTED, and read without a fence on every allocation after: embed.h's ordering contract makes ceesafe_init happen
+   before every call into CeeSafe. Until then, and in a program that never installs one, the C library's, whose blocks
+   are 16-aligned on every target CeeSafe supports. */
+static ceesafe_allocator host_allocator;
+static bool host_allocator_used;
+
+/* The C library's path falls through, a load and an untaken branch beside 0.28.0's direct call: laid out as the taken
+   branch, it cost binary-trees 6% (benchmarks/alloc_hook.py). */
+#if defined(__GNUC__) || defined(__clang__)
+#define CEE_HOOKED() __builtin_expect(host_allocator_used, 0)
+#else
+#define CEE_HOOKED() host_allocator_used
+#endif
+
+void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator) {
+    if (allocator != NULL) {
+        host_allocator = *allocator;
+        host_allocator_used = true;
+    } else {
+        static const ceesafe_allocator none = {0};
+        host_allocator_used = false;
+        host_allocator = none;
+    }
+}
+
+/* A block from the hook: NULL, or aligned to CEE_HEAP_ALIGN. A misaligned block would be undefined behaviour at the
+   first 16-aligned access (a task frame, ADR 0088 §1.9), so it panics here, naming the hook: one mask and an untaken
+   branch beside an indirect call, so every build checks, not only `-g` ones. */
+static void *ceesafe_hook_block(void *p, const char *which) {
+    if (p != NULL && ((uintptr_t)p & (CEE_HEAP_ALIGN - 1u)) != 0u) {
+        ceesafe_panic_runtime(CEE_PANIC_ALLOCATOR, which);
+    }
+    return p;
+}
+
+/* The hooks are given at least 1 byte: malloc(0) and realloc(p, 0) mean different things in different C libraries. */
 void *ceesafe_platform_alloc(size_t size) {
-    return ceesafe_note_allocated(malloc(size)); /* aligned for max_align_t */
+    if (CEE_HOOKED()) {
+        void *p = host_allocator.alloc(host_allocator.context, size == 0u ? 1u : size);
+        return ceesafe_note_allocated(ceesafe_hook_block(p, "ceesafe_allocator.alloc returned a misaligned block"));
+    }
+    return ceesafe_note_allocated(malloc(size));
 }
 
 void *ceesafe_platform_alloc_zeroed(size_t size) {
-    return ceesafe_note_allocated(calloc(1u, size)); /* aligned for max_align_t */
+    if (CEE_HOOKED()) {
+        void *p = host_allocator.alloc_zeroed(host_allocator.context, size == 0u ? 1u : size);
+        return ceesafe_note_allocated(
+            ceesafe_hook_block(p, "ceesafe_allocator.alloc_zeroed returned a misaligned block"));
+    }
+    return ceesafe_note_allocated(calloc(1u, size));
 }
 
-void *ceesafe_platform_realloc(void *p, size_t size) {
-    return ceesafe_note_allocated(realloc(p, size)); /* aligned for max_align_t */
+void *ceesafe_platform_realloc(void *block, size_t size) {
+    if (CEE_HOOKED()) {
+        if (block == NULL) {
+            return ceesafe_platform_alloc(size); /* realloc(NULL, n) */
+        }
+        void *p = host_allocator.realloc(host_allocator.context, block, size == 0u ? 1u : size);
+        return ceesafe_note_allocated(ceesafe_hook_block(p, "ceesafe_allocator.realloc returned a misaligned block"));
+    }
+    return ceesafe_note_allocated(realloc(block, size));
 }
 
 void ceesafe_platform_free(void *p) {
+    if (CEE_HOOKED()) {
+        if (p != NULL) {
+            host_allocator.free(host_allocator.context, p); /* the hook is never given NULL (embed.h) */
+        }
+        return;
+    }
     free(p);
 }
 

@@ -329,7 +329,7 @@ static int cee_window_script_add(struct cee_window *w, size_t *capacity, uint64_
                                  int32_t b, int32_t c, int32_t d, double x, double y) {
     if (w->script_count == *capacity) {
         size_t next = *capacity == 0 ? 64 : *capacity * 2;
-        struct cee_window_scripted *grown = (struct cee_window_scripted *)realloc(w->script, next * sizeof *grown);
+        struct cee_window_scripted *grown = (struct cee_window_scripted *)ceesafe_platform_realloc(w->script, next * sizeof *grown);
         if (grown == NULL) {
             return 0;
         }
@@ -455,9 +455,9 @@ static int cee_window_script_load(struct cee_window *w, const char *path) {
     for (;;) {
         if (used == capacity) {
             size_t next = capacity == 0 ? 4096 : capacity * 2;
-            char *grown = (char *)realloc(text, next);
+            char *grown = (char *)ceesafe_platform_realloc(text, next);
             if (grown == NULL) {
-                free(text);
+                ceesafe_platform_free(text);
                 fclose(f);
                 return 0;
             }
@@ -488,7 +488,7 @@ static int cee_window_script_load(struct cee_window *w, const char *path) {
             start = k + 1;
         }
     }
-    free(text);
+    ceesafe_platform_free(text);
     if (!ok) {
         return 0;
     }
@@ -863,9 +863,9 @@ static int cee_native_open(struct cee_window *w, const char *title) {
             break;
         }
     }
-    struct cee_mac *m = (struct cee_mac *)calloc(1, sizeof *m);
+    struct cee_mac *m = (struct cee_mac *)ceesafe_platform_alloc_zeroed(sizeof *m);
     if (slot < 0 || m == NULL) {
-        free(m);
+        ceesafe_platform_free(m);
         return CEE_WINDOW_RESOURCES;
     }
     void *pool = cee_objc.pool_push();
@@ -876,7 +876,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         window, cee_mac_sel("initWithContentRect:styleMask:backing:defer:"), frame, 15ul, 2ul, 0);
     if (window == NULL) {
         cee_objc.pool_pop(pool);
-        free(m);
+        ceesafe_platform_free(m);
         return CEE_WINDOW_RESOURCES;
     }
     m->window = window;
@@ -927,8 +927,8 @@ static void cee_native_close(struct cee_window *w) {
             cee_objc.cf_release(m->surface[k]);
         }
     }
-    free(m->frame);
-    free(m);
+    ceesafe_platform_free(m->frame);
+    ceesafe_platform_free(m);
     w->native = NULL;
 }
 
@@ -1089,21 +1089,21 @@ static void cee_native_pump(struct cee_window *w) {
 static void cee_mac_release_pixels(void *info, const void *data, size_t size) {
     (void)data;
     (void)size;
-    free(info);
+    ceesafe_platform_free(info);
 }
 
 /* A frame as a CGImage on the layer: the way without IOSurface. */
 static int32_t cee_mac_present_image(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
     struct cee_mac *m = (struct cee_mac *)w->native;
     size_t bytes = (size_t)width * (size_t)height * 4u;
-    void *copy = malloc(bytes);
+    void *copy = ceesafe_platform_alloc(bytes);
     if (copy == NULL) {
         return -CEE_WINDOW_RESOURCES;
     }
     memcpy(copy, pixels, bytes);
     void *provider = cee_objc.provider_create(copy, copy, bytes, cee_mac_release_pixels);
     if (provider == NULL) {
-        free(copy);
+        ceesafe_platform_free(copy);
         return -CEE_WINDOW_RESOURCES;
     }
     /* kCGImageAlphaNoneSkipLast, default byte order: bytes R, G, B, then an alpha the opaque window ignores. */
@@ -1202,10 +1202,10 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
             }
             m->surface[k] = cee_mac_surface(width, height);
         }
-        free(m->frame);
-        m->frame = (uint32_t *)malloc((size_t)width * (size_t)height * 4u);
+        ceesafe_platform_free(m->frame);
+        m->frame = (uint32_t *)ceesafe_platform_alloc((size_t)width * (size_t)height * 4u);
         if (m->frame == NULL || m->surface[0] == NULL || m->surface[1] == NULL) {
-            free(m->frame);
+            ceesafe_platform_free(m->frame);
             m->frame = NULL;
             return cee_mac_present_image(w, pixels, width, height);
         }
@@ -1461,7 +1461,7 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
 
 static wchar_t *cee_win32_wide(const char *text) {
     int count = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
-    wchar_t *wide = count > 0 ? (wchar_t *)malloc((size_t)count * sizeof(wchar_t)) : NULL;
+    wchar_t *wide = count > 0 ? (wchar_t *)ceesafe_platform_alloc((size_t)count * sizeof(wchar_t)) : NULL;
     if (wide != NULL) {
         MultiByteToWideChar(CP_UTF8, 0, text, -1, wide, count);
     }
@@ -1492,19 +1492,19 @@ static int cee_native_open(struct cee_window *w, const char *title) {
         }
         cee_win32_registered = 1;
     }
-    struct cee_win32 *n = (struct cee_win32 *)calloc(1, sizeof *n);
+    struct cee_win32 *n = (struct cee_win32 *)ceesafe_platform_alloc_zeroed(sizeof *n);
     wchar_t *wide = cee_win32_wide(title);
     if (n == NULL || wide == NULL) {
-        free(n);
-        free(wide);
+        ceesafe_platform_free(n);
+        ceesafe_platform_free(wide);
         return CEE_WINDOW_RESOURCES;
     }
     DWORD style = WS_OVERLAPPEDWINDOW;
     HWND hwnd = CreateWindowExW(0, cee_win32_class, wide, style, CW_USEDEFAULT, CW_USEDEFAULT, 640, 480, NULL, NULL,
                                 instance, NULL);
-    free(wide);
+    ceesafe_platform_free(wide);
     if (hwnd == NULL) {
-        free(n);
+        ceesafe_platform_free(n);
         return CEE_WINDOW_RESOURCES;
     }
     n->hwnd = hwnd;
@@ -1527,8 +1527,8 @@ static void cee_native_close(struct cee_window *w) {
     }
     SetWindowLongPtrW(n->hwnd, GWLP_USERDATA, 0);
     DestroyWindow(n->hwnd);
-    free(n->frame);
-    free(n);
+    ceesafe_platform_free(n->frame);
+    ceesafe_platform_free(n);
     w->native = NULL;
 }
 
@@ -1546,7 +1546,7 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
     struct cee_win32 *n = (struct cee_win32 *)w->native;
     size_t count = (size_t)width * (size_t)height;
     if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
-        uint32_t *grown = (uint32_t *)realloc(n->frame, count * sizeof(uint32_t));
+        uint32_t *grown = (uint32_t *)ceesafe_platform_realloc(n->frame, count * sizeof(uint32_t));
         if (grown == NULL) {
             return -CEE_WINDOW_RESOURCES;
         }
@@ -1621,7 +1621,7 @@ static void cee_native_title(struct cee_window *w, const char *title) {
     wchar_t *wide = cee_win32_wide(title);
     if (wide != NULL) {
         SetWindowTextW(((struct cee_win32 *)w->native)->hwnd, wide);
-        free(wide);
+        ceesafe_platform_free(wide);
     }
 }
 
@@ -1814,7 +1814,7 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     if (display == NULL) {
         return CEE_WINDOW_NO_DISPLAY;
     }
-    struct cee_x11 *n = (struct cee_x11 *)calloc(1, sizeof *n);
+    struct cee_x11 *n = (struct cee_x11 *)ceesafe_platform_alloc_zeroed(sizeof *n);
     if (n == NULL) {
         cee_x.close_display(display);
         return CEE_WINDOW_RESOURCES;
@@ -1825,14 +1825,14 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     n->depth = cee_x.default_depth(display, n->screen);
     if (n->depth < 24) {
         cee_x.close_display(display);
-        free(n);
+        ceesafe_platform_free(n);
         return CEE_WINDOW_UNSUPPORTED; /* only TrueColor visuals of 24 or 32 bits */
     }
     n->window = cee_x.create_simple_window(display, cee_x.root_window(display, n->screen), 0, 0, w->width, w->height,
                                            0, 0ul, 0ul);
     if (n->window == 0) {
         cee_x.close_display(display);
-        free(n);
+        ceesafe_platform_free(n);
         return CEE_WINDOW_RESOURCES;
     }
     /* KeyPress, KeyRelease, ButtonPress, ButtonRelease, PointerMotion, Exposure, StructureNotify, FocusChange. */
@@ -1855,8 +1855,8 @@ static void cee_native_close(struct cee_window *w) {
     }
     cee_x.destroy_window(n->display, n->window);
     cee_x.close_display(n->display);
-    free(n->frame);
-    free(n);
+    ceesafe_platform_free(n->frame);
+    ceesafe_platform_free(n);
     w->native = NULL;
 }
 
@@ -1988,6 +1988,8 @@ static void cee_x_draw(struct cee_window *w) {
         return;
     }
     uint32_t width = w->width, height = w->height;
+    /* The C library's malloc, not the platform's: the image owns the block, and XDestroyImage frees it
+       with free (ADR 0088 §2.5). */
     char *data = (char *)malloc((size_t)width * (size_t)height * 4u);
     if (data == NULL) {
         return;
@@ -2017,7 +2019,7 @@ static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, 
     struct cee_x11 *n = (struct cee_x11 *)w->native;
     size_t count = (size_t)width * (size_t)height;
     if (n->frame == NULL || n->frame_width != width || n->frame_height != height) {
-        uint32_t *grown = (uint32_t *)realloc(n->frame, count * sizeof(uint32_t));
+        uint32_t *grown = (uint32_t *)ceesafe_platform_realloc(n->frame, count * sizeof(uint32_t));
         if (grown == NULL) {
             return -CEE_WINDOW_RESOURCES;
         }
@@ -2049,6 +2051,8 @@ static int32_t cee_native_present_boxes(struct cee_window *w, const uint32_t *pi
     /* One pixel per pixel: only the boxes. */
     for (size_t k = 0; k < count; k++) {
         struct cee_window_box b = boxes[k];
+        /* The C library's malloc, not the platform's: the image owns the block, and XDestroyImage frees it
+           with free (ADR 0088 §2.5). */
         char *data = (char *)malloc((size_t)b.w * (size_t)b.h * 4u);
         if (data == NULL) {
             return -CEE_WINDOW_RESOURCES;
@@ -2114,7 +2118,7 @@ static void cee_native_wait(struct cee_window *w, double seconds) {
 /* ---- The calls lib/std/window.cee makes -------------------------------------------------------------------------- */
 
 static char *cee_window_cstring(const uint8_t *text, uint64_t length) {
-    char *s = (char *)malloc((size_t)length + 1u);
+    char *s = (char *)ceesafe_platform_alloc((size_t)length + 1u);
     if (s != NULL) {
         if (length > 0) {
             memcpy(s, text, (size_t)length);
@@ -2134,11 +2138,11 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
         *error = CEE_WINDOW_NOT_MAIN_THREAD;
         return NULL;
     }
-    struct cee_window *w = (struct cee_window *)calloc(1, sizeof *w);
+    struct cee_window *w = (struct cee_window *)ceesafe_platform_alloc_zeroed(sizeof *w);
     char *name = cee_window_cstring(title, length);
     if (w == NULL || name == NULL) {
-        free(w);
-        free(name);
+        ceesafe_platform_free(w);
+        ceesafe_platform_free(name);
         *error = CEE_WINDOW_RESOURCES;
         return NULL;
     }
@@ -2155,26 +2159,26 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
             w->dump = NULL;
         }
         if (!cee_window_script_load(w, script)) {
-            free(w->script);
-            free(w);
-            free(name);
+            ceesafe_platform_free(w->script);
+            ceesafe_platform_free(w);
+            ceesafe_platform_free(name);
             *error = CEE_WINDOW_RESOURCES;
             return NULL;
         }
-        free(name);
+        ceesafe_platform_free(name);
         cee_window_script_pump(w);
         return w;
     }
 #if defined(CEE_WINDOW_NO_NATIVE)
-    free(w);
-    free(name);
+    ceesafe_platform_free(w);
+    ceesafe_platform_free(name);
     *error = CEE_WINDOW_UNSUPPORTED;
     return NULL;
 #else
     int failed = cee_native_open(w, name);
-    free(name);
+    ceesafe_platform_free(name);
     if (failed != 0) {
-        free(w);
+        ceesafe_platform_free(w);
         *error = failed;
         return NULL;
     }
@@ -2192,9 +2196,9 @@ void ceesafe_window_close(void *window) {
         cee_native_close(w);
     }
 #endif
-    free(w->script);
-    free(w->kept);
-    free(w);
+    ceesafe_platform_free(w->script);
+    ceesafe_platform_free(w->kept);
+    ceesafe_platform_free(w);
 }
 
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position) {
@@ -2230,7 +2234,7 @@ int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t wi
     if (w->scripted) {
         size_t count = (size_t)width * (size_t)height;
         if (!w->shown || w->shown_width != width || w->shown_height != height) {
-            uint32_t *grown = (uint32_t *)realloc(w->kept, count * sizeof(uint32_t));
+            uint32_t *grown = (uint32_t *)ceesafe_platform_realloc(w->kept, count * sizeof(uint32_t));
             if (grown == NULL) {
                 return -CEE_WINDOW_RESOURCES;
             }
@@ -2331,7 +2335,7 @@ void ceesafe_window_set_title(void *window, const uint8_t *title, uint64_t lengt
 #else
     (void)w;
 #endif
-    free(name);
+    ceesafe_platform_free(name);
 }
 
 void ceesafe_window_wait(void *window) {

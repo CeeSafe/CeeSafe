@@ -9,9 +9,11 @@
  * not a leak: C libraries keep global state until the process ends. The report gives those blocks on their own line,
  * `ceesafe alloc: foreign held=<k>`.
  *
- * The calls follow malloc, realloc and free: memory aligned for any C type (max_align_t), NULL on failure,
- * ceesafe_free(NULL, …) does nothing and ceesafe_realloc(NULL, n, …) allocates. A failed realloc leaves the block
- * unchanged and live. A block is freed with the number it was allocated with, or with the other foreign number.
+ * The calls follow malloc, realloc and free: memory aligned to max(16, alignof(max_align_t)), so for any C type (ADR
+ * 0088 §2.5), NULL on failure, ceesafe_free(NULL, …) does nothing and ceesafe_realloc(NULL, n, …) allocates. A failed
+ * realloc leaves the block unchanged and live. A block is freed with the number it was allocated with, or with the
+ * other foreign number. In a host that installed an allocator with ceesafe_init (ceesafe/embed.h), the blocks are
+ * the host's allocator's.
  */
 #ifndef CEESAFE_FOREIGN_H
 #define CEESAFE_FOREIGN_H

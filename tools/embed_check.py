@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ADR 0088 stage A's contract tests: CeeSafe embedded in a C host through `build --emit lib` and ceesafe/embed.h.
+"""ADR 0088's contract tests (stages A and B): CeeSafe embedded in a C host through `build --emit lib` and ceesafe/embed.h.
 
 The fixture is tests/embedding: the package `embed` (exports with threads, async, a @callback, panics, scratch frames)
 depending on `tally` (one umbrella build of two packages), C hosts (host.c, host.cpp), the executor's aborts reached
@@ -24,7 +24,8 @@ directly (aborts.c) and boxes.cee, the executable form of one export. Checked:
   threads calling it at once, one 0;
   two threads that call it and then an export at once, with a third calling ceesafe_shutdown, under ThreadSanitizer
   (AGAIN only once the config is published); argv copied (the host's strings overwritten and freed afterwards);
-- the generated `main` starts, and counts when asked, after a C constructor allocated through CeeSafe (0.27.0's);
+- the generated `main` starts, and counts when asked, after a C constructor allocated through CeeSafe (0.27.0's); a
+  thread a constructor started allocates and reads the arguments during its ceesafe_init, under ThreadSanitizer;
 - fail_alloc_at = k for every k of a single-threaded run, against boxes.cee with CEESAFE_FAIL_ALLOC_AT=k: the same
   outcomes; CEESAFE_INIT_ENVIRONMENT with CEESAFE_ALLOC_REPORT=1: the report from ceesafe_shutdown;
 - the panic hook: a bounds panic on the caller's thread, a Thread.spawn thread, an Async.runWorkers child and in a
@@ -38,6 +39,12 @@ directly (aborts.c) and boxes.cee, the executable form of one export. Checked:
   ceesafe_platform_abort is called only from the panic functions;
 - two host threads calling an export (a scratch frame, a FailingAllocator box) 200,000 times each, under
   ThreadSanitizer: no report, every result right (skipped where -fsanitize=thread does not build);
+- the allocator hook (stage B): a tagged hook (each block with a header, so a block freed by the wrong heap is caught
+  either way) gets every block of CeeSafe, the executor, a scratch frame, a thread, argv's copy and a scripted window,
+  also under ASan, and the window layer's five blocks exactly; two host threads through it under ThreadSanitizer, every
+  block counted; fail_alloc_at = k never reaches it; an 8-aligned alloc, alloc_zeroed or realloc, also at argv's copy
+  inside ceesafe_init, panics with CEE_PANIC_ALLOCATOR through the panic hook, naming the function; an allocator after
+  an allocation is LATE, one missing a function ALLOCATOR, nothing changed;
 - ceesafe/embed.h included by a C++ host;
 - every run-pass and ffi corpus program with an @export, built with `--emit lib --lib-main` and linked from the archive
   alone (its generated `main` is a member): the corpus's expected output, at -O2 and under ASan and UBSan.
@@ -316,9 +323,30 @@ def main():
         check.expect("the generated main after a C constructor allocated through CeeSafe: runs, and counts when asked",
                      r1.returncode == 0 and r1.stdout == "ran\n" and r2.returncode == 0 and r2.stdout == "ran\n" and
                      "ceesafe alloc: attempts=1 live=0" in r2.stderr, f"{b.stderr[-300:]} {r1.stderr} {r2.stderr}")
+        # A thread a C constructor starts, allocating and reading the arguments while the generated main's
+        # ceesafe_init writes the counting configuration and the arguments: relaxed atomics, not a data race (ADR 0088
+        # §8; 0.28.0's plain stores were one, on alloc_fail_at).
+        racer = os.path.join(work, "ctor_thread")
+        b = run([cee, "build", "--cc", cc, "--cflag", "-fsanitize=thread", "--cflag", "-g", "--cflag", "-O1",
+                 os.path.join(FIXTURE, "ctor.cee"), os.path.join(FIXTURE, "ctor_thread.c"), "-o", racer], timeout=600)
+        if b.returncode != 0:
+            check.skip("a constructor's thread during the generated main's ceesafe_init, under ThreadSanitizer",
+                       b.stderr.strip()[-200:])
+        else:
+            ok, detail = True, ""
+            for extra in ({}, {"CEESAFE_ALLOC_REPORT": "1"}):
+                for _ in range(5):
+                    r = run([racer, "a", "b"], env=clean_env({"TSAN_OPTIONS": "halt_on_error=1", **extra}))
+                    if r.returncode != 0 or r.stdout != "ran\n" or "ThreadSanitizer" in r.stderr:
+                        ok, detail = False, f"{extra}: {r.stdout} {r.stderr[-800:]}"
+            check.expect("a constructor's thread allocating and reading arguments during the generated main's "
+                         "ceesafe_init, under ThreadSanitizer (5 runs, counting off and on): no report", ok, detail)
         r = run([host, "report"], env=clean_env({"CEESAFE_ALLOC_REPORT": "1"}))
         check.expect("CEESAFE_INIT_ENVIRONMENT: CEESAFE_ALLOC_REPORT=1 reported by ceesafe_shutdown",
                      "ceesafe alloc: attempts=6 live=1" in r.stderr and "live=1" in r.stdout, r.stdout + r.stderr)
+
+        # The allocator hook (ADR 0088 §2.5, stage B).
+        allocator_cases(check, cee, cc, host, package, work)
 
         # The panic hook (ADR 0088 §2.4).
         for where, kind, message in (("panic", 5, None), ("thread", 5, None), ("worker", 5, None),
@@ -449,6 +477,14 @@ def main():
             check.expect("two host threads, 200,000 calls each, under ThreadSanitizer: no report, results right",
                          r.returncode == 0 and "seed=1000 wrong=0" in r.stdout and "seed=5000 wrong=0" in r.stdout and
                          "ThreadSanitizer" not in r.stderr, r.stdout + r.stderr[-800:])
+            r = run([exe, "threads", "hook"], env=clean_env({"TSAN_OPTIONS": "halt_on_error=1"}), timeout=900)
+            counts = ALLOC_HOOK.search(r.stdout)
+            check.expect("two host threads through the allocator hook under ThreadSanitizer: no report, results "
+                         "right, every block back to the hook",
+                         r.returncode == 0 and "seed=1000 wrong=0" in r.stdout and "seed=5000 wrong=0" in r.stdout and
+                         counts is not None and counts.group(1) == "800000" and counts.group(2) == "800000" and
+                         counts.group(3) == "0" and
+                         "ThreadSanitizer" not in r.stderr, r.stdout + r.stderr[-800:])
         if exe is not None:
             ok, detail = True, ""
             for what in ("init-race", "init-shutdown"):
@@ -474,6 +510,81 @@ def main():
 
         corpus_programs(check, cee, cc, work)
     return report(check)
+
+
+ALLOC_HOOK = re.compile(r"hook allocs=(\d+) frees=(\d+) bad=(\d+)")
+
+
+def allocator_cases(check, cee, cc, host, package, work):
+    """The allocator hook (ADR 0088 §2.5): host.c's tagged hook, whose blocks carry a header, so a block that reaches
+    the wrong heap is caught either way (the C library's free of a hook block, the hook's free of a C library block)."""
+    script = os.path.join(work, "window-script.txt")
+    with open(script, "w") as handle:
+        handle.write("0:key:a;1:type:b;2:close")
+    window_env = clean_env({"CEESAFE_WINDOW_SCRIPT": script})
+
+    def every_block(r):
+        counts = ALLOC_HOOK.search(r.stdout)
+        report = re.search(r"ceesafe alloc: attempts=(\d+) live=0", r.stderr)
+        # Every block but argv's copy (never freed) comes back to the hook; the hook makes at least the attempts
+        # CeeSafe counts, and more for the runtime's own (the executor's, the window layer's, argv's).
+        return (r.returncode == 0 and counts is not None and report is not None and int(counts.group(3)) == 0 and
+                int(counts.group(1)) == int(counts.group(2)) + 1 and int(counts.group(1)) > int(report.group(1)) and
+                "sum=6 twice=42 async=42 boxes=5 scratch=66016 window=4 args=2" in r.stdout and "live=0" in r.stdout)
+
+    r = run([host, "alloc-hook"], env=window_env)
+    check.expect("the allocator hook: every block of CeeSafe, the executor, a scratch frame, a thread, argv's copy "
+                 "and a scripted window, each freed by the heap that made it", every_block(r), r.stdout + r.stderr)
+    same, detail = True, ""
+    for k in range(0, 7):
+        r = run([host, "alloc-fail", str(k)])
+        made = re.search(r"boxes=(\d+) ", r.stdout)
+        counts = ALLOC_HOOK.search(r.stdout)
+        want = 5 if k == 0 or k > 5 else k - 1
+        if made is None or counts is None or int(made.group(1)) != want or counts.group(1) != made.group(1) or \
+                counts.group(1) != counts.group(2) or counts.group(3) != "0":
+            same, detail = False, f"k={k}: {r.stdout} {r.stderr}"
+    check.expect("fail_alloc_at = k with the allocator hook: the injected failure never reaches it", same, detail)
+    # The window layer's blocks alone, exactly: the lower bounds above cannot see a malloc/free pair that never touches
+    # the hook (review: with every window call site back on malloc they still passed). The five: the cee_window
+    # object, its title, the script's text and items, the kept frame.
+    r = run([host, "alloc-window"], env=window_env)
+    check.expect("the window layer's five blocks, each through the hook and freed by it",
+                 "window=4 hook allocs=5 frees=5 bad=0" in r.stdout, r.stdout + r.stderr)
+    # An 8-aligned function, each in turn: the panic naming it reaches the panic hook (CEE_PANIC_ALLOCATOR), before
+    # any misaligned access; `init` is alloc's at argv's copy inside ceesafe_init.
+    for which, function in (("alloc", "alloc"), ("alloc_zeroed", "alloc_zeroed"), ("realloc", "realloc"),
+                            ("init", "alloc")):
+        r = run([host, "alloc-misaligned", which], env=window_env)
+        found = hooks(r.stdout)
+        check.expect(f"an 8-aligned allocator hook ({which}): the panic naming {function}, kind 17, through the hook",
+                     status_of(r) == 134 and len(found) == 1 and found[0].group(2) == "17" and
+                     found[0].group(4) == "(null)" and
+                     found[0].group(7) == f"ceesafe_allocator.{function} returned a misaligned block" and
+                     ("init=" not in r.stdout) == (which == "init"),
+                     f"{status_of(r)} {r.stdout} {r.stderr}")
+    r = run([host, "alloc-late"])
+    check.expect("an allocator after an allocation: LATE, nothing changed, the hook never called",
+                 "alloc-late=2,0 boxes=3 hook allocs=0 frees=0 bad=0" in r.stdout, r.stdout + r.stderr)
+    r = run([host, "alloc-partial"])
+    check.expect("an allocator missing a function: ALLOCATOR, nothing changed",
+                 "partial=4 then=0 boxes=2 hook allocs=2 frees=2 bad=0" in r.stdout, r.stdout + r.stderr)
+
+    # The same blocks under AddressSanitizer: a hook block given to the C library's free is a free of a pointer
+    # malloc never returned.
+    asan_dir = os.path.join(work, "asan")
+    b = run([cee, "build", "--offline", "--emit", "lib", "--cc", cc, "--cflag", "-fsanitize=address", "--cflag", "-g",
+             "-o", os.path.join(asan_dir, "libembed.a")], cwd=package, timeout=600)
+    exe = os.path.join(work, "host_asan")
+    p = b if b.returncode != 0 else run(
+        [cc, "-std=c11", "-g", "-fsanitize=address", "-I" + asan_dir, os.path.join(FIXTURE, "host.c"),
+         os.path.join(asan_dir, "libembed.a"), "-o", exe, "-lpthread"], timeout=600)
+    if p.returncode != 0:
+        check.skip("the allocator hook under AddressSanitizer", p.stderr.strip()[-200:])
+    else:
+        r = run([exe, "alloc-hook"], env=window_env)
+        check.expect("the allocator hook under AddressSanitizer: no report, every block back to its heap",
+                     every_block(r) and "AddressSanitizer" not in r.stderr, r.stdout + r.stderr[-800:])
 
 
 def member_names(check, cee, work):

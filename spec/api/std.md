@@ -941,7 +941,9 @@ A checksum of no bytes yet.
 public fn update(borrow mut this, bytes: Slice<u8>)
 ```
 
-Feeds `bytes`: eight at a time through the slicing tables, then the rest one at a time.
+Feeds `bytes`: through the CPU's CRC-32C instruction where it has one (SSE4.2 on x86-64, the CRC extension on
+AArch64; ADR 0089), else eight at a time through the slicing tables, then the rest one at a time.
+Safety: the runtime reads at most the slice's length, during the call only, and keeps no pointer.
 
 ### Crc32c.finish
 

@@ -2537,6 +2537,126 @@ void ceesafe_random_key(uint64_t *key) {
     key[1] = cee_random_words[1];
 }
 
+/* ---- CRC-32C on the CPU's instruction (ADR 0089): SSE4.2 `crc32` on x86-64, the CRC extension's `crc32c` on
+ * AArch64. lib/std's Crc32c asks ceesafe_crc32c_available at each update and keeps its tables where it says 0. The
+ * instruction is reached by inline assembly (GCC, clang) or the compiler's intrinsics (MSVC), so no file needs a
+ * target flag and no helper library is linked; whether the CPU has it is asked of the CPU or the system, once. ---- */
+#if defined(__aarch64__) && defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(__aarch64__) && defined(__linux__) && !defined(CEE_COSMOOS) && defined(__has_include)
+#if __has_include(<sys/auxv.h>)
+#include <sys/auxv.h>
+#define CEE_HAVE_GETAUXVAL 1
+#endif
+#endif
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
+#if (defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))) || (defined(_MSC_VER) && defined(_M_X64))
+#define CEE_CRC32C_X86 1
+#elif (defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))) || (defined(_MSC_VER) && defined(_M_ARM64))
+#define CEE_CRC32C_ARM 1
+#endif
+
+static uint32_t cee_crc32c_state; /* 0 not asked, 1 no instruction, 2 the instruction (ceesafe_atomic_*) */
+
+static bool cee_crc32c_probe(void) {
+#if defined(CEE_CRC32C_X86) && defined(_MSC_VER) && !defined(__clang__)
+    int regs[4];
+    __cpuid(regs, 1);
+    return ((unsigned)regs[2] & (1u << 20)) != 0u; /* CPUID.1:ECX.SSE4_2 */
+#elif defined(CEE_CRC32C_X86)
+    uint32_t a = 1u, b, c = 0u, d;
+    __asm__ __volatile__("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    (void)a;
+    (void)b;
+    (void)d;
+    return (c & (1u << 20)) != 0u; /* CPUID.1:ECX.SSE4_2 */
+#elif defined(CEE_CRC32C_ARM) && defined(__ARM_FEATURE_CRC32)
+    return true; /* the compiler's target has it (every Apple arm64 Mac, ARMv8.1 and later) */
+#elif defined(CEE_CRC32C_ARM) && defined(__APPLE__)
+    int has = 0;
+    size_t size = sizeof has;
+    return sysctlbyname("hw.optional.armv8_crc32", &has, &size, NULL, 0) == 0 && has != 0;
+#elif defined(CEE_CRC32C_ARM) && defined(CEE_HAVE_GETAUXVAL)
+    return (getauxval(AT_HWCAP) & (1ul << 7)) != 0u; /* HWCAP_CRC32 */
+#elif defined(CEE_CRC32C_ARM) && defined(_MSC_VER) && !defined(__clang__)
+    return IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE) != 0;
+#else
+    return false;
+#endif
+}
+
+uint32_t ceesafe_crc32c_available(void) {
+    uint32_t state = ceesafe_atomic_load_u32(&cee_crc32c_state);
+    if (state == 0u) {
+        state = cee_crc32c_probe() ? 2u : 1u;
+        ceesafe_atomic_store_u32(&cee_crc32c_state, state); /* racing threads store the same answer */
+    }
+    return state == 2u ? 1u : 0u;
+}
+
+#if defined(CEE_CRC32C_X86) || defined(CEE_CRC32C_ARM)
+static inline uint32_t cee_crc32c_u64(uint32_t crc, uint64_t v) {
+#if defined(CEE_CRC32C_X86) && defined(_MSC_VER) && !defined(__clang__)
+    return (uint32_t)_mm_crc32_u64(crc, v);
+#elif defined(CEE_CRC32C_X86)
+    uint64_t c = crc;
+    __asm__("crc32q %1, %0" : "+r"(c) : "rm"(v));
+    return (uint32_t)c;
+#elif defined(_MSC_VER) && !defined(__clang__)
+    return __crc32cd(crc, v);
+#elif defined(__ARM_FEATURE_CRC32)
+    __asm__("crc32cx %w0, %w0, %x1" : "+r"(crc) : "r"(v));
+    return crc;
+#else
+    __asm__(".arch_extension crc\n\tcrc32cx %w0, %w0, %x1" : "+r"(crc) : "r"(v));
+    return crc;
+#endif
+}
+
+static inline uint32_t cee_crc32c_u8(uint32_t crc, uint8_t v) {
+#if defined(CEE_CRC32C_X86) && defined(_MSC_VER) && !defined(__clang__)
+    return _mm_crc32_u8(crc, v);
+#elif defined(CEE_CRC32C_X86)
+    __asm__("crc32b %1, %0" : "+r"(crc) : "rm"(v));
+    return crc;
+#elif defined(_MSC_VER) && !defined(__clang__)
+    return __crc32cb(crc, v);
+#elif defined(__ARM_FEATURE_CRC32)
+    __asm__("crc32cb %w0, %w0, %w1" : "+r"(crc) : "r"((uint32_t)v));
+    return crc;
+#else
+    __asm__(".arch_extension crc\n\tcrc32cb %w0, %w0, %w1" : "+r"(crc) : "r"((uint32_t)v));
+    return crc;
+#endif
+}
+#endif
+
+/* The register `crc` (reflected, before the final XOR, as Crc32c keeps it) after `length` bytes. Called only after
+ * ceesafe_crc32c_available() said 1; on a target without the instruction it returns `crc` unchanged. */
+uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t length) {
+#if defined(CEE_CRC32C_X86) || defined(CEE_CRC32C_ARM)
+    while (length >= 8u) {
+        uint64_t word;
+        ceesafe_mem_copy(&word, bytes, sizeof word); /* little-endian on both, as the reflected CRC wants */
+        crc = cee_crc32c_u64(crc, word);
+        bytes += 8;
+        length -= 8u;
+    }
+    while (length > 0u) {
+        crc = cee_crc32c_u8(crc, *bytes);
+        bytes++;
+        length--;
+    }
+#else
+    (void)bytes;
+    (void)length;
+#endif
+    return crc;
+}
+
 /* ---- Wall-clock time (ADR 0055). The monotonic clock, for waits, is ceesafe_async_now. ---- */
 #if !defined(_WIN32)
 #include <time.h>

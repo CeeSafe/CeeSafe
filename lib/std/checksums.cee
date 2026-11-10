@@ -1,7 +1,14 @@
 // Checksums and hashes (ADR 0075 §2.5): CRC-32C, CRC-64/NVME, MD5, SHA-256 and HMAC-SHA-256, in pure CeeSafe. Each is
 // incremental (`create`, `update`, `finish`) and has a one-call `of`. The CRC tables and the round constants are in
-// checksum_tables.cee, which tools/gen_checksums.py writes. The CRCs are table-driven, slicing-by-8; hardware CRC
-// needs intrinsics CeeSafe does not have, and is left to a later ADR without a change to this API.
+// checksum_tables.cee, which tools/gen_checksums.py writes. The CRCs are table-driven, slicing-by-8. Crc32c uses the
+// CPU's CRC-32C instruction where the runtime finds one (ADR 0089), with the same results and the same API.
+
+extern "C" {
+    @effects()
+    fn ceesafe_crc32c_available() -> u32;
+    @effects()
+    fn ceesafe_crc32c_update(crc: u32, bytes: *u8, length: u64) -> u32;
+}
 
 /// CRC-32C (Castagnoli: polynomial 0x1EDC6F41, reflected, initial value and final XOR all ones), the checksum of
 /// iSCSI, ext4, Btrfs and the S3 `x-amz-checksum-crc32c` header. `Crc32c.of("123456789".bytes())` is 0xE3069283.
@@ -11,8 +18,14 @@ public struct Crc32c {
     /// A checksum of no bytes yet.
     public fn create() -> Crc32c => Crc32c { state: 0xFFFFFFFF };
 
-    /// Feeds `bytes`: eight at a time through the slicing tables, then the rest one at a time.
+    /// Feeds `bytes`: through the CPU's CRC-32C instruction where it has one (SSE4.2 on x86-64, the CRC extension on
+    /// AArch64; ADR 0089), else eight at a time through the slicing tables, then the rest one at a time.
+    /// Safety: the runtime reads at most the slice's length, during the call only, and keeps no pointer.
     public fn update(borrow mut this, bytes: Slice<u8>) {
+        if (unsafe { ceesafe_crc32c_available() } != 0) {
+            this.state = unsafe { ceesafe_crc32c_update(this.state, bytes.ptr, bytes.length as u64) };
+            return;
+        }
         var c = this.state;
         var i: usize = 0;
         let n = bytes.length;

@@ -106,6 +106,24 @@ const reference = [
   { text: "Decisions (ADRs)", collapsed: true, items: [{ text: "Index", link: "/reference/decisions/" }, ...decisions] },
 ];
 
+// The posts of docs/blog/, by first heading; the file names sort them.
+const blogDirectory = new URL("../../docs/blog/", import.meta.url);
+const blog = [
+  {
+    text: "Blog",
+    items: [
+      { text: "All posts", link: "/blog/" },
+      ...readdirSync(blogDirectory)
+        .filter((name) => name.endsWith(".md") && name !== "README.md")
+        .sort()
+        .map((name) => ({
+          text: readFileSync(new URL(name, blogDirectory), "utf8").match(/^# (.+)$/m)?.[1] ?? name,
+          link: `/blog/${name.replace(/\.md$/, "")}`,
+        })),
+    ],
+  },
+];
+
 export default defineConfig({
   title: "CeeSafe",
   description: "A memory-safe systems language with C#-style syntax, compiled to portable C.",
@@ -124,17 +142,20 @@ export default defineConfig({
       { text: "Specification", link: "/reference/", activeMatch: "/reference/(?!api/|decisions/)" },
       { text: "Library", link: "/reference/api/core", activeMatch: "/reference/api/" },
       { text: "Decisions", link: "/reference/decisions/", activeMatch: "/reference/decisions/" },
+      { text: "Blog", link: "/blog/", activeMatch: "/blog/" },
     ],
-    sidebar: { "/guide/": guide, "/reference/": reference },
+    sidebar: { "/guide/": guide, "/reference/": reference, "/blog/": blog },
     socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/CeeSafe" }],
     search: { provider: "local" },
     outline: { level: [2, 3] },
     editLink: {
-      // Pages are copies of spec/ and guide/ (site/scripts/prepare.mjs): edit the originals.
+      // Pages are copies of spec/, guide/ and docs/blog/ (site/scripts/prepare.mjs): edit the originals.
       pattern: ({ filePath }) =>
         filePath.startsWith("reference/")
           ? `https://github.com/CeeSafe/CeeSafe/edit/main/spec/${filePath.slice("reference/".length).replace(/(^|\/)index\.md$/, "$1README.md")}`
-          : `https://github.com/CeeSafe/CeeSafe/edit/main/${filePath}`,
+          : filePath.startsWith("blog/")
+            ? `https://github.com/CeeSafe/CeeSafe/edit/main/docs/${filePath.replace(/(^|\/)index\.md$/, "$1README.md")}`
+            : `https://github.com/CeeSafe/CeeSafe/edit/main/${filePath}`,
       text: "Edit this page on GitHub",
     },
     footer: {

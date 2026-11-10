@@ -1,5 +1,5 @@
-// Copies the repository's spec/ and guide/ into the documentation site (site/README.md):
-// - spec/ becomes reference/ (spec/README.md is reference/index.md), guide/ becomes guide/;
+// Copies the repository's spec/, guide/ and docs/blog/ into the documentation site (site/README.md):
+// - spec/ becomes reference/ (spec/README.md is reference/index.md), guide/ becomes guide/, docs/blog/ becomes blog/;
 // - links between the two stay relative (guide/ → ../spec/x.md becomes ../reference/x.md); links to other files of
 //   the repository become GitHub URLs;
 // - outside code, `<` that does not start an HTML tag and `{{` are escaped, since VitePress compiles pages as Vue.
@@ -17,6 +17,7 @@ const base = "https://ceesafe.github.io/CeeSafe/";
 const trees = [
   ["spec", "reference"],
   ["guide", "guide"],
+  ["docs/blog", "blog"],
 ];
 
 const htmlTags = new Set(["a", "br", "sub", "sup", "details", "summary", "img", "code", "kbd", "b", "i", "em", "strong", "div", "span", "p", "table", "tr", "td", "th"]);
@@ -101,7 +102,7 @@ function transform(from, text) {
 const publicDirectory = join(site, "public");
 const titleOf = (text, fallback) => text.match(/^# (.+)$/m)?.[1].trim() ?? fallback;
 const textOf = (page) => readFileSync(join(publicDirectory, ...page.split("/")), "utf8");
-for (const generated of ["guide", "reference", "llms.txt", "llms-full.txt"]) {
+for (const generated of ["guide", "reference", "blog", "llms.txt", "llms-full.txt"]) {
   rmSync(join(publicDirectory, generated), { recursive: true, force: true });
 }
 const pages = [];
@@ -133,7 +134,7 @@ writeFileSync(
     "",
   ].join("\n"),
 );
-console.log(`prepare: ${pages.length} pages from spec/ and guide/, and the decisions' index`);
+console.log(`prepare: ${pages.length} pages from spec/, guide/ and docs/blog/, and the decisions' index`);
 
 // ---- For AI agents: llms.txt (an index) and llms-full.txt (the guide and the specification in one file). ----
 

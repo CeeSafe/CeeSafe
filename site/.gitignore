@@ -5,5 +5,7 @@ reference/
 .vitepress/dist/
 public/guide/
 public/reference/
+blog/
+public/blog/
 public/llms.txt
 public/llms-full.txt

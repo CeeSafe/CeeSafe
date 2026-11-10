@@ -86,9 +86,17 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  --dump-nir        (build) print the NIR of the package\n")?;
     appendText(
         out,
-        "  --emit c|exe|obj  (build) write C sources (to the -o directory), an executable (default), or one\n",
+        "  --emit c|exe|obj|lib\n",
     )?;
-    appendText(out, "                    relocatable object (profiles.md §4.3)\n")?;
+    appendText(
+        out,
+        "                    (build) write C sources (to the -o directory), an executable (default), one\n",
+    )?;
+    appendText(
+        out,
+        "                    relocatable object (profiles.md §4.3), or a static library: one archive member per\n",
+    )?;
+    appendText(out, "                    C file, for a host program's link (ADR 0088)\n")?;
     appendText(
         out,
         "  --kernel cosmoos  (build, check, with --profile freestanding) include lib/kernel, the library for a kernel\n",
@@ -120,6 +128,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --ld <linker>     (build --emit obj) join the objects with '<linker> -r' (e.g. ld.lld for ELF\n",
     )?;
     appendText(out, "                    cross builds) instead of the C compiler\n")?;
+    appendText(
+        out,
+        "  --ar <archiver>   (build --emit lib) the archiver; default: llvm-ar beside an LLVM clang, else ar\n",
+    )?;
     appendText(out, "  --line-directives (build) map the generated C to CeeSafe lines with #line\n")?;
     appendText(
         out,
@@ -223,7 +235,7 @@ struct Options {
     oce: bool;                   // on unless --no-oce (optimisations.md §3)
     explainOverflowChecks: bool; // --explain-overflow-checks
     structured: bool;            // on unless --flat-c (c-backend.md §3)
-    emit: Vector<u8>;            // --emit c|exe|obj (build)
+    emit: Vector<u8>;            // --emit c|exe|obj|lib (build)
     output: Vector<u8>;          // -o (build), or empty
     exportsHeader: Vector<u8>;   // --exports-header (build)
     emitGiven: bool;
@@ -235,6 +247,7 @@ struct Options {
     cc: Vector<u8>;             // --cc, else $CC (build)
     cflags: Vector<Vector<u8>>; // --cflag (build)
     linker: Vector<u8>;         // --ld (build --emit obj)
+    archiver: Vector<u8>;       // --ar (build --emit lib)
     cNames: Vector<Vector<u8>>; // C files given or the manifest's (type-system.md §28.6): names
     cTexts: Vector<Vector<u8>>; // and texts
     native: NativeBuild;        // the manifests' libraries and separately compiled C (ADR 0047)
@@ -361,7 +374,7 @@ fn readOptions(options: borrow mut Options) -> i32 {
         } else if (options.building && arg == "--split") {
             options.split = true;
         } else if (options.building && (arg == "--emit" || arg == "-o" || arg == "--exports-header" || arg == "--cc" ||
-            arg == "--cflag" || arg == "--ld" || arg == "--program")) {
+            arg == "--cflag" || arg == "--ld" || arg == "--ar" || arg == "--program")) {
             let value = match (Process.argument(a)) {
                 Some(v) => v,
                 null => {
@@ -374,9 +387,9 @@ fn readOptions(options: borrow mut Options) -> i32 {
             };
             a += 1;
             if (arg == "--emit") {
-                if (value != "c" && value != "exe" && value != "obj") {
+                if (value != "c" && value != "exe" && value != "obj" && value != "lib") {
                     var message = String.create();
-                    message.append("--emit must be 'c', 'exe' or 'obj', not '")!;
+                    message.append("--emit must be 'c', 'exe', 'obj' or 'lib', not '")!;
                     message.append(value)!;
                     message.append("'")!;
                     return fail(message.view());
@@ -391,6 +404,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 options.cflags.push(copyBytes(value.bytes())!)!;
             } else if (arg == "--ld") {
                 options.linker = copyBytes(value.bytes())!;
+            } else if (arg == "--ar") {
+                options.archiver = copyBytes(value.bytes())!;
             } else if (arg == "--program") {
                 options.programName = copyBytes(value.bytes())!;
             } else {
@@ -523,6 +538,9 @@ fn readOptions(options: borrow mut Options) -> i32 {
     if (options.building && !options.testing && options.jobsGiven && !options.split) {
         // Without --split the C is one compile, so a --jobs that did nothing would mislead (ADR 0082 §2.5).
         return fail("build's --jobs needs --split: without it, the C is compiled in one command");
+    }
+    if (options.archiver.length > 0 && !sameText(options.emit.view(), "lib")) {
+        return fail("--ar needs --emit lib: only a library is archived (ADR 0088 §2.1)");
     }
     return 0;
 }
@@ -793,6 +811,7 @@ fn parseCommand() -> i32 {
         },
         cflags: Vector<Vector<u8>>.create(),
         linker: Vector<u8>.create(),
+        archiver: Vector<u8>.create(),
         cNames: Vector<Vector<u8>>.create(),
         cTexts: Vector<Vector<u8>>.create(),
         native: NativeBuild.create(),
@@ -1148,6 +1167,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     },
     cflags: Vector<Vector<u8>>.create(),
     linker: Vector<u8>.create(),
+    archiver: Vector<u8>.create(),
     cNames: Vector<Vector<u8>>.create(),
     cTexts: Vector<Vector<u8>>.create(),
     native: NativeBuild.create(),

@@ -711,6 +711,22 @@ typedef struct cee_str { const uint8_t *ptr; uint64_t len; } cee_str;
    freestanding package, the environment's ceesafe_panic with CEE_PANIC_EXPLICIT (the message is not shown). */
 CEE_COLD _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc);
 
+/* Embedding (ADR 0088 §2.4), hosted: a runtime abort (no CeeSafe location) reported as a panic of `kind` with the
+   runtime's message, through the host's panic hook if there is one. */
+CEE_COLD _Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *message);
+
+/* Every export and every @callback entry calls ceesafe_entry_check first (ADR 0088 §2.4): on a thread that has
+   panicked (its hook called CeeSafe, or a host escaped the hook and called in again) it prints that panic's line and
+   aborts instead of running on broken state. One thread-local load. Hosted only: the generated code of a
+   freestanding build does not call it. */
+#if !defined(CEE_FREESTANDING)
+extern _Thread_local uint8_t ceesafe_thread_panicked;
+CEE_COLD _Noreturn void ceesafe_panic_reentered(void);
+static inline void ceesafe_entry_check(void) {
+    if (ceesafe_thread_panicked != 0u) ceesafe_panic_reentered();
+}
+#endif
+
 /* True if `index` is not inside a UTF-8 multi-byte sequence (the end counts as a boundary). */
 static inline bool cee_str_boundary(cee_str text, uint64_t index) {
     return index >= text.len || (text.ptr[index] & 0xC0u) != 0x80u;
@@ -789,6 +805,9 @@ void *ceesafe_platform_realloc(void *p, size_t size);
 void ceesafe_platform_free(void *p);
 /* A configuration number from the environment; 0 if absent or not a number (hosted test builds). */
 uint64_t ceesafe_platform_config(const char *name);
+/* Set (relaxed) by the platform's allocation functions at their first success: ceesafe_init's CEESAFE_INIT_LATE
+   (ADR 0088 §2.2). */
+extern uint32_t ceesafe_rt_allocated;
 
 /* ---- Heap (type-system.md §18; runtime/core/ceesafe_rt_core.c) ------------------------------ */
 
@@ -798,6 +817,7 @@ uint64_t ceesafe_platform_config(const char *name);
 /* CEE_ALLOC_FOREIGN (2u, for C code: ADR 0060), CEE_ALLOC_FOREIGN_INIT (3u, a C library's one-time initialisation:
    ADR 0061) and the three calls are declared in ceesafe/foreign.h, which a package's C files include on their own. */
 #include "foreign.h" /* beside this header, whatever the include path */
+#include "embed.h"   /* ceesafe_init and ceesafe_shutdown (ADR 0088), which the generated `main` calls */
 
 /*
  * Allocation for Box and every later heap type. Every attempt is counted, and the attempt numbered
@@ -1129,9 +1149,8 @@ static inline void *ceesafe_region_alloc_fast(void *region, uint32_t kind, uint6
     return ceesafe_region_alloc(region, kind, size, align);
 }
 
-/* Called by the generated `main`: configuration at start; the CEESAFE_ALLOC_REPORT line at the end. */
-void ceesafe_rt_start(void);
-int32_t ceesafe_rt_finish(int32_t code);
+/* The generated `main` starts the runtime with ceesafe_init and ends it with ceesafe_shutdown (ceesafe/embed.h,
+   ADR 0088 §2.2); nothing else starts it. */
 
 /* ---- Output and process control (runtime/core/ceesafe_rt_core.c) --------------------------- */
 
@@ -1182,8 +1201,8 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 uint32_t ceesafe_io_kind(int32_t error);
 cee_str ceesafe_io_message(uint32_t kind);
 
-/* Called by the generated `main` before anything else: keeps argv for Process.argument (never copied). */
-void ceesafe_rt_args(int32_t count, const uint8_t *const *arguments);
+/* Called by ceesafe_init (ADR 0088 §2.2): argv for Process.argument, already copied, kept for the process's life. */
+void ceesafe_args_set(int32_t count, const uint8_t *const *arguments);
 uint64_t ceesafe_arg_count(void);
 /* Argument `index` as a view; false if out of range or not valid UTF-8. */
 bool ceesafe_arg(uint64_t index, cee_str *out);

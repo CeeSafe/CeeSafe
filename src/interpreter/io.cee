@@ -74,7 +74,7 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     channels: Vector<InterpChannel>.create(),
 };
 
-/// ceesafe_rt_args: argv as static memory (never copied by the native runtime either).
+/// ceesafe_init's argv (ADR 0088 §2.2): copied, as the native runtime copies it.
 fn startRuntime(it: borrow mut Interp) -> Result<void, Stop> {
     for (k in 0..it.options.arguments.length) {
         let bytes = copyBytes(it.options.arguments[k].view())!;

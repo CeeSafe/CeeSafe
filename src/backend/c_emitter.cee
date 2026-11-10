@@ -74,6 +74,7 @@ struct CEmitter {
     hasPendingLabel: bool;
     structured: bool;      // c-backend.md §3 (off: --flat-c)
     debugAssertions: bool; // `debugAssert` compiled in (ADR 0087 §2.5)
+    hosted: bool;          // not the freestanding profile: exports and callbacks check the panicked flag (ADR 0088 §2.4)
     capturing: bool;       // structured form: statement lines are collected for the tree
     capture: Vector<Vector<u8>>;
 
@@ -130,6 +131,7 @@ struct CEmitter {
         hasPendingLabel: false,
         structured: false,
         debugAssertions: false,
+        hosted: true,
         capturing: false,
         capture: Vector<Vector<u8>>.create(),
     };

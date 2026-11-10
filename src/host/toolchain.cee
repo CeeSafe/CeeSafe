@@ -679,8 +679,65 @@ fn processorCount() -> u32 {
     return if (n == 0) 1 else truncate<u32>(n);
 }
 
-/// Compiles each C file with `-c` and joins the objects into one relocatable object with `-r` (CompileObject,
-/// profiles.md §4.3): by `linker` if given, else by the compiler with the target flag.
+/// The archive member a C file of the build becomes (ADR 0088 §2.1): a runtime file keeps its name
+/// (`ceesafe_rt_core.o`), the generated code's carry the program's (`<program>_main.o`, a split unit's path with `_`
+/// for `/`), so no two members share one.
+fn appendMemberName(out: borrow mut Vector<u8>, file: Slice<u8>, program: Slice<u8>) -> Result<void, AllocError> {
+    if (!(file.length >= 11 && sameText(file[..11], "ceesafe_rt_"))) {
+        appendBytes(out, program)?;
+        out.push('_')?;
+    }
+    for (c in file[..(file.length - 2)]) {
+        // without `.c`; a split unit's directories (`embed/src/lib.c`) become part of the one name
+        out.push(if (c == '/' || c == '\\') '_' else c)?;
+    }
+    return appendText(out, ".o");
+}
+
+/// `build --emit lib`'s archiver when no `--ar` is given (ADR 0088 §2.1): `llvm-ar` beside an LLVM clang (with the
+/// clang's version suffix, `clang-18` beside `llvm-ar-18`), else `ar` on the PATH; null when there is none.
+fn locateArchiver(compiler: Slice<u8>) -> Vector<u8>? {
+    let windows = hostIsWindows();
+    var path = Vector<u8>.create();
+    var separator = false;
+    for (c in compiler) {
+        separator = separator || c == '/' || c == '\\';
+    }
+    if (separator) {
+        appendBytes(mut path, compiler)!;
+    } else {
+        match (StringView.fromUtf8(compiler)) {
+            Some(name) => {
+                match (findInPath(name, windows)) {
+                    Some(found) => { path = found; }
+                    null => {}
+                }
+            }
+            null => {}
+        }
+    }
+    let base = compilerBase(path.view());
+    if (base.length >= 5 && sameText(base[..5], "clang")) {
+        var end = base.length;
+        if (end >= 4 && sameText(base[(end - 4)..], ".exe")) {
+            end -= 4;
+        }
+        var archiver = copyBytes(path[..(path.length - base.length)])!;
+        appendText(mut archiver, "llvm-ar")!;
+        appendBytes(mut archiver, base[5..end])!; // the version suffix, if any
+        if (windows) {
+            appendText(mut archiver, ".exe")!;
+        }
+        if (fileExists(archiver.view())) {
+            return archiver;
+        }
+    }
+    return findInPath("ar", windows);
+}
+
+/// Compiles each C file with `-c` and joins the objects (CompileObject, profiles.md §4.3): with `archiver` empty, into
+/// one relocatable object with `-r`, by `linker` if given, else by the compiler with the target flag; else into a
+/// static archive by `archiver` (`--emit lib`, ADR 0088 §2.1), one member per C file, named for `program`.
 fn compileObject(
     compiler: Slice<u8>,
     directory: Slice<u8>,
@@ -690,12 +747,20 @@ fn compileObject(
     freestanding: bool,
     linker: Slice<u8>,
     native: borrow NativeBuild,
+    archiver: Slice<u8>,
+    program: Slice<u8>,
 ) -> Result<ToolOutcome, AllocError> {
+    let archive = archiver.length > 0;
     var objects = Vector<Vector<u8>>.create();
     // A package's C files with its include directories (ADR 0047 §3.3).
     for (k in 0..native.separate.length) {
         let s = borrow native.separate[k];
-        var name = copyBytes("ceesafe_package_".bytes())?;
+        var name = Vector<u8>.create();
+        if (archive) {
+            appendBytes(mut name, program)?;
+            name.push('_')?;
+        }
+        appendText(mut name, "ceesafe_package_")?;
         appendDecimal(mut name, k as u64)?;
         appendText(mut name, ".o")?;
         let object = joinPath(directory, name.view())?;
@@ -723,8 +788,15 @@ fn compileObject(
             continue;
         }
         let source = joinPath(directory, file.name.view())?;
-        var object = copyBytes(source.view())?;
-        appendText(mut object, ".o")?;
+        var object = Vector<u8>.create();
+        if (archive) {
+            var member = Vector<u8>.create();
+            appendMemberName(mut member, file.name.view(), program)?;
+            object = joinPath(directory, member.view())?;
+        } else {
+            appendBytes(mut object, source.view())?;
+            appendText(mut object, ".o")?;
+        }
         var arguments = Vector<Vector<u8>>.create();
         pushCommonFlags(mut arguments, directory, freestanding)?;
         for (flag in flags.view()) {
@@ -741,6 +813,19 @@ fn compileObject(
         objects.push(object)?;
     }
     var link = Vector<Vector<u8>>.create();
+    if (archive) {
+        // `ar r` adds to an archive that exists, so an earlier build's members would stay: it is made afresh.
+        match (StringView.fromUtf8(output)) {
+            Some(text) => { let removed = File.remove(text); }
+            null => {}
+        }
+        pushText(mut link, "rcs")?;
+        pushBytes(mut link, output)?;
+        for (object in objects.view()) {
+            pushBytes(mut link, object.view())?;
+        }
+        return runTool(archiver, link);
+    }
     if (linker.length == 0) {
         for (flag in flags.view()) {
             let text = flag.view();

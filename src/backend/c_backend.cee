@@ -100,6 +100,7 @@ fn generateC(
     trial.bce = o.bce;
     trial.structured = o.structured;
     trial.debugAssertions = o.debugAssertions;
+    trial.hosted = !freestanding;
     trial.oce = o.oce;
     setUpEmitter(mut trial, c, n)?;
     emitProgram(mut trial, c, n, sources)?;
@@ -124,6 +125,7 @@ fn generateC(
     emitter.bce = o.bce;
     emitter.structured = o.structured;
     emitter.debugAssertions = o.debugAssertions;
+    emitter.hosted = !freestanding;
     emitter.oce = o.oce;
     emitter.usedTypes = trial.usedTypes;
     setUpEmitter(mut emitter, c, n)?;
@@ -147,6 +149,15 @@ fn generateC(
     }
     out.push(runtimeFile(0, "")?)?;
     out.push(runtimeFile(7, "")?)?; // ceesafe/foreign.h, which rt.h includes and C files may (ADR 0060)
+    // ceesafe/embed.h, the embedding interface (ADR 0088 §2.2), which rt.h includes: its freestanding form without
+    // the environment, the arguments, the allocator and the panic hook.
+    out.push(
+        runtimeFile(
+            9,
+            if (freestanding) "/* The freestanding form (ADR 0088 §2.2). */\n#define CEESAFE_EMBED_FREESTANDING 1\n"
+                else "",
+        )?,
+    )?;
     if (freestanding) {
         out.push(
             runtimeFile(

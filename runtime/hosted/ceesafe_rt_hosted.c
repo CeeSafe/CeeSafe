@@ -68,16 +68,33 @@ _Noreturn void ceesafe_platform_abort(void) {
 #endif
 }
 
+/* ceesafe_init's CEESAFE_INIT_LATE (ADR 0088 §2.2): set at the first block these functions hand out. A relaxed load
+   (a plain one under MSVC, whose volatile accesses are not torn), and a store only the first time. */
+uint32_t ceesafe_rt_allocated = 0u;
+
+static void *ceesafe_note_allocated(void *p) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    if (p != NULL && *(volatile uint32_t *)&ceesafe_rt_allocated == 0u) {
+        *(volatile uint32_t *)&ceesafe_rt_allocated = 1u;
+    }
+#else
+    if (p != NULL && __atomic_load_n(&ceesafe_rt_allocated, __ATOMIC_RELAXED) == 0u) {
+        __atomic_store_n(&ceesafe_rt_allocated, 1u, __ATOMIC_RELAXED);
+    }
+#endif
+    return p;
+}
+
 void *ceesafe_platform_alloc(size_t size) {
-    return malloc(size); /* aligned for max_align_t */
+    return ceesafe_note_allocated(malloc(size)); /* aligned for max_align_t */
 }
 
 void *ceesafe_platform_alloc_zeroed(size_t size) {
-    return calloc(1u, size); /* aligned for max_align_t */
+    return ceesafe_note_allocated(calloc(1u, size)); /* aligned for max_align_t */
 }
 
 void *ceesafe_platform_realloc(void *p, size_t size) {
-    return realloc(p, size); /* aligned for max_align_t */
+    return ceesafe_note_allocated(realloc(p, size)); /* aligned for max_align_t */
 }
 
 void ceesafe_platform_free(void *p) {

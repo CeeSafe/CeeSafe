@@ -72,7 +72,7 @@ extern char **environ;
 static int32_t ceesafe_argc;
 static const uint8_t *const *ceesafe_argv;
 
-void ceesafe_rt_args(int32_t count, const uint8_t *const *arguments) {
+void ceesafe_args_set(int32_t count, const uint8_t *const *arguments) {
     ceesafe_argc = count;
     ceesafe_argv = arguments;
 }

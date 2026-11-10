@@ -376,9 +376,7 @@ static _Noreturn void cee_out_of_memory(void) {
 #if defined(CEE_FREESTANDING)
     ceesafe_panic(CEE_PANIC_ASYNC, CEE_LOC("ceesafe_rt_async.c", 0u, 0u));
 #else
-    static const char message[] = "ceesafe: out of memory for the executor's own bookkeeping\n";
-    ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
-    ceesafe_platform_abort();
+    ceesafe_panic_runtime(CEE_PANIC_ASYNC, "out of memory for the executor's own bookkeeping");
 #endif
 }
 
@@ -695,9 +693,7 @@ static void cee_park(cee_task *t) {
     if (t->on_wake) {
 #if !defined(CEE_FREESTANDING)
         if (t->fd >= 0) {
-            static const char message[] = "ceesafe: a task waits on a descriptor and a wake at once\n";
-            ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
-            ceesafe_platform_abort();
+            ceesafe_panic_runtime(CEE_PANIC_ASYNC, "a task waits on a descriptor and a wake at once");
         }
 #endif
         t->link_prev = NULL;
@@ -1583,9 +1579,7 @@ static _Noreturn void cee_stuck(void) {
 #if defined(CEE_FREESTANDING)
     ceesafe_panic(CEE_PANIC_ASYNC, CEE_LOC("ceesafe_rt_async.c", 0u, 0u));
 #else
-    static const char message[] = "ceesafe: every task is parked with nothing to wake it\n";
-    ceesafe_platform_write_stderr((const uint8_t *)message, sizeof message - 1u);
-    ceesafe_platform_abort();
+    ceesafe_panic_runtime(CEE_PANIC_ASYNC, "every task is parked with nothing to wake it");
 #endif
 }
 

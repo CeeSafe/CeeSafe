@@ -133,7 +133,14 @@ static ceeR_XS4PairS10SystemHeapE10AllocError ceeB_XS4PairS10SystemHeap(ceeT_Pai
 }
 
 int main(int argc, char **argv) {
-    ceesafe_rt_args((int32_t)argc, (const uint8_t *const *)(void *)argv);
-    ceesafe_rt_start();
-    return (int)ceesafe_rt_finish(ceeF_main());
+    ceesafe_config config = {
+        .size = (uint32_t)sizeof(ceesafe_config),
+        .flags = CEESAFE_INIT_ENVIRONMENT,
+        .argc = (int32_t)argc,
+        .argv = (const char *const *)(void *)argv,
+    };
+    if (ceesafe_init(&config) != 0) ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed");
+    int32_t code = ceeF_main();
+    (void)ceesafe_shutdown();
+    return (int)code;
 }

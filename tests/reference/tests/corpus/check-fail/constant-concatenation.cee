@@ -1,0 +1,17 @@
+// Constant concatenation (ADR 0087 §2.7): `+` joins constant views only in a constant or static initialiser, and
+// only views, with a `c"…"` allowed as the right operand alone. A NUL in the left operand of a `+ c"…"` is N0006 at
+// the `+`, as inside a `c"…"`; an operand that is not constant is N0217 in a constant and N0338 in a static.
+const NUL_LEFT: CStr = "a\0b" + c"x"; // error[N0006]
+const C_LEFT: CStr = c"a" + "b"; // error[N0207]
+const NUMBER: StringView = "a" + 1; // error[N0207]
+const BOTH_C: CStr = c"a" + c"b"; // error[N0207]
+const MINUS: StringView = "a" - "b"; // error[N0207]
+static CALLED: StringView = name() + "x"; // error[N0338]
+const FINE: StringView = "a" + "b";
+
+fn name() -> StringView => "n";
+
+fn main() {
+    let joined = "a" + "b"; // error[N0207]
+    let named = FINE + FINE; // error[N0207]
+}

@@ -57,7 +57,10 @@ fn evaluateConstant(c: borrow mut Checker, k: u32) -> Result<u32, AllocError> {
         ItemKind.Const(_, value) => value,
         _ => none(),
     };
+    let savedConstant = c.inConstantInitializer;
+    c.inConstantInitializer = true;
     let checked = checkExpr(c, valueSyntax, hirConstant.typ)?;
+    c.inConstantInitializer = savedConstant;
     let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
     let value = if (hirConstant.typ == c.types.error) c.errorResult(
         valueSpan.start,
@@ -437,4 +440,50 @@ fn floatFromInteger(v: IntValue, bits: u32) -> f64 {
     }
     let magnitude = doubleOf(m, shift);
     return if (v.negative && v.magnitude != 0) 0.0 - magnitude else magnitude;
+}
+
+/// `a + b` on constant views in a constant or static initialiser (ADR 0087 §2.7, type-system.md §10): `a`'s bytes,
+/// then `b`'s, as one literal; with a `c"…"` right operand, a `CStr<static>`, whose left operand may hold no NUL
+/// (N0006, as inside a `c"…"`). Each operand is a literal, a constant or such a `+`, folded already.
+fn constantConcatenation(c: borrow mut Checker, left: u32, right: u32, span: Span) -> Result<u32, AllocError> {
+    if (isErrorExpr(c, left) || isErrorExpr(c, right)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let leftText = stringLiteralOf(c, left);
+    let cRight = isCStringValue(c, right);
+    let rightText = if (cRight) cStringText(c, right) else stringLiteralOf(c, right);
+    if (leftText.count == 0xFFFFFFFF || rightText.count == 0xFFFFFFFF) {
+        let operand = if (leftText.count == 0xFFFFFFFF) left else right;
+        let at = c.spanOf(operand);
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'+' on views is evaluated when the program is compiled: each operand must be a string literal, a constant or another such '+' (type-system.md §10)",
+        )?;
+        let code = if (c.inConstantInitializer) notConstant() else notStaticInitializer();
+        c.error(code, at.start, at.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var bytes = copyBytes(c.hir.textOf(leftText))?;
+    if (cRight) {
+        for (b in bytes.view()) {
+            if (b == 0) {
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "a C string cannot hold a NUL byte: the left operand of this '+' has one, and the result is a 'c\"…\"' (ADR 0087 §2.7)",
+                )?;
+                c.error(6, span.start, span.end, message)?;
+                return c.errorResult(span.start, span.end);
+            }
+        }
+    }
+    let rightBytes = copyBytes(c.hir.textOf(rightText))?;
+    appendBytes(mut bytes, rightBytes.view())?;
+    if (cRight) {
+        return cStringValue(c, bytes.view(), span);
+    }
+    let range = c.hir.addText(bytes.view())?;
+    let view = c.types.stringView;
+    return c.expr(HirExpr.StringConst(range), view, span.start, span.end);
 }

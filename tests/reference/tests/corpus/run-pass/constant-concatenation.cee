@@ -1,0 +1,44 @@
+// Constant concatenation (ADR 0087 §2.7, type-system.md §10): in a constant or static initialiser, `a + b` on
+// constant views is one view of `a`'s bytes, then `b`'s. Chains fold left to right, constants may name other
+// constants, and a `c"…"` right operand makes a `CStr<static>` that ends in the NUL the compiler adds.
+extern "C" {
+    fn strlen(s: *CChar) -> usize;
+}
+
+const PREFIX: StringView = "bun: ";
+const MESSAGE: StringView = PREFIX + "error";
+const CHAIN: StringView = PREFIX + "a" + "b" + MESSAGE;
+const EMPTY: StringView = "" + "";
+const C_MESSAGE: CStr = PREFIX + c"cerr";
+const C_CHAIN: CStr = PREFIX + "x" + c"y";
+static BANG: StringView = MESSAGE + "!";
+static C_STATIC: CStr = MESSAGE + c"?";
+static NAMES: [StringView; 2] = [PREFIX + "0", MESSAGE + "1"];
+
+/// Safety: a `CStr` ends in a NUL, so `strlen` stays inside it.
+fn measured(s: CStr) -> usize => unsafe { strlen(s.ptr()) };
+
+fn main() {
+    Console.writeLine(MESSAGE);
+    Console.writeLine(CHAIN);
+    Console.writeLine(EMPTY.length);
+    Console.writeLine(C_MESSAGE.view());
+    Console.writeLine(measured(C_MESSAGE));
+    Console.writeLine(C_CHAIN.view());
+    Console.writeLine(BANG);
+    Console.writeLine(C_STATIC.view());
+    Console.writeLine(measured(C_STATIC));
+    Console.writeLine(NAMES[0]);
+    Console.writeLine(NAMES[1]);
+}
+// expect-stdout: bun: error
+// expect-stdout: bun: abbun: error
+// expect-stdout: 0
+// expect-stdout: bun: cerr
+// expect-stdout: 9
+// expect-stdout: bun: xy
+// expect-stdout: bun: error!
+// expect-stdout: bun: error?
+// expect-stdout: 11
+// expect-stdout: bun: 0
+// expect-stdout: bun: error1

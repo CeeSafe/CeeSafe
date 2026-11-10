@@ -62,6 +62,21 @@ fn isCStrType(c: borrow Checker, t: u32) -> bool {
         sameText(c.typeName(t), "CStr");
 }
 
+/// The text of a `c"…"` value (isCStringValue), without its NUL; a count of 0xFFFFFFFF for anything else.
+fn cStringText(c: borrow Checker, value: u32) -> Range {
+    match (c.hir.exprs[value as usize]) {
+        HirExpr.StructLiteral(fields) => {
+            let text = c.hir.fieldValues[fields.start as usize].value;
+            match (c.hir.exprs[text as usize]) {
+                HirExpr.StringConst(range) => { return range; }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    return Range { start: 0, count: 0xFFFFFFFF };
+}
+
 /// A `c"…"` literal's value: the struct literal checkCStringLiteral makes.
 fn isCStringValue(c: borrow Checker, e: u32) -> bool {
     if (!isCStrType(c, c.hir.exprTypes[e as usize])) {

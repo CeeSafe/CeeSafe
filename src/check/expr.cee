@@ -590,12 +590,22 @@ fn synthBinary(
     rightHir = viewOf(c, rightHir);
     var lt = c.typeOf(leftHir);
     var rt = c.typeOf(rightHir);
+    if (index == 13 && (c.inConstantInitializer || c.inStaticInitializer) && c.types.isStringView(lt) &&
+        (c.types.isStringView(rt) || isCStrType(c, rt))) {
+        return constantConcatenation(c, leftHir, rightHir, span); // ADR 0087 §2.7
+    }
     if (c.types.isStringView(lt) && c.types.isStringView(rt)) {
         if (index != 2 && index != 3) {
             var message = Vector<u8>.create();
             appendText(mut message, "operator '")?;
             appendText(mut message, binaryOpText(op))?;
             appendText(mut message, "' cannot be applied to type 'StringView'; views compare with '==' and '!='")?;
+            if (index == 13) {
+                appendText(
+                    mut message,
+                    ", and only a constant or static initialiser joins them with '+' (append to a 'String' at run time)",
+                )?;
+            }
             c.error(invalidOperandTypes(), span.start, span.end, message)?;
             return c.errorResult(span.start, span.end);
         }

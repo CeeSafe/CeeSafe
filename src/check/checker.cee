@@ -174,6 +174,7 @@ struct Checker {
     usedUnsafe: bool;                                // the body has an `unsafe` block or expression
     allowCChar: bool;                                // the next resolution is a pointer's pointee (§28.3)
     inStaticInitializer: bool;                       // checking a static's initialiser (S7c)
+    inConstantInitializer: bool;                     // checking a constant's value (ADR 0087 §2.7's `+`)
     inStaticType: bool;                              // resolving a static's declared type (ADR 0075 §2.15)
     atomicStructs: Vector<u32>;                      // Ast.items of structs declared `@context(atomic)`
     allowImported: bool;                             // the next resolution may be an imported C type (§31.2)

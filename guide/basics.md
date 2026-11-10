@@ -291,6 +291,28 @@ fn main() {
 
 A constant is evaluated at compile time. An overflow there is a compile error rather than a run-time stop.
 
+A constant may be text, and in a constant or a static `+` joins constant text, so a prefix is written once:
+
+```ceesafe
+const TOOL: StringView = "bun";
+const USAGE: StringView = TOOL + " <command> [options]";
+const VERSION_LINE: StringView = TOOL + " 1.4.4";
+
+fn main() {
+    Console.writeLine(USAGE);
+    Console.writeLine(VERSION_LINE);
+}
+```
+
+```text
+bun <command> [options]
+bun 1.4.4
+```
+
+The joined text is made when the program is compiled. Anywhere else `+` on views is an error (N0207): build text at
+run time by appending to a `String`. With a `c"…"` on the right, `TOOL + c"rc"` is a C string (a `CStr`,
+[C interop](unsafe-and-c.md)).
+
 ## Comments
 
 `//` comments run to the end of the line, `/* … */` comments may span lines, and `///` before an item is its

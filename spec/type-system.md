@@ -286,6 +286,13 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 - **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
   the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
   N0246.
+- **Constant concatenation** (ADR 0087 §2.7). In a constant's value or a static initialiser (§39.4), `a + b` whose
+  operands are both constant views (a string literal, a constant's name or another such `+`) is a constant view:
+  `a`'s bytes, then `b`'s. `A + B + C` folds left to right, and a constant of another package (`dep.PREFIX`) is a
+  constant view like any. With a `c"…"` (or a `CStr` constant) as the right operand, the result is a `CStr<static>`
+  whose text is `a`'s then the literal's: a NUL byte in `a` is N0006 at the `+`, as inside a `c"…"`. A `CStr` on the
+  left is N0207. An operand that is not constant is N0217 in a constant and N0338 in a static. Anywhere else, `+` on
+  views stays N0207: text is joined at run time by appending to a `String`.
 - `@export` on a constant makes it C data (§28.4).
 - **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
   struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`,
@@ -4269,7 +4276,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 `e` is evaluated at compile time to a C constant initialiser. It must be a **static initialiser** (N0338 otherwise):
 - a constant expression of an integer, `bool` or float type (§10), or a constant's name;
 - `"…".ptr as *T`, a string literal's address, for a C string (`"name\0".ptr as *CChar`; §28);
-- a string literal, as a `StringView`;
+- a string literal, as a `StringView`, or a constant concatenation of constant views (`PREFIX + "name"`, §10; ADR
+  0087 §2.7), as a `StringView` or, with a `c"…"` right operand, a `CStr`;
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may

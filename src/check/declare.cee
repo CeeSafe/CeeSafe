@@ -189,6 +189,7 @@ fn checkProgram(
         usedUnsafe: false,
         allowCChar: false,
         inStaticInitializer: false,
+        inConstantInitializer: false,
         inStaticType: false,
         atomicStructs: Vector<u32>.create(),
         allowImported: false,

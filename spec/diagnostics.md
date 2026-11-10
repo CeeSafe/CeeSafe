@@ -39,7 +39,7 @@ diagnostics, so any cascade fails the test.
 | N0003 | Unterminated block comment | `/* ...` at EOF |
 | N0004 | Integer literal does not fit in 64 bits | `18446744073709551616` |
 | N0005 | Unterminated string literal (newline or EOF before `"`) | `"abc` |
-| N0006 | Invalid escape sequence, or `\u{...}` that is not a Unicode scalar value | `"\q"`, `"\u{D800}"` |
+| N0006 | Invalid escape sequence, or `\u{...}` that is not a Unicode scalar value; a NUL byte in a `c"…"`, or in the left operand of a constant `+` whose right operand is one (ADR 0087 §2.4, §2.7) | `"\q"`, `"\u{D800}"` |
 | N0007 | Invalid char literal: empty, more than one character, or unterminated | `''`, `'ab'` |
 | N0008 | Invalid digit for the radix, or no digits after a radix prefix | `0b102`, `0x` |
 | N0009 | Unknown literal suffix | `12abc`, `1f32` (float suffix needs a float literal) |
@@ -81,7 +81,7 @@ Semantic checks run only when every file parsed without errors.
 | N0204 | Unknown type name | `fn f(a: int)` |
 | N0205 | Type mismatch against the expected type | `let a: bool = 1;`, `if (n) {}` |
 | N0206 | Integer literal out of range for its type | `256u8`, `let c: i8 = 128;` |
-| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
+| N0207 | Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3; `+` on views outside a constant or static initialiser, ADR 0087 §2.7) | `a + b` with `u8`/`i32`, `s & s` with `i32` |
 | N0208 | `as` conversion that can lose information | `a as u32` with `a: i32` |
 | N0209 | Wrong number of arguments | `two(1)` |
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |

@@ -8,7 +8,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     3 => "Unterminated block comment",
     4 => "Integer literal does not fit in 64 bits",
     5 => "Unterminated string literal (newline or EOF before `\"`)",
-    6 => "Invalid escape sequence, or `\\u{...}` that is not a Unicode scalar value",
+    6 =>
+        "Invalid escape sequence, or `\\u{...}` that is not a Unicode scalar value; a NUL byte in a `c\"…\"`, or in the left operand of a constant `+` whose right operand is one (ADR 0087 §2.4, §2.7)",
     7 => "Invalid char literal: empty, more than one character, or unterminated",
     8 => "Invalid digit for the radix, or no digits after a radix prefix",
     9 => "Unknown literal suffix",
@@ -39,7 +40,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     205 => "Type mismatch against the expected type",
     206 => "Integer literal out of range for its type",
     207 =>
-        "Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3)",
+        "Operator not applicable to the operand types (includes mixed types, signed bitwise ops, negating unsigned values; `==` on an enum with payloads, or on slices or arrays of floats or structs, ADR 0072; a field without `==` under `@derive(Equal)`, ADR 0087 §2.3; `+` on views outside a constant or static initialiser, ADR 0087 §2.7)",
     208 => "`as` conversion that can lose information",
     209 => "Wrong number of arguments",
     210 => "Not callable, or a function or built-in used as a value",

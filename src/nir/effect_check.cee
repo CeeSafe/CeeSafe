@@ -91,6 +91,7 @@ struct Effects {
     origins: Vector<Origins>; // by NIR function
     current: u32;             // the NIR function being looked at, or none
     reported: Vector<EffectReport>;
+    lengths: Vector<Vector<u32>>; // by effect slot (effectSlot), by HIR function: its explanation's steps, or none
 }
 
 fn blankOp() -> EffectOp => effectOp(0, 0, none(), none(), none());
@@ -969,21 +970,44 @@ fn explainOp(
     out: borrow mut Vector<u8>,
 ) -> Result<void, AllocError> {
     appendOpDescription(c, op, out)?;
-    var seen = Vector<u32>.create();
-    var next = op.next;
+    let chain = chainFrom(c, e, op.next, effect)?;
     var depth: u32 = 0;
+    for (step in chain.steps.view()) {
+        if (depth == maxEffectChain()) {
+            appendText(out, ", …")?;
+            return Ok();
+        }
+        appendText(out, ", which ")?;
+        appendBytes(out, step.view())?;
+        depth += 1;
+    }
+    if (!chain.truncated) {
+        appendBytes(out, chain.terminal.view())?;
+    }
+    return Ok();
+}
+
+/// The rest of an explanation from `first`, the function an operation reaches, as explainOp prints it: each step's
+/// description (at most maxEffectChain() + 1, enough for any depth), then what ends the chain, an extern's or a `dyn`
+/// method's text or nothing. A function whose body was not checked, its package's interface record standing for it
+/// (ADR 0082 §2.7), continues with the steps its record kept.
+fn chainFrom(c: borrow Checker, e: borrow Effects, first: u32, effect: u32) -> Result<RecordedChain, AllocError> {
+    var chain = emptyChain();
+    let limit = (maxEffectChain() + 1) as usize;
+    var seen = Vector<u32>.create();
+    var next = first;
     while (next != none() && !containsU32(seen, next)) {
         seen.push(next)?;
         if (isExternFunction(c, next)) {
             let declared = c.hir.functions[next as usize].declaredEffects;
             if (effect == writeEffect()) {
-                appendText(out, ", a C function, which may write anything (ADR 0087 §2.5)")?;
+                appendText(mut chain.terminal, ", a C function, which may write anything (ADR 0087 §2.5)")?;
             } else if (declared != none()) {
-                appendText(out, ", declared @effects(")?;
-                appendEffectNames(out, declared)?;
-                appendText(out, ")")?;
+                appendText(mut chain.terminal, ", declared @effects(")?;
+                appendEffectNames(mut chain.terminal, declared)?;
+                appendText(mut chain.terminal, ")")?;
             } else {
-                appendText(out, ", a C function without @effects, which may do anything")?;
+                appendText(mut chain.terminal, ", a C function without @effects, which may do anything")?;
             }
             break;
         }
@@ -993,16 +1017,16 @@ fn explainOp(
             let declared = c.hir.functions[next as usize].declaredEffects;
             if (effect == writeEffect()) {
                 appendText(
-                    out,
+                    mut chain.terminal,
                     ", an interface method called through 'dyn', which may write anything (ADR 0087 §2.5)",
                 )?;
             } else if (declared != none()) {
-                appendText(out, ", declared @effects(")?;
-                appendEffectNames(out, declared)?;
-                appendText(out, ")")?;
+                appendText(mut chain.terminal, ", declared @effects(")?;
+                appendEffectNames(mut chain.terminal, declared)?;
+                appendText(mut chain.terminal, ")")?;
             } else {
                 appendText(
-                    out,
+                    mut chain.terminal,
                     ", an interface method without @effects, which may do anything: if no implementation may block or allocate, declare it '@effects() fn …' in the interface (type-system.md §37.3)",
                 )?;
             }
@@ -1020,8 +1044,23 @@ fn explainOp(
         if (!has) {
             break;
         }
-        if (depth == maxEffectChain()) {
-            appendText(out, ", …")?;
+        let recorded = recordedEntryOf(c, next);
+        if (recorded != none()) {
+            // The rest is the record's: its steps, then its end.
+            let kept = borrow c.recordedEffects[recorded as usize].chains[effectSlot(effect)];
+            for (step in kept.steps.view()) {
+                if (chain.steps.length == limit) {
+                    chain.truncated = true;
+                    return Ok(chain);
+                }
+                chain.steps.push(copyBytes(step.view())?)?;
+            }
+            chain.truncated = kept.truncated;
+            appendBytes(mut chain.terminal, kept.terminal.view())?;
+            break;
+        }
+        if (chain.steps.length == limit) {
+            chain.truncated = true;
             break;
         }
         let step =
@@ -1029,12 +1068,12 @@ fn explainOp(
                 else if (effect == allocEffect()) inferred.alloc
                 else if (effect == writeEffect()) inferred.write
                 else inferred.suspend;
-        appendText(out, ", which ")?;
-        appendOpDescription(c, step, out)?;
+        var text = Vector<u8>.create();
+        appendOpDescription(c, step, mut text)?;
+        chain.steps.push(text)?;
         next = step.next;
-        depth += 1;
     }
-    return Ok();
+    return Ok(chain);
 }
 
 // ---- Inference (§32.1) ----
@@ -1106,6 +1145,112 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
                 }
             }
         }
+    }
+    return Ok();
+}
+
+/// The length of an explanation after `op` (in steps), for `effect`: 0 where explainOp stops after it, else its
+/// next function's; none while that is not known yet.
+fn continuationLength(
+    c: borrow Checker,
+    e: borrow Effects,
+    op: borrow EffectOp,
+    effect: u32,
+    length: borrow Vector<u32>,
+) -> u32 {
+    let next = op.next;
+    if (next == none() || isExternFunction(c, next) || c.hir.functions[next as usize].isDynMethod) {
+        return 0;
+    }
+    if ((next as usize) >= e.inferred.length || !e.inferred[next as usize].present ||
+        (e.inferred[next as usize].effects & effect) == 0) {
+        return 0;
+    }
+    return length[next as usize];
+}
+
+/// After the fixed point, each function's witness for each effect, the operation its explanation starts from
+/// (type-system.md §32.1): one whose chain to where the effect comes from is the shortest, and the first in the
+/// function's order among those. The fixed point found a witness in whatever round the effect reached the function,
+/// which depends on the order the functions are looked at; shortest-then-first does not, so a dependency's interface
+/// record explains a call into it as the check of the whole program does (ADR 0082 §2.7).
+fn chooseWitnesses(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) -> Result<void, AllocError> {
+    e.round += 1;                                // drop effects afresh, at the fixed point
+    var ops = Vector<Vector<EffectOp>>.create(); // by e.functions' index
+    for (i in 0..e.functions.length) {
+        let function = e.functions[i];
+        e.current = function;
+        originsOf(c, n, e, function)?;
+        var list = Vector<EffectOp>.create();
+        for (block in n.functions[function as usize].blocks.view()) {
+            for (s in block.statements.view()) {
+                statementOperations(c, n, e, s, mut list)?;
+                writeOperations(c, n, e, s, mut list)?;
+            }
+            if (exitsProcess(n, block.terminator)) {
+                list.push(textOp(writeEffect(), 17))?;
+            }
+        }
+        ops.push(list)?;
+    }
+    for (slot in 0..4usize) {
+        let effect = slotEffect(slot);
+        var length = Vector<u32>.create();
+        while (length.length < c.hir.functions.length) {
+            length.push(none())?;
+        }
+        for (f in 0..c.recordedFunction.length) {
+            let r = c.recordedFunction[f];
+            if (r != none() && (c.recordedEffects[r as usize].effects & effect) != 0) {
+                length[f] = c.recordedEffects[r as usize].chains[slot].length;
+            }
+        }
+        // Shortest lengths, by relaxing until nothing changes; then the first operation of that length.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (i in 0..e.functions.length) {
+                let source = n.functions[e.functions[i] as usize].source;
+                if ((e.inferred[source as usize].effects & effect) == 0) {
+                    continue;
+                }
+                for (op in ops[i].view()) {
+                    if ((op.effects & effect) == 0) {
+                        continue;
+                    }
+                    let rest = continuationLength(c, e, op, effect, length);
+                    if (rest != none() && rest + 1 < length[source as usize]) {
+                        length[source as usize] = rest + 1;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (i in 0..e.functions.length) {
+            let source = n.functions[e.functions[i] as usize].source;
+            if ((e.inferred[source as usize].effects & effect) == 0 || length[source as usize] == none()) {
+                continue;
+            }
+            for (op in ops[i].view()) {
+                if ((op.effects & effect) == 0) {
+                    continue;
+                }
+                let rest = continuationLength(c, e, op, effect, length);
+                if (rest != none() && rest + 1 == length[source as usize]) {
+                    if (slot == 0) {
+                        e.inferred[source as usize].sleep = op;
+                    } else if (slot == 1) {
+                        e.inferred[source as usize].alloc = op;
+                    } else if (slot == 2) {
+                        e.inferred[source as usize].suspend = op;
+                    } else {
+                        e.inferred[source as usize].write = op;
+                    }
+                    break;
+                }
+            }
+        }
+        e.lengths.push(length)?;
     }
     return Ok();
 }
@@ -1545,6 +1690,7 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
         origins: Vector<Origins>.create(),
         current: none(),
         reported: Vector<EffectReport>.create(),
+        lengths: Vector<Vector<u32>>.create(),
     };
     for (k in 0..n.functions.length) {
         if (!functionIsGeneric(c, n.functions[k].source)) {
@@ -1576,7 +1722,12 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
             },
         )?;
     }
+    seedRecordedEffects(c, mut e); // the effects of bodies an interface record stands for (ADR 0082 §2.7)
     inferEffects(c, n, mut e)?;
+    chooseWitnesses(c, n, mut e)?;
+    if (c.recording) {
+        recordEffects(c, e)?;
+    }
     for (k in 0..e.functions.length) {
         let function = e.functions[k];
         checkFunctionEffects(c, n, mut e, function)?;

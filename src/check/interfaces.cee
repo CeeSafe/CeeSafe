@@ -212,8 +212,9 @@ fn resolveInterface(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocErro
     if (bottom) {
         return Ok(none());
     }
-    var name = Vector<u8>.create();
-    appendBytes(mut name, c.name(symbol))?;
+    // Named from its declaration, with its package's name for a dependency's (qualifiedName), however the use spells
+    // it: the first use names the type, and whichever package that is, the name is one (ADR 0082 §2.7).
+    let name = interfaceDisplayName(c, entry)?;
     return c.types.addBound(entry, name.view(), resolved.view());
 }
 
@@ -896,9 +897,7 @@ fn interfaceSelf(c: borrow mut Checker, index: u32) -> Result<u32, AllocError> {
     }
     let selfType = c.types.createTypeParameter("Self".bytes())?;
     c.interfaces[index as usize].selfType = selfType;
-    let item = c.interfaces[index as usize].item;
-    var name = Vector<u8>.create();
-    appendBytes(mut name, c.name(c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol))?;
+    let name = interfaceDisplayName(c, index)?;
     var arguments = Vector<u32>.create();
     listTypes(c, c.interfaces[index as usize].parameters, mut arguments)?;
     let ownBound = c.types.addBound(index, name.view(), arguments.view())?;
@@ -1283,4 +1282,13 @@ fn substitute(c: borrow mut Checker, typ: u32, map: Slice<TypeMapping>) -> Resul
     }
     // Function, closure and thread types come with S6.
     return Ok(typ);
+}
+
+/// An interface's name as messages write it: its declared name, with its package's for a dependency's (qualifiedName).
+fn interfaceDisplayName(c: borrow Checker, entry: u32) -> Result<Vector<u8>, AllocError> {
+    let item = c.interfaces[entry as usize].item;
+    let symbol = c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol;
+    var name = Vector<u8>.create();
+    qualifiedName(c, c.interfaces[entry as usize].file, c.name(symbol), mut name)?;
+    return Ok(name);
 }

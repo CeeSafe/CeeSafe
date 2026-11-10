@@ -1,0 +1,19 @@
+// ADR 0088 §5: the executable form of embed's `embed_boxes(5)`, so a sweep over CEESAFE_FAIL_ALLOC_AT gives the same
+// outcomes as one over ceesafe_init's fail_alloc_at in a C host.
+
+/// Makes `n` boxes, one allocation attempt each; how many were made before one failed.
+fn boxes(n: u64) -> u64 {
+    var made: u64 = 0;
+    for (i in 0u64..n) {
+        match (Box.create(i)) {
+            Ok(_) => { made += 1; }
+            Err(_) => { return made; }
+        }
+    }
+    return made;
+}
+
+fn main() {
+    Console.write("boxes=");
+    Console.writeLine(boxes(5));
+}

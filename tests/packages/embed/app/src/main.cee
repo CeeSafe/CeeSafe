@@ -1,0 +1,22 @@
+// Embedded files in a package (ADR 0087 §2.8), and constant `+` over a dependency's constants (§2.7).
+// tools/package_tests.py check 18 makes assets/alias.txt (a symbolic link to greeting.txt) and assets/changing.txt.
+const GREETING: StringView = embedText("../assets/greeting.txt");
+const ALIAS: StringView = embedText("../assets/alias.txt");
+static EMPTY: Slice<u8> = embed("../assets/empty.txt");
+static CHANGING: StringView = embedText("../assets/changing.txt");
+const MANIFEST: StringView = embedText("../ceesafe.toml");
+const JOINED: StringView = words.PREFIX + "joined";
+const SHOUT: StringView = words.BANNER + "!";
+const C_JOINED: CStr = words.PREFIX + c"c";
+
+fn main() {
+    Console.write(GREETING);
+    Console.writeLine(ALIAS == GREETING);
+    Console.writeLine(EMPTY.length);
+    Console.writeLine(CHANGING);
+    Console.writeLine(MANIFEST.startsWith("[package]"));
+    Console.writeLine(JOINED);
+    Console.writeLine(SHOUT);
+    Console.writeLine(C_JOINED.view());
+    Console.writeLine(words.banner());
+}

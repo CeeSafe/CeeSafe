@@ -126,6 +126,12 @@ fn fold(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
         HirExpr.Cast(operand) => {
             let folded = fold(c, operand)?;
             match (c.hir.exprs[folded as usize]) {
+                HirExpr.StringConst(_) => {
+                    if (isStaticBytesType(c, typ)) {
+                        return c.expr(HirExpr.Cast(folded), typ, span.start, span.end); // `embed` (ADR 0087 §2.8)
+                    }
+                    return Ok(folded);
+                }
                 HirExpr.IntConst(i) => {
                     if (c.types.is(typ, TypeKind.Float)) {
                         // `as` and round<T> to a float (§35.4), rounded as at run time.

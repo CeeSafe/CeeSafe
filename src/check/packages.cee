@@ -425,12 +425,25 @@ fn checkPublicSignatures(c: borrow mut Checker) -> Result<void, AllocError> {
 
 fn packageNameReused() -> u32 => 315;
 
-/// A package of the build as the checker takes it (PackageInfo): its name, its dependencies' names, `trusted`.
+/// A package of the build as the checker takes it (PackageInfo): its name, its dependencies' names, `trusted`; and
+/// where its files may embed from (ADR 0087 §2.8): its directory and its `[embed] roots`, absolute, both empty for
+/// files given alone (each then embeds from its own directory).
 struct PackageInfo {
     name: Vector<u8>;
     dependencies: Vector<Vector<u8>>;
     trusted: bool;
+    directory: Vector<u8>;
+    embedRoots: Vector<Vector<u8>>;
 }
+
+/// The one package of files given alone, unnamed.
+fn loosePackage() -> PackageInfo => PackageInfo {
+    name: Vector<u8>.create(),
+    dependencies: Vector<Vector<u8>>.create(),
+    trusted: false,
+    directory: Vector<u8>.create(),
+    embedRoots: Vector<Vector<u8>>.create(),
+};
 
 /// Where each AST arena stood before a file was parsed: the file's nodes are the ones after (PackageNames.Rewrite
 /// walks them).

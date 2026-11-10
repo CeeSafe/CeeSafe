@@ -14,11 +14,13 @@ struct Compiled {
     nir: NirProgram;
 }
 
-/// The files of one package: paths as diagnostics name them, and their texts.
+/// The files of one package: paths as diagnostics name them, and their texts; `diskPath`, the file's absolute path on
+/// disk, which `embed` paths are relative to (ADR 0087 §2.8), or empty for a text that is not a file's.
 struct InputFile {
     path: Vector<u8>;
     text: Vector<u8>;
     package: u32;
+    diskPath: Vector<u8>;
 }
 
 fn compileInMemory(
@@ -42,7 +44,9 @@ fn compileInMemory(
     }
     let firstUser = sources.length;
     for (f in files.view()) {
-        sources.push(SourceText.create(f.path.view(), f.text.view())?)?;
+        var source = SourceText.create(f.path.view(), f.text.view())?;
+        source.diskPath = copyBytes(f.diskPath.view())?;
+        sources.push(source)?;
         fileIsLibrary.push(false)?;
         filePackage.push(f.package)?;
     }
@@ -74,9 +78,11 @@ fn compileInMemory(
     }
     var texts = Vector<Vector<u8>>.create();
     var paths = Vector<Vector<u8>>.create();
+    var diskPaths = Vector<Vector<u8>>.create();
     for (s in sources.view()) {
         texts.push(copyBytes(s.text.view())?)?;
         paths.push(copyBytes(s.path.view())?)?;
+        diskPaths.push(copyBytes(s.diskPath.view())?)?;
     }
     var libraries = Vector<bool>.create();
     for (b in fileIsLibrary.view()) {
@@ -87,6 +93,7 @@ fn compileInMemory(
         libraries,
         texts,
         paths,
+        diskPaths,
         noFloat,
         freestanding,
         packages,
@@ -118,7 +125,7 @@ fn compileInMemory(
 fn alonePackages() -> Result<Vector<PackageInfo>, AllocError> {
     var packages = Vector<PackageInfo>.create();
     packages.push(
-        PackageInfo { name: Vector<u8>.create(), dependencies: Vector<Vector<u8>>.create(), trusted: false },
+        loosePackage(),
     )?;
     return Ok(packages);
 }

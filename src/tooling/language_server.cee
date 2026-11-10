@@ -281,7 +281,8 @@ fn startsWithBytesText(text: Slice<u8>, prefix: StringView) -> bool =>
 /// A document alone (CheckAlone): freestanding if it says so on its first line.
 fn checkAlone(path: Slice<u8>, text: Slice<u8>) -> Result<Compiled, AllocError> {
     var files = Vector<InputFile>.create();
-    files.push(InputFile { path: copyBytes(path)?, text: copyBytes(text)?, package: 0 })?;
+    let diskPath = if (isRooted(path)) joinPath("/".bytes(), path)? else Vector<u8>.create();
+    files.push(InputFile { path: copyBytes(path)?, text: copyBytes(text)?, package: 0, diskPath: diskPath })?;
     let freestanding = startsWithBytesText(text, "// profile: freestanding");
     return compileInMemory(files, alonePackages()?, freestanding, false, false);
 }
@@ -326,6 +327,8 @@ fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Res
                 name: copyBytes(manifest.name.view())?,
                 dependencies: dependencies,
                 trusted: manifest.trusted,
+                directory: copyBytes(manifest.directory.view())?,
+                embedRoots: Vector<Vector<u8>>.create(),
             },
         )?;
         var paths = Vector<Vector<u8>>.create();
@@ -334,14 +337,26 @@ fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Res
             if (sameBytes(f.view(), full.view())) {
                 file = truncate<u32>(files.length);
                 files.push(
-                    InputFile { path: copyBytes(f.view())?, text: copyBytes(text)?, package: truncate<u32>(p) },
+                    InputFile {
+                        path: copyBytes(f.view())?,
+                        text: copyBytes(text)?,
+                        package: truncate<u32>(p),
+                        diskPath: copyBytes(f.view())?,
+                    },
                 )?;
             } else {
                 let bytes = match (readFile(StringView.fromUtf8(f.view())!)) {
                     Ok(b) => b,
                     Err(_) => Vector<u8>.create(),
                 };
-                files.push(InputFile { path: copyBytes(f.view())?, text: bytes, package: truncate<u32>(p) })?;
+                files.push(
+                    InputFile {
+                        path: copyBytes(f.view())?,
+                        text: bytes,
+                        package: truncate<u32>(p),
+                        diskPath: copyBytes(f.view())?,
+                    },
+                )?;
             }
         }
     }

@@ -938,7 +938,7 @@ fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
             }
             let path = requiredString(doc, file, "path")?;
             let text = requiredString(doc, file, "text")?;
-            files.push(InputFile { path: path, text: text, package: 0 })!;
+            files.push(InputFile { path: path, text: text, package: 0, diskPath: Vector<u8>.create() })!;
         }
     }
     let paths = doc.member(arguments, "paths");
@@ -946,7 +946,8 @@ fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
         for (k in 0..doc.childCount(paths)) {
             let path = elementString(doc, doc.child(paths, k))?;
             let text = readSource(server, path.view())?;
-            files.push(InputFile { path: path, text: text, package: 0 })!;
+            let full = serverPath(server, path.view());
+            files.push(InputFile { path: path, text: text, package: 0, diskPath: full })!;
         }
     }
     if (files.length == 0) {
@@ -964,7 +965,8 @@ fn sourcesOf(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
 
 /// A file's text as File.ReadAllText reads it (a byte order mark dropped, an invalid sequence made U+FFFD), or the
 /// tool's failure with .NET's message.
-fn readSource(server: borrow McpServer, path: Slice<u8>) -> Result<Vector<u8>, McpFailure> {
+/// `path` from the server's working directory, absolute and normalised.
+fn serverPath(server: borrow McpServer, path: Slice<u8>) -> Vector<u8> {
     var combined = Vector<u8>.create();
     if (!isRooted(path)) {
         appendBytes(mut combined, server.workingDirectory.view())!;
@@ -973,7 +975,11 @@ fn readSource(server: borrow McpServer, path: Slice<u8>) -> Result<Vector<u8>, M
         }
     }
     appendBytes(mut combined, path)!;
-    let full = joinPath("/".bytes(), combined.view())!;
+    return joinPath("/".bytes(), combined.view())!;
+}
+
+fn readSource(server: borrow McpServer, path: Slice<u8>) -> Result<Vector<u8>, McpFailure> {
+    let full = serverPath(server, path);
     var problem = Vector<u8>.create();
     if (isDirectory(full.view())) {
         problem = textOf("Access to the path '", full.view(), "' is denied.");

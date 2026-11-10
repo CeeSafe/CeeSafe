@@ -1,0 +1,30 @@
+// `embed` and `embedText` (ADR 0087 §2.8, type-system.md §10.1): a file's bytes, read when the package is checked,
+// as static data. The path is relative to the source file; this test embeds itself. `embed` gives a `Slice<u8>` (a
+// static or a constant may hold one), `embedText` a `StringView` once the bytes are UTF-8, which constant `+` joins.
+static SELF: Slice<u8> = embed("embed.cee");
+const TEXT: StringView = embedText("embed.cee");
+const FRAMED: StringView = "<" + embedText("./embed.cee") + ">";
+const BYTES: Slice<u8> = embed("../run-pass/embed.cee");
+
+fn firstLine(text: StringView) -> StringView {
+    for (line in text.split("\n")) {
+        return line;
+    }
+    return "";
+}
+
+fn main() {
+    Console.writeLine(SELF[0] == '/' && SELF[1] == '/');
+    Console.writeLine(SELF.length == TEXT.length && BYTES.length == TEXT.length);
+    Console.writeLine(FRAMED.length == TEXT.length + 2);
+    Console.writeLine(firstLine(TEXT));
+    let local = embedText("embed.cee");
+    Console.writeLine(local == TEXT);
+    Console.writeLine(TEXT.endsWith(": true\n"));
+}
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: // `embed` and `embedText` (ADR 0087 §2.8, type-system.md §10.1): a file's bytes, read when the package is checked,
+// expect-stdout: true
+// expect-stdout: true

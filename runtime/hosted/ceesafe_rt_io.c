@@ -1614,6 +1614,34 @@ int64_t ceesafe_host_dir_create(uint8_t const *path, uint64_t length) {
 #endif
 }
 
+#ifdef _WIN32
+/* realpath(3) for Windows (rt.h): GetFinalPathNameByHandleA on a handle opened for no access (FILE_FLAG_BACKUP_SEMANTICS
+ * opens a directory too), without the `\\?\` prefix the call adds; `\\?\UNC\server\share` becomes `\\server\share`. */
+char *ceesafe_win_realpath(const char *path, char *resolved) {
+    HANDLE h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    char final[4104];
+    DWORD n = GetFinalPathNameByHandleA(h, final, (DWORD)sizeof final, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(h);
+    if (n == 0 || n >= (DWORD)sizeof final) return NULL;
+    const char *start = final;
+    size_t prefix = 0;
+    if (strncmp(final, "\\\\?\\UNC\\", 8) == 0) {
+        start = final + 8;
+        resolved[0] = '\\';
+        resolved[1] = '\\';
+        prefix = 2;
+    } else if (strncmp(final, "\\\\?\\", 4) == 0) {
+        start = final + 4;
+    }
+    size_t length = strlen(start);
+    if (prefix + length >= 4096) return NULL;
+    memcpy(resolved + prefix, start, length + 1);
+    return resolved;
+}
+#endif
+
 /* `File.rename(from, to)` (ADR 0075 §2.1): replaces `to` atomically where the system can. */
 int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength) {
     char source[4096];

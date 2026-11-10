@@ -287,12 +287,12 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
   N0246.
 - **Constant concatenation** (ADR 0087 §2.7). In a constant's value or a static initialiser (§39.4), `a + b` whose
-  operands are both constant views (a string literal, a constant's name or another such `+`) is a constant view:
-  `a`'s bytes, then `b`'s. `A + B + C` folds left to right, and a constant of another package (`dep.PREFIX`) is a
-  constant view like any. With a `c"…"` (or a `CStr` constant) as the right operand, the result is a `CStr<static>`
-  whose text is `a`'s then the literal's: a NUL byte in `a` is N0006 at the `+`, as inside a `c"…"`. A `CStr` on the
-  left is N0207. An operand that is not constant is N0217 in a constant and N0338 in a static. Anywhere else, `+` on
-  views stays N0207: text is joined at run time by appending to a `String`.
+  operands are both constant views (a string literal, a constant's name, an `embedText`, §10.1, or another such `+`)
+  is a constant view: `a`'s bytes, then `b`'s. `A + B + C` folds left to right, and a constant of another package
+  (`dep.PREFIX`) is a constant view like any. With a `c"…"` (or a `CStr` constant) as the right operand, the result is
+  a `CStr<static>` whose text is `a`'s then the literal's: a NUL byte in `a` is N0006 at the `+`, as inside a `c"…"`.
+  A `CStr` on the left is N0207. An operand that is not constant is N0217 in a constant and N0338 in a static.
+  Anywhere else, `+` on views stays N0207: text is joined at run time by appending to a `String`.
 - `@export` on a constant makes it C data (§28.4).
 - **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
   struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`,
@@ -305,6 +305,37 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   - An interface's constants (§21.1, ADR 0086 §2.4) become associated constants of each impl's target.
   - An array length in a type or a repeat may name a `usize` constant, top-level or associated (§16.1, ADR 0083
     §2.7): `[u8; LENGTH]` and `[u8; Oid.LENGTH]` are accepted.
+
+### 10.1 Embedded files (ADR 0087 §2.8)
+
+`embed(path)` is a file's bytes as a `Slice<u8>`, and `embedText(path)` the same bytes as a `StringView`, read when
+the package is checked: `static ROOT_CERTS: Slice<u8> = embed("certs/root.der");`,
+`const RUNTIME_JS: StringView = embedText("../js/runtime.js");`. They are built-in functions, which a package's own
+item of the same name shadows.
+
+- **The value** is static data, like a string literal's: it holds no loan, may be a constant's or a static's value
+  (a constant or a non-`mut` static may have the type `Slice<u8>` for it; §39.2), is used anywhere a literal is, and
+  `embedText(…)` is a constant view that constant `+` joins (§10). A use of the constant is the same bytes.
+- **The path** is a string literal or a constant view (N0362 otherwise), relative to the directory of the source file
+  that names it, with `/` separators on every system. Nothing in it is expanded. N0362 for: an empty path; an
+  absolute one (`/…`, `\…`, `X:`); a `\`, a `:`, a `$` or a `%` anywhere; a `~` first.
+- **Where it may lead.** The compiler resolves the path fully, every symbolic link and `..`, as the system does
+  (`realpath`; on Windows the final path of the opened file), and compares the result byte for byte with the real
+  paths of its package's directory (the one holding `ceesafe.toml`) and of each of its `[embed] roots`
+  (`tooling.md` §4.1). It must be one of them or below one: a symbolic link is followed only when where it leads is
+  inside. A file given on the command line or to a server outside a package embeds only below its own directory. A
+  path whose real path is outside these, that does not exist, that is a directory or anything but a regular file, or
+  that names a file of more than 16 MiB (16,777,216 bytes), is N0362 at the path. A source with no file on disk (the
+  MCP server's `files`, a library's sources) embeds nothing (N0362).
+- **Letter case.** Real paths are compared byte for byte. On a file system that ignores case, a spelling that names
+  the file but differs in case from the directory's real path is refused (it may be outside), never wrongly accepted;
+  macOS and Windows give the real path in the stored case, so a package is unaffected unless it spells its own
+  directories otherwise.
+- **`embedText`** also requires the bytes to be UTF-8 (N0361 at the path). A leading byte-order mark is kept.
+- **When files are read.** Every command that checks the package reads them: `check`, `build`, `run`, `test`, `doc`,
+  the language server and the MCP server. Each compilation reads each file once (by real path), so all its uses agree,
+  and keeps no copy afterwards: a file changed between `check` and `build` is read again by `build`, which compiles
+  the new contents. `embed` is how a program depends on a file; what the file depends on is the build's business.
 
 ## 11. `main`
 
@@ -4245,7 +4276,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   `static mut`) also `[StringView; N]`, whose initialiser is an array of string literals or constant views (ADR 0066).
   Such a table is a place, so unlike a constant table (§10) it is sliced and borrowed where it is named:
   `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`. A lib/core `CStr` (§22.3)
-  initialised by a `c"…"` is static string data too (ADR 0087 §2.4).
+  initialised by a `c"…"` is static string data too (ADR 0087 §2.4), and so is a `Slice<u8>` in a `static` initialised
+  by `embed` (§10.1) or a constant holding one.
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:
@@ -4278,6 +4310,7 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - `"…".ptr as *T`, a string literal's address, for a C string (`"name\0".ptr as *CChar`; §28);
 - a string literal, as a `StringView`, or a constant concatenation of constant views (`PREFIX + "name"`, §10; ADR
   0087 §2.7), as a `StringView` or, with a `c"…"` right operand, a `CStr`;
+- `embed(path)` as a `Slice<u8>`, `embedText(path)` as a `StringView` (§10.1);
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may

@@ -1,0 +1,126 @@
+// `embed("path")` and `embedText("path")` (ADR 0087 §2.8, type-system.md §10.1): a file's bytes, read when the package
+// is checked, as static data, like a string literal's: `embed` gives a `Slice<u8>`, `embedText` a `StringView` once its
+// bytes are UTF-8 (N0361). src/host/embedding.cee resolves the path and refuses what may not be read (N0362). Each
+// file is read once per compilation, so every use of it sees the same bytes.
+
+fn embedNotText() -> u32 => 361;
+fn embedRefused() -> u32 => 362;
+
+/// A file `embed` read in this compilation: its real path and its bytes, as HIR text.
+struct EmbeddedFile {
+    real: Vector<u8>;
+    text: Range;
+}
+
+/// `embed(path)` (`asText` false) or `embedText(path)`: the path is a string literal or a constant view.
+fn checkEmbed(c: borrow mut Checker, asText: bool, arguments: Range, span: Span) -> Result<u32, AllocError> {
+    if (arguments.count != 1) {
+        return builtinArity(
+            c,
+            arguments,
+            span,
+            if (asText) "write 'embedText(\"path\")'" else "write 'embed(\"path\")'",
+        );
+    }
+    let view = c.types.stringView;
+    let pathSyntax = c.front.ast.at(arguments, 0);
+    let argument = checkExpr(c, pathSyntax, view)?;
+    if (c.isBottom(argument) || isErrorExpr(c, argument)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let pathSpan = c.spanOf(argument);
+    let written = stringLiteralOf(c, argument);
+    if (written.count == 0xFFFFFFFF) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "an embed path is a string literal or a constant view: the file is read when the package is checked",
+        )?;
+        c.error(embedRefused(), pathSpan.start, pathSpan.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let writtenBytes = copyBytes(c.hir.textOf(written))?;
+    let file = c.file as usize;
+    var source = Vector<u8>.create();
+    if (file < c.fileDiskPaths.length && !(file < c.fileIsLibrary.length && c.fileIsLibrary[file])) {
+        source = copyBytes(c.fileDiskPaths[file].view())?;
+    }
+    var roots = Vector<Vector<u8>>.create();
+    if (file < c.filePackage.length) {
+        let package = c.filePackage[file] as usize;
+        if (package < c.packages.length && c.packages[package].directory.length > 0) {
+            roots.push(copyBytes(c.packages[package].directory.view())?)?;
+            for (r in c.packages[package].embedRoots.view()) {
+                roots.push(copyBytes(r.view())?)?;
+            }
+        }
+    }
+    let resolved = resolveEmbedded(source.view(), writtenBytes.view(), roots)?;
+    if (resolved.problem.length > 0) {
+        return embedFailed(c, writtenBytes.view(), resolved.problem.view(), pathSpan, span);
+    }
+    var text = Range { start: 0, count: 0xFFFFFFFF };
+    for (e in c.embeddedFiles.view()) {
+        if (sameBytes(e.real.view(), resolved.real.view())) {
+            text = e.text;
+        }
+    }
+    if (text.count == 0xFFFFFFFF) {
+        let read = readEmbeddedBytes(resolved.real.view())?;
+        if (read.problem.length > 0) {
+            return embedFailed(c, writtenBytes.view(), read.problem.view(), pathSpan, span);
+        }
+        text = c.hir.addText(read.bytes.view())?;
+        c.embeddedFiles.push(EmbeddedFile { real: read.real, text: text })?;
+    }
+    let literal = c.expr(HirExpr.StringConst(text), view, span.start, span.end)?;
+    if (asText) {
+        if (StringView.fromUtf8(c.hir.textOf(text)) == null) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'")?;
+            appendBytes(mut message, writtenBytes.view())?;
+            appendText(mut message, "' is not UTF-8 text: 'embed' gives a file's bytes as a 'Slice<u8>'")?;
+            c.error(embedNotText(), pathSpan.start, pathSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return Ok(literal);
+    }
+    let u8Type = c.types.u8;
+    let bytesType = c.types.sliceOf(u8Type, false)?;
+    return c.expr(HirExpr.Cast(literal), bytesType, span.start, span.end); // as a `c"…"`'s bytes (ADR 0087 §2.4)
+}
+
+fn embedFailed(
+    c: borrow mut Checker,
+    written: Slice<u8>,
+    problem: Slice<u8>,
+    pathSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "cannot embed '")?;
+    appendBytes(mut message, written)?;
+    appendText(mut message, "': ")?;
+    appendBytes(mut message, problem)?;
+    c.error(embedRefused(), pathSpan.start, pathSpan.end, message)?;
+    return c.errorResult(span.start, span.end);
+}
+
+/// Whether `t` is `Slice<u8>`, the type of `embed`'s static bytes, which a constant or static may hold.
+fn isStaticBytesType(c: borrow Checker, t: u32) -> bool =>
+    t != none() && c.types.isSlice(t) && !c.types.isStringView(t) && !c.types.info(t).mutableReference &&
+        c.types.info(c.types.info(t).pointee).element == c.types.u8;
+
+/// An `embed` value, or one copied from a constant: `Cast(StringConst)` of type `Slice<u8>`.
+fn isStaticBytesValue(c: borrow Checker, e: u32) -> bool {
+    if (!isStaticBytesType(c, c.hir.exprTypes[e as usize])) {
+        return false;
+    }
+    return match (c.hir.exprs[e as usize]) {
+        HirExpr.Cast(inner) => match (c.hir.exprs[inner as usize]) {
+            HirExpr.StringConst(_) => true,
+            _ => false,
+        },
+        _ => false,
+    };
+}

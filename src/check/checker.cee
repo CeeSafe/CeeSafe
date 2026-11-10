@@ -61,7 +61,9 @@ fn builtinPanic() -> u32 => 30;
 fn builtinReplace() -> u32 => 31; // ADR 0075 §2.11
 fn builtinSwap() -> u32 => 32;
 fn builtinDebugAssert() -> u32 => 33; // ADR 0087 §2.5
-fn builtinCount() -> u32 => 34;
+fn builtinEmbed() -> u32 => 34;       // ADR 0087 §2.8
+fn builtinEmbedText() -> u32 => 35;
+fn builtinCount() -> u32 => 36;
 
 // BuiltinFunction members are in src/hir/builtins.cee (generated); only ConsoleWrite (0) and ConsoleWriteLine (1)
 // print by name (HirPrinter.BuiltinName).
@@ -89,10 +91,12 @@ struct Checker {
     types: TypeTable;
     hir: HirProgram;
     fileIsLibrary: Vector<bool>;
-    fileTexts: Vector<Vector<u8>>;   // each file's bytes, for fixes that quote source text
-    filePaths: Vector<Vector<u8>>;   // each file's path, as messages name it
-    noFloat: bool;                   // --no-float (type-system.md §35.9)
-    packageItems: Map<Word, Entity>; // every package's own items, by packageKey (0 the root)
+    fileTexts: Vector<Vector<u8>>;       // each file's bytes, for fixes that quote source text
+    filePaths: Vector<Vector<u8>>;       // each file's path, as messages name it
+    fileDiskPaths: Vector<Vector<u8>>;   // each file's absolute path on disk, or empty (`embed`, ADR 0087 §2.8)
+    embeddedFiles: Vector<EmbeddedFile>; // the files `embed` read, each once per compilation
+    noFloat: bool;                       // --no-float (type-system.md §35.9)
+    packageItems: Map<Word, Entity>;     // every package's own items, by packageKey (0 the root)
     coreItems: Map<Word, Entity>;
     builtins: Map<Word, u32>;
     builtinNames: Vector<u32>; // the symbols of AllocError, IoError, SystemHeap, FailingAllocator

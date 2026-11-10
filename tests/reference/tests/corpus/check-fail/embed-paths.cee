@@ -1,0 +1,21 @@
+// `embed` paths (ADR 0087 §2.8): relative to the source file, nothing expanded, and the file's real path inside the
+// package's directory and its `[embed] roots`; a file given alone embeds only below its own directory. Each refusal
+// is N0362 at the path. tools/package_tests.py check 18 covers symbolic links, roots and file contents.
+const ABSOLUTE: StringView = embedText("/etc/hosts"); // error[N0362]
+const HOME: StringView = embedText("~/notes.txt"); // error[N0362]
+const VARIABLE: StringView = embedText("$HOME/notes.txt"); // error[N0362]
+const PERCENT: StringView = embedText("%USERPROFILE%/notes.txt"); // error[N0362]
+const BACKSLASH: StringView = embedText("sub\\file.txt"); // error[N0362]
+const DRIVE: StringView = embedText("C:/file.txt"); // error[N0362]
+const MISSING: StringView = embedText("no-such-file.txt"); // error[N0362]
+const DIRECTORY: StringView = embedText("."); // error[N0362]
+const OUTSIDE: StringView = embedText("../run-pass/embed.cee"); // error[N0362]
+const EMPTY: StringView = embedText(""); // error[N0362]
+static BYTES: Slice<u8> = embed("/etc/hosts"); // error[N0362]
+
+fn path() -> StringView => "embed-paths.cee";
+
+fn main() {
+    let named = embed(path()); // error[N0362]
+    let mine = embed("embed-paths.cee");
+}

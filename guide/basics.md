@@ -313,6 +313,30 @@ The joined text is made when the program is compiled. Anywhere else `+` on views
 run time by appending to a `String`. With a `c"…"` on the right, `TOOL + c"rc"` is a C string (a `CStr`,
 [C interop](unsafe-and-c.md)).
 
+## Embedded files
+
+`embed("path")` puts a file's bytes in the program, as a `Slice<u8>`; `embedText("path")` puts them as text, a
+`StringView`, and refuses a file that is not UTF-8 (N0361). The file is read when the package is checked, so the
+program needs nothing beside it at run time:
+
+<!-- ceesafe: skip -->
+```ceesafe
+static ROOT_CERTS: Slice<u8> = embed("certs/roots.der");
+const HELP: StringView = embedText("help.txt");
+const BANNER: StringView = "bun: " + embedText("banner.txt");
+
+fn main() {
+    Console.writeLine(ROOT_CERTS.length);
+    Console.write(HELP);
+}
+```
+
+The path is relative to the source file that names it, with `/` between directories, and nothing in it is expanded:
+no absolute paths, no `~`, no environment variables. Wherever its symbolic links lead, the file must be inside the
+package's directory, or inside a directory its manifest lists in `[embed] roots` ([Packages](packages.md)); a file
+checked on its own embeds only below its own directory. Anything else, a missing file, a directory or a file over
+16 MiB, is N0362, also in the editor and the MCP server, which read the files too.
+
 ## Comments
 
 `//` comments run to the end of the line, `/* … */` comments may span lines, and `///` before an item is its

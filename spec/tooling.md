@@ -72,6 +72,11 @@ apply. Any other document, or one whose package does not resolve, is checked as 
 `lib/core`, as `ceesafec check file.cee` would check it, using the text the editor holds. Its profile is hosted, unless
 its first line is `// profile: freestanding` (the corpus convention, `testing.md` §3).
 
+Checking reads the files the document's `embed` and `embedText` calls name (`type-system.md` §10.1, ADR 0087 §2.8),
+under the same rules as the command line: inside the package's directory and its `[embed] roots`, or, for a document
+checked alone, below the document's own directory. A document whose URI is not a file on disk embeds nothing. An
+embedded file is read again at each check, so a change to it shows at the document's next change or save.
+
 ### 2.2 Capabilities
 
 | Request or notification | What the server does |
@@ -300,6 +305,17 @@ source = "path+../geometry"
   include it) with that package: the open document's text, the package's other files from disk, and its locked
   dependencies. Without a lock, or outside a package, the document is checked alone as before.
 
+### 4.4.1 Embedded files and what is cached
+
+`embed` and `embedText` (`type-system.md` §10.1) make a program depend on files that are not sources. Every command
+that checks a package reads them afresh: nothing of a compilation is kept for the next, so a file changed after
+`check` is what `build` compiles, and the language server sees a change at its next check. Within one compilation each
+file is read once, by its real path. Neither the lock's hash (§4.3), which covers a package's manifest and sources, nor
+`fetch` looks at embedded files. When ADR 0082's caches come (they are not in this release): an object's key is a hash
+of its C unit's text (§2.6), which holds the embedded bytes, so nothing more is needed there; a package's interface
+record (§2.7) must add to its key the real path and the contents of every file the package embeds, since its sources
+and manifest alone do not determine the bytes.
+
 ### 4.5 Errors
 
 | Code | Meaning |
@@ -503,6 +519,10 @@ Every tool that compiles takes its program as either
 
 plus `profile` (`hosted`, the default, or `freestanding`) and `noFloat` (default false). Paths in results are the
 paths given.
+
+`embed` and `embedText` (`type-system.md` §10.1) read files relative to the source's file on disk: a `paths` file
+embeds below its own directory, and a `files` source, which is no file, embeds nothing (N0362). The server reads
+nothing else for them.
 
 ### 6.3 Tools
 

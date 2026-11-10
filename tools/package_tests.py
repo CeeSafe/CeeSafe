@@ -43,6 +43,13 @@
     bad `--cflag`'s message is printed once with a count; `build --jobs` without `--split` is a usage error.
 17. doc: `ceesafec doc` lists an interface's associated types and constants with its methods, in source order
     (ADR 0086 §2.4, §2.5).
+18. embed (ADR 0087 §2.7, §2.8): app embeds from its own directory (a symbolic link inside it included, an empty
+    file, its manifest) and joins its dependency words' constants with `+`; words embeds from its own directory. The
+    program prints the same in the interpreter and compiled, and a file changed after `check` is what `build`
+    compiles. escape gets N0362 for a symbolic link to a file outside the package, a path through a linked directory
+    outside it, a link loop, `..` out of the package and a file of 16 MiB + 1; N0361 for `embedText` of Latin-1 bytes;
+    and nothing for `embed` of the same bytes, an exactly 16 MiB file, or its manifest. The links and large files are
+    made here (on Windows, without the privilege to make links, only what needs none).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -586,7 +593,56 @@ def main():
         if p.returncode != 0 or want not in p.stdout:
             problems.append(f"doc: expected the interface with its constants and types:\n{p.stdout}{p.stderr[:300]}")
 
-    print(f"package_tests: 17 checks; {len(problems)} problems")
+        # 18. Embedded files (ADR 0087 §2.8) and constant `+` across packages (§2.7).
+        embed = os.path.join(work, "embed")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "embed"), embed)
+        app = os.path.join(embed, "app")
+        escape = os.path.join(embed, "escape")
+        try:
+            os.symlink("greeting.txt", os.path.join(app, "assets", "alias.txt"))
+            os.symlink(os.path.join("..", "..", "outside", "secret.txt"), os.path.join(escape, "assets", "leak.txt"))
+            os.symlink(os.path.join("..", "..", "outside"), os.path.join(escape, "assets", "linked"),
+                       target_is_directory=True)
+            os.symlink("loop", os.path.join(escape, "assets", "loop"))
+        except (OSError, NotImplementedError):
+            shutil.copy(os.path.join(app, "assets", "greeting.txt"), os.path.join(app, "assets", "alias.txt"))
+        with open(os.path.join(app, "assets", "changing.txt"), "w") as f:
+            f.write("one")
+        with open(os.path.join(escape, "assets", "latin1.txt"), "wb") as f:
+            f.write(b"caf\xe9\n")
+        with open(os.path.join(escape, "assets", "limit.bin"), "wb") as f:
+            f.write(b"\x00" * 16777216)
+        with open(os.path.join(escape, "assets", "over.bin"), "wb") as f:
+            f.write(b"\x00" * 16777217)
+        p = run([compiler, "fetch"], app)
+        p = run([compiler, "check"], app)
+        if p.returncode != 0:
+            problems.append(f"embed: app did not check: {p.stdout[:300]}{p.stderr[:600]}")
+        with open(os.path.join(app, "assets", "changing.txt"), "w") as f:
+            f.write("two")
+        expected = "hello from a file\ntrue\n0\ntwo\ntrue\nwords: joined\nbanner!\nwords: c\nbanner"
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"embed: run --interp printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-600:]}")
+        p = run([compiler, "build"], app)
+        exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+        if p.returncode != 0:
+            problems.append(f"embed: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"embed: the program printed {out!r}")
+        p = run([compiler, "check", "--diagnostics-format=json"], escape)
+        try:
+            found = sorted((d["start"]["line"], d["code"]) for d in json.loads(p.stdout)["diagnostics"])
+        except (ValueError, KeyError):
+            found = []
+        # Without links, lines 3-5 name files that are not there: N0362 too.
+        want = [(3, "N0362"), (4, "N0362"), (5, "N0362"), (6, "N0361"), (9, "N0362"), (10, "N0362")]
+        if p.returncode != 1 or found != want:
+            problems.append(f"embed: escape: expected {want}, found {found} ({p.returncode}) {p.stderr[:300]}")
+
+    print(f"package_tests: 18 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

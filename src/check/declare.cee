@@ -62,7 +62,9 @@ fn builtinName(k: u32) -> StringView => match (k) {
     30 => "panic",
     31 => "replace",
     32 => "swap",
-    _ => "debugAssert",
+    33 => "debugAssert",
+    34 => "embed",
+    _ => "embedText",
 };
 
 /// The names the reference interns while declaring the built-in items (DeclareAllocError, DeclareIoError,
@@ -93,6 +95,7 @@ fn checkProgram(
     fileIsLibrary: Vector<bool>,
     fileTexts: Vector<Vector<u8>>,
     filePaths: Vector<Vector<u8>>,
+    fileDiskPaths: Vector<Vector<u8>>,
     noFloat: bool,
     freestanding: bool,
     packages: Vector<PackageInfo>,
@@ -107,6 +110,8 @@ fn checkProgram(
         fileIsLibrary: fileIsLibrary,
         fileTexts: fileTexts,
         filePaths: filePaths,
+        fileDiskPaths: fileDiskPaths,
+        embeddedFiles: Vector<EmbeddedFile>.create(),
         noFloat: noFloat,
         packageItems: Map<Word, Entity>.create(),
         coreItems: Map<Word, Entity>.create(),
@@ -522,7 +527,7 @@ fn declareConstantEntry(c: borrow mut Checker, item: u32, typ: u32, symbol: u32)
         var message = Vector<u8>.create();
         appendText(
             mut message,
-            "constants cannot be references; a string view, or an array of them, can (ADR 0064 §2)",
+            "constants cannot be references; a string view, or an array of them, can (ADR 0064 §2), and an embedded file's 'Slice<u8>' (ADR 0087 §2.8)",
         )?;
         c.error(referenceNotAllowed(), span.start, span.end, message)?;
         t = c.types.error;
@@ -560,7 +565,8 @@ fn constElementOk(c: borrow Checker, t: u32) -> bool {
 /// whose value is string literals.
 fn isConstantView(c: borrow Checker, t: u32) -> bool =>
     c.types.isStringView(t) || (c.types.is(t, TypeKind.Array) && c.types.isStringView(c.types.info(t).element)) ||
-        isCStrType(c, t); // `c"…"` (ADR 0087 §2.4)
+        isCStrType(c, t) ||      // `c"…"` (ADR 0087 §2.4)
+        isStaticBytesType(c, t); // `embed`'s bytes (ADR 0087 §2.8)
 
 fn receiverIndex(kind: ReceiverKind) -> u32 => match (kind) {
     ReceiverKind.None => 0,

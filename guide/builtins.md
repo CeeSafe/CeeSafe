@@ -265,6 +265,7 @@ Medium
 | `replace(mut place, v)`, `swap(mut a, mut b)` | the old value, which nothing is left without; exchange two places |
 | `assert(cond)`, `assert(cond, message)`, `panic(message)` | panic when false; always (`never`) |
 | `debugAssert(cond)`, `debugAssert(cond, message)` | as `assert`, but only in debug builds, tests and the interpreter; may change nothing that exists before it ([Debugging](debugging.md#debug-assertions)) |
+| `embed("path")`, `embedText("path")` | a file's bytes as a `Slice<u8>`, or as UTF-8 text, read when the package is checked; the path is relative to the source file and stays inside the package ([Constants](basics.md#embedded-files)) |
 | `r.isOk()`, `r.isErr()`, `r.ok()`, `r.err()`, `o.okOr(e)` | a `Result`'s tests and conversions; an optional as a `Result` |
 | `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |

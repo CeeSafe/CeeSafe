@@ -1,0 +1,6 @@
+// A dependency's constants (ADR 0087 §2.7, §2.8): one joined by a dependant's constant `+`, and one embedded from the
+// dependency's own directory, relative to this file.
+public const PREFIX: StringView = "words: ";
+public const BANNER: StringView = embedText("../data/banner.txt");
+
+public fn banner() -> StringView => BANNER;

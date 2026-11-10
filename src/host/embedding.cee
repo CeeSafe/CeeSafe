@@ -1,0 +1,225 @@
+// Files a program embeds (ADR 0087 §2.8, type-system.md §10.1): `embed("path")` and `embedText("path")` read a file
+// when the package is checked, by every command that checks it, the language server's and the MCP server's included,
+// which may run on code the user does not trust. So the path is checked before anything is read:
+// - it is relative to the source file, with `/` separators, and nothing in it is expanded (no `~`, `$` or `%`);
+// - the file's real path (every symbolic link and `..` resolved by the system) must lie inside the real path of its
+//   package's directory or of one of the package's `[embed] roots`; a symbolic link is followed only if where it
+//   leads is inside them;
+// - it must be a regular file of at most embedLimit() bytes.
+// Real paths are compared byte for byte: a spelling the file system would match without regard to letter case, but
+// that its real path does not repeat, is outside (refused, never wrongly accepted).
+
+/// The largest file `embed` and `embedText` read: 16 MiB (ADR 0087 §9).
+fn embedLimit() -> usize => 16777216;
+
+extern "C" {
+    // POSIX's realpath(3). On Windows, the runtime's rt.h names its own implementation (ceesafe_win_realpath, over
+    // GetFinalPathNameByHandleA), with the same contract: `resolved` holds at least 4,096 bytes.
+    fn realpath(path: *CChar, resolved: *mut CChar) -> *mut CChar;
+}
+
+/// Why `written`, an embed path, is refused before any file is looked at; empty when it is not.
+fn embedPathProblem(written: Slice<u8>) -> StringView {
+    if (written.length == 0) {
+        return "the path is empty";
+    }
+    if (written[0] == '/' || written[0] == '\\' || hasDrive(written)) {
+        return "the path is absolute; an embed path is relative to the source file that names it";
+    }
+    if (written[0] == '~') {
+        return "the path starts with '~', and nothing in an embed path is expanded, the home directory included";
+    }
+    for (b in written) {
+        if (b == 0) {
+            return "the path holds a NUL byte";
+        }
+        if (b == '\\') {
+            return "the path holds '\\'; separate directories with '/', on every system";
+        }
+        if (b == ':') {
+            return "the path holds ':', a Windows drive or stream";
+        }
+        if (b == '$' || b == '%') {
+            return "the path holds '$' or '%', and nothing in an embed path is expanded, environment variables included";
+        }
+    }
+    return "";
+}
+
+/// The real path of `path`, absolute and with `/` separators: every symbolic link, `.` and `..` resolved by the
+/// system; null when nothing is there or it cannot be resolved.
+/// Safety: `input` ends in the NUL pushed here and holds no other; `realpath` writes at most PATH_MAX bytes (4,096 on
+/// Linux, 1,024 on macOS; the Windows runtime's at most 4,096) into `buffer`, which has 4,096, and only during the call.
+fn realPath(path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    if (path.length == 0 || path.length >= 4096) {
+        return Ok(null);
+    }
+    var input = Vector<u8>.create();
+    for (b in path) {
+        if (b == 0) {
+            return Ok(null);
+        }
+        input.push(b)?;
+    }
+    input.push(0)?;
+    var buffer = [0u8; 4096];
+    let resolved = unsafe { realpath(borrow input[0] as *u8 as *CChar, borrow mut buffer[0] as *mut u8 as *mut CChar) };
+    if (resolved == 0 as *mut u8 as *mut CChar) {
+        return Ok(null);
+    }
+    var length: usize = 0;
+    while (length < 4096 && buffer[length] != 0) {
+        length += 1;
+    }
+    var out = copyBytes(buffer[..length])?;
+    // Windows gives `C:\x` or `\\server\share\x`: `/` separates there too. A POSIX real path starts with `/`, and a
+    // `\` in it is part of a name, so it is kept.
+    if (hasDrive(out.view()) || (out.length >= 2 && out[0] == '\\' && out[1] == '\\')) {
+        for (k in 0..out.length) {
+            if (out[k] == '\\') {
+                out[k] = '/';
+            }
+        }
+    }
+    return Ok(out);
+}
+
+/// Whether the real path `path` is `directory` (a real path) or below it.
+fn realPathWithin(path: Slice<u8>, directory: Slice<u8>) -> bool {
+    var base = directory.length;
+    while (base > 1 && directory[base - 1] == '/') {
+        base -= 1;
+    }
+    if (path.length < base || !sameBytes(path[..base], directory[..base])) {
+        return false;
+    }
+    return path.length == base || path[base] == '/' || directory[base - 1] == '/';
+}
+
+/// What reading an embedded file found: its bytes and real path, or why it cannot be embedded (`problem`).
+struct EmbeddedRead {
+    bytes: Vector<u8>;
+    real: Vector<u8>;
+    problem: Vector<u8>;
+}
+
+fn embedFailure(why: Slice<u8>) -> Result<EmbeddedRead, AllocError> => Ok(
+    EmbeddedRead { bytes: Vector<u8>.create(), real: Vector<u8>.create(), problem: copyBytes(why)? },
+);
+
+/// The directory a source file at `source` (absolute, `/`-separated) lies in.
+fn sourceDirectory(source: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var end = source.length;
+    while (end > 0 && source[end - 1] != '/') {
+        end -= 1;
+    }
+    if (end > 1) {
+        end -= 1; // the separator, unless it is the root's
+    }
+    return copyBytes(source[..end]);
+}
+
+/// The file `written` names for an `embed` in the source file at `source` (absolute; empty when the source is not a
+/// file on disk), which may read inside `roots` (absolute directories: its package's and its `[embed] roots`; empty
+/// for a file outside package mode, which may read inside its own directory): its real path, or why it cannot be
+/// embedded. Nothing is read yet (readEmbeddedBytes).
+fn resolveEmbedded(
+    source: Slice<u8>,
+    written: Slice<u8>,
+    roots: borrow Vector<Vector<u8>>,
+) -> Result<EmbeddedRead, AllocError> {
+    let lexical = embedPathProblem(written);
+    if (lexical.length > 0) {
+        return embedFailure(lexical.bytes());
+    }
+    if (source.length == 0) {
+        return embedFailure(
+            "the source file is not a file on disk, and an embed path is relative to the file that names it".bytes(),
+        );
+    }
+    let directory = sourceDirectory(source)?;
+    // The path as written after the directory, not normalised here: the system resolves each `..` after the
+    // symbolic link before it, as opening the file would.
+    var candidate = copyBytes(directory.view())?;
+    if (candidate.length == 0 || candidate[candidate.length - 1] != '/') {
+        candidate.push('/')?;
+    }
+    appendBytes(mut candidate, written)?;
+    let found = realPath(candidate.view())?;
+    if (found == null) {
+        return embedFailure("no file is there".bytes());
+    }
+    let real = found!;
+    var allowed = Vector<Vector<u8>>.create();
+    if (roots.length == 0) {
+        let itself = realPath(directory.view())?;
+        if (itself != null) {
+            allowed.push(itself!)?;
+        }
+    } else {
+        for (r in roots.view()) {
+            let resolved = realPath(r.view())?;
+            if (resolved != null) {
+                allowed.push(resolved!)?;
+            }
+        }
+    }
+    var inside = false;
+    for (a in allowed.view()) {
+        inside = inside || realPathWithin(real.view(), a.view());
+    }
+    if (!inside) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "it is '")?;
+        appendBytes(mut message, real.view())?;
+        appendText(
+            mut message,
+            if (roots.length == 0) "', outside the source file's directory (a file given alone embeds only below it)"
+                else "', outside the package's directory and its [embed] roots",
+        )?;
+        return embedFailure(message.view());
+    }
+    let text = match (StringView.fromUtf8(real.view())) {
+        Some(t) => t,
+        null => { return embedFailure("its real path is not UTF-8".bytes()); }
+    };
+    let kind = match (File.kind(text)) {
+        Ok(k) => k,
+        Err(_) => { return embedFailure("it cannot be read".bytes()); }
+    };
+    match (kind) {
+        Some(PathKind.File) => {}
+        Some(PathKind.Directory) => { return embedFailure("it is a directory".bytes()); }
+        Some(_) => { return embedFailure("it is not a regular file".bytes()); }
+        null => { return embedFailure("no file is there".bytes()); }
+    }
+    return Ok(EmbeddedRead { bytes: Vector<u8>.create(), real: real, problem: Vector<u8>.create() });
+}
+
+/// The bytes of the file at the real path `real` (resolveEmbedded's), at most embedLimit() of them; or why not.
+fn readEmbeddedBytes(real: Slice<u8>) -> Result<EmbeddedRead, AllocError> {
+    let text = match (StringView.fromUtf8(real)) {
+        Some(t) => t,
+        null => { return embedFailure("its real path is not UTF-8".bytes()); }
+    };
+    var file = match (File.open(text)) {
+        Ok(f) => f,
+        Err(_) => { return embedFailure("it cannot be read".bytes()); }
+    };
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 65536];
+    loop {
+        let n = match (file.read(mut buffer[..])) {
+            Ok(n) => n,
+            Err(_) => { return embedFailure("it cannot be read".bytes()); }
+        };
+        if (n == 0) {
+            break;
+        }
+        if (bytes.length + n > embedLimit()) {
+            return embedFailure("it is larger than 16 MiB (16,777,216 bytes), the most a program embeds".bytes());
+        }
+        appendBytes(mut bytes, buffer[..n])?;
+    }
+    return Ok(EmbeddedRead { bytes: bytes, real: copyBytes(real)?, problem: Vector<u8>.create() });
+}

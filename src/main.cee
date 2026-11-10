@@ -617,9 +617,24 @@ fn loadFiles(files: borrow Vector<String>, sources: borrow mut Vector<SourceText
             Err(ReadError.Memory) => { return fail("out of memory"); }
         };
         let name = sourcePath(path);
-        sources.push(SourceText.create(name.view(), bytes.view())!)!;
+        var source = SourceText.create(name.view(), bytes.view())!;
+        source.diskPath = absolutePath(path.bytes());
+        sources.push(source)!;
     }
     return 0;
+}
+
+/// `path` (from the working directory, or absolute) as an absolute, normalised path with `/` separators; empty if the
+/// working directory is unknown (`embed` then finds no file, ADR 0087 §2.8).
+fn absolutePath(path: Slice<u8>) -> Vector<u8> {
+    let slashed = slashedPath(path)!;
+    if (isRooted(slashed.view())) {
+        return joinPath("/".bytes(), slashed.view())!;
+    }
+    return match (currentDirectory()) {
+        Ok(cwd) => joinPath(cwd.view(), slashed.view())!,
+        Err(_) => Vector<u8>.create(),
+    };
 }
 
 /// A diagnostic as text with a source excerpt and caret (DiagnosticRenderer.Render).
@@ -953,6 +968,8 @@ fn loadPackage(
                 name: copyBytes(manifest.name.view())!,
                 dependencies: dependencies,
                 trusted: manifest.trusted,
+                directory: copyBytes(manifest.directory.view())!,
+                embedRoots: Vector<Vector<u8>>.create(),
             },
         )!;
         options.packageDirectories.push(copyBytes(manifest.directory.view())!)!;
@@ -1184,7 +1201,7 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
         }
     } else {
         packages.push(
-            PackageInfo { name: Vector<u8>.create(), dependencies: Vector<Vector<u8>>.create(), trusted: false },
+            loosePackage(),
         )!;
     }
     return compileFiles(options, building, sourceFiles, packages, packageFiles);
@@ -1270,6 +1287,7 @@ fn compileFiles(
                 source.package = copyBytes(packages[p].name.view())!;
                 source.packagePath = inPackage;
                 source.openPath = openPath;
+                source.diskPath = absolutePath(path.bytes());
                 sources.push(source)!;
                 filePackage.push(truncate<u32>(p))!;
             }
@@ -1313,15 +1331,18 @@ fn compileFiles(
     }
     var texts = Vector<Vector<u8>>.create();
     var paths = Vector<Vector<u8>>.create();
+    var diskPaths = Vector<Vector<u8>>.create();
     for (i in 0..sources.length) {
         texts.push(copyBytes(sources[i].text.view())!)!;
         paths.push(copyBytes(sources[i].path.view())!)!;
+        diskPaths.push(copyBytes(sources[i].diskPath.view())!)!;
     }
     var checker = checkProgram(
         front,
         fileIsLibrary,
         texts,
         paths,
+        diskPaths,
         options.noFloat,
         options.freestanding,
         packages,

@@ -1,0 +1,16 @@
+// What a package may not embed (ADR 0087 §2.8): tools/package_tests.py check 18 makes the symbolic links and the
+// large files, and expects N0362 or N0361 on exactly the lines it lists.
+const LEAK: StringView = embedText("../assets/leak.txt");
+const LINKED: StringView = embedText("../assets/linked/secret.txt");
+const LOOP: StringView = embedText("../assets/loop");
+const LATIN: StringView = embedText("../assets/latin1.txt");
+static LATIN_BYTES: Slice<u8> = embed("../assets/latin1.txt");
+static LIMIT: Slice<u8> = embed("../assets/limit.bin");
+static OVER: Slice<u8> = embed("../assets/over.bin");
+const PARENT: StringView = embedText("../../outside/secret.txt");
+const KEPT: StringView = embedText("../assets/kept.txt");
+const MANIFEST: StringView = embedText("../ceesafe.toml");
+
+fn main() {
+    Console.write(KEPT);
+}

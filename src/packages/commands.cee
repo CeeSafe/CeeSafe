@@ -79,6 +79,8 @@ fn workspaceTypeChecks(workspace: borrow Workspace) -> bool {
                 name: copyBytes(manifest.name.view())!,
                 dependencies: dependencies,
                 trusted: manifest.trusted,
+                directory: copyBytes(manifest.directory.view())!,
+                embedRoots: Vector<Vector<u8>>.create(),
             },
         )!;
         options.packageDirectories.push(copyBytes(manifest.directory.view())!)!;

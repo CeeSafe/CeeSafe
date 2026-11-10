@@ -377,6 +377,19 @@ fn namedConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32, 
             }
             return c.errorResult(span.start, span.end);
         }
+        HirExpr.Cast(inner) => {
+            if (isStaticBytesValue(c, value)) {
+                // An embedded file's bytes (ADR 0087 §2.8): the same text, at the use.
+                let text = match (c.hir.exprs[inner as usize]) {
+                    HirExpr.StringConst(range) => range,
+                    _ => Range { start: 0, count: 0 },
+                };
+                let view = c.types.stringView;
+                let literal = c.expr(HirExpr.StringConst(text), view, span.start, span.end)?;
+                return c.expr(HirExpr.Cast(literal), t, span.start, span.end);
+            }
+            return c.errorResult(span.start, span.end);
+        }
         _ => { return c.errorResult(span.start, span.end); }
     }
 }
@@ -954,6 +967,9 @@ fn synthCall(
                     }
                     if (b == builtinDebugAssert()) {
                         return checkDebugAssert(c, arguments, span);
+                    }
+                    if (b == builtinEmbed() || b == builtinEmbedText()) {
+                        return checkEmbed(c, b == builtinEmbedText(), arguments, span); // ADR 0087 §2.8
                     }
                     if (b == builtinPanic()) {
                         return checkPanic(c, arguments, span);

@@ -1,0 +1,8 @@
+@effects()
+fn pure(n: u64) -> u64 => mid.twice(n);
+
+fn typed() -> u64 => true;
+
+fn main() {
+    Console.writeLine(broken.fine(1) + borrowfail.fine(2) + pure(3) + typed());
+}

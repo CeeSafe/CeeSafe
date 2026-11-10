@@ -133,6 +133,10 @@ struct Checker {
     instantiating: u32;
     recursionState: Vector<u8>; // by type id: 0 new, 1 on the stack, 2 done (kept across runs)
     copyDone: Vector<bool>;     // by type id (kept across runs)
+    recursionStructs: usize;    // the structs and enums checkStructRecursion has looked at
+    recursionEnums: usize;
+    copyStructs: usize; // and computeCopyAndDrop
+    copyEnums: usize;
     interfaces: Vector<InterfaceEntry>;
     impls: Vector<ImplRef>; // every impl, processed once every item is declared (§21.1)
     implsReady: bool;
@@ -211,6 +215,25 @@ struct Checker {
     methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
     memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)
     fileImports: Vector<FileImport>;         // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
+    // Interface records (ADR 0082 §2.7, src/check/interface_records.cee).
+    fileFromRecord: Vector<bool>;         // by file: its package's skipped bodies come from a record
+    filePackagePaths: Vector<Vector<u8>>; // by file: its path in its package
+    recordPaths: Vector<Vector<u8>>;      // by file: its path as a dependent names it, for the root's record
+    recordedEffects: Vector<RecordedEffects>;
+    recordedFunction: Vector<u32>;             // by HIR function: its entry in recordedEffects, or none
+    recording: bool;                           // make the root package's record
+    qualifyRoot: bool;                         // name the root's items as a dependent does (qualifiedName)
+    recordOut: Vector<RecordedEffects>;        // the root package's record's functions
+    recordOpaque: bool;                        // a skipped body of the root made what a record cannot hold (madeOpaque)
+    embedCalls: u32;                           // the root package's `embed` and `embedText` calls checked so far
+    afterNirErrors: Vector<PendingError>;      // added after the per-function NIR checks
+    nirLoopErrors: bool;                       // errors were found by the end of the per-function NIR checks
+    instanceErrors: bool;                      // errors were found by the end of the instances' checks (N0222)
+    regionImpls: Vector<u32>;                  // the impls (in c.impls) with region parameters
+    implementationsOf: Map<Word, Vector<u32>>; // c.implementations by interface entry, in order
+    templatesOf: Map<Word, Vector<u32>>;       // c.implTemplates by their target's declaration, in order
+    structInstances: Map<Word, Vector<u32>>;   // c.structs' instances by template, in order
+    enumInstances: Map<Word, Vector<u32>>;     // c.enums' instances by template, in order
 
     fn letKeywordOf(borrow this, local: u32) -> u32 {
         for (k in this.letKeywords.view()) {

@@ -110,6 +110,9 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
             checkBorrows(c, n, truncate<u32>(k))?;
         }
     }
+    c.nirLoopErrors = c.front.diagnostics.hasErrors();
+    // A dependency whose own check failed in these checks fails here too, at its line in the manifest (ADR 0082 §2.7).
+    addPendingErrors(c, 3)?;
     // An instance whose body does not check, with no other error to explain it, is N0222 at its use (§20.4).
     if (!c.front.diagnostics.hasErrors()) {
         for (function in n.functions.view()) {
@@ -124,6 +127,8 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
             }
         }
     }
+    c.instanceErrors = c.front.diagnostics.hasErrors();
+    addPendingErrors(c, 4)?; // a dependency whose instances did not check (ADR 0082 §2.7)
     if (!c.front.diagnostics.hasErrors()) {
         // Destruction is inserted only into programs that passed every check (type-system.md §14.5), and only into
         // code that is compiled: not into generic versions.
@@ -139,4 +144,18 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
         checkCoroutines(c, mut n)?; // recursion through `await`: stacked awaits (ADR 0056), N0343 where none can be
     }
     return Ok(n);
+}
+
+/// The errors of the dependencies whose own checks failed at `stage` (3: the per-function checks, 4: the instances'),
+/// each at its line in the manifest (ADR 0082 §2.7).
+fn addPendingErrors(c: borrow mut Checker, stage: u32) -> Result<void, AllocError> {
+    for (k in 0..c.afterNirErrors.length) {
+        if (c.afterNirErrors[k].stage != stage) {
+            continue;
+        }
+        let pending = borrow c.afterNirErrors[k];
+        let message = copyBytes(pending.message.view())?;
+        c.front.diagnostics.error(pending.code, pending.file, pending.start, pending.end, message)?;
+    }
+    return Ok();
 }

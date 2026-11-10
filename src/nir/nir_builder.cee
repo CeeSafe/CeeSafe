@@ -54,7 +54,11 @@ fn buildNir(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     var n = NirProgram.create();
     for (k in 0..c.hir.functions.length) {
         let f = truncate<u32>(k);
-        if (!c.hir.functions[k].registered || isExternFunction(c, f) || isCompileTimeOnly(c, f)) {
+        // A body an interface record stands for was not checked, so it has no HIR to lower (ADR 0082 §2.7).
+        if (!c.hir.functions[k].registered || isExternFunction(
+            c,
+            f,
+        ) || isCompileTimeOnly(c, f) || bodyFromRecord(c, f)) {
             continue;
         }
         let function = buildNirFunction(c, mut n, f)?;

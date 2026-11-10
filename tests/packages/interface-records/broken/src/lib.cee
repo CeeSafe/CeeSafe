@@ -1,0 +1,4 @@
+public fn fine(n: u64) -> u64 => n;
+
+/// A type error in a body its dependents skip.
+fn wrong() -> u64 => "text";

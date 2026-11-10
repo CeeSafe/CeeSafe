@@ -853,7 +853,8 @@ fn packageItem(c: borrow Checker, symbol: u32) -> Entity {
     return foundEntity(c.coreItems, Word { value: symbol as u64 });
 }
 
-/// An item's name as messages and the C backend write it (Qualified): with its package's name for a dependency's.
+/// An item's name as messages and the C backend write it (Qualified): with its package's name for a dependency's,
+/// and for the root's in the check that makes its interface record (ADR 0082 §2.7), named as its dependents name it.
 fn qualifiedName(
     c: borrow Checker,
     file: u32,
@@ -861,7 +862,7 @@ fn qualifiedName(
     out: borrow mut Vector<u8>,
 ) -> Result<void, AllocError> {
     let package = packageOfFile(c, file);
-    if (package != none() && package != 0) {
+    if (package != none() && (package != 0 || c.qualifyRoot)) {
         appendBytes(out, c.packages[package as usize].name.view())?;
         out.push('.')?;
     }
@@ -871,7 +872,7 @@ fn qualifiedName(
 /// The symbol of a declared name, qualified for a dependency's item.
 fn qualifiedSymbol(c: borrow mut Checker, symbol: u32) -> Result<u32, AllocError> {
     let package = currentPackage(c);
-    if (package == none() || package == 0) {
+    if (package == none() || (package == 0 && !c.qualifyRoot)) {
         return Ok(symbol);
     }
     var text = Vector<u8>.create();

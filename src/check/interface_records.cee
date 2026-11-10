@@ -1,0 +1,327 @@
+// Interface records in the checker (ADR 0082 §2.7): a dependency whose record is valid is parsed and its declarations
+// resolved, but its non-generic bodies are not checked again; its functions' inferred effects come from the record.
+// The bodies that stay checked are those a dependent compiles into its own C, or that a dependent's checks read:
+// generic code and its instances, async functions, functions with a closure or function parameter or `@effectsOf`,
+// `@constant` functions, closures (with the body that holds them), C functions and `dyn` methods (keepsBody).
+// The record is made by a check of the package itself (`recording`): the effects and the explanation chains of every
+// function whose body its dependents skip.
+
+/// What explainOp would print after reaching a function, for one effect: each step's description, then the chain's
+/// end (an extern's or a `dyn` method's text, or nothing); `truncated` when it went on past maxEffectChain() + 1 steps.
+struct RecordedChain {
+    steps: Vector<Vector<u8>>;
+    terminal: Vector<u8>;
+    truncated: bool;
+    length: u32; // its steps in full: what the shortest explanation through it counts (chooseWitnesses)
+}
+
+/// One function of a record: where it is declared (its file's path in its package and the declaration's start), its
+/// inferred effects, and its chains for sleep, alloc, suspend and write (effectSlot).
+struct RecordedEffects {
+    package: u32; // the package's index in this check (0 the root); set when the record is loaded
+    path: Vector<u8>;
+    offset: u32;
+    effects: u32;
+    chains: Vector<RecordedChain>;
+}
+
+/// What a check takes from the records of its dependencies, and whether it makes its own.
+struct RecordInput {
+    fileFromRecord: Vector<bool>;         // by file: its package's bodies come from a record
+    filePackagePaths: Vector<Vector<u8>>; // by file: its path in its package
+    recordPaths: Vector<Vector<u8>>;      // by file: its path as a dependency names it (`alpha/src/util.cee`), or empty
+    functions: Vector<RecordedEffects>;   // every record's functions, with their package's index
+    recording: bool;                      // make the root package's record: its effects and chains
+    qualifyRoot: bool;                    // name the root's items as its dependents do (a dependency's check)
+}
+
+fn emptyRecordInput() -> RecordInput => RecordInput {
+    fileFromRecord: Vector<bool>.create(),
+    filePackagePaths: Vector<Vector<u8>>.create(),
+    recordPaths: Vector<Vector<u8>>.create(),
+    functions: Vector<RecordedEffects>.create(),
+    recording: false,
+    qualifyRoot: false,
+};
+
+fn emptyChain() -> RecordedChain =>
+    RecordedChain { steps: Vector<Vector<u8>>.create(), terminal: Vector<u8>.create(), truncated: false, length: 0 };
+
+/// The chain of `effect` among a record's four: sleep, alloc, suspend, write.
+fn effectSlot(effect: u32) -> usize {
+    if (effect == sleepEffect()) {
+        return 0;
+    }
+    if (effect == allocEffect()) {
+        return 1;
+    }
+    if (effect == suspendEffect()) {
+        return 2;
+    }
+    return 3;
+}
+
+fn slotEffect(slot: usize) -> u32 => match (slot) {
+    0 => sleepEffect(),
+    1 => allocEffect(),
+    2 => suspendEffect(),
+    _ => writeEffect(),
+};
+
+/// Whether `function`'s body is checked in every package that sees it: what a dependent compiles into its own C
+/// (generic code, closures' variants and async instances, ADR 0082 §2.3), or reads while it checks (constants,
+/// `@effectsOf` callees' async instances). Every other body is a dependency's own business, which its record covers.
+fn keepsBody(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    if (!f.registered || f.isClosure || f.isDynMethod || f.syntax == none() || f.file == none()) {
+        return true;
+    }
+    if (isExternFunction(c, function) || functionIsGeneric(c, function) || functionIsInstantiation(c, function)) {
+        return true;
+    }
+    if (isAsyncFunction(c, function) || f.asyncInstanceOf != none() || f.methodTemplate != none()) {
+        return true;
+    }
+    if (containsU32(c.constantFunctions, f.syntax)) {
+        return true;
+    }
+    for (entry in c.effectsOfAttributes.view()) {
+        if (entry.syntax == f.syntax) {
+            return true;
+        }
+    }
+    for (parameter in f.parameters.view()) {
+        let typ = c.hir.locals[parameter as usize].typ;
+        if (c.types.is(typ, TypeKind.Function) || c.types.isClosure(typ)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Whether `function`'s body is left unchecked: its package's record stands for it.
+fn bodyFromRecord(c: borrow Checker, function: u32) -> bool =>
+    (function as usize) < c.recordedFunction.length && c.recordedFunction[function as usize] != none();
+
+/// The index of `function`'s entry in c.recordedEffects, or none.
+fn recordedEntryOf(c: borrow Checker, function: u32) -> u32 {
+    if ((function as usize) >= c.recordedFunction.length) {
+        return none();
+    }
+    return c.recordedFunction[function as usize];
+}
+
+/// The key a recorded function is found by: its package, its file's path in it, and its declaration's start.
+fn recordKey(package: u32, path: Slice<u8>, offset: u32) -> Result<Bytes, AllocError> {
+    var key = Vector<u8>.create();
+    appendDecimal(mut key, package as u64)?;
+    key.push(0)?;
+    appendBytes(mut key, path)?;
+    key.push(0)?;
+    appendDecimal(mut key, offset as u64)?;
+    return Bytes.from(key.view());
+}
+
+/// The start of `function`'s declaration in its file.
+fn declarationStart(c: borrow Checker, function: u32) -> u32 =>
+    c.front.ast.functions[c.hir.functions[function as usize].syntax as usize].start;
+
+/// Gives each function whose body a record stands for its entry, once every item is declared and before any body is
+/// checked. A package for which the record lacks one of them (it cannot, when the record's key holds) is checked in
+/// full instead: no record is ever trusted for more than it says.
+fn resolveRecordedFunctions(c: borrow mut Checker) -> Result<void, AllocError> {
+    while (c.recordedFunction.length < c.hir.functions.length) {
+        c.recordedFunction.push(none())?;
+    }
+    if (c.recordedEffects.length == 0) {
+        return Ok();
+    }
+    var index = Map<Bytes, Word>.create();
+    for (k in 0..c.recordedEffects.length) {
+        let entry = borrow c.recordedEffects[k];
+        let key = recordKey(entry.package, entry.path.view(), entry.offset)?;
+        index.put(key, Word { value: k as u64 })?;
+    }
+    var failed = Vector<bool>.create(); // by package: a function its record lacks
+    while (failed.length < c.packages.length) {
+        failed.push(false)?;
+    }
+    for (f in 0..c.hir.functions.length) {
+        let function = truncate<u32>(f);
+        let file = c.hir.functions[f].file;
+        if (file == none() || (file as usize) >= c.fileFromRecord.length || !c.fileFromRecord[file as usize] ||
+            keepsBody(c, function)) {
+            continue;
+        }
+        let package = c.filePackage[file as usize];
+        let key = recordKey(package, c.filePackagePaths[file as usize].view(), declarationStart(c, function))?;
+        match (index.get(key)) {
+            Some(w) => { c.recordedFunction[f] = truncate<u32>(w.value); }
+            null => {
+                if ((package as usize) < failed.length) {
+                    failed[package as usize] = true;
+                }
+            }
+        }
+    }
+    for (f in 0..c.hir.functions.length) {
+        let file = c.hir.functions[f].file;
+        if (file != none() && (file as usize) < c.filePackage.length) {
+            let package = c.filePackage[file as usize];
+            if ((package as usize) < failed.length && failed[package as usize]) {
+                c.recordedFunction[f] = none();
+            }
+        }
+    }
+    for (file in 0..c.fileFromRecord.length) {
+        let package = c.filePackage[file];
+        if ((package as usize) < failed.length && failed[package as usize]) {
+            c.fileFromRecord[file] = false;
+        }
+    }
+    return Ok();
+}
+
+/// The packages (by index in this check) whose bodies a record stood for: every one whose files the check skipped.
+fn packagesFromRecords(c: borrow Checker, out: borrow mut Vector<bool>) -> Result<void, AllocError> {
+    while (out.length < c.packages.length) {
+        out.push(false)?;
+    }
+    for (file in 0..c.fileFromRecord.length) {
+        let package = c.filePackage[file];
+        if (c.fileFromRecord[file] && (package as usize) < out.length) {
+            out[package as usize] = true;
+        }
+    }
+    return Ok();
+}
+
+/// The effect checker's start: each function a record stands for has the effects its record says.
+fn seedRecordedEffects(c: borrow Checker, e: borrow mut Effects) {
+    for (f in 0..c.recordedFunction.length) {
+        let r = c.recordedFunction[f];
+        if (r == none() || f >= e.inferred.length) {
+            continue;
+        }
+        let effects = c.recordedEffects[r as usize].effects;
+        e.inferred[f].present = true;
+        e.inferred[f].effects = effects;
+        e.inferred[f].hasSleep = (effects & sleepEffect()) != 0;
+        e.inferred[f].hasAlloc = (effects & allocEffect()) != 0;
+        e.inferred[f].hasSuspend = (effects & suspendEffect()) != 0;
+        e.inferred[f].hasWrite = (effects & writeEffect()) != 0;
+    }
+}
+
+/// Whether `function` goes into the root package's record: a function of its own whose body dependents skip.
+fn isRecordedHere(c: borrow Checker, function: u32) -> bool {
+    let file = c.hir.functions[function as usize].file;
+    if (file == none() || c.fileIsLibrary[file as usize] || c.filePackage[file as usize] != 0) {
+        return false;
+    }
+    return !keepsBody(c, function);
+}
+
+/// The root package's record (c.recording): every function of its own whose body dependents skip, with its effects
+/// and chains. The chains name the package's files as a dependent names them (`alpha/src/util.cee`).
+fn recordEffects(c: borrow mut Checker, e: borrow Effects) -> Result<void, AllocError> {
+    var saved = Vector<Vector<u8>>.create();
+    let swap = c.recordPaths.length == c.filePaths.length;
+    if (swap) {
+        for (k in 0..c.filePaths.length) {
+            if (c.recordPaths[k].length > 0) {
+                saved.push(copyBytes(c.filePaths[k].view())?)?;
+                c.filePaths[k] = copyBytes(c.recordPaths[k].view())?;
+            } else {
+                saved.push(Vector<u8>.create())?;
+            }
+        }
+    }
+    for (f in 0..c.hir.functions.length) {
+        let function = truncate<u32>(f);
+        if (!isRecordedHere(c, function)) {
+            continue;
+        }
+        let file = c.hir.functions[f].file;
+        var entry = RecordedEffects {
+            package: 0,
+            path: copyBytes(c.filePackagePaths[file as usize].view())?,
+            offset: declarationStart(c, function),
+            effects: 0,
+            chains: Vector<RecordedChain>.create(),
+        };
+        if (f < e.inferred.length && e.inferred[f].present) {
+            entry.effects = e.inferred[f].effects;
+        }
+        for (slot in 0..4usize) {
+            let effect = slotEffect(slot);
+            if ((entry.effects & effect) != 0) {
+                var chain = chainFrom(c, e, function, effect)?;
+                if (slot < e.lengths.length && f < e.lengths[slot].length) {
+                    chain.length = e.lengths[slot][f];
+                }
+                entry.chains.push(chain)?;
+            } else {
+                entry.chains.push(emptyChain())?;
+            }
+        }
+        c.recordOut.push(entry)?;
+    }
+    if (swap) {
+        for (k in 0..c.filePaths.length) {
+            if (c.recordPaths[k].length > 0) {
+                c.filePaths[k] = copyBytes(saved[k].view())?;
+            }
+        }
+    }
+    return Ok();
+}
+
+/// Whether a body just checked made a `dyn` table of an interface with an async method, which a dependent cannot see
+/// from the record: its frames, and recursion through `await`, are the program's (§1.5). Such a package's record says
+/// so (opaque), and dependents check its bodies; as they do a package that embeds a file (c.embedCalls), whose
+/// contents are not part of the record's key.
+fn madeOpaque(c: borrow Checker, tablesBefore: usize) -> bool {
+    for (k in tablesBefore..c.dynTables.length) {
+        let methods = c.dynTables[k].methods;
+        for (m in 0..methods.count) {
+            if (isAsyncFunction(c, c.hir.at(methods, m))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// The byte ranges of the root package's bodies that dependents skip, in `file`: what the interface hash leaves out.
+fn skippedBodies(c: borrow Checker, file: u32, out: borrow mut Vector<Span>) -> Result<void, AllocError> {
+    for (f in 0..c.hir.functions.length) {
+        let function = truncate<u32>(f);
+        if (c.hir.functions[f].file != file || !isRecordedHere(c, function)) {
+            continue;
+        }
+        let syntax = borrow c.front.ast.functions[c.hir.functions[f].syntax as usize];
+        var start = none();
+        if (syntax.body != none()) {
+            start = c.front.ast.stmtSpans[syntax.body as usize].start;
+        } else if (syntax.expressionBody != none()) {
+            start = c.front.ast.exprSpans[syntax.expressionBody as usize].start;
+        }
+        if (start != none() && start < syntax.end) {
+            out.push(Span { start: start, end: syntax.end })?;
+        }
+    }
+    return Ok();
+}
+
+/// An error a check adds once the NIR passes' per-function checks are done (ADR 0082 §2.7): a dependency whose own
+/// check failed there, as one diagnostic at its line in the manifest, so that what follows stops as it would had the
+/// dependency's error been found here.
+struct PendingError {
+    stage: u32; // 3: after the per-function checks; 4: after the instances' checks
+    code: u32;
+    file: u32;
+    start: u32;
+    end: u32;
+    message: Vector<u8>;
+}

@@ -524,8 +524,10 @@ fn instantiateStruct(
             }
         }
     }
-    for (k in 0..c.structs.length) {
-        let s = c.structs[k];
+    // Its template's instances alone: a scan of every struct was quadratic in the instances.
+    let known = instancesOf(c.structInstances, template)?;
+    for (k in known.view()) {
+        let s = c.structs[k as usize];
         if (s.template == template && sameTypes(
             c,
             c.types.structs[c.types.info(s.typ).structDef as usize].typeArguments,
@@ -554,6 +556,7 @@ fn instantiateStruct(
     let env = storeEnvironment(c, pairs.view())?;
     c.structs.push(StructEntry { item: entry.item, file: entry.file, typ: typ, environment: env, template: template })?;
     let index = truncate<u32>(c.structs.length - 1);
+    addInstance(mut c.structInstances, template, index)?;
     if (c.membersResolved) {
         c.instantiating += 1;
         let mark = diagnosticsMark(c);
@@ -580,8 +583,9 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
     var parameterTypes = Vector<u32>.create();
     listTypes(c, parameters, mut parameterTypes)?;
     checkBounds(c, parameterTypes.view(), arguments, span)?;
-    for (k in 0..c.enums.length) {
-        let e = c.enums[k];
+    let known = instancesOf(c.enumInstances, template)?;
+    for (k in known.view()) {
+        let e = c.enums[k as usize];
         if (e.template == template && sameTypes(
             c,
             c.types.enums[c.types.info(e.typ).enumDef as usize].typeArguments,
@@ -614,6 +618,7 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
             template: template,
         },
     )?;
+    addInstance(mut c.enumInstances, template, truncate<u32>(c.enums.length - 1))?;
     let index = truncate<u32>(c.enums.length - 1);
     if (c.membersResolved) {
         c.instantiating += 1;
@@ -1241,12 +1246,46 @@ fn enumEntryFor(c: borrow Checker, template: u32, typ: u32) -> u32 {
     if (c.enums[template as usize].typ == typ) {
         return template;
     }
-    for (k in 0..c.enums.length) {
-        if (c.enums[k].template == template && c.enums[k].typ == typ) {
-            return truncate<u32>(k);
+    match (c.enumInstances.get(Word { value: template as u64 })) {
+        Some(list) => {
+            for (k in list.view()) {
+                if (c.enums[k as usize].template == template && c.enums[k as usize].typ == typ) {
+                    return k;
+                }
+            }
         }
+        null => {}
     }
     return none();
+}
+
+/// The instances of `template` (indices into c.structs or c.enums), in the order they were made.
+fn instancesOf(map: borrow Map<Word, Vector<u32>>, template: u32) -> Result<Vector<u32>, AllocError> {
+    var out = Vector<u32>.create();
+    match (map.get(Word { value: template as u64 })) {
+        Some(list) => {
+            for (k in list.view()) {
+                out.push(k)?;
+            }
+        }
+        null => {}
+    }
+    return Ok(out);
+}
+
+fn addInstance(map: borrow mut Map<Word, Vector<u32>>, template: u32, index: u32) -> Result<void, AllocError> {
+    let key = Word { value: template as u64 };
+    match (map.getMut(key)) {
+        Some(list) => {
+            list.push(index)?;
+            return Ok();
+        }
+        null => {}
+    }
+    var list = Vector<u32>.create();
+    list.push(index)?;
+    map.put(key, list)?;
+    return Ok();
 }
 
 /// Is the struct or enum entry a generic declaration (its syntax has type parameters)?

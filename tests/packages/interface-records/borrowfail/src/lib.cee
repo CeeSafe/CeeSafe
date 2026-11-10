@@ -1,0 +1,9 @@
+public fn fine(n: u64) -> u64 => n;
+
+/// An ownership error, found after the types check (lifetimes.md).
+fn dangling() -> u64 {
+    var v = Vector<u64>.create();
+    let r = borrow v;
+    v.push(1)!;
+    return r.length as u64;
+}

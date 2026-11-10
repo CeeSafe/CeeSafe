@@ -335,72 +335,81 @@ fn diagnosticsJson(
     json.name("diagnostics")?;
     json.startArray()?;
     for (i in 0..diagnostics.items.length) {
-        let d = borrow diagnostics.items[i];
-        let placeholder = placeholderSource(d)?;
-        let source = if ((d.file as usize) < sources.length) borrow sources[d.file as usize] else borrow placeholder;
+        writeJsonDiagnostic(mut json, diagnostics.items[i], sources)?;
+    }
+    json.endArray()?;
+    json.endObject()?;
+    return Ok(json.out);
+}
+
+/// One diagnostic of the document (tooling.md §5.1), in `sources`.
+fn writeJsonDiagnostic(
+    json: borrow mut JsonWriter,
+    d: borrow Diagnostic,
+    sources: borrow Vector<SourceText>,
+) -> Result<void, AllocError> {
+    let placeholder = placeholderSource(d)?;
+    let source = if ((d.file as usize) < sources.length) borrow sources[d.file as usize] else borrow placeholder;
+    json.startObject()?;
+    json.name("code")?;
+    var code = Vector<u8>.create();
+    appendCode(mut code, d.code)?;
+    json.stringBytes(code.view())?;
+    json.name("severity")?;
+    json.string(if (d.isError) "error" else "warning")?;
+    json.name("file")?;
+    json.stringBytes(source.shownPath())?;
+    if (source.package.length > 0) {
+        // A file's package in package mode (ADR 0082 §2.1): which of a build's packages to open.
+        json.name("package")?;
+        json.stringBytes(source.package.view())?;
+    }
+    writePosition(mut json, "start", source, d.start)?;
+    writePosition(mut json, "end", source, d.end)?;
+    json.name("message")?;
+    json.stringBytes(d.message.view())?;
+    json.name("summary")?;
+    json.string(summaryOf(d.code))?;
+    json.name("notes")?;
+    json.startArray()?;
+    for (note in d.notes.view()) {
+        let noteSource =
+            if (note.file != d.file && (note.file as usize) < sources.length) borrow sources[note.file as usize]
+                else source;
         json.startObject()?;
-        json.name("code")?;
-        var code = Vector<u8>.create();
-        appendCode(mut code, d.code)?;
-        json.stringBytes(code.view())?;
-        json.name("severity")?;
-        json.string(if (d.isError) "error" else "warning")?;
+        json.name("file")?;
+        json.stringBytes(noteSource.shownPath())?;
+        writePosition(mut json, "start", noteSource, note.start)?;
+        writePosition(mut json, "end", noteSource, note.end)?;
+        json.name("message")?;
+        json.stringBytes(note.message.view())?;
+        json.endObject()?;
+    }
+    json.endArray()?;
+    json.name("fixes")?;
+    json.startArray()?;
+    if (d.hasFix) {
+        json.startObject()?;
+        json.name("title")?;
+        json.stringBytes(d.fixTitle.view())?;
+        json.name("edits")?;
+        json.startArray()?;
+        json.startObject()?;
         json.name("file")?;
         json.stringBytes(source.shownPath())?;
-        if (source.package.length > 0) {
-            // A file's package in package mode (ADR 0082 §2.1): which of a build's packages to open.
-            json.name("package")?;
-            json.stringBytes(source.package.view())?;
-        }
-        writePosition(mut json, "start", source, d.start)?;
-        writePosition(mut json, "end", source, d.end)?;
-        json.name("message")?;
-        json.stringBytes(d.message.view())?;
-        json.name("summary")?;
-        json.string(summaryOf(d.code))?;
-        json.name("notes")?;
-        json.startArray()?;
-        for (note in d.notes.view()) {
-            let noteSource =
-                if (note.file != d.file && (note.file as usize) < sources.length) borrow sources[note.file as usize]
-                    else source;
-            json.startObject()?;
-            json.name("file")?;
-            json.stringBytes(noteSource.shownPath())?;
-            writePosition(mut json, "start", noteSource, note.start)?;
-            writePosition(mut json, "end", noteSource, note.end)?;
-            json.name("message")?;
-            json.stringBytes(note.message.view())?;
-            json.endObject()?;
-        }
-        json.endArray()?;
-        json.name("fixes")?;
-        json.startArray()?;
-        if (d.hasFix) {
-            json.startObject()?;
-            json.name("title")?;
-            json.stringBytes(d.fixTitle.view())?;
-            json.name("edits")?;
-            json.startArray()?;
+        writePosition(mut json, "start", source, d.fixStart)?;
+        writePosition(mut json, "end", source, d.fixEnd)?;
+        json.name("newText")?;
+        json.stringBytes(d.fixText.view())?;
+        json.endObject()?;
+        if (d.hasSecondEdit) {
             json.startObject()?;
             json.name("file")?;
             json.stringBytes(source.shownPath())?;
-            writePosition(mut json, "start", source, d.fixStart)?;
-            writePosition(mut json, "end", source, d.fixEnd)?;
+            writePosition(mut json, "start", source, d.secondStart)?;
+            writePosition(mut json, "end", source, d.secondEnd)?;
             json.name("newText")?;
-            json.stringBytes(d.fixText.view())?;
-            json.endObject()?;
-            if (d.hasSecondEdit) {
-                json.startObject()?;
-                json.name("file")?;
-                json.stringBytes(source.shownPath())?;
-                writePosition(mut json, "start", source, d.secondStart)?;
-                writePosition(mut json, "end", source, d.secondEnd)?;
-                json.name("newText")?;
-                json.stringBytes(d.secondText.view())?;
-                json.endObject()?;
-            }
-            json.endArray()?;
+            json.stringBytes(d.secondText.view())?;
             json.endObject()?;
         }
         json.endArray()?;
@@ -408,5 +417,5 @@ fn diagnosticsJson(
     }
     json.endArray()?;
     json.endObject()?;
-    return Ok(json.out);
+    return Ok();
 }

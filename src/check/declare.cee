@@ -101,6 +101,35 @@ fn checkProgram(
     packages: Vector<PackageInfo>,
     filePackage: Vector<u32>,
     entryName: Vector<u8>,
+) -> Result<Checker, AllocError> => checkProgramWith(
+    front,
+    fileIsLibrary,
+    fileTexts,
+    filePaths,
+    fileDiskPaths,
+    noFloat,
+    freestanding,
+    packages,
+    filePackage,
+    entryName,
+    emptyRecordInput(),
+);
+
+/// checkProgram with the dependencies' interface records (ADR 0082 §2.7): a package whose record is used has its
+/// declarations resolved but its other bodies left unchecked (keepsBody), and with `records.recording` the root
+/// package's own record is made.
+fn checkProgramWith(
+    front: Frontend,
+    fileIsLibrary: Vector<bool>,
+    fileTexts: Vector<Vector<u8>>,
+    filePaths: Vector<Vector<u8>>,
+    fileDiskPaths: Vector<Vector<u8>>,
+    noFloat: bool,
+    freestanding: bool,
+    packages: Vector<PackageInfo>,
+    filePackage: Vector<u32>,
+    entryName: Vector<u8>,
+    records: RecordInput,
 ) -> Result<Checker, AllocError> {
     let expanded = expandDerives(front, fileTexts)?; // `@derive` (ADR 0087 §2.3)
     var c = Checker {
@@ -149,6 +178,10 @@ fn checkProgram(
         instantiating: 0,
         recursionState: Vector<u8>.create(),
         copyDone: Vector<bool>.create(),
+        recursionStructs: 0,
+        recursionEnums: 0,
+        copyStructs: 0,
+        copyEnums: 0,
         interfaces: Vector<InterfaceEntry>.create(),
         impls: Vector<ImplRef>.create(),
         implsReady: false,
@@ -227,6 +260,24 @@ fn checkProgram(
         methodFiles: Vector<MethodFile>.create(),
         memberConstants: Vector<MemberConstant>.create(),
         fileImports: Vector<FileImport>.create(),
+        fileFromRecord: records.fileFromRecord,
+        filePackagePaths: records.filePackagePaths,
+        recordPaths: records.recordPaths,
+        recordedEffects: records.functions,
+        recordedFunction: Vector<u32>.create(),
+        recording: records.recording,
+        qualifyRoot: records.qualifyRoot,
+        recordOut: Vector<RecordedEffects>.create(),
+        recordOpaque: false,
+        embedCalls: 0,
+        afterNirErrors: Vector<PendingError>.create(),
+        nirLoopErrors: false,
+        instanceErrors: false,
+        regionImpls: Vector<u32>.create(),
+        implementationsOf: Map<Word, Vector<u32>>.create(),
+        templatesOf: Map<Word, Vector<u32>>.create(),
+        structInstances: Map<Word, Vector<u32>>.create(),
+        enumInstances: Map<Word, Vector<u32>>.create(),
     };
     // The constructor: the builtins' names, `this`, and a scratch frame's two parts.
     for (k in 0..builtinCount()) {
@@ -325,15 +376,26 @@ fn checkProgram(
     for (k in 0..c.constants.length) {
         evaluateConstant(mut c, truncate<u32>(k))?;
     }
-    checkStaticInitializers(mut c)?; // before the bodies, so the instances its calls make are checked with them
+    checkStaticInitializers(mut c)?;  // before the bodies, so the instances its calls make are checked with them
+    resolveRecordedFunctions(mut c)?; // ADR 0082 §2.7
 
     // The body pass: every function in creation order, the libraries' included.
     var f: usize = 0;
     while (f < c.hir.functions.length) {
         // A closure's body is checked where its literal is (§36.2).
         // A C function is defined in C (§28.2).
+        // A dependency's body its interface record stands for is not checked again (ADR 0082 §2.7).
         let isExtern = c.front.ast.functions[c.hir.functions[f].syntax as usize].isExtern;
-        if (c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern) {
+        if (c.recording && c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern &&
+            isRecordedHere(c, truncate<u32>(f))) {
+            // The root's record: a body that makes what a record cannot hold makes the record opaque.
+            let tables = c.dynTables.length;
+            checkFunctionBody(mut c, truncate<u32>(f))?;
+            if (madeOpaque(c, tables)) {
+                c.recordOpaque = true;
+            }
+        } else if (c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern &&
+            !bodyFromRecord(c, truncate<u32>(f))) {
             let function = truncate<u32>(f);
             if (functionIsInstantiation(c, function)) {
                 // Its generic version reports (§20.3); a scoped type argument the body cannot take is N0274.
@@ -441,8 +503,11 @@ fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, A
 fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     match (entry.kind) {
-        ItemKind.Impl(_, _, _, _, _) => {
+        ItemKind.Impl(_, _, _, _, regions) => {
             c.impls.push(ImplRef { item: item, file: c.file })?; // processed once every item is declared (§21.1)
+            if (regions.count > 0) {
+                c.regionImpls.push(truncate<u32>(c.impls.length - 1))?; // implRegionsOf looks at these alone
+            }
             return Ok();
         }
         ItemKind.Extern(_, _, _) => { return declareExternBlock(c, item); }

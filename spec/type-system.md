@@ -2363,6 +2363,9 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
 - `File.open(path)`: `Result<File, IoError>` for reading; `File.create(path)`: for writing, created
   or truncated; `File.remove(path)`: `Result<void, IoError>`. `path` is a `StringView`; a path that
   contains a zero byte or is longer than 4095 bytes is `InvalidInput`.
+- A file may be removed or renamed while a `File` holds it open, natively on every system: the name goes, and the
+  open `File` keeps reading and writing the file until it is dropped. Windows opens every file sharing delete
+  (`FILE_SHARE_DELETE`), which its C runtime's `_open` does not.
 - **Durable files** (ADR 0075 §2.1), each `Result<…, IoError>`:
   - `File.openReadWrite(path)` opens an existing file for reading and writing (`NotFound` if missing);
     `File.openOrCreate(path)` creates a missing one; `File.createNew(path)` creates one and is `AlreadyExists` if
@@ -2379,7 +2382,8 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
   - `f.length()`: `u64`; `f.setLength(n: u64)` shrinks the file or extends it with zeros.
   - Each takes `borrow this` (since ADR 0075 §8; 0.19.0 took `borrow mut this`): none moves the position `read` and
     `write` use, so a file shared by reference can be read and synced. Interrupted calls are retried. On Windows, positions go through the handle's
-    `OVERLAPPED` offset.
+    `OVERLAPPED` offset, which also moves the handle's position: it is read before and put back after, so a `read` or
+    `write` on another thread during the call may see it moved.
 - `File.openAppend(path)` (ADR 0077): write-only, created if missing, every write at the end (`O_APPEND`).
 - `File.modified(path)` (ADR 0077, lib/std): `Result<UnixTime, IoError>`, the last modification time.
 - `File.openRegular(path)` (ADR 0078 §3): opens `path` for reading if it is a regular file, never waiting on a FIFO

@@ -67,6 +67,122 @@ static void hook_records(void *context, const ceesafe_panic_info *info) {
     abort();
 }
 
+/* Stage B's allocator hook (ADR 0088 §2.5). Each block has a 16-byte header with a tag, so a block that reaches the
+   wrong heap is caught both ways: one of the hook's given to the C library's free is a pointer malloc never returned
+   (ASan, or the C library, stops), and one of the C library's given to the hook's free has no tag (hook_free
+   aborts). The calls are counted, and the context is checked to be the host's. */
+#define HOOK_TAG 0x0088B10C0088B10Cull
+static int hook_context;
+static uint64_t hook_allocs, hook_frees, hook_bad;
+
+static void *hook_tag(unsigned char *base) {
+    if (base == NULL) return NULL;
+    *(uint64_t *)(void *)base = HOOK_TAG;
+    return base + 16;
+}
+
+static void hook_check(void *context, void *block) {
+    if (context != &hook_context || ((uintptr_t)block & 15u) != 0u ||
+        *(uint64_t *)(void *)((unsigned char *)block - 16) != HOOK_TAG) {
+        __atomic_add_fetch(&hook_bad, 1, __ATOMIC_RELAXED);
+        printf("hook_free: a block the hook did not allocate\n");
+        fflush(stdout);
+        abort();
+    }
+}
+
+static void *hook_alloc(void *context, size_t size) {
+    if (context != &hook_context || size == 0 || size > SIZE_MAX - 16) __atomic_add_fetch(&hook_bad, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&hook_allocs, 1, __ATOMIC_RELAXED);
+    return hook_tag(malloc(16 + size));
+}
+
+static void *hook_alloc_zeroed(void *context, size_t size) {
+    if (context != &hook_context || size == 0 || size > SIZE_MAX - 16) __atomic_add_fetch(&hook_bad, 1, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&hook_allocs, 1, __ATOMIC_RELAXED);
+    return hook_tag(calloc(1, 16 + size));
+}
+
+static void *hook_realloc(void *context, void *block, size_t size) {
+    hook_check(context, block);
+    if (size == 0 || size > SIZE_MAX - 16) __atomic_add_fetch(&hook_bad, 1, __ATOMIC_RELAXED);
+    unsigned char *base = realloc((unsigned char *)block - 16, 16 + size);
+    return base == NULL ? NULL : base + 16; /* the tag moved with the block; on failure the block is kept */
+}
+
+static void hook_free(void *context, void *block) {
+    hook_check(context, block);
+    *(uint64_t *)(void *)((unsigned char *)block - 16) = 0;
+    __atomic_add_fetch(&hook_frees, 1, __ATOMIC_RELAXED);
+    free((unsigned char *)block - 16);
+}
+
+static const ceesafe_allocator tagged = {hook_alloc, hook_alloc_zeroed, hook_realloc, hook_free, &hook_context};
+
+/* malloc's contract kept exactly, but for one function (`odd_which`: "alloc", "alloc_zeroed" or "realloc"), whose
+   blocks are 8-aligned and never 16-aligned (ADR 0088 §1.9's evidence); the others give 16-aligned blocks. Each block
+   is base + offset (24, or 32 when aligned) of a malloc block, with its size and base in the 16 bytes before it. */
+static const char *odd_which = "";
+
+static void *odd_block(size_t size, const char *function, int zero) {
+    size_t offset = strcmp(odd_which, function) == 0 ? 24 : 32;
+    unsigned char *base = zero ? calloc(1, size + 32) : malloc(size + 32);
+    if (base == NULL) return NULL;
+    unsigned char *p = base + offset;
+    memcpy(p - 16, &size, sizeof size);
+    memcpy(p - 8, &base, sizeof base);
+    return p;
+}
+
+static void *odd_alloc(void *context, size_t size) {
+    (void)context;
+    return odd_block(size, "alloc", 0);
+}
+
+static void *odd_alloc_zeroed(void *context, size_t size) {
+    (void)context;
+    return odd_block(size, "alloc_zeroed", 1);
+}
+
+static void odd_free(void *context, void *block) {
+    (void)context;
+    unsigned char *base;
+    memcpy(&base, (unsigned char *)block - 8, sizeof base);
+    free(base);
+}
+
+static void *odd_realloc(void *context, void *block, size_t size) {
+    size_t old;
+    memcpy(&old, (unsigned char *)block - 16, sizeof old);
+    void *p = odd_block(size, "realloc", 0);
+    if (p == NULL) return NULL;
+    memcpy(p, block, old < size ? old : size);
+    odd_free(context, block);
+    return p;
+}
+
+static const ceesafe_allocator misaligned = {odd_alloc, odd_alloc_zeroed, odd_realloc, odd_free, NULL};
+
+static int init_allocator(const ceesafe_allocator *allocator, ceesafe_panic_hook hook, uint32_t flags,
+                          uint64_t fail_at) {
+    ceesafe_config config;
+    memset(&config, 0, sizeof config);
+    config.size = (uint32_t)sizeof config;
+    config.flags = flags;
+    config.fail_alloc_at = fail_at;
+    config.allocator = allocator;
+    config.panic_hook = hook;
+    return ceesafe_init(&config);
+}
+
+static void hook_counts(const char *label) {
+    printf("%s allocs=%llu frees=%llu bad=%llu\n", label,
+           (unsigned long long)__atomic_load_n(&hook_allocs, __ATOMIC_RELAXED),
+           (unsigned long long)__atomic_load_n(&hook_frees, __ATOMIC_RELAXED),
+           (unsigned long long)__atomic_load_n(&hook_bad, __ATOMIC_RELAXED));
+    fflush(stdout);
+}
+
 static void __attribute__((noinline)) scribble(void) {
     volatile char junk[4096];
     memset((char *)junk, 'z', sizeof junk);
@@ -316,13 +432,89 @@ int main(int argc, char **argv) {
         pthread_create(&b, NULL, panic_thread, NULL);
         pthread_join(a, NULL);
         pthread_join(b, NULL);
+    } else if (strcmp(what, "alloc-hook") == 0) {
+        /* Every kind of block the runtime makes, through the tagged hook: CeeSafe's own (boxes, a thread's, the
+           async executor's buffers and frames, a scratch frame's chunks), argv's copy, and the window layer's (run
+           with CEESAFE_WINDOW_SCRIPT). The report counts CeeSafe's attempts beside the hook's. */
+        char *arguments[2] = {"prog", "one"};
+        ceesafe_config config;
+        memset(&config, 0, sizeof config);
+        config.size = (uint32_t)sizeof config;
+        config.argc = 2;
+        config.argv = (const char *const *)arguments;
+        config.alloc_report = true;
+        config.allocator = &tagged;
+        config.panic_hook = hook_abort;
+        if (ceesafe_init(&config) != 0) return 1;
+        uint8_t bytes[3] = {1, 2, 3};
+        printf("sum=%llu twice=%llu async=%llu boxes=%llu scratch=%llu window=%u args=%llu\n",
+               (unsigned long long)embed_sum(bytes, 3), (unsigned long long)embed_twice(21),
+               (unsigned long long)embed_async(41), (unsigned long long)embed_boxes(5),
+               (unsigned long long)embed_scratch(1000), embed_window(), (unsigned long long)embed_arg_count());
+        hook_counts("hook");
+        printf("live=%llu\n", (unsigned long long)ceesafe_shutdown());
+    } else if (strcmp(what, "alloc-fail") == 0) {
+        /* alloc-fail K: fail_alloc_at = K with the hook. An injected failure never reaches it, so the hook's calls
+           are the boxes made. */
+        if (init_allocator(&tagged, NULL, 0, strtoull(argv[2], NULL, 10)) != 0) return 1;
+        printf("boxes=%llu ", (unsigned long long)embed_boxes(5));
+        hook_counts("hook");
+    } else if (strcmp(what, "alloc-misaligned") == 0) {
+        /* alloc-misaligned alloc|alloc_zeroed|realloc|init: that function gives 8-aligned blocks; the runtime's panic,
+           naming it, reaches the panic hook before any misaligned access. `init`: alloc's, at argv's copy inside
+           ceesafe_init. */
+        const char *which = argv[2];
+        odd_which = strcmp(which, "init") == 0 ? "alloc" : which;
+        char *arguments[2] = {"prog", "one"};
+        ceesafe_config config;
+        memset(&config, 0, sizeof config);
+        config.size = (uint32_t)sizeof config;
+        config.argc = strcmp(which, "init") == 0 ? 2 : 0;
+        config.argv = (const char *const *)arguments;
+        config.allocator = &misaligned;
+        config.panic_hook = hook_abort;
+        int32_t r = ceesafe_init(&config);
+        printf("init=%d\n", r);
+        fflush(stdout);
+        if (strcmp(which, "alloc") == 0) printf("boxes=%llu\n", (unsigned long long)embed_boxes(1));
+        if (strcmp(which, "alloc_zeroed") == 0) printf("window=%u\n", embed_window());
+        if (strcmp(which, "realloc") == 0) printf("grow=%llu\n", (unsigned long long)embed_grow(100));
+    } else if (strcmp(what, "alloc-window") == 0) {
+        /* The window layer's own blocks, exactly: a scripted window opened, run and closed through the hook, with no
+           counting, so every hook call here is the window's (CeeSafe's side of Window.open allocates nothing). */
+        if (init_allocator(&tagged, hook_abort, 0, 0) != 0) return 1;
+        uint32_t events = embed_window();
+        printf("window=%u ", events);
+        hook_counts("hook");
+    } else if (strcmp(what, "alloc-late") == 0) {
+        /* An allocator after the runtime has allocated: LATE, nothing changed; then the C library's heap goes on, and
+           the hook is never called. */
+        printf("boxes=%llu\n", (unsigned long long)embed_boxes(1));
+        int32_t late = init_allocator(&tagged, NULL, 0, 0);
+        int32_t plain = init_allocator(NULL, NULL, 0, 0);
+        printf("alloc-late=%d,%d boxes=%llu ", late, plain, (unsigned long long)embed_boxes(3));
+        hook_counts("hook");
+    } else if (strcmp(what, "alloc-partial") == 0) {
+        /* A hook missing one function: ALLOCATOR, nothing changed. */
+        ceesafe_allocator partial = tagged;
+        partial.free = NULL;
+        int32_t r = init_allocator(&partial, NULL, 0, 0);
+        int32_t again = init_allocator(&tagged, NULL, 0, 0);
+        printf("partial=%d then=%d boxes=%llu ", r, again, (unsigned long long)embed_boxes(2));
+        hook_counts("hook");
     } else if (strcmp(what, "threads") == 0) {
-        if (init_with(NULL, 0, NULL, 0, 0) != 0) return 1;
+        /* threads [hook]: with `hook`, every block of both threads through the tagged allocator hook */
+        if (argc > 2 && strcmp(argv[2], "hook") == 0) {
+            if (init_allocator(&tagged, NULL, 0, 0) != 0) return 1;
+        } else if (init_with(NULL, 0, NULL, 0, 0) != 0) {
+            return 1;
+        }
         pthread_t a, b;
         pthread_create(&a, NULL, scratch_thread, (void *)1000);
         pthread_create(&b, NULL, scratch_thread, (void *)5000);
         pthread_join(a, NULL);
         pthread_join(b, NULL);
+        if (argc > 2) hook_counts("hook");
     }
     fflush(stdout);
     return 0;

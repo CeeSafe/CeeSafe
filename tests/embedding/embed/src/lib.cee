@@ -177,3 +177,51 @@ fn embedScratch(seed: u64) -> u64 {
         Err(_) => { return 0; }
     }
 }
+
+fn growWork(n: u64) -> Result<u64, AllocError> {
+    var v = Vector<u64>.create();
+    for (i in 0u64..n) {
+        v.push(i)?;
+    }
+    var sum: u64 = 0;
+    for (x in v[..]) {
+        sum += x;
+    }
+    return Ok(sum);
+}
+
+/// The sum of 0..n through a growing vector: a first buffer, then reallocations (ADR 0088 §2.5's realloc); 0 when out
+/// of memory.
+@export("embed_grow")
+fn embedGrow(n: u64) -> u64 {
+    match (growWork(n)) {
+        Ok(s) => { return s; }
+        Err(_) => { return 0; }
+    }
+}
+
+fn windowWork() -> Result<u32, WindowError> {
+    var window = Window.open("embed", 8, 6)?;
+    var events: u32 = 0;
+    let pixels = [0xff0000ffu32; 48];
+    for (frame in 0u32..3) {
+        loop {
+            match (window.nextEvent()) {
+                Some(_) => { events += 1; }
+                null => { break; }
+            }
+        }
+        window.present(pixels[..], 8, 6)?;
+    }
+    return Ok(events);
+}
+
+/// Opens a window and runs three frames: the window layer's buffers (ADR 0088 §2.5). Run with
+/// CEESAFE_WINDOW_SCRIPT, without a display; the number of events, or 1000 when the window fails.
+@export("embed_window")
+fn embedWindow() -> u32 {
+    match (windowWork()) {
+        Ok(n) => { return n; }
+        Err(_) => { return 1000; }
+    }
+}

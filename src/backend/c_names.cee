@@ -51,6 +51,19 @@ fn isImportedStruct(c: borrow Checker, t: u32) -> bool {
     return s != none() && c.types.structs[s as usize].isImported;
 }
 
+/// A `@repr` type's C name (type-system.md §28.5): its declared name, without the package's that a dependency's
+/// CeeSafe name has (`dep.Pair` is `struct Pair`), so C code sees the name it was declared with.
+fn reprCName(c: borrow Checker, t: u32) -> Slice<u8> {
+    let name = c.types.name(t);
+    var start: usize = 0;
+    for (k in 0..name.length) {
+        if (name[k] == '.') {
+            start = k + 1;
+        }
+    }
+    return name[start..name.length];
+}
+
 fn isReprCStruct(c: borrow Checker, t: u32) -> bool {
     let s = c.types.info(t).structDef;
     return s != none() && c.types.structs[s as usize].isReprC;

@@ -1,0 +1,8 @@
+[package]
+name = "app"
+version = "0.1.0"
+c = ["c/caller.c"]
+
+[dependencies]
+geo = { path = "../geo" }
+other = { path = "../other" }

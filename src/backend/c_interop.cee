@@ -23,7 +23,7 @@ fn appendBoundaryType(c: borrow Checker, out: borrow mut Vector<u8>, t: u32, hea
         }
         TypeKind.Enum => {
             // The header's typedef names the same integer type.
-            return if (header) appendBytes(out, c.types.name(t)) else appendCTypeName(c, out, reprOf(c, t));
+            return if (header) appendBytes(out, reprCName(c, t)) else appendCTypeName(c, out, reprOf(c, t));
         }
         TypeKind.Struct => {
             if (isImportedStruct(c, t)) {
@@ -36,7 +36,7 @@ fn appendBoundaryType(c: borrow Checker, out: borrow mut Vector<u8>, t: u32, hea
             }
             if (header) {
                 appendText(out, "struct ")?;
-                return appendBytes(out, c.types.name(t));
+                return appendBytes(out, reprCName(c, t));
             }
             return appendCTypeName(c, out, t);
         }
@@ -911,14 +911,14 @@ fn exportsHeader(
         appendText(out, "typedef ")?;
         appendCTypeName(c, out, repr)?;
         out.push(' ')?;
-        appendId(out, c.types.name(t))?;
+        appendBytes(out, reprCName(c, t))?;
         appendText(out, ";\nenum { ")?;
         let variants = borrow c.types.enums[c.types.info(t).enumDef as usize].variants;
         for (k in 0..variants.length) {
             if (k > 0) {
                 appendText(out, ", ")?;
             }
-            appendId(out, c.types.name(t))?;
+            appendBytes(out, reprCName(c, t))?;
             out.push('_')?;
             appendBytes(out, c.name(c.types.variants[variants[k] as usize].name))?;
             appendText(out, " = ")?;

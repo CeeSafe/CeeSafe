@@ -1,0 +1,12 @@
+// Declares `@repr` types with the C names geo's have (type-system.md §28.5). Neither package depends on the other,
+// so geo, first by name, owns them, and these are N0201.
+
+@repr(C)
+public struct Point {
+    public x: i64;
+}
+
+@repr(u16)
+public enum Shade {
+    Grey,
+}

@@ -103,7 +103,7 @@ fn isCAggregate(c: borrow Checker, t: u32) -> bool {
 
 /// The C tag of a struct type (StructTag): its CeeSafe name for `@repr(C)` (§28.5), else its C type name.
 fn appendStructTag(c: borrow Checker, out: borrow mut Vector<u8>, t: u32) -> Result<void, AllocError> =>
-    if (isReprCStruct(c, t)) appendBytes(out, c.types.name(t)) else appendCTypeName(c, out, t);
+    if (isReprCStruct(c, t)) appendBytes(out, reprCName(c, t)) else appendCTypeName(c, out, t);
 
 /// `_Alignas(n) ` on the first member of an `@align(n)` struct (AlignPrefix, §29.4).
 fn appendAlignPrefix(c: borrow Checker, out: borrow mut Vector<u8>, t: u32, index: u32) -> Result<void, AllocError> {

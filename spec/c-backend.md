@@ -212,7 +212,11 @@ prefix:
 **Packages** (M10 T5, ADR 0013 D4): an item of a dependency, rather than of the package being built, has its
 package's name in its C name: `ceeF_geometry_area`, `ceeT_geometry_Point`, `ceeM_14geometry_Point_norm`. The package
 name is part of the item's name as the backend sees it (`geometry.Point`, written with `_` in C), so every rule above
-applies unchanged, and two packages may declare the same name.
+applies unchanged, and two packages may declare the same name. A `@repr` type's C interface name is the exception
+(type-system.md §28.5): `geo.Point` with `@repr(C)` is `struct Point`, its tag in the generated C and in
+`ceesafe_exports.h`, with `typedef struct Point ceeT_geo_Point;`, and a `@repr` enum `geo.Shade` is `Shade` in the
+header and in exports' prototypes, while its internal struct stays `ceeE_geo_Shade`. Those names have one declaration
+in a program (N0201).
 
 Before M7d, top-level functions were `cee_<name>`. A function named `add_i32` then collided with
 the runtime's `cee_add_i32`, and the C failed to compile. The random program generator found this,

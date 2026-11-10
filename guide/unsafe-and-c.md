@@ -182,6 +182,11 @@ fn main() {
 }
 ```
 
+In C, a `@repr(C)` struct or `@repr` enum keeps the name it is declared with, even when it comes from a dependency:
+package `geo`'s `Point` is `struct Point` in `ceesafe_exports.h`, not `geo.Point`. So, like a C function, a `@repr`
+type's name belongs to one package in a program: a second `@repr(C) struct Point` in another package is N0201
+(type-system.md §28.5). Ordinary structs and enums have no such limit.
+
 `@callback` gives a function a C address without exporting a symbol, for C APIs that take a function pointer and a
 `void *` argument, as kernels' timer and thread APIs do. `extern "C" fn(…) -> R` is the type of such a pointer.
 

@@ -5,27 +5,39 @@ The fixture is tests/embedding: the package `embed` (exports with threads, async
 depending on `tally` (one umbrella build of two packages), C hosts (host.c, host.cpp), the executor's aborts reached
 directly (aborts.c) and boxes.cee, the executable form of one export. Checked:
 - `--emit lib` (also `--split`): one member per C file, uniquely named; the C host links the archive and every export
-  runs, the two packages' code among them; with `-dead_strip` (ld64) or `--gc-sections --icf=safe` (ld.lld), the
-  exports run and the panic hook fires; with `--cflag -flto=thin`, every member is bitcode and a ThinLTO host link
-  runs it (skipped where clang cannot);
-- usage errors: `--ar` without `--emit lib`, and an archiver that is not found (status 2);
+  runs, the two packages' code among them; with `-dead_strip` (ld64) or `--gc-sections --icf=safe` (ld.lld, where the
+  host links ELF; a skip elsewhere), the exports run and the panic hook fires; with `--cflag -flto=thin`, every member
+  is bitcode and a ThinLTO host link runs it (skipped where clang cannot);
+- member names: `src/a/b.cee` and `src/a_b.cee` (and a unit against a C file) are two members, both linked; C files
+  whose names differ only in case fail the build; a failing archiver is named and leaves the old archive;
+- the host's headers: `--emit lib` and `--emit obj` write ceesafe/embed.h and the exports header (its
+  `--exports-header` name) beside the output, and the C host is compiled against those alone;
+- `main`: a package with a CeeSafe `main` gives an archive without the C `main` (a host with its own links it), and
+  with `--lib-main` one that runs alone;
+- usage errors: `--ar` or `--lib-main` without `--emit lib`, `--ld` with it, and an archiver that is not found
+  (status 2);
 - no ceesafe_init: 0.27.0's behaviour (the environment ignored, no report, no arguments, the printed panic);
-- ceesafe_init's errors: LATE after an allocation (nothing changed), AGAIN, SIZE (larger, smaller, NULL), ALLOCATOR;
-  two threads calling it at once, one 0; argv copied (the host's strings overwritten and freed afterwards);
+- ceesafe_init's errors: LATE after an allocation when counting is asked for (nothing changed), and 0 when it is not
+  (the hook and argv taken); AGAIN, SIZE (larger, smaller, NULL), ALLOCATOR; two threads calling it at once, one 0;
+  two threads that call it and then an export at once, with a third calling ceesafe_shutdown, under ThreadSanitizer
+  (AGAIN only once the config is published); argv copied (the host's strings overwritten and freed afterwards);
+- the generated `main` starts, and counts when asked, after a C constructor allocated through CeeSafe (0.27.0's);
 - fail_alloc_at = k for every k of a single-threaded run, against boxes.cee with CEESAFE_FAIL_ALLOC_AT=k: the same
   outcomes; CEESAFE_INIT_ENVIRONMENT with CEESAFE_ALLOC_REPORT=1: the report from ceesafe_shutdown;
 - the panic hook: a bounds panic on the caller's thread, a Thread.spawn thread, an Async.runWorkers child and in a
   @callback, and panic("..."): kind, file, line, column (and message), status 134; a hook that returns, and one that
   calls an export: the printed line once, 134; a hook escaped with longjmp: another thread still calls in, the same
-  thread's next export call aborts with the line; two threads panicking at once: both records, one exit;
+  thread's next export call aborts with the line, whose message (built in a frame since overwritten) is intact; two
+  threads panicking at once: both records, one exit;
 - the three async aborts reach the hook with CEE_PANIC_ASYNC, their message and no file (aborts.c calls the
   runtime's own functions: they are not reachable from safe code, and the executor's allocations are not counted, so
-  fail_alloc_at cannot reach them); ceesafe_platform_abort is called only from the panic functions;
+  fail_alloc_at cannot reach them); without a hook, the line an ordinary program prints, `ceesafe panic: <message>`;
+  ceesafe_platform_abort is called only from the panic functions;
 - two host threads calling an export (a scratch frame, a FailingAllocator box) 200,000 times each, under
   ThreadSanitizer: no report, every result right (skipped where -fsanitize=thread does not build);
 - ceesafe/embed.h included by a C++ host;
-- every run-pass and ffi corpus program with an @export, built with `--emit lib` and linked from the archive alone
-  (its generated `main` is a member): the corpus's expected output, at -O2 and under ASan and UBSan.
+- every run-pass and ffi corpus program with an @export, built with `--emit lib --lib-main` and linked from the archive
+  alone (its generated `main` is a member): the corpus's expected output, at -O2 and under ASan and UBSan.
 
 usage: python3 tools/embed_check.py --compiler out/ceesafec [--cc clang]
 """
@@ -121,9 +133,19 @@ def main():
         check.expect("--emit c writes ceesafe/embed.h", b.returncode == 0 and
                      os.path.isfile(os.path.join(headers, "ceesafe", "embed.h")), b.stderr[-300:])
 
-        # The archive.
-        lib = os.path.join(work, "libembed.a")
+        # The archive, and the host's headers beside it (ADR 0088 §2.1).
+        out = os.path.join(work, "out")
+        lib = os.path.join(out, "libembed.a")
         b = build("--emit", "lib", "-o", lib)
+        check.expect("--emit lib writes ceesafe/embed.h and ceesafe_exports.h beside the archive",
+                     b.returncode == 0 and sorted(os.listdir(out)) == ["ceesafe", "ceesafe_exports.h", "libembed.a"] and
+                     os.listdir(os.path.join(out, "ceesafe")) == ["embed.h"], f"{b.stderr[-300:]}")
+        named = os.path.join(work, "named")
+        b = build("--emit", "obj", "--exports-header", "embed_api.h", "-o", os.path.join(named, "embed.o"))
+        check.expect("--emit obj writes the headers too, the exports header under its --exports-header name",
+                     b.returncode == 0 and os.path.isfile(os.path.join(named, "embed_api.h")) and
+                     os.path.isfile(os.path.join(named, "ceesafe", "embed.h")) and
+                     "embed_sum" in open(os.path.join(named, "embed_api.h"), encoding="utf-8").read(), b.stderr[-300:])
         members = run(["ar", "t", lib]).stdout.split() if b.returncode == 0 else []
         members = [m for m in members if m.endswith(".o")]
         check.expect("--emit lib: one member per C file", b.returncode == 0 and "embed_main.o" in members and
@@ -144,9 +166,29 @@ def main():
         u = build("--emit", "lib", "--ar", "no-such-archiver-0088", "-o", os.path.join(work, "x.a"))
         check.expect("usage: --emit lib without an archiver", u.returncode == 2 and "--ar" in u.stderr.split("\n")[0],
                      f"status {u.returncode} {u.stderr[:200]}")
+        u = build("--emit", "lib", "--ld", "ld.lld", "-o", os.path.join(work, "x.a"))
+        check.expect("usage: --ld with --emit lib", u.returncode == 2 and "--ld does not apply" in u.stderr,
+                     f"status {u.returncode} {u.stderr[:200]}")
+        u = build("--emit", "obj", "--lib-main", "-o", os.path.join(work, "x.o"))
+        check.expect("usage: --lib-main without --emit lib", u.returncode == 2 and "--lib-main needs" in u.stderr,
+                     f"status {u.returncode} {u.stderr[:200]}")
+
+        # A failing archiver: named, and the archive already there kept.
+        kept = os.path.join(work, "kept.a")
+        with open(kept, "w") as handle:
+            handle.write("an earlier archive\n")
+        u = build("--emit", "lib", "--ar", "/usr/bin/false" if os.path.exists("/usr/bin/false") else "false",
+                  "-o", kept)
+        check.expect("a failing archiver: named, the earlier archive kept, no temporary left",
+                     u.returncode == 1 and "the archiver '" in u.stderr and "C compiler" not in u.stderr and
+                     open(kept).read() == "an earlier archive\n" and not os.path.exists(kept + ".partial"),
+                     f"status {u.returncode} {u.stderr[-300:]}")
+
+        member_names(check, cee, work)
+        library_main(check, cee, cc, work)
 
         host_c = os.path.join(FIXTURE, "host.c")
-        include = ["-I" + headers]
+        include = ["-I" + out]  # the headers --emit lib wrote, alone
 
         def link(out, archive, *flags, source=host_c, compiler=cc):
             exe = os.path.join(work, out)
@@ -181,8 +223,13 @@ def main():
 
         # ceesafe_init's errors.
         r = run([host, "late"])
-        check.expect("LATE after an allocation, twice, and fail_alloc_at not applied",
+        check.expect("LATE after an allocation, counting asked for, twice, and fail_alloc_at not applied",
                      "late=2,2 boxes=5" in r.stdout, r.stdout + r.stderr)
+        r = run([host, "late-quiet"])
+        found = hooks(r.stdout)
+        check.expect("after an allocation, no counting asked for: 0, the hook and argv taken",
+                     "quiet=0 args=2" in r.stdout and status_of(r) == 134 and len(found) == 1,
+                     f"{status_of(r)} {r.stdout} {r.stderr}")
         r = run([host, "misuse"])
         check.expect("SIZE (larger, smaller, NULL), ALLOCATOR, then 0 with the first version's size, then AGAIN",
                      "larger=3 smaller=3 null=3 allocator=4 first=0 again=1" in r.stdout, r.stdout + r.stderr)
@@ -207,6 +254,14 @@ def main():
                 same = False
                 detail = f"k={k}: host {h.stdout.strip()!r}, executable {e.stdout.strip()!r}"
         check.expect("fail_alloc_at = k, every k: the executable's outcomes", same, detail)
+        ctor = os.path.join(work, "ctor")
+        b = run([cee, "build", os.path.join(FIXTURE, "ctor.cee"), os.path.join(FIXTURE, "ctor.c"), "-o", ctor],
+                timeout=600)
+        r1 = run([ctor]) if b.returncode == 0 else b
+        r2 = run([ctor], env=clean_env({"CEESAFE_ALLOC_REPORT": "1"})) if b.returncode == 0 else b
+        check.expect("the generated main after a C constructor allocated through CeeSafe: runs, and counts when asked",
+                     r1.returncode == 0 and r1.stdout == "ran\n" and r2.returncode == 0 and r2.stdout == "ran\n" and
+                     "ceesafe alloc: attempts=1 live=0" in r2.stderr, f"{b.stderr[-300:]} {r1.stderr} {r2.stderr}")
         r = run([host, "report"], env=clean_env({"CEESAFE_ALLOC_REPORT": "1"}))
         check.expect("CEESAFE_INIT_ENVIRONMENT: CEESAFE_ALLOC_REPORT=1 reported by ceesafe_shutdown",
                      "ceesafe alloc: attempts=6 live=1" in r.stderr and "live=1" in r.stdout, r.stdout + r.stderr)
@@ -232,6 +287,12 @@ def main():
         check.expect("an escaped hook: other threads call in, the panicked thread's next call aborts",
                      status_of(r) == 134 and "other thread sum=6" in r.stdout and "same thread" not in r.stdout and
                      len(LINE.findall(r.stderr)) == 1, f"{status_of(r)} {r.stdout} {r.stderr}")
+        r = run([host, "escape-built"])
+        built = "".join(chr(65 + (1 + i) % 26) for i in range(64))
+        check.expect("the re-entry line keeps a message built in a frame since overwritten",
+                     status_of(r) == 134 and "same thread" not in r.stdout and
+                     re.search(rf"^ceesafe panic: {built} at src/lib\.cee:\d+:\d+$", r.stderr, re.M) is not None,
+                     f"{status_of(r)} {r.stdout} {r.stderr}")
         r = run([host, "two-panics"])
         records = [line for line in r.stdout.splitlines() if line.startswith("record kind=5 file=src/lib.cee")]
         check.expect("two threads panicking at once: both reports whole, one exit", status_of(r) == 134 and
@@ -241,7 +302,7 @@ def main():
         aborts = os.path.join(work, "aborts")
         runtime = [os.path.join(headers, n) for n in ("ceesafe_rt_core.c", "ceesafe_rt_hosted.c", "ceesafe_rt_io.c",
                                                       "ceesafe_rt_thread.c")]
-        p = run([cc, "-std=c11", *include, os.path.join(FIXTURE, "aborts.c"), *runtime, "-o", aborts, "-lpthread"],
+        p = run([cc, "-std=c11", "-I" + headers, os.path.join(FIXTURE, "aborts.c"), *runtime, "-o", aborts, "-lpthread"],
                 timeout=600)
         if p.returncode != 0:
             check.expect("aborts.c builds", False, p.stderr[-500:])
@@ -252,6 +313,11 @@ def main():
                 r = run([aborts, what])
                 check.expect(f"async abort routed to the hook: {what}", status_of(r) == 134 and
                              f"hook kind=14 file=(null) line=0 message={message}" in r.stdout, r.stdout + r.stderr)
+            r = run([aborts, "stuck-print"])
+            check.expect("an async abort without a hook: an ordinary program's line, 'ceesafe panic: <message>'",
+                         status_of(r) == 134 and
+                         r.stderr == "ceesafe panic: every task is parked with nothing to wake it\n",
+                         f"{status_of(r)} {r.stderr!r}")
         calls = []
         for directory, _, names in os.walk(headers):
             for name in names:
@@ -277,6 +343,8 @@ def main():
                 r1, r2 = run([exe, "run"]), run([exe, "hook", "callback"])
                 check.expect("-dead_strip: the exports run and the hook fires", want in r1.stdout and
                              status_of(r2) == 134 and len(hooks(r2.stdout)) == 1, r1.stdout + r2.stdout)
+        if platform.system() == "Darwin":
+            check.skip("--gc-sections --icf=safe (ld.lld)", "the host links Mach-O here; ELF hosts run it")
         elif shutil.which("ld.lld") or shutil.which("lld"):
             exe, p = link("host_gc", lib, "-std=c11", "-fuse-ld=lld", "-Wl,--gc-sections", "-Wl,--icf=safe")
             if exe is None:
@@ -294,11 +362,11 @@ def main():
         if b.returncode != 0:
             check.skip("--emit lib with ThinLTO", f"{cc} -flto=thin: {b.stderr.strip()[-200:]}")
         else:
-            out = os.path.join(work, "lto_members")
-            os.makedirs(out)
-            run(["ar", "x", lto], cwd=out)
-            names = [n for n in os.listdir(out) if n.endswith(".o")]
-            bitcode = all(open(os.path.join(out, n), "rb").read(4) in BITCODE for n in names)
+            extracted = os.path.join(work, "lto_members")
+            os.makedirs(extracted)
+            run(["ar", "x", lto], cwd=extracted)
+            names = [n for n in os.listdir(extracted) if n.endswith(".o")]
+            bitcode = all(open(os.path.join(extracted, n), "rb").read(4) in BITCODE for n in names)
             check.expect("--cflag -flto=thin: every member is bitcode", bitcode and len(names) >= 5, str(names))
             flags = ["-flto=thin"] + (["-Wl,-dead_strip"] if platform.system() == "Darwin" else
                                       ["-fuse-ld=lld", "-Wl,--gc-sections"] if shutil.which("ld.lld") else [])
@@ -323,6 +391,17 @@ def main():
             check.expect("two host threads, 200,000 calls each, under ThreadSanitizer: no report, results right",
                          r.returncode == 0 and "seed=1000 wrong=0" in r.stdout and "seed=5000 wrong=0" in r.stdout and
                          "ThreadSanitizer" not in r.stderr, r.stdout + r.stderr[-800:])
+        if exe is not None:
+            ok, detail = True, ""
+            for what in ("init-race", "init-shutdown"):
+                for _ in range(30):
+                    r = run([exe, what], env=clean_env({"TSAN_OPTIONS": "halt_on_error=1"}))
+                    if r.returncode != 0 or "init sums=6000,6001 live=0" not in r.stdout or \
+                            "ThreadSanitizer" in r.stderr:
+                        ok, detail = False, f"{what}: {r.stdout} {r.stderr[-800:]}"
+                        break
+            check.expect("ceesafe_init from two threads that then call an export, and ceesafe_shutdown meanwhile, "
+                         "under ThreadSanitizer (30 runs each): no report", ok, detail)
         r = run([host, "threads"], timeout=900)
         check.expect("two host threads at -O2: results right", "seed=1000 wrong=0" in r.stdout and
                      "seed=5000 wrong=0" in r.stdout, r.stdout + r.stderr)
@@ -337,6 +416,63 @@ def main():
 
         corpus_programs(check, cee, cc, work)
     return report(check)
+
+
+def member_names(check, cee, work):
+    """Archive member names (ADR 0088 §2.1): distinct paths give distinct members, so no object replaces another."""
+    package = os.path.join(work, "layout")
+    files = {"ceesafe.toml": '[package]\nname = "layout"\nkind = "object"\n',
+             "src/a/b.cee": '/// One.\n@export("layout_one")\nfn one() -> u64 => 1;\n',
+             "src/a_b.cee": '/// Two.\n@export("layout_two")\nfn two() -> u64 => 2;\n',
+             "src/a_/b.cee": '/// Four.\n@export("layout_four")\nfn four() -> u64 => 4;\n',
+             "src/a/_b.cee": '/// Eight.\n@export("layout_eight")\nfn eight() -> u64 => 8;\n',
+             "host.c": '#include <stdio.h>\n#include "ceesafe_exports.h"\nint main(void) {\n'
+                       '    printf("%llu\\n", (unsigned long long)(layout_one() + layout_two() + layout_four() +'
+                       ' layout_eight()));\n    return 0;\n}\n'}
+    for name, text in files.items():
+        os.makedirs(os.path.dirname(os.path.join(package, name)), exist_ok=True)
+        with open(os.path.join(package, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+    archive = os.path.join(package, "out", "liblayout.a")
+    b = run([cee, "build", "--offline", "--emit", "lib", "--split", "-o", archive], cwd=package, timeout=600)
+    members = [m for m in run(["ar", "t", archive]).stdout.split() if m.endswith(".o")] if b.returncode == 0 else []
+    exe = os.path.join(package, "host")
+    p = run(["cc", "-I" + os.path.dirname(archive), os.path.join(package, "host.c"), archive, "-o", exe])
+    r = run([exe]) if p.returncode == 0 else p
+    check.expect("--split: src/a/b, src/a_b, src/a_/b and src/a/_b are four members, all linked",
+                 b.returncode == 0 and len(set(members)) == len(members) and r.stdout.strip() == "15",
+                 f"{b.stderr[-300:]} {members} {p.stderr[-300:]} {r.stdout}")
+    # A C file against a unit: c/layout/x.c (the unit of src/x.cee... here the C file layout_x.c) stay apart too.
+    single = os.path.join(work, "single")
+    os.makedirs(single)
+    for name, text in (("x.cee", '/// X.\n@export("single_x")\nfn x() -> u64 => 1;\n'),
+                       ("Twin.c", "int single_upper(void) { return 1; }\n"),
+                       ("twin.c", "int single_lower(void) { return 2; }\n")):
+        with open(os.path.join(single, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+    b = run([cee, "build", "--emit", "lib", "x.cee", "Twin.c", "twin.c", "-o", "out/x.a"], cwd=single, timeout=600)
+    check.expect("C files whose member names differ only in case: the build fails, naming the member",
+                 b.returncode == 1 and "would share the archive member" in b.stderr and
+                 not os.path.exists(os.path.join(single, "out", "x.a")), f"status {b.returncode} {b.stderr[-300:]}")
+
+
+def library_main(check, cee, cc, work):
+    """A package with a CeeSafe `main`: --emit lib leaves the C `main` out unless --lib-main (ADR 0088 §2.1)."""
+    source = os.path.join(FIXTURE, "withmain.cee")
+    plain = os.path.join(work, "withmain", "libwithmain.a")
+    b = run([cee, "build", "--emit", "lib", source, "-o", plain], timeout=600)
+    exe = os.path.join(work, "withmain", "host")
+    p = run([cc, os.path.join(FIXTURE, "withmain.c"), plain, "-o", exe]) if b.returncode == 0 else b
+    r = run([exe]) if p.returncode == 0 else p
+    check.expect("--emit lib of a package with a CeeSafe main: no C main, so a host with its own links it",
+                 r.returncode == 0 and r.stdout == "host main 42\n", f"{b.stderr[-300:]} {p.stderr[-300:]} {r.stdout}")
+    kept = os.path.join(work, "withmain", "libkept.a")
+    b = run([cee, "build", "--emit", "lib", "--lib-main", source, "-o", kept], timeout=600)
+    alone = os.path.join(work, "withmain", "alone")
+    p = run([cc, kept, "-o", alone, "-lpthread"]) if b.returncode == 0 else b
+    r = run([alone]) if p.returncode == 0 else p
+    check.expect("--lib-main keeps it: the archive linked alone runs the CeeSafe main",
+                 r.returncode == 0 and r.stdout == "cee main 5\n", f"{b.stderr[-300:]} {p.stderr[-300:]} {r.stdout}")
 
 
 def corpus_programs(check, cee, cc, work):
@@ -363,7 +499,7 @@ def corpus_programs(check, cee, cc, work):
                 inputs += [path[:-4] + ".c", "--cflag", "-I" + os.path.dirname(path)]
             stem = name[:-4]
             archive = os.path.join(work, f"corpus_{stem}.a")
-            b = run([cee, "build", "--emit", "lib", "--cc", cc, *flags, *inputs, "-o", archive], cwd=ROOT,
+            b = run([cee, "build", "--emit", "lib", "--lib-main", "--cc", cc, *flags, *inputs, "-o", archive], cwd=ROOT,
                     timeout=600)
             if b.returncode != 0:
                 failures.append(f"{family}/{name}: build {b.stderr.strip()[-200:]}")

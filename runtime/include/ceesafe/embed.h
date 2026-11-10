@@ -28,15 +28,16 @@ extern "C" {
 #define CEESAFE_EMBED_VERSION 1
 
 /* ceesafe_init's results: 0, or one of these, with nothing changed. */
-#define CEESAFE_INIT_AGAIN 1     /* called before, or concurrently */
-#define CEESAFE_INIT_LATE 2      /* the runtime has already allocated */
+#define CEESAFE_INIT_AGAIN 1     /* called before, or concurrently: returned once that call has succeeded */
+#define CEESAFE_INIT_LATE 2      /* counting asked for, and the runtime has already allocated */
 #define CEESAFE_INIT_SIZE 3      /* config is NULL, or its size is not one this runtime knows */
 #define CEESAFE_INIT_ALLOCATOR 4 /* an allocator hook: stage A takes none (ADR 0088 §2.5) */
 #define CEESAFE_INIT_MEMORY 5    /* the copy of argv could not be allocated */
 
 #if !defined(CEESAFE_EMBED_FREESTANDING)
 
-/* config.flags: read CEESAFE_ALLOC_REPORT and CEESAFE_FAIL_ALLOC_AT from the environment. */
+/* config.flags: read CEESAFE_ALLOC_REPORT and CEESAFE_FAIL_ALLOC_AT from the environment. The other bits are
+   reserved: pass 0 in them (this version ignores them; a later one may give them a meaning). */
 #define CEESAFE_INIT_ENVIRONMENT 1u
 
 typedef struct ceesafe_allocator {      /* ADR 0088 §2.5, stage B */
@@ -56,9 +57,10 @@ typedef struct ceesafe_panic_info {
     uint32_t line, column;              /* 1-based; 0 when file is NULL */
 } ceesafe_panic_info;
 
-/* Runs on the panicking thread. It must end the process or never return; it must not call CeeSafe; escaping it
-   (longjmp, an exception, an unwind, ending the thread) is undefined behaviour. If it returns, the runtime prints the
-   usual line and aborts. */
+/* Runs on the panicking thread, once per thread: several threads that panic at once run it at once, so a hook that
+   reports serialises the reports itself. It must end the process or never return; it must not call CeeSafe; escaping
+   it (longjmp, an exception, an unwind, ending the thread) is undefined behaviour. If it returns, the runtime prints
+   the usual line and aborts. `info` and its message are valid until the hook returns. */
 typedef void (*ceesafe_panic_hook)(void *context, const ceesafe_panic_info *info);
 
 typedef struct ceesafe_config {
@@ -77,7 +79,7 @@ typedef struct ceesafe_config {
 
 typedef struct ceesafe_config {
     uint32_t size;                      /* sizeof(ceesafe_config) */
-    uint32_t flags;                     /* none are defined: 0 */
+    uint32_t flags;                     /* none are defined: pass 0 (this version ignores the field) */
 } ceesafe_config;
 
 #endif

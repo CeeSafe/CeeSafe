@@ -67,6 +67,11 @@ static void hook_records(void *context, const ceesafe_panic_info *info) {
     abort();
 }
 
+static void __attribute__((noinline)) scribble(void) {
+    volatile char junk[4096];
+    memset((char *)junk, 'z', sizeof junk);
+}
+
 static int init_with(ceesafe_panic_hook hook, int argc, char **argv, uint32_t flags, uint64_t fail_at) {
     ceesafe_config config;
     memset(&config, 0, sizeof config);
@@ -106,6 +111,38 @@ static int32_t race_results[2];
 static void *race_thread(void *arg) {
     int k = (int)(intptr_t)arg;
     race_results[k] = ceesafe_init(&race_config);
+    return NULL;
+}
+
+/* ceesafe_init from two components at once, as review found: each calls CeeSafe as soon as its call returns, 0 or
+   AGAIN, so AGAIN must mean the config is published (ADR 0088 §2.2); with `shutter`, a third thread calls
+   ceesafe_shutdown meanwhile, which must not read a config being written. Run under ThreadSanitizer. */
+static volatile int init_go;
+static void *init_component(void *arg) {
+    (void)arg;
+    while (!__atomic_load_n(&init_go, __ATOMIC_ACQUIRE)) {
+    }
+    ceesafe_config config;
+    memset(&config, 0, sizeof config);
+    config.size = (uint32_t)sizeof config;
+    config.alloc_report = false;
+    config.fail_alloc_at = 1000000; /* counting on, never reached */
+    int32_t r = ceesafe_init(&config);
+    uint64_t sum = 0;
+    uint8_t bytes[3] = {1, 2, 3};
+    for (int k = 0; k < 1000; k++) {
+        sum += embed_sum(bytes, 3);
+    }
+    return (void *)(uintptr_t)(r == 0 ? sum : r == CEESAFE_INIT_AGAIN ? sum + 1 : 0);
+}
+
+static void *init_shutter(void *arg) {
+    (void)arg;
+    while (!__atomic_load_n(&init_go, __ATOMIC_ACQUIRE)) {
+    }
+    for (int k = 0; k < 50; k++) {
+        (void)ceesafe_shutdown();
+    }
     return NULL;
 }
 
@@ -152,6 +189,14 @@ int main(int argc, char **argv) {
         int32_t a = init_with(NULL, 0, NULL, 0, 1);
         int32_t b = init_with(NULL, 0, NULL, 0, 1);
         printf("late=%d,%d boxes=%llu\n", a, b, (unsigned long long)embed_boxes(5)); /* fail_alloc_at=1 not applied */
+    } else if (strcmp(what, "late-quiet") == 0) {
+        /* An allocation before ceesafe_init, which asks for no counting: 0, and the hook and argv are taken. */
+        printf("boxes=%llu\n", (unsigned long long)embed_boxes(1));
+        char *arguments[2] = {"prog", "one"};
+        int32_t r = init_with(hook_abort, 2, arguments, 0, 0);
+        printf("quiet=%d args=%llu\n", r, (unsigned long long)embed_arg_count());
+        fflush(stdout);
+        printf("%u\n", embed_panic(9)); /* the hook fires */
     } else if (strcmp(what, "misuse") == 0) {
         ceesafe_config config;
         memset(&config, 0, sizeof config);
@@ -178,6 +223,20 @@ int main(int argc, char **argv) {
         pthread_join(b, NULL);
         printf("race=%d,%d\n", race_results[0] < race_results[1] ? race_results[0] : race_results[1],
                race_results[0] < race_results[1] ? race_results[1] : race_results[0]);
+    } else if (strcmp(what, "init-race") == 0 || strcmp(what, "init-shutdown") == 0) {
+        pthread_t a, b, s;
+        bool shutter = strcmp(what, "init-shutdown") == 0;
+        pthread_create(&a, NULL, init_component, NULL);
+        pthread_create(&b, NULL, init_component, NULL);
+        if (shutter) pthread_create(&s, NULL, init_shutter, NULL);
+        __atomic_store_n(&init_go, 1, __ATOMIC_RELEASE);
+        void *ra, *rb;
+        pthread_join(a, &ra);
+        pthread_join(b, &rb);
+        if (shutter) pthread_join(s, NULL);
+        uintptr_t x = (uintptr_t)ra, y = (uintptr_t)rb;
+        printf("init sums=%lu,%lu live=%llu\n", (unsigned long)(x < y ? x : y), (unsigned long)(x < y ? y : x),
+               (unsigned long long)ceesafe_shutdown());
     } else if (strcmp(what, "argv") == 0) {
         /* The host's argument strings, overwritten and freed after ceesafe_init. */
         char **copy = malloc(3 * sizeof *copy);
@@ -223,6 +282,16 @@ int main(int argc, char **argv) {
         pthread_t t;
         pthread_create(&t, NULL, sum_thread, NULL); /* another thread is not stopped */
         pthread_join(t, NULL);
+        uint8_t bytes[3] = {1, 2, 3};
+        printf("same thread sum=%llu\n", (unsigned long long)embed_sum(bytes, 3)); /* the flag: aborts */
+    } else if (strcmp(what, "escape-built") == 0) {
+        /* The re-entry line after an escape prints the first panic's message, built in a frame that is gone and
+           whose stack the host has since reused. */
+        if (init_with(hook_escapes, 0, NULL, 0, 0) != 0) return 1;
+        if (setjmp(escape_to) == 0) {
+            embed_built_panic(1);
+        }
+        scribble();
         uint8_t bytes[3] = {1, 2, 3};
         printf("same thread sum=%llu\n", (unsigned long long)embed_sum(bytes, 3)); /* the flag: aborts */
     } else if (strcmp(what, "two-panics") == 0) {

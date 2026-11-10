@@ -16,10 +16,12 @@ int main(int argc, char **argv) {
     ceesafe_config config;
     memset(&config, 0, sizeof config);
     config.size = (uint32_t)sizeof config;
-    config.panic_hook = hook;
-    if (argc < 2 || ceesafe_init(&config) != 0) return 1;
+    if (argc < 2) return 1;
+    /* stuck-print: no hook, so the line an ordinary program prints ("ceesafe panic: <message>", c-backend.md) */
+    config.panic_hook = strcmp(argv[1], "stuck-print") == 0 ? NULL : hook;
+    if (ceesafe_init(&config) != 0) return 1;
     if (strcmp(argv[1], "oom") == 0) cee_out_of_memory();
-    if (strcmp(argv[1], "stuck") == 0) cee_stuck();
+    if (strcmp(argv[1], "stuck") == 0 || strcmp(argv[1], "stuck-print") == 0) cee_stuck();
     if (strcmp(argv[1], "fd-wake") == 0) {
         static cee_task t;
         t.deadline = UINT64_MAX;

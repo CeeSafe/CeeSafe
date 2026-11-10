@@ -1,0 +1,9 @@
+// ADR 0088 §2.2: ctor.c's constructor allocates through CeeSafe before `main`. The generated `main` still starts, and
+// counts when the environment asks, as 0.27.0's did: CEESAFE_INIT_LATE is for hosts, not for it.
+
+fn main() {
+    match (Box.create(7u64)) {
+        Ok(_) => { Console.writeLine("ran"); }
+        Err(_) => { Console.writeLine("no memory"); }
+    }
+}

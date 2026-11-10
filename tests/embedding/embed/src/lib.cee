@@ -135,6 +135,20 @@ fn embedExplicit() {
     panic("embed: deliberate");
 }
 
+/// panic("…") with a message built at run time in this frame's buffer: 64 letters from `first` (ADR 0088 §2.4's
+/// re-entry line prints it after the frame is gone).
+@export("embed_built_panic")
+fn embedBuiltPanic(first: u64) {
+    var buffer = [0u8; 64];
+    for (i in 0..buffer.length) {
+        buffer[i] = 65 + truncate<u8>((first + i as u64) % 26);
+    }
+    match (StringView.fromUtf8(buffer[..])) {
+        Some(text) => { panic(text); }
+        null => {}
+    }
+}
+
 /// 100 / x: a zero panics inside a callback C calls.
 @callback
 fn hundredBy(x: u32) -> u32 => 100 / x;

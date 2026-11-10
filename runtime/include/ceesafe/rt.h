@@ -717,10 +717,20 @@ CEE_COLD _Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *m
 
 /* Every export and every @callback entry calls ceesafe_entry_check first (ADR 0088 §2.4): on a thread that has
    panicked (its hook called CeeSafe, or a host escaped the hook and called in again) it prints that panic's line and
-   aborts instead of running on broken state. One thread-local load. Hosted only: the generated code of a
-   freestanding build does not call it. */
+   aborts instead of running on broken state. Hosted only: the generated code of a freestanding build does not call
+   it. Its cost is a thread-local load and an untaken branch, and the load's cost is the target's:
+   - ELF (GCC, clang): the initial-exec model, so a load of the thread pointer's offset from the GOT and the load
+     itself, no call, also in position-independent code. Right for an archive or object linked into an executable,
+     or into a shared library the program loads at start; a shared library loaded later by dlopen needs the C
+     library's spare static TLS, which glibc keeps for this and other C libraries may not have (ADR 0088 §7).
+   - Mach-O: a call through the variable's TLV descriptor (its thunk, after the first call a few loads).
+   - Windows: the TLS index and slot loads. */
 #if !defined(CEE_FREESTANDING)
+#if defined(__ELF__) && (defined(__GNUC__) || defined(__clang__))
+extern _Thread_local uint8_t ceesafe_thread_panicked __attribute__((tls_model("initial-exec")));
+#else
 extern _Thread_local uint8_t ceesafe_thread_panicked;
+#endif
 CEE_COLD _Noreturn void ceesafe_panic_reentered(void);
 static inline void ceesafe_entry_check(void) {
     if (ceesafe_thread_panicked != 0u) ceesafe_panic_reentered();
@@ -818,6 +828,11 @@ extern uint32_t ceesafe_rt_allocated;
    ADR 0061) and the three calls are declared in ceesafe/foreign.h, which a package's C files include on their own. */
 #include "foreign.h" /* beside this header, whatever the include path */
 #include "embed.h"   /* ceesafe_init and ceesafe_shutdown (ADR 0088), which the generated `main` calls */
+#if !defined(CEESAFE_EMBED_FREESTANDING)
+/* ceesafe_init's flag for the generated `main` alone, outside embed.h's: counting starts even when the runtime has
+   already allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. */
+#define CEE_INIT_GENERATED_MAIN 0x80000000u
+#endif
 
 /*
  * Allocation for Box and every later heap type. Every attempt is counted, and the attempt numbered

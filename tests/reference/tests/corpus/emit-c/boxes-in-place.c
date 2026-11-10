@@ -214,11 +214,14 @@ static ceeR_XS3ResS10SystemHeapE10AllocError ceeB_XS3ResS10SystemHeap(ceeT_Res v
 int main(int argc, char **argv) {
     ceesafe_config config = {
         .size = (uint32_t)sizeof(ceesafe_config),
-        .flags = CEESAFE_INIT_ENVIRONMENT,
+        .flags = CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN,
         .argc = (int32_t)argc,
         .argv = (const char *const *)(void *)argv,
     };
-    if (ceesafe_init(&config) != 0) ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed");
+    int32_t started = ceesafe_init(&config);
+    if (started != 0 && started != CEESAFE_INIT_AGAIN) {
+        ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed");
+    }
     int32_t code = ceeF_main();
     (void)ceesafe_shutdown();
     return (int)code;

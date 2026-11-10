@@ -794,18 +794,22 @@ fn emitMainWrapper(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
             main = function.source;
         }
     }
-    if (main == none()) {
+    if (main == none() || e.omitMain) {
         return Ok();
     }
     e.line("int main(int argc, char **argv) {")?;
     // The runtime's one start path (ADR 0088 §2.2): the environment's settings and argv, through ceesafe_init.
     e.line("    ceesafe_config config = {")?;
     e.line("        .size = (uint32_t)sizeof(ceesafe_config),")?;
-    e.line("        .flags = CEESAFE_INIT_ENVIRONMENT,")?;
+    e.line("        .flags = CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN,")?;
     e.line("        .argc = (int32_t)argc,")?;
     e.line("        .argv = (const char *const *)(void *)argv,")?;
     e.line("    };")?;
-    e.line("    if (ceesafe_init(&config) != 0) ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, \"ceesafe_init failed\");")?;
+    // Only MEMORY can fail it (LATE is not the generated main's); AGAIN is a C constructor's earlier call.
+    e.line("    int32_t started = ceesafe_init(&config);")?;
+    e.line("    if (started != 0 && started != CEESAFE_INIT_AGAIN) {")?;
+    e.line("        ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, \"ceesafe_init failed\");")?;
+    e.line("    }")?;
     // The entry's C name: ceeF_main, or the test harness's (ADR 0049 §3.4).
     var entry = copyBytes("ceeF_".bytes())?;
     appendId(mut entry, c.entryName.view())?;

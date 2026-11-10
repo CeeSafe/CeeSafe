@@ -1,0 +1,11 @@
+// ADR 0088 §2.1: a package with a CeeSafe `main` and an export. `--emit lib` leaves the C `main` out, so a host with its
+// own links the archive (withmain.c); `--lib-main` keeps it, so the archive linked alone runs this `main`.
+
+/// The host's call.
+@export("withmain_add")
+fn add(a: u64, b: u64) -> u64 => a + b;
+
+fn main() {
+    Console.write("cee main ");
+    Console.writeLine(add(2, 3));
+}

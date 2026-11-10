@@ -141,6 +141,20 @@ fn buildFiles(
     if (program.length == 0) {
         appendStem(mut program, firstSource)!;
     }
+    if (library) {
+        // Two C files that would become one member: the second object would replace the first, losing its code.
+        let members = archiveMembers(files, options.native.separate.length, program.view())!;
+        let shared = sharedMember(members)!;
+        if (shared.length > 0) {
+            removeTree(workBytes.view());
+            var message = copyBytes("--emit lib: two C files would share the archive member '".bytes())!;
+            appendBytes(mut message, shared.view())!;
+            appendText(mut message, "'; rename one (ADR 0088 §2.1)")!;
+            Console.writeError("ceesafec: ");
+            Console.writeErrorLine(StringView.fromUtf8(message.view())!);
+            return 1;
+        }
+    }
     let status = compileIn(
         options,
         files,
@@ -153,11 +167,40 @@ fn buildFiles(
     );
     removeTree(workBytes.view());
     if (status == 0 && object) {
+        let headers = writeHostHeaders(options, files, output.view());
+        if (headers != 0) {
+            return headers;
+        }
         var linkPath = copyBytes(output.view())!;
         appendText(mut linkPath, ".link.txt")!;
         return writeLinkFile(options, "".bytes(), linkPath.view(), false); // an object's libraries are its user's
     }
     return status;
+}
+
+/// `--emit obj` and `--emit lib` (ADR 0088 §2.1): the headers a C or C++ host includes, written beside `output`:
+/// `ceesafe/embed.h` and, if the program has exports, the exports header (`--exports-header`'s name, by default
+/// `ceesafe_exports.h`); 0, or 1 after reporting a failure.
+fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output: Slice<u8>) -> i32 {
+    var headers = Vector<CFile>.create();
+    for (file in files.view()) {
+        let name = file.name.view();
+        if (sameText(name, "ceesafe/embed.h") || sameBytes(name, options.exportsHeader.view())) {
+            headers.push(CFile { name: copyBytes(name)!, text: copyBytes(file.text.view())! })!;
+        }
+    }
+    var directory = copyBytes(directoryOf(output))!;
+    if (directory.length == 0) {
+        directory.push('.')!;
+    }
+    match (writeFilesUnder(directory.view(), headers)) {
+        Ok() => { return 0; }
+        Err(e) => {
+            var message = copyBytes("cannot write the host's headers: ".bytes())!;
+            appendText(mut message, e.message())!;
+            return failBytes(message.view());
+        }
+    }
 }
 
 /// Writes the manifests' link line (ADR 0047 §3.4) as `name` in `directory` (or, with `nameIsPath` false, to the path
@@ -190,6 +233,7 @@ fn compileIn(
     program: Slice<u8>,
 ) -> i32 {
     let compiler = compilerFound.path.view();
+    var tool = Vector<u8>.create(); // the program that failed: the C compiler, or --emit lib's archiver
     match (writeFilesUnder(work, files)) {
         Ok() => {}
         Err(e) => {
@@ -218,6 +262,7 @@ fn compileIn(
         borrow options.native,
         archiver,
         program,
+        mut tool,
     )! else compileExecutable(
         compilerFound,
         work,
@@ -230,9 +275,14 @@ fn compileIn(
         options.split,
         if (!options.split) 1 else if (options.jobsGiven) options.testJobs else processorCount(),
     )!;
+    if (tool.length == 0) {
+        appendBytes(mut tool, compiler)!;
+    }
+    let what = if (sameBytes(tool.view(), compiler)) "the C compiler '" else "the archiver '";
     if (!outcome.started) {
-        var message = copyBytes("cannot run the C compiler '".bytes())!;
-        appendBytes(mut message, compiler)!;
+        var message = copyBytes("cannot run ".bytes())!;
+        appendText(mut message, what)!;
+        appendBytes(mut message, tool.view())!;
         appendText(mut message, "': ")!;
         appendText(mut message, outcome.error.message())!;
         return failBytes(message.view());
@@ -245,8 +295,8 @@ fn compileIn(
         relayTool(outcome);
     }
     if (outcome.status != 0) {
-        var message = copyBytes("the C compiler '".bytes())!;
-        appendBytes(mut message, compiler)!;
+        var message = copyBytes(what.bytes())!;
+        appendBytes(mut message, tool.view())!;
         appendText(mut message, "' failed (exit code ")!;
         if (outcome.status < 0) {
             message.push('-')!;

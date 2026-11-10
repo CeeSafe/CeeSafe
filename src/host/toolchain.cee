@@ -680,18 +680,67 @@ fn processorCount() -> u32 {
 }
 
 /// The archive member a C file of the build becomes (ADR 0088 §2.1): a runtime file keeps its name
-/// (`ceesafe_rt_core.o`), the generated code's carry the program's (`<program>_main.o`, a split unit's path with `_`
-/// for `/`), so no two members share one.
+/// (`ceesafe_rt_core.o`); the others carry the program's, then their path without `.c`, `_` written `__` and each
+/// directory separator `_s` (`embed/src/lib.c` is `<program>_embed_ssrc_slib.o`, `a_b.c` `<program>_a__b.o`), a
+/// mapping no two paths share. A package's separately compiled C is `<program>_ceesafe_package_<k>.o`.
 fn appendMemberName(out: borrow mut Vector<u8>, file: Slice<u8>, program: Slice<u8>) -> Result<void, AllocError> {
-    if (!(file.length >= 11 && sameText(file[..11], "ceesafe_rt_"))) {
-        appendBytes(out, program)?;
-        out.push('_')?;
+    if (file.length >= 11 && sameText(file[..11], "ceesafe_rt_")) {
+        appendBytes(out, file[..(file.length - 2)])?;
+        return appendText(out, ".o");
     }
+    appendBytes(out, program)?;
+    out.push('_')?;
     for (c in file[..(file.length - 2)]) {
-        // without `.c`; a split unit's directories (`embed/src/lib.c`) become part of the one name
-        out.push(if (c == '/' || c == '\\') '_' else c)?;
+        if (c == '_') {
+            appendText(out, "__")?;
+        } else if (c == '/' || c == '\\') {
+            appendText(out, "_s")?;
+        } else {
+            out.push(c)?;
+        }
     }
     return appendText(out, ".o");
+}
+
+/// The archive's member names, in compileObject's order: the package C files', then the build's C files'.
+fn archiveMembers(
+    files: borrow Vector<CFile>,
+    packageFiles: usize,
+    program: Slice<u8>,
+) -> Result<Vector<Vector<u8>>, AllocError> {
+    var members = Vector<Vector<u8>>.create();
+    for (k in 0..packageFiles) {
+        var name = Vector<u8>.create();
+        appendBytes(mut name, program)?;
+        appendText(mut name, "_ceesafe_package_")?;
+        appendDecimal(mut name, k as u64)?;
+        appendText(mut name, ".o")?;
+        members.push(name)?;
+    }
+    for (file in files.view()) {
+        if (isCSourceName(file.name.view())) {
+            var name = Vector<u8>.create();
+            appendMemberName(mut name, file.name.view(), program)?;
+            members.push(name)?;
+        }
+    }
+    return Ok(members);
+}
+
+/// A member name two of `members` share, or empty: `--emit lib` refuses to build such an archive, since the second
+/// object would replace the first and its code would be lost (ADR 0088 §2.1). Names are compared without ASCII case,
+/// as the file systems of macOS and Windows compare the objects' names in the build directory. archiveMembers' mapping
+/// makes distinct paths distinct names, so only C files whose names differ in case alone are refused (c_split.cee's
+/// sameIgnoringCase).
+fn sharedMember(members: borrow Vector<Vector<u8>>) -> Result<Vector<u8>, AllocError> {
+    for (i in 0..members.length) {
+        for (j in (i + 1)..members.length) {
+            if (sameIgnoringCase(members[i].view(), members[j].view())) {
+                return copyBytes(members[i].view());
+            }
+        }
+    }
+    return Ok(Vector<u8>.create());
 }
 
 /// `build --emit lib`'s archiver when no `--ar` is given (ADR 0088 §2.1): `llvm-ar` beside an LLVM clang (with the
@@ -737,7 +786,9 @@ fn locateArchiver(compiler: Slice<u8>) -> Vector<u8>? {
 
 /// Compiles each C file with `-c` and joins the objects (CompileObject, profiles.md §4.3): with `archiver` empty, into
 /// one relocatable object with `-r`, by `linker` if given, else by the compiler with the target flag; else into a
-/// static archive by `archiver` (`--emit lib`, ADR 0088 §2.1), one member per C file, named for `program`.
+/// static archive by `archiver` (`--emit lib`, ADR 0088 §2.1), one member per C file, named by archiveMembers for
+/// `program`, written under a temporary name and renamed over `output`, so a failure keeps the archive there. `tool` is
+/// set to the program that failed, when one did.
 fn compileObject(
     compiler: Slice<u8>,
     directory: Slice<u8>,
@@ -749,20 +800,23 @@ fn compileObject(
     native: borrow NativeBuild,
     archiver: Slice<u8>,
     program: Slice<u8>,
+    tool: borrow mut Vector<u8>,
 ) -> Result<ToolOutcome, AllocError> {
     let archive = archiver.length > 0;
+    appendBytes(tool, compiler)?;
+    let members = archiveMembers(files, native.separate.length, program)?;
     var objects = Vector<Vector<u8>>.create();
     // A package's C files with its include directories (ADR 0047 §3.3).
     for (k in 0..native.separate.length) {
         let s = borrow native.separate[k];
         var name = Vector<u8>.create();
         if (archive) {
-            appendBytes(mut name, program)?;
-            name.push('_')?;
+            appendBytes(mut name, members[k].view())?;
+        } else {
+            appendText(mut name, "ceesafe_package_")?;
+            appendDecimal(mut name, k as u64)?;
+            appendText(mut name, ".o")?;
         }
-        appendText(mut name, "ceesafe_package_")?;
-        appendDecimal(mut name, k as u64)?;
-        appendText(mut name, ".o")?;
         let object = joinPath(directory, name.view())?;
         var arguments = Vector<Vector<u8>>.create();
         pushCommonFlags(mut arguments, directory, freestanding)?;
@@ -790,9 +844,7 @@ fn compileObject(
         let source = joinPath(directory, file.name.view())?;
         var object = Vector<u8>.create();
         if (archive) {
-            var member = Vector<u8>.create();
-            appendMemberName(mut member, file.name.view(), program)?;
-            object = joinPath(directory, member.view())?;
+            object = joinPath(directory, members[objects.length].view())?;
         } else {
             appendBytes(mut object, source.view())?;
             appendText(mut object, ".o")?;
@@ -814,17 +866,31 @@ fn compileObject(
     }
     var link = Vector<Vector<u8>>.create();
     if (archive) {
-        // `ar r` adds to an archive that exists, so an earlier build's members would stay: it is made afresh.
-        match (StringView.fromUtf8(output)) {
-            Some(text) => { let removed = File.remove(text); }
-            null => {}
-        }
+        // Made afresh under a temporary name (`ar r` adds to an archive that exists, so an earlier build's members
+        // would stay), then renamed over the output: a failed archiver leaves the output as it was.
+        var partial = copyBytes(output)?;
+        appendText(mut partial, ".partial")?;
+        removeFile(partial.view());
         pushText(mut link, "rcs")?;
-        pushBytes(mut link, output)?;
+        pushBytes(mut link, partial.view())?;
         for (object in objects.view()) {
             pushBytes(mut link, object.view())?;
         }
-        return runTool(archiver, link);
+        tool.clear();
+        appendBytes(tool, archiver)?;
+        var archived = runTool(archiver, link)?;
+        if (!archived.started || archived.status != 0) {
+            removeFile(partial.view());
+            return Ok(archived);
+        }
+        if (!renameFile(partial.view(), output)?) {
+            removeFile(partial.view());
+            archived.status = 1;
+            appendText(mut archived.stderr, "ceesafec: cannot rename the archive over '")?;
+            appendBytes(mut archived.stderr, output)?;
+            appendText(mut archived.stderr, "'\n")?;
+        }
+        return Ok(archived);
     }
     if (linker.length == 0) {
         for (flag in flags.view()) {
@@ -842,6 +908,30 @@ fn compileObject(
         pushBytes(mut link, object.view())?;
     }
     return runTool(if (linker.length == 0) compiler else linker, link);
+}
+
+/// Removes the file at `path`, if there is one.
+fn removeFile(path: Slice<u8>) {
+    match (StringView.fromUtf8(path)) {
+        Some(text) => { let removed = File.remove(text); }
+        null => {}
+    }
+}
+
+/// Gives the file at `from` the name `to`, replacing a file there (C's `rename`, declared in record_cache.cee since
+/// ceesafec 0.8.0's lib/std has no File.rename; `to` removed first on Windows, whose rename does not replace); false
+/// if it could not.
+/// Safety: rename reads its two NUL-terminated paths during the call only.
+fn renameFile(from: Slice<u8>, to: Slice<u8>) -> Result<bool, AllocError> {
+    var source = copyBytes(from)?;
+    source.push(0)?;
+    var target = copyBytes(to)?;
+    target.push(0)?;
+    if (hostIsWindows()) {
+        removeFile(to);
+    }
+    let renamed = unsafe { rename(borrow source[0] as *u8 as *CChar, borrow target[0] as *u8 as *CChar) };
+    return Ok(renamed == 0);
 }
 
 /// Removes a directory and everything under it, ignoring what cannot be removed.

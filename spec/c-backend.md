@@ -627,7 +627,9 @@ Heap (M3b):
   - `ceeTJ_<T>` joins, takes the result, then drops and frees the environment and the record. A `Thread<T>`'s drop
     glue joins, then drops the result.
   - `Thread.both(a, b)` (§38.6) is a block, not a call: it starts `ceeTF_<closure>` on `a` with `ceesafe_thread_start`,
-    calls `b`, then joins; if the start returned `NULL` it calls `a` first, then `b`. `ceeTF_<closure>` takes the
+    calls `b`, then joins; if the start returned `NULL` it calls `a` first, through
+    `ceesafe_scratch_aside(ceeTF_<closure>, a)` (`a` gets an empty scratch stack, as on a thread of its own, §19.5),
+    then `b`. `ceeTF_<closure>` takes the
     closure as `void *`, converts it back to its own type and calls it, so no function pointer is called through
     another type. A `fn()` argument is passed as the address of a local holding it, which lives until the join.
 - **Async** (L1, type-system.md §40): `runtime/hosted/ceesafe_rt_async.c`, linked only when the generated C calls

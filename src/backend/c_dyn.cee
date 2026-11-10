@@ -532,8 +532,12 @@ fn emitForkHelpers(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
         appendMangle(c, mut e.buf, a)?;
         e.t(", (void *)a);")?;
         e.emit()?;
+        // No thread: `a` runs here, with a scratch stack of its own as on its own thread (type-system.md §38.6).
         e.line("    if (t == NULL) {")?;
-        e.line("        (*a)(a);")?;
+        e.t("        (void)ceesafe_scratch_aside(ceeTF_")?;
+        appendMangle(c, mut e.buf, a)?;
+        e.t(", (void *)a);")?;
+        e.emit()?;
         e.line("    }")?;
         e.line("    (*b)(b);")?;
         e.line("    if (t != NULL) {")?;

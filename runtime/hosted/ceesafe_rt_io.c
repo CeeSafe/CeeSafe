@@ -2292,12 +2292,18 @@ void ceesafe_random_key(uint64_t *key) {
 /* `Clock.monotonicNanos()` (ADR 0075 §2.6): nanoseconds from an arbitrary start, never decreasing in a process. */
 uint64_t ceesafe_clock_monotonic(void) {
 #if defined(_WIN32)
-    static LARGE_INTEGER frequency;
-    if (frequency.QuadPart == 0) (void)QueryPerformanceFrequency(&frequency);
+    /* The counter's frequency, fixed at boot: read once and kept, atomically, since every thread may ask the time. */
+    static uint64_t frequency;
+    uint64_t per = ceesafe_atomic_load_u64(&frequency);
+    if (per == 0u) {
+        LARGE_INTEGER read;
+        (void)QueryPerformanceFrequency(&read);
+        per = (uint64_t)read.QuadPart;
+        ceesafe_atomic_store_u64(&frequency, per);
+    }
     LARGE_INTEGER now;
     (void)QueryPerformanceCounter(&now);
     uint64_t ticks = (uint64_t)now.QuadPart;
-    uint64_t per = (uint64_t)frequency.QuadPart;
     return (ticks / per) * UINT64_C(1000000000) + (ticks % per) * UINT64_C(1000000000) / per;
 #elif defined(__APPLE__)
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);

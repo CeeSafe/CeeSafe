@@ -352,6 +352,33 @@ fn scratchDrop(it: borrow mut Interp, frame: u64) -> Result<void, Stop> {
     return Ok();
 }
 
+/// A thread's scratch stack, set aside while another thread's body runs on this one (ceesafe_scratch_aside).
+struct ScratchStack {
+    chunk: u64;
+    cur: u64;
+    end: u64;
+    depth: u64;
+}
+
+/// ceesafe_scratch_aside's start: the current scratch stack, and an empty one in its place, for a thread's body run
+/// here (type-system.md §19.5: each thread has its own stack).
+fn scratchAside(it: borrow mut Interp) -> ScratchStack {
+    let saved = ScratchStack { chunk: it.scratchChunk, cur: it.scratchCur, end: it.scratchEnd, depth: it.scratchDepth };
+    it.scratchChunk = 0;
+    it.scratchCur = 0;
+    it.scratchEnd = 0;
+    it.scratchDepth = 0;
+    return saved;
+}
+
+/// ceesafe_scratch_aside's end: the body has dropped every frame it entered, and the stack it set aside is back.
+fn scratchRestore(it: borrow mut Interp, saved: ScratchStack) {
+    it.scratchChunk = saved.chunk;
+    it.scratchCur = saved.cur;
+    it.scratchEnd = saved.end;
+    it.scratchDepth = saved.depth;
+}
+
 fn scratchAlloc(it: borrow mut Interp, size: u64, align: u64) -> Result<u64, Stop> {
     let aligned = alignUp(it.scratchCur, align);
     if (it.scratchCur != 0 && aligned >= it.scratchCur && it.scratchEnd >= aligned && size <= it.scratchEnd - aligned) {
@@ -865,7 +892,10 @@ fn builtin(
             values.push(closure)!;
         }
         let function = nirFunctionOf(it, body, 0)?;
-        return callFunction(it, c, n, function, values);
+        let saved = scratchAside(it); // as on a thread of its own
+        let result = callFunction(it, c, n, function, values)?;
+        scratchRestore(it, saved);
+        return Ok(result);
     }
     if (b == bfAsyncJoinResult()) {
         return asyncJoinResult(it, c, n, frame, arguments);

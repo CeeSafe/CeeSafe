@@ -1180,7 +1180,11 @@ fn main() -> i32 {
   - `FailingAllocator.failAfter(n: u64)`: the next `n` allocations through `FailingAllocator`
     succeed, and every later one fails;
   - `FailingAllocator.reset()`: allocations never fail (the initial state).
-  The countdown is process-wide; frees are never affected.
+  The countdown is process-wide; frees are never affected. It is atomic: when several threads allocate through
+  `FailingAllocator`, exactly `n` of the allocations that follow `failAfter(n)` succeed, but which ones depends on the
+  order in which the threads reach the countdown. A test that needs the same allocation to fail on every run arms
+  the countdown on one thread and allocates through `FailingAllocator` from that thread only, or orders the threads'
+  allocations itself (a join, a mutex).
 - Their names, and `Box`, cannot be declared as items (N0201).
 
 ### 18.2 `Box<T, A>`
@@ -1376,10 +1380,24 @@ fn render(n: usize) -> Result<u64, AllocError> {
 }                                                // `frame`'s memory is released here
 ```
 - Scratch memory is a runtime-owned stack of heap chunks (`SystemHeap`); it is not the native stack.
-- `Scratch.enter()` makes a **root frame**. Only one root frame may be live at a time (per
-  thread; v0 is single-threaded): entering a second one **panics** ("a scratch frame is already
-  active"). Code that needs scratch memory below a frame receives the frame
-  (`borrow ScratchFrame`) and nests.
+- **Each thread has its own scratch stack.** A frame belongs to the thread that entered it, and its memory comes
+  from that thread's stack.
+  - `Scratch.enter()` makes a **root frame**. Only one root frame may be live at a time on a thread: entering a
+    second one on the same thread **panics** ("a scratch frame is already active"). Two threads may each have a root
+    frame live at once.
+  - Code that needs scratch memory below a frame receives the frame (`borrow ScratchFrame`) and nests.
+  - A frame never reaches another thread. `ScratchFrame` is scoped, so neither `Send` nor `Share` (§38.1), and
+    `Thread.both` refuses a capture of a frame or of a borrow of one (N0334, §38.6). So only the thread that entered a
+    frame allocates from it, nests in it or drops it.
+  - An allocation is a reference into the frame's memory, so it is not `Send` either. It reaches another thread only
+    as a `Thread.both` capture: a `borrow mut T` or `borrow T` whose `T` is `Send` or `Share` (§38.6). The borrow
+    checker keeps the frame live until `both` returns, and the other thread is done with the reference by then.
+  - A thread's body that runs on the calling thread because no thread could be started (`Thread.both`'s first
+    closure, `Async.blocking`'s body; §38.6, §40.8) runs with an empty scratch stack, as on a thread of its own; the
+    caller's stack is restored when it returns. So whether that body may enter a root frame does not depend on
+    whether the thread started.
+  - *Up to 0.27.0 the stack was one for the process and not synchronised:* two threads that each entered a frame raced
+    on it, and one could be handed memory the other was using.
 - `frame.enter()` makes a **nested frame**. For the borrow checker a frame has two parts: its
   *memory*, which allocations borrow, and its *allocation right*, which every allocation call
   uses briefly. The rules:

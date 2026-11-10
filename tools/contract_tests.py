@@ -90,6 +90,10 @@ def main():
             ("run tsan share", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "share",
                                              "--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-g",
                                              "--cflag=-fsanitize=thread"]),
+            # Per-thread scratch stacks and FailingAllocator's atomic countdown: threads that each enter frames.
+            ("run tsan scratch", run_corpus + ["--corpus", corpus, "--family", "run-pass", "--filter", "thread-scratch",
+                                               "--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-g",
+                                               "--cflag=-fsanitize=thread"]),
             ("run asan", run_corpus + ["--corpus", corpus] + run_families +
 
              ["--cc", SANITIZER_CC, "--cflag=-O1", "--cflag=-Werror", "--cflag=-fsanitize=address,undefined",
@@ -132,7 +136,7 @@ def main():
                 print(f"{name:14} skip _FORTIFY_SOURCE and gcc are checked on Linux (glibc)")
                 sys.stdout.flush()
                 continue
-            if name in ("run tsan", "run tsan share") and platform.system() == "Windows":
+            if name in ("run tsan", "run tsan share", "run tsan scratch") and platform.system() == "Windows":
                 print(f"{name:14} skip ThreadSanitizer is not on Windows' compilers here")
                 sys.stdout.flush()
                 continue
@@ -143,7 +147,7 @@ def main():
             lines = [line for line in (p.stdout + p.stderr).splitlines() if line.strip()]
             summary = " | ".join(lines[-3:]) if name in ("corpus", "run -Werror", "run asan", "support",
                                                          "reactor poll", "reactor uring", "run tsan",
-                                                         "run tsan share") else (
+                                                         "run tsan share", "run tsan scratch") else (
                 lines[-1] if lines else "(no output)")
             ok = p.returncode == 0
             if name == "freestanding" and p.returncode == 2:

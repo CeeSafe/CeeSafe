@@ -1853,6 +1853,7 @@ fn runThread(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, k: 
     let previous = it.runtime.current;
     it.runtime.threads[k as usize].started = true;
     it.runtime.current = k;
+    let scratch = scratchAside(it); // the thread's own scratch stack (type-system.md §19.5)
     let t = it.runtime.threads[k as usize];
     var arguments = Vector<Value>.create();
     arguments.push(valueOf(t.data, 8))!;
@@ -1868,6 +1869,7 @@ fn runThread(it: borrow mut Interp, c: borrow Checker, n: borrow NirProgram, k: 
             null => {}
         }
     }
+    scratchRestore(it, scratch);
     it.runtime.threads[k as usize].finished = true;
     it.runtime.current = previous;
     return Ok();
@@ -1995,7 +1997,9 @@ fn threadBuiltin(
         let second = argument(it, c, n, frame, arguments, 1)?;
         let record = alloc(it, 8, allocSystem())?;
         if (record == 0) {
+            let scratch = scratchAside(it); // `a` as on a thread of its own (ceesafe_scratch_aside)
             callClosureValue(it, c, n, a)?;
+            scratchRestore(it, scratch);
             callClosureValue(it, c, n, second)?;
             return Ok(null);
         }

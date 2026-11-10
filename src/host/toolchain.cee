@@ -743,6 +743,22 @@ fn sharedMember(members: borrow Vector<Vector<u8>>) -> Result<Vector<u8>, AllocE
     return Ok(Vector<u8>.create());
 }
 
+/// `--ar <tool>` (ADR 0088 §2.1): a path as it is, if the file exists; a bare name searched for on the host's PATH
+/// (with `.exe` on Windows); null if not found.
+fn resolveTool(name: Slice<u8>) -> Vector<u8>? {
+    var separator = isRooted(name);
+    for (c in name) {
+        separator = separator || c == '/' || c == '\\';
+    }
+    if (separator) {
+        return if (fileExists(name)) copyBytes(name)! else null;
+    }
+    return match (StringView.fromUtf8(name)) {
+        Some(text) => findInPath(text, hostIsWindows()),
+        null => null,
+    };
+}
+
 /// `build --emit lib`'s archiver when no `--ar` is given (ADR 0088 §2.1): `llvm-ar` beside an LLVM clang (with the
 /// clang's version suffix, `clang-18` beside `llvm-ar-18`), else `ar` on the PATH; null when there is none.
 fn locateArchiver(compiler: Slice<u8>) -> Vector<u8>? {

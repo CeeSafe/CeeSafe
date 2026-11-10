@@ -173,6 +173,11 @@ def main():
         check.expect("usage: --lib-main without --emit lib", u.returncode == 2 and "--lib-main needs" in u.stderr,
                      f"status {u.returncode} {u.stderr[:200]}")
 
+        named_ar = os.path.join(work, "named_ar", "libembed.a")
+        u = build("--emit", "lib", "--ar", "ar", "-o", named_ar)
+        check.expect("--ar by a bare name, found on PATH", u.returncode == 0 and os.path.isfile(named_ar),
+                     f"status {u.returncode} {u.stderr[:200]}")
+
         # A failing archiver: named, and the archive already there kept.
         kept = os.path.join(work, "kept.a")
         with open(kept, "w") as handle:

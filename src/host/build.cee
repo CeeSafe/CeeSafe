@@ -79,7 +79,7 @@ fn buildFiles(
     if (library) {
         let compilerName =
             if (options.cc.length > 0) options.cc.view() else (if (hostIsWindows()) "clang" else "cc").bytes();
-        let found: Vector<u8>? = if (options.archiver.length > 0) resolveCompiler(
+        let found: Vector<u8>? = if (options.archiver.length > 0) resolveTool(
             options.archiver.view(),
         ) else locateArchiver(
             compilerName,

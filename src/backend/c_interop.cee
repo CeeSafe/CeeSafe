@@ -866,6 +866,23 @@ fn exportsHeader(
         appendBytes(out, header.view())?;
         appendText(out, "\"\n")?; // imported C types (type-system.md §31.3)
     }
+    var ordered = Vector<u32>.create();
+    headerStructsOf(c, mut ordered)?;
+    var aligned = false;
+    for (t in ordered.view()) {
+        if (c.types.structs[c.types.info(t).structDef as usize].explicitAlign > 1) {
+            aligned = true;
+        }
+    }
+    if (aligned) {
+        // C++ spells C11's `_Alignas` `alignas`.
+        appendText(
+            out,
+            "\n#ifndef CEESAFE_ALIGNAS\n#ifdef __cplusplus\n#define CEESAFE_ALIGNAS(n) alignas(n)\n#else\n#define CEESAFE_ALIGNAS(n) _Alignas(n)\n#endif\n#endif\n",
+        )?;
+    }
+    // A C++ host includes the header too: its declarations have C linkage (ADR 0088 §2.6).
+    appendText(out, "\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n")?;
     out.push('\n')?;
     // Struct names first: function pointer types may name them, and structs may hold function pointers.
     for (t in structs.view()) {
@@ -886,16 +903,19 @@ fn exportsHeader(
         appendText(out, ");\n")?;
     }
     out.push('\n')?;
-    var ordered = Vector<u32>.create();
-    headerStructsOf(c, mut ordered)?;
     for (t in ordered.view()) {
         appendText(out, "struct ")?;
         appendStructTag(c, out, t)?;
         appendText(out, " {\n")?;
+        let align = c.types.structs[c.types.info(t).structDef as usize].explicitAlign;
         for (f in c.types.structs[c.types.info(t).structDef as usize].fields.view()) {
             let field = c.types.fields[f as usize];
             appendText(out, "    ")?;
-            appendAlignPrefix(c, out, t, field.index)?;
+            if (field.index == 0 && align > 1) {
+                appendText(out, "CEESAFE_ALIGNAS(")?;
+                appendDecimal(out, align as u64)?;
+                appendText(out, ") ")?;
+            }
             var member = Vector<u8>.create();
             if (!field.hasCeeSafeCName) {
                 appendText(mut member, "f_")?;
@@ -950,7 +970,7 @@ fn exportsHeader(
         appendStaticName(c, out, k)?;
         appendText(out, ";\n")?;
     }
-    appendText(out, "\n#endif\n")?;
+    appendText(out, "\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n")?;
     return Ok(true);
 }
 

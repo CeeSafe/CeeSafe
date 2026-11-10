@@ -238,7 +238,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     363 =>
         "Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file",
     364 =>
-        "A dependency that does not check, reported by `check` in a package at the dependency's line in the manifest, once for the whole dependency instead of its own diagnostics: its interface record, or the check that made it, has errors (`tooling.md` §4.4, ADR 0082 §2.7). The check of the package stops where the whole program's would: after the types, or after the ownership checks, when that is where the dependency failed. A dependency checked here in full (its record opaque) reports its own diagnostics instead",
+        "A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead",
     400 =>
         "A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\\{` means the brace and does not warn (`grammar.md` §1.6)",
     401 =>

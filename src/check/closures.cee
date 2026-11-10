@@ -612,6 +612,51 @@ fn returnsValue(c: borrow Checker, stmt: u32) -> bool {
     }
 }
 
+/// Gives closure `function` its place, by which explanations and its environment's type name it: its ordinal among
+/// the closures of the function it is written in (the outermost: a closure's own closures count in it), in the order
+/// they are checked. A place holds no position and no count of what was checked before the function, so it reads the
+/// same in every check of the program and in an interface record (ADR 0082 §2.7), and moving the function keeps it.
+fn placeClosure(c: borrow mut Checker, function: u32) -> Result<void, AllocError> {
+    let size = c.hir.functions.length;
+    while (c.closureTop.length < size) {
+        c.closureTop.push(none())?;
+        c.closureOrdinal.push(0)?;
+        c.closureCounts.push(0)?;
+    }
+    var outer = c.function;
+    if (outer != none() && (outer as usize) < c.closureTop.length && c.closureTop[outer as usize] != none()) {
+        outer = c.closureTop[outer as usize];
+    }
+    c.closureTop[function as usize] = outer;
+    if (outer == none() || (outer as usize) >= c.closureCounts.length) {
+        c.staticClosures += 1;
+        c.closureOrdinal[function as usize] = c.staticClosures;
+    } else {
+        c.closureCounts[outer as usize] += 1;
+        c.closureOrdinal[function as usize] = c.closureCounts[outer as usize];
+    }
+    return Ok();
+}
+
+/// Closure `function`'s place (placeClosure): `<ordinal> in <function>`, the function as `Owner.name`.
+fn appendClosurePlace(c: borrow Checker, out: borrow mut Vector<u8>, function: u32) -> Result<void, AllocError> {
+    if ((function as usize) >= c.closureTop.length) {
+        return appendText(out, "?");
+    }
+    appendDecimal(out, c.closureOrdinal[function as usize] as u64)?;
+    let outer = c.closureTop[function as usize];
+    if (outer == none()) {
+        return appendText(out, " of a static");
+    }
+    appendText(out, " in ")?;
+    let f = borrow c.hir.functions[outer as usize];
+    if (f.owner != none()) {
+        appendBytes(out, c.typeName(f.owner))?;
+        out.push('.')?;
+    }
+    return appendBytes(out, c.name(f.name));
+}
+
 /// A closure's function, registered with the program (NewClosureFunction): parameter 0 is its environment (a `borrow
 /// mut` of a new environment struct, whose fields finishEnvironment adds) when it has one.
 fn newClosureFunction(
@@ -660,10 +705,12 @@ fn newClosureFunction(
     let environment = storeEnvironment(c, pairs.view())?;
     c.hir.functions[function as usize].environment = environment;
     c.hir.functions[function as usize].isClosure = true;
+    placeClosure(c, function)?;
     if (withEnvironment) {
+        // Named by its place (placeClosure), the same in every check.
         var text = Vector<u8>.create();
         appendText(mut text, "{closure environment ")?;
-        appendDecimal(mut text, id as u64)?;
+        appendClosurePlace(c, mut text, function)?;
         appendText(mut text, "}")?;
         let environmentType = c.types.createStruct(text.view(), none(), c.file, false)?;
         let definition = c.types.info(environmentType).structDef;

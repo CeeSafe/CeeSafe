@@ -373,6 +373,9 @@ and C. Split output becomes the default for package builds after B (Question 2).
 
 ## 8. Implementation notes: stage D (2026-11-10)
 
+§8.1 to §8.4 describe stage D as first built; two adversarial reviews then found a soundness hole, a poisoned cache
+and a check up to 7× slower than 0.27.0's, and §8.5 says what replaced it for 0.28.0: where they differ, §8.5 holds.
+
 ### 8.1 What was built
 
 - **`check` in a package** checks that package fully, its tests included, and takes each dependency from its
@@ -469,3 +472,104 @@ same command again.
   make it a lookup; not done here.
 - The records of all 120 libraries at 300k lines take 4.2 MB.
 
+### 8.5 Revised after two reviews (0.28.0)
+
+The owner's rule: **plain `check` is never meaningfully slower than `check --whole-program`, never accepts what it
+rejects, and reports the same whatever the cache holds** (tooling.md §4.4). What changed to meet it, finding by
+finding:
+
+- **One check, never a cascade of them.** `check` is now one check of the package and its whole closure, in one
+  process. A dependency with a valid record that has no error and is not opaque is taken from it (parsed and
+  declared, its skipped bodies not checked); every other one (no record, an opaque record, errors) is checked in full
+  in that same check. With no usable cache (Windows, an unknown `fstat` layout, a `$CEESAFE_HOME` that cannot be
+  written: review B's 0555 case) or a cold one, that is the whole program's check, at its cost: the review measured
+  7× 0.27.0's there, from one dependency-mode check per package, each parsing its closure. The child processes,
+  `--jobs` for `check`, and `checkInProcesses` are gone, and with them review A's `argv[0]`/`PATH` spawn (A3).
+- **N0364 for every failed package of the closure** (A1, critical). A package with errors is never taken from a
+  record: it is checked in full, so its errors are found at the stage they occur, and the report replaces each
+  failed package's diagnostics with one N0364 at the line of the root manifest that leads to it (the first such
+  direct dependency), whatever its depth and whether the path goes through an opaque package. The staged N0364s
+  (`afterNirErrors`, `PendingError`) are gone: the stages are the whole program's because the failed packages are in
+  the check. The N0364's message says `ceesafec check --package <name>` (which works from anywhere in the lock; the old
+  "run 'ceesafec check' in ../mid" failed with N0324 where only the workspace's root has a lock, B4), and its note is
+  at the failed package's first error, with its code and message. A dependency's own diagnostics, its warnings too,
+  are never repeated, so cold, warm and cacheless reports are identical (`package_tests.py` §23 checks all three
+  against `--whole-program` for every package of the fixtures, among them the new `transitive-failures`: a failure
+  through an opaque package, through an ordinary one, through both, an opaque package's own failure, two failures at
+  different stages).
+- **Records are made from the check itself.** The effect checker records every package marked for it, not only the
+  root (`recordedPackages`, `opaquePackages` per package). Once the report is printed and flushed, each dependency
+  the check checked in full whose closure has no error gets its record from what was found; three ways of making
+  `p000`…`p005`'s records (their own dependency-mode checks, from `app`, from `app`'s whole check) gave byte-identical
+  files. Before the check, a missing record low in the graph is made first by a dependency-mode check of that package
+  alone, but only if a package depending on it has had a record (in a cold cache none has), within a twentieth of the
+  whole check's estimated cost, and while it lets more records be found.
+- **The key hashes exactly the bytes checked** (A2). Each package's sources are read once (`loadTexts`); the key's
+  digest and the parse use the same bytes, so an edit during a check cannot file a record under the new sources' key.
+  Review A's race (`p4/race.sh`) now reports the N0295 that `--whole-program` reports. No child's record is accepted
+  any more: there is no child.
+- **The compiler's identity** (A3, A5) is the SHA-256 of its executable, read once per process and only when a record
+  is wanted, from the executable as the system knows it: `/proc/self/exe` on Linux; on macOS the kernel's path of the
+  process (`proc_info`'s `PROC_PIDPATHINFO` through `syscall`, since `_NSGetExecutablePath` would not link on Linux
+  and 0.8.0 cannot configure an extern), then `realpath`. Never `argv[0]` or `PATH`.
+- **The directories are opened once** (A4): `cache`, then `records` from its descriptor, each with
+  `O_DIRECTORY | O_NOFOLLOW` and checked by `fstat`; records are opened with `openat(records, name, O_NOFOLLOW)`,
+  written with `O_CREAT | O_EXCL | O_NOFOLLOW` and renamed with `renameat` in it. `$CEESAFE_HOME` and its parents are
+  trusted by path (tooling.md §4.4.1). Windows' `rt.h` names failing stand-ins for `fstat`, `pwrite`, `renameat`,
+  `unlinkat` and `syscall`, which `ceesafec` never calls there.
+- **The interface hash holds no position** (B2). It hashes the package's tokens by their bytes, a skipped body as one
+  `{}`, not the text with its line breaks: a comment or a moved declaration leaves the dependents' keys. Two texts
+  could still carry positions into a dependent's record, so they changed: a closure environment's type was named by
+  a global count (`{closure environment 1168}`, which also made a record depend on what was checked before it), and
+  an explanation named a closure by its line (`with the closure at main.cee:12`). Both now name it by its place in its
+  function, `{closure environment 2 in Lexer.scan}`, `with the closure 1 in main` (type-system.md §32.1).
+- **`check --all`** (B3, B5) is one check of every package of the lock, every package's tests included, reported by
+  package, with records where they cut work (a package without tests whose record has no error or warning). Where an
+  error stops it before the effect checks, it checks again the packages none of whose closure failed, so that each
+  package's own errors are still found (`borrowfail`'s ownership error behind `broken`'s type error); a package's
+  diagnostics are those of the last round that checked it. The JSON's `packages` summary counts the diagnostics by
+  their `package`, each diagnostic appears once, no N0364 is added, and the text is in the JSON's sorted order.
+- **Explanations prefer an operation to "may do anything"** (B6): `chooseWitnesses` ranks a chain that ends in a call
+  that may do anything (a C function or `dyn` method without an effect list, or any of them for a write) after every
+  chain that ends in an operation, then by length (`vagueEnd`); a record's chain `length` is that rank (record
+  format 2).
+- **The rest** (B7): `--help` describes `check`'s modes; `--package nope` names the lock's packages (status 2,
+  without the usage); `ceesafe_exports.h` has the `extern "C"` guards of ADR 0088 §2.6 and spells `_Alignas` for C++
+  (`package_tests.py` §28 compiles a C++11 caller with `-Wall -Werror` and links it); `ceesafe_lldb.py` turns off
+  lldb's `objc` category, whose `Rect` and `Point` summaries matched a dependency's `@repr(C)` structs. A child
+  that failed to start no longer exists to report.
+
+Measured on the same Mac, again shared (load averages from 10 to 130 during the runs, so the CPU seconds are the
+figures to compare), `scale_test.generate` with 120 packages, 0.28.0 as first built ("before") against this one.
+Cold: an empty `$CEESAFE_HOME`; warm: the same command again; no cache: a `$CEESAFE_HOME` with mode 0555.
+
+CPU seconds (wall in brackets where the load made them differ much); "before" at 1.5M is §8.4's, but for no cache:
+
+| Lines | Check | Before | After |
+|---|---|---|---|
+| 304,176 | `app --whole-program` | 2.7 | 2.6–3.1 |
+| 304,176 | leaf `p000` | 0.06 | 0.06–0.07 |
+| 304,176 | `app` cold | 45.6 (14.9 wall, 8 jobs) | 2.9–3.3 |
+| 304,176 | `app` warm | 0.65 | 0.67–0.78 |
+| 304,176 | `app` after a comment at the top of `p000` | a cold check | 0.72–0.86 |
+| 304,176 | `p119` cold / warm | 43.6 (18.1 wall) / 0.66 | 2.8–3.2 / 0.71 |
+| 304,176 | `check --all` cold / warm | 98.0 (22.4 wall) / 55.7 (9.1 wall) | 3.2–3.3 / 0.71–0.74 |
+| 304,176 | `app`, no usable cache | 26.6 | 2.8–2.9 |
+| 1,514,176 | `app --whole-program` | 16.4 | 16.1–20.4 |
+| 1,514,176 | leaf `p000` | 0.13 | 0.15 |
+| 1,514,176 | `app` cold / warm | 23.2 wall / 4.4 | 18.1–23.5 / 4.4–5.1 |
+| 1,514,176 | `app` after a comment at the top of `p000` | a cold check | 4.8–5.2 |
+| 1,514,176 | `p119` cold / warm | 167 (64.6 wall) / 4.0 | 19.7–20.2 / 4.7–5.0 |
+| 1,514,176 | `check --all` cold / warm | 418 (129 wall) / 226 (52.8 wall) | 22.6–23.2 / 5.2–5.4 |
+| 1,514,176 | `app`, no usable cache | 196.6 (217 wall) | 18.6–22.7 |
+
+- **Cold** is the whole program's check plus making the records, which comes after the report is printed and
+  flushed (5–15% more in all, at 1.5M about 1.7 s after the report); the report itself arrives within a few percent
+  of `--whole-program`'s, the keys' hashing and the effect checker's recording before it.
+- **No usable cache** is the whole program's check: 7–9× faster than before.
+- **Warm** is about a quarter of the whole program's check, as before; `check --all` warm is now one such check.
+- **A comment at the top of `p000`**, which every package depends on, used to invalidate every record; now `p000`
+  alone is checked again (in dependency mode, before the check), its interface hash is unchanged, and the check is
+  warm.
+- The cache is never pruned: every edit leaves the records of the old keys. Pruning is left to stage E's object
+  cache, which needs the same policy.

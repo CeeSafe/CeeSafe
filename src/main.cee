@@ -13,14 +13,27 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  parse    lex and parse the files, report syntax errors\n")?;
     appendText(
         out,
-        "  check    parse and type-check the files as one package; in a package, the package, each dependency\n",
+        "  check    parse and type-check the files as one package; in a package, the package with every package\n",
     )?;
-    appendText(out, "           from its interface record (ADR 0082 §2.7): --all checks every package of the lock,\n")?;
     appendText(
         out,
-        "           --jobs <n> at once; --package <name> checks that package of the lock; --whole-program\n",
+        "           it depends on, each from its interface record where the cache holds a valid one (ADR 0082\n",
     )?;
-    appendText(out, "           checks the packages as one program\n")?;
+    appendText(
+        out,
+        "           §2.7), and one N0364 at the manifest for a dependency with errors (tooling.md §4.4):\n",
+    )?;
+    appendText(out, "           --package <name>  check that package of the lock instead, from anywhere in it\n")?;
+    appendText(
+        out,
+        "           --all             check every package of the lock, their tests included, reported by package\n",
+    )?;
+    appendText(
+        out,
+        "           --whole-program   check the packages as one program, without records, every package's own\n",
+    )?;
+    appendText(out, "                             diagnostics in full (the oracle the others agree with)\n")?;
+    appendText(out, "           It takes no --jobs: the check is one process, which then makes the records it can\n")?;
     appendText(out, "  build    compile the package to C, and by default to an executable; .c files are compiled\n")?;
     appendText(out, "           and linked with it (type-system.md §28.6)\n")?;
     appendText(out, "  run      run the package with the NIR reference interpreter (--interp)\n")?;
@@ -470,7 +483,7 @@ fn readOptions(options: borrow mut Options) -> i32 {
         } else if ((options.testing &&
             (arg == "--filter" || arg == "--jobs" || arg == "--timeout" || arg == "--sweep" ||
                 arg == "--format")) || (options.running && arg == "--ceesafe-harness") ||
-            ((options.building || options.checking) && !options.testing && arg == "--jobs")) {
+            (options.building && !options.testing && arg == "--jobs")) {
             let value = match (Process.argument(a)) {
                 Some(v) => v,
                 null => {

@@ -7,10 +7,18 @@
 #include <stdint.h>
 #include "c-chars.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 uint32_t cc_name_sum(struct cc_pool const *);
 void cc_shout(struct cc_pool *);
 uint32_t cc_name_length(struct cc_pool const *);
 void cc_bump_tag(struct cc_pool *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

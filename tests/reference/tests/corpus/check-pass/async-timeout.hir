@@ -18,7 +18,7 @@
       (return (await (call body):Result<u32, WebError>):Result<u32, WebError>)
     )
   )
-  (fn closure ((env#0: borrow mut {closure environment 945})) -> Result<u32, WebError>
+  (fn closure ((env#0: borrow mut {closure environment 2 in timed})) -> Result<u32, WebError>
     (block
       (return (await (call body):Result<u32, WebError>):Result<u32, WebError>)
     )

@@ -266,11 +266,15 @@ fn checkProgramWith(
         recordedEffects: records.functions,
         recordedFunction: Vector<u32>.create(),
         recording: records.recording,
+        recordedPackages: records.recordedPackages,
         qualifyRoot: records.qualifyRoot,
         recordOut: Vector<RecordedEffects>.create(),
-        recordOpaque: false,
-        embedCalls: 0,
-        afterNirErrors: Vector<PendingError>.create(),
+        opaquePackages: Vector<bool>.create(),
+        effectsRecorded: false,
+        closureTop: Vector<u32>.create(),
+        closureOrdinal: Vector<u32>.create(),
+        closureCounts: Vector<u32>.create(),
+        staticClosures: 0,
         nirLoopErrors: false,
         instanceErrors: false,
         regionImpls: Vector<u32>.create(),
@@ -388,11 +392,12 @@ fn checkProgramWith(
         let isExtern = c.front.ast.functions[c.hir.functions[f].syntax as usize].isExtern;
         if (c.recording && c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern &&
             isRecordedHere(c, truncate<u32>(f))) {
-            // The root's record: a body that makes what a record cannot hold makes the record opaque.
+            // A recorded package's body that makes what a record cannot hold makes its record opaque.
             let tables = c.dynTables.length;
             checkFunctionBody(mut c, truncate<u32>(f))?;
             if (madeOpaque(c, tables)) {
-                c.recordOpaque = true;
+                let file = c.hir.functions[f].file;
+                markOpaque(mut c, file)?;
             }
         } else if (c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern &&
             !bodyFromRecord(c, truncate<u32>(f))) {

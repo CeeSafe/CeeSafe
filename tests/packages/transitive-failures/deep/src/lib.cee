@@ -1,0 +1,8 @@
+// An ownership error inside a body its dependents skip: found by the per-function checks.
+public fn broken(n: u64) -> u64 {
+    var v = Vector<u64>.create();
+    v.push(n)!;
+    let first = borrow v[0];
+    v.push(n)!; // error[N0241]: mutation while borrowed
+    return *first;
+}

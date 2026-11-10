@@ -7,6 +7,10 @@
 #include <stdint.h>
 #include "cfg-exports.types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 #if CFG_ON
 int32_t cfg_on_fn(void);
@@ -15,5 +19,9 @@ int32_t cfg_on_fn(void);
 int32_t cfg_off_fn(void);
 #endif
 int32_t cfg_inner(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

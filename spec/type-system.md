@@ -3364,10 +3364,13 @@ fn onInterrupt(count: borrow mut u64) { count += 1; }   // may neither sleep nor
   effects its package's interface record gives it, those the dependency's own check inferred; generic code, async
   functions and functions with a closure parameter are inferred where they are used, as before.
 - **Explanations.** A diagnostic about an effect (N0295, N0360) names the chain of operations from where it is
-  reported to where the effect comes from: for each function on the chain, the operation whose chain is the
-  shortest, the first in the function's order among those. Neither depends on the order the program's functions or
-  packages are looked at, so a chain through a dependency reads the same whether the dependency comes from its record
-  or is checked with the program.
+  reported to where the effect comes from: for each function on the chain, an operation whose chain ends in an
+  operation rather than in a call that may do anything (a C function or a `dyn` method without an effect list, or for
+  a write any of them), then the shortest such chain, then the first in the function's order among those. None of
+  this depends on the order the program's functions or packages are looked at, and a closure is named by its place in
+  its function (`the closure 2 in parse`, `{closure environment 2 in parse}`), not by its line, so a chain through a
+  dependency reads the same whether the dependency comes from its record or is checked with the program (ADR 0082
+  §2.7, §8.5).
 - Operations have these effects:
 
 | Operation | Effects |
@@ -3452,7 +3455,7 @@ fn underLock(values: Slice<i32>, limit: i32) -> i32 {
   | the caller's own `@effectsOf` parameter, or a local that holds it | none: the caller's caller counts it |
   | anything else | its type's effect list (both effects without one, §36.3) |
 
-  N0295 names the argument in its chain: "it calls 'count' with the closure at main.cee:12, which calls …".
+  N0295 names the argument in its chain: "it calls 'count' with the closure 1 in main, which calls …".
 - **As a value**, an `@effectsOf` function (§36.1) has its own effects plus each named parameter's type list.
 - **Why this is sound.** A parameter is never assigned (N0211), and a closure or function value cannot be `var`
   (N0246), so every call through `p` during a call runs the argument the caller passed, whose effects the caller

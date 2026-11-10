@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct Point;
 struct Segment;
 
@@ -32,5 +36,9 @@ Color geo_next_color(Color);
 Mode geo_flip(Mode);
 uint64_t geo_sum_bytes(uint8_t const *, size_t);
 ptrdiff_t geo_flag(bool, ptrdiff_t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -1,0 +1,3 @@
+fn main() {
+    Console.writeLine(opaque.banner() + plain.twice(1));
+}

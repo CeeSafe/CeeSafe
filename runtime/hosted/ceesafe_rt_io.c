@@ -19,6 +19,11 @@
 #define _CRT_RAND_S /* rand_s, for HashMap's key (ADR 0052) */
 #endif
 #include "ceesafe/rt.h"
+#if defined(_WIN32)
+/* rt.h names ceesafec's stand-in `fstat` (ceesafe_win_fstat); this file uses the C library's, which <sys/stat.h>
+ * defines inline under that name. */
+#undef fstat
+#endif
 
 #include <errno.h>
 #include <stdarg.h>
@@ -1745,6 +1750,47 @@ ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t of
         return -1;
     }
     return (ptrdiff_t)got;
+}
+
+/* The calls of ceesafec's interface-record cache (ADR 0082 §2.7), which reads and writes no record on Windows (it
+ * cannot read owners and modes there): each fails (ENOSYS), and syscall, which ceesafec makes on macOS only, too. */
+int32_t ceesafe_win_fstat(int32_t fd, uint8_t *buffer) {
+    (void)fd;
+    (void)buffer;
+    errno = ENOSYS;
+    return -1;
+}
+
+ptrdiff_t ceesafe_win_pwrite(int32_t fd, uint8_t const *buffer, size_t size, int64_t offset) {
+    (void)fd;
+    (void)buffer;
+    (void)size;
+    (void)offset;
+    errno = ENOSYS;
+    return -1;
+}
+
+int32_t ceesafe_win_renameat(int32_t from_directory, char const *from, int32_t to_directory, char const *to) {
+    (void)from_directory;
+    (void)from;
+    (void)to_directory;
+    (void)to;
+    errno = ENOSYS;
+    return -1;
+}
+
+int32_t ceesafe_win_unlinkat(int32_t directory, char const *path, int32_t flags) {
+    (void)directory;
+    (void)path;
+    (void)flags;
+    errno = ENOSYS;
+    return -1;
+}
+
+int32_t ceesafe_win_syscall(int32_t number, ...) {
+    (void)number;
+    errno = ENOSYS;
+    return -1;
 }
 #endif
 

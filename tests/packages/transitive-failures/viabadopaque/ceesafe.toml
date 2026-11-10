@@ -1,0 +1,7 @@
+[package]
+name = "viabadopaque"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+badopaque = { path = "../badopaque" }

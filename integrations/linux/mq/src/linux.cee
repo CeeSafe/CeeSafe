@@ -1,0 +1,177 @@
+// profile: freestanding
+// Linux for CeeSafe: the kernel heap, a mutex and a spinlock that hold the data they protect, and the kernel log.
+// The C side is include/ceesafe_linux.h, whose contracts these declarations repeat as effects (type-system.md §32):
+// what sleeps or allocates is said here once, and the checker follows it through every caller.
+
+@header("ceesafe_linux.h")
+extern "C" {
+    struct mutex;
+    @ctype("spinlock_t")
+    struct spinlock_t;
+    // GFP_KERNEL: may sleep to reclaim memory.
+    @effects(alloc, sleep)
+    fn lx_kmalloc(size: usize) -> *mut void;
+    @effects()
+    fn lx_kfree(p: *mut void);
+    @effects()
+    fn lx_mutex_init(m: *mut mutex);
+    @effects(sleep)
+    fn lx_mutex_lock(m: *mut mutex);
+    @effects()
+    fn lx_mutex_unlock(m: *mut mutex);
+    @effects()
+    fn lx_spin_lock_init(lock: *mut spinlock_t);
+    @effects()
+    fn lx_spin_lock(lock: *mut spinlock_t);
+    @effects()
+    fn lx_spin_unlock(lock: *mut spinlock_t);
+    // A user page may have to be faulted in: both may sleep.
+    @effects(sleep)
+    fn lx_copy_from_user(to: *mut u8, from: *void, n: usize) -> usize;
+    @effects(sleep)
+    fn lx_copy_to_user(to: *mut void, from: *u8, n: usize) -> usize;
+    @effects()
+    fn lx_log(text: *CChar);
+}
+
+/// Linux's kernel heap with GFP_KERNEL: an allocation may sleep, so it is rejected under a spinlock. A block is at
+/// least 8-byte aligned (ARCH_KMALLOC_MINALIGN). `Box<T, KernelHeap>` is one pointer, freed with kfree.
+public struct KernelHeap {}
+
+impl Allocator for KernelHeap {
+    /// Safety: lx_kmalloc returns null or a block of `layout.size` bytes, 8-byte aligned; larger alignments are
+    /// refused here, so an Ok block always meets `layout`.
+    fn allocate(borrow this, layout: Layout) -> Result<*mut u8, AllocError> {
+        if (layout.align > 8) {
+            return Err(AllocError.OutOfMemory);
+        }
+        let p = unsafe { lx_kmalloc(layout.size) } as *mut u8;
+        if (p.isNull()) {
+            return Err(AllocError.OutOfMemory);
+        }
+        return Ok(p);
+    }
+
+    /// Safety: the caller (Box) passes a block from `allocate`, once: kfree's contract.
+    unsafe fn deallocate(borrow this, p: *mut u8, layout: Layout) {
+        lx_kfree(p as *mut void);
+    }
+}
+
+/// A value in a KernelHeap box that may move between threads. A box with a user allocator is not `Send` by itself
+/// (type-system.md §38.1), since the checker cannot know that the allocator's blocks may be freed on another thread.
+/// Linux's are: kfree may be called from any thread for any kmalloc block. That is what `@threadSafe` asserts here.
+@threadSafe
+public struct KBox<T: Send> {
+    private inner: Box<Held<T>, KernelHeap>;
+
+    /// Moves `value` into a new kernel block.
+    public fn create(value: T) -> Result<KBox<T>, AllocError> =>
+        Ok(KBox { inner: Box.createIn(KernelHeap {}, Held { value: value })? });
+
+    public fn get(borrow this) -> borrow T => borrow this.inner.value;
+
+    public fn getMut(borrow mut this) -> borrow mut T => borrow mut this.inner.value;
+}
+
+/// What a KBox's block holds: a box's contents are borrowed through a field.
+struct Held<T> {
+    value: T;
+}
+
+/// A sleeping lock and the data it protects. Linux's `struct mutex` is imported from its header and embedded by
+/// value, so the C compiler lays it out for this kernel's configuration; it points into itself once initialised,
+/// which is why it is made in place in its box and never moved (type-system.md §33).
+@threadSafe
+@noncopy
+public struct Mutex<T: Send> {
+    private raw: mutex;
+    private data: T;
+
+    /// Makes one in a KernelHeap box, initialised in place before this returns.
+    public fn create(data: T) -> Result<Box<Mutex<T>, KernelHeap>, AllocError> =>
+        Box.createIn(KernelHeap {}, Mutex { data: data });
+
+    /// Safety: runs once, at the mutex's final address, before anything else can see it (type-system.md §33.3).
+    @placed
+    fn init(borrow mut this) {
+        unsafe { lx_mutex_init(borrow mut this.raw as *mut mutex); }
+    }
+
+    /// Takes the mutex, sleeping until it is free: forbidden in atomic contexts (its effect is `sleep`).
+    /// Safety: `raw` was initialised by `init`.
+    public fn lock(borrow this) -> MutexGuard<T> {
+        unsafe { lx_mutex_lock(this.cLock()); }
+        return MutexGuard { lock: this };
+    }
+
+    /// The C lock. Locking mutates it through a shared reference: the C code synchronises that itself.
+    fn cLock(borrow this) -> *mut mutex => borrow this.raw as *mutex as *mut mutex;
+}
+
+/// Holding the mutex. Not an atomic context: code under a mutex may sleep. Unlocks when dropped.
+public struct MutexGuard<region r, T: Send> {
+    private lock: borrow(r) Mutex<T>;
+
+    /// The protected data, for as long as the guard is borrowed.
+    /// Safety: the mutex is held, so this guard is the only way to the data until it is dropped.
+    public fn data(borrow mut this) -> borrow mut T =>
+        unsafe { Ptr.toBorrowMut(borrow this.lock.data as *T as *mut T) };
+
+    /// Safety: the guard holds the mutex, which it took in `lock`.
+    drop {
+        unsafe { lx_mutex_unlock(this.lock.cLock()); }
+    }
+}
+
+/// A spinlock and the data it protects, made in place in its box like Mutex.
+@threadSafe
+@noncopy
+public struct SpinLock<T: Send> {
+    private raw: spinlock_t;
+    private data: T;
+
+    /// Makes one in a KernelHeap box, initialised in place before this returns.
+    public fn create(data: T) -> Result<Box<SpinLock<T>, KernelHeap>, AllocError> =>
+        Box.createIn(KernelHeap {}, SpinLock { data: data });
+
+    /// Safety: as Mutex.init.
+    @placed
+    fn init(borrow mut this) {
+        unsafe { lx_spin_lock_init(borrow mut this.raw as *mut spinlock_t); }
+    }
+
+    /// Takes the lock, spinning; preemption is off until the guard is dropped.
+    /// Safety: `raw` was initialised by `init`.
+    public fn lock(borrow this) -> SpinGuard<T> {
+        unsafe { lx_spin_lock(this.cLock()); }
+        return SpinGuard { lock: this };
+    }
+
+    fn cLock(borrow this) -> *mut spinlock_t => borrow this.raw as *spinlock_t as *mut spinlock_t;
+}
+
+/// Holding the spinlock. An atomic context while it is live (type-system.md §32.3): code that may sleep, a
+/// GFP_KERNEL allocation or a user copy among it, does not compile here. Unlocks when dropped.
+@context(atomic)
+public struct SpinGuard<region r, T: Send> {
+    private lock: borrow(r) SpinLock<T>;
+
+    /// Safety: the lock is held, so this guard is the only way to the data until it is dropped.
+    public fn data(borrow mut this) -> borrow mut T =>
+        unsafe { Ptr.toBorrowMut(borrow this.lock.data as *T as *mut T) };
+
+    /// Safety: the guard holds the lock, which it took in `lock`.
+    drop {
+        unsafe { lx_spin_unlock(this.lock.cLock()); }
+    }
+}
+
+/// The kernel log, at KERN_INFO.
+public struct Log {
+    /// Sends the writer's text as one line.
+    /// Safety: cText is the writer's zero-terminated text, which is what lx_log reads.
+    public fn send(line: borrow TextWriter) {
+        unsafe { lx_log(line.cText()); }
+    }
+}

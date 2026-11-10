@@ -1,0 +1,8 @@
+[package]
+name = "ceesafe_mq"
+version = "0.1.0"
+kind = "object"              # one object for the kernel's build; `ceesafec build --emit c` gives Kbuild its C
+profile = "freestanding"
+float = false
+trusted = true               # src/linux.cee declares the locks and KBox @threadSafe (ADR 0025 §3.2)
+sources = ["src"]

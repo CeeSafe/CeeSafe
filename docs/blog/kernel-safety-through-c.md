@@ -63,7 +63,6 @@ uses:
 ```ceesafe
 @header("kernel/timer.h")
 extern "C" {
-    @ctype("struct timer")
     struct timer;
     @effects()
     fn timer_start(t: *mut timer, delay_ns: u64);
@@ -152,9 +151,9 @@ The last point above is also the first cost.
   specification, a reference interpreter that runs the same programs, and tests.
 - **Narrower than "any C compiler" in the kernel today.** Hosted programs build with clang, gcc and, best effort,
   MSVC. The kernel profile has been built and tested with clang and lld only, because that is what CosmoOS uses.
-- **No Linux integration yet.** The mechanisms are not specific to CosmoOS: flags come from the codebase's build,
-  types from its headers, symbols from its exports. A Linux kernel-module profile is a future integration and is not
-  scheduled.
+- **Linux is a demonstration, not a profile.** The mechanisms are not specific to CosmoOS: flags come from the
+  codebase's build, types from its headers, symbols from its exports. A Linux module built this way exists (below),
+  but its bindings cover one driver, and a Linux kernel-module profile is not scheduled.
 - **A young language and a small ecosystem.** There is no crates.io to draw on.
 
 ## What has been measured
@@ -172,6 +171,28 @@ unchanged CosmoOS tree:
   and a deliberate lock inversion was reported, as a control.
 
 AArch64 boots were not part of that record.
+
+### A Linux kernel module
+
+The same mechanisms build a Linux module.
+[integrations/linux/](https://github.com/CeeSafe/CeeSafe/tree/main/integrations/linux) holds `ceesafe_mq.ko`, a
+misc device that is a bounded message queue: 205 lines of CeeSafe for the driver, 177 for its Linux bindings (a
+kernel heap, a mutex and a spinlock that hold their data), and 81 lines of C for what Linux requires to be macros
+(`module_init`, the `file_operations` table). `struct mutex` and `spinlock_t` are imported from Linux's headers and
+embedded by value.
+
+Kbuild compiles the generated C with the kernel's own flags. On Debian 12's `6.1.0-54-cloud-arm64` kernel with gcc
+12.2 (2026-11-10), it builds with no warning under `make W=1`, links against kernel exports only, and passes 24
+checks from user space: message order, `EMSGSIZE`, `ENOSPC`, `EFAULT`, four processes writing and reading at once,
+and `rmmod` with 14 messages queued, which frees every block with no cleanup code in the driver. The same sources
+with one allocation moved under the spinlock do not compile:
+
+```text
+error[N0295]: a 'SpinGuard<Latest>' is live here, which makes this an atomic context (type-system.md §32.3), but this may sleep: it calls 'KBox<u64>.create', which allocates a 'Box<Held<u64>, KernelHeap>', which calls 'lx_kmalloc', declared @effects(sleep, alloc)
+```
+
+It has not run on x86-64 or under lockdep or KASAN, and each kernel macro CeeSafe calls goes through a one-line C
+function, as Rust's kernel helpers do. The directory's README lists the rest of what was not done.
 
 On speed, with every check on, CeeSafe runs sixteen user-space workloads in 0.96× Rust's time (geometric mean) and
 0.88× that of Rust built with overflow checks; hand-written C without checks takes 0.94×. CeeSafe is ahead where

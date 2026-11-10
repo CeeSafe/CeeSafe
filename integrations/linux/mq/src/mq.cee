@@ -1,0 +1,205 @@
+// profile: freestanding
+// ceesafe_mq: a Linux misc device, /dev/ceesafe_mq, that is a bounded queue of messages. A write adds one message, a
+// read takes the oldest. The device's state, its locking and every byte of message memory are CeeSafe; glue.c holds
+// what Linux requires to be C macros (module_init, MODULE_LICENSE, the file_operations table) and calls the four
+// exports below.
+//
+// What the checker proves here, beyond memory safety:
+// - a message is owned by exactly one place (the queue, or the message before it), and is freed when it is read or when the device is destroyed: rmmod with
+//   messages still queued frees them, with no cleanup code written;
+// - every allocation's failure is a value, and becomes -ENOMEM;
+// - the queue is reached only with its mutex held, the counters only with their spinlock held;
+// - nothing that may sleep (kmalloc with GFP_KERNEL, a user copy, a mutex) runs with the spinlock held
+//   (negative/sleep-under-spinlock.cee is the same code with that mistake, and does not compile).
+
+/// The most messages the queue holds.
+const SLOTS: usize = 16;
+/// The longest message, in bytes.
+const MESSAGE_MAX: usize = 512;
+
+const ENOMEM: i64 = -12;
+const EFAULT: i64 = -14;
+const ENOSPC: i64 = -28;
+const EMSGSIZE: i64 = -90;
+
+/// A message, and the one after it: each message owns the next, so the queue is a chain of kernel blocks with
+/// one owner each, and dropping the first drops them all.
+struct Message {
+    next: KBox<Message>?;
+    length: usize;
+    bytes: [u8; 512];
+}
+
+/// The messages, oldest first, and how many there are.
+struct Queue {
+    oldest: KBox<Message>?;
+    count: usize;
+}
+
+struct Counters {
+    written: u64;
+    read: u64;
+    refused: u64;
+}
+
+struct Device {
+    queue: Box<Mutex<Queue>, KernelHeap>;
+    counters: Box<SpinLock<Counters>, KernelHeap>;
+}
+
+/// Puts `message` after the last message of the chain that starts at `place`. The chain has at most SLOTS
+/// messages, so this recurses at most SLOTS deep.
+fn append(place: borrow mut (KBox<Message>?), message: KBox<Message>) {
+    if (place is Some(node)) {
+        append(mut node.getMut().next, message);
+        return;
+    }
+    place = message;
+}
+
+fn makeDevice() -> Result<Box<Device, KernelHeap>, AllocError> {
+    let queue = Mutex<Queue>.create(Queue { oldest: null, count: 0 })?;
+    let counters = SpinLock<Counters>.create(Counters { written: 0, read: 0, refused: 0 })?;
+    return Box.createIn(KernelHeap {}, Device { queue: queue, counters: counters });
+}
+
+enum Counted {
+    Written,
+    Read,
+    Refused,
+}
+
+/// Counts one event. The spinlock is held only for the increment.
+fn count(device: borrow Device, what: Counted) {
+    var guard = device.counters.lock();
+    let counters = guard.data();
+    match (what) {
+        Counted.Written => { counters.written += 1; }
+        Counted.Read => { counters.read += 1; }
+        Counted.Refused => { counters.refused += 1; }
+    }
+}
+
+/// Adds the `n` bytes at the user address `user` as one message.
+/// Safety: `user` is passed to lx_copy_from_user only, which checks it; the message has room for `n` bytes, since
+/// `n <= MESSAGE_MAX` was checked.
+fn enqueue(device: borrow Device, user: *void, n: usize) -> i64 {
+    if (n > MESSAGE_MAX) {
+        return EMSGSIZE;
+    }
+    var guard = device.queue.lock();
+    let queue = guard.data();
+    if (queue.count == SLOTS) {
+        return ENOSPC;
+    }
+    var message = match (KBox<Message>.create(Message { next: null, length: n, bytes: [0; 512] })) {
+        Ok(m) => m,
+        Err(e) => { return ENOMEM; }
+    };
+    let left = unsafe { lx_copy_from_user(borrow mut message.getMut().bytes[0] as *mut u8, user, n) };
+    if (left != 0) {
+        return EFAULT; // the message is dropped, and so freed, here
+    }
+    append(mut queue.oldest, message);
+    queue.count += 1;
+    return truncate<i64>(n);
+}
+
+/// Copies at most `n` bytes of the oldest message to the user address `user`, and then takes that message off the
+/// queue and frees it. 0 when the queue is empty. When the copy fails the message stays queued.
+/// Safety: `user` is passed to lx_copy_to_user only, which checks it; `length` is at most the message's length.
+fn dequeue(device: borrow Device, user: *mut void, n: usize) -> i64 {
+    var guard = device.queue.lock();
+    let queue = guard.data();
+    match (replace(mut queue.oldest, null)) {
+        Some(owned) => {
+            var taken = owned;
+            let length = if (taken.get().length < n) taken.get().length else n;
+            let left = unsafe { lx_copy_to_user(user, borrow taken.get().bytes[0] as *u8, length) };
+            if (left != 0) {
+                queue.oldest = taken;
+                return EFAULT;
+            }
+            queue.oldest = replace(mut taken.getMut().next, null);
+            queue.count -= 1;
+            return truncate<i64>(length);
+        } // the message is freed here: the queue no longer owns it
+        null => { return 0; }
+    }
+}
+
+/// Makes the device and gives it to the glue, which keeps it until ceemq_destroy.
+/// Safety: the glue passes a valid place for one pointer.
+@export("ceemq_create")
+fn create(out: *mut *mut void) -> i32 {
+    match (makeDevice()) {
+        Err(e) => { return truncate<i32>(ENOMEM); }
+        Ok(device) => {
+            unsafe { out.write(Box.intoRaw(device) as *mut void); }
+            var buffer: [u8; 96] = [0; 96];
+            var line = TextWriter.create(mut buffer[..]);
+            line.text("ceesafe_mq: ready, ");
+            line.decimal(SLOTS as u64);
+            line.text(" messages of at most ");
+            line.decimal(MESSAGE_MAX as u64);
+            line.text(" bytes");
+            Log.send(line);
+            return 0;
+        }
+    }
+}
+
+/// Takes the device back and drops it: every message still queued is freed, then the locks.
+/// Safety: `state` is what ceemq_create handed out, given back once, with no call of the other exports running.
+@export("ceemq_destroy")
+unsafe fn destroy(state: *mut void) {
+    let device: Box<Device, KernelHeap> = Box.fromRaw(state as *mut Device);
+    var written: u64 = 0;
+    var read: u64 = 0;
+    var refused: u64 = 0;
+    {
+        var guard = device.counters.lock();
+        let counters = guard.data();
+        written = counters.written;
+        read = counters.read;
+        refused = counters.refused;
+    }
+    var queued: usize = 0;
+    {
+        var guard = device.queue.lock();
+        queued = guard.data().count;
+    }
+    var buffer: [u8; 128] = [0; 128];
+    var line = TextWriter.create(mut buffer[..]);
+    line.text("ceesafe_mq: written ");
+    line.decimal(written);
+    line.text(", read ");
+    line.decimal(read);
+    line.text(", refused ");
+    line.decimal(refused);
+    line.text(", freed with the device ");
+    line.decimal(queued as u64);
+    Log.send(line);
+}
+
+/// write(2) on the device.
+/// Safety: `state` is the device from ceemq_create, alive until ceemq_destroy; `user` is a user address.
+@export("ceemq_write")
+unsafe fn write(state: *void, user: *void, n: usize) -> i64 {
+    let device = Ptr.toBorrow(state as *Device);
+    let result = enqueue(device, user, n);
+    count(device, if (result < 0) Counted.Refused else Counted.Written);
+    return result;
+}
+
+/// read(2) on the device.
+/// Safety: as ceemq_write.
+@export("ceemq_read")
+unsafe fn read(state: *void, user: *mut void, n: usize) -> i64 {
+    let device = Ptr.toBorrow(state as *Device);
+    let result = dequeue(device, user, n);
+    if (result > 0) {
+        count(device, Counted.Read);
+    }
+    return result;
+}

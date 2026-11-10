@@ -1,0 +1,20 @@
+// profile: freestanding
+// A negative control for ceesafe_mq: the mistake a C driver makes silently until it deadlocks or lockdep is on.
+// It allocates with GFP_KERNEL, which may sleep, while a spinlock is held. This directory is a package of the
+// module's own sources and this file (ceesafe.toml): `ceesafec check` here must report N0295, and nothing else.
+
+struct Latest {
+    value: KBox<u64>?;
+}
+
+fn remember(latest: borrow SpinLock<Latest>, value: u64) -> bool {
+    var guard = latest.lock();
+    let held = guard.data();
+    match (KBox<u64>.create(value)) { // kmalloc(GFP_KERNEL) with the spinlock held
+        Ok(box) => {
+            held.value = box;
+            return true;
+        }
+        Err(e) => { return false; }
+    }
+}

@@ -200,7 +200,6 @@ each one at build time.
 ```ceesafe
 @header("kernel/timer.h")
 extern "C" {
-    @ctype("struct timer")
     struct timer;
     @effects()
     fn timer_start(t: *mut timer, delay_ns: u64);

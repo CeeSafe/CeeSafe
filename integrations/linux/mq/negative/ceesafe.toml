@@ -1,0 +1,7 @@
+[package]
+name = "ceesafe_mq_negative"
+kind = "object"
+profile = "freestanding"
+float = false
+trusted = true
+sources = ["../src", "."]     # the module's own sources, and the mistake

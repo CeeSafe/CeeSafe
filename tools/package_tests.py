@@ -282,7 +282,7 @@ def interface_records(compiler, work, problems):
         if not any(n.startswith(package + "-") and n.endswith(".rec") for n in names):
             problems.append(f"records: no record of {package}: {names[:20]}")
     expected = {
-        "app": ["N0295"] * 6,
+        "app": ["N0295"] * 7,
         "usesbroken": ["N0205", "N0364", "N0364"],
         "usesborrow": ["N0364"],
     }
@@ -291,6 +291,9 @@ def interface_records(compiler, work, problems):
         found = [d["code"] for d in document["diagnostics"]] if document else None
         if found != codes:
             problems.append(f"records: {package}: expected {codes}, found {found}")
+        if package == "app" and document and not any(
+                "which calls 'base.helper', which does console I/O" in d["message"] for d in document["diagnostics"]):
+            problems.append("records: app: no chain through base's private helper, named 'base.helper'")
 
     # 24. check --all: sorted, with a summary; the same whatever --jobs.
     usesbroken = os.path.join(fixture, "usesbroken")

@@ -659,30 +659,25 @@ fn isAggregate(c: borrow Checker, typ: u32) -> bool =>
 
 /// N0227: an aggregate may not contain itself by value (CheckStructRecursion, a depth-first search).
 fn checkStructRecursion(c: borrow mut Checker) -> Result<void, AllocError> {
-    // Kept across calls: instantiations made later are checked incrementally (§20.4).
-    var state = Vector<u8>.create(); // by type id: 0 new, 1 on the stack, 2 done
-    for (v in c.recursionState.view()) {
-        state.push(v)?;
-    }
-    while (state.length < c.types.types.length) {
-        state.push(0)?;
+    // Kept across calls (c.recursionState): instantiations made later are checked incrementally (§20.4), each call
+    // looking only at the structs and enums made since the last, so that many instantiations stay linear.
+    while (c.recursionState.length < c.types.types.length) {
+        c.recursionState.push(0)?;
     }
     var stack = Vector<u32>.create();
     var order = Vector<u32>.create();
-    for (s in c.structs.view()) {
-        order.push(s.typ)?;
+    for (k in c.recursionStructs..c.structs.length) {
+        order.push(c.structs[k].typ)?;
     }
-    for (e in c.enums.view()) {
-        order.push(e.typ)?;
+    for (k in c.recursionEnums..c.enums.length) {
+        order.push(c.enums[k].typ)?;
     }
+    c.recursionStructs = c.structs.length;
+    c.recursionEnums = c.enums.length;
     for (t in order.view()) {
-        if (state[t as usize] == 0) {
-            visitRecursion(c, t, mut state, mut stack)?;
+        if (c.recursionState[t as usize] == 0) {
+            visitRecursion(c, t, mut stack)?;
         }
-    }
-    c.recursionState.truncate(0);
-    for (v in state.view()) {
-        c.recursionState.push(v)?;
     }
     return Ok();
 }
@@ -690,10 +685,9 @@ fn checkStructRecursion(c: borrow mut Checker) -> Result<void, AllocError> {
 fn visitRecursion(
     c: borrow mut Checker,
     typ: u32,
-    state: borrow mut Vector<u8>,
     stack: borrow mut Vector<u32>,
 ) -> Result<void, AllocError> {
-    state[typ as usize] = 1;
+    c.recursionState[typ as usize] = 1;
     stack.push(typ)?;
     var inner = Vector<u32>.create();
     var fields = Vector<u32>.create();
@@ -703,12 +697,12 @@ fn visitRecursion(
         if (!isAggregate(c, t)) {
             continue;
         }
-        while (state.length < c.types.types.length) {
-            state.push(0)?;
+        while (c.recursionState.length < c.types.types.length) {
+            c.recursionState.push(0)?;
         }
-        if (state[t as usize] == 0) {
-            visitRecursion(c, t, state, stack)?;
-        } else if (state[t as usize] == 1) {
+        if (c.recursionState[t as usize] == 0) {
+            visitRecursion(c, t, stack)?;
+        } else if (c.recursionState[t as usize] == 1) {
             // Every type on the cycle is recursive; report at the one that closes it.
             var from: usize = 0;
             for (i in 0..stack.length) {
@@ -743,7 +737,7 @@ fn visitRecursion(
         }
     }
     stack.truncate(stack.length - 1);
-    state[typ as usize] = 2;
+    c.recursionState[typ as usize] = 2;
     return Ok();
 }
 
@@ -758,35 +752,31 @@ fn sourceOfAggregate(c: borrow Checker, typ: u32) -> u32 {
 
 /// Copy and needs-drop for every struct and enum, contained types first (ComputeCopyAndDrop, §14.1, §15.1).
 fn computeCopyAndDrop(c: borrow mut Checker) -> Result<void, AllocError> {
-    var done = Vector<bool>.create(); // kept across calls (the reference's _copyDone)
-    for (v in c.copyDone.view()) {
-        done.push(v)?;
-    }
+    // Kept across calls (c.copyDone, the reference's _copyDone), each call visiting only the structs and enums made
+    // since the last.
     var order = Vector<u32>.create();
-    for (s in c.structs.view()) {
-        order.push(s.typ)?;
+    for (k in c.copyStructs..c.structs.length) {
+        order.push(c.structs[k].typ)?;
     }
-    for (e in c.enums.view()) {
-        order.push(e.typ)?;
+    for (k in c.copyEnums..c.enums.length) {
+        order.push(c.enums[k].typ)?;
     }
+    c.copyStructs = c.structs.length;
+    c.copyEnums = c.enums.length;
     for (t in order.view()) {
-        visitCopy(c, t, mut done)?;
-    }
-    c.copyDone.truncate(0);
-    for (v in done.view()) {
-        c.copyDone.push(v)?;
+        visitCopy(c, t)?;
     }
     return Ok();
 }
 
-fn visitCopy(c: borrow mut Checker, typ: u32, done: borrow mut Vector<bool>) -> Result<void, AllocError> {
-    while (done.length < c.types.types.length) {
-        done.push(false)?;
+fn visitCopy(c: borrow mut Checker, typ: u32) -> Result<void, AllocError> {
+    while (c.copyDone.length < c.types.types.length) {
+        c.copyDone.push(false)?;
     }
-    if (done[typ as usize]) {
+    if (c.copyDone[typ as usize]) {
         return Ok();
     }
-    done[typ as usize] = true;
+    c.copyDone[typ as usize] = true;
     let t = c.types.info(typ);
     if ((t.structDef != none() && c.types.structs[t.structDef as usize].isRecursive) ||
         (t.enumDef != none() && c.types.enums[t.enumDef as usize].isRecursive)) {
@@ -797,7 +787,7 @@ fn visitCopy(c: borrow mut Checker, typ: u32, done: borrow mut Vector<bool>) -> 
     containedTypes(c, typ, mut contained, mut fields)?;
     for (inner in contained.view()) {
         if (isAggregate(c, inner)) {
-            visitCopy(c, inner, done)?;
+            visitCopy(c, inner)?;
         }
     }
     var anyDrop = false;

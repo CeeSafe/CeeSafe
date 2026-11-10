@@ -479,7 +479,9 @@ fn checkPackageRun(
     run.record.package = copyBytes(data.packages[package].info.name.view())!;
     let members = packageClosure(data, package)!;
     let withTests = !dependencyMode && data.packages[package].tests.length > 0;
-    let recording = dependencyMode || !withTests;
+    // Only a dependency-mode check makes a record: a record says what dependents see, and they see neither the
+    // package's tests nor its entry function, and name its items with its name (qualifyRoot).
+    let recording = dependencyMode;
     var packages = Vector<PackageInfo>.create();
     for (m in members.view()) {
         packages.push(copyPackageInfo(data.packages[m].info)!)!;
@@ -801,7 +803,7 @@ fn finishRun(
     if (!dependencyMode && options.denyWarnings) {
         run.diagnostics.denyWarnings();
     }
-    if (!recording || run.failure != 0 || (!dependencyMode && run.declaresEntry)) {
+    if (!recording || run.failure != 0) {
         return Ok();
     }
     var texts = Vector<Vector<u8>>.create();
@@ -924,6 +926,13 @@ fn moveOutcomes(from: borrow mut Vector<PackageOutcome>, to: borrow mut Vector<P
     }
 }
 
+/// How many checks run at once: `jobs` (0 for the number of CPUs), at most one per task, at least one.
+fn workerCount(jobs: u32, tasks: usize) -> u32 {
+    let wanted = if (jobs == 0) processorCount() else jobs;
+    let workers = if (wanted as usize > tasks) truncate<u32>(tasks) else wanted;
+    return if (workers == 0) 1 else workers;
+}
+
 /// The records of every package `needed` marks, made where the cache has none, level by level: each in its own
 /// process, `jobs` at once, when the cache can pass the records between them; else here, one after another.
 fn ensureRecords(
@@ -969,8 +978,8 @@ fn ensureRecords(
         pushText(mut extra, "--record")?;
         let next = AtomicU64.create(0);
         var out = Vector<PackageOutcome>.create();
-        let workers = if (jobs as usize > tasks.length) truncate<u32>(tasks.length) else jobs;
-        checkInProcesses(options, data, tasks, extra, next, if (workers == 0) 1 else workers, mut out);
+        let workers = workerCount(jobs, tasks.length);
+        checkInProcesses(options, data, tasks, extra, next, workers, mut out);
         // A record the check printed is used here, the cache aside; a check that made none leaves its package to be
         // checked in full by its dependents.
         for (made in out.view()) {
@@ -1006,7 +1015,7 @@ fn packageCheckCommand(given: Options) -> i32 {
     }
     let cache = openRecordCache()!;
     data.identity = copyBytes(cache.identity.view())!;
-    let jobs = if (options.jobsGiven) options.testJobs else processorCount();
+    let jobs = if (options.jobsGiven) options.testJobs else 0; // 0: the number of CPUs, asked for when needed
     var target: usize = 0;
     if (options.checkPackage.length > 0) {
         var found = false;
@@ -1073,8 +1082,8 @@ fn packageCheckCommand(given: Options) -> i32 {
             pushText(mut extra, "--deny-warnings")!;
         }
         let next = AtomicU64.create(0);
-        let workers = if (jobs as usize > tasks.length) truncate<u32>(tasks.length) else jobs;
-        checkInProcesses(options, data, tasks, extra, next, if (workers == 0) 1 else workers, mut outcomes);
+        let workers = workerCount(jobs, tasks.length);
+        checkInProcesses(options, data, tasks, extra, next, workers, mut outcomes);
     } else {
         for (p in tasks.view()) {
             let run = checkPackageRun(options, data, p, records, false);

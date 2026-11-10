@@ -178,6 +178,10 @@ fn checkProgramWith(
         instantiating: 0,
         recursionState: Vector<u8>.create(),
         copyDone: Vector<bool>.create(),
+        recursionStructs: 0,
+        recursionEnums: 0,
+        copyStructs: 0,
+        copyEnums: 0,
         interfaces: Vector<InterfaceEntry>.create(),
         impls: Vector<ImplRef>.create(),
         implsReady: false,
@@ -269,6 +273,11 @@ fn checkProgramWith(
         afterNirErrors: Vector<PendingError>.create(),
         nirLoopErrors: false,
         instanceErrors: false,
+        regionImpls: Vector<u32>.create(),
+        implementationsOf: Map<Word, Vector<u32>>.create(),
+        templatesOf: Map<Word, Vector<u32>>.create(),
+        structInstances: Map<Word, Vector<u32>>.create(),
+        enumInstances: Map<Word, Vector<u32>>.create(),
     };
     // The constructor: the builtins' names, `this`, and a scratch frame's two parts.
     for (k in 0..builtinCount()) {
@@ -494,8 +503,11 @@ fn ownItem(c: borrow mut Checker, symbol: u32, entity: Entity) -> Result<void, A
 fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let entry = c.front.ast.items[item as usize];
     match (entry.kind) {
-        ItemKind.Impl(_, _, _, _, _) => {
+        ItemKind.Impl(_, _, _, _, regions) => {
             c.impls.push(ImplRef { item: item, file: c.file })?; // processed once every item is declared (§21.1)
+            if (regions.count > 0) {
+                c.regionImpls.push(truncate<u32>(c.impls.length - 1))?; // implRegionsOf looks at these alone
+            }
             return Ok();
         }
         ItemKind.Extern(_, _, _) => { return declareExternBlock(c, item); }

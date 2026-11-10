@@ -4,6 +4,10 @@ fn pure(n: u64) -> u64 => mid.twice(n) + mid.calm(n);
 @effects(alloc)
 fn quietly(n: u64) -> u64 => mid.loud(n);
 
+/// Through base's private helper, which its record names as a dependent does: 'base.helper'.
+@effects(alloc)
+fn speaks(n: u64) -> u64 => base.noisy(n);
+
 @effects()
 fn generic(n: u64) -> u64 => mid.either(n, n + 1) + base.listed(n) as u64;
 
@@ -19,5 +23,5 @@ fn shapes(n: u64) -> u64 {
 async fn waiting(n: u64) -> u64 => await mid.laterTwice(n);
 
 fn main() {
-    Console.writeLine(pure(3) + quietly(1) + generic(2) + withClosure(1) + shapes(2) + Async.run(waiting(1)));
+    Console.writeLine(pure(3) + quietly(1) + speaks(1) + generic(2) + withClosure(1) + shapes(2) + Async.run(waiting(1)));
 }

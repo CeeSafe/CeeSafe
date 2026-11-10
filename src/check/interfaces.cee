@@ -247,10 +247,16 @@ fn implements(c: borrow Checker, typ: u32, bound: u32) -> bool {
             return true; // `dyn B` implements B's supertraits too (ADR 0086 §2.6)
         }
     }
-    for (i in c.implementations.view()) {
-        if (i.typ == typ && i.interfaceEntry == b.interfaceEntry && sameLists(c, i.arguments, b.arguments)) {
-            return true;
+    match (c.implementationsOf.get(Word { value: b.interfaceEntry as u64 })) {
+        Some(list) => {
+            for (k in list.view()) {
+                let i = c.implementations[k as usize];
+                if (i.typ == typ && sameLists(c, i.arguments, b.arguments)) {
+                    return true;
+                }
+            }
         }
+        null => {}
     }
     return false;
 }
@@ -464,8 +470,18 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     // Overlap (ADR 0054 §3.1): with a generic impl on either side, one impl of an interface per struct or enum.
     let constructor = declarationOf(c, forType);
     if (constructor != none()) {
-        for (k in 0..c.implementations.length) {
-            let other = c.implementations[k];
+        // The impls of this interface alone, in their order: a scan of every impl was quadratic.
+        var same = Vector<u32>.create();
+        match (c.implementationsOf.get(Word { value: b.interfaceEntry as u64 })) {
+            Some(list) => {
+                for (k in list.view()) {
+                    same.push(k)?;
+                }
+            }
+            null => {}
+        }
+        for (k in same.view()) {
+            let other = c.implementations[k as usize];
             let sameDeclaration = other.interfaceEntry == b.interfaceEntry && declarationOf(
                 c,
                 other.typ,
@@ -494,6 +510,21 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         c.implTemplates.push(
             ImplTemplate { item: item, file: c.file, target: forType, bound: bound, parameters: list },
         )?;
+        let constructorKey = Word { value: declarationOf(c, forType) as u64 };
+        let index = truncate<u32>(c.implTemplates.length - 1);
+        var known = false;
+        match (c.templatesOf.getMut(constructorKey)) {
+            Some(templates) => {
+                templates.push(index)?;
+                known = true;
+            }
+            null => {}
+        }
+        if (!known) {
+            var templates = Vector<u32>.create();
+            templates.push(index)?;
+            c.templatesOf.put(constructorKey, templates)?;
+        }
     }
     return implementFor(c, item, forType, bound, implEnvironment, true);
 }
@@ -571,7 +602,9 @@ fn isInterfaceImplMethod(c: borrow Checker, f: u32) -> bool {
 
 /// The region parameters of the impl whose method `f` (an AST function) is, or none (ADR 0054 §3.2).
 fn implRegionsOf(c: borrow Checker, f: u32) -> Range {
-    for (r in c.impls.view()) {
+    // Only the impls with region parameters: every function asks, so a scan of every impl was quadratic.
+    for (index in c.regionImpls.view()) {
+        let r = c.impls[index as usize];
         match (c.front.ast.items[r.item as usize].kind) {
             ItemKind.Impl(_, _, functions, _, regions) => {
                 if (regions.count > 0) {
@@ -596,9 +629,19 @@ fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocErro
     if (constructor == none()) {
         return Ok();
     }
-    for (t in 0..c.implTemplates.length) {
-        let template = c.implTemplates[t];
-        if (template.target == typ || declarationOf(c, template.target) != constructor) {
+    // The templates for this declaration alone: every instance asks, so a scan of every template was quadratic.
+    var candidates = Vector<u32>.create();
+    match (c.templatesOf.get(Word { value: constructor as u64 })) {
+        Some(list) => {
+            for (t in list.view()) {
+                candidates.push(t)?;
+            }
+        }
+        null => {}
+    }
+    for (t in candidates.view()) {
+        let template = c.implTemplates[t as usize];
+        if (template.target == typ) {
             continue;
         }
         var parameters = Vector<u32>.create();
@@ -698,6 +741,21 @@ fn implementFor(
 ) -> Result<void, AllocError> {
     let b = c.types.bounds[bound as usize];
     c.implementations.push(Implementation { typ: forType, interfaceEntry: b.interfaceEntry, arguments: b.arguments })?;
+    let index = truncate<u32>(c.implementations.length - 1);
+    let key = Word { value: b.interfaceEntry as u64 };
+    var found = false;
+    match (c.implementationsOf.getMut(key)) {
+        Some(list) => {
+            list.push(index)?;
+            found = true;
+        }
+        null => {}
+    }
+    if (!found) {
+        var list = Vector<u32>.create();
+        list.push(index)?;
+        c.implementationsOf.put(key, list)?;
+    }
     let interfaceEntry = b.interfaceEntry;
     var arguments = Vector<u32>.create();
     listTypes(c, b.arguments, mut arguments)?;

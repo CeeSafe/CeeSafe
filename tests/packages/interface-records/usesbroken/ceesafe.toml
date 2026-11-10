@@ -1,0 +1,9 @@
+[package]
+name = "usesbroken"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+broken = { path = "../broken" }
+borrowfail = { path = "../borrowfail" }
+mid = { path = "../mid" }

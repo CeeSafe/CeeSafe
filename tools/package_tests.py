@@ -74,6 +74,19 @@
       the language server answers with it there.
     - A constant `+` past 16 MiB is tests/reference/tests/corpus/check-fail/constant-concatenation-limit.cee.
 22. hover: the language server shows the type of an `embedText` in a constant's value and of an `embed` in a static's.
+23. The interface records' oracle (ADR 0082 §2.7, §5): for every package of every fixture here, interface-records'
+    included (a dependency with a type error, one with an ownership error, a generic body, an `@effectsOf` function
+    with a closure parameter, an async function, a coercion to `dyn`, effect chains through two dependencies), `check`
+    (each dependency from its record, cold and then warm) gives the diagnostics of `check --whole-program`, but that a
+    dependency with errors is one N0364 at its line in the manifest instead of its own diagnostics.
+24. check --all: one JSON document whose diagnostics are sorted by package, file and position, with a `packages`
+    summary of each package's errors and warnings; the same with --jobs 1 and 4; its text form, and its exit status.
+25. Stale records are never used (ADR 0082 §2.7): a record changed to say its package has errors is used while it
+    holds (N0364), but not with another banner, after its package's sources change, after a dependency's interface
+    changes, when it is writable by the group or others, when it is cut short, or when the cache directory is
+    writable by others; a change inside a body dependents skip keeps the dependency's interface, so the dependent's
+    record still holds. `build` reads no record: it checks the whole program.
+26. The cache: `$CEESAFE_HOME/cache` and its `records` directory are made with mode 0700, and each record 0600.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -161,6 +174,267 @@ def language_server(compiler, path, hover=None):
 
 def language_server_diagnostics(compiler, path):
     return language_server(compiler, path)[0]
+
+
+def record_fields(data):
+    """An interface record's fields (src/host/record_cache.cee): each `<length>:<bytes>\\n`."""
+    fields, i = [], 0
+    while i < len(data):
+        j = data.index(b":", i)
+        n = int(data[i:j])
+        fields.append(data[j + 1:j + 1 + n])
+        if data[j + 1 + n:j + 2 + n] != b"\n":
+            raise ValueError("not a record")
+        i = j + 2 + n
+    return fields
+
+
+def record_bytes(fields):
+    """The record of `fields`, its last field (the SHA-256 of the rest) made afresh."""
+    import hashlib
+    body = b"".join(b"%d:%s\n" % (len(f), f) for f in fields[:-1])
+    digest = hashlib.sha256(body).hexdigest().encode()
+    return body + b"%d:%s\n" % (len(digest), digest)
+
+
+def json_check(compiler, directory, *extra, env=None):
+    """`check --diagnostics-format=json` in `directory`: its exit status and document (None if it printed none)."""
+    p = run([compiler, "check", "--diagnostics-format=json", *extra], directory, env)
+    try:
+        return p.returncode, json.loads(p.stdout)
+    except ValueError:
+        return p.returncode, None
+
+
+def oracle_problem(compiler, directory, whole, per, env):
+    """What makes `per`, the per-package check, differ from `whole`, the whole-program check (ADR 0082 §2.7): the
+    same diagnostics, but that a dependency that fails on its own may be one N0364 at the manifest instead of its own
+    diagnostics (its own are kept when it was checked here in full, its record opaque); or None."""
+    root = None
+    with open(os.path.join(directory, "ceesafe.toml")) as f:
+        for line in f:
+            if line.strip().startswith("name"):
+                root = line.split("=", 1)[1].strip().strip('"')
+                break
+    status, everything = json_check(compiler, directory, "--all", env=env)
+    if everything is None:
+        return f"check --all printed no document ({status})"
+    failed = {e["name"] for e in everything.get("packages", []) if e["errors"] > 0 and e["name"] != root}
+    n0364 = [d for d in per["diagnostics"] if d["code"] == "N0364"]
+    rest = [d for d in per["diagnostics"] if d["code"] != "N0364"]
+
+    def outside(diagnostics):
+        return [d for d in diagnostics if d.get("package", root) not in failed]
+
+    if outside(rest) != outside(whole["diagnostics"]):
+        return (f"diagnostics differ:\n    whole {json.dumps(outside(whole['diagnostics']))[:900]}"
+                f"\n    per   {json.dumps(outside(rest))[:900]}")
+    replaced = False
+    for package in sorted(failed):
+        mine = [d for d in rest if d.get("package") == package]
+        theirs = [d for d in whole["diagnostics"] if d.get("package") == package]
+        if mine and mine != theirs:
+            return f"{package}'s diagnostics differ: {json.dumps(mine)[:600]} {json.dumps(theirs)[:600]}"
+        replaced = replaced or (not mine and any(d["severity"] == "error" for d in theirs))
+    if replaced and not n0364:
+        return "a dependency's errors are left out, and no N0364 stands for them"
+    for d in n0364:
+        named = d["message"].split("the dependency '", 1)[-1].split("'", 1)[0]
+        if d.get("package") != root or d["file"] != "ceesafe.toml" or d["severity"] != "error" or named not in failed:
+            return f"N0364 is not an error at the manifest, for a dependency that fails: {d}"
+    return None
+
+
+def interface_records(compiler, work, problems):
+    """Checks 23-26 (ADR 0082 §2.7), on their own copy of the fixtures and their own $CEESAFE_HOME."""
+    oracle = os.path.join(work, "oracle")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages"), oracle)
+    home = os.path.join(work, "records-home")
+    env = {"CEESAFE_HOME": home}
+    directories = sorted(top for top, _, files in os.walk(oracle) if "ceesafe.toml" in files)
+    for directory in directories:
+        run([compiler, "fetch", "--offline"], directory, env)
+
+    # 23. Every package: the per-package check, cold then warm, against the whole program's.
+    compared = 0
+    for directory in directories:
+        name = os.path.relpath(directory, oracle)
+        status_whole, whole = json_check(compiler, directory, "--whole-program", env=env)
+        if status_whole not in (0, 1) or whole is None:
+            continue
+        cold = json_check(compiler, directory, env=env)
+        warm = json_check(compiler, directory, env=env)
+        if cold != warm:
+            problems.append(f"records: {name}: the warm check differs from the cold one")
+        if cold[0] != status_whole or cold[1] is None:
+            problems.append(f"records: {name}: exit {cold[0]}, the whole program's {status_whole}")
+            continue
+        problem = oracle_problem(compiler, directory, whole, cold[1], env)
+        if problem:
+            problems.append(f"records: {name}: {problem}")
+        compared += 1
+    if compared < 40:
+        problems.append(f"records: only {compared} packages compared")
+    fixture = os.path.join(oracle, "interface-records")
+    cache = os.path.join(home, "cache", "records")
+    names = sorted(os.listdir(cache)) if os.path.isdir(cache) else []
+    for package in ("base", "mid", "broken", "borrowfail"):
+        if not any(n.startswith(package + "-") and n.endswith(".rec") for n in names):
+            problems.append(f"records: no record of {package}: {names[:20]}")
+    expected = {
+        "app": ["N0295"] * 6,
+        "usesbroken": ["N0205", "N0364", "N0364"],
+        "usesborrow": ["N0364"],
+    }
+    for package, codes in expected.items():
+        _, document = json_check(compiler, os.path.join(fixture, package), env=env)
+        found = [d["code"] for d in document["diagnostics"]] if document else None
+        if found != codes:
+            problems.append(f"records: {package}: expected {codes}, found {found}")
+
+    # 24. check --all: sorted, with a summary; the same whatever --jobs.
+    usesbroken = os.path.join(fixture, "usesbroken")
+    p1 = run([compiler, "check", "--all", "--jobs", "1", "--diagnostics-format=json"], usesbroken, env)
+    p4 = run([compiler, "check", "--all", "--jobs", "4", "--diagnostics-format=json"], usesbroken, env)
+    try:
+        document = json.loads(p1.stdout)
+        keys = [(d.get("package", ""), d["file"], d["start"]["line"], d["start"]["column"])
+                for d in document["diagnostics"]]
+        summary = {e["name"]: (e["errors"], e["warnings"]) for e in document["packages"]}
+        want = {"base": (0, 0), "borrowfail": (1, 0), "broken": (1, 0), "mid": (0, 0), "usesbroken": (3, 0)}
+        if keys != sorted(keys) or summary != want or document["errors"] != 5 or p1.returncode != 1:
+            problems.append(f"check --all: {keys} {summary} {document['errors']} ({p1.returncode})")
+        if [e["name"] for e in document["packages"]] != sorted(want):
+            problems.append(f"check --all: the summary is not by name: {document['packages']}")
+    except (ValueError, KeyError) as e:
+        problems.append(f"check --all printed no document ({e}): {p1.stdout[:300]} {p1.stderr[:300]}")
+    if p1.stdout != p4.stdout:
+        problems.append("check --all: --jobs 1 and --jobs 4 differ")
+    text = run([compiler, "check", "--all"], usesbroken, env)
+    if text.returncode != 1 or "ceesafec: package 'broken': 1 error, 0 warnings" not in text.stderr:
+        problems.append(f"check --all as text: {text.stderr[-500:]} ({text.returncode})")
+    p = run([compiler, "check", "--all"], os.path.join(fixture, "base"), env)
+    if p.returncode != 0 or p.stdout or p.stderr:
+        problems.append(f"check --all in base: ({p.returncode}) {p.stdout[:200]} {p.stderr[:200]}")
+    p = run([compiler, "check", "--all", "--whole-program"], usesbroken, env)
+    if p.returncode != 2:
+        problems.append(f"check --all --whole-program is not a usage error ({p.returncode})")
+
+    # 25. Stale records. A fresh cache, then a forged record of mid that says it has errors.
+    stale = os.path.join(work, "stale")
+    shutil.copytree(fixture, stale)
+    home2 = os.path.join(work, "stale-home")
+    env2 = {"CEESAFE_HOME": home2}
+    app = os.path.join(stale, "app")
+    for package in ("mid", "app"):
+        run([compiler, "fetch", "--offline"], os.path.join(stale, package), env2)
+    records = os.path.join(home2, "cache", "records")
+
+    def codes():
+        _, document = json_check(compiler, app, env=env2)
+        return [d["code"] for d in document["diagnostics"]] if document else None
+
+    clean = codes()
+
+    def record_of(package):
+        found = [n for n in os.listdir(records) if n.startswith(package + "-") and n.endswith(".rec")]
+        return os.path.join(records, found[0]) if len(found) == 1 else None
+
+    def forge(package):
+        """Rewrites the package's current record to say it has type errors; returns its path."""
+        for name in os.listdir(records):  # the current record alone: made afresh
+            if name.startswith(package + "-"):
+                os.remove(os.path.join(records, name))
+        codes()
+        path = record_of(package)
+        if path is None:
+            return None
+        fields = record_fields(open(path, "rb").read())
+        fields[6], fields[8] = b"1", b"2"  # errors, phase: the types
+        with open(path, "wb") as f:
+            f.write(record_bytes(fields))
+        os.chmod(path, 0o600)
+        return path
+
+    def forged_used(label, expect_used, prepare=None, package="mid"):
+        path = forge(package)
+        if path is None:
+            problems.append(f"stale records: {label}: no record of {package}")
+            return
+        if prepare:
+            prepare(path)
+        found = codes()
+        used = found is not None and "N0364" in found
+        if used != expect_used:
+            problems.append(f"stale records: {label}: the forged record was {'' if used else 'not '}used: {found}")
+        # Whatever happened, a clean check again: a fresh record replaces the forged one.
+        for name in os.listdir(records):
+            if name.startswith(package + "-"):
+                os.remove(os.path.join(records, name))
+        codes()
+
+    if clean is None or "N0364" in clean or record_of("mid") is None:
+        problems.append(f"stale records: the first check: {clean}")
+    else:
+        forged_used("a valid record", True)
+        def other_banner(path):
+            fields = record_fields(open(path, "rb").read())
+            fields[3] = b"ceesafec 0.0.1"
+            with open(path, "wb") as f:
+                f.write(record_bytes(fields))
+
+        forged_used("another banner", False, other_banner)
+        forged_used("writable by others", False, lambda path: os.chmod(path, 0o666))
+        forged_used("writable by the group", False, lambda path: os.chmod(path, 0o620))
+        forged_used("cut short", False, lambda path: open(path, "r+b").truncate(os.path.getsize(path) - 10))
+        mid_source = os.path.join(stale, "mid", "src", "lib.cee")
+        original = open(mid_source).read()
+
+        def edit_mid(path):
+            with open(mid_source, "a") as f:
+                f.write("\n// a comment changes the sources\n")
+
+        forged_used("mid's sources changed", False, edit_mid)
+        with open(mid_source, "w") as f:
+            f.write(original)
+        codes()
+        base_source = os.path.join(stale, "base", "src", "lib.cee")
+        base_original = open(base_source).read()
+
+        def edit_base_interface(path):
+            with open(base_source, "a") as f:
+                f.write("\npublic fn extra() -> u64 => 1;\n")
+
+        forged_used("base's interface changed", False, edit_base_interface)
+        with open(base_source, "w") as f:
+            f.write(base_original)
+        codes()
+
+        def edit_base_body(path):
+            # Inside grow's body, which dependents skip: base's interface, and so mid's key, stay.
+            with open(base_source, "w") as f:
+                f.write(base_original.replace("v.push(n)!;", "v.push(n + 0)!;"))
+            codes()  # base is checked again and recorded; mid's forged record still holds
+
+        forged_used("a change inside base's skipped body", True, edit_base_body)
+        with open(base_source, "w") as f:
+            f.write(base_original)
+        codes()
+        forged_used("the cache writable by others", False, lambda path: os.chmod(records, 0o777))
+        os.chmod(records, 0o700)
+        # build reads no record: a forged one changes nothing.
+        forge("mid")
+        p = run([compiler, "build", "--emit", "c", "-o", os.path.join(work, "stale-c")], app, env2)
+        if p.returncode != 1 or "N0364" in p.stderr or "N0295" not in p.stderr:
+            problems.append(f"stale records: build used a record: ({p.returncode}) {p.stderr[:400]}")
+
+    # 26. The cache's modes.
+    for path, mode in ((os.path.join(home2, "cache"), 0o700), (records, 0o700)):
+        if os.path.isdir(path) and (os.stat(path).st_mode & 0o777) != mode:
+            problems.append(f"records: {path} has mode {oct(os.stat(path).st_mode & 0o777)}, not {oct(mode)}")
+    for name in os.listdir(records) if os.path.isdir(records) else []:
+        if (os.stat(os.path.join(records, name)).st_mode & 0o777) != 0o600:
+            problems.append(f"records: {name} has mode {oct(os.stat(os.path.join(records, name)).st_mode & 0o777)}")
 
 
 def main():
@@ -402,7 +676,10 @@ def main():
         shutil.copytree(os.path.join(ROOT, "tests", "packages", "c-names"), c_names)
 
         def n0201s(directory, command="check"):
-            p = run([compiler, command, "--diagnostics-format=json"], directory)
+            # The whole program's check (ADR 0013 D4): `check` alone would report a dependency that fails on its own
+            # as one N0364 (ADR 0082 §2.7, §23–§25 below).
+            extra = ["--whole-program"] if command == "check" else []
+            p = run([compiler, command, "--diagnostics-format=json", *extra], directory)
             try:
                 return p.returncode, [d for d in json.loads(p.stdout)["diagnostics"] if d["code"] == "N0201"]
             except (ValueError, KeyError):
@@ -581,7 +858,8 @@ def main():
             text = f.read()
         with open(util, "w") as f:
             f.write(text.replace("x + 10;", "x + true;"))
-        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        # The whole program's check, which reports the dependency's own error (`check` alone reports N0364 for it).
+        p = run([compiler, "check", "--whole-program", "--diagnostics-format=json"], app)
         try:
             found = [(d["code"], d["file"], d.get("package")) for d in json.loads(p.stdout)["diagnostics"]]
         except (ValueError, KeyError):
@@ -956,7 +1234,9 @@ def main():
             if want not in answered:
                 problems.append(f"hover: {line}:{character} should show {want}: {answered[:300]!r}")
 
-    print(f"package_tests: 22 checks; {len(problems)} problems")
+        interface_records(compiler, work, problems)
+
+    print(f"package_tests: 26 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

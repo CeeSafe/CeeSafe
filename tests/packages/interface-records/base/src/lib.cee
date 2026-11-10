@@ -1,0 +1,54 @@
+// ADR 0082 §2.7: what a dependent takes from base's interface record (the effects of the bodies it skips) and what
+// it checks again (generic bodies, a closure-parameter function, an async function).
+
+public interface Shape {
+    fn area(borrow this) -> u64;
+}
+
+public struct Square {
+    public side: u64;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u64 => this.side * this.side;
+}
+
+/// Allocates: a dependent's @effects() function that calls it fails through the record's chain.
+public fn grow(n: u64) -> u64 {
+    var v = Vector<u64>.create();
+    v.push(n)!;
+    return v[0];
+}
+
+public fn quiet(n: u64) -> u64 => n + 1;
+
+/// Sleeps (console I/O), through a private helper.
+public fn noisy(n: u64) -> u64 => helper(n);
+
+fn helper(n: u64) -> u64 {
+    Console.writeLine(n);
+    return n;
+}
+
+/// A generic body, checked again in every package that sees it.
+public fn pick<T>(a: T, b: T, first: bool) -> T => if (first) a else b;
+
+/// A generic body that allocates.
+public fn listed<T>(value: T) -> usize {
+    var v = Vector<T>.create();
+    v.push(value)!;
+    return v.length;
+}
+
+/// A function with a closure parameter.
+@effectsOf(f)
+public fn applyTwice(n: u64, f: borrow fn(u64) -> u64) -> u64 => f(f(n));
+
+/// An async function.
+public async fn later(n: u64) -> u64 => n + grow(n);
+
+/// A coercion to `dyn` in a body a dependent skips.
+public fn measured(side: u64) -> u64 {
+    let s: Box<dyn Shape> = Box.create(Square { side: side })!;
+    return s.area();
+}

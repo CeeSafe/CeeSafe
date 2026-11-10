@@ -1,0 +1,10 @@
+public fn twice(n: u64) -> u64 => base.grow(n) + base.grow(n);
+
+public fn calm(n: u64) -> u64 => base.quiet(n);
+
+public fn loud(n: u64) -> u64 => base.noisy(n) + base.measured(n);
+
+/// Generic, calling base's generic code.
+public fn either<T>(a: T, b: T) -> T => base.pick(a, b, true);
+
+public async fn laterTwice(n: u64) -> u64 => await base.later(n) + await base.later(n);

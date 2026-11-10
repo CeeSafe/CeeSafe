@@ -1,0 +1,8 @@
+// borrowfail fails in the ownership checks, which run here too; the effect checks after them do not, so 'pure' is
+// not reported, in the check of the whole program as in this package's.
+@effects()
+fn pure(n: u64) -> u64 => mid.twice(n);
+
+fn main() {
+    Console.writeLine(borrowfail.fine(2) + pure(3));
+}

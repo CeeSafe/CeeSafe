@@ -1,0 +1,8 @@
+[package]
+name = "usesborrow"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+borrowfail = { path = "../borrowfail" }
+mid = { path = "../mid" }

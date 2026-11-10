@@ -1,0 +1,99 @@
+// Scratch frames on several threads (type-system.md §19.5): each thread has its own scratch stack, so two threads may
+// each have a root frame live at once, and neither is handed memory the other uses. Up to 0.27.0 the stack was one for
+// the process and not synchronised: this program panicked ("a scratch frame is already active") or raced.
+// FailingAllocator's countdown is atomic (§18.1): of two threads' allocations after failAfter(n), exactly n succeed.
+// The contract suite runs it under ThreadSanitizer ("run tsan scratch").
+
+// Values from a root frame, a nested frame's work over them (large enough for new chunks), and a check that the
+// root frame's values are still this thread's own.
+fn work(seed: u64, count: usize) -> Result<u64, AllocError> {
+    using frame = Scratch.enter();
+    let values = frame.allocArray(count, 0u64)?;
+    for (i in 0..values.length) {
+        values[i] = seed * 1000000 + i as u64;
+    }
+    var extra: u64 = 0;
+    {
+        using inner = frame.enter();
+        let more = inner.allocArray(count * 2, seed)?;
+        for (x in more) {
+            extra += x;
+        }
+    }
+    var sum: u64 = 0;
+    for (i in 0..values.length) {
+        if (values[i] != seed * 1000000 + i as u64) {
+            Console.writeLine("scratch memory changed under its frame");
+            return Ok(0);
+        }
+        sum += values[i];
+    }
+    return Ok(sum + extra);
+}
+
+fn rounds(seed: u64) -> u64 {
+    var total: u64 = 0;
+    for (k in 0usize..60) {
+        total += work(seed, 16 + (k % 5) * 1100)!;
+    }
+    return total;
+}
+
+// Successes of `tries` allocations through FailingAllocator.
+fn failing(tries: u32) -> u32 {
+    var succeeded: u32 = 0;
+    for (i in 0..tries) {
+        match (Box.createIn(FailingAllocator {}, i)) {
+            Ok(_) => { succeeded += 1; }
+            Err(_) => {}
+        }
+    }
+    return succeeded;
+}
+
+fn main() {
+    // Two threads, each with its own root frames, at once.
+    let t = Thread.spawn(move () => rounds(2))!;
+    let mine = rounds(3);
+    let theirs = t.join();
+    Console.writeLine(mine);
+    Console.writeLine(theirs);
+
+    // Thread.both while this thread has a root frame live: the new thread enters its own, and writes into this
+    // frame's memory through the slice it captures, which outlives the call.
+    let expected = work(5, 3000usize)!;
+    {
+        using frame = Scratch.enter();
+        let shared = frame.allocArray(1000usize, 1u64)!;
+        var fromThread: u64 = 0;
+        var here: u64 = 0;
+        Thread.both(
+            () => {
+                fromThread = work(5, 3000usize)!;
+                for (i in 0..shared.length) {
+                    shared[i] = 2;
+                }
+            },
+            () => { here = 7; },
+        );
+        var total: u64 = 0;
+        for (x in shared) {
+            total += x;
+        }
+        Console.writeLine(fromThread == expected);
+        Console.writeLine(total + here);
+    }
+
+    // One countdown for every thread: 2 x 1000 attempts after failAfter(1000), 1000 successes.
+    FailingAllocator.failAfter(1000);
+    let other = Thread.spawn(move () => failing(1000))!;
+    let ours = failing(1000);
+    let succeeded = ours + other.join();
+    FailingAllocator.reset();
+    Console.writeLine(succeeded);
+}
+// expect-stdout: 399100650960
+// expect-stdout: 266140385040
+// expect-stdout: true
+// expect-stdout: 2007
+// expect-stdout: 1000

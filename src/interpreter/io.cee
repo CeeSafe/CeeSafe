@@ -1381,6 +1381,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_random_fill")) {
         return "Ps:l";
     }
+    if (sameText(name, "ceesafe_crc32c_available")) {
+        return ":u";
+    }
+    if (sameText(name, "ceesafe_crc32c_update")) {
+        return "uPs:u";
+    }
     if (sameText(name, "ceesafe_clock_realtime")) {
         return "PP:-";
     }
@@ -1667,6 +1673,25 @@ fn callC(
         }
         freeMemory(it, address)?;
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_crc32c_available")) {
+        // Crc32c (ADR 0089): the interpreter has no CRC instruction, so lib/std keeps its tables, as on such a CPU.
+        return Ok(valueOf(0, 4));
+    }
+    if (sameText(n0, "ceesafe_crc32c_update")) {
+        // Not reached while ceesafe_crc32c_available answers 0; modelled bit by bit (reflected 0x82F63B78) all the same.
+        var crc = arguments[0].bits(0, 4)?;
+        let at = arguments[1].bits(0, 8)?;
+        let length = arguments[2].bits(0, 8)?;
+        var k: u64 = 0;
+        while (k < length) {
+            crc = crc ^ it.memory.loadBits(at + k, 1)?;
+            for (bit in 0..8) {
+                crc = if (crc & 1 != 0) (crc >> 1) ^ 0x82F63B78 else crc >> 1;
+            }
+            k += 1;
+        }
+        return Ok(valueOf(crc, 4));
     }
     if (sameText(n0, "ceesafe_random_fill")) {
         // Random.fill (ADR 0060): a fixed sequence, SplitMix64 from a fixed seed and continuing from call to call, so

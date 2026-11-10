@@ -126,7 +126,7 @@ const blog = [
 
 export default defineConfig({
   title: "CeeSafe",
-  description: "A memory-safe systems language with C#-style syntax, compiled to portable C.",
+  description: "A memory-safe systems language with modern syntax, compiled to portable C.",
   base: "/CeeSafe/",
   srcExclude: ["README.md", "public/**"],
   cleanUrls: true,

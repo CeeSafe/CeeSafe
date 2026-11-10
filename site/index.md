@@ -7,7 +7,7 @@ hero:
   image:
     src: /logo.svg
     alt: CeeSafe
-  tagline: Ownership and borrowing with C#-style syntax, deterministic destruction, explicit allocation, and readable C11 that runs anywhere C runs, including inside an operating system kernel. Its compiler is written in CeeSafe.
+  tagline: Ownership and borrowing with modern syntax, deterministic destruction, explicit allocation, and readable C11 that runs anywhere C runs, including inside an operating system kernel. Its compiler is written in CeeSafe.
   actions:
     - theme: brand
       text: Get started

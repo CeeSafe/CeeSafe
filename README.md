@@ -4,8 +4,7 @@
 
 **Memory-safe systems programming, compiled to C.**
 
-CeeSafe is a systems programming language with C#-, Java- and TypeScript-style syntax and Rust-style ownership and
-borrowing.
+CeeSafe is a systems programming language with modern syntax and Rust-style ownership and borrowing.
 `ceesafec` compiles it ahead of time to portable, readable C11, so a CeeSafe program runs wherever a C compiler does:
 Linux, macOS and Windows, bare metal, and inside an operating system kernel. There is no garbage collector and no
 reference counting; values are destroyed deterministically. The compiler is written in CeeSafe and rebuilds itself to

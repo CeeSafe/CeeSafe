@@ -162,7 +162,7 @@ const libraries = ["reference/api/core.md", "reference/api/std.md"];
 const summary = [
   "# CeeSafe",
   "",
-  "> CeeSafe is a memory-safe systems programming language with C#- and TypeScript-style syntax, compiled ahead of",
+  "> CeeSafe is a memory-safe systems programming language with modern syntax, compiled ahead of",
   "> time to portable C11. Ownership and borrowing are checked at compile time; there is no garbage collector. Its",
   "> compiler, ceesafec, is written in CeeSafe.",
   "",

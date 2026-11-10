@@ -1,6 +1,6 @@
 # The CeeSafe Specification
 
-CeeSafe is a memory-safe systems programming language with C#/TypeScript-style syntax, compiled ahead of time to
+CeeSafe is a memory-safe systems programming language with modern syntax, compiled ahead of time to
 portable C. This directory is its specification. `ceesafec` embeds it: `ceesafec explain` and the MCP server
 (`ceesafe_spec_search`, `ceesafe_spec_section`, the `ceesafe://docs/…` resources) serve this text.
 

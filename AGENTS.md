@@ -2,7 +2,7 @@
 
 # Using CeeSafe
 
-This package is written in CeeSafe, a memory-safe systems programming language with C#/TypeScript-style syntax that
+This package is written in CeeSafe, a memory-safe systems programming language with modern syntax that
 `ceesafec` compiles ahead of time to C. Ownership and borrowing are checked at compile time; there is no garbage
 collector. CeeSafe is new: code that looks right from C#, TypeScript or Rust often is not CeeSafe. Check every edit with the
 compiler, and read the guide for agents: https://ceesafe.github.io/CeeSafe/guide/for-agents (the whole guide and
@@ -47,7 +47,7 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 
 - There is no `~`: complement with `x ^ 0xFFFFFFFF`. There are no type aliases or tuples, and no `==` on structs.
 - An optional's fallback is `o ?? value`; `o.isSome()` and `o.isNull()` test it. `let _ = f();` discards a value.
-- Indexes are `usize`; `0..4` is a range of `i32`. Loop with `for (i in 0..values.length)`.
+- Indexes are `usize`. `0..4` is a `usize` range when the body indexes with its variable, else `i32`; `0..values.length` is `usize`.
 - `if` and `match` expressions take expressions, `let s = if (x < 0) -1 else 1;`, or blocks that end with their value
   without `;`; a statement's block has no value.
 - A variable that changes is `var`; a `let` cannot be assigned. A `borrow mut` argument is written `mut x`.
@@ -62,6 +62,10 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - Pass a function or closure as a parameter and call the parameter; a field holding one cannot be called.
 - A `StringView` inside an enum or struct needs a region parameter; for fixed messages, use an enum of reasons.
 - A method cannot have the name of a field.
+- Look a name up before deciding it does not exist: MCP `ceesafe_api` (`TextWriter.decimal`, `Process.argument`), or
+  the guide's built-in types page and the lib/core and lib/std API pages. A "did you mean" in an error names the real one.
+- A lookup that may find nothing is an optional (`Process.argument(i)`, `StringView.fromUtf8(b)`): `Some`/`null`.
+- Some keywords read like names (`own`, `type`, `move`, `drop`, `where`); async code uses `AsyncConsole`, not `Console`.
 
 <!--CEESAFE END-->
 

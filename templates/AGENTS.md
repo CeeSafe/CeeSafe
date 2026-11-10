@@ -2,7 +2,7 @@
 
 # Using CeeSafe
 
-This package is written in CeeSafe, a memory-safe systems programming language with C#/TypeScript-style syntax that
+This package is written in CeeSafe, a memory-safe systems programming language with modern syntax that
 `ceesafec` compiles ahead of time to C. Ownership and borrowing are checked at compile time; there is no garbage
 collector. CeeSafe is new: code that looks right from C#, TypeScript or Rust often is not CeeSafe. Check every edit with the
 compiler, and read the guide for agents: https://ceesafe.github.io/CeeSafe/guide/for-agents (the whole guide and

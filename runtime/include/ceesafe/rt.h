@@ -1234,19 +1234,31 @@ int64_t ceesafe_host_file_kind(void const *file);
  * - uname: writes only the system's name, "Windows";
  * - openat: opens the absolute `path` for reading, and only a regular file on a disk;
  * - fcntl: only macOS's F_GETPATH (50), the descriptor's final path into a buffer of 4,096 bytes;
- * - readlink: fails (ENOSYS); pread: reads at an offset. */
+ * - readlink: fails (ENOSYS); pread: reads at an offset;
+ * - fstat, pwrite, renameat, unlinkat and syscall, which ceesafec's interface-record cache calls only where it can
+ *   read owners and modes (ADR 0082 §2.7), and syscall on macOS only: each fails (ENOSYS). */
 #define realpath ceesafe_win_realpath
 #define uname ceesafe_win_uname
 #define openat ceesafe_win_openat
 #define fcntl ceesafe_win_fcntl
 #define readlink ceesafe_win_readlink
 #define pread ceesafe_win_pread
+#define fstat ceesafe_win_fstat
+#define pwrite ceesafe_win_pwrite
+#define renameat ceesafe_win_renameat
+#define unlinkat ceesafe_win_unlinkat
+#define syscall ceesafe_win_syscall
 char *ceesafe_win_realpath(const char *path, char *resolved);
 int32_t ceesafe_win_uname(uint8_t *name);
 int32_t ceesafe_win_openat(int32_t directory, char const *path, int32_t flags, ...);
 int32_t ceesafe_win_fcntl(int32_t fd, int32_t command, ...);
 ptrdiff_t ceesafe_win_readlink(char const *path, char *buffer, size_t size);
 ptrdiff_t ceesafe_win_pread(int32_t fd, uint8_t *buffer, size_t size, int64_t offset);
+int32_t ceesafe_win_fstat(int32_t fd, uint8_t *buffer);
+ptrdiff_t ceesafe_win_pwrite(int32_t fd, uint8_t const *buffer, size_t size, int64_t offset);
+int32_t ceesafe_win_renameat(int32_t from_directory, char const *from, int32_t to_directory, char const *to);
+int32_t ceesafe_win_unlinkat(int32_t directory, char const *path, int32_t flags);
+int32_t ceesafe_win_syscall(int32_t number, ...);
 #endif
 int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode);
 int64_t ceesafe_host_console_flush(void);

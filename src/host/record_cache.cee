@@ -2,30 +2,36 @@
 // (`cache/objects/`, §2.6). A record is a cache of a check this compiler made, never a promise from outside, so any
 // doubt is a miss and a recheck:
 // - the cache directories are made with mode 0700, and used only while they, and each record, are owned by this user
-//   and not writable by the group or others;
-// - a record is read from the descriptor whose owner and mode were checked, and one that cannot be read, is not
-//   complete (its last field is the SHA-256 of the rest) or names another key, banner, profile or package, is a miss;
-// - a record is written to a new temporary name (created exclusively) and renamed, so agents checking at once share
-//   the cache and a reader never sees half a record.
+//   and not writable by the group or others. `$CEESAFE_HOME` and the directories above it are trusted as they are
+//   named; `cache` and `records` are opened once, neither through a symbolic link, and their descriptors checked;
+// - a record is opened from the descriptor of `records` (openat, never through a symbolic link), and read from the
+//   descriptor whose owner and mode were checked; one that cannot be read, is not complete (its last field is the
+//   SHA-256 of the rest) or names another key, banner, profile or package, is a miss;
+// - a record is written to a new temporary name (created exclusively) in that directory and renamed there, so agents
+//   checking at once share the cache and a reader never sees half a record.
 // Owners and modes come from fstat(2), whose layout this file knows for macOS and Linux on arm64 and x86-64; on any
 // other system (Windows included) no record is read or written, and every check is whole.
 //
 // A record is a sequence of fields, each `<length>:<bytes>\n`, in this order: the magic `ceesafe-interface-record`,
-// the format (`1`), the key, the banner, the package, the profile, errors, warnings, the phase of its first error,
+// the format (`2`), the key, the banner, the package, the profile, errors, warnings, the phase of its first error,
 // opaque (`0`/`1`), the interface hash, the number of functions; then per function its path in the package, its
 // declaration's offset, its effects, and for sleep, alloc, suspend and write a chain (the number of steps, the steps,
-// the end, truncated `0`/`1`, its length in full); last, the SHA-256 (hexadecimal) of every byte before that field.
+// the end, truncated `0`/`1`, its rank); last, the SHA-256 (hexadecimal) of every byte before that field.
 
 extern "C" {
-    // POSIX's calls (ceesafec 0.8.0's runtime lets the compiler's own sources use them, as embedding.cee's).
+    // POSIX's calls (ceesafec 0.8.0's runtime lets the compiler's own sources use them, as embedding.cee's). On
+    // Windows, rt.h names the runtime's own (ceesafe_win_*), which fail: no record is read or written there.
     fn fstat(fd: i32, buffer: *mut u8) -> i32;
     fn chmod(path: *CChar, mode: u32) -> i32;
-    fn rename(from: *CChar, to: *CChar) -> i32;
     fn pwrite(fd: i32, buffer: *u8, size: usize, offset: i64) -> isize;
+    fn renameat(fromDirectory: i32, from: *CChar, toDirectory: i32, to: *CChar) -> i32;
+    fn unlinkat(directory: i32, path: *CChar, flags: i32) -> i32;
+    // macOS's system calls by number (executablePath): getpid (20) and proc_info (336).
+    fn syscall(number: i32, ...) -> i32;
 }
 
 /// The record format; a change to what a record holds or means changes it.
-fn recordFormat() -> StringView => "1";
+fn recordFormat() -> StringView => "2";
 
 /// What a record says of a package (ADR 0082 §2.7).
 struct InterfaceRecord {
@@ -41,13 +47,16 @@ struct InterfaceRecord {
     functions: Vector<RecordedEffects>;
 }
 
-/// The cache's directory and this process's user, once the directory is known to be safe; `usable` false otherwise.
+/// The cache's directory, open, and this process's user, once the directory is known to be safe; `usable` false
+/// otherwise.
 struct RecordCache {
     usable: bool;
-    directory: Vector<u8>;
+    directory: Vector<u8>; // its path, for messages
+    directoryFd: i32;      // its descriptor, every record opened from it; -1 if not usable
     owner: u32;
     system: u32;          // hostSystem()
-    identity: Vector<u8>; // this ceesafec's executable (compilerIdentity), part of every key
+    layout: u32;          // statLayout()
+    identity: Vector<u8>; // this ceesafec's executable (compilerIdentity), part of every key, once asked for
 }
 
 /// What fstat says of an open file: 1 a regular file, 2 a directory, 3 anything else; its permission bits; its owner.
@@ -56,9 +65,6 @@ struct FileFacts {
     mode: u32;
     owner: u32;
     size: u64;
-    modified: u64;   // seconds
-    modifiedNs: u64; // and nanoseconds
-    inode: u64;
 }
 
 /// The machine, from uname(2): its `machine` member follows four others, of 256 bytes each on macOS and 65 on Linux.
@@ -125,39 +131,26 @@ fn descriptorFacts(layout: u32, fd: i32) -> FileFacts? {
         return null;
     }
     let bytes = buffer[..];
-    // Offsets of st_mode, st_uid, st_size, st_mtime (seconds, then nanoseconds) and st_ino, with the sizes of the
-    // first two and of st_ino.
+    // Offsets of st_mode, st_uid and st_size, with the sizes of the first two.
     var mode: u32 = 0;
     var owner: u32 = 0;
-    var facts = FileFacts { kind: 0, mode: 0, owner: 0, size: 0, modified: 0, modifiedNs: 0, inode: 0 };
+    var facts = FileFacts { kind: 0, mode: 0, owner: 0, size: 0 };
     if (layout == 1) {
         mode = littleEndian(bytes, 4, 2);
         owner = littleEndian(bytes, 16, 4);
         facts.size = littleEndian64(bytes, 96, 8);
-        facts.modified = littleEndian64(bytes, 48, 8);
-        facts.modifiedNs = littleEndian64(bytes, 56, 8);
-        facts.inode = littleEndian64(bytes, 8, 8);
     } else if (layout == 2) {
         mode = littleEndian(bytes, 8, 2);
         owner = littleEndian(bytes, 12, 4);
         facts.size = littleEndian64(bytes, 72, 8);
-        facts.modified = littleEndian64(bytes, 40, 8);
-        facts.modifiedNs = littleEndian64(bytes, 48, 8);
-        facts.inode = littleEndian64(bytes, 4, 4);
     } else if (layout == 3) {
         mode = littleEndian(bytes, 24, 4);
         owner = littleEndian(bytes, 28, 4);
         facts.size = littleEndian64(bytes, 48, 8);
-        facts.modified = littleEndian64(bytes, 88, 8);
-        facts.modifiedNs = littleEndian64(bytes, 96, 8);
-        facts.inode = littleEndian64(bytes, 8, 8);
     } else {
         mode = littleEndian(bytes, 16, 4);
         owner = littleEndian(bytes, 24, 4);
         facts.size = littleEndian64(bytes, 48, 8);
-        facts.modified = littleEndian64(bytes, 88, 8);
-        facts.modifiedNs = littleEndian64(bytes, 96, 8);
-        facts.inode = littleEndian64(bytes, 8, 8);
     }
     let fileType = mode & 0xF000;
     facts.kind = if (fileType == 0x8000) 1 else if (fileType == 0x4000) 2 else 3;
@@ -166,17 +159,46 @@ fn descriptorFacts(layout: u32, fd: i32) -> FileFacts? {
     return facts;
 }
 
-/// Opens `path` to read it: O_RDONLY | O_NONBLOCK | O_CLOEXEC; -1 if it cannot be.
+/// openat's flags on `layout`'s system: `what` 0 reads a file (O_RDONLY | O_NONBLOCK | O_CLOEXEC), 1 also never
+/// through a symbolic link (| O_NOFOLLOW), 2 opens a directory that way (O_RDONLY | O_DIRECTORY | O_NOFOLLOW |
+/// O_CLOEXEC), 3 creates a new file that way (O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC).
+fn openFlags(layout: u32, what: u32) -> i32 {
+    let mac = layout == 1 || layout == 2;
+    let nonblock: u32 = if (mac) 0x4 else 0x800;
+    let cloexec: u32 = if (mac) 0x1000000 else 0x80000;
+    let nofollow: u32 = if (mac) 0x100 else if (layout == 4) 0x8000 else 0x20000;
+    let directory: u32 = if (mac) 0x100000 else if (layout == 4) 0x4000 else 0x10000;
+    let create: u32 = if (mac) 0xA00 else 0xC0; // O_CREAT | O_EXCL
+    var flags: u32 = 1 | create | nofollow | cloexec;
+    if (what == 0) {
+        flags = nonblock | cloexec;
+    } else if (what == 1) {
+        flags = nonblock | cloexec | nofollow;
+    } else if (what == 2) {
+        flags = directory | nofollow | cloexec;
+    }
+    return truncate<i32>(flags);
+}
+
+/// The current directory for openat: AT_FDCWD.
+fn currentDirectoryFd(layout: u32) -> i32 => if (layout == 1 || layout == 2) -2 else -100;
+
+/// Opens `path`, relative to the directory `at` (currentDirectoryFd for a path from here), with `flags`; -1 if it
+/// cannot be.
 /// Safety: openat reads the NUL-terminated path during the call only.
-fn openForReading(system: u32, path: Slice<u8>) -> Result<i32, AllocError> {
+fn openAt(at: i32, path: Slice<u8>, flags: i32) -> Result<i32, AllocError> {
     let input = match (cPath(path)?) {
         Some(p) => p,
         null => { return Ok(-1); }
     };
-    let flags: i32 = if (system == 1) 0x1000004 else 0x80800;
-    let here: i32 = if (system == 1) -2 else -100;
-    let fd = unsafe { openat(here, borrow input[0] as *u8 as *CChar, flags) };
+    let fd = unsafe { openat(at, borrow input[0] as *u8 as *CChar, flags) };
     return Ok(fd);
+}
+
+/// Opens `path` to read it: O_RDONLY | O_NONBLOCK | O_CLOEXEC; -1 if it cannot be.
+fn openForReading(system: u32, path: Slice<u8>) -> Result<i32, AllocError> {
+    let layout: u32 = if (system == 1) 1 else 3; // the flags read alike on each system's two layouts
+    return openAt(currentDirectoryFd(layout), path, openFlags(layout, 0));
 }
 
 /// The facts of the file or directory at `path`, or null.
@@ -220,24 +242,40 @@ fn makePrivateDirectory(path: Slice<u8>) -> Result<void, AllocError> {
     return Ok();
 }
 
+/// The directory `name` in the open directory `at`, opened never through a symbolic link, if this user owns it and
+/// no one else may write to it; else -1.
+/// Safety: the descriptor is closed here unless it is returned.
+fn openPrivateDirectory(layout: u32, at: i32, name: Slice<u8>, owner: u32) -> Result<i32, AllocError> {
+    let fd = openAt(at, name, openFlags(layout, 2))?;
+    if (fd < 0) {
+        return Ok(-1);
+    }
+    if (!privateDirectory(descriptorFacts(layout, fd), owner)) {
+        unsafe { close(fd); }
+        return Ok(-1);
+    }
+    return Ok(fd);
+}
+
 /// The cache, made if missing: `$CEESAFE_HOME/cache/records`, usable only where owners and modes can be read and its
-/// two directories belong to this user, who alone may write to them.
+/// two directories belong to this user, who alone may write to them. Both are opened once, never through a symbolic
+/// link, and `records` stays open: every record is opened from it.
+/// Safety: the descriptor of `cache` is closed here, once.
 fn openRecordCache() -> Result<RecordCache, AllocError> {
     var cache = RecordCache {
         usable: false,
         directory: Vector<u8>.create(),
+        directoryFd: -1,
         owner: 0,
         system: hostSystem(),
+        layout: 0,
         identity: Vector<u8>.create(),
     };
     let layout = statLayout(cache.system)?;
+    cache.layout = layout;
     let home = defaultHome()?;
     if (layout == 0 || home.length == 0) {
         return Ok(cache);
-    }
-    match (compilerIdentity(cache.system, layout)?) {
-        Some(identity) => { cache.identity = identity; }
-        null => { return Ok(cache); }
     }
     // This user, as the owner of a directory just made for it.
     let probe = match (Directory.temporary()) {
@@ -257,96 +295,138 @@ fn openRecordCache() -> Result<RecordCache, AllocError> {
     let records = joinPath(top.view(), "records".bytes())?;
     makePrivateDirectory(top.view())?;
     makePrivateDirectory(records.view())?;
-    let topFacts = pathFacts(cache.system, layout, top.view())?;
-    let recordFacts = pathFacts(cache.system, layout, records.view())?;
-    if (!privateDirectory(topFacts, cache.owner) || !privateDirectory(recordFacts, cache.owner)) {
+    let topFd = openPrivateDirectory(layout, currentDirectoryFd(layout), top.view(), cache.owner)?;
+    if (topFd < 0) {
+        return Ok(cache);
+    }
+    let recordsFd = openPrivateDirectory(layout, topFd, "records".bytes(), cache.owner)?;
+    unsafe { close(topFd); }
+    if (recordsFd < 0) {
         return Ok(cache);
     }
     cache.directory = records;
+    cache.directoryFd = recordsFd;
     cache.usable = true;
     return Ok(cache);
 }
 
-/// This ceesafec's executable, as a key holds it beside the banner: its size, modification time and inode. Builds of
-/// one version share its banner, and a record proved by one build is not the next build's to trust. Null if the
-/// executable cannot be found: then no record is used.
-fn compilerIdentity(system: u32, layout: u32) -> Result<Vector<u8>?, AllocError> {
-    let path = match (executablePath(system)?) {
-        Some(p) => p,
-        null => { return Ok(null); }
-    };
-    let facts = match (pathFacts(system, layout, path.view())?) {
-        Some(f) => f,
-        null => { return Ok(null); }
-    };
-    if (facts.kind != 1) {
-        return Ok(null);
+/// This ceesafec's identity, as a key holds it beside the banner: the SHA-256 of its executable's bytes, read once
+/// per process (builds of one version share its banner, and a record proved by one build is not the next build's to
+/// trust). False if the executable cannot be found or read: then no record is used.
+fn ensureCompilerIdentity(cache: borrow mut RecordCache) -> Result<bool, AllocError> {
+    if (cache.identity.length > 0) {
+        return Ok(true);
     }
-    var identity = Vector<u8>.create();
-    appendDecimal(mut identity, facts.size)?;
-    identity.push(' ')?;
-    appendDecimal(mut identity, facts.modified)?;
-    identity.push('.')?;
-    appendDecimal(mut identity, facts.modifiedNs)?;
-    identity.push(' ')?;
-    appendDecimal(mut identity, facts.inode)?;
-    return Ok(identity);
+    let path = match (executablePath(cache.system)?) {
+        Some(p) => p,
+        null => { return Ok(false); }
+    };
+    match (hashFile(cache.system, cache.layout, path.view())?) {
+        Some(digest) => {
+            cache.identity = digest;
+            return Ok(true);
+        }
+        null => { return Ok(false); }
+    }
 }
 
-/// The running executable: Linux's /proc/self/exe; elsewhere the program's name as it was started, found on `PATH`
-/// when it holds no `/`.
+/// The SHA-256 (hexadecimal) of the regular file at `path`, or null if it cannot be read.
+/// Safety: the descriptor is closed here, once; pread writes at most the 65,536 bytes asked into `buffer`.
+fn hashFile(system: u32, layout: u32, path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    let fd = openForReading(system, path)?;
+    if (fd < 0) {
+        return Ok(null);
+    }
+    let regular = match (descriptorFacts(layout, fd)) {
+        Some(f) => f.kind == 1,
+        null => false,
+    };
+    if (!regular) {
+        unsafe { close(fd); }
+        return Ok(null);
+    }
+    var sha = Sha256.create();
+    var buffer = [0u8; 65536];
+    var at: i64 = 0;
+    var failed = false;
+    loop {
+        let n = unsafe { pread(fd, borrow mut buffer[0] as *mut u8, 65536, at) };
+        if (n < 0) {
+            failed = true;
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        sha.append(buffer[..truncate<usize>(n)]);
+        at += n as i64;
+    }
+    unsafe { close(fd); }
+    if (failed) {
+        return Ok(null);
+    }
+    var digest = Vector<u8>.create();
+    appendHexDigest(mut digest, sha.finish())?;
+    return Ok(digest);
+}
+
+/// The running executable itself, as the system knows it, never as it was named when started (`argv[0]` and `PATH`
+/// are the caller's to choose): Linux's /proc/self/exe; on macOS the path of the process's executable from the
+/// kernel (proc_info's PROC_PIDPATHINFO, what proc_pidpath(3) asks), its real path; null elsewhere.
+/// Safety: proc_info writes at most the 4,096 bytes given (PROC_PIDPATHINFO_MAXSIZE) into `buffer`, during the call
+/// only; getpid takes no argument.
 fn executablePath(system: u32) -> Result<Vector<u8>?, AllocError> {
     if (system == 2) {
         return Ok(copyBytes("/proc/self/exe".bytes())?);
     }
-    let name = match (Process.argument(0)) {
-        Some(a) => copyBytes(a.bytes())?,
-        null => { return Ok(null); }
-    };
-    for (b in name.view()) {
-        if (b == '/') {
-            return Ok(name);
-        }
+    if (system != 1) {
+        return Ok(null);
     }
-    let search = match (Environment.variable("PATH")) {
-        Some(v) => copyBytes(v.bytes())?,
-        null => { return Ok(null); }
-    };
-    var start: usize = 0;
-    for (k in 0..(search.length + 1)) {
-        if (k < search.length && search[k] != ':') {
-            continue;
-        }
-        if (k > start) {
-            let candidate = joinPath(search[start..k], name.view())?;
-            if (fileExists(candidate.view())) {
-                return Ok(candidate);
-            }
-        }
-        start = k + 1;
+    var buffer = [0u8; 4096];
+    let pid = unsafe { syscall(20) };
+    let failed = unsafe { syscall(336, 2, pid, 11, 0u64, borrow mut buffer[0] as *mut u8, 4096) };
+    if (pid <= 0 || failed < 0) {
+        return Ok(null);
     }
-    return Ok(null);
+    var length: usize = 0;
+    while (length < 4096 && buffer[length] != 0) {
+        length += 1;
+    }
+    if (length == 0 || length == 4096 || buffer[0] != '/') {
+        return Ok(null);
+    }
+    return realPath(buffer[..length]);
 }
 
-/// The record's file: `<package>-<key>.rec`, the package's name for whoever looks, the key for the cache.
-fn recordPath(cache: borrow RecordCache, package: Slice<u8>, key: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+/// The record's file name in the cache: `<package>-<key>.rec`, the package's name for whoever looks, the key for the
+/// cache. Null if the package's name would make it a path (names are checked by the manifest's rules: this is a
+/// second guard).
+fn recordName(package: Slice<u8>, key: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    for (b in package) {
+        if (b == '/' || b == '\\' || b == 0) {
+            return Ok(null);
+        }
+    }
+    if (package.length == 0 || package[0] == '.') {
+        return Ok(null);
+    }
     var name = copyBytes(package)?;
     name.push('-')?;
     appendBytes(mut name, key)?;
     appendText(mut name, ".rec")?;
-    return joinPath(cache.directory.view(), name.view());
+    return Ok(name);
 }
 
-/// The bytes of the record file at `path`, if it is a regular file this user owns that no one else may write to;
-/// read from the descriptor that was checked.
+/// The bytes of the record file `name` in the cache's directory, if it is a regular file this user owns that no one
+/// else may write to; opened from the directory's descriptor, never through a symbolic link, and read from the
+/// descriptor that was checked.
 /// Safety: the descriptor is closed here, once; pread writes at most the 65,536 bytes asked into `buffer`.
-fn readRecordFile(cache: borrow RecordCache, path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
-    let layout = statLayout(cache.system)?;
-    let fd = openForReading(cache.system, path)?;
+fn readRecordFile(cache: borrow RecordCache, name: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    let fd = openAt(cache.directoryFd, name, openFlags(cache.layout, 1))?;
     if (fd < 0) {
         return Ok(null);
     }
-    let trusted = match (descriptorFacts(layout, fd)) {
+    let trusted = match (descriptorFacts(cache.layout, fd)) {
         Some(f) => f.kind == 1 && f.owner == cache.owner && (f.mode & 0x12) == 0,
         null => false,
     };
@@ -386,8 +466,11 @@ fn lookUpRecord(
     if (!cache.usable) {
         return Ok(null);
     }
-    let path = recordPath(cache, package, key)?;
-    let bytes = match (readRecordFile(cache, path.view())?) {
+    let name = match (recordName(package, key)?) {
+        Some(n) => n,
+        null => { return Ok(null); }
+    };
+    let bytes = match (readRecordFile(cache, name.view())?) {
         Some(b) => b,
         null => { return Ok(null); }
     };
@@ -402,23 +485,25 @@ fn lookUpRecord(
     return Ok(record);
 }
 
-/// Stores `record`: written under a new name created for it alone (mode 0600), then renamed over the record's name.
-/// A failure leaves the cache as it was: the record stays this process's only.
-/// Safety: openat and rename read their NUL-terminated paths during the call only; pwrite reads at most `size`
-/// bytes of the record; the descriptor is closed here, once.
+/// Stores `record`: written under a new name created for it alone (mode 0600) in the cache's directory, then renamed
+/// over the record's name there, both from the directory's descriptor. A failure leaves the cache as it was: the
+/// record stays this process's only.
+/// Safety: openat, renameat and unlinkat read their NUL-terminated names during the call only; pwrite reads at most
+/// `size` bytes of the record; the descriptor is closed here, once.
 fn storeRecord(cache: borrow RecordCache, record: borrow InterfaceRecord) -> Result<void, AllocError> {
     if (!cache.usable) {
         return Ok();
     }
     let bytes = encodeRecord(record)?;
-    let path = recordPath(cache, record.package.view(), record.key.view())?;
-    let flags: i32 = if (cache.system == 1) 0x1000A01 else 0x800C1; // O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC
-    let here: i32 = if (cache.system == 1) -2 else -100;
+    let name = match (recordName(record.package.view(), record.key.view())?) {
+        Some(n) => n,
+        null => { return Ok(); }
+    };
     var temporary = Vector<u8>.create();
     var fd: i32 = -1;
     var attempt: u64 = 0;
     while (fd < 0 && attempt < 16) {
-        temporary = copyBytes(path.view())?;
+        temporary = copyBytes(name.view())?;
         appendText(mut temporary, ".tmp-")?;
         appendDecimal(mut temporary, Timer.now())?;
         temporary.push('-')?;
@@ -427,7 +512,7 @@ fn storeRecord(cache: borrow RecordCache, record: borrow InterfaceRecord) -> Res
             Some(p) => p,
             null => { return Ok(); }
         };
-        fd = unsafe { openat(here, borrow input[0] as *u8 as *CChar, flags, 384) }; // 0600
+        fd = unsafe { openat(cache.directoryFd, borrow input[0] as *u8 as *CChar, openFlags(cache.layout, 3), 384) };
         attempt += 1;
     }
     if (fd < 0) {
@@ -446,25 +531,23 @@ fn storeRecord(cache: borrow RecordCache, record: borrow InterfaceRecord) -> Res
     }
     unsafe { close(fd); }
     let from = cPath(temporary.view())?;
-    let to = cPath(path.view())?;
+    let to = cPath(name.view())?;
     if (from == null || to == null) {
         return Ok();
     }
     let source = from!;
     let target = to!;
-    if (failed) {
-        match (File.remove(StringView.fromUtf8(temporary.view())!)) {
-            Ok() => {}
-            Err(_) => {}
-        }
-        return Ok();
+    var renamed: i32 = -1;
+    if (!failed) {
+        renamed = unsafe { renameat(
+            cache.directoryFd,
+            borrow source[0] as *u8 as *CChar,
+            cache.directoryFd,
+            borrow target[0] as *u8 as *CChar,
+        ) };
     }
-    let renamed = unsafe { rename(borrow source[0] as *u8 as *CChar, borrow target[0] as *u8 as *CChar) };
     if (renamed != 0) {
-        match (File.remove(StringView.fromUtf8(temporary.view())!)) {
-            Ok() => {}
-            Err(_) => {}
-        }
+        unsafe { unlinkat(cache.directoryFd, borrow source[0] as *u8 as *CChar, 0); }
     }
     return Ok();
 }

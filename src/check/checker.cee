@@ -221,12 +221,16 @@ struct Checker {
     recordPaths: Vector<Vector<u8>>;      // by file: its path as a dependent names it, for the root's record
     recordedEffects: Vector<RecordedEffects>;
     recordedFunction: Vector<u32>;             // by HIR function: its entry in recordedEffects, or none
-    recording: bool;                           // make the root package's record
+    recording: bool;                           // make the records of the packages `recordedPackages` marks
+    recordedPackages: Vector<bool>;            // by package in this check: its record is made here
     qualifyRoot: bool;                         // name the root's items as a dependent does (qualifiedName)
-    recordOut: Vector<RecordedEffects>;        // the root package's record's functions
-    recordOpaque: bool;                        // a skipped body of the root made what a record cannot hold (madeOpaque)
-    embedCalls: u32;                           // the root package's `embed` and `embedText` calls checked so far
-    afterNirErrors: Vector<PendingError>;      // added after the per-function NIR checks
+    recordOut: Vector<RecordedEffects>;        // the recorded packages' functions, each with its package
+    opaquePackages: Vector<bool>;              // by package: a recorded body made what a record cannot hold, or embeds
+    effectsRecorded: bool;                     // the effect checker ran, and recordOut holds what it found
+    closureTop: Vector<u32>;                   // by function: a closure's outermost function (placeClosure), or none
+    closureOrdinal: Vector<u32>;               // by function: a closure's ordinal in it
+    closureCounts: Vector<u32>;                // by function: the closures written in it so far
+    staticClosures: u32;                       // the closures written outside any function so far
     nirLoopErrors: bool;                       // errors were found by the end of the per-function NIR checks
     instanceErrors: bool;                      // errors were found by the end of the instances' checks (N0222)
     regionImpls: Vector<u32>;                  // the impls (in c.impls) with region parameters

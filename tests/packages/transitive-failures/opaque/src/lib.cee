@@ -1,0 +1,2 @@
+// Embeds a file, so its record is opaque: its dependents check its bodies, and deep is reached through it.
+public fn banner() -> u64 => embedText("note.txt").length as u64 + deep.broken(1);

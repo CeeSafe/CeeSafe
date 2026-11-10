@@ -878,12 +878,9 @@ fn appendOpDescription(c: borrow Checker, op: borrow EffectOp, out: borrow mut V
         appendText(out, "calls ")?;
         appendDescribedFunction(c, op.function, out)?;
         if (kind == opCallLiteral()) {
-            let f = borrow c.hir.functions[op.literal as usize];
-            let start = c.front.ast.functions[f.syntax as usize].start;
-            appendText(out, " with the closure at ")?;
-            appendBytes(out, c.filePaths[f.file as usize].view())?;
-            appendText(out, ":")?;
-            appendDecimal(out, lineOfOffset(c.fileTexts[f.file as usize], start))?;
+            // By its place in its function, not its line: the explanation holds no position (ADR 0082 §2.7).
+            appendText(out, " with the closure ")?;
+            appendClosurePlace(c, out, op.literal)?;
         } else if (kind == opCallTyped()) {
             appendText(out, " with a ")?;
             appendQuotedType(out, c, op.typ)?;
@@ -1149,8 +1146,14 @@ fn inferEffects(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) 
     return Ok();
 }
 
-/// The length of an explanation after `op` (in steps), for `effect`: 0 where explainOp stops after it, else its
-/// next function's; none while that is not known yet.
+/// What ranks an explanation that ends in a call it cannot see into, saying only that the callee "may do anything"
+/// (or, for writes, "may write anything"): a C function or a `dyn` method without an effect list. Such an
+/// explanation comes after every one that ends in an operation, whatever their lengths (chooseWitnesses).
+fn vagueEnd() -> u32 => 0x40000000;
+
+/// The rank of an explanation after `op`, for `effect`: its length in steps, plus vagueEnd() if it ends in a call
+/// that may do anything. 0 where explainOp stops after it at an operation, vagueEnd() where it stops at such a call,
+/// else its next function's; none while that is not known yet.
 fn continuationLength(
     c: borrow Checker,
     e: borrow Effects,
@@ -1159,8 +1162,12 @@ fn continuationLength(
     length: borrow Vector<u32>,
 ) -> u32 {
     let next = op.next;
-    if (next == none() || isExternFunction(c, next) || c.hir.functions[next as usize].isDynMethod) {
+    if (next == none()) {
         return 0;
+    }
+    if (isExternFunction(c, next) || c.hir.functions[next as usize].isDynMethod) {
+        let declared = c.hir.functions[next as usize].declaredEffects;
+        return if (effect == writeEffect() || declared == none()) vagueEnd() else 0;
     }
     if ((next as usize) >= e.inferred.length || !e.inferred[next as usize].present ||
         (e.inferred[next as usize].effects & effect) == 0) {
@@ -1170,10 +1177,11 @@ fn continuationLength(
 }
 
 /// After the fixed point, each function's witness for each effect, the operation its explanation starts from
-/// (type-system.md §32.1): one whose chain to where the effect comes from is the shortest, and the first in the
-/// function's order among those. The fixed point found a witness in whatever round the effect reached the function,
-/// which depends on the order the functions are looked at; shortest-then-first does not, so a dependency's interface
-/// record explains a call into it as the check of the whole program does (ADR 0082 §2.7).
+/// (type-system.md §32.1): one whose chain ends in an operation rather than a call that may do anything (vagueEnd),
+/// then the shortest, then the first in the function's order among those. The fixed point found a witness in
+/// whatever round the effect reached the function, which depends on the order the functions are looked at; this
+/// ranking does not, so a dependency's interface record explains a call into it as the check of the whole program
+/// does (ADR 0082 §2.7).
 fn chooseWitnesses(c: borrow Checker, n: borrow NirProgram, e: borrow mut Effects) -> Result<void, AllocError> {
     e.round += 1;                                // drop effects afresh, at the fixed point
     var ops = Vector<Vector<EffectOp>>.create(); // by e.functions' index
@@ -1728,6 +1736,7 @@ fn checkEffects(c: borrow mut Checker, n: borrow NirProgram) -> Result<void, All
     if (c.recording) {
         recordEffects(c, e)?;
     }
+    c.effectsRecorded = true;
     for (k in 0..e.functions.length) {
         let function = e.functions[k];
         checkFunctionEffects(c, n, mut e, function)?;

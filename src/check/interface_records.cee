@@ -12,7 +12,7 @@ struct RecordedChain {
     steps: Vector<Vector<u8>>;
     terminal: Vector<u8>;
     truncated: bool;
-    length: u32; // its steps in full: what the shortest explanation through it counts (chooseWitnesses)
+    length: u32; // its rank: its steps in full, plus vagueEnd() if it ends in a call that may do anything
 }
 
 /// One function of a record: where it is declared (its file's path in its package and the declaration's start), its
@@ -31,7 +31,8 @@ struct RecordInput {
     filePackagePaths: Vector<Vector<u8>>; // by file: its path in its package
     recordPaths: Vector<Vector<u8>>;      // by file: its path as a dependency names it (`alpha/src/util.cee`), or empty
     functions: Vector<RecordedEffects>;   // every record's functions, with their package's index
-    recording: bool;                      // make the root package's record: its effects and chains
+    recording: bool;                      // make the records of the packages `recordedPackages` marks
+    recordedPackages: Vector<bool>;       // by package in this check: make its record (its effects and chains)
     qualifyRoot: bool;                    // name the root's items as its dependents do (a dependency's check)
 }
 
@@ -41,6 +42,7 @@ fn emptyRecordInput() -> RecordInput => RecordInput {
     recordPaths: Vector<Vector<u8>>.create(),
     functions: Vector<RecordedEffects>.create(),
     recording: false,
+    recordedPackages: Vector<bool>.create(),
     qualifyRoot: false,
 };
 
@@ -213,17 +215,37 @@ fn seedRecordedEffects(c: borrow Checker, e: borrow mut Effects) {
     }
 }
 
-/// Whether `function` goes into the root package's record: a function of its own whose body dependents skip.
+/// Whether `function` goes into a record made here: a function of a recorded package whose body dependents skip.
 fn isRecordedHere(c: borrow Checker, function: u32) -> bool {
     let file = c.hir.functions[function as usize].file;
-    if (file == none() || c.fileIsLibrary[file as usize] || c.filePackage[file as usize] != 0) {
+    if (file == none() || c.fileIsLibrary[file as usize]) {
+        return false;
+    }
+    let package = c.filePackage[file as usize] as usize;
+    if (package >= c.recordedPackages.length || !c.recordedPackages[package]) {
         return false;
     }
     return !keepsBody(c, function);
 }
 
-/// The root package's record (c.recording): every function of its own whose body dependents skip, with its effects
-/// and chains. The chains name the package's files as a dependent names them (`alpha/src/util.cee`).
+/// Marks the record of `file`'s package opaque (madeOpaque, an `embed`).
+fn markOpaque(c: borrow mut Checker, file: u32) -> Result<void, AllocError> {
+    if (file == none() || (file as usize) >= c.filePackage.length) {
+        return Ok();
+    }
+    let package = c.filePackage[file as usize];
+    if (package == 0xFFFFFFFF) {
+        return Ok();
+    }
+    while (c.opaquePackages.length <= package as usize) {
+        c.opaquePackages.push(false)?;
+    }
+    c.opaquePackages[package as usize] = true;
+    return Ok();
+}
+
+/// The records made here (c.recording): every function of a recorded package whose body dependents skip, with its
+/// package, effects and chains. The chains name the packages' files as a dependent names them (`alpha/src/util.cee`).
 fn recordEffects(c: borrow mut Checker, e: borrow Effects) -> Result<void, AllocError> {
     var saved = Vector<Vector<u8>>.create();
     let swap = c.recordPaths.length == c.filePaths.length;
@@ -244,7 +266,7 @@ fn recordEffects(c: borrow mut Checker, e: borrow Effects) -> Result<void, Alloc
         }
         let file = c.hir.functions[f].file;
         var entry = RecordedEffects {
-            package: 0,
+            package: c.filePackage[file as usize],
             path: copyBytes(c.filePackagePaths[file as usize].view())?,
             offset: declarationStart(c, function),
             effects: 0,
@@ -279,8 +301,8 @@ fn recordEffects(c: borrow mut Checker, e: borrow Effects) -> Result<void, Alloc
 
 /// Whether a body just checked made a `dyn` table of an interface with an async method, which a dependent cannot see
 /// from the record: its frames, and recursion through `await`, are the program's (§1.5). Such a package's record says
-/// so (opaque), and dependents check its bodies; as they do a package that embeds a file (c.embedCalls), whose
-/// contents are not part of the record's key.
+/// so (opaque), and dependents check its bodies; as they do a package that embeds a file (checkEmbed), whose contents
+/// are not part of the record's key.
 fn madeOpaque(c: borrow Checker, tablesBefore: usize) -> bool {
     for (k in tablesBefore..c.dynTables.length) {
         let methods = c.dynTables[k].methods;
@@ -293,11 +315,17 @@ fn madeOpaque(c: borrow Checker, tablesBefore: usize) -> bool {
     return false;
 }
 
-/// The byte ranges of the root package's bodies that dependents skip, in `file`: what the interface hash leaves out.
-fn skippedBodies(c: borrow Checker, file: u32, out: borrow mut Vector<Span>) -> Result<void, AllocError> {
+/// For each file of a recorded package, the byte ranges of the bodies dependents skip, which its interface hash leaves
+/// out (sorted, none inside another), in one pass over the functions.
+fn recordedShapes(c: borrow Checker, spans: borrow mut Vector<Vector<Span>>) -> Result<void, AllocError> {
+    while (spans.length < c.fileTexts.length) {
+        spans.push(Vector<Span>.create())?;
+    }
     for (f in 0..c.hir.functions.length) {
         let function = truncate<u32>(f);
-        if (c.hir.functions[f].file != file || !isRecordedHere(c, function)) {
+        let file = c.hir.functions[f].file;
+        if (file == none() || (file as usize) >= spans.length || c.fileIsLibrary[file as usize] ||
+            c.hir.functions[f].isClosure || !isRecordedHere(c, function)) {
             continue;
         }
         let syntax = borrow c.front.ast.functions[c.hir.functions[f].syntax as usize];
@@ -308,20 +336,41 @@ fn skippedBodies(c: borrow Checker, file: u32, out: borrow mut Vector<Span>) -> 
             start = c.front.ast.exprSpans[syntax.expressionBody as usize].start;
         }
         if (start != none() && start < syntax.end) {
-            out.push(Span { start: start, end: syntax.end })?;
+            insertSpan(mut spans[file as usize], Span { start: start, end: syntax.end })?;
         }
     }
     return Ok();
 }
 
-/// An error a check adds once the NIR passes' per-function checks are done (ADR 0082 §2.7): a dependency whose own
-/// check failed there, as one diagnostic at its line in the manifest, so that what follows stops as it would had the
-/// dependency's error been found here.
-struct PendingError {
-    stage: u32; // 3: after the per-function checks; 4: after the instances' checks
-    code: u32;
-    file: u32;
-    start: u32;
-    end: u32;
-    message: Vector<u8>;
+/// Adds `span` to the sorted `spans`, merged with any it overlaps.
+fn insertSpan(spans: borrow mut Vector<Span>, span: Span) -> Result<void, AllocError> {
+    var merged = span;
+    var kept = Vector<Span>.create();
+    var placed = false;
+    for (s in spans.view()) {
+        if (s.end < merged.start) {
+            kept.push(s)?;
+        } else if (s.start > merged.end) {
+            if (!placed) {
+                kept.push(merged)?;
+                placed = true;
+            }
+            kept.push(s)?;
+        } else {
+            if (s.start < merged.start) {
+                merged.start = s.start;
+            }
+            if (s.end > merged.end) {
+                merged.end = s.end;
+            }
+        }
+    }
+    if (!placed) {
+        kept.push(merged)?;
+    }
+    spans.truncate(0);
+    for (s in kept.view()) {
+        spans.push(s)?;
+    }
+    return Ok();
 }

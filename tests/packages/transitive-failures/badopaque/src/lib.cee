@@ -1,0 +1,8 @@
+// Opaque (it embeds), with an ownership error of its own.
+public fn text() -> u64 {
+    var v = Vector<u64>.create();
+    v.push(embedText("note.txt").length as u64)!;
+    let first = borrow v[0];
+    v.push(1)!;
+    return *first;
+}

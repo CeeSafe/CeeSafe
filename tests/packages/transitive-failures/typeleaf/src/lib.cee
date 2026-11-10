@@ -1,0 +1,2 @@
+// A type error: the check stops after the types.
+public fn wrong() -> u64 => true;

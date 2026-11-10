@@ -1,0 +1,8 @@
+[package]
+name = "twostages"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+plain = { path = "../plain" }
+typeleaf = { path = "../typeleaf" }

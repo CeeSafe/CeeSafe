@@ -14,9 +14,9 @@ struct EmbeddedFile {
 
 /// `embed(path)` (`asText` false) or `embedText(path)`: the path is a string literal or a constant view.
 fn checkEmbed(c: borrow mut Checker, asText: bool, arguments: Range, span: Span) -> Result<u32, AllocError> {
-    if (c.file != none() && (c.file as usize) < c.filePackage.length && c.filePackage[c.file as usize] == 0) {
-        c.embedCalls += 1; // the root package embeds: its interface record is opaque (ADR 0082 §2.7)
-    }
+    // A package that embeds has an opaque interface record: the file's bytes are not part of its key (ADR 0082 §2.7).
+    let embedding = c.file;
+    markOpaque(c, embedding)?;
     if (arguments.count != 1) {
         return builtinArity(
             c,

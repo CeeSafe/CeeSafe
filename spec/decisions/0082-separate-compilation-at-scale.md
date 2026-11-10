@@ -10,7 +10,8 @@
   file under the nearest `Cargo.toml`. The generated 100k program was not kept: `analysis/scale/scale_test.py`
   regenerates it.
 - Release: stage A ships in 0.24.3, with ADR 0081's diagnostics and the bug of §4. Stages B–F are tooling work, with
-  no language change, that can land with any later release; D first.
+  no language change, that can land with any later release; D first. **Stage D is implemented** (branch `impl/0082d`,
+  2026-11-10, not yet released): per-package `check` with interface records and `check --all` (§8).
 - Scope: c-backend.md §2.1 (names), §2.4 (split output), §7 (location tables); tooling.md §4.4 (commands), §5.1 (the
   JSON diagnostics), §8.3 (flags); type-system.md §32.1 (effects across packages); the C backend (`c_split.cee`,
   `c_skeleton.cee`, `c_names.cee`, `c_program.cee`, `c_backend.cee`), closure-call specialisation's variant names, the
@@ -369,3 +370,102 @@ and C. Split output becomes the default for package builds after B (Question 2).
   under the hand-run 69 s, is **not met**: the hand run compiled 12 merged units, and each of today's 825 units parses
   the 54.7 MB `ceesafe_program.h` (§1.2.4), about 4.5 CPU-s each. As §3 predicted for "fix the names only", more units
   make the build slower until stage B's preludes remove the shared header; stage B is what the C step's target needs.
+
+## 8. Implementation notes: stage D (2026-11-10)
+
+### 8.1 What was built
+
+- **`check` in a package** checks that package fully, its tests included, and takes each dependency from its
+  interface record. A dependency is still parsed and its declarations resolved; its bodies are checked again only
+  where a dependent compiles or reads them (`keepsBody`, `src/check/interface_records.cee`): generic code and its
+  instances, async functions, functions with a closure or function parameter or `@effectsOf`, `@constant`
+  functions, closures, C functions and `dyn` methods. Every other body is skipped: it gets no HIR and no NIR, and its
+  inferred effects come from the record (`seedRecordedEffects`). A dependency without a valid record is checked
+  first, alone, in **dependency mode** (no tests, no entry function, its files and items named as dependents name
+  them), with its own dependencies from their records, level by level, `--jobs` at once. `--whole-program` is the
+  check of ADR 0013 D4, kept as the oracle; `--package <name>` checks another package of the lock; `--record` is
+  the dependency-mode check, which prints the record (what the parallel checks run).
+- **A dependency with errors** is one **N0364** at its line in the manifest, and the package's check stops where the
+  whole program's would: a record keeps the stage of its package's first error (parse, types, the per-function
+  ownership checks, the instances' checks, later), and the N0364 is added at that stage (`afterNirErrors`), so the
+  package's own diagnostics are those of `check --whole-program` in its files.
+- **`check --all`** runs each package's own check in its own process, after making the records; one JSON document
+  sorted by package, file and position, with a `packages` summary (tooling.md §5.1), or text with a line per package.
+- **The record** (`src/host/record_cache.cee`), `$CEESAFE_HOME/cache/records/<package>-<key>.rec`, is a sequence of
+  length-prefixed fields: format, key, banner, package, profile, errors, warnings, the stage of the first error,
+  opaque, the interface hash, then per skipped function its path in the package, its declaration's offset, its
+  effects, and for each of sleep, alloc, suspend and write the explanation from it (the steps' texts, its end, and its
+  full length); last, the SHA-256 of the rest. Declarations and bodies are not serialised.
+- **The key** is a SHA-256 of the format, the banner, **the executable** (size, modification time, inode), the
+  profile, the package's name, manifest and sources with their paths, and the direct dependencies' interface hashes.
+  **The interface hash** covers the sources with the skipped bodies left out (their line breaks and last line's
+  length kept, so positions after them hold), what the record says (offsets aside), and the dependencies' interface
+  hashes: `package_tests.py` §25 checks that a change inside a skipped body leaves a dependent's record valid.
+- **Trust**, as §2.7: the directories are made 0700; a record is read from the descriptor whose owner (this user) and
+  mode (no group or other write) were checked, in directories that pass the same test; a cut, altered or foreign
+  record is a miss; writes go to a new name created exclusively (0600) and are renamed. Any record a check makes is
+  also used from memory, so the cache is never needed for correctness.
+
+### 8.2 Departures from §2.7, and why
+
+1. **The record holds what `check` needs, not yet what `build` needs.** It has the effects and the status; not the
+   libraries reached, the instances and variants needed, or the coercions to `dyn I` with frame sizes. Those serve
+   stage E's per-package C. Instead a package whose skipped bodies make a `dyn` table of an interface with an async
+   method, or that embeds a file (whose contents the key does not cover, tooling.md §4.4.1), has an **opaque** record:
+   dependents check its bodies, and its own diagnostics, not N0364, say whether it fails. So does a package whose own
+   check found errors in such a dependency (its checks may have stopped early).
+2. **The key adds the executable's identity** to the banner: builds of one version share a banner, and a record one
+   build proved is not the next build's to trust.
+3. **Explanations are canonical.** The effect checker's chains (N0295, N0360) named the operation found first by the
+   fixed point, which depends on the order functions and packages are visited; a record could not reproduce the
+   whole program's. Each function's witness is now the operation with the shortest chain, the first among equals
+   (`chooseWitnesses`; type-system.md §32.1). Interface bounds are named from their declaration with their package,
+   not by whichever use came first (`interfaceDisplayName`).
+4. **Parallel checks are processes, not threads.** Thread.both's threads have the system's default stack (512 KiB on
+   macOS), and a dependency with an expression nested 900 deep overflowed it (SIGBUS); a process has the main
+   thread's stack and gives its memory back.
+5. **Where owners and modes cannot be read** (Windows, systems other than macOS and Linux on arm64 and x86-64), no
+   record is read or written; checks then run one after another in one process, each dependency's record used from
+   memory. The "not owned by this user" case is not in the tests: it needs a second user; the mode cases are.
+6. **`build` is unchanged**: it, `run`, `test` and `fix` still check the whole program and read no record. Using
+   records there is stage E's, with the build-side facts of item 1.
+
+### 8.3 Found on the way: four quadratic passes in the checker
+
+Profiling the 1.5M check found the declaration phase quadratic, in the whole program's check as in a package's:
+`implRegionsOf` scanned every impl for every function; an impl's overlap check, `implements` and
+`attachGenericImpls` scanned every implementation or template; `checkStructRecursion` and `computeCopyAndDrop`
+copied their state and revisited every struct after each instantiation; an instance was found by scanning every
+struct or enum. Each is now indexed or incremental, with the same diagnostics. The whole program's `check` of `app`
+at 1.5M went from 65.8 s to 16.4 s.
+
+### 8.4 Measured
+
+Mac, 8 cores, 16 GB, shared with other work (load averages from 15 to 140 during the runs, so wall times are
+approximate; user CPU is steadier). `scale_test.generate` with 120 packages; `p000` is the leaf (no dependency),
+`p119` the package with the most (110 in its lock), `app` depends on all. Cold: an empty `$CEESAFE_HOME`; warm: the
+same command again.
+
+| Lines | Check | Whole program | Cold | Warm |
+|---|---|---|---|---|
+| 304,176 | leaf `p000` | 0.06 s | 0.06 s | **0.06 s** |
+| 304,176 | `p119` | 2.3 s | 13.4 s wall, 32.4 s CPU (8 jobs) | 0.63 s |
+| 304,176 | `app` | 2.7 s, 360 MB | 4.0 s | 0.67 s |
+| 304,176 | `check --all` (121 packages) | — | 24.9 s wall, 83 s CPU | 10.1 s wall, 44 s CPU |
+| 1,514,176 | leaf `p000` | 0.13 s | 0.13 s | **0.13 s** |
+| 1,514,176 | `p119` | 14.6 s, 1.3 GB | 64.6 s wall, 167 s CPU (8 jobs) | 4.0 s, 0.7 GB |
+| 1,514,176 | `app` | 16.4 s, 1.25 GB | 23.2 s | 4.4 s |
+| 1,514,176 | `check --all` | — | 129 s wall, 418 s CPU | 52.8 s wall, 226 s CPU |
+
+(`p119` cold followed `p000`'s; `app` cold followed `p119`'s, so it made only the records still missing.) Before
+§8.3 the same 1.5M program took 53.5 s for `p119`'s whole check, 19.1 s warm, 375 s cold.
+
+- **Stage D's target, a leaf-package check under 1 s at 1.5M, is met**: 0.13 s, cold or warm. The JSON of
+  `check --all` is grouped as specified. A package high in the graph pays for parsing and resolving its whole
+  closure (1.5M lines: about 1 s hashing and reading, 2 s parsing, the rest declarations), a quarter of the whole
+  program's check when warm.
+- **`check --all` warm** is about 3× the whole program's check, since each of 121 packages re-parses its closure.
+  Caching each package's own report beside its record (keyed also by its tests and the current directory) would
+  make it a lookup; not done here.
+- The records of all 120 libraries at 300k lines take 4.2 MB.
+

@@ -712,19 +712,28 @@ A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one rel
 
 **`--emit lib`** (ADR 0088 §2.1) writes a static library for a host program whose `main` is not CeeSafe's
 (type-system.md §28.6): each C file of the build compiled with `-c` and `--emit obj`'s flags (`--cflag`s included),
-then archived with `<archiver> rcs <output>`, made afresh. The members are one per C file and uniquely named: the
-generated code's carry the program's name (`<program>_main.o`; with `--split`, one per unit, the unit's path with `_`
-for `/`), the runtime's keep theirs (`ceesafe_rt_core.o`, …), and a package's separately compiled C files are
-`<program>_ceesafe_package_<k>.o`. The default output is `<name>.a` (`out/<name>.a` in a package). Unlike `-r`, an
-archive keeps the host's LTO: with `--cflag -flto=thin` (or `-flto`) every member is bitcode, which the host's link
-optimises with its own code. One archive per host binary: two archives built separately each carry the runtime and
-clash as two objects do (ADR 0088 §2.7). The headers a host includes (`ceesafe/embed.h`, `ceesafe_exports.h`) are
-`--emit c`'s.
-- `--ar <archiver>` names the archiver; by default it is `llvm-ar` beside an LLVM clang (`clang-18` beside
-  `llvm-ar-18`; the C compiler found as for `--emit obj`, on `PATH` when it has no directory), else `ar` on `PATH`
-  (Apple's `ar` indexes bitcode members).
-- Usage errors (status 2): `--ar` without `--emit lib`; `--emit lib` when no archiver is found, or `--ar`'s is not,
-  naming `--ar`.
+then archived with `<archiver> rcs` into `<output>.partial`, made afresh, and renamed over the output, so a failing
+archiver (`ceesafec: the archiver '<path>' failed`) leaves an earlier archive as it was. The members are one per C
+file: the runtime's keep their names (`ceesafe_rt_core.o`, …); every other one is `<program>_` and the C file's path
+without `.c`, each `_` written `__` and each directory separator `_s` (`main.c` gives `<program>_main.o`;
+with `--split`, `c/embed/src/lib.c` gives `<program>_c_sembed_ssrc_slib.o`), so two paths never give one name; a
+package's separately compiled C files are `<program>_ceesafe_package_<k>.o`. Two C files whose member names differ
+only in case would be one file on macOS and Windows, so such a build fails (status 1) naming the member. The default
+output is `<name>.a` (`out/<name>.a` in a package). Unlike `-r`, an archive keeps the host's LTO: with `--cflag
+-flto=thin` (or `-flto`) every member is bitcode, which the host's link optimises with its own code (a ThinLTO host
+that builds its own C with `-fno-split-lto-unit`, as Bun does, needs `--cflag -fno-split-lto-unit` too). One archive
+per host binary: two archives built separately each carry the runtime and clash as two objects do (ADR 0088 §2.7).
+- **The C `main`.** A package with a CeeSafe `main` gets no C `main` in its archive, since the host has its own (two
+  would not link); `--lib-main` keeps it, for an archive linked into an executable alone.
+- **The host's headers**, with `--emit lib` and `--emit obj`, are written beside the output: `ceesafe/embed.h` (its
+  freestanding form in a freestanding build), and, when the program has exports, the exports header, named by
+  `--exports-header <name>` (default `ceesafe_exports.h`). `-o build/libtext.a` gives `build/ceesafe/embed.h` and
+  `build/ceesafe_exports.h`, so a host compiles with `-I build`.
+- `--ar <archiver>` names the archiver, a path or a name looked up on `PATH`; by default it is `llvm-ar` beside an
+  LLVM clang (`clang-18` beside `llvm-ar-18`; the C compiler found as for `--emit obj`, on `PATH` when it has no
+  directory), else `ar` on `PATH` (Apple's `ar` indexes bitcode members).
+- Usage errors (status 2): `--ar` or `--lib-main` without `--emit lib`; `--ld` with `--emit lib`, which archives
+  instead of linking; `--emit lib` when no archiver is found, or `--ar`'s is not, naming `--ar`.
 
 `--jobs N` (`build --split`, ADR 0082 §2.5) compiles at most `N` C files at once; the default is the number of CPUs
 (`getconf _NPROCESSORS_ONLN`, or `NUMBER_OF_PROCESSORS` on Windows), and `--jobs 1` compiles them one at a time in the

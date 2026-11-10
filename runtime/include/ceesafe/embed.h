@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0 */
 /*
  * Embedding CeeSafe in a host program whose `main` is not CeeSafe's (ADR 0088): the whole interface a host calls.
- * ceesafec writes this header beside ceesafe/rt.h in every build that writes headers; the internal ceesafe_rt_*
- * functions are not part of it.
+ * ceesafec writes this header beside ceesafe/rt.h in every build that writes headers, and beside the archive or object
+ * of `--emit lib` and `--emit obj`; the internal ceesafe_rt_* functions are not part of it.
  *
  * - ceesafe_init, once, must happen before every call into CeeSafe on every thread: called before the host starts the
  *   threads that call CeeSafe, or published to them by the host's own synchronisation. A host that never calls it gets

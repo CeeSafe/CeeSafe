@@ -51,8 +51,9 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   `<program>_ceesafe_instances.o`), every runtime file the program needs, chosen as for an executable
   (`ceesafe_rt_core.o`, `ceesafe_rt_hosted.o`, `ceesafe_rt_io.o`, and `ceesafe_rt_float.o`, `ceesafe_rt_thread.o`,
   `ceesafe_rt_async.o`, `ceesafe_rt_window.o` when its calls appear), and a package's separately compiled C files
-  (`<program>_ceesafe_package_<k>.o`). Headers are not members. The generated `main`, when the program has one, is
-  in the generated code's member, so an archive of a program with a CeeSafe `main` links into an executable alone.
+  (`<program>_ceesafe_package_<k>.o`); tooling.md §8.3 gives the names. Headers are not members: they are written
+  beside the archive. The generated `main` is left out, since the host has its own; with `--lib-main` it is kept, in
+  the generated code's member, so the archive of a program with a CeeSafe `main` links into an executable alone.
 - Plain C `char` is **never** used for CeeSafe data (`char` is signed on x86-64 and
   unsigned on AArch64; CosmoOS's `limits.h` is also wrong about it on AArch64). Bytes are `uint8_t`.
 
@@ -267,9 +268,10 @@ Everything else is unchanged. Heap boxes, and every other site, use the drop glu
 - **Exports.** Each `@export` function gets a non-`static` wrapper under its symbol, with the C
   types, that converts the arguments (checking `@repr` enums), calls `ceeF_<name>`, and converts the
   result. Nothing else in the generated code has external linkage except `main`. In a hosted build the wrapper,
-  and each `@callback`'s C function (`ceeW_<name>`), first calls `ceesafe_entry_check()` (ADR 0088 §2.4): one
-  thread-local load of the runtime's panicked flag, and on a thread that has panicked, that panic's line and the
-  abort. A freestanding build has no flag and no call.
+  and each `@callback`'s C function (`ceeW_<name>`), first calls `ceesafe_entry_check()` (ADR 0088 §2.4): a relaxed
+  load of `ceesafe_any_panicked`, a global set at any thread's first panic, and only when it is set, a call that reads
+  the thread's own panicked flag and on a thread that has panicked prints that panic's line and aborts. A freestanding
+  build has no flag and no call.
 - **`@repr(C)` structs** are `struct S` with members named as in CeeSafe (other structs are `struct
   ceeT_S` with members `f_<name>`), and `typedef struct S ceeT_S;`, so generated code uses them like
   any struct, and C code that includes `ceesafe_exports.h` sees the same type (C11 6.2.7 makes struct
@@ -819,21 +821,28 @@ Heap (M3b):
 - **Start and end: `ceesafe/embed.h`** (ADR 0088 §2.2), written beside `ceesafe/rt.h` (which includes it) by every
   build that writes headers; in a freestanding build its form has only `size` and `flags` (a `#define
   CEESAFE_EMBED_FREESTANDING 1` at its top), and `ceesafe_init` checks the size and keeps no state, since the
-  freestanding core has no mutable global (profiles.md §4.4). The generated `main` fills a `ceesafe_config` with its
-  size, `CEESAFE_INIT_ENVIRONMENT` and `argc`/`argv`, calls `ceesafe_init` (a failure is a runtime panic), then the
+  freestanding core has no mutable global (profiles.md §4.4); its `ceesafe_init` ignores `flags`, none being defined.
+  The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN`
+  (the second, from `rt.h`, starts counting even after a C constructor allocated through CeeSafe, as before
+  `ceesafe_init`) and `argc`/`argv`, calls `ceesafe_init` (a failure other than `AGAIN` is a runtime panic), then the
   entry, then `ceesafe_shutdown()`, which prints the allocation report if asked, and returns the entry's code.
   `Process.exit` and panics skip the report. A host program calls the same two functions (type-system.md §28.6);
   nothing else starts the runtime.
-  - `ceesafe_init` moves an atomic state word from unstarted to starting with a compare-and-swap
-    (`CEESAFE_INIT_AGAIN` otherwise), checks the config's `size` (`CEESAFE_INIT_SIZE`: NULL, or a size that is not a
-    version's), its `allocator` (`CEESAFE_INIT_ALLOCATOR`: none is taken until ADR 0088's stage B) and whether the
-    platform's allocation functions have handed out a block (`CEESAFE_INIT_LATE`: a relaxed flag they set), copies
+  - `ceesafe_init` moves an atomic state word from unstarted to starting with a compare-and-swap. If another call is
+    starting, it waits (spinning) for that call's end: `CEESAFE_INIT_AGAIN` once the state is started, so a caller
+    that goes on to call CeeSafe after `AGAIN` sees the config, or a new compare-and-swap after an error. It checks the
+    config's `size` (`CEESAFE_INIT_SIZE`: NULL, or a size that is not a version's), its `allocator`
+    (`CEESAFE_INIT_ALLOCATOR`: none is taken until ADR 0088's stage B) and, when the config asks for counting (a
+    report or failure injection), whether the platform's allocation functions have handed out a block
+    (`CEESAFE_INIT_LATE`: a relaxed flag they set; without counting an earlier block changes nothing), copies
     `argv` into one uncounted block from the C library (`CEESAFE_INIT_MEMORY` if it cannot), sets the counting
     configuration and the panic hook, and publishes them with the store of started. On an error it stores unstarted
-    back and changes nothing.
+    back and changes nothing. `ceesafe_shutdown` returns 0 and prints nothing unless it loads started.
   - **Panics** go through one path (`ceesafe_panic`, `ceesafe_panic_text`, and `ceesafe_panic_runtime` for the
-    runtime's own aborts, which have no CeeSafe location): on the thread's first panic it sets the thread's panicked
-    flag (`_Thread_local`), keeps a copy of the panic, and calls the host's hook, if `ceesafe_init` installed one; if
+    runtime's own aborts, which have no CeeSafe location): on the thread's first panic it sets `ceesafe_any_panicked`
+    and the thread's panicked flag (`_Thread_local`), keeps a copy of the panic (the message's first 256 bytes in a
+    thread-local buffer, since a message built at run time lives in a frame the re-entry line outlives), and calls the
+    host's hook with the original, if `ceesafe_init` installed one; several threads may be in the hook at once; if
     the hook returns, or on a later panic of that thread, it prints the line and calls `ceesafe_platform_abort`, which
     nothing else calls. The executor's three aborts (its bookkeeping out of memory, a task waiting on a descriptor and
     a wake, every task parked with nothing to wake it) are `ceesafe_panic_runtime(CEE_PANIC_ASYNC, message)`, printed

@@ -2953,7 +2953,8 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   its `main` in C instead of in CeeSafe.
 - **A program without a CeeSafe `main`** (a C, C++ or Rust host; ADR 0088) is linked from `build --emit lib`'s archive
   (tooling.md §4.1) or `--emit obj`'s object, and starts the runtime with `ceesafe_init` from `ceesafe/embed.h`, which
-  every build that writes headers writes beside `ceesafe/rt.h`. Its config gives the program arguments (copied), the
+  every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` and `--emit obj` beside their output
+  (with the exports header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
   allocation report and failure injection (`fail_alloc_at`, `alloc_report`, or the environment's variables with
   `CEESAFE_INIT_ENVIRONMENT`), and a panic hook. `ceesafe_init` must happen before every call into CeeSafe on every
   thread, once; then exports may be called from any host thread at once. `ceesafe_shutdown` prints the report when one
@@ -2964,7 +2965,9 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   CeeSafe spawned, an `Async.runWorkers` worker, or one C calls a `@callback` on) with the kind, the reason, the message
   and the CeeSafe location; the executor's own aborts arrive as `CEE_PANIC_ASYNC` with their message and no file. The
   hook must end the process or never return, must not call CeeSafe, and may not escape (`longjmp`, an exception, an
-  unwind): panic = abort stays the rule. If it returns, the line is printed and the process aborts. Every export and
+  unwind): panic = abort stays the rule. If it returns, the line is printed and the process aborts. It runs once per
+  panicking thread, so several threads panicking at once are in it at once; a hook serialises its own reports. Every
+  export and
   every `@callback` entry checks a per-thread panicked flag first: on a thread that has panicked, the call prints that
   panic's line and aborts.
 - When a program has `@export` functions or `@repr` types, ceesafec also writes `ceesafe_exports.h`: the

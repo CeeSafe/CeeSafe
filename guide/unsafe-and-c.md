@@ -408,10 +408,11 @@ other. Use it for the setup only: an allocation made under it is never tested
 ## Embedding in a host program
 
 A program whose `main` is not CeeSafe's (a C, C++ or Rust program calling CeeSafe exports) links CeeSafe as a static
-library. `ceesafec build --emit lib -o libtext.a` writes one archive holding the generated code and the runtime, one
-member per C file; with `--cflag -flto=thin` the members are bitcode and join the host's ThinLTO. Link one archive per
-host program. The headers come from `ceesafec build --emit c`: `ceesafe_exports.h` declares the exports, and
-`ceesafe/embed.h` is the runtime's interface for a host.
+library. `ceesafec build --emit lib -o build/libtext.a` writes one archive holding the generated code and the runtime,
+one member per C file; with `--cflag -flto=thin` the members are bitcode and join the host's ThinLTO. Link one archive
+per host program. Beside the archive it writes the headers: `build/ceesafe_exports.h` declares the exports, and
+`build/ceesafe/embed.h` is the runtime's interface for a host. A package with a CeeSafe `main` gets no C `main` in the
+archive, since the host has its own (`--lib-main` keeps it).
 
 <!-- ceesafe: check -->
 ```ceesafe
@@ -455,12 +456,13 @@ int main(int argc, char **argv) {
     config.panic_hook = on_panic;
     if (ceesafe_init(&config) != 0) return 1;
     printf("%llu\n", (unsigned long long)text_letters((const uint8_t *)"a1b2", 4));
-    return (int)ceesafe_shutdown(); /* 0 unless blocks leaked under a report */
+    return ceesafe_shutdown() == 0 ? 0 : 1; /* 1 if blocks leaked under a report */
 }
 ```
 
-`cc host.c libtext.a -o host` links it. A panic calls the hook on the thread that panicked, with the reason, the
-message and the CeeSafe location. The hook must not return into CeeSafe, call an export, `longjmp` out or throw:
+`cc -I build host.c build/libtext.a -o host` links it. A panic calls the hook on the thread that panicked, with the
+reason, the message and the CeeSafe location; threads that panic at once are in the hook at once, so a hook that
+writes a report takes a lock first. The hook must not return into CeeSafe, call an export, `longjmp` out or throw:
 CeeSafe's frames have no unwinding, so after a panic that thread may not call CeeSafe again, and an export called on
 it prints the panic and aborts. Without `ceesafe_init` everything still works, but the panic is only printed, the
 environment's settings are ignored and `Process.argument` has no arguments

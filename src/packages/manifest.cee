@@ -120,6 +120,7 @@ struct Manifest {
     libDirs: Vector<Vector<u8>>;     // their directories, absolute
     includeDirs: Vector<Vector<u8>>; // for this package's own C files, absolute
     tests: Vector<Vector<u8>>;       // test directories (ADR 0049): sources for `check` and `test` only
+    embedRoots: Vector<Vector<u8>>;  // [embed] roots (ADR 0087 §2.8): the directory, `/`, the root as written
 }
 
 /// The manifest's file name.
@@ -220,7 +221,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
     for (k in 1..tables.length) {
         let t = borrow tables[k];
         if (!sameText(t.name.view(), "package") && !sameText(t.name.view(), "dependencies") &&
-            !isTargetTable(t.name.view())) {
+            !sameText(t.name.view(), "embed") && !isTargetTable(t.name.view())) {
             // TrimStart('[', ']'): an array table's "[]" goes.
             var start: usize = 0;
             while (start < t.name.length && (t.name[start] == '[' || t.name[start] == ']')) {
@@ -234,7 +235,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                 message2(
                     "unknown table '[",
                     t.name[start..],
-                    "]': a manifest has [package], [dependencies] and [target.linux], [target.macos], [target.windows]",
+                    "]': a manifest has [package], [dependencies], [embed] and [target.linux], [target.macos], [target.windows]",
                 )?,
             )?;
         }
@@ -306,6 +307,7 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         libDirs: Vector<Vector<u8>>.create(),
         includeDirs: Vector<Vector<u8>>.create(),
         tests: Vector<Vector<u8>>.create(),
+        embedRoots: Vector<Vector<u8>>.create(),
     };
     manifest.tests.push(copyBytes("tests".bytes())?)?;
     for (e in package.entries.view()) {
@@ -465,6 +467,56 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                     e.value.end,
                     copyBytes(nativeFieldShape(key).bytes())?,
                 )?;
+            }
+        }
+    }
+    // [embed] roots (ADR 0087 §2.8): directories beside the package's own that its files may embed from.
+    for (k in 1..tables.length) {
+        let t = borrow tables[k];
+        if (!sameText(t.name.view(), "embed")) {
+            continue;
+        }
+        for (e in t.entries.view()) {
+            let key = e.key.view();
+            if (!sameText(key, "roots")) {
+                manifestError(
+                    report,
+                    file,
+                    e.keyStart,
+                    e.keyEnd,
+                    message2("unknown field '", key, "' in [embed]: it has 'roots'")?,
+                )?;
+                continue;
+            }
+            let v = borrow e.value;
+            if (!v.isArray()) {
+                manifestError(
+                    report,
+                    file,
+                    v.start,
+                    v.end,
+                    copyBytes(
+                        "'roots' is an array of directories relative to the package: [\"../build/codegen\"]".bytes(),
+                    )?,
+                )?;
+                continue;
+            }
+            for (root in v.strings.view()) {
+                let problem = embedPathProblem(root.view());
+                if (problem.length > 0) {
+                    var message = message2(
+                        "an [embed] root is a directory relative to the package, and '",
+                        root.view(),
+                        "' is not: ",
+                    )?;
+                    appendText(mut message, problem)?;
+                    manifestError(report, file, v.start, v.end, message)?;
+                    continue;
+                }
+                var joined = copyBytes(manifest.directory.view())?;
+                joined.push('/')?;
+                appendBytes(mut joined, root.view())?;
+                manifest.embedRoots.push(joined)?;
             }
         }
     }

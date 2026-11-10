@@ -120,13 +120,16 @@ fn sourceDirectory(source: Slice<u8>) -> Result<Vector<u8>, AllocError> {
 }
 
 /// The file `written` names for an `embed` in the source file at `source` (absolute; empty when the source is not a
-/// file on disk), which may read inside `roots` (absolute directories: its package's and its `[embed] roots`; empty
-/// for a file outside package mode, which may read inside its own directory): its real path, or why it cannot be
-/// embedded. Nothing is read yet (readEmbeddedBytes).
+/// file on disk), which may read inside `roots` (absolute directories: its package's first, then its `[embed] roots`;
+/// empty for a file outside package mode, which may read inside its own directory): its real path, or why it cannot
+/// be embedded. Unless `rootsOutside` (the root package and path dependencies), a root counts only when its real path
+/// is inside the package's: a git or registry checkout reaches nothing outside itself, through a symbolic link it
+/// holds either. Nothing is read yet (readEmbeddedBytes).
 fn resolveEmbedded(
     source: Slice<u8>,
     written: Slice<u8>,
     roots: borrow Vector<Vector<u8>>,
+    rootsOutside: bool,
 ) -> Result<EmbeddedRead, AllocError> {
     let lexical = embedPathProblem(written);
     if (lexical.length > 0) {
@@ -157,10 +160,14 @@ fn resolveEmbedded(
             allowed.push(itself!)?;
         }
     } else {
-        for (r in roots.view()) {
-            let resolved = realPath(r.view())?;
+        for (k in 0..roots.length) {
+            let resolved = realPath(roots[k].view())?;
             if (resolved != null) {
-                allowed.push(resolved!)?;
+                let rootDirectory = resolved!;
+                let inPackage = allowed.length > 0 && realPathWithin(rootDirectory.view(), allowed[0].view());
+                if (k == 0 || rootsOutside || inPackage) {
+                    allowed.push(rootDirectory)?;
+                }
             }
         }
     }
@@ -175,7 +182,8 @@ fn resolveEmbedded(
         appendText(
             mut message,
             if (roots.length == 0) "', outside the source file's directory (a file given alone embeds only below it)"
-                else "', outside the package's directory and its [embed] roots",
+                else if (rootsOutside) "', outside the package's directory and its [embed] roots"
+                else "', outside the package's directory and its [embed] roots inside it (a git or registry package embeds only from itself)",
         )?;
         return embedFailure(message.view());
     }

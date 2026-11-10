@@ -46,16 +46,18 @@ fn checkEmbed(c: borrow mut Checker, asText: bool, arguments: Range, span: Span)
         source = copyBytes(c.fileDiskPaths[file].view())?;
     }
     var roots = Vector<Vector<u8>>.create();
+    var rootsOutside = false;
     if (file < c.filePackage.length) {
         let package = c.filePackage[file] as usize;
         if (package < c.packages.length && c.packages[package].directory.length > 0) {
             roots.push(copyBytes(c.packages[package].directory.view())?)?;
+            rootsOutside = c.packages[package].embedOutside;
             for (r in c.packages[package].embedRoots.view()) {
                 roots.push(copyBytes(r.view())?)?;
             }
         }
     }
-    let resolved = resolveEmbedded(source.view(), writtenBytes.view(), roots)?;
+    let resolved = resolveEmbedded(source.view(), writtenBytes.view(), roots, rootsOutside)?;
     if (resolved.problem.length > 0) {
         return embedFailed(c, writtenBytes.view(), resolved.problem.view(), pathSpan, span);
     }

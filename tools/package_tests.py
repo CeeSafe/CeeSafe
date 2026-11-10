@@ -54,6 +54,12 @@
     (made here) through a static, a constant and a local, a 4-byte file and an empty one; it prints the lengths and a
     checksum, which Python computes, the same compiled and interpreted. `--emit c` holds each non-empty file's bytes
     once, as a `static const uint8_t` array, the short one too.
+20. [embed] roots (ADR 0087 §2.8, tooling.md §4.1), made here: app's roots are a directory outside it and a symbolic
+    link inside it to another outside it; its path dependency near has a root outside it; its git dependency far
+    embeds from itself. All three embed, and the program prints the files, in the interpreter. farbad, a git
+    dependency whose roots are a committed symbolic link to a directory outside its checkout and `../shared`, gets
+    N0362 for each (a git or registry package embeds only from itself). Invalid roots (absolute, `\`, `$`) and an
+    unknown field in [embed] are N0321.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -695,7 +701,79 @@ def main():
             problems.append(f"embed-large: --emit c: expected two byte arrays, the short one among them: "
                             f"{[a[:60] for a in arrays]} ({p.returncode}) {p.stderr[-300:]}")
 
-    print(f"package_tests: 19 checks; {len(problems)} problems")
+        # 20. [embed] roots: outside the package for the root package and a path dependency, not for a git one.
+        roots = os.path.join(work, "roots")
+        def write(path, text):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        shared = os.path.join(roots, "shared")
+        write(os.path.join(shared, "data.txt"), "shared")
+        write(os.path.join(roots, "shared2", "two.txt"), "two")
+        try:
+            os.makedirs(os.path.join(roots, "app"))
+            os.symlink(os.path.join("..", "shared2"), os.path.join(roots, "app", "gen"), target_is_directory=True)
+            linked = True
+        except (OSError, NotImplementedError):
+            write(os.path.join(roots, "app", "gen", "two.txt"), "two")
+            linked = False
+        write(os.path.join(roots, "near", "ceesafe.toml"),
+              '[package]\nname = "near"\nkind = "library"\n\n[embed]\nroots = ["../shared"]\n')
+        write(os.path.join(roots, "near", "src", "lib.cee"),
+              'public const TEXT: StringView = "near " + embedText("../../shared/data.txt");\n')
+        def repository(name, source):
+            directory = os.path.join(roots, name)
+            write(os.path.join(directory, "ceesafe.toml"),
+                  f'[package]\nname = "{name}"\nkind = "library"\n\n[embed]\nroots = ["linked", "../shared"]\n')
+            write(os.path.join(directory, "own.txt"), "own")
+            write(os.path.join(directory, "src", "lib.cee"), source)
+            if linked:
+                os.symlink(shared, os.path.join(directory, "linked"), target_is_directory=True)
+            run(git + ["init", "-q"], directory)
+            run(git + ["add", "-A"], directory)
+            run(git + ["commit", "-qm", "one"], directory)
+            commit = run(["git", "rev-parse", "HEAD"], directory).stdout.strip()
+            return f'{{ git = "{directory.replace(chr(92), "/")}", rev = "{commit}" }}'
+        far = repository("far", 'public const OWN: StringView = embedText("../own.txt");\n')
+        farbad = repository("farbad", 'public const LINKED: StringView = embedText("../linked/data.txt");\n'
+                                      'public const SHARED: StringView = embedText("../../shared/data.txt");\n')
+        write(os.path.join(roots, "app", "ceesafe.toml"),
+              '[package]\nname = "app"\n\n[embed]\nroots = ["../shared", "gen"]\n\n[dependencies]\n'
+              f'near = {{ path = "../near" }}\nfar = {far}\n')
+        write(os.path.join(roots, "app", "src", "main.cee"),
+              'const SHARED: StringView = embedText("../../shared/data.txt");\n'
+              'const TWO: StringView = embedText("../gen/two.txt");\n\nfn main() {\n    Console.writeLine(SHARED);\n'
+              '    Console.writeLine(TWO);\n    Console.writeLine(near.TEXT);\n    Console.writeLine(far.OWN);\n}\n')
+        app = os.path.join(roots, "app")
+        run([compiler, "fetch"], app)
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != "shared\ntwo\nnear shared\nown":
+            problems.append(f"embed roots: app printed {p.stdout.strip()!r} ({p.returncode}) {p.stderr[-600:]}")
+        bad = os.path.join(roots, "bad")
+        write(os.path.join(bad, "ceesafe.toml"), f'[package]\nname = "bad"\n\n[dependencies]\nfarbad = {farbad}\n')
+        write(os.path.join(bad, "src", "main.cee"), "fn main() {\n    Console.writeLine(farbad.SHARED);\n}\n")
+        run([compiler, "fetch"], bad)
+        p = run([compiler, "check", "--diagnostics-format=json"], bad)
+        try:
+            found = sorted((d["code"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"])
+        except (ValueError, KeyError):
+            found = []
+        if p.returncode != 1 or found != [("N0362", 1), ("N0362", 2)]:
+            problems.append(f"embed roots: farbad: expected N0362 on lines 1 and 2: {found} ({p.returncode}) "
+                            f"{p.stdout[:400]}{p.stderr[:400]}")
+        errors = os.path.join(roots, "errors")
+        write(os.path.join(errors, "ceesafe.toml"),
+              '[package]\nname = "errors"\n\n[embed]\nroots = ["/abs", "a\\\\b", "$X/y", "fine"]\nother = "x"\n')
+        write(os.path.join(errors, "src", "main.cee"), "fn main() {}\n")
+        p = run([compiler, "check", "--diagnostics-format=json"], errors)
+        try:
+            found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = p.stdout + p.stderr
+        if p.returncode == 0 or found != ["N0321"] * 4:
+            problems.append(f"embed roots: expected four N0321 for the invalid roots and field: {found}")
+
+    print(f"package_tests: 20 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

@@ -38,6 +38,32 @@ struct Workspace {
         return copyBytes(manifest.name.view());
     }
 
+    /// Package `p` of the build (0 the root, then the resolved ones) as the checker takes it: its name, its
+    /// dependencies' names, `trusted`, and where its files may embed from (ADR 0087 §2.8). Only the root package and
+    /// path dependencies, code the user works on, may have `[embed] roots` outside their directory.
+    fn packageInfo(borrow this, p: usize) -> Result<PackageInfo, AllocError> {
+        let manifest = this.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+        var dependencies = Vector<Vector<u8>>.create();
+        for (d in manifest.dependencies.view()) {
+            dependencies.push(copyBytes(d.name.view())?)?;
+        }
+        var roots = Vector<Vector<u8>>.create();
+        for (r in manifest.embedRoots.view()) {
+            roots.push(copyBytes(r.view())?)?;
+        }
+        let local = p == 0 || startsWithText(this.resolved[p - 1].entry.source.view(), "path+");
+        return Ok(
+            PackageInfo {
+                name: copyBytes(manifest.name.view())?,
+                dependencies: dependencies,
+                trusted: manifest.trusted,
+                directory: copyBytes(manifest.directory.view())?,
+                embedRoots: roots,
+                embedOutside: local,
+            },
+        );
+    }
+
     fn dependentDirectory(borrow this, dependent: u32) -> Result<Vector<u8>, AllocError> {
         let manifest = this.dependentManifest(dependent);
         return copyBytes(manifest.directory.view());

@@ -216,6 +216,9 @@ include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C file
 [target.windows]             # also [target.macos] and [target.linux]: added after [package]'s on that system
 links = ["libssl", "libcrypto"]
 
+[embed]                      # where `embed` may read besides the package's directory (ADR 0087 §2.8)
+roots = ["../build/codegen"]
+
 [dependencies]
 geometry = { path = "../geometry" }
 lz4 = { git = "https://example.org/lz4-cee.git", tag = "v1.2.0" }      # or rev = "<commit>", or branch = "main"
@@ -248,7 +251,18 @@ syntax) and N0321 (a missing, unknown or invalid field), with the line.
   manifests name any: one argument per line, each separately compiled C file after its include directories, then the
   library directories and the libraries (`cl`'s spelling when `--cc` is `cl`).
 
-### 4.2 Resolving dependencies
+**Embed roots** (ADR 0087 §2.8, `type-system.md` §10.1). A package's files may embed files inside the package's
+directory (the one holding `ceesafe.toml`), and inside each directory `[embed] roots` lists:
+- A root is relative to the package's directory, with `/` separators, and nothing in it is expanded: an absolute path,
+  a drive, a `\`, `:`, `$` or `%`, or a leading `~` is N0321 at the array, and so is any other field in `[embed]`.
+  It may use `..`. Roots are resolved when a file is embedded, not when the manifest is read: one that does not exist
+  (yet: a build's generated directory) reaches nothing, and an `embed` below it is N0362 until it does.
+- A root is its real path: every symbolic link in it is followed, so a root that is a symbolic link stands for the
+  directory it leads to.
+- **Only the root package and path dependencies may have roots outside their directory.** They are code the user works
+  on, whose manifest the user wrote. A git or registry dependency's root counts only when its real path is inside the
+  dependency's own: a checkout reaches nothing outside itself, through `..` or through a symbolic link it holds.
+
 
 From the package being built, every dependency is resolved, and then its dependencies, recursively:
 - `path` is a directory relative to the manifest that names it, holding the dependency's `ceesafe.toml`;

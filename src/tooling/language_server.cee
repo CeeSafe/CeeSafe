@@ -318,19 +318,7 @@ fn checkInPackage(path: Slice<u8>, text: Slice<u8>, file: borrow mut u32) -> Res
     var files = Vector<InputFile>.create();
     for (p in 0..workspace.resolved.length + 1) {
         let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
-        var dependencies = Vector<Vector<u8>>.create();
-        for (d in manifest.dependencies.view()) {
-            dependencies.push(copyBytes(d.name.view())?)?;
-        }
-        packages.push(
-            PackageInfo {
-                name: copyBytes(manifest.name.view())?,
-                dependencies: dependencies,
-                trusted: manifest.trusted,
-                directory: copyBytes(manifest.directory.view())?,
-                embedRoots: Vector<Vector<u8>>.create(),
-            },
-        )?;
+        packages.push(workspace.packageInfo(p)?)?;
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)?;
         for (f in paths.view()) {

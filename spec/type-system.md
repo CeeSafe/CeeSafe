@@ -321,12 +321,13 @@ item of the same name shadows.
   absolute one (`/…`, `\…`, `X:`); a `\`, a `:`, a `$` or a `%` anywhere; a `~` first.
 - **Where it may lead.** The compiler resolves the path fully, every symbolic link and `..`, as the system does
   (`realpath`; on Windows the final path of the opened file), and compares the result byte for byte with the real
-  paths of its package's directory (the one holding `ceesafe.toml`) and of each of its `[embed] roots`
-  (`tooling.md` §4.1). It must be one of them or below one: a symbolic link is followed only when where it leads is
-  inside. A file given on the command line or to a server outside a package embeds only below its own directory. A
-  path whose real path is outside these, that does not exist, that is a directory or anything but a regular file, or
-  that names a file of more than 16 MiB (16,777,216 bytes), is N0362 at the path. A source with no file on disk (the
-  MCP server's `files`, a library's sources) embeds nothing (N0362).
+  paths of its package's directory (the one holding `ceesafe.toml`) and of each of its `[embed] roots` (`tooling.md`
+  §4.1; a git or registry dependency's roots count only inside its own directory). It must be one of them or below
+  one: a symbolic link is followed only when where it leads is inside. A file given on the command line or to a server
+  outside a package embeds only below its own directory. A path whose real path is outside these, that does not exist,
+  that is a directory or anything but a regular file, or that names a file of more than 16 MiB (16,777,216 bytes), is
+  N0362 at the path. A source with no file on disk (the MCP server's `files`, a library's sources) embeds nothing
+  (N0362).
 - **Letter case.** Real paths are compared byte for byte. On a file system that ignores case, a spelling that names
   the file but differs in case from the directory's real path is refused (it may be outside), never wrongly accepted;
   macOS and Windows give the real path in the stored case, so a package is unaffected unless it spells its own

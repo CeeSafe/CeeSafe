@@ -46,6 +46,19 @@ links = ["libssl", "libcrypto"]
 Nothing runs to find the library: no pkg-config, no scripts. A directory is literal, or starts with an environment
 variable, which must be set. `ceesafec build --emit c` writes the link line to `ceesafe_link.txt`, for building by hand.
 
+## Embedded files
+
+`embed("path")` and `embedText("path")` ([Basics](basics.md#embedded-files)) read files inside the package's directory.
+To embed what a build generates elsewhere, list the directory:
+
+```toml
+[embed]
+roots = ["../build/codegen"]             # relative to the package; no absolute paths or environment variables
+```
+
+A root may be outside the package in your own package and in a path dependency. A git or registry dependency embeds only
+from its own checkout, whatever its roots say: a symbolic link it holds that leads outside is refused (N0362).
+
 ## Using a dependency
 
 All files of one package share one scope. Another package's items are reached through its name, and only its

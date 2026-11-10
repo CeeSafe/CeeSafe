@@ -4,10 +4,11 @@
   plan"). It rests on a census of Bun 1.4.4's hand-written Rust made for this ADR (§1.1), on the source of Bun's four
   proc-macro crates and its codegen scripts, and on probes compiled with ceesafec 0.24.2 (`out/ceesafec` from main)
   on 2026-11-09.
-- Scope: grammar.md §1.6 (`c"…"`); type-system.md §6 (`==` on derived types), §8 (`debugAssert`), §10 and §39.4
-  (constant `+`, `embed`), §16.2 (equality of elements), §24.3 and ADR 0075 §2.4 (derived `HashKey`, `OrderKey`),
-  §28.1 (`@derive`), §32.1 (the write fact of §2.5); tooling.md (`--debug-assertions`); the checker, NIR lowering,
-  the C backend and the interpreter; lib/core (`CStr`, formatting helpers); the corpus and the guide.
+- Scope: grammar.md §1.6 (`c"…"`); type-system.md §6 (`==` on derived types), §8 (`debugAssert`), §10, §10.1 and
+  §39.4 (constant `+`, `embed`), §16.2 (equality of elements), §24.3 and ADR 0075 §2.4 (derived `HashKey`,
+  `OrderKey`), §28.1 (`@derive`), §32.1 (the write fact of §2.5); tooling.md (`--debug-assertions`, `[embed] roots`);
+  the checker, NIR lowering, the C backend and the interpreter; lib/core (`CStr`, formatting helpers); the corpus and
+  the guide.
 
 ## 1. Context
 
@@ -422,3 +423,49 @@ Step 1 (§2.3, §2.4, §2.5 and §2.9) is implemented as written, with these pre
   type parameters: `impl<T: Copy + OrderKey<T>, const N: usize> OrderKey<Buf<T, N>> for Buf<T, N>`.
 - **Not added:** `==` on a `CStr` field (a struct with one is N0207 under `@derive(Equal)`; compare `view()`s in a
   method), and `HashKey` or `OrderKey` for arrays, optionals, boxes and floats, which §2.3 does not list.
+
+## 9. Implementation notes (step 2, 0.27.0)
+
+Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-system.md §10, §10.1, §39.4; tooling.md
+§4.1, §4.4.1; c-backend.md §2):
+
+- **Constant `+`.** It folds in the checker, where the operands are already literals: a string literal, a constant
+  (another package's too), an `embedText`, a `c"…"` or `CStr` constant on the right, or another `+`. A `CStr` on the
+  left, or two `c"…"`, is N0207; an operand that is not constant is N0217 in a constant and N0338 in a static. The
+  N0207 for `+` on views elsewhere now says where it works.
+- **Where `embed` may stand.** Anywhere an expression may, not only in a constant or a static: its value is static
+  data like a literal's. A constant and a non-`mut` static may have the type `Slice<u8>` for it (a `static mut` may
+  not: N0337); nothing else gives that type a constant value. The path is a string literal or a constant view.
+- **Paths.** Besides §2.8's rules: `\` is refused on every system (a separator on Windows, a name's character
+  elsewhere: the same files must give the same program), and so are `:` (a drive, an NTFS stream), `$` and `%`
+  (nothing is expanded, so they would name a literal directory, which is surely a mistake) and a leading `~`.
+- **Resolution.** The system's `realpath` (on Windows, `GetFinalPathNameByHandleA` on the opened path, every symbolic
+  link and junction resolved), then a byte-for-byte prefix comparison with the real paths of the package's directory
+  and its roots. Byte comparison may refuse a spelling that a case-insensitive file system would accept, never accept
+  one outside. The file must be a regular file (a FIFO would block `check`), of at most **16 MiB**: Bun's largest is
+  339 kB, and a file is C text about five times its size. A file given alone (no package: the command line, the
+  language server's lone document, the MCP server's `paths`) embeds only below its own directory; a source with no
+  file (the MCP server's `files`, the libraries) embeds nothing.
+- **How the compiler resolves.** The compiler's sources must still build with ceesafec 0.8.0, whose library has no
+  real-path service, so `src/host/embedding.cee` declares libc's `realpath` in an `extern "C"` block. Windows has no
+  `realpath`: the runtime's `rt.h` maps the name to `ceesafe_win_realpath`, which the hosted runtime defines there,
+  so the compiler builds on Windows from its seed. A program may use the same declaration.
+- **Roots.** Relative to the package, under the path rules (N0321 otherwise). They are resolved when a file is
+  embedded: a root that is a symbolic link stands for its target, and one that does not exist yet (a build's
+  generated directory) reaches nothing. Only the root package and path dependencies, whose manifests the user writes,
+  may have roots outside their directory; a git or registry dependency's root counts only if its real path is inside
+  the checkout, so a symbolic link committed in a dependency cannot reach the user's files.
+- **When files are read.** By every command that checks, the language server and the MCP server included; once per
+  compilation by real path, so every use agrees; nothing is kept between compilations, so a file changed after
+  `check` is what `build` compiles. ADR 0082's object cache and interface records are not implemented yet (stages C
+  and D); when they are, an object's key (its unit's C text) already holds the bytes, and a package's record must add
+  the real path and contents of each embedded file to its key. The lock's hash still covers manifests and sources
+  only.
+- **Code generation.** An embedded file's bytes are a `static const uint8_t ceeLS_<k>[]` at any length but zero,
+  once per distinct contents (literals over 4,095 bytes were already); an empty file is an empty literal. The
+  interpreter needed nothing: it runs the NIR, which holds the bytes. A static `c"…"` over 4,095 bytes was a C
+  literal before; it is an array now too.
+- **Not done.** The language server does not watch embedded files (a change shows at the next check of the document).
+  Between resolving a path and opening it, a file inside the package could be replaced (by a FIFO, or a link): only
+  someone who can already write the package's files could, and the compiler's sources cannot use `File.openRegular`
+  (ADR 0078) while they build with 0.8.0.

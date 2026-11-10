@@ -2862,8 +2862,11 @@ result, local or field of C's `char`, 8 bits with no arithmetic. `b as CChar` (f
 prototypes exactly.
 
 `CLong` and `CULong` (ADR 0080 §3.5) are C's `long` and `unsigned long`: integer types of their own, of the target's
-width (64 bits on every target ceesafec supports today), spelled `long` and `unsigned long` in C. A generated C file
-that uses one asserts `sizeof(long)`, so a target whose `long` is another width fails to compile.
+width, spelled `long` and `unsigned long` in C. The width is 32 bits on Windows (LLP64), the target of a hosted build
+when ceesafec runs there (ADR 0069), and 64 bits on every other target (LP64), freestanding ones included. It is part
+of the layouts ceesafec computes and asserts, so `[CULong; 3]` is 12 bytes on Windows and 24 elsewhere. A generated C
+file that uses one asserts `sizeof(long)`, so C generated for one target and compiled for another whose `long` is
+another width fails to compile.
 
 ### 28.4 Exports
 - `@export` makes a top-level, non-generic, non-method function callable from C, with the C types of

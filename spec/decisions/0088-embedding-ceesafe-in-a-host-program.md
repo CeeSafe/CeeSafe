@@ -1,6 +1,6 @@
 # ADR 0088 — Embedding CeeSafe in a host program: a library archive, `ceesafe_init`, panic and allocator hooks, host bindings
 
-- Status: **Proposed**, 2026-11-10; revised the same day after two adversarial reviews (soundness; fit with Bun).
+- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
   Raised by the Bun port's first crate swap (`~/dev/CeeSafeApps/bun/analysis/trials/csrf/REPORT.md`): `bun_csrf` was
   replaced by CeeSafe inside Bun 1.4.4 and Bun's tests passed, but the trial found that CeeSafe cannot yet live in a
   program whose `main` is not CeeSafe's (its gaps G8, G6, G2, G9, and the runtime that is never started). The trial's

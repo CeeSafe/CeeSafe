@@ -26,6 +26,8 @@ extern "C" {
     fn pwrite(fd: i32, buffer: *u8, size: usize, offset: i64) -> isize;
     fn renameat(fromDirectory: i32, from: *CChar, toDirectory: i32, to: *CChar) -> i32;
     fn unlinkat(directory: i32, path: *CChar, flags: i32) -> i32;
+    // C's rename, on every platform: toolchain.cee moves `--emit lib`'s finished archive over its output.
+    fn rename(from: *CChar, to: *CChar) -> i32;
     // macOS's system calls by number (executablePath): getpid (20) and proc_info (336).
     fn syscall(number: i32, ...) -> i32;
 }

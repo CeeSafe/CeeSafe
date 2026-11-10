@@ -246,14 +246,17 @@ _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
 static uint64_t alloc_attempts;   /* every allocation attempt, failed ones included */
 static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
-static bool alloc_foreign_used;   /* C has allocated: the report gives alloc_foreign */
+static uint32_t alloc_foreign_used; /* C has allocated: the report gives alloc_foreign (ceesafe_atomic_*) */
 static uint64_t alloc_fail_at;    /* CEESAFE_FAIL_ALLOC_AT: this attempt fails; 0 = never */
 static bool alloc_report;         /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
 /* Whether to count at all (ADR 0059): only a report, CEESAFE_FAIL_ALLOC_AT or `ceesafec test` reads the counters. Decided
    before the program's first allocation and never changed afterwards, so a free never subtracts what its allocation
    did not add. */
 static bool alloc_counting;
-static bool failing_armed;        /* FailingAllocator.failAfter has been called */
+/* FailingAllocator's countdown (type-system.md §18.1): process-wide, and changed from every thread, so atomic
+   (ceesafe_atomic_*). failAfter stores `failing_left` before `failing_armed`, so an allocation that sees the flag sees
+   the count it was armed with. */
+static uint32_t failing_armed;    /* FailingAllocator.failAfter has been called, reset has not */
 static uint64_t failing_left;     /* successes FailingAllocator still allows */
 
 void ceesafe_rt_start(void) {
@@ -276,8 +279,10 @@ void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
 }
 
 /*
- * The counters change from every thread of a threaded program (type-system.md §38), so atomically. The fault-injection
- * flags are set before threads exist (FailingAllocator is single-threaded test code).
+ * The counters change from every thread of a threaded program (type-system.md §38), so atomically: every attempt
+ * gets its own number, in the order of the increments, and CEESAFE_FAIL_ALLOC_AT fails exactly one. The configuration
+ * (alloc_counting, alloc_fail_at, alloc_report) is written only by ceesafe_rt_start and ceesafe_test_begin, which run
+ * at the start of main before any thread exists; a thread's start orders them before everything it does.
  */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
@@ -294,11 +299,19 @@ static bool alloc_refused(uint32_t allocator) {
         return false;
     }
     uint64_t attempt = alloc_counting ? CEE_COUNT(alloc_attempts, 1u) : 0u;
-    if (allocator == CEE_ALLOC_FAILING && failing_armed) {
-        if (failing_left == 0u) {
-            return true;
+    if (allocator == CEE_ALLOC_FAILING && ceesafe_atomic_load_u32(&failing_armed) != 0u) {
+        /* One success taken from the countdown, or none left: a decrement that never goes below zero. */
+        uint64_t left = ceesafe_atomic_load_u64(&failing_left);
+        for (;;) {
+            if (left == 0u) {
+                return true;
+            }
+            uint64_t seen = ceesafe_atomic_cas_u64(&failing_left, left, left - 1u);
+            if (seen == left) {
+                break;
+            }
+            left = seen;
         }
-        failing_left--;
     }
     return alloc_fail_at != 0u && attempt == alloc_fail_at;
 }
@@ -308,7 +321,9 @@ static bool alloc_refused(uint32_t allocator) {
 static void alloc_count_live(uint32_t allocator, uint64_t delta) {
     if ((allocator == CEE_ALLOC_FOREIGN || allocator == CEE_ALLOC_FOREIGN_INIT) && alloc_counting) {
         (void)CEE_COUNT(alloc_foreign, delta);
-        alloc_foreign_used = true;
+        if (ceesafe_atomic_load_u32(&alloc_foreign_used) == 0u) {
+            ceesafe_atomic_store_u32(&alloc_foreign_used, 1u);
+        }
     } else if (alloc_counting) {
         (void)CEE_COUNT(alloc_live, delta);
     }
@@ -358,12 +373,12 @@ void ceesafe_free(void *p, uint32_t allocator) {
 }
 
 void ceesafe_fail_after(uint64_t n) {
-    failing_armed = true;
-    failing_left = n;
+    ceesafe_atomic_store_u64(&failing_left, n);
+    ceesafe_atomic_store_u32(&failing_armed, 1u);
 }
 
 void ceesafe_fail_reset(void) {
-    failing_armed = false;
+    ceesafe_atomic_store_u32(&failing_armed, 0u);
 }
 
 static void write_err_u64(uint64_t value) {
@@ -377,13 +392,13 @@ static void write_err_u64(uint64_t value) {
 int32_t ceesafe_rt_finish(int32_t code) {
     if (alloc_report) {
         write_err_cstr("ceesafe alloc: attempts=");
-        write_err_u64(alloc_attempts);
+        write_err_u64(ceesafe_atomic_load_u64(&alloc_attempts));
         write_err_cstr(" live=");
-        write_err_u64(alloc_live);
+        write_err_u64(ceesafe_atomic_load_u64(&alloc_live));
         write_err_cstr("\n");
-        if (alloc_foreign_used) {
+        if (ceesafe_atomic_load_u32(&alloc_foreign_used) != 0u) {
             write_err_cstr("ceesafe alloc: foreign held=");
-            write_err_u64(alloc_foreign);
+            write_err_u64(ceesafe_atomic_load_u64(&alloc_foreign));
             write_err_cstr("\n");
         }
     }
@@ -449,10 +464,14 @@ void ceesafe_arena_drop(cee_arena *a) {
 
 #define CEE_SCRATCH_CHUNK 65536u
 
-static void *scratch_chunk;   /* newest chunk; each starts with the previous chunk's address */
-static uint8_t *scratch_cur;
-static uint8_t *scratch_end;
-static uint64_t scratch_depth; /* live frames */
+/* Each thread has its own scratch stack (type-system.md §19.5): a frame belongs to the thread that entered it, and
+   neither a frame nor its allocations can reach another thread unless that thread is done with them before the frame
+   ends (§38.6). _Thread_local as in ceesafe_rt_async.c (MSVC accepts it under /std:c11). A thread ends with every frame
+   it entered dropped, so with no chunk left: nothing to free at its exit. */
+static _Thread_local void *scratch_chunk; /* newest chunk; each starts with the previous chunk's address */
+static _Thread_local uint8_t *scratch_cur;
+static _Thread_local uint8_t *scratch_end;
+static _Thread_local uint64_t scratch_depth; /* live frames */
 
 cee_scratch ceesafe_scratch_enter_root(cee_loc loc) {
     if (scratch_depth != 0u) {
@@ -479,6 +498,24 @@ void ceesafe_scratch_drop(cee_scratch *frame) {
     scratch_cur = frame->cur;
     scratch_end = frame->end;
     scratch_depth = frame->depth - 1u;
+}
+
+/* Runs body(arg) on the calling thread as a thread of its own would run it: with an empty scratch stack, the caller's
+   restored afterwards. For the places that run a thread's body here when no thread can be started (Thread.both,
+   Async.blocking; type-system.md §38.6, §40.8), so the body can enter a root frame whether or not the caller has one.
+   The body drops every frame it enters before it returns (they are scoped), so the stack is empty again then. */
+void *ceesafe_scratch_aside(void *(*body)(void *), void *arg) {
+    cee_scratch saved = {scratch_chunk, scratch_cur, scratch_end, scratch_depth};
+    scratch_chunk = NULL;
+    scratch_cur = NULL;
+    scratch_end = NULL;
+    scratch_depth = 0u;
+    void *result = body(arg);
+    scratch_chunk = saved.chunk;
+    scratch_cur = saved.cur;
+    scratch_end = saved.end;
+    scratch_depth = saved.depth;
+    return result;
 }
 
 static void *scratch_alloc(uint64_t size, uint64_t align) {

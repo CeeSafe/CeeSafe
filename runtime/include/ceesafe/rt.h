@@ -1063,7 +1063,7 @@ typedef struct cee_fba {
 
 /*
  * A scratch frame: the scratch stack's state when the frame was entered, which its drop restores.
- * The scratch stack itself (runtime-owned heap chunks) is global; v0 is single-threaded. 32 bytes.
+ * The scratch stack itself (runtime-owned heap chunks) is per thread (type-system.md §19.5). 32 bytes.
  */
 typedef struct cee_scratch {
     void *chunk;
@@ -1081,6 +1081,8 @@ cee_fba ceesafe_fba_over(uint8_t *base, uint64_t capacity);
 cee_scratch ceesafe_scratch_enter_root(cee_loc loc);
 cee_scratch ceesafe_scratch_enter_child(cee_scratch *parent);
 void ceesafe_scratch_drop(cee_scratch *frame);
+/* Runs body(arg) here with an empty scratch stack, as a new thread would (a thread's body run on the calling thread). */
+void *ceesafe_scratch_aside(void *(*body)(void *), void *arg);
 
 /* ---- Pools (type-system.md §19.6) ------------------------------------------------------- */
 

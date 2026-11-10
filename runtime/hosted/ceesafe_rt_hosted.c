@@ -17,14 +17,22 @@
 #include <io.h>
 #endif
 
-/* Windows translates "\n" to "\r\n" in text mode: CeeSafe's output is bytes, so both streams become binary. */
+/* Windows translates "\n" to "\r\n" in text mode: CeeSafe's output is bytes, so both streams become binary. Several
+   threads may write at once (ceesafe_atomic_*): the first switches the streams, and the others wait until it has. */
+#ifdef _WIN32
+static uint32_t ceesafe_binary_state; /* 0 not switched, 1 being switched, 2 switched */
+#endif
 static void ceesafe_binary_streams(void) {
 #ifdef _WIN32
-    static bool done;
-    if (!done) {
-        done = true;
-        (void)_setmode(_fileno(stdout), _O_BINARY);
-        (void)_setmode(_fileno(stderr), _O_BINARY);
+    if (ceesafe_atomic_load_u32(&ceesafe_binary_state) != 2u) {
+        if (ceesafe_atomic_cas_u32(&ceesafe_binary_state, 0u, 1u) == 0u) {
+            (void)_setmode(_fileno(stdout), _O_BINARY);
+            (void)_setmode(_fileno(stderr), _O_BINARY);
+            ceesafe_atomic_store_u32(&ceesafe_binary_state, 2u);
+        } else {
+            while (ceesafe_atomic_load_u32(&ceesafe_binary_state) != 2u) {
+            }
+        }
     }
 #endif
 }

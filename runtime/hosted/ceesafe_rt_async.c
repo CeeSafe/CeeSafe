@@ -1357,7 +1357,8 @@ void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), vo
     ceesafe_atomic_store_u32(&b->done, 0u);
     b->thread = ceesafe_thread_start(body, arg);
     if (b->thread == NULL) {
-        body(arg); /* no thread: at once, here (as Thread.both, type-system.md §38.6) */
+        /* No thread: at once, here (as Thread.both, type-system.md §38.6), with a scratch stack of its own. */
+        (void)ceesafe_scratch_aside(body, arg);
     }
 }
 
@@ -2892,8 +2893,10 @@ static void cee_iocp_begin(cee_op *o, uint32_t kind, SOCKET s) {
     o->u.io.flags = 0;
 }
 
-static LPFN_ACCEPTEX cee_accept_ex;
-static LPFN_CONNECTEX cee_connect_ex;
+/* WSA extension functions, found on the first socket that asks and kept for the process. Async.runWorkers's workers
+   may ask at once, so a slot is read and written only with Interlocked*Pointer (each finds the same function). */
+static void *volatile cee_accept_ex;
+static void *volatile cee_connect_ex;
 
 static void *cee_extension(SOCKET s, GUID id) {
     void *function = NULL;
@@ -2901,6 +2904,17 @@ static void *cee_extension(SOCKET s, GUID id) {
     if (WSAIoctl(s, SIO_GET_EXTENSION_FUNCTION_POINTER, &id, sizeof id, &function, sizeof function, &bytes, NULL,
                  NULL) != 0) {
         return NULL;
+    }
+    return function;
+}
+
+static void *cee_extension_kept(void *volatile *slot, SOCKET s, GUID id) {
+    void *function = InterlockedCompareExchangePointer(slot, NULL, NULL);
+    if (function == NULL) {
+        function = cee_extension(s, id);
+        if (function != NULL) {
+            (void)InterlockedExchangePointer(slot, function);
+        }
     }
     return function;
 }
@@ -3344,11 +3358,9 @@ int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
     }
     SOCKET s = cee_iocp_socket(fd);
     if (s != INVALID_SOCKET) {
-        if (cee_accept_ex == NULL) {
-            GUID id = WSAID_ACCEPTEX;
-            cee_accept_ex = (LPFN_ACCEPTEX)cee_extension(s, id);
-        }
-        if (cee_accept_ex != NULL) {
+        GUID id = WSAID_ACCEPTEX;
+        LPFN_ACCEPTEX accept_ex = (LPFN_ACCEPTEX)cee_extension_kept(&cee_accept_ex, s, id);
+        if (accept_ex != NULL) {
             cee_iocp_begin(o, 3u, s);
             o->listener = s;
             /* The new socket has the listener's family (ADR 0044). */
@@ -3361,7 +3373,7 @@ int64_t ceesafe_async_op_accept(void *op, int32_t fd) {
                 return cee_wsa_failure();
             }
             DWORD received = 0;
-            BOOL done = cee_accept_ex(s, o->accepted, o->u.addresses, 0, sizeof(struct sockaddr_in6) + 16,
+            BOOL done = accept_ex(s, o->accepted, o->u.addresses, 0, sizeof(struct sockaddr_in6) + 16,
                                       sizeof(struct sockaddr_in6) + 16, &received, &o->overlapped);
             return cee_iocp_submitted(o, 0, !done);
         }
@@ -3409,11 +3421,9 @@ static int64_t cee_op_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
         ceesafe_mem_set(&local, 0, sizeof local);
         local.sa.sa_family = (ADDRESS_FAMILY)family; /* the any-address of its family, any port */
         int localLength = family == AF_INET6 ? (int)sizeof local.v6 : (int)sizeof local.v4;
-        if (cee_connect_ex == NULL) {
-            GUID id = WSAID_CONNECTEX;
-            cee_connect_ex = (LPFN_CONNECTEX)cee_extension(s, id);
-        }
-        if (cee_connect_ex == NULL || bind(s, &local.sa, localLength) != 0 ||
+        GUID id = WSAID_CONNECTEX;
+        LPFN_CONNECTEX connect_ex = (LPFN_CONNECTEX)cee_extension_kept(&cee_connect_ex, s, id);
+        if (connect_ex == NULL || bind(s, &local.sa, localLength) != 0 ||
             CreateIoCompletionPort((HANDLE)s, cee_exec.port, 0, 0) == NULL) {
             int64_t failed = cee_wsa_failure();
             (void)closesocket(s);
@@ -3421,7 +3431,7 @@ static int64_t cee_op_connect(cee_op *o, const ceesafe_endpoint *endpoint) {
         }
         cee_iocp_begin(o, 4u, s);
         o->accepted = s; /* the new socket, given an id when it connects */
-        BOOL done = cee_connect_ex(s, &remote.sa, remoteLength, NULL, 0, NULL, &o->overlapped);
+        BOOL done = connect_ex(s, &remote.sa, remoteLength, NULL, 0, NULL, &o->overlapped);
         return cee_iocp_submitted(o, 0, !done);
     }
 #endif
@@ -3660,15 +3670,12 @@ static WSACMSGHDR *cee_wsa_next(WSAMSG *msg, WSACMSGHDR *c) {
     return c->cmsg_len < sizeof(WSACMSGHDR) || next + sizeof(WSACMSGHDR) > end ? NULL : (WSACMSGHDR *)(void *)next;
 }
 
-static LPFN_WSARECVMSG cee_wsa_recvmsg;
+static void *volatile cee_wsa_recvmsg; /* LPFN_WSARECVMSG, kept as the extensions above */
 
-/* The WSARecvMsg extension, found once on the first socket that asks. */
-static bool cee_have_recvmsg(SOCKET s) {
-    if (cee_wsa_recvmsg == NULL) {
-        GUID id = WSAID_WSARECVMSG;
-        cee_wsa_recvmsg = (LPFN_WSARECVMSG)cee_extension(s, id);
-    }
-    return cee_wsa_recvmsg != NULL;
+/* The WSARecvMsg extension, found once on the first socket that asks; NULL if there is none. */
+static LPFN_WSARECVMSG cee_recvmsg_of(SOCKET s) {
+    GUID id = WSAID_WSARECVMSG;
+    return (LPFN_WSARECVMSG)cee_extension_kept(&cee_wsa_recvmsg, s, id);
 }
 
 static void cee_msg_received(cee_op *o, DWORD flags, bool truncated) {
@@ -3935,12 +3942,13 @@ static int64_t cee_ready_recvmsg(cee_msg_op *m, int32_t fd) {
     if (s == INVALID_SOCKET) {
         return -(int64_t)EBADF;
     }
-    if (!cee_have_recvmsg(s)) {
+    LPFN_WSARECVMSG receive_message = cee_recvmsg_of(s);
+    if (receive_message == NULL) {
         return -(int64_t)EOPNOTSUPP;
     }
     cee_msg_header(m, 1u, true);
     DWORD got = 0;
-    if (cee_wsa_recvmsg(s, &m->msg, &got, NULL, NULL) != 0) {
+    if (receive_message(s, &m->msg, &got, NULL, NULL) != 0) {
         int failed = WSAGetLastError();
         if (failed == WSAEWOULDBLOCK) {
             ceesafe_async_wait_readable(fd);
@@ -3987,10 +3995,11 @@ int64_t ceesafe_async_op_recvmsg(void *op, int32_t fd, uint8_t *buffer, uint64_t
     ceesafe_async_msg_part(op, 0u, buffer, room);
 #if defined(_WIN32)
     SOCKET s = cee_iocp_socket(fd);
-    if (s != INVALID_SOCKET && cee_have_recvmsg(s)) {
+    LPFN_WSARECVMSG receive_message = s != INVALID_SOCKET ? cee_recvmsg_of(s) : NULL;
+    if (receive_message != NULL) {
         cee_msg_header(m, 1u, true);
         cee_iocp_begin(o, 7u, s);
-        int status = cee_wsa_recvmsg(s, &m->msg, NULL, &o->overlapped, NULL);
+        int status = receive_message(s, &m->msg, NULL, &o->overlapped, NULL);
         if (status != 0 && WSAGetLastError() == WSAEMSGSIZE) {
             status = 0; /* completed at once, truncated: the completion still comes to the port */
         }
@@ -4224,7 +4233,7 @@ static int64_t cee_ready_sendfile(int32_t socket, int32_t file, uint64_t offset,
 #endif
 
 #if defined(_WIN32)
-static LPFN_TRANSMITFILE cee_transmit_file;
+static void *volatile cee_transmit_file; /* LPFN_TRANSMITFILE, kept as the extensions above */
 #endif
 
 int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, uint64_t offset, uint64_t length) {
@@ -4253,11 +4262,9 @@ int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, ui
     if (length > (uint64_t)size.QuadPart - offset) {
         length = (uint64_t)size.QuadPart - offset;
     }
-    if (cee_transmit_file == NULL) {
-        GUID id = WSAID_TRANSMITFILE;
-        cee_transmit_file = (LPFN_TRANSMITFILE)cee_extension(s, id);
-    }
-    if (cee_transmit_file == NULL) {
+    GUID id = WSAID_TRANSMITFILE;
+    LPFN_TRANSMITFILE transmit_file = (LPFN_TRANSMITFILE)cee_extension_kept(&cee_transmit_file, s, id);
+    if (transmit_file == NULL) {
         return CEE_ASYNC_NO_SENDFILE;
     }
     DWORD count = length > 0x7FFFFFFEu ? (DWORD)0x7FFFFFFEu : (DWORD)length; /* TransmitFile's limit for one call */
@@ -4271,7 +4278,7 @@ int64_t ceesafe_async_op_sendfile(void *op, int32_t socket, const void *file, ui
     o->u.file = h;
     o->overlapped.Offset = (DWORD)(offset & 0xFFFFFFFFu);
     o->overlapped.OffsetHigh = (DWORD)(offset >> 32);
-    BOOL done = cee_transmit_file(s, h, count, 0, &o->overlapped, NULL, 0);
+    BOOL done = transmit_file(s, h, count, 0, &o->overlapped, NULL, 0);
     if (!done && WSAGetLastError() != WSA_IO_PENDING) {
         (void)CloseHandle(h); /* failed at once: no completion will come */
     }

@@ -1,0 +1,6 @@
+// A dependency of embed: the second package of the one umbrella build, with a static.
+
+static CALLS: AtomicU64 = AtomicU64.constant(0);
+
+/// Counts a call; returns the count so far.
+public fn bump() -> u64 => CALLS.fetchAdd(1) + 1;

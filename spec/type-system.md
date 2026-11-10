@@ -2950,9 +2950,26 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   `CEE_ALLOC_FOREIGN_INIT` (ADR 0061) is for a C library's one-time initialisation, which cannot survive a failed
   allocation: never failed and not counted as an attempt, its blocks held with `CEE_ALLOC_FOREIGN`'s (either number
   may reallocate or free them). With them, a program may have
-  its `main` in C instead of in CeeSafe; without a CeeSafe `main`, the CeeSafe runtime is not started, so
-  allocation-failure injection (`CEESAFE_FAIL_ALLOC_AT`) and program arguments are not available to
-  exported functions.
+  its `main` in C instead of in CeeSafe.
+- **A program without a CeeSafe `main`** (a C, C++ or Rust host; ADR 0088) is linked from `build --emit lib`'s archive
+  (tooling.md §4.1) or `--emit obj`'s object, and starts the runtime with `ceesafe_init` from `ceesafe/embed.h`, which
+  every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` and `--emit obj` beside their output
+  (with the exports header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
+  allocation report and failure injection (`fail_alloc_at`, `alloc_report`, or the environment's variables with
+  `CEESAFE_INIT_ENVIRONMENT`), and a panic hook. `ceesafe_init` must happen before every call into CeeSafe on every
+  thread, once; then exports may be called from any host thread at once. `ceesafe_shutdown` prints the report when one
+  was asked for and returns the live blocks. A host that never calls `ceesafe_init` gets what 0.27.0 gave: no program
+  arguments, the environment's variables ignored, and the printed panic. The generated `main` calls the same two
+  functions, so a CeeSafe `main` and a host start the runtime one way.
+- **Panics in a host** (ADR 0088 §2.4). The panic hook is called on the panicking thread (the caller's, a thread
+  CeeSafe spawned, an `Async.runWorkers` worker, or one C calls a `@callback` on) with the kind, the reason, the message
+  and the CeeSafe location; the executor's own aborts arrive as `CEE_PANIC_ASYNC` with their message and no file. The
+  hook must end the process or never return, must not call CeeSafe, and may not escape (`longjmp`, an exception, an
+  unwind): panic = abort stays the rule. If it returns, the line is printed and the process aborts. It runs once per
+  panicking thread, so several threads panicking at once are in it at once; a hook serialises its own reports. Every
+  export and
+  every `@callback` entry checks a per-thread panicked flag first: on a thread that has panicked, the call prints that
+  panic's line and aborts.
 - When a program has `@export` functions or `@repr` types, ceesafec also writes `ceesafe_exports.h`: the
   `@repr` structs and enums, and a prototype for each export. C files include it as
   `#include "ceesafe_exports.h"`.

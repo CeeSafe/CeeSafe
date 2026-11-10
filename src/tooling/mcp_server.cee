@@ -1176,6 +1176,7 @@ fn generateCompiled(
         oce: true,
         structured: true,
         debugAssertions: false,
+        omitMain: false,
     };
     match (borrow mut compiled.checker) {
         Some(checker) => { return generateC(checker, mut compiled.nir, compiled.sources, build, out)!; }

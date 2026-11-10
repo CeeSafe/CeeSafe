@@ -10,7 +10,8 @@
   tests (tools/package_tests.py), the native DNS checks (tools/dns_check.py), a file over 4 GiB sent
   (tools/sendfile_check.py), UDP's ECN, segments and cancellation (tools/udp_check.py), the wall clock (tools/clock_check.py), random bytes
   (tools/random_check.py), C's allocations (tools/foreign_alloc_check.py), task frame
-  stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), the
+  stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
+  (tools/embed_check.py, ADR 0088), the
   cancellation wake count (tools/wake_check.py), `ceesafec test` on its fixture (tools/test_command_check.py),
   the collection
   properties, the freestanding checks;
@@ -118,6 +119,7 @@ def main():
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),
             ("frame stacks", py + [f"{HERE}/frame_stack_check.py", "--compiler", cee]),
             ("alloc counting", py + [f"{HERE}/alloc_counting_check.py", "--compiler", cee]),
+            ("embedding", py + [f"{HERE}/embed_check.py", "--compiler", cee]),
             ("wakes", py + [f"{HERE}/wake_check.py", "--compiler", cee]),
             ("tests", py + [f"{HERE}/test_command_check.py", "--compiler", cee]),
             ("collections", py + [f"{HERE}/collection_properties.py", "--compiler", cee, "--sweep"]),

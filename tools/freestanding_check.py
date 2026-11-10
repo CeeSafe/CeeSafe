@@ -9,8 +9,13 @@ For each freestanding corpus program:
   same allowlist; no constructors, TLS or unwind tables, no mutable global state, no COMMON symbols; and with ld.lld,
   the one object `--emit obj --ld ld.lld` makes has the same allowlist.
 
+And the embedded build (ADR 0088 §5), for demo.cee: `--emit lib` writes the archive with ceesafe/embed.h's
+freestanding form beside it; the archive's undefined symbols are the allowlist's; a C embedder including that header
+compiles with the profile's flags and warnings for each triple (with llvm-ar), and on the host links the archive,
+whose ceesafe_init takes the config's size and refuses another.
+
 usage: python3 tools/freestanding_check.py --compiler PATH [--corpus DIR] [--nm llvm-nm] [--objdump llvm-objdump]
-           [--lld ld.lld]
+           [--lld ld.lld] [--ar llvm-ar]
 """
 import argparse
 import os
@@ -76,6 +81,7 @@ def main():
     parser.add_argument("--nm", default=shutil.which("llvm-nm") or "nm")
     parser.add_argument("--objdump", default=shutil.which("llvm-objdump") or "objdump")
     parser.add_argument("--lld", default=shutil.which("ld.lld"))
+    parser.add_argument("--ar", default=shutil.which("llvm-ar"), help="the triples' archiver (an ELF one)")
     args = parser.parse_args()
     compiler = os.path.abspath(os.path.expanduser(args.compiler))
     directory = os.path.join(args.corpus, "freestanding")
@@ -165,11 +171,103 @@ def main():
                         extra = undefined(args.nm, [joined]) - allowed
                         if extra:
                             problems.append(f"{relative} ({triple} joined) leaves undefined: {', '.join(sorted(extra))}")
+    problems += embedded(compiler, args, cross)
     for p in problems:
         print("FAIL", p)
     print(f"freestanding_check: {len(files)} programs, host and {len(TRIPLES)} triples"
-          f"{' (with ld.lld)' if args.lld else ''}: {len(problems)} problems")
+          f"{' (with ld.lld)' if args.lld else ''}, and the embedded build: {len(problems)} problems")
     return 1 if problems else 0
+
+
+EMBEDDER = r"""
+#include "ceesafe/embed.h"
+#if !defined(CEESAFE_EMBED_FREESTANDING)
+#error "the freestanding form of ceesafe/embed.h"
+#endif
+int embedder(void);
+int embedder(void) {
+    ceesafe_config config = {(uint32_t)sizeof(ceesafe_config), 0u};
+    ceesafe_config other = {1u, 0u};
+    int32_t ok = ceesafe_init(&config);
+    int32_t size = ceesafe_init(&other);
+    return ok == 0 && size == CEESAFE_INIT_SIZE && ceesafe_shutdown() == 0u ? 0 : 1;
+}
+"""
+
+HOST_MAIN = r"""
+#include <stdio.h>
+#include <stdlib.h>
+#include "ceesafe/rt.h"
+int embedder(void);
+_Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
+    (void)kind;
+    (void)loc;
+    abort();
+}
+int main(void) {
+    int r = embedder();
+    printf("embedder=%d\n", r);
+    return r;
+}
+"""
+
+
+def embedded(compiler, args, cross):
+    """ADR 0088 §5: the freestanding profile's embedded build, demo.cee as `--emit lib`."""
+    problems = []
+    relative = "freestanding/demo.cee"
+    allowed = ALLOWLIST | ENVIRONMENT | externs_of(read(os.path.join(args.corpus, relative)))
+    warnings = ["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Wmissing-prototypes", "-Wstrict-prototypes",
+                "-Werror"]
+    profile = ["-ffreestanding", "-fno-stack-protector"]
+    with tempfile.TemporaryDirectory() as work:
+        embedder = os.path.join(work, "embedder.c")
+        with open(embedder, "w", encoding="utf-8") as handle:
+            handle.write(EMBEDDER)
+        # The host: the archive linked by an environment's stand-in, which runs ceesafe_init.
+        archive = os.path.join(work, "host", "libdemo.a")
+        built = run([compiler, "build", "--profile", "freestanding", "--emit", "lib", "--cc", "clang", "--cflag",
+                     "-O2", "-o", archive, relative], cwd=args.corpus)
+        header = os.path.join(work, "host", "ceesafe", "embed.h")
+        if built.returncode != 0 or not os.path.isfile(header):
+            problems.append(f"{relative} (embedded, host): {built.stderr.strip()[:500]}")
+        else:
+            extra = undefined(args.nm, [archive]) - allowed - HOST_ONLY
+            if extra:
+                problems.append(f"{relative} (embedded, host) leaves undefined: {', '.join(sorted(extra))}")
+            host_c = os.path.join(work, "host-c")  # rt.h, for the stand-in's ceesafe_panic
+            run([compiler, "build", "--profile", "freestanding", "--emit", "c", "-o", host_c, relative],
+                cwd=args.corpus)
+            main_c = os.path.join(work, "main.c")
+            with open(main_c, "w", encoding="utf-8") as handle:
+                handle.write(HOST_MAIN)
+            exe = os.path.join(work, "embedded")
+            linked = run(["clang", *warnings, "-I", os.path.join(work, "host"), "-I", host_c, embedder, main_c,
+                          archive, "-o", exe])
+            ran = run([exe], timeout=30) if linked.returncode == 0 else linked
+            if ran.returncode != 0 or ran.stdout != "embedder=0\n":
+                problems.append(f"{relative} (embedded, host): {ran.stdout.strip()} {ran.stderr.strip()[:500]}")
+        if args.ar is None:
+            print("freestanding_check: the embedded build's triples skipped: no llvm-ar (--ar)")
+            return problems
+        for triple in TRIPLES:
+            flags = [f"--target={triple}"] + cross
+            directory = os.path.join(work, triple)
+            archive = os.path.join(directory, "libdemo.a")
+            built = run([compiler, "build", "--profile", "freestanding", "--emit", "lib", "--cc", "clang", "--ar",
+                         args.ar] + [x for f in flags for x in ("--cflag", f)] + ["-o", archive, relative],
+                        cwd=args.corpus)
+            if built.returncode != 0:
+                problems.append(f"{relative} (embedded, {triple}): {built.stderr.strip()[:500]}")
+                continue
+            extra = undefined(args.nm, [archive]) - allowed
+            if extra:
+                problems.append(f"{relative} (embedded, {triple}) leaves undefined: {', '.join(sorted(extra))}")
+            compiled = run(["clang", *warnings, *profile, *flags, "-I", directory, "-c", embedder, "-o",
+                            os.path.join(directory, "embedder.o")])
+            if compiled.returncode != 0:
+                problems.append(f"{relative} (embedded, {triple}) embed.h: {compiled.stderr.strip()[:500]}")
+    return problems
 
 
 if __name__ == "__main__":

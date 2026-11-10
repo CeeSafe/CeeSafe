@@ -7,7 +7,7 @@ fn arenaHeader() -> u64 => 16;
 fn scratchChunkSize() -> u64 => 65536;
 fn stableVectorChunks() -> u64 => 32;
 
-/// ceesafe_rt_finish: the CEESAFE_ALLOC_REPORT line.
+/// ceesafe_shutdown (ADR 0088 §2.2): the CEESAFE_ALLOC_REPORT line.
 fn finishRuntime(it: borrow mut Interp) {
     if (it.options.allocationReport) {
         var m = copyBytes("ceesafe alloc: attempts=".bytes())!;

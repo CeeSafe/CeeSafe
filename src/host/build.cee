@@ -1,5 +1,5 @@
 // `build` after checking (the reference's Program.Build): C files for `--emit c`, else the C compiler run on them in a
-// temporary directory for `--emit exe` (the default) or `--emit obj`.
+// temporary directory for `--emit exe` (the default), `--emit obj` or `--emit lib` (ADR 0088 §2.1).
 
 /// The name without its directory and extension (Path.GetFileNameWithoutExtension).
 fn appendStem(out: borrow mut Vector<u8>, path: Slice<u8>) -> Result<void, AllocError> {
@@ -63,12 +63,41 @@ fn buildFiles(
             }
         }
     }
-    let object = sameText(options.emit.view(), "obj");
+    let library = sameText(options.emit.view(), "lib");
+    let object = library || sameText(options.emit.view(), "obj");
     var output = copyBytes(options.output.view())!;
     if (output.length == 0) {
         appendBytes(mut output, defaultName.view())!;
-        if (object) {
+        if (library) {
+            appendText(mut output, ".a")!;
+        } else if (object) {
             appendText(mut output, ".o")!;
+        }
+    }
+    // --emit lib's archiver (ADR 0088 §2.1): --ar, else llvm-ar beside an LLVM clang, else ar; a usage error if none.
+    var archiver = Vector<u8>.create();
+    if (library) {
+        let compilerName =
+            if (options.cc.length > 0) options.cc.view() else (if (hostIsWindows()) "clang" else "cc").bytes();
+        let found: Vector<u8>? = if (options.archiver.length > 0) resolveTool(
+            options.archiver.view(),
+        ) else locateArchiver(
+            compilerName,
+        );
+        match (found) {
+            Some(a) => { archiver = a; }
+            null => {
+                var message = copyBytes("--emit lib needs an archiver: ".bytes())!;
+                if (options.archiver.length > 0) {
+                    appendText(mut message, "'")!;
+                    appendBytes(mut message, options.archiver.view())!;
+                    appendText(mut message, "' was not found")!;
+                } else {
+                    appendText(mut message, "neither llvm-ar beside the C compiler nor ar was found")!;
+                }
+                appendText(mut message, "; name one with --ar")!;
+                return failBytes(message.view());
+            }
         }
     }
     if (!object && hostIsWindows()) {
@@ -107,14 +136,71 @@ fn buildFiles(
         Err(e) => { return fail(e.message()); }
     };
     let workBytes = copyBytes(work.view().bytes())!;
-    let status = compileIn(options, files, workBytes.view(), compiler, output.view(), object);
+    // Archive members carry the program's name (ADR 0088 §2.1): --program, the package's, or the first file's.
+    var program = copyBytes(options.programName.view())!;
+    if (program.length == 0) {
+        appendStem(mut program, firstSource)!;
+    }
+    if (library) {
+        // Two C files that would become one member: the second object would replace the first, losing its code.
+        let members = archiveMembers(files, options.native.separate.length, program.view())!;
+        let shared = sharedMember(members)!;
+        if (shared.length > 0) {
+            removeTree(workBytes.view());
+            var message = copyBytes("--emit lib: two C files would share the archive member '".bytes())!;
+            appendBytes(mut message, shared.view())!;
+            appendText(mut message, "'; rename one (ADR 0088 §2.1)")!;
+            Console.writeError("ceesafec: ");
+            Console.writeErrorLine(StringView.fromUtf8(message.view())!);
+            return 1;
+        }
+    }
+    let status = compileIn(
+        options,
+        files,
+        workBytes.view(),
+        compiler,
+        output.view(),
+        object,
+        archiver.view(),
+        program.view(),
+    );
     removeTree(workBytes.view());
     if (status == 0 && object) {
+        let headers = writeHostHeaders(options, files, output.view());
+        if (headers != 0) {
+            return headers;
+        }
         var linkPath = copyBytes(output.view())!;
         appendText(mut linkPath, ".link.txt")!;
         return writeLinkFile(options, "".bytes(), linkPath.view(), false); // an object's libraries are its user's
     }
     return status;
+}
+
+/// `--emit obj` and `--emit lib` (ADR 0088 §2.1): the headers a C or C++ host includes, written beside `output`:
+/// `ceesafe/embed.h` and, if the program has exports, the exports header (`--exports-header`'s name, by default
+/// `ceesafe_exports.h`); 0, or 1 after reporting a failure.
+fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output: Slice<u8>) -> i32 {
+    var headers = Vector<CFile>.create();
+    for (file in files.view()) {
+        let name = file.name.view();
+        if (sameText(name, "ceesafe/embed.h") || sameBytes(name, options.exportsHeader.view())) {
+            headers.push(CFile { name: copyBytes(name)!, text: copyBytes(file.text.view())! })!;
+        }
+    }
+    var directory = copyBytes(directoryOf(output))!;
+    if (directory.length == 0) {
+        directory.push('.')!;
+    }
+    match (writeFilesUnder(directory.view(), headers)) {
+        Ok() => { return 0; }
+        Err(e) => {
+            var message = copyBytes("cannot write the host's headers: ".bytes())!;
+            appendText(mut message, e.message())!;
+            return failBytes(message.view());
+        }
+    }
 }
 
 /// Writes the manifests' link line (ADR 0047 §3.4) as `name` in `directory` (or, with `nameIsPath` false, to the path
@@ -143,8 +229,11 @@ fn compileIn(
     compilerFound: borrow CCompiler,
     output: Slice<u8>,
     object: bool,
+    archiver: Slice<u8>,
+    program: Slice<u8>,
 ) -> i32 {
     let compiler = compilerFound.path.view();
+    var tool = Vector<u8>.create(); // the program that failed: the C compiler, or --emit lib's archiver
     match (writeFilesUnder(work, files)) {
         Ok() => {}
         Err(e) => {
@@ -171,6 +260,9 @@ fn compileIn(
         options.freestanding,
         options.linker.view(),
         borrow options.native,
+        archiver,
+        program,
+        mut tool,
     )! else compileExecutable(
         compilerFound,
         work,
@@ -183,9 +275,14 @@ fn compileIn(
         options.split,
         if (!options.split) 1 else if (options.jobsGiven) options.testJobs else processorCount(),
     )!;
+    if (tool.length == 0) {
+        appendBytes(mut tool, compiler)!;
+    }
+    let what = if (sameBytes(tool.view(), compiler)) "the C compiler '" else "the archiver '";
     if (!outcome.started) {
-        var message = copyBytes("cannot run the C compiler '".bytes())!;
-        appendBytes(mut message, compiler)!;
+        var message = copyBytes("cannot run ".bytes())!;
+        appendText(mut message, what)!;
+        appendBytes(mut message, tool.view())!;
         appendText(mut message, "': ")!;
         appendText(mut message, outcome.error.message())!;
         return failBytes(message.view());
@@ -198,8 +295,8 @@ fn compileIn(
         relayTool(outcome);
     }
     if (outcome.status != 0) {
-        var message = copyBytes("the C compiler '".bytes())!;
-        appendBytes(mut message, compiler)!;
+        var message = copyBytes(what.bytes())!;
+        appendBytes(mut message, tool.view())!;
         appendText(mut message, "' failed (exit code ")!;
         if (outcome.status < 0) {
             message.push('-')!;

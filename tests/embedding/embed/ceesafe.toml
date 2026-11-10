@@ -1,0 +1,6 @@
+[package]
+name = "embed"
+kind = "object"
+
+[dependencies]
+tally = { path = "../tally" }

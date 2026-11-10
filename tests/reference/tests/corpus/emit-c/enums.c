@@ -118,7 +118,17 @@ static void ceeD_6Holder(ceeE_Holder *p) {
 }
 
 int main(int argc, char **argv) {
-    ceesafe_rt_args((int32_t)argc, (const uint8_t *const *)(void *)argv);
-    ceesafe_rt_start();
-    return (int)ceesafe_rt_finish(ceeF_main());
+    ceesafe_config config = {
+        .size = (uint32_t)sizeof(ceesafe_config),
+        .flags = CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN,
+        .argc = (int32_t)argc,
+        .argv = (const char *const *)(void *)argv,
+    };
+    int32_t started = ceesafe_init(&config);
+    if (started != 0 && started != CEESAFE_INIT_AGAIN) {
+        ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed");
+    }
+    int32_t code = ceeF_main();
+    (void)ceesafe_shutdown();
+    return (int)code;
 }

@@ -46,6 +46,14 @@ Status: Milestone 0 proposal. Applies from M1. CosmoOS-specific flags are covere
   -fno-asynchronous-unwind-tables -fno-unwind-tables` (the stack protector's `__stack_chk_*` symbols
   come from the C library; unwind tables are useless with panic = abort and have no unwinder to read
   them in a kernel).
+- **What `--emit lib`'s archive holds** (ADR 0088 §2.1; tooling.md §8.3): one object per C file the build compiles,
+  each with the flags above: the generated code (`<program>_main.o`, or with `--split` one per unit and
+  `<program>_ceesafe_instances.o`), every runtime file the program needs, chosen as for an executable
+  (`ceesafe_rt_core.o`, `ceesafe_rt_hosted.o`, `ceesafe_rt_io.o`, and `ceesafe_rt_float.o`, `ceesafe_rt_thread.o`,
+  `ceesafe_rt_async.o`, `ceesafe_rt_window.o` when its calls appear), and a package's separately compiled C files
+  (`<program>_ceesafe_package_<k>.o`); tooling.md §8.3 gives the names. Headers are not members: they are written
+  beside the archive. The generated `main` is left out, since the host has its own; with `--lib-main` it is kept, in
+  the generated code's member, so the archive of a program with a CeeSafe `main` links into an executable alone.
 - Plain C `char` is **never** used for CeeSafe data (`char` is signed on x86-64 and
   unsigned on AArch64; CosmoOS's `limits.h` is also wrong about it on AArch64). Bytes are `uint8_t`.
 
@@ -144,7 +152,7 @@ relies on) raises the version. Version 1 is the first.
 | `Vector<T, A>`, `String<A>` (M6d) | `ceeV_<[T] or Z><A>` = `struct { T *ptr; uint64_t len; uint64_t cap; }` (24 bytes, asserted), element code `V<U<T> or Z><A>` (`Vector<i32>` → `ceeV_Ui32S10SystemHeap`). An empty vector points to the runtime's `ceesafe_vec_empty` (a `max_align_t` object, never dereferenced) with `cap == 0`, so slices of it never do arithmetic on NULL. Growth is `ceesafe_vec_grow` (doubling, at least 4; a first buffer is allocated, a later one resized with `ceesafe_realloc`, which keeps the old bytes; NULL with nothing changed on overflow or allocation failure). Push and append call it only when the buffer is full, and pass the capacity through a local, so the vector's address does not escape the helper and the C compiler can keep its length in a register. Per type: `ceeVP_` push (destroys the value on failure), `ceeVO_` pop, `ceeVC_` clear, `ceeVA_` append (strings; it copies a text of up to 16 bytes with a byte loop and a longer one with `ceesafe_mem_copy`, since a `memcpy` of a length unknown to the C compiler is a library call for gcc, also for one byte), `ceeVW_` withCapacity; drop glue `ceeD_V…` destroys the elements in index order, then frees the buffer if `cap != 0`. The elements place `*v` is the vector itself, so elements are `v.ptr[i]` and views are rebuilt from `ptr` and `len` |
 | `SlotMap<T, A>`, `Handle<T>` (M6e) | `ceeK_<T><A>` = `struct { ceeKS_… *ptr; uint64_t len, cap, count; uint32_t free; }` (40 bytes) with slots `ceeKS_…` = `{ uint32_t gen; uint32_t next; T value; }`; element code `K<T><A>`. `Handle<T>` is `cee_handle` = `{ uint32_t index; uint32_t gen; }` from `ceesafe/rt.h` (code `H<T>`), compared with `ceesafe_handle_eq`. Generations are odd while a slot is live; a removal whose generation reaches `UINT32_MAX - 1` retires the slot (never put back on the free list), so generations never wrap. Helpers `ceeKI_` insert (grows the slots with `ceesafe_vec_grow`, at most `UINT32_MAX - 1` slots), `ceeKV_` validity, `ceeKG_`/`ceeKM_` get (an optional pointer), `ceeKR_` remove; drop glue destroys values in odd-generation slots |
 | `StableVector<T, A>` (M6e) | `ceeSV_<T><A>` = `struct { void *chunks[CEE_SVEC_CHUNKS]; uint64_t len; }` (264 bytes); element code `W<T><A>`. Chunk `k` holds `8 << k` elements and is allocated by `ceesafe_svec_slot` when its first element is pushed; chunks never move or shrink. Element `i` is `(*ceeSVE_…(&sv, i))` (`ceesafe_svec_at`: chunk `60 - clz(i + 8)`). A shared reference to a stable vector is a non-const pointer, since `push` mutates through it. Drop glue destroys the elements, then `ceesafe_svec_free` |
-| `File`, `TcpListener`, `TcpStream` (C3) | `int32_t` descriptors; drop glue is the runtime's `ceesafe_fd_drop` (close). I/O built-ins call `ceesafe_*` functions declared in `ceesafe/rt.h` and implemented in `runtime/hosted/ceesafe_rt_io.c`; each returns `cee_io_result { value, error }`, and a per-type helper `ceeIOR_<Result>` turns it into `Result<X, IoError>` (written only for an `X` an I/O built-in returns: `void`, an integer or a descriptor) (the runtime maps errno to the variant; `Other` keeps the number). The generated `main` is `int main(int argc, char **argv)` — the one place plain `char` appears — and passes argv to `ceesafe_rt_args` as bytes |
+| `File`, `TcpListener`, `TcpStream` (C3) | `int32_t` descriptors; drop glue is the runtime's `ceesafe_fd_drop` (close). I/O built-ins call `ceesafe_*` functions declared in `ceesafe/rt.h` and implemented in `runtime/hosted/ceesafe_rt_io.c`; each returns `cee_io_result { value, error }`, and a per-type helper `ceeIOR_<Result>` turns it into `Result<X, IoError>` (written only for an `X` an I/O built-in returns: `void`, an integer or a descriptor) (the runtime maps errno to the variant; `Other` keeps the number). The generated `main` is `int main(int argc, char **argv)` — the one place plain `char` appears — and passes argv to `ceesafe_init` (§6) |
 | `StringView` (M6c) | `cee_str` = `struct { const uint8_t *ptr; uint64_t len; }` from `ceesafe/rt.h` (16 bytes); element code `PZ` (`Z` is the unsized `str`). A literal is `((cee_str){ .ptr = (const uint8_t *)"…", .len = n })`, pointing to static storage. A literal longer than 4095 bytes, the most C99 and C11 require a compiler to accept (§5.2.4.1; clang and GCC warn beyond it under `-Wpedantic`, and MSVC rejects much longer ones), is instead a file-scope `static const uint8_t ceeLS_<k>[] = { 0x…, … };`, emitted once per distinct text, and `.ptr = ceeLS_<k>` (0.15.2). The same goes for a static's initialiser and `Console.write` of a literal. A file's bytes from `embed` or `embedText` (type-system.md §10.1, ADR 0087 §2.8) are such an array at any length but zero, once per distinct contents however many constants, statics and uses name them; an `embed` value views that array as a `Slice<u8>`, and an empty file is an empty literal. In a split build (§2.4) each array is declared `extern const uint8_t ceeLS_<k>[n];` in `ceesafe_program.h` and defined once, in `ceesafe_instances.c`, its name carrying the program's as other split data does: a file is in the image once, and only one unit parses its bytes. The interpreter holds the same bytes in the program it runs, from its start. `s[lo..hi]` calls `cee_check_str_range` (range, then character boundaries; `CEE_PANIC_STR_BOUNDARY`); `==`/`!=` call `ceesafe_str_eq`; `s.bytes()` rebuilds the struct as `ceeSl_u8`; printing calls `ceesafe_write_view` |
 | `*T`, `*mut T` (M8a) | `T *` for both, `void *` for `*void`: read-only is a CeeSafe rule, and casting `const` away would trip `-Wcast-qual`. Element codes `N<T>` / `M<T>`. Every conversion to or from a pointer goes through `uintptr_t` (`(U *)(uintptr_t)p`), and `add`/`sub`/`offset` compute the address in `uintptr_t`, so no C pointer arithmetic or pointer-to-pointer cast is ever emitted; `p.read()` / `p.write(v)` are the place `(*p)`; `s.ptr` is the slice's `ptr` field; `Slice.fromRaw` builds the slice struct (`unsafe.md` §4) |
 | `borrow T` | `const T *`. `borrow mut T` → `T *` (`restrict` only where the borrow checker proves exclusivity *and* M9 enables it). `Ref(k, p)` is `&p`, a deref place is `(*r)`, and reference locals are zero-initialised to `NULL` (never read before assignment) |
@@ -259,7 +267,11 @@ Everything else is unchanged. Heap boxes, and every other site, use the drop glu
   6.5.2.2 makes a call through an incompatible type undefined.
 - **Exports.** Each `@export` function gets a non-`static` wrapper under its symbol, with the C
   types, that converts the arguments (checking `@repr` enums), calls `ceeF_<name>`, and converts the
-  result. Nothing else in the generated code has external linkage except `main`.
+  result. Nothing else in the generated code has external linkage except `main`. In a hosted build the wrapper,
+  and each `@callback`'s C function (`ceeW_<name>`), first calls `ceesafe_entry_check()` (ADR 0088 §2.4): a relaxed
+  load of `ceesafe_any_panicked`, a global set at any thread's first panic, and only when it is set, a call that reads
+  the thread's own panicked flag and on a thread that has panicked prints that panic's line and aborts. A freestanding
+  build has no flag and no call.
 - **`@repr(C)` structs** are `struct S` with members named as in CeeSafe (other structs are `struct
   ceeT_S` with members `f_<name>`), and `typedef struct S ceeT_S;`, so generated code uses them like
   any struct, and C code that includes `ceesafe_exports.h` sees the same type (C11 6.2.7 makes struct
@@ -806,17 +818,43 @@ Heap (M3b):
     flushes with `IORING_ENTER_GETEVENTS`. Deadlines, consoles and the wake pipe stay on epoll. A kernel that refuses
     the ring leaves epoll alone.
   - The interpreter's steps are readiness ones over its real sockets.
-- The generated `main` calls `ceesafe_rt_start()` (reads `CEESAFE_FAIL_ALLOC_AT`, `CEESAFE_ALLOC_REPORT`
-  via `ceesafe_platform_config`) and returns through `ceesafe_rt_finish(code)`, which prints the
-  allocation report if asked. `Process.exit` and panics skip the report.
+- **Start and end: `ceesafe/embed.h`** (ADR 0088 §2.2), written beside `ceesafe/rt.h` (which includes it) by every
+  build that writes headers; in a freestanding build its form has only `size` and `flags` (a `#define
+  CEESAFE_EMBED_FREESTANDING 1` at its top), and `ceesafe_init` checks the size and keeps no state, since the
+  freestanding core has no mutable global (profiles.md §4.4); its `ceesafe_init` ignores `flags`, none being defined.
+  The generated `main` fills a `ceesafe_config` with its size, `CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN`
+  (the second, from `rt.h`, starts counting even after a C constructor allocated through CeeSafe, as before
+  `ceesafe_init`) and `argc`/`argv`, calls `ceesafe_init` (a failure other than `AGAIN` is a runtime panic), then the
+  entry, then `ceesafe_shutdown()`, which prints the allocation report if asked, and returns the entry's code.
+  `Process.exit` and panics skip the report. A host program calls the same two functions (type-system.md §28.6);
+  nothing else starts the runtime.
+  - `ceesafe_init` moves an atomic state word from unstarted to starting with a compare-and-swap. If another call is
+    starting, it waits (spinning) for that call's end: `CEESAFE_INIT_AGAIN` once the state is started, so a caller
+    that goes on to call CeeSafe after `AGAIN` sees the config, or a new compare-and-swap after an error. It checks the
+    config's `size` (`CEESAFE_INIT_SIZE`: NULL, or a size that is not a version's), its `allocator`
+    (`CEESAFE_INIT_ALLOCATOR`: none is taken until ADR 0088's stage B) and, when the config asks for counting (a
+    report or failure injection), whether the platform's allocation functions have handed out a block
+    (`CEESAFE_INIT_LATE`: a relaxed flag they set; without counting an earlier block changes nothing), copies
+    `argv` into one uncounted block from the C library (`CEESAFE_INIT_MEMORY` if it cannot), sets the counting
+    configuration and the panic hook, and publishes them with the store of started. On an error it stores unstarted
+    back and changes nothing. `ceesafe_shutdown` returns 0 and prints nothing unless it loads started.
+  - **Panics** go through one path (`ceesafe_panic`, `ceesafe_panic_text`, and `ceesafe_panic_runtime` for the
+    runtime's own aborts, which have no CeeSafe location): on the thread's first panic it sets `ceesafe_any_panicked`
+    and the thread's panicked flag (`_Thread_local`), keeps a copy of the panic (the message's first 256 bytes in a
+    thread-local buffer, since a message built at run time lives in a frame the re-entry line outlives), and calls the
+    host's hook with the original, if `ceesafe_init` installed one; several threads may be in the hook at once; if
+    the hook returns, or on a later panic of that thread, it prints the line and calls `ceesafe_platform_abort`, which
+    nothing else calls. The executor's three aborts (its bookkeeping out of memory, a task waiting on a descriptor and
+    a wake, every task parked with nothing to wake it) are `ceesafe_panic_runtime(CEE_PANIC_ASYNC, message)`, printed
+    as `ceesafe panic: <message>`.
 - The allocation counters are kept only when something reads them (ADR 0059): `CEESAFE_ALLOC_REPORT`,
   `CEESAFE_FAIL_ALLOC_AT`, or `ceesafec test`'s `ceesafe_test_begin`. That is decided before the program's first
   allocation and never changes afterwards. Without any of them, an allocation, reallocation or free touches no
   counter, and so makes no atomic operation.
 
 
-- `ceesafe_panic(kind, src)`: `noreturn`. Provided by the profile: hosted (write to
-  stderr + `abort()`), CosmoOS userland (same, through CosmoOS libc), kernel
+- `ceesafe_panic(kind, src)`: `noreturn`. Provided by the profile: hosted (the host's panic hook if one was given to
+  `ceesafe_init`, else write to stderr + `abort()`), CosmoOS userland (same, through CosmoOS libc), kernel
   (calls the kernel panic routine; C5).
 - Checked-arithmetic helpers (`static inline`).
 - `ceesafe_mem_copy/move/set` (M9b): `__builtin_memcpy`, `__builtin_memmove` and `__builtin_memset` under clang

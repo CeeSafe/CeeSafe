@@ -1,0 +1,179 @@
+// ADR 0088's embedding contract tests: exports a C host calls through `build --emit lib`.
+
+struct Count {
+    value: u64;
+}
+
+/// The sum of `length` bytes, through a Vector.
+/// Safety: the host passes `length` readable bytes at `bytes`.
+@export("embed_sum")
+fn embedSum(bytes: *u8, length: usize) -> u64 {
+    var v = Vector<u64>.create();
+    for (i in 0..length) {
+        v.push(unsafe { bytes.add(i).read() } as u64)!;
+    }
+    var total: u64 = 0;
+    for (x in v) {
+        total += x;
+    }
+    return total;
+}
+
+/// Doubles `x` on a thread CeeSafe spawns, under a Mutex.
+@export("embed_twice")
+fn embedTwice(x: u64) -> u64 {
+    let count = Arc<Mutex<Count>>.create(Mutex<Count>.create(Count { value: x })!)!;
+    let mine = count.clone();
+    let worker = Thread.spawn(move () => {
+        var guard = mine.get().lock();
+        let data = guard.data();
+        data.value *= 2;
+    })!;
+    worker.join();
+    var guard = count.get().lock();
+    return guard.data().value;
+}
+
+async fn later(x: u64) -> Result<u64, AsyncError> {
+    await Timer.sleep(1)?;
+    return Ok(x + 1);
+}
+
+/// `x + 1` after an async sleep.
+@export("embed_async")
+fn embedAsync(x: u64) -> u64 {
+    match (Async.run(later(x))) {
+        Ok(v) => { return v; }
+        Err(_) => { return 0; }
+    }
+}
+
+/// tally's count of calls (a package of the same build).
+@export("embed_bump")
+fn embedBump() -> u64 => tally.bump();
+
+/// Makes `n` boxes, one allocation attempt each; how many were made before one failed.
+@export("embed_boxes")
+fn embedBoxes(n: u64) -> u64 {
+    var made: u64 = 0;
+    for (i in 0u64..n) {
+        match (Box.create(i)) {
+            Ok(_) => { made += 1; }
+            Err(_) => { return made; }
+        }
+    }
+    return made;
+}
+
+/// Leaks one box: a live block for the report.
+@export("embed_leak")
+fn embedLeak() {
+    let p = Box.intoRaw(Box.create(7u64)!);
+}
+
+/// The number of program arguments the runtime has.
+@export("embed_arg_count")
+fn embedArgCount() -> u64 => Process.argumentCount() as u64;
+
+/// The length of argument `i`, plus 1000 times its first byte; 0 when there is none.
+@export("embed_arg_code")
+fn embedArgCode(i: u64) -> u64 {
+    match (Process.argument(i as usize)) {
+        Some(a) => {
+            let b = a.bytes();
+            return b.length as u64 + (if (b.length > 0) b[0] as u64 * 1000 else 0);
+        }
+        null => { return 0; }
+    }
+}
+
+/// An index out of bounds on the caller's thread.
+@export("embed_panic")
+fn embedPanic(i: usize) -> u8 {
+    let a = [1u8, 2, 3];
+    return a[i];
+}
+
+/// The same on a thread CeeSafe spawns.
+@export("embed_thread_panic")
+fn embedThreadPanic(i: usize) -> u8 {
+    let worker = Thread.spawn(move () => {
+        let a = [1u8, 2, 3];
+        return a[i];
+    })!;
+    return worker.join();
+}
+
+async fn bad(i: usize) -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    let a = [1u8, 2, 3];
+    let x = a[i];
+    return Ok();
+}
+
+async fn fan(i: usize) -> Result<void, AsyncError> {
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (p in 0..8u32) {
+            s.spawnSend(async () => await bad(i));
+        }
+    })?;
+    return Ok();
+}
+
+/// The same in Async.runWorkers' children, on any of its 4 workers.
+@export("embed_worker_panic")
+fn embedWorkerPanic(i: usize) -> u8 {
+    match (Async.runWorkers(4, fan(i))) {
+        Ok() => { return 0; }
+        Err(_) => { return 1; }
+    }
+}
+
+/// panic("…") with the program's message.
+@export("embed_explicit")
+fn embedExplicit() {
+    panic("embed: deliberate");
+}
+
+/// panic("…") with a message built at run time in this frame's buffer: 64 letters from `first` (ADR 0088 §2.4's
+/// re-entry line prints it after the frame is gone).
+@export("embed_built_panic")
+fn embedBuiltPanic(first: u64) {
+    var buffer = [0u8; 64];
+    for (i in 0..buffer.length) {
+        buffer[i] = 65 + truncate<u8>((first + i as u64) % 26);
+    }
+    match (StringView.fromUtf8(buffer[..])) {
+        Some(text) => { panic(text); }
+        null => {}
+    }
+}
+
+/// 100 / x: a zero panics inside a callback C calls.
+@callback
+fn hundredBy(x: u32) -> u32 => 100 / x;
+
+/// The callback's address, for the host.
+@export("embed_callback")
+fn embedCallback() -> extern "C" fn(u32) -> u32 => hundredBy;
+
+fn scratchWork(seed: u64) -> Result<u64, AllocError> {
+    using frame = Scratch.enter();
+    var sum: u64 = 0;
+    for (i in 0u64..64) {
+        let p = frame.alloc(seed + i)?;
+        sum += *p;
+    }
+    let b = Box.createIn(FailingAllocator {}, seed)?;
+    let kept: u64 = b;
+    return Ok(sum + kept - seed);
+}
+
+/// 64 values from `seed` summed in a scratch frame, with a box through FailingAllocator; 0 when out of memory.
+@export("embed_scratch")
+fn embedScratch(seed: u64) -> u64 {
+    match (scratchWork(seed)) {
+        Ok(s) => { return s; }
+        Err(_) => { return 0; }
+    }
+}

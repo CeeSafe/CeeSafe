@@ -94,6 +94,14 @@ _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
     (void)message;
     ceesafe_panic(CEE_PANIC_EXPLICIT, loc);
 }
+/* Embedding (ceesafe/embed.h's freestanding form, ADR 0088 §2.2): nothing to configure, and no mutable global state
+   (profiles.md §4.4), so no state word either: the size is checked and nothing else. */
+int32_t ceesafe_init(const ceesafe_config *config) {
+    return config == NULL || config->size != (uint32_t)sizeof(ceesafe_config) ? CEESAFE_INIT_SIZE : 0;
+}
+uint64_t ceesafe_shutdown(void) {
+    return 0u;
+}
 /* Only fixed buffers exist without a heap (profiles.md §4.1). */
 void *ceesafe_region_alloc(void *region, uint32_t kind, uint64_t size, uint64_t align) {
     return kind == CEE_REGION_FBA ? fba_alloc((cee_fba *)region, size, align) : NULL;
@@ -212,33 +220,111 @@ static void write_err_u32(uint32_t value) {
     ceesafe_platform_write_stderr(buffer + start, 20u - start);
 }
 
-/* Message format (relied on by run-fail tests): "ceesafe panic: <reason> at <file>:<line>:<column>\n" */
-_Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
-    const char *reason = ceesafe_panic_reason(kind);
+/* ---- Panics, and the host's panic hook (ADR 0088 §2.4) ------------------------------------- */
+
+/* The runtime's state word (ADR 0088 §2.2): ceesafe_init moves it UNSTARTED -> STARTING with a compare-and-swap and
+   publishes the copied config with the store of STARTED; on an error it stores UNSTARTED back. */
+#define CEE_RT_UNSTARTED 0u
+#define CEE_RT_STARTING 1u
+#define CEE_RT_STARTED 2u
+static uint32_t rt_state;
+static ceesafe_panic_hook rt_panic_hook; /* written before STARTED is stored, read after it is loaded */
+static void *rt_panic_context;
+
+/* Set before the hook runs (ADR 0088 §2.4): ceesafe_any_panicked for every thread, then the thread's own flag, which
+   ceesafe_entry_panicked reads at an export or @callback entry once the first is set (relaxed: a thread sees its own
+   store, and another thread's panic only sends it here to read its own flag). */
+uint32_t ceesafe_any_panicked;
+static _Thread_local uint8_t ceesafe_thread_panicked;
+/* This thread's first panic, for the line ceesafe_panic_reentered prints. Its message is copied (up to
+   CEE_PANIC_KEPT bytes): a runtime-built message lives in the panicking frame, which is gone by the re-entry. */
+#define CEE_PANIC_KEPT 256u
+static _Thread_local ceesafe_panic_info thread_panic;
+static _Thread_local uint8_t thread_panic_text[CEE_PANIC_KEPT];
+
+/* Message format (relied on by run-fail tests): "ceesafe panic: <reason or message> at <file>:<line>:<column>\n"; a
+   runtime abort, which has no CeeSafe location, ends after its message. */
+static void write_panic_line(const ceesafe_panic_info *info) {
     write_err_cstr("ceesafe panic: ");
-    write_err_cstr(reason);
-    write_err_cstr(" at ");
-    write_err_cstr(loc.file);
-    write_err_cstr(":");
-    write_err_u32(loc.line);
-    write_err_cstr(":");
-    write_err_u32(loc.column);
+    if (info->message != NULL) {
+        ceesafe_platform_write_stderr(info->message, info->message_length);
+    } else {
+        write_err_cstr(info->reason);
+    }
+    if (info->file != NULL) {
+        write_err_cstr(" at ");
+        write_err_cstr(info->file);
+        write_err_cstr(":");
+        write_err_u32(info->line);
+        write_err_cstr(":");
+        write_err_u32(info->column);
+    }
     write_err_cstr("\n");
+}
+
+/* The one path every hosted panic takes: the hook on the thread's first panic, if ceesafe_init installed one; then,
+   if the hook returns, or on a panic inside it, the printed line and the abort. */
+static _Noreturn void panic_report(const ceesafe_panic_info *info) {
+    if (ceesafe_thread_panicked == 0u) {
+#if defined(_MSC_VER) && !defined(__clang__)
+        *(volatile uint32_t *)&ceesafe_any_panicked = 1u;
+#else
+        __atomic_store_n(&ceesafe_any_panicked, 1u, __ATOMIC_RELAXED);
+#endif
+        ceesafe_thread_panicked = 1u;
+        thread_panic = *info;
+        if (info->message != NULL) {
+            size_t kept = info->message_length < CEE_PANIC_KEPT ? info->message_length : CEE_PANIC_KEPT;
+            ceesafe_mem_copy(thread_panic_text, info->message, kept);
+            thread_panic.message = thread_panic_text;
+            thread_panic.message_length = kept;
+        }
+        /* The hook gets the whole message, which lives until the hook returns. It may run on several threads at
+           once: one call per panicking thread (ADR 0088 §2.4). */
+        if (ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTED && rt_panic_hook != NULL) {
+            rt_panic_hook(rt_panic_context, info);
+        }
+    }
+    write_panic_line(info);
     ceesafe_platform_abort();
 }
 
-/* Message format as ceesafe_panic's, with the program's text as the reason (ADR 0075 §2.8). */
+_Noreturn void ceesafe_panic(cee_panic_kind kind, cee_loc loc) {
+    ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), NULL, 0u, loc.file, loc.line, loc.column};
+    panic_report(&info);
+}
+
+/* The program's text in place of the reason (ADR 0075 §2.8). */
 _Noreturn void ceesafe_panic_text(cee_str message, cee_loc loc) {
-    write_err_cstr("ceesafe panic: ");
-    ceesafe_platform_write_stderr(message.ptr, (size_t)message.len);
-    write_err_cstr(" at ");
-    write_err_cstr(loc.file);
-    write_err_cstr(":");
-    write_err_u32(loc.line);
-    write_err_cstr(":");
-    write_err_u32(loc.column);
-    write_err_cstr("\n");
+    static const uint8_t empty = 0u;
+    ceesafe_panic_info info = {(uint32_t)CEE_PANIC_EXPLICIT, ceesafe_panic_reason(CEE_PANIC_EXPLICIT),
+                               message.ptr != NULL ? message.ptr : &empty, (size_t)message.len, loc.file, loc.line,
+                               loc.column};
+    panic_report(&info);
+}
+
+_Noreturn void ceesafe_panic_runtime(cee_panic_kind kind, const char *message) {
+    size_t length = 0;
+    while (message[length] != '\0') {
+        length++;
+    }
+    ceesafe_panic_info info = {(uint32_t)kind, ceesafe_panic_reason(kind), (const uint8_t *)message, length, NULL, 0u,
+                               0u};
+    panic_report(&info);
+}
+
+/* An export or @callback entered on a thread that has panicked: that panic's line (its message as kept), and the
+   abort; never the hook. */
+static _Noreturn void ceesafe_panic_reentered(void) {
+    write_panic_line(&thread_panic);
     ceesafe_platform_abort();
+}
+
+/* ceesafe_entry_check's slow path, once some thread has panicked: this thread's flag. */
+void ceesafe_entry_panicked(void) {
+    if (ceesafe_thread_panicked != 0u) {
+        ceesafe_panic_reentered();
+    }
 }
 
 /* ---- Heap: accounting and fault injection (type-system.md §18) ---------------------------- */
@@ -259,12 +345,6 @@ static bool alloc_counting;
 static uint32_t failing_armed;    /* FailingAllocator.failAfter has been called, reset has not */
 static uint64_t failing_left;     /* successes FailingAllocator still allows */
 
-void ceesafe_rt_start(void) {
-    alloc_fail_at = ceesafe_platform_config("CEESAFE_FAIL_ALLOC_AT");
-    alloc_report = ceesafe_platform_config("CEESAFE_ALLOC_REPORT") != 0u;
-    alloc_counting = alloc_report || alloc_fail_at != 0u;
-}
-
 /* `ceesafec test`'s harness (ADR 0049): the allocation report on, and the sweeps' points from its arguments rather than
    the environment (0: none). */
 uint64_t ceesafe_test_cancel_at;
@@ -281,8 +361,9 @@ void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
 /*
  * The counters change from every thread of a threaded program (type-system.md §38), so atomically: every attempt
  * gets its own number, in the order of the increments, and CEESAFE_FAIL_ALLOC_AT fails exactly one. The configuration
- * (alloc_counting, alloc_fail_at, alloc_report) is written only by ceesafe_rt_start and ceesafe_test_begin, which run
- * at the start of main before any thread exists; a thread's start orders them before everything it does.
+ * (alloc_counting, alloc_fail_at, alloc_report) is written only by ceesafe_init and ceesafe_test_begin, which run
+ * before any thread calls CeeSafe (ADR 0088 §2.2's ordering contract); a thread's start orders them before everything
+ * it does.
  */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
@@ -387,14 +468,145 @@ static void write_err_u64(uint64_t value) {
     ceesafe_platform_write_stderr(buffer + start, 20u - start);
 }
 
+/* ---- Embedding: ceesafe_init and ceesafe_shutdown (ceesafe/embed.h, ADR 0088 §2.2) -------------------------- */
+
+/* The config sizes this runtime accepts: the first version's, and each later version's end on a field boundary (a
+   host built with an older ceesafe/embed.h). Only the first exists. */
+static bool config_size_known(uint32_t size) {
+    return size == (uint32_t)sizeof(ceesafe_config);
+}
+
+/* argv copied into one block from the C library's allocator, the array and its strings: not counted, never freed. */
+static int32_t copy_arguments(int32_t argc, const char *const *argv, const uint8_t *const **out) {
+    *out = NULL;
+    if (argc <= 0 || argv == NULL) {
+        return 0;
+    }
+    size_t count = (size_t)argc;
+    if (count > (SIZE_MAX - sizeof(void *)) / sizeof(void *)) {
+        return CEESAFE_INIT_MEMORY;
+    }
+    size_t total = (count + 1u) * sizeof(void *);
+    for (size_t k = 0; k < count; k++) {
+        size_t length = 0;
+        if (argv[k] != NULL) {
+            while (argv[k][length] != '\0') {
+                length++;
+            }
+        }
+        if (length + 1u > SIZE_MAX - total) {
+            return CEESAFE_INIT_MEMORY;
+        }
+        total += length + 1u;
+    }
+    uint8_t *block = (uint8_t *)ceesafe_platform_alloc(total);
+    if (block == NULL) {
+        return CEESAFE_INIT_MEMORY;
+    }
+    const uint8_t **array = (const uint8_t **)(void *)block;
+    uint8_t *text = block + (count + 1u) * sizeof(void *);
+    for (size_t k = 0; k < count; k++) {
+        size_t length = 0;
+        if (argv[k] != NULL) {
+            while (argv[k][length] != '\0') {
+                length++;
+            }
+            ceesafe_mem_copy(text, argv[k], length);
+        }
+        text[length] = 0u;
+        array[k] = text;
+        text += length + 1u;
+    }
+    array[count] = NULL;
+    *out = array;
+    return 0;
+}
+
+static uint32_t allocated_already(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile uint32_t *)&ceesafe_rt_allocated;
+#else
+    return __atomic_load_n(&ceesafe_rt_allocated, __ATOMIC_RELAXED);
+#endif
+}
+
+int32_t ceesafe_init(const ceesafe_config *config) {
+    for (;;) {
+        uint32_t seen = ceesafe_atomic_cas_u32(&rt_state, CEE_RT_UNSTARTED, CEE_RT_STARTING);
+        if (seen == CEE_RT_UNSTARTED) {
+            break;
+        }
+        if (seen == CEE_RT_STARTED) {
+            return CEESAFE_INIT_AGAIN; /* the load saw STARTED: the config is published to this thread */
+        }
+        /* STARTING: another thread's call is under way. AGAIN would let this caller call CeeSafe before that config
+           is published, so wait for its end: STARTED (AGAIN), or UNSTARTED after its error (try again). */
+        while (ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTING) {
+            cee_spin_hint();
+        }
+    }
+    ceesafe_config given;
+    ceesafe_mem_set(&given, 0, sizeof given); /* the fields an older header lacks take their defaults */
+    int32_t error = 0;
+    uint64_t fail_at = 0u;
+    bool report = false;
+    if (config == NULL || !config_size_known(config->size)) {
+        error = CEESAFE_INIT_SIZE;
+    } else {
+        ceesafe_mem_copy(&given, config, config->size);
+        fail_at = given.fail_alloc_at;
+        report = given.alloc_report;
+        if ((given.flags & CEESAFE_INIT_ENVIRONMENT) != 0u) {
+            uint64_t from_environment = ceesafe_platform_config("CEESAFE_FAIL_ALLOC_AT");
+            if (from_environment != 0u) {
+                fail_at = from_environment;
+            }
+            if (ceesafe_platform_config("CEESAFE_ALLOC_REPORT") != 0u) {
+                report = true;
+            }
+        }
+        if (given.allocator != NULL) {
+            error = CEESAFE_INIT_ALLOCATOR; /* stage B's (ADR 0088 §2.5) */
+        } else if ((report || fail_at != 0u) && allocated_already() != 0u &&
+                   (given.flags & CEE_INIT_GENERATED_MAIN) == 0u) {
+            /* Counting cannot start under live blocks (ADR 0059): a free would subtract what was never added. Without
+               counting, an earlier allocation changes nothing, so the hook and argv are taken. The generated `main`
+               counts regardless, as 0.27.0's did after a C constructor allocated through CeeSafe. */
+            error = CEESAFE_INIT_LATE;
+        }
+    }
+    const uint8_t *const *arguments = NULL;
+    if (error == 0) {
+        error = copy_arguments(given.argc, given.argv, &arguments);
+    }
+    if (error != 0) {
+        ceesafe_atomic_store_u32(&rt_state, CEE_RT_UNSTARTED);
+        return error;
+    }
+    alloc_fail_at = fail_at;
+    alloc_report = report;
+    alloc_counting = report || fail_at != 0u;
+    rt_panic_hook = given.panic_hook;
+    rt_panic_context = given.panic_context;
+    ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
+    ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
+    return 0;
+}
+
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
    with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak. */
-int32_t ceesafe_rt_finish(int32_t code) {
+uint64_t ceesafe_shutdown(void) {
+    /* Before ceesafe_init has published the config (never called, or still under way on another thread), nothing
+       was asked for: 0. The load orders that config before the reads below. */
+    if (ceesafe_atomic_load_u32(&rt_state) != CEE_RT_STARTED) {
+        return 0u;
+    }
+    uint64_t live = alloc_counting ? ceesafe_atomic_load_u64(&alloc_live) : 0u;
     if (alloc_report) {
         write_err_cstr("ceesafe alloc: attempts=");
         write_err_u64(ceesafe_atomic_load_u64(&alloc_attempts));
         write_err_cstr(" live=");
-        write_err_u64(ceesafe_atomic_load_u64(&alloc_live));
+        write_err_u64(live);
         write_err_cstr("\n");
         if (ceesafe_atomic_load_u32(&alloc_foreign_used) != 0u) {
             write_err_cstr("ceesafe alloc: foreign held=");
@@ -402,7 +614,7 @@ int32_t ceesafe_rt_finish(int32_t code) {
             write_err_cstr("\n");
         }
     }
-    return code;
+    return live;
 }
 
 /* ---- Arena (type-system.md §19.2) ---------------------------------------------------------- */

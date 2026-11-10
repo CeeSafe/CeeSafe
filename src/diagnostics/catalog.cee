@@ -51,7 +51,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     214 => "`break`/`continue` outside a loop",
     215 => "`return` with or without a value contradicts the return type, or `return` in a `never` function",
     216 =>
-        "Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11)",
+        "Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11); also ceesafec's internal check that an expression with no value, which no diagnostic explains, never reaches code generation (a defect of ceesafec, ADR 0087 §9)",
     217 =>
         "Not a constant expression, or constant evaluation would panic, or a constant `+` of views longer than 16 MiB (ADR 0087 §2.7)",
     218 => "Constant depends on itself",

@@ -2722,6 +2722,23 @@ fn operandRvalue(
     return if (operand == none()) Ok(none()) else useRvalue(n, operand);
 }
 
+/// An expression the checker made an error of, reached while lowering a function that checked without one: no
+/// diagnostic explains it, and code generation would make nothing of it, so it fails the compilation here, loudly. A
+/// library function left out of the checks (uncheckedLibrary) is not lowered for code, and is let through.
+fn errorReached(c: borrow mut Checker, b: borrow Lowering, span: Span) -> Result<void, AllocError> {
+    let f = b.function as usize;
+    if (f < c.uncheckedLibrary.length && c.uncheckedLibrary[f]) {
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "internal error: this expression has no value, and no diagnostic says why (a defect of ceesafec: please report it)",
+    )?;
+    c.front.diagnostics.error(216, b.file, span.start, span.end, message)?;
+    return Ok();
+}
+
 fn lowerRvalueCore(
     c: borrow mut Checker,
     n: borrow mut NirProgram,
@@ -2730,6 +2747,10 @@ fn lowerRvalueCore(
 ) -> Result<u32, AllocError> {
     let typ = c.hir.exprTypes[e as usize];
     let span = exprSpan(c, e);
+    if (isErrorExpr(c, e)) {
+        errorReached(c, b, span)?;
+        return Ok(none());
+    }
     match (c.hir.exprs[e as usize]) {
         HirExpr.IntConst(_) => { return operandRvalue(c, n, b, e); }
         HirExpr.BoolConst(_) => { return operandRvalue(c, n, b, e); }

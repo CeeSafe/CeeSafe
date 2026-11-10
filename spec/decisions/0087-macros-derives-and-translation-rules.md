@@ -436,8 +436,20 @@ Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-sys
   (N0338 in a static), with a message that says so: without a limit, a chain of constants that each double the one
   before took gigabytes. No code fitted better: N0217 already covers a constant evaluation that cannot be made.
 - **Where `embed` may stand.** Anywhere an expression may, not only in a constant or a static: its value is static
-  data like a literal's. A constant and a non-`mut` static may have the type `Slice<u8>` for it (a `static mut` may
-  not: N0337); nothing else gives that type a constant value. The path is a string literal or a constant view.
+  data like a literal's. A constant and a non-`mut` static may have the type `Slice<u8>` for it, or an array of them
+  (`static FILES: [Slice<u8>; 2] = [embed("a"), embed("b")]`, as `[StringView; N]` may; a `static mut` may not:
+  N0337). The path is a string literal or a constant view.
+- **A constant view's `.bytes()` is a constant `Slice<u8>`** (decided after the review, which found it accepted
+  while this ADR and the specification said nothing gave that type a constant value). It is the CeeSafe spelling of
+  a byte-string literal: `const MAGIC: Slice<u8> = "\u{7f}ELF".bytes();`, of a literal, a `StringView` constant, an
+  `embedText` or a constant `+`. It folds as `embed` does, to static bytes. Any other call, or `.bytes()` of a view
+  that is not constant, stays N0217 (N0338 in a static), and `as` makes none (N0208).
+- **View equality folds.** `==` and `!=` on constant views compare their bytes when the program is compiled
+  (`const SAME: bool = "a" + "b" == "ab";`). Before, they gave an error value with no diagnostic, which compiled to
+  nothing, as did `"ab" == "ab"` in 0.26.0. Folding a binary operation no rule evaluates is now N0217, and two
+  checks keep such a value from passing unexplained: a constant or a static whose value is an error while no error
+  was reported is N0217 (N0338), and lowering an error expression in a function that checked cleanly fails the
+  compilation (N0216, a defect of ceesafec).
 - **Paths.** Besides §2.8's rules: `\` is refused on every system (a separator on Windows, a name's character
   elsewhere: the same files must give the same program), and so are `:` (a drive, an NTFS stream), `$` and `%`
   (nothing is expanded, so they would name a literal directory, which is surely a mistake) and a leading `~`.
@@ -478,7 +490,8 @@ Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-sys
   dependency nor a path dependency it names (`inner = { path = "inner" }` whose roots climb out, which the review
   found) reaches the user's files. A package reached both ways is the user's. A package whose directory lies in the
   package cache (`$CEESAFE_HOME`, by real path) is confined to its own directory even as the root package, so the
-  language server going to a definition in a checkout, or `check` run inside it, honours no root the build did not.
+  language server going to a definition in a checkout, or `check` run inside it, honours no root the build did not;
+  the path dependencies such a root reaches are kept inside its directory too, even one that lies outside the cache.
 - **Hard links** cannot be detected: a hard link inside the package to a file outside has a real path inside, and is
   read. Making one needs write access to the package's directory and to the file, on the same volume, and git (so the
   registry) stores none: a fetched package holds no hard link.
@@ -491,5 +504,9 @@ Step 2 (§2.7, §2.8) is implemented as written, with these precisions (type-sys
 - **Code generation.** An embedded file's bytes are a `static const uint8_t ceeLS_<k>[]` at any length but zero,
   once per distinct contents (literals over 4,095 bytes were already); an empty file is an empty literal. The
   interpreter needed nothing: it runs the NIR, which holds the bytes. A static `c"…"` over 4,095 bytes was a C
-  literal before; it is an array now too.
+  literal before; it is an array now too. A split build declares each array `extern` in `ceesafe_program.h` and
+  defines it once, in `ceesafe_instances.c`: defined in the header, as first written, it was in every unit, and a
+  1 MB file doubled the binary of a two-file program.
+- **The language server** shows a type on hover in a constant's value (folded: an `embedText(…)` is its text, typed
+  as the call was) and in a static's, which it did not index before.
 - **Not done.** The language server does not watch embedded files (a change shows at the next check of the document).

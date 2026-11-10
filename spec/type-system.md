@@ -270,22 +270,30 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
 ## 10. Constants
 
 - `const N: T = e;` where `e` is a constant expression: literals, other constants, and unary,
-  binary, `as` and `truncate` applied to constant expressions. Calls are not constant (N0217).
+  binary, `as` and `truncate` applied to constant expressions. Calls are not constant (N0217), except `embed` and
+  `embedText` (§10.1) and a constant view's `.bytes()` (below). `==` and `!=` on constant views compare their bytes
+  (`"a" + "b" == "ab"` is `true`).
 - Constants are evaluated at compile time with the runtime semantics of §6. An operation that
   would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217).
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is
-  a string literal or a `c"…"`; other struct types are N0216.
-- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool` or `StringView`, and
+  a string literal or a `c"…"`, or a `Slice<u8>` of static bytes (below); other struct types are N0216.
+- **Constant arrays** (C9, ADR 0014): `T` may be `[E; N]` with `E` an integer type, `bool`, `StringView` or
+  `Slice<u8>` (static bytes, below), and
   `e` an array literal `[e1, …, eN]` or repeat `[v; N]` of constant expressions. A use is the whole array's value,
   like an array literal: it can be indexed and iterated, its `.length` read (ADR 0072), and bound to a local to be
   sliced or borrowed. A table to
   be sliced where it is named is a `static` instead (§39.2, ADR 0066). Arrays of other types, and of arrays, are
   N0216.
 - **Constant views** (ADR 0064 §2): `T` may be `StringView` (or an array of them, above), with string literals as
-  the constant expressions. The value is static data, so a constant view holds no loans. Other reference types are
-  N0246.
+  the constant expressions. The value is static data, so a constant view holds no loans. The other reference types a
+  constant may have are `CStr`, `Slice<u8>` and an array of `Slice<u8>`, all holding static data; any other is N0246.
+- **Constant bytes** (ADR 0087 §2.8, §9). A constant's `Slice<u8>` is static bytes: an `embed(path)` (§10.1), or the
+  `.bytes()` of a constant view (a string literal, a `StringView` constant, an `embedText` or a constant `+`), which
+  is CeeSafe's spelling of a byte-string literal (`const MAGIC: Slice<u8> = "\u{7f}ELF".bytes();`). Nothing else gives
+  that type a constant value: another call, or `.bytes()` of a view that is not constant, is N0217 (N0338 in a
+  static), and `as` cannot make one (N0208).
 - **Constant concatenation** (ADR 0087 §2.7). In a constant's value or a static initialiser (§39.4), `a + b` whose
   operands are both constant views (a string literal, a constant's name, an `embedText`, §10.1, or another such `+`)
   is a constant view: `a`'s bytes, then `b`'s. `A + B + C` folds left to right, and a constant of another package
@@ -315,7 +323,8 @@ the package is checked: `static ROOT_CERTS: Slice<u8> = embed("certs/root.der");
 item of the same name shadows.
 
 - **The value** is static data, like a string literal's: it holds no loan, may be a constant's or a static's value
-  (a constant or a non-`mut` static may have the type `Slice<u8>` for it; §39.2), is used anywhere a literal is, and
+  (a constant or a non-`mut` static may have the type `Slice<u8>` for it, or an array of them; §10, §39.2), is used
+  anywhere a literal is, and
   `embedText(…)` is a constant view that constant `+` joins (§10). A use of the constant is the same bytes.
 - **The path** is a string literal or a constant view (N0362 otherwise), relative to the directory of the source file
   that names it, with `/` separators on every system. Nothing in it is expanded. N0362 for: an empty path; an
@@ -328,8 +337,8 @@ item of the same name shadows.
   - **Code the user does not work on is confined.** A git or registry dependency, every package reached through one
     (its path dependencies, at any depth), and every package whose directory lies in the package cache
     (`$CEESAFE_HOME`, `tooling.md` §4.3), even as the root package (the language server going to a definition in a
-    checkout, or `check` run there), embeds only inside that checkout: its roots, its own directory included, count
-    only where their real paths lie inside it.
+    checkout, or `check` run there, with the path dependencies it reaches), embeds only inside that checkout: its
+    roots, its own directory included, count only where their real paths lie inside it.
   - **The file read is the file checked.** The compiler opens the path first, without waiting (a FIFO cannot hang a
     check) and without taking a terminal, then checks the open file: its own real path (`F_GETPATH` on macOS,
     `/proc/self/fd` on Linux, `GetFinalPathNameByHandleW` on Windows) against the directories above, and that it is a
@@ -4293,7 +4302,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   Such a table is a place, so unlike a constant table (§10) it is sliced and borrowed where it is named:
   `static LEVELS: [StringView; 3] = ["Low", "Medium", "High"];` then `f(LEVELS[..])`. A lib/core `CStr` (§22.3)
   initialised by a `c"…"` is static string data too (ADR 0087 §2.4), and so is a `Slice<u8>` in a `static` initialised
-  by `embed` (§10.1) or a constant holding one.
+  by `embed` (§10.1), by a constant view's `.bytes()` (§10) or by a constant holding one, and, in a `static`, an array
+  of them (`static FILES: [Slice<u8>; 2] = [embed("a.bin"), embed("b.bin")];`).
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:
@@ -4326,7 +4336,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
 - `"…".ptr as *T`, a string literal's address, for a C string (`"name\0".ptr as *CChar`; §28);
 - a string literal, as a `StringView`, or a constant concatenation of constant views (`PREFIX + "name"`, §10; ADR
   0087 §2.7), as a `StringView` or, with a `c"…"` right operand, a `CStr`;
-- `embed(path)` as a `Slice<u8>`, `embedText(path)` as a `StringView` (§10.1);
+- `embed(path)` as a `Slice<u8>`, `embedText(path)` as a `StringView` (§10.1), and a constant view's `.bytes()` as a
+  `Slice<u8>` (§10);
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may

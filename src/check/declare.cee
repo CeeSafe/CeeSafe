@@ -558,15 +558,18 @@ fn constElementOk(c: borrow Checker, t: u32) -> bool {
     return c.types.is(
         element,
         TypeKind.Integer,
-    ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error) || c.types.isStringView(element);
+    ) || c.types.is(element, TypeKind.Bool) || c.types.is(element, TypeKind.Error) || c.types.isStringView(element) ||
+        isStaticBytesType(c, element); // embedded files' bytes, as a table (ADR 0087 §2.8)
 }
 
 /// A constant's type that may hold loans but only of static data (ADR 0064 §2): `StringView` or `[StringView; N]`,
-/// whose value is string literals.
+/// whose value is string literals; a `CStr`; a `Slice<u8>` of static bytes (`embed`, or a constant view's `.bytes()`),
+/// or an array of them.
 fn isConstantView(c: borrow Checker, t: u32) -> bool =>
     c.types.isStringView(t) || (c.types.is(t, TypeKind.Array) && c.types.isStringView(c.types.info(t).element)) ||
-        isCStrType(c, t) ||      // `c"…"` (ADR 0087 §2.4)
-        isStaticBytesType(c, t); // `embed`'s bytes (ADR 0087 §2.8)
+        isCStrType(c, t) ||        // `c"…"` (ADR 0087 §2.4)
+        isStaticBytesType(c, t) || // `embed`'s bytes (ADR 0087 §2.8)
+        (c.types.is(t, TypeKind.Array) && isStaticBytesType(c, c.types.info(t).element));
 
 fn receiverIndex(kind: ReceiverKind) -> u32 => match (kind) {
     ReceiverKind.None => 0,

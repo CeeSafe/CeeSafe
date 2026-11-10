@@ -71,6 +71,12 @@ fn evaluateConstant(c: borrow mut Checker, k: u32) -> Result<u32, AllocError> {
     c.loopDepth = savedLoop;
     c.scopes.truncate(savedScopeCount);
     c.scopeStarts.truncate(savedStarts);
+    if (isErrorExpr(c, value) && !c.front.diagnostics.hasErrors()) {
+        // A value that is an error with no diagnostic anywhere would compile to nothing: never let it pass.
+        var message = Vector<u8>.create();
+        appendText(mut message, "this constant's value cannot be evaluated when the program is compiled")?;
+        c.error(notConstant(), valueSpan.start, valueSpan.end, message)?;
+    }
     // A cycle may already have stored an error value for this constant; keep the first result.
     if (c.hir.constants[entry.hir as usize].value == none()) {
         c.hir.constants[entry.hir as usize].value = value;
@@ -262,12 +268,37 @@ fn foldBinary(c: borrow mut Checker, e: u32, op: BinaryOp, leftExpr: u32, rightE
                 _ => {}
             }
         }
+        HirExpr.StringConst(a) => {
+            match (r) {
+                HirExpr.StringConst(b) => {
+                    let index = binaryIndex(op);
+                    if (index == 2 || index == 3) {
+                        // Views compare by their bytes (§6), here as at run time.
+                        let leftBytes = copyBytes(c.hir.textOf(a))?;
+                        let equal = sameBytes(leftBytes.view(), c.hir.textOf(b));
+                        return c.expr(
+                            HirExpr.BoolConst(if (index == 2) equal else !equal),
+                            typ,
+                            span.start,
+                            span.end,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
         _ => {}
     }
     match (r) {
         HirExpr.Error => { return Ok(right); }
-        _ => { return c.errorResult(span.start, span.end); }
+        _ => {}
     }
+    // Nothing above evaluates these operands: say so, rather than leave a value that is an error no diagnostic
+    // explains (which reached code generation as nothing at all).
+    var message = Vector<u8>.create();
+    appendText(mut message, "this operation cannot be evaluated when the program is compiled")?;
+    c.error(notConstant(), span.start, span.end, message)?;
+    return c.errorResult(span.start, span.end);
 }
 
 fn binaryIndex(op: BinaryOp) -> u32 => match (op) {

@@ -53,7 +53,8 @@
 19. embed in C and the interpreter (ADR 0087 §2.8, c-backend.md §2): a program embeds a 3 MiB file of random bytes
     (made here) through a static, a constant and a local, a 4-byte file and an empty one; it prints the lengths and a
     checksum, which Python computes, the same compiled and interpreted. `--emit c` holds each non-empty file's bytes
-    once, as a `static const uint8_t` array, the short one too.
+    once, as a `static const uint8_t` array, the short one too. With `--split`, each array is defined once, in
+    ceesafe_instances.c, and declared `extern` in the header, and the program is about the size it is without.
 20. [embed] roots (ADR 0087 §2.8, tooling.md §4.1), made here: app's roots are a directory outside it and a symbolic
     link inside it to another outside it; its path dependency near has a root outside it; its git dependency far
     embeds from itself. All three embed, and the program prints the files, in the interpreter. farbad, a git
@@ -66,11 +67,13 @@
       `run --interp` does not print it (a package reached through a git or registry package embeds only from itself).
     - evilroots, a git dependency with roots outside its checkout, gets N0362; so does `check` run inside its checkout
       and the language server opening its file there (a package in the package cache embeds only from itself, even as
-      the root package).
+      the root package). evilout's path dependency lies outside the package cache (made here) and has roots outside
+      it: N0362 through the victim, and with `check` run in evilout's checkout (its lock committed for that).
     - local: a symbolic link to the secret and a missing file get the same N0362 message, which names the path as
       written and neither the secret's directory nor its name; a FIFO is refused at once (not a regular file), and
       the language server answers with it there.
     - A constant `+` past 16 MiB is tests/reference/tests/corpus/check-fail/constant-concatenation-limit.cee.
+22. hover: the language server shows the type of an `embedText` in a constant's value and of an `embed` in a static's.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -117,9 +120,10 @@ def build_library(work):
     return lib
 
 
-def language_server_diagnostics(compiler, path):
-    """The diagnostics `ceesafec lsp` publishes for the file at `path` once opened, as JSON text; empty on a timeout
-    (a FIFO that hung the check would be one)."""
+def language_server(compiler, path, hover=None):
+    """What `ceesafec lsp` answers for the file at `path` once opened: the diagnostics it publishes, as JSON text, and
+    with `hover` (a line and a character) the hover's answer; both empty on a timeout (a FIFO that hung the check
+    would be one)."""
     with open(path) as f:
         text = f.read()
     uri = "file://" + ("/" if not path.startswith("/") else "") + path.replace(chr(92), "/")
@@ -128,9 +132,11 @@ def language_server_diagnostics(compiler, path):
         {"jsonrpc": "2.0", "method": "initialized", "params": {}},
         {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {
             "uri": uri, "languageId": "ceesafe", "version": 1, "text": text}}},
-        {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
-        {"jsonrpc": "2.0", "method": "exit"},
     ]
+    if hover:
+        messages.append({"jsonrpc": "2.0", "id": 7, "method": "textDocument/hover", "params": {
+            "textDocument": {"uri": uri}, "position": {"line": hover[0], "character": hover[1]}}})
+    messages += [{"jsonrpc": "2.0", "id": 2, "method": "shutdown"}, {"jsonrpc": "2.0", "method": "exit"}]
     data = b""
     for m in messages:
         body = json.dumps(m).encode()
@@ -138,9 +144,23 @@ def language_server_diagnostics(compiler, path):
     try:
         p = subprocess.run([compiler, "lsp"], input=data, capture_output=True, timeout=60)
     except subprocess.TimeoutExpired:
-        return ""
-    out = p.stdout.decode("utf-8", "replace")
-    return "".join(part for part in out.split("Content-Length:") if "publishDiagnostics" in part)
+        return "", ""
+    parts = p.stdout.decode("utf-8", "replace").split("Content-Length:")
+    published = "".join(part for part in parts if "publishDiagnostics" in part)
+    answered = ""
+    for part in parts:
+        body = part.split("\r\n\r\n", 1)[-1]
+        try:
+            message = json.loads(body)
+        except ValueError:
+            continue
+        if message.get("id") == 7:
+            answered = json.dumps(message.get("result"))
+    return published, answered
+
+
+def language_server_diagnostics(compiler, path):
+    return language_server(compiler, path)[0]
 
 
 def main():
@@ -737,6 +757,26 @@ def main():
                                                             for l in arrays):
             problems.append(f"embed-large: --emit c: expected two byte arrays, the short one among them: "
                             f"{[a[:60] for a in arrays]} ({p.returncode}) {p.stderr[-300:]}")
+        # Split: each array is defined once, in ceesafe_instances.c, and declared in the header every unit includes.
+        sdir = os.path.join(work, "embed-large-split")
+        p = run([compiler, "build", "--split", "--emit", "c", "-o", sdir], large)
+        definitions, declarations = 0, 0
+        for top, _, files in os.walk(sdir):
+            for name in files:
+                if name.endswith((".c", ".h")):
+                    for line in open(os.path.join(top, name), errors="replace"):
+                        definitions += line.startswith("const uint8_t ceeLS_") or "CEE_UNUSED const uint8_t ceeLS_" in line
+                        declarations += line.startswith("extern const uint8_t ceeLS_")
+        if p.returncode != 0 or definitions != 2 or declarations != 2:
+            problems.append(f"embed-large: --split --emit c: expected two arrays defined once and declared once: "
+                            f"{definitions} definitions, {declarations} declarations ({p.returncode}) {p.stderr[-300:]}")
+        split_exe = os.path.join(work, "embed-large-split-program.exe" if WINDOWS else "embed-large-split-program")
+        p = run([compiler, "build", "--split", "-o", split_exe], large)
+        if p.returncode != 0 or run([split_exe], large).stdout.strip() != expected:
+            problems.append(f"embed-large: build --split: the program did not print {expected!r} {p.stderr[-300:]}")
+        elif os.path.getsize(split_exe) > os.path.getsize(exe) + len(big) // 2:
+            problems.append(f"embed-large: build --split: {os.path.getsize(split_exe)} bytes, against "
+                            f"{os.path.getsize(exe)} without --split: an embedded file is in it more than once")
 
         # 20. [embed] roots: outside the package for the root package and a path dependency, not for a git one.
         roots = os.path.join(work, "roots")
@@ -837,7 +877,8 @@ def main():
                 return [(d["code"], d["message"]) for d in json.loads(p.stdout)["diagnostics"]]
             except (ValueError, KeyError):
                 return []
-        for dependency in ("evil", "evildeep", "evilroots"):
+        shutil.move(os.path.join(security, "outside-inner"), os.path.join(work, "outside-inner"))
+        for dependency in ("evil", "evildeep", "evilroots", "evilout"):
             directory = victim("victim", dependency)
             p = run([compiler, "check", "--diagnostics-format=json"], directory)
             found = diagnostics(p)
@@ -848,10 +889,22 @@ def main():
             if p.returncode == 0 or "TOPSECRET" in p.stdout + p.stderr:
                 problems.append(f"embed security: {dependency}: run --interp read the secret ({p.returncode})")
         home = os.environ["CEESAFE_HOME"]
-        checkout = None
-        for top, _, files in os.walk(os.path.join(home, "git", "checkouts")):
-            if "ceesafe.toml" in files and 'name = "evilroots"' in open(os.path.join(top, "ceesafe.toml")).read():
-                checkout = top
+        def checkout_of(name):
+            for top, _, files in os.walk(os.path.join(home, "git", "checkouts")):
+                if "ceesafe.toml" in files and f'name = "{name}"' in open(os.path.join(top, "ceesafe.toml")).read():
+                    return top
+            return None
+        checkout = checkout_of("evilroots")
+        outer = checkout_of("evilout")
+        if outer is None:
+            problems.append("embed security: evilout has no checkout in the package cache")
+        else:
+            # The checkout as the root package: its path dependency outside the cache is kept inside the checkout.
+            p = run([compiler, "check", "--diagnostics-format=json"], outer)
+            found = diagnostics(p)
+            if p.returncode != 1 or [c for c, _ in found] != ["N0362"] or "TOPSECRET" in p.stdout + p.stderr:
+                problems.append(f"embed security: check in the evilout checkout: expected one N0362: {found} "
+                                f"({p.returncode}) {p.stderr[:300]}")
         if checkout is None:
             problems.append("embed security: evilroots has no checkout in the package cache")
         else:
@@ -887,7 +940,23 @@ def main():
             if published.count("N0362") != 3:
                 problems.append(f"embed security: the language server with a FIFO: {published[:400]}")
 
-    print(f"package_tests: 21 checks; {len(problems)} problems")
+        # 22. The language server's hover in a constant's and a static's value (ADR 0087 §2.8).
+        hovered = os.path.join(work, "hover")
+        os.makedirs(os.path.join(hovered, "src"))
+        with open(os.path.join(hovered, "ceesafe.toml"), "w") as f:
+            f.write('[package]\nname = "hover"\n')
+        with open(os.path.join(hovered, "src", "note.txt"), "w") as f:
+            f.write("note\n")
+        with open(os.path.join(hovered, "src", "main.cee"), "w") as f:
+            f.write('const NOTE: StringView = embedText("note.txt");\nstatic BYTES: Slice<u8> = embed("note.txt");\n\n'
+                    'fn main() {\n    Console.write(NOTE);\n    Console.writeLine(BYTES.length);\n}\n')
+        source = os.path.join(hovered, "src", "main.cee")
+        for line, character, want in ((0, 30, "StringView"), (1, 30, "Slice<u8>")):
+            _, answered = language_server(compiler, source, (line, character))
+            if want not in answered:
+                problems.append(f"hover: {line}:{character} should show {want}: {answered[:300]!r}")
+
+    print(f"package_tests: 22 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

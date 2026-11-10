@@ -283,6 +283,13 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
         c.inStaticInitializer = true;
         let checked = checkExpr(c, valueSyntax, typ)?;
         c.inStaticInitializer = false;
+        if (holdsError(c, checked) && !c.front.diagnostics.hasErrors()) {
+            // An initialiser that is an error no diagnostic explains would be emitted as nothing: never let it pass.
+            let valueSpan = c.front.ast.exprSpans[valueSyntax as usize];
+            var message = Vector<u8>.create();
+            appendText(mut message, "this static's value cannot be evaluated when the program is compiled")?;
+            c.error(notStaticInitializer(), valueSpan.start, valueSpan.end, message)?;
+        }
         c.statics[k].checked = checked;
         c.scopes.truncate(savedScopes);
         c.scopeStarts.truncate(savedStarts);
@@ -1060,4 +1067,31 @@ fn hostedOnlyCall(c: borrow mut Checker, e: u32) -> Result<bool, AllocError> {
     hostedOnly(c, nameSpan, what.view())?;
     checkArgumentsLoosely(c, arguments)?;
     return Ok(true);
+}
+
+/// Whether the static initialiser `e` is an error, or holds one in a field, an element or a conversion.
+fn holdsError(c: borrow Checker, e: u32) -> bool {
+    if (e == none()) {
+        return false;
+    }
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Error => { return true; }
+        HirExpr.Cast(inner) => { return holdsError(c, inner); }
+        HirExpr.StructLiteral(fields) => {
+            for (k in 0..fields.count) {
+                if (holdsError(c, c.hir.fieldValues[(fields.start + k) as usize].value)) {
+                    return true;
+                }
+            }
+        }
+        HirExpr.ArrayLiteral(elements) => {
+            for (k in 0..elements.count) {
+                if (holdsError(c, c.hir.at(elements, k))) {
+                    return true;
+                }
+            }
+        }
+        _ => {}
+    }
+    return false;
 }

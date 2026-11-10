@@ -1,0 +1,42 @@
+// A constant view's `.bytes()` is a constant `Slice<u8>` (ADR 0087 §9, type-system.md §10): of a string literal, a
+// `StringView` constant or a constant `+`, CeeSafe's spelling of a byte-string literal. A constant or a static may
+// hold it, and an array of such slices, or of `embed`s, is a constant or a static table (§10, §39.4).
+const NAME: StringView = "bun";
+const MAGIC: Slice<u8> = "\u{7f}ELF".bytes();
+const OF_NAME: Slice<u8> = NAME.bytes();
+const JOINED: Slice<u8> = (NAME + "x").bytes();
+static HEADER: Slice<u8> = "#!".bytes();
+const TABLE: [Slice<u8>; 3] = ["ab".bytes(), embed("constant-bytes.cee"), NAME.bytes()];
+static FILES: [Slice<u8>; 2] = [embed("constant-bytes.cee"), "z".bytes()];
+// Views compare by their bytes when the program is compiled, a constant `+` among them.
+const SAME: bool = "a" + "b" == "ab";
+const DIFFERENT: bool = NAME != "bun";
+const ALIKE: bool = "ab" == "ab";
+
+fn main() {
+    Console.writeLine(MAGIC.length);
+    Console.writeLine(MAGIC[0] == 0x7f && MAGIC[1] == 'E');
+    Console.writeLine(OF_NAME.length + JOINED.length);
+    Console.writeLine(JOINED[3] == 'x');
+    Console.writeLine(HEADER[1] == '!');
+    Console.writeLine(TABLE[0].length + TABLE[2].length);
+    Console.writeLine(TABLE[1][0] == '/' && FILES[0].length == TABLE[1].length);
+    for (t in FILES) {
+        Console.writeLine(t.length > 0);
+    }
+    Console.writeLine(SAME);
+    Console.writeLine(DIFFERENT);
+    Console.writeLine(ALIKE);
+}
+// expect-stdout: 4
+// expect-stdout: true
+// expect-stdout: 7
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true

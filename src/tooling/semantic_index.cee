@@ -733,6 +733,20 @@ fn buildSemanticIndex(
             indexFunction(mut index, c, sources, truncate<u32>(f))?;
         }
     }
+    // Constants' and statics' values: a constant's is folded (an `embedText(…)` is its text, typed as the call was),
+    // a static's is as checked.
+    for (constant in c.hir.constants.view()) {
+        if (constant.value != none() && (constant.file as usize) < sources.length &&
+            sameBytes(sources[constant.file as usize].path.view(), sources[file as usize].path.view())) {
+            walkExpression(mut index, c, sources, constant.value)?;
+        }
+    }
+    for (item in c.hir.statics.view()) {
+        if (item.value != none() && (item.file as usize) < sources.length &&
+            sameBytes(sources[item.file as usize].path.view(), sources[file as usize].path.view())) {
+            walkExpression(mut index, c, sources, item.value)?;
+        }
+    }
     return Ok(index);
 }
 

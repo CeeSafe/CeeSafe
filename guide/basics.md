@@ -337,6 +337,9 @@ package's directory, or inside a directory its manifest lists in `[embed] roots`
 checked on its own embeds only below its own directory. Anything else, a missing file, a directory or a file over
 16 MiB, is N0362, also in the editor and the MCP server, which read the files too.
 
+A constant text's `.bytes()` is constant too, so a byte string is written as text: `const MAGIC: Slice<u8> =
+"\u{7f}ELF".bytes();`. A constant or a static may also be a table of them, `[Slice<u8>; N]`, embedded files included.
+
 ## Comments
 
 `//` comments run to the end of the line, `/* … */` comments may span lines, and `///` before an item is its

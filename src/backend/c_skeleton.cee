@@ -318,6 +318,7 @@ fn emitProgram(
     }
     e.into("ceesafe_instances.c".bytes())?;
     if (e.split) {
+        emitLongStringDefinitions(e)?;
         emitExportedConstants(e, c)?; // C data, defined once
         emitStatics(e, c, true)?;
     } else {
@@ -616,7 +617,35 @@ fn emitLongStrings(e: borrow mut CEmitter, c: borrow Checker, n: borrow NirProgr
         collectLongStaticStrings(e, c, item.value)?;
     }
     for (id in 0..e.longStrings.length) {
+        if (e.split) {
+            // Declared in ceesafe_program.h, which every unit includes, and defined once, in ceesafe_instances.c
+            // (emitLongStringDefinitions): a file embedded in a split build is in the image once, and parsed once.
+            e.t("extern const uint8_t ceeLS_")?;
+            e.d(id as u64)?;
+            e.t("[")?;
+            e.d(e.longStrings[id].length as u64)?;
+            e.t("];")?;
+            e.emit()?;
+            var name = copyBytes("ceeLS_".bytes())?;
+            appendDecimal(mut name, id as u64)?;
+            insertSorted(mut e.splitData, name)?; // renamed with the program's name (c-backend.md §2.4)
+            continue;
+        }
         e.t("static CEE_UNUSED const uint8_t ceeLS_")?;
+        e.d(id as u64)?;
+        e.t("[] = ")?;
+        let text = copyBytes(e.longStrings[id].view())?;
+        appendCByteList(mut e.buf, text.view(), false)?;
+        e.t(";")?;
+        e.emit()?;
+    }
+    return Ok();
+}
+
+/// In a split build, the long strings' byte arrays (emitLongStrings), defined once, in ceesafe_instances.c.
+fn emitLongStringDefinitions(e: borrow mut CEmitter) -> Result<void, AllocError> {
+    for (id in 0..e.longStrings.length) {
+        e.t("const uint8_t ceeLS_")?;
         e.d(id as u64)?;
         e.t("[] = ")?;
         let text = copyBytes(e.longStrings[id].view())?;

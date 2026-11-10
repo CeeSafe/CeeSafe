@@ -1,0 +1,15 @@
+// Only a constant view's `.bytes()` is a constant `Slice<u8>` (ADR 0087 §9, type-system.md §10): a call, another
+// conversion or a non-constant view is not constant (N0217 in a constant, N0338 in a static), and a view's bytes
+// are not a `StringView` (N0205).
+fn name() -> StringView => "n";
+
+const CALLED: Slice<u8> = name().bytes();            // error[N0217]
+const C_VIEW: Slice<u8> = c"abc".view().bytes();     // error[N0217]
+const LENGTH: usize = "abc".bytes().length;          // error[N0217]
+const CAST: Slice<u8> = "abc" as Slice<u8>;          // error[N0208]
+const AS_VIEW: StringView = "abc".bytes();           // error[N0205]
+static FROM_CALL: Slice<u8> = name().bytes();        // error[N0338]
+static mut WRITABLE: [Slice<u8>; 1] = ["a".bytes()]; // error[N0337]
+const ORDER: bool = "a" < "b";                       // error[N0207]
+
+fn main() {}

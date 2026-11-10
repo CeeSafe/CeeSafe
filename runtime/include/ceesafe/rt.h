@@ -66,6 +66,8 @@ typedef double cee_max_align_t;
 #else
 typedef max_align_t cee_max_align_t;
 #endif
+/* The alignment of every heap block (ceesafe_platform_alloc, ADR 0088 §2.5): max(16, alignof(max_align_t)). */
+#define CEE_HEAP_ALIGN (_Alignof(cee_max_align_t) > 16u ? (size_t)_Alignof(cee_max_align_t) : (size_t)16u)
 
 #if !defined(CEE_NO_BUILTIN_OVERFLOW) && (defined(__clang__) || (defined(__GNUC__) && __GNUC__ >= 5))
 #define CEE_HAVE_BUILTIN_OVERFLOW 1
@@ -89,7 +91,8 @@ typedef enum cee_panic_kind {
     CEE_PANIC_FLOAT_RANGE = 13,
     CEE_PANIC_ASYNC = 14, /* the executor cannot go on: every task waits for nothing, or its bookkeeping failed */
     CEE_PANIC_FRAME_STACK = 15, /* a task's frame stack could not grow (ADR 0056 §3.3) */
-    CEE_PANIC_EXPLICIT = 16 /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
+    CEE_PANIC_EXPLICIT = 16, /* `panic(message)` or a failed `assert` (ADR 0075 §2.8) */
+    CEE_PANIC_ALLOCATOR = 17 /* the host's allocator hook broke its contract (ADR 0088 §2.5) */
 } cee_panic_kind;
 
 /* A CeeSafe source location; `file` points to a string in the generated program's file table. */
@@ -804,7 +807,9 @@ void ceesafe_platform_write_stdout(const uint8_t *bytes, size_t length);
 void ceesafe_platform_write_stderr(const uint8_t *bytes, size_t length);
 _Noreturn void ceesafe_platform_exit(int32_t code);
 _Noreturn void ceesafe_platform_abort(void);
-/* Heap memory; NULL on failure. Must be aligned for any CeeSafe type (max_align_t). */
+/* Heap memory; NULL on failure. Aligned to CEE_HEAP_ALIGN, max(16, alignof(max_align_t)): max_align_t is aligned to 8
+   on macOS arm64 and under MSVC, and the runtime lays out 16-aligned task frames and slots in these blocks (ADR 0088
+   §1.9, §2.5). Hosted, they come from the host's allocator when ceesafe_init installed one, else from the C library. */
 void *ceesafe_platform_alloc(size_t size);
 /* The same, with every byte zero (a C library's calloc can skip zeroing memory that already is). */
 void *ceesafe_platform_alloc_zeroed(size_t size);
@@ -831,6 +836,9 @@ extern uint32_t ceesafe_rt_allocated;
    allocated (a C constructor through CeeSafe), as it did before ceesafe_init (0.27.0), instead of LATE. A host has
    no way to ask for this: ceesafe_init masks config.flags' reserved bits off. */
 int32_t ceesafe_rt_init_main(const ceesafe_config *config);
+/* Installs the host's allocator hook in the platform functions (NULL: the C library's again), from ceesafe_init only,
+   before it publishes STARTED (ADR 0088 §2.5). */
+void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator);
 #endif
 
 /*

@@ -2966,7 +2966,8 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
 - Every C file of the build has the runtime's headers on its include path. `ceesafe/foreign.h` (ADR 0060) is CeeSafe's
   allocator for C code: `ceesafe_alloc(size, CEE_ALLOC_FOREIGN)`, `ceesafe_realloc(p, size, CEE_ALLOC_FOREIGN)` and
   `ceesafe_free(p, CEE_ALLOC_FOREIGN)`, which follow `malloc`, `realloc` and `free` (`free(NULL)` does nothing,
-  `realloc(NULL, n)` allocates; aligned for any C type; a failed realloc keeps the block). Their attempts are counted
+  `realloc(NULL, n)` allocates; aligned to max(16, `alignof(max_align_t)`), so for any C type; a failed realloc keeps
+  the block). Their attempts are counted
   and fault-injected in one sequence with CeeSafe's (`CEESAFE_FAIL_ALLOC_AT`), but a block live at exit is not a
   leak: the report gives such blocks on a line of their own (memory-model.md §3.2). A C library's global state, kept
   until the process ends, may live there, such as OpenSSL's through `CRYPTO_set_mem_functions` in test builds.
@@ -2979,11 +2980,19 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
   every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` beside its output (with the exports
   header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
   allocation report and failure injection (`fail_alloc_at`, `alloc_report`, or the environment's variables with
-  `CEESAFE_INIT_ENVIRONMENT`), and a panic hook. `ceesafe_init` must happen before every call into CeeSafe on every
+  `CEESAFE_INIT_ENVIRONMENT`), a panic hook, and an allocator (below). `ceesafe_init` must happen before every call into CeeSafe on every
   thread, once; then exports may be called from any host thread at once. `ceesafe_shutdown` prints the report when one
   was asked for and returns the live blocks. A host that never calls `ceesafe_init` gets what 0.27.0 gave: no program
   arguments, the environment's variables ignored, and the printed panic. The generated `main` calls the same two
   functions, so a CeeSafe `main` and a host start the runtime one way.
+- **The host's allocator** (ADR 0088 §2.5). The config's `allocator`, four functions and a context, takes every
+  block the runtime allocates: CeeSafe's own, the runtime's buffers, `argv`'s copy and a C library's through
+  `ceesafe/foreign.h`. It sits under the accounting, so the report, failure injection and `FailingAllocator` work
+  with it, and an injected failure never reaches it. Its contract is malloc's, but every block is aligned to
+  max(16, `alignof(max_align_t)`) (a block that is not panics, `CEE_PANIC_ALLOCATOR`); it is called from any thread,
+  and stays valid with its context until the process exits. It cannot change under live blocks: given after the
+  runtime has allocated, it is `CEESAFE_INIT_LATE`. Each side frees what it allocated through its own code: a block
+  CeeSafe hands out comes back through an export, even when both use one heap.
 - **Panics in a host** (ADR 0088 §2.4). The panic hook is called on the panicking thread (the caller's, a thread
   CeeSafe spawned, an `Async.runWorkers` worker, or one C calls a `@callback` on) with the kind, the reason, the message
   and the CeeSafe location; the executor's own aborts arrive as `CEE_PANIC_ASYNC` with their message and no file. The

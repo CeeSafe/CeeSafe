@@ -726,7 +726,8 @@ Heap (M3b):
     bytes. `ceesafe_async_poll` serves code with its own wait loop (the
     interpreter). Woken tasks run in the order they were woken.
   - Portability (L1 A4a): the runtime's atomics are rt.h's `ceesafe_atomic_*` (§38.3: the `__atomic` builtins, or
-    `_Interlocked*` under MSVC), and a block's alignment is `cee_max_align_t`. On Linux the file defines
+    `_Interlocked*` under MSVC), and a block's alignment is `CEE_HEAP_ALIGN`, max(16, `alignof(cee_max_align_t)`) (ADR
+    0088 §2.5: `max_align_t` is 8-aligned on macOS arm64 and under MSVC, and task frames are 16-aligned). On Linux the file defines
     `_POSIX_C_SOURCE 200809L` before its includes: under `-std=c11` glibc hides `clock_gettime` otherwise. On Windows
     the wake pipe is an auto-reset event: a wake calls `SetEvent`, and an executor whose tasks wait to be woken waits
     in `WaitForSingleObject` until the next deadline.
@@ -838,11 +839,12 @@ Heap (M3b):
     starting, it waits (spinning) for that call's end: `CEESAFE_INIT_AGAIN` once the state is started, so a caller
     that goes on to call CeeSafe after `AGAIN` sees the config, or a new compare-and-swap after an error. It checks the
     config's `size` (`CEESAFE_INIT_SIZE`: NULL, or a size that is not a version's), its `allocator`
-    (`CEESAFE_INIT_ALLOCATOR`: none is taken until ADR 0088's stage B) and, when the config asks for counting (a
-    report or failure injection), whether the platform's allocation functions have handed out a block
-    (`CEESAFE_INIT_LATE`: a relaxed flag they set; without counting an earlier block changes nothing), copies
-    `argv` into one uncounted block from the C library (`CEESAFE_INIT_MEMORY` if it cannot), sets the counting
-    configuration and the panic hook, and publishes them with the store of started. On an error it stores unstarted
+    (`CEESAFE_INIT_ALLOCATOR`: a hook with a NULL function) and, when the config gives an allocator or asks for
+    counting (a report or failure injection), whether the platform's allocation functions have handed out a block
+    (`CEESAFE_INIT_LATE`: a relaxed flag they set; without either, an earlier block changes nothing). It installs
+    the allocator (`ceesafe_platform_use_allocator`), copies `argv` into one uncounted block from the platform
+    functions (`CEESAFE_INIT_MEMORY` if it cannot, the allocator removed again), sets the counting configuration and
+    the panic hook, and publishes them with the store of started. On an error it stores unstarted
     back and changes nothing. `ceesafe_shutdown` returns 0 and prints nothing unless it loads started.
   - **Panics** go through one path (`ceesafe_panic`, `ceesafe_panic_text`, and `ceesafe_panic_runtime` for the
     runtime's own aborts, which have no CeeSafe location): on the thread's first panic it sets `ceesafe_any_panicked`
@@ -853,6 +855,15 @@ Heap (M3b):
     nothing else calls. The executor's three aborts (its bookkeeping out of memory, a task waiting on a descriptor and
     a wake, every task parked with nothing to wake it) are `ceesafe_panic_runtime(CEE_PANIC_ASYNC, message)`, printed
     as `ceesafe panic: <message>`.
+  - **The host's allocator** (ADR 0088 §2.5). The hosted platform functions (`ceesafe_platform_alloc`, `_alloc_zeroed`,
+    `_realloc`, `_free`) call the hook `ceesafe_init` copied, else the C library's `malloc`, `calloc`, `realloc` and
+    `free`; the test is a load and an untaken branch, marked unlikely. They are under the accounting (`ceesafe_alloc`
+    counts and fault-injects first, so an injected failure never reaches the hook) and are the only allocation
+    calls of the runtime: the executor's and the I/O layer's buffers, and the window layer's, except the two X11
+    image buffers, which `XDestroyImage` frees with the C library's `free`. The hook is given at least 1 byte,
+    never NULL to free, and `realloc(NULL, n)` is its alloc. A block it returns that is not `CEE_HEAP_ALIGN`-aligned
+    is `ceesafe_panic_runtime(CEE_PANIC_ALLOCATOR, "ceesafe_allocator.<function> returned a misaligned block")`,
+    in every build.
 - The allocation counters are kept only when something reads them (ADR 0059): `CEESAFE_ALLOC_REPORT`,
   `CEESAFE_FAIL_ALLOC_AT`, or `ceesafec test`'s `ceesafe_test_begin`. That is decided before the program's first
   allocation and never changes afterwards. Without any of them, an allocation, reallocation or free touches no

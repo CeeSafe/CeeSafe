@@ -1,6 +1,6 @@
 # ADR 0088 — Embedding CeeSafe in a host program: a library archive, `ceesafe_init`, panic and allocator hooks, host bindings
 
-- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Stage A implemented on branch `impl/0088a` (§7). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
+- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Stage A implemented on branch `impl/0088a` (§7), stage B on `impl/0088b` (§8). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
   Raised by the Bun port's first crate swap (`~/dev/CeeSafeApps/bun/analysis/trials/csrf/REPORT.md`): `bun_csrf` was
   replaced by CeeSafe inside Bun 1.4.4 and Bun's tests passed, but the trial found that CeeSafe cannot yet live in a
   program whose `main` is not CeeSafe's (its gaps G8, G6, G2, G9, and the runtime that is never started). The trial's
@@ -13,7 +13,7 @@
 - **Depends on** a runtime bug fix that is not part of this ADR: the runtime's per-process scratch and
   `FailingAllocator` state races between threads (§1.8). It is being fixed on branch `fix/runtime-thread-state`
   (per-thread or atomic state, with an audit of every runtime global). Stage A does not ship before it.
-- Release (§2.9): stage A in 0.28.0, after that fix; stage B in 0.28.0 if ready, else 0.29.0; stage C in 0.29.0;
+- Release (§2.9): stage A in 0.28.0, after that fix; stage B in 0.29.0 (0.28.0 shipped without it); stage C in 0.29.0;
   stage D (separately built libraries) deferred until a host needs it (§6 question 8); stage E with any release that
   has a Windows run.
 - Scope: profiles.md §4.2–§4.3 (the runtime, `--emit obj`); tooling.md §4.1, §8.3 and the `build` flags (`--emit lib`,
@@ -298,7 +298,7 @@ typedef struct ceesafe_config {
     const char *const *argv;            /* copied by ceesafe_init */
     uint64_t fail_alloc_at;             /* as CEESAFE_FAIL_ALLOC_AT; the environment's wins when read */
     bool alloc_report;                  /* as CEESAFE_ALLOC_REPORT */
-    const ceesafe_allocator *allocator; /* NULL: the C library's. Stage A: must be NULL */
+    const ceesafe_allocator *allocator; /* NULL: the C library's (§2.5) */
     ceesafe_panic_hook panic_hook;      /* NULL: print and abort, as today */
     void *panic_context;
 } ceesafe_config;
@@ -423,8 +423,9 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   then calls the hook instead of `ceesafe_platform_alloc`. Failure injection, `FailingAllocator` and the report
   therefore work with any host allocator, and the counters remain CeeSafe's own.
 - **What it covers.** Everything the runtime allocates: the counted calls; the 30 direct platform calls of the async
-  and I/O layers (still uncounted, as now); and the window layer's 15 direct calls to the C library, which move to the
-  platform functions in this stage. The platform functions become the defaults the hook replaces. A C library given
+  and I/O layers (still uncounted, as now); and the window layer's direct calls to the C library, which move to the
+  platform functions in this stage, except its two X11 image buffers, which `XDestroyImage` frees with the C
+  library's `free` (§8). The platform functions become the defaults the hook replaces. A C library given
   CeeSafe's allocator through `ceesafe/foreign.h` (ADR 0060) gets the host's allocator too, still counted under
   `CEE_ALLOC_FOREIGN`; `CEE_ALLOC_FOREIGN_INIT` (ADR 0061) is unchanged, neither counted nor failed.
 - **The contract** is malloc's, with one change: blocks are aligned to **`max(16, alignof(max_align_t))`**, not to
@@ -432,10 +433,12 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   does for `malloc`; `realloc` keeps the block on failure. Thread-safe: any CeeSafe or host thread may call it. The
   same wording replaces `rt.h:783` and `foreign.h:12` (the platform functions' contract, and what a C library gets).
   mimalloc's `mi_malloc`, `mi_zalloc`, `mi_realloc` and `mi_free` give 16 and fit with a one-line adapter each.
-- **A debug check.** A runtime built with `-g` checks each block a hook returns and panics, naming the hook, when it
-  is not 16-aligned; a release runtime does not check.
+- **An alignment check.** The runtime checks each block a hook returns and panics, naming the function
+  (`CEE_PANIC_ALLOCATOR`, a new kind), when it is not aligned to max(16, `alignof(max_align_t)`). Every build checks, not only `-g` ones as first
+  proposed: the runtime cannot tell how it was built, and the check is a mask and an untaken branch beside the
+  indirect call (§8).
 - **Cost.** An indirect call through a table that `ceesafe_init` writes once, where today there is a direct call
-  across C files. Not measured; §5's benchmark measures it.
+  across C files; without a hook, a load and an untaken branch. Measured in §8.
 - **Ownership of memory that crosses.** Installing the host's allocator does not make the two sides' blocks
   interchangeable; it makes them come from one heap. The rules:
   1. **Lending is the default.** A pointer passed for the call (the trial's case) owns nothing.
@@ -526,7 +529,7 @@ deferred until a host does (§6 question 8). What the reviews settled, so the st
 | Stage | What | Closes | Release |
 |---|---|---|---|
 | A | §2.1 `--emit lib`; §2.2 `ceesafe_init`/`ceesafe_shutdown` (state word, argv copy, report, failure injection), generated `main` through it; §2.3 the thread contract; §2.4 the panic hook, the panicked flag, the async aborts routed; §2.6 the `extern "C"` guards (on `fix/0.28.0`, §7) | the initialiser, G2, the C++ part of G9; G8 for one umbrella build per binary | 0.28.0, after `fix/runtime-thread-state` |
-| B | §2.5 the allocator hook (the config's `allocator`, NULL-only in stage A, so the struct does not change), the 16-byte contract in `rt.h` and `foreign.h`, the debug check, the window layer's calls | G6 | 0.28.0 if ready, else 0.29.0 |
+| B | §2.5 the allocator hook (the config's `allocator`, NULL-only in stage A, so the struct does not change), the 16-byte contract in `rt.h` and `foreign.h`, the alignment check, the window layer's calls | G6 | 0.29.0 |
 | C | §2.6 `--emit rust`, signature symbols | G9 for Rust | 0.29.0 |
 | D | §2.7 `--no-runtime`, `--emit runtime`, the version check, the package marker, visibility | G8 for separately built libraries | deferred (§6 question 8) |
 | E | §2.8 `clang-cl` and `llvm-lib` by target, MSVC archives, the Windows tests | Windows | any release with a Windows run |
@@ -788,3 +791,92 @@ Branch `impl/0088a`, on `release/0.28.0` after `fix/runtime-thread-state`.
   passes it with `-flto=thin` in release builds. The corpus programs with an `@export` are the run-pass and ffi ones
   with a CeeSafe `main` (14), linked from their archive alone. The two-panics hook records under a mutex and the
   second reporter aborts; the "hook that calls an export" ends with the line once and the export not run.
+
+## 8. Implementation notes: stage B (2026-11-10)
+
+Branch `impl/0088b`, on `main` after 0.28.0.
+
+- **Where the hook sits.** In the hosted platform functions (`runtime/hosted/ceesafe_rt_hosted.c`), not in
+  `ceesafe_alloc`: they are what the counted calls, the executor's and I/O layer's direct calls, the window layer and
+  `argv`'s copy all reach, so one place covers every block. `ceesafe_init` validates the allocator (all four
+  functions, else `CEESAFE_INIT_ALLOCATOR`), refuses it after the runtime has allocated (`CEESAFE_INIT_LATE`, the
+  stage A flag `ceesafe_rt_allocated`, best effort as for counting), and installs it with
+  `ceesafe_platform_use_allocator` (internal, `rt.h`) before copying `argv`, so the copy is the hook's block; on a
+  failed copy it removes it again, so an error changes nothing. Without an allocator it writes nothing there: the
+  first version always called it (with NULL), a plain store to the state every allocation reads, which a thread a C
+  constructor started raced under ThreadSanitizer (review). The panic hook is written before the copy too, and a
+  thread-local flag marks the thread running `ceesafe_init`, so a panic of the allocator's during the copy (a
+  misaligned block) reaches the host's hook; the first version printed it instead, the state being STARTING
+  (review). Other threads read the hook only after STARTED, as before.
+- **Found, not fixed here** (older than this stage; 0.28.0 has it): the review's repro, a C constructor that starts a
+  thread allocating through CeeSafe while the generated `main` runs `ceesafe_init`, still gives one ThreadSanitizer
+  report, on `alloc_fail_at`, which `rt_init` writes while the thread reads it in `alloc_refused`. The ordering
+  contract forbids that thread; `ceesafe_rt_init_main` only tolerates a constructor's allocations before `main`.
+  Writing the counting configuration only when it changes, or relaxed atomics, would silence it: a fix of its own. The copied table and a flag are plain statics, read
+  without a fence under §2.2's ordering contract. The hook is given at least 1 byte (`malloc(0)` and
+  `realloc(p, 0)` differ between C libraries), never NULL to free, and `realloc(NULL, n)` becomes its alloc.
+- **The alignment check** is `CEE_HEAP_ALIGN`, max(16, `_Alignof(cee_max_align_t)`), a new `rt.h` macro;
+  `ceesafe_panic_runtime(CEE_PANIC_ALLOCATOR, "ceesafe_allocator.alloc returned a misaligned block")` (or
+  `alloc_zeroed`, `realloc`), reason "the host's allocator broke its contract". The first version's message said
+  "not 16-aligned", which would be wrong where `max_align_t` is 32-aligned (review). A new kind, 17: none of the sixteen
+  says that a host broke a contract, and a host's panic hook can tell it apart.
+- **The window layer**: 48 call sites move to the platform functions (its `calloc(1, n)` to
+  `ceesafe_platform_alloc_zeroed`). Two stay on `malloc`: the X11 image buffers, which the `XImage` owns and
+  `XDestroyImage` frees with the C library's `free`. The macOS frame copy, freed by CoreGraphics' release callback,
+  is the runtime's own callback, so it moves.
+- **Contract wording**: `rt.h`'s platform functions, `foreign.h` and `embed.h` say max(16, `alignof(max_align_t)`);
+  c-backend.md §6's async portability line said `cee_max_align_t`.
+- **Tests** (`tools/embed_check.py`, on macOS arm64, 2026-11-10; counts below). host.c's tagged
+  hook puts a 16-byte header with a tag before each block, so a block reaching the wrong heap is caught both ways
+  (the hook's free checks the tag; the C library's free of a hook block is a pointer malloc never returned). Two
+  planted bugs in the emitted C were each caught: a window buffer back on `malloc` (the tag check, under ASan a
+  heap-buffer-overflow in it) and a platform free that ignored the hook (ASan: "attempting free on address which
+  was not malloc()-ed"). Cases: every block of the exports (a thread, async, boxes, a scratch frame), `argv`'s copy
+  and a scripted window (`CEESAFE_WINDOW_SCRIPT`) through the hook, at -O2 and under ASan (20 hook allocations for
+  13 counted attempts; 19 freed, the 20th `argv`'s copy); `fail_alloc_at = k` for k = 0..6, the hook's calls equal to
+  the boxes made; two host threads, 200,000 calls each, through the hook under ThreadSanitizer; an 8-aligned hook
+  (§1.9's evidence) ends in kind 17 with that message and status 134; an allocator after an allocation, LATE and the
+  hook never called; one missing `free`, ALLOCATOR. Review showed that these counts are lower bounds, blind to a
+  `malloc`/`free` pair that never touches the hook: with every window call site put back on `malloc`, the first
+  version still passed (15 hook allocations and 14 frees instead of 20 and 19). So `alloc-window` counts the window
+  layer's blocks alone, exactly (a scripted window through the hook, no counting, nothing else allocating): the
+  `cee_window` object, its title, the script's text and items, and the kept frame, each freed; and the misaligned
+  hook is tried per function (`alloc` by a box, `alloc_zeroed` by the window object, `realloc` by a growing
+  `Vector`, and `alloc` at argv's copy inside `ceesafe_init`, which reaches the panic hook). The TSan case asserts
+  exactly 800,000 allocations and frees (two per call), not a lower bound.
+- **Windows** (stage E has the Windows tests; this was a check, 2026-11-10): on Windows 11 ARM64, MSVC 14.5 (`cl
+  /std:c11 /W3`), ceesafec's own C and the fixture's (`ceesafe_rt_window.c`'s Win32 backend included) compile with
+  no warning in the runtime files, and a Win32 host with the tagged hook gives the same counts (20, 19, none bad)
+  and the kind-17 panic.
+- **Cost** (`benchmarks/alloc_hook.py`, new: each suite program built by 0.28.0, by this branch, and by this branch
+  with a hook that calls `malloc`; 31 runs each, interleaved in a rotating order, medians; macOS arm64, Apple clang
+  21, a loaded machine, whose A/A check of two identical binaries agreed within 0.6%):
+
+  | Program | No hook | Hook calling `malloc` |
+  |---|---|---|
+  | vector-growth | −2.4% | −3.9% |
+  | string-building | −0.1% | −0.2% |
+  | small-objects | +3.0% | +11.6% |
+  | binary-trees (30.0 million allocations) | +2.8% | +11.7% |
+  | heap-alloc | −0.1% | −0.2% |
+
+  The two small-object programs are malloc-bound loops: +2.8% of binary-trees is about 0.6 ns per allocation and
+  free without a hook, and +11.7% about 2.4 ns with one, the indirect call, the size and alignment tests and the
+  extra frame. Laid out as a taken branch, the no-hook path first cost binary-trees +6.3% (A/A within 0.1%);
+  `__builtin_expect` on the flag halved it. In one A/A run of the final form against 0.28.0 the no-hook path was
+  within 0.3%, so part of the remaining 3% may be layout. §5 asked for "within noise, or the indirect call or the
+  check is reconsidered": the hook's 11% is the price of an indirect allocator, which only a host that asks pays;
+  the no-hook 3% on these two programs recurred in every run, but the same table moves vector-growth by −3.9%
+  with a hook, which cannot be faster, so layout alone reaches about ±4% and the 3% is not clearly above it; the
+  owner accepted it (§8.1). `--aa` adds a second copy of the baseline, the A/A check (review: it was not
+  reproducible from the script).
+
+### 8.1 Question for the owner
+
+1. **The no-hook cost.** A program that installs no allocator pays a load and an untaken branch per allocation and
+   per free: about +3% on the two malloc-bound microbenchmarks above, nothing measurable on the other three. Accept
+   it, or remove it: the runtime could choose the platform functions once, at `ceesafe_init`, through a function
+   pointer the core calls (an indirect call for every program, which costs more than the branch), or keep the hook
+   flag in the cache line the accounting already reads (`alloc_counting`), so the no-hook path loads nothing new.
+   **Proposed: accept** for 0.29.0, and try the shared cache line as a follow-up measured with the same benchmark.
+   **Decided by the owner, 2026-11-10: accepted as proposed.**

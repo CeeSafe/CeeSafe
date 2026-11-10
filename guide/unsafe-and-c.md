@@ -435,8 +435,8 @@ fn letters(text: *u8, length: usize) -> u64 {
 ```
 
 The host calls `ceesafe_init` once, before any thread calls CeeSafe; after it, exports may be called from any of its
-threads at once. Its config gives the program arguments (copied), the allocation report and failure injection, and a
-panic hook, and `ceesafe_shutdown` prints the report and returns the blocks still live:
+threads at once. Its config gives the program arguments (copied), the allocation report and failure injection, a
+panic hook, and the host's allocator, and `ceesafe_shutdown` prints the report and returns the blocks still live:
 
 ```c
 #include "ceesafe/embed.h"
@@ -470,6 +470,25 @@ CeeSafe's frames have no unwinding, so after a panic that thread may not call Ce
 it prints the panic and aborts. Without `ceesafe_init` everything still works, but the panic is only printed, the
 environment's settings are ignored and `Process.argument` has no arguments
 ([ADR 0088](../spec/decisions/0088-embedding-ceesafe-in-a-host-program.md)).
+
+A host with its own allocator (mimalloc, an arena) gives it in `config.allocator`: four functions with malloc's
+contracts and a context, called from any thread. Every block CeeSafe and its runtime allocate then comes from it,
+and the report and failure injection work as before: an injected failure never reaches it. Its blocks must be aligned
+to 16 bytes (more than `max_align_t` promises on macOS arm64 and under MSVC); one that is not stops the program
+with a panic that names the function. Install it before CeeSafe allocates anything, or `ceesafe_init` returns
+`CEESAFE_INIT_LATE`. Each side still frees what it allocated: a block CeeSafe hands out goes back through an export.
+
+```c
+/* mimalloc's process-wide functions: any thread may call them (a mimalloc heap belongs to one thread). */
+static void *my_alloc(void *context, size_t size) { (void)context; return mi_malloc_aligned(size, 16); }
+static void *my_zeroed(void *context, size_t size) { (void)context; return mi_zalloc_aligned(size, 16); }
+static void *my_realloc(void *context, void *p, size_t size) { (void)context; return mi_realloc_aligned(p, size, 16); }
+static void my_free(void *context, void *p) { (void)context; mi_free(p); }
+
+static const ceesafe_allocator mimalloc_allocator = {my_alloc, my_zeroed, my_realloc, my_free, NULL};
+/* in main, before ceesafe_init: */
+config.allocator = &mimalloc_allocator;
+```
 
 ## Next
 

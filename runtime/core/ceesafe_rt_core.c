@@ -27,6 +27,7 @@ const char *ceesafe_panic_reason(cee_panic_kind kind) {
     case CEE_PANIC_ASYNC: return "async executor: every task waits with nothing to wake it";
     case CEE_PANIC_FRAME_STACK: return "async frame stack: out of memory";
     case CEE_PANIC_EXPLICIT: return "explicit panic";
+    case CEE_PANIC_ALLOCATOR: return "the host's allocator broke its contract";
     default: return "unknown panic";
     }
 }
@@ -230,6 +231,10 @@ static void write_err_u32(uint32_t value) {
 static uint32_t rt_state;
 static ceesafe_panic_hook rt_panic_hook; /* written before STARTED is stored, read after it is loaded */
 static void *rt_panic_context;
+/* Set on the thread running ceesafe_init while it is STARTING, after the hook is written: the host's allocator can
+   panic there (a misaligned argv copy, CEE_PANIC_ALLOCATOR), and that panic reaches the hook too. No other thread
+   reads the hook before STARTED, so this adds no race. */
+static _Thread_local uint8_t rt_initializing;
 
 /* Set before the hook runs (ADR 0088 §2.4): ceesafe_any_panicked for every thread, then the thread's own flag, which
    ceesafe_entry_panicked reads at an export or @callback entry once the first is set (relaxed: a thread sees its own
@@ -281,7 +286,7 @@ static _Noreturn void panic_report(const ceesafe_panic_info *info) {
         }
         /* The hook gets the whole message, which lives until the hook returns. It may run on several threads at
            once: one call per panicking thread (ADR 0088 §2.4). */
-        if (ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTED && rt_panic_hook != NULL) {
+        if ((rt_initializing != 0u || ceesafe_atomic_load_u32(&rt_state) == CEE_RT_STARTED) && rt_panic_hook != NULL) {
             rt_panic_hook(rt_panic_context, info);
         }
     }
@@ -476,7 +481,8 @@ static bool config_size_known(uint32_t size) {
     return size == (uint32_t)sizeof(ceesafe_config);
 }
 
-/* argv copied into one block from the C library's allocator, the array and its strings: not counted, never freed. */
+/* argv copied into one block from the platform functions (the host's allocator when ceesafe_init installs one, else
+   the C library's), the array and its strings: not counted, never freed. */
 static int32_t copy_arguments(int32_t argc, const char *const *argv, const uint8_t *const **out) {
     *out = NULL;
     if (argc <= 0 || argv == NULL) {
@@ -581,8 +587,15 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
                 environment_asked = true;
             }
         }
-        if (given.allocator != NULL) {
-            error = CEESAFE_INIT_ALLOCATOR; /* stage B's (ADR 0088 §2.5) */
+        const ceesafe_allocator *hook = given.allocator;
+        if (hook != NULL && (hook->alloc == NULL || hook->alloc_zeroed == NULL || hook->realloc == NULL ||
+                             hook->free == NULL)) {
+            error = CEESAFE_INIT_ALLOCATOR; /* all four, or a block could be freed by the wrong heap */
+        } else if (hook != NULL && allocated_already() != 0u) {
+            /* The allocator cannot change under live blocks (ADR 0088 §2.5): one from the C library's heap would be
+               given to the hook's free. Best effort, as for counting: an allocation racing with this call breaks the
+               ordering contract and is not seen. */
+            error = CEESAFE_INIT_LATE;
         } else if ((report || fail_at != 0u) && !generated_main && allocated_already() != 0u) {
             /* Counting cannot start under live blocks (ADR 0059): a free would subtract what was never added. Without
                counting, an earlier allocation changes nothing, so the hook and argv are taken. A config that asks for
@@ -599,7 +612,26 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     }
     const uint8_t *const *arguments = NULL;
     if (error == 0) {
+        /* Installed before argv is copied, so the copy is the hook's block too (§2.2). No other thread allocates
+           meanwhile (the ordering contract), and on an error it is removed again: nothing changed. The panic hook is
+           written first, so a panic of the allocator's on this thread (a misaligned block) reaches it. */
+        rt_panic_hook = given.panic_hook;
+        rt_panic_context = given.panic_context;
+        rt_initializing = 1u;
+        /* Only when one is given: without, the platform functions' state is not written at all, since a thread a C
+           constructor started may be allocating through it while the generated main's ceesafe_init runs. */
+        if (given.allocator != NULL) {
+            ceesafe_platform_use_allocator(given.allocator);
+        }
         error = copy_arguments(given.argc, given.argv, &arguments);
+        rt_initializing = 0u;
+        if (error != 0) {
+            if (given.allocator != NULL) {
+                ceesafe_platform_use_allocator(NULL);
+            }
+            rt_panic_hook = NULL;
+            rt_panic_context = NULL;
+        }
     }
     if (error != 0) {
         ceesafe_atomic_store_u32(&rt_state, CEE_RT_UNSTARTED);
@@ -608,8 +640,6 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     alloc_fail_at = fail_at;
     alloc_report = report;
     alloc_counting = report || fail_at != 0u;
-    rt_panic_hook = given.panic_hook;
-    rt_panic_context = given.panic_context;
     ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
     ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
     return 0;

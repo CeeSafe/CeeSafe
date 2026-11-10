@@ -136,6 +136,10 @@ public interface Allocator {
     succeeds without counting and says so on stderr). The generated `main` counts regardless,
     as before `ceesafe_init`, when a C constructor has allocated through CeeSafe. A host that never calls it gets no counting, no failure injection and no report, whatever the
     environment says. `ceesafe_init`'s copy of `argv` is not counted.
+  - **With a host's allocator** (ADR 0088 §2.5), `ceesafe_init`'s `allocator` replaces the C library's under this
+    accounting: attempts are counted and failed before it is called, so the injected attempt never reaches it, and
+    `live` and `foreign held` count the same blocks. `CEE_ALLOC_FOREIGN` and `CEE_ALLOC_FOREIGN_INIT` blocks come from
+    it too.
   - **With threads.** The counters are atomic, so every attempt, whatever its thread, gets its own number in one
     order, and attempt *k* is the only one that fails. That order is the order in which the threads' attempts reach
     the counter. A sweep (`k` = 1, 2, …) therefore fails every attempt of a run that allocates from one thread at a

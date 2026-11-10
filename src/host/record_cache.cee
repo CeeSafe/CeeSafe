@@ -1,0 +1,640 @@
+// The interface records' cache (ADR 0082 §2.7): `$CEESAFE_HOME/cache/records/`, beside where the objects will live
+// (`cache/objects/`, §2.6). A record is a cache of a check this compiler made, never a promise from outside, so any
+// doubt is a miss and a recheck:
+// - the cache directories are made with mode 0700, and used only while they, and each record, are owned by this user
+//   and not writable by the group or others;
+// - a record is read from the descriptor whose owner and mode were checked, and one that cannot be read, is not
+//   complete (its last field is the SHA-256 of the rest) or names another key, banner, profile or package, is a miss;
+// - a record is written to a new temporary name (created exclusively) and renamed, so agents checking at once share
+//   the cache and a reader never sees half a record.
+// Owners and modes come from fstat(2), whose layout this file knows for macOS and Linux on arm64 and x86-64; on any
+// other system (Windows included) no record is read or written, and every check is whole.
+//
+// A record is a sequence of fields, each `<length>:<bytes>\n`, in this order: the magic `ceesafe-interface-record`,
+// the format (`1`), the key, the banner, the package, the profile, errors, warnings, the phase of its first error,
+// opaque (`0`/`1`), the interface hash, the number of functions; then per function its path in the package, its
+// declaration's offset, its effects, and for sleep, alloc, suspend and write a chain (the number of steps, the steps,
+// the end, truncated `0`/`1`, its length in full); last, the SHA-256 (hexadecimal) of every byte before that field.
+
+extern "C" {
+    // POSIX's calls (ceesafec 0.8.0's runtime lets the compiler's own sources use them, as embedding.cee's).
+    fn fstat(fd: i32, buffer: *mut u8) -> i32;
+    fn chmod(path: *CChar, mode: u32) -> i32;
+    fn rename(from: *CChar, to: *CChar) -> i32;
+    fn pwrite(fd: i32, buffer: *u8, size: usize, offset: i64) -> isize;
+}
+
+/// The record format; a change to what a record holds or means changes it.
+fn recordFormat() -> StringView => "1";
+
+/// What a record says of a package (ADR 0082 §2.7).
+struct InterfaceRecord {
+    key: Vector<u8>;
+    banner: Vector<u8>;
+    package: Vector<u8>;
+    profile: Vector<u8>;
+    errors: u64;
+    warnings: u64;
+    phase: u32; // of its first error: 0 none, 1 parse, 2 types, 3 per-function NIR checks, 4 instances, 5 later
+    opaque: bool;
+    interfaceHash: Vector<u8>;
+    functions: Vector<RecordedEffects>;
+}
+
+/// The cache's directory and this process's user, once the directory is known to be safe; `usable` false otherwise.
+struct RecordCache {
+    usable: bool;
+    directory: Vector<u8>;
+    owner: u32;
+    system: u32;          // hostSystem()
+    identity: Vector<u8>; // this ceesafec's executable (compilerIdentity), part of every key
+}
+
+/// What fstat says of an open file: 1 a regular file, 2 a directory, 3 anything else; its permission bits; its owner.
+struct FileFacts {
+    kind: u32;
+    mode: u32;
+    owner: u32;
+    size: u64;
+    modified: u64;   // seconds
+    modifiedNs: u64; // and nanoseconds
+    inode: u64;
+}
+
+/// The machine, from uname(2): its `machine` member follows four others, of 256 bytes each on macOS and 65 on Linux.
+/// Safety: uname writes a struct utsname of at most 1,280 bytes (macOS) into the 2,048 given, during the call only.
+fn hostMachine(system: u32) -> Result<Vector<u8>, AllocError> {
+    var name = [0u8; 2048];
+    let failed = unsafe { uname(borrow mut name[0] as *mut u8) };
+    if (failed != 0 || (system != 1 && system != 2)) {
+        return Ok(Vector<u8>.create());
+    }
+    let start: usize = if (system == 1) 1024 else 260;
+    var end = start;
+    while (end < 2048 && name[end] != 0) {
+        end += 1;
+    }
+    return copyBytes(name[start..end]);
+}
+
+/// Where fstat puts the mode and the owner: 1 macOS arm64 (the 64-bit inode layout), 2 macOS x86-64 (the `fstat`
+/// symbol's older layout), 3 Linux x86-64, 4 Linux arm64 (the generic layout); 0 unknown.
+fn statLayout(system: u32) -> Result<u32, AllocError> {
+    let machine = hostMachine(system)?;
+    let m = machine.view();
+    if (system == 1) {
+        if (sameBytes(m, "arm64".bytes())) {
+            return Ok(1);
+        }
+        if (sameBytes(m, "x86_64".bytes())) {
+            return Ok(2);
+        }
+    } else if (system == 2) {
+        if (sameBytes(m, "x86_64".bytes())) {
+            return Ok(3);
+        }
+        if (sameBytes(m, "aarch64".bytes())) {
+            return Ok(4);
+        }
+    }
+    return Ok(0);
+}
+
+fn littleEndian(bytes: Slice<u8>, at: usize, size: usize) -> u32 => truncate<u32>(littleEndian64(bytes, at, size));
+
+fn littleEndian64(bytes: Slice<u8>, at: usize, size: usize) -> u64 {
+    var value: u64 = 0;
+    var k = size;
+    while (k > 0) {
+        k -= 1;
+        value = (value << 8) | bytes[at + k] as u64;
+    }
+    return value;
+}
+
+/// What fstat says of `fd`, or null if it fails or the layout is unknown.
+/// Safety: fstat writes one struct stat, at most 144 bytes on the four layouts known, into the 512 given, during the
+/// call only.
+fn descriptorFacts(layout: u32, fd: i32) -> FileFacts? {
+    if (layout == 0) {
+        return null;
+    }
+    var buffer = [0u8; 512];
+    let failed = unsafe { fstat(fd, borrow mut buffer[0] as *mut u8) };
+    if (failed != 0) {
+        return null;
+    }
+    let bytes = buffer[..];
+    // Offsets of st_mode, st_uid, st_size, st_mtime (seconds, then nanoseconds) and st_ino, with the sizes of the
+    // first two and of st_ino.
+    var mode: u32 = 0;
+    var owner: u32 = 0;
+    var facts = FileFacts { kind: 0, mode: 0, owner: 0, size: 0, modified: 0, modifiedNs: 0, inode: 0 };
+    if (layout == 1) {
+        mode = littleEndian(bytes, 4, 2);
+        owner = littleEndian(bytes, 16, 4);
+        facts.size = littleEndian64(bytes, 96, 8);
+        facts.modified = littleEndian64(bytes, 48, 8);
+        facts.modifiedNs = littleEndian64(bytes, 56, 8);
+        facts.inode = littleEndian64(bytes, 8, 8);
+    } else if (layout == 2) {
+        mode = littleEndian(bytes, 8, 2);
+        owner = littleEndian(bytes, 12, 4);
+        facts.size = littleEndian64(bytes, 72, 8);
+        facts.modified = littleEndian64(bytes, 40, 8);
+        facts.modifiedNs = littleEndian64(bytes, 48, 8);
+        facts.inode = littleEndian64(bytes, 4, 4);
+    } else if (layout == 3) {
+        mode = littleEndian(bytes, 24, 4);
+        owner = littleEndian(bytes, 28, 4);
+        facts.size = littleEndian64(bytes, 48, 8);
+        facts.modified = littleEndian64(bytes, 88, 8);
+        facts.modifiedNs = littleEndian64(bytes, 96, 8);
+        facts.inode = littleEndian64(bytes, 8, 8);
+    } else {
+        mode = littleEndian(bytes, 16, 4);
+        owner = littleEndian(bytes, 24, 4);
+        facts.size = littleEndian64(bytes, 48, 8);
+        facts.modified = littleEndian64(bytes, 88, 8);
+        facts.modifiedNs = littleEndian64(bytes, 96, 8);
+        facts.inode = littleEndian64(bytes, 8, 8);
+    }
+    let fileType = mode & 0xF000;
+    facts.kind = if (fileType == 0x8000) 1 else if (fileType == 0x4000) 2 else 3;
+    facts.mode = mode & 0xFFF;
+    facts.owner = owner;
+    return facts;
+}
+
+/// Opens `path` to read it: O_RDONLY | O_NONBLOCK | O_CLOEXEC; -1 if it cannot be.
+/// Safety: openat reads the NUL-terminated path during the call only.
+fn openForReading(system: u32, path: Slice<u8>) -> Result<i32, AllocError> {
+    let input = match (cPath(path)?) {
+        Some(p) => p,
+        null => { return Ok(-1); }
+    };
+    let flags: i32 = if (system == 1) 0x1000004 else 0x80800;
+    let here: i32 = if (system == 1) -2 else -100;
+    let fd = unsafe { openat(here, borrow input[0] as *u8 as *CChar, flags) };
+    return Ok(fd);
+}
+
+/// The facts of the file or directory at `path`, or null.
+/// Safety: the descriptor is closed here, once.
+fn pathFacts(system: u32, layout: u32, path: Slice<u8>) -> Result<FileFacts?, AllocError> {
+    let fd = openForReading(system, path)?;
+    if (fd < 0) {
+        return Ok(null);
+    }
+    let facts = descriptorFacts(layout, fd);
+    unsafe { close(fd); }
+    return Ok(facts);
+}
+
+/// A directory this user owns, that no one else may write to.
+fn privateDirectory(facts: FileFacts?, owner: u32) -> bool {
+    return match (facts) {
+        Some(f) => f.kind == 2 && f.owner == owner && (f.mode & 0x12) == 0,
+        null => false,
+    };
+}
+
+/// Makes `path` if it is missing, with mode 0700.
+/// Safety: chmod reads the NUL-terminated path during the call only.
+fn makePrivateDirectory(path: Slice<u8>) -> Result<void, AllocError> {
+    let text = StringView.fromUtf8(path)!;
+    match (File.kind(text)) {
+        Ok(Some(_)) => { return Ok(); }
+        _ => {}
+    }
+    match (makeDirectories(path)) {
+        Ok() => {}
+        Err(_) => { return Ok(); }
+    }
+    match (cPath(path)?) {
+        Some(p) => {
+            unsafe { chmod(borrow p[0] as *u8 as *CChar, 448); } // 0700
+        }
+        null => {}
+    }
+    return Ok();
+}
+
+/// The cache, made if missing: `$CEESAFE_HOME/cache/records`, usable only where owners and modes can be read and its
+/// two directories belong to this user, who alone may write to them.
+fn openRecordCache() -> Result<RecordCache, AllocError> {
+    var cache = RecordCache {
+        usable: false,
+        directory: Vector<u8>.create(),
+        owner: 0,
+        system: hostSystem(),
+        identity: Vector<u8>.create(),
+    };
+    let layout = statLayout(cache.system)?;
+    let home = defaultHome()?;
+    if (layout == 0 || home.length == 0) {
+        return Ok(cache);
+    }
+    match (compilerIdentity(cache.system, layout)?) {
+        Some(identity) => { cache.identity = identity; }
+        null => { return Ok(cache); }
+    }
+    // This user, as the owner of a directory just made for it.
+    let probe = match (Directory.temporary()) {
+        Ok(d) => d,
+        Err(_) => { return Ok(cache); }
+    };
+    let probeFacts = pathFacts(cache.system, layout, probe.view().bytes())?;
+    match (Directory.remove(probe.view())) {
+        Ok() => {}
+        Err(_) => {}
+    }
+    match (probeFacts) {
+        Some(f) => { cache.owner = f.owner; }
+        null => { return Ok(cache); }
+    }
+    let top = joinPath(home.view(), "cache".bytes())?;
+    let records = joinPath(top.view(), "records".bytes())?;
+    makePrivateDirectory(top.view())?;
+    makePrivateDirectory(records.view())?;
+    let topFacts = pathFacts(cache.system, layout, top.view())?;
+    let recordFacts = pathFacts(cache.system, layout, records.view())?;
+    if (!privateDirectory(topFacts, cache.owner) || !privateDirectory(recordFacts, cache.owner)) {
+        return Ok(cache);
+    }
+    cache.directory = records;
+    cache.usable = true;
+    return Ok(cache);
+}
+
+/// This ceesafec's executable, as a key holds it beside the banner: its size, modification time and inode. Builds of
+/// one version share its banner, and a record proved by one build is not the next build's to trust. Null if the
+/// executable cannot be found: then no record is used.
+fn compilerIdentity(system: u32, layout: u32) -> Result<Vector<u8>?, AllocError> {
+    let path = match (executablePath(system)?) {
+        Some(p) => p,
+        null => { return Ok(null); }
+    };
+    let facts = match (pathFacts(system, layout, path.view())?) {
+        Some(f) => f,
+        null => { return Ok(null); }
+    };
+    if (facts.kind != 1) {
+        return Ok(null);
+    }
+    var identity = Vector<u8>.create();
+    appendDecimal(mut identity, facts.size)?;
+    identity.push(' ')?;
+    appendDecimal(mut identity, facts.modified)?;
+    identity.push('.')?;
+    appendDecimal(mut identity, facts.modifiedNs)?;
+    identity.push(' ')?;
+    appendDecimal(mut identity, facts.inode)?;
+    return Ok(identity);
+}
+
+/// The running executable: Linux's /proc/self/exe; elsewhere the program's name as it was started, found on `PATH`
+/// when it holds no `/`.
+fn executablePath(system: u32) -> Result<Vector<u8>?, AllocError> {
+    if (system == 2) {
+        return Ok(copyBytes("/proc/self/exe".bytes())?);
+    }
+    let name = match (Process.argument(0)) {
+        Some(a) => copyBytes(a.bytes())?,
+        null => { return Ok(null); }
+    };
+    for (b in name.view()) {
+        if (b == '/') {
+            return Ok(name);
+        }
+    }
+    let search = match (Environment.variable("PATH")) {
+        Some(v) => copyBytes(v.bytes())?,
+        null => { return Ok(null); }
+    };
+    var start: usize = 0;
+    for (k in 0..(search.length + 1)) {
+        if (k < search.length && search[k] != ':') {
+            continue;
+        }
+        if (k > start) {
+            let candidate = joinPath(search[start..k], name.view())?;
+            if (fileExists(candidate.view())) {
+                return Ok(candidate);
+            }
+        }
+        start = k + 1;
+    }
+    return Ok(null);
+}
+
+/// The record's file: `<package>-<key>.rec`, the package's name for whoever looks, the key for the cache.
+fn recordPath(cache: borrow RecordCache, package: Slice<u8>, key: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var name = copyBytes(package)?;
+    name.push('-')?;
+    appendBytes(mut name, key)?;
+    appendText(mut name, ".rec")?;
+    return joinPath(cache.directory.view(), name.view());
+}
+
+/// The bytes of the record file at `path`, if it is a regular file this user owns that no one else may write to;
+/// read from the descriptor that was checked.
+/// Safety: the descriptor is closed here, once; pread writes at most the 65,536 bytes asked into `buffer`.
+fn readRecordFile(cache: borrow RecordCache, path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+    let layout = statLayout(cache.system)?;
+    let fd = openForReading(cache.system, path)?;
+    if (fd < 0) {
+        return Ok(null);
+    }
+    let trusted = match (descriptorFacts(layout, fd)) {
+        Some(f) => f.kind == 1 && f.owner == cache.owner && (f.mode & 0x12) == 0,
+        null => false,
+    };
+    if (!trusted) {
+        unsafe { close(fd); }
+        return Ok(null);
+    }
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 65536];
+    var failed = false;
+    loop {
+        let n = unsafe { pread(fd, borrow mut buffer[0] as *mut u8, 65536, truncate<i64>(bytes.length)) };
+        if (n < 0) {
+            failed = true;
+            break;
+        }
+        if (n == 0) {
+            break;
+        }
+        appendBytes(mut bytes, buffer[..truncate<usize>(n)])?;
+    }
+    unsafe { close(fd); }
+    if (failed) {
+        return Ok(null);
+    }
+    return Ok(bytes);
+}
+
+/// The record of `package` under `key`, if the cache holds a valid one: complete, and naming this key, banner,
+/// profile and package.
+fn lookUpRecord(
+    cache: borrow RecordCache,
+    package: Slice<u8>,
+    key: Slice<u8>,
+    profile: Slice<u8>,
+) -> Result<InterfaceRecord?, AllocError> {
+    if (!cache.usable) {
+        return Ok(null);
+    }
+    let path = recordPath(cache, package, key)?;
+    let bytes = match (readRecordFile(cache, path.view())?) {
+        Some(b) => b,
+        null => { return Ok(null); }
+    };
+    let record = match (decodeRecord(bytes.view())?) {
+        Some(r) => r,
+        null => { return Ok(null); }
+    };
+    if (!sameBytes(record.key.view(), key) || !sameBytes(record.banner.view(), compilerBanner().bytes()) ||
+        !sameBytes(record.profile.view(), profile) || !sameBytes(record.package.view(), package)) {
+        return Ok(null);
+    }
+    return Ok(record);
+}
+
+/// Stores `record`: written under a new name created for it alone (mode 0600), then renamed over the record's name.
+/// A failure leaves the cache as it was: the record stays this process's only.
+/// Safety: openat and rename read their NUL-terminated paths during the call only; pwrite reads at most `size`
+/// bytes of the record; the descriptor is closed here, once.
+fn storeRecord(cache: borrow RecordCache, record: borrow InterfaceRecord) -> Result<void, AllocError> {
+    if (!cache.usable) {
+        return Ok();
+    }
+    let bytes = encodeRecord(record)?;
+    let path = recordPath(cache, record.package.view(), record.key.view())?;
+    let flags: i32 = if (cache.system == 1) 0x1000A01 else 0x800C1; // O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC
+    let here: i32 = if (cache.system == 1) -2 else -100;
+    var temporary = Vector<u8>.create();
+    var fd: i32 = -1;
+    var attempt: u64 = 0;
+    while (fd < 0 && attempt < 16) {
+        temporary = copyBytes(path.view())?;
+        appendText(mut temporary, ".tmp-")?;
+        appendDecimal(mut temporary, Timer.now())?;
+        temporary.push('-')?;
+        appendDecimal(mut temporary, attempt)?;
+        let input = match (cPath(temporary.view())?) {
+            Some(p) => p,
+            null => { return Ok(); }
+        };
+        fd = unsafe { openat(here, borrow input[0] as *u8 as *CChar, flags, 384) }; // 0600
+        attempt += 1;
+    }
+    if (fd < 0) {
+        return Ok();
+    }
+    var written: usize = 0;
+    var failed = false;
+    while (written < bytes.length) {
+        let rest = bytes.view();
+        let n = unsafe { pwrite(fd, borrow rest[written] as *u8, bytes.length - written, truncate<i64>(written)) };
+        if (n <= 0) {
+            failed = true;
+            break;
+        }
+        written += truncate<usize>(n);
+    }
+    unsafe { close(fd); }
+    let from = cPath(temporary.view())?;
+    let to = cPath(path.view())?;
+    if (from == null || to == null) {
+        return Ok();
+    }
+    let source = from!;
+    let target = to!;
+    if (failed) {
+        match (File.remove(StringView.fromUtf8(temporary.view())!)) {
+            Ok() => {}
+            Err(_) => {}
+        }
+        return Ok();
+    }
+    let renamed = unsafe { rename(borrow source[0] as *u8 as *CChar, borrow target[0] as *u8 as *CChar) };
+    if (renamed != 0) {
+        match (File.remove(StringView.fromUtf8(temporary.view())!)) {
+            Ok() => {}
+            Err(_) => {}
+        }
+    }
+    return Ok();
+}
+
+// ---- The format ----
+
+fn appendField(out: borrow mut Vector<u8>, bytes: Slice<u8>) -> Result<void, AllocError> {
+    appendDecimal(out, bytes.length as u64)?;
+    out.push(':')?;
+    appendBytes(out, bytes)?;
+    out.push('\n')?;
+    return Ok();
+}
+
+fn appendNumberField(out: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError> {
+    var text = Vector<u8>.create();
+    appendDecimal(mut text, value)?;
+    return appendField(out, text.view());
+}
+
+fn encodeRecord(record: borrow InterfaceRecord) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    appendField(mut out, "ceesafe-interface-record".bytes())?;
+    appendField(mut out, recordFormat().bytes())?;
+    appendField(mut out, record.key.view())?;
+    appendField(mut out, record.banner.view())?;
+    appendField(mut out, record.package.view())?;
+    appendField(mut out, record.profile.view())?;
+    appendNumberField(mut out, record.errors)?;
+    appendNumberField(mut out, record.warnings)?;
+    appendNumberField(mut out, record.phase as u64)?;
+    appendNumberField(mut out, if (record.opaque) 1 else 0)?;
+    appendField(mut out, record.interfaceHash.view())?;
+    appendNumberField(mut out, record.functions.length as u64)?;
+    for (f in record.functions.view()) {
+        appendField(mut out, f.path.view())?;
+        appendNumberField(mut out, f.offset as u64)?;
+        appendNumberField(mut out, f.effects as u64)?;
+        for (chain in f.chains.view()) {
+            appendNumberField(mut out, chain.steps.length as u64)?;
+            for (step in chain.steps.view()) {
+                appendField(mut out, step.view())?;
+            }
+            appendField(mut out, chain.terminal.view())?;
+            appendNumberField(mut out, if (chain.truncated) 1 else 0)?;
+            appendNumberField(mut out, chain.length as u64)?;
+        }
+    }
+    var sha = Sha256.create();
+    sha.append(out.view());
+    var digest = Vector<u8>.create();
+    appendHexDigest(mut digest, sha.finish())?;
+    appendField(mut out, digest.view())?;
+    return Ok(out);
+}
+
+/// Reads the fields of a record in order.
+struct FieldReader {
+    at: usize;
+    ok: bool;
+
+    fn next(borrow mut this, bytes: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+        var length: u64 = 0;
+        var digits: usize = 0;
+        while (this.ok && this.at < bytes.length && bytes[this.at] >= '0' && bytes[this.at] <= '9' && digits < 12) {
+            length = length * 10 + (bytes[this.at] - '0') as u64;
+            this.at += 1;
+            digits += 1;
+        }
+        if (!this.ok || digits == 0 || this.at >= bytes.length || bytes[this.at] != ':') {
+            this.ok = false;
+            return Ok(Vector<u8>.create());
+        }
+        this.at += 1;
+        let start = this.at;
+        if (length > (bytes.length - start) as u64) {
+            this.ok = false;
+            return Ok(Vector<u8>.create());
+        }
+        let end = start + truncate<usize>(length);
+        if (end >= bytes.length || bytes[end] != '\n') {
+            this.ok = false;
+            return Ok(Vector<u8>.create());
+        }
+        this.at = end + 1;
+        return copyBytes(bytes[start..end]);
+    }
+
+    fn number(borrow mut this, bytes: Slice<u8>) -> Result<u64, AllocError> {
+        let field = this.next(bytes)?;
+        var value: u64 = 0;
+        if (field.length == 0 || field.length > 19) {
+            this.ok = false;
+            return Ok(0);
+        }
+        for (b in field.view()) {
+            if (b < '0' || b > '9') {
+                this.ok = false;
+                return Ok(0);
+            }
+            value = value * 10 + (b - '0') as u64;
+        }
+        return Ok(value);
+    }
+}
+
+/// A record's bytes as a record; null if they are not one, whole and unchanged.
+fn decodeRecord(bytes: Slice<u8>) -> Result<InterfaceRecord?, AllocError> {
+    var r = FieldReader { at: 0, ok: true };
+    let magic = r.next(bytes)?;
+    let format = r.next(bytes)?;
+    if (!r.ok || !sameBytes(magic.view(), "ceesafe-interface-record".bytes()) ||
+        !sameBytes(format.view(), recordFormat().bytes())) {
+        return Ok(null);
+    }
+    var record = InterfaceRecord {
+        key: r.next(bytes)?,
+        banner: r.next(bytes)?,
+        package: r.next(bytes)?,
+        profile: r.next(bytes)?,
+        errors: r.number(bytes)?,
+        warnings: r.number(bytes)?,
+        phase: 0,
+        opaque: false,
+        interfaceHash: Vector<u8>.create(),
+        functions: Vector<RecordedEffects>.create(),
+    };
+    let phase = r.number(bytes)?;
+    record.phase = truncate<u32>(if (phase > 5) 5 else phase);
+    record.opaque = r.number(bytes)? != 0;
+    record.interfaceHash = r.next(bytes)?;
+    let count = r.number(bytes)?;
+    var k: u64 = 0;
+    while (r.ok && k < count) {
+        var entry = RecordedEffects {
+            package: 0,
+            path: r.next(bytes)?,
+            offset: 0,
+            effects: 0,
+            chains: Vector<RecordedChain>.create(),
+        };
+        entry.offset = truncate<u32>(r.number(bytes)? & 0xFFFFFFFF);
+        entry.effects = truncate<u32>(r.number(bytes)? & 0xFFFFFFFF);
+        for (slot in 0..4usize) {
+            var chain = emptyChain();
+            let steps = r.number(bytes)?;
+            var s: u64 = 0;
+            while (r.ok && s < steps) {
+                chain.steps.push(r.next(bytes)?)?;
+                s += 1;
+            }
+            chain.terminal = r.next(bytes)?;
+            chain.truncated = r.number(bytes)? != 0;
+            chain.length = truncate<u32>(r.number(bytes)? & 0xFFFFFFFF);
+            entry.chains.push(chain)?;
+        }
+        record.functions.push(entry)?;
+        k += 1;
+    }
+    let body = r.at;
+    let digest = r.next(bytes)?;
+    if (!r.ok || r.at != bytes.length) {
+        return Ok(null);
+    }
+    var sha = Sha256.create();
+    sha.append(bytes[..body]);
+    var expected = Vector<u8>.create();
+    appendHexDigest(mut expected, sha.finish())?;
+    if (!sameBytes(expected.view(), digest.view())) {
+        return Ok(null);
+    }
+    return Ok(record);
+}

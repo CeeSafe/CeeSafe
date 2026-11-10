@@ -1,0 +1,1388 @@
+// `check` in a package, one package at a time (ADR 0082 §2.7, tooling.md §4.4): the package is checked fully, and each
+// dependency comes from its interface record (src/host/record_cache.cee), checked and recorded first if the record
+// is missing. A dependency's record is made by a check of that dependency alone, with its own dependencies from their
+// records, in "dependency mode": without its tests, without an entry function, its files named as a dependent names
+// them. `check --all` checks every package of the lock that way, in dependency order, `--jobs` at once, and prints
+// one report. `--whole-program` is the check of ADR 0013 D4, every package as one program: the oracle these checks
+// must agree with (tools/package_tests.py §23–§26).
+//
+// Safety stays whole-program: `build`, `test`, `run` and `fix` check every package together and read no record.
+
+/// A package of the workspace as per-package checking needs it.
+struct WorkspacePackage {
+    info: PackageInfo;
+    sources: Vector<Vector<u8>>;   // absolute paths of its .cee sources
+    tests: Vector<Vector<u8>>;     // and of its test files (ADR 0049)
+    manifestFile: u32;             // its manifest in WorkspaceData.report
+    dependencies: Vector<u32>;     // its direct dependencies, by index
+    dependencyStarts: Vector<u32>; // each one's span in its manifest
+    dependencyEnds: Vector<u32>;
+    level: u32; // 0 for no dependencies, else one more than its deepest dependency's
+}
+
+/// The package of the current directory (first) and every package of its lock, in the workspace's order.
+struct WorkspaceData {
+    packages: Vector<WorkspacePackage>;
+    report: PackageReport; // the manifests' texts
+    levels: u32;
+    identity: Vector<u8>; // this ceesafec's executable (compilerIdentity), part of every record's key
+}
+
+/// What one package's check found: the diagnostics, with the sources they name, and the facts its record keeps.
+struct PackageRun {
+    package: usize; // the package checked, by index
+    sources: Vector<SourceText>;
+    diagnostics: Diagnostics;
+    errors: u64; // before --deny-warnings
+    warnings: u64;
+    phase: u32;
+    recorded: bool; // `record` holds the package's record
+    record: InterfaceRecord;
+    declaresEntry: bool; // the package declares `main` (a dependency-mode check does not look at it)
+    failure: i32;        // a usage error's exit status, else 0
+}
+
+fn blankRecord() -> InterfaceRecord => InterfaceRecord {
+    key: Vector<u8>.create(),
+    banner: Vector<u8>.create(),
+    package: Vector<u8>.create(),
+    profile: Vector<u8>.create(),
+    errors: 0,
+    warnings: 0,
+    phase: 0,
+    opaque: false,
+    interfaceHash: Vector<u8>.create(),
+    functions: Vector<RecordedEffects>.create(),
+};
+
+fn copyRecord(r: borrow InterfaceRecord) -> Result<InterfaceRecord, AllocError> {
+    var copy = InterfaceRecord {
+        key: copyBytes(r.key.view())?,
+        banner: copyBytes(r.banner.view())?,
+        package: copyBytes(r.package.view())?,
+        profile: copyBytes(r.profile.view())?,
+        errors: r.errors,
+        warnings: r.warnings,
+        phase: r.phase,
+        opaque: r.opaque,
+        interfaceHash: copyBytes(r.interfaceHash.view())?,
+        functions: Vector<RecordedEffects>.create(),
+    };
+    for (f in r.functions.view()) {
+        copy.functions.push(copyRecordedEffects(f, f.package)?)?;
+    }
+    return Ok(copy);
+}
+
+fn copyRecordedEffects(f: borrow RecordedEffects, package: u32) -> Result<RecordedEffects, AllocError> {
+    var copy = RecordedEffects {
+        package: package,
+        path: copyBytes(f.path.view())?,
+        offset: f.offset,
+        effects: f.effects,
+        chains: Vector<RecordedChain>.create(),
+    };
+    for (chain in f.chains.view()) {
+        var steps = Vector<Vector<u8>>.create();
+        for (step in chain.steps.view()) {
+            steps.push(copyBytes(step.view())?)?;
+        }
+        copy.chains.push(
+            RecordedChain {
+                steps: steps,
+                terminal: copyBytes(chain.terminal.view())?,
+                truncated: chain.truncated,
+                length: chain.length,
+            },
+        )?;
+    }
+    return Ok(copy);
+}
+
+fn copyPackageInfo(p: borrow PackageInfo) -> Result<PackageInfo, AllocError> {
+    var dependencies = Vector<Vector<u8>>.create();
+    for (d in p.dependencies.view()) {
+        dependencies.push(copyBytes(d.view())?)?;
+    }
+    var roots = Vector<Vector<u8>>.create();
+    for (r in p.embedRoots.view()) {
+        roots.push(copyBytes(r.view())?)?;
+    }
+    return Ok(
+        PackageInfo {
+            name: copyBytes(p.name.view())?,
+            dependencies: dependencies,
+            trusted: p.trusted,
+            directory: copyBytes(p.directory.view())?,
+            embedRoots: roots,
+            embedBoundary: copyBytes(p.embedBoundary.view())?,
+        },
+    );
+}
+
+/// The workspace of the nearest manifest, resolved through its lock, with the root manifest's profile set in
+/// `options` as loadPackage sets it; or the exit status of a failure (reported).
+fn loadWorkspaceData(options: borrow mut Options, data: borrow mut WorkspaceData) -> i32 {
+    let cwd = match (currentDirectory()) {
+        Ok(d) => d,
+        Err(_) => { return fail("cannot read the current directory"); }
+    };
+    let directory = match (findManifestDirectory(cwd.view())!) {
+        Some(d) => d,
+        null => {
+            fail("no CeeSafe input files, and no ceesafe.toml here or above");
+            return 1;
+        }
+    };
+    let noUpdate = Vector<Vector<u8>>.create();
+    let resolved = resolveWorkspace(directory.view(), mut data.report, false, options.offline, false, noUpdate)!;
+    if (data.report.count() > 0) {
+        reportPackage(options.json, data.report);
+    }
+    let workspace = match (resolved) {
+        Some(w) => w,
+        null => { return 1; }
+    };
+    var rootFiles = Vector<Vector<u8>>.create();
+    manifestSourceFiles(workspace.root, mut rootFiles)!;
+    if (rootFiles.length == 0) {
+        var message = String.create();
+        message.append("package '")!;
+        message.append(StringView.fromUtf8(workspace.root.name.view())!)!;
+        message.append("' has no .cee files under ")!;
+        for (k in 0..workspace.root.sources.length) {
+            if (k > 0) {
+                message.append(", ")!;
+            }
+            message.append(StringView.fromUtf8(workspace.root.sources[k].view())!)!;
+        }
+        fail(message.view());
+        return 1;
+    }
+    if (!options.profileGiven) {
+        options.freestanding = workspace.root.freestanding;
+    }
+    if (!workspace.root.floatAllowed) {
+        options.noFloat = true;
+    }
+    if (workspace.root.kernel) {
+        options.kernel = true;
+    }
+    let count = workspace.resolved.length + 1;
+    for (p in 0..count) {
+        let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+        var sources = Vector<Vector<u8>>.create();
+        manifestSourceFiles(manifest, mut sources)!;
+        var tests = Vector<Vector<u8>>.create();
+        manifestTestFiles(manifest, mut tests)!;
+        data.packages.push(
+            WorkspacePackage {
+                info: workspace.packageInfo(p)!,
+                sources: sources,
+                tests: tests,
+                manifestFile: manifest.file,
+                dependencies: Vector<u32>.create(),
+                dependencyStarts: Vector<u32>.create(),
+                dependencyEnds: Vector<u32>.create(),
+                level: 0,
+            },
+        )!;
+    }
+    // Each package's dependencies by index: names are unique in a build (ADR 0013 D1).
+    for (p in 0..count) {
+        let manifest = workspace.dependentManifest(if (p == 0) none() else truncate<u32>(p - 1));
+        for (d in manifest.dependencies.view()) {
+            for (q in 0..count) {
+                if (q != p && sameBytes(data.packages[q].info.name.view(), d.name.view())) {
+                    data.packages[p].dependencies.push(truncate<u32>(q))!;
+                    data.packages[p].dependencyStarts.push(d.start)!;
+                    data.packages[p].dependencyEnds.push(d.end)!;
+                    break;
+                }
+            }
+        }
+    }
+    // Levels: a package after everything it depends on. A cycle (the resolver forbids one) leaves the rounds unsettled.
+    var settled = false;
+    var round: usize = 0;
+    while (!settled && round <= count) {
+        settled = true;
+        for (p in 0..count) {
+            var level: u32 = 0;
+            for (d in data.packages[p].dependencies.view()) {
+                let below = data.packages[d as usize].level + 1;
+                if (below > level) {
+                    level = below;
+                }
+            }
+            if (level != data.packages[p].level) {
+                data.packages[p].level = level;
+                settled = false;
+            }
+        }
+        round += 1;
+    }
+    if (!settled) {
+        return fail("the packages' dependencies form a cycle");
+    }
+    for (p in data.packages.view()) {
+        if (p.level + 1 > data.levels) {
+            data.levels = p.level + 1;
+        }
+    }
+    return 0;
+}
+
+/// `root` and every package it depends on, directly or not: root first, then the others in the workspace's order.
+fn packageClosure(data: borrow WorkspaceData, root: usize) -> Result<Vector<usize>, AllocError> {
+    var reached = Vector<bool>.create();
+    while (reached.length < data.packages.length) {
+        reached.push(false)?;
+    }
+    var work = Vector<usize>.create();
+    work.push(root)?;
+    reached[root] = true;
+    while (work.length > 0) {
+        let p = work[work.length - 1];
+        work.truncate(work.length - 1);
+        for (d in data.packages[p].dependencies.view()) {
+            if (!reached[d as usize]) {
+                reached[d as usize] = true;
+                work.push(d as usize)?;
+            }
+        }
+    }
+    var members = Vector<usize>.create();
+    members.push(root)?;
+    for (p in 0..data.packages.length) {
+        if (p != root && reached[p]) {
+            members.push(p)?;
+        }
+    }
+    return Ok(members);
+}
+
+/// The profile a record is valid for: what changes how every package checks.
+fn profileText(options: borrow Options) -> Result<Vector<u8>, AllocError> {
+    var text = copyBytes((if (options.freestanding) "freestanding" else "hosted").bytes())?;
+    if (options.kernel) {
+        appendText(mut text, "+kernel")?;
+    }
+    if (options.noFloat) {
+        appendText(mut text, "+no-float")?;
+    }
+    return Ok(text);
+}
+
+/// `package`'s record key (ADR 0082 §2.7): a SHA-256 of the record format, ceesafec's banner and executable, the profile, the
+/// package's name, manifest and sources (each with its path in the package), and its direct dependencies' interface
+/// hashes, by name; null if a dependency has no record yet or a file cannot be read.
+fn interfaceKey(
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    package: usize,
+    records: borrow Vector<InterfaceRecord?>,
+) -> Result<Vector<u8>?, AllocError> {
+    let p = borrow data.packages[package];
+    var sha = Sha256.create();
+    let zero = [0u8];
+    sha.append("ceesafe-interface-key".bytes());
+    sha.append(zero[..]);
+    sha.append(recordFormat().bytes());
+    sha.append(zero[..]);
+    sha.append(compilerBanner().bytes());
+    sha.append(zero[..]);
+    sha.append(data.identity.view());
+    sha.append(zero[..]);
+    let profile = profileText(options)?;
+    sha.append(profile.view());
+    sha.append(zero[..]);
+    sha.append(p.info.name.view());
+    sha.append(zero[..]);
+    appendLengthPrefixed(mut sha, data.report.sources[p.manifestFile as usize].text.view())?;
+    for (path in p.sources.view()) {
+        let bytes = match (readFile(StringView.fromUtf8(path.view())!)) {
+            Ok(b) => b,
+            Err(_) => { return Ok(null); }
+        };
+        let inPackage = pathBelow(path.view(), p.info.directory.view())?;
+        appendLengthPrefixed(mut sha, inPackage.view())?;
+        appendLengthPrefixed(mut sha, bytes.view())?;
+    }
+    var names = Vector<usize>.create();
+    for (d in p.dependencies.view()) {
+        names.push(d as usize)?;
+        var at = names.length - 1;
+        while (at > 0 && lessBytes(
+            data.packages[names[at]].info.name.view(),
+            data.packages[names[at - 1]].info.name.view(),
+        )) {
+            names.swap(at, at - 1);
+            at -= 1;
+        }
+    }
+    for (d in names.view()) {
+        match (borrow records[d]) {
+            Some(r) => {
+                appendLengthPrefixed(mut sha, data.packages[d].info.name.view())?;
+                appendLengthPrefixed(mut sha, r.interfaceHash.view())?;
+            }
+            null => { return Ok(null); }
+        }
+    }
+    var key = Vector<u8>.create();
+    appendHexDigest(mut key, sha.finish())?;
+    return Ok(key);
+}
+
+fn appendLengthPrefixed(sha: borrow mut Sha256, bytes: Slice<u8>) -> Result<void, AllocError> {
+    var length = Vector<u8>.create();
+    appendDecimal(mut length, bytes.length as u64)?;
+    length.push(':')?;
+    sha.append(length.view());
+    sha.append(bytes);
+    return Ok();
+}
+
+/// The package's interface hash (ADR 0082 §2.7): its name, its sources with every body its dependents skip left out
+/// (only the lines it held kept, so that what follows keeps its positions), what its record says, and its direct
+/// dependencies' interface hashes. A change inside a skipped body changes the record's key but not this hash, unless
+/// it changes the package's effects or whether it checks.
+fn interfaceHash(
+    run: borrow PackageRun,
+    data: borrow WorkspaceData,
+    blanked: borrow Vector<Vector<u8>>,
+    records: borrow Vector<InterfaceRecord?>,
+) -> Result<Vector<u8>, AllocError> {
+    let p = borrow data.packages[run.package];
+    var sha = Sha256.create();
+    let zero = [0u8];
+    sha.append("ceesafe-interface".bytes());
+    sha.append(zero[..]);
+    sha.append(recordFormat().bytes());
+    sha.append(zero[..]);
+    appendLengthPrefixed(mut sha, p.info.name.view())?;
+    for (text in blanked.view()) {
+        appendLengthPrefixed(mut sha, text.view())?;
+    }
+    var facts = Vector<u8>.create();
+    appendDecimal(mut facts, if (run.errors > 0) 1 else 0)?;
+    facts.push(' ')?;
+    appendDecimal(mut facts, run.phase as u64)?;
+    facts.push(' ')?;
+    appendDecimal(mut facts, if (run.record.opaque) 1 else 0)?;
+    sha.append(facts.view());
+    var shown = copyRecord(run.record)?;
+    shown.key = Vector<u8>.create();
+    shown.interfaceHash = Vector<u8>.create();
+    shown.errors = if (run.errors > 0) 1 else 0;
+    shown.warnings = 0;
+    for (k in 0..shown.functions.length) {
+        shown.functions[k].offset = 0; // a declaration's offset is a key into its own sources, not its interface
+    }
+    let encoded = encodeRecord(shown)?;
+    appendLengthPrefixed(mut sha, encoded.view())?;
+    for (d in p.dependencies.view()) {
+        match (borrow records[d as usize]) {
+            Some(r) => {
+                appendLengthPrefixed(mut sha, data.packages[d as usize].info.name.view())?;
+                appendLengthPrefixed(mut sha, r.interfaceHash.view())?;
+            }
+            null => {}
+        }
+    }
+    var hash = Vector<u8>.create();
+    appendHexDigest(mut hash, sha.finish())?;
+    return Ok(hash);
+}
+
+/// `text` with the byte ranges `spans` left out, but for their line breaks and the length of their last line.
+fn blankedText(text: Slice<u8>, spans: borrow Vector<Span>) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    var at: usize = 0;
+    var order = Vector<usize>.create();
+    for (k in 0..spans.length) {
+        order.push(k)?;
+        var j = order.length - 1;
+        while (j > 0 && spans[order[j - 1]].start > spans[order[j]].start) {
+            order.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    for (k in order.view()) {
+        let span = spans[k];
+        let start = span.start as usize;
+        let end = if ((span.end as usize) < text.length) span.end as usize else text.length;
+        if (start < at || start > end) {
+            continue; // nested in one already left out
+        }
+        appendBytes(mut out, text[at..start])?;
+        var tail: u64 = 0;
+        for (b in text[start..end]) {
+            if (b == '\n') {
+                out.push('\n')?;
+                tail = 0;
+            } else {
+                tail += 1;
+            }
+        }
+        out.push('{')?;
+        appendDecimal(mut out, tail)?;
+        out.push('}')?;
+        at = end;
+    }
+    appendBytes(mut out, text[at..])?;
+    return Ok(out);
+}
+
+/// A dependency failed: N0364 at its line in `package`'s manifest.
+fn dependencyFailure() -> u32 => 364;
+
+fn dependencyFailureMessage(data: borrow WorkspaceData, dependency: usize) -> Result<Vector<u8>, AllocError> {
+    var message = copyBytes("the dependency '".bytes())?;
+    appendBytes(mut message, data.packages[dependency].info.name.view())?;
+    appendText(mut message, "' has errors: run 'ceesafec check' in ")?;
+    let directory = data.packages[dependency].info.directory.view();
+    match (currentDirectory()) {
+        Ok(cwd) => {
+            let shown = pathFrom(cwd.view(), directory)?;
+            appendBytes(mut message, shown.view())?;
+        }
+        Err(_) => { appendBytes(mut message, directory)?; }
+    }
+    appendText(mut message, " (ADR 0082 §2.7)")?;
+    return Ok(message);
+}
+
+/// Checks package `package` with its dependencies from `records` (none for a dependency checked in full, as an
+/// opaque record's is). `dependencyMode` is the check that makes a dependency's record: without its tests or entry
+/// function, its files named as a dependent names them. `recording` makes the package's record.
+fn checkPackageRun(
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    package: usize,
+    records: borrow Vector<InterfaceRecord?>,
+    dependencyMode: bool,
+) -> PackageRun {
+    var run = PackageRun {
+        package: package,
+        sources: Vector<SourceText>.create(),
+        diagnostics: Diagnostics.create(),
+        errors: 0,
+        warnings: 0,
+        phase: 0,
+        recorded: false,
+        record: blankRecord(),
+        declaresEntry: false,
+        failure: 0,
+    };
+    run.record.package = copyBytes(data.packages[package].info.name.view())!;
+    let members = packageClosure(data, package)!;
+    let withTests = !dependencyMode && data.packages[package].tests.length > 0;
+    let recording = dependencyMode || !withTests;
+    var packages = Vector<PackageInfo>.create();
+    for (m in members.view()) {
+        packages.push(copyPackageInfo(data.packages[m].info)!)!;
+    }
+    var sources = Vector<SourceText>.create();
+    var fileIsLibrary = Vector<bool>.create();
+    var filePackage = Vector<u32>.create();
+    for (k in 0..libraryFileCount()) {
+        let group = libraryGroup(k);
+        if (group == 0 || (group == 1 && !options.freestanding) ||
+            (group == 2 && options.freestanding && options.kernel)) {
+            let text = libraryText(k)!;
+            sources.push(SourceText.create(libraryPath(k).bytes(), text.view())!)!;
+            fileIsLibrary.push(true)!;
+            filePackage.push(0xFFFFFFFF)!;
+        }
+    }
+    var input = emptyRecordInput();
+    input.recording = recording;
+    input.qualifyRoot = dependencyMode;
+    while (input.fileFromRecord.length < sources.length) {
+        input.fileFromRecord.push(false)!;
+        input.filePackagePaths.push(Vector<u8>.create())!;
+        input.recordPaths.push(Vector<u8>.create())!;
+    }
+    var rootFiles = Vector<u32>.create();
+    let cwd = match (currentDirectory()) {
+        Ok(d) => d,
+        Err(_) => Vector<u8>.create(),
+    };
+    for (position in 0..members.length) {
+        let member = members[position];
+        let p = borrow data.packages[member];
+        var fromRecord = false;
+        if (position > 0) {
+            match (borrow records[member]) {
+                Some(r) => {
+                    if (!r.opaque) {
+                        fromRecord = true;
+                        for (f in r.functions.view()) {
+                            input.functions.push(copyRecordedEffects(f, truncate<u32>(position))!)!;
+                        }
+                    }
+                }
+                null => {}
+            }
+        }
+        var paths = Vector<Vector<u8>>.create();
+        for (s in p.sources.view()) {
+            paths.push(copyBytes(s.view())!)!;
+        }
+        if (position == 0 && withTests) {
+            for (t in p.tests.view()) {
+                paths.push(copyBytes(t.view())!)!;
+            }
+        }
+        for (path in paths.view()) {
+            let text = StringView.fromUtf8(path.view())!;
+            let bytes = match (readFile(text)) {
+                Ok(b) => b,
+                Err(_) => {
+                    var message = String.create();
+                    message.append("cannot read '")!;
+                    message.append(text)!;
+                    message.append("'")!;
+                    run.failure = fail(message.view());
+                    return run;
+                }
+            };
+            let slashed = slashedPath(path.view())!;
+            let inPackage = pathBelow(slashed.view(), p.info.directory.view())!;
+            // The current directory's package is named from it; any other by its package (ADR 0082 §2.1).
+            var name = Vector<u8>.create();
+            var openPath = Vector<u8>.create();
+            var dependencyName = Vector<u8>.create();
+            appendBytes(mut dependencyName, p.info.name.view())!;
+            dependencyName.push('/')!;
+            appendBytes(mut dependencyName, inPackage.view())!;
+            if (member == 0 || inPackage.length == 0) {
+                name = sourcePath(text);
+            } else {
+                name = copyBytes(dependencyName.view())!;
+                if (cwd.length > 0) {
+                    openPath = pathFrom(cwd.view(), slashed.view())!;
+                }
+            }
+            if (position == 0) {
+                rootFiles.push(truncate<u32>(sources.length))!;
+            }
+            input.fileFromRecord.push(fromRecord)!;
+            input.filePackagePaths.push(copyBytes(inPackage.view())!)!;
+            input.recordPaths.push(if (position == 0 && member == 0) dependencyName else Vector<u8>.create())!;
+            var source = SourceText.create(name.view(), bytes.view())!;
+            source.package = copyBytes(p.info.name.view())!;
+            source.packagePath = inPackage;
+            source.openPath = openPath;
+            source.diskPath = absolutePath(path.view());
+            sources.push(source)!;
+            fileIsLibrary.push(false)!;
+            filePackage.push(truncate<u32>(position))!;
+        }
+    }
+    var front = Frontend.create();
+    for (i in 0..sources.length) {
+        let source = borrow sources[i];
+        let file = truncate<u32>(i);
+        let lexed = lex(source.text.view(), file, mut front.symbols, mut front.diagnostics)!;
+        let marks = astMarks(front);
+        front = parseFile(file, lexed, front)!;
+        if (!fileIsLibrary[i] && !front.diagnostics.hasErrors()) {
+            let unit = truncate<u32>(front.ast.units.length - 1);
+            rewritePackageNames(mut front, unit, packages[filePackage[i] as usize].dependencies, marks)!;
+        }
+    }
+    var manifestFile = none(); // the root's manifest, once a diagnostic is at a dependency's line in it
+    if (front.diagnostics.hasErrors()) {
+        run.phase = 1;
+        run.diagnostics = front.diagnostics;
+        run.sources = sources;
+        finishRun(mut run, options, data, records, members, rootFiles, manifestFile, recording, dependencyMode, null)!;
+        return run;
+    }
+    var texts = Vector<Vector<u8>>.create();
+    var names = Vector<Vector<u8>>.create();
+    var diskPaths = Vector<Vector<u8>>.create();
+    for (i in 0..sources.length) {
+        texts.push(copyBytes(sources[i].text.view())!)!;
+        names.push(copyBytes(sources[i].path.view())!)!;
+        diskPaths.push(copyBytes(sources[i].diskPath.view())!)!;
+    }
+    let entry = if (dependencyMode) copyBytes("-".bytes())! else copyBytes(options.entryName.view())!;
+    var checker = checkProgramWith(
+        front,
+        fileIsLibrary,
+        texts,
+        names,
+        diskPaths,
+        options.noFloat,
+        options.freestanding,
+        packages,
+        filePackage,
+        entry,
+        input,
+    )!;
+    run.declaresEntry = declaresEntry(checker, options.entryName.view());
+    markUncheckedLibrary(mut checker);
+    checker.front.diagnostics.removeFiles(checker.fileIsLibrary.view());
+    // A dependency whose own check failed fails here at the same stage, at its line in the manifest: after the
+    // types (now), after the per-function checks or the instances' (pending), or at the end.
+    let root = borrow data.packages[package];
+    var late = Vector<usize>.create();
+    for (k in 0..root.dependencies.length) {
+        let d = root.dependencies[k] as usize;
+        match (borrow records[d]) {
+            Some(r) => {
+                // An opaque record's package is checked here in full: its own diagnostics say whether it fails.
+                if (r.errors == 0 || r.opaque) {
+                    continue;
+                }
+                if (manifestFile == none()) {
+                    manifestFile = truncate<u32>(sources.length);
+                    sources.push(manifestSource(data, package)!)!;
+                }
+                let message = dependencyFailureMessage(data, d)!;
+                let start = root.dependencyStarts[k];
+                let end = root.dependencyEnds[k];
+                if (r.phase <= 2) {
+                    checker.front.diagnostics.error(dependencyFailure(), manifestFile, start, end, message)!;
+                } else if (r.phase <= 4) {
+                    checker.afterNirErrors.push(
+                        PendingError {
+                            stage: r.phase,
+                            code: dependencyFailure(),
+                            file: manifestFile,
+                            start: start,
+                            end: end,
+                            message: message,
+                        },
+                    )!;
+                } else {
+                    late.push(k)!;
+                }
+            }
+            null => {}
+        }
+    }
+    if (checker.front.diagnostics.hasErrors()) {
+        // The rest is not checked, as it would not be had the failed dependencies' errors been found here: those
+        // that failed later are reported too (each dependency with errors is one diagnostic).
+        run.phase = 2;
+        addPendingErrors(mut checker, 3)!;
+        addPendingErrors(mut checker, 4)!;
+    } else {
+        analyzeProgram(mut checker)!;
+        if (checker.nirLoopErrors) {
+            run.phase = 3;
+        } else if (checker.instanceErrors) {
+            run.phase = 4;
+        } else if (checker.front.diagnostics.hasErrors()) {
+            run.phase = 5;
+        }
+    }
+    for (k in late.view()) {
+        let d = root.dependencies[k] as usize;
+        let message = dependencyFailureMessage(data, d)!;
+        checker.front.diagnostics.error(
+            dependencyFailure(),
+            manifestFile,
+            root.dependencyStarts[k],
+            root.dependencyEnds[k],
+            message,
+        )!;
+        if (run.phase == 0) {
+            run.phase = 5;
+        }
+    }
+    var blanked = Vector<Vector<u8>>.create();
+    if (recording) {
+        run.record.opaque = checker.recordOpaque || checker.embedCalls > 0;
+        for (f in rootFiles.view()) {
+            var spans = Vector<Span>.create();
+            if (!run.record.opaque) {
+                skippedBodies(checker, f, mut spans)!;
+            }
+            blanked.push(blankedText(sources[f as usize].text.view(), spans)!)!;
+        }
+        var reversed = Vector<RecordedEffects>.create();
+        while (checker.recordOut.length > 0) {
+            reversed.push(checker.recordOut.pop()!)!;
+        }
+        while (reversed.length > 0) {
+            run.record.functions.push(reversed.pop()!)!;
+        }
+    }
+    run.diagnostics = checker.front.diagnostics;
+    run.sources = sources;
+    finishRun(mut run, options, data, records, members, rootFiles, manifestFile, recording, dependencyMode, blanked)!;
+    return run;
+}
+
+/// Whether the root package declares the entry function `name` (`main`).
+fn declaresEntry(c: borrow Checker, name: Slice<u8>) -> bool {
+    let symbol = match (c.front.symbols.find(name)) {
+        Some(s) => s.id,
+        null => { return false; }
+    };
+    return match (foundEntity(c.packageItems, packageKey(0, symbol))) {
+        Entity.None => false,
+        _ => true,
+    };
+}
+
+/// The manifest of `package` as a source diagnostics can name, from the current directory.
+fn manifestSource(data: borrow WorkspaceData, package: usize) -> Result<SourceText, AllocError> {
+    let manifest = borrow data.report.sources[data.packages[package].manifestFile as usize];
+    let directory = data.packages[package].info.directory.view();
+    let path = joinPath(directory, manifestName().bytes())?;
+    var shown = Vector<u8>.create();
+    match (currentDirectory()) {
+        Ok(cwd) => { shown = pathFrom(cwd.view(), path.view())?; }
+        Err(_) => { shown = copyBytes(path.view())?; }
+    }
+    var source = SourceText.create(shown.view(), manifest.text.view())?;
+    source.package = copyBytes(data.packages[package].info.name.view())?;
+    source.packagePath = copyBytes(manifestName().bytes())?;
+    return Ok(source);
+}
+
+/// The end of a package's check: the diagnostics in a failed dependency's files left out (its one diagnostic at the
+/// manifest stands for them), the counts, and the record if one is made.
+fn finishRun(
+    run: borrow mut PackageRun,
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    records: borrow Vector<InterfaceRecord?>,
+    members: borrow Vector<usize>,
+    rootFiles: borrow Vector<u32>,
+    manifestFile: u32,
+    recording: bool,
+    dependencyMode: bool,
+    blanked: Vector<Vector<u8>>?,
+) -> Result<void, AllocError> {
+    var failedFile = Vector<bool>.create();
+    for (s in run.sources.view()) {
+        var failed = false;
+        for (position in 1..members.length) {
+            let member = members[position];
+            if (s.package.length > 0 && sameBytes(s.package.view(), data.packages[member].info.name.view())) {
+                match (borrow records[member]) {
+                    Some(r) => { failed = r.errors > 0 && !r.opaque; }
+                    null => {}
+                }
+            }
+        }
+        failedFile.push(failed && !sameBytes(s.packagePath.view(), manifestName().bytes()))?;
+    }
+    run.diagnostics.removeFiles(failedFile.view());
+    // An error in a dependency checked here in full (no record, or an opaque one) may have stopped this package's own
+    // checks: its record would be of checks not made, so it is opaque, and its dependents check it in full too.
+    var liveFailure = false;
+    for (d in run.diagnostics.items.view()) {
+        if (!d.isError || (d.file as usize) >= run.sources.length) {
+            continue;
+        }
+        let s = borrow run.sources[d.file as usize];
+        for (position in 1..members.length) {
+            let member = members[position];
+            if (s.package.length > 0 && sameBytes(s.package.view(), data.packages[member].info.name.view()) &&
+                !sameBytes(s.packagePath.view(), manifestName().bytes())) {
+                liveFailure = true;
+            }
+        }
+    }
+    if (liveFailure) {
+        run.record.opaque = true;
+    }
+    run.errors = truncate<u64>(run.diagnostics.count(true));
+    run.warnings = truncate<u64>(run.diagnostics.count(false));
+    if (!dependencyMode && options.denyWarnings) {
+        run.diagnostics.denyWarnings();
+    }
+    if (!recording || run.failure != 0 || (!dependencyMode && run.declaresEntry)) {
+        return Ok();
+    }
+    var texts = Vector<Vector<u8>>.create();
+    match (blanked) {
+        Some(b) => { texts = b; }
+        null => {
+            for (f in rootFiles.view()) {
+                texts.push(copyBytes(run.sources[f as usize].text.view())?)?;
+            }
+            run.record.opaque = true;
+        }
+    }
+    let key = match (interfaceKey(options, data, run.package, records)?) {
+        Some(k) => k,
+        null => { return Ok(); }
+    };
+    run.record.key = key;
+    run.record.banner = copyBytes(compilerBanner().bytes())?;
+    run.record.package = copyBytes(data.packages[run.package].info.name.view())?;
+    run.record.profile = profileText(options)?;
+    run.record.errors = run.errors;
+    run.record.warnings = run.warnings;
+    run.record.phase = run.phase;
+    run.record.interfaceHash = interfaceHash(run, data, texts, records)?;
+    run.recorded = true;
+    return Ok();
+}
+
+/// One package's check in its own process (`ceesafec check --package <name>`), for `ensureRecords` (with
+/// `--record`) and `check --all`: its exit status and what it wrote.
+struct PackageOutcome {
+    package: usize;
+    started: bool;
+    status: i32;
+    stdout: Vector<u8>;
+    stderr: Vector<u8>;
+}
+
+/// The arguments that check package `package` in its own process as this one would: the profile and --offline that
+/// apply here, `extra` after them.
+fn childArguments(
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    package: usize,
+    extra: borrow Vector<Vector<u8>>,
+) -> Result<Vector<Vector<u8>>, AllocError> {
+    var arguments = Vector<Vector<u8>>.create();
+    pushText(mut arguments, "check")?;
+    pushText(mut arguments, "--package")?;
+    pushBytes(mut arguments, data.packages[package].info.name.view())?;
+    pushText(mut arguments, "--profile")?;
+    pushText(mut arguments, if (options.freestanding) "freestanding" else "hosted")?;
+    if (options.kernel) {
+        pushText(mut arguments, "--kernel")?;
+        pushText(mut arguments, "cosmoos")?;
+    }
+    if (options.noFloat) {
+        pushText(mut arguments, "--no-float")?;
+    }
+    if (options.offline) {
+        pushText(mut arguments, "--offline")?;
+    }
+    for (e in extra.view()) {
+        arguments.push(copyBytes(e.view())?)?;
+    }
+    return Ok(arguments);
+}
+
+/// Checks `tasks` in their own processes, at most `workers` at once: Thread.both splits the workers until each is
+/// one, and each starts the next package's check when it is free (as `build --split` compiles, ADR 0082 §2.5). A
+/// check runs in a process of its own, not on a thread: its stack is the main thread's, and its memory is returned
+/// when it ends.
+fn checkInProcesses(
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    tasks: borrow Vector<usize>,
+    extra: borrow Vector<Vector<u8>>,
+    next: borrow AtomicU64,
+    workers: u32,
+    out: borrow mut Vector<PackageOutcome>,
+) {
+    if (workers <= 1) {
+        let program = copyBytes(Process.argument(0)!.bytes())!;
+        loop {
+            let k = next.fetchAdd(1) as usize;
+            if (k >= tasks.length) {
+                return;
+            }
+            let arguments = childArguments(options, data, tasks[k], extra)!;
+            let outcome = runTool(program.view(), arguments)!;
+            out.push(
+                PackageOutcome {
+                    package: tasks[k],
+                    started: outcome.started,
+                    status: outcome.status,
+                    stdout: outcome.stdout,
+                    stderr: outcome.stderr,
+                },
+            )!;
+        }
+    }
+    var left = Vector<PackageOutcome>.create();
+    var right = Vector<PackageOutcome>.create();
+    let leftWorkers = workers / 2;
+    let rightWorkers = workers - leftWorkers;
+    Thread.both(
+        () => { checkInProcesses(options, data, tasks, extra, next, leftWorkers, mut left); },
+        () => { checkInProcesses(options, data, tasks, extra, next, rightWorkers, mut right); },
+    );
+    moveOutcomes(mut left, out);
+    moveOutcomes(mut right, out);
+}
+
+fn moveOutcomes(from: borrow mut Vector<PackageOutcome>, to: borrow mut Vector<PackageOutcome>) {
+    loop {
+        match (from.pop()) {
+            Some(o) => { to.push(o)!; }
+            null => { return; }
+        }
+    }
+}
+
+/// The records of every package `needed` marks, made where the cache has none, level by level: each in its own
+/// process, `jobs` at once, when the cache can pass the records between them; else here, one after another.
+fn ensureRecords(
+    options: borrow Options,
+    data: borrow WorkspaceData,
+    cache: borrow RecordCache,
+    needed: borrow Vector<bool>,
+    jobs: u32,
+    records: borrow mut Vector<InterfaceRecord?>,
+) -> Result<void, AllocError> {
+    let profile = profileText(options)?;
+    for (level in 0..data.levels) {
+        var tasks = Vector<usize>.create();
+        for (p in 0..data.packages.length) {
+            if (!needed[p] || data.packages[p].level != level || records[p] != null) {
+                continue;
+            }
+            let key = match (interfaceKey(options, data, p, records)?) {
+                Some(k) => k,
+                null => {
+                    tasks.push(p)?;
+                    continue;
+                }
+            };
+            match (lookUpRecord(cache, data.packages[p].info.name.view(), key.view(), profile.view())?) {
+                Some(r) => { records[p] = r; }
+                null => { tasks.push(p)?; }
+            }
+        }
+        if (tasks.length == 0) {
+            continue;
+        }
+        if (!cache.usable) {
+            for (p in tasks.view()) {
+                let run = checkPackageRun(options, data, p, records, true);
+                if (run.recorded) {
+                    records[p] = copyRecord(run.record)?;
+                }
+            }
+            continue;
+        }
+        var extra = Vector<Vector<u8>>.create();
+        pushText(mut extra, "--record")?;
+        let next = AtomicU64.create(0);
+        var out = Vector<PackageOutcome>.create();
+        let workers = if (jobs as usize > tasks.length) truncate<u32>(tasks.length) else jobs;
+        checkInProcesses(options, data, tasks, extra, next, if (workers == 0) 1 else workers, mut out);
+        // A record the check printed is used here, the cache aside; a check that made none leaves its package to be
+        // checked in full by its dependents.
+        for (made in out.view()) {
+            if (!made.started || made.status != 0) {
+                continue;
+            }
+            match (decodeRecord(made.stdout.view())?) {
+                Some(r) => {
+                    if (sameBytes(r.package.view(), data.packages[made.package].info.name.view())) {
+                        records[made.package] = r;
+                    }
+                }
+                null => {}
+            }
+        }
+    }
+    return Ok();
+}
+
+/// `check` in a package with records (ADR 0082 §2.7): the package of the current directory, or `--package`'s; with
+/// --all, every package of the lock; with --record, the check that makes a dependency's record, which it prints.
+fn packageCheckCommand(given: Options) -> i32 {
+    var options = given;
+    var data = WorkspaceData {
+        packages: Vector<WorkspacePackage>.create(),
+        report: PackageReport.create(),
+        levels: 0,
+        identity: Vector<u8>.create(),
+    };
+    let loaded = loadWorkspaceData(mut options, mut data);
+    if (loaded != 0) {
+        return loaded;
+    }
+    let cache = openRecordCache()!;
+    data.identity = copyBytes(cache.identity.view())!;
+    let jobs = if (options.jobsGiven) options.testJobs else processorCount();
+    var target: usize = 0;
+    if (options.checkPackage.length > 0) {
+        var found = false;
+        for (p in 0..data.packages.length) {
+            if (sameBytes(data.packages[p].info.name.view(), options.checkPackage.view())) {
+                target = p;
+                found = true;
+            }
+        }
+        if (!found) {
+            var message = copyBytes("there is no package '".bytes())!;
+            appendBytes(mut message, options.checkPackage.view())!;
+            appendText(mut message, "' in this package's lock")!;
+            return failBytes(message.view());
+        }
+    }
+    var records = Vector<InterfaceRecord?>.create();
+    var needed = Vector<bool>.create();
+    for (p in 0..data.packages.length) {
+        records.push(null)!;
+        needed.push(false)!;
+    }
+    if (!options.checkAll) {
+        // The package's dependencies, then the package itself, checked fully.
+        let members = packageClosure(data, target)!;
+        for (k in 1..members.length) {
+            needed[members[k]] = true;
+        }
+        ensureRecords(options, data, cache, needed, jobs, mut records)!;
+        let run = checkPackageRun(options, data, target, records, options.recordOnly);
+        if (run.failure != 0) {
+            return run.failure;
+        }
+        if (run.recorded) {
+            storeRecord(cache, run.record)!;
+        }
+        if (options.recordOnly) {
+            if (!run.recorded) {
+                return 1;
+            }
+            let bytes = encodeRecord(run.record)!;
+            Console.writeBytes(bytes.view());
+            return 0;
+        }
+        return report(options.json, run.diagnostics, run.sources);
+    }
+    // --all: every package's record, then each package's own check, its tests included, as `check` in its
+    // directory would (a dependency-mode check is not that check: it names the package's items as dependents do).
+    for (p in 0..needed.length) {
+        needed[p] = p > 0;
+    }
+    ensureRecords(options, data, cache, needed, jobs, mut records)!;
+    var outcomes = Vector<PackageOutcome>.create();
+    var tasks = Vector<usize>.create();
+    for (p in 0..data.packages.length) {
+        tasks.push(p)!;
+    }
+    if (cache.usable) {
+        var extra = Vector<Vector<u8>>.create();
+        if (options.json) {
+            pushText(mut extra, "--diagnostics-format=json")!;
+        }
+        if (options.denyWarnings) {
+            pushText(mut extra, "--deny-warnings")!;
+        }
+        let next = AtomicU64.create(0);
+        let workers = if (jobs as usize > tasks.length) truncate<u32>(tasks.length) else jobs;
+        checkInProcesses(options, data, tasks, extra, next, if (workers == 0) 1 else workers, mut outcomes);
+    } else {
+        for (p in tasks.view()) {
+            let run = checkPackageRun(options, data, p, records, false);
+            if (run.failure != 0) {
+                return run.failure;
+            }
+            var output = Vector<u8>.create();
+            if (options.json) {
+                output = diagnosticsJson(run.diagnostics, run.sources)!;
+            } else {
+                for (d in run.diagnostics.items.view()) {
+                    renderAny(mut output, d, run.sources)!;
+                }
+            }
+            var outcome = PackageOutcome {
+                package: p,
+                started: true,
+                status: if (run.diagnostics.hasErrors()) 1 else 0,
+                stdout: Vector<u8>.create(),
+                stderr: Vector<u8>.create(),
+            };
+            if (options.json) {
+                outcome.stdout = output;
+            } else {
+                outcome.stderr = output;
+            }
+            outcomes.push(outcome)!;
+        }
+    }
+    return reportAll(options, data, outcomes);
+}
+
+/// The outcome of package `p` among `outcomes`, or none.
+fn outcomeOf(outcomes: borrow Vector<PackageOutcome>, p: usize) -> usize {
+    for (k in 0..outcomes.length) {
+        if (outcomes[k].package == p) {
+            return k;
+        }
+    }
+    return none64();
+}
+
+/// The number of diagnostics of `severity` ("error" or "warning") a text report holds: its lines
+/// `<path>:<line>:<column>: error[N…]: …`.
+fn countRendered(text: Slice<u8>, severity: StringView) -> i64 {
+    var marker = copyBytes(": ".bytes())!;
+    appendText(mut marker, severity)!;
+    appendText(mut marker, "[N")!;
+    var count: i64 = 0;
+    var lineStart: usize = 0;
+    for (k in 0..(text.length + 1)) {
+        if (k < text.length && text[k] != '\n') {
+            continue;
+        }
+        let line = text[lineStart..k];
+        if (line.length > 0 && line[0] != ' ' && line[0] != '=') {
+            var i: usize = 0;
+            while (i + marker.length <= line.length) {
+                if (sameBytes(line[i..(i + marker.length)], marker.view())) {
+                    count += 1;
+                    break;
+                }
+                i += 1;
+            }
+        }
+        lineStart = k + 1;
+    }
+    return count;
+}
+
+/// One diagnostic of `check --all`'s JSON report: its package's document and its node there, and its sort key.
+struct ReportedDiagnostic {
+    document: usize;
+    node: u32;
+    order: usize; // where it was found: the package's index, then its place in the document
+}
+
+/// `check --all`'s report (tooling.md §5.1): as JSON, one document whose diagnostics are sorted by package, file and
+/// position, with a `packages` summary by name; as text, each package's diagnostics in the order of their names,
+/// then a line per package with any. A package whose check did not run is an error of its own.
+fn reportAll(options: borrow Options, data: borrow WorkspaceData, outcomes: borrow Vector<PackageOutcome>) -> i32 {
+    let byName = packagesByName(data);
+    var errors: i64 = 0;
+    var warnings: i64 = 0;
+    var packageErrors = Vector<i64>.create();
+    var packageWarnings = Vector<i64>.create();
+    var documents = Vector<JsonDoc>.create();
+    var documentOf = Vector<usize>.create(); // by package: its document, or none
+    var broken = Vector<u8>.create();        // what the checks that did not run printed
+    for (p in 0..data.packages.length) {
+        packageErrors.push(0)!;
+        packageWarnings.push(0)!;
+        documentOf.push(none64())!;
+        let k = outcomeOf(outcomes, p);
+        if (k == none64()) {
+            continue;
+        }
+        let o = borrow outcomes[k];
+        if (options.json) {
+            match (parseJson(o.stdout.view())) {
+                Some(doc) => {
+                    let root = 0u32;
+                    match (doc.integerOf(doc.member(root, "errors"))) {
+                        Some(n) => { packageErrors[p] = n; }
+                        null => {}
+                    }
+                    match (doc.integerOf(doc.member(root, "warnings"))) {
+                        Some(n) => { packageWarnings[p] = n; }
+                        null => {}
+                    }
+                    documentOf[p] = documents.length;
+                    documents.push(doc)!;
+                }
+                null => {
+                    packageErrors[p] = 1;
+                    appendBytes(mut broken, o.stderr.view())!;
+                }
+            }
+        } else {
+            packageErrors[p] = countRendered(o.stderr.view(), "error");
+            packageWarnings[p] = countRendered(o.stderr.view(), "warning");
+            if (o.status != 0 && packageErrors[p] == 0) {
+                packageErrors[p] = 1; // a failure without a diagnostic: a usage error, printed as it is
+            }
+        }
+        if (!o.started) {
+            packageErrors[p] = 1;
+        }
+        errors += packageErrors[p];
+        warnings += packageWarnings[p];
+    }
+    if (options.json) {
+        var order = Vector<ReportedDiagnostic>.create();
+        var keys = Vector<DiagnosticKey>.create();
+        for (p in 0..data.packages.length) {
+            let d = documentOf[p];
+            if (d == none64()) {
+                continue;
+            }
+            let doc = borrow documents[d];
+            let list = doc.member(0, "diagnostics");
+            if (doc.kind(list) != jsonArray()) {
+                continue;
+            }
+            for (i in 0..doc.childCount(list)) {
+                let node = doc.child(list, i);
+                order.push(ReportedDiagnostic { document: d, node: node, order: order.length })!;
+                keys.push(diagnosticKey(doc, node, data.packages[p].info.name.view()))!;
+            }
+        }
+        sortReported(keys, mut order);
+        var json = JsonWriter.create();
+        json.startObject()!;
+        json.name("version")!;
+        json.number(1)!;
+        json.name("errors")!;
+        json.number(errors)!;
+        json.name("warnings")!;
+        json.number(warnings)!;
+        json.name("diagnostics")!;
+        json.startArray()!;
+        for (o in order.view()) {
+            writeJsonNode(mut json, documents[o.document], o.node)!;
+        }
+        json.endArray()!;
+        json.name("packages")!;
+        json.startArray()!;
+        for (p in byName.view()) {
+            json.startObject()!;
+            json.name("name")!;
+            json.stringBytes(data.packages[p].info.name.view())!;
+            json.name("errors")!;
+            json.number(packageErrors[p])!;
+            json.name("warnings")!;
+            json.number(packageWarnings[p])!;
+            json.endObject()!;
+        }
+        json.endArray()!;
+        json.endObject()!;
+        Console.writeBytes(json.out.view());
+        Console.writeLine("");
+        if (broken.length > 0) {
+            Console.writeError(StringView.fromUtf8(broken.view())!);
+        }
+    } else {
+        var text = Vector<u8>.create();
+        for (p in byName.view()) {
+            let k = outcomeOf(outcomes, p);
+            if (k != none64()) {
+                appendBytes(mut text, outcomes[k].stderr.view())!;
+            }
+        }
+        for (p in byName.view()) {
+            let e = packageErrors[p];
+            let w = packageWarnings[p];
+            if (e > 0 || w > 0) {
+                appendText(mut text, "ceesafec: package '")!;
+                appendBytes(mut text, data.packages[p].info.name.view())!;
+                appendText(mut text, "': ")!;
+                appendDecimal(mut text, truncate<u64>(e))!;
+                appendText(mut text, if (e == 1) " error, " else " errors, ")!;
+                appendDecimal(mut text, truncate<u64>(w))!;
+                appendText(mut text, if (w == 1) " warning\n" else " warnings\n")!;
+            }
+        }
+        match (StringView.fromUtf8(text.view())) {
+            Some(t) => { Console.writeError(t); }
+            null => { Console.writeBytes(text.view()); }
+        }
+    }
+    return if (errors > 0) 1 else 0;
+}
+
+/// What a diagnostic of the JSON report is sorted by: its package (the one checked when its file has none), file,
+/// line and column.
+struct DiagnosticKey {
+    package: Vector<u8>;
+    file: Vector<u8>;
+    line: i64;
+    column: i64;
+}
+
+fn diagnosticKey(doc: borrow JsonDoc, node: u32, checked: Slice<u8>) -> DiagnosticKey {
+    let package = match (doc.stringOf(doc.member(node, "package"))) {
+        Some(p) => p,
+        null => copyBytes(checked)!,
+    };
+    let file = match (doc.stringOf(doc.member(node, "file"))) {
+        Some(f) => f,
+        null => Vector<u8>.create(),
+    };
+    let start = doc.member(node, "start");
+    let line = match (doc.integerOf(doc.member(start, "line"))) {
+        Some(n) => n,
+        null => 0,
+    };
+    let column = match (doc.integerOf(doc.member(start, "column"))) {
+        Some(n) => n,
+        null => 0,
+    };
+    return DiagnosticKey { package: package, file: file, line: line, column: column };
+}
+
+/// Whether diagnostic `a` comes before `b`: by package, file and position, then in the order they were found.
+fn reportedBefore(keys: borrow Vector<DiagnosticKey>, a: ReportedDiagnostic, b: ReportedDiagnostic) -> bool {
+    let ka = borrow keys[a.order];
+    let kb = borrow keys[b.order];
+    let byPackage = compareBytes(ka.package.view(), kb.package.view());
+    if (byPackage != 0) {
+        return byPackage < 0;
+    }
+    let byFile = compareBytes(ka.file.view(), kb.file.view());
+    if (byFile != 0) {
+        return byFile < 0;
+    }
+    if (ka.line != kb.line) {
+        return ka.line < kb.line;
+    }
+    if (ka.column != kb.column) {
+        return ka.column < kb.column;
+    }
+    return a.order < b.order;
+}
+
+/// The packages' indices in the order of their names.
+fn packagesByName(data: borrow WorkspaceData) -> Vector<usize> {
+    var order = Vector<usize>.create();
+    for (p in 0..data.packages.length) {
+        order.push(p)!;
+        var at = order.length - 1;
+        while (at > 0 && lessBytes(
+            data.packages[order[at]].info.name.view(),
+            data.packages[order[at - 1]].info.name.view(),
+        )) {
+            order.swap(at, at - 1);
+            at -= 1;
+        }
+    }
+    return order;
+}
+
+/// Sorts `order` by reportedBefore: a merge sort, stable.
+fn sortReported(keys: borrow Vector<DiagnosticKey>, order: borrow mut Vector<ReportedDiagnostic>) {
+    var width: usize = 1;
+    let n = order.length;
+    var scratch = Vector<ReportedDiagnostic>.create();
+    while (width < n) {
+        scratch.truncate(0);
+        var lo: usize = 0;
+        while (lo < n) {
+            let mid = if (lo + width < n) lo + width else n;
+            let hi = if (lo + 2 * width < n) lo + 2 * width else n;
+            var i = lo;
+            var j = mid;
+            while (i < mid || j < hi) {
+                if (j >= hi || (i < mid && !reportedBefore(keys, order[j], order[i]))) {
+                    scratch.push(order[i])!;
+                    i += 1;
+                } else {
+                    scratch.push(order[j])!;
+                    j += 1;
+                }
+            }
+            lo = hi;
+        }
+        for (k in 0..n) {
+            order[k] = scratch[k];
+        }
+        width *= 2;
+    }
+}

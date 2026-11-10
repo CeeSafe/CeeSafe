@@ -11,7 +11,16 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "\n")?;
     appendText(out, "commands:\n")?;
     appendText(out, "  parse    lex and parse the files, report syntax errors\n")?;
-    appendText(out, "  check    parse and type-check the files as one package\n")?;
+    appendText(
+        out,
+        "  check    parse and type-check the files as one package; in a package, the package, each dependency\n",
+    )?;
+    appendText(out, "           from its interface record (ADR 0082 §2.7): --all checks every package of the lock,\n")?;
+    appendText(
+        out,
+        "           --jobs <n> at once; --package <name> checks that package of the lock; --whole-program\n",
+    )?;
+    appendText(out, "           checks the packages as one program\n")?;
     appendText(out, "  build    compile the package to C, and by default to an executable; .c files are compiled\n")?;
     appendText(out, "           and linked with it (type-system.md §28.6)\n")?;
     appendText(out, "  run      run the package with the NIR reference interpreter (--interp)\n")?;
@@ -252,6 +261,11 @@ struct Options {
     fixing: bool;                           // `fix`: check, then apply the fixes (tooling.md §5.3)
     dryRun: bool;                           // fix --dry-run
     fixRound: u32;
+    checking: bool;           // `check` (not `fix`): package mode checks each package with interface records (ADR 0082 §2.7)
+    checkAll: bool;           // check --all: every package of the lock
+    wholeProgram: bool;       // check --whole-program: every package as one program, without records (ADR 0013 D4)
+    checkPackage: Vector<u8>; // check --package <name>: that package of the lock, as from its directory
+    recordOnly: bool;         // check --record: the check that makes the package's interface record, which it prints
 }
 
 /// A usage error: the message and the usage text on stderr (Program.Fail).
@@ -456,7 +470,7 @@ fn readOptions(options: borrow mut Options) -> i32 {
         } else if ((options.testing &&
             (arg == "--filter" || arg == "--jobs" || arg == "--timeout" || arg == "--sweep" ||
                 arg == "--format")) || (options.running && arg == "--ceesafe-harness") ||
-            (options.building && !options.testing && arg == "--jobs")) {
+            ((options.building || options.checking) && !options.testing && arg == "--jobs")) {
             let value = match (Process.argument(a)) {
                 Some(v) => v,
                 null => {
@@ -480,6 +494,18 @@ fn readOptions(options: borrow mut Options) -> i32 {
                 options.programArguments.push(copyBytes(Process.argument(a)!.bytes())!)!;
                 a += 1;
             }
+        } else if (options.checking && arg == "--all") {
+            options.checkAll = true;
+        } else if (options.checking && arg == "--whole-program") {
+            options.wholeProgram = true;
+        } else if (options.checking && arg == "--record") {
+            options.recordOnly = true;
+        } else if (options.checking && arg == "--package") {
+            match (Process.argument(a)) {
+                Some(v) => { options.checkPackage = copyBytes(v.bytes())!; }
+                null => { return fail("option '--package' needs a value"); }
+            }
+            a += 1;
         } else if (arg == "--offline") {
             options.offline = true;
         } else if (options.fixing && arg == "--dry-run") {
@@ -793,6 +819,11 @@ fn parseCommand() -> i32 {
         fixing: false,
         dryRun: false,
         fixRound: 0,
+        checking: false,
+        checkAll: false,
+        wholeProgram: false,
+        checkPackage: Vector<u8>.create(),
+        recordOnly: false,
     };
     let status = readOptions(mut options);
     if (status != 0) {
@@ -1143,6 +1174,11 @@ fn defaultOptions(building: bool) -> Options => Options {
     fixing: false,
     dryRun: false,
     fixRound: 0,
+    checking: false,
+    checkAll: false,
+    wholeProgram: false,
+    checkPackage: Vector<u8>.create(),
+    recordOnly: false,
 };
 
 fn runCommand() -> i32 => fileCommandIn(false, true, false, 0);
@@ -1155,9 +1191,25 @@ fn fileCommandIn(building: bool, running: bool, fixing: bool, fixRound: u32) -> 
     options.fixing = fixing;
     options.includeTests = !building && !running; // `check` and `fix` check the tests too (ADR 0049 §3.1)
     options.fixRound = fixRound;
+    options.checking = !building && !running && !fixing;
     let status = readOptions(mut options);
     if (status != 0) {
         return status;
+    }
+    if (options.checking && options.checkAll && (options.files.length > 0 || options.wholeProgram ||
+        options.checkPackage.length > 0)) {
+        return fail(
+            "check --all checks every package of the lock: run it in a package, without files, --package or --whole-program",
+        );
+    }
+    if (options.checking && (options.checkPackage.length > 0 || options.recordOnly) &&
+        (options.files.length > 0 || options.wholeProgram)) {
+        return fail("check --package and --record take a package of the lock: run them in a package, without files");
+    }
+    if (options.checking && options.files.length == 0 && !options.wholeProgram && !options.dumpHir &&
+        !options.dumpAst && !options.dumpTokens && !options.libraryDiagnostics) {
+        // Package mode: the package checked fully, its dependencies from their interface records (ADR 0082 §2.7).
+        return packageCheckCommand(options);
     }
     if (running && !options.interp) {
         return fail("'run' needs --interp (the only way to run without building is the interpreter)");

@@ -320,6 +320,21 @@ source = "path+../geometry"
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), or
   the C sources with `--emit c`; the manifest's profile, `float` and C files apply, and command-line options add to
   them. `fmt` formats the package's own sources, not its dependencies'.
+- `ceesafec check` in a package (ADR 0082 §2.7) checks that package fully, its tests included, and takes each
+  dependency from its **interface record** (§4.4.1): the dependency is parsed and its declarations resolved, but its
+  bodies are checked again only where a dependent compiles or reads them (generic code, async functions, functions
+  with a closure or function parameter or `@effectsOf`, `@constant` functions); every other body's effects come from
+  the record. A dependency without a valid record is checked first, alone, and recorded: without its tests or entry
+  function, its own dependencies from their records, up to `--jobs <n>` packages at once (default: the number of
+  CPUs). A dependency with errors is one diagnostic, N0364, at its line in the manifest, and the package's check stops
+  where the whole program's would. The diagnostics are otherwise those of `check --whole-program`, which checks every
+  package as one program (ADR 0013 D4) and reads no record: the oracle `tools/package_tests.py` §23 compares the two
+  for every package of its fixtures.
+- `ceesafec check --all` checks every package of the lock, as `check` would in each, in dependency order, `--jobs <n>`
+  at once, and prints one report (§5.1): its diagnostics sorted by package, file and position, then, as text, a line
+  per package with errors or warnings, or as JSON a `packages` summary. It exits with 1 if any package has an error.
+- `build`, `run`, `test` and `fix` check every package as one program and read no record: a record is a cache of a
+  result `check` proved, and only `check` uses it (ADR 0082 §2.7, §8).
 - The language server (§2.1) checks a document that belongs to a package (a `ceesafe.toml` above it, whose sources
   include it) with that package: the open document's text, the package's other files from disk, and its locked
   dependencies. Without a lock, or outside a package, the document is checked alone as before.
@@ -327,13 +342,34 @@ source = "path+../geometry"
 ### 4.4.1 Embedded files and what is cached
 
 `embed` and `embedText` (`type-system.md` §10.1) make a program depend on files that are not sources. Every command
-that checks a package reads them afresh: nothing of a compilation is kept for the next, so a file changed after
-`check` is what `build` compiles, and the language server sees a change at its next check. Within one compilation each
-file is read once, by its real path. Neither the lock's hash (§4.3), which covers a package's manifest and sources, nor
-`fetch` looks at embedded files. When ADR 0082's caches come (they are not in this release): an object's key is a hash
-of its C unit's text (§2.6), which holds the embedded bytes, so nothing more is needed there; a package's interface
-record (§2.7) must add to its key the real path and the contents of every file the package embeds, since its sources
-and manifest alone do not determine the bytes.
+that checks a package reads them afresh, so a file changed after `check` is what `build` compiles, and the language
+server sees a change at its next check. Within one compilation each file is read once, by its real path. Neither the
+lock's hash (§4.3), which covers a package's manifest and sources, nor `fetch` looks at embedded files.
+
+**Interface records** (ADR 0082 §2.7) are what `check` keeps of a package between runs, in
+`$CEESAFE_HOME/cache/records/<package>-<key>.rec`:
+- **The key** is a SHA-256 of the record format, `ceesafec --version`'s banner, the profile (hosted or
+  freestanding, `--kernel`, `--no-float`), the package's name, manifest and sources (each with its path in the
+  package), and its direct dependencies' interface hashes. Any change to one of them is another key: a miss, and a
+  check.
+- **The record** says whether the package checked and the stage of its first error; and for each function whose body
+  dependents skip, where it is declared, its inferred effects (`type-system.md` §32.1) and the explanation of each
+  (the steps an N0295 or N0360 names through it, and their number).
+- **The interface hash** covers the package's sources with those skipped bodies left out (only their line breaks
+  kept, so that what follows keeps its positions), what the record says, and its dependencies' interface hashes. A
+  change inside a skipped body that changes neither the effects nor whether the package checks leaves the hash, and
+  so every dependent's record, as it was.
+- **Opaque records.** A package that embeds a file, or whose skipped bodies make a `dyn` table of an interface with an
+  async method (whose frames, and recursion through `await`, belong to the whole program), has an opaque record: its
+  dependents check its bodies, and its own diagnostics, not N0364, say whether it fails.
+- **Trust.** A record is a cache of a result this compiler proved, never a promise from outside, and any doubt is a
+  miss. `$CEESAFE_HOME/cache` and `cache/records` are made with mode 0700; a record is read only if it and both
+  directories belong to the user running `ceesafec` and no one else may write to them, from the descriptor whose
+  owner and mode were checked; one that cannot be read, is cut short (its last field is the SHA-256 of the rest), or
+  names another key, banner, profile or package is a miss. A record is written to a new name created for it alone
+  (mode 0600) and renamed, so agents that check at once share the cache and none reads half a record. Owners and
+  modes are read where `ceesafec` knows `fstat`'s layout, macOS and Linux on arm64 and x86-64; elsewhere, Windows
+  included, no record is read or written, and every `check` checks every package.
 
 ### 4.5 Errors
 
@@ -468,6 +504,16 @@ only when there are warnings, and a warning never changes the exit status unless
   of files, and for lib/core's and lib/std's files.
 - `summary` is the code's "Meaning" in `diagnostics.md`, which `ceesafec` embeds.
 - Diagnostics are in the order the text form prints them. Keys are written in the order shown.
+- A dependency with errors (N0364, §4.4) is reported in the manifest of the package checked: `file` is
+  `ceesafe.toml` from the current directory, and `package` that package's name.
+- `check --all` (§4.4; added in version 1 by ADR 0082 §2.7) writes one document for every package of the lock. Its
+  diagnostics are sorted by `package`, then `file`, then position (a diagnostic's order of discovery breaks ties), and
+  `errors` and `warnings` count them all. After `diagnostics` comes `packages`: one entry per package, by name, with
+  its `name` and its own `errors` and `warnings`:
+
+```json
+  "packages": [ { "name": "app", "errors": 1, "warnings": 0 }, { "name": "mid", "errors": 0, "warnings": 0 } ]
+```
 
 ### 5.2 Fixes
 

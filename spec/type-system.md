@@ -3330,6 +3330,14 @@ fn onInterrupt(count: borrow mut u64) { count += 1; }   // may neither sleep nor
 - The effects of a function are those of every operation its body may perform, including everything it
   calls and every value it drops (drop glue, `drop` blocks, a box's deallocation). They are inferred over the
   whole package. Recursion is handled by iterating to a fixed point.
+- **Across packages** (ADR 0082 §2.7): a dependency's function whose body `check` does not check again has the
+  effects its package's interface record gives it, those the dependency's own check inferred; generic code, async
+  functions and functions with a closure parameter are inferred where they are used, as before.
+- **Explanations.** A diagnostic about an effect (N0295, N0360) names the chain of operations from where it is
+  reported to where the effect comes from: for each function on the chain, the operation whose chain is the
+  shortest, the first in the function's order among those. Neither depends on the order the program's functions or
+  packages are looked at, so a chain through a dependency reads the same whether the dependency comes from its record
+  or is checked with the program.
 - Operations have these effects:
 
 | Operation | Effects |

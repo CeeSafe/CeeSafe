@@ -126,13 +126,21 @@ public interface Allocator {
   - The runtime counts every allocation attempt when asked to (ADR 0059). `CEESAFE_FAIL_ALLOC_AT=k` fails attempt *k*,
     and `CEESAFE_ALLOC_REPORT=1` prints `ceesafe alloc: attempts=<n> live=<m>` when `main` returns. Either one, or
     `ceesafec test`, turns counting on; without them the runtime counts nothing.
+  - **In a host program** (ADR 0088 §2.2), whose `main` is not CeeSafe's, the same settings come from `ceesafe_init`'s
+    config (`ceesafe/embed.h`): `fail_alloc_at` and `alloc_report`, or with `CEESAFE_INIT_ENVIRONMENT` the two
+    variables (the environment's `CEESAFE_FAIL_ALLOC_AT` wins over the config's when set). The report is printed by
+    `ceesafe_shutdown`, which the host calls (in its exit path), and which returns `live`; the generated `main` calls
+    `ceesafe_init` with the environment flag before anything else and `ceesafe_shutdown` when `main` returns. Counting
+    cannot start under live blocks: `ceesafe_init` after the runtime has allocated is `CEESAFE_INIT_LATE`, and changes
+    nothing. A host that never calls it gets no counting, no failure injection and no report, whatever the
+    environment says. `ceesafe_init`'s copy of `argv` is not counted.
   - **With threads.** The counters are atomic, so every attempt, whatever its thread, gets its own number in one
     order, and attempt *k* is the only one that fails. That order is the order in which the threads' attempts reach
     the counter. A sweep (`k` = 1, 2, …) therefore fails every attempt of a run that allocates from one thread at a
     time in a fixed order, as before. Where threads allocate concurrently, the attempt numbered *k* may be a different
     allocation from one run to the next: the sweep still fails one allocation per run and never races, but it may not
     reproduce, and it may miss an allocation that is never numbered *k* in its run. `FailingAllocator`'s countdown is
-    atomic in the same way (`type-system.md` §18.1).
+    atomic in the same way (`type-system.md` §18.1). The same holds for a host's threads calling exports at once.
   - C code's allocations through `CEE_ALLOC_FOREIGN` (ADR 0060, type-system.md §28.6) count in `attempts` and can be
     failed, but not in `live`: when there were any, a second line, `ceesafe alloc: foreign held=<k>`, gives the blocks
     C still holds, and no tool reads it as a leak. `CEE_ALLOC_FOREIGN_INIT` (ADR 0061), for a C library's one-time

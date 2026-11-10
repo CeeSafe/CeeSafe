@@ -247,7 +247,8 @@ syntax) and N0321 (a missing, unknown or invalid field), with the line.
   its last place, so it follows what uses it; a directory keeps its first.
 - A package with `include-dirs` has its own C files compiled apart, with `-c` and those directories, and the objects
   join the build. No other C file sees its directories.
-- `--emit c` writes the link line as `ceesafe_link.txt` beside the C, and `--emit obj` as `<output>.link.txt`, when the
+- `--emit c` writes the link line as `ceesafe_link.txt` beside the C, and `--emit obj` and `--emit lib` as
+  `<output>.link.txt`, when the
   manifests name any: one argument per line, each separately compiled C file after its include directories, then the
   library directories and the libraries (`cl`'s spelling when `--cc` is `cl`).
 
@@ -317,8 +318,8 @@ source = "path+../geometry"
 - `ceesafec publish` checks that the package can be published and prints its index entry (§4.8).
 - `ceesafec test` runs the package's `@test` functions (§10).
 - `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
-  the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), or
-  the C sources with `--emit c`; the manifest's profile, `float` and C files apply, and command-line options add to
+  the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
+  C sources with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
   them. `fmt` formats the package's own sources, not its dependencies'.
 - `ceesafec check` in a package (ADR 0082 §2.7) checks that package fully, its tests included, and takes each
   dependency from its **interface record** (§4.4.1): the dependency is parsed and its declarations resolved, but its
@@ -708,6 +709,22 @@ Visual Studio's "Desktop development with C++" workload (or the Build Tools), or
 | `cl` (MSVC) | `/nologo /std:c11 /W3 /O2` (or `/Zi /Od` with `-g`), `--cflag`s, `/Fo:` the build directory (so no `.obj` lands in the project), `/Fe:<output>`, `/link /STACK:8388608` (`c-backend.md` §1.1), then the manifests' `/LIBPATH:<dir>` and `<name>.lib` (§4.1) |
 
 A compiler is MSVC when its file name is `cl` or `cl.exe`. `--emit obj` (one relocatable object) needs clang or gcc.
+
+**`--emit lib`** (ADR 0088 §2.1) writes a static library for a host program whose `main` is not CeeSafe's
+(type-system.md §28.6): each C file of the build compiled with `-c` and `--emit obj`'s flags (`--cflag`s included),
+then archived with `<archiver> rcs <output>`, made afresh. The members are one per C file and uniquely named: the
+generated code's carry the program's name (`<program>_main.o`; with `--split`, one per unit, the unit's path with `_`
+for `/`), the runtime's keep theirs (`ceesafe_rt_core.o`, …), and a package's separately compiled C files are
+`<program>_ceesafe_package_<k>.o`. The default output is `<name>.a` (`out/<name>.a` in a package). Unlike `-r`, an
+archive keeps the host's LTO: with `--cflag -flto=thin` (or `-flto`) every member is bitcode, which the host's link
+optimises with its own code. One archive per host binary: two archives built separately each carry the runtime and
+clash as two objects do (ADR 0088 §2.7). The headers a host includes (`ceesafe/embed.h`, `ceesafe_exports.h`) are
+`--emit c`'s.
+- `--ar <archiver>` names the archiver; by default it is `llvm-ar` beside an LLVM clang (`clang-18` beside
+  `llvm-ar-18`; the C compiler found as for `--emit obj`, on `PATH` when it has no directory), else `ar` on `PATH`
+  (Apple's `ar` indexes bitcode members).
+- Usage errors (status 2): `--ar` without `--emit lib`; `--emit lib` when no archiver is found, or `--ar`'s is not,
+  naming `--ar`.
 
 `--jobs N` (`build --split`, ADR 0082 §2.5) compiles at most `N` C files at once; the default is the number of CPUs
 (`getconf _NPROCESSORS_ONLN`, or `NUMBER_OF_PROCESSORS` on Windows), and `--jobs 1` compiles them one at a time in the

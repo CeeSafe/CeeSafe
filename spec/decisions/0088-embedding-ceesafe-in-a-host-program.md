@@ -1,6 +1,6 @@
 # ADR 0088 — Embedding CeeSafe in a host program: a library archive, `ceesafe_init`, panic and allocator hooks, host bindings
 
-- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
+- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Stage A implemented on branch `impl/0088a` (§7). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
   Raised by the Bun port's first crate swap (`~/dev/CeeSafeApps/bun/analysis/trials/csrf/REPORT.md`): `bun_csrf` was
   replaced by CeeSafe inside Bun 1.4.4 and Bun's tests passed, but the trial found that CeeSafe cannot yet live in a
   program whose `main` is not CeeSafe's (its gaps G8, G6, G2, G9, and the runtime that is never started). The trial's
@@ -314,8 +314,9 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   C library's allocator (or the hook's, in stage B), not counted and never freed — so the host may change or free its
   own `argv` afterwards (a libuv-style host rewrites it for the process title, §1.3).
 - **Errors.** `CEESAFE_INIT_AGAIN` (called before, or concurrently); `CEESAFE_INIT_LATE` (the runtime has already
-  allocated: counting, and in stage B the allocator, cannot change under live blocks, ADR 0059); `CEESAFE_INIT_SIZE`;
-  `CEESAFE_INIT_ALLOCATOR` (a hook with a NULL function; in stage A, any allocator). The default allocator functions
+  allocated: counting, and in stage B the allocator, cannot change under live blocks, ADR 0059); `CEESAFE_INIT_SIZE`
+  (also a NULL config); `CEESAFE_INIT_ALLOCATOR` (a hook with a NULL function; in stage A, any allocator);
+  `CEESAFE_INIT_MEMORY` (the copy of `argv` could not be allocated; added in the implementation, §7). The default allocator functions
   set a relaxed "allocated" flag, so `LATE` costs nothing once a hook is installed. **`LATE` is best effort:** it sees
   allocations that happened before the call; an allocation racing with `ceesafe_init` on another thread breaks the
   ordering contract and is not detected.
@@ -341,15 +342,18 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
 - **Generated `main`** calls `ceesafe_init` (with the environment flag and its `argv`), so there is one start path,
   and `ceesafe_rt_start` and `ceesafe_rt_args` go.
 - **Freestanding.** `ceesafe/embed.h` exists there too, without the environment flag (there is no environment),
-  `argc`/`argv` (no `Process`) or the allocator (no heap; profiles.md §4.1). The panic hook stays the link-time
-  `ceesafe_panic` of profiles.md §4.2, unchanged; `panic_hook` is hosted only.
+  `argc`/`argv` (no `Process`) or the allocator (no heap; profiles.md §4.1), and, as implemented (§7), without
+  `fail_alloc_at` and `alloc_report`, since nothing is counted without a heap: its config is `size` and `flags`.
+  The freestanding core keeps no mutable global (profiles.md §4.4), so its `ceesafe_init` checks the size and keeps
+  no state word. The panic hook stays the link-time `ceesafe_panic` of profiles.md §4.2, unchanged; `panic_hook` is
+  hosted only.
 
 ### 2.3 Exports on any host thread (stage A, after the runtime fix)
 
 - **The guarantee.** Exports may be called concurrently from any number of host threads, which need not be threads
-  CeeSafe made and need no registration. Per-thread runtime state (scratch frames, `FailingAllocator`'s arming, the
-  async executor, the panic flags of §2.4) is `_Thread_local`; process-wide state (the counters, the config, the state
-  word) is atomic or written once before any call (§2.2).
+  CeeSafe made and need no registration. Per-thread runtime state (scratch frames, the async executor, the panic flags
+  of §2.4) is `_Thread_local`; process-wide state (the counters, `FailingAllocator`'s countdown, which type-system.md
+  §18.1 makes one for the process, the config, the state word) is atomic or written once before any call (§2.2).
 - **This is the runtime fix's guarantee** (header, §1.8), stated here as the embedding contract. Stage A does not ship
   until that fix has landed and §5's two-host-thread test passes under ThreadSanitizer.
 - **Data the program shares between threads** is the language's business, as for CeeSafe's own threads
@@ -363,7 +367,8 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   them and calls `Bun__crashHandler(ptr, len)` (§1.5), which reports `CrashReason::Panic` with a stack and does not
   return.
 - **Runtime aborts go through it.** The three hosted aborts of `ceesafe_rt_async.c` (§1.5) call
-  `ceesafe_panic_text(CEE_PANIC_ASYNC, <their message>, …)` instead of writing and aborting, as the freestanding
+  `ceesafe_panic_runtime(CEE_PANIC_ASYNC, <their message>)` (`ceesafe_panic_text` takes no kind; §7) instead of
+  writing and aborting, as the freestanding
   branches already call `ceesafe_panic(CEE_PANIC_ASYNC, …)`. `CEE_PANIC_ASYNC` exists (`rt.h:90`), so no kind is added;
   the message tells the three apart, and `file` is NULL. Afterwards `ceesafe_platform_abort` is called only from the
   panic functions, which a contract test checks.
@@ -376,7 +381,7 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   that the next caller relocks, drops never run. Generated C has no unwind information, and panic = abort stays the
   rule (OD-5).
 - **It must not call CeeSafe.** A per-thread **panicked** flag is set before the hook runs. Every export and every
-  `@callback` entry checks it first and, if it is set, prints the line and aborts. This turns the two ways a thread
+  `@callback` entry checks it first and, if it is set, prints that thread's panic's line and aborts. This turns the two ways a thread
   could re-enter after a panic — the hook calling an export, and a host that escaped the hook anyway and calls in
   again on that thread — into an abort instead of running on broken state. It costs one thread-local load and an
   untaken branch per export call (§5's benchmark). Other threads are not stopped: a lock the panicked thread held stays
@@ -659,3 +664,49 @@ The G1 fix is independent and should land first: a host that includes `ceesafe_e
    **Proposed: defer**, with that design.
 9. **The plan:** A in 0.28.0 after the runtime fix, B with it if ready (else 0.29.0), C in 0.29.0, D deferred, E with
    a Windows run? **Proposed: yes.**
+
+## 7. Implementation notes: stage A (2026-11-10)
+
+Branch `impl/0088a`, on `release/0.28.0` after `fix/runtime-thread-state`.
+
+- **`--emit lib`** (`src/host/build.cee`, `toolchain.cee`'s `compileObject`, which now archives as well as `-r`
+  links): members `<program>_main.o` (with `--split`, the unit's path with `_` for `/`), `ceesafe_rt_*.o`,
+  `<program>_ceesafe_package_<k>.o`; `<archiver> rcs`, the output removed first since `ar r` adds to an archive that
+  exists. The default archiver is `llvm-ar` beside an LLVM clang (a version suffix kept: `clang-18`, `llvm-ar-18`),
+  else `ar` on `PATH`; `--ar` is looked up as `--cc` is. The headers stay `--emit c`'s: an archive build writes none.
+- **`ceesafe/embed.h`** is `runtime/include/ceesafe/embed.h`, runtime file 9 of `tools/gen_runtime.py`, written by
+  every build beside `ceesafe/rt.h`, which includes it; the freestanding form is the same file after `#define
+  CEESAFE_EMBED_FREESTANDING 1`. It has `extern "C"` guards of its own (new; `ceesafe_exports.h`'s are §2.6's, on
+  their own branch).
+- **`ceesafe_init`/`ceesafe_shutdown`** are in `runtime/core/ceesafe_rt_core.c`. The state word uses the runtime's
+  sequentially consistent atomics (stronger than the acquire and release §2.2 asks). Only the first version's size
+  is known, so `size` must be `sizeof(ceesafe_config)`; the config is copied into a zeroed local, `size` bytes, so a
+  later version's defaults come for free. The "allocated" flag is `ceesafe_rt_allocated`, set (relaxed; a volatile
+  access under MSVC) by `ceesafe_platform_alloc`, `_alloc_zeroed` and `_realloc` at their first success, so it also
+  sees the executor's and I/O layer's direct calls. `argv` is copied by `ceesafe_platform_alloc` after the LATE check.
+  With `CEESAFE_INIT_ENVIRONMENT`, `CEESAFE_FAIL_ALLOC_AT` replaces the config's value when set and non-zero, and
+  `CEESAFE_ALLOC_REPORT` turns the report on.
+- **Departures from §2.2–§2.4, with the text above amended to match:** a fifth error, `CEESAFE_INIT_MEMORY`, since
+  the copy of `argv` can fail and none of the four errors says so; a NULL config is `CEESAFE_INIT_SIZE`; the hosted
+  aborts call a new `ceesafe_panic_runtime(kind, message)` (printed `ceesafe panic: <message>`, no location), since
+  `ceesafe_panic_text` has no kind parameter; the freestanding config has only `size` and `flags`, and no state word;
+  the re-entry check prints the thread's first panic's line (kept in a `_Thread_local` copy), so a hook that calls an
+  export, and an escaped host that calls in again, both end with that panic's line, printed once.
+- **The generated `main`** fills the config with designated initialisers, panics (`ceesafe_panic_runtime(
+  CEE_PANIC_EXPLICIT, "ceesafe_init failed")`) if `ceesafe_init` fails (only LATE, from a C constructor allocating
+  through CeeSafe, or MEMORY could), runs the entry and calls `ceesafe_shutdown`. `ceesafe_rt_start`, `ceesafe_rt_args`
+  and `ceesafe_rt_finish` are gone; `ceesafe_args_set` is the internal setter `ceesafe_init` calls.
+- **The panic path**: `ceesafe_panic`, `ceesafe_panic_text` and `ceesafe_panic_runtime` build a `ceesafe_panic_info`
+  and share one `panic_report`; `ceesafe_platform_abort` is called only from it and from `ceesafe_panic_reentered`.
+  The check, `ceesafe_entry_check()` in `ceesafe/rt.h`, is emitted first in every export wrapper and `@callback`
+  function of a hosted build (`CEmitter.hosted`).
+- **Tests** (`tools/embed_check.py`, contract step "embedding"; fixture `tests/embedding`): §5's stage A list, with
+  these differences. The executor's out-of-memory abort is not reachable through `fail_alloc_at`: its bookkeeping
+  allocates through the platform functions directly, uncounted (§2.5), and the other two aborts are not reachable from
+  safe code; so `aborts.c` compiles `ceesafe_rt_async.c` into itself and calls the three directly, with a hook
+  installed. The two-host-thread export uses `FailingAllocator` unarmed, since its countdown is the process's
+  (type-system.md §18.1) and two threads arming it would steer each other. ld.lld's `--gc-sections --icf=safe` runs
+  where the host links ELF with lld; on macOS, `-dead_strip`. `ceesafe_exports.h` compiled as C++ waits for its guards;
+  `ceesafe/embed.h` is compiled as C++ instead. The corpus programs with an `@export` are the run-pass and ffi ones
+  with a CeeSafe `main` (14), linked from their archive alone. The two-panics hook records under a mutex and the
+  second reporter aborts; the "hook that calls an export" ends with the line once and the export not run.

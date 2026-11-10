@@ -405,6 +405,67 @@ keep are reported as held, like `CEE_ALLOC_FOREIGN`'s. Either number may realloc
 other. Use it for the setup only: an allocation made under it is never tested
 ([ADR 0061](../spec/decisions/0061-foreign-allocations-for-initialisation.md)).
 
+## Embedding in a host program
+
+A program whose `main` is not CeeSafe's (a C, C++ or Rust program calling CeeSafe exports) links CeeSafe as a static
+library. `ceesafec build --emit lib -o libtext.a` writes one archive holding the generated code and the runtime, one
+member per C file; with `--cflag -flto=thin` the members are bitcode and join the host's ThinLTO. Link one archive per
+host program. The headers come from `ceesafec build --emit c`: `ceesafe_exports.h` declares the exports, and
+`ceesafe/embed.h` is the runtime's interface for a host.
+
+<!-- ceesafe: check -->
+```ceesafe
+/// The number of bytes of `text` that are ASCII letters.
+/// Safety: the host passes `length` readable bytes at `text`.
+@export("text_letters")
+fn letters(text: *u8, length: usize) -> u64 {
+    let bytes = unsafe { Slice.fromRaw(text, length) };
+    var count: u64 = 0;
+    for (b in bytes) {
+        if ((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')) {
+            count += 1;
+        }
+    }
+    return count;
+}
+```
+
+The host calls `ceesafe_init` once, before any thread calls CeeSafe; after it, exports may be called from any of its
+threads at once. Its config gives the program arguments (copied), the allocation report and failure injection, and a
+panic hook, and `ceesafe_shutdown` prints the report and returns the blocks still live:
+
+```c
+#include "ceesafe/embed.h"
+#include "ceesafe_exports.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+static void on_panic(void *context, const ceesafe_panic_info *info) {
+    (void)context;
+    fprintf(stderr, "panic: %s at %s:%u\n", info->reason, info->file ? info->file : "(runtime)", info->line);
+    abort(); /* a hook must end the process or never return */
+}
+
+int main(int argc, char **argv) {
+    ceesafe_config config = {0};
+    config.size = sizeof config;
+    config.flags = CEESAFE_INIT_ENVIRONMENT; /* CEESAFE_ALLOC_REPORT and CEESAFE_FAIL_ALLOC_AT */
+    config.argc = argc;
+    config.argv = (const char *const *)argv;
+    config.panic_hook = on_panic;
+    if (ceesafe_init(&config) != 0) return 1;
+    printf("%llu\n", (unsigned long long)text_letters((const uint8_t *)"a1b2", 4));
+    return (int)ceesafe_shutdown(); /* 0 unless blocks leaked under a report */
+}
+```
+
+`cc host.c libtext.a -o host` links it. A panic calls the hook on the thread that panicked, with the reason, the
+message and the CeeSafe location. The hook must not return into CeeSafe, call an export, `longjmp` out or throw:
+CeeSafe's frames have no unwinding, so after a panic that thread may not call CeeSafe again, and an export called on
+it prints the panic and aborts. Without `ceesafe_init` everything still works, but the panic is only printed, the
+environment's settings are ignored and `Process.argument` has no arguments
+([ADR 0088](../spec/decisions/0088-embedding-ceesafe-in-a-host-program.md)).
+
 ## Next
 
 [Kernel code](kernel.md).

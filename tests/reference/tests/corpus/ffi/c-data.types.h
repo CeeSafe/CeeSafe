@@ -10,7 +10,9 @@
 #define EIO 5
 #define DATA_VERSION "data 2.0"
 #define PAGE_SHIFT 12
-enum node_kind { NODE_FILE = 1, NODE_DIR = 2 };
+/* NODE_NONE makes the enum's integer `int` on every target (type-system.md §31.6): without a negative enumerator GCC
+ * and Clang give it `unsigned int` on Linux and macOS, and MSVC gives it `int` on Windows. */
+enum node_kind { NODE_NONE = -1, NODE_FILE = 1, NODE_DIR = 2 };
 
 struct dev {
     uint32_t id;

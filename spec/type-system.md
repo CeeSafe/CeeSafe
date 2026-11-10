@@ -3299,6 +3299,9 @@ fn copyOut(info: borrow cosmoboot_info, out: borrow mut bootinfo_framebuffer) {
   naming the struct, the field and the declaration's file and line. Neither expression is
   evaluated. A header that lacks a field, or has it with another type in some configuration, fails
   to compile; it cannot miscompile.
+- A field of an imported enum spelled `enum name` (§31.6) is asserted with `_Generic(&((S *)0)->f, enum name *: 1,
+  default: 0)`: Clang targeting Windows reads `enum name:` in an association as an enum with a fixed underlying type (a
+  Microsoft extension) and refuses it.
 - An array field `f: [E; N]` (C9) is asserted with `_Generic(&((S *)0)->f, CE (*)[N]: 1, default: 0)`, exact
   where `_Generic` of the member itself would see a decayed pointer, and, for integer and `bool` elements, with
   the size of CeeSafe's array. Its place is `(*(A *)(uintptr_t)&(*p).f)` (through `uintptr_t`, as `p` may be a `const` pointer), where `A` is CeeSafe's array struct
@@ -3334,10 +3337,20 @@ N0294 (an imported type used where CeeSafe would need its size, or a borrow of a
   pointer type of C's with an enum parameter is therefore the same C type as CeeSafe's, which a call through a pointer
   needs (UBSan's `-fsanitize=function` refuses a call whose pointer type names `unsigned int` where the function's
   says `enum`, though C calls the two compatible).
-- **Lowering.** A generated C file that uses the type asserts, once and before its first use,
-  `_Static_assert(sizeof(T) == sizeof(CI) && _Generic((T)0, CI: 1, default: 0), "…")` for its C spelling `T` and
-  `I`'s C type `CI`, with a message naming the type and the declaration's file and line. A header whose enum the C
-  compiler lays out as another integer fails to compile. Its mangled name is its own (`N`, the length, the name).
+- **Lowering.** A generated C file that uses the type asserts, once and before its first use, that C gives the enum
+  `I`'s width and signedness: `_Static_assert(sizeof(T) == sizeof(CI) && (T)-1 < (T)1, "…")` for its C spelling `T`
+  and `I`'s C type `CI` when `I` is signed, with `>` when it is unsigned, and a message naming the type and the
+  declaration's file and line. A header whose enum the C compiler lays out as another integer fails to compile.
+  `_Generic` cannot state it: MSVC makes no enum compatible with any integer type. Its mangled name is its own (`N`,
+  the length, the name).
+- **The integer is the target's** (C11 §6.7.2.2 ¶4 leaves it to the implementation), and values of the type are C's
+  enum in the generated code, so C's arithmetic and comparisons on them are CeeSafe's only when it has `I`'s width and
+  signedness. GCC
+  and Clang on Linux and macOS give an enum whose enumerators are all non-negative `unsigned int` (`u32`) and one with a
+  negative enumerator `int` (`i32`); MSVC, and Clang targeting Windows, give every enum `int`. So one declaration fits
+  every target only where the header's enum has the same integer on all of them, as one with a negative enumerator
+  does (`i32`). Elsewhere the assertion stops the build on the target whose integer differs; ceesafec never accepts
+  an integer of the right width but the wrong signedness.
 - The interpreter runs it as an integer of `I`'s width.
 
 Diagnostics: N0290 (an attribute other than `@ctype`, a block without `@header`), N0291 (an integer type C does not give

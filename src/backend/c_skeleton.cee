@@ -1501,11 +1501,15 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
         e.b(spelling)?;
         e.t(") == sizeof(")?;
         e.b(integer.view())?;
-        e.t(") && _Generic((")?;
+        // The width and the signedness (§31.6): `(T)-1` is below `(T)1` only for a signed integer. _Generic cannot say
+        // it, since MSVC makes no enum compatible with any integer type.
+        e.t(") && (")?;
         e.b(spelling)?;
-        e.t(")0, ")?;
-        e.b(integer.view())?;
-        e.t(": 1, default: 0), ")?;
+        e.t(")-1 ")?;
+        e.t(if (c.types.info(imported.typ).signed) "<" else ">")?;
+        e.t(" (")?;
+        e.b(spelling)?;
+        e.t(")1, ")?;
         var message = Vector<u8>.create();
         appendText(mut message, "ceesafec import: ")?;
         appendBytes(mut message, spelling)?;
@@ -1617,10 +1621,18 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
             }
             var cType = Vector<u8>.create();
             appendBoundaryType(c, mut cType, field.typ, false)?;
-            e.t("_Static_assert(_Generic(")?;
+            // An imported enum spelled `enum name` (§31.6) is matched through the member's address: Clang targeting
+            // Windows reads `enum name:` in an association as an enum with a fixed underlying type, a Microsoft
+            // extension, and refuses it.
+            let cTypeText = cType.view();
+            let byAddress = cTypeText.length > 5 && sameText(cTypeText[..5], "enum ");
+            e.t(if (byAddress) "_Static_assert(_Generic(&" else "_Static_assert(_Generic(")?;
             e.b(member.view())?;
             e.t(", ")?;
-            e.b(cType.view())?;
+            e.b(cTypeText)?;
+            if (byAddress) {
+                e.t(" *")?;
+            }
             if (field.typ == c.types.u8) {
                 e.t(": 1, default: _Generic(")?; // a `u8` field is also C's `char` (ADR 0034)
                 e.b(member.view())?;

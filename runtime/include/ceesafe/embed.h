@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Classpath-exception-2.0 */
 /*
  * Embedding CeeSafe in a host program whose `main` is not CeeSafe's (ADR 0088): the whole interface a host calls.
- * ceesafec writes this header beside ceesafe/rt.h in every build that writes headers, and beside the archive or object
- * of `--emit lib` and `--emit obj`; the internal ceesafe_rt_* functions are not part of it.
+ * ceesafec writes this header beside ceesafe/rt.h in every build that writes headers, and beside the archive of
+ * `--emit lib`; the internal ceesafe_rt_* functions are not part of it.
  *
  * - ceesafe_init, once, must happen before every call into CeeSafe on every thread: called before the host starts the
  *   threads that call CeeSafe, or published to them by the host's own synchronisation. A host that never calls it gets
@@ -29,7 +29,7 @@ extern "C" {
 
 /* ceesafe_init's results: 0, or one of these, with nothing changed. */
 #define CEESAFE_INIT_AGAIN 1     /* called before, or concurrently: returned once that call has succeeded */
-#define CEESAFE_INIT_LATE 2      /* counting asked for, and the runtime has already allocated */
+#define CEESAFE_INIT_LATE 2      /* counting asked for by the config, and the runtime has already allocated */
 #define CEESAFE_INIT_SIZE 3      /* config is NULL, or its size is not one this runtime knows */
 #define CEESAFE_INIT_ALLOCATOR 4 /* an allocator hook: stage A takes none (ADR 0088 §2.5) */
 #define CEESAFE_INIT_MEMORY 5    /* the copy of argv could not be allocated */
@@ -37,7 +37,9 @@ extern "C" {
 #if !defined(CEESAFE_EMBED_FREESTANDING)
 
 /* config.flags: read CEESAFE_ALLOC_REPORT and CEESAFE_FAIL_ALLOC_AT from the environment. The other bits are
-   reserved: pass 0 in them (this version ignores them; a later one may give them a meaning). */
+   reserved: pass 0 in them (ceesafe_init masks them off and ignores them; a later version may give them a meaning).
+   When only the environment asks for counting and the runtime has already allocated, ceesafe_init succeeds without
+   counting, says so on stderr, and takes the hook and argv; a config that asks itself gets CEESAFE_INIT_LATE. */
 #define CEESAFE_INIT_ENVIRONMENT 1u
 
 typedef struct ceesafe_allocator {      /* ADR 0088 §2.5, stage B */

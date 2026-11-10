@@ -86,7 +86,10 @@
 24. check --all: one JSON document whose diagnostics are sorted by package, file and position, with a `packages`
     summary that counts them by their package; every package's own error found (borrowfail's too, which broken's
     type error stops in the first round), no N0364; the text in the same order; the same cold and warm; its exit
-    status. `check --jobs` is a usage error: check is one process.
+    status. `check --jobs` is a usage error: check is one process. A dependency's failing test hides none of its
+    dependents' own errors (all-tests); N0400 and N0401 in a dependency's own files are reported by `check --all`
+    and fail it with `--deny-warnings`, but not by `check` in its dependant, cold or warm, and the dependency's
+    record counts them (all-lints).
 25. Stale records are never used (ADR 0082 §2.7): a record of mid forged to say its functions have no effects is used
     while it holds (app's N0295 change), but not with another banner, after its package's sources change, after a
     dependency's interface changes, when it is writable by the group or others, when it is cut short, when it is a
@@ -100,7 +103,9 @@
     c/caller.c, which includes ceesafe_exports.h and calls both packages' exports. Built as one file, `--split` and
     `--emit obj` (linked here with cc), the program prints the same; `--emit c` spells the types by their declared
     names (`struct Point`, `Shade`), never `geo.`. clash: app's `@repr(C)` struct named as its dependency geo's, and
-    rival's struct and enum named as geo's (rival and geo unrelated, geo first by name), are N0201 with a note at geo's.
+    rival's struct and enum named as geo's (rival and geo unrelated, geo first by name), are N0201 with a note at geo's;
+    the per-package check's N0364 for rival names geo and suggests `check --whole-program`, since `check --package
+    rival` alone finds nothing.
 28. A C++ caller (ADR 0088 §2.6): a C++11 file includes repr-dep's ceesafe_exports.h (its `extern "C"` guards),
     calls both packages' exports with their `@repr` types, compiles with -Wall -Werror and links with the program,
     which prints the same.
@@ -253,11 +258,94 @@ def oracle_problem(directory, whole, per):
         named.append(name)
         if d.get("package") != root or d["file"] != "ceesafe.toml" or d["severity"] != "error" or not d["notes"]:
             return f"N0364 is not an error at the manifest with a note: {d}"
-        if f"--package {name}'" not in d["message"]:
+        if f"--package {name}'" not in d["message"] or (
+                "--whole-program'" not in d["message"] and f"'ceesafec check --package {name}' to see" not in d["message"]):
             return f"N0364 does not say how to see {name}'s errors: {d['message']}"
     if sorted(named) != sorted(failed):
         return f"N0364 names {sorted(named)}, but the packages with errors are {sorted(failed)}"
     return None
+
+
+def check_all_rounds(compiler, work, problems):
+    """Check 24's further cases, on packages made here: a dependency's failing test hides none of its dependents' own
+    errors; N0400 and N0401 are found in every package's own files by `check --all` (and fail it with
+    `--deny-warnings`), while `check` in a dependant reports neither; a record counts its package's own warnings."""
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as handle:
+            handle.write(text)
+
+    def manifest(name, kind, dependencies=()):
+        deps = "".join(f'{d} = {{ path = "../{d}" }}\n' for d in dependencies)
+        return (f'[package]\nname = "{name}"\nversion = "0.1.0"\nkind = "{kind}"\n'
+                + (f"\n[dependencies]\n{deps}" if deps else ""))
+
+    allocates = "    var v = Vector<u64>.create();\n    v.push(1)!;\n    return v.length as u64"
+    tests = os.path.join(work, "all-tests")
+    write(os.path.join(tests, "l", "ceesafe.toml"), manifest("l", "library"))
+    write(os.path.join(tests, "l", "src", "lib.cee"), "public fn one() -> u64 {\n    return 1;\n}\n")
+    write(os.path.join(tests, "l", "tests", "t.cee"),
+          "@test\nfn broken() -> Result<void, TestFailure> {\n    let x: u64 = \"s\";\n    return Ok();\n}\n")
+    write(os.path.join(tests, "r", "ceesafe.toml"), manifest("r", "library", ["l"]))
+    write(os.path.join(tests, "r", "src", "lib.cee"),
+          f"@effects()\npublic fn pure() -> u64 {{\n{allocates} + l.one();\n}}\n")
+    write(os.path.join(tests, "app", "ceesafe.toml"), manifest("app", "executable", ["l", "r"]))
+    write(os.path.join(tests, "app", "src", "main.cee"),
+          f"@effects()\nfn mine() -> u64 {{\n{allocates};\n}}\n\nfn main() {{\n"
+          "    Console.writeLine(mine() + r.pure());\n}\n")
+    env = {"CEESAFE_HOME": os.path.join(work, "all-tests-home")}
+    app = os.path.join(tests, "app")
+    run([compiler, "fetch", "--offline"], app, env)
+    p = run([compiler, "check", "--all", "--diagnostics-format=json"], app, env)
+    try:
+        document = json.loads(p.stdout)
+        found = sorted((d.get("package", ""), d["code"]) for d in document["diagnostics"])
+    except (ValueError, KeyError) as e:
+        found = f"no document ({e}): {p.stdout[:200]} {p.stderr[:200]}"
+    want = [("app", "N0295"), ("l", "N0205"), ("r", "N0295")]
+    if found != want or p.returncode != 1:
+        problems.append(f"check --all: l's failing test hid its dependents' own errors: {found} ({p.returncode})")
+
+    lints = os.path.join(work, "all-lints")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "shadowing", "tls"), os.path.join(lints, "tls"))
+    write(os.path.join(lints, "mid", "ceesafe.toml"), manifest("mid", "library", ["tls"]))
+    write(os.path.join(lints, "mid", "src", "lib.cee"),
+          "public fn describe(tls: tls.TlsConfig) -> u32 {\n    return tls.port + 1;\n}\n\n"
+          "public fn greet(name: StringView) {\n    Console.writeLine(\"hello {name}\");\n}\n")
+    write(os.path.join(lints, "top", "ceesafe.toml"), manifest("top", "executable", ["mid", "tls"]))
+    write(os.path.join(lints, "top", "src", "main.cee"),
+          "fn main() {\n    mid.greet(\"x\");\n"
+          "    Console.writeLine(mid.describe(tls.TlsConfig { port: 1 }));\n}\n")
+    home = os.path.join(work, "all-lints-home")
+    env = {"CEESAFE_HOME": home}
+    top = os.path.join(lints, "top")
+    run([compiler, "fetch", "--offline"], top, env)
+    for attempt in ("cold", "warm"):
+        p = run([compiler, "check", "--diagnostics-format=json"], top, env)
+        if p.returncode != 0 or '"diagnostics":[]' not in p.stdout.replace(" ", ""):
+            problems.append(f"check ({attempt}): a dependency's N0400 or N0401 reported: {p.stdout[:300]}")
+        p = run([compiler, "check", "--deny-warnings"], top, env)
+        if p.returncode != 0:
+            problems.append(f"check --deny-warnings ({attempt}): a dependency's warning failed it: {p.stderr[:300]}")
+    records = os.path.join(home, "cache", "records")
+    mids = [n for n in os.listdir(records) if n.startswith("mid-")] if os.path.isdir(records) else []
+    if os.name != "nt":
+        counts = [int(record_fields(open(os.path.join(records, n), "rb").read())[7]) for n in mids]
+        if not counts or any(c != 2 for c in counts):
+            problems.append(f"records: mid's record does not count its two warnings: {counts}")
+    for attempt in ("warm", "again"):
+        p = run([compiler, "check", "--all", "--diagnostics-format=json"], top, env)
+        try:
+            document = json.loads(p.stdout)
+            found = sorted((d.get("package", ""), d["code"], d["severity"]) for d in document["diagnostics"])
+        except (ValueError, KeyError) as e:
+            found = f"no document ({e}): {p.stdout[:200]} {p.stderr[:200]}"
+        if found != [("mid", "N0400", "warning"), ("mid", "N0401", "warning")] or p.returncode != 0:
+            problems.append(f"check --all ({attempt}): expected mid's N0400 and N0401: {found} ({p.returncode})")
+        p = run([compiler, "check", "--all", "--deny-warnings"], top, env)
+        if p.returncode != 1 or "N0400" not in p.stderr or "N0401" not in p.stderr:
+            problems.append(f"check --all --deny-warnings ({attempt}): a dependency's warnings did not fail it "
+                            f"({p.returncode}) {p.stderr[-300:]}")
 
 
 def interface_records(compiler, work, problems):
@@ -1467,8 +1555,22 @@ def main():
         if p.returncode != 1 or got != want or not all("§28.5" in d.get("message", "") for d in found):
             problems.append(f"repr-dep/clash: expected N0201 at rival's Point and Shade and app's Rect, owned by geo: "
                             f"{p.returncode} {got}")
+        # The per-package check: rival's clash needs geo, which rival does not depend on, so N0364 names geo and
+        # suggests the whole program's check, not `check --package rival`, which finds nothing.
+        p = run([compiler, "check", "--diagnostics-format=json"], clash)
+        try:
+            n0364 = [d["message"] for d in json.loads(p.stdout)["diagnostics"] if d["code"] == "N0364"]
+        except (ValueError, KeyError):
+            n0364 = [p.stdout[:300] + p.stderr[:300]]
+        if p.returncode != 1 or len(n0364) != 1 or "'rival'" not in n0364[0] or "one with 'geo'" not in n0364[0] or \
+                "check --whole-program'" not in n0364[0]:
+            problems.append(f"repr-dep/clash: N0364 should name geo and suggest --whole-program: {n0364}")
+        p = run([compiler, "check", "--package", "rival"], clash)
+        if p.returncode != 0:
+            problems.append(f"repr-dep/clash: check --package rival ({p.returncode}) {p.stderr[-300:]}")
 
         interface_records(compiler, work, problems)
+        check_all_rounds(compiler, work, problems)
 
     print(f"package_tests: 28 checks; {len(problems)} problems")
     for problem in problems:

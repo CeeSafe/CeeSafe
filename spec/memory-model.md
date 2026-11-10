@@ -131,8 +131,9 @@ public interface Allocator {
     variables (the environment's `CEESAFE_FAIL_ALLOC_AT` wins over the config's when set). The report is printed by
     `ceesafe_shutdown`, which the host calls (in its exit path), and which returns `live`; the generated `main` calls
     `ceesafe_init` with the environment flag before anything else and `ceesafe_shutdown` when `main` returns. Counting
-    cannot start under live blocks: `ceesafe_init` asking for counting after the runtime has allocated is
-    `CEESAFE_INIT_LATE`, and changes nothing (without counting, it succeeds). The generated `main` counts regardless,
+    cannot start under live blocks: a config asking for counting after the runtime has allocated is
+    `CEESAFE_INIT_LATE`, and changes nothing (without counting, it succeeds; when only the environment asks, it
+    succeeds without counting and says so on stderr). The generated `main` counts regardless,
     as before `ceesafe_init`, when a C constructor has allocated through CeeSafe. A host that never calls it gets no counting, no failure injection and no report, whatever the
     environment says. `ceesafe_init`'s copy of `argv` is not counted.
   - **With threads.** The counters are atomic, so every attempt, whatever its thread, gets its own number in one

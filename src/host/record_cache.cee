@@ -28,6 +28,8 @@ extern "C" {
     fn unlinkat(directory: i32, path: *CChar, flags: i32) -> i32;
     // C's rename, on every platform: toolchain.cee moves `--emit lib`'s finished archive over its output.
     fn rename(from: *CChar, to: *CChar) -> i32;
+    // POSIX's getpid (on Windows, rt.h names the runtime's ceesafe_win_getpid): `--emit lib`'s temporary archive name.
+    fn getpid() -> i32;
     // macOS's system calls by number (executablePath): getpid (20) and proc_info (336).
     fn syscall(number: i32, ...) -> i32;
 }
@@ -67,6 +69,12 @@ struct FileFacts {
     mode: u32;
     owner: u32;
     size: u64;
+    device: u64;
+    inode: u64;
+    modified: u64; // st_mtime's seconds
+    modifiedNanos: u64;
+    changed: u64; // st_ctime's seconds: any write, chmod, link or rename of the file moves it
+    changedNanos: u64;
 }
 
 /// The machine, from uname(2): its `machine` member follows four others, of 256 bytes each on macOS and 65 on Linux.
@@ -136,24 +144,53 @@ fn descriptorFacts(layout: u32, fd: i32) -> FileFacts? {
     // Offsets of st_mode, st_uid and st_size, with the sizes of the first two.
     var mode: u32 = 0;
     var owner: u32 = 0;
-    var facts = FileFacts { kind: 0, mode: 0, owner: 0, size: 0 };
+    var facts = FileFacts {
+        kind: 0,
+        mode: 0,
+        owner: 0,
+        size: 0,
+        device: 0,
+        inode: 0,
+        modified: 0,
+        modifiedNanos: 0,
+        changed: 0,
+        changedNanos: 0,
+    };
+    // Also st_dev and st_ino, and st_mtime and st_ctime (each a timespec: seconds, then nanoseconds, 8 bytes each).
+    var times: usize = 0;
     if (layout == 1) {
         mode = littleEndian(bytes, 4, 2);
         owner = littleEndian(bytes, 16, 4);
         facts.size = littleEndian64(bytes, 96, 8);
+        facts.device = littleEndian64(bytes, 0, 4);
+        facts.inode = littleEndian64(bytes, 8, 8);
+        times = 48;
     } else if (layout == 2) {
         mode = littleEndian(bytes, 8, 2);
         owner = littleEndian(bytes, 12, 4);
         facts.size = littleEndian64(bytes, 72, 8);
+        facts.device = littleEndian64(bytes, 0, 4);
+        facts.inode = littleEndian64(bytes, 4, 4);
+        times = 40;
     } else if (layout == 3) {
         mode = littleEndian(bytes, 24, 4);
         owner = littleEndian(bytes, 28, 4);
         facts.size = littleEndian64(bytes, 48, 8);
+        facts.device = littleEndian64(bytes, 0, 8);
+        facts.inode = littleEndian64(bytes, 8, 8);
+        times = 88;
     } else {
         mode = littleEndian(bytes, 16, 4);
         owner = littleEndian(bytes, 24, 4);
         facts.size = littleEndian64(bytes, 48, 8);
+        facts.device = littleEndian64(bytes, 0, 8);
+        facts.inode = littleEndian64(bytes, 8, 8);
+        times = 88;
     }
+    facts.modified = littleEndian64(bytes, times, 8);
+    facts.modifiedNanos = littleEndian64(bytes, times + 8, 8);
+    facts.changed = littleEndian64(bytes, times + 16, 8);
+    facts.changedNanos = littleEndian64(bytes, times + 24, 8);
     let fileType = mode & 0xF000;
     facts.kind = if (fileType == 0x8000) 1 else if (fileType == 0x4000) 2 else 3;
     facts.mode = mode & 0xFFF;
@@ -314,7 +351,11 @@ fn openRecordCache() -> Result<RecordCache, AllocError> {
 
 /// This ceesafec's identity, as a key holds it beside the banner: the SHA-256 of its executable's bytes, read once
 /// per process (builds of one version share its banner, and a record proved by one build is not the next build's to
-/// trust). False if the executable cannot be found or read: then no record is used.
+/// trust). False if the executable cannot be found or read, or may not be the one running: then no record is used.
+/// The file at the executable's path is the one the process runs only if nothing changed it since: its device, inode,
+/// size, modification and change times must be the same before and after it is read, and again at the path, and on
+/// macOS, where the path is the kernel's name for the image and another file may since have been put there, neither
+/// time may be later than the process's start (a write, a rename or a link moves the change time).
 fn ensureCompilerIdentity(cache: borrow mut RecordCache) -> Result<bool, AllocError> {
     if (cache.identity.length > 0) {
         return Ok(true);
@@ -323,7 +364,14 @@ fn ensureCompilerIdentity(cache: borrow mut RecordCache) -> Result<bool, AllocEr
         Some(p) => p,
         null => { return Ok(false); }
     };
-    match (hashFile(cache.system, cache.layout, path.view())?) {
+    var started: u64 = 0;
+    if (cache.system == 1) {
+        started = processStart();
+        if (started == 0) {
+            return Ok(false);
+        }
+    }
+    match (hashFile(cache.system, cache.layout, path.view(), started)?) {
         Some(digest) => {
             cache.identity = digest;
             return Ok(true);
@@ -332,18 +380,48 @@ fn ensureCompilerIdentity(cache: borrow mut RecordCache) -> Result<bool, AllocEr
     }
 }
 
-/// The SHA-256 (hexadecimal) of the regular file at `path`, or null if it cannot be read.
+/// The facts that tell one version of a file from another.
+fn sameVersion(a: borrow FileFacts, b: borrow FileFacts) -> bool =>
+    a.device == b.device && a.inode == b.inode && a.size == b.size && a.modified == b.modified &&
+        a.modifiedNanos == b.modifiedNanos && a.changed == b.changed && a.changedNanos == b.changedNanos;
+
+/// The microsecond at which this process started, since 1970 (macOS's proc_info PROC_PIDTBSDINFO: proc_bsdinfo's
+/// pbi_start_tvsec and pbi_start_tvusec, at bytes 120 and 128 of its 136), or 0 if it cannot be known.
+/// Safety: proc_info writes at most the 136 bytes given into `buffer`, during the call only; getpid takes no argument.
+fn processStart() -> u64 {
+    var buffer = [0u8; 136];
+    let pid = unsafe { syscall(20) };
+    if (pid <= 0) {
+        return 0;
+    }
+    let written = unsafe { syscall(336, 2, pid, 3, 0u64, borrow mut buffer[0] as *mut u8, 136) };
+    if (written < 136) {
+        return 0;
+    }
+    return littleEndian64(buffer[..], 120, 8) * 1000000 + littleEndian64(buffer[..], 128, 8);
+}
+
+/// A file time (seconds and nanoseconds) in microseconds since 1970.
+fn microseconds(seconds: u64, nanoseconds: u64) -> u64 => seconds * 1000000 + nanoseconds / 1000;
+
+/// The SHA-256 (hexadecimal) of the regular file at `path`, or null if it cannot be read or changed while it was
+/// (ensureCompilerIdentity); with `started` not 0, also null if it changed after that microsecond.
 /// Safety: the descriptor is closed here, once; pread writes at most the 65,536 bytes asked into `buffer`.
-fn hashFile(system: u32, layout: u32, path: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
+fn hashFile(system: u32, layout: u32, path: Slice<u8>, started: u64) -> Result<Vector<u8>?, AllocError> {
     let fd = openForReading(system, path)?;
     if (fd < 0) {
         return Ok(null);
     }
-    let regular = match (descriptorFacts(layout, fd)) {
-        Some(f) => f.kind == 1,
-        null => false,
+    let before = match (descriptorFacts(layout, fd)) {
+        Some(f) => f,
+        null => {
+            unsafe { close(fd); }
+            return Ok(null);
+        }
     };
-    if (!regular) {
+    let late = started != 0 && (microseconds(before.modified, before.modifiedNanos) > started ||
+        microseconds(before.changed, before.changedNanos) > started);
+    if (before.kind != 1 || late) {
         unsafe { close(fd); }
         return Ok(null);
     }
@@ -363,8 +441,23 @@ fn hashFile(system: u32, layout: u32, path: Slice<u8>) -> Result<Vector<u8>?, Al
         sha.append(buffer[..truncate<usize>(n)]);
         at += n as i64;
     }
+    let after = descriptorFacts(layout, fd);
     unsafe { close(fd); }
     if (failed) {
+        return Ok(null);
+    }
+    var stable = match (after) {
+        Some(f) => sameVersion(before, f) && truncate<u64>(at) == f.size,
+        null => false,
+    };
+    if (stable) {
+        let again = pathFacts(system, layout, path)?;
+        stable = match (again) {
+            Some(f) => sameVersion(before, f),
+            null => false,
+        };
+    }
+    if (!stable) {
         return Ok(null);
     }
     var digest = Vector<u8>.create();

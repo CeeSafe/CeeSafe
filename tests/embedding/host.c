@@ -197,6 +197,21 @@ int main(int argc, char **argv) {
         printf("quiet=%d args=%llu\n", r, (unsigned long long)embed_arg_count());
         fflush(stdout);
         printf("%u\n", embed_panic(9)); /* the hook fires */
+    } else if (strcmp(what, "late-env") == 0) {
+        /* Counting asked for by the environment alone (CEESAFE_ALLOC_REPORT set in the host's), after an allocation:
+           0, a warning on stderr, the hook and argv taken, and no report. */
+        printf("boxes=%llu\n", (unsigned long long)embed_boxes(1));
+        char *arguments[2] = {"prog", "one"};
+        int32_t r = init_with(hook_abort, 2, arguments, CEESAFE_INIT_ENVIRONMENT, 0);
+        printf("env=%d args=%llu live=%llu\n", r, (unsigned long long)embed_arg_count(),
+               (unsigned long long)ceesafe_shutdown());
+        fflush(stdout);
+        printf("%u\n", embed_panic(9)); /* the hook fires */
+    } else if (strcmp(what, "reserved") == 0) {
+        /* The reserved bits are masked off: bit 31, the generated main's signal before, does not skip LATE. */
+        printf("boxes=%llu\n", (unsigned long long)embed_boxes(1));
+        int32_t r = init_with(NULL, 0, NULL, 0x80000000u | 0x40000000u, 1);
+        printf("reserved=%d\n", r);
     } else if (strcmp(what, "misuse") == 0) {
         ceesafe_config config;
         memset(&config, 0, sizeof config);

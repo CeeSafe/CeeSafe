@@ -14,10 +14,24 @@ struct BraceScope {
     hasThis: bool;
 }
 
+/// N0400 for the root package's files; with `lintAll` (`check --all`), for every package's own files, each package
+/// with its own constants in scope, as its own check would see them.
 fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
+    for (p in 0..c.packages.length) {
+        if (p == 0 || c.lintAll) {
+            warnStringBracesOf(c, truncate<u32>(p))?;
+        }
+    }
+    if (c.packages.length == 0) {
+        warnStringBracesOf(c, 0)?;
+    }
+    return Ok();
+}
+
+fn warnStringBracesOf(c: borrow mut Checker, package: u32) -> Result<void, AllocError> {
     var scope = BraceScope { names: Vector<u32>.create(), constants: Vector<u32>.create(), hasThis: false };
     for (u in 0..c.front.ast.units.length) {
-        if (isBraceRootFile(c, c.front.ast.units[u].file)) {
+        if (isBraceFileOf(c, c.front.ast.units[u].file, package)) {
             let items = c.front.ast.units[u].items;
             for (k in 0..items.count) {
                 let item = c.front.ast.items[c.front.ast.at(items, k) as usize];
@@ -33,7 +47,7 @@ fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     for (u in 0..c.front.ast.units.length) {
         let file = c.front.ast.units[u].file;
-        if (!isBraceRootFile(c, file)) {
+        if (!isBraceFileOf(c, file, package)) {
             continue;
         }
         let items = c.front.ast.units[u].items;
@@ -67,11 +81,28 @@ fn warnStringBraces(c: borrow mut Checker) -> Result<void, AllocError> {
 }
 
 /// A file of the root package (package 0), not a library's.
-fn isBraceRootFile(c: borrow Checker, file: u32) -> bool {
+fn isBraceRootFile(c: borrow Checker, file: u32) -> bool => isBraceFileOf(c, file, 0);
+
+/// A file the lints read: of `package`, not a library's, and not one whose package's bodies come from a record.
+fn isBraceFileOf(c: borrow Checker, file: u32, package: u32) -> bool {
     if (file == none() || (file as usize) >= c.fileIsLibrary.length || c.fileIsLibrary[file as usize]) {
         return false;
     }
-    return packageOfFile(c, file) == 0;
+    if ((file as usize) < c.fileFromRecord.length && c.fileFromRecord[file as usize]) {
+        return false;
+    }
+    return packageOfFile(c, file) == package;
+}
+
+/// A file N0401 reads: the root package's, or with `lintAll` (`check --all`) any package's own.
+fn isLintedFile(c: borrow Checker, file: u32) -> bool {
+    if (!c.lintAll) {
+        return isBraceRootFile(c, file);
+    }
+    if (file == none()) {
+        return false;
+    }
+    return isBraceFileOf(c, file, packageOfFile(c, file));
 }
 
 fn braceFunctions(

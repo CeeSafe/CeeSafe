@@ -320,12 +320,13 @@ fn shadowBound(scope: borrow ShadowScope, symbol: u32) -> bool {
 }
 
 /// N0401 (ADR 0074 §2.10): `name.X`, where the local `name` shadows a dependency that has a public item `X`. The
-/// dependency's item is not reachable there; the warning says so. Run once after checking, for the root package's files.
+/// dependency's item is not reachable there; the warning says so. Run once after checking, for the root package's files
+/// (with `lintAll`, every package's own).
 fn warnShadowedMembers(c: borrow mut Checker) -> Result<void, AllocError> {
     let saved = c.file;
     for (k in 0..c.front.ast.shadowed.length) {
         let s = c.front.ast.shadowed[k];
-        if (!isBraceRootFile(c, s.file)) {
+        if (!isLintedFile(c, s.file)) {
             continue;
         }
         var name = none();

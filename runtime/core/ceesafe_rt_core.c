@@ -530,7 +530,18 @@ static uint32_t allocated_already(void) {
 #endif
 }
 
-int32_t ceesafe_init(const ceesafe_config *config) {
+/* Written by rt_init when the environment asked for counting after the runtime had allocated: counting is off, the
+   hook and argv are taken, and this says so on stderr (ADR 0088 §2.2). */
+static void warn_counting_unavailable(void) {
+    static const char line[] = "ceesafe: CEESAFE_ALLOC_REPORT and CEESAFE_FAIL_ALLOC_AT ignored: the runtime had "
+                               "already allocated before ceesafe_init, so allocations cannot be counted\n";
+    ceesafe_platform_write_stderr((const uint8_t *)line, sizeof line - 1u);
+}
+
+/* ceesafe_init's work. `generated_main` is the generated C `main`'s call (ceesafe_rt_init_main), which counts even when
+   the runtime has already allocated (a C constructor through CeeSafe), as 0.27.0 did: a host cannot ask for that,
+   since the internal entry point is not in embed.h and config.flags' reserved bits are masked off. */
+static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     for (;;) {
         uint32_t seen = ceesafe_atomic_cas_u32(&rt_state, CEE_RT_UNSTARTED, CEE_RT_STARTING);
         if (seen == CEE_RT_UNSTARTED) {
@@ -554,25 +565,36 @@ int32_t ceesafe_init(const ceesafe_config *config) {
         error = CEESAFE_INIT_SIZE;
     } else {
         ceesafe_mem_copy(&given, config, config->size);
+        given.flags &= CEESAFE_INIT_ENVIRONMENT; /* the reserved bits mean nothing (embed.h) */
         fail_at = given.fail_alloc_at;
         report = given.alloc_report;
+        bool asked = report || fail_at != 0u; /* by the config itself */
+        bool environment_asked = false;
         if ((given.flags & CEESAFE_INIT_ENVIRONMENT) != 0u) {
             uint64_t from_environment = ceesafe_platform_config("CEESAFE_FAIL_ALLOC_AT");
             if (from_environment != 0u) {
                 fail_at = from_environment;
+                environment_asked = true;
             }
             if (ceesafe_platform_config("CEESAFE_ALLOC_REPORT") != 0u) {
                 report = true;
+                environment_asked = true;
             }
         }
         if (given.allocator != NULL) {
             error = CEESAFE_INIT_ALLOCATOR; /* stage B's (ADR 0088 §2.5) */
-        } else if ((report || fail_at != 0u) && allocated_already() != 0u &&
-                   (given.flags & CEE_INIT_GENERATED_MAIN) == 0u) {
+        } else if ((report || fail_at != 0u) && !generated_main && allocated_already() != 0u) {
             /* Counting cannot start under live blocks (ADR 0059): a free would subtract what was never added. Without
-               counting, an earlier allocation changes nothing, so the hook and argv are taken. The generated `main`
-               counts regardless, as 0.27.0's did after a C constructor allocated through CeeSafe. */
-            error = CEESAFE_INIT_LATE;
+               counting, an earlier allocation changes nothing, so the hook and argv are taken. A config that asks for
+               counting itself gets LATE; when only the environment asks (a variable the host's own environment
+               happens to carry), counting is off and a warning says so, and the rest is taken. */
+            if (asked) {
+                error = CEESAFE_INIT_LATE;
+            } else if (environment_asked) {
+                report = false;
+                fail_at = 0u;
+                warn_counting_unavailable();
+            }
         }
     }
     const uint8_t *const *arguments = NULL;
@@ -591,6 +613,14 @@ int32_t ceesafe_init(const ceesafe_config *config) {
     ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
     ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
     return 0;
+}
+
+int32_t ceesafe_init(const ceesafe_config *config) {
+    return rt_init(config, false);
+}
+
+int32_t ceesafe_rt_init_main(const ceesafe_config *config) {
+    return rt_init(config, true);
 }
 
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated

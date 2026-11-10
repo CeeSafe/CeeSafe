@@ -34,6 +34,7 @@ struct RecordInput {
     recording: bool;                      // make the records of the packages `recordedPackages` marks
     recordedPackages: Vector<bool>;       // by package in this check: make its record (its effects and chains)
     qualifyRoot: bool;                    // name the root's items as its dependents do (a dependency's check)
+    lintAll: bool;                        // N0400 and N0401 for every package's own files, not the root's alone
 }
 
 fn emptyRecordInput() -> RecordInput => RecordInput {
@@ -44,6 +45,7 @@ fn emptyRecordInput() -> RecordInput => RecordInput {
     recording: false,
     recordedPackages: Vector<bool>.create(),
     qualifyRoot: false,
+    lintAll: false,
 };
 
 fn emptyChain() -> RecordedChain =>

@@ -246,8 +246,8 @@ link succeeds.
   Member names are unique (`<package>_main.o`, `ceesafe_rt_core.o`, …): a path maps to a name injectively (§7), and
   a build whose members would still share a name (C files differing in case alone) fails rather than lose an object.
   The archive is written under a temporary name and renamed over the output, so a failed archiver keeps the old one.
-- **The host's headers** are written beside the archive (and beside `--emit obj`'s object): `ceesafe/embed.h` and
-  the exports header under its `--exports-header` name.
+- **The host's headers** are written beside the archive: `ceesafe/embed.h` and the exports header under its
+  `--exports-header` name. Not beside `--emit obj`'s object, which stays as it is (below).
 - **`main`.** A package with a CeeSafe `main` gets no C `main` in its archive (the host has its own; two do not link);
   `--lib-main` keeps it.
 - **Why an archive, not `-r`.** It is the only form that keeps the host's LTO: with `--cflag -flto=thin` (or `-flto`)
@@ -325,7 +325,9 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   other's error it tries the compare-and-swap again); `CEESAFE_INIT_LATE` (the config asks for counting, a report or
   failure injection, and the runtime has already allocated: counting, and in stage B the allocator, cannot change
   under live blocks, ADR 0059; without counting an earlier allocation changes nothing, so the hook and `argv` are
-  taken); `CEESAFE_INIT_SIZE`
+  taken; when only the environment asks, through `CEESAFE_INIT_ENVIRONMENT` and a variable the host's environment
+  happens to carry, `ceesafe_init` returns 0 without counting, writes a line saying so on stderr, and takes the hook
+  and `argv`, since a host cannot always control its environment); `CEESAFE_INIT_SIZE`
   (also a NULL config); `CEESAFE_INIT_ALLOCATOR` (a hook with a NULL function; in stage A, any allocator);
   `CEESAFE_INIT_MEMORY` (the copy of `argv` could not be allocated; added in the implementation, §7). The default allocator functions
   set a relaxed "allocated" flag, so `LATE` costs nothing once a hook is installed. **`LATE` is best effort:** it sees
@@ -338,9 +340,10 @@ uint64_t ceesafe_shutdown(void);                      /* prints the report if as
   until the process exits, not only until `ceesafe_shutdown`: CeeSafe threads (`Thread.spawn`, `Async.runWorkers`'
   workers) may still run after it and while `exit` runs the host's `atexit` handlers and destructors.
 - **`flags`**: bits other than `CEESAFE_INIT_ENVIRONMENT` are reserved; a host passes 0 in them, and this version
-  ignores them (the freestanding form defines none and ignores the field). The generated `main` passes an internal
-  bit from `rt.h`, `CEE_INIT_GENERATED_MAIN`, which skips `LATE`: a C constructor that allocated through CeeSafe
-  before `main` must not stop the program, which 0.27.0 ran (with its counts off by those blocks).
+  masks them off and ignores them (the freestanding form defines none and ignores the field). The generated `main`
+  calls an internal entry point from `rt.h`, `ceesafe_rt_init_main`, which skips `LATE`: a C constructor that
+  allocated through CeeSafe before `main` must not stop the program, which 0.27.0 ran (with its counts off by those
+  blocks). No bit of `flags` can ask for that, so a host cannot.
 - **`ceesafe_shutdown`** returns 0 and prints nothing unless it loads `STARTED` (acquire); otherwise it prints the
   report when one was asked for (`ceesafe alloc: …`, memory-model.md §3.2), reading
   the counters with atomic loads, and returns the live count (0 when not counting). It frees nothing and tears nothing
@@ -694,14 +697,18 @@ Branch `impl/0088a`, on `release/0.28.0` after `fix/runtime-thread-state`.
   `src/a/b.cee` and `src/a_b.cee` were one object and the second replaced the first (both reviews); `_`→`__` with
   `/`→`_` would still map `a_/b` and `a/_b` alike, hence `_s`. `archiveMembers` names them all before compiling and
   the build fails (status 1) if two names are equal ignoring ASCII case (only C files whose names differ in case
-  alone, which macOS's and Windows' file systems would make one object). `<archiver> rcs <output>.partial`, made
+  alone, which macOS's and Windows' file systems would make one object). `<archiver> rcs <output>.partial.<pid>`, made
   afresh, then renamed over the output (C's `rename`, the target removed first on Windows), so a failing archiver
   keeps the old archive; its message names the archiver. The default archiver is `llvm-ar` beside an LLVM clang (a
   version suffix kept: `clang-18`, `llvm-ar-18`), else `ar` on `PATH`; `--ar` is a path, or a name searched on the
   host's `PATH` (the first version searched it as Windows' `cl` is, so `--ar ar` was never found on POSIX).
-- **The host's headers.** `--emit lib` and `--emit obj` write `ceesafe/embed.h` and the exports header
+- **The host's headers.** `--emit lib` writes `ceesafe/embed.h` and the exports header
   (`--exports-header`'s name, when the program has exports) beside the output, the directory of `-o`; the first
-  version wrote none and ignored `--exports-header`. `--ld` with `--emit lib` is a usage error.
+  version wrote none and ignored `--exports-header`. The second wrote them for `--emit obj` too, and replaced any file
+  at those paths, and at `<output>.partial`, silently (the second reviews): a user's own `ceesafe_exports.h` beside
+  `-o` was lost. Now each header starts with `/* Generated by ceesafec`, a file already there is replaced only if it
+  starts so too (otherwise the build fails before compiling, naming it), `--emit obj` writes none, as §2.1 says, and
+  the temporary archive carries the process id. `--ld` with `--emit lib` is a usage error.
 - **`main` in an archive.** `--emit lib` leaves the generated C `main` out (`CBuildOptions.omitMain`,
   `CEmitter.omitMain`): with it in the member that holds the exports, a host with its own `main` got a duplicate
   symbol. `--lib-main` keeps it (the corpus programs of §5 use it, linked from the archive alone).
@@ -718,7 +725,11 @@ Branch `impl/0088a`, on `release/0.28.0` after `fix/runtime-thread-state`.
   way (60 of 60). Both repros are `embed_check`'s `init-race` and `init-shutdown`, 30 runs each under ThreadSanitizer.
   `LATE` is returned only when counting is asked for (the first version refused any config after an allocation,
   dropping the hook and `argv`, and its generated `main` refused to start after a C constructor had allocated through
-  CeeSafe, which 0.27.0 ran; `CEE_INIT_GENERATED_MAIN` restores that). Only the first version's size
+  CeeSafe, which 0.27.0 ran; `ceesafe_rt_init_main` restores that). The second version passed that signal as bit 31
+  of `config.flags`, which a host could set too, and failed with `LATE` when `CEESAFE_ALLOC_REPORT` was only in the
+  host's environment, losing the hook and `argv` (the second reviews): now `ceesafe_init` masks the reserved bits off,
+  the generated `main` calls `ceesafe_rt_init_main`, and an environment-only request after an allocation turns
+  counting off with a warning on stderr instead. Only the first version's size
   is known, so `size` must be `sizeof(ceesafe_config)`; the config is copied into a zeroed local, `size` bytes, so a
   later version's defaults come for free. The "allocated" flag is `ceesafe_rt_allocated`, set (relaxed; a volatile
   access under MSVC) by `ceesafe_platform_alloc`, `_alloc_zeroed` and `_realloc` at their first success, so it also
@@ -731,9 +742,9 @@ Branch `impl/0088a`, on `release/0.28.0` after `fix/runtime-thread-state`.
   `ceesafe_panic_text` has no kind parameter; the freestanding config has only `size` and `flags`, and no state word;
   the re-entry check prints the thread's first panic's line (kept in a `_Thread_local` copy), so a hook that calls an
   export, and an escaped host that calls in again, both end with that panic's line, printed once.
-- **The generated `main`** fills the config with designated initialisers (`CEESAFE_INIT_ENVIRONMENT |
-  CEE_INIT_GENERATED_MAIN`), panics (`ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed")`) if
-  `ceesafe_init` fails with anything but `AGAIN` (a C constructor's own call; only MEMORY can otherwise), runs the
+- **The generated `main`** fills the config with designated initialisers (`CEESAFE_INIT_ENVIRONMENT`), calls
+  `ceesafe_rt_init_main`, panics (`ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed")`) if
+  it fails with anything but `AGAIN` (a C constructor's own call; only MEMORY can otherwise), runs the
   entry and calls `ceesafe_shutdown`. `ceesafe_rt_start`, `ceesafe_rt_args`
   and `ceesafe_rt_finish` are gone; `ceesafe_args_set` is the internal setter `ceesafe_init` calls.
 - **The panic path**: `ceesafe_panic`, `ceesafe_panic_text` and `ceesafe_panic_runtime` build a `ceesafe_panic_info`

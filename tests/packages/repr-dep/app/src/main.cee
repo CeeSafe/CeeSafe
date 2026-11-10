@@ -20,6 +20,14 @@ fn flip(s: geo.Shade) -> geo.Shade => match (s) {
     geo.Shade.Dark => geo.Shade.Light,
 };
 
+/// A struct whose C name, `ceeT_geo_Plain`, is not geo's `Plain`'s (c-backend.md §2.1).
+struct geo_Plain {
+    wide: i64;
+}
+
+/// A function whose C name is not geo's `twice`'s.
+fn geo_twice(p: geo_Plain) -> geo_Plain => geo_Plain { wide: 2 * p.wide };
+
 /// Safety: caller_total only calls this program's exports, with valid arguments.
 fn main() {
     // Generic instances that hold the dependency's types.
@@ -38,6 +46,7 @@ fn main() {
     let plain = geo.twice(geo.Plain { n: 21 });
     Console.writeLine(plain.n);
     let plains: geo.Pair<geo.Plain> = geo.Pair { first: plain, second: geo.Plain { n: 1 } };
+    Console.writeLine(geo_twice(geo_Plain { wide: 21 }).wide);
     let mine = other.twice(other.Plain { n: 14 });
     let spot = other.Spot { at: mine.n };
     Console.writeLine(spot.at);

@@ -82,7 +82,7 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   otherwise, `a` being a dependency (and so not an item, N0315), `a.b` is that dependency's item `b`, unless a local
   `a` is in scope there (ADR 0074 §2.10). `T.NAME`, with `T` a struct or an enum, is its associated constant (§10).
 - **Messages and C names** write an item of a dependency with its package's name, `geometry.Point`; the C backend
-  gives it a prefixed name, `ceeT_geometry_Point` (`c-backend.md` §2.1).
+  gives it a prefixed name, `ceeT_8geometry_Point` (`c-backend.md` §2.1).
 
 ## 3. Bindings and mutability
 
@@ -2895,7 +2895,7 @@ that uses one asserts `sizeof(long)`, so a target whose `long` is another width 
   constants `Shade_Light`, …, in `ceesafe_exports.h`), are the name it is declared with, in every package: a
   dependency `geo`'s `Point`, which CeeSafe calls `geo.Point`, is `struct Point` in C, in prototypes and in the
   exports header, as in `geo`'s own build, so C code that includes the header names it as declared. (Its internal
-  name in the generated C, `ceeT_geo_Point`, has the package's, c-backend.md §2.1.) A C name has one declaration, as
+  name in the generated C, `ceeT_3geo_Point`, has the package's, c-backend.md §2.1.) A C name has one declaration, as
   for extern functions (§28.2; ADR 0081 §2.1): two `@repr(C)` structs with one name are N0201, even in different
   packages, and so are two `@repr` enums, or a `@repr` enum and a C function, export or exported constant, with one
   name (a struct tag is in C's other name space, so a struct and a function may share a name). The owner is chosen as

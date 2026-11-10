@@ -210,12 +210,18 @@ prefix:
 `ceeAI_` initialisers and `ceeAR_` resume functions, §3a); locals `v_<name>_<n>` and `t_<n>`; fields `f_<name>`; variants `v_<name>`; labels `bb<n>`; files `cee_file_<n>`; source locations `ceeL_<n>` (§6); string literals over 4095 bytes `ceeLS_<n>` |
 
 **Packages** (M10 T5, ADR 0013 D4): an item of a dependency, rather than of the package being built, has its
-package's name in its C name: `ceeF_geometry_area`, `ceeT_geometry_Point`, `ceeM_14geometry_Point_norm`. The package
-name is part of the item's name as the backend sees it (`geometry.Point`, written with `_` in C), so every rule above
-applies unchanged, and two packages may declare the same name. A `@repr` type's C interface name is the exception
+package's name in its C name: `ceeF_8geometry_area`, `ceeT_8geometry_Point`, `ceeM_08geometry5Point_norm`. The package
+name is part of the item's name as the backend sees it (`geometry.Point`), so every rule above applies unchanged, and
+two packages may declare the same name. In C the package's name comes after its length, where the item's name would
+start: `8geometry_Point`, and inside a name written with its length (a method's owner, a mangled type argument), `0`
+then the package's name and the item's, each after its length: `08geometry5Point`, since no length starts with `0`. A
+digit starts no CeeSafe identifier, so a package's own `geometry_Point` (`ceeT_geometry_Point`) never meets a
+dependency's `geometry.Point`, and the lengths keep a package `geo_x`'s `P` apart from a package `geo`'s `x_P`. Up to
+0.27.0 the `.` was written `_` (`ceeT_geometry_Point` for both), so a package's own `geometry_Point` or
+`geometry_area` beside its dependency `geometry`'s `Point` or `area` was a C redefinition. A `@repr` type's C interface name is the exception
 (type-system.md §28.5): `geo.Point` with `@repr(C)` is `struct Point`, its tag in the generated C and in
-`ceesafe_exports.h`, with `typedef struct Point ceeT_geo_Point;`, and a `@repr` enum `geo.Shade` is `Shade` in the
-header and in exports' prototypes, while its internal struct stays `ceeE_geo_Shade`. Those names have one declaration
+`ceesafe_exports.h`, with `typedef struct Point ceeT_3geo_Point;`, and a `@repr` enum `geo.Shade` is `Shade` in the
+header and in exports' prototypes, while its internal struct stays `ceeE_3geo_Shade`. Those names have one declaration
 in a program (N0201).
 
 Before M7d, top-level functions were `cee_<name>`. A function named `add_i32` then collided with

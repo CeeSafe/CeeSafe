@@ -234,3 +234,8 @@ another C declaration with one name (the ordinary one), are N0201, with the owne
 note at the owner's; there is no hint or fix, since a type cannot be called through its package's C name.
 Ordinary types keep the package in their C names (c-backend.md §2.1). Specified in type-system.md §28.5; checked by
 `package_tests.py` §23 (repr-dep).
+
+The same check of ordinary items across packages found that a dependency's item `geo.Point` and a package's own
+`geo_Point` had one C name, `ceeT_geo_Point` (and `geo.area` and `geo_area` one `ceeF_geo_area`), since `.` was written
+`_`: `check` passed and the C compiler failed. Internal C names now write the package's name after its length,
+`ceeT_3geo_Point`, where no identifier can start (c-backend.md §2.1); `package_tests.py` §23 declares both.

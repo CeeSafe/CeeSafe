@@ -76,7 +76,7 @@
 22. hover: the language server shows the type of an `embedText` in a constant's value and of an `embed` in a static's.
 23. repr-dep (type-system.md §28.5; ADR 0081 §8): geo declares `@repr(C)` structs (one nested, one with an array
     member), a `@repr(u8)` enum, exports and an exported constant that use them, and ordinary items; other declares
-    ordinary items with geo's names. app uses them in its own exports, in generic instances and through
+    ordinary items with geo's names, and app declares `geo_Plain` and `geo_twice` (c-backend.md §2.1). app uses them in its own exports, in generic instances and through
     c/caller.c, which includes ceesafe_exports.h and calls both packages' exports. Built as one file, `--split` and
     `--emit obj` (linked here with cc), the program prints the same; `--emit c` spells the types by their declared
     names (`struct Point`, `Shade`), never `geo.`. clash: app's `@repr(C)` struct named as its dependency geo's, and
@@ -486,8 +486,8 @@ def main():
         app = os.path.join(same, "app")
         units = ["c/alpha/src/a/mod.c", "c/alpha/src/b/mod.c", "c/alpha/src/util.c", "c/app/src/main.c",
                  "c/app/src/util.c", "c/beta/src/util.c"]
-        homes = {"c/alpha/src/util.c": ["ceeF_alpha_helper", "ceeF_alpha_scale"], "c/beta/src/util.c": ["ceeF_beta_helper"],
-                 "c/alpha/src/a/mod.c": ["ceeF_alpha_left"], "c/alpha/src/b/mod.c": ["ceeF_alpha_right"],
+        homes = {"c/alpha/src/util.c": ["ceeF_5alpha_helper", "ceeF_5alpha_scale"], "c/beta/src/util.c": ["ceeF_4beta_helper"],
+                 "c/alpha/src/a/mod.c": ["ceeF_5alpha_left"], "c/alpha/src/b/mod.c": ["ceeF_5alpha_right"],
                  "c/app/src/util.c": ["ceeF_helper"], "c/app/src/main.c": ["ceeF_main"]}
 
         def tree(directory):
@@ -967,7 +967,7 @@ def main():
         repr = os.path.join(work, "repr-dep")
         shutil.copytree(os.path.join(ROOT, "tests", "packages", "repr-dep"), repr)
         app = os.path.join(repr, "app")
-        expected = "8\n40\n42\n42\n44\n55"
+        expected = "8\n40\n42\n42\n42\n44\n55"
         p = run([compiler, "check"], app)
         if p.returncode != 0:
             problems.append(f"repr-dep: check failed: {p.stderr[:600]}")

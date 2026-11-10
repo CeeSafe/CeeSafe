@@ -343,13 +343,18 @@ fn drain(
     return Ok();
 }
 
-/// The boundary (ResolvedPackage) of a path dependency `spec` of `dependent`: its dependent's, empty for the root's.
+/// The boundary (ResolvedPackage) of a path dependency `spec` of `dependent`: its dependent's; for the root's, empty,
+/// or the root's directory when that lies in the package cache.
 /// A git or registry dependency's is its checkout, known once it is loaded; this gives it as not empty.
 fn reachedBoundary(w: borrow Workspace, dependent: u32, spec: borrow DependencySpec) -> Result<Vector<u8>, AllocError> {
     if (!spec.hasPath) {
         return copyBytes("/".bytes());
     }
     if (dependent == none()) {
+        // The root's own, unless the root lies in the package cache (packageInfo): then what it reaches is kept in it.
+        if (inPackageCache(w.root.directory.view())?) {
+            return copyBytes(w.root.directory.view());
+        }
         return Ok(Vector<u8>.create());
     }
     return copyBytes(w.resolved[dependent as usize].boundary.view());

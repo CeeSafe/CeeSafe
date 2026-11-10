@@ -1,0 +1,6 @@
+# Written by hand for package_tests.py check 21: the path as resolved from the checkout, five levels below the work
+# directory.
+
+[[package]]
+name = "outer"
+source = "path+../../../../../outside-inner"

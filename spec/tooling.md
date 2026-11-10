@@ -265,7 +265,8 @@ directory (the one holding `ceesafe.toml`), and inside each directory `[embed] r
   checkout: a root counts only when its real path is inside it, so a checkout reaches nothing outside itself, through
   `..`, through a symbolic link it holds, or through a path dependency it names. So does a package whose directory
   lies in the package cache (`$CEESAFE_HOME`, §4.3), even as the root package: the language server going to a
-  definition in a checkout, or `check` run there, gives it no more than the build that fetched it.
+  definition in a checkout, or `check` run there, gives it no more than the build that fetched it, and the path
+  dependencies such a root reaches are kept inside its directory, wherever they lie.
 
 
 From the package being built, every dependency is resolved, and then its dependencies, recursively:

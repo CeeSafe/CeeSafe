@@ -1,0 +1,6 @@
+[package]
+name = "outer"
+kind = "library"
+
+[embed]
+roots = [".."]

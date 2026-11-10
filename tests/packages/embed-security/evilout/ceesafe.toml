@@ -1,0 +1,6 @@
+[package]
+name = "evilout"
+kind = "library"
+
+[dependencies]
+outer = { path = "../../../../../outside-inner" }

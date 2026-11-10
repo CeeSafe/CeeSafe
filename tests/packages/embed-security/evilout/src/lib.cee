@@ -1,0 +1,1 @@
+public const STOLEN: StringView = outer.STOLEN;

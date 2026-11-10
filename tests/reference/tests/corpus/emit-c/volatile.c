@@ -40,11 +40,11 @@ static int32_t ceeF_main(void) {
 int main(int argc, char **argv) {
     ceesafe_config config = {
         .size = (uint32_t)sizeof(ceesafe_config),
-        .flags = CEESAFE_INIT_ENVIRONMENT | CEE_INIT_GENERATED_MAIN,
+        .flags = CEESAFE_INIT_ENVIRONMENT,
         .argc = (int32_t)argc,
         .argv = (const char *const *)(void *)argv,
     };
-    int32_t started = ceesafe_init(&config);
+    int32_t started = ceesafe_rt_init_main(&config);
     if (started != 0 && started != CEESAFE_INIT_AGAIN) {
         ceesafe_panic_runtime(CEE_PANIC_EXPLICIT, "ceesafe_init failed");
     }

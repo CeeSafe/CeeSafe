@@ -19,6 +19,7 @@
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the debugger scripts, and the MCP
   server's name lookup (tools/mcp_api_check.py).
 - `extern "C"` blocks generated from C headers (tools/cbind_check.py; ADR 0095).
+- Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
 Each step's last line is printed.
 
 usage: python3 tools/contract_tests.py --ceesafec PATH
@@ -164,6 +165,7 @@ def main():
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
             ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),
+            ("const statics", py + [f"{HERE}/const_statics_check.py", "--ceesafec", cee]),
         ]
         for name, argv in steps:
             if name == "reactor uring" and platform.system() != "Linux":

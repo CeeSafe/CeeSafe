@@ -4529,6 +4529,9 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   changed, and such an object is a `static mut` (§39.3). A pointer in a read-only object may point at a `static
   mut`: the pointer is constant, what it points at is not. Following a raw pointer read from one is an unsafe
   operation, as always.
+- **Scalar data** (ADR 0098). A plain `static` of an integer, a float, a `bool`, a `CChar`, or an array of these is
+  emitted `const` too (`static const` when it is not exported, §39.6): nothing writes it, so it belongs in read-only
+  data, as C's `static const` table does.
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:

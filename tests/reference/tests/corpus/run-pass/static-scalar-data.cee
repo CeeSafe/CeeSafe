@@ -1,0 +1,49 @@
+// Plain statics of scalar data (ADR 0098; type-system.md §39.2): an integer, a `bool`, or an array of them is
+// never written, so it is C's `const` object. It is read by value, by index, through a borrow, as a slice and through
+// a raw pointer; a `static mut` beside it is not `const`. tools/const_statics_check.py reads the C this file emits.
+static LIMIT: u32 = 40;
+static ARMED: bool = true;
+static ALLOWED: [u16; 4] = [0, 68, 86, 87];
+static GRID: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]];
+static mut HITS: [u32; 2] = [0, 0];
+
+fn sum(values: borrow [u16; 4]) -> u32 {
+    var total: u32 = 0;
+    for (v in values[..]) {
+        total += v as u32;
+    }
+    return total;
+}
+
+fn has(values: Slice<u16>, wanted: u16) -> bool {
+    for (v in values) {
+        if (v == wanted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Safety: the pointer is to ALLOWED's four elements, which live for the program; HITS is used on the one thread.
+fn main() {
+    Console.writeLine(LIMIT + 2);
+    Console.writeLine(ARMED);
+    Console.writeLine(sum(borrow ALLOWED));
+    Console.writeLine(has(ALLOWED[..], 86));
+    Console.writeLine(has(ALLOWED[1..3], 87));
+    Console.writeLine(GRID[1][2] as u32 * 10 + GRID[0][0] as u32);
+    let first = borrow ALLOWED as *[u16; 4] as *u16;
+    unsafe {
+        Console.writeLine(first.add(3).read());
+        HITS[1] = LIMIT;
+        Console.writeLine(HITS[0] + HITS[1]);
+    }
+}
+// expect-stdout: 42
+// expect-stdout: true
+// expect-stdout: 241
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 61
+// expect-stdout: 87
+// expect-stdout: 40

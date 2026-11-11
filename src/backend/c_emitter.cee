@@ -100,6 +100,7 @@ struct CEmitter {
             removed: Vector<bool>.create(),
             noOverflow: Vector<bool>.create(),
             ascii: Vector<bool>.create(),
+            guards: Vector<LoopGuard>.create(),
         },
         bce: false,
         oce: false,

@@ -43,6 +43,7 @@ struct CBuildOptions {
     placement: bool;             // memory-model.md §5 (off: --no-placement)
     bce: bool;                   // optimisations.md §2 (off: --no-bce)
     oce: bool;                   // optimisations.md §3 (off: --no-oce)
+    loopVersioning: bool;        // docs/proposals/loop-versioning.md (off: --no-loop-versioning)
     structured: bool;            // c-backend.md §3 (off: --flat-c)
     debugAssertions: bool;       // `debugAssert` compiled in (ADR 0087 §2.5)
     omitMain: bool;              // no C `main`: `--emit lib` without `--lib-main` (ADR 0088 §2.1)
@@ -91,12 +92,16 @@ fn generateC(
     trial.split = split;
     trial.programName = copyBytes(programName)?;
     trial.exportsHeader = copyBytes(exportsHeaderName)?;
+    if (o.bce || o.oce) {
+        trial.checks = analyzeChecks(c, n)?;
+    }
+    if (o.loopVersioning && o.bce && o.oce) {
+        // Before placement and emission, which read the NIR this changes (docs/proposals/loop-versioning.md).
+        versionLoops(c, n, mut trial.checks)?;
+    }
     if (o.placement) {
         let analysis = analyzePlacement(c, n, sources)?;
         trial.placements = analysis.functions;
-    }
-    if (o.bce || o.oce) {
-        trial.checks = analyzeChecks(c, n)?;
     }
     trial.bce = o.bce;
     trial.structured = o.structured;

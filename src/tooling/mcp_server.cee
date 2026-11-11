@@ -1174,6 +1174,7 @@ fn generateCompiled(
         placement: true,
         bce: true,
         oce: true,
+        loopVersioning: true,
         structured: true,
         debugAssertions: false,
         omitMain: false,

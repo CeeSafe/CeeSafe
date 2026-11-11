@@ -189,6 +189,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  --explain-bounds-checks  (build) print each index check and whether it was removed\n")?;
     appendText(
         out,
+        "  --no-loop-versioning  (build) do not emit counted loops twice (docs/proposals/loop-versioning.md)\n",
+    )?;
+    appendText(
+        out,
         "  --no-oce          (build, run) keep every overflow check (no overflow-check elimination, optimisations.md §3)\n",
     )?;
     appendText(
@@ -262,6 +266,7 @@ struct Options {
     bce: bool;                   // on unless --no-bce (optimisations.md §2)
     explainBoundsChecks: bool;   // --explain-bounds-checks
     oce: bool;                   // on unless --no-oce (optimisations.md §3)
+    loopVersioning: bool;        // on unless --no-loop-versioning (docs/proposals/loop-versioning.md)
     explainOverflowChecks: bool; // --explain-overflow-checks
     structured: bool;            // on unless --flat-c (c-backend.md §3)
     emit: Vector<u8>;            // --emit c|exe|obj|lib (build)
@@ -459,6 +464,8 @@ fn readOptions(options: borrow mut Options) -> i32 {
             options.explainBoundsChecks = true;
         } else if ((options.building || options.running) && arg == "--no-oce") {
             options.oce = false;
+        } else if (options.building && arg == "--no-loop-versioning") {
+            options.loopVersioning = false;
         } else if (options.building && arg == "--explain-overflow-checks") {
             options.explainOverflowChecks = true;
         } else if (options.building && arg == "--flat-c") {
@@ -832,6 +839,7 @@ fn parseCommand() -> i32 {
         bce: true,
         explainBoundsChecks: false,
         oce: true,
+        loopVersioning: true,
         explainOverflowChecks: false,
         structured: true,
         emit: copyBytes("exe".bytes())!,
@@ -1085,6 +1093,7 @@ fn interpretChecked(
         placement: options.placement,
         bce: options.bce,
         oce: options.oce,
+        loopVersioning: options.loopVersioning,
         structured: options.structured,
         debugAssertions: false,
         omitMain: false,
@@ -1190,6 +1199,7 @@ fn defaultOptions(building: bool) -> Options => Options {
     bce: true,
     explainBoundsChecks: false,
     oce: true,
+    loopVersioning: true,
     explainOverflowChecks: false,
     structured: true,
     emit: copyBytes("exe".bytes())!,
@@ -1530,6 +1540,7 @@ fn compileFiles(
             placement: options.placement,
             bce: options.bce,
             oce: options.oce,
+            loopVersioning: options.loopVersioning,
             structured: options.structured,
             debugAssertions: options.debugAssertions == 1 ||
                 (options.debugAssertions == 0 && (options.debug || options.testing)),

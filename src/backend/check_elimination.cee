@@ -267,6 +267,7 @@ struct CheckResults {
     removed: Vector<bool>;    // by statement: a BoundsCheck that cannot fail
     noOverflow: Vector<bool>; // by rvalue: a checked + - * or negation that cannot overflow
     ascii: Vector<bool>;      // by statement: a RangeCheck of ASCII text, whose boundary check is not needed
+    guards: Vector<LoopGuard>; // the guards of versioned loops (loop_versioning.cee)
 }
 
 fn markSet(set: borrow mut Vector<bool>, k: u32) -> Result<void, AllocError> {
@@ -300,6 +301,7 @@ fn analyzeChecks(c: borrow Checker, n: borrow NirProgram) -> Result<CheckResults
         removed: Vector<bool>.create(),
         noOverflow: Vector<bool>.create(),
         ascii: Vector<bool>.create(),
+        guards: Vector<LoopGuard>.create(),
     };
     for (k in 0..n.functions.length) {
         if (functionIsGeneric(c, n.functions[k].source)) {

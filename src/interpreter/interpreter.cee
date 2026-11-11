@@ -1923,6 +1923,7 @@ fn newInterp(
             removed: Vector<bool>.create(),
             noOverflow: Vector<bool>.create(),
             ascii: Vector<bool>.create(),
+            guards: Vector<LoopGuard>.create(),
         },
         stdout: Vector<u8>.create(),
         capturedOutput: Vector<u8>.create(),

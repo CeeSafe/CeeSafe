@@ -703,6 +703,10 @@ fn emitStatement(
     }
     match (n.statements[s as usize]) {
         NirStatement.Assign(target, r) => {
+            let guard = loopGuardOf(e.checks, s);
+            if (guard != none()) {
+                return emitLoopGuard(e, c, n, sources, f, target, guard);
+            }
             let builtin = builtinOf(n, r);
             if (builtin == bfScratchEnter()) {
                 let place = appendPlaceIn(e, c, n, sources, f, target)?;

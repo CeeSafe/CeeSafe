@@ -1,0 +1,877 @@
+// Loop versioning (a prototype; docs/proposals/loop-versioning.md): a counted loop whose index checks are not proved
+// by check elimination is emitted twice. A guard before the loop tests, without panicking, that the largest index the
+// loop can use is in range; if so the copy without those checks runs, else the loop as it was. A run that would panic
+// takes the checked loop and panics where it did, so behaviour is unchanged.
+//
+// The pass changes the NIR: it copies the loop's blocks, adds the guard block, and marks the copy's hoisted checks in
+// the check results, which the C backend already consults. In the NIR the guard is `g = false`, so any other reader of
+// the NIR sees a program that always takes the checked loop; the C backend writes the real test in its place.
+
+/// A guard's program, as triples (kind, a, b), run on a stack of unsigned values.
+fn guardPush() -> u32 => 0; // a: an operand to push
+fn guardAdd() -> u32 => 1; // pop two, push their sum; the guard fails if it overflows
+fn guardMul() -> u32 => 2; // pop two, push their product; the guard fails if it overflows
+fn guardSpan() -> u32 => 3; // pop the base: base + (bound − 1) must not overflow and be below the length
+fn guardWhole() -> u32 => 4; // the index is the counter itself: bound must be at most the length
+fn guardFixed() -> u32 => 5; // pop an index that does not change in the loop: it must be below the length
+
+/// For guardSpan, guardWhole and guardFixed, `a` says what `b` is: an operand, or a place whose length is meant.
+fn lengthOperand() -> u32 => 0;
+fn lengthOfPlace() -> u32 => 1;
+
+/// The guard of one versioned loop.
+struct LoopGuard {
+    statement: u32; // the guard block's `g = false`, which the C backend replaces by the test
+    counter: u32;   // an operand: the loop's counter, read before the loop
+    bound: u32;     // an operand: the counter's exclusive bound
+    program: Vector<u32>;
+}
+
+fn loopGuardOf(results: borrow CheckResults, statement: u32) -> u32 {
+    for (k in 0..results.guards.length) {
+        if (results.guards[k].statement == statement) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// What the analysis knows of one loop.
+struct LoopShape {
+    members: Vector<bool>;     // by block index
+    defs: Vector<u32>;         // by local: the assignments in the loop that may change it (2 or more: not tracked)
+    defStatement: Vector<u32>; // by local: its one assignment
+    defBlock: Vector<u32>;     // that assignment's block index
+    defPosition: Vector<u32>;  // and its position in the block
+    wholeWrites: Vector<u32>;  // by local: the assignments in the loop to all of what it refers to (`*r = …`)
+    isReference: Vector<bool>; // by local
+    counter: u32;              // a local
+    usize: u32;
+}
+
+/// One loop to version.
+struct LoopPlan {
+    header: u32;    // a block index
+    preheader: u32; // a block index
+    members: Vector<bool>;
+    checks: Vector<u32>;   // the BoundsCheck statements the guard covers
+    overflow: Vector<u32>; // the rvalues whose overflow checks the guard covers
+    counter: u32;          // operands
+    bound: u32;
+    program: Vector<u32>;
+}
+
+fn maxLoopBlocks() -> u32 => 12;
+fn maxGuardChecks() -> usize => 6;
+fn maxResolveDepth() -> u32 => 16;
+
+fn truncateU32s(v: borrow mut Vector<u32>, length: usize) {
+    while (v.length > length) {
+        v.pop();
+    }
+}
+
+/// The local an operand reads whole (no projections), or none.
+fn operandLocal(n: borrow NirProgram, o: u32) -> u32 => match (n.operands[o as usize]) {
+    NirOperand.Place(p, _) => if (placeIsLocal(n, p)) placeLocal(n, p) else none(),
+    _ => none(),
+};
+
+fn operandIsConst(n: borrow NirProgram, o: u32) -> bool => match (n.operands[o as usize]) {
+    NirOperand.Const(_) => true,
+    _ => false,
+};
+
+fn operandIsOne(n: borrow NirProgram, o: u32) -> bool => match (n.operands[o as usize]) {
+    NirOperand.Const(v) => !v.negative && v.magnitude == 1,
+    _ => false,
+};
+
+/// Whether a statement is one the pass copies: an assignment of a plain computation, a check, or a StorageDead.
+fn isSimpleStatement(n: borrow NirProgram, s: u32) -> bool {
+    match (n.statements[s as usize]) {
+        NirStatement.StorageDead(_) => { return true; }
+        NirStatement.BoundsCheck(_, _) => { return true; }
+        NirStatement.Assign(_, r) => {
+            return match (n.rvalues[r as usize]) {
+                NirRvalue.Use(_) => true,
+                NirRvalue.Binary(_, _, _) => true,
+                NirRvalue.Unary(_, _) => true,
+                NirRvalue.Cast(_) => true,
+                NirRvalue.Truncate(_) => true,
+                NirRvalue.Length(_) => true,
+                // Arithmetic that cannot panic and touches nothing but its operands.
+                NirRvalue.Builtin(b, _) => b == bfWrappingAdd() || b == bfWrappingSub() || b == bfWrappingMul() ||
+                    b == bfSaturatingAdd() || b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() ||
+                    b == bfIntMax() || b == bfIntMulHigh(),
+                _ => false,
+            };
+        }
+        _ => { return false; }
+    }
+}
+
+/// Whether local x's one assignment in the loop runs, in every iteration, before the statement at (block, position).
+fn defBefore(flow: borrow ControlFlow, shape: borrow LoopShape, x: u32, block: u32, position: u32) -> bool {
+    let d = shape.defBlock[x as usize];
+    if (d == block) {
+        return shape.defPosition[x as usize] < position;
+    }
+    return dominates(flow, d, block);
+}
+
+/// Pushes the program of an operand whose value does not change in the loop; false if it is not one.
+fn resolveInvariant(
+    n: borrow NirProgram,
+    flow: borrow ControlFlow,
+    shape: borrow LoopShape,
+    o: u32,
+    block: u32,
+    position: u32,
+    depth: u32,
+    program: borrow mut Vector<u32>,
+    overflow: borrow mut Vector<u32>,
+) -> Result<bool, AllocError> {
+    if (depth > maxResolveDepth() || n.operandTypes[o as usize] != shape.usize) {
+        return Ok(false);
+    }
+    if (operandIsConst(n, o)) {
+        program.push(guardPush())?;
+        program.push(o)?;
+        program.push(0)?;
+        return Ok(true);
+    }
+    let x = operandLocal(n, o);
+    if (x == none() || x == shape.counter) {
+        return Ok(false);
+    }
+    if (shape.defs[x as usize] == 0) {
+        program.push(guardPush())?;
+        program.push(o)?;
+        program.push(0)?;
+        return Ok(true);
+    }
+    if (shape.defs[x as usize] != 1 || !defBefore(flow, shape, x, block, position)) {
+        return Ok(false);
+    }
+    let dBlock = shape.defBlock[x as usize];
+    let dPosition = shape.defPosition[x as usize];
+    match (n.statements[shape.defStatement[x as usize] as usize]) {
+        NirStatement.Assign(_, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Use(source) => {
+                    return resolveInvariant(n, flow, shape, source, dBlock, dPosition, depth + 1, program, overflow);
+                }
+                NirRvalue.Binary(op, left, right) => {
+                    let k = binaryIndex(op);
+                    if ((k != 13 && k != 15) || n.rvalueTypes[r as usize] != shape.usize) {
+                        return Ok(false);
+                    }
+                    if (!resolveInvariant(n, flow, shape, left, dBlock, dPosition, depth + 1, program, overflow)?) {
+                        return Ok(false);
+                    }
+                    if (!resolveInvariant(n, flow, shape, right, dBlock, dPosition, depth + 1, program, overflow)?) {
+                        return Ok(false);
+                    }
+                    program.push(if (k == 13) guardAdd() else guardMul())?;
+                    program.push(0)?;
+                    program.push(0)?;
+                    overflow.push(r)?;
+                    return Ok(true);
+                }
+                _ => { return Ok(false); }
+            }
+        }
+        _ => { return Ok(false); }
+    }
+}
+
+/// An index operand's form: 0 unknown; 1 the counter; 2 the counter plus a base, whose program is pushed; 3 a value
+/// that does not change in the loop, whose program is pushed. On 0 the caller restores the program.
+fn resolveIndex(
+    n: borrow NirProgram,
+    flow: borrow ControlFlow,
+    shape: borrow LoopShape,
+    o: u32,
+    block: u32,
+    position: u32,
+    depth: u32,
+    program: borrow mut Vector<u32>,
+    overflow: borrow mut Vector<u32>,
+) -> Result<u32, AllocError> {
+    if (depth > maxResolveDepth() || n.operandTypes[o as usize] != shape.usize) {
+        return Ok(0);
+    }
+    let programMark = program.length;
+    let overflowMark = overflow.length;
+    if (resolveInvariant(n, flow, shape, o, block, position, depth, program, overflow)?) {
+        return Ok(3);
+    }
+    truncateU32s(program, programMark);
+    truncateU32s(overflow, overflowMark);
+    let x = operandLocal(n, o);
+    if (x == none()) {
+        return Ok(0);
+    }
+    if (x == shape.counter) {
+        return Ok(1);
+    }
+    if (shape.defs[x as usize] != 1 || !defBefore(flow, shape, x, block, position)) {
+        return Ok(0);
+    }
+    let dBlock = shape.defBlock[x as usize];
+    let dPosition = shape.defPosition[x as usize];
+    match (n.statements[shape.defStatement[x as usize] as usize]) {
+        NirStatement.Assign(_, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Use(source) => {
+                    return resolveIndex(n, flow, shape, source, dBlock, dPosition, depth + 1, program, overflow);
+                }
+                NirRvalue.Binary(op, left, right) => {
+                    if (binaryIndex(op) != 13 || n.rvalueTypes[r as usize] != shape.usize) {
+                        return Ok(0);
+                    }
+                    // counter-form + invariant
+                    let a = resolveIndex(n, flow, shape, left, dBlock, dPosition, depth + 1, program, overflow)?;
+                    if (a == 1 || a == 2) {
+                        if (resolveInvariant(n, flow, shape, right, dBlock, dPosition, depth + 1, program, overflow)?) {
+                            if (a == 2) {
+                                program.push(guardAdd())?;
+                                program.push(0)?;
+                                program.push(0)?;
+                            }
+                            overflow.push(r)?;
+                            return Ok(2);
+                        }
+                    }
+                    truncateU32s(program, programMark);
+                    truncateU32s(overflow, overflowMark);
+                    // invariant + counter-form
+                    if (resolveInvariant(n, flow, shape, left, dBlock, dPosition, depth + 1, program, overflow)?) {
+                        let b = resolveIndex(n, flow, shape, right, dBlock, dPosition, depth + 1, program, overflow)?;
+                        if (b == 1 || b == 2) {
+                            if (b == 2) {
+                                program.push(guardAdd())?;
+                                program.push(0)?;
+                                program.push(0)?;
+                            }
+                            overflow.push(r)?;
+                            return Ok(2);
+                        }
+                    }
+                    return Ok(0);
+                }
+                _ => { return Ok(0); }
+            }
+        }
+        _ => { return Ok(0); }
+    }
+}
+
+/// A length operand that does not change in the loop, as (lengthOperand, operand) or (lengthOfPlace, place) packed
+/// in a u64, or none (all ones).
+fn resolveLength(
+    n: borrow NirProgram,
+    flow: borrow ControlFlow,
+    shape: borrow LoopShape,
+    o: u32,
+    block: u32,
+    position: u32,
+    depth: u32,
+) -> u64 {
+    let unknown: u64 = 0xFFFFFFFFFFFFFFFF;
+    if (depth > maxResolveDepth() || n.operandTypes[o as usize] != shape.usize) {
+        return unknown;
+    }
+    if (operandIsConst(n, o)) {
+        return ((lengthOperand() as u64) << 32) | o as u64;
+    }
+    let x = operandLocal(n, o);
+    if (x == none() || x == shape.counter) {
+        return unknown;
+    }
+    if (shape.defs[x as usize] == 0) {
+        return ((lengthOperand() as u64) << 32) | o as u64;
+    }
+    if (shape.defs[x as usize] != 1 || !defBefore(flow, shape, x, block, position)) {
+        return unknown;
+    }
+    match (n.statements[shape.defStatement[x as usize] as usize]) {
+        NirStatement.Assign(_, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Use(source) => {
+                    return resolveLength(
+                        n,
+                        flow,
+                        shape,
+                        source,
+                        shape.defBlock[x as usize],
+                        shape.defPosition[x as usize],
+                        depth + 1,
+                    );
+                }
+                NirRvalue.Length(place) => {
+                    // The length of a local that nothing in the loop assigns or borrows mutably (optimisations.md §2.3).
+                    let v = placeLocal(n, place) as usize;
+                    if (placeIsLocal(n, place) && shape.defs[v] == 0) {
+                        return ((lengthOfPlace() as u64) << 32) | place as u64;
+                    }
+                    // `(*r).length` for a reference r that the loop neither assigns nor writes whole: what r
+                    // borrows cannot change its length while the loop runs, since only r can reach it.
+                    let projections = n.places[place as usize].projections;
+                    if (projections.count == 1 && isNirDeref(n.projections[projections.start as usize]) &&
+                        shape.isReference[v] && shape.defs[v] == 0 && shape.wholeWrites[v] == 0) {
+                        return ((lengthOfPlace() as u64) << 32) | place as u64;
+                    }
+                    return unknown;
+                }
+                _ => { return unknown; }
+            }
+        }
+        _ => { return unknown; }
+    }
+}
+
+/// The plan for loop `l` of function `f`, or none: it is not a counted loop the pass handles, or the guard would
+/// cover no check.
+fn planLoop(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    flow: borrow ControlFlow,
+    f: u32,
+    l: usize,
+    results: borrow CheckResults,
+) -> Result<LoopPlan?, AllocError> {
+    let function = borrow n.functions[f as usize];
+    let header = flow.loopHeaders[l];
+    if (header == 0 || flow.loopSizes[l] > maxLoopBlocks()) {
+        return Ok(null);
+    }
+    // Innermost only: no other loop's header is a member.
+    for (k in 0..flow.loopHeaders.length) {
+        if (k != l && flow.loopMembers[l][flow.loopHeaders[k] as usize]) {
+            return Ok(null);
+        }
+    }
+    var shape = LoopShape {
+        members: Vector<bool>.create(),
+        defs: Vector<u32>.create(),
+        defStatement: Vector<u32>.create(),
+        defBlock: Vector<u32>.create(),
+        defPosition: Vector<u32>.create(),
+        wholeWrites: Vector<u32>.create(),
+        isReference: Vector<bool>.create(),
+        counter: none(),
+        usize: c.types.usize,
+    };
+    for (k in 0..function.blocks.length) {
+        shape.members.push(flow.loopMembers[l][k])?;
+    }
+    for (k in 0..function.locals.length) {
+        shape.defs.push(0)?;
+        shape.defStatement.push(none())?;
+        shape.defBlock.push(none())?;
+        shape.defPosition.push(0)?;
+        shape.wholeWrites.push(0)?;
+        shape.isReference.push(c.types.is(function.locals[k].typ, TypeKind.Reference))?;
+    }
+    // One way in, from a block that does nothing but go to the header.
+    var preheader = none();
+    for (p in flow.predecessors[header as usize].view()) {
+        if (!shape.members[p as usize]) {
+            if (preheader != none()) {
+                return Ok(null);
+            }
+            preheader = p;
+        }
+    }
+    if (preheader == none()) {
+        return Ok(null);
+    }
+    match (n.terminators[function.blocks[preheader as usize].terminator as usize]) {
+        NirTerminator.Goto(_) => {}
+        _ => { return Ok(null); }
+    }
+    // Every member is plain code, and each local's assignments in the loop are counted.
+    for (b in 0..function.blocks.length) {
+        if (!shape.members[b]) {
+            continue;
+        }
+        let block = borrow function.blocks[b];
+        if (block.cfg.length > 0 || block.branchCfg.length > 0) {
+            return Ok(null);
+        }
+        match (n.terminators[block.terminator as usize]) {
+            NirTerminator.Goto(_) => {}
+            NirTerminator.Branch(_, _, _) => {}
+            _ => { return Ok(null); }
+        }
+        for (k in 0..block.statements.length) {
+            let s = block.statements[k];
+            if (!isSimpleStatement(n, s)) {
+                return Ok(null);
+            }
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, _) => {
+                    let x = placeLocal(n, target) as usize;
+                    if (placeIsLocal(n, target)) {
+                        shape.defs[x] = shape.defs[x] + 1;
+                        shape.defStatement[x] = s;
+                        shape.defBlock[x] = truncate<u32>(b);
+                        shape.defPosition[x] = truncate<u32>(k);
+                    } else if (!placeHasDeref(n, target)) {
+                        shape.defs[x] = shape.defs[x] + 2; // a part of the local's own storage
+                    } else if (n.places[target as usize].projections.count == 1) {
+                        shape.wholeWrites[x] = shape.wholeWrites[x] + 1; // `*r = …`: a new value, a new length
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // The header: `t = counter < bound; branch t ? inside : outside`.
+    let headerBlock = borrow function.blocks[header as usize];
+    var condition = none();
+    match (n.terminators[headerBlock.terminator as usize]) {
+        NirTerminator.Branch(test, then, otherwise) => {
+            if (!shape.members[blockIndexIn(flow, then) as usize] || shape.members[blockIndexIn(
+                flow,
+                otherwise,
+            ) as usize]) {
+                return Ok(null);
+            }
+            condition = operandLocal(n, test);
+        }
+        _ => { return Ok(null); }
+    }
+    if (condition == none() || shape.defs[condition as usize] != 1 || shape.defBlock[condition as usize] != header) {
+        return Ok(null);
+    }
+    var counterOperand = none();
+    var boundOperand = none();
+    match (n.statements[shape.defStatement[condition as usize] as usize]) {
+        NirStatement.Assign(_, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Binary(op, left, right) => {
+                    if (binaryIndex(op) != 4) {
+                        return Ok(null);
+                    }
+                    counterOperand = left;
+                    boundOperand = right;
+                }
+                _ => { return Ok(null); }
+            }
+        }
+        _ => { return Ok(null); }
+    }
+    let counter = operandLocal(n, counterOperand);
+    if (counter == none() || n.operandTypes[counterOperand as usize] != shape.usize ||
+        n.operandTypes[boundOperand as usize] != shape.usize) {
+        return Ok(null);
+    }
+    if (!operandIsConst(n, boundOperand)) {
+        let bound = operandLocal(n, boundOperand);
+        if (bound == none() || bound == counter || shape.defs[bound as usize] != 0) {
+            return Ok(null);
+        }
+    }
+    // The counter's one assignment: `counter = counter + 1`, in a block whose only way on is back to the header.
+    if (shape.defs[counter as usize] != 1) {
+        return Ok(null);
+    }
+    let latch = shape.defBlock[counter as usize];
+    if (latch == header) {
+        return Ok(null);
+    }
+    let latchBlock = borrow function.blocks[latch as usize];
+    if (latchBlock.successors.length != 1 || blockIndexIn(flow, latchBlock.successors[0]) != header) {
+        return Ok(null);
+    }
+    match (n.statements[shape.defStatement[counter as usize] as usize]) {
+        NirStatement.Assign(_, r) => {
+            match (n.rvalues[r as usize]) {
+                NirRvalue.Binary(op, left, right) => {
+                    let steps = (operandLocal(n, left) == counter && operandIsOne(n, right)) ||
+                        (operandLocal(n, right) == counter && operandIsOne(n, left));
+                    if (binaryIndex(op) != 13 || !steps) {
+                        return Ok(null);
+                    }
+                }
+                _ => { return Ok(null); }
+            }
+        }
+        _ => { return Ok(null); }
+    }
+    shape.counter = counter;
+    var plan = LoopPlan {
+        header: header,
+        preheader: preheader,
+        members: Vector<bool>.create(),
+        checks: Vector<u32>.create(),
+        overflow: Vector<u32>.create(),
+        counter: counterOperand,
+        bound: boundOperand,
+        program: Vector<u32>.create(),
+    };
+    for (k in 0..shape.members.length) {
+        plan.members.push(shape.members[k])?;
+    }
+    // The checks the guard can cover: those that run after the header's test and before the counter's step.
+    for (b in 0..function.blocks.length) {
+        if (!shape.members[b] || b == header as usize || b == latch as usize) {
+            continue;
+        }
+        let block = borrow function.blocks[b];
+        for (k in 0..block.statements.length) {
+            let s = block.statements[k];
+            if (inSet(results.removed, s) || plan.checks.length >= maxGuardChecks()) {
+                continue;
+            }
+            match (n.statements[s as usize]) {
+                NirStatement.BoundsCheck(index, length) => {
+                    let inBlock = truncate<u32>(b);
+                    let at = truncate<u32>(k);
+                    let known = resolveLength(n, flow, shape, length, inBlock, at, 0);
+                    if (known == 0xFFFFFFFFFFFFFFFF) {
+                        continue;
+                    }
+                    let programMark = plan.program.length;
+                    let overflowMark = plan.overflow.length;
+                    let form = resolveIndex(n, flow, shape, index, inBlock, at, 0, mut plan.program, mut plan.overflow)?;
+                    if (form == 0) {
+                        truncateU32s(mut plan.program, programMark);
+                        truncateU32s(mut plan.overflow, overflowMark);
+                        continue;
+                    }
+                    plan.program.push(if (form == 1) guardWhole() else if (form == 2) guardSpan() else guardFixed())?;
+                    plan.program.push(truncate<u32>(known >> 32))?;
+                    plan.program.push(truncate<u32>(known))?;
+                    plan.checks.push(s)?;
+                }
+                _ => {}
+            }
+        }
+    }
+    if (plan.checks.length == 0) {
+        return Ok(null);
+    }
+    return Ok(Some(plan));
+}
+
+fn containsId(v: borrow Vector<u32>, id: u32) -> bool {
+    for (x in v.view()) {
+        if (x == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// A copy of an rvalue, with its own number: the check results name rvalues.
+fn cloneRvalue(n: borrow mut NirProgram, r: u32) -> Result<u32, AllocError> {
+    let node = n.rvalues[r as usize];
+    let typ = n.rvalueTypes[r as usize];
+    let span = n.rvalueSpans[r as usize];
+    let copy = n.rvalue(node, typ, span)?;
+    n.rvalueVariants[copy as usize] = n.rvalueVariants[r as usize];
+    n.rvalueTasks[copy as usize] = n.rvalueTasks[r as usize];
+    return Ok(copy);
+}
+
+fn pushStatement(n: borrow mut NirProgram, node: NirStatement, span: Span) -> Result<u32, AllocError> {
+    n.statements.push(node)?;
+    n.statementSpans.push(span)?;
+    return Ok(truncate<u32>(n.statements.length - 1));
+}
+
+fn pushTerminator(n: borrow mut NirProgram, node: NirTerminator, span: Span) -> Result<u32, AllocError> {
+    n.terminators.push(node)?;
+    n.terminatorSpans.push(span)?;
+    return Ok(truncate<u32>(n.terminators.length - 1));
+}
+
+/// Makes the copy and the guard of one planned loop.
+fn applyPlan(
+    c: borrow Checker,
+    n: borrow mut NirProgram,
+    flow: borrow ControlFlow,
+    f: u32,
+    plan: borrow LoopPlan,
+    results: borrow mut CheckResults,
+) -> Result<void, AllocError> {
+    let fi = f as usize;
+    var nextId: u32 = 0;
+    for (k in 0..n.functions[fi].blocks.length) {
+        if (n.functions[fi].blocks[k].id >= nextId) {
+            nextId = n.functions[fi].blocks[k].id + 1;
+        }
+    }
+    // The copies' ids, by the original's index.
+    var copyIds = Vector<u32>.create();
+    for (k in 0..plan.members.length) {
+        if (plan.members[k]) {
+            copyIds.push(nextId)?;
+            nextId += 1;
+        } else {
+            copyIds.push(none())?;
+        }
+    }
+    let guardId = nextId;
+    let headerId = n.functions[fi].blocks[plan.header as usize].id;
+    let span = n.terminatorSpans[n.functions[fi].blocks[plan.header as usize].terminator as usize];
+    for (b in 0..plan.members.length) {
+        if (!plan.members[b]) {
+            continue;
+        }
+        var originals = Vector<u32>.create();
+        for (s in n.functions[fi].blocks[b].statements.view()) {
+            originals.push(s)?;
+        }
+        var statements = Vector<u32>.create();
+        for (s in originals.view()) {
+            let statementSpan = n.statementSpans[s as usize];
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(target, r) => {
+                    let copy = cloneRvalue(n, r)?;
+                    if (inSet(results.noOverflow, r) || containsId(plan.overflow, r)) {
+                        markSet(mut results.noOverflow, copy)?;
+                    }
+                    statements.push(pushStatement(n, NirStatement.Assign(target, copy), statementSpan)?)?;
+                }
+                NirStatement.BoundsCheck(index, length) => {
+                    let copy = pushStatement(n, NirStatement.BoundsCheck(index, length), statementSpan)?;
+                    if (inSet(results.removed, s) || containsId(plan.checks, s)) {
+                        markSet(mut results.removed, copy)?;
+                    }
+                    statements.push(copy)?;
+                }
+                NirStatement.StorageDead(local) => {
+                    statements.push(pushStatement(n, NirStatement.StorageDead(local), statementSpan)?)?;
+                }
+                _ => {}
+            }
+        }
+        let terminator = n.functions[fi].blocks[b].terminator;
+        let terminatorSpan = n.terminatorSpans[terminator as usize];
+        var successors = Vector<u32>.create();
+        var copied = none();
+        match (n.terminators[terminator as usize]) {
+            NirTerminator.Goto(target) => {
+                let to = copyTarget(flow, plan, copyIds, target);
+                successors.push(to)?;
+                copied = pushTerminator(n, NirTerminator.Goto(to), terminatorSpan)?;
+            }
+            NirTerminator.Branch(test, then, otherwise) => {
+                let a = copyTarget(flow, plan, copyIds, then);
+                let o = copyTarget(flow, plan, copyIds, otherwise);
+                successors.push(a)?;
+                successors.push(o)?;
+                copied = pushTerminator(n, NirTerminator.Branch(test, a, o), terminatorSpan)?;
+            }
+            _ => {}
+        }
+        n.functions[fi].blocks.push(
+            NirBlock {
+                id: copyIds[b],
+                statements: statements,
+                terminator: copied,
+                successors: successors,
+                cfg: Vector<u8>.create(),
+                branchCfg: Vector<u8>.create(),
+            },
+        )?;
+    }
+    // The guard block: the lengths it reads, then `g = false` (the C backend writes the test), then the choice.
+    let noProjections = Vector<NirProjection>.create();
+    var program = Vector<u32>.create();
+    var guardStatements = Vector<u32>.create();
+    var k: usize = 0;
+    while (k + 2 < plan.program.length) {
+        let kind = plan.program[k];
+        var a = plan.program[k + 1];
+        var b = plan.program[k + 2];
+        if ((kind == guardSpan() || kind == guardWhole() || kind == guardFixed()) && a == lengthOfPlace()) {
+            n.functions[fi].locals.push(NirLocal { typ: c.types.usize, name: none(), isUsing: false })?;
+            let local = truncate<u32>(n.functions[fi].locals.length - 1);
+            let place = n.place(local, noProjections.view())?;
+            let length = n.rvalue(NirRvalue.Length(b), c.types.usize, span)?;
+            guardStatements.push(pushStatement(n, NirStatement.Assign(place, length), span)?)?;
+            a = lengthOperand();
+            b = n.operand(NirOperand.Place(place, false), c.types.usize)?;
+        }
+        program.push(kind)?;
+        program.push(a)?;
+        program.push(b)?;
+        k += 3;
+    }
+    n.functions[fi].locals.push(NirLocal { typ: c.types.boolType, name: none(), isUsing: false })?;
+    let flag = truncate<u32>(n.functions[fi].locals.length - 1);
+    let flagPlace = n.place(flag, noProjections.view())?;
+    let never = n.operand(NirOperand.Const(IntValue { negative: false, magnitude: 0 }), c.types.boolType)?;
+    let neverValue = n.rvalue(NirRvalue.Use(never), c.types.boolType, span)?;
+    let guardStatement = pushStatement(n, NirStatement.Assign(flagPlace, neverValue), span)?;
+    guardStatements.push(guardStatement)?;
+    let flagOperand = n.operand(NirOperand.Place(flagPlace, false), c.types.boolType)?;
+    let fast = copyIds[plan.header as usize];
+    let choice = pushTerminator(n, NirTerminator.Branch(flagOperand, fast, headerId), span)?;
+    var guardSuccessors = Vector<u32>.create();
+    guardSuccessors.push(fast)?;
+    guardSuccessors.push(headerId)?;
+    n.functions[fi].blocks.push(
+        NirBlock {
+            id: guardId,
+            statements: guardStatements,
+            terminator: choice,
+            successors: guardSuccessors,
+            cfg: Vector<u8>.create(),
+            branchCfg: Vector<u8>.create(),
+        },
+    )?;
+    // The way in now goes through the guard.
+    let entry = n.functions[fi].blocks[plan.preheader as usize].terminator;
+    n.terminators[entry as usize] = NirTerminator.Goto(guardId);
+    var entrySuccessors = Vector<u32>.create();
+    entrySuccessors.push(guardId)?;
+    n.functions[fi].blocks[plan.preheader as usize].successors = entrySuccessors;
+    results.guards.push(
+        LoopGuard { statement: guardStatement, counter: plan.counter, bound: plan.bound, program: program },
+    )?;
+    return Ok();
+}
+
+/// A terminator's target in the copy: a member's copy, or the target itself outside the loop.
+fn copyTarget(flow: borrow ControlFlow, plan: borrow LoopPlan, copyIds: borrow Vector<u32>, id: u32) -> u32 {
+    let index = blockIndexIn(flow, id) as usize;
+    return if (plan.members[index]) copyIds[index] else id;
+}
+
+/// Versions the program's loops; the number of loops versioned.
+fn versionLoops(c: borrow Checker, n: borrow mut NirProgram, results: borrow mut CheckResults) -> Result<u32, AllocError> {
+    var versioned: u32 = 0;
+    let count = n.functions.length;
+    for (f in 0..count) {
+        let source = n.functions[f].source;
+        if (functionIsGeneric(c, source) || isAsyncFunction(c, source)) {
+            continue;
+        }
+        var asserts = false;
+        for (d in n.debugAsserts.view()) {
+            if (d.function as usize == f) {
+                asserts = true;
+            }
+        }
+        if (asserts) {
+            continue; // a debugAssert names its blocks by id range (ADR 0087 §2.5)
+        }
+        let flow = controlFlowOf(n.functions[f])?;
+        if (!flow.isReducible) {
+            continue;
+        }
+        var plans = Vector<LoopPlan>.create();
+        for (l in 0..flow.loopHeaders.length) {
+            match (planLoop(c, n, flow, truncate<u32>(f), l, results)?) {
+                Some(plan) => { plans.push(plan)?; }
+                null => {}
+            }
+        }
+        for (k in 0..plans.length) {
+            applyPlan(c, n, flow, truncate<u32>(f), plans[k], results)?;
+            versioned += 1;
+        }
+    }
+    return Ok(versioned);
+}
+
+/// The guard's C: one statement that sets the flag to whether every covered check holds for the whole loop, computed
+/// with the non-panicking arithmetic of rt.h (`cee_try_add_u64`, `cee_try_mul_u64`).
+fn emitLoopGuard(
+    e: borrow mut CEmitter,
+    c: borrow Checker,
+    n: borrow NirProgram,
+    sources: borrow Vector<SourceText>,
+    f: u32,
+    target: u32,
+    guard: u32,
+) -> Result<void, AllocError> {
+    let g = guard as usize;
+    let counter = operandText(e, c, n, sources, f, e.checks.guards[g].counter)?;
+    let bound = operandText(e, c, n, sources, f, e.checks.guards[g].bound)?;
+    var test = Vector<u8>.create();
+    appendBytes(mut test, counter.view())?;
+    appendText(mut test, " < ")?;
+    appendBytes(mut test, bound.view())?;
+    var stack = Vector<Vector<u8>>.create();
+    var temporaries: u64 = 0;
+    var k: usize = 0;
+    while (k + 2 < e.checks.guards[g].program.length) {
+        let kind = e.checks.guards[g].program[k];
+        let b = e.checks.guards[g].program[k + 2];
+        let a = e.checks.guards[g].program[k + 1];
+        k += 3;
+        if (kind == guardPush()) {
+            stack.push(operandText(e, c, n, sources, f, a)?)?;
+        } else if (kind == guardAdd() || kind == guardMul()) {
+            let right = stack.pop()!;
+            let left = stack.pop()!;
+            var name = copyBytes("ceeG".bytes())?;
+            appendDecimal(mut name, temporaries)?;
+            temporaries += 1;
+            appendText(mut test, if (kind == guardAdd()) " && cee_try_add_" else " && cee_try_mul_")?;
+            appendSuffix(c, mut test, c.types.usize)?;
+            test.push('(')?;
+            appendBytes(mut test, left.view())?;
+            appendText(mut test, ", ")?;
+            appendBytes(mut test, right.view())?;
+            appendText(mut test, ", &")?;
+            appendBytes(mut test, name.view())?;
+            test.push(')')?;
+            stack.push(name)?;
+        } else {
+            let length = operandText(e, c, n, sources, f, b)?;
+            if (kind == guardWhole()) {
+                appendText(mut test, " && ")?;
+                appendBytes(mut test, bound.view())?;
+                appendText(mut test, " <= ")?;
+                appendBytes(mut test, length.view())?;
+            } else if (kind == guardFixed()) {
+                let index = stack.pop()!;
+                appendText(mut test, " && ")?;
+                appendBytes(mut test, index.view())?;
+                appendText(mut test, " < ")?;
+                appendBytes(mut test, length.view())?;
+            } else {
+                let base = stack.pop()!;
+                var name = copyBytes("ceeG".bytes())?;
+                appendDecimal(mut name, temporaries)?;
+                temporaries += 1;
+                appendText(mut test, " && cee_try_add_")?;
+                appendSuffix(c, mut test, c.types.usize)?;
+                test.push('(')?;
+                appendBytes(mut test, base.view())?;
+                appendText(mut test, ", ")?;
+                appendBytes(mut test, bound.view())?;
+                appendText(mut test, " - 1, &")?;
+                appendBytes(mut test, name.view())?;
+                appendText(mut test, ") && ")?;
+                appendBytes(mut test, name.view())?;
+                appendText(mut test, " < ")?;
+                appendBytes(mut test, length.view())?;
+            }
+        }
+    }
+    let place = appendPlaceIn(e, c, n, sources, f, target)?;
+    e.t("    { ")?;
+    if (temporaries > 0) {
+        appendCTypeName(c, mut e.buf, c.types.usize)?;
+        for (t in 0..temporaries) {
+            e.t(if (t == 0) " ceeG" else ", ceeG")?;
+            e.d(t)?;
+        }
+        e.t("; ")?;
+    }
+    e.b(place.view())?;
+    e.t(" = ")?;
+    e.b(test.view())?;
+    e.t("; }")?;
+    return e.emit();
+}

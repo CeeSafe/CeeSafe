@@ -145,7 +145,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 | N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
-| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
+| N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
 
 Arrays and slices otherwise reuse codes: indexing or slicing a non-array, a non-`usize` index,
 or a bad `for` sequence or range is N0205; writing an element of a `let` array or through a
@@ -170,7 +170,7 @@ N0271 is unassigned: destroying a value that holds loans while their referents a
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0280 | An unsafe operation outside an unsafe context: a read, write or arithmetic through a raw pointer, `Ptr.toBorrow`/`toBorrowMut`, `Slice.fromRaw`/`SliceMut.fromRaw`, a call to an `unsafe fn`, or a use of a `static mut` (U1, type-system.md §39.3) | `let v = p.read();` in a safe function |
+| N0280 | An unsafe operation outside an unsafe context: a read, write or arithmetic through a raw pointer, `Ptr.toBorrow`/`toBorrowMut`, `Slice.fromRaw`/`SliceMut.fromRaw`, `Box.fromRaw`, `Vector.fromRaw`, `Vector.intoForeign`, `Vector.fromForeign` or `v.setLength(n)` (§23.3), a call to an `unsafe fn`, or a use of a `static mut` (U1, type-system.md §39.3) | `let v = p.read();` in a safe function |
 | N0281 | An invalid raw-pointer pointee: a reference, slice, `StringView` or other scoped type, or `never` (a type parameter is allowed since M8d; a scoped argument for it is N0274) | `*borrow i32`, `*Slice<u8>` |
 | N0282 | A pointer operation that the pointer or its pointee does not allow: reading or writing a non-Copy type, writing through a `*T`, `toBorrowMut` or `SliceMut.fromRaw` from a `*T`, any access through `*void` | `p.write(1)` with `p: *i32`; `q.read()` with `q: *void` |
 | N0283 | An `unsafe fn`, or a function containing `unsafe`, without a doc comment with a `Safety:` line (U2) | `unsafe fn f() {}` with no `/// Safety: …` above it |

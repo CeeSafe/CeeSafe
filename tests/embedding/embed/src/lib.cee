@@ -225,3 +225,54 @@ fn embedWindow() -> u32 {
         Err(_) => { return 1000; }
     }
 }
+
+/// A vector of `n` bytes, byte `i` being `i % 251`, that the host adopts (ADR 0090 §2.3): false when out of memory.
+/// Safety: the three out-pointers are the host's, and the host frees the block with the allocator both sides share.
+@export("embed_give")
+fn embedGive(n: usize, outPointer: *mut *mut u8, outLength: *mut usize, outCapacity: *mut usize) -> bool {
+    var v = Vector<u8>.create();
+    for (i in 0..n) {
+        if (v.push(truncate<u8>(i % 251)).isErr()) {
+            return false;
+        }
+    }
+    let parts = unsafe { Vector.intoForeign(v) };
+    unsafe {
+        outPointer.write(parts.pointer);
+        outLength.write(parts.length);
+        outCapacity.write(parts.capacity);
+    }
+    return true;
+}
+
+/// Takes the host's vector, appends `extra` bytes of 7 and gives it back, whether or not it could grow (ADR 0090
+/// §2.3's shape of an export that takes the caller's vector): false when out of memory.
+/// Safety: the three pointers hold the parts of a block of the allocator both sides share, given up by the host for
+/// the call.
+@export("embed_take_grow")
+fn embedTakeGrow(pointer: *mut *mut u8, length: *mut usize, capacity: *mut usize, extra: usize) -> bool {
+    var v: Vector<u8> = unsafe { Vector.fromForeign(pointer.read(), length.read(), capacity.read()) };
+    var grown = true;
+    for (i in 0..extra) {
+        if (v.push(7).isErr()) {
+            grown = false;
+            break;
+        }
+    }
+    let parts = unsafe { Vector.intoForeign(v) };
+    unsafe {
+        pointer.write(parts.pointer);
+        length.write(parts.length);
+        capacity.write(parts.capacity);
+    }
+    return grown;
+}
+
+/// Wrong on purpose: the address of a block handed out with Vector.intoRaw, which stays in the report's `live`
+/// whatever the host does with it.
+@export("embed_raw")
+fn embedRaw() -> *mut u8 {
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    return Vector.intoRaw(v).pointer;
+}

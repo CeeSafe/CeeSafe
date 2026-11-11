@@ -338,6 +338,9 @@ static uint64_t alloc_attempts;   /* every allocation attempt, failed ones inclu
 static uint64_t alloc_live;       /* successful allocations not yet freed */
 static uint64_t alloc_foreign;    /* CEE_ALLOC_FOREIGN's (ADR 0060): live, but not a leak */
 static uint32_t alloc_foreign_used; /* C has allocated: the report gives alloc_foreign (ceesafe_atomic_*) */
+static uint64_t alloc_given;      /* blocks a host adopted (Vector.intoForeign, ADR 0090): no longer in alloc_live */
+static uint64_t alloc_taken;      /* blocks taken from a host (Vector.fromForeign): now in alloc_live */
+static uint32_t alloc_moved_used; /* a block changed sides: the report gives both counts (ceesafe_atomic_*) */
 static uint64_t alloc_fail_at;    /* CEESAFE_FAIL_ALLOC_AT: this attempt fails; 0 = never */
 static uint32_t alloc_report;     /* CEESAFE_ALLOC_REPORT: print the counters at the end of main */
 /* Whether to count at all (ADR 0059): only a report, CEESAFE_FAIL_ALLOC_AT or `ceesafec test` reads the counters. Decided
@@ -494,6 +497,35 @@ void ceesafe_free(void *p, uint32_t allocator) {
         alloc_count_live(allocator, UINT64_MAX); /* minus one */
     }
     ceesafe_platform_free(p);
+}
+
+/* A vector's block changes sides (ADR 0090 §2.3): out of `live` when the host adopts it, into `live` when CeeSafe
+   takes one of the host's. Neither is an allocation attempt: they are not numbered and never failed. Each count has
+   its own guard, written out, as alloc_counting_check asks of every CEE_COUNT. */
+static void alloc_moved(void) {
+    if (ceesafe_atomic_load_u32(&alloc_moved_used) == 0u) {
+        ceesafe_atomic_store_u32(&alloc_moved_used, 1u);
+    }
+}
+
+void ceesafe_alloc_given(void) {
+    if (config_u32(&alloc_counting) != 0u) {
+        (void)CEE_COUNT(alloc_live, UINT64_MAX); /* minus one */
+    }
+    if (config_u32(&alloc_counting) != 0u) {
+        (void)CEE_COUNT(alloc_given, 1u);
+        alloc_moved();
+    }
+}
+
+void ceesafe_alloc_taken(void) {
+    if (config_u32(&alloc_counting) != 0u) {
+        (void)CEE_COUNT(alloc_live, 1u);
+    }
+    if (config_u32(&alloc_counting) != 0u) {
+        (void)CEE_COUNT(alloc_taken, 1u);
+        alloc_moved();
+    }
 }
 
 void ceesafe_fail_after(uint64_t n) {
@@ -692,7 +724,8 @@ int32_t ceesafe_rt_init_main(const ceesafe_config *config) {
 }
 
 /* Format (relied on by the fault-injection sweep): "ceesafe alloc: attempts=<n> live=<m>\n"; then, if C allocated
-   with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak. */
+   with CEE_ALLOC_FOREIGN, "ceesafe alloc: foreign held=<k>\n" (ADR 0060), which no tool reads as a leak; then, if a
+   vector's block changed sides, "ceesafe alloc: given=<k> taken=<m>\n" (ADR 0090), for information too. */
 uint64_t ceesafe_shutdown(void) {
     /* Before ceesafe_init has published the config (never called, or still under way on another thread), nothing
        was asked for: 0. The load orders that config before the reads below. */
@@ -709,6 +742,13 @@ uint64_t ceesafe_shutdown(void) {
         if (ceesafe_atomic_load_u32(&alloc_foreign_used) != 0u) {
             write_err_cstr("ceesafe alloc: foreign held=");
             write_err_u64(ceesafe_atomic_load_u64(&alloc_foreign));
+            write_err_cstr("\n");
+        }
+        if (ceesafe_atomic_load_u32(&alloc_moved_used) != 0u) {
+            write_err_cstr("ceesafe alloc: given=");
+            write_err_u64(ceesafe_atomic_load_u64(&alloc_given));
+            write_err_cstr(" taken=");
+            write_err_u64(ceesafe_atomic_load_u64(&alloc_taken));
             write_err_cstr("\n");
         }
     }

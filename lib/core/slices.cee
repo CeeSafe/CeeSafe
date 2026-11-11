@@ -342,3 +342,124 @@ public struct VectorEditing<T> {
         return v.pop()!;
     }
 }
+
+/// What a vector is made of (ADR 0090 §2.1, type-system.md §23.3): `pointer` is null when `capacity` is 0.
+public struct VectorParts<T> {
+    public pointer: *mut T;
+    public length: usize;
+    public capacity: usize;
+}
+
+/// `Vector.intoRaw` and `Vector.fromRaw` (ADR 0090, type-system.md §23.3). `releaseBuffer` and `adoptBuffer` are the
+/// compiler's, for the libraries alone: the first makes a vector the empty one without freeing its buffer or dropping
+/// its elements, the second gives an empty vector a buffer; their last argument moves the block out of, or into, the
+/// allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`.
+public struct VectorRaw<T> {
+    /// `Vector.intoRaw(v)`: the caller owns the buffer and its elements.
+    public fn intoRaw(v: Vector<T>) -> VectorParts<T> {
+        var owned = v;
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity == 0) {
+            return VectorParts<T> { pointer: 0 as *mut T, length: 0, capacity: 0 };
+        }
+        // As an address: a pointer made from the view would keep the vector borrowed past `releaseBuffer`.
+        let address = owned.viewMut().ptr as usize;
+        owned.releaseBuffer(false);
+        return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
+    }
+
+    /// `Vector.fromRaw(pointer, length, capacity)`. A capacity of 0 gives the empty vector.
+    /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+    public unsafe fn fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T> {
+        var v = Vector<T>.create();
+        if (capacity != 0) {
+            v.adoptBuffer(pointer, length, capacity, false);
+        }
+        return v;
+    }
+
+    /// `Vector.intoRaw(v)` for a vector of `FailingAllocator`: the caller owns the buffer and its elements.
+    public fn intoRawFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T> {
+        var owned = v;
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity == 0) {
+            return VectorParts<T> { pointer: 0 as *mut T, length: 0, capacity: 0 };
+        }
+        // As an address: a pointer made from the view would keep the vector borrowed past `releaseBuffer`.
+        let address = owned.viewMut().ptr as usize;
+        owned.releaseBuffer(false);
+        return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
+    }
+
+    /// `Vector.fromRaw(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
+    /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+    public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, FailingAllocator> {
+        var v = Vector<T, FailingAllocator>.create();
+        if (capacity != 0) {
+            v.adoptBuffer(pointer, length, capacity, false);
+        }
+        return v;
+    }
+}
+
+/// `Vector.intoForeign` and `Vector.fromForeign` (ADR 0090 §2.3, type-system.md §23.3): a buffer of plain values that
+/// changes sides in a host program. The element type is Copy, also when a program names this struct itself.
+public struct VectorForeign<T: Copy> {
+    /// `Vector.intoForeign(v)`: the host owns the buffer; it leaves the report's `live`.
+    /// Safety: the caller names the host that frees the block with the allocator both sides share (type-system.md
+    /// §23.3).
+    public unsafe fn intoForeign(v: Vector<T>) -> VectorParts<T> {
+        var owned = v;
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity == 0) {
+            return VectorParts<T> { pointer: 0 as *mut T, length: 0, capacity: 0 };
+        }
+        // As an address: a pointer made from the view would keep the vector borrowed past `releaseBuffer`.
+        let address = owned.viewMut().ptr as usize;
+        owned.releaseBuffer(true);
+        return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
+    }
+
+    /// `Vector.fromForeign(pointer, length, capacity)`. A capacity of 0 gives the empty vector.
+    /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+    public unsafe fn fromForeign(pointer: *mut T, length: usize, capacity: usize) -> Vector<T> {
+        var v = Vector<T>.create();
+        if (capacity != 0) {
+            v.adoptBuffer(pointer, length, capacity, true);
+        }
+        return v;
+    }
+
+    /// `Vector.intoForeign(v)` for a vector of `FailingAllocator`: the host owns the buffer; it leaves the report's `live`.
+    /// Safety: the caller names the host that frees the block with the allocator both sides share (type-system.md
+    /// §23.3).
+    public unsafe fn intoForeignFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T> {
+        var owned = v;
+        let length = owned.length;
+        let capacity = owned.capacity;
+        if (capacity == 0) {
+            return VectorParts<T> { pointer: 0 as *mut T, length: 0, capacity: 0 };
+        }
+        // As an address: a pointer made from the view would keep the vector borrowed past `releaseBuffer`.
+        let address = owned.viewMut().ptr as usize;
+        owned.releaseBuffer(true);
+        return VectorParts<T> { pointer: address as *mut T, length: length, capacity: capacity };
+    }
+
+    /// `Vector.fromForeign(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
+    /// Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+    public unsafe fn fromForeignFailing(
+        pointer: *mut T,
+        length: usize,
+        capacity: usize,
+    ) -> Vector<T, FailingAllocator> {
+        var v = Vector<T, FailingAllocator>.create();
+        if (capacity != 0) {
+            v.adoptBuffer(pointer, length, capacity, true);
+        }
+        return v;
+    }
+}

@@ -489,6 +489,83 @@ static const ceesafe_allocator mimalloc_allocator = {my_alloc, my_zeroed, my_rea
 config.allocator = &mimalloc_allocator;
 ```
 
+### Buffers that change sides
+
+A C function that fills a buffer writes into a vector's spare capacity: `reserve`, write through the view's pointer,
+then `setLength`. Nothing is filled twice. What is written above the length is lost if the vector grows before
+`setLength`.
+
+To return a buffer the host will own, give it up with `Vector.intoForeign`; to work on a vector the host owns, take
+it with `Vector.fromForeign` and give it back the same way. Both need one allocator on both sides (the host's, given
+to `ceesafe_init`, or the C library's when none was given) and a Copy element type, and both are unsafe: the block
+leaves, or joins, the blocks CeeSafe must free. A value with drop glue still goes back through an export.
+
+<!-- ceesafe: check -->
+```ceesafe
+extern "C" {
+    /// Writes up to `room` bytes at `to` and returns how many.
+    fn source_read(to: *mut u8, room: usize) -> usize;
+}
+
+/// Reads up to 4096 bytes more into `out`.
+/// Safety: `source_read` writes at most `room` bytes from the pointer, inside the capacity `reserve` made, and
+/// `setLength` covers exactly the bytes it wrote.
+fn readMore(out: borrow mut Vector<u8>) -> Result<usize, AllocError> {
+    out.reserve(4096)?;
+    let at = out.length;
+    let room = out.capacity - at;
+    let written = unsafe { source_read(out.viewMut().ptr.add(at), room) };
+    unsafe { out.setLength(at + written); }
+    return Ok(written);
+}
+
+/// Appends to the host's vector: take, work, give, with no early return between. False when out of memory; the
+/// bytes read before that are kept.
+/// Safety: the three pointers hold the parts of a block of the allocator both sides share, given up by the host for
+/// the call; the host owns the block again when this returns.
+@export("source_read_into")
+fn readInto(pointer: *mut *mut u8, length: *mut usize, capacity: *mut usize) -> bool {
+    var out: Vector<u8> = unsafe { Vector.fromForeign(pointer.read(), length.read(), capacity.read()) };
+    let ok = readMore(mut out).isOk();
+    let parts = unsafe { Vector.intoForeign(out) };
+    unsafe {
+        pointer.write(parts.pointer);
+        length.write(parts.length);
+        capacity.write(parts.capacity);
+    }
+    return ok;
+}
+```
+
+In a Rust host the shim takes the caller's `Vec` apart and rebuilds it from what comes back. A `Vec` with capacity 0
+has a dangling pointer, so it is passed as capacity 0, and a returned capacity 0 has a null pointer:
+
+```rust
+unsafe extern "C" {
+    fn source_read_into(pointer: *mut *mut u8, length: *mut usize, capacity: *mut usize) -> bool;
+}
+
+pub fn read_into(out: &mut Vec<u8>) -> bool {
+    let mut taken = core::mem::ManuallyDrop::new(core::mem::take(out));
+    let (mut pointer, mut length, mut capacity) = (taken.as_mut_ptr(), taken.len(), taken.capacity());
+    // SAFETY: CeeSafe takes the block with Vector.fromForeign and gives one back with Vector.intoForeign.
+    let ok = unsafe { source_read_into(&mut pointer, &mut length, &mut capacity) };
+    if capacity != 0 {
+        // SAFETY: a block of the allocator both sides share, with `length` initialised bytes.
+        *out = unsafe { Vec::from_raw_parts(pointer, length, capacity) };
+    }
+    ok
+}
+```
+
+This is outside what Rust documents for `Vec::from_raw_parts`: the block was not allocated by Rust with the `Vec`'s
+layout. The allocator defines it, so it holds only for a `#[global_allocator]` that is the allocator CeeSafe was
+given, frees by address alone, and reallocates correctly for any layout no larger than the block and aligned to at
+most 16 (mimalloc and the C library's `malloc` on Unix do). The hook's `realloc` must also return a 16-aligned block
+for a less-aligned one it is given, since a small `Vec<u8>`'s block may be aligned to 8: `mi_realloc_aligned(p, n,
+16)` does. A CeeSafe panic aborts the process, so nothing unwinds past a taken vector
+([ADR 0090](../spec/decisions/0090-buffers-that-cross-a-c-boundary.md)).
+
 ## Next
 
 [Kernel code](kernel.md).

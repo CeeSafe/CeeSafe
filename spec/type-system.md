@@ -2002,6 +2002,7 @@ fn main() -> i32 {
 - No `==`, no `Copy`.
 - **Layout (v0):** `{ T *ptr; u64 length; u64 capacity }` (24 bytes on LP64). An empty vector's
   pointer is a valid, aligned, never-dereferenced address (not null), so views of it are valid.
+  `v.viewMut().ptr` is the buffer's address, also for an empty vector that has capacity (§23.3).
 
 ### 23.2 `String<A>`
 ```ceesafe
@@ -2054,6 +2055,72 @@ fn main() -> i32 {
 - **Layout (v0):** as `Vector<u8, A>`.
 
 Diagnostics: none new. The errors reuse N0205, N0207, N0209, N0211, N0240–N0251, N0260 and N0263.
+
+### 23.3 A vector's raw parts and spare capacity (ADR 0090)
+```ceesafe
+/// Safety: the 3 bytes written are inside the 8 reserved, and `setLength` covers exactly them; the parts given to
+/// `fromRaw` are those `intoRaw` returned, once.
+fn main() {
+    var v = Vector<u8>.create();
+    v.reserve(8)!;
+    let p = v.viewMut().ptr; // the buffer, also while the vector is empty
+    unsafe {
+        p.write(1);
+        p.add(1).write(2);
+        p.add(2).write(3);
+        v.setLength(3); // the three bytes are now elements
+    }
+    let parts = Vector.intoRaw(v); // nothing is freed: the caller owns the buffer
+    Console.writeLine(parts.capacity >= 8);
+    let back: Vector<u8> = unsafe { Vector.fromRaw(parts.pointer, parts.length, parts.capacity) };
+    Console.writeLine(back[2]);
+}
+```
+- **`VectorParts<T>`** (lib/core) is what a vector is made of: `pointer: *mut T`, `length: usize`,
+  `capacity: usize`. `pointer` is null when `capacity` is 0. It is an ordinary struct, not `@repr(C)` (a generic
+  struct cannot be, N0290): an export passes the three values separately.
+- **`Vector.intoRaw(v)`** consumes `v: Vector<T, A>` and returns `VectorParts<T>`. Nothing is dropped or freed: the
+  caller owns the buffer and its first `length` elements, and leaks them unless it gives them back. It is safe, as
+  `Box.intoRaw` is (§34.2). A vector that never allocated gives a null `pointer` and capacity 0.
+- **`Vector.fromRaw(pointer, length, capacity)`** (unsafe, §27.3) makes a vector again. The vector type, allocator
+  included, is the written one (`Vector<u8>.fromRaw(…)`) or the expected one; without either it is N0205. Contract:
+  the three values came from `Vector.intoRaw` of a vector of exactly that type, with `length` changed only to a value
+  at most `capacity` below which every element is initialised, and are given back once. A `capacity` of 0 gives the
+  empty vector, whatever `pointer` and `length` are.
+- **`v.setLength(n)`** (unsafe, `borrow mut this`, two-phase like `resize`) sets the length without touching the
+  elements. Contract: every element below `n` is initialised, and the vector has not grown since they were written.
+  Elements at `n` and above are forgotten, not dropped. `n > v.capacity` panics ("index out of bounds") in every
+  build.
+  - **Spare capacity does not survive a growth.** What is written above the length is lost when `push`, `reserve` or
+    another growth moves the buffer (the interpreter's growth copies only the elements). The order is `reserve`,
+    write, `setLength`, with no growth between the last two.
+  - In generic code, where the element type is a type parameter, a pointer taken from a view keeps the vector
+    borrowed while it is used (N0241 at `setLength`): use it before `setLength`, or convert it (`as usize`) first.
+    With a concrete element type the pointer holds no loan.
+- **`Vector.intoForeign(v)`** and **`Vector.fromForeign(pointer, length, capacity)`** (both unsafe) are `intoRaw`
+  and `fromRaw` for a buffer that changes sides for good in a host program (§28.6): `intoForeign` for one the host
+  adopts and frees with its own allocator, `fromForeign` for a block the host allocated and gives up, which CeeSafe
+  then grows and frees.
+  - `T` must be Copy (N0259): the pair is for buffers of plain values. A value with drop glue comes back through an
+    export instead.
+  - `intoForeign` is unsafe although it frees nothing: it takes the block out of the allocation report
+    (`memory-model.md` §3.2), so in safe code it would hide a leak. Its `Safety:` line names the host that frees the
+    block.
+  - The pairs do not mix: parts from `intoForeign` are not valid for `fromRaw`, and parts from `intoRaw` are not the
+    host's to free.
+  - The contract with the host is §28.6's.
+- None of these has an effect or allocates. All work for both of a vector's allocators, and in the interpreter as in
+  C. `intoRaw` and the `from` functions expose an address (`memory-model.md` §5.1 rule 1c).
+- A type written on an `into` call (`Vector<u8>.intoRaw(v)`) must be the argument's type (N0205).
+- **Lowering:** the functions are lib/core's `VectorRaw<T>` and `VectorForeign<T: Copy>`, over two built-ins that
+  only the libraries may call: `releaseBuffer(foreign)` makes a vector the empty one without freeing its buffer or
+  dropping its elements, and `adoptBuffer(pointer, length, capacity, foreign)` gives an empty vector a buffer. A
+  program that names the two structs itself is held to the same rules: their `from` functions and `intoForeign` are
+  `unsafe fn`, and `VectorForeign`'s bound rejects an element type that is not Copy (N0268).
+
+Diagnostics: none new. N0280 (outside an unsafe context), N0205 (the vector type of a `from` call is unknown;
+`intoRaw` or `intoForeign` of something that is not a vector, or of a vector that is not of the written type), N0209,
+N0259 (a Foreign call with an element type that is not Copy).
 
 ## 24. `SlotMap<T, A>`, `Handle<T>` and `StableVector<T, A>` (M6e)
 
@@ -2691,6 +2758,8 @@ expression, evaluated once.
   function whose signature ties it to a parameter (§13.5).
 - `Slice.fromRaw(p, n)`: a `Slice<T>` of the `n` elements from `p`; `SliceMut.fromRaw(p, n)`: a
   `SliceMut<T>`, for `p: *mut T`. Like `Ptr.toBorrow`, the slice holds no loans.
+- `Box.fromRaw(p)` (§34.2); `Vector.fromRaw`, `Vector.intoForeign`, `Vector.fromForeign` and `v.setLength(n)`
+  (§23.3, ADR 0090).
 - Calling an `unsafe fn` (§27.4).
 - None of these is defined for `*void`: cast it to a typed pointer first (N0282).
 
@@ -2993,6 +3062,24 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
   and stays valid with its context until the process exits. It cannot change under live blocks: given after the
   runtime has allocated, it is `CEESAFE_INIT_LATE`. Each side frees what it allocated through its own code: a block
   CeeSafe hands out comes back through an export, even when both use one heap.
+- **A vector's buffer that changes sides** (ADR 0090 §2.3) is the exception: `Vector.intoForeign` and
+  `Vector.fromForeign` (§23.3). The contract:
+  1. Both sides use one allocator: the host's, given to `ceesafe_init`, or, when none was given, the C library's.
+  2. A block CeeSafe gives holds `capacity × size(T)` bytes, at least 1. It is aligned to
+     max(16, `alignof(max_align_t)`) when CeeSafe allocated or grew it; a block that was taken and is given back
+     without having grown is the block as taken. The host frees or reallocates it with the function its hook's
+     `free` or `realloc` calls. The host's functions must treat it as a block of their own of that size: an
+     allocator that keeps the size or alignment it was asked for outside the block, and checks them at `free`,
+     cannot adopt.
+  3. A block CeeSafe takes came from that same allocator, holds at least `capacity × size(T)` bytes, and is aligned
+     for `T`; it need not be 16-aligned.
+  4. The hook's `realloc`, given any block of its allocator, also one aligned below 16, returns a block aligned to
+     max(16, `alignof(max_align_t)`). The runtime grows a taken vector through it and checks the result, so a
+     `realloc` that grew an 8-aligned block in place is reported as a broken hook (`CEE_PANIC_ALLOCATOR`). A host
+     that never gives CeeSafe a block is not affected.
+  An export that takes the caller's vector calls `fromForeign`, passes the vector on by `borrow mut`, calls
+  `intoForeign` whatever the result was, and writes the three parts back: take, work, give, with no early return
+  between.
 - **Panics in a host** (ADR 0088 §2.4). The panic hook is called on the panicking thread (the caller's, a thread
   CeeSafe spawned, an `Async.runWorkers` worker, or one C calls a `@callback` on) with the kind, the reason, the message
   and the CeeSafe location; the executor's own aborts arrive as `CEE_PANIC_ASYNC` with their message and no file. The

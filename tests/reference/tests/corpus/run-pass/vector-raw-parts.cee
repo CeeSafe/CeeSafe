@@ -1,0 +1,129 @@
+// Vector.intoRaw, Vector.fromRaw, v.setLength and the Foreign pair (ADR 0090; type-system.md §23.3).
+struct Noisy {
+    id: u32;
+
+    drop {
+        Console.writeLine(this.id);
+    }
+}
+
+/// Stands for a C function that fills a buffer: writes `count` bytes from `first` at `p`.
+/// Safety: `p` has `count` writable bytes.
+unsafe fn fill(p: *mut u8, count: usize, first: u8) {
+    for (i in 0..count) {
+        p.add(i).write(first + truncate<u8>(i));
+    }
+}
+
+/// Appends 3 bytes through the spare capacity, as a port of Rust's `spare_capacity_mut` and `set_len` does.
+/// Safety: `reserve` made room for the 3 bytes `fill` writes above the length, and `setLength` covers exactly them.
+fn append(out: borrow mut Vector<u8>, first: u8) -> Result<void, AllocError> {
+    out.reserve(3)?;
+    let at = out.length;
+    unsafe {
+        fill(out.viewMut().ptr.add(at), 3, first);
+        out.setLength(at + 3);
+    }
+    return Ok();
+}
+
+/// A round trip in generic code: the element type is a type parameter.
+/// Safety: the parts are those of `v`, given back once, to a vector of the same type.
+fn roundTrip<T>(v: Vector<T>) -> Vector<T> {
+    let parts = Vector.intoRaw(v);
+    return unsafe { Vector<T>.fromRaw(parts.pointer, parts.length, parts.capacity) };
+}
+
+/// Safety: every `from` call is given the parts of an `into` call of a vector of the same type, once.
+fn main() {
+    // A round trip: the buffer and the elements are the same.
+    var v = Vector<u8>.create();
+    v.push(1)!;
+    v.push(2)!;
+    let parts = Vector.intoRaw(v);
+    Console.writeLine(parts.length);
+    Console.writeLine(parts.capacity);
+    var back: Vector<u8> = unsafe { Vector.fromRaw(parts.pointer, parts.length, parts.capacity) };
+    back.push(3)!;
+    Console.writeLine(back[0] + back[1] + back[2]);
+
+    // A vector that never allocated has a null pointer, and comes back as the empty vector.
+    let none = Vector.intoRaw(Vector<u8>.create());
+    Console.writeLine(none.pointer.isNull());
+    Console.writeLine(none.capacity);
+    let nothing = unsafe { Vector<u8>.fromRaw(none.pointer, 0, 0) };
+    Console.writeLine(nothing.length);
+
+    // setLength after writes through the pointer; then grown by push, with the bytes kept.
+    var w = Vector<u8>.create();
+    append(mut w, 10)!;
+    append(mut w, 20)!;
+    Console.writeLine(w.length);
+    Console.writeLine(w[0] + w[2] + w[3] + w[5]);
+    unsafe { w.setLength(2); }
+    Console.writeLine(w.length);
+
+    // The whole capacity is a valid length; the argument is evaluated before the vector's loan (two-phase).
+    var whole = Vector<u8>.create();
+    whole.reserve(4)!;
+    unsafe {
+        fill(whole.viewMut().ptr, whole.capacity, 1);
+        whole.setLength(whole.capacity);
+        whole.setLength(whole.length - 1);
+    }
+    Console.writeLine(whole.length + 1 == whole.capacity);
+
+    // A vector made by fromRaw grows past its capacity like any other; one with capacity and no elements comes back.
+    var grown = roundTrip(Vector<u32>.withCapacity(2)!);
+    Console.writeLine(grown.length);
+    Console.writeLine(grown.capacity >= 2);
+    for (i in 0u32..100) {
+        grown.push(i)!;
+    }
+    Console.writeLine(grown[99] + truncate<u32>(grown.length));
+
+    // Elements with drop glue are not dropped by intoRaw, and once by the vector fromRaw makes.
+    var n = Vector<Noisy>.create();
+    n.push(Noisy { id: 100 })!;
+    n.push(Noisy { id: 101 })!;
+    let held = Vector.intoRaw(n);
+    Console.writeLine("held");
+    {
+        let again: Vector<Noisy> = unsafe { Vector.fromRaw(held.pointer, held.length, held.capacity) };
+        Console.writeLine(again.length);
+    }
+    Console.writeLine("dropped");
+
+    // The Foreign pair, the same block out and in again; and a vector of FailingAllocator through both pairs.
+    let given = unsafe { Vector.intoForeign(w) };
+    var taken: Vector<u8> = unsafe { Vector.fromForeign(given.pointer, given.length, given.capacity) };
+    taken.push(9)!;
+    Console.writeLine(taken.length);
+    var f = Vector<u8, FailingAllocator>.create();
+    f.push(4)!;
+    let fp = Vector.intoRaw(f);
+    let fb: Vector<u8, FailingAllocator> = unsafe { Vector.fromRaw(fp.pointer, fp.length, fp.capacity) };
+    let fg = unsafe { Vector.intoForeign(fb) };
+    let ft = unsafe { Vector<u8, FailingAllocator>.fromForeign(fg.pointer, fg.length, fg.capacity) };
+    Console.writeLine(ft[0]);
+}
+// expect-stdout: 2
+// expect-stdout: 4
+// expect-stdout: 6
+// expect-stdout: true
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 6
+// expect-stdout: 64
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 199
+// expect-stdout: held
+// expect-stdout: 2
+// expect-stdout: 100
+// expect-stdout: 101
+// expect-stdout: dropped
+// expect-stdout: 3
+// expect-stdout: 4

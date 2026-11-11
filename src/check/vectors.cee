@@ -94,6 +94,9 @@ fn checkVectorCreate(
     let ident = c.front.ast.idents[member as usize];
     let text = c.name(ident.symbol);
     let withCapacity = sameText(text, "withCapacity");
+    if (!isString && isVectorRawName(text)) {
+        return checkVectorRaw(c, member, typeArguments, arguments, expected, span);
+    }
     if (!withCapacity && !sameText(text, "create")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
@@ -105,6 +108,12 @@ fn checkVectorCreate(
         appendText(mut message, ".create()' or '")?;
         appendText(mut message, kind)?;
         appendText(mut message, ".withCapacity(n)'")?;
+        if (!isString) {
+            appendText(
+                mut message,
+                ", or for raw parts 'Vector.intoRaw(v)', 'Vector.fromRaw(p, n, c)', 'Vector.intoForeign(v)' or 'Vector.fromForeign(p, n, c)'",
+            )?;
+        }
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
@@ -182,6 +191,234 @@ fn checkVectorCreate(
     return c.expr(HirExpr.BuiltinCall(bfVectorCreate(), emptyRange()), vector, span.start, span.end);
 }
 
+fn isVectorRawName(text: Slice<u8>) -> bool =>
+    sameText(text, "intoRaw") || sameText(text, "fromRaw") || sameText(text, "intoForeign") ||
+        sameText(text, "fromForeign");
+
+/// `Vector.intoRaw(v)`, `Vector.fromRaw(p, n, c)`, `Vector.intoForeign(v)` and `Vector.fromForeign(p, n, c)` (ADR
+/// 0090, §23.3): lib/core's VectorRaw<T> and VectorForeign<T>. The vector type of the `from` pair, allocator included,
+/// is the written one or the expected one; a written type on the `into` pair must be the argument's. All but
+/// `intoRaw` are unsafe; the Foreign pair needs a Copy element.
+fn checkVectorRaw(
+    c: borrow mut Checker,
+    member: u32,
+    typeArguments: Range,
+    arguments: Range,
+    expected: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let into = sameText(text, "intoRaw") || sameText(text, "intoForeign");
+    let foreign = sameText(text, "intoForeign") || sameText(text, "fromForeign");
+    let wanted: u32 = if (into) 1 else 3;
+    if (arguments.count != wanted) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Vector.")?;
+        appendBytes(mut message, text)?;
+        appendText(
+            mut message,
+            if (into) "' takes one vector" else "' takes a pointer, a length and a capacity",
+        )?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var what = Vector<u8>.create();
+    appendText(mut what, "'Vector.")?;
+    appendBytes(mut what, text)?;
+    appendText(mut what, "'")?;
+    var unsafeOk = true;
+    if (!sameText(text, "intoRaw")) {
+        unsafeOk = requireUnsafe(c, span, what.view())?;
+    }
+    var vectorType = none();
+    var values = Vector<u32>.create();
+    var written = none();
+    if (typeArguments.count > 2) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'Vector' takes one or two type arguments: 'Vector<T>' or 'Vector<T, A>'")?;
+        c.error(unknownType(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (typeArguments.count > 0) {
+        written = resolveVectorType(c, false, typeArguments)?;
+        if (c.types.isBottom(written)) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    if (into) {
+        let syntax = c.front.ast.at(arguments, 0);
+        let vector = synth(c, syntax, none())?;
+        if (c.isBottom(vector)) {
+            return Ok(vector);
+        }
+        vectorType = c.typeOf(vector);
+        if (!c.types.is(vectorType, TypeKind.Vector) || c.types.isString(vectorType)) {
+            let argumentSpan = c.front.ast.exprSpans[syntax as usize];
+            var message = Vector<u8>.create();
+            appendBytes(mut message, what.view())?;
+            appendText(mut message, " takes a vector, not a ")?;
+            appendQuotedType(mut message, c, vectorType)?;
+            appendText(mut message, " (type-system.md §23.3)")?;
+            c.error(typeMismatch(), argumentSpan.start, argumentSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        if (written != none() && written != vectorType) {
+            let argumentSpan = c.front.ast.exprSpans[syntax as usize];
+            var message = Vector<u8>.create();
+            appendBytes(mut message, what.view())?;
+            appendText(mut message, " is written for a ")?;
+            appendQuotedType(mut message, c, written)?;
+            appendText(mut message, ", but its argument is a ")?;
+            appendQuotedType(mut message, c, vectorType)?;
+            c.error(typeMismatch(), argumentSpan.start, argumentSpan.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        values.push(vector)?;
+    } else {
+        if (written != none()) {
+            vectorType = written;
+        } else if (expected != none() && c.types.is(expected, TypeKind.Vector) && !c.types.isString(expected)) {
+            vectorType = expected;
+        }
+        if (vectorType == none()) {
+            var message = Vector<u8>.create();
+            appendBytes(mut message, what.view())?;
+            appendText(
+                mut message,
+                " makes a vector whose type, allocator included, must be known: write it, as in 'let v: Vector<T> = unsafe { Vector.",
+            )?;
+            appendBytes(mut message, text)?;
+            appendText(mut message, "(p, n, c) };' (type-system.md §23.3)")?;
+            c.error(typeMismatch(), span.start, span.end, message)?;
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        if (c.types.isBottom(vectorType)) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        let element = c.types.info(c.types.info(vectorType).pointee).element;
+        let pointerType = c.types.pointerTo(element, true)?;
+        let usize = c.types.usize;
+        let first = c.front.ast.at(arguments, 0);
+        values.push(checkExpr(c, first, pointerType)?)?;
+        let second = c.front.ast.at(arguments, 1);
+        values.push(checkExpr(c, second, usize)?)?;
+        let third = c.front.ast.at(arguments, 2);
+        values.push(checkExpr(c, third, usize)?)?;
+    }
+    for (v in values.view()) {
+        if (c.isBottom(v)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    let element = c.types.info(c.types.info(vectorType).pointee).element;
+    if (foreign && !c.types.isCopy(element)) {
+        var message = Vector<u8>.create();
+        appendBytes(mut message, what.view())?;
+        appendText(
+            mut message,
+            " moves a buffer of plain values to or from a host, so the element type must be Copy; ",
+        )?;
+        appendQuotedType(mut message, c, element)?;
+        appendText(mut message, " is not (type-system.md §23.3)")?;
+        c.error(invalidArray(), ident.start, ident.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    if (!unsafeOk) {
+        return c.errorResult(span.start, span.end);
+    }
+    var name = Vector<u8>.create();
+    appendBytes(mut name, text)?;
+    if (c.types.info(vectorType).allocator == c.structs[1].typ) {
+        appendText(mut name, "Failing")?; // the only other allocator a vector has (§23.1)
+    }
+    let symbol = c.intern(StringView.fromUtf8(name.view())!)?;
+    let elements = [element];
+    let function = libraryFunction(c, if (foreign) "VectorForeign" else "VectorRaw", elements[..], symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library function", "ADR 0090")?;
+        return c.errorResult(span.start, span.end);
+    }
+    return libraryCall(c, function, values.view(), span);
+}
+
+/// `v.setLength(n)` (ADR 0090 §2.2, §23.3), and the libraries' own `releaseBuffer(foreign)` and
+/// `adoptBuffer(pointer, length, capacity, foreign)`. The arguments are checked before the vector's mutable loan
+/// starts (two-phase, B5).
+fn checkVectorBuffer(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    var textBytes = Vector<u8>.create();
+    appendBytes(mut textBytes, c.name(ident.symbol))?;
+    let text = textBytes.view();
+    let setLength = sameText(text, "setLength");
+    let adopt = sameText(text, "adoptBuffer");
+    let wanted: u32 = if (adopt) 4 else 1;
+    if (arguments.count != wanted) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendBytes(mut message, text)?;
+        appendText(mut message, if (adopt) "' takes four arguments" else "' takes one argument")?;
+        if (setLength) {
+            appendText(mut message, ": 'v.setLength(n)'")?;
+        }
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    var unsafeOk = true;
+    if (setLength) {
+        unsafeOk = requireUnsafe(c, span, "'setLength'".bytes())?;
+    }
+    let vectorType = c.typeOf(vector);
+    let element = c.types.info(c.types.info(vectorType).pointee).element;
+    let usize = c.types.usize;
+    let boolType = c.types.boolType;
+    var values = Vector<u32>.create();
+    values.push(none())?; // the receiver, below
+    if (adopt) {
+        let pointerType = c.types.pointerTo(element, true)?;
+        let first = c.front.ast.at(arguments, 0);
+        values.push(checkExpr(c, first, pointerType)?)?;
+        let second = c.front.ast.at(arguments, 1);
+        values.push(checkExpr(c, second, usize)?)?;
+        let third = c.front.ast.at(arguments, 2);
+        values.push(checkExpr(c, third, usize)?)?;
+        let fourth = c.front.ast.at(arguments, 3);
+        values.push(checkExpr(c, fourth, boolType)?)?;
+    } else {
+        let first = c.front.ast.at(arguments, 0);
+        values.push(checkExpr(c, first, if (setLength) usize else boolType)?)?;
+    }
+    let receiver = borrowReceiver(c, vector, true, targetSpan)?;
+    values[0] = receiver;
+    for (v in values.view()) {
+        if (c.isBottom(v)) {
+            return c.errorResult(span.start, span.end);
+        }
+    }
+    if (!unsafeOk) {
+        return c.errorResult(span.start, span.end);
+    }
+    let voidType = c.types.voidType;
+    let list = c.hir.list(values.view())?;
+    let function = if (setLength) bfVectorSetLength() else if (adopt) bfVectorAdopt() else bfVectorRelease();
+    return c.expr(HirExpr.BuiltinCall(function, list), voidType, span.start, span.end);
+}
+
 /// A vector's or string's methods (CheckVectorMethod, §23).
 fn checkVectorMethod(
     c: borrow mut Checker,
@@ -220,6 +457,14 @@ fn checkVectorMethod(
     if (!isString && (sameText(text, "insert") || sameText(text, "remove") || sameText(text, "swapRemove"))) {
         return checkVectorEditing(c, member, arguments, vector, targetSpan, span);
     }
+    if (!isString && sameText(text, "setLength")) {
+        return checkVectorBuffer(c, member, arguments, vector, targetSpan, span);
+    }
+    if (!isString && (sameText(text, "releaseBuffer") || sameText(text, "adoptBuffer")) && c.function != none() &&
+        c.hir.functions[c.function as usize].library) {
+        // The libraries' own, for lib/core's VectorRaw and VectorForeign (ADR 0090): a program has no such methods.
+        return checkVectorBuffer(c, member, arguments, vector, targetSpan, span);
+    }
     let arity = vectorMethodArity(isString, text);
     if (arity < 0) {
         var message = Vector<u8>.create();
@@ -229,7 +474,7 @@ fn checkVectorMethod(
         appendText(
             mut message,
             if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'"
-                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'insert', 'remove', 'swapRemove'",
+                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

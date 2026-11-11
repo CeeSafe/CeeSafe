@@ -1286,6 +1286,57 @@ fn emitBuiltin(
         }
         return e.emit();
     }
+    if (b == bfVectorSetLength()) {
+        // The length alone, checked against the capacity (ADR 0090 §2.2): the elements are not touched.
+        let vectorType = n.operandTypes[n.at(arguments, 0) as usize];
+        let vector = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let length = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        let site = siteText(e, c, n, sources, f, n.rvalueSpans[r as usize].start)?;
+        e.t("    { ")?;
+        appendCTypeName(c, mut e.buf, vectorType)?;
+        e.t(" cee_v = ")?;
+        e.b(vector.view())?;
+        e.t("; uint64_t cee_n = ")?;
+        e.b(length.view())?;
+        e.t("; cee_check_index(cee_n, cee_v->cap + 1u, ")?;
+        e.b(site.view())?;
+        e.t("); cee_v->len = cee_n; }")?;
+        return e.emit();
+    }
+    if (b == bfVectorRelease() || b == bfVectorAdopt()) {
+        // lib/core's VectorRaw (ADR 0090): the vector gives its buffer up and becomes the empty one, or an empty
+        // vector takes a buffer; `foreign` moves the block out of, or into, the report's `live`.
+        let vectorType = n.operandTypes[n.at(arguments, 0) as usize];
+        let vector = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let element = c.types.info(c.types.info(c.types.info(vectorType).pointee).pointee).element;
+        e.t("    { ")?;
+        appendCTypeName(c, mut e.buf, vectorType)?;
+        e.t(" cee_v = ")?;
+        e.b(vector.view())?;
+        if (b == bfVectorRelease()) {
+            let foreign = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+            e.t("; if (")?;
+            e.b(foreign.view())?;
+            e.t(") { ceesafe_alloc_given(); } cee_v->ptr = (")?;
+            appendCTypeName(c, mut e.buf, element)?;
+            e.t(" *)(void *)&ceesafe_vec_empty; cee_v->len = 0u; cee_v->cap = 0u; }")?;
+            return e.emit();
+        }
+        let pointer = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        let length = operandText(e, c, n, sources, f, n.at(arguments, 2))?;
+        let capacity = operandText(e, c, n, sources, f, n.at(arguments, 3))?;
+        let foreign = operandText(e, c, n, sources, f, n.at(arguments, 4))?;
+        e.t("; cee_v->ptr = ")?;
+        e.b(pointer.view())?;
+        e.t("; cee_v->len = ")?;
+        e.b(length.view())?;
+        e.t("; cee_v->cap = ")?;
+        e.b(capacity.view())?;
+        e.t("; if (")?;
+        e.b(foreign.view())?;
+        e.t(") { ceesafe_alloc_taken(); } }")?;
+        return e.emit();
+    }
     if (b == bfVectorTruncate()) {
         // Keeps the first n elements and destroys the rest, from the lowest index up (type-system.md §23.1).
         let vectorType = n.operandTypes[n.at(arguments, 0) as usize];

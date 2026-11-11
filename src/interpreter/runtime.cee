@@ -15,6 +15,14 @@ fn finishRuntime(it: borrow mut Interp) {
         appendText(mut m, " live=")!;
         appendDecimal(mut m, it.liveAllocations)!;
         m.push('\n')!;
+        if (it.givenAllocations != 0 || it.takenAllocations != 0) {
+            // Blocks that changed sides (ADR 0090 §2.3): for information, as the runtime prints them.
+            appendText(mut m, "ceesafe alloc: given=")!;
+            appendDecimal(mut m, it.givenAllocations)!;
+            appendText(mut m, " taken=")!;
+            appendDecimal(mut m, it.takenAllocations)!;
+            m.push('\n')!;
+        }
         writeError(it, m.view());
     }
 }
@@ -49,7 +57,9 @@ fn alloc(it: borrow mut Interp, size: u64, allocator: u64) -> Result<u64, Stop> 
 }
 
 fn freeMemory(it: borrow mut Interp, pointer: u64) -> Result<void, Stop> {
-    it.liveAllocations -= 1;
+    // Wraps as the runtime's counter does: a program that breaks Vector.fromRaw's contract can free a block that
+    // is not in the count (ADR 0090 §2.3).
+    it.liveAllocations = it.liveAllocations.wrappingSub(1);
     return it.memory.free(pointer);
 }
 
@@ -1221,6 +1231,38 @@ fn builtin(
     if (b == bfVectorCapacity()) {
         let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
         return Ok(it.memory.load(vector + 16, 8)?);
+    }
+    if (b == bfVectorSetLength()) {
+        // The length alone, checked against the capacity (ADR 0090 §2.2).
+        let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
+        let length = argumentInteger(it, c, n, frame, arguments, 1)?.magnitude;
+        if (length > it.memory.loadBits(vector + 16, 8)?) {
+            return Err(panicAt("index out of bounds", rvalueLocation(it, c, n, frame, r)));
+        }
+        it.memory.storeBits(vector + 8, length, 8)?;
+        return Ok(null);
+    }
+    if (b == bfVectorRelease()) {
+        // lib/core's VectorRaw (ADR 0090): the buffer is given up, not freed; the vector is the empty one.
+        let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
+        if (argument(it, c, n, frame, arguments, 1)?.bits(0, 1)? != 0) {
+            it.liveAllocations = it.liveAllocations.wrappingSub(1); // wraps as the runtime's counter does
+            it.givenAllocations += 1;
+        }
+        it.memory.store(vector, vectorValue(it.emptyVector, 0, 0))?;
+        return Ok(null);
+    }
+    if (b == bfVectorAdopt()) {
+        let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;
+        let pointer = argument(it, c, n, frame, arguments, 1)?.bits(0, 8)?;
+        let length = argumentInteger(it, c, n, frame, arguments, 2)?.magnitude;
+        let capacity = argumentInteger(it, c, n, frame, arguments, 3)?.magnitude;
+        if (argument(it, c, n, frame, arguments, 4)?.bits(0, 1)? != 0) {
+            it.liveAllocations += 1;
+            it.takenAllocations += 1;
+        }
+        it.memory.store(vector, vectorValue(pointer, length, capacity))?;
+        return Ok(null);
     }
     if (b == bfStableVectorPush()) {
         let vector = argument(it, c, n, frame, arguments, 0)?.bits(0, 8)?;

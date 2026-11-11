@@ -851,6 +851,10 @@ void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator);
 void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator);
 /* ceesafe_realloc (one attempt, the block unchanged and still live on failure) and ceesafe_free: in
    ceesafe/foreign.h. */
+/* A vector's block changes sides (Vector.intoForeign, Vector.fromForeign; ADR 0090 §2.3): the report's `live` loses
+   or gains it, and its last line counts both. Not allocation attempts. */
+void ceesafe_alloc_given(void);
+void ceesafe_alloc_taken(void);
 /* FailingAllocator.failAfter(n) / FailingAllocator.reset(). */
 void ceesafe_fail_after(uint64_t n);
 void ceesafe_fail_reset(void);

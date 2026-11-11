@@ -570,6 +570,9 @@ def allocator_cases(check, cee, cc, host, package, work):
     check.expect("an allocator missing a function: ALLOCATOR, nothing changed",
                  "partial=4 then=0 boxes=2 hook allocs=2 frees=2 bad=0" in r.stdout, r.stdout + r.stderr)
 
+    adoption_cases(check, host)
+    interpreter_accounting(check, cee, work)
+
     # The same blocks under AddressSanitizer: a hook block given to the C library's free is a free of a pointer
     # malloc never returned.
     asan_dir = os.path.join(work, "asan")
@@ -585,6 +588,56 @@ def allocator_cases(check, cee, cc, host, package, work):
         r = run([exe, "alloc-hook"], env=window_env)
         check.expect("the allocator hook under AddressSanitizer: no report, every block back to its heap",
                      every_block(r) and "AddressSanitizer" not in r.stderr, r.stdout + r.stderr[-800:])
+        adoption_cases(check, exe, " under AddressSanitizer")
+
+
+def adoption_cases(check, host, where=""):
+    """Blocks that change sides (ADR 0090 §2.3): a buffer CeeSafe gives and the host frees, a block of the host's that
+    CeeSafe grows and gives back. With the tagged hook a block freed by the wrong heap aborts; without one both sides
+    use the C library's."""
+    for mode, counts in (("hook", "hook allocs=4 frees=4 bad=0"), ("plain", "hook allocs=0 frees=0 bad=0")):
+        r = run([host, "adopt", mode])
+        report = re.search(r"ceesafe alloc: attempts=\d+ live=0\nceesafe alloc: given=4 taken=2\n", r.stderr)
+        check.expect(f"adoption ({mode}){where}: a given buffer freed by the host, a taken block grown and given back, "
+                     "one given back unmoved, an empty vector's null pointer, a dangling pointer at capacity 0; "
+                     "live=0, given=4 taken=2",
+                     r.returncode == 0 and f"adopt give=1 grow=1 empty=1 unmoved=1 fresh=1 {counts}" in r.stdout and
+                     "live=0" in r.stdout and report is not None and "AddressSanitizer" not in r.stderr,
+                     r.stdout + r.stderr[-800:])
+    r = run([host, "adopt-raw"])
+    check.expect(f"a Vector.intoRaw block the host frees{where}: it stays in `live`, and no line counts it as given",
+                 r.returncode == 0 and "live=1" in r.stdout and "given=" not in r.stderr, r.stdout + r.stderr[-800:])
+    r = run([host, "adopt-small", "moves"])
+    check.expect(f"an 8-aligned block of the host's, taken and grown by a realloc that moves it{where}",
+                 r.returncode == 0 and "small grow=1 length=12 aligned=1 first=5 last=7" in r.stdout,
+                 r.stdout + r.stderr[-800:])
+    r = run([host, "adopt-small", "inplace"])
+    found = hooks(r.stdout)
+    check.expect(f"the same block grown in place{where}: the panic naming realloc, kind 17, through the hook",
+                 status_of(r) == 134 and len(found) == 1 and found[0].group(2) == "17" and
+                 found[0].group(7) == "ceesafe_allocator.realloc returned a misaligned block",
+                 f"{status_of(r)} {r.stdout} {r.stderr[-800:]}")
+
+
+def interpreter_accounting(check, cee, work):
+    """The interpreter counts a block that changes sides as the runtime does (ADR 0090 §2.3): there is no host, so a
+    block given and not taken back is simply not in `live`."""
+    program = os.path.join(work, "given.cee")
+    with open(program, "w") as handle:
+        handle.write("/// Safety: the first block is taken back once; the interpreter has no host for the second.\n"
+                     "fn main() {\n"
+                     "    var v = Vector<u8>.create();\n"
+                     "    v.push(1)!;\n"
+                     "    let first = unsafe { Vector.intoForeign(v) };\n"
+                     "    let back = unsafe { Vector<u8>.fromForeign(first.pointer, first.length, first.capacity) };\n"
+                     "    let second = unsafe { Vector.intoForeign(back) };\n"
+                     "    Console.writeLine(second.length);\n"
+                     "}\n")
+    r = run([cee, "run", "--interp", program], env=clean_env({"CEESAFE_ALLOC_REPORT": "1"}))
+    check.expect("the interpreter's report: a block given, taken back and given again; live=0, given=2 taken=1",
+                 r.returncode == 0 and r.stdout == "1\n" and
+                 "ceesafe alloc: attempts=1 live=0\nceesafe alloc: given=2 taken=1\n" in r.stderr,
+                 r.stdout + r.stderr[-400:])
 
 
 def member_names(check, cee, work):

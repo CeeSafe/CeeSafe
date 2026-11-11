@@ -386,7 +386,9 @@ static mut RATE: u32 = 100;
 struct private to its file, or an array of them is C's `static const` object, placed in read-only data. A C function
 pointer is `Share`, so an array of them is an ordinary static, and a static's array may give its elements by index
 (`[i: e, j: f]`), the rest zero. A type with an atomic member is not read-only and
-stays a `static mut` ([ADR 0091](../spec/decisions/0091-read-only-c-objects.md)):
+stays a `static mut` ([ADR 0091](../spec/decisions/0091-read-only-c-objects.md)). A plain `static` of integers or
+`bool`s, or an array of them, is `static const` in C as well
+([ADR 0098](../spec/decisions/0098-plain-statics-of-scalar-data-are-const.md)):
 
 <!-- ceesafe: check -->
 ```ceesafe

@@ -425,7 +425,18 @@ fn staticIsConst(c: borrow Checker, k: u32) -> bool {
     if (s.mutable || c.types.holdsRawCell(s.typ)) {
         return false;
     }
-    return (s.exported && !typeHoldsAtomic(c, s.typ)) || (c.types.isCObject(s.typ) && !holdsAtomicMember(c, s.typ));
+    return (s.exported && !typeHoldsAtomic(c, s.typ)) || (c.types.isCObject(s.typ) && !holdsAtomicMember(c, s.typ)) ||
+        isScalarData(c, s.typ);
+}
+
+/// Is this an integer, a float, a `bool`, a `CChar`, or an array of these (ADR 0098)? A plain `static` of one is
+/// never written, so it is C's `const` object, in read-only data.
+fn isScalarData(c: borrow Checker, t: u32) -> bool {
+    if (c.types.is(t, TypeKind.Array)) {
+        return isScalarData(c, c.types.info(t).element);
+    }
+    return c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Float) || c.types.is(t, TypeKind.Bool) ||
+        c.types.is(t, TypeKind.CChar);
 }
 
 fn typeHoldsAtomic(c: borrow Checker, t: u32) -> bool {

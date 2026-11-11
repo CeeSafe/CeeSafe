@@ -1,7 +1,7 @@
 # ADR 0095 — `extern "C"` blocks generated from C headers
 
 - Status: **Accepted** by the owner, 2026-11-11 ("Accept ADR 0095 as proposed, one file per header").
-  Implemented on branch `impl/0095` (§7); not released. Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
+  Implemented on branch `impl/0095` (§7); released with ceesafec 0.34.0 (the owner: "1. Yes"). Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
   copies the C declarations it uses by hand.
 - Scope: a tool, `tools/cbind.py`, shipped with a release, and its tests; `guide/unsafe-and-c.md`. No language,
   checker or emitter change.
@@ -160,7 +160,7 @@ Each was found by running the tool on CosmoOS's headers, and each is the tool de
   integer), so that the functions that mention it are still declared; §2.4 had it not emitted at all.
 - **An enumerator of a named enum** has the enum's type (`const FX_GREEN: fx_color = 5;`).
 - **Not done:** `c2cee.py` does not call the tool yet (§3), and the tool is not in a release's archives; a tree
-  uses it from a checkout of CeeSafe at its pinned version.
+  uses it from a checkout of CeeSafe at its pinned version's tag.
 
 ### 7.2 Runs (macOS arm64, Apple clang 21, ceesafec 0.33.0)
 

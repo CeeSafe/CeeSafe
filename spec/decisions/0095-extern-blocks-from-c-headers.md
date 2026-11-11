@@ -1,6 +1,7 @@
 # ADR 0095 — `extern "C"` blocks generated from C headers
 
-- Status: **Proposed** 2026-11-11. Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
+- Status: **Accepted** by the owner, 2026-11-11 ("Accept ADR 0095 as proposed, one file per header"). Not
+  implemented. Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
   copies the C declarations it uses by hand.
 - Scope: a tool, `tools/cbind.py`, shipped with a release, and its tests; `guide/unsafe-and-c.md`. No language,
   checker or emitter change.
@@ -125,10 +126,8 @@ wants, and nothing else.
   `socket.h`, `unix.h`, `errno.h` and `uaccess.h`; the kernel's matrix; the build time of `make cee` and of the
   kernel before and after.
 
-## 6. Questions for the owner
+## 6. Decisions of the owner (2026-11-11)
 
-1. Accept the tool as proposed: Python in `tools/`, clang's AST, committed output with a CI freshness check?
-2. §2.4: emit only what is identical in every configuration, the rest by hand? The alternative, generating `@cfg`
-   blocks, needs the tool to know which macro explains a difference, which it cannot see.
-3. Where CosmoOS keeps the files (`kernel/bind/`) is CosmoOS's choice; is one binding file per header the right
-   grain, or one per subsystem?
+1. The tool as proposed: Python in `tools/`, clang's AST, committed output with a CI freshness check.
+2. §2.4 as proposed: emit only what is identical in every configuration; the rest is written by hand with `@cfg`.
+3. One binding file per header.

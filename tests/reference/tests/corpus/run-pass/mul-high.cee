@@ -1,0 +1,282 @@
+// `x.mulHigh(y)` (ADR 0092, type-system.md §6): the upper half of the full product, floor(x * y / 2^bits), on every
+// integer width and signedness, at the corners and on random pairs against the product built from 32-bit halves; it
+// never panics.
+
+/// The high half from four 32-bit products.
+fn byHalves(a: u64, b: u64) -> u64 {
+    let al = a & 0xFFFF_FFFF;
+    let ah = a >> 32;
+    let bl = b & 0xFFFF_FFFF;
+    let bh = b >> 32;
+    let ll = al * bl;
+    let lh = al * bh;
+    let hl = ah * bl;
+    let hh = ah * bh;
+    let mid = (ll >> 32) + (lh & 0xFFFF_FFFF) + (hl & 0xFFFF_FFFF);
+    return hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+}
+
+/// The signed high half from the unsigned one: less `b` where `a` is negative, less `a` where `b` is.
+fn signedByHalves(a: i64, b: i64) -> i64 {
+    let ua = truncate<u64>(a);
+    let ub = truncate<u64>(b);
+    var high = byHalves(ua, ub);
+    if (a < 0) {
+        high = high.wrappingSub(ub);
+    }
+    if (b < 0) {
+        high = high.wrappingSub(ua);
+    }
+    return truncate<i64>(high);
+}
+
+fn next(state: borrow mut u64) -> u64 {
+    var x = *state;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    *state = x;
+    return x;
+}
+
+fn main() {
+    Console.writeLine((0u8).mulHigh((255u8)));
+    Console.writeLine((1u8).mulHigh((255u8)));
+    Console.writeLine((255u8).mulHigh((255u8)));
+    Console.writeLine((255u8).mulHigh((2u8)));
+    Console.writeLine((128u8).mulHigh((2u8)));
+    Console.writeLine((128u8).mulHigh((4u8)));
+    Console.writeLine((85u8).mulHigh((51u8)));
+    Console.writeLine((3u8).mulHigh((7u8)));
+    Console.writeLine((0i8).mulHigh((127i8)));
+    Console.writeLine((1i8).mulHigh((127i8)));
+    Console.writeLine((127i8).mulHigh((127i8)));
+    Console.writeLine((-127i8 - 1).mulHigh((-127i8 - 1)));
+    Console.writeLine((-127i8 - 1).mulHigh((127i8)));
+    Console.writeLine((-1i8).mulHigh((1i8)));
+    Console.writeLine((-1i8).mulHigh((-1i8)));
+    Console.writeLine((-1i8).mulHigh((127i8)));
+    Console.writeLine((-127i8 - 1).mulHigh((1i8)));
+    Console.writeLine((-127i8 - 1).mulHigh((-1i8)));
+    Console.writeLine((127i8).mulHigh((2i8)));
+    Console.writeLine((-3i8).mulHigh((7i8)));
+    Console.writeLine((42i8).mulHigh((-25i8)));
+    Console.writeLine((0u16).mulHigh((65535u16)));
+    Console.writeLine((1u16).mulHigh((65535u16)));
+    Console.writeLine((65535u16).mulHigh((65535u16)));
+    Console.writeLine((65535u16).mulHigh((2u16)));
+    Console.writeLine((32768u16).mulHigh((2u16)));
+    Console.writeLine((32768u16).mulHigh((4u16)));
+    Console.writeLine((21845u16).mulHigh((13107u16)));
+    Console.writeLine((3u16).mulHigh((7u16)));
+    Console.writeLine((0i16).mulHigh((32767i16)));
+    Console.writeLine((1i16).mulHigh((32767i16)));
+    Console.writeLine((32767i16).mulHigh((32767i16)));
+    Console.writeLine((-32767i16 - 1).mulHigh((-32767i16 - 1)));
+    Console.writeLine((-32767i16 - 1).mulHigh((32767i16)));
+    Console.writeLine((-1i16).mulHigh((1i16)));
+    Console.writeLine((-1i16).mulHigh((-1i16)));
+    Console.writeLine((-1i16).mulHigh((32767i16)));
+    Console.writeLine((-32767i16 - 1).mulHigh((1i16)));
+    Console.writeLine((-32767i16 - 1).mulHigh((-1i16)));
+    Console.writeLine((32767i16).mulHigh((2i16)));
+    Console.writeLine((-3i16).mulHigh((7i16)));
+    Console.writeLine((10922i16).mulHigh((-6553i16)));
+    Console.writeLine((0u32).mulHigh((4294967295u32)));
+    Console.writeLine((1u32).mulHigh((4294967295u32)));
+    Console.writeLine((4294967295u32).mulHigh((4294967295u32)));
+    Console.writeLine((4294967295u32).mulHigh((2u32)));
+    Console.writeLine((2147483648u32).mulHigh((2u32)));
+    Console.writeLine((2147483648u32).mulHigh((4u32)));
+    Console.writeLine((1431655765u32).mulHigh((858993459u32)));
+    Console.writeLine((3u32).mulHigh((7u32)));
+    Console.writeLine((0i32).mulHigh((2147483647i32)));
+    Console.writeLine((1i32).mulHigh((2147483647i32)));
+    Console.writeLine((2147483647i32).mulHigh((2147483647i32)));
+    Console.writeLine((-2147483647i32 - 1).mulHigh((-2147483647i32 - 1)));
+    Console.writeLine((-2147483647i32 - 1).mulHigh((2147483647i32)));
+    Console.writeLine((-1i32).mulHigh((1i32)));
+    Console.writeLine((-1i32).mulHigh((-1i32)));
+    Console.writeLine((-1i32).mulHigh((2147483647i32)));
+    Console.writeLine((-2147483647i32 - 1).mulHigh((1i32)));
+    Console.writeLine((-2147483647i32 - 1).mulHigh((-1i32)));
+    Console.writeLine((2147483647i32).mulHigh((2i32)));
+    Console.writeLine((-3i32).mulHigh((7i32)));
+    Console.writeLine((715827882i32).mulHigh((-429496729i32)));
+    Console.writeLine((0u64).mulHigh((18446744073709551615u64)));
+    Console.writeLine((1u64).mulHigh((18446744073709551615u64)));
+    Console.writeLine((18446744073709551615u64).mulHigh((18446744073709551615u64)));
+    Console.writeLine((18446744073709551615u64).mulHigh((2u64)));
+    Console.writeLine((9223372036854775808u64).mulHigh((2u64)));
+    Console.writeLine((9223372036854775808u64).mulHigh((4u64)));
+    Console.writeLine((6148914691236517205u64).mulHigh((3689348814741910323u64)));
+    Console.writeLine((3u64).mulHigh((7u64)));
+    Console.writeLine((0i64).mulHigh((9223372036854775807i64)));
+    Console.writeLine((1i64).mulHigh((9223372036854775807i64)));
+    Console.writeLine((9223372036854775807i64).mulHigh((9223372036854775807i64)));
+    Console.writeLine((-9223372036854775807i64 - 1).mulHigh((-9223372036854775807i64 - 1)));
+    Console.writeLine((-9223372036854775807i64 - 1).mulHigh((9223372036854775807i64)));
+    Console.writeLine((-1i64).mulHigh((1i64)));
+    Console.writeLine((-1i64).mulHigh((-1i64)));
+    Console.writeLine((-1i64).mulHigh((9223372036854775807i64)));
+    Console.writeLine((-9223372036854775807i64 - 1).mulHigh((1i64)));
+    Console.writeLine((-9223372036854775807i64 - 1).mulHigh((-1i64)));
+    Console.writeLine((9223372036854775807i64).mulHigh((2i64)));
+    Console.writeLine((-3i64).mulHigh((7i64)));
+    Console.writeLine((3074457345618258602i64).mulHigh((-1844674407370955161i64)));
+    Console.writeLine((0usize).mulHigh((18446744073709551615usize)));
+    Console.writeLine((1usize).mulHigh((18446744073709551615usize)));
+    Console.writeLine((18446744073709551615usize).mulHigh((18446744073709551615usize)));
+    Console.writeLine((18446744073709551615usize).mulHigh((2usize)));
+    Console.writeLine((9223372036854775808usize).mulHigh((2usize)));
+    Console.writeLine((9223372036854775808usize).mulHigh((4usize)));
+    Console.writeLine((6148914691236517205usize).mulHigh((3689348814741910323usize)));
+    Console.writeLine((3usize).mulHigh((7usize)));
+    Console.writeLine((0isize).mulHigh((9223372036854775807isize)));
+    Console.writeLine((1isize).mulHigh((9223372036854775807isize)));
+    Console.writeLine((9223372036854775807isize).mulHigh((9223372036854775807isize)));
+    Console.writeLine((-9223372036854775807isize - 1).mulHigh((-9223372036854775807isize - 1)));
+    Console.writeLine((-9223372036854775807isize - 1).mulHigh((9223372036854775807isize)));
+    Console.writeLine((-1isize).mulHigh((1isize)));
+    Console.writeLine((-1isize).mulHigh((-1isize)));
+    Console.writeLine((-1isize).mulHigh((9223372036854775807isize)));
+    Console.writeLine((-9223372036854775807isize - 1).mulHigh((1isize)));
+    Console.writeLine((-9223372036854775807isize - 1).mulHigh((-1isize)));
+    Console.writeLine((9223372036854775807isize).mulHigh((2isize)));
+    Console.writeLine((-3isize).mulHigh((7isize)));
+    Console.writeLine((3074457345618258602isize).mulHigh((-1844674407370955161isize)));
+
+    // The pair is the whole product: wyhash's mix.
+    let p: u64 = 0xa0761d6478bd642f;
+    let q: u64 = 0xe7037ed1a0b428db;
+    Console.writeLine(p.wrappingMul(q) ^ p.mulHigh(q));
+
+    var state: u64 = 0x9E3779B97F4A7C15;
+    var wrong: u32 = 0;
+    for (i in 0u32..2000) {
+        let a = next(mut state);
+        let b = next(mut state);
+        if (a.mulHigh(b) != byHalves(a, b)) {
+            wrong += 1;
+        }
+        let sa = truncate<i64>(a);
+        let sb = truncate<i64>(b);
+        if (sa.mulHigh(sb) != signedByHalves(sa, sb)) {
+            wrong += 1;
+        }
+        let na = truncate<u32>(a & 0xFFFF_FFFF);
+        let nb = truncate<u32>(b & 0xFFFF_FFFF);
+        if (na.mulHigh(nb) != truncate<u32>((na as u64 * nb as u64) >> 32)) {
+            wrong += 1;
+        }
+    }
+    Console.writeLine(wrong);
+}
+
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 254
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 16
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 63
+// expect-stdout: 64
+// expect-stdout: -64
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -5
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 65534
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 4368
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 16383
+// expect-stdout: 16384
+// expect-stdout: -16384
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1093
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 4294967294
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 286331152
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 1073741823
+// expect-stdout: 1073741824
+// expect-stdout: -1073741824
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -71582789
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 18446744073709551614
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 1229782938247303440
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 4611686018427387903
+// expect-stdout: 4611686018427387904
+// expect-stdout: -4611686018427387904
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -307445734561825861
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 18446744073709551614
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 1229782938247303440
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 4611686018427387903
+// expect-stdout: 4611686018427387904
+// expect-stdout: -4611686018427387904
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: -1
+// expect-stdout: -307445734561825861
+// expect-stdout: 2302960717771869484
+// expect-stdout: 0

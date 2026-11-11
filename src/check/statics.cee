@@ -674,7 +674,8 @@ fn staticFold(
             // which may be another file of the package or a library's: what is not a static initialiser there is
             // reported there.
             let callerFile = c.file;
-            c.setFile(c.hir.functions[callee as usize].file);
+            let calleeFile = c.hir.functions[callee as usize].file; // a local: 0.8.0 builds this file (docs/release.md)
+            c.setFile(calleeFile);
             let folded = staticFold(c, body, bound.view(), true, depth + 1)?;
             c.setFile(callerFile);
             return Ok(folded);

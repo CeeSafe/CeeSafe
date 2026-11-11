@@ -1,0 +1,9 @@
+// A loan of the vector cannot live across v.setLength(n), which takes `borrow mut this` (ADR 0090 §2.2).
+/// Safety: nothing here runs; the call is rejected.
+fn loanAcross(v: borrow mut Vector<u8>) -> u8 {
+    let first = borrow v[0];
+    unsafe { v.setLength(1); } // error[N0241]
+    return *first;
+}
+
+fn main() {}

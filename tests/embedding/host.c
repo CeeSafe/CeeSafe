@@ -163,6 +163,26 @@ static void *odd_realloc(void *context, void *block, size_t size) {
 
 static const ceesafe_allocator misaligned = {odd_alloc, odd_alloc_zeroed, odd_realloc, odd_free, NULL};
 
+/* For a block CeeSafe takes (ADR 0090 §2.3 rule 4): `misaligned`'s blocks, and a realloc that leaves a block where it
+   is when its malloc block has the room. The host's own block, small_block, is 8-aligned with room for 64 bytes, as
+   a Rust Vec<u8> of 8 bytes is in mimalloc: a realloc that keeps it in place returns an 8-aligned block. */
+static void *small_block(size_t room) {
+    unsigned char *base = malloc(room + 32);
+    if (base == NULL) return NULL;
+    unsigned char *p = base + 24;
+    memcpy(p - 16, &room, sizeof room);
+    memcpy(p - 8, &base, sizeof base);
+    return p;
+}
+
+static void *inplace_realloc(void *context, void *block, size_t size) {
+    size_t room;
+    memcpy(&room, (unsigned char *)block - 16, sizeof room);
+    return size <= room ? block : odd_realloc(context, block, size);
+}
+
+static const ceesafe_allocator grows_in_place = {odd_alloc, odd_alloc_zeroed, inplace_realloc, odd_free, NULL};
+
 static int init_allocator(const ceesafe_allocator *allocator, ceesafe_panic_hook hook, uint32_t flags,
                           uint64_t fail_at) {
     ceesafe_config config;
@@ -502,6 +522,78 @@ int main(int argc, char **argv) {
         int32_t again = init_allocator(&tagged, NULL, 0, 0);
         printf("partial=%d then=%d boxes=%llu ", r, again, (unsigned long long)embed_boxes(2));
         hook_counts("hook");
+    } else if (strcmp(what, "adopt") == 0) {
+        /* adopt hook|plain (ADR 0090 §2.3): CeeSafe gives a buffer and the host frees it; the host gives a block,
+           CeeSafe grows it past its capacity and gives it back, and the host frees that. With `hook` every block is
+           the tagged allocator's, so a block freed by the wrong heap aborts; with `plain` both sides use malloc. */
+        bool hooked = strcmp(argv[2], "hook") == 0;
+        ceesafe_config config;
+        memset(&config, 0, sizeof config);
+        config.size = (uint32_t)sizeof config;
+        config.alloc_report = true;
+        config.allocator = hooked ? &tagged : NULL;
+        config.panic_hook = hook_abort;
+        if (ceesafe_init(&config) != 0) return 1;
+        uint8_t *given = NULL;
+        size_t length = 0, capacity = 0;
+        bool ok = embed_give(100, &given, &length, &capacity);
+        bool same = ok && length == 100 && capacity >= 100 && ((uintptr_t)given & 15u) == 0u;
+        for (size_t i = 0; same && i < length; i++) same = given[i] == (uint8_t)(i % 251);
+        if (hooked) hook_free(&hook_context, given); else free(given);
+        uint8_t *mine = hooked ? hook_alloc(&hook_context, 4) : malloc(4);
+        if (mine == NULL) return 1;
+        mine[0] = 1, mine[1] = 2, mine[2] = 3;
+        size_t mine_length = 3, mine_capacity = 4;
+        bool grown = embed_take_grow(&mine, &mine_length, &mine_capacity, 50);
+        bool kept = grown && mine_length == 53 && mine_capacity >= 53 && mine[0] == 1 && mine[2] == 3 && mine[3] == 7 &&
+                    mine[52] == 7;
+        if (hooked) hook_free(&hook_context, mine); else free(mine);
+        uint8_t *none = NULL;
+        size_t none_length = 7, none_capacity = 7;
+        bool empty = embed_give(0, &none, &none_length, &none_capacity) && none == NULL && none_length == 0 &&
+                     none_capacity == 0;
+        /* A block taken and given back without growing is the same block; a Rust Vec of capacity 0 has a dangling
+           pointer, which CeeSafe ignores. */
+        uint8_t *still = hooked ? hook_alloc(&hook_context, 8) : malloc(8);
+        if (still == NULL) return 1;
+        still[0] = 9, still[1] = 8;
+        uint8_t *before = still;
+        size_t still_length = 2, still_capacity = 8;
+        bool unmoved = embed_take_grow(&still, &still_length, &still_capacity, 0) && still == before &&
+                       still_length == 2 && still_capacity == 8 && still[0] == 9 && still[1] == 8;
+        if (hooked) hook_free(&hook_context, still); else free(still);
+        uint8_t *dangling = (uint8_t *)(uintptr_t)1;
+        size_t dangling_length = 0, dangling_capacity = 0;
+        bool fresh = embed_take_grow(&dangling, &dangling_length, &dangling_capacity, 3) && dangling_length == 3 &&
+                     dangling_capacity >= 3 && dangling[0] == 7 && dangling[2] == 7;
+        if (hooked) hook_free(&hook_context, dangling); else free(dangling);
+        printf("adopt give=%d grow=%d empty=%d unmoved=%d fresh=%d ", (int)same, (int)kept, (int)empty, (int)unmoved,
+               (int)fresh);
+        hook_counts("hook");
+        printf("live=%llu\n", (unsigned long long)ceesafe_shutdown());
+    } else if (strcmp(what, "adopt-raw") == 0) {
+        /* The wrong case: a Vector.intoRaw block freed by the host stays in `live`, so the report shows it. */
+        ceesafe_config config;
+        memset(&config, 0, sizeof config);
+        config.size = (uint32_t)sizeof config;
+        config.alloc_report = true;
+        if (ceesafe_init(&config) != 0) return 1;
+        free(embed_raw());
+        printf("live=%llu\n", (unsigned long long)ceesafe_shutdown());
+    } else if (strcmp(what, "adopt-small") == 0) {
+        /* adopt-small moves|inplace (ADR 0090 §2.3 rule 4): the host's 8-aligned block of 8 bytes, taken and grown.
+           A realloc that moves it to a 16-aligned block works; one that grows it in place gives the runtime an
+           8-aligned block, and the panic naming realloc (kind 17) reaches the panic hook. */
+        bool inplace = strcmp(argv[2], "inplace") == 0;
+        if (init_allocator(inplace ? &grows_in_place : &misaligned, hook_abort, 0, 0) != 0) return 1;
+        uint8_t *mine = small_block(64);
+        if (mine == NULL) return 1;
+        memset(mine, 5, 8);
+        size_t length = 8, capacity = 8;
+        bool grown = embed_take_grow(&mine, &length, &capacity, 4);
+        printf("small grow=%d length=%llu aligned=%d first=%u last=%u\n", (int)grown, (unsigned long long)length,
+               (int)(((uintptr_t)mine & 15u) == 0u), mine[0], mine[11]);
+        odd_free(NULL, mine);
     } else if (strcmp(what, "threads") == 0) {
         /* threads [hook]: with `hook`, every block of both threads through the tagged allocator hook */
         if (argc > 2 && strcmp(argv[2], "hook") == 0) {

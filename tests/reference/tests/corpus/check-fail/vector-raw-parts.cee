@@ -1,0 +1,42 @@
+// Vector.fromRaw, v.setLength and the Foreign pair are unsafe; the vector type of a `from` call must be known; the
+// Foreign pair needs a Copy element (ADR 0090, type-system.md §23.3).
+struct Owner {
+    name: String;
+}
+
+fn unsafeNeeded(p: *mut u8) {
+    let a: Vector<u8> = Vector.fromRaw(p, 0, 0); // error[N0280]
+    var b = Vector<u8>.create();
+    b.setLength(0);                                  // error[N0280]
+    let c = Vector.intoForeign(b);                   // error[N0280]
+    let d: Vector<u8> = Vector.fromForeign(p, 0, 0); // error[N0280]
+}
+
+/// Safety: nothing here runs; the calls are rejected.
+fn typeNeeded(p: *mut u8) {
+    let a = unsafe { Vector.fromRaw(p, 0, 0) };     // error[N0205]
+    let b = Vector.intoRaw(5u32);                   // error[N0205]
+    let c = Vector.intoRaw(Vector<u8>.create(), 1); // error[N0209]
+}
+
+/// Safety: nothing here runs; the calls are rejected.
+fn copyNeeded(v: Vector<Owner>, p: *mut Owner) {
+    let a = unsafe { Vector.intoForeign(v) };                      // error[N0259]
+    let b: Vector<Owner> = unsafe { Vector.fromForeign(p, 0, 0) }; // error[N0259]
+}
+
+/// Safety: nothing here runs; the calls are rejected.
+fn typeWritten(v: Vector<u8>, w: Vector<u8>, o: Vector<Owner>) {
+    let a = Vector<u32>.intoRaw(v);                  // error[N0205]
+    let b = Vector<u8, FailingAllocator>.intoRaw(w); // error[N0205]
+    // The Copy rule holds for lib/core's struct named directly too.
+    let c = unsafe { VectorForeign<Owner>.intoForeign(o) }; // error[N0268]
+}
+
+// A program has no `releaseBuffer` or `adoptBuffer`: they are the libraries'.
+fn hidden(v: borrow mut Vector<u8>, p: *mut u8) {
+    v.releaseBuffer(false);        // error[N0200]
+    v.adoptBuffer(p, 0, 0, false); // error[N0200]
+}
+
+fn main() {}

@@ -1,0 +1,17 @@
+// v.setLength(n) above the capacity panics in every build (ADR 0090 §2.2).
+/// Safety: none needed for the first call (2 of the 4 reserved bytes were written); the second is the test.
+fn main() {
+    var v = Vector<u8>.create();
+    v.reserve(4)!;
+    let p = v.viewMut().ptr;
+    unsafe {
+        p.write(1);
+        p.add(1).write(2);
+        v.setLength(2);
+    }
+    Console.writeLine(v.length);
+    let more = v.capacity + 1;
+    unsafe { v.setLength(more); } // expect-panic: index out of bounds
+    Console.writeLine("after");
+}
+// expect-stdout: 2

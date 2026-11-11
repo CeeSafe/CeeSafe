@@ -2755,6 +2755,11 @@ expression, evaluated once.
   run at `p` afterwards, as for `Box.create`, and `v` may be the struct literal without its C state that
   `Box.create` takes (§33.2).
 - `p.readVolatile()` and `p.writeVolatile(v)` (§29.1) still need a Copy `T`.
+- `p.readUnaligned()` and `p.writeUnaligned(v)` (ADR 0093) are `read` and `write` through a pointer that need not be
+  aligned for `T`: a `u32` at any byte offset, a field of a packed C struct. `T` is Copy (N0282): a value moved out
+  of an unaligned place could not be borrowed there to put one back. The value is in the machine's byte order, as
+  with `read`; a format with a fixed order uses `readLE`/`readBE` on a byte slice (§16), or `byteSwap`. The C is a
+  byte copy, which compilers lower to one load or store.
 - `p.add(n)` and `p.sub(n)` (`n: usize`) and `p.offset(n)` (`n: isize`): the pointer `n` elements
   (`n × size(T)` bytes) after (`sub`: before) `p`, with the type of `p`. The arithmetic wraps modulo
   2^64; it never panics.

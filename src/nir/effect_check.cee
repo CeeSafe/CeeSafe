@@ -730,7 +730,8 @@ fn builtinOperation(
     if (function == bfCallPointer()) {
         return Ok(textOp(sleep | alloc | writeEffect(), 6));
     }
-    if (function == bfPtrWrite() || function == bfPtrWriteVolatile() || function == bfPtrPlace()) {
+    if (function == bfPtrWrite() || function == bfPtrWriteVolatile() || function == bfPtrWriteUnaligned() ||
+        function == bfPtrPlace()) {
         return Ok(textOp(writeEffect(), 14)); // ADR 0087 §2.5
     }
     if (function == bfCallClosure() || function == bfCallFunction()) {

@@ -1407,6 +1407,19 @@ fn builtin(
         it.memory.store(addr, value)?;
         return Ok(null);
     }
+    if (b == bfPtrReadUnaligned()) {
+        // ADR 0093: the value's bytes at the address, whatever its alignment.
+        let pointee = pointeeOf(c, builtinArgumentType(n, arguments, 0));
+        let pointer = argument(it, c, n, frame, arguments, 0)?;
+        return Ok(it.memory.load(pointer.bits(0, 8)?, typeSize(c, pointee)?)?);
+    }
+    if (b == bfPtrWriteUnaligned()) {
+        let pointer = argument(it, c, n, frame, arguments, 0)?;
+        let addr = pointer.bits(0, 8)?;
+        let value = argument(it, c, n, frame, arguments, 1)?;
+        it.memory.store(addr, value)?;
+        return Ok(null);
+    }
     if (b == bfCallerAddress()) {
         return Ok(valueOf(0, 8)); // no C frame called it (ADR 0030)
     }

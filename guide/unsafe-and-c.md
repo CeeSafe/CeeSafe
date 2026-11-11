@@ -35,6 +35,28 @@ fn main() {
 16
 ```
 
+`p.read()` and `p.write(v)` need `p` aligned for its type. For a value at any byte offset (a field of a packed C
+struct, a word in the middle of a buffer) use `p.readUnaligned()` and `p.writeUnaligned(v)`, which take a Copy
+type and compile to one load or store:
+
+```ceesafe
+/// Safety: the caller gives four readable bytes at `p`.
+unsafe fn wordAt(p: *u8) -> u32 => (p as *u32).readUnaligned();
+
+/// Safety: `bytes` has five bytes, and the word is bytes 1 to 4.
+fn main() {
+    let bytes = [9u8, 1, 0, 0, 0];
+    Console.writeLine(unsafe { wordAt(borrow bytes[1] as *u8) });
+}
+```
+
+```text
+1
+```
+
+The value is in the machine's byte order. For a fixed order, `bytes.readLE<u32>(at)` and `readBE` on a byte slice
+check the bounds and need no `unsafe`.
+
 ## The `Safety:` rule
 
 Every `unsafe fn`, and every function that contains an `unsafe` block, must say in its doc comment why it is sound, on

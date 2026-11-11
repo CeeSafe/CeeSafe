@@ -732,6 +732,16 @@ static inline void cee_check_range(uint64_t low, uint64_t high, uint64_t length,
 #define ceesafe_mem_set memset
 #endif
 
+/*
+ * p.readUnaligned() and p.writeUnaligned(v) (ADR 0093): a byte copy between the address and a value of type T, so
+ * the pointer need not be aligned for T and the access is valid whatever type the bytes were written as. Compilers
+ * lower it to one load or store. The value is an element of an array of one, which an expression of T initialises
+ * whether T is a scalar or a struct. The address is passed as a char pointer: a sanitizer checks a memcpy argument's
+ * alignment by its type.
+ */
+#define cee_read_unaligned(T, p) (*(T *)ceesafe_mem_copy((T[1]){0}, (const char *)(p), sizeof(T)))
+#define cee_write_unaligned(T, p, v) ((void)ceesafe_mem_copy((char *)(p), (T[1]){v}, sizeof(T)))
+
 /* `d.copyFrom(s)`: the lengths must be equal. */
 static inline void cee_check_length(uint64_t source, uint64_t destination, const cee_loc *loc) {
     if (source != destination) ceesafe_panic(CEE_PANIC_LENGTH, *loc);

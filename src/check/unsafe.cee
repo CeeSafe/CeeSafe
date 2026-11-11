@@ -112,6 +112,11 @@ fn checkPointerMethod(
     } else if (sameText(name, "writeVolatile")) {
         function = bfPtrWriteVolatile();
         argumentType = pointee;
+    } else if (sameText(name, "readUnaligned")) {
+        function = bfPtrReadUnaligned();
+    } else if (sameText(name, "writeUnaligned")) {
+        function = bfPtrWriteUnaligned();
+        argumentType = pointee;
     } else if (sameText(name, "add")) {
         function = bfPtrAdd();
         argumentType = c.types.usize;
@@ -131,7 +136,7 @@ fn checkPointerMethod(
         appendBytes(mut message, name)?;
         appendText(
             mut message,
-            "'; raw pointers have read, write, readVolatile, writeVolatile, add, sub, offset and isNull (type-system.md §27, §29.1)",
+            "'; raw pointers have read, write, readUnaligned, writeUnaligned, readVolatile, writeVolatile, add, sub, offset and isNull (type-system.md §27, §29.1)",
         )?;
         c.error(notAStruct(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -207,8 +212,10 @@ fn checkPointerMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    // `read` and `write` move any type (ADR 0027); the volatile forms are for device registers, and copy.
-    if ((function == bfPtrReadVolatile() || function == bfPtrWriteVolatile()) && !c.types.isCopy(pointee)) {
+    // `read` and `write` move any type (ADR 0027); the volatile forms are for device registers, and copy; so do the
+    // unaligned forms (ADR 0093), whose place cannot be borrowed afterwards to repair a second owner.
+    if ((function == bfPtrReadVolatile() || function == bfPtrWriteVolatile() || function == bfPtrReadUnaligned() ||
+        function == bfPtrWriteUnaligned()) && !c.types.isCopy(pointee)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, name)?;
@@ -219,7 +226,8 @@ fn checkPointerMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if ((function == bfPtrWrite() || function == bfPtrWriteVolatile()) && !c.types.info(typ).mutablePointer) {
+    if ((function == bfPtrWrite() || function == bfPtrWriteVolatile() || function == bfPtrWriteUnaligned()) &&
+        !c.types.info(typ).mutablePointer) {
         var message = Vector<u8>.create();
         appendText(mut message, "cannot write through ")?;
         appendQuotedType(mut message, c, typ)?;
@@ -246,8 +254,10 @@ fn checkPointerMethod(
         return c.errorResult(span.start, span.end);
     }
     let result =
-        if (function == bfPtrRead() || function == bfPtrReadVolatile()) pointee else if (function == bfPtrWrite() ||
-            function == bfPtrWriteVolatile()) c.types.voidType else typ;
+        if (function == bfPtrRead() || function == bfPtrReadVolatile() || function == bfPtrReadUnaligned()) pointee
+            else if (function == bfPtrWrite() ||
+                function == bfPtrWriteVolatile() || function == bfPtrWriteUnaligned()) c.types.voidType
+            else typ;
     let list = c.hir.list(values.view())?;
     return c.expr(HirExpr.BuiltinCall(function, list), result, span.start, span.end);
 }

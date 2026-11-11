@@ -1,7 +1,8 @@
 # ADR 0093 — Unaligned reads and writes through a raw pointer
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: done at low
-  priority, with the names `readUnaligned` and `writeUnaligned`. Not implemented yet. Raised by the Bun port's timing of wyhash against Rust
+  priority, with the names `readUnaligned` and `writeUnaligned`. Deferred after 0.32.0 and taken up again on
+  2026-11-11 ("implement all three"). **Implemented** (§6). Raised by the Bun port's timing of wyhash against Rust
   (`~/dev/CeeSafeApps/bun/analysis/trials/wyhash/REPORT.md` §4, gap 2).
 - Scope: `spec/unsafe.md` §1 and its table of requirements, `spec/type-system.md` §27.3, the checker's pointer
   methods, the C emitter, the interpreter. No library or runtime change.
@@ -35,8 +36,8 @@ Two unsafe methods on raw pointers, beside `read` and `write`:
 
 | Method | Does | Requirement |
 |---|---|---|
-| `p.readUnaligned()` on `*T` or `*mut T` | the `T` at `p`, in the machine's byte order | as `p.read()`, without the alignment; `T` is Copy (N0259) |
-| `p.writeUnaligned(v)` on `*mut T` | stores `v` at `p` | as `p.write(v)`, without the alignment; `T` is Copy (N0259) |
+| `p.readUnaligned()` on `*T` or `*mut T` | the `T` at `p`, in the machine's byte order | as `p.read()`, without the alignment; `T` is Copy (N0282) |
+| `p.writeUnaligned(v)` on `*mut T` | stores `v` at `p` | as `p.write(v)`, without the alignment; `T` is Copy (N0282) |
 
 - **Copy only.** A value with drop glue read this way would have two owners, as with `p.read()`, and an unaligned
   place cannot be borrowed afterwards to repair it.
@@ -59,7 +60,7 @@ Two unsafe methods on raw pointers, beside `read` and `write`:
 
 - **Corpus, run-pass:** each integer width, `f32`, `f64`, a raw pointer and a `@repr(C)` struct, read and written at
   every offset 0 to 7 of a byte buffer, native and interpreted, compared with the bytes.
-- **Corpus, check-fail:** outside `unsafe`; a type that is not Copy (N0259); `writeUnaligned` through a `*T`.
+- **Corpus, check-fail:** outside `unsafe`; a type that is not Copy (N0282); `writeUnaligned` through a `*T`.
 - **Sanitizers:** the run-pass file under UBSan (`-fsanitize=alignment`) reports nothing, where the same reads with
   `p.read()` do.
 - **The C:** at `-O2` a `u64` read disassembles to one load on AArch64 and x86-64.
@@ -69,3 +70,19 @@ Two unsafe methods on raw pointers, beside `read` and `write`:
 1. **Do it at all?** The integer case has a zero-cost idiom today. **Proposed: yes, at low priority**, for the
    non-integer cases and for code that reads as what it does.
 2. **The names `readUnaligned` and `writeUnaligned`.** Rust's, in CeeSafe's spelling. **Proposed: yes.**
+
+## 6. Implementation notes (2026-11-11)
+
+On branch `impl/0093`, on 0.33.0.
+
+- **The built-ins** are `PtrReadUnaligned` (139) and `PtrWriteUnaligned` (140), checked beside `readVolatile` and
+  `writeVolatile` (`src/check/unsafe.cee`): unsafe (N0280), a Copy pointee (N0282), a `*mut T` to write through
+  (N0282). §2 named N0259 for the Copy rule; the code is N0282, the one the volatile forms report.
+- **`rt.h`:** `cee_read_unaligned(T, p)` and `cee_write_unaligned(T, p, v)`, expressions. Each copies `sizeof(T)`
+  bytes with `ceesafe_mem_copy` (`__builtin_memcpy` on GCC and clang, `memcpy` elsewhere, which every profile
+  provides) between `p` and the element of a compound literal `(T[1]){…}`. An array of one takes an initialiser of
+  type `T` whether `T` is a scalar or a struct. `p` is cast to a `char` pointer first: clang's alignment sanitizer
+  checks a `memcpy` argument by its static type, and reported the first form.
+- **The interpreter** loads and stores at the address without `checkAligned`; every other check of a raw access
+  stays.
+- **Effects:** `writeUnaligned` has `write`'s effect.

@@ -31,6 +31,7 @@ Every unsafe operation must be **valid** when it runs:
 |---|---|
 | `p.read()` | `p` is non-null, aligned for `T`, and points to a live, initialised `T` inside one object. For a `T` that is not Copy, the value is moved out (ADR 0027): until the next `p.write`, nothing may read, drop or borrow the `T` at `p`, or the value would have two owners (O1) |
 | `p.write(v)` | `p` is non-null, aligned for `T`, and points to live storage for a `T` inside one object, which nothing currently borrows (no live loan of it, shared or mutable; a shared loan of a `RawCell`, or of a value holding it, does not count for the cell's contents, type-system.md §41.1). The old contents are not dropped: if they held a `T` that needs drop, it leaks unless it was read out first |
+| `p.readUnaligned()`, `p.writeUnaligned(v)` | as `p.read()` and `p.write(v)`, without the alignment: `p` may be any address inside the object. `T` is Copy (N0282), so nothing is moved out (ADR 0093) |
 | `p.add/sub/offset(n)` | always defined (the address wraps); the *result* must meet the requirements above before it is used |
 | `Ptr.toBorrow(p)` | as `read`, for as long as the reference is used; nothing writes the `T` meanwhile (except through the reference itself, for `toBorrowMut`), and for `toBorrowMut` nothing else reads it either |
 | `Slice.fromRaw(p, n)` | as `Ptr.toBorrow`, for each of the `n` elements; `n × size(T)` ≤ 2^63 − 1 |
@@ -95,6 +96,7 @@ The compiler checks only that the comment exists. Reviews check that it is true.
 |---|---|
 | `*T`, `*mut T` | `T *` (C's type of `T`); `*void` is `void *`. No `const`: read-only is a CeeSafe rule, and CosmoOS's `-Wcast-qual` would reject casting it away |
 | `p.read()` / `p.write(v)` | `(*p)` / `(*p) = v` |
+| `p.readUnaligned()` / `p.writeUnaligned(v)` | a `memcpy` of `sizeof(T)` bytes between `p` and a value of type `T` (`cee_read_unaligned`, `cee_write_unaligned` in `rt.h`) |
 | `p.add(n)` | `(T *)(uintptr_t)((uintptr_t)p + (uintptr_t)n * sizeof(T))`; `sub` subtracts, and `offset` converts the signed `n` to `uintptr_t` first (modulo 2^64) |
 | `r as *T` | `(T *)(uintptr_t)r` |
 | `p as *U` | `(U *)(uintptr_t)p` (no pointer-to-pointer cast, so no `-Wcast-align` or `-Wcast-qual`) |

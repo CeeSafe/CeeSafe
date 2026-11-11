@@ -43,7 +43,10 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   **public** items are reached by qualifying them with the dependency's name:
   - in a type, `geometry.Point`, `geometry.Pair<u8>`;
   - in an expression, `geometry.area(p)`, `geometry.LIMIT`, `geometry.Shape.Circle(2)`, a struct literal
-    `geometry.Point { x: 1, y: 2 }`; in a pattern, `geometry.Shape.Circle(r)`.
+    `geometry.Point { x: 1, y: 2 }`; in a pattern, `geometry.Shape.Circle(r)`;
+  - in an `impl`, as its interface or its target, where the orphan rule allows the impl (§21.1):
+    `impl geometry.Shape for Tile`, `impl geometry.Scale<u8> for Tile`, `impl Named for geometry.Point`
+    (ADR 0097). An impl declares no name, so N0315 does not apply to it.
 
   A static function of a generic type of a dependency is called through an import (`Pair<u8>.make()`), since
   `geometry.Pair<u8>.make()` does not parse (grammar.md §2.1: in an expression, generic arguments follow a simple

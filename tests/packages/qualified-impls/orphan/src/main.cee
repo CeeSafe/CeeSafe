@@ -1,0 +1,6 @@
+// `impl dep.I for dep.T` is the orphan rule's error, not N0315 (ADR 0097).
+impl shapes.Area for shapes.Square {
+    public fn area(borrow this) -> u64 => this.side * this.side;
+}
+
+fn main() {}

@@ -1,0 +1,62 @@
+// `impl dep.I for T` (ADR 0097): a dependency's interface named by qualifying it, plain and generic, beside the
+// same impls through an import, and this package's interface implemented for the dependency's struct. Each is
+// called directly, through a bound and through `dyn`.
+import shapes.Area;
+
+struct Rect {
+    w: u64;
+    h: u64;
+}
+
+struct Circle {
+    r: u64;
+}
+
+interface Named {
+    fn name(borrow this) -> StringView;
+}
+
+impl shapes.Area for Rect {
+    public fn area(borrow this) -> u64 => this.w * this.h;
+}
+
+impl shapes.Scale<u8> for Rect {
+    public fn scaled(borrow this, by: u8) -> u64 => this.w * this.h * (by as u64);
+}
+
+impl shapes.Scale<u64> for Circle {
+    public fn scaled(borrow this, by: u64) -> u64 => 3 * this.r * this.r * by;
+}
+
+impl Area for Circle {
+    public fn area(borrow this) -> u64 => 3 * this.r * this.r;
+}
+
+impl Named for shapes.Square {
+    fn name(borrow this) -> StringView => "square";
+}
+
+fn doubled<S: shapes.Scale<u8>>(shape: borrow S) -> u64 => shape.scaled(2);
+
+fn total(shapes: Slice<Box<dyn shapes.Area>>) -> u64 {
+    var sum: u64 = 0;
+    for (i in 0..shapes.length) {
+        sum += shapes[i].area();
+    }
+    return sum;
+}
+
+fn main() {
+    let rect = Rect { w: 3, h: 4 };
+    let circle = Circle { r: 2 };
+    Console.writeLine(rect.area());
+    Console.writeLine(shapes.areaOf(rect));
+    Console.writeLine(shapes.areaOf(circle));
+    Console.writeLine(doubled(rect));
+    Console.writeLine(circle.scaled(5));
+    Console.writeLine(shapes.Square { side: 2 }.name());
+    var boxes = Vector<Box<dyn shapes.Area>>.create();
+    boxes.push(Box.create(Rect { w: 5, h: 6 })!)!;
+    boxes.push(Box.create(Circle { r: 1 })!)!;
+    Console.writeLine(total(boxes.view()));
+}

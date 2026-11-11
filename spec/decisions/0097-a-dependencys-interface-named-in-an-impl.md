@@ -1,7 +1,7 @@
 # ADR 0097 — A dependency's interface named in an `impl`
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: the qualified form is accepted, in a patch
-  release. Not implemented yet. Raised by the port of two tsrs crates
+  release. **Implemented** (§6). Raised by the port of two tsrs crates
   (`~/dev/CeeSafeApps/bun/analysis/trials/tsrs/REPORT.md` §4, gap 2).
 - Scope: `spec/type-system.md` §2, `spec/diagnostics.md` (N0315), the reference implementation's `PackageNames`,
   ceesafec's `src/check/packages.cee`. No grammar change.
@@ -65,3 +65,17 @@
    already describe it; only the N0315 check stands in the way.
 2. **In a patch release?** It accepts programs that were errors and changes no program that compiled.
    **Proposed: yes.**
+
+## 6. Implementation notes (2026-11-11)
+
+On branch `impl/0097`, on 0.33.0 with ADR 0093.
+
+- **The change** is in `rewritePackageNames` (`src/check/packages.cee`): impls, interface and inherent, are left out
+  of the names N0315 checks, as extern blocks are. Nothing else changed: the interface and the target of an impl are
+  type nodes, which the same pass already joins into `dep.X`, so they resolved as soon as the check let them through.
+- **The reference implementation is not changed.** §2 said both change together; the reference is the frozen fork
+  point (`tests/reference/README.md`), and this is a CeeSafe-only change, as the others since Decision 0007.
+- **What the other cases report:** `impl dep.I for dep.T` is N0267 (the orphan rule), and an interface the
+  dependency lacks is N0311.
+- **Tests:** `tests/packages/qualified-impls`, check 29 of `tools/package_tests.py`, in place of §4's corpus files:
+  the corpus has no dependencies.

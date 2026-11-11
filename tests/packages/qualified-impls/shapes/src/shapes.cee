@@ -1,0 +1,16 @@
+// The dependency of qualified-impls (ADR 0097): interfaces and a struct that `app` implements and is implemented for.
+
+public interface Area {
+    fn area(borrow this) -> u64;
+}
+
+public interface Scale<T> {
+    fn scaled(borrow this, by: T) -> u64;
+}
+
+public struct Square {
+    public side: u64;
+}
+
+/// The area through a bound: the caller's impl, chosen at compile time.
+public fn areaOf<S: Area>(shape: borrow S) -> u64 => shape.area();

@@ -1,0 +1,4 @@
+// A type parameter named like a dependency keeps N0315 (ADR 0097 changes impls only).
+fn first<shapes>(value: shapes) -> shapes => value;
+
+fn main() {}

@@ -109,6 +109,10 @@
 28. A C++ caller (ADR 0088 §2.6): a C++11 file includes repr-dep's ceesafe_exports.h (its `extern "C"` guards),
     calls both packages' exports with their `@repr` types, compiles with -Wall -Werror and links with the program,
     which prints the same.
+29. qualified-impls (ADR 0097): `impl dep.I for T`, `impl dep.G<u8> for T` and `impl Local for dep.T`, beside an impl
+    through an import, called directly, through a bound and through `dyn`: `check` is clean and the program prints
+    what it should, in the interpreter and compiled. `impl dep.I for dep.T` is the orphan rule's N0267, an interface
+    the dependency lacks is N0311, and a type parameter named like the dependency is still N0315.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1569,10 +1573,44 @@ def main():
         if p.returncode != 0:
             problems.append(f"repr-dep/clash: check --package rival ({p.returncode}) {p.stderr[-300:]}")
 
+        # 29. A dependency's interface named in an impl (ADR 0097).
+        qualified = os.path.join(work, "qualified-impls")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "qualified-impls"), qualified)
+        app = os.path.join(qualified, "app")
+        expected = "12\n12\n12\n24\n60\nsquare\n33"
+        p = run([compiler, "check", "--diagnostics-format=json"], app)
+        try:
+            found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = [p.stdout[:300] + p.stderr[:300]]
+        if p.returncode != 0 or found:
+            problems.append(f"qualified-impls: check should be clean: {p.returncode} {found}")
+        p = run([compiler, "run", "--interp"], app)
+        if p.returncode != 0 or p.stdout.strip() != expected:
+            problems.append(f"qualified-impls: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                            f"{p.stderr[-300:]}")
+        p = run([compiler, "build"], app)
+        exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+        if p.returncode != 0:
+            problems.append(f"qualified-impls: build failed: {p.stderr.strip()[-600:]}")
+        else:
+            out = run([exe], app).stdout.strip()
+            if out != expected:
+                problems.append(f"qualified-impls: the program printed {out!r}")
+        for name, code in (("orphan", "N0267"), ("missing", "N0311"), ("parameter", "N0315")):
+            p = run([compiler, "check", "--diagnostics-format=json"], os.path.join(qualified, name))
+            try:
+                found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+            except (ValueError, KeyError):
+                found = []
+            if p.returncode != 1 or found != [code]:
+                problems.append(f"qualified-impls/{name}: expected {code} alone: {p.returncode} {found} "
+                                f"{p.stderr[:300]}")
+
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 28 checks; {len(problems)} problems")
+    print(f"package_tests: 29 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

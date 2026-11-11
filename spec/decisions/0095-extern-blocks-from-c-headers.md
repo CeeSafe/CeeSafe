@@ -1,7 +1,7 @@
 # ADR 0095 — `extern "C"` blocks generated from C headers
 
-- Status: **Accepted** by the owner, 2026-11-11 ("Accept ADR 0095 as proposed, one file per header"). Not
-  implemented. Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
+- Status: **Accepted** by the owner, 2026-11-11 ("Accept ADR 0095 as proposed, one file per header").
+  Implemented on branch `impl/0095` (§7); not released. Raised by CosmoOS's roadmap 1.3 (its row C1, `docs/roadmap-1.3.md`): each port
   copies the C declarations it uses by hand.
 - Scope: a tool, `tools/cbind.py`, shipped with a release, and its tests; `guide/unsafe-and-c.md`. No language,
   checker or emitter change.
@@ -131,3 +131,50 @@ wants, and nothing else.
 1. The tool as proposed: Python in `tools/`, clang's AST, committed output with a CI freshness check.
 2. §2.4 as proposed: emit only what is identical in every configuration; the rest is written by hand with `@cfg`.
 3. One binding file per header.
+
+## 7. Implementation and evidence (2026-11-11, branch `impl/0095`, on 0.33.0)
+
+`tools/cbind.py` and its check `tools/cbind_check.py` (in the contract suite as `cbind`), the fixture
+`tests/cbind/`, and the guide's "Generating the block from the header".
+
+### 7.1 Where the tool departs from §2
+
+Each was found by running the tool on CosmoOS's headers, and each is the tool declining to guess.
+
+- **Several headers in one run** (`--header` repeated, `--out-dir`). §4's first risk was real at once: ten bindings
+  that each declared `struct kobject;` could not compile together (N0201). Given together, a name is declared once: a
+  type by the header that defines it, anything else by the first header that has it. `--with FILE.cee` remains, for a
+  file made elsewhere, and `--leave NAME,…` was added for names another package owns (ADR 0081): `lib/kernel`
+  declares `kmalloc`, `list_init` and 31 more of CosmoOS's.
+- **`union name`** has no CeeSafe spelling (`@ctype("union u")` is N0292), so §2.2's row holds only for a union's
+  typedef. A union with a tag is not declared, and a member or parameter of that type makes its struct opaque or
+  its function left out.
+- **A struct by value** as a parameter or result is N0294, so such a function is left out with a comment.
+- **A `char` member** is `u8`, and an array of them `[u8; N]`, as the ports already write: §31.1 has no `CChar`
+  member.
+- **A pointer to a function pointer's typedef** (`const syscall_fn *table`) is `*syscall_fn`, the typedef's opaque
+  name, since a member cannot be `*extern "C" fn(…)`. Elsewhere a function pointer's typedef is spelled out.
+- **`volatile`** anywhere in a type makes it unrepresentable: declared `*mut void`, a `volatile void *` member failed
+  the C compiler's check, which is how it was found.
+- **A type that differs between configurations** is declared by its name alone (a struct opaque, an enum its
+  integer), so that the functions that mention it are still declared; §2.4 had it not emitted at all.
+- **An enumerator of a named enum** has the enum's type (`const FX_GREEN: fx_color = 5;`).
+- **Not done:** `c2cee.py` does not call the tool yet (§3), and the tool is not in a release's archives; a tree
+  uses it from a checkout of CeeSafe at its pinned version.
+
+### 7.2 Runs (macOS arm64, Apple clang 21, ceesafec 0.33.0)
+
+- `tools/cbind_check.py`: 61 expected declarations and 8 names left out, written from §2.2 and the fixture header,
+  not from the tool's output; a program over the bindings built and run for one header, for two headers, and for two
+  configurations (each built with its own flags, the differing struct declared by hand with `@cfg`); `--only`,
+  `--with`, `--leave`; a header that does not compile is refused; the tool's keyword list equals the lexer's: 0
+  problems. With `unsigned int` mapped to `i32` in the tool, the check reports 5 failures.
+- CosmoOS at `ac4f4c60`, a scratch copy generated with 0.33.0: the 105 headers of `kernel/include/kernel` that
+  compile alone (all but `selftest.h`, which needs `size_t` from its includer), in three configurations (x86-64
+  debug, AArch64 debug, x86-64 release), with `--with lib/kernel/*.cee`: 105 files, 5,266 lines, 158 structs with
+  their members, 8 opaque and 1 by its name alone (its members differ by build), in 67 s including the builds below. A one-function port compiled with all 105 files:
+  `ceesafec check` reports 0 errors, the emitted C has 3,410 assertions, and clang accepts it for x86-64 and for
+  AArch64 with `-Wall -Wextra -Werror`.
+
+Not run: Linux, gcc's headers, a Windows target; the whole contract suite on this branch; CosmoOS's ports rewritten
+over the bindings (§5's third test), which waits for CosmoOS to move its pinned ceesafec from 0.24.2.

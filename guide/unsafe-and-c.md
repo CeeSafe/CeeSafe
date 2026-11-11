@@ -209,6 +209,38 @@ extern "C" {
 See [C structs from headers](../spec/decisions/0008-c-struct-bindings-from-headers.md) and
 [Kernel code](kernel.md).
 
+### Generating the block from the header
+
+`tools/cbind.py`, in CeeSafe's repository, writes the block for you. It reads the header with clang (nothing is
+compiled or run, so a header for another target is read like any other) and writes one `.cee` file with every
+function, struct, enum, integer or string macro and `extern` variable the header itself declares:
+
+```sh
+python3 tools/cbind.py --header kernel/handle.h -I kernel/include -o kernel/bind/handle.cee
+python3 tools/cbind.py --header kernel/handle.h --header kernel/socket.h -I kernel/include --out-dir kernel/bind \
+    --config x86_64="--target=x86_64-unknown-none-elf -DCONFIG_DEBUG=1" \
+    --config aarch64="--target=aarch64-unknown-none-elf -DCONFIG_DEBUG=1"
+```
+
+- **Use.** Commit the generated files, and name them as extra sources beside the file that uses them
+  (`ceesafec build port.cee kernel/bind/handle.cee`): several files compile as one unit. A CI step that generates
+  them again and fails on a difference keeps them true to the headers.
+- **What it leaves out.** A struct with a bit-field, an anonymous member, a flexible array or a `volatile` member is
+  declared opaque, with a comment that names the member. A function that takes or returns a struct by value, or a
+  `va_list`, is left out, as is a macro that is not an integer constant or a string. `union name` has no CeeSafe
+  spelling. Each is listed in a comment at the end of the file. The tool never guesses a type.
+- **Several configurations.** With `--config`, given once per architecture and build, only what is the same in all
+  of them is declared. The rest is listed, to be written by hand with `@cfg`; a struct whose members differ is
+  declared by its name alone, and `--leave NAME` drops even that when your own block declares the struct.
+- **Several headers.** Given together, each header gets one file, and a name is declared once among them: a type by
+  the header that defines it. `--with FILE.cee` and `--leave NAME,…` leave out what another file already declares,
+  such as the functions `lib/kernel` owns.
+- **Members.** A `char` member or array of them is `u8`, a function pointer is `extern "C" fn(…)`, and a pointer to a
+  typedef of one, such as a table, is a pointer to the typedef's name.
+
+The C compiler still checks every generated line against the header when the program is built, exactly as for a
+block written by hand. The rules are [ADR 0095](../spec/decisions/0095-extern-blocks-from-c-headers.md).
+
 ### Arrays, keyword names and tables
 
 A C array member is declared as a CeeSafe array (`uint8_t uuid[16]` is `uuid: [u8; 16]`) and used like one: indexed with

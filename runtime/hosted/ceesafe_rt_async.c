@@ -199,6 +199,7 @@ typedef struct {
     bool want_uring;           /* asked for, not yet set up */
 #endif
     struct cee_run *run;       /* the run it is a worker of when it has more than one (ADR 0038), else NULL */
+    struct cee_bpool *pool;     /* the run's Async.blocking threads (ADR 0094); NULL when freestanding */
     struct cee_task *root;     /* freestanding: the run's root (the hosted runtime's cee_cancel_root) */
     uint64_t wake_sequence;    /* freestanding: the hosted runtime's global cee_wake_sequence */
     uint64_t cancel_seen;      /* the run's cancel_epoch when this executor last rechecked its parked tasks */
@@ -1346,28 +1347,297 @@ static void cee_open_wake_pipe(void) {
 }
 
 #if !defined(CEE_FREESTANDING)
+/* ---- Async.blocking's threads (ADR 0094) ----
+ * Each Async.run has a pool of worker threads for its blocking calls, shared by its workers (ADR 0038). A call takes an
+ * idle worker, or starts one; there is no bound on calls at once, since a bound could deadlock bodies that wait on each
+ * other. A worker idle for CEE_POOL_IDLE_MS ends, and its record goes on `retired`, which the next call's start or the
+ * run's end joins and frees. The pool lives in ceesafe_async_run's frame and ends with it: every blocking call has
+ * finished by then (a wait is not cancelled, type-system.md §40.4), so its end waits only for idle workers to leave. */
+#ifndef CEE_POOL_IDLE_MS
+#define CEE_POOL_IDLE_MS 10000u
+#endif
+
+#if defined(_WIN32)
+typedef SRWLOCK cee_bpool_lock;
+typedef CONDITION_VARIABLE cee_bpool_cond;
+#elif defined(CEE_COSMOOS)
+typedef cosmo_mutex_t cee_bpool_lock;
+typedef cosmo_cond_t cee_bpool_cond;
+#else
+typedef pthread_mutex_t cee_bpool_lock;
+typedef pthread_cond_t cee_bpool_cond;
+#endif
+
+typedef struct cee_bpool_worker {
+    struct cee_bpool *pool;
+    cee_thread *thread;            /* set under the pool's lock, read by whoever joins it */
+    void *(*body)(void *);         /* the call it runs, or NULL while idle */
+    void *arg;
+    struct cee_bpool_worker *next;  /* on `idle` or `retired` */
+    cee_bpool_cond cv;              /* signalled when it is given a call, or the pool stops */
+} cee_bpool_worker;
+
+typedef struct cee_bpool {
+    cee_bpool_lock lock;
+    cee_bpool_cond ended;           /* a worker left while the pool was stopping */
+    cee_bpool_worker *idle;         /* waiting for a call, the last parked first */
+    cee_bpool_worker *retired;      /* left: to join and free */
+    uint32_t live;                 /* started and not yet left */
+    bool stop;
+    uint64_t idle_ms;
+} cee_bpool;
+
+static void cee_bpool_lock_init(cee_bpool_lock *m) {
+#if defined(_WIN32)
+    InitializeSRWLock(m);
+#elif defined(CEE_COSMOOS)
+    *m = (cosmo_mutex_t)COSMO_MUTEX_INIT;
+#else
+    (void)pthread_mutex_init(m, NULL);
+#endif
+}
+
+static void cee_bpool_cond_init(cee_bpool_cond *c) {
+#if defined(_WIN32)
+    InitializeConditionVariable(c);
+#elif defined(CEE_COSMOOS)
+    *c = (cosmo_cond_t)COSMO_COND_INIT;
+#else
+    (void)pthread_cond_init(c, NULL);
+#endif
+}
+
+static void cee_bpool_cond_destroy(cee_bpool_cond *c) {
+#if !defined(_WIN32) && !defined(CEE_COSMOOS)
+    (void)pthread_cond_destroy(c);
+#else
+    (void)c;
+#endif
+}
+
+static void cee_bpool_acquire(cee_bpool *p) {
+#if defined(_WIN32)
+    AcquireSRWLockExclusive(&p->lock);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_lock(&p->lock);
+#else
+    (void)pthread_mutex_lock(&p->lock);
+#endif
+}
+
+static void cee_bpool_release(cee_bpool *p) {
+#if defined(_WIN32)
+    ReleaseSRWLockExclusive(&p->lock);
+#elif defined(CEE_COSMOOS)
+    cosmo_mutex_unlock(&p->lock);
+#else
+    (void)pthread_mutex_unlock(&p->lock);
+#endif
+}
+
+static void cee_bpool_signal(cee_bpool_cond *c) {
+#if defined(_WIN32)
+    WakeConditionVariable(c);
+#elif defined(CEE_COSMOOS)
+    cosmo_cond_signal(c);
+#else
+    (void)pthread_cond_signal(c);
+#endif
+}
+
+/* Waits on `c` under the pool's lock, at most `ms` milliseconds (0: no limit). It may return early: callers recheck. */
+static void cee_bpool_wait(cee_bpool *p, cee_bpool_cond *c, uint64_t ms) {
+#if defined(_WIN32)
+    (void)SleepConditionVariableSRW(c, &p->lock, ms == 0u ? INFINITE : (DWORD)ms, 0);
+#elif defined(CEE_COSMOOS)
+    if (ms == 0u) {
+        cosmo_cond_wait(c, &p->lock);
+    } else {
+        (void)cosmo_cond_timedwait(c, &p->lock, (unsigned long long)ms * 1000000ull);
+    }
+#else
+    if (ms == 0u) {
+        (void)pthread_cond_wait(c, &p->lock);
+    } else {
+        /* pthread_cond_timedwait counts on the realtime clock: a jump of it only moves when an idle worker ends, which
+           the caller decides on the monotonic clock. */
+        struct timespec until;
+        (void)clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_sec += (time_t)(ms / 1000u);
+        until.tv_nsec += (long)(ms % 1000u) * 1000000L;
+        if (until.tv_nsec >= 1000000000L) {
+            until.tv_sec += 1;
+            until.tv_nsec -= 1000000000L;
+        }
+        (void)pthread_cond_timedwait(c, &p->lock, &until);
+    }
+#endif
+}
+
+static void cee_bpool_init(cee_bpool *p) {
+    cee_bpool_lock_init(&p->lock);
+    cee_bpool_cond_init(&p->ended);
+    p->idle = NULL;
+    p->retired = NULL;
+    p->live = 0u;
+    p->stop = false;
+    uint64_t ms = ceesafe_platform_config("CEESAFE_BLOCKING_IDLE_MS"); /* tests shorten it */
+    p->idle_ms = ms != 0u ? ms : (uint64_t)CEE_POOL_IDLE_MS;
+}
+
+/* A worker: runs the calls it is given; leaves when it has been idle for idle_ms, or the pool stops. */
+static void *cee_bpool_main(void *arg) {
+    cee_bpool_worker *w = (cee_bpool_worker *)arg;
+    cee_bpool *p = w->pool;
+    cee_bpool_acquire(p);
+    for (;;) {
+        uint64_t since = ceesafe_async_now();
+        while (w->body == NULL && !p->stop) {
+            uint64_t idle = ceesafe_async_now() - since;
+            if (idle >= p->idle_ms) {
+                break;
+            }
+            cee_bpool_wait(p, &w->cv, p->idle_ms - idle);
+        }
+        if (w->body == NULL) {
+            /* Idle too long, or the pool stops: off the idle list, onto the retired one. */
+            cee_bpool_worker **at = &p->idle;
+            while (*at != NULL && *at != w) {
+                at = &(*at)->next;
+            }
+            if (*at == w) {
+                *at = w->next;
+            }
+            w->next = p->retired;
+            p->retired = w;
+            p->live -= 1u;
+            if (p->stop) {
+                cee_bpool_signal(&p->ended);
+            }
+            cee_bpool_release(p);
+            return NULL;
+        }
+        void *(*body)(void *) = w->body;
+        void *body_arg = w->arg;
+        cee_bpool_release(p);
+        cee_next_workers = 0u; /* as a thread of its own: no Async.runWorkers left over from an earlier body */
+        (void)body(body_arg);  /* ends with ceesafe_async_blocking_finish */
+        cee_bpool_acquire(p);
+        w->body = NULL;
+        w->arg = NULL;
+        w->next = p->idle;
+        p->idle = w;
+    }
+}
+
+/* Joins and frees the workers that have left; the list was taken from the pool under its lock. */
+static void cee_bpool_join(cee_bpool_worker *w) {
+    while (w != NULL) {
+        cee_bpool_worker *next = w->next;
+        ceesafe_thread_join(w->thread);
+        cee_bpool_cond_destroy(&w->cv);
+        ceesafe_free(w, CEE_ALLOC_SYSTEM);
+        w = next;
+    }
+}
+
+/* Gives body(arg) to an idle worker, or to a new one; false if neither can be had. */
+static bool cee_bpool_give(cee_bpool *p, void *(*body)(void *), void *arg) {
+    cee_bpool_acquire(p);
+    cee_bpool_worker *left = p->retired;
+    p->retired = NULL;
+    cee_bpool_worker *w = p->idle;
+    if (w != NULL) {
+        p->idle = w->next;
+        w->next = NULL;
+        w->body = body;
+        w->arg = arg;
+        cee_bpool_signal(&w->cv);
+        cee_bpool_release(p);
+        cee_bpool_join(left);
+        return true;
+    }
+    cee_bpool_release(p);
+    cee_bpool_join(left);
+    w = (cee_bpool_worker *)ceesafe_alloc(sizeof *w, CEE_ALLOC_SYSTEM);
+    if (w == NULL) {
+        return false;
+    }
+    w->pool = p;
+    w->thread = NULL;
+    w->body = body;
+    w->arg = arg;
+    w->next = NULL;
+    cee_bpool_cond_init(&w->cv);
+    /* Under the lock: the worker takes it first thing, so it runs only once its record is complete. */
+    cee_bpool_acquire(p);
+    cee_thread *t = ceesafe_thread_start(cee_bpool_main, w);
+    if (t == NULL) {
+        cee_bpool_release(p);
+        cee_bpool_cond_destroy(&w->cv);
+        ceesafe_free(w, CEE_ALLOC_SYSTEM);
+        return false;
+    }
+    w->thread = t;
+    p->live += 1u;
+    cee_bpool_release(p);
+    return true;
+}
+
+/* The run's end: every call has finished; the idle workers are told to leave, and all are joined and freed. */
+static void cee_bpool_end(cee_bpool *p) {
+    cee_bpool_acquire(p);
+    p->stop = true;
+    for (cee_bpool_worker *w = p->idle; w != NULL; w = w->next) {
+        cee_bpool_signal(&w->cv);
+    }
+    while (p->live > 0u) {
+        cee_bpool_wait(p, &p->ended, 0u);
+    }
+    cee_bpool_worker *left = p->retired;
+    p->retired = NULL;
+    cee_bpool_release(p);
+    cee_bpool_join(left);
+    cee_bpool_cond_destroy(&p->ended);
+#if !defined(_WIN32) && !defined(CEE_COSMOOS)
+    (void)pthread_mutex_destroy(&p->lock);
+#endif
+}
+
 void ceesafe_async_blocking_start(ceesafe_blocking *b, void *(*body)(void *), void *arg) {
     cee_open_wake_pipe();
     b->task = cee_exec.current;
     b->executor = &cee_exec;
+    b->thread = NULL; /* unused since ADR 0094: workers belong to the run's pool */
     ceesafe_atomic_store_u32(&b->done, 0u);
-    b->thread = ceesafe_thread_start(body, arg);
-    if (b->thread == NULL) {
-        /* No thread: at once, here (as Thread.both, type-system.md §38.6), with a scratch stack of its own. */
-        (void)ceesafe_scratch_aside(body, arg);
+    if (cee_exec.pool != NULL && cee_bpool_give(cee_exec.pool, body, arg)) {
+        return;
     }
+    /* No worker: at once, here (as Thread.both, type-system.md §38.6), with a scratch stack of its own. */
+    (void)ceesafe_scratch_aside(body, arg);
 }
 
+/* `done`: 0 running; 1 the result is written and the worker is waking the task; 2 the worker no longer touches `b`.
+ * Without a join (ADR 0094 §2.3), 2 is what keeps the task's frame, which holds `b`, alive until the worker is out. */
 void ceesafe_async_blocking_finish(ceesafe_blocking *b) {
+    cee_executor *executor = (cee_executor *)b->executor;
+    cee_task *task = (cee_task *)b->task;
     ceesafe_atomic_store_u32(&b->done, 1u);
-    cee_wake_task((cee_executor *)b->executor, (cee_task *)b->task);
+    cee_wake_task(executor, task);
+    ceesafe_atomic_store_u32(&b->done, 2u);
 }
 
 bool ceesafe_async_blocking_ready(ceesafe_blocking *b) {
-    if (ceesafe_atomic_load_u32(&b->done) != 0u) {
-        if (b->thread != NULL) {
-            ceesafe_thread_join((cee_thread *)b->thread);
-            b->thread = NULL;
+    uint32_t done = ceesafe_atomic_load_u32(&b->done);
+    if (done != 0u) {
+        /* At 1 the wake has happened and the worker is leaving cee_wake_task: the wait a join made before. */
+        while (done != 2u) {
+#if defined(_WIN32)
+            (void)SwitchToThread();
+#elif !defined(CEE_COSMOOS)
+            (void)sched_yield(); /* CosmoOS has none in its libc: the loop retries (ADR 0040) */
+#endif
+            done = ceesafe_atomic_load_u32(&b->done);
         }
         return true;
     }
@@ -2120,6 +2390,7 @@ static void cee_exec_begin(cee_run *run) {
     cee_exec.want_uring = !cee_exec.use_poll && ceesafe_platform_config("CEESAFE_REACTOR_URING") != 0u;
 #endif
     cee_exec.run = run;
+    cee_exec.pool = NULL; /* set by ceesafe_async_run and cee_worker after this (ADR 0094) */
     cee_exec.cancel_seen = 0u;
     if (run != NULL) {
         cee_open_wake_pipe();
@@ -2293,6 +2564,7 @@ typedef struct {
     cee_run *run;
     cee_task *root;
     uint64_t cancel_at;
+    cee_bpool *pool;
 } cee_worker_start;
 
 static void *cee_worker(void *arg) {
@@ -2301,6 +2573,7 @@ static void *cee_worker(void *arg) {
     cee_task *saved_root = cee_cancel_root;
     cee_cancel_root = start->root; /* the sweep may count its point on any worker */
     cee_exec_begin(start->run);
+    cee_exec.pool = start->pool;
     cee_exec_loop(NULL, start->cancel_at);
     cee_exec_end();
     cee_cancel_root = saved_root;
@@ -2327,6 +2600,9 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
         }
     }
     cee_exec_begin(shared);
+    cee_bpool pool; /* Async.blocking's threads, shared by the run's workers (ADR 0094) */
+    cee_bpool_init(&pool);
+    cee_exec.pool = &pool;
     uint64_t cancel_at = ceesafe_test_reports ? ceesafe_test_cancel_at : ceesafe_platform_config("CEESAFE_CANCEL_AT");
     bool cancel_report = ceesafe_test_reports || ceesafe_platform_config("CEESAFE_CANCEL_REPORT") != 0u;
     cee_task root;
@@ -2334,7 +2610,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
     root.resume.root = resume;
     cee_cancel_root = &root;
     cee_thread *threads[CEE_MAX_WORKERS];
-    cee_worker_start start = {shared, &root, cancel_at};
+    cee_worker_start start = {shared, &root, cancel_at, &pool};
     uint32_t started = 0u;
     if (shared != NULL) {
         for (uint32_t k = 1u; k < workers; k++) {
@@ -2353,6 +2629,7 @@ void ceesafe_async_run(void *frame, bool (*resume)(void *), const ceesafe_frame_
             ceesafe_thread_join(threads[k]);
         }
     }
+    cee_bpool_end(&pool); /* every blocking call has finished: its idle threads leave and are joined */
     cee_exec_end();
     if (shared != NULL) {
         ceesafe_mutex_destroy(run.lock);

@@ -1507,10 +1507,12 @@ void ceesafe_async_cancel(ceesafe_scope *scope);
  * (CEE_PANIC_FRAME_STACK). Hosted only. */
 void *ceesafe_async_stack_push(size_t size, size_t align);
 void ceesafe_async_stack_pop(void *frame);
-/* Async.blocking (type-system.md §40.4): `body(arg)` runs on a worker thread, which calls ceesafe_async_blocking_finish
- * when it is done; ceesafe_async_blocking_ready is true once it is, and otherwise parks the task until the worker wakes
- * it through its executor (any thread may wake a task: a flag and the executor's wake pipe). If no thread can be
- * started, the body runs at once on this one: the result is the same. A blocking body is not cancelled. */
+/* Async.blocking (type-system.md §40.4): `body(arg)` runs on a worker thread of the run's pool (ADR 0094: an idle one,
+ * or a new one; a worker idle for 10 s ends), which calls ceesafe_async_blocking_finish when it is done;
+ * ceesafe_async_blocking_ready is true once the worker no longer touches the record (`done` 2), and otherwise parks the
+ * task until the worker wakes it through its executor (any thread may wake a task: a flag and the executor's wake
+ * pipe). If no worker can be had, the body runs at once on this thread: the result is the same. A blocking body is not
+ * cancelled. `thread` is unused since ADR 0094. */
 typedef struct ceesafe_blocking {
     void *thread;
     void *task;

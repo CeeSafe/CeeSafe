@@ -1,0 +1,85 @@
+// ADR 0094: `Async.blocking` runs on the run's pool of worker threads, reused from call to call and joined when the
+// run ends. Many calls in sequence and from 32 tasks at once; a body that runs a nested `Async.run`, which blocks too;
+// calls from the workers of `Async.runWorkers(4, …)`; and runs one after another, each with a pool of its own. (No
+// body here waits on another: a body runs on the calling thread when no worker can be had, and in the interpreter.)
+
+async fn sequential(n: u64) -> u64 {
+    var sum: u64 = 0;
+    var i: u64 = 0;
+    while (i < n) {
+        let x = i;
+        sum += await Async.blocking(() => x * 2);
+        i += 1;
+    }
+    return sum;
+}
+
+async fn fanOut() -> Result<u64, AsyncError> {
+    let total = AtomicU64.create(0);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (k in 0..32u64) {
+            s.spawn(async () => {
+                var j: u64 = 0;
+                while (j < 20) {
+                    let base = k * 100 + j;
+                    total.fetchAdd(await Async.blocking(() => base));
+                    j += 1;
+                }
+                return Ok();
+            });
+        }
+    })?;
+    return Ok(total.load());
+}
+
+async fn fanOutSend() -> Result<u64, AsyncError> {
+    let total = AtomicU64.create(0);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        for (k in 0..32u64) {
+            s.spawnSend(async () => {
+                var j: u64 = 0;
+                while (j < 20) {
+                    let base = k * 100 + j;
+                    total.fetchAdd(await Async.blocking(() => base));
+                    j += 1;
+                }
+                return Ok();
+            });
+        }
+    })?;
+    return Ok(total.load());
+}
+
+async fn inner() -> u64 {
+    var sum: u64 = 0;
+    var i: u64 = 0;
+    while (i < 10) {
+        let x = i;
+        sum += await Async.blocking(() => x + 1);
+        i += 1;
+    }
+    return sum;
+}
+
+fn nestedRun() -> u64 => Async.run(inner());
+
+async fn nested() -> u64 => await Async.blocking(() => nestedRun());
+
+fn main() {
+    Console.writeLine(Async.run(sequential(1000)));
+    match (Async.run(fanOut())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("cancelled"); }
+    }
+    Console.writeLine(Async.run(nested()));
+    match (Async.runWorkers(4, fanOutSend())) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("cancelled"); }
+    }
+    Console.writeLine(Async.run(sequential(10)));
+}
+// expect-stdout: 999000
+// expect-stdout: 998080
+// expect-stdout: 55
+// expect-stdout: 998080
+// expect-stdout: 90

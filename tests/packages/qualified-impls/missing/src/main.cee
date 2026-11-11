@@ -1,0 +1,10 @@
+// An interface the dependency does not have is reported as unknown, not as N0315 (ADR 0097).
+struct Rect {
+    w: u64;
+}
+
+impl shapes.Missing for Rect {
+    public fn area(borrow this) -> u64 => this.w;
+}
+
+fn main() {}

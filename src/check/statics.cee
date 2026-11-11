@@ -670,8 +670,14 @@ fn staticFold(
             if (failed) {
                 return c.errorResult(span.start, span.end);
             }
-            // When checking a @constant body, its parameters stay symbolic.
-            return staticFold(c, body, bound.view(), true, depth + 1);
+            // When checking a @constant body, its parameters stay symbolic. The body's spans are in the callee's file,
+            // which may be another file of the package or a library's: what is not a static initialiser there is
+            // reported there.
+            let callerFile = c.file;
+            c.setFile(c.hir.functions[callee as usize].file);
+            let folded = staticFold(c, body, bound.view(), true, depth + 1)?;
+            c.setFile(callerFile);
+            return Ok(folded);
         }
         // A C function's address where an `extern "C" fn` is expected (§29.5; ADR 0042 §3.3).
         HirExpr.FunctionAddress(_) => { return Ok(e); }

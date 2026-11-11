@@ -1,0 +1,14 @@
+// An initialiser that asks its own OnceLock for the value panics (ADR 0096, type-system.md §38.3).
+struct Holder {
+    cell: OnceLock<u32>;
+
+    fn value(borrow this) -> u32 => this.cell.getOrInit(() => this.value() + 1);
+}
+
+fn main() {
+    let h = Holder { cell: OnceLock<u32>.create() };
+    Console.writeLine("before");
+    Console.writeLine(h.value());
+}
+// expect-stdout: before
+// expect-library-panic: cell initialised recursively

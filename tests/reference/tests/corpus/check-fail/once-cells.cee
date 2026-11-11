@@ -1,0 +1,18 @@
+// `OnceCell` and `OnceLock` (ADR 0096): a OnceCell is a cell, so it is not shared between threads or kept in a
+// static; a OnceLock's value is `Share`; a full cell changes only through an exclusive borrow.
+
+static GLOBAL: OnceCell<u32> = OnceCell<u32>.create(); // error[N0337] // error[N0338]
+
+struct NotShare {
+    cell: Cell<u32>;
+}
+
+fn main() {
+    let cell = OnceCell<u32>.create();
+    cell.take(); // error[N0248]
+    cell.getMut(); // error[N0248]
+    let shared = Arc<OnceCell<u32>>.create(OnceCell<u32>.create()); // error[N0334]
+    let lock = OnceLock<NotShare>.create(); // error[N0334]
+    let good = OnceLock<u32>.create();
+    good.take(); // error[N0248]
+}

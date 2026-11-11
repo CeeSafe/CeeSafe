@@ -133,6 +133,47 @@ weaker ordering never makes a data race, but a wrong one can make a thread read 
 `ceesafec run --interp` nor ThreadSanitizer will notice. Use the plain methods unless a measurement says otherwise.
 `benchmarks/atomics` has one: a ring between two threads, 5 to 9 times faster on x86-64 with release and acquire.
 
+## Built once: `OnceLock`
+
+A value that is built on first use and then only read, such as an index or a cache, goes in a `OnceLock`. The first
+thread to ask runs the initialiser; any thread that arrives meanwhile waits, and every later read is one atomic load:
+
+```ceesafe
+struct Catalog {
+    prices: Vector<u64>;
+    total: OnceLock<u64>;
+
+    fn sum(borrow this) -> u64 => this.total.getOrInit(() => {
+        var sum: u64 = 0;
+        for (p in this.prices.view()) {
+            sum += p;
+        }
+        return sum;
+    });
+}
+
+fn main() {
+    var prices = Vector<u64>.create();
+    prices.push(40)!;
+    prices.push(2)!;
+    let catalog = Arc<Catalog>.create(Catalog { prices: prices, total: OnceLock<u64>.create() })!;
+    let other = catalog.clone();
+    let worker = Thread.spawn(move () => other.get().sum())!;
+    Console.writeLine(catalog.get().sum());
+    Console.writeLine(worker.join());
+}
+```
+
+```text
+42
+42
+```
+
+- `get()` gives the value or `null`, `set(v)` fills an empty cell, and `tryInit<E>(init)` takes an initialiser that
+  returns a `Result` and leaves the cell empty on an error.
+- `take()` and `getMut()` need the cell exclusively (`var` and no other borrow).
+- For one thread, lib/core's `OnceCell<T>` has the same members and no lock.
+
 ## Borrowing: `Thread.both`
 
 A spawned thread cannot borrow, since it may outlive what it borrowed. `Thread.both(a, b)` can: it runs `a` on a new

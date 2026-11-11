@@ -43,7 +43,10 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   **public** items are reached by qualifying them with the dependency's name:
   - in a type, `geometry.Point`, `geometry.Pair<u8>`;
   - in an expression, `geometry.area(p)`, `geometry.LIMIT`, `geometry.Shape.Circle(2)`, a struct literal
-    `geometry.Point { x: 1, y: 2 }`; in a pattern, `geometry.Shape.Circle(r)`.
+    `geometry.Point { x: 1, y: 2 }`; in a pattern, `geometry.Shape.Circle(r)`;
+  - in an `impl`, as its interface or its target, where the orphan rule allows the impl (§21.1):
+    `impl geometry.Shape for Tile`, `impl geometry.Scale<u8> for Tile`, `impl Named for geometry.Point`
+    (ADR 0097). An impl declares no name, so N0315 does not apply to it.
 
   A static function of a generic type of a dependency is called through an import (`Pair<u8>.make()`), since
   `geometry.Pair<u8>.make()` does not parse (grammar.md §2.1: in an expression, generic arguments follow a simple
@@ -2755,6 +2758,11 @@ expression, evaluated once.
   run at `p` afterwards, as for `Box.create`, and `v` may be the struct literal without its C state that
   `Box.create` takes (§33.2).
 - `p.readVolatile()` and `p.writeVolatile(v)` (§29.1) still need a Copy `T`.
+- `p.readUnaligned()` and `p.writeUnaligned(v)` (ADR 0093) are `read` and `write` through a pointer that need not be
+  aligned for `T`: a `u32` at any byte offset, a field of a packed C struct. `T` is Copy (N0282): a value moved out
+  of an unaligned place could not be borrowed there to put one back. The value is in the machine's byte order, as
+  with `read`; a format with a fixed order uses `readLE`/`readBE` on a byte slice (§16), or `byteSwap`. The C is a
+  byte copy, which compilers lower to one load or store.
 - `p.add(n)` and `p.sub(n)` (`n: usize`) and `p.offset(n)` (`n: isize`): the pointer `n` elements
   (`n × size(T)` bytes) after (`sub`: before) `p`, with the type of `p`. The arithmetic wraps modulo
   2^64; it never panics.
@@ -4418,6 +4426,17 @@ fn main() {
   - An ordering changes which values an operation may observe, never whether two accesses race: every access is
     still atomic, so T1–T3 are unchanged. A too-weak ordering is a logic error that neither the interpreter (which runs
     one thread at a time, a sequentially consistent execution) nor ThreadSanitizer can find.
+- **`OnceLock<T: Send + Share>`** (ADR 0096): `OnceCell` (§41.4) for a value that threads share, with the same
+  members. It is written at most once through a shared reference and lent as `borrow T` from then on: an index or
+  a cache built on first use.
+  - `getOrInit(init)` and `tryInit(init)` run the initialiser of an empty cell under one lock for the process
+    (`ceesafe_mutex_once_lock`, c-backend.md §6); a thread that arrives meanwhile waits and then reads the value. The
+    lock is recursive, so an initialiser may fill another `OnceLock`; initialisers of different cells do not run at
+    the same time. They and `set` have the `sleep` effect, so an `async fn` cannot call them (N0295, §40.1).
+  - A full cell is read with one atomic load and no lock; `get` has no effect.
+  - An initialiser that asks its own cell panics: "cell initialised recursively".
+  - It holds no lock of its own, so `create()` does not allocate and cannot fail.
+  - Not a static's initialiser yet: its storage is a `T?`, and an optional is not a static initialiser (§39.4).
 - These types are `Send` and `Share` by the library's declaration (`@threadSafe`, accepted only in the library's
   own files). Their `unsafe` internals are argued in `ownership.md` T1–T3.
 
@@ -4965,7 +4984,7 @@ the scope body's own locals), N0345 (`Async.park` or `Async.waker` outside the l
 code, `await` while a `@context(atomic)` value is live, `Async.run` in async code); N0241 (conflicting captures of a
 scope's children); N0334 (`Async.blocking`'s captures and result, and `spawnSend`'s captures, error type and allocator).
 
-## 41. Interior mutability: `RawCell`, `Cell` and `RefCell` (ADR 0084)
+## 41. Interior mutability: `RawCell`, `Cell`, `RefCell` and `OnceCell` (ADR 0084, ADR 0096)
 
 A shared loan freezes the value it borrows (`ownership.md` B2), with one exception: the contents of a `RawCell`. The
 three cells are lib/core types (`lib/core/cells.cee`), in every profile. A type that reaches a cell is `Send` when its
@@ -5040,3 +5059,32 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   what it owns: a struct or enum field, an optional, an array, a `Box`, a `Vector`, a `StableVector`, a `SlotMap`, or
   a closure's environment. Tasks that cross threads already need `Send` captures, and a guard is not `Send`.
 - A `RefCell` in a task frame is fine (frames never move, `ownership.md` A1).
+
+### 41.4 `OnceCell<T>`: written once, then lent (ADR 0096)
+A cell that holds nothing or one `T`. It is filled at most once through a shared reference, and from then on lends
+`borrow T` for as long as the cell is borrowed, with no guard: a value built on first use, such as an index a
+struct keeps beside its data. `OnceLock<T>` (§38.3) is the same for values that threads share.
+
+| Member | Type | Does |
+|---|---|---|
+| `OnceCell<T>.create()` | `OnceCell<T>` | an empty cell |
+| `c.get()` | `borrow T?` | the value, or `null` while the cell is empty |
+| `c.getOrInit(init)` | `borrow T`; `init: borrow mut fn() -> T` | the value; an empty cell runs `init` and stores its result first |
+| `c.tryInit<E>(init)` | `Result<void, E>`; `init: borrow mut fn() -> Result<T, E>` | fills an empty cell; on `Err` the cell stays empty and the error is returned; a full cell is left alone and `init` does not run |
+| `c.set(value)` | `Result<void, T>` | stores `value` in an empty cell; otherwise gives the value back |
+| `c.getMut()` | `(borrow mut T)?` | the value, through an exclusive borrow of the cell |
+| `c.take()` | `T?` | the value, leaving the cell empty; through an exclusive borrow |
+| `c.intoInner()` | `T?` | the value, the cell consumed |
+
+- **Why it is sound.** No method writes a full cell through a shared reference: `set` refuses, and an initialiser
+  runs only in an empty cell, which has lent nothing. `take` and `getMut` need the cell exclusively, when no
+  `borrow T` from it can be live (B-rules). So a `borrow T` from the cell never sees a change.
+- **An initialiser that asks its own cell** panics, "cell initialised recursively": it would read a value that is
+  not there yet.
+- **A fallible initialiser.** Allocation can fail, so most initialisers return a `Result`. `tryInit` fills the cell
+  or returns the error, and `get()!` or `getOrInit` then lends the value. It does not return the reference itself:
+  a reference inside a `Result` cannot name which of two reference parameters it is borrowed from (§25.6, N0246).
+  `E` is written at the call when the closure's result does not give it: `c.tryInit<AllocError>(() => build())`.
+- **Drop.** The cell drops its value, if it has one.
+- Like the other cells it is `Send` when `T` is and never `Share`: it is refused in a `static` (N0337) and in an
+  `Arc` (N0334).

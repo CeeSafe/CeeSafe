@@ -1157,6 +1157,7 @@ fn isRvalueBuiltin(b: u32) -> bool =>
     ) || b == bfArgument() || b == bfArgumentCount() || b == bfProcessRun() ||
         b == bfIoErrorMessage() || b == bfPtrAdd() || b == bfPtrSub() || b == bfPtrOffset() || b == bfPtrIsNull() ||
         b == bfSlicePtr() || b == bfSliceFromRaw() || b == bfPtrReadVolatile() || b == bfPtrWriteVolatile() ||
+        b == bfPtrReadUnaligned() || b == bfPtrWriteUnaligned() ||
         b == bfPtrPlace() || b == bfSpinHint() || b == bfTargetIsX8664() || b == bfTargetIsAArch64() ||
         b == bfCallPointer() || b == bfCallFunction() || b == bfCallClosure() || b == bfFloatBits() ||
         b == bfFloatFromBits() ||
@@ -2348,6 +2349,26 @@ fn appendBuiltinRvalue(
         appendText(out, "((")?;
         appendCTypeName(c, out, t)?;
         out.push(')')?;
+        appendBytes(out, value.view())?;
+        return out.push(')');
+    }
+    // ADR 0093: a byte copy to or from a value of the type, which the C compiler lowers to one load or store.
+    if (b == bfPtrReadUnaligned()) {
+        let pointer = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        appendText(out, "cee_read_unaligned(")?;
+        appendCTypeName(c, out, t)?;
+        appendText(out, ", ")?;
+        appendBytes(out, pointer.view())?;
+        return out.push(')');
+    }
+    if (b == bfPtrWriteUnaligned()) {
+        let pointer = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
+        let value = operandText(e, c, n, sources, f, n.at(arguments, 1))?;
+        appendText(out, "cee_write_unaligned(")?;
+        appendCTypeName(c, out, c.types.info(argumentType(n, arguments, 0)).pointee)?;
+        appendText(out, ", ")?;
+        appendBytes(out, pointer.view())?;
+        appendText(out, ", ")?;
         appendBytes(out, value.view())?;
         return out.push(')');
     }

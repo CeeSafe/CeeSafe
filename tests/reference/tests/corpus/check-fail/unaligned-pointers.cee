@@ -1,0 +1,27 @@
+// `p.readUnaligned()` and `p.writeUnaligned(v)` (ADR 0093, type-system.md §27.3): unsafe, a Copy type, and a
+// mutable pointer to write through.
+
+struct Owner {
+    items: Vector<u8>;
+}
+
+/// Safety: nothing here runs; each line is checked.
+fn main() {
+    var word: u32 = 1;
+    let shared = borrow word as *u32;
+    let exclusive = borrow mut word as *mut u32;
+    shared.readUnaligned(); // error[N0280]
+    exclusive.writeUnaligned(2); // error[N0280]
+    unsafe {
+        shared.writeUnaligned(2); // error[N0282]
+        exclusive.writeUnaligned(true); // error[N0205]
+        exclusive.writeUnaligned(); // error[N0209]
+        let wide: u64 = exclusive.readUnaligned(); // error[N0205]
+    }
+    var owner = Owner { items: Vector<u8>.create() };
+    let owned = borrow mut owner as *mut Owner;
+    unsafe {
+        let moved = owned.readUnaligned(); // error[N0282]
+        owned.writeUnaligned(Owner { items: Vector<u8>.create() }); // error[N0282]
+    }
+}

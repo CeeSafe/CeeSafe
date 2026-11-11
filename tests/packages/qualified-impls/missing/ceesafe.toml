@@ -1,0 +1,7 @@
+[package]
+name = "missing"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+shapes = { path = "../shapes" }

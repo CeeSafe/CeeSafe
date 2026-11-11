@@ -171,6 +171,11 @@ fn bfVectorAdopt() -> u32 => 137;
 /// `x.mulHigh(y)` (ADR 0092): the upper half of the full product, of the receiver's type; never overflows.
 fn bfIntMulHigh() -> u32 => 138;
 
+/// `p.readUnaligned()` and `p.writeUnaligned(v)` (ADR 0093): `read` and `write` of a Copy type through a pointer
+/// that need not be aligned for it.
+fn bfPtrReadUnaligned() -> u32 => 139;
+fn bfPtrWriteUnaligned() -> u32 => 140;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
 
@@ -315,6 +320,8 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     136 => "VectorRelease",
     137 => "VectorAdopt",
     138 => "IntMulHigh",
+    139 => "PtrReadUnaligned",
+    140 => "PtrWriteUnaligned",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

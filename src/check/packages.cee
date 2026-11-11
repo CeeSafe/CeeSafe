@@ -588,12 +588,15 @@ fn rewritePackageNames(
     var declared = Vector<DeclaredName>.create();
     for (k in marks.items..front.ast.items.length) {
         let item = front.ast.items[k];
-        // An impl is named by its interface's first identifier, so `impl dep.I for T` is N0315 as in the reference.
-        let isExtern = match (item.kind) {
+        // An impl declares no name (ADR 0097): its `name` is its interface's or its target's first identifier, which
+        // for `impl dep.I for T` is the dependency. The reference reported N0315 there.
+        let declaresNothing = match (item.kind) {
             ItemKind.Extern(_, _, _) => true,
+            ItemKind.Impl(_, _, _, _, _) => true,
+            ItemKind.InherentImpl(_, _, _, _, _) => true,
             _ => false,
         };
-        if (!isExtern) {
+        if (!declaresNothing) {
             declared.push(DeclaredName { ident: item.name, what: 0 })?;
         }
     }

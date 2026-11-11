@@ -29,6 +29,7 @@
 - [struct RefCellTaking](#struct-refcelltaking)
 - [struct CellRef](#struct-cellref)
 - [struct CellRefMut](#struct-cellrefmut)
+- [struct OnceCell](#struct-oncecell)
 - [struct CStr](#struct-cstr)
 - [interface DerivedEqual](#interface-derivedequal)
 - [struct DerivedEqualElements](#struct-derivedequalelements)
@@ -1863,6 +1864,89 @@ The contents, for as long as the guard is borrowed exclusively.
 Safety: the guard set the state to -1, so no other guard is live and none can be made while it is; the loan
 ends before the guard's drop gives the access back (a RawCell's contents may change while the cell is
 shared, type-system.md §41.1).
+
+## struct OnceCell
+
+```ceesafe
+public struct OnceCell<T>
+```
+
+A value written at most once through a shared reference (§41.4, ADR 0096): empty at first, then full for as long
+as the cell is shared, lending `borrow T`. `getOrInit` fills an empty cell from its initialiser; `set` fills it
+with a value. A full cell changes only through an exclusive borrow (`take`, `getMut`), when no reference to the
+contents can be live. The state is one byte: 0 empty, 1 the initialiser is running, 2 full.
+
+### OnceCell.create
+
+```ceesafe
+public fn create() -> OnceCell<T>
+```
+
+An empty cell.
+
+### OnceCell.get
+
+```ceesafe
+public fn get(borrow this) -> borrow T?
+```
+
+The value, or null while the cell is empty.
+
+### OnceCell.getOrInit
+
+```ceesafe
+public fn getOrInit(borrow this, init: borrow mut fn() -> T) -> borrow(this) T
+```
+
+The value; an empty cell runs `init` and stores its result first. Panics if `init` asks this cell for its
+value ("cell initialised recursively").
+Safety: the state is 0, so no reference to the contents has been lent and `init` cannot get one (a nested
+call panics); the old contents are null and need no drop.
+
+### OnceCell.tryInit
+
+```ceesafe
+public fn tryInit<E>(borrow this, init: borrow mut fn() -> Result<T, E>) -> Result<void, E>
+```
+
+Fills an empty cell from an initialiser that can fail: on `Err` the cell stays empty and the error is
+returned. A full cell is left as it is, and `init` does not run. `get` or `getOrInit` then lends the value.
+Panics as getOrInit.
+Safety: as getOrInit.
+
+### OnceCell.set
+
+```ceesafe
+public fn set(borrow this, value: T) -> Result<void, T>
+```
+
+Stores `value` in an empty cell. A cell that is full, or whose initialiser is running, gives the value back.
+Safety: as getOrInit.
+
+### OnceCell.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> (borrow mut T)?
+```
+
+The value, for as long as the cell is borrowed exclusively; null while the cell is empty.
+
+### OnceCell.take
+
+```ceesafe
+public fn take(borrow mut this) -> T?
+```
+
+The value, leaving the cell empty: no reference to it can be live while the cell is borrowed exclusively.
+Safety: the contents are read out and null written in their place, so they have one owner.
+
+### OnceCell.intoInner
+
+```ceesafe
+public fn intoInner(this) -> T?
+```
+
+The value, the cell consumed.
 
 ## struct CStr
 

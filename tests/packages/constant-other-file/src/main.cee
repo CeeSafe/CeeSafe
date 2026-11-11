@@ -1,0 +1,6 @@
+// A static whose initialiser calls a `@constant` function of another file (type-system.md §39.4). What is not a
+// static initialiser in that function's body is reported in its file: this file is shorter than the body's offset,
+// and the report once panicked reading this file's text there.
+static P: Pair<u32> = makePair<u32>();
+
+fn main() {}

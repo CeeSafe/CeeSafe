@@ -41,6 +41,7 @@ struct InterpRuntime {
     recordThreads: Vector<u32>;
     mutexAddresses: Vector<u64>;
     mutexOwners: Vector<u32>;        // the owning thread, or none
+    onceDepth: u32;                  // how often the owner of OnceLock's lock (ADR 0096) holds it
     channels: Vector<InterpChannel>; // ADR 0032: a channel's handle is its index + 1
 }
 
@@ -71,6 +72,7 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     recordThreads: Vector<u32>.create(),
     mutexAddresses: Vector<u64>.create(),
     mutexOwners: Vector<u32>.create(),
+    onceDepth: 0,
     channels: Vector<InterpChannel>.create(),
 };
 
@@ -1411,6 +1413,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_mutex_lock")) {
         return "P:-";
     }
+    if (sameText(name, "ceesafe_mutex_once_lock") || sameText(name, "ceesafe_mutex_once_unlock")) {
+        return ":-"; // ADR 0096
+    }
     if (sameText(name, "ceesafe_mutex_unlock")) {
         return "P:-";
     }
@@ -1655,6 +1660,37 @@ fn callC(
         mutexLock(it, c, n, arguments[0].bits(0, 8)?)?;
         return Ok(null);
     }
+    if (sameText(n0, "ceesafe_mutex_once_lock")) {
+        // OnceLock's lock (ADR 0096): a mutex at an address no allocation has, recursive for its owner.
+        if (mutexOwner(it, onceLockAddress()) == it.runtime.current) {
+            it.runtime.onceDepth += 1;
+            return Ok(null);
+        }
+        var known = false;
+        for (k in 0..it.runtime.mutexAddresses.length) {
+            if (it.runtime.mutexAddresses[k] == onceLockAddress()) {
+                known = true;
+            }
+        }
+        if (!known) {
+            it.runtime.mutexAddresses.push(onceLockAddress())!;
+            it.runtime.mutexOwners.push(none())!;
+        }
+        mutexLock(it, c, n, onceLockAddress())?;
+        it.runtime.onceDepth = 1;
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_mutex_once_unlock")) {
+        it.runtime.onceDepth -= 1;
+        if (it.runtime.onceDepth == 0) {
+            for (k in 0..it.runtime.mutexAddresses.length) {
+                if (it.runtime.mutexAddresses[k] == onceLockAddress()) {
+                    it.runtime.mutexOwners[k] = none();
+                }
+            }
+        }
+        return Ok(null);
+    }
     if (sameText(n0, "ceesafe_mutex_unlock")) {
         let address = arguments[0].bits(0, 8)?;
         for (k in 0..it.runtime.mutexAddresses.length) {
@@ -1804,6 +1840,9 @@ fn callC(
 }
 
 // ---- Threads (Threads.cs): cooperative, one at a time, switching only when the running thread blocks ----
+
+/// The address of OnceLock's lock (ADR 0096) among the mutexes: below every allocation's.
+fn onceLockAddress() -> u64 => 8;
 
 fn mutexOwner(it: borrow Interp, address: u64) -> u32 {
     for (k in 0..it.runtime.mutexAddresses.length) {

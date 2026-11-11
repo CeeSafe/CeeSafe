@@ -145,5 +145,6 @@ calls, at compile time. Rust has no equivalent in the language.
 ## Things you will miss
 
 `Rc` (CeeSafe has `Arc`, and lib/core's `Cell` and `RefCell`, whose `read()` and `write()` are Rust's `borrow()` and
-`borrow_mut()`: type-system.md §41), macros, iterator adapters, blanket impls, `impl Trait`, shadowing, the
+`borrow_mut()`: type-system.md §41; `OnceCell` and `OnceLock` are there too, with `getOrInit` for `get_or_init`),
+macros, iterator adapters, blanket impls, `impl Trait`, shadowing, the
 standard library's breadth, and crates.io. Several are planned or recorded as open decisions.

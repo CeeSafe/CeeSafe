@@ -11,6 +11,10 @@ extern "C" {
     fn ceesafe_mutex_unlock(m: *mut void);
     @effects()
     fn ceesafe_mutex_destroy(m: *mut void);
+    @effects(sleep)
+    fn ceesafe_mutex_once_lock();
+    @effects()
+    fn ceesafe_mutex_once_unlock();
 }
 
 /// Mutual exclusion: the data is reached only through a guard, which one thread holds at a time.
@@ -99,4 +103,119 @@ public struct Arc<T: Share> {
 /// Why Thread.spawn failed: the thread, its record or its closure could not be allocated (type-system.md §38.2).
 public enum SpawnError {
     Resources,
+}
+
+/// A value written at most once and then read from any thread (§38.3, ADR 0096): `OnceCell` (lib/core, §41.4) for
+/// values that threads share. Empty at first, then full for as long as the lock is shared, lending `borrow T`. One
+/// thread runs an initialiser at a time, under one lock for the process; a thread that finds a full cell reads it
+/// with one atomic load and takes no lock. A full cell changes only through an exclusive borrow (`take`, `getMut`).
+/// The state is one byte: 0 empty, 1 the initialiser is running, 2 full.
+@threadSafe
+@noncopy
+public struct OnceLock<T: Send + Share> {
+    private state: AtomicU8;
+    private raw: RawCell<T?>;
+
+    /// An empty cell.
+    public fn create() -> OnceLock<T> => OnceLock { state: AtomicU8.create(0), raw: RawCell<T?>.create(null) };
+
+    /// The value, or null while the cell is empty.
+    public fn get(borrow this) -> borrow T? {
+        if (this.state.load() != 2) {
+            return null;
+        }
+        return this.contents().asBorrow();
+    }
+
+    /// The value; an empty cell runs `init` and stores its result first. Threads that arrive while another runs
+    /// `init` wait for it and read its value. Panics if `init` asks this cell for its value ("cell initialised
+    /// recursively").
+    /// Safety: the write happens under the lock with the state 0 seen there, so no reference to the contents has
+    /// been lent and no other thread writes; the old contents are null and need no drop. The lock is released on
+    /// every path.
+    public fn getOrInit(borrow this, init: borrow mut fn() -> T) -> borrow(this) T {
+        if (this.state.load() != 2) {
+            unsafe { ceesafe_mutex_once_lock(); }
+            let state = this.state.load();
+            if (state == 1) {
+                unsafe { ceesafe_mutex_once_unlock(); }
+                panic("cell initialised recursively");
+            }
+            if (state == 0) {
+                this.state.store(1);
+                let value = init();
+                unsafe { this.raw.pointer().write(value); }
+                this.state.store(2);
+            }
+            unsafe { ceesafe_mutex_once_unlock(); }
+        }
+        return this.contents().asBorrow()!;
+    }
+
+    /// Fills an empty cell from an initialiser that can fail: on `Err` the cell stays empty and the error is
+    /// returned. A full cell is left as it is, and `init` does not run. `get` or `getOrInit` then lends the value.
+    /// Panics as getOrInit.
+    /// Safety: as getOrInit.
+    public fn tryInit<E>(borrow this, init: borrow mut fn() -> Result<T, E>) -> Result<void, E> {
+        if (this.state.load() == 2) {
+            return Ok();
+        }
+        unsafe { ceesafe_mutex_once_lock(); }
+        let state = this.state.load();
+        if (state == 1) {
+            unsafe { ceesafe_mutex_once_unlock(); }
+            panic("cell initialised recursively");
+        }
+        if (state == 0) {
+            this.state.store(1);
+            match (init()) {
+                Ok(value) => {
+                    unsafe { this.raw.pointer().write(value); }
+                    this.state.store(2);
+                }
+                Err(error) => {
+                    this.state.store(0);
+                    unsafe { ceesafe_mutex_once_unlock(); }
+                    return Err(error);
+                }
+            }
+        }
+        unsafe { ceesafe_mutex_once_unlock(); }
+        return Ok();
+    }
+
+    /// Stores `value` in an empty cell. A cell that is full, or whose initialiser is running, gives the value back.
+    /// Safety: as getOrInit.
+    public fn set(borrow this, value: T) -> Result<void, T> {
+        unsafe { ceesafe_mutex_once_lock(); }
+        if (this.state.load() != 0) {
+            unsafe { ceesafe_mutex_once_unlock(); }
+            return Err(value);
+        }
+        unsafe { this.raw.pointer().write(value); }
+        this.state.store(2);
+        unsafe { ceesafe_mutex_once_unlock(); }
+        return Ok();
+    }
+
+    /// The value, for as long as the cell is borrowed exclusively; null while the cell is empty.
+    public fn getMut(borrow mut this) -> (borrow mut T)? => this.raw.getMut().asBorrowMut();
+
+    /// The value, leaving the cell empty: no reference to it can be live while the cell is borrowed exclusively.
+    /// Safety: the contents are read out and null written in their place, so they have one owner.
+    public fn take(borrow mut this) -> T? {
+        let p = this.raw.pointer();
+        let old = unsafe { p.read() };
+        unsafe { p.write(null); }
+        this.state.store(0);
+        return old;
+    }
+
+    /// The value, the cell consumed.
+    public fn intoInner(this) -> T? => this.raw.intoInner();
+
+    /// The contents as a shared reference.
+    /// Safety: nothing writes the contents of a full cell while it is shared, and an empty cell's are null until the
+    /// write that fills it, which happens before any reference from here is used again.
+    fn contents(borrow this) -> borrow (T?) => unsafe { Ptr.toBorrow(this.raw.pointer() as *(T?)) };
 }

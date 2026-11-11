@@ -646,6 +646,9 @@ Heap (M3b):
   `ceesafe_thread_*`, `ceesafe_mutex_*` or `ceesafe_atomic_*`.
   - `ceesafe_thread_start`/`join` run over POSIX threads, or Win32 threads on Windows.
   - Mutexes are allocated: `pthread_mutex_t`, or `SRWLOCK` on Windows.
+  - `ceesafe_mutex_once_lock`/`unlock` (ADR 0096) are the one lock `OnceLock`'s initialisers run under: a static
+    mutex, not allocated, recursive for its owner (`pthread_self`, `GetCurrentThreadId`, or CosmoOS's
+    `cosmo_thread_id`).
   - The atomics are sequentially consistent: `__atomic` builtins, or `Interlocked*` under MSVC.
   - Thread records, environments and mutexes come from `ceesafe_alloc`, so fault injection reaches them.
   - The allocation counters change with relaxed atomic adds (`CEE_COUNT`), since any thread may allocate.

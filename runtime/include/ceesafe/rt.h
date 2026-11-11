@@ -931,7 +931,7 @@ void ceesafe_mutex_lock(void *m);
 void ceesafe_mutex_unlock(void *m);
 void ceesafe_mutex_destroy(void *m);
 /* The lock a OnceLock's initialiser runs under (ADR 0096): one for the process, not allocated, and recursive, so an
- * initialiser may fill another OnceLock. On CosmoOS a thread has no identity here and the lock is not recursive. */
+ * initialiser may fill another OnceLock. */
 void ceesafe_mutex_once_lock(void);
 void ceesafe_mutex_once_unlock(void);
 /* ---- Atomics (§38.3): sequentially consistent, and with an ordering (ADR 0021); compare-exchange returns the

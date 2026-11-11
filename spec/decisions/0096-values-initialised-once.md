@@ -110,14 +110,17 @@ On branch `impl/0096`, on 0.34.0 with ADRs 0093 and 0097.
   `get()!` or `getOrInit` then lends the value. `getOrInit` is as proposed, with `borrow(this) T`.
 - **Not done: `OnceLock<T>.constant()`** (question 3). The storage is a `T?`, and an optional is not a static
   initialiser (§39.4, "not in v1"). A static `OnceLock` needs either that rule extended to `null` or storage that is
-  not an optional; neither is in this ADR. Found on the way: an N0338 inside a library `@constant` body made the
-  diagnostic printer panic (`src/support/source.cee:27`), which is not fixed here.
+  not an optional; neither is in this ADR. Found on the way, and fixed: an N0338 inside the body of a `@constant` function
+  of another file (a library's, or the package's own) was reported with the calling file, and the diagnostic printer
+  panicked reading that file's text at the other file's offset (`src/support/source.cee:27`). The body is now folded
+  with its own file current (`staticFold`, `src/check/statics.cee`); check 30 of `tools/package_tests.py`.
 - **The lock.** A `OnceLock` holds none, so `create()` neither allocates nor fails. Initialisers run under one lock
   for the process, new in the runtime: `ceesafe_mutex_once_lock` and `ceesafe_mutex_once_unlock`
   (`runtime/hosted/ceesafe_rt_thread.c`), a static mutex made recursive by its owner's identity, so an initialiser
   may fill another `OnceLock`. Waiters block on it. The cost: initialisers of different cells do not run at the same
-  time. A lock or a wait queue per cell would lift that, and can replace this without changing the type. CosmoOS
-  gives the runtime no thread identity, so there the lock is not recursive.
+  time. A lock or a wait queue per cell would lift that, and can replace this without changing the type. The owner's
+  identity is `pthread_self`, `GetCurrentThreadId`, or on CosmoOS `cosmo_thread_id` (compiled against CosmoOS's
+  headers; not run there).
 - **The interpreter** models the lock as a mutex at a fixed address, with a depth for its owner.
 - **Inference.** `E` of `tryInit<E>` is not inferred from a closure that returns `Err(…)` alone, or from a call's
   result in some positions: the call writes it.

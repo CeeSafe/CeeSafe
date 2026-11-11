@@ -152,10 +152,11 @@ static cee_mutex_impl cee_once_mutex = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t cee_once_owner;
 static uint32_t cee_once_depth;
 
-/* The running thread, never 0; or 0 where the platform gives no identity. */
+/* The running thread, never 0. */
 static uint64_t cee_once_self(void) {
 #if defined(CEE_COSMOOS)
-    return 0;
+    /* The thread's id from its thread block (cosmo/thread.h): no system call. One more, so that it is never 0. */
+    return (uint64_t)cosmo_thread_id() + 1u;
 #elif defined(_WIN32)
     return (uint64_t)GetCurrentThreadId();
 #else
@@ -165,7 +166,7 @@ static uint64_t cee_once_self(void) {
 
 void ceesafe_mutex_once_lock(void) {
     uint64_t self = cee_once_self();
-    if (self != 0 && ceesafe_atomic_load_u64(&cee_once_owner) == self) {
+    if (ceesafe_atomic_load_u64(&cee_once_owner) == self) {
         cee_once_depth++;
         return;
     }

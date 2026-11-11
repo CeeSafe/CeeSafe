@@ -113,6 +113,9 @@
     through an import, called directly, through a bound and through `dyn`: `check` is clean and the program prints
     what it should, in the interpreter and compiled. `impl dep.I for dep.T` is the orphan rule's N0267, an interface
     the dependency lacks is N0311, and a type parameter named like the dependency is still N0315.
+30. constant-other-file: a static's initialiser calls a generic `@constant` function of another file whose body is
+    not a static initialiser for that call: one N0338, in the function's file at its line (the report once
+    panicked, reading the calling file's text at the other file's offset).
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1607,10 +1610,22 @@ def main():
                 problems.append(f"qualified-impls/{name}: expected {code} alone: {p.returncode} {found} "
                                 f"{p.stderr[:300]}")
 
+        # 30. A @constant body's error is reported in the body's file (type-system.md §39.4).
+        constant = os.path.join(work, "constant-other-file")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "constant-other-file"), constant)
+        p = run([compiler, "check", "--diagnostics-format=json"], constant)
+        try:
+            found = [(d["code"], os.path.basename(d["file"]), d["start"]["line"])
+                     for d in json.loads(p.stdout)["diagnostics"]]
+        except (ValueError, KeyError):
+            found = [p.stdout[:300] + p.stderr[:300]]
+        if p.returncode != 1 or found != [("N0338", "zother.cee", 12)]:
+            problems.append(f"constant-other-file: expected N0338 at zother.cee:12 alone: {p.returncode} {found}")
+
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 29 checks; {len(problems)} problems")
+    print(f"package_tests: 30 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

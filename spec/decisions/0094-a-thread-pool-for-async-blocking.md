@@ -2,8 +2,8 @@
 
 - Status: **Accepted** by the owner, 2026-11-11 (every question of §6 answered as proposed: a pool per
   `Async.run`, a 10-second idle timeout without a cap, released alone; ADRs 0092, 0091, 0095 and 0093 with 0096 and
-  0097 took 0.32.0 to 0.35.0 the same day, so this is 0.36.0). Raised by CosmoStore's CEESAFE_GAPS G28
-  (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`) and its profile of 1 MiB GETs
+  0097 took 0.32.0 to 0.35.0 the same day, so this is 0.36.0). Released with ceesafec 0.36.0. Raised by
+  CosmoStore's CEESAFE_GAPS G28 (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`) and its profile of 1 MiB GETs
   (`~/dev/CeeSafeApps/cosmostore/docs/benchmarks/2026-11-11-get-1mib-profile.md`).
 - Scope: `runtime/hosted/ceesafe_rt_async.c` (`ceesafe_async_blocking_*`, `ceesafe_async_run`, the workers of
   `Async.runWorkers`) and the comment of `ceesafe_blocking` in `runtime/include/ceesafe/rt.h`. No language, library,

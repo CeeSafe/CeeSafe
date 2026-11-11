@@ -1,0 +1,16 @@
+// Array literals by index (ADR 0091 §2.3; type-system.md §39.4) are a static's initialiser: each index a constant
+// below the array's length and given once, and an element left out only where its type has a zero (N0338).
+const SLOTS: usize = 4;
+
+static GOOD: [u32; SLOTS] = [1: 5];
+static PAST: [u32; SLOTS] = [SLOTS: 5]; // error[N0338]
+static TWICE: [u32; SLOTS] = [1: 5, 3: 6, 1: 7]; // error[N0338]
+static NAMES: [StringView; 2] = [0: "zero"]; // error[N0338]
+static FULL: [StringView; 2] = [1: "one", 0: "zero"];
+
+fn local(n: usize) -> u32 {
+    let a: [u32; 4] = [1: 5]; // error[N0338]
+    return a[n];
+}
+
+fn main() {}

@@ -725,6 +725,14 @@ struct AstPrinter {
                 }
                 this.text(")")?;
             }
+            ExprNode.ArrayIndexed(pairs) => {
+                this.text("(array-indexed")?;
+                for (k in 0..pairs.count) {
+                    this.text(" ")?;
+                    this.expr(ast, symbols, ast.at(pairs, k))?;
+                }
+                this.text(")")?;
+            }
             ExprNode.ArrayLiteral(elements) => {
                 this.text("(array")?;
                 for (k in 0..elements.count) {

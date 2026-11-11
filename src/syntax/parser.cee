@@ -2890,6 +2890,24 @@ struct Parser {
                         this.endFrom(token.start),
                     );
                 }
+                if (this.eat(TokenKind.Colon)) {
+                    // `[index: value, …]` (ADR 0091 §2.3): each index, then its value.
+                    var pairs = Vector<u32>.create();
+                    pairs.push(first)?;
+                    pairs.push(this.parseExpr()?)?;
+                    while (this.eat(TokenKind.Comma) && !this.at(TokenKind.CloseBracket)) {
+                        pairs.push(this.parseExpr()?)?;
+                        this.expect(TokenKind.Colon)?;
+                        pairs.push(this.parseExpr()?)?;
+                    }
+                    this.expect(TokenKind.CloseBracket)?;
+                    let indexed = this.list(pairs)?;
+                    return this.front.ast.addExpr(
+                        ExprNode.ArrayIndexed(indexed),
+                        token.start,
+                        this.endFrom(token.start),
+                    );
+                }
                 var elements = Vector<u32>.create();
                 elements.push(first)?;
                 while (this.eat(TokenKind.Comma) && !this.at(TokenKind.CloseBracket)) {

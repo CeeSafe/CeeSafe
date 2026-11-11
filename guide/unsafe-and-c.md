@@ -330,7 +330,8 @@ static mut RATE: u32 = 100;
 
 **Read-only tables.** A plain `static` of a C type need not be exported: a table of C functions, an operations
 struct private to its file, or an array of them is C's `static const` object, placed in read-only data. A C function
-pointer is `Share`, so an array of them is an ordinary static. A type with an atomic member is not read-only and
+pointer is `Share`, so an array of them is an ordinary static, and a static's array may give its elements by index
+(`[i: e, j: f]`), the rest zero. A type with an atomic member is not read-only and
 stays a `static mut` ([ADR 0091](../spec/decisions/0091-read-only-c-objects.md)):
 
 <!-- ceesafe: check -->
@@ -354,15 +355,16 @@ extern "C" {
 @export("sys_getpid")
 unsafe fn getpid(a: *mut syscall_args) -> i64 => 1;
 
-/// `static const syscall_fn native_table[2]` in C.
-static TABLE: [extern "C" fn(*mut syscall_args) -> i64; 2] = [sys_exit, getpid];
+/// `static const syscall_fn native_table[4]` in C: each entry by its number, as C's `[SYS_exit] = sys_exit`. Entries
+/// 0 and 2 are not named, so they are null.
+static TABLE: [extern "C" fn(*mut syscall_args) -> i64; 4] = [1: sys_exit, 3: getpid];
 
 /// `extern const struct personality personality_native;` in C.
 @export("personality_native")
 static NATIVE: personality = personality {
     name: "native\0".ptr as *CChar,
-    table: borrow TABLE as *[extern "C" fn(*mut syscall_args) -> i64; 2] as *syscall_fn,
-    count: 2,
+    table: borrow TABLE as *[extern "C" fn(*mut syscall_args) -> i64; 4] as *syscall_fn,
+    count: 4,
 };
 ```
 

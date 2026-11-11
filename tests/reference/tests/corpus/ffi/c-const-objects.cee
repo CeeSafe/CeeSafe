@@ -26,8 +26,9 @@ unsafe fn double(value: i32) -> i32 => value * 2;
 @export("co_negate")
 unsafe fn negate(value: i32) -> i32 => -value;
 
-// A callback, an export, an extern and a null entry: a C function pointer is Share (§2.1), so the array is.
-static TABLE: [extern "C" fn(i32) -> i32; 4] = [double, negate, co_c_handler, 0 as extern "C" fn(i32) -> i32];
+// A callback, an export and an extern, by index (§2.3); entry 3, not named, is null. A C function pointer is Share
+// (§2.1), so the array is.
+static TABLE: [extern "C" fn(i32) -> i32; 4] = [0: double, 2: co_c_handler, 1: negate];
 
 // Exported: C's `const struct co_record co_native`, as the header declares it. It names TABLE before or after it.
 @export("co_native")

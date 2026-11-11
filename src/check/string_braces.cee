@@ -334,6 +334,7 @@ fn braceExpr(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, e: 
             }
         }
         ExprNode.ArrayLiteral(elements) => { braceExprs(c, scope, file, elements)?; }
+        ExprNode.ArrayIndexed(pairs) => { braceExprs(c, scope, file, pairs)?; }
         ExprNode.ArrayRepeat(value, count) => {
             braceExpr(c, scope, file, value)?;
             braceExpr(c, scope, file, count)?;

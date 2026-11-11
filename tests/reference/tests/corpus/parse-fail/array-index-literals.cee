@@ -1,0 +1,3 @@
+// An array literal gives every element by index or none (ADR 0091 §2.3).
+static A: [u32; 4] = [1, 2: 3]; // error[N0100]
+static B: [u32; 4] = [2: 3, 1]; // error[N0100]

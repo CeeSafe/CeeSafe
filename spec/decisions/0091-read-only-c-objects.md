@@ -1,7 +1,7 @@
 # ADR 0091 — Read-only C objects: `static` tables of C functions and C structs
 
-- Status: **§2.1 and §2.2 accepted** by the owner, 2026-11-11 ("I accept parts 1 and 2 of ADR 0091"); §2.3 (array
-  literals by index) is proposed and not decided. Implementation on branch `impl/0091`. Raised by CosmoOS's roadmap 1.3 (its row C2, `docs/roadmap-1.3.md`): the last C in
+- Status: **Accepted** by the owner, 2026-11-11: §2.1 and §2.2 first ("I accept parts 1 and 2 of ADR 0091"), then
+  §2.3, array literals by index ("2. Yes"). To be released on its own, after the owner is asked. Implementation on branch `impl/0091`. Raised by CosmoOS's roadmap 1.3 (its row C2, `docs/roadmap-1.3.md`): the last C in
   `kernel/syscall/` is a table of functions and the record that points at it, and CeeSafe cannot write either as C
   declares them.
 - Scope: `spec/type-system.md` §38.1, §39.2, §39.4 and §28.4; the checker's `isSend` (`src/types/types.cee`); the C
@@ -81,7 +81,7 @@ of static string data: it cannot change and it outlives everything.
 A pointer inside a read-only object may point at a `static mut`: the pointer is constant, what it points at is not,
 exactly as `T *const` in C.
 
-### 2.3 Array literals by index (separable)
+### 2.3 Array literals by index
 
 A table indexed by a number is written in C with designated initialisers, so that an entry sits beside its number and
 a missing one is null. A positional literal of 113 entries loses both: one misplaced line moves every call after it.
@@ -96,16 +96,16 @@ static TABLE: [extern "C" fn(*mut syscall_args) -> i64; SYS_COUNT] = [
 ];
 ```
 
-- Each index is a constant expression of an integer type, less than the array's length (N0338 otherwise), and no
-  index appears twice (N0338).
+- Each index is a constant expression of an integer type, not negative and less than the array's length (N0338
+  otherwise), and no index appears twice (N0338). The indexes may come in any order.
 - An element not named is zero: null for pointers and function pointers, 0 for integers, `false` for `bool`, and for
   an imported struct every member zero. Any other element type must name every index (N0338): CeeSafe has no zero
   for it.
-- The form is all or nothing: a literal does not mix `index: value` with positional elements.
-- It is emitted as C's `[index] = value`.
-
-This is new syntax, so it can be decided apart from §2.1 and §2.2: without it the tables can still be written, in
-order, with a comment per line.
+- The form is all or nothing: a literal does not mix `index: value` with positional elements (a syntax error).
+- It is a static's initialiser only (N0338 elsewhere): there the static's type gives the length.
+- **As built:** the checker replaces the literal with the ordinary array literal of every element, the unnamed ones
+  zero, so no later stage knows the form and the C emitted is positional, `{ a, 0, 0, b }`, not `[i] = v`. It is the
+  same object; the proposal's "emitted as C's `[index] = value`" was not needed.
 
 ## 3. Alternatives
 
@@ -129,8 +129,12 @@ stays as it is.
 - Corpus `check-fail/static-c-state.cee` (changed, an intended change of an expectation): its plain static of an
   imported struct was N0337 and is now accepted; it gains a struct with an atomic member and an array of them
   (N0337 each), and an assignment to the read-only static (N0211).
-- Not written: §2.3's cases (it is not accepted), and a test that a header declaring the object without `const`
-  fails to compile (the corpus has no family for a C compile that must fail).
+- §2.3: `run-pass/static-index-literals.cee` (integers and `bool` by index, any order, constant expressions as
+  indexes; compiled and interpreted), `check-fail/static-index-literals.cee` (an index past the end, one given
+  twice, a gap in `[StringView; 2]`, the form in a function: N0338 each), `parse-fail/array-index-literals.cee` (a
+  mixed literal), and `ffi/c-const-objects.cee`'s table, now by index with its last entry left null.
+- Not written: a test that a header declaring the object without `const` fails to compile (the corpus has no family
+  for a C compile that must fail).
 
 ## 6. Questions for the owner
 
@@ -159,8 +163,30 @@ stays as it is.
 | the same build: corpus families `check-fail`, `check-pass`, `ffi` | 251, 38 and 19 pass |
 | `tools/guide_check.py` | 155 examples, 0 problems |
 
-Not run: the whole contract suite after the last rebuild (only the three corpus families, the spec check and the
-guide check were repeated), the fixed point, Linux, and CosmoOS's tree with this compiler.
+Not run at that point: the whole contract suite after the last rebuild, the fixed point, Linux, CosmoOS's tree.
+
+**With §2.3 and the fix below** (the same day and machine):
+
+| Command | Result |
+|---|---|
+| `tools/run_corpus.py … --corpus tests/reference/tests/corpus` | 814 files: 0 fail (4 freestanding partial, as before) |
+| the same with `--family run-pass --family run-fail --interp` | 319 and 51 pass |
+| `tools/contract_tests.py --ceesafec out/ceesafec` | exit 0: 38 lines ok, 2 skipped (`run fortify`, `reactor uring`: Linux only) |
+
+**A defect the contract suite found, and its fix.** The first full run with §2.2 failed `run -Werror` and `run
+asan` on `ffi/c-const-objects.cee`: a static initialiser that takes a `const` static's address emitted
+`(T *)&object`, which drops `const` (clang's `-Wcast-qual`, an error under `-Werror`). A kernel builds with
+`-Werror`, so this would have refused CosmoOS's table. The emitter now writes `(T *)(uintptr_t)&object` for a
+`const` static (`staticOfPlace`, `c_skeleton.cee`), as a use in a function already does (§39.6). It is still an
+address constant: clang (Apple, macOS) and gcc 13.3 (Ubuntu 24.04) both accept it in a static initialiser with
+`-std=c11 -Wall -Wextra -Wcast-qual -Werror -pedantic`. The exported `const` statics of ADR 0080 had the same
+latent fault; nothing had taken one's address from another static under `-Werror`.
+
+One unexplained sighting: the interpreter pass before the fix reported 318 of 319 run-pass programs passing; the
+failing program's name was not kept, and the pass after the fix has all 319. The machine's load average was above
+50 during the first.
+
+Not run: the fixed point, Linux, and CosmoOS's tree with this compiler.
 
 ### 7.3 What CosmoOS can now write
 
@@ -172,4 +198,12 @@ static CEE_UNUSED const ceeA3_F1MS4argsi64 ceeS_TABLE = { .e = { sys_one, sys_c,
 const struct personality personality_native = { .name = ceeSC_0, .table = ((syscall_fn *)…&ceeS_TABLE), … };
 ```
 
-Without §2.3 the table's entries are positional: CosmoOS's 113-entry table would be written in number order.
+### 7.4 §2.3 (2026-11-11, the same branch)
+
+- `src/syntax/ast.cee` (`ExprNode.ArrayIndexed`), `parser.cee`, `ast_printer.cee`; `src/formatting/formatter.cee`
+  (each `index: value` one element); `src/check/arrays.cee` (`synthArrayIndexed`, `zeroElement`) and the syntax
+  walkers in `closures.cee`, `shadowing.cee`, `string_braces.cee` and `range_index.cee`.
+- `spec/grammar.md` §2, `spec/type-system.md` §39.4, the guide's example.
+- A probe with `[SYS_one: one, SYS_c: sys_c, COUNT - 1: one]` over six entries emits
+  `{ .e = { 0, sys_one, 0, 0, sys_c, sys_one } }` (the zeros as null casts), `const`.
+- Runs: §7.2's second table.

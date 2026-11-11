@@ -261,6 +261,131 @@ fn synthArrayLiteral(c: borrow mut Checker, elements: Range, expected: u32, span
     return c.expr(HirExpr.ArrayLiteral(list), typ, span.start, span.end);
 }
 
+/// The zero of an element a literal by index leaves out (ADR 0091 §2.3): 0, `false`, a null pointer or C function
+/// pointer, or an imported C struct with every member zero; none() for a type CeeSafe has no zero for.
+fn zeroElement(c: borrow mut Checker, t: u32, span: Span) -> Result<u32, AllocError> {
+    let zero = IntValue { negative: false, magnitude: 0 };
+    if (c.types.is(t, TypeKind.Integer)) {
+        return c.expr(HirExpr.IntConst(zero), t, span.start, span.end);
+    }
+    if (c.types.is(t, TypeKind.Bool)) {
+        return c.expr(HirExpr.BoolConst(false), t, span.start, span.end);
+    }
+    if (c.types.is(t, TypeKind.RawPointer) || c.types.is(t, TypeKind.FunctionPointer)) {
+        let usize = c.types.usize;
+        let address = c.expr(HirExpr.IntConst(zero), usize, span.start, span.end)?;
+        return c.expr(HirExpr.Cast(address), t, span.start, span.end);
+    }
+    if (c.types.is(t, TypeKind.Struct) && c.types.structs[c.types.info(t).structDef as usize].isImported) {
+        return c.expr(HirExpr.StructLiteral(emptyRange()), t, span.start, span.end);
+    }
+    return Ok(none());
+}
+
+/// `[i: a, j: b]` (ADR 0091 §2.3): a static's array given by index. It becomes the array literal of every element,
+/// the ones not named zero, so nothing after the checker knows the form.
+fn synthArrayIndexed(c: borrow mut Checker, pairs: Range, expected: u32, span: Span) -> Result<u32, AllocError> {
+    let elementType = expectedElement(c, expected);
+    if (!c.inStaticInitializer || elementType == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "an array literal by index ('[i: v, …]') is a static's initialiser, where the static's type gives the array's length (type-system.md §39.4)",
+        )?;
+        c.error(notStaticInitializer(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let length = truncate<u64>(c.types.info(expected).arrayLength);
+    var slots = Vector<u32>.create();
+    for (k in 0..length) {
+        slots.push(none())?;
+    }
+    var failed = false;
+    var k: u32 = 0;
+    while (k + 1 < pairs.count) {
+        let indexSyntax = c.front.ast.at(pairs, k);
+        let valueSyntax = c.front.ast.at(pairs, k + 1);
+        k += 2;
+        let indexSpan = c.front.ast.exprSpans[indexSyntax as usize];
+        let index = synth(c, indexSyntax, none())?;
+        let value = checkExpr(c, valueSyntax, elementType)?;
+        if (c.isBottom(index)) {
+            failed = true;
+            continue;
+        }
+        let folded = if (c.types.is(c.typeOf(index), TypeKind.Integer)) fold(c, index)? else none();
+        var position: u64 = length;
+        var constant = false;
+        if (folded != none()) {
+            match (c.hir.exprs[folded as usize]) {
+                HirExpr.IntConst(v) => {
+                    constant = true;
+                    if (!v.negative) {
+                        position = v.magnitude;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if (!constant) {
+            failed = true;
+            if (!c.front.diagnostics.hasErrors()) {
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "an index of an array literal must be a constant integer (type-system.md §39.4)",
+                )?;
+                c.error(notStaticInitializer(), indexSpan.start, indexSpan.end, message)?;
+            }
+            continue;
+        }
+        if (position >= length) {
+            failed = true;
+            var message = Vector<u8>.create();
+            appendText(mut message, "this index is not below the array's length, ")?;
+            appendDecimal(mut message, length)?;
+            appendText(mut message, " (type-system.md §39.4)")?;
+            c.error(notStaticInitializer(), indexSpan.start, indexSpan.end, message)?;
+            continue;
+        }
+        if (slots[truncate<usize>(position)] != none()) {
+            failed = true;
+            var message = Vector<u8>.create();
+            appendText(mut message, "index ")?;
+            appendDecimal(mut message, position)?;
+            appendText(mut message, " is given twice (type-system.md §39.4)")?;
+            c.error(notStaticInitializer(), indexSpan.start, indexSpan.end, message)?;
+            continue;
+        }
+        slots[truncate<usize>(position)] = value;
+    }
+    if (failed) {
+        return c.errorResult(span.start, span.end);
+    }
+    for (i in 0..slots.length) {
+        if (slots[i] != none()) {
+            continue;
+        }
+        let zero = zeroElement(c, elementType, span)?;
+        if (zero == none()) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "element ")?;
+            appendDecimal(mut message, i as u64)?;
+            appendText(mut message, " is not given, and ")?;
+            appendQuotedType(mut message, c, elementType)?;
+            appendText(
+                mut message,
+                " has no zero to stand for it: only integers, bool, pointers, C function pointers and imported C structs do; name every index (type-system.md §39.4)",
+            )?;
+            c.error(notStaticInitializer(), span.start, span.end, message)?;
+            return c.errorResult(span.start, span.end);
+        }
+        slots[i] = zero;
+    }
+    let list = c.hir.list(slots.view())?;
+    return c.expr(HirExpr.ArrayLiteral(list), expected, span.start, span.end);
+}
+
 /// `[v; N]`.
 fn synthArrayRepeat(
     c: borrow mut Checker,

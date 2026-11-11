@@ -4540,6 +4540,20 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   `Slice<u8>` (§10);
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
+- an **array literal by index** (ADR 0091 §2.3), `[i: e, j: f]`, where the static's type gives the array's length:
+  a table indexed by a number, each entry beside its number, as C's designated initialisers write one.
+
+  ```ceesafe
+  static TABLE: [extern "C" fn(*mut syscall_args) -> i64; SYS_COUNT] = [SYS_exit: sys_exit, SYS_write: sys_write];
+  ```
+
+  Each index is a constant expression of an integer type, not negative and below the length, and no index is given
+  twice; the indexes may come in any order. An element that is not named is zero: 0, `false`, a null pointer or C
+  function pointer, or an imported C struct with every member zero. An element of any other type must be named,
+  since CeeSafe has no zero for it. A literal is by index throughout or not at all (a mixed one is a syntax
+  error). Each failure is N0338, and so is the form anywhere but a static's initialiser. The checker replaces it
+  with the array literal of every element, so the rest of this section, and the C emitted, are an array
+  literal's;
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may
   be of a non-Copy type with no `drop` block, such as atomics (ADR 0075 §2.15): a static is never moved out of or
   destroyed, and `[e; N]` there evaluates `e` N times at compile time, so `static SLOTS: [AtomicU64; 4] =

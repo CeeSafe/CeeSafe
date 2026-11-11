@@ -146,6 +146,8 @@ enum ExprNode {
     /// `S<T> { f: e, … }`: the type name (an identifier), field initialisers, type arguments.
     StructLiteral(u32, Range, Range),
     ArrayLiteral(Range),
+    /// `[i: a, j: b]` (ADR 0091 §2.3): each index, then its value.
+    ArrayIndexed(Range),
     ArrayRepeat(u32, u32),
     Index(u32, u32),
     /// `a[lo..hi]`: target, low or none, high or none.

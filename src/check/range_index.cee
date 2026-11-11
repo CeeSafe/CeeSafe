@@ -121,6 +121,7 @@ fn indexesIn(c: borrow Checker, e: u32, symbol: u32, inIndex: bool) -> bool {
             return false;
         }
         ExprNode.ArrayLiteral(elements) => { return indexesInList(c, elements, symbol, false); }
+        ExprNode.ArrayIndexed(pairs) => { return indexesInList(c, pairs, symbol, false); }
         ExprNode.ArrayRepeat(value, count) => {
             return indexesIn(c, value, symbol, false) || indexesIn(c, count, symbol, false);
         }

@@ -935,7 +935,10 @@ fn appendStaticInitializer(
             } else if (borrowed != none()) {
                 appendText(out, "((")?;
                 appendCTypeName(c, out, t)?;
-                appendText(out, ")&")?;
+                // A `const` object's address goes through `uintptr_t`, as a use's does (§39.6): CeeSafe's pointer
+                // type carries no `const`, and a plain cast would drop it (-Wcast-qual). Still an address constant.
+                let root = staticOfPlace(c, borrowed);
+                appendText(out, if (root != none() && staticIsConst(c, root)) ")(uintptr_t)&" else ")&")?;
                 appendStaticPlace(c, out, borrowed)?;
                 appendText(out, ")")?;
             } else {
@@ -988,6 +991,21 @@ fn anyFieldHoldsAddress(c: borrow Checker, fields: Range) -> bool {
         }
     }
     return false;
+}
+
+/// The static a place is in (its StaticAddress), or none().
+fn staticOfPlace(c: borrow Checker, e: u32) -> u32 {
+    match (c.hir.exprs[e as usize]) {
+        HirExpr.Deref(inner) => {
+            match (c.hir.exprs[inner as usize]) {
+                HirExpr.StaticAddress(item) => { return item; }
+                _ => { return none(); }
+            }
+        }
+        HirExpr.FieldAccess(target, _) => { return staticOfPlace(c, target); }
+        HirExpr.Index(target, _) => { return staticOfPlace(c, target); }
+        _ => { return none(); }
+    }
 }
 
 /// A place in a static as C (ADR 0042 §3.3): its object, then members and elements (a C array member's directly).

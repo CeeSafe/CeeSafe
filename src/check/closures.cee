@@ -142,6 +142,7 @@ fn namesInExpr(c: borrow Checker, e: u32, parameters: borrow Vector<u32>) -> boo
             return false;
         }
         ExprNode.ArrayLiteral(elements) => { return namesInList(c, elements, parameters); }
+        ExprNode.ArrayIndexed(pairs) => { return namesInList(c, pairs, parameters); }
         ExprNode.ArrayRepeat(value, count) => {
             return namesInExpr(c, value, parameters) || namesInExpr(c, count, parameters);
         }

@@ -1759,6 +1759,7 @@ struct TypeTable {
             TypeKind.Never => { return Ok(true); }
             TypeKind.Error => { return Ok(true); }
             TypeKind.Function => { return Ok(true); }
+            TypeKind.FunctionPointer => { return Ok(true); } // a code address, as `fn(…)` (ADR 0091 §2.1)
             TypeKind.Handle => { return Ok(true); }
             TypeKind.Resource => { return Ok(true); }
             TypeKind.Struct => {
@@ -1822,6 +1823,19 @@ struct TypeTable {
         let unsized = this.types[id as usize].pointee;
         let element = this.types[unsized as usize].element;
         return this.isSend(if (element != none()) element else unsized, visiting);
+    }
+
+    /// Is this a C-object type (ADR 0091 §2.2): an imported C struct, a raw pointer, a C function pointer, or an
+    /// array of these? A plain `static` of one is C's `const` object.
+    fn isCObject(borrow this, id: u32) -> bool {
+        let t = this.types[id as usize];
+        if (isKind(t.kind, TypeKind.Array)) {
+            return this.isCObject(t.element);
+        }
+        if (isKind(t.kind, TypeKind.RawPointer) || isKind(t.kind, TypeKind.FunctionPointer)) {
+            return true;
+        }
+        return isKind(t.kind, TypeKind.Struct) && this.structs[t.structDef as usize].isImported;
     }
 
     /// May shared references be used from several threads (IsShare, §38.1)? A Send type that does not own, through

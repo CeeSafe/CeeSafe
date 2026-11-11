@@ -1,5 +1,6 @@
-// Statics that are C state (ADR 0042): an imported type's static is a `static mut` (N0337 for a plain one), its literal
-// exists only in a static initialiser (N0294 elsewhere), a name member takes a string that fits (N0338), and an
+// Statics that are C state (ADR 0042): an imported type's static that C writes is a `static mut`; a plain one is C's
+// const object (ADR 0091 §2.2) unless the type has an atomic member, which exists to be changed (N0337), and it
+// cannot be assigned (N0211). Its literal exists only in a static initialiser (N0294 elsewhere), a name member takes a string that fits (N0338), and an
 // initialiser may take another static's address but not its value (N0338).
 @header("static-c-state.h")
 extern "C" {
@@ -11,12 +12,18 @@ extern "C" {
         mtu: u32;
         ops: *sc_ops;
     }
+    struct sc_counted {
+        refs: AtomicU32;
+        mtu: u32;
+    }
     fn sc_run(dev: *mut sc_dev);
 }
 
 static mut OPS: sc_ops = sc_ops { run: sc_run };
 static mut GOOD: sc_dev = sc_dev { name: "eth0", ops: borrow OPS as *sc_ops };
-static PLAIN: sc_dev = sc_dev { mtu: 1 }; // error[N0337]
+static PLAIN: sc_dev = sc_dev { mtu: 1 };
+static COUNTED: sc_counted = sc_counted { mtu: 1 }; // error[N0337]
+static TABLE: [sc_counted; 2] = [sc_counted { mtu: 1 }, sc_counted { mtu: 2 }]; // error[N0337]
 static mut LONG: sc_dev = sc_dev { name: "much-too-long" }; // error[N0338]
 static mut COPY: sc_dev = sc_dev { mtu: GOOD.mtu }; // error[N0338]
 static mut EXACT: sc_dev = sc_dev { name: "eight-ch" };
@@ -24,6 +31,10 @@ static mut EXACT: sc_dev = sc_dev { name: "eight-ch" };
 fn make() -> u32 {
     let d = sc_dev { mtu: 1 }; // error[N0294]
     return 0;
+}
+
+fn change() {
+    PLAIN.mtu = 2; // error[N0211]
 }
 
 fn main() {}

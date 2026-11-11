@@ -1,0 +1,69 @@
+// Read-only C objects (ADR 0091): a table of C functions and the record that points at it, as a kernel writes a
+// system-call table and a personality. Each is a plain `static`, emitted `const`: the header declares the record
+// const, C reads it and calls through the table, and CeeSafe reads both without `unsafe` around the statics.
+
+@header("c-const-objects.types.h")
+extern "C" {
+    @ctype("co_handler")
+    struct co_handler;
+    struct co_record {
+        name: *CChar;
+        table: *co_handler;
+        count: u32;
+    }
+    struct co_ops {
+        twice: extern "C" fn(i32) -> i32;
+    }
+    fn co_c_handler(value: i32) -> i32;
+    fn c_main() -> i32;
+}
+
+/// Safety: any value.
+@callback
+unsafe fn double(value: i32) -> i32 => value * 2;
+
+/// Safety: any value.
+@export("co_negate")
+unsafe fn negate(value: i32) -> i32 => -value;
+
+// A callback, an export, an extern and a null entry: a C function pointer is Share (§2.1), so the array is.
+static TABLE: [extern "C" fn(i32) -> i32; 4] = [double, negate, co_c_handler, 0 as extern "C" fn(i32) -> i32];
+
+// Exported: C's `const struct co_record co_native`, as the header declares it. It names TABLE before or after it.
+@export("co_native")
+static NATIVE: co_record = co_record {
+    name: "native\0".ptr as *CChar,
+    table: borrow TABLE as *[extern "C" fn(i32) -> i32; 4] as *co_handler,
+    count: 4,
+};
+
+// Not exported: a read-only imported struct of this file's own (§2.2).
+static OPS: co_ops = co_ops { twice: double };
+
+/// A call through the table from CeeSafe: entry `index`, or -1 for a null one.
+/// Safety: `index` is below 4.
+@export("co_through_table")
+unsafe fn throughTable(index: u32, value: i32) -> i32 {
+    let f = TABLE[index as usize];
+    if (f.isNull()) {
+        return -1;
+    }
+    return f(value);
+}
+
+/// A call through the read-only struct.
+/// Safety: any value.
+@export("co_through_ops")
+unsafe fn throughOps(value: i32) -> i32 {
+    let f = OPS.twice;
+    return f(value);
+}
+
+/// Safety: c_main only reads the record and calls the exports above.
+fn main() -> i32 => unsafe { c_main() };
+// expect-stdout: native 4 1
+// expect-stdout: 0 14
+// expect-stdout: 1 -7
+// expect-stdout: 2 107
+// expect-stdout: 3 null
+// expect-stdout: -5 42

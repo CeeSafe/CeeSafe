@@ -221,6 +221,27 @@ fn declareStaticLocals(c: borrow mut Checker, function: u32) -> Result<void, All
 fn isCData(c: borrow Checker, hir: u32) -> bool =>
     c.hir.statics[hir as usize].imported || c.hir.statics[hir as usize].cInitializer.count > 0;
 
+/// Does a C-object type hold an atomic, in a member, an embedded struct or an element (ADR 0091 §2.2)? Such an
+/// object exists to be changed, so it is not C's `const`.
+fn holdsAtomicMember(c: borrow Checker, t: u32) -> bool {
+    if (c.types.is(t, TypeKind.Array)) {
+        return holdsAtomicMember(c, c.types.info(t).element);
+    }
+    if (!c.types.is(t, TypeKind.Struct)) {
+        return false;
+    }
+    if (atomicFieldInteger(c, t) != none()) {
+        return true;
+    }
+    let def = c.types.info(t).structDef;
+    for (f in c.types.structs[def as usize].fields.view()) {
+        if (holdsAtomicMember(c, c.types.fields[f as usize].typ)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Type-checks each static's type and initialiser (CheckStaticInitializers, §39.1–§39.4); FoldStatics evaluates them.
 fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
     for (k in 0..c.statics.length) {
@@ -256,8 +277,10 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
         // Views of static string data are the one reference a static may hold, and they are safe to share: a view,
         // or in a static that is never written, an array of views (ADR 0066).
         // An exported plain static of a C type is C's `const` object, which neither side writes (ADR 0080 §3.2).
-        let constCData = s.exported && c.types.is(typ, TypeKind.Struct) &&
+        // So is any plain static of a C-object type that has no atomic member, exported or not (ADR 0091 §2.2).
+        let exportedCStruct = s.exported && c.types.is(typ, TypeKind.Struct) &&
             c.types.structs[c.types.info(typ).structDef as usize].isImported;
+        let constCData = exportedCStruct || (c.types.isCObject(typ) && !holdsAtomicMember(c, typ));
         if (!s.mutable && !constCData && typ != c.types.error && !c.types.isShare(typ)? && !isConstantView(c, typ)) {
             var message = Vector<u8>.create();
             appendText(mut message, "a static is shared by every thread, so its type must be 'Share', and ")?;
@@ -266,7 +289,7 @@ fn checkStaticInitializers(c: borrow mut Checker) -> Result<void, AllocError> {
             let imported = def != none() && c.types.structs[def as usize].isImported;
             appendText(
                 mut message,
-                if (imported) " is not: C writes a C object, so declare it 'static mut' (type-system.md §39.3; ADR 0042 §3.1)"
+                if (imported) " is not: it has an atomic member, which is there to be changed, so declare it 'static mut' (type-system.md §39.2, §39.3; ADR 0091 §2.2)"
                     else " is not (type-system.md §39.2; §38.1)",
             )?;
             c.error(staticNotAllowed(), typeSpan.start, typeSpan.end, message)?;

@@ -930,6 +930,10 @@ void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);
 void ceesafe_mutex_unlock(void *m);
 void ceesafe_mutex_destroy(void *m);
+/* The lock a OnceLock's initialiser runs under (ADR 0096): one for the process, not allocated, and recursive, so an
+ * initialiser may fill another OnceLock. On CosmoOS a thread has no identity here and the lock is not recursive. */
+void ceesafe_mutex_once_lock(void);
+void ceesafe_mutex_once_unlock(void);
 /* ---- Atomics (§38.3): sequentially consistent, and with an ordering (ADR 0021); compare-exchange returns the
  * previous value. Static inline (ADR 0026), so an operation is its instructions where the compiler inlines it, and
  * a freestanding build needs no runtime for them. An ordering is lib/core's code: 0 relaxed, 1 acquire, 2 release, 3 acquire-release, 4 sequentially

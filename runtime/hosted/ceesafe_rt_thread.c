@@ -136,6 +136,51 @@ void ceesafe_mutex_destroy(void *m) {
     ceesafe_free(m, CEE_ALLOC_SYSTEM);
 }
 
+/*
+ * The lock of OnceLock's initialisers (ADR 0096). A OnceLock holds no lock of its own, so that it needs no
+ * allocation and can be a static's initialiser; a thread that finds a cell empty takes this lock, looks again, and
+ * runs the initialiser holding it. The owner's identity makes it recursive: an initialiser may fill another
+ * OnceLock. The owner is read without the lock, so it is an atomic; only the owner reads or writes the depth.
+ */
+#if defined(CEE_COSMOOS)
+static cee_mutex_impl cee_once_mutex = {0};
+#elif defined(_WIN32)
+static cee_mutex_impl cee_once_mutex = SRWLOCK_INIT;
+#else
+static cee_mutex_impl cee_once_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+static uint64_t cee_once_owner;
+static uint32_t cee_once_depth;
+
+/* The running thread, never 0; or 0 where the platform gives no identity. */
+static uint64_t cee_once_self(void) {
+#if defined(CEE_COSMOOS)
+    return 0;
+#elif defined(_WIN32)
+    return (uint64_t)GetCurrentThreadId();
+#else
+    return (uint64_t)(uintptr_t)pthread_self();
+#endif
+}
+
+void ceesafe_mutex_once_lock(void) {
+    uint64_t self = cee_once_self();
+    if (self != 0 && ceesafe_atomic_load_u64(&cee_once_owner) == self) {
+        cee_once_depth++;
+        return;
+    }
+    ceesafe_mutex_lock(&cee_once_mutex);
+    ceesafe_atomic_store_u64(&cee_once_owner, self);
+    cee_once_depth = 1;
+}
+
+void ceesafe_mutex_once_unlock(void) {
+    if (--cee_once_depth == 0) {
+        ceesafe_atomic_store_u64(&cee_once_owner, 0);
+        ceesafe_mutex_unlock(&cee_once_mutex);
+    }
+}
+
 /* The atomics (§38.3, ADR 0021) are static inline in ceesafe/rt.h (ADR 0026). */
 
 /* `ceesafec test`'s timeout (ADR 0049 §8): a detached thread that ends the process with status 124 once `ms` pass,

@@ -47,6 +47,7 @@
 - [struct MutexGuard](#struct-mutexguard)
 - [struct Arc](#struct-arc)
 - [enum SpawnError](#enum-spawnerror)
+- [struct OnceLock](#struct-oncelock)
 - [struct TestFailure](#struct-testfailure)
 - [struct Check](#struct-check)
 - [struct CheckResult](#struct-checkresult)
@@ -2135,6 +2136,94 @@ public enum SpawnError {
 ```
 
 Why Thread.spawn failed: the thread, its record or its closure could not be allocated (type-system.md §38.2).
+
+## struct OnceLock
+
+```ceesafe
+@threadSafe
+@noncopy
+public struct OnceLock<T: Send + Share>
+```
+
+A value written at most once and then read from any thread (§38.3, ADR 0096): `OnceCell` (lib/core, §41.4) for
+values that threads share. Empty at first, then full for as long as the lock is shared, lending `borrow T`. One
+thread runs an initialiser at a time, under one lock for the process; a thread that finds a full cell reads it
+with one atomic load and takes no lock. A full cell changes only through an exclusive borrow (`take`, `getMut`).
+The state is one byte: 0 empty, 1 the initialiser is running, 2 full.
+
+### OnceLock.create
+
+```ceesafe
+public fn create() -> OnceLock<T>
+```
+
+An empty cell.
+
+### OnceLock.get
+
+```ceesafe
+public fn get(borrow this) -> borrow T?
+```
+
+The value, or null while the cell is empty.
+
+### OnceLock.getOrInit
+
+```ceesafe
+public fn getOrInit(borrow this, init: borrow mut fn() -> T) -> borrow(this) T
+```
+
+The value; an empty cell runs `init` and stores its result first. Threads that arrive while another runs
+`init` wait for it and read its value. Panics if `init` asks this cell for its value ("cell initialised
+recursively").
+Safety: the write happens under the lock with the state 0 seen there, so no reference to the contents has
+been lent and no other thread writes; the old contents are null and need no drop. The lock is released on
+every path.
+
+### OnceLock.tryInit
+
+```ceesafe
+public fn tryInit<E>(borrow this, init: borrow mut fn() -> Result<T, E>) -> Result<void, E>
+```
+
+Fills an empty cell from an initialiser that can fail: on `Err` the cell stays empty and the error is
+returned. A full cell is left as it is, and `init` does not run. `get` or `getOrInit` then lends the value.
+Panics as getOrInit.
+Safety: as getOrInit.
+
+### OnceLock.set
+
+```ceesafe
+public fn set(borrow this, value: T) -> Result<void, T>
+```
+
+Stores `value` in an empty cell. A cell that is full, or whose initialiser is running, gives the value back.
+Safety: as getOrInit.
+
+### OnceLock.getMut
+
+```ceesafe
+public fn getMut(borrow mut this) -> (borrow mut T)?
+```
+
+The value, for as long as the cell is borrowed exclusively; null while the cell is empty.
+
+### OnceLock.take
+
+```ceesafe
+public fn take(borrow mut this) -> T?
+```
+
+The value, leaving the cell empty: no reference to it can be live while the cell is borrowed exclusively.
+Safety: the contents are read out and null written in their place, so they have one owner.
+
+### OnceLock.intoInner
+
+```ceesafe
+public fn intoInner(this) -> T?
+```
+
+The value, the cell consumed.
 
 ## struct TestFailure
 

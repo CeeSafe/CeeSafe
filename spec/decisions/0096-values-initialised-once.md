@@ -1,7 +1,8 @@
 # ADR 0096 — Values initialised once: `OnceCell` and `OnceLock`
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: both types, the names `OnceCell` and `OnceLock`, `OnceLock<T>.constant()` for
-  statics, no kernel variant now. Not implemented yet. Raised by the port of two tsrs crates
+  statics, no kernel variant now. **Implemented, with two differences** (§6): `tryInit` in place of `getOrTryInit`,
+  and no `constant()` yet. Raised by the port of two tsrs crates
   (`~/dev/CeeSafeApps/bun/analysis/trials/tsrs/REPORT.md` §4, gap 1).
 - Scope: `lib/core/cells.cee`, `lib/std/sync.cee`, `spec/type-system.md` §38 and §41, the guide (`threads.md`,
   `builtins.md`, `coming-from/rust.md`). No change to the checker, the emitter or the grammar.
@@ -95,3 +96,29 @@ The same members on both:
 3. **`OnceLock<T>.constant()` for statics in this ADR?** **Proposed: yes**: it is one `@constant` function, and
    lazily built globals are the other common use.
 4. **A kernel `OnceLock`** over lib/kernel's lock. **Proposed: not now**: no port has asked for it.
+
+## 6. Implementation notes (2026-11-11)
+
+On branch `impl/0096`, on 0.34.0 with ADRs 0093 and 0097.
+
+- **`OnceCell<T>`** is in `lib/core/cells.cee`: a `Cell<u8>` state (empty, running, full) and a `RawCell<T?>`.
+  **`OnceLock<T: Send + Share>`** is in `lib/std/sync.cee`, `@threadSafe`: an `AtomicU8` state and a `RawCell<T?>`.
+- **Different from §2: `tryInit`, not `getOrTryInit`.** `Result<borrow T, E>` cannot be written for a method with two
+  reference parameters, the cell and the closure: the result must say which it is borrowed from, and a source list
+  is allowed only on a reference that is the whole return type (N0245, N0246). The receiver cannot be given a region
+  of its own either. So `tryInit<E>(init)` returns `Result<void, E>`: it fills the cell or returns the error, and
+  `get()!` or `getOrInit` then lends the value. `getOrInit` is as proposed, with `borrow(this) T`.
+- **Not done: `OnceLock<T>.constant()`** (question 3). The storage is a `T?`, and an optional is not a static
+  initialiser (§39.4, "not in v1"). A static `OnceLock` needs either that rule extended to `null` or storage that is
+  not an optional; neither is in this ADR. Found on the way: an N0338 inside a library `@constant` body made the
+  diagnostic printer panic (`src/support/source.cee:27`), which is not fixed here.
+- **The lock.** A `OnceLock` holds none, so `create()` neither allocates nor fails. Initialisers run under one lock
+  for the process, new in the runtime: `ceesafe_mutex_once_lock` and `ceesafe_mutex_once_unlock`
+  (`runtime/hosted/ceesafe_rt_thread.c`), a static mutex made recursive by its owner's identity, so an initialiser
+  may fill another `OnceLock`. Waiters block on it. The cost: initialisers of different cells do not run at the same
+  time. A lock or a wait queue per cell would lift that, and can replace this without changing the type. CosmoOS
+  gives the runtime no thread identity, so there the lock is not recursive.
+- **The interpreter** models the lock as a mutex at a fixed address, with a depth for its owner.
+- **Inference.** `E` of `tryInit<E>` is not inferred from a closure that returns `Err(…)` alone, or from a call's
+  result in some positions: the call writes it.
+- **Not done from §4:** the port's `tsrs_spanmap` index has not been moved into the CeeSafe `SpanMap`.

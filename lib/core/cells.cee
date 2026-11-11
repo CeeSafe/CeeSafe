@@ -173,3 +173,98 @@ public struct CellRefMut<region r, T> {
         this.cell.releaseWrite();
     }
 }
+
+/// A value written at most once through a shared reference (§41.4, ADR 0096): empty at first, then full for as long
+/// as the cell is shared, lending `borrow T`. `getOrInit` fills an empty cell from its initialiser; `set` fills it
+/// with a value. A full cell changes only through an exclusive borrow (`take`, `getMut`), when no reference to the
+/// contents can be live. The state is one byte: 0 empty, 1 the initialiser is running, 2 full.
+public struct OnceCell<T> {
+    private state: Cell<u8>;
+    private raw: RawCell<T?>;
+
+    /// An empty cell.
+    public fn create() -> OnceCell<T> => OnceCell { state: Cell<u8>.create(0), raw: RawCell<T?>.create(null) };
+
+    /// The value, or null while the cell is empty.
+    public fn get(borrow this) -> borrow T? {
+        if (this.state.get() != 2) {
+            return null;
+        }
+        return this.contents().asBorrow();
+    }
+
+    /// The value; an empty cell runs `init` and stores its result first. Panics if `init` asks this cell for its
+    /// value ("cell initialised recursively").
+    /// Safety: the state is 0, so no reference to the contents has been lent and `init` cannot get one (a nested
+    /// call panics); the old contents are null and need no drop.
+    public fn getOrInit(borrow this, init: borrow mut fn() -> T) -> borrow(this) T {
+        let state = this.state.get();
+        if (state == 1) {
+            panic("cell initialised recursively");
+        }
+        if (state == 0) {
+            this.state.set(1);
+            let value = init();
+            unsafe { this.raw.pointer().write(value); }
+            this.state.set(2);
+        }
+        return this.contents().asBorrow()!;
+    }
+
+    /// Fills an empty cell from an initialiser that can fail: on `Err` the cell stays empty and the error is
+    /// returned. A full cell is left as it is, and `init` does not run. `get` or `getOrInit` then lends the value.
+    /// Panics as getOrInit.
+    /// Safety: as getOrInit.
+    public fn tryInit<E>(borrow this, init: borrow mut fn() -> Result<T, E>) -> Result<void, E> {
+        let state = this.state.get();
+        if (state == 1) {
+            panic("cell initialised recursively");
+        }
+        if (state == 0) {
+            this.state.set(1);
+            match (init()) {
+                Ok(value) => {
+                    unsafe { this.raw.pointer().write(value); }
+                    this.state.set(2);
+                }
+                Err(error) => {
+                    this.state.set(0);
+                    return Err(error);
+                }
+            }
+        }
+        return Ok();
+    }
+
+    /// Stores `value` in an empty cell. A cell that is full, or whose initialiser is running, gives the value back.
+    /// Safety: as getOrInit.
+    public fn set(borrow this, value: T) -> Result<void, T> {
+        if (this.state.get() != 0) {
+            return Err(value);
+        }
+        unsafe { this.raw.pointer().write(value); }
+        this.state.set(2);
+        return Ok();
+    }
+
+    /// The value, for as long as the cell is borrowed exclusively; null while the cell is empty.
+    public fn getMut(borrow mut this) -> (borrow mut T)? => this.raw.getMut().asBorrowMut();
+
+    /// The value, leaving the cell empty: no reference to it can be live while the cell is borrowed exclusively.
+    /// Safety: the contents are read out and null written in their place, so they have one owner.
+    public fn take(borrow mut this) -> T? {
+        let p = this.raw.pointer();
+        let old = unsafe { p.read() };
+        unsafe { p.write(null); }
+        this.state.set(0);
+        return old;
+    }
+
+    /// The value, the cell consumed.
+    public fn intoInner(this) -> T? => this.raw.intoInner();
+
+    /// The contents as a shared reference.
+    /// Safety: nothing writes the contents of a full cell while it is shared, and an empty cell's are null until the
+    /// write that fills it, which happens before any reference from here is used again.
+    fn contents(borrow this) -> borrow (T?) => unsafe { Ptr.toBorrow(this.raw.pointer() as *(T?)) };
+}

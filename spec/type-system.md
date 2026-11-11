@@ -4350,7 +4350,8 @@ fn main() {
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
   - references, slices, views and every other scoped type (§19.1);
-  - closures (`borrow fn`), function values aside (`fn(…)` is `Send`: a code address);
+  - closures (`borrow fn`), function values aside (`fn(…)` and `extern "C" fn(…)` are `Send`, and `Share`: a code
+    address, the same in every thread; ADR 0091 §2.1);
   - raw pointers and imported C types;
   - a box or collection with a user allocator;
   - regions and pools;
@@ -4500,6 +4501,15 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   initialised by a `c"…"` is static string data too (ADR 0087 §2.4), and so is a `Slice<u8>` in a `static` initialised
   by `embed` (§10.1), by a constant view's `.bytes()` (§10) or by a constant holding one, and, in a `static`, an array
   of them (`static FILES: [Slice<u8>; 2] = [embed("a.bin"), embed("b.bin")];`).
+- **Read-only C objects** (ADR 0091 §2.2). `T` may also be a C-object type, which is not `Share`: an imported C
+  struct (§31), a raw pointer, or an array of these or of `extern "C" fn` values (which are `Share` themselves,
+  §38.1). Such a static is C's `const` object: a system-call table, an operations table, the record that points at
+  one. It cannot change and it outlives everything, as static string data does. It is emitted `const` (`static
+  const` when it is not exported, §39.6), so a header that declares it without `const` does not compile against it.
+  A type with an atomic member, directly, embedded or in an element, is refused (N0337): an atomic exists to be
+  changed, and such an object is a `static mut` (§39.3). A pointer in a read-only object may point at a `static
+  mut`: the pointer is constant, what it points at is not. Following a raw pointer read from one is an unsafe
+  operation, as always.
 - `NAME` in an expression denotes the place `*S`, where `S` is a reference to the static of type `borrow(static) T`.
   `static` is the built-in region of §25.1, which outlives everything. So a static is used exactly as a value behind
   a shared reference is:
@@ -4523,8 +4533,8 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   view read from another static, and a call's result whose type names only `static` (§25.6, ADR 0068). A view of a
   local or of a parameter is rejected. The unsafe block makes the use unsafe; it does not lift this rule.
 - **C objects** (ADR 0042). `T` may be an imported C type (§31), or hold one: a device, a protocol's ops table. C
-  code reaches it through the addresses CeeSafe gives it and writes it, which is why it is a `static mut`: a plain
-  `static` of an imported type is N0337, since CeeSafe would read it as unchanging. Its initialiser is C's (§39.4).
+  code reaches it through the addresses CeeSafe gives it and writes it, which is why it is a `static mut`. A C object
+  that nothing writes is a plain `static` (§39.2, read-only C objects). Its initialiser is C's (§39.4).
 
 ### 39.4 Static initialisers
 `e` is evaluated at compile time to a C constant initialiser. It must be a **static initialiser** (N0338 otherwise):
@@ -4536,6 +4546,20 @@ unsafe fn setBootFlags(flags: u32) { BOOT_FLAGS = flags; }
   `Slice<u8>` (§10);
 - a struct literal (§12) whose fields are static initialisers. Private fields may be given only where §12 allows it:
   inside the struct's own functions, so inside its `@constant` constructors (below);
+- an **array literal by index** (ADR 0091 §2.3), `[i: e, j: f]`, where the static's type gives the array's length:
+  a table indexed by a number, each entry beside its number, as C's designated initialisers write one.
+
+  ```ceesafe
+  static TABLE: [extern "C" fn(*mut syscall_args) -> i64; SYS_COUNT] = [SYS_exit: sys_exit, SYS_write: sys_write];
+  ```
+
+  Each index is a constant expression of an integer type, not negative and below the length, and no index is given
+  twice; the indexes may come in any order. An element that is not named is zero: 0, `false`, a null pointer or C
+  function pointer, or an imported C struct with every member zero. An element of any other type must be named,
+  since CeeSafe has no zero for it. A literal is by index throughout or not at all (a mixed one is a syntax
+  error). Each failure is N0338, and so is the form anywhere but a static's initialiser. The checker replaces it
+  with the array literal of every element, so the rest of this section, and the C emitted, are an array
+  literal's;
 - an array literal or repeat (`[e; N]`) of static initialisers. In a static's type and initialiser the elements may
   be of a non-Copy type with no `drop` block, such as atomics (ADR 0075 §2.15): a static is never moved out of or
   destroyed, and `[e; N]` there evaluates `e` N times at compile time, so `static SLOTS: [AtomicU64; 4] =
@@ -4622,7 +4646,8 @@ Diagnostics: N0337 (a static whose type is not `Share`, or one that is generic o
   otherwise); an array is not supported yet (N0216). The symbol follows §28.4's rules (N0292, N0201).
   - A `static mut` is C's `T symbol = …;`: C may read and write it, and every CeeSafe use stays unsafe (§39.3).
   - A plain `static` holding no atomic is C's `const T symbol = …;`, matching a header's `extern const struct ops
-    data_ops;`, and may be of an imported C type (which §39.3 otherwise refuses): neither side writes it.
+    data_ops;`, and may be of an imported C type: neither side writes it. A plain static of a C-object type that is
+    not exported is `static const` (§39.2, read-only C objects; ADR 0091 §2.2).
 - **Imported statics.** In an `extern "C"` block, `static NAME: T;` and `static mut NAME: T;` declare data its headers
   define (`extern T NAME;`), named `NAME` in C or its `@cname("symbol")`, of a type as above; arrays included
   (`static names: [*CChar; 8];` for `extern const char *const names[8];`). A `static mut` is used as one (unsafe); a

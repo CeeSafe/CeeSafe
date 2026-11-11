@@ -284,6 +284,7 @@ fn shadowExpr(
             }
         }
         ExprNode.ArrayLiteral(elements) => { shadowExprs(front, dependencies, scope, elements)?; }
+        ExprNode.ArrayIndexed(pairs) => { shadowExprs(front, dependencies, scope, pairs)?; }
         ExprNode.ArrayRepeat(value, count) => {
             shadowExpr(front, dependencies, scope, value)?;
             shadowExpr(front, dependencies, scope, count)?;

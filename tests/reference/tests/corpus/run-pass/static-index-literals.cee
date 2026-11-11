@@ -1,0 +1,30 @@
+// Array literals by index (ADR 0091 §2.3; type-system.md §39.4): a static's array may give its elements by index, in
+// any order, with constant indexes; the ones it leaves out are zero.
+const SLOTS: usize = 6;
+const FIRST: u32 = 1;
+const LAST: usize = SLOTS - 1;
+
+static WEIGHTS: [u16; SLOTS] = [FIRST: 10, LAST: 50, 3: 30];
+static FLAGS: [bool; 4] = [2: true];
+static mut COUNTS: [u64; 3] = [1: 7];
+static ALL: [u8; 3] = [2: 3, 0: 1, 1: 2];
+
+/// Safety: COUNTS is only read, on the one thread.
+fn main() {
+    var total: u16 = 0;
+    for (w in WEIGHTS[..]) {
+        total += w;
+    }
+    Console.writeLine(total);
+    Console.writeLine(WEIGHTS[0] + WEIGHTS[1] + WEIGHTS[5]);
+    Console.writeLine(FLAGS[2]);
+    Console.writeLine(FLAGS[3]);
+    Console.writeLine(unsafe { COUNTS[0] + COUNTS[1] + COUNTS[2] });
+    Console.writeLine(ALL[0] as u32 * 100 + ALL[1] as u32 * 10 + ALL[2] as u32);
+}
+// expect-stdout: 90
+// expect-stdout: 60
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 7
+// expect-stdout: 123

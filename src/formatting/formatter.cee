@@ -1217,6 +1217,22 @@ fn fmtWalkExpr(l: borrow mut FmtLayout, ast: borrow Ast, e: u32) -> Result<void,
                 fmtWalkExpr(l, ast, element)?;
             }
         }
+        ExprNode.ArrayIndexed(pairs) => {
+            // Each `index: value` is one element of the list.
+            let open = exprFirst(l, ast, e);
+            let container = l.addContainer(open, false, true, priorityList())?;
+            var k: u32 = 0;
+            while (k + 1 < pairs.count) {
+                let index = ast.at(pairs, k);
+                let value = ast.at(pairs, k + 1);
+                let first = exprFirst(l, ast, index);
+                let last = exprLast(l, ast, value);
+                l.addElement(container, first, last)?;
+                fmtWalkExpr(l, ast, index)?;
+                fmtWalkExpr(l, ast, value)?;
+                k += 2;
+            }
+        }
         ExprNode.ArrayRepeat(value, count) => {
             fmtWalkExpr(l, ast, value)?;
             fmtWalkExpr(l, ast, count)?;

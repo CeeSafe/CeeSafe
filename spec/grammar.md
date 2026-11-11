@@ -274,6 +274,8 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | Identifier GenericArgs? '{' FieldInits? '}'       (* struct literal, M2a; GenericArgs M6a *)
         | '[' Expr (',' Expr)* ','? ']' | '[' Expr ';' IntLiteral ']'   (* array literals, M2d *)
         | '[' ']'                                    (* the empty slice, ADR 0075 §2.9 *)
+        | '[' Expr ':' Expr (',' Expr ':' Expr)* ','? ']'   (* an array by index, in a static's initialiser:
+                                                        type-system.md §39.4, ADR 0091 §2.3 *)
 IsTest  = Operand 'is' Pattern                       (* level 3; Pattern: type-system.md §15.2, §15.4 *)
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)

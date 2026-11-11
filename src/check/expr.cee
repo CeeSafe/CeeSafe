@@ -241,6 +241,7 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
         ExprNode.Move(operand) => { return synthMove(c, operand, span); }
         ExprNode.Deref(operand) => { return synthDeref(c, operand, span); }
         ExprNode.ArrayLiteral(elements) => { return synthArrayLiteral(c, elements, expected, span); }
+        ExprNode.ArrayIndexed(pairs) => { return synthArrayIndexed(c, pairs, expected, span); }
         ExprNode.ArrayRepeat(value, count) => { return synthArrayRepeat(c, value, count, expected, span); }
         ExprNode.Index(target, index) => { return synthIndex(c, target, index, span); }
         ExprNode.Slice(target, low, high) => { return synthSlice(c, target, low, high, false, span); }

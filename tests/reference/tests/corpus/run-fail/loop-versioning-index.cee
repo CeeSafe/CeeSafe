@@ -1,0 +1,27 @@
+// Loop versioning (docs/proposals/loop-versioning.md).
+// A loop whose bound is past the vector's end takes the checked copy and panics where it always did, after the same
+// work: the output before the panic is the same.
+fn fill(n: usize) -> Vector<u64> {
+    var v = Vector<u64>.create();
+    for (i in 0..n) {
+        v.push(i as u64 * 3 + 1)!;
+    }
+    return v;
+}
+
+fn count() -> usize => match (Process.argument(1)) {
+    Some(_) => 0,
+    null => 17,
+};
+
+fn main() {
+    let v = fill(16);
+    let n = count();
+    Console.writeLine("before");
+    var s: u64 = 0;
+    for (j in 0..n) {
+        s = s.wrappingAdd(v[j]); // expect-panic: index out of bounds
+    }
+    Console.writeLine(s);
+}
+// expect-stdout: before

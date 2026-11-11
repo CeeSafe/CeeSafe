@@ -1,0 +1,140 @@
+// Loop versioning (docs/proposals/loop-versioning.md): counted loops whose index checks check elimination keeps
+// are emitted twice, and the copy without the checks runs when a test before the loop shows they cannot fail. Each
+// function here is one shape the pass handles or must leave alone; the sizes come from `arg`, so nothing is constant.
+// The expected values are the output of an independent model, tools/oracles/loop_versioning_model.py.
+
+fn arg(i: usize, fallback: u64) -> u64 {
+    match (Process.argument(i)) {
+        Some(text) => {
+            var n: u64 = 0;
+            for (b in text.bytes()) {
+                n = n * 10 + (b - 48) as u64;
+            }
+            return n;
+        }
+        null => { return fallback; }
+    }
+}
+
+fn fill(n: usize) -> Vector<u64> {
+    var v = Vector<u64>.create();
+    for (i in 0..n) {
+        v.push(i as u64 * 3 + 1)!;
+    }
+    return v;
+}
+
+fn plain(v: borrow Vector<u64>, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        s = s.wrappingAdd(v[j]);
+    }
+    return s;
+}
+
+fn based(v: borrow Vector<u64>, a: usize, b: usize, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        s = s.wrappingAdd(v[a * b + j]);
+    }
+    return s;
+}
+
+fn shifted(v: borrow mut Vector<u64>, lo: usize, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        v[j + lo] = v[lo + j + 1] + 1;
+        s = s.wrappingAdd(v[j + lo]);
+    }
+    return s;
+}
+
+fn fixed(v: borrow Vector<u64>, k: usize, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        s = s.wrappingAdd(v[k]).wrappingAdd(j as u64);
+    }
+    return s;
+}
+
+fn broken(v: borrow Vector<u64>, stop: usize, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        if (j == stop) {
+            break;
+        }
+        s = s.wrappingAdd(v[j]);
+    }
+    return s;
+}
+
+fn slices(a: Slice<u64>, b: SliceMut<u64>, n: usize) -> u64 {
+    var s: u64 = 0;
+    for (j in 0..n) {
+        if (a[j] % 2 == 1) {
+            b[j] = a[j] + b[j];
+        }
+        s = s.wrappingAdd(b[j]);
+    }
+    return s;
+}
+
+fn matrix(n: usize, len: usize) -> u64 {
+    var c = fill(len);
+    let b = fill(len);
+    for (i in 0..n) {
+        for (k in 0..n) {
+            let x = b[i * n + k];
+            for (j in 0..n) {
+                c[i * n + j] = c[i * n + j].wrappingAdd(x.wrappingMul(b[k * n + j]));
+            }
+        }
+    }
+    var s: u64 = 0;
+    for (i in 0..len) {
+        s = s.wrappingMul(31).wrappingAdd(c[i]);
+    }
+    return s;
+}
+
+fn array(n: usize) -> u64 {
+    var a = [0u64; 8];
+    for (j in 0..n) {
+        a[j] = j as u64 + 5;
+    }
+    var s: u64 = 0;
+    for (j in 0..8) {
+        s = s * 3 + a[j];
+    }
+    return s;
+}
+
+fn main() {
+    let n = arg(1, 16) as usize;
+    let none = arg(2, 0) as usize;
+    let big = arg(3, 4294967296) as usize;
+    var v = fill(n);
+    let w = fill(n);
+    Console.writeLine(plain(v, n));
+    Console.writeLine(plain(v, none));
+    Console.writeLine(based(v, 2, 3, 5));
+    Console.writeLine(based(v, big, big, none)); // the base would overflow, but the loop does not run
+    Console.writeLine(shifted(mut v, none, n - 1));
+    Console.writeLine(fixed(v, 5, 4));
+    Console.writeLine(fixed(v, 99, none)); // the index is past the end, but the loop does not run
+    Console.writeLine(broken(v, 3, 100));  // the bound is past the end, but the loop leaves first
+    Console.writeLine(slices(w[..], borrow mut v[..], n));
+    Console.writeLine(matrix(4, n));
+    Console.writeLine(array(8));
+}
+// expect-stdout: 376
+// expect-stdout: 0
+// expect-stdout: 125
+// expect-stdout: 0
+// expect-stdout: 390
+// expect-stdout: 86
+// expect-stdout: 0
+// expect-stdout: 24
+// expect-stdout: 612
+// expect-stdout: 8321886332060957672
+// expect-stdout: 18036

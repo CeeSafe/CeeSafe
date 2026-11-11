@@ -1,0 +1,27 @@
+// Loop versioning (docs/proposals/loop-versioning.md).
+// The base of an index overflows: the guard's own arithmetic does not panic, the checked copy does, at the
+// multiplication.
+fn fill(n: usize) -> Vector<u64> {
+    var v = Vector<u64>.create();
+    for (i in 0..n) {
+        v.push(i as u64 * 3 + 1)!;
+    }
+    return v;
+}
+
+fn factor() -> usize => match (Process.argument(1)) {
+    Some(_) => 0,
+    null => 4294967296,
+};
+
+fn main() {
+    let v = fill(16);
+    let a = factor();
+    Console.writeLine("before");
+    var s: u64 = 0;
+    for (j in 0..4) {
+        s = s.wrappingAdd(v[a * a + j]); // expect-panic: integer overflow
+    }
+    Console.writeLine(s);
+}
+// expect-stdout: before

@@ -8,10 +8,10 @@
 // the NIR sees a program that always takes the checked loop; the C backend writes the real test in its place.
 
 /// A guard's program, as triples (kind, a, b), run on a stack of unsigned values.
-fn guardPush() -> u32 => 0; // a: an operand to push
-fn guardAdd() -> u32 => 1; // pop two, push their sum; the guard fails if it overflows
-fn guardMul() -> u32 => 2; // pop two, push their product; the guard fails if it overflows
-fn guardSpan() -> u32 => 3; // pop the base: base + (bound − 1) must not overflow and be below the length
+fn guardPush() -> u32 => 0;  // a: an operand to push
+fn guardAdd() -> u32 => 1;   // pop two, push their sum; the guard fails if it overflows
+fn guardMul() -> u32 => 2;   // pop two, push their product; the guard fails if it overflows
+fn guardSpan() -> u32 => 3;  // pop the base: base + (bound − 1) must not overflow and be below the length
 fn guardWhole() -> u32 => 4; // the index is the counter itself: bound must be at most the length
 fn guardFixed() -> u32 => 5; // pop an index that does not change in the loop: it must be below the length
 
@@ -537,7 +537,17 @@ fn planLoop(
                     }
                     let programMark = plan.program.length;
                     let overflowMark = plan.overflow.length;
-                    let form = resolveIndex(n, flow, shape, index, inBlock, at, 0, mut plan.program, mut plan.overflow)?;
+                    let form = resolveIndex(
+                        n,
+                        flow,
+                        shape,
+                        index,
+                        inBlock,
+                        at,
+                        0,
+                        mut plan.program,
+                        mut plan.overflow,
+                    )?;
                     if (form == 0) {
                         truncateU32s(mut plan.program, programMark);
                         truncateU32s(mut plan.overflow, overflowMark);
@@ -746,7 +756,11 @@ fn copyTarget(flow: borrow ControlFlow, plan: borrow LoopPlan, copyIds: borrow V
 }
 
 /// Versions the program's loops; the number of loops versioned.
-fn versionLoops(c: borrow Checker, n: borrow mut NirProgram, results: borrow mut CheckResults) -> Result<u32, AllocError> {
+fn versionLoops(
+    c: borrow Checker,
+    n: borrow mut NirProgram,
+    results: borrow mut CheckResults,
+) -> Result<u32, AllocError> {
     var versioned: u32 = 0;
     let count = n.functions.length;
     for (f in 0..count) {

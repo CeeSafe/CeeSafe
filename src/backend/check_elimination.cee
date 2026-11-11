@@ -264,9 +264,9 @@ fn maxFacts() -> usize => 128;
 
 /// The checks proved not to fail (the reference's result sets), by statement and rvalue.
 struct CheckResults {
-    removed: Vector<bool>;    // by statement: a BoundsCheck that cannot fail
-    noOverflow: Vector<bool>; // by rvalue: a checked + - * or negation that cannot overflow
-    ascii: Vector<bool>;      // by statement: a RangeCheck of ASCII text, whose boundary check is not needed
+    removed: Vector<bool>;     // by statement: a BoundsCheck that cannot fail
+    noOverflow: Vector<bool>;  // by rvalue: a checked + - * or negation that cannot overflow
+    ascii: Vector<bool>;       // by statement: a RangeCheck of ASCII text, whose boundary check is not needed
     guards: Vector<LoopGuard>; // the guards of versioned loops (loop_versioning.cee)
 }
 

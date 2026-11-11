@@ -1,7 +1,7 @@
 # ADR 0097 — A dependency's interface named in an `impl`
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: the qualified form is accepted, in a patch
-  release. **Implemented** (§6). Raised by the port of two tsrs crates
+  release. **Implemented** (§6); released with ceesafec 0.35.0. Raised by the port of two tsrs crates
   (`~/dev/CeeSafeApps/bun/analysis/trials/tsrs/REPORT.md` §4, gap 2).
 - Scope: `spec/type-system.md` §2, `spec/diagnostics.md` (N0315), the reference implementation's `PackageNames`,
   ceesafec's `src/check/packages.cee`. No grammar change.

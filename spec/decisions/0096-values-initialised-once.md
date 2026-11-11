@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: both types, the names `OnceCell` and `OnceLock`, `OnceLock<T>.constant()` for
   statics, no kernel variant now. **Implemented, with two differences** (§6): `tryInit` in place of `getOrTryInit`,
-  and no `constant()` yet. Raised by the port of two tsrs crates
+  and no `constant()` yet. Released with ceesafec 0.35.0. Raised by the port of two tsrs crates
   (`~/dev/CeeSafeApps/bun/analysis/trials/tsrs/REPORT.md` §4, gap 1).
 - Scope: `lib/core/cells.cee`, `lib/std/sync.cee`, `spec/type-system.md` §38 and §41, the guide (`threads.md`,
   `builtins.md`, `coming-from/rust.md`). No change to the checker, the emitter or the grammar.

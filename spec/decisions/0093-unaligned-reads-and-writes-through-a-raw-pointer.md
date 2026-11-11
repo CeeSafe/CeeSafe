@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: done at low
   priority, with the names `readUnaligned` and `writeUnaligned`. Deferred after 0.32.0 and taken up again on
-  2026-11-11 ("implement all three"). **Implemented** (§6). Raised by the Bun port's timing of wyhash against Rust
+  2026-11-11 ("implement all three"). **Implemented** (§6); released with ceesafec 0.35.0. Raised by the Bun port's timing of wyhash against Rust
   (`~/dev/CeeSafeApps/bun/analysis/trials/wyhash/REPORT.md` §4, gap 2).
 - Scope: `spec/unsafe.md` §1 and its table of requirements, `spec/type-system.md` §27.3, the checker's pointer
   methods, the C emitter, the interpreter. No library or runtime change.

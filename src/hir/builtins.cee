@@ -157,6 +157,17 @@ fn bfDebugAssert() -> u32 => 133;
 /// `HashKey` or `OrderKey` over a fieldless-enum field; NIR lowers it to the place's discriminant.
 fn bfVariantIndex() -> u32 => 134;
 
+/// `v.setLength(n)` (ADR 0090 §2.2): the length, without touching the elements; `n <= capacity` is checked.
+fn bfVectorSetLength() -> u32 => 135;
+
+/// The libraries only, for lib/core's VectorRaw and VectorForeign (ADR 0090): the vector becomes the empty one without its buffer being freed or its
+/// elements dropped; `(v, foreign)`, where `foreign` takes the block out of the report's `live`.
+fn bfVectorRelease() -> u32 => 136;
+
+/// The libraries only (ADR 0090): an empty vector takes a buffer; `(v, pointer, length, capacity, foreign)`,
+/// where `foreign` adds the block to the report's `live`.
+fn bfVectorAdopt() -> u32 => 137;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
 
@@ -297,6 +308,9 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     132 => "FileOpenRegular",
     133 => "DebugAssert",
     134 => "VariantIndex",
+    135 => "VectorSetLength",
+    136 => "VectorRelease",
+    137 => "VectorAdopt",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

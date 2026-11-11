@@ -151,6 +151,12 @@ public interface Allocator {
     failed, but not in `live`: when there were any, a second line, `ceesafe alloc: foreign held=<k>`, gives the blocks
     C still holds, and no tool reads it as a leak. `CEE_ALLOC_FOREIGN_INIT` (ADR 0061), for a C library's one-time
     initialisation, is neither counted in `attempts` nor failed; its blocks are in `foreign held`.
+  - A vector's buffer that changes sides (ADR 0090, `type-system.md` §23.3): `Vector.intoForeign` takes the block out
+    of `live`, and `Vector.fromForeign` adds it, so `live` stays the blocks CeeSafe must still free. Neither is an
+    attempt: they are not numbered, and never failed. When either was used, a last line,
+    `ceesafe alloc: given=<k> taken=<m>`, counts them, and no tool reads it as a leak. The interpreter counts the
+    same way. `Vector.intoRaw` changes nothing: its block stays in `live` until a vector made by `Vector.fromRaw` is
+    dropped.
   - The test runner's sweep uses both (`testing.md`).
 
 ### 3.3 Arenas (regions)

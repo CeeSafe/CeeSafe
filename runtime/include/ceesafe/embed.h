@@ -50,7 +50,15 @@ extern "C" {
    block that is not makes the runtime panic, naming the function. NULL on failure. The functions are called from any
    thread, CeeSafe's or the host's, at once, are never given a size of 0, and must stay valid, with the context, until
    the process exits. Each side frees what it allocated through its own code: a block CeeSafe hands out comes back
-   through an export, not through this free, even when both sides use one heap. */
+   through an export, not through this free, even when both sides use one heap.
+
+   The exception is a vector's buffer that changes sides (ADR 0090 §2.3): one CeeSafe gives up with
+   Vector.intoForeign, which the host then frees or reallocates with the functions these call, or one of this
+   allocator's blocks that the host gives up and CeeSafe takes with Vector.fromForeign. A given block holds
+   capacity × size(T) bytes, at least 1, and is aligned as above when CeeSafe allocated or grew it. A taken block need
+   only be aligned for its elements, so a host that lets CeeSafe take blocks owes one thing more: realloc, given any
+   block of this allocator, also one aligned below 16, returns a block aligned as above. Without an allocator here,
+   both sides use the C library's malloc, realloc and free. */
 typedef struct ceesafe_allocator {
     void *(*alloc)(void *context, size_t size);                 /* malloc's contract */
     void *(*alloc_zeroed)(void *context, size_t size);          /* calloc(1, size)'s */

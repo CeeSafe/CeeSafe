@@ -175,6 +175,9 @@ hi
 | `b.readBE<T>(at)`, `b.readLE<T>(at)` | `T`, an integer from bytes, big- or little-endian |
 | `b.writeBE(at, x)`, `b.writeLE(at, x)` | into a `SliceMut<u8>` (or a mutable `Vector<u8>`) |
 | `v.pushBE(x)`, `v.pushLE(x)` | `Result<void, AllocError>`: `x`'s bytes appended to a `Vector<u8>` |
+| `Vector.intoRaw(v)`, `Vector.fromRaw(p, n, c)` | `VectorParts<T>` (`pointer`, `length`, `capacity`), nothing freed; a vector again, its type written or expected. `fromRaw` is unsafe |
+| `v.setLength(n)` | unsafe: the length, over elements written through `v.viewMut().ptr`; panics above the capacity |
+| `Vector.intoForeign(v)`, `Vector.fromForeign(p, n, c)` | unsafe: a buffer of Copy values a host adopts, or gives up ([Unsafe code and C](unsafe-and-c.md#buffers-that-change-sides)) |
 
 Byte order works on fixed-width integers (`u8` to `u64`, `i8` to `i64`); the value's type gives the width, so a
 literal needs a suffix (`v.pushBE(5u32)`). A read or write past the end panics at the call, and writes nothing.

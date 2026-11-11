@@ -47,6 +47,9 @@
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
 - [struct VectorEditing](#struct-vectorediting)
+- [struct VectorParts](#struct-vectorparts)
+- [struct VectorRaw](#struct-vectorraw)
+- [struct VectorForeign](#struct-vectorforeign)
 - [struct TextHalves](#struct-texthalves)
 - [struct ByteHalves](#struct-bytehalves)
 - [struct TextSplit](#struct-textsplit)
@@ -2614,6 +2617,114 @@ public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize
 ```
 
 `swapRemove` for a vector of `FailingAllocator`.
+
+## struct VectorParts
+
+```ceesafe
+public struct VectorParts<T> {
+    public pointer: *mut T;
+    public length: usize;
+    public capacity: usize;
+}
+```
+
+What a vector is made of (ADR 0090 §2.1, type-system.md §23.3): `pointer` is null when `capacity` is 0.
+
+## struct VectorRaw
+
+```ceesafe
+public struct VectorRaw<T>
+```
+
+`Vector.intoRaw` and `Vector.fromRaw` (ADR 0090, type-system.md §23.3). `releaseBuffer` and `adoptBuffer` are the
+compiler's, for the libraries alone: the first makes a vector the empty one without freeing its buffer or dropping
+its elements, the second gives an empty vector a buffer; their last argument moves the block out of, or into, the
+allocation report's `live`. The `…Failing` functions are for a vector of `FailingAllocator`.
+
+### VectorRaw.intoRaw
+
+```ceesafe
+public fn intoRaw(v: Vector<T>) -> VectorParts<T>
+```
+
+`Vector.intoRaw(v)`: the caller owns the buffer and its elements.
+
+### VectorRaw.fromRaw
+
+```ceesafe
+public unsafe fn fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
+```
+
+`Vector.fromRaw(pointer, length, capacity)`. A capacity of 0 gives the empty vector.
+Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+
+### VectorRaw.intoRawFailing
+
+```ceesafe
+public fn intoRawFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>
+```
+
+`Vector.intoRaw(v)` for a vector of `FailingAllocator`: the caller owns the buffer and its elements.
+
+### VectorRaw.fromRawFailing
+
+```ceesafe
+public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, FailingAllocator>
+```
+
+`Vector.fromRaw(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
+Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+
+## struct VectorForeign
+
+```ceesafe
+public struct VectorForeign<T: Copy>
+```
+
+`Vector.intoForeign` and `Vector.fromForeign` (ADR 0090 §2.3, type-system.md §23.3): a buffer of plain values that
+changes sides in a host program. The element type is Copy, also when a program names this struct itself.
+
+### VectorForeign.intoForeign
+
+```ceesafe
+public unsafe fn intoForeign(v: Vector<T>) -> VectorParts<T>
+```
+
+`Vector.intoForeign(v)`: the host owns the buffer; it leaves the report's `live`.
+Safety: the caller names the host that frees the block with the allocator both sides share (type-system.md
+§23.3).
+
+### VectorForeign.fromForeign
+
+```ceesafe
+public unsafe fn fromForeign(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
+```
+
+`Vector.fromForeign(pointer, length, capacity)`. A capacity of 0 gives the empty vector.
+Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
+
+### VectorForeign.intoForeignFailing
+
+```ceesafe
+public unsafe fn intoForeignFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>
+```
+
+`Vector.intoForeign(v)` for a vector of `FailingAllocator`: the host owns the buffer; it leaves the report's `live`.
+Safety: the caller names the host that frees the block with the allocator both sides share (type-system.md
+§23.3).
+
+### VectorForeign.fromForeignFailing
+
+```ceesafe
+public unsafe fn fromForeignFailing(
+    pointer: *mut T,
+    length: usize,
+    capacity: usize,
+) -> Vector<T, FailingAllocator>
+```
+
+`Vector.fromForeign(pointer, length, capacity)` for a vector of `FailingAllocator`. A capacity of 0 gives the empty vector.
+Safety: the caller's, as type-system.md §23.3 states it: the parts of one vector of this type, given once.
 
 ## struct TextHalves
 

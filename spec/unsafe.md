@@ -15,6 +15,9 @@ M8b). Later increments add MMIO accesses:
 - pointer arithmetic (`add`, `sub`, `offset`);
 - making references and slices from raw parts (`Ptr.toBorrow`, `Ptr.toBorrowMut`, `Slice.fromRaw`,
   `SliceMut.fromRaw`);
+- making a box or a vector from raw parts (`Box.fromRaw`, `Vector.fromRaw`), setting a vector's length over
+  elements written through a pointer (`v.setLength(n)`), and moving a vector's buffer to or from a host
+  (`Vector.intoForeign`, `Vector.fromForeign`): `type-system.md` §34.2 and §23.3;
 - calling an `unsafe fn`.
 
 Making, copying, comparing and casting pointers is safe (§27.2): a pointer that is never used

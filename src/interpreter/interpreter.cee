@@ -79,6 +79,8 @@ struct Interp {
     emptyVector: u64;
     attempts: u64;
     liveAllocations: u64;
+    givenAllocations: u64; // vector blocks a host adopted (ADR 0090): out of liveAllocations
+    takenAllocations: u64; // vector blocks taken from a host: in liveAllocations
     failingArmed: bool;
     failingLeft: u64;
     scratchChunk: u64;
@@ -1945,6 +1947,8 @@ fn newInterp(
         emptyVector: 0,
         attempts: 0,
         liveAllocations: 0,
+        givenAllocations: 0,
+        takenAllocations: 0,
         failingArmed: false,
         failingLeft: 0,
         scratchChunk: 0,

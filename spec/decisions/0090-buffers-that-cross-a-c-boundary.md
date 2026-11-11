@@ -1,6 +1,7 @@
 # ADR 0090 — Buffers that cross a C boundary: a vector's raw parts, its spare capacity, and blocks a host adopts
 
-- Status: **Accepted** by the owner, 2026-11-11 (every question of §6 answered as proposed). Not implemented.
+- Status: **Accepted** by the owner, 2026-11-11 (every question of §6 answered as proposed). Implemented on branch
+  `impl/0090` (§8).
   Proposed the same day and revised after two adversarial reviews (soundness; fit with `bun_zstd`), whose findings
   are in §7.
   Raised by the Bun port's second crate swap, `bun_zstd` (`~/dev/CeeSafeApps/bun/ROADMAP.md` §2,
@@ -131,7 +132,7 @@ fn decompressAppend(out: borrow mut Vector<u8>, src: Slice<u8>) -> Result<void, 
     let room = out.capacity - at;
     let to = unsafe { out.viewMut().ptr.add(at) };
     let written = unsafe { ZSTD_decompress(to as *mut void, room, src.ptr as *void, src.length) };
-    if (ZSTD_isError(written) != 0) {
+    if (unsafe { ZSTD_isError(written) } != 0) {
         return Err(ZstdError.DecompressionFailed);
     }
     unsafe { out.setLength(at + written); }
@@ -274,13 +275,13 @@ let out = if capacity == 0 { Vec::new() } else { unsafe { Vec::from_raw_parts(po
   report's `live` and `given`/`taken`; a `Vector<u8, FailingAllocator>` through both. The same under the
   interpreter, ASan and the fault sweep (no new allocation attempts: the sweep's count does not change).
 - **Corpus, check-fail:** `fromRaw`, `intoForeign`, `fromForeign` and `setLength` outside `unsafe` (N0280);
-  `fromRaw` without an expected type (N0205); `intoForeign` of a `Vector<String>` (N0259); a view live across
-  `setLength` (N0240).
+  `fromRaw` without an expected type (N0205); `intoForeign` of a `Vector<String>` (N0259); a loan live across
+  `setLength` (N0241).
 - **`embed_check`** (ADR 0088's host fixture, whose tagged allocator aborts on a block it did not allocate): an export
   returns a buffer with `intoForeign` and the host frees it with the hook's `free`; the host passes a block it
   allocated, the export grows it past its capacity and returns it; the same with an 8-aligned block of 8 bytes,
   with a hook whose `realloc` meets rule 4, and with one that grows in place, which must panic with kind 17; with
-  the report on, `live=0` and `given=1 taken=1`; all of it without a hook, where both sides use `malloc`. A
+  the report on, `live=0` and the `given`/`taken` line; all of it without a hook, where both sides use `malloc`. A
   deliberate wrong case, the host freeing an `intoRaw` block, must show `live=1`.
 - **CeeBun:** `bun_zstd` swapped in the trial clone; Bun's zstd, fetch and archive tests in a release build and in a
   debug + ASAN build, where a block freed by the wrong allocator is an ASAN report.
@@ -323,3 +324,36 @@ Two adversarial reviewers read the first draft. Neither found a blocker. What ch
     `mi_realloc_aligned(p, n, 16)` moves an 8-aligned block; `Mimalloc::dealloc` ignores the layout; nothing in Bun
     calls `mi_expand` or relies on `mi_usable_size` for a global `Vec`; `reserve` and `withCapacity` return a
     `Result`, so the `try_reserve` paths port.
+
+## 8. Implementation notes (2026-11-11)
+
+On branch `impl/0090`, rebased onto 0.30.0 (ADR 0089), for 0.31.0.
+
+- **The four functions are lib/core's**, `VectorRaw<T>` (`intoRaw`, `fromRaw`) and `VectorForeign<T: Copy>`
+  (`intoForeign`, `fromForeign`), each with a `…Failing` copy for a vector of `FailingAllocator`, as `VectorEditing`
+  has. The checker (`checkVectorRaw`) finds the vector type, asks for `unsafe` and for a Copy element, and calls them.
+  They are written over two built-ins that only the libraries may call (`releaseBuffer`, `adoptBuffer`); a third,
+  `setLength`, is the program's. A reinterpretation of the vector as its parts in CeeSafe was not possible: the
+  generated C must be right under strict aliasing (c-backend.md §1).
+- **`setLength`'s check** is emitted with the built-in (`cee_check_index(n, cap + 1, site)` in C, a panic at the call
+  in the interpreter), not as a NIR bounds check, so no pass removes it.
+- **The pointer and its loan.** In generic code, a pointer taken from a vector's view keeps the vector borrowed while
+  it is used; with a concrete element type it does not. lib/core's `intoRaw` therefore reads the address as a `usize`
+  before it gives the buffer up. §2.2's order (write, then `setLength`) is unaffected. The difference between the two
+  cases is older than this ADR and is not changed here; type-system.md §23.3 states it.
+- **The accounting:** `ceesafe_alloc_given` and `ceesafe_alloc_taken` in the runtime, two counters in the
+  interpreter, and the line `ceesafe alloc: given=<k> taken=<m>` in both. Mixing the pairs (a contract breach in
+  `unsafe`) wraps `live` in both, as a double free of a counted block always has.
+- **Review.** Two adversarial reviewers read the change (soundness; the ADR and the documentation against the
+  behaviour). Neither found a way from safe code to memory unsafety or to a wrong report. Fixed: the Copy rule could
+  be bypassed in `unsafe` by naming lib/core's struct (the Foreign functions moved to a struct with the bound, N0268);
+  type arguments on an `into` call were ignored (now N0205 when they are not the argument's type); the interpreter
+  stopped with its own overflow panic when the pairs were mixed; the spec's sentence on the pointer's loan was wrong
+  for concrete element types; `diagnostics.md`, the guide's member table (which the API lookup reads) and three
+  messages. Tests added for what the reviewers found untested: `setLength` at exactly the capacity and two-phase, a
+  vector grown after `fromRaw`, a round trip in generic code, the interpreter's report, a block given back unmoved,
+  and a dangling pointer at capacity 0.
+- **Tests:** corpus `run-pass/vector-raw-parts`, `run-fail/vector-set-length-above-capacity`,
+  `check-fail/vector-raw-parts` and `vector-set-length-loan`; `embed_check`'s adoption cases (the tagged hook, no
+  hook, under AddressSanitizer, an 8-aligned block moved and one grown in place) and the interpreter's report.
+- **Not done here:** `bun_zstd` in the trial clone (§5's last line) is CeeBun's next step.

@@ -3763,7 +3763,7 @@ fn lowerBuiltinCall(
     }
     if (function == bfVectorPush() || function == bfStringAppend() || function == bfStringAppendNumber() ||
         function == bfSlotMapInsert() || function == bfVectorTruncate() || function == bfVectorExtend() ||
-        function == bfVectorReserve()) {
+        function == bfVectorReserve() || function == bfVectorSetLength() || function == bfVectorRelease()) {
         // B5, as for a `borrow mut this` method: the receiver's loan starts after the argument (§23.1).
         let hoisted103 = c.hir.at(arguments, 1);
         let argument = lowerOperand(c, n, b, hoisted103)?;

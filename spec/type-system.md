@@ -162,6 +162,12 @@ literal adapts:
 Two more take one argument the same way and cannot overflow (ADR 0063): `x.min(y)` and `x.max(y)`, of result `T`,
 the smaller and the larger operand (`x` when they are equal).
 
+`x.mulHigh(y)` (ADR 0092) takes one argument the same way and cannot overflow either: the upper half of the full
+product, of result `T`. For a `T` of `n` bits it is floor(`x` × `y` / 2^`n`), computed exactly; on a signed type the
+product is signed and the result rounds towards negative infinity. `x.wrappingMul(y)` is the lower half, so the two
+are the whole product. The generated C is one multiply instruction where the target has one: a 128-bit product on GCC
+and clang, `__umulh` on MSVC, and four 32-bit products elsewhere and in the interpreter.
+
 On signed types (ADR 0063 §2.5), `x.abs()` is the magnitude as a `T`. It panics at `T`'s minimum, whose magnitude
 `T` cannot hold, exactly as `-x` does, reported at the call. `x.unsignedAbs()` is the magnitude in the unsigned type
 of the same width and never panics. Neither exists on unsigned types (N0234).

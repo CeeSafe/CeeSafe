@@ -229,7 +229,7 @@ fn appendNumberDidYouMean(
     wanted: u32,
 ) -> Result<void, AllocError> {
     let integers =
-        "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul min max abs unsignedAbs";
+        "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul mulHigh min max abs unsignedAbs";
     let floats = "bits sqrt abs floor ceil min max";
     let list = (if (isFloat) floats else integers).bytes();
     let name = c.name(wanted);

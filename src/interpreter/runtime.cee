@@ -1480,6 +1480,14 @@ fn builtin(
         let keepLeft = if (b == bfIntMin()) order <= 0 else order >= 0;
         return Ok(fromInteger(c, if (keepLeft) x else y, t)?);
     }
+    if (b == bfIntMulHigh()) {
+        let t = builtinArgumentType(n, arguments, 0);
+        let left = argument(it, c, n, frame, arguments, 0)?;
+        let right = argument(it, c, n, frame, arguments, 1)?;
+        let x = integerOf(c, left, t)?;
+        let y = integerOf(c, right, t)?;
+        return Ok(fromInteger(c, mulHigh(x, y, 8 * typeSize(c, t)?), t)?);
+    }
     if (b >= bfWrappingAdd() && b <= bfSaturatingMul()) {
         let t = builtinArgumentType(n, arguments, 0);
         let left = argument(it, c, n, frame, arguments, 0)?;
@@ -1556,6 +1564,32 @@ fn overflowMethod(
         above = !y.negative;
     }
     return fromInteger(c, if (above) intMax(c, t) else intMin(c, t), t);
+}
+
+/// `x.mulHigh(y)` (ADR 0092) for a type of `bits` bits: floor(x * y / 2^bits). The magnitudes' product is built from
+/// four 32-bit products, as 128 bits; a negative product rounds away from zero, which is the floor.
+fn mulHigh(x: IntValue, y: IntValue, bits: usize) -> IntValue {
+    let a = x.magnitude;
+    let b = y.magnitude;
+    let al = a & 0xFFFFFFFF;
+    let ah = a >> 32;
+    let bl = b & 0xFFFFFFFF;
+    let bh = b >> 32;
+    let ll = al * bl;
+    let lh = al * bh;
+    let hl = ah * bl;
+    let hh = ah * bh;
+    let mid = (ll >> 32) + (lh & 0xFFFFFFFF) + (hl & 0xFFFFFFFF);
+    let high = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+    let low = a.wrappingMul(b);
+    // The magnitudes are below 2^bits, so under 64 bits the product is below 2^64 and `high` is 0.
+    let quotient = if (bits == 64) high else low >> (bits as u64);
+    let remainder = if (bits == 64) low else low & (((1u64) << (bits as u64)) - 1);
+    if (x.negative == y.negative) {
+        return IntValue { negative: false, magnitude: quotient };
+    }
+    let magnitude = if (remainder != 0) quotient + 1 else quotient;
+    return IntValue { negative: magnitude != 0, magnitude: magnitude };
 }
 
 /// The result modulo 2^64 (the type's bytes keep the low bits).

@@ -1,7 +1,8 @@
 # ADR 0092 — The high half of a product: `x.mulHigh(y)`
 
 - Status: **Accepted** by the owner, 2026-11-11 ("I accept both ADRs"), every question as proposed: the name
-  `mulHigh`, signed types too, `usize` and `isize` at the target's width. Not implemented yet. Raised by the Bun port's timing of wyhash against Rust
+  `mulHigh`, signed types too, `usize` and `isize` at the target's width. Implemented on branch `impl/0092` (§7).
+  Raised by the Bun port's timing of wyhash against Rust
   (`~/dev/CeeSafeApps/bun/analysis/trials/wyhash/REPORT.md` §4, gap 1).
 - Scope: `spec/type-system.md` §6 (one integer method), the checker's integer methods, the C emitter and `rt.h` (one
   inline function per width), the interpreter. No library or runtime-library change.
@@ -107,3 +108,46 @@ The four 32-bit products, for every width, so native and interpreted results agr
 1. **The name `mulHigh`.** It follows `wrappingMul`, `checkedMul`. **Proposed: yes.**
 2. **Signed types too.** Division by a constant uses the signed form. **Proposed: yes.**
 3. **`usize` and `isize`**, at the target's width. **Proposed: yes.**
+
+## 7. Implementation notes (2026-11-11)
+
+On branch `impl/0092`, on 0.31.0.
+
+- **The built-in** is `IntMulHigh` (138), checked and emitted beside `min` and `max`: one argument of the receiver's
+  type, the receiver's type as the result, a reserved method name on integer types (N0228).
+- **`rt.h`:** `cee_mul_high_<type>` for the eight fixed widths; `usize` and `isize` use the 64-bit ones.
+  - Below 64 bits, unsigned: the product in `uint32_t` or `uint64_t`, shifted.
+  - 64 bits, unsigned: `unsigned __int128` where `__SIZEOF_INT128__` is defined; `__umulh` on MSVC for x64 and
+    ARM64; else the four 32-bit products.
+  - Signed: through the unsigned twin, less `b` where `a` is negative and less `a` where `b` is, modulo 2^bits, so
+    no signed value is shifted. With `__int128` the 64-bit signed case is the signed product shifted, which GCC and
+    clang define as arithmetic. MSVC's `__mulh` is not used: the correction is two instructions and has one form on
+    every compiler.
+- **The interpreter** multiplies the magnitudes into 128 bits from four 32-bit products and rounds a negative product
+  away from zero.
+
+### 7.1 Tests
+
+- **Corpus:** `run-pass/mul-high.cee` (105 corner products over the ten integer types, with values computed
+  independently; wyhash's mix; 2,000 random pairs of `u64`, `i64` and `u32` against the product built from halves),
+  native and interpreted; `check-fail/mul-high.cee` (the argument count and type, the result type, a float and a
+  `bool` receiver, the reserved name).
+- **The C paths,** each running the run-pass file with the expected output:
+  - Apple clang 21, arm64 (`__int128`): `u64` is one `umulh`, `i64` one `smulh`;
+  - the same with `-U__SIZEOF_INT128__`: the four 32-bit products and the signed correction;
+  - the same under `-fsanitize=undefined`: no report;
+  - MSVC 14.5x for ARM64 on the Windows 11 VM (`cl /std:c11 /O2 /W3`): no warning, `__umulh`, `umulh` in the object.
+- **Not run:** gcc, and MSVC for x64.
+
+### 7.2 The evidence rerun
+
+The wyhash port of §1 with `a.mulHigh(b)` in place of the hand-written function, built with Apple clang 21, against
+Bun's Rust (nanoseconds per call, M1):
+
+| Input | Rust | CeeSafe, hand-written, Apple clang 21 | CeeSafe, `mulHigh`, Apple clang 21 |
+|---|---:|---:|---:|
+| 16 bytes | 2.72 | 7.44 | 3.05 |
+| 1 KB | 37.64 | 149.21 | 37.53 |
+| 1 MB | 41,556 | 143,618 | 41,689 |
+
+The middle column is §1's run; the other two are one run together. The dependence on the C compiler is gone.

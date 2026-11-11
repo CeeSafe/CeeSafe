@@ -686,7 +686,8 @@ fn isIntegerMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "wrappingAdd") || sameText(name, "wrappingSub") || sameText(name, "wrappingMul") ||
         sameText(name, "checkedAdd") || sameText(name, "checkedSub") || sameText(name, "checkedMul") ||
         sameText(name, "saturatingAdd") || sameText(name, "saturatingSub") || sameText(name, "saturatingMul") ||
-        sameText(name, "min") || sameText(name, "max") || sameText(name, "abs") || sameText(name, "unsignedAbs");
+        sameText(name, "mulHigh") || sameText(name, "min") || sameText(name, "max") || sameText(name, "abs") ||
+        sameText(name, "unsignedAbs");
 
 fn isFloatMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "bits") || sameText(name, "sqrt") || sameText(name, "abs") || sameText(name, "floor") ||

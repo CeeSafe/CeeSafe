@@ -1,7 +1,7 @@
 # ADR 0098 — A plain `static` of scalar data is C's `const` object
 
-- Status: **Accepted** by the owner, 2026-11-11 ("Go ahead with CeeSafe fix"), and implemented on branch `impl/0098`,
-  on 0.36.0. Raised by CosmoOS's roadmap 1.3 (K1): the list of system calls a filter may never deny is C's `static
+- Status: **Accepted** by the owner, 2026-11-11 ("Go ahead with CeeSafe fix"), implemented on branch `impl/0098`,
+  on 0.36.0, and released in ceesafec 0.37.0. Raised by CosmoOS's roadmap 1.3 (K1): the list of system calls a filter may never deny is C's `static
   const uint16_t native_always_allowed[]`, in read-only data, and written in CeeSafe it was emitted writable.
 - Scope: the C emitter's statics (`src/backend/c_skeleton.cee`); `spec/type-system.md` §39.2 and §39.6. No change to
   what the checker accepts, to the runtime or to the library.

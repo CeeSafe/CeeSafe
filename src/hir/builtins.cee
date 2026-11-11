@@ -168,6 +168,9 @@ fn bfVectorRelease() -> u32 => 136;
 /// where `foreign` adds the block to the report's `live`.
 fn bfVectorAdopt() -> u32 => 137;
 
+/// `x.mulHigh(y)` (ADR 0092): the upper half of the full product, of the receiver's type; never overflows.
+fn bfIntMulHigh() -> u32 => 138;
+
 /// Whether `b` is one of ADR 0075 §2.1's file builtins.
 fn isDurableFileBuiltin(b: u32) -> bool => b >= bfFileOpenReadWrite() && b <= bfFileOpenRegular();
 
@@ -311,6 +314,7 @@ fn builtinFunctionName(index: u32) -> StringView => match (index) {
     135 => "VectorSetLength",
     136 => "VectorRelease",
     137 => "VectorAdopt",
+    138 => "IntMulHigh",
     1000 => "AsyncPark",
     1001 => "AsyncSpawn",
     1002 => "AsyncScopeWait",

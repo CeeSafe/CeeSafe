@@ -1226,7 +1226,8 @@ fn emitBuiltin(
         return e.emit();
     }
     if (b == bfWrappingAdd() || b == bfWrappingSub() || b == bfWrappingMul() || b == bfSaturatingAdd() ||
-        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax()) {
+        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax() ||
+        b == bfIntMulHigh()) {
         var call = Vector<u8>.create();
         appendArithmeticCall(e, c, n, sources, f, mut call, r, "")?;
         e.t("    (void)")?;
@@ -1612,6 +1613,7 @@ fn appendArithmeticCall(
             else if (b == bfSaturatingAdd()) "cee_saturating_add_"
             else if (b == bfSaturatingSub()) "cee_saturating_sub_"
             else if (b == bfIntMin()) "cee_min_"
+            else if (b == bfIntMulHigh()) "cee_mul_high_"
             else if (b == bfIntMax()) "cee_max_"
             else "cee_saturating_mul_";
     let left = operandText(e, c, n, sources, f, builtinArgument(n, r, 0))?;
@@ -2394,7 +2396,8 @@ fn appendBuiltinRvalue(
         return appendBuiltinCall(e, c, n, sources, f, out, name.view(), arguments);
     }
     if (b == bfWrappingAdd() || b == bfWrappingSub() || b == bfWrappingMul() || b == bfSaturatingAdd() ||
-        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax()) {
+        b == bfSaturatingSub() || b == bfSaturatingMul() || b == bfIntMin() || b == bfIntMax() ||
+        b == bfIntMulHigh()) {
         return appendArithmeticCall(e, c, n, sources, f, out, r, "");
     }
     if (b >= bfIntRotateLeft() && b <= bfIntByteSwap()) {

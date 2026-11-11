@@ -1,0 +1,22 @@
+// `x.mulHigh(y)` (ADR 0092, type-system.md §6): its argument, its receiver and its reserved name.
+
+interface High { fn mulHigh(borrow this, other: u32) -> u32; }
+
+impl High for u32 {
+    fn mulHigh(borrow this, other: u32) -> u32 => other; // error[N0228]
+}
+
+fn main() {
+    let a: u64 = 1;
+    let b: u32 = 2;
+    a.mulHigh(); // error[N0209]
+    a.mulHigh(1, 2); // error[N0209]
+    a.mulHigh(b); // error[N0205]
+    a.mulHigh(true); // error[N0205]
+    let c: u32 = a.mulHigh(3); // error[N0205]
+    let d: u64 = a.mulHigh(3);
+    let f: f64 = 1.5;
+    f.mulHigh(2.0); // error[N0234]
+    let g = true;
+    g.mulHigh(1); // error[N0234]
+}

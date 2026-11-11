@@ -383,6 +383,9 @@ fn integerMethod(name: Slice<u8>) -> u32 {
     if (sameText(name, "saturatingMul")) {
         return bfSaturatingMul();
     }
+    if (sameText(name, "mulHigh")) {
+        return bfIntMulHigh();
+    }
     if (sameText(name, "min")) {
         return bfIntMin();
     }

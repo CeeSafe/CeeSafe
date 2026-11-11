@@ -413,6 +413,48 @@ CEE_MINMAX(int16_t, i16)
 CEE_MINMAX(int32_t, i32)
 CEE_MINMAX(int64_t, i64)
 
+/* mulHigh (ADR 0092, type-system.md §6): the upper half of the full product, floor(a * b / 2^bits); never overflows.
+   Below 64 bits the product fits the next unsigned type that is no narrower than unsigned int. At 64 bits it is the
+   compiler's 128-bit product (GCC, clang), MSVC's intrinsic (x64, ARM64), or four 32-bit products. A signed type
+   goes through its unsigned twin: the signed high half is the unsigned one less b where a is negative and less a
+   where b is negative, modulo 2^bits. With a 128-bit type the signed 64-bit case is the signed product, shifted
+   (GCC and clang shift a negative value arithmetically). */
+#define CEE_MULHIGH_NARROW(T, S, W, BITS)                                                              \
+    static inline T cee_mul_high_##S(T a, T b) { return (T)(((W)a * (W)b) >> (BITS)); }
+CEE_MULHIGH_NARROW(uint8_t, u8, uint32_t, 8)
+CEE_MULHIGH_NARROW(uint16_t, u16, uint32_t, 16)
+CEE_MULHIGH_NARROW(uint32_t, u32, uint64_t, 32)
+#if defined(__SIZEOF_INT128__)
+static inline uint64_t cee_mul_high_u64(uint64_t a, uint64_t b) {
+    return (uint64_t)(((unsigned __int128)a * (unsigned __int128)b) >> 64);
+}
+#elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_ARM64))
+#include <intrin.h>
+static inline uint64_t cee_mul_high_u64(uint64_t a, uint64_t b) { return __umulh(a, b); }
+#else
+static inline uint64_t cee_mul_high_u64(uint64_t a, uint64_t b) {
+    uint64_t al = a & 0xFFFFFFFFu, ah = a >> 32, bl = b & 0xFFFFFFFFu, bh = b >> 32;
+    uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFu) + (hl & 0xFFFFFFFFu);
+    return hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+}
+#endif
+#define CEE_MULHIGH_SIGNED(T, S, U, US)                                                                \
+    static inline T cee_mul_high_##S(T a, T b) {                                                       \
+        U high = cee_mul_high_##US((U)a, (U)b);                                                        \
+        if (a < 0) high = cee_wrapping_sub_##US(high, (U)b);                                           \
+        if (b < 0) high = cee_wrapping_sub_##US(high, (U)a);                                           \
+        return cee_as_##S(high);                                                                       \
+    }
+CEE_MULHIGH_SIGNED(int8_t, i8, uint8_t, u8)
+CEE_MULHIGH_SIGNED(int16_t, i16, uint16_t, u16)
+CEE_MULHIGH_SIGNED(int32_t, i32, uint32_t, u32)
+#if defined(__SIZEOF_INT128__)
+static inline int64_t cee_mul_high_i64(int64_t a, int64_t b) { return (int64_t)(((__int128)a * (__int128)b) >> 64); }
+#else
+CEE_MULHIGH_SIGNED(int64_t, i64, uint64_t, u64)
+#endif
+
 /* unsignedAbs (ADR 0063 §2.5): the magnitude in the unsigned type of the same width, so the minimum fits. */
 #define CEE_UNSIGNED_ABS(T, S, U) \
     static inline U cee_unsigned_abs_##S(T a) { return a < 0 ? (U)((U)0 - (U)a) : (U)a; }

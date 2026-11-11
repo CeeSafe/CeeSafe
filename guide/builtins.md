@@ -258,6 +258,7 @@ Medium
 | `+ - * / %`, unary `-` | panic on overflow, and on dividing by zero |
 | `& \| ^ << >>` | unsigned types only; no `~` (use `x ^ 0xFFFFFFFF`) |
 | `x.wrappingAdd(y)`, `x.checkedAdd(y)`, `x.saturatingAdd(y)` | also `Sub`, `Mul`; `checked…` is a `T?` |
+| `x.mulHigh(y)` | every integer type: the upper half of the full product (`wrappingMul` is the lower); never overflows |
 | `x.min(y)`, `x.max(y)` | every integer type |
 | `x.abs()`, `x.unsignedAbs()` | signed types: `abs` panics at the minimum, `unsignedAbs` is the unsigned type of the width |
 | `x.rotateLeft(n)`, `x.rotateRight(n)`, `x.wrappingShl(n)`, `x.wrappingShr(n)` | unsigned types; `n: u32`, taken modulo the width |
@@ -406,6 +407,7 @@ fn numbers() {
     let a: u8 = 250;
     let s: u8 = a.wrappingSub(1);
     let m: u8? = a.checkedMul(2);
+    let high: u64 = (0xFFFF_FFFF_FFFF_FFFFu64).mulHigh(2);
     let x: i64 = -5;
     let u: u64 = x.unsignedAbs();
     let f: f64 = 2.0;

@@ -1,0 +1,105 @@
+// `p.readUnaligned()` and `p.writeUnaligned(v)` (ADR 0093, type-system.md §27.3): a Copy value read and written
+// through a raw pointer at every offset 0 to 7 of a byte buffer, in the machine's byte order, compared with the bytes.
+
+@repr(C)
+struct Header {
+    tag: u8;
+    length: u32;
+    checksum: u16;
+}
+
+/// The sum of `count` bytes at `from`, each weighted by its place, so a byte out of place shows.
+fn weigh(bytes: Slice<u8>, from: usize, count: usize) -> u64 {
+    var sum: u64 = 0;
+    for (i in 0..count) {
+        sum += (bytes[from + i] as u64) * ((i as u64) + 1);
+    }
+    return sum;
+}
+
+const OFFSETS: usize = 8;
+
+/// Safety: every pointer is into `buffer`, at most 7 + 16 bytes before the end of what it reads or writes, or is
+/// `target`'s address.
+fn main() {
+    var buffer = [0u8; 48];
+    for (i in 0..buffer.length) {
+        buffer[i] = truncate<u8>(i * 7 + 3);
+    }
+    let base = borrow mut buffer[0] as *mut u8;
+
+    // Integers: what readLE gives on a little-endian machine, at every offset.
+    var agree = 0;
+    for (offset in 0..OFFSETS) {
+        let p = unsafe { base.add(offset) };
+        if (unsafe { (p as *u16).readUnaligned() } == buffer[..].readLE<u16>(offset)) {
+            agree += 1;
+        }
+        if (unsafe { (p as *u32).readUnaligned() } == buffer[..].readLE<u32>(offset)) {
+            agree += 1;
+        }
+        if (unsafe { (p as *u64).readUnaligned() } == buffer[..].readLE<u64>(offset)) {
+            agree += 1;
+        }
+        if (unsafe { (p as *i64).readUnaligned() } == buffer[..].readLE<i64>(offset)) {
+            agree += 1;
+        }
+    }
+    Console.writeLine(agree);
+
+    // Written values read back, and only their own bytes change.
+    var kept = 0;
+    for (offset in 0..OFFSETS) {
+        let p = unsafe { base.add(16 + offset) };
+        let before = weigh(buffer[..], 0, 16 + offset) + weigh(buffer[..], 16 + offset + 8, 16);
+        unsafe { (p as *mut u64).writeUnaligned(0x1122334455667788 + (offset as u64)); }
+        if (unsafe { (p as *u64).readUnaligned() } == 0x1122334455667788 + (offset as u64) &&
+            buffer[..].readLE<u64>(16 + offset) == 0x1122334455667788 + (offset as u64) &&
+            weigh(buffer[..], 0, 16 + offset) + weigh(buffer[..], 16 + offset + 8, 16) == before) {
+            kept += 1;
+        }
+        unsafe { (p as *mut u16).writeUnaligned(0xBEEF); }
+        if (unsafe { (p as *u16).readUnaligned() } == 0xBEEF && buffer[16 + offset] == 0xEF) {
+            kept += 1;
+        }
+    }
+    Console.writeLine(kept);
+
+    // Floats, a raw pointer and a @repr(C) struct.
+    var others = 0;
+    var target: u32 = 77;
+    let address = borrow mut target as *mut u32;
+    for (offset in 0..OFFSETS) {
+        let p = unsafe { base.add(offset) };
+        unsafe { (p as *mut f32).writeUnaligned(1.5); }
+        if (unsafe { (p as *f32).readUnaligned() } == 1.5 && buffer[..].readLE<u32>(offset) == 0x3FC00000) {
+            others += 1;
+        }
+        unsafe { (p as *mut f64).writeUnaligned(-2.25); }
+        if (unsafe { (p as *f64).readUnaligned() } == -2.25) {
+            others += 1;
+        }
+        unsafe { (p as *mut *mut u32).writeUnaligned(address); }
+        let back = unsafe { (p as **mut u32).readUnaligned() };
+        if (back == address && unsafe { back.read() } == 77) {
+            others += 1;
+        }
+        unsafe {
+            (p as *mut Header).writeUnaligned(Header { tag: 9, length: 70000 + truncate<u32>(offset), checksum: 513 });
+        }
+        let header = unsafe { (p as *Header).readUnaligned() };
+        if (header.tag == 9 && header.length == 70000 + truncate<u32>(offset) && header.checksum == 513) {
+            others += 1;
+        }
+    }
+    Console.writeLine(others);
+
+    // Through a *mut T, a read works too.
+    let q = unsafe { base.add(1) } as *mut u32;
+    unsafe { q.writeUnaligned(0xA1B2C3D4); }
+    Console.writeLine(unsafe { q.readUnaligned() });
+}
+// expect-stdout: 32
+// expect-stdout: 16
+// expect-stdout: 32
+// expect-stdout: 2712847316

@@ -1,0 +1,21 @@
+// A program over the bindings cbind generates for fixture.h and other.h (tools/cbind_check.py): it uses a constant,
+// an enumerator, a struct's members, C data and C functions, and exits with a value only the right ones give.
+
+/// Safety: the C functions take what they are given here, and the box is a live C local.
+fn main() -> i32 {
+    var box: fx_box;
+    box.origin.x = FX_LIMIT;
+    box.color = FX_GREEN;
+    box.label[0] = 7;
+    box.type_ = 2;
+    var thing: other_thing;
+    thing.a = 4;
+    unsafe {
+        let picked = fx_pick(borrow mut box as *mut fx_box, box.notify, borrow fx_names[0] as **CChar);
+        let sum = fx_add(box.origin.x, fx_origin.y) + type_(fx_count) + other_get(borrow thing as *other_thing);
+        // 22 + 2, + 3 + 1, + 4, + 5 (FX_GREEN), + 7, + 2, + 2 * 3, - 5
+        return sum + truncate<i32>(picked as u32) + (box.label[0] as i32) + (box.type_ as i32)
+            + truncate<i32>(fx_twice(3))
+            + FX_NEGATIVE;
+    }
+}

@@ -1,0 +1,82 @@
+// `OnceLock<T>` (ADR 0096, type-system.md §38.3): `OnceCell` for values that threads share. Many threads ask one
+// cell at once: the initialiser runs once and every thread reads the same value. An initialiser may fill another
+// OnceLock.
+
+struct Shared {
+    first: OnceLock<u64>;
+    second: OnceLock<u64>;
+    runs: AtomicU64;
+}
+
+fn main() {
+    // Eight threads ask one cell; the initialiser is slow enough that they meet.
+    let shared = Arc<Shared>.create(Shared {
+        first: OnceLock<u64>.create(),
+        second: OnceLock<u64>.create(),
+        runs: AtomicU64.create(0),
+    })!;
+    var threads = Vector<Thread<u64>>.create();
+    for (t in 0..8u64) {
+        let mine = shared.clone();
+        threads.push(Thread.spawn(move () => {
+            var seen: u64 = 0;
+            for (k in 0..1000) {
+                let state = mine.get();
+                // The second cell's initialiser fills the first: one initialiser inside another.
+                let value = state.second.getOrInit(() => {
+                    state.runs.fetchAdd(1);
+                    let inner = state.first.getOrInit(() => {
+                        state.runs.fetchAdd(1);
+                        var sum: u64 = 0;
+                        for (i in 0..200000u64) {
+                            sum = sum.wrappingAdd(i * i);
+                        }
+                        return sum;
+                    });
+                    return inner + 1;
+                });
+                seen = value;
+            }
+            return seen;
+        })!)!;
+    }
+    var agree = 0;
+    var answer: u64 = 0;
+    while (threads.length > 0) {
+        let t = threads.pop()!;
+        let value = t.join();
+        if (answer == 0) {
+            answer = value;
+        }
+        if (value == answer) {
+            agree += 1;
+        }
+    }
+    Console.writeLine(agree);
+    Console.writeLine(shared.get().runs.load());
+    Console.writeLine(shared.get().second.get()! == shared.get().first.get()! + 1);
+
+    // The other members, as OnceCell's.
+    var lock = OnceLock<u32>.create();
+    Console.writeLine(lock.get() == null);
+    Console.writeLine(lock.set(3).isOk());
+    Console.writeLine(lock.set(4).isOk());
+    let failed = lock.tryInit<u32>(() => Err(1));
+    Console.writeLine(failed.isOk());
+    Console.writeLine(lock.take()!);
+    let refused = lock.tryInit<u32>(() => Err(2));
+    Console.writeLine(refused.isOk());
+    Console.writeLine(lock.getOrInit(() => 5));
+    Console.writeLine(lock.intoInner()!);
+}
+// expect-stdout: 8
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: 3
+// expect-stdout: false
+// expect-stdout: 5
+// expect-stdout: 5

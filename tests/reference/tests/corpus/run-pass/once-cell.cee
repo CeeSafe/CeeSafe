@@ -1,0 +1,135 @@
+// `OnceCell<T>` (ADR 0096, type-system.md §41.4): a value written at most once through a shared reference, then lent
+// as `borrow T`. `getOrInit` runs its initialiser once; `tryInit` leaves the cell empty after an `Err`; `set`
+// refuses a full cell; `take` and `getMut` need the cell exclusively; the value is dropped once.
+
+struct Loud {
+    id: u32;
+
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.id);
+    }
+}
+
+/// An index built on first use, as the port that asked for this had.
+struct Table {
+    values: Vector<u32>;
+    sum: OnceCell<u64>;
+
+    fn total(borrow this) -> u64 {
+        let sum = this.sum.getOrInit(() => {
+            Console.writeLine("summing");
+            var total: u64 = 0;
+            for (v in this.values.view()) {
+                total += v as u64;
+            }
+            return total;
+        });
+        return sum;
+    }
+}
+
+fn build(fail: bool) -> Result<Vector<u32>, u32> {
+    if (fail) {
+        return Err(41);
+    }
+    var made = Vector<u32>.create();
+    made.push(7)!;
+    made.push(8)!;
+    return Ok(made);
+}
+
+fn main() {
+    // getOrInit: once, and the same value from then on.
+    let cell = OnceCell<Vector<u32>>.create();
+    Console.writeLine(cell.get() == null);
+    var runs = 0;
+    for (i in 0..3) {
+        let v = cell.getOrInit(() => {
+            runs += 1;
+            var made = Vector<u32>.create();
+            made.push(7)!;
+            return made;
+        });
+        Console.writeLine(v[0]);
+    }
+    Console.writeLine(runs);
+    Console.writeLine(cell.get()!.length);
+
+    // A field filled from the struct that holds it.
+    var values = Vector<u32>.create();
+    values.push(1)!;
+    values.push(2)!;
+    values.push(3)!;
+    let table = Table { values: values, sum: OnceCell<u64>.create() };
+    Console.writeLine(table.total());
+    Console.writeLine(table.total());
+
+    // tryInit: an error leaves the cell empty; the next success fills it; a full cell is left alone.
+    let fallible = OnceCell<Vector<u32>>.create();
+    match (fallible.tryInit<u32>(() => build(true))) {
+        Ok() => { Console.writeLine("filled"); }
+        Err(code) => { Console.writeLine(code); }
+    }
+    Console.writeLine(fallible.get() == null);
+    fallible.tryInit<u32>(() => build(false))!;
+    fallible.tryInit<u32>(() => build(true))!;
+    Console.writeLine(fallible.get()!.length);
+
+    // set: an empty cell takes the value; a full one gives it back.
+    let number = OnceCell<u32>.create();
+    Console.writeLine(number.set(5).isOk());
+    match (number.set(6)) {
+        Ok() => { Console.writeLine("stored twice"); }
+        Err(back) => { Console.writeLine(back); }
+    }
+    Console.writeLine(number.getOrInit(() => 9));
+
+    // getMut and take, through an exclusive borrow; intoInner.
+    var owned = OnceCell<u32>.create();
+    Console.writeLine(owned.getMut() == null);
+    owned.set(10)!;
+    match (owned.getMut()) {
+        Some(value) => { value += 1; }
+        null => {}
+    }
+    Console.writeLine(owned.take()!);
+    Console.writeLine(owned.get() == null);
+    Console.writeLine(owned.getOrInit(() => 12));
+    Console.writeLine(owned.intoInner()!);
+
+    // Drops: a taken value is dropped by its taker, a kept one with the cell, each once.
+    var loud = OnceCell<Loud>.create();
+    loud.set(Loud { id: 1 }).isOk();
+    {
+        let taken = loud.take();
+        Console.writeLine("taken");
+    }
+    loud.getOrInit(() => Loud { id: 2 });
+    let empty = OnceCell<Loud>.create();
+    Console.writeLine("end");
+}
+// expect-stdout: true
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: summing
+// expect-stdout: 6
+// expect-stdout: 6
+// expect-stdout: 41
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: 6
+// expect-stdout: 5
+// expect-stdout: true
+// expect-stdout: 11
+// expect-stdout: true
+// expect-stdout: 12
+// expect-stdout: 12
+// expect-stdout: taken
+// expect-stdout: drop 1
+// expect-stdout: end
+// expect-stdout: drop 2

@@ -1,0 +1,11 @@
+// A OnceLock's initialiser may wait for another thread's, so an async fn cannot run one (ADR 0096; type-system.md
+// §40.1). `get` does not wait.
+async fn lazily(lock: borrow OnceLock<u32>) -> u32 {
+    let ready = lock.get();
+    return lock.getOrInit(() => 1); // error[N0295]
+}
+
+fn main() {
+    let lock = OnceLock<u32>.create();
+    Console.writeLine(Async.run(lazily(lock)));
+}

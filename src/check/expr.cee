@@ -69,7 +69,7 @@ fn foldsLiteralArithmetic(c: borrow Checker, e: u32) -> bool =>
 /// would panic every time it ran is N0217 here. The expression stays as it was written.
 fn literalArithmeticChecked(c: borrow mut Checker, value: u32) -> Result<u32, AllocError> {
     if (c.types.is(c.typeOf(value), TypeKind.Integer)) {
-        let _ = fold(c, value)?;
+        fold(c, value)?; // only for its diagnostics (the chain's compilers have no `let _`)
     }
     return Ok(value);
 }

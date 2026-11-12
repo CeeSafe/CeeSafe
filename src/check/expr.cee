@@ -127,7 +127,8 @@ fn checkExpr(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocE
             expected,
             TypeKind.Vector,
         ) || c.types.is(expected, TypeKind.StableVector) || c.types.isDynBox(expected) ||
-            (c.types.is(expected, TypeKind.Box) && isBoxFromRaw(c, e)?);
+            (c.types.is(expected, TypeKind.Box) && (isBoxFromRaw(c, e)? || unwrapsMemberCall(c, e))) ||
+            (c.types.is(expected, TypeKind.RawPointer) && isNullLiteral(c, e)); // N0260 names the pointer type
         if (!keep && t.pointee != none()) {
             synthExpected = t.pointee;
         }
@@ -906,9 +907,23 @@ fn coerce(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Result<u3
     appendQuotedType(mut message, c, expected)?;
     appendText(mut message, ", found ")?;
     appendQuotedType(mut message, c, t)?;
+    if (c.types.is(expected, TypeKind.Reference) && !c.types.isSlice(expected) && !c.types.isStringView(expected) &&
+        (t == x.pointee || c.types.is(t, TypeKind.Box)) && isNamedPlace(c, e)) {
+        // Only an argument is lent without the word (§13.2): `let r: borrow T = x;` wants `borrow x`, for a variable
+        // or field of the referent's type or a box (which lends its contents, §18.2).
+        appendText(mut message, if (x.mutableReference) "; write 'borrow mut'" else "; write 'borrow'")?;
+        appendText(mut message, " before the value to lend it (only an argument is lent without it)")?;
+    }
     c.error(typeMismatch(), span.start, span.end, message)?;
     return c.errorResult(span.start, span.end);
 }
+
+/// Is the checked expression a variable or a field of one (`x`, `x.f.g`)?
+fn isNamedPlace(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as usize]) {
+    HirExpr.LocalRef(_) => true,
+    HirExpr.FieldAccess(target, _) => isNamedPlace(c, target),
+    _ => false,
+};
 
 /// CheckArgumentsLoosely: the call is already rejected; its arguments are still checked.
 fn checkArgumentsLoosely(c: borrow mut Checker, arguments: Range) -> Result<void, AllocError> {
@@ -1665,6 +1680,10 @@ fn printableView(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
             let view = c.types.stringView;
             return c.expr(HirExpr.Borrow(false, place), view, span.start, span.end);
         }
+        // A `String` value that is no place (a call's result, `a ?? b`, a field of one): it is held to the end of
+        // the statement, where it is destroyed, and its text is lent from it (ADR 0073 §2.1).
+        let span = c.spanOf(e);
+        return borrowReceiver(c, e, false, span);
     }
     return Ok(viewOf(c, e));
 }

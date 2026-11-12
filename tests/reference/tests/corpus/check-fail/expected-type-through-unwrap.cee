@@ -1,0 +1,13 @@
+// The expected type through `!` and `?` (type-system.md §17.4) is a hint for the call, never a conversion: a value
+// that does not fit the expected contents, a box of another type and a string of another allocator are still errors.
+fn makesBox() -> Result<Box<i32>, AllocError> {
+    return Box.create(1);
+}
+
+fn main() {
+    let a: Box<u8> = Box.create(300)!; // error[N0206]
+    let b: Box<i64> = makesBox()!; // error[N0205]
+    let s = String.from("s")!;
+    let c: String<FailingAllocator> = s.clone()!; // error[N0205]
+    let d: Box<bool> = Box.create(5)!; // error[N0205]
+}

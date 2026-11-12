@@ -60,6 +60,7 @@ fn checkTypeCall(
         return c.errorResult(span.start, span.end);
     }
     checkEnumMethodVisible(c, function, memberSpan)?; // a function of an enum's own (ADR 0107)
+    checkMethodPrivate(c, function, memberSpan)?;     // and private to its block's file (ADR 0109)
     let template = c.hir.functions[function as usize].methodTemplate;
     if (template != none() && enumEntry != none()) {
         // A generic static function of an enum (ADR 0107), as a struct's (checkStaticCall): no receiver to skip.

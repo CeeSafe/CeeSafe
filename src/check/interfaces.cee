@@ -1165,6 +1165,7 @@ fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<
     let implemented = implMethodFor(c, typ, name);
     if (implemented != none()) {
         checkEnumMethodVisible(c, implemented, span)?; // a function of an enum's own (ADR 0107)
+        checkMethodPrivate(c, implemented, span)?;     // and private to its block's file (ADR 0109)
         return Ok(implemented);
     }
     if (c.types.isDyn(typ)) {

@@ -167,3 +167,9 @@ compiled changes.
     identical (`diff -r`).
 - Not run here: `tools/contract_tests.py` (the integrator's), which will ask for `src/library/documents.cee` to be
   regenerated from the changed `spec/` and `guide/`.
+
+## Addendum: an enum's functions (ADR 0107)
+
+ADR 0107, made beside this one, gives an enum functions through `impl E { … }`. They follow §2 as a struct's do: a
+`private` function of the block is usable in the block's file only, and N0296 elsewhere in the package. The package
+test `private-items` has the case (a method and a static function of an enum in `src/more.cee`).

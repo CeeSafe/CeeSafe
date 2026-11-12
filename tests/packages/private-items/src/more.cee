@@ -5,3 +5,18 @@ impl Open {
     private const EXTRA: i32 = 8;
     fn viaMine(borrow this) -> i32 => this.mine() + Open.EXTRA;
 }
+
+// An enum's functions (ADR 0107) are private in the same way.
+enum Light {
+    On,
+    Off,
+}
+
+impl Light {
+    private fn hidden(borrow this) -> i32 => 1;
+    private fn dark() -> Light => Light.Off;
+    fn isOn(borrow this) -> bool => match (this) {
+        Light.On => this.hidden() == 1,
+        Light.Off => false,
+    };
+}

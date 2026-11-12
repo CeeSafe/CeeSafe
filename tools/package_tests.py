@@ -118,7 +118,7 @@
     panicked, reading the calling file's text at the other file's offset).
 31. private-items (ADR 0109): a private function, generic function, struct, generic struct, enum, interface, constant,
     static, method, static function and associated constant of src/shapes.cee, and an `impl` block's of
-    src/more.cee, named in src/main.cee in a call, a value, a type, a bound, `dyn`, an `impl` header, a literal and
+    src/more.cee (a struct's and an enum's), named in src/main.cee in a call, a value, a type, a bound, `dyn`, an `impl` header, a literal and
     a pattern: N0296 at each marked line and nowhere else, the message naming the declaring file. Without those
     lines the program runs: a generic of shapes.cee instantiated from main.cee, values of private types held there,
     and locals named like private items are all allowed.
@@ -1643,7 +1643,7 @@ def main():
         except (ValueError, KeyError):
             found = [p.stdout[:300] + p.stderr[:300]]
         expected = sorted(("N0296", "main.cee", line) for line in marked + twice)
-        if p.returncode != 1 or len(marked) != 26 or found != expected:
+        if p.returncode != 1 or len(marked) != 28 or found != expected:
             problems.append(f"private-items: expected N0296 at main.cee's {len(marked)} marked lines "
                             f"(line {twice} twice): {p.returncode} {found}")
         for name, where in (("'helper'", "src/shapes.cee"), ("'Open.mine'", "src/more.cee")):

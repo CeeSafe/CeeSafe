@@ -57,4 +57,7 @@ fn main() {
     let d = o.mine(); // N0296
     let x = Open.EXTRA; // N0296
     let y = c.peek(); // N0296
+    let light = Light.On;
+    let lightHidden = light.hidden(); // N0296
+    let lightDark = Light.dark(); // N0296
 }

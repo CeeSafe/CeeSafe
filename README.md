@@ -87,9 +87,9 @@ And beyond safety:
 
 ## Performance
 
-With every safety check on, CeeSafe runs sixteen benchmark workloads in **0.96× Rust's time** (geometric mean), and
-**0.88×** that of Rust built with overflow checks. Hand-written C without checks takes 0.94×. Binaries are about
-40–56 KiB. See [guide/performance.md](guide/performance.md) for the full table, where CeeSafe is ahead or behind and
+With every safety check on, CeeSafe runs seventeen benchmark workloads in **0.92× Rust's time** (geometric mean), and
+**0.85×** that of Rust built with overflow checks. Hand-written C without checks takes 0.95×. Binaries are about
+94 KiB. See [guide/performance.md](guide/performance.md) for the full table, where CeeSafe is ahead or behind and
 why, and `benchmarks/` to run it yourself.
 
 ## Install

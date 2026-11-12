@@ -1,6 +1,8 @@
 # Performance against Rust: findings of 2026-11-11, for a later session
 
-**Status:** an investigation, not a plan that anyone accepted. Nothing here is implemented. Each finding says whether
+**Status:** an investigation, not a plan that anyone accepted. §9 records what a session of 2026-11-12 implemented
+from it (in the working tree: ADRs 0099 to 0101, proposed, not released) and what it measured and left; §1 to §8 are
+as written on 2026-11-11. Each finding says whether
 it was **measured**, **read in the source** or is a **hypothesis**. Written so that a session with no other context
 can pick an item, reproduce its number and fix it.
 
@@ -352,3 +354,102 @@ Parity is the ceiling for code that is the same in both languages. The items abo
 Rust does not (the fill, the allocator call, missing `restrict`) and add knowledge Rust does not have (check
 elimination). They can move the mean below 1.00 and turn several of the "behind" rows; they cannot make CeeSafe
 faster than Rust on everything.
+
+## 9. What was done on 2026-11-12
+
+Same machine and tools as §1, ceesafec 0.37.0 (commit `4f0ed22`) as the base. The machine was shared again (load 2
+to 7). `python3 benchmarks/run.py --runs 5`, before and after, each language's median over Rust's:
+
+| Workload | 0.37.0 | With ADRs 0099–0101 | Item |
+|---|---:|---:|---|
+| binary-trees | 1.28 | 0.98 | §4.5 |
+| small-objects | 1.16 | 0.94 | §4.5 |
+| linked-list | 1.13 | 0.84 | §4.5 |
+| hash-map | 1.36 | 1.03 | §4.1 |
+| memory-copy | 1.16 | 0.99 | §4.1's pattern |
+| data-oriented | 1.18 | 1.05 | §4.1's pattern and §4.2 |
+| numeric | 1.11 | 1.08 | §4.1's pattern and §4.2 |
+| **geometric mean, 17 workloads** | **0.98** | **0.92** | |
+
+The other ten rows moved by less than the spread. Against Rust with overflow checks the mean is 0.85.
+`guide/performance.md` has the whole table and is corrected as §5 asked.
+
+### 9.1 §4.1, the fill — done (ADR 0099)
+
+- The hypothesis was right: `resize` grew the buffer and then wrote the fill. The helper now takes
+  `ceesafe_alloc_zeroed` for a vector with no buffer and a fill of zero bytes (tested at run time on the value's
+  bytes, so `-0.0` and a struct with a non-zero field keep the loop).
+- That alone is small (the pages are touched by the probes anyway). The larger part of `hash-map`'s gap was the 8
+  million `push` calls, which §4.1 measured: the benchmark now uses `resize`, as the Rust and C use `vec!` and
+  `calloc`. `memory-copy`, `data-oriented` and `numeric` had the same `push` loops and were changed the same way.
+- `Vector<T>.filled(n, value)` was not added: `create` and `resize` now cost what it would.
+- **What is left of `hash-map` (1.03):** the overflow check on the hash's multiplication. Rust with overflow checks
+  takes 1.20. Measured with the checks compiled out (§6.2): no overflow checks 0.423 s against 0.429 s and Rust's
+  0.381 s under load, so not all of it; within the spread on a quiet run.
+
+### 9.2 §4.5, the allocation path — measured, then done (ADR 0101)
+
+Measured first, as asked: the generated C of each workload built twice, lowest of 7 runs.
+
+| Workload | Through the runtime | `malloc`/`free` directly | One word tested, then `malloc`/`free` |
+|---|---:|---:|---:|
+| binary-trees | 0.658 s | 0.512 s | 0.523 s |
+| small-objects | 0.594 s | 0.475 s | 0.474 s |
+| linked-list | 0.423 s | 0.336 s | 0.345 s |
+
+About 20%, more than the guide's old 12%. `__attribute__((malloc))` on the declaration alone gained nothing. The
+runtime now has the one-word test inline in `rt.h`; a counted run, an injected failure and a host's allocator still
+see every allocation. The allocation counts of the three workloads under `benchmarks/allocount.c` are unchanged
+(the C compiler removed no pair).
+
+### 9.3 §4.2, check elimination — items 1 and 2 done, item 3 in part (ADR 0100)
+
+- **Item 1** (a fact from a branch that leaves): `==` and `!=` give facts; `n ≠ 0` moves an unsigned bound to 1.
+- **Item 2** (the binary search): `/` is a definition; half of a value that is at least 1 is less than it; what
+  the temporaries of `lo + (hi - lo) / 2` derived is kept when they end; the join keeps `hi ≤ length` across
+  `hi = middle`. The three checks of §4.2's example are removed (`tests/corpus/bounds-checks/search.cee`,
+  `overflow-checks/tested.cee`).
+- **Item 3, in part:** after `v.resize(n, fill)?` (or `!`), `v.length` is `n`. That removed the four index checks
+  per iteration of `data-oriented`, which cost 11% (measured with the checks compiled out, 0.400 s against 0.355 s).
+  A masked index in another function (`find` in `hash-map`) is not covered: it needs facts across calls.
+- **Item 4:** not done.
+- **A finding on the way:** the budget of 128 facts counted implications, which no proof reads. With more
+  comparisons kept, 51 checks in the compiler's own sources that 0.37.0 removed were kept. The budget now counts
+  comparisons and definitions only.
+- **Counts** (`--explain-bounds-checks`, `--explain-overflow-checks`, 0.37.0 against this tree) are in ROADMAP §10.
+  The tsrs packages of §4.2 were not re-measured: do that with §6.3 and compare with "100 of 123" and "130 of 195".
+- **Not explained, still:** §4.2's row where compiling the bounds checks out made the sort slower. The same shape
+  showed in `hash-map` (0.429 s with checks, 0.592 s without) and slightly in `numeric`. Disassemble before
+  trusting a "checks compiled out" row.
+- Compile time: the compiler emitting its own C, 8.1 s before and 8.45 s after.
+
+### 9.4 §4.4, `restrict` — measured by hand, not implemented
+
+Only two workloads of the suite pass an exclusive borrow to a function: `const-flags` (`s: borrow mut Scan`) and
+`nbody` (`SliceMut<Body>`). `memory-copy` and `numeric`, which §4.4 names, do all their work in `main`. With
+`restrict` written into the generated C by hand (lowest of 5):
+
+| Workload | As generated | With `restrict` |
+|---|---:|---:|
+| const-flags (the `Scan *` parameter) | 2.666 s | 2.663 s |
+| nbody (the `ptr` member of the `SliceMut` struct) | 0.533 s | 0.514 s |
+
+Nothing on `const-flags`; 3.5% on `nbody`, inside the spread of that run, and `nbody` is already at C's speed.
+With no measured gain and the soundness risk §4.4 describes, it was left. A workload that reads one slice and writes
+another in a called function would be the place to look again.
+
+### 9.5 §4.7, the workloads not investigated
+
+- **memory-copy:** the fill (two `push` calls for each of 16,777,216 bytes). Now 0.99.
+- **data-oriented:** the fill and the index checks (§9.3). What is left (1.05) is its overflow checks: with them
+  compiled out, 0.326 s against 0.339 s and Rust's 0.328 s. Rust with overflow checks takes 1.04.
+- **numeric (1.08):** partly. Four index checks of the matrix product (`a[i * M + k]`: nothing bounds a product)
+  and 11 overflow checks stay; compiling either out gains about 3% (0.234 s, 0.228 s, 0.226 s; Rust 0.212 s).
+- **parsing (1.17):** not looked at beyond §4.3. Compiling the overflow checks out brought it to Rust's time
+  (0.143 s against 0.171 s; Rust 0.145 s), so it is §4.3's cost.
+
+### 9.6 Not touched
+
+§4.3 (a wrapping mode: the owner's decision; it is now the main cost left in `recursion`, `parsing`, `hash-map` and
+`data-oriented`), §4.6 (cross-language LTO), §4.2 item 4.
+

@@ -3,16 +3,20 @@ const N: usize = 1000000;
 const W: i32 = 1000;
 
 fn main() -> i32 {
-    var x = Vector<i32>.withCapacity(N)!;
-    var y = Vector<i32>.withCapacity(N)!;
-    var vx = Vector<i32>.withCapacity(N)!;
-    var vy = Vector<i32>.withCapacity(N)!;
+    var x = Vector<i32>.create();
+    var y = Vector<i32>.create();
+    var vx = Vector<i32>.create();
+    var vy = Vector<i32>.create();
+    x.resize(N, 0)!;
+    y.resize(N, 0)!;
+    vx.resize(N, 0)!;
+    vy.resize(N, 0)!;
     for (i in 0..N) {
         let k = truncate<i32>(i);
-        x.push(k % 1000)!;
-        y.push(3 * k % 1000)!;
-        vx.push(k % 7 - 3)!;
-        vy.push(k % 5 - 2)!;
+        x[i] = k % 1000;
+        y[i] = 3 * k % 1000;
+        vx[i] = k % 7 - 3;
+        vy[i] = k % 5 - 2;
     }
     for (s in 0..100) {
         for (i in 0..N) {

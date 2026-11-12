@@ -3,8 +3,8 @@ const LIMIT: usize = 40000000;
 const M: usize = 320;
 
 fn main() -> i32 {
-    var composite = Vector<u8>.withCapacity(LIMIT + 1)!;
-    for (i in 0..LIMIT + 1) { composite.push(0)!; }
+    var composite = Vector<u8>.create();
+    composite.resize(LIMIT + 1, 0)!;
     var primes: u64 = 0;
     for (i in 2..LIMIT + 1) {
         if (composite[i] != 0) { continue; }
@@ -15,12 +15,14 @@ fn main() -> i32 {
             j += i;
         }
     }
-    var a = Vector<u64>.withCapacity(M * M)!;
-    var b = Vector<u64>.withCapacity(M * M)!;
+    var a = Vector<u64>.create();
+    var b = Vector<u64>.create();
+    a.resize(M * M, 0)!;
+    b.resize(M * M, 0)!;
     for (i in 0..M) {
         for (j in 0..M) {
-            a.push((i * j % 100) as u64)!;
-            b.push(((i + j) % 100) as u64)!;
+            a[i * M + j] = (i * j % 100) as u64;
+            b[i * M + j] = ((i + j) % 100) as u64;
         }
     }
     var product: u64 = 0;

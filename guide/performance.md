@@ -1,75 +1,105 @@
 # Performance
 
 CeeSafe compiles through C, with every safety check on: array bounds, integer overflow, lossy conversions. This page
-measures what that costs against Rust and plain C on sixteen workloads, and says where CeeSafe is ahead or behind and
-why.
+measures what that costs against Rust and plain C on seventeen workloads, and says where CeeSafe is ahead or behind
+and why.
 
 ## The result
 
-Over the sixteen workloads CeeSafe takes **0.96× Rust's time** (geometric mean), and **0.88×** that of Rust built with
-overflow checks, which is the comparison that checks the same things CeeSafe does. Hand-written C without any check takes
-0.94×.
+Over the seventeen workloads CeeSafe takes **0.92× Rust's time** (geometric mean), and **0.85×** that of Rust built
+with overflow checks, which is the comparison that checks the same things CeeSafe does. Hand-written C without any
+check takes 0.95×.
 
 | Workload | CeeSafe | Rust | Rust, overflow checks | C | CeeSafe (ms) | Rust (ms) |
 |---|---:|---:|---:|---:|---:|---:|
-| `heap-alloc` | **0.28** | 1.00 | 0.92 | 0.95 | 121 | 428 |
-| `nbody` | **0.82** | 1.00 | 1.08 | 0.82 | 500 | 611 |
-| `stack-alloc` | **0.84** | 1.00 | 1.70 | 0.85 | 244 | 289 |
-| `vector-growth` | **0.87** | 1.00 | 1.03 | 0.80 | 385 | 443 |
-| `arena` | **0.95** | 1.00 | 0.91 | 0.98 | 241 | 254 |
-| `memory-copy` | 0.99 | 1.00 | 1.06 | 1.13 | 595 | 602 |
-| `linked-list` | 1.01 | 1.00 | 0.99 | 0.90 | 366 | 361 |
-| `large-objects` | 1.02 | 1.00 | 0.97 | 1.02 | 254 | 250 |
-| `small-objects` | 1.03 | 1.00 | 1.00 | 0.89 | 510 | 493 |
-| `string-building` | 1.03 | 1.00 | 1.31 | 0.78 | 299 | 292 |
-| `numeric` | 1.12 | 1.00 | 1.00 | 1.14 | 240 | 214 |
-| `binary-trees` | 1.13 | 1.00 | 1.02 | 0.91 | 561 | 494 |
-| `parsing` | 1.16 | 1.00 | 1.10 | 1.05 | 161 | 139 |
-| `data-oriented` | 1.18 | 1.00 | 1.05 | 1.00 | 381 | 323 |
-| `recursion` | 1.26 | 1.00 | 1.26 | 1.00 | 407 | 323 |
-| `hash-map` | 1.41 | 1.00 | 1.17 | 0.94 | 453 | 321 |
-| **geometric mean** | **0.96** | 1.00 | 1.09 | 0.94 | | |
+| `heap-alloc` | **0.29** | 1.00 | 0.93 | 1.25 | 122 | 419 |
+| `nbody` | **0.82** | 1.00 | 0.99 | 0.81 | 506 | 619 |
+| `linked-list` | **0.84** | 1.00 | 0.99 | 0.91 | 323 | 384 |
+| `stack-alloc` | **0.84** | 1.00 | 1.70 | 0.85 | 242 | 288 |
+| `vector-growth` | **0.86** | 1.00 | 1.07 | 0.69 | 469 | 544 |
+| `small-objects` | **0.94** | 1.00 | 1.01 | 0.89 | 462 | 494 |
+| `arena` | **0.94** | 1.00 | 0.92 | 1.14 | 251 | 266 |
+| `binary-trees` | 0.98 | 1.00 | 1.00 | 0.83 | 515 | 523 |
+| `memory-copy` | 0.99 | 1.00 | 0.99 | 1.07 | 626 | 630 |
+| `large-objects` | 1.01 | 1.00 | 1.00 | 0.97 | 262 | 260 |
+| `string-building` | 1.03 | 1.00 | 1.31 | 0.78 | 297 | 289 |
+| `hash-map` | 1.03 | 1.00 | 1.20 | 0.98 | 328 | 317 |
+| `data-oriented` | 1.05 | 1.00 | 1.04 | 1.01 | 340 | 325 |
+| `const-flags` | 1.07 | 1.00 | 1.05 | 1.11 | 2650 | 2473 |
+| `numeric` | 1.08 | 1.00 | 0.99 | 1.05 | 232 | 214 |
+| `parsing` | 1.17 | 1.00 | 1.11 | 1.03 | 163 | 139 |
+| `recursion` | 1.26 | 1.00 | 1.27 | 1.02 | 401 | 317 |
+| **geometric mean** | **0.92** | 1.00 | 1.08 | 0.95 | | |
 
 Times are each language's median wall time over five runs (after one discarded run) divided by Rust's; lower is
-faster. Measured 2026-10-31 on an Apple M-series Mac (arm64, macOS), with ceesafec 0.2.0-dev, rustc 1.99.1 and Apple
-clang 21. A run-to-run spread of a few percent is normal: compare ratios, not single milliseconds.
+faster. Measured 2026-11-12 on an Apple M-series Mac (arm64, macOS), with ceesafec 0.37.0 and ADRs 0099 to 0101,
+rustc 1.99.1 and Apple clang 21. The machine was shared with other work, so a spread of several percent between runs
+is normal here (the C column of `heap-alloc` and `arena` shows it): compare ratios, not single milliseconds, and
+measure again before deciding anything on a small difference.
 
-Peak memory is the same as Rust's or lower everywhere (`arena`: 7.8 MiB against 17.7 MiB). Binaries are about 40–56 KiB
-against Rust's 460 KiB. ceesafec compiles each program in about a quarter of a second, roughly twice rustc's time on these
+Peak memory is the same as Rust's or lower everywhere (`arena`: 3.1 MiB against 4.6 MiB). Binaries are about 94 KiB
+against Rust's 460 KiB. ceesafec compiles each program in about half a second, against rustc's 0.4 s on these
 single-file programs, since it runs the C compiler after its own work.
+
+The same suite with ceesafec 0.37.0 as released took 0.98× Rust's time. What moved it:
+
+| Workload | Before | Now | What changed |
+|---|---:|---:|---|
+| `binary-trees` | 1.28 | 0.98 | an allocation is `malloc` behind one test, not two calls into the runtime (ADR 0101) |
+| `small-objects` | 1.16 | 0.94 | the same |
+| `linked-list` | 1.13 | 0.84 | the same |
+| `hash-map` | 1.36 | 1.03 | the tables are made with `resize`, which takes zeroed memory (ADR 0099), not 8 million `push` calls |
+| `memory-copy` | 1.16 | 0.99 | the buffers are made with `resize`, not 32 million `push` calls |
+| `data-oriented` | 1.18 | 1.05 | the arrays are made with `resize`, whose length ceesafec then knows: no index check in the loop (ADR 0100) |
+| `numeric` | 1.11 | 1.08 | the sieve is made with `resize`; its index checks are removed |
+
+In the last four the CeeSafe program changed as well as the compiler: it now makes its arrays filled, as the Rust
+(`vec![0; n]`) and C (`calloc`) versions always did.
 
 ## Where CeeSafe is ahead
 
-- **`heap-alloc`, 3.5× faster than Rust.** ceesafec's placement optimisation keeps a box that never escapes its
+- **`heap-alloc`, 3.4× faster than Rust.** ceesafec's placement optimisation keeps a box that never escapes its
   function on the stack, so the program's per-iteration heap array costs no allocation at all. It beats hand-written C,
   which calls `malloc` and `free` each time.
 - **`stack-alloc`, `nbody`, `vector-growth`.** CeeSafe matches C. Its overflow and bounds checks are removed where
   ceesafec proves they cannot fail (loop indexes within a length, sums of bounded values), which Rust with overflow
   checks does not manage on `stack-alloc` (1.70×).
+- **`linked-list`, `small-objects`.** A box is allocated and freed by the C library directly: in a program that did
+  not ask for the allocation report, the runtime's part is one load and an untaken branch (ADR 0101).
 - **`arena`.** A region's bump allocation is inlined into the program (Decision 0007), and the arena's chunks take less
-  than half the memory of Rust's.
+  memory than Rust's.
 
 ## Where CeeSafe is behind, and why
 
-- **`hash-map` (1.41×).** Rust builds its tables with `vec![0; n]`, so LLVM knows their length and removes the bounds
-  checks on `keys[s & MASK]`. A CeeSafe `Vector` can only be filled by `push`, so the length is unknown and every probe
-  keeps its check: with the checks compiled out the program runs at Rust's speed. A filled-vector constructor would
-  close this gap.
-- **`recursion` (1.26×) and `parsing` (1.16×).** The overflow check on `fib(n - 1) + fib(n - 2)` and on accumulating
-  digits cannot be proven unnecessary; Rust pays the same when its overflow checks are on (1.26× and 1.10×).
-- **`data-oriented` (1.18×).** As for `hash-map`, the particle arrays are filled by `push`; the bounds checks cost about
-  11%.
-- **`binary-trees` (1.13×) and `small-objects` (1.03×).** Every heap allocation goes through the runtime's
-  `ceesafe_alloc`, which counts allocations (for `CEESAFE_ALLOC_REPORT` and fault injection) before calling `malloc`.
-  Calling `malloc` directly measured 12% faster on both.
+- **`recursion` (1.26×) and `parsing` (1.17×).** The overflow check on `fib(n - 1) + fib(n - 2)` and on accumulating
+  digits cannot be proven unnecessary; Rust pays the same when its overflow checks are on (1.27× and 1.11×). CeeSafe
+  always checks; Rust's release builds wrap.
+- **`hash-map` (1.03×).** What is left is the overflow check on the hash's multiplication: Rust with overflow checks
+  takes 1.20×. Its index checks are kept, in `find`, which sees the table through a borrow, and cost nothing
+  measurable.
+- **`data-oriented` (1.05×).** Its overflow checks: the position and velocity sums are of values read from the
+  arrays, so they stay (15 of 23), and with them compiled out the program runs at Rust's speed. Rust with overflow
+  checks takes 1.04×.
+- **`numeric` (1.08×).** Partly established. It keeps the four index checks of its matrix product (`a[i * M + k]`:
+  nothing bounds a product) and 11 overflow checks; compiling either kind out gains about 3%, and the rest is
+  within the spread.
+- **`const-flags` (1.07×).** See below: within the spread of this machine.
+
+## Making a filled vector
+
+A vector that starts filled is made with `resize`: `var v = Vector<u64>.create(); v.resize(n, 0)?;`. When the vector
+has no buffer and the fill value is all zero bits, the memory comes from the allocator already zeroed, which for a
+large table is memory the operating system has not touched yet (ADR 0099). After the `?` (or `!`), ceesafec knows
+that `v.length` is `n`, so `for (i in 0..n) { v[i] = …; }` has no index check (ADR 0100). A loop of `push` calls
+costs a call and a capacity test for each element, and leaves the length unknown to the compiler.
 
 ## Const parameters
 
 `const-flags` (ADR 0083 §1.3) is a recursive scanner over 10 MB of pseudo-random bytes, run 100 times, with three
 flag tests per byte; its flags are const parameters (`fn scan<const TS: bool, const JSX: bool>`), so each instance
-keeps only its own tests. It is a workload of `run.py`, measured on its own and not in the table above, whose sixteen
-workloads were measured with an older ceesafec. Measured 2026-11-09 on the same kind of machine (Apple arm64, Apple
-clang 21, rustc 1.99.1, ceesafec 0.26.0-dev), on a machine shared with other work, so the spread is wider than usual:
+keeps only its own tests. Its row in the table above is the first line below, measured again. The comparison with
+run-time flags was measured 2026-11-09 on the same kind of machine (Apple arm64, Apple clang 21, rustc 1.99.1,
+ceesafec 0.26.0-dev), on a machine shared with other work, so the spread is wider than usual:
 
 | Version | Time |
 |---|---:|

@@ -704,7 +704,8 @@ AltPattern = (Identifier '@')? PrimPattern                         -- `name @ P`
 PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | '(' Pattern ')'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
-          | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
+          | Bound '..=' Bound | Bound '..' Bound                  -- ranges: ADR 0085 §2.4
+Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
@@ -746,6 +747,10 @@ and `E.V…` there are patterns.
   expressions do. Both bounds are integer or character literals, typed by the scrutinee (or payload) as §4 types a
   literal, so `'a'..='z'` matches bytes of a `u8`. A range that matches no value (`'z'..='a'`, `5..5`) is N0357.
   Ranges are for integers only: `bool`, floats and other types take none (N0205; a `bool` bound is N0108).
+  A bound may also be the bare name of a constant (ADR 0118): `LOW..=HIGH`, `0..LOW`. The constant's type must be
+  the scrutinee's (N0205), its value is the bound, and the range then follows the rules above (N0357, N0256, N0257
+  by its values). A name that is not a constant in scope (a local, a parameter, a const parameter, a misspelling)
+  is N0358: a value that is not constant is tested in a guard.
 - **String literal patterns** (ADR 0085 §2.7). On a `StringView`, `"get"` matches equal bytes, as `==` does (§22.2).
   On a `Slice<u8>`, the same literal matches its UTF-8 bytes: the literal is typed by the value, as `'k'` is, so a
   byte string is written `"cjs"`. A string pattern on any other type is N0205. String patterns never cover their

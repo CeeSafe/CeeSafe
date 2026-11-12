@@ -1357,6 +1357,50 @@ fn constantPattern(
     }
 }
 
+/// A range pattern's bound (ADR 0085 §2.4, ADR 0118): a literal of the value's type, or the name of a constant of
+/// that type, whose value it is. None after an error.
+fn rangeBound(c: borrow mut Checker, bound: u32, typ: u32) -> Result<u32, AllocError> {
+    let span = c.front.ast.exprSpans[bound as usize];
+    var name = none();
+    match (c.front.ast.exprs[bound as usize]) {
+        ExprNode.Name(n, _) => { name = n; }
+        _ => {}
+    }
+    if (name == none()) {
+        return checkExpr(c, bound, typ);
+    }
+    let constant = constantNamed(c, name);
+    if (constant == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a range pattern's bound is an integer or character literal or a constant's name, and ",
+        )?;
+        appendQuotedName(mut message, c, c.front.ast.idents[name as usize].symbol)?;
+        appendText(
+            mut message,
+            " is not a constant (a 'const' item); test a value that is not constant in a guard (ADR 0118)",
+        )?;
+        c.error(constantNotPattern(), span.start, span.end, message)?;
+        return Ok(none());
+    }
+    checkPrivateItem(c, Entity.Constant(constant), span)?; // ADR 0109
+    let constType = c.hir.constants[c.constants[constant as usize].hir as usize].typ;
+    if (c.types.isBottom(constType)) {
+        return Ok(none());
+    }
+    if (constType != typ) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "this constant has type ")?;
+        appendQuotedType(mut message, c, constType)?;
+        appendText(mut message, ", but the value has type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        return Ok(none());
+    }
+    return namedConstantValue(c, constant, span);
+}
+
 /// N0250's number: use of a moved value, here a value `name @ P` would move twice (ADR 0085 §2.5).
 fn atMovesTwice() -> u32 => 250;
 
@@ -1407,8 +1451,12 @@ fn checkRangePattern(
         failed = true;
         return c.hir.addPattern(HirPattern.Wildcard);
     }
-    let lowHir = checkExpr(c, low, typ)?;
-    let highHir = checkExpr(c, high, typ)?;
+    let lowHir = rangeBound(c, low, typ)?;
+    let highHir = rangeBound(c, high, typ)?;
+    if (lowHir == none() || highHir == none()) {
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
     let lowValue = match (c.hir.exprs[lowHir as usize]) {
         HirExpr.IntConst(v) => v,
         _ => {

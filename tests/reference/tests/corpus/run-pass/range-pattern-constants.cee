@@ -1,0 +1,71 @@
+// A constant's name as a range pattern's bound (ADR 0118, type-system.md §15.2): either bound or both, with the
+// constant's value; such ranges count toward exhaustiveness, and stand after `is` and in a `let … else` too.
+const LOW: u8 = 10;
+const HIGH: u8 = LOW + 10;
+const A: u8 = 'a';
+const Z: u8 = 'z';
+const MINUS: i32 = -5;
+const PLUS: i32 = 5;
+const FIRST: u8 = 0;
+const LAST: u8 = 255;
+
+fn kind(n: u8) -> u32 => match (n) {
+    LOW..=HIGH => 1,
+    0..LOW => 0,
+    A..=Z => 2,
+    _ => 3,
+};
+
+fn sign(n: i32) -> i32 => match (n) {
+    MINUS..0 => -1,
+    0..=PLUS => 1,
+    _ => 0,
+};
+
+fn all(n: u8) -> u32 => match (n) {
+    FIRST..LOW => 0,
+    LOW..=LAST => 1,
+};
+
+fn inBand(n: u8) -> bool => n is LOW..=HIGH;
+
+fn bind(n: u8) -> u8 {
+    let v @ LOW..=HIGH = n else {
+        return 0;
+    };
+    let LOW..HIGH = v else {
+        return 1;
+    };
+    return v;
+}
+
+fn main() {
+    Console.writeLine(kind(15));
+    Console.writeLine(kind(20));
+    Console.writeLine(kind(21));
+    Console.writeLine(kind(9));
+    Console.writeLine(kind('q'));
+    Console.writeLine(sign(-5));
+    Console.writeLine(sign(-6));
+    Console.writeLine(sign(5));
+    Console.writeLine(all(9) + all(10) + all(255));
+    Console.writeLine(inBand(10));
+    Console.writeLine(inBand(21));
+    Console.writeLine(bind(12));
+    Console.writeLine(bind(20));
+    Console.writeLine(bind(30));
+}
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: -1
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 12
+// expect-stdout: 1
+// expect-stdout: 0

@@ -1,0 +1,44 @@
+// A constant's name as a range pattern's bound (ADR 0118, type-system.md §15.2): the range follows the rules of a
+// range of literals by the constants' values (N0357, N0256, N0257); the constant has the value's type (N0205); a name
+// that is not a constant is N0358.
+const LOW: u8 = 10;
+const HIGH: u8 = 20;
+const WIDE: u32 = 20;
+
+fn empty(n: u8) -> u32 => match (n) {
+    HIGH..=LOW => 1, // error[N0357]
+    _ => 0,
+};
+
+fn local(n: u8, top: u8) -> u32 => match (n) {
+    LOW..=top => 1, // error[N0358]
+    _ => 0,
+};
+
+fn unknown(n: u8) -> u32 => match (n) {
+    LOW..=HIHG => 1, // error[N0358]
+    _ => 0,
+};
+
+fn wrongType(n: u8) -> u32 => match (n) {
+    LOW..=WIDE => 1, // error[N0205]
+    _ => 0,
+};
+
+fn missing(n: u8) -> u32 => match (n) { // error[N0256]
+    0..LOW => 0,
+    HIGH..=255 => 1,
+};
+
+fn repeated(n: u8) -> u32 => match (n) {
+    LOW..=HIGH => 0,
+    10..=20 => 1, // error[N0257]
+    _ => 2,
+};
+
+fn constParameter<const N: usize>(n: usize) -> u32 => match (n) {
+    0..=N => 0, // error[N0358]
+    _ => 2,
+};
+
+fn main() {}

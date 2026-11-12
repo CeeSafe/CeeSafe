@@ -333,7 +333,7 @@ unreachable.
 ### Ranges
 
 `lo..=hi` matches the integers from `lo` to `hi`, both included; `lo..hi` leaves `hi` out. The bounds are integer or
-character literals. Literals and ranges that together hold every value of the type need no `_`.
+character literals, or the names of constants of the value's type (`LOW..=HIGH`, `0..LOW`). Literals and ranges that together hold every value of the type need no `_`.
 
 ```ceesafe
 fn kind(c: u8) -> StringView => match (c) {

@@ -61,6 +61,23 @@ EXPLAIN = {
 ANNOTATION = re.compile(r"// (?:error|warning)\[(N\d{4})\](?:@(\d+))?")
 DIRECTIVE = re.compile(r"// expect-(stdout|exit|panic|library-panic):(?: (.*))?$")
 ABORT_EXIT = 134  # 128 + SIGABRT
+# `// stdin: text` (ADR 0106): the program's standard input, the directives' texts joined with nothing between them.
+# In a text, `\n`, `\r`, `\\` and `\xNN` (a byte) are escapes; `// stdin:` alone adds nothing.
+STDIN = re.compile(r"// stdin:(?: (.*))?$")
+STDIN_ESCAPE = re.compile(rb"\\(n|r|\\|x[0-9a-fA-F]{2})")
+
+
+def stdin_of(text):
+    """The bytes of the file's `// stdin:` directives, or None without one (the runner's own input is inherited)."""
+    found = None
+    for line in lines_of(text):
+        m = STDIN.search(line)
+        if m:
+            piece = STDIN_ESCAPE.sub(
+                lambda e: {b"n": b"\n", b"r": b"\r", b"\\": b"\\"}.get(e.group(1)) or bytes([int(e.group(1)[1:], 16)]),
+                (m.group(1) or "").encode("utf-8"))
+            found = (found or b"") + piece
+    return found
 
 
 def normalise(text):
@@ -164,15 +181,17 @@ class Runner:
             env["CC"] = self.args.cc
         return env
 
-    def execute(self, exe):
-        """Runs a built program, or, given a list, that command (--interp's `ceesafec run --interp`)."""
+    def execute(self, exe, stdin=None):
+        """Runs a built program, or, given a list, that command (--interp's `ceesafec run --interp`); `stdin` is its
+        standard input's bytes (`// stdin:`), if the test gives one."""
         argv = exe if isinstance(exe, list) else [exe]
         start = time.monotonic()
         try:
             env = dict(os.environ)
             if self.args.check_leaks:
                 env["CEESAFE_ALLOC_REPORT"] = "1"
-            p = subprocess.run(argv, cwd=self.corpus, capture_output=True, timeout=self.args.timeout, env=env)
+            given = {} if stdin is None else {"input": stdin}
+            p = subprocess.run(argv, cwd=self.corpus, capture_output=True, timeout=self.args.timeout, env=env, **given)
             status, stdout, stderr = p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
         except subprocess.TimeoutExpired:
             status, stdout, stderr = "timeout", "", ""
@@ -288,7 +307,9 @@ def run_test(runner, family, path, work):
             problems.append(f"build failed (status {o.status}): {o.stderr.strip()[:500]}")
         else:
             # --interp: the same program in the interpreter, held to the same expectations (testing.md §1).
-            run = runner.execute([runner.compiler, "run", "--interp"] + options + inputs) if interp else runner.execute(exe)
+            given = stdin_of(text)
+            run = (runner.execute([runner.compiler, "run", "--interp"] + options + inputs, given) if interp
+                   else runner.execute(exe, given))
             outcomes.append(run)
             stdout, exit_code, panic, panic_line = expectations(text)
             if run.stdout.replace("\r\n", "\n") != stdout:

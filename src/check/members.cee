@@ -404,7 +404,10 @@ fn checkMethodCall(
             if (isSliceMethodName(name)) {
                 // `a[lo..hi].copyFrom(s)`: the receiver is `borrow mut a[lo..hi]` (§16.5), or `borrow a[lo..hi]` for a
                 // method that only reads (§36.4).
-                let mutable = !(sameText(name, "forEach") || sameText(name, "any") || sameText(name, "all") ||
+                let mutable = !(sameText(
+                    name,
+                    "forEach",
+                ) || sameText(name, "partitionPoint") || sameText(name, "any") || sameText(name, "all") ||
                     sameText(name, "splitAt"));
                 let slice = synthSlice(c, sliced, low, high, mutable, targetSpan)?;
                 return checkSliceMethod(c, member, arguments, slice, targetSpan, span);
@@ -831,7 +834,13 @@ fn checkNonStructMethod(
 
 fn isSliceMethodName(name: Slice<u8>) -> bool =>
     sameText(name, "copyFrom") || sameText(name, "fill") || sameText(name, "swap") || sameText(name, "sortBy") ||
-        sameText(name, "forEach") || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
+        sameText(
+            name,
+            "forEach",
+        ) || sameText(
+        name,
+        "partitionPoint",
+    ) || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
         sameText(name, "splitAtMut") || isByteWriter(name);
 
 /// A string literal for a `[u8; N]` member of an imported struct's literal (ADR 0042 §3.4): its bytes, which C's

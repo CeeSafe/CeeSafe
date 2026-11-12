@@ -2632,6 +2632,20 @@ public fn all(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> bool
 
 Does `test` return true for every element? Stops at the first that does not.
 
+### SliceAlgorithms.partitionPoint
+
+```ceesafe
+@effectsOf(test)
+public fn partitionPoint(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> usize
+```
+
+The index of the first element for which `test` is false, in a slice partitioned by `test`: every element
+for which it is true comes before every element for which it is false. The length, if it is true for all;
+0 for an empty slice. A binary search: `test` is called at most ⌈log₂ n⌉ + 1 times, on elements chosen by
+the length and the earlier answers. On a slice that is not partitioned the result is some index of it or its
+length, with no panic. The number of steps depends on the length alone, not on the answers (ADR 0103): the
+loop's own branch does not wait for `test`, which makes it faster than a loop that ends when two bounds meet.
+
 ### SliceAlgorithms.retain
 
 ```ceesafe

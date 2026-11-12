@@ -24,7 +24,7 @@ fn libraryFunction(
     return Ok(findStructFunction(c, definition, name));
 }
 
-/// `s.swap(i, j)`, and the slice methods written in lib/core (CheckSliceAlgorithm): `sortBy`, `forEach`, `any`, `all`
+/// `s.swap(i, j)`, and the slice methods written in lib/core (CheckSliceAlgorithm): `sortBy`, `forEach`, `any`, `all`, `partitionPoint`
 /// (SliceAlgorithms<T>), `splitAt`, `splitAtMut` (SliceSplitting<r, T>). `slice` is the receiver, already borrowed.
 fn checkSliceAlgorithm(
     c: borrow mut Checker,

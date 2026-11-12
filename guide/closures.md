@@ -125,7 +125,8 @@ fn main() {
 
 ## Methods that take closures
 
-Slices, arrays (through `a[..]`) and vectors have `sortBy`, `forEach`, `any`, `all`, and vectors `retain`:
+Slices, arrays (through `a[..]`) and vectors have `sortBy`, `forEach`, `any`, `all` and `partitionPoint`, and
+vectors `retain`:
 
 ```ceesafe
 struct Reading {
@@ -158,6 +159,11 @@ true
 `sortBy` is an introsort: it allocates nothing and runs in O(n log n), but it is not stable. Sorted, reversed and
 duplicate-heavy input take about one pass. Its comparator returns a
 negative number, zero or a positive number. These methods are written in CeeSafe, in `lib/core/slices.cee`.
+
+`partitionPoint` is the binary search: on a slice whose elements pass a test and then fail it, it returns the index
+of the first that fails, or the length. For a slice sorted by a key, `entries.partitionPoint((e) => e.key < k)` is
+where `k` is, or where it would go. Prefer it to a search loop of your own: its number of steps depends on the
+length alone, which made it nearly twice as fast as a loop that ends when two bounds meet.
 
 In an async fn, they take async closures too: `await readings.forEach(async (r) => await upload(r))` calls the
 closure on each element and waits for each call. Such a call is a task, so it needs its `await`. The same holds for

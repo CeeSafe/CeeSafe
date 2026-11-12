@@ -1995,7 +1995,7 @@ fn main() -> i32 {
     and panics there ("index out of bounds"). They are lib/core's VectorEditing<T>: the elements move by `swap`, so
     they may be of any type. If `insert` cannot grow the vector, it is unchanged and `x` is destroyed;
   - for a `Vector<u8, A>`, byte order, searching and parsing (§16.6), on its elements;
-  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `retain`): §16.5 and §36.4;
+  - `v.swap(i, j)`, and the methods taking closures (`sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `retain`): §16.5 and §36.4;
   - `v.view()`: the elements as a `Slice<T>`, and `v.viewMut()` as a `SliceMut<T>`;
   - a `Vector<T>` argument for a `Slice<T>` parameter is borrowed as `v.view()`, and `mut v` for a
     `SliceMut<T>` parameter as `v.viewMut()` (like a box's contents, §18.2);
@@ -3623,7 +3623,7 @@ fn underLock(values: Slice<i32>, limit: i32) -> i32 {
 - **Why this is sound.** A parameter is never assigned (N0211), and a closure or function value cannot be `var`
   (N0246), so every call through `p` during a call runs the argument the caller passed, whose effects the caller
   counted. Anything made from `p` other than a copy or reborrow is counted by its type, where it is called.
-- lib/core's `sortBy`, `forEach`, `any`, `all` and `retain` (§36.4) are `@effectsOf` their closure, and so are
+- lib/core's `sortBy`, `forEach`, `any`, `all`, `partitionPoint` and `retain` (§36.4) are `@effectsOf` their closure, and so are
   `sortBy`'s helpers.
 - **Async arguments** (ADR 0037). An `@effectsOf` parameter of closure type also takes an async closure literal
   (§40.3) whose task's result is the closure type's, or a named async fn of that signature (§36.1), unless the type's
@@ -4111,6 +4111,7 @@ fn main() {
 | `s.sortBy(cmp)` | `SliceMut<T>`, or a vector (lending its elements mutably) | `borrow mut fn(borrow T, borrow T) -> i32` | `void` |
 | `s.forEach(visit)` | `Slice<T>` (a `SliceMut<T>` coerces), or a vector | `borrow mut fn(borrow T)` | `void` |
 | `s.any(test)`, `s.all(test)` | as `forEach` | `borrow mut fn(borrow T) -> bool` | `bool` |
+| `s.partitionPoint(test)` (ADR 0103) | as `forEach` | `borrow mut fn(borrow T) -> bool` | `usize` |
 | `v.retain(keep)` | a `Vector<T, A>` (a mutable place) | `borrow mut fn(borrow T) -> bool` | `void` |
 
   The closure types are `borrow mut fn`, so a closure that changes what it captures may be passed, and so may a
@@ -4126,6 +4127,17 @@ fn main() {
     descending run is reversed, after at most n − 1 calls of `cmp`.
   - If `cmp` is not a consistent order, or changes what it captures, the elements end in some order: they are
     still a permutation of the input, and nothing panics or misbehaves.
+- **`partitionPoint`** (ADR 0103) is a binary search. For a slice **partitioned** by `test` (every element for which
+  it returns `true` comes before every element for which it returns `false`) it returns the index of the first
+  element for which `test` is false: the length if there is none, 0 for an empty slice. So for a slice sorted by a
+  key, `s.partitionPoint((e) => e.key < k)` is where `k` is or would be inserted, and `(e) => e.key <= k` the index
+  after the last `k`.
+  - It calls `test` at most ⌈log₂ n⌉ + 1 times, on elements chosen by the length and the earlier results, allocates
+    nothing, and never panics. On a slice that is not partitioned, or with a `test` that changes what it captures,
+    the result is some index of the slice or its length.
+  - The number of steps depends on the length alone, so the loop's own branch does not wait for `test`'s results.
+    Written by hand as a loop that ends when two bounds meet, the same search took 16 ns where this takes 9 (2,000
+    elements, random keys; ADR 0103).
 - **`forEach`** calls `visit` on each element in index order. **`any`** calls `test` in index order until it returns
   `true` (then `true`; `false` for an empty slice), and **`all`** until it returns `false` (then `false`; `true` for
   an empty slice).

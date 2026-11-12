@@ -1,7 +1,7 @@
 // Vectors, strings and string views (the reference's ResolveVectorType, VectorType, the String case of a named type,
 // CheckVectorCreate, CheckVectorMethod, NumberToFormat, CheckViewMethod, CheckSliceMethod's copyFrom and fill,
 // CheckStringViewFunction, PrintableView, and the vector cases of SynthMember and CheckFor): P3 S3b. The methods that
-// call lib/core (`retain`, `swap`, `sortBy`, `forEach`, `any`, `all`, `splitAt`, `splitAtMut`) come with the library
+// call lib/core (`retain`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`, `splitAtMut`) come with the library
 // (S5) and closures (S6).
 
 fn builtinVector() -> u32 => 14;
@@ -474,7 +474,7 @@ fn checkVectorMethod(
         appendText(
             mut message,
             if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'"
-                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove'",
+                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -493,7 +493,10 @@ fn checkVectorMethod(
     if (!isString && (sameText(
         text,
         "swap",
-    ) || sameText(text, "sortBy") || sameText(text, "forEach") || sameText(text, "any") ||
+    ) || sameText(
+        text,
+        "sortBy",
+    ) || sameText(text, "forEach") || sameText(text, "partitionPoint") || sameText(text, "any") ||
         sameText(
             text,
             "all",
@@ -581,7 +584,13 @@ fn vectorMethodArity(isString: bool, text: Slice<u8>) -> i32 {
         return -1;
     }
     if (sameText(text, "push") || sameText(text, "retain") || sameText(text, "truncate") || sameText(text, "sortBy") ||
-        sameText(text, "forEach") || sameText(text, "any") || sameText(text, "all") || sameText(text, "splitAt") ||
+        sameText(
+            text,
+            "forEach",
+        ) || sameText(
+        text,
+        "partitionPoint",
+    ) || sameText(text, "any") || sameText(text, "all") || sameText(text, "splitAt") ||
         sameText(text, "splitAtMut")) {
         return 1;
     }
@@ -657,7 +666,13 @@ fn checkSliceMethod(
     var textBytes = Vector<u8>.create();
     appendBytes(mut textBytes, c.name(ident.symbol))?;
     let text = textBytes.view();
-    if (sameText(text, "sortBy") || sameText(text, "forEach") || sameText(text, "any") || sameText(text, "all") ||
+    if (sameText(
+        text,
+        "sortBy",
+    ) || sameText(
+        text,
+        "forEach",
+    ) || sameText(text, "partitionPoint") || sameText(text, "any") || sameText(text, "all") ||
         sameText(text, "swap") || sameText(text, "splitAt") || sameText(text, "splitAtMut")) {
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
@@ -672,7 +687,7 @@ fn checkSliceMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         appendText(
             mut message,
-            "; slices have 'copyFrom', 'fill', 'swap', 'sortBy', 'forEach', 'any', 'all', 'splitAt' and 'splitAtMut'",
+            "; slices have 'copyFrom', 'fill', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt' and 'splitAtMut'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

@@ -1,0 +1,83 @@
+// s.partitionPoint(test) (ADR 0103; type-system.md §36.4): the index of the first element for which `test` is
+// false, in a slice where the elements for which it is true come first. On a slice, a slicing expression, an array
+// through `a[..]` and a vector; with a captured value, a function value and a struct element.
+struct Entry {
+    key: u32;
+    value: u32;
+}
+
+fn below40(x: borrow i32) -> bool => x < 40;
+
+// A binary search made of it: the index of `key`, if it is there.
+fn find(entries: Slice<Entry>, key: u32) -> usize? {
+    let at = entries.partitionPoint((e) => e.key < key);
+    if (at < entries.length && entries[at].key == key) {
+        return Some(at);
+    }
+    return null;
+}
+
+fn main() {
+    let values = [1, 3, 5, 7, 9, 11, 40, 41];
+    Console.writeLine(values[..].partitionPoint((v) => v < 7));   // 3
+    Console.writeLine(values[..].partitionPoint((v) => v <= 7));  // 4
+    Console.writeLine(values[..].partitionPoint((v) => v < 0));   // 0: false for all
+    Console.writeLine(values[..].partitionPoint((v) => v < 100)); // 8: true for all
+    Console.writeLine(values[..].partitionPoint(below40));        // 6
+    Console.writeLine(values[2..5].partitionPoint((v) => v < 8)); // 2, within the part
+    Console.writeLine(values[..0].partitionPoint((v) => v < 8));  // 0: empty
+    Console.writeLine(values[..1].partitionPoint((v) => v < 8));  // 1
+    Console.writeLine(values[..1].partitionPoint((v) => v < 1));  // 0
+
+    // Every length from 0 to 40 and every split: the answer is the split.
+    var wrong: u32 = 0;
+    var calls: u32 = 0;
+    var most: u32 = 0;
+    var v = Vector<u32>.create();
+    for (n in 0..41u32) {
+        for (split in 0..n + 1) {
+            var these: u32 = 0;
+            let at = v.partitionPoint((x) => {
+                these += 1;
+                return x < split;
+            });
+            if (at != split as usize) {
+                wrong += 1;
+            }
+            calls += these;
+            if (these > most) {
+                most = these;
+            }
+        }
+        v.push(n)!;
+    }
+    Console.writeLine(wrong);
+    Console.writeLine(most); // at most ceil(log2 40) + 1 = 7 calls
+
+    let entries = [
+        Entry { key: 2, value: 20 },
+        Entry { key: 5, value: 50 },
+        Entry { key: 9, value: 90 },
+    ];
+    Console.writeLine(entries[find(entries[..], 5) ?? 0].value);
+    Console.writeLine(find(entries[..], 6).isNull());
+
+    // Not partitioned: some index or the length, and no panic.
+    let mixed = [5, 1, 9, 2, 8];
+    Console.writeLine(mixed[..].partitionPoint((x) => x < 6) <= 5);
+}
+
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 8
+// expect-stdout: 6
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 50
+// expect-stdout: true
+// expect-stdout: true

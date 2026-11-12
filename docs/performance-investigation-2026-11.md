@@ -569,3 +569,41 @@ each other.
 `string-building`); their rounds are millions of operations long, far more than a predictor holds, but they were
 not checked for this effect.
 
+## 12. The tsrs lookups: the boundary is the smaller part (2026-11-12, ceesafec 0.39.0)
+
+§3 and the trial's report put the lookups' gap (13 to 40% a call) on the call across the boundary, which rustc's
+LTO cannot inline. Measured apart, in a copy of the trial's differential test, over 65,536 different positions and
+ranges (three runs, load 3 to 8), nanoseconds a call:
+
+| | Rust, inlined | Rust, `#[inline(never)]` | CeeSafe export, called directly | CeeSafe through the shim |
+|---|---:|---:|---:|---:|
+| `virtual_to_original_position` | 47–48 | 48–50 | 51–53 | 52–54 |
+| `original_to_virtual_spans` | 222–231 | 223–240 | 261–306 | 272–288 |
+
+The same export on an empty map, which returns at once: 2.7 to 4.0 ns.
+
+- **The boundary costs a few nanoseconds:** 3 to 4 for the call, about 1 for the shim's conversions, and Rust
+  gains 1.5 to 2 from inlining. That is the whole gap of the position lookup, and it fits adding a mapping (17.5
+  against 24.5 ns), which was not broken down.
+- **`original_to_virtual_spans` is slower inside CeeSafe,** by about 40 ns of 230, with no shim. Sampled
+  (`sample`, shares turned into nanoseconds a call):
+
+  | | CeeSafe | Rust |
+  |---|---:|---:|
+  | The tree walk (`collectSegmentsEndingAtOrAfter`) | 148 | 142 |
+  | `segmentsAtOriginalPosition` (two searches, the walk's call, an `extend`) | 66 | 43 |
+  | The function's own code | 15 | 17 |
+  | `malloc`, `free` and growing the vectors | 29 | 22 |
+
+- **Not found:** what costs the 23 ns in `segmentsAtOriginalPosition`. Its samples fall on the first search's load
+  and after the second search; function-level sampling says no more. The 7 ns of allocation is vector growth
+  through `ceesafe_vec_grow`, which ADR 0101's inline path does not cover.
+- **A lead that did not pan out there.** The port writes `partition_point` as a loop that ends when two bounds
+  meet; Rust's standard one takes a number of steps fixed by the length. Alone, on random positions in 2,000
+  segments, the difference is large and is not the language: 16.9 ns a search for the port's loop in CeeSafe and
+  18.6 ns for the same loop in Rust, 9.6 ns for the fixed-step form in CeeSafe (two checks kept in its loop) and
+  10.8 ns for Rust's `partition_point`. Rewritten that way, the port's three searches give the same answers
+  (909,360 questions) but the lookups did not move by more than the spread (`spans` 261–275 ns, `position`
+  unchanged), so the trial was left as it was. CeeSafe's library has no `partitionPoint` for a port to call; one
+  would need an ADR.
+

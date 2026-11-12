@@ -94,10 +94,16 @@ Speed, in a release build against the original Rust compiled into the same test:
 | Build a map of 2,000 segments (512 different maps in turn) | 85 µs | 91 µs (5–9% slower) |
 
 Where the work is inside CeeSafe, as in building the index, it is equal. Where a small function is called across
-the boundary, it pays for
-the call: the Rust is inlined into its caller by link-time optimisation, and the CeeSafe archive does not take part
-in rustc's LTO. That is a cost of a hybrid build, not of the language, and a port of the calling crate would remove
-it.
+the boundary, it pays for the call: the Rust is inlined into its caller by link-time optimisation, and the CeeSafe
+archive does not take part in rustc's LTO. That is a cost of a hybrid build, not of the language, and a port of
+the calling crate would remove it.
+
+Measured apart later (2026-11-12), the boundary is the smaller part of the lookups' gap. A call into CeeSafe that
+does nothing costs 3 to 4 ns, the shim's conversions about 1 ns, and Rust gains about 2 ns from inlining its own
+function. That accounts for the simplest lookup (47 ns against 53) and fits the 7 ns of adding a mapping. It does
+not account for the largest one, `original_to_virtual_spans`: called directly, with no shim, the CeeSafe function
+still takes about 270 ns against the Rust function's 230. About 23 ns of that is in the routine that collects the
+segments at a position and 7 ns in allocation; we did not find what in the code costs it.
 
 Building a map is the row to read with care. Timed as the others were, by building the same 2,000 segments
 again and again, it was about twice as slow (27 µs against 50 to 59 µs), and when this was first written we had

@@ -1337,6 +1337,9 @@ typedef struct cee_io_result { int64_t value; int32_t error; } cee_io_result;
 #define CEE_ERROR_HOST_NOT_FOUND 65536
 /* ADR 0077: after HostNotFound. ENOSPC, and EDQUOT where the system has it; Windows' ERROR_DISK_FULL. */
 #define CEE_IO_STORAGE_FULL 20u
+/* ADR 0104: after StorageFull. EMFILE and ENFILE; Windows' ERROR_TOO_MANY_OPEN_FILES, which the runtime maps to
+   EMFILE. */
+#define CEE_IO_TOO_MANY_OPEN_FILES 21u
 
 /* The IoError variant for an errno value (hosted), and its message (core: static text). */
 uint32_t ceesafe_io_kind(int32_t error);
@@ -1380,6 +1383,9 @@ uint64_t ceesafe_clock_monotonic(void);
 int64_t ceesafe_host_rename(uint8_t const *from, uint64_t fromLength, uint8_t const *to, uint64_t toLength);
 int64_t ceesafe_host_dir_sync(uint8_t const *path, uint64_t length);
 int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total, uint64_t *free, uint64_t *available);
+/* ADR 0104: the open-file limit (soft and hard; UINT64_MAX when unlimited), and raising the soft one. */
+int64_t ceesafe_host_open_files(uint64_t *current, uint64_t *maximum);
+int64_t ceesafe_host_raise_open_files(uint64_t to, uint64_t *now);
 int64_t ceesafe_host_modified(uint8_t const *path, uint64_t length, int64_t *seconds, uint32_t *nanoseconds);
 /* ADR 0078 §3: an open File's (its first field is the descriptor) modification time, and kind (1 regular file,
    2 directory, 3 other), from fstat; negated errno on failure. */

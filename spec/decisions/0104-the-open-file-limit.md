@@ -110,3 +110,35 @@ A new built-in `IoError` variant, `TooManyOpenFiles`, after `StorageFull`: `EMFI
    Recommended: no, leave it to the program, which may know a number it wants.
 4. **Release:** alone as 0.41.0, or with whatever else is ready? Recommended: as soon as it passes, alone if nothing
    else is ready.
+
+## 7. Implementation and evidence
+
+- **Where:**
+  - `runtime/hosted/ceesafe_rt_io.c`: `ceesafe_host_open_files` and `ceesafe_host_raise_open_files` after
+    `ceesafe_host_space`, with `<sys/resource.h>` where the system has it (`CEE_HAVE_RLIMIT`; else `Unsupported`) and
+    `<sys/sysctl.h>`, `<limits.h>` on Apple systems; `ceesafe_io_kind` maps `EMFILE` and `ENFILE`.
+  - `runtime/include/ceesafe/rt.h`: `CEE_IO_TOO_MANY_OPEN_FILES` (21) and the two declarations;
+    `runtime/core/ceesafe_rt_core.c`: the message.
+  - `lib/std/host.cee`: `OpenFileLimit`, `ProcessLimits`, the externs, and kind 21 in `HostServices.hostError`.
+  - The checker's variant list (`src/check/structs.cee`); the interpreter (`src/interpreter/io.cee`): the message,
+    `errnoOfMessage`, `ioKindOf` (`EMFILE`, `ENFILE`), and `Unsupported` for both host calls. The compiler's own
+    sources name no new variant, so the bootstrap chain (0.8.0) builds them.
+  - type-system.md §26.2 and §26.14, the guide, `spec/api/std.md` (`ceesafec doc lib/std`); corpus
+    `run-pass/process-limits.cee`.
+- **Measured before writing it** (a C probe of `setrlimit`, soft limit only): macOS 27 on an M1 accepts any value,
+  unlimited included, with `kern.maxfilesperproc` 61,440 the real cap; Debian 13 accepts its hard limit (524,288) and
+  refuses one more with `EINVAL`. macOS 15 was not reachable for this release, so the `OPEN_MAX` fallback is untested
+  there; on macOS 27 it is never taken.
+- **The new test:** natively with the shell's limit (1,048,576: too large to exhaust, so that part prints its line
+  without opening), under `ulimit -Sn 256` (raised to 272, then opens until one is `TooManyOpenFiles`, with its
+  message), and in the interpreter (`Unsupported`): the same four lines.
+- **Checks (Debian 13, x86-64, in the CosmoStore benchmark container, 0.40.0's main with and without the branch, both
+  as git checkouts):** `tools/contract_tests.py` passes the same 34 suites on both and fails the same 7 on both
+  (corpus's partial status, `run fortify` and `run split` on two ffi programs, `run interp` on run-fail, packages,
+  embedding, cbind). Those 7 fail on 0.39.0's main in that container too: the container's, not this ADR's. The
+  corpus's run-pass family: 328 on the branch, 327 without.
+- **Checks (macOS 27, M1, load average 9 to 27 from two virtual machines):** `tools/contract_tests.py` passes every
+  suite but the corpus's partial status, as on main; run-pass 328 with `-Werror`. `tools/spec_check.py`: 0 problems.
+- **Found on the way:** the interpreter's `ioKindOf` does not map `ENOSPC` to `StorageFull` (ADR 0077); an
+  interpreted program gets `Other(28)`. Not changed here.
+- **Not run:** Windows (the release workflow builds and smoke-tests it), CosmoOS, macOS 15.

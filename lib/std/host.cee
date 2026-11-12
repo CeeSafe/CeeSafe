@@ -23,6 +23,10 @@ extern "C" {
     fn ceesafe_host_dir_sync(path: *u8, length: u64) -> i64;
     @effects(sleep)
     fn ceesafe_host_space(path: *u8, length: u64, total: *mut u64, free: *mut u64, available: *mut u64) -> i64;
+    @effects()
+    fn ceesafe_host_open_files(current: *mut u64, maximum: *mut u64) -> i64;
+    @effects()
+    fn ceesafe_host_raise_open_files(to: u64, now: *mut u64) -> i64;
     @effects(sleep)
     fn ceesafe_host_console_flush() -> i64;
     @effects(sleep)
@@ -94,6 +98,46 @@ public struct Environment {
         }
         let bytes = unsafe { Slice.fromRaw(value, truncate<usize>(length)) };
         return StringView.fromUtf8(bytes);
+    }
+}
+
+/// The process's open-file limit (`ProcessLimits.openFiles`, ADR 0104). u64's maximum stands for "unlimited".
+public struct OpenFileLimit {
+    /// The soft limit: the most descriptors the process may hold now.
+    public current: u64;
+    /// The hard limit: the most `current` may be raised to without privilege.
+    public maximum: u64;
+}
+
+/// Limits the system puts on the process (type-system.md §26.12, ADR 0104). Hosted only; the interpreter answers
+/// `Unsupported`.
+public struct ProcessLimits {
+    /// The open-file limit: POSIX `getrlimit(RLIMIT_NOFILE)`. Windows' handles have no count limit: both are u64's
+    /// maximum there.
+    /// Safety: the runtime writes the two values during the call only.
+    public fn openFiles() -> Result<OpenFileLimit, IoError> {
+        var current: u64 = 0;
+        var maximum: u64 = 0;
+        let result = unsafe {
+            ceesafe_host_open_files(borrow mut current as *mut u64, borrow mut maximum as *mut u64)
+        };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(OpenFileLimit { current: current, maximum: maximum });
+    }
+
+    /// Raises the soft open-file limit to `to`, at most the hard limit (and, on Apple systems, the kernel's
+    /// `kern.maxfilesperproc`, or `OPEN_MAX` where an older release refuses more), and returns the soft limit
+    /// afterwards. It never lowers it. A server calls it once at start: `ProcessLimits.raiseOpenFiles(u64.max)`.
+    /// Safety: the runtime writes the value during the call only.
+    public fn raiseOpenFiles(to: u64) -> Result<u64, IoError> {
+        var now: u64 = 0;
+        let result = unsafe { ceesafe_host_raise_open_files(to, borrow mut now as *mut u64) };
+        if (result < 0) {
+            return Err(HostServices.hostError(result));
+        }
+        return Ok(now);
     }
 }
 
@@ -462,6 +506,7 @@ public struct HostServices {
             18 => IoError.Unsupported,
             19 => IoError.HostNotFound,
             20 => IoError.StorageFull,
+            21 => IoError.TooManyOpenFiles,
             _ => IoError.Other(error),
         };
     }

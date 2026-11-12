@@ -22,6 +22,8 @@
 - [enum PathKind](#enum-pathkind)
 - [struct ProcessOutput](#struct-processoutput)
 - [struct Environment](#struct-environment)
+- [struct OpenFileLimit](#struct-openfilelimit)
+- [struct ProcessLimits](#struct-processlimits)
 - [struct VolumeSpace](#struct-volumespace)
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
@@ -1330,6 +1332,47 @@ public fn variable(name: StringView) -> StringView?
 The value of the variable `name` as static text, or null if it is not set or not valid UTF-8.
 Safety: the runtime returns getenv's text, which stays valid and unchanged: CeeSafe has no way to change the
 environment (C code that calls setenv breaks this, as it does in C).
+
+## struct OpenFileLimit
+
+```ceesafe
+public struct OpenFileLimit {
+    public current: u64;
+    public maximum: u64;
+}
+```
+
+The process's open-file limit (`ProcessLimits.openFiles`, ADR 0104). u64's maximum stands for "unlimited".
+
+## struct ProcessLimits
+
+```ceesafe
+public struct ProcessLimits
+```
+
+Limits the system puts on the process (type-system.md §26.12, ADR 0104). Hosted only; the interpreter answers
+`Unsupported`.
+
+### ProcessLimits.openFiles
+
+```ceesafe
+public fn openFiles() -> Result<OpenFileLimit, IoError>
+```
+
+The open-file limit: POSIX `getrlimit(RLIMIT_NOFILE)`. Windows' handles have no count limit: both are u64's
+maximum there.
+Safety: the runtime writes the two values during the call only.
+
+### ProcessLimits.raiseOpenFiles
+
+```ceesafe
+public fn raiseOpenFiles(to: u64) -> Result<u64, IoError>
+```
+
+Raises the soft open-file limit to `to`, at most the hard limit (and, on Apple systems, the kernel's
+`kern.maxfilesperproc`, or `OPEN_MAX` where an older release refuses more), and returns the soft limit
+afterwards. It never lowers it. A server calls it once at start: `ProcessLimits.raiseOpenFiles(u64.max)`.
+Safety: the runtime writes the value during the call only.
 
 ## struct VolumeSpace
 

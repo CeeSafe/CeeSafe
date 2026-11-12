@@ -2408,12 +2408,14 @@ A built-in enum, like `AllocError`, with the variants `NotFound`, `PermissionDen
 after it (ADR 0044, so the earlier variants keep their tags) the network kinds `ConnectionReset`,
 `ConnectionAborted`, `NotConnected`, `TimedOut`, `HostUnreachable`, `NetworkUnreachable`,
 `AddressNotAvailable` and `Unsupported`, and after them (ADR 0060) `HostNotFound`, the resolver's "no such host",
-and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`.
+and (ADR 0077) `StorageFull`: `ENOSPC` or `EDQUOT`, Windows' `ERROR_DISK_FULL`, and (ADR 0104)
+`TooManyOpenFiles`: `EMFILE` or `ENFILE`, Windows' `ERROR_TOO_MANY_OPEN_FILES`.
 `e.message()` is a `StringView` of static text describing it, glibc's `strerror` wording on every
 platform: "No such file or directory", "Permission denied", …, "Connection reset by peer",
 "Software caused connection abort", "Transport endpoint is not connected", "Connection timed out",
 "No route to host", "Network is unreachable", "Cannot assign requested address", "Operation not
-supported", "Host not found", which no errno has, and "No space left on device"; `Other`'s is "Input/output error".
+supported", "Host not found", which no errno has, "No space left on device" and "Too many open files"; `Other`'s is
+"Input/output error".
 
 | Variant | POSIX | Winsock |
 |---|---|---|
@@ -2431,7 +2433,8 @@ supported", "Host not found", which no errno has, and "No space left on device";
 deadline of the program's. A `match` that names the first eleven variants and has no `_` arm does
 not cover the network kinds (N0256): a source change of 0.7.0; one that names the first nineteen does not cover
 `HostNotFound` (N0256): a source change of ADR 0060's release; one that names the first twenty does not cover
-`StorageFull`: a source change of ADR 0077's.
+`StorageFull`: a source change of ADR 0077's; one that names the first twenty-one does not cover `TooManyOpenFiles`: a
+source change of ADR 0104's.
 
 ### 26.3 Files and the console
 - `File` owns an open file. It is a **move type that needs drop**: destroying it closes the file
@@ -2696,6 +2699,19 @@ Diagnostics: none new.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
   to `open`.
+
+### 26.14 Process limits (ADR 0104)
+- `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft
+  limit, the most descriptors the process may hold now) and `maximum` (the hard limit, the most `current` may be
+  raised to without privilege). u64's maximum stands for unlimited. POSIX `getrlimit(RLIMIT_NOFILE)`; on Windows,
+  whose handles have no count limit, both are u64's maximum.
+- `ProcessLimits.raiseOpenFiles(to)`: `Result<u64, IoError>`. It raises the soft limit to `to`, at most the hard
+  limit, and on Apple systems at most `kern.maxfilesperproc` (or `OPEN_MAX`, 10,240, where a release refuses more),
+  and returns the soft limit afterwards. It never lowers it: a `to` at or below the soft limit changes nothing. It
+  cannot raise the hard limit. Windows answers u64's maximum and changes nothing.
+- The runtime never raises the limit by itself: a program that needs more descriptors, a server, calls
+  `raiseOpenFiles` once at start.
+- Hosted only: in freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`.
 
 ## 27. Raw pointers and `unsafe` (M8a)
 
@@ -4111,7 +4127,7 @@ fn main() {
 | `s.sortBy(cmp)` | `SliceMut<T>`, or a vector (lending its elements mutably) | `borrow mut fn(borrow T, borrow T) -> i32` | `void` |
 | `s.forEach(visit)` | `Slice<T>` (a `SliceMut<T>` coerces), or a vector | `borrow mut fn(borrow T)` | `void` |
 | `s.any(test)`, `s.all(test)` | as `forEach` | `borrow mut fn(borrow T) -> bool` | `bool` |
-| `s.partitionPoint(test)` (ADR 0103) | as `forEach` | `borrow mut fn(borrow T) -> bool` | `usize` |
+| `s.partitionPoint(test)` (ADR 0104) | as `forEach` | `borrow mut fn(borrow T) -> bool` | `usize` |
 | `v.retain(keep)` | a `Vector<T, A>` (a mutable place) | `borrow mut fn(borrow T) -> bool` | `void` |
 
   The closure types are `borrow mut fn`, so a closure that changes what it captures may be passed, and so may a
@@ -4127,7 +4143,7 @@ fn main() {
     descending run is reversed, after at most n − 1 calls of `cmp`.
   - If `cmp` is not a consistent order, or changes what it captures, the elements end in some order: they are
     still a permutation of the input, and nothing panics or misbehaves.
-- **`partitionPoint`** (ADR 0103) is a binary search. For a slice **partitioned** by `test` (every element for which
+- **`partitionPoint`** (ADR 0104) is a binary search. For a slice **partitioned** by `test` (every element for which
   it returns `true` comes before every element for which it returns `false`) it returns the index of the first
   element for which `test` is false: the length if there is none, 0 for an empty slice. So for a slice sorted by a
   key, `s.partitionPoint((e) => e.key < k)` is where `k` is or would be inserted, and `(e) => e.key <= k` the index
@@ -4137,7 +4153,7 @@ fn main() {
     the result is some index of the slice or its length.
   - The number of steps depends on the length alone, so the loop's own branch does not wait for `test`'s results.
     Written by hand as a loop that ends when two bounds meet, the same search took 16 ns where this takes 9 (2,000
-    elements, random keys; ADR 0103).
+    elements, random keys; ADR 0104).
 - **`forEach`** calls `visit` on each element in index order. **`any`** calls `test` in index order until it returns
   `true` (then `true`; `false` for an empty slice), and **`all`** until it returns `false` (then `false`; `true` for
   an empty slice).

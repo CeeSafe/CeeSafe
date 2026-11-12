@@ -48,6 +48,16 @@
 #else
 #include <dirent.h>
 #include <sys/statvfs.h>
+#if defined(__has_include)
+#if __has_include(<sys/resource.h>)
+#include <sys/resource.h> /* getrlimit, setrlimit (ADR 0104) */
+#define CEE_HAVE_RLIMIT 1
+#endif
+#endif
+#if defined(__APPLE__)
+#include <limits.h>     /* OPEN_MAX */
+#include <sys/sysctl.h> /* kern.maxfilesperproc */
+#endif
 #include <netinet/in.h>
 #include <spawn.h>
 #include <sys/socket.h>
@@ -129,6 +139,7 @@ uint32_t ceesafe_io_kind(int32_t error) {
 #ifdef EDQUOT
     case EDQUOT: return CEE_IO_STORAGE_FULL;
 #endif
+    case EMFILE: case ENFILE: return CEE_IO_TOO_MANY_OPEN_FILES; /* ADR 0104 */
     default: return CEE_IO_OTHER;
     }
 }
@@ -2017,6 +2028,72 @@ int64_t ceesafe_host_space(uint8_t const *path, uint64_t length, uint64_t *total
     *free = (uint64_t)st.f_bfree * unit;
     *available = (uint64_t)st.f_bavail * unit;
     return 0;
+#endif
+}
+
+/* `ProcessLimits.openFiles()` (ADR 0104): the soft and hard limits on open descriptors, UINT64_MAX when unlimited.
+   Windows' handles have no count limit. */
+int64_t ceesafe_host_open_files(uint64_t *current, uint64_t *maximum) {
+    *current = 0;
+    *maximum = 0;
+#ifdef _WIN32
+    *current = UINT64_MAX;
+    *maximum = UINT64_MAX;
+    return 0;
+#elif defined(CEE_HAVE_RLIMIT)
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return -(int64_t)errno;
+    *current = limit.rlim_cur == RLIM_INFINITY ? UINT64_MAX : (uint64_t)limit.rlim_cur;
+    *maximum = limit.rlim_max == RLIM_INFINITY ? UINT64_MAX : (uint64_t)limit.rlim_max;
+    return 0;
+#else
+    return -(int64_t)EOPNOTSUPP;
+#endif
+}
+
+/* `ProcessLimits.raiseOpenFiles(to)` (ADR 0104): raises the soft limit to `to`, at most the hard limit and, on Apple
+   systems, `kern.maxfilesperproc` (older releases refuse more than OPEN_MAX: then that). Never lowers it. `now` is the
+   soft limit afterwards. */
+int64_t ceesafe_host_raise_open_files(uint64_t to, uint64_t *now) {
+    *now = 0;
+#ifdef _WIN32
+    (void)to;
+    *now = UINT64_MAX;
+    return 0;
+#elif defined(CEE_HAVE_RLIMIT)
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0) return -(int64_t)errno;
+    uint64_t current = limit.rlim_cur == RLIM_INFINITY ? UINT64_MAX : (uint64_t)limit.rlim_cur;
+    uint64_t maximum = limit.rlim_max == RLIM_INFINITY ? UINT64_MAX : (uint64_t)limit.rlim_max;
+    *now = current;
+    uint64_t target = to < maximum ? to : maximum;
+#if defined(__APPLE__)
+    int cap = 0;
+    size_t size = sizeof cap;
+    if (sysctlbyname("kern.maxfilesperproc", &cap, &size, NULL, 0) == 0 && cap > 0 && target > (uint64_t)cap) {
+        target = (uint64_t)cap;
+    }
+#endif
+    if (target <= current) return 0;
+    limit.rlim_cur = (rlim_t)target;
+    if (setrlimit(RLIMIT_NOFILE, &limit) != 0) {
+        int error = errno;
+#if defined(__APPLE__)
+        if (error == EINVAL && target > (uint64_t)OPEN_MAX && current < (uint64_t)OPEN_MAX) {
+            limit.rlim_cur = (rlim_t)OPEN_MAX;
+            if (setrlimit(RLIMIT_NOFILE, &limit) == 0) {
+                *now = (uint64_t)OPEN_MAX;
+                return 0;
+            }
+        }
+#endif
+        return -(int64_t)error;
+    }
+    *now = target;
+    return 0;
+#else
+    (void)to;
+    return -(int64_t)EOPNOTSUPP;
 #endif
 }
 

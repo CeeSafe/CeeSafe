@@ -104,6 +104,29 @@ A vector can be passed where a `Slice<T>` is expected (it lends its elements), a
 `v.view()` and `v.viewMut()` give the slices explicitly. Other members: `capacity`, `clear()`, `truncate(n)`,
 `swap(i, j)`, and `Vector<T>.withCapacity(n)`.
 
+`v.clone()` makes a second vector with a copy of the elements, which must be Copy. It allocates, so it returns a
+`Result`, and afterwards the two vectors have nothing to do with each other.
+
+```ceesafe
+fn main() {
+    var first = Vector<i32>.create();
+    first.push(1)!;
+    first.push(2)!;
+    var second = first.clone()!;           // Result<Vector<i32>, AllocError>
+    second.push(3)!;
+    first[0] = 10;
+    Console.writeLine(first.length);
+    Console.writeLine(second.length);
+    Console.writeLine(second[0]);
+}
+```
+
+```text
+2
+3
+1
+```
+
 **Invalidation is a compile error.** Growing a vector may move its elements, so while any element or view of it is
 borrowed, `push`, `pop`, `clear` and writes are rejected. This is the most common thing the borrow checker catches
 in code that would crash in C++.
@@ -145,6 +168,28 @@ true
 - A `String` can only receive valid UTF-8 (`append` takes a view, which always is), so its contents are always valid
   text.
 - `==` compares bytes, on views and on `String`s.
+
+`String.from(text)` makes an owned string from a view in one call, and `s.clone()` copies a string. Both allocate,
+so both return a `Result`; neither touches the text it copies.
+
+```ceesafe
+fn main() {
+    var name = String.from("Ada")!;        // Result<String, AllocError>
+    var other = name.clone()!;
+    other.append(" Lovelace")!;
+    name.append("!")!;
+    Console.writeLine(name);
+    Console.writeLine(other);
+    let first = String.from(other[0..3])!; // from a part of another string
+    Console.writeLine(first);
+}
+```
+
+```text
+Ada!
+Ada Lovelace
+Ada
+```
 
 Numbers in other forms go through lib/core's helpers, which a `String` and a `Vector<u8>` both have (and `VectorBytes`
 as static functions): `appendHex(n, minWidth, upper)`, `appendOctal(n)`, `appendFixed(f, digits)`, rounded half to

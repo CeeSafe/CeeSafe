@@ -2,7 +2,7 @@
 // CheckVectorCreate, CheckVectorMethod, NumberToFormat, CheckViewMethod, CheckSliceMethod's copyFrom and fill,
 // CheckStringViewFunction, PrintableView, and the vector cases of SynthMember and CheckFor): P3 S3b. The methods that
 // call lib/core (`retain`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`, `splitAtMut`) come with the library
-// (S5) and closures (S6).
+// (S5) and closures (S6); `clone` and `String.from` (ADR 0108) are lib/core's too.
 
 fn builtinVector() -> u32 => 14;
 fn builtinString() -> u32 => 15;
@@ -79,7 +79,8 @@ fn isBareContainerName(text: Slice<u8>) -> bool =>
     ) || sameText(text, "Vector") || sameText(text, "SlotMap") || sameText(text, "StableVector") ||
         sameText(text, "Handle");
 
-/// `Vector.create()`, `Vector<T>.withCapacity(n)`, `String.create()` (CheckVectorCreate, §23).
+/// `Vector.create()`, `Vector<T>.withCapacity(n)`, `String.create()` (CheckVectorCreate, §23), and `String.from(text)`
+/// (ADR 0108): lib/core's StringCopying.
 fn checkVectorCreate(
     c: borrow mut Checker,
     member: u32,
@@ -94,10 +95,11 @@ fn checkVectorCreate(
     let ident = c.front.ast.idents[member as usize];
     let text = c.name(ident.symbol);
     let withCapacity = sameText(text, "withCapacity");
+    let fromText = isString && sameText(text, "from");
     if (!isString && isVectorRawName(text)) {
         return checkVectorRaw(c, member, typeArguments, arguments, expected, span);
     }
-    if (!withCapacity && !sameText(text, "create")) {
+    if (!withCapacity && !fromText && !sameText(text, "create")) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendText(mut message, kind)?;
@@ -108,6 +110,9 @@ fn checkVectorCreate(
         appendText(mut message, ".create()' or '")?;
         appendText(mut message, kind)?;
         appendText(mut message, ".withCapacity(n)'")?;
+        if (isString) {
+            appendText(mut message, ", or 'String.from(text)'")?;
+        }
         if (!isString) {
             appendText(
                 mut message,
@@ -118,11 +123,13 @@ fn checkVectorCreate(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if (arguments.count != (if (withCapacity) 1u32 else 0u32)) {
+    if (arguments.count != (if (withCapacity || fromText) 1u32 else 0u32)) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendText(mut message, kind)?;
-        if (withCapacity) {
+        if (fromText) {
+            appendText(mut message, ".from' takes the text to copy: 'String.from(text)'")?;
+        } else if (withCapacity) {
             appendText(mut message, ".withCapacity' takes the number of elements: '")?;
             appendText(mut message, kind)?;
             appendText(mut message, ".withCapacity(n)'")?;
@@ -141,6 +148,12 @@ fn checkVectorCreate(
         let argument = c.front.ast.at(arguments, 0);
         capacity = checkExpr(c, argument, usize)?;
     }
+    var text0 = none();
+    if (fromText) {
+        let view = c.types.stringView;
+        let argument = c.front.ast.at(arguments, 0);
+        text0 = checkArgument(c, argument, view)?;
+    }
     var vector = none();
     if (typeArguments.count > 0) {
         if (typeArguments.count > (if (isString) 1u32 else 2u32)) {
@@ -157,7 +170,7 @@ fn checkVectorCreate(
         vector = resolveVectorType(c, isString, typeArguments)?;
     } else {
         var hint = expected;
-        if (withCapacity) {
+        if (withCapacity || fromText) {
             hint = if (expected != none() && isResultType(c, expected)) resultOk(c, expected) else none();
         }
         if (hint != none() && c.types.is(hint, TypeKind.Vector) && c.types.isString(hint) == isString) {
@@ -181,6 +194,12 @@ fn checkVectorCreate(
     if (c.types.isBottom(vector) || (capacity != none() && c.isBottom(capacity))) {
         return c.errorResult(span.start, span.end);
     }
+    if (fromText) {
+        if (c.isBottom(text0)) {
+            return c.errorResult(span.start, span.end);
+        }
+        return stringCopy(c, vector, text0, span);
+    }
     if (withCapacity) {
         let values = [capacity];
         let list = c.hir.list(values[..])?;
@@ -189,6 +208,21 @@ fn checkVectorCreate(
         return c.expr(HirExpr.BuiltinCall(bfVectorWithCapacity(), list), result, span.start, span.end);
     }
     return c.expr(HirExpr.BuiltinCall(bfVectorCreate(), emptyRange()), vector, span.start, span.end);
+}
+
+/// A call of lib/core's `StringCopying.from(text)` (ADR 0108), or of `fromFailing` for a string of `FailingAllocator`,
+/// the only other allocator a string has (§23.1): `string` is the type of the string to make, `text` a `StringView`.
+fn stringCopy(c: borrow mut Checker, string: u32, text: u32, span: Span) -> Result<u32, AllocError> {
+    let failing = c.types.info(string).allocator == c.structs[1].typ;
+    let symbol = c.intern(if (failing) "fromFailing" else "from")?;
+    let none0 = Vector<u32>.create();
+    let function = libraryFunction(c, "StringCopying", none0.view(), symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library function", "ADR 0108")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [text];
+    return libraryCall(c, function, values[..], span);
 }
 
 fn isVectorRawName(text: Slice<u8>) -> bool =>
@@ -457,6 +491,9 @@ fn checkVectorMethod(
     if (!isString && (sameText(text, "insert") || sameText(text, "remove") || sameText(text, "swapRemove"))) {
         return checkVectorEditing(c, member, arguments, vector, targetSpan, span);
     }
+    if (sameText(text, "clone")) {
+        return checkVectorClone(c, member, arguments, vector, targetSpan, span);
+    }
     if (!isString && sameText(text, "setLength")) {
         return checkVectorBuffer(c, member, arguments, vector, targetSpan, span);
     }
@@ -473,8 +510,8 @@ fn checkVectorMethod(
         appendQuotedName(mut message, c, ident.symbol)?;
         appendText(
             mut message,
-            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes'"
-                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove'",
+            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes', 'clone'"
+                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove', 'clone'",
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
@@ -949,4 +986,56 @@ fn checkVectorEditing(
         values.push(value)?;
     }
     return libraryCall(c, function, values.view(), span);
+}
+
+/// `v.clone()` and `s.clone()` (ADR 0108): a new vector or string of the same type, allocator included, holding a copy
+/// of the elements or the text; `Result<…, AllocError>`. The receiver is only read (`borrow this`). A vector's
+/// elements must be Copy (N0259, as for `extend`). They are lib/core's VectorCopying<T> and StringCopying.
+fn checkVectorClone(
+    c: borrow mut Checker,
+    member: u32,
+    arguments: Range,
+    vector: u32,
+    targetSpan: Span,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let ident = c.front.ast.idents[member as usize];
+    let typ = c.typeOf(vector);
+    let isString = c.types.isString(typ);
+    if (arguments.count != 0) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'clone' takes no arguments")?;
+        c.error(argumentCount(), span.start, span.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let pointee = c.types.info(typ).pointee;
+    let element = c.types.info(pointee).element;
+    if (!isString && !c.types.isCopy(element)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'clone' copies elements, so the element type must be Copy; ")?;
+        appendQuotedType(mut message, c, element)?;
+        appendText(mut message, " is not")?;
+        c.error(invalidArray(), ident.start, ident.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let s = c.spanOf(vector);
+    let elements = c.expr(HirExpr.Deref(vector), pointee, s.start, s.end)?;
+    let view = borrowReceiver(c, elements, false, targetSpan)?;
+    if (c.isBottom(view)) {
+        return c.errorResult(span.start, span.end);
+    }
+    if (isString) {
+        return stringCopy(c, typ, view, span);
+    }
+    let failing = c.types.info(typ).allocator == c.structs[1].typ;
+    let symbol = c.intern(if (failing) "cloneFailing" else "clone")?;
+    let types = [element];
+    let function = libraryFunction(c, "VectorCopying", types[..], symbol, span)?;
+    if (function == none()) {
+        c.notPorted(span.start, span.end, "this library method", "ADR 0108")?;
+        return c.errorResult(span.start, span.end);
+    }
+    let values = [view];
+    return libraryCall(c, function, values[..], span);
 }

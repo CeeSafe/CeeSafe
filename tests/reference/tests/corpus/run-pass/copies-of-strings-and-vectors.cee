@@ -1,0 +1,196 @@
+// `String.from(text)`, `s.clone()` and `v.clone()` (ADR 0108, type-system.md §23.1, §23.2): one call, one allocation
+// sized as `withCapacity` of the length (never under 4 elements), a `Result`; the copy and the original are
+// independent.
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn shout(text: StringView) -> Result<String, AllocError> {
+    var s = String.from(text)?;
+    s.append("!")?;
+    return Ok(s);
+}
+
+fn doubled(values: borrow Vector<i32>) -> Result<Vector<i32>, AllocError> {
+    var copy = values.clone()?;
+    for (i in 0..copy.length) {
+        copy[i] *= 2;
+    }
+    return Ok(copy);
+}
+
+fn copyOf(s: borrow String) -> Result<String, AllocError> => s.clone();
+
+fn report(r: Result<String<FailingAllocator>, AllocError>) {
+    match (r) {
+        Ok(s) => {
+            Console.writeLine(s.length);
+        }
+        Err(_) => {
+            Console.writeLine("out of memory");
+        }
+    }
+}
+
+fn reportBytes(r: Result<Vector<u8, FailingAllocator>, AllocError>) {
+    match (r) {
+        Ok(v) => {
+            Console.writeLine(v.length);
+        }
+        Err(_) => {
+            Console.writeLine("out of memory");
+        }
+    }
+}
+
+fn main() {
+    // A string from text: exactly sized.
+    var s = String.from("héllo")!;
+    Console.writeLine(s);
+    Console.writeLine(s.length);
+    Console.writeLine(s.capacity);
+
+    // A copy is independent of its original.
+    var t = s.clone()!;
+    t.append(", wörld")!;
+    s.append("?")!;
+    Console.writeLine(s);
+    Console.writeLine(t);
+
+    // From a view of a string, from a slice of one, through a reference, in a function.
+    let u = String.from(t.view())!;
+    let w = String.from(t[0..6])!;
+    let x = copyOf(borrow u)!;
+    Console.writeLine(u);
+    Console.writeLine(w);
+    Console.writeLine(x);
+    let loud = shout("hey")!;
+    Console.writeLine(loud);
+
+    // The type from the expected one.
+    let typed: String = String.from("typed")!;
+    Console.writeLine(typed);
+
+    // Empty: no allocation, no capacity.
+    let empty = String.from("")!;
+    Console.writeLine(empty.length);
+    Console.writeLine(empty.capacity);
+    let empty2 = empty.clone()!;
+    Console.writeLine(empty2.capacity);
+    Console.writeLine(empty2.view() == "");
+
+    // A long one.
+    var long = String.create();
+    for (i in 0..1000) {
+        long.appendNumber(i)!;
+        long.append(" ")!;
+    }
+    let long2 = long.clone()!;
+    Console.writeLine(long2.length);
+    Console.writeLine(long2.capacity == long2.length);
+    Console.writeLine(long2.view() == long.view());
+    Console.writeLine(long2[long2.length - 4..long2.length - 1]);
+
+    // Vectors.
+    var v = Vector<i32>.create();
+    v.push(1)!;
+    v.push(2)!;
+    v.push(3)!;
+    var c = v.clone()!;
+    c.push(4)!;
+    v[0] = 10;
+    Console.writeLine(v.length);
+    Console.writeLine(v[0]);
+    Console.writeLine(c.length);
+    Console.writeLine(c[0]);
+    Console.writeLine(c[3]);
+    let d = doubled(borrow c)!;
+    Console.writeLine(d[3]);
+    Console.writeLine(d.capacity);
+
+    // Copy structs as elements.
+    var points = Vector<Point>.create();
+    points.push(Point { x: 1, y: 2 })!;
+    points.push(Point { x: 3, y: 4 })!;
+    var points2 = points.clone()!;
+    points2[1].y = 40;
+    Console.writeLine(points[1].y);
+    Console.writeLine(points2[1].y);
+    Console.writeLine(points2.capacity);
+
+    // An empty vector, and a long one.
+    let none = Vector<u64>.create();
+    let none2 = none.clone()!;
+    Console.writeLine(none2.length);
+    Console.writeLine(none2.capacity);
+    var many = Vector<u64>.create();
+    var next: u64 = 0;
+    while (next < 15000) {
+        many.push(next)!;
+        next += 3;
+    }
+    let many2 = many.clone()!;
+    var same = many2.length == many.length;
+    for (i in 0..many.length) {
+        same = same && many[i] == many2[i];
+    }
+    Console.writeLine(same);
+    Console.writeLine(many2.capacity);
+
+    // The other allocator: the copy has its original's allocator, and the failure is a value.
+    var bytes = Vector<u8, FailingAllocator>.create();
+    bytes.extend("abc".bytes())!;
+    reportBytes(bytes.clone());
+    var limited = String<FailingAllocator>.from("limited")!;
+    report(limited.clone());
+    FailingAllocator.failAfter(0u64);
+    reportBytes(bytes.clone());
+    report(limited.clone());
+    report(String<FailingAllocator>.from("more"));
+    report(String<FailingAllocator>.from("")); // nothing to allocate
+    FailingAllocator.reset();
+    limited.append(" again")!;
+    report(limited.clone());
+    Console.writeLine(bytes.length);
+}
+// expect-stdout: héllo
+// expect-stdout: 6
+// expect-stdout: 6
+// expect-stdout: héllo?
+// expect-stdout: héllo, wörld
+// expect-stdout: héllo, wörld
+// expect-stdout: héllo
+// expect-stdout: héllo, wörld
+// expect-stdout: hey!
+// expect-stdout: typed
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 3890
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 999
+// expect-stdout: 3
+// expect-stdout: 10
+// expect-stdout: 4
+// expect-stdout: 1
+// expect-stdout: 4
+// expect-stdout: 8
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 40
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: true
+// expect-stdout: 5000
+// expect-stdout: 3
+// expect-stdout: 7
+// expect-stdout: out of memory
+// expect-stdout: out of memory
+// expect-stdout: out of memory
+// expect-stdout: 0
+// expect-stdout: 13
+// expect-stdout: 3

@@ -368,6 +368,25 @@ public struct VectorEditing<T> {
     }
 }
 
+/// `v.clone()` (ADR 0108, type-system.md §23.1): a new vector holding a copy of the elements, so the element type is
+/// Copy. One allocation, sized as `withCapacity` of the length sizes it, none for an empty slice. The `…Failing`
+/// function makes a vector of `FailingAllocator`.
+public struct VectorCopying<T: Copy> {
+    /// A vector with a copy of the elements of `s`: its length is `s.length`, its capacity at least that.
+    public fn clone(s: Slice<T>) -> Result<Vector<T>, AllocError> {
+        var copy = Vector<T>.withCapacity(s.length)?;
+        copy.extend(s)?;
+        return Ok(copy);
+    }
+
+    /// `clone` for a vector of `FailingAllocator`.
+    public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, AllocError> {
+        var copy = Vector<T, FailingAllocator>.withCapacity(s.length)?;
+        copy.extend(s)?;
+        return Ok(copy);
+    }
+}
+
 /// What a vector is made of (ADR 0090 §2.1, type-system.md §23.3): `pointer` is null when `capacity` is 0.
 public struct VectorParts<T> {
     public pointer: *mut T;

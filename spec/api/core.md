@@ -48,6 +48,7 @@
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
 - [struct VectorEditing](#struct-vectorediting)
+- [struct VectorCopying](#struct-vectorcopying)
 - [struct VectorParts](#struct-vectorparts)
 - [struct VectorRaw](#struct-vectorraw)
 - [struct VectorForeign](#struct-vectorforeign)
@@ -57,6 +58,7 @@
 - [struct ByteSplit](#struct-bytesplit)
 - [struct TextSearch](#struct-textsearch)
 - [struct ByteSearch](#struct-bytesearch)
+- [struct StringCopying](#struct-stringcopying)
 
 ## struct PhysAddr
 
@@ -2716,6 +2718,32 @@ public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize
 
 `swapRemove` for a vector of `FailingAllocator`.
 
+## struct VectorCopying
+
+```ceesafe
+public struct VectorCopying<T: Copy>
+```
+
+`v.clone()` (ADR 0108, type-system.md §23.1): a new vector holding a copy of the elements, so the element type is
+Copy. One allocation, sized as `withCapacity` of the length sizes it, none for an empty slice. The `…Failing`
+function makes a vector of `FailingAllocator`.
+
+### VectorCopying.clone
+
+```ceesafe
+public fn clone(s: Slice<T>) -> Result<Vector<T>, AllocError>
+```
+
+A vector with a copy of the elements of `s`: its length is `s.length`, its capacity at least that.
+
+### VectorCopying.cloneFailing
+
+```ceesafe
+public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, AllocError>
+```
+
+`clone` for a vector of `FailingAllocator`.
+
 ## struct VectorParts
 
 ```ceesafe
@@ -3029,3 +3057,29 @@ public fn splitOnce(s: Slice<r, u8>, separator: Slice<u8>) -> ByteHalves<r>?
 ```ceesafe
 public fn split(s: Slice<r, u8>, separator: Slice<r, u8>) -> ByteSplit<r>
 ```
+
+## struct StringCopying
+
+```ceesafe
+public struct StringCopying
+```
+
+`String.from(text)` and `s.clone()` (ADR 0108, type-system.md §23.2): a new string holding a copy of a text. One
+allocation, sized as `withCapacity` of the length in bytes sizes it, none for an empty text. The `…Failing`
+function makes a string of `FailingAllocator`.
+
+### StringCopying.from
+
+```ceesafe
+public fn from(text: StringView) -> Result<String, AllocError>
+```
+
+A string with a copy of `text`: its length is `text.length`, its capacity at least that.
+
+### StringCopying.fromFailing
+
+```ceesafe
+public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, AllocError>
+```
+
+`from` for a string of `FailingAllocator`.

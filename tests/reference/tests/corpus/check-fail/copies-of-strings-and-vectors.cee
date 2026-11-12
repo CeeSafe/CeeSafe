@@ -1,0 +1,20 @@
+// clone copies elements, so a vector's must be Copy; clone and String.from take what they say; the results are
+// Results; a vector has no `from` (ADR 0108).
+struct Owned {
+    b: Box<i32>;
+}
+
+fn main() {
+    var owned = Vector<Owned>.create();
+    let a = owned.clone()!; // error[N0259]
+    var names = Vector<String>.create();
+    let b = names.clone()!; // error[N0259]
+    var v = Vector<u8>.create();
+    let c = v.clone(1)!;                      // error[N0209]
+    let d: Vector<u8> = v.clone();            // error[N0205]
+    let e = String.from()!;                   // error[N0209]
+    let f = String.from(v)!;                  // error[N0205]
+    let g: String = String.from("text");      // error[N0205]
+    let h = Vector<u8>.from("text".bytes())!; // error[N0200]
+    let i = "text".clone()!;                  // error[N0200]
+}

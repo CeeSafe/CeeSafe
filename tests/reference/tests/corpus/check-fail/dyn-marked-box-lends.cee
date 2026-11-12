@@ -1,0 +1,47 @@
+// Lending a marked `dyn` box (type-system.md §37.2, §38.4) is a loan like any other: no second mutable borrow, no
+// use of the box while it is mutably lent, no reference that outlives the box, no use after a move.
+interface Shape {
+    fn area(borrow this) -> u32;
+    fn grow(borrow mut this);
+}
+
+struct Square {
+    side: u32;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+    fn grow(borrow mut this) {
+        this.side += 1;
+    }
+}
+
+fn show(s: borrow dyn Shape) { }
+fn two(a: borrow mut dyn Shape, b: borrow mut dyn Shape) { }
+fn consume(s: Box<dyn Shape + Send>) { }
+
+fn twoMutable() {
+    var sent: Box<dyn Shape + Send> = Box.create(Square { side: 2 })!;
+    two(mut sent, mut sent); // error[N0241]
+}
+
+fn usedWhileLent() {
+    var sent: Box<dyn Shape + Send> = Box.create(Square { side: 2 })!;
+    let lent: borrow mut dyn Shape = borrow mut sent;
+    show(sent); // error[N0241]
+    lent.grow();
+}
+
+fn outlives(other: borrow dyn Shape) -> borrow dyn Shape {
+    let sent: Box<dyn Shape + Send> = Box.create(Square { side: 2 })!;
+    let lent: borrow dyn Shape = borrow sent;
+    return lent; // error[N0244]
+}
+
+fn afterMove() {
+    let sent: Box<dyn Shape + Send> = Box.create(Square { side: 2 })!;
+    consume(sent);
+    show(sent); // error[N0250]
+}
+
+fn main() { }

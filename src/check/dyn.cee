@@ -254,9 +254,12 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
     if (expectsReference && c.types.is(actual, TypeKind.Reference)) {
         let box = c.types.info(actual).pointee;
         if (c.types.is(box, TypeKind.Box) && !isPoolBox(c, box)) {
-            if (c.types.isDyn(c.types.info(box).pointee)) {
+            let held = c.types.info(box).pointee;
+            if (c.types.isDyn(held) && (held == dynType || !sameDyn(c, held, dynType))) {
                 return Ok(none()); // `borrow Box<dyn I>` to `borrow dyn I`: a reborrow of the box's contents (§18.2)
             }
+            // A `borrow Box<dyn I + Send>` lends its contents as a `borrow dyn I + Send`, which then forgets its
+            // markers below (§38.4).
             // `borrow Box<T>` lends its contents, a `T` (§18.2), which then coerces.
             let mutable = c.types.info(actual).mutableReference && x.mutableReference;
             let contents = c.types.info(box).pointee;

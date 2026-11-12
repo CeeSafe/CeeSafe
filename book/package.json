@@ -1,0 +1,14 @@
+{
+  "name": "ceesafe-book",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-book": "node scripts/prepare.mjs",
+    "dev": "node scripts/prepare.mjs && vitepress dev",
+    "build": "node scripts/prepare.mjs && vitepress build",
+    "preview": "vitepress preview"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}

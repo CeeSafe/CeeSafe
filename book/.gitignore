@@ -1,0 +1,5 @@
+node_modules/
+.vitepress/dist/
+.vitepress/cache/
+# Written by scripts/prepare.mjs: the machine-readable book.
+src/public/

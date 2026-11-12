@@ -1,0 +1,58 @@
+// N0402 (ADR 0105): a call used as a statement whose value is a `Result`. Nothing reads it, so an error it reports
+// is lost. A warning: the program still checks, builds and runs.
+fn save(n: i32) -> Result<void, AllocError> {
+    var v = Vector<i32>.create();
+    v.push(n)?;
+    return Ok();
+}
+
+fn count(n: i32) -> Result<i32, AllocError> {
+    save(n)?;
+    return Ok(n);
+}
+
+fn find(n: i32) -> i32? {
+    return if (n > 0) Some(n) else null;
+}
+
+// Once for the statement, whatever the number of instances.
+fn each<T: Copy>(x: T) {
+    var v = Vector<T>.create();
+    v.push(x); // warning[N0402]
+}
+
+async fn later() -> Result<void, AllocError> {
+    return Ok();
+}
+
+async fn waits() {
+    await later(); // warning[N0402]
+    let _ = await later();
+}
+
+fn main() {
+    save(1);       // warning[N0402]
+    count(2);      // warning[N0402]
+    defer save(3); // warning[N0402]
+    var v = Vector<i32>.create();
+    v.push(4); // warning[N0402]
+    let g = () => save(5);
+    g(); // warning[N0402]
+    if (v.length > 0) {
+        save(6); // warning[N0402]
+    }
+    each<i32>(1);
+    each<u8>(2);
+    // None of these warns: the error is handled, or the discard is written, or the value is not a Result.
+    save(7)!;
+    let _ = save(8);
+    let kept = count(9);
+    match (kept) {
+        Ok(n) => { Console.writeLine(n); }
+        Err(_) => {}
+    }
+    defer { let _ = save(10); }
+    defer save(11)!;
+    find(12);
+    Console.writeLine(v.length);
+}

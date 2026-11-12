@@ -256,6 +256,7 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up.
   - A package's own function or item of one of these names shadows the built-in (§2).
 - An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
+  A call statement whose value is a `Result` is warning N0402 (§17.5).
 - `break`/`continue` must be inside `while` or `loop` (N0214).
 - `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
   unit local is `return;` (§20.4). Neither is allowed in a `never` function (§1), which does not return (N0215).
@@ -1145,6 +1146,10 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
 - An expression statement whose value needs drop (for example a call `make();` returning a
   `Res`) destroys the value at the end of the statement, like any other temporary. Before M3a
   the value was never destroyed: an O4 violation, found while specifying 3a.
+- A call statement whose value is a `Result<T, E>` is warning N0402 (ADR 0105): `v.push(1);` loses the error `push`
+  may report. `v.push(1)?;` and `v.push(1)!;` handle it, and `let _ = v.push(1);` discards it in writing (§3); none
+  of them warns. An optional used as a statement does not warn. The warning is reported once for a statement,
+  whatever the number of instances of a generic function, and not for a statement that has an error of its own.
 
 Diagnostics: N0260 (no expected `Result` type for `Ok`/`Err`), N0261 (`?` in a function whose
 return type is not a `Result` with the same error type or an `@from` variant for it), N0262 (`?` or `!` on a

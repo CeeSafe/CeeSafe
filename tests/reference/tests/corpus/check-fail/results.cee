@@ -57,7 +57,7 @@ fn patterns(r: Result<i32, E>, p: Result<Res, E>, q: borrow Result<Res, E>) {
     }
     give()!;
     none()?; // error[N0261]
-    give(); // a discarded Result is fine
+    give(); // warning[N0402] a discarded Result checks, with a warning (ADR 0105)
 }
 fn varBindingOnReference(h: borrow Result<i32, E>) {
     match (h) {

@@ -269,6 +269,7 @@ fn checkProgramWith(
         recordedPackages: records.recordedPackages,
         qualifyRoot: records.qualifyRoot,
         lintAll: records.lintAll,
+        unusedResults: Vector<u32>.create(),
         recordOut: Vector<RecordedEffects>.create(),
         opaquePackages: Vector<bool>.create(),
         effectsRecorded: false,
@@ -431,6 +432,7 @@ fn checkProgramWith(
     checkMain(mut c)?;
     warnStringBraces(mut c)?;    // ADR 0073 §2.4: after every body, so no check's diagnostics mark sees a warning
     warnShadowedMembers(mut c)?; // ADR 0074 §2.10
+    warnUnusedResults(mut c)?;   // ADR 0105
     foldStatics(mut c)?;
     finishFunctionFacts(mut c)?;
     finishAtomicStructs(mut c);

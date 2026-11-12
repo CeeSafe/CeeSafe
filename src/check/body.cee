@@ -189,7 +189,17 @@ fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocE
         c.error(statementNotCall(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
-    return synth(c, e, none());
+    let reported = c.front.diagnostics.items.length;
+    let value = synth(c, e, none())?;
+    if (!c.isBottom(value) && isResultType(c, c.typeOf(value)) && c.front.diagnostics.items.length == reported) {
+        // A call statement whose `Result` nothing reads (ADR 0105): noted here, reported once after every body
+        // (warnUnusedResults), since a generic body is checked once for each instance. Not when the statement has an
+        // error of its own: the warning would say nothing more.
+        c.unusedResults.push(c.file)?;
+        c.unusedResults.push(span.start)?;
+        c.unusedResults.push(span.end)?;
+    }
+    return Ok(value);
 }
 
 /// May a `let` of this `void` initializer declare a unit local (§20.4)? A `?` or `!`, or a unit value; a call of a

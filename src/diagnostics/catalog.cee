@@ -103,7 +103,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     258 =>
         "*Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4)",
     259 =>
-        "Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
+        "Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block)",
     260 =>
         "`Ok(...)` / `Err(...)` (or, since M4c, `Pool.create(...)`; since M6c, `null`) without an expected type that fixes its type arguments, or where another type is expected",
     261 =>
@@ -129,7 +129,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     274 =>
         "A generic used with a scoped type argument where it needs an unscoped one (it boxes `T`, makes an array of `T`, …)",
     280 =>
-        "An unsafe operation outside an unsafe context: a read, write or arithmetic through a raw pointer, `Ptr.toBorrow`/`toBorrowMut`, `Slice.fromRaw`/`SliceMut.fromRaw`, a call to an `unsafe fn`, or a use of a `static mut` (U1, type-system.md §39.3)",
+        "An unsafe operation outside an unsafe context: a read, write or arithmetic through a raw pointer, `Ptr.toBorrow`/`toBorrowMut`, `Slice.fromRaw`/`SliceMut.fromRaw`, `Box.fromRaw`, `Vector.fromRaw`, `Vector.intoForeign`, `Vector.fromForeign` or `v.setLength(n)` (§23.3), a call to an `unsafe fn`, or a use of a `static mut` (U1, type-system.md §39.3)",
     281 =>
         "An invalid raw-pointer pointee: a reference, slice, `StringView` or other scoped type, or `never` (a type parameter is allowed since M8d; a scoped argument for it is N0274)",
     282 =>
@@ -244,6 +244,6 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     401 =>
         "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
     402 =>
-        "A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6)",
+        "A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105)",
     _ => "",
 };

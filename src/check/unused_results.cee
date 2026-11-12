@@ -1,0 +1,34 @@
+// N0402 (ADR 0105): a call used as a statement whose value is a `Result`. Nothing reads the result, so an error it
+// reports is lost without a trace. A warning, as N0400 is (ADR 0073 §2.4): reported once for each statement, after
+// every body is checked, for the root package's files (with `check --all`, every package's own).
+
+fn n0402() -> u32 => 402;
+
+fn warnUnusedResults(c: borrow mut Checker) -> Result<void, AllocError> {
+    var at: usize = 0;
+    while (at + 2 < c.unusedResults.length) {
+        let file = c.unusedResults[at];
+        let start = c.unusedResults[at + 1];
+        let end = c.unusedResults[at + 2];
+        // Once for a statement: a generic function's body is checked for each of its instances.
+        var seen = false;
+        var earlier: usize = 0;
+        while (earlier < at) {
+            if (c.unusedResults[earlier] == file && c.unusedResults[earlier + 1] == start) {
+                seen = true;
+            }
+            earlier += 3;
+        }
+        at += 3;
+        if (seen || !isLintedFile(c, file)) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it",
+        )?;
+        c.front.diagnostics.warning(n0402(), file, start, end, message)?;
+    }
+    return Ok();
+}

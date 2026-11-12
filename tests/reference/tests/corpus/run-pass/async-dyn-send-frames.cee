@@ -28,7 +28,7 @@ impl Job for Big {
         for (k in 0..256usize) {
             table[k] = this.seed + truncate<u32>(k);
         }
-        await Timer.sleep(1);
+        let _ = await Timer.sleep(1);
         var sum: u32 = 0;
         for (k in 0..256usize) {
             sum = sum.wrappingAdd(table[k]);

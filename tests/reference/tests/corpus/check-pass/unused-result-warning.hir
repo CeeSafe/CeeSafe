@@ -1,0 +1,97 @@
+(program
+  (fn save ((n#0: i32)) -> Result<void, AllocError>
+    (block
+      (var v#1: Vector<i32> = (Process.exit))
+      (expr (try (Process.exit (borrow-mut v#1) n#0)):void)
+      (return (Result<void, AllocError>.Ok))
+    )
+  )
+  (fn count ((n#0: i32)) -> Result<i32, AllocError>
+    (block
+      (expr (try (call save n#0):Result<void, AllocError>):void)
+      (return (Result<i32, AllocError>.Ok n#0))
+    )
+  )
+  (fn find ((n#0: i32)) -> i32?
+    (block
+      (return (value (if (> n#0 0:i32):bool (block (yield (i32?.Some n#0))) (else (block (yield (i32?.null)))))):i32?)
+    )
+  )
+  (fn each ((x#0: T)) -> void
+    (block
+      (var v#1: Vector<T> = (Process.exit))
+      (expr (Process.exit (borrow-mut v#1) x#0))
+    )
+  )
+  (fn later () -> Result<void, AllocError>
+    (block
+      (return (Result<void, AllocError>.Ok))
+    )
+  )
+  (fn waits () -> void
+    (block
+      (expr (await (call later):Result<void, AllocError>):Result<void, AllocError>)
+      (expr (await (call later):Result<void, AllocError>):Result<void, AllocError>)
+    )
+  )
+  (fn main () -> void
+    (block
+      (expr (call save 1:i32):Result<void, AllocError>)
+      (expr (call count 2:i32):Result<i32, AllocError>)
+      (defer
+        (expr (call save 3:i32):Result<void, AllocError>)
+      )
+      (var v#0: Vector<i32> = (Process.exit))
+      (expr (Process.exit (borrow-mut v#0) 4:i32))
+      (let g#1: fn() -> Result<void, AllocError> = (closure 994 () (block (return (call save 5:i32):Result<void, AllocError>))):fn() -> Result<void, AllocError>)
+      (expr (Process.exit g#1))
+      (if (> (length v#0):usize 0:usize):bool
+        (block
+          (expr (call save 6:i32):Result<void, AllocError>)
+        )
+      )
+      (expr (call each 1:i32):void)
+      (expr (call each 2:u8):void)
+      (expr (unwrap (call save 7:i32):Result<void, AllocError>):void)
+      (expr (call save 8:i32):Result<void, AllocError>)
+      (let kept#2: Result<i32, AllocError> = (call count 9:i32):Result<i32, AllocError>)
+      (match kept#2
+        (arm Ok (n#3: i32 = payload 0)
+          (block
+            (expr (Console.writeLine n#3))
+          )
+        )
+        (arm Err
+          (block)
+        )
+      )
+      (defer
+        (block
+          (expr (call save 10:i32):Result<void, AllocError>)
+        )
+      )
+      (defer
+        (expr (unwrap (call save 11:i32):Result<void, AllocError>):void)
+      )
+      (expr (call find 12:i32):i32?)
+      (expr (Console.writeLine (length v#0):usize))
+    )
+  )
+  (fn closure () -> Result<void, AllocError>
+    (block
+      (return (call save 5:i32):Result<void, AllocError>)
+    )
+  )
+  (fn each ((x#0: i32)) -> void
+    (block
+      (var v#1: Vector<i32> = (Process.exit))
+      (expr (Process.exit (borrow-mut v#1) x#0))
+    )
+  )
+  (fn each ((x#0: u8)) -> void
+    (block
+      (var v#1: Vector<u8> = (Process.exit))
+      (expr (Process.exit (borrow-mut v#1) x#0))
+    )
+  )
+)

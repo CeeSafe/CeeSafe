@@ -122,5 +122,5 @@ fn main() {
     debugAssert(counter.load() == 0 && allowed(4) && x == 0 && unsafe { HITS } == 0, "reads only");
     apply((k) => k > 0);
     check(Always {});
-    parse("ab");
+    parse("ab"); // warning[N0402]
 }

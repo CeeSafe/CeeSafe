@@ -10,18 +10,20 @@ codes are listed in `diagnostics.md`.
 |---|---|---|
 | `i8 i16 i32 i64` | two's complement, −2^(n−1) … 2^(n−1)−1 | |
 | `u8 u16 u32 u64` | 0 … 2^n−1 | |
-| `isize` / `usize` | pointer width of the **target** (64 on every M1 target) | from `TargetInfo`, never the host |
+| `isize` / `usize` | pointer width of the **target** (64 on every supported target) | from `TargetInfo`, never the host |
+| `f32 f64` | IEEE 754 binary32 and binary64 | since M11 (§35) |
 | `bool` | `true`, `false` | |
-| `void` | no value | function return type only |
+| `void` | no value | a function's return type, and the `T` of `Result<void, E>` (§17.1) |
 | `never` | no value; the expression does not complete | a function's return type only (§15.3, ADR 0074 §2.2) |
 
-Not in M1 (error N0216): floats, `char`, strings as values, user-defined types, references. Floats came in M11
-(`f32`, `f64`, §35); character literals are integers (§4).
-In M1 a string literal was allowed **only** as a direct argument of `Console.write`/`writeLine`;
-since M6c it is a `StringView` value (§22.2).
+These are the scalar types; the later sections add the rest (structs §12, enums §15, references §13, boxes §18,
+optionals and views §22, vectors and strings §23, raw pointers §27, function types §36). There is no `char` type
+(N0204, as any unknown type name): a character literal is an integer (§4). A string literal is a `StringView` value
+(§22.2).
 
-`void` may appear only as a return type (writing `-> void` is the same as omitting the
-return type). A *never* expression is accepted wherever any type is expected.
+`void` may appear only as a return type (writing `-> void` is the same as omitting the return type) and as the
+success type of a `Result` (`Result<void, E>`, whose value is `Ok()`); anywhere else it is N0226, and a `void` call
+used as a value is N0224. A *never* expression is accepted wherever any type is expected.
 
 `never` (ADR 0074 §2.2) names the bottom type, and only as the return type of a function or of a struct's method: a
 call of one is a call of type *never* (§9), as `Process.exit` is. Anywhere else (a parameter, a field, a local, a type
@@ -115,7 +117,8 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
 - Without an annotation, a local's type is the type of its initialiser. An initialiser of type
   `void` is an error (N0224).
 - Parameters and `const` items are immutable. Assigning to them, or to a `let`, is N0211.
-- Assignment targets in M1 are locals only. Member targets (`a.b = …`) are N0216.
+- An assignment target is a mutable place: a `var` local, or a field (§12), an element (§16.3) or the referent of a
+  `borrow mut` (§13.3) reached from one. (In M1 only locals were; a member target was N0216.)
 
 ## 4. Integer literals
 
@@ -249,8 +252,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   Functions are not values in M1 (since M11 they are, §36.1). The argument count must match (N0209), and each argument is
   checked against its parameter type.
 - Built-ins:
-  - `Console.write(x)` and `Console.writeLine(x)`: `x` is an integer, a `bool`, or a string
-    literal. `writeLine()` with no argument writes a newline. Both return `void`.
+  - `Console.write(x)` and `Console.writeLine(x)`: `x` is an integer, a float (§35.7), a `bool`, a `StringView`
+    (§22.2) or a `String` place (§23.2), or a reference to one of them; anything else is N0207. `writeLine()` with
+    no argument writes a newline; `write()` is N0209. Both return `void`.
   - `Process.exit(code: i32)`: has type *never*.
   - `truncate<T>(e)`: see §7. Exactly one type argument (N0216 for other generic arguments).
   - `panic(message: StringView)` (ADR 0075 §2.8): has type *never*. It panics with the program's message:
@@ -287,9 +291,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
     (N0249, N0247). Neither leaves a place moved-from, so both work for any type, a field of a struct with a `drop`
     block included: `replace(mut this.buffer, Vector<u8>.create())` is how a method gives a field up.
   - A package's own function or item of one of these names shadows the built-in (§2).
-- An expression statement must be a call (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
+- An expression statement must be a call, or a call under `?`, `!` or `await` (N0225). `1 + 2;` is rejected; `let _ = 1 + 2;` discards any value (§3).
   A call statement whose value is a `Result` is warning N0402 (§17.5).
-- `break`/`continue` must be inside `while` or `loop` (N0214).
+- `break`/`continue` must be inside `while`, `loop` or `for` (N0214).
 - `return;` only in a `void` function. `return e;` only in a non-`void` function (N0215), except that `return v;` of a
   unit local is `return;` (§20.4). Neither is allowed in a `never` function (§1), which does not return (N0215).
 
@@ -423,14 +427,14 @@ struct Point {
 ```
 
 - **Declaration.** Top level only. Field names and member names (fields and functions) are unique
-  within the struct (N0228). Field types are any non-`void` M1 type or another struct. A struct
+  within the struct (N0228). A field's type is any type but `void` (N0226); a reference, view or other scoped type
+  needs a region parameter on the struct (§25). A struct
   must not contain itself by value, directly or through other structs (N0227: infinite size).
   Recursive data needs indirection (`Box`, M3). Empty structs are allowed.
 - **Names.** A struct name is a package item (unique with functions and constants, N0201) and a
   type name. In expressions, `S.f(...)` calls the static function `f` of `S`.
-- **Copy.** In M2a every struct is a Copy type: its fields are Copy and `drop` does not exist yet.
-  Assignment, argument passing and return copy the value. OD-7's rule ("Copy iff all fields Copy
-  and no `drop`") takes effect in 2c.
+- **Copy.** A struct is a Copy type iff every field is Copy, it has no `drop` block and it is not `@noncopy`
+  (OD-7, §14.1): assignment, argument passing and return then copy the value. Any other struct is a move type.
 - **Literals.** `S { f1: e1, …, fn: en }` must initialise **every** field exactly once (missing:
   N0229, unknown: N0230, duplicate: N0231), in any order. Each `ei` is checked against the field's
   type. Initialisers are **evaluated in source order** (`intermediate-representation.md`), not in
@@ -440,7 +444,7 @@ struct Point {
   is a local or `this`.
 - **Field assignment.** `a.f = e` and `a.f op= e` require the root local `a` to be a `var` (N0211).
   `this` is immutable in a by-value method. The root must be definitely assigned *as a whole*
-  first (N0212): M2a has no partial initialisation.
+  first (N0212): a struct is not initialised field by field.
 - **Methods.** A function in a struct whose first parameter is `this` is a method. `this` has the
   struct's type and is an immutable binding (a copy for Copy structs). It is called as `e.m(args)`,
   where `e` is evaluated first and passed as `this`. A static function (no `this`) is called as
@@ -458,8 +462,8 @@ struct Point {
   only in the source file that declares it, which for one in an `impl T { … }` block is the block's file, not the
   struct's: `v.m()`, `S.f()` and `S.NAME` elsewhere in the package are N0296 (§2). Before ADR 0109 only fields were
   checked, and the modifier on anything else had no effect within a package.
-- **Operators.** No operator applies to struct values in M2a (`==` included: N0207).
-  `Console.write` cannot print structs (N0207).
+- **Operators.** No operator applies to struct values (N0207), except `==` and `!=` on a struct with
+  `@derive(Equal)` (§28.7). `Console.write` cannot print structs (N0207).
 - **Layout.** Fields are laid out in declaration order with C's rules (`@repr(C)` by default,
   `memory-model.md` §2). The compiler computes size, alignment and field offsets from `TargetInfo`.
   The generated C checks them with `_Static_assert` (`c-backend.md` §2), so a disagreement with the
@@ -564,8 +568,10 @@ Normative for 2c. It implements `ownership.md` O1–O5 and R3. The NIR analyses 
 `intermediate-representation.md`.
 
 ### 14.1 Copy and move types (OD-7)
-- **Copy:** integers, `bool`, and `borrow T`. A struct is Copy iff it has no `drop` block and every
-  field is Copy.
+- **Copy:** integers, floats, `bool`, raw pointers (§27), function values `fn(…)` (§36.1), `borrow T`, and the
+  views `Slice<T>` and `StringView`. A struct is Copy iff it has no `drop` block, is not `@noncopy` (§28.1) and
+  every field is Copy. An enum is Copy iff every payload is (§15.1), an array iff its element is (§16.1), an
+  optional iff its `T` is (§22.1).
 - **Move types:** structs with a `drop` block or a move-type field, and `borrow mut T` (whose uses
   are reborrows, §13.3, so in practice it is never moved out of a variable).
 - **Needs drop:** a struct with a `drop` block, or one with a field that needs drop. Every type that
@@ -1269,7 +1275,10 @@ fn main() -> i32 {
     reached through `borrow mut` or another mutable place. `b.f = 1` needs a `var b`;
   - a `Box<T>` argument for a `borrow T` parameter borrows the contents, and `mut b` lends them
     for a `borrow mut T` parameter;
-  - where a Copy `T` is expected, a `Box<T>` is read through (auto-deref);
+  - where a `T` is expected, a `Box<T>` is read through (auto-deref): a Copy `T` is copied, a move `T` is moved
+    out of the box (§18.3);
+  - an operand of an operator is read through too: `a == b` and `a < b` on boxes compare the contents with `T`'s
+    operator, and are rejected where `T` has none (N0207);
   - a `borrow Box<T>` converts to `borrow T`, and a `borrow mut Box<T>` to `borrow mut T` or
     `borrow T`: a reborrow of the contents (for example, a payload bound by reference in a match);
   - `borrow b` borrows the box itself (`borrow Box<T>`).
@@ -1278,7 +1287,7 @@ fn main() -> i32 {
   its fields. (Unlike a reference going out of scope, a box going out of scope destroys what it
   points to.)
 - **Moving out of a box's contents**: see §18.3 (M3c).
-- No null boxes exist. A `Box` is never Copy and has no `==`.
+- No null boxes exist. A `Box` is never Copy and has no `==` of its own: two boxes are never compared by address.
 
 Diagnostics: N0263 (an allocator argument that is not an allocator type).
 
@@ -1293,7 +1302,10 @@ Diagnostics: N0263 (an allocator argument that is not an allocator type).
 - Destroying a partially moved box destroys the fields still initialised (in declaration order),
   then returns the memory to the allocator. `T`'s drop glue does not run, and `T` has no `drop`
   block by the rule above.
-- There is no way to move the whole contents out in v0 (`T` would need an unbox operation, M6).
+- **The whole contents** move out where a `T` is expected and the box is in an owned place (§18.2): `let t: T = b;`,
+  `list = rest;` with `rest: Box<List>`, an argument for a `T` parameter. The box is consumed like any moved value
+  and its memory is returned to the allocator; `T` is not destroyed (it has a new owner), so a `T` with a `drop`
+  block may be moved out whole. Through a reference it is rejected (N0251), as above.
 
 ### 18.4 Moving payloads out in `match` (M3c; replaces N0258)
 ```text
@@ -1446,7 +1458,9 @@ fn render(n: usize) -> Result<u64, AllocError> {
   - `Scratch.enter()` makes a **root frame**. Only one root frame may be live at a time on a thread: entering a
     second one on the same thread **panics** ("a scratch frame is already active"). Two threads may each have a root
     frame live at once.
-  - Code that needs scratch memory below a frame receives the frame (`borrow ScratchFrame`) and nests.
+  - Code that needs scratch memory below a frame receives the frame and allocates from it (`borrow ScratchFrame`)
+    or nests in it (`borrow mut ScratchFrame`, passed as `mut frame`: `enter()` needs the mutable loan below; N0248
+    through a shared reference).
   - A frame never reaches another thread. `ScratchFrame` is scoped, so neither `Send` nor `Share` (§38.1), and
     `Thread.both` refuses a capture of a frame or of a borrow of one (N0334, §38.6). So only the thread that entered a
     frame allocates from it, nests in it or drops it.
@@ -1564,7 +1578,8 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 - **Calls:** `largest<i32>(p, true)` gives the arguments explicitly. `largest(p, true)` infers
   them from the argument types: each parameter type is matched against its argument's type. An
   integer literal argument is `i32` unless the parameter type fixes it. A parameter that the
-  arguments do not determine is N0265 ("write the type arguments").
+  arguments do not determine is N0265 ("write the type arguments"): the call's expected type is not used, so
+  `let m: Maybe<i32> = make();` needs `make<i32>()`.
 - **Values:** `Pair { first: 1, second: 2 }` infers `T` from the field values, or takes it from the
   expected type. `Pair<u8> { … }` gives it. Likewise `Maybe.Just(7)` infers from the payload, and
   `Maybe.Nothing` needs an expected type or explicit arguments: `Maybe<u8>.Nothing`.
@@ -2118,7 +2133,8 @@ fn main() -> i32 {
   - `s.append(text)` (`text: StringView`): `Result<void, AllocError>`, two-phase like `push`.
     Growth is as for vectors. On failure the string is unchanged;
   - `s.appendNumber(n)` (M11, G4c; `n` of any integer type, or a reference to one): appends `n` in decimal, with a
-    `-` before a negative value and no leading zeros or `+`: `0`, `-128`, `18446744073709551615`. It is
+    `-` before a negative value and no leading zeros or `+`: `0`, `-128`, `18446744073709551615`. A float `n`
+    is appended as `Console.write` prints it (§35.7). It is
     `Result<void, AllocError>`, two-phase and unchanged on failure, as for `append`. An integer literal argument has
     its usual default type (§4). Any other argument type is N0207;
   - formatting helpers (lib/core, ADR 0087 §2.9), each `Result<void, AllocError>`: `s.appendHex(n, minWidth, upper)`
@@ -2135,7 +2151,9 @@ fn main() -> i32 {
   - `s.view()`: the text as a `StringView`, a loan of `s`; a `String` argument for a `StringView`
     parameter is borrowed the same way;
   - read-only access as for a view: `s[i]` (`u8`), `s[lo..hi]` (a `StringView`, boundary-checked),
-    `s.bytes()`;
+    `s.bytes()`, and the searches, trims, splits and parsers of §16.6;
+  - `==` and `!=` between two strings compare their bytes. A `String` and a `StringView` are different types
+    (N0207): compare `s.view()`;
   - printing: `Console.writeLine(s)` prints the text of a string place.
 - Appending a view of the string itself (`s.append(s.view())`) is rejected (N0240): the view is a
   live shared loan of `s` when the call's mutable loan starts.
@@ -2946,9 +2964,14 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@export`, `@export("symbol")` | a top-level, non-generic function; a constant (C9); a static (ADR 0080) | callable from C under `symbol` (default: the function's name); for a constant or a static, C data under that name, §28.4, §39.6 |
 | `@cname("name")` | a field of an imported C struct (C9); an `extern "C"` function or static (ADR 0080) | its C member name, when that is not a CeeSafe identifier, §31.1; the C symbol of a function or static, §28.2, §39.6 |
 | `@cvalue("expression")` | a constant of an `extern "C"` block (ADR 0080) | the C constant expression whose value C asserts, §28.2 |
+| `@header("path", …)` | an `extern "C"` block | the C headers that define the block's types, constants and `static inline` functions, §28.2, §31.1 |
+| `@ctype("cname")` | a struct, union or enum of an `extern "C"` block | its C spelling, for a typedef, instead of `struct name`, `union name` or `enum name`, §31.1, §31.3 |
+| `@constant` | a function or method; a function of an `extern "C"` block | callable in a static initialiser; in a block, a C macro that expands to a constant initialiser, §39.4 |
 | `@repr(C)` | a non-generic struct | a C-compatible struct, §28.5 |
 | `@repr(u8)` … `@repr(i64)` | a non-generic enum without payloads | passed to and from C as that integer type, §28.5 |
 | `@effects(…)` | a function, method or `extern` function | the effects it may have (§32.2) |
+| `@effectsOf(p, …)` | a function or method | its effects at a call include those of the closure or function passed for each named parameter (§32.5) |
+| `@from` | a variant of an enum, with exactly one payload | `?` converts an error of the payload's type into this variant (ADR 0075; §17.4) |
 | `@context(atomic)`, `@context(irq)` | a function or method; `atomic` also a struct | a context that forbids effects (§32.3) |
 | `@placed` | a method `fn m(borrow mut this)` | the type's placement initialiser (§33.3) |
 | `@callback` | a top-level function | a C address without a symbol, for C callbacks (§34.1) |
@@ -3032,7 +3055,8 @@ attribute twice is N0290.
 | `CLong`, `CULong` (ADR 0080) | `long`, `unsigned long` |
 | `CChar` (ADR 0080) | `char` |
 | `bool` | `bool` |
-| `*T`, `*mut T` | `T const *`, `T *`, where `T` is an integer, `bool`, a `@repr(C)` struct, or (recursively) such a pointer |
+| `f32`, `f64` (§35.1) | `float`, `double` |
+| `*T`, `*mut T` | `T const *`, `T *`, where `T` is an integer, `bool`, a float, a `@repr(C)` struct, or (recursively) such a pointer |
 | `*void`, `*mut void` | `const void *`, `void *` |
 | `*CChar`, `*mut CChar` | `const char *`, `char *` |
 | a `@repr(C)` struct `S` | `struct S` |
@@ -3163,7 +3187,7 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
   may reallocate or free them). With them, a program may have
   its `main` in C instead of in CeeSafe.
 - **A program without a CeeSafe `main`** (a C, C++ or Rust host; ADR 0088) is linked from `build --emit lib`'s archive
-  (tooling.md §4.1) or `--emit obj`'s object, and starts the runtime with `ceesafe_init` from `ceesafe/embed.h`, which
+  (tooling.md §8.3) or `--emit obj`'s object, and starts the runtime with `ceesafe_init` from `ceesafe/embed.h`, which
   every build that writes headers writes beside `ceesafe/rt.h`, and `--emit lib` beside its output (with the exports
   header). The archive has no C `main` unless `--lib-main` asks for it. Its config gives the program arguments (copied), the
   allocation report and failure injection (`fail_alloc_at`, `alloc_report`, or the environment's variables with
@@ -4381,7 +4405,7 @@ fn main() {
   of the reference it came from. As for any `borrow(a) View<r>`, `r` outlives `a`, so the referent's loans outlive
   the `dyn` reference, and borrowing the value keeps its loans alive (B4). No region is written on the `dyn` type.
   Other scoped types (references, closures, views, slices) are not `dyn` (they implement no interface), and
-  `Box<dyn I>` takes no scoped `T` (**N0268**): a box owns its value, and its type keeps no region.
+  `Box<dyn I>` takes no scoped `T` (**N0246**, at the `Box<T>` itself, §18.2): a box owns its value, and its type keeps no region.
 - `T` must be a sized type: a struct, an enum, or a built-in type such as `i32`. A `dyn I` does not coerce to another
   `dyn` type, and there is no conversion back to `T` (no downcasting; OD-10b).
 - **`dyn I` implements `I`** (ADR 0064 §3.1). For bounds, `dyn I` (and `dyn I + Send`) implements its own
@@ -4426,7 +4450,7 @@ fn main() {
   order. Each function is a generated adapter taking `void *` as its receiver, so no function is called through a
   pointer of another type. An async method's entry starts `T`'s method in the frame of a call through the table, and
   the table also holds the size of that frame for `T` (§40.6, c-backend.md §3a).
-- `dyn I` values have no address identity beyond `data`. Two `borrow dyn I` values are not comparable (N0209).
+- `dyn I` values have no address identity beyond `data`. Two `borrow dyn I` values are not comparable (N0207).
 
 Diagnostics: N0330 (`dyn I` not behind a pointer), N0331 (an interface that is not dyn-compatible).
 
@@ -4871,7 +4895,8 @@ fn main() {
 
 ### 40.4 The `Async` operations
 `Async` is a built-in type, like `Thread` (§38), in the hosted profile until L1 A4 (§38.5). Every operation below
-except `run` and `blocking`'s closure produces a task, so it is written after `await`.
+except `run`, `runWorkers`, `checkpoint`, `isCancelled` and `blocking`'s closure produces a task, so it is written
+after `await`; `checkpoint` and `isCancelled` are plain calls that never suspend (`await` on one is N0342).
 
 | Operation | Result | Notes |
 |---|---|---|

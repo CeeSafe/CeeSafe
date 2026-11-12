@@ -14,6 +14,7 @@ and run by the guide's checks, so the names and signatures are the compiler's. W
 | `Console.writeBytes(bytes)` | `bytes: Slice<u8>`, raw bytes to standard output, UTF-8 or not |
 | `Console.writeError(text)`, `Console.writeErrorLine(text)` | `text: StringView`, to standard error |
 | `Console.read(mut buffer)` | `Result<usize, IoError>`; `0` at the end of input |
+| `Console.readLine(mut line)` | `Result<bool, IoError>`: the next line of input in `line`, a `String`, without its `\n` or `\r\n`; `false` at the end of input |
 
 `Console` blocks its thread: in an `async fn`, use lib/std's `AsyncConsole` (N0295 otherwise).
 
@@ -37,6 +38,42 @@ answer: 42
 raw
 2.5
 true
+```
+
+`Console.readLine(mut line)` reads standard input a line at a time into one `String`, which it empties first. The
+input's last line needs no line ending; a line that is not UTF-8 is `Err(InvalidInput)`. What the program wrote is
+on the screen before it waits, so a prompt needs no `Console.flush()`. `Random.below(n)` (lib/std) is a random
+integer from 0 to `n - 1`, each as likely as the others, as a `Result<u64, IoError>`; in the interpreter, the same
+numbers every run.
+
+This program picks a number from 1 to 100, then adds up the numbers it is given, one a line. The guide's checks run
+it with no input, and its number may be any, so this is all they can show:
+
+```ceesafe
+fn main() {
+    let secret = Random.below(100)! + 1;
+    Console.writeLine(secret >= 1 && secret <= 100);
+    var line = String.create();
+    var lines = 0;
+    var total: i64 = 0;
+    Console.writeLine("numbers, one a line:");
+    while (Console.readLine(mut line)!) {
+        lines += 1;
+        match (line.view().trim().parseInt<i64>()) {
+            Some(n) => { total += n; }
+            null => { Console.writeLine("not a number"); }
+        }
+    }
+    Console.write(lines);
+    Console.write(" lines, total ");
+    Console.writeLine(total);
+}
+```
+
+```text
+true
+numbers, one a line:
+0 lines, total 0
 ```
 
 ## `Process` and program arguments
@@ -341,6 +378,9 @@ fn everything() -> Result<void, IoError> {
     let got: Result<usize, IoError> = f.read(mut buffer[..]);
     let removed: Result<void, IoError> = File.remove("/tmp/x");
     let input: Result<usize, IoError> = Console.read(mut buffer[..]);
+    var line = String.create();
+    let more: Result<bool, IoError> = Console.readLine(mut line);
+    let below: Result<u64, IoError> = Random.below(100);
     Console.writeError("e");
     Console.writeErrorLine("e");
     var listener = TcpListener.bind("127.0.0.1", 0)?;

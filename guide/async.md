@@ -332,7 +332,7 @@ The library's waiting operations are async functions, in the hosted profile:
 | What | Operations |
 |---|---|
 | Time | `Timer.sleep(ms)`; `Timer.now()` (not async), a monotonic clock for waits and measurements; `Clock.now()`, the date as a `UnixTime` (seconds and nanoseconds since 1970), which may jump |
-| Random bytes | `Random.fill(bytes)` (not async, and cheap enough per message): bytes from the system's cryptographic source, for keys, masks and tokens |
+| Random bytes | `Random.fill(bytes)` (not async, and cheap enough per message): bytes from the system's cryptographic source, for keys, masks and tokens. `Random.below(n)`: an integer from 0 to `n - 1`, each as likely (no modulo bias) |
 | Console | `AsyncConsole.write(text)`, `writeLine(text)`, `writeError(text)` |
 | Files | `AsyncFiles.open`, `create`, `read`, `write` (each on a worker thread while the task waits) |
 | Sockets | `AsyncTcpListener.bind` or `bindWith(address, options)` (not async), `accept`; `AsyncTcpStream.connect` or `connectTo(address)`, `read`, `write`, `writeVectored(parts)` and `writeAllVectored(parts)` (an `IoParts`, up to eight byte parts sent in one call); `sendFile(file, offset, length)` and `sendFileAll(file, offset, length)`, a file's bytes sent by the kernel where it can (`sendfile`, `TransmitFile`), the file's position untouched; `AsyncUdpSocket.bind(address, options)`, `sendTo`, `recvFrom`, and `sendMsg`/`recvMsg` with the local address, ECN bits, truncation and segments; `AsyncDns.resolve(host, port)`, a name's addresses, cancellable; the options (`setNoDelay`, `setKeepAlive`, buffers, `setLinger`) and `peerAddress`/`localAddress`, not async |

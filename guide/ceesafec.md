@@ -72,3 +72,7 @@ instead, as one JSON document with each diagnostic's position, message and fixes
 `ceesafec run --interp` runs a program without a C compiler, in an interpreter that executes the compiler's own
 intermediate form. It stops with an exit status of 70 on any use of freed, out-of-bounds or uninitialised memory, or
 a bad free, which the C build would not detect. The test suite runs every program both ways and compares the results.
+
+A program that asks and reads can be played in it: what the program wrote is on the screen before it waits for a
+line of input, as in the built program. `Random` gives the same numbers every run there, so a game's secret is the
+same each time; the built program's is not.

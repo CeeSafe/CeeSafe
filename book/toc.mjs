@@ -194,12 +194,13 @@ export const chapters = [
   },
   {
     title: "Advanced features",
+    file: "ch20-00-advanced-features",
     sections: [
-      { title: "Unsafe code" },
-      { title: "Calling C and being called by it" },
-      { title: "More on interfaces and generics" },
-      { title: "Arithmetic: checked, wrapping, conversions" },
-      { title: "Derives and macros" },
+      { title: "Unsafe code", file: "ch20-01-unsafe-code" },
+      { title: "Calling C and being called by it", file: "ch20-02-calling-c" },
+      { title: "More on interfaces and generics", file: "ch20-03-more-interfaces-and-generics" },
+      { title: "Arithmetic: checked, wrapping, conversions", file: "ch20-04-arithmetic" },
+      { title: "Derives and macros", file: "ch20-05-derives-and-macros" },
     ],
   },
   { title: "A final project: a web server", sections: [] },

@@ -242,8 +242,9 @@ fn total(values: Slice<i32>) -> i64 {
 
 A callback is a top-level function, so it captures nothing. C's convention for that is the `void *` beside the
 function pointer: `total` passes the address of `sum`, and `addTo` casts it back. A closure literal is not
-accepted where C's function pointer is expected. If C keeps the pointer after the call returns, a local will not do: put the value in a box and pass
-`Box.intoRaw(box)`, as [Unsafe code](./ch20-01-unsafe-code#a-box-as-a-raw-pointer) shows.
+accepted where C's function pointer is expected. If C keeps the pointer after the call returns, a local will not
+do: put the value in a box and pass `Box.intoRaw(box)`, as
+[Unsafe code](./ch20-01-unsafe-code#a-box-as-a-raw-pointer) shows.
 
 `@export` and `@callback` differ in one thing. An exported function has a C name that C code calls directly, as
 `gauge.c` calls `gauge_clamp`. A callback has no name in C, only an address.

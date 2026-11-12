@@ -353,8 +353,8 @@ So `Pair<Square>` is a shape, and then `Pair<Pair<Square>>` is one. A `Pair<u8>`
 not a `Shape`.
 
 ::: tip Rule
-Beside a generic impl, no other impl of the same interface may have a target of the same struct or enum. `impl
-Shape for Pair<u8>` and `impl<T> Shape for Pair<T>` are refused together: there is no specialisation.
+Beside a generic impl, no other impl of the same interface may have a target of the same struct or enum.
+`impl Shape for Pair<u8>` and `impl<T> Shape for Pair<T>` are refused together: there is no specialisation.
 
 *Specification: `type-system.md` §21.1.*
 :::

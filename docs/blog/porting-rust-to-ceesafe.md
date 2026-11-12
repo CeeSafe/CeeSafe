@@ -8,7 +8,7 @@ compiles to C. A claim that it can stand where Rust stands needs more than small
 Rust code bases that other people wrote for production use:
 
 - **[Bun](https://github.com/oven-sh/bun)**, the JavaScript runtime, 1.79 million lines of Rust at the commit we
-  pinned.
+  pinned, not counting blank lines and comments.
 - **[tsrs](https://github.com/oxc-project/tsrs)**, a Rust port of the TypeScript 7 type checker, 24 MB of Rust in 38
   crates.
 
@@ -58,7 +58,8 @@ column has no unsafe code in the hash. It is equal from 1 KB up and 12 to 16% sl
 at length-dependent offsets keep their checks. Written with the same unchecked reads as the Rust, short keys come
 within 2 to 5%.
 
-This is the result we expected, and it is worth saying plainly: **CeeSafe was not faster than Rust anywhere.** Rust
+This is the result we expected, and it is worth saying plainly: **on this hash, CeeSafe was not faster than Rust
+at any size.** Rust
 compiles through LLVM; CeeSafe compiles to C that clang compiles through the same LLVM. For arithmetic and memory
 code the two meet at the same machine code, and parity is the ceiling.
 
@@ -92,11 +93,26 @@ Speed, in a release build against the original Rust compiled into the same test:
 | Add a mapping to a source map | 17.5 ns | 24.5 ns (40% slower) |
 | Build a map of 2,000 segments | 27 µs | 50–59 µs |
 
-Where the work is inside CeeSafe, it is equal. Where a small function is called across the boundary, it pays for
+Where the work is inside CeeSafe, as in building the index, it is equal. Where a small function is called across
+the boundary, it pays for
 the call: the Rust is inlined into its caller by link-time optimisation, and the CeeSafe archive does not take part
 in rustc's LTO. That is a cost of a hybrid build, not of the language, and a port of the calling crate would remove
-it. Building a map was about twice as slow and we did not establish why; two extra copies at the boundary account
-for part of it.
+it.
+
+Building a map was about twice as slow, and when this was first written we had not established why. We have
+since (2026-11-12, ceesafec 0.38.0): most of it is where the linker placed the sort in that test binary, not the
+code. The same machine code, on the same 2,000 segments, takes 42 to 50 µs in the test binary and 24 to 33 µs in
+another binary linked from the same archive. Moved a few bytes at a time, the sort is slow (46 to 52 µs) when it
+starts at 3 of the 16 possible offsets within a 64-byte line and fast (28 to 41 µs) at the others, and the test
+binary has it at a slow one. Rust's sort has the same hazard at 1 offset of 16 (41 µs against 21 to 28 µs). At a
+good placement the CeeSafe sort takes 24 to 28 µs against Rust's 21 to 22 µs, and the shim's copy of the segments
+adds about 3.5 µs. The machine was shared during these runs, so the figures move by a few microseconds; the
+placement effect is far larger than that.
+
+Two rows of the report went the other way, and are not in the table because neither is a result about the
+language: validating a 2,000-segment map was 17 to 21% faster in CeeSafe, which we did not investigate, and the
+base64 data URL of a source map 25 to 31% faster, because the Rust pushes `char`s through an iterator into a
+`String` where the port writes bytes into a slice.
 
 ## What the ports changed in CeeSafe
 
@@ -129,15 +145,19 @@ design did not fit: a method cannot return `Result<borrow T, E>` when it has two
 - **Windows and WebAssembly inside these programs.** Both trials build for Unix only.
 - **The full suites.** Bun's tests for the two crates ran; tsrs's conformance suite needs a TypeScript checkout the
   trial did not have.
-- **Faster than Rust.** Nothing here supports that, and we do not expect it.
+- **Faster than Rust.** Nothing here supports that, and we do not expect it: of the two faster rows of the tsrs
+  report, one comes from how that Rust was written and the other was not investigated.
 
 ## What it does show
 
 A crate of a production Rust program can be replaced by CeeSafe without its users noticing: the same API, the
-program's own tests passing, the same answers on about a million generated cases, and the same speed wherever the
-work is done inside CeeSafe. What the host program receives is C, compiled by the C compiler it already uses.
+program's own tests passing, the same answers on about a million generated cases, and, where the work is done
+inside CeeSafe, Rust's speed or within about a quarter of it: equal for the hash from 1 KB up and for the index
+build, 12 to 16% behind on short keys, and 15 to 25% behind on the sort once it is placed alike. What the host program receives is C, compiled by the C compiler it already uses.
 
-The reports, with every number above and how it was measured, are in the
-[CeeBun repository](https://github.com/CeeSafe/CeeBun) under `analysis/trials/`, and the Bun trial's code is at
+The reports, with the numbers above and how they were measured, are in the
+[CeeBun repository](https://github.com/CeeSafe/CeeBun) under `analysis/trials/` (the compiler's scale test under
+`analysis/scale/`, the line count in its `ROADMAP.md`); the placement of the sort is measured in
+[this repository's investigation](../performance-investigation-2026-11.md), §10. The Bun trial's code is at
 [CeeSafe/ceebun-trial](https://github.com/CeeSafe/ceebun-trial). For the language itself, start with
 [CeeSafe for Rust programmers](../../guide/coming-from/rust.md).

@@ -453,3 +453,45 @@ another in a called function would be the place to look again.
 §4.3 (a wrapping mode: the owner's decision; it is now the main cost left in `recursion`, `parsing`, `hash-map` and
 `data-oriented`), §4.6 (cross-language LTO), §4.2 item 4.
 
+## 10. The tsrs map build: code placement (2026-11-12, after 0.38.0)
+
+§3's last item, "building a map of 2,000 segments: about twice as slow, cause not established". Measured with
+ceesafec 0.38.0, the trial at `878c330f`, on the shared machine (load 2 to 8; figures move by about ±5 µs).
+
+- **It is the sort's placement in the test binary.** `tsrs_spanmap__new` called directly, with the benchmark's exact
+  input and a drop after each call: 42 to 50 µs inside the differential test binary, 24 to 33 µs in a C program and
+  in a plain Rust binary linked with the same archive. The sort function's machine code is identical in both
+  binaries (624 instructions, compared after disassembly); its address is 0x08 modulo 64 in the slow one and 0x04
+  in the fast one.
+- **The scan.** The sort moved 4 bytes at a time by a padding object linked before the archive, lowest of 5 runs:
+
+  | Start, modulo 64 | CeeSafe, as built (`-O3`) | `-falign-loops=16` | `=32` | `=64` |
+  |---|---:|---:|---:|---:|
+  | 0x08, 0x0c, 0x10 | 46–52 µs | | | |
+  | the other 13 | 28–41 µs | | | |
+  | all 16 placements | | 24–41 µs, and 49–52 µs at one start (0x2c) | 25–36 µs | 24–33 µs |
+
+  Rust's sort (`goslices.rs`, tsrs's release profile), moved the same way: 21–28 µs at 15 placements, 41 µs at one.
+- **What is left.** At a good placement, CeeSafe 24–28 µs against Rust 21–22 µs for the copy and the sort; the
+  shim's copy into a `Vec<u32>` is 3.5 µs more per call.
+- **Not identified:** which loop. Three adjacent slow offsets would fit a four-instruction loop split by a line
+  boundary, but the disassembly has none: the sort's smallest loops are six and seven instructions, and none starts
+  at the offset that guess predicts. The cause inside the function is not known.
+- **§4.2's unexplained row** (the sort slower with its bounds checks compiled out, 1.08 s) and §9.3's (`hash-map`)
+  are probably the same effect: a different build moves the loops. Not verified.
+
+**Loop alignment as a default, measured and not adopted.** The whole suite built three ways and run interleaved, 9
+runs each (load 2 to 4):
+
+| | `-falign-loops=32` | `-falign-loops=64` |
+|---|---:|---:|
+| Geometric mean of 17 workloads, lowest run | +0.4% | +0.6% |
+| `string-building` | +3% | +6% |
+| `numeric` | +2% | +2% |
+| `const-flags` | +1% | +2% |
+| The other 14 | within ±1% | within ±2% |
+
+`string-building` was scanned over the 16 placements too: it has no slow placement as built (about 297 ms at each),
+and aligned loops cost it the same 3% and 6% at every one. So the flag removes a rare large loss (a tight loop at an
+unlucky offset) and adds a small one everywhere. Executables grow by 16 bytes.
+

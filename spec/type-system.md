@@ -152,6 +152,11 @@ conversions.
 | unary `-` | **signed** integer | same | `-MIN` → panic |
 | unary `!` | `bool` | `bool` | |
 
+These panics are run-time behaviour, also when every operand is a literal: `let big: u8 = 200 + 100;` in a function
+compiles, and panics when it runs (each literal fits `u8`, §4; their sum is not a literal). Only an expression that
+is evaluated at compile time, the value of a `const` (§10) or of a `static` (§39.4), reports the operation that
+would panic as a compile error (N0217).
+
 **Explicit overflow behaviour** (M11, G4b; OD-6). The operators panic on overflow. Where a program wants another
 behaviour, every integer type has nine methods. Each takes one argument of the receiver's type, and a flexible
 literal adapts:
@@ -282,8 +287,10 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   binary, `as` and `truncate` applied to constant expressions. Calls are not constant (N0217), except `embed` and
   `embedText` (§10.1) and a constant view's `.bytes()` (below). `==` and `!=` on constant views compare their bytes
   (`"a" + "b" == "ab"` is `true`).
-- Constants are evaluated at compile time with the runtime semantics of §6. An operation that
-  would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217).
+- Constants are evaluated at compile time with the runtime semantics of §6. An operation in a constant's value that
+  would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217). This is a rule for
+  constants, not for every expression of literals: the same operation in a function's body is checked when it
+  runs (§6).
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is

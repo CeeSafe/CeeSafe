@@ -1,0 +1,9 @@
+// A sum of literals in a function's body is checked when it runs (type-system.md §6): each literal fits `u8`, so
+// the program compiles, and the addition panics. Only a constant's value is evaluated at compile time, where the
+// same sum is N0217 (§10; check-fail/constants.cee).
+fn main() {
+    Console.writeLine("before");
+    let big: u8 = 200 + 100; // expect-panic: integer overflow
+    Console.writeLine(big);
+}
+// expect-stdout: before

@@ -71,7 +71,8 @@ right depends on what the program means.
 ## 4. Consequences
 
 - The book's and the guide's "mistake: forgetting `?`" boxes show the warning instead of silence.
-- Four files of the corpus warned. `run-pass/async-dyn-send-frames.cee` now writes `let _ = await Timer.sleep(1);`.
-  `run-fail/result-unwrap-err.cee` keeps its bare `makeRes(8, false);`, which is what it tests (§17.5), and
-  `check-fail/results.cee` and `check-fail/debug-assert-writes.cee` keep theirs; each expects the warning.
+- Four files of the corpus warned. `run-pass/async-dyn-send-frames.cee` now writes `let _ = await Timer.sleep(1);`
+  and `run-fail/result-unwrap-err.cee` `let _ = makeRes(8, false);` (the value is still destroyed at the end of the
+  statement, §17.5; under the interpreter the warning would stand before the panic the test expects).
+  `check-fail/results.cee` and `check-fail/debug-assert-writes.cee` keep their bare calls and expect the warning.
 - New test: `check-pass/unused-result-warning.cee`.

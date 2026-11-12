@@ -43,7 +43,7 @@ fn main() {
     }
     let r = makeRes(7, false)!;
     Console.writeLine(r.id);
-    makeRes(8, false); // warning[N0402] on purpose: the discarded value is destroyed (type-system.md §17.5)
+    let _ = makeRes(8, false); // discarded in writing (ADR 0105); the value is destroyed (type-system.md §17.5)
     Console.writeLine(digit(57u8)!);
     let bad = digit(1u8)!; // expect-panic: unwrapped an Err value
 }

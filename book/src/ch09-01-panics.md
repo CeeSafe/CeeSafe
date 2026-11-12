@@ -101,6 +101,10 @@ ceesafe panic: integer overflow at main.cee:1:27
 
 The location is the `*` inside `double`, not the call in `main`: a panic names the operation that failed.
 
+The panic needs a value that is known only when the program runs, as `n` is here. Arithmetic written with
+literals alone, such as `let big: u8 = 200 + 100;`, could never succeed, so the compiler works it out and refuses
+the program with an error instead of leaving a panic for the run.
+
 Where overflow is a case your program expects, ask for it as a value. `n.checkedMul(2)` gives an optional that is
 `null` when the result does not fit; `checkedAdd` and `checkedSub` do the same for `+` and `-`.
 

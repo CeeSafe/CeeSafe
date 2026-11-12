@@ -1,9 +1,9 @@
 ---
 title: Organising tests
-summary: Where tests live in a package - beside the code or in the tests directory - how they reach private functions, how to test a library through its public interface from a second package, and the alloc and cancel sweeps.
+summary: Where tests live in a package - beside the code or in the tests directory - which functions they see and what private keeps from them, how to test a library through its public interface from a second package, and the alloc and cancel sweeps.
 assumes: [ch07-01-package-and-manifest, ch07-02-files-and-public, ch09-03-allocation-failure, ch11-01-writing-tests, ch11-02-running-tests]
 keywords: [tests directory, private, public, import, "--sweep alloc", "--sweep cancel", allocation failure, cancellation, unwrap]
-diagnostics: [N0200]
+diagnostics: [N0200, N0296]
 specification: ["tooling.md §10.1", "tooling.md §10.2"]
 ---
 
@@ -59,14 +59,14 @@ neither is part of what `ceesafec build` makes.
 The directory has another name if the manifest says so: `tests = ["checks"]` under `[package]` makes `checks/` the
 test directory. Without that line it is `tests`.
 
-## Tests of private functions
+## Tests of functions that are not public
 
 A file in `tests/` is part of the same package as the files in `src/`. It names their functions directly, with no
 `import`, and it sees the ones that are not `public`. `digit` in
-[Listing 11-3](./ch11-01-writing-tests#testing-a-function-that-returns-a-result) is private, and this test calls
-it:
+[Listing 11-3](./ch11-01-writing-tests#testing-a-function-that-returns-a-result) has no `public`, so only the
+package can use it, and this test calls it:
 
-<span class="listing-caption"><strong>Listing 11-11</strong>, <code>tests/digit.cee</code>: A test in the <code>tests</code> directory of a private function.</span>
+<span class="listing-caption"><strong>Listing 11-11</strong>, <code>tests/digit.cee</code>: A test in the <code>tests</code> directory of a function that is not public.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -81,14 +81,22 @@ fn digitReadsOnlyDigits() -> Result<void, TestFailure> {
 `digit` returns an optional ([section 6.3](./ch06-03-optionals)): `?? 0` gives its value or 0, and `isNull()` tests
 for no value.
 
+One word narrows this. An item marked `private` belongs to the file that declares it
+([section 7.2](./ch07-02-files-and-public)), and a file in `tests/` is another file. So a test of a `private`
+function goes beside the function, in the same file under `src/`. The mistakes below show what the compiler says
+otherwise.
+
 ::: tip Rule
-The tests of a package see everything in the package, private or public, wherever the tests are.
+The tests of a package see every item of the package that is not `private`, public or not, wherever the tests
+are. A `private` item is seen only by the tests in its own file.
+
+*Specification: `tooling.md` §10.1.*
 :::
 
 ## Tests through the public interface
 
 A library's users see only its `public` items. A test inside the library cannot show that the public items are
-enough, because it sees the private ones too. `ceesafec test` has no kind of test that is limited to the public
+enough, because it sees the others too. `ceesafec test` has no kind of test that is limited to the public
 interface, so the way to get one is a second package that depends on the library, as a user's package does.
 
 `race` is an executable package next to `laps`. Its manifest names the library:
@@ -280,11 +288,11 @@ you work, and the sweeps before you share the code.
 
 ## Mistakes
 
-::: warning Mistake: testing a private function from another package
-The second package sees what a user sees. `digit` is private to `laps`, so this test in `race` does not compile.
+::: warning Mistake: testing a function that is not public from another package
+The second package sees what a user sees. `digit` is not public in `laps`, so this test in `race` does not compile.
 :::
 
-<span class="listing-caption"><strong>Listing 11-17</strong>, <code>race-private/tests/public.cee</code>: The same test file with one more test, which calls a private function of <code>laps</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 11-17</strong>, <code>race-private/tests/public.cee</code>: The same test file with one more test, which calls a function of <code>laps</code> that is not public. This does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -312,6 +320,39 @@ tests/public.cee:11:18: error[N0200]: cannot find function 'digit' in this scope
 
 Test `digit` inside `laps`, as Listing 11-11 does, or test it through `seconds`, which is public.
 
+::: warning Mistake: testing a `private` function from the `tests` directory
+`private` means the file, not the package. In the package `laps-private`, `digit` is marked `private`, and the
+test of Listing 11-11 is still in `tests/digit.cee`. `ceesafec check` and `ceesafec test` both refuse it.
+:::
+
+<span class="listing-caption"><strong>Listing 11-18</strong>, <code>laps-private/src/time.cee</code>: The helper of Listing 11-3, now <code>private</code>. The test in <code>tests/digit.cee</code> no longer compiles.</span>
+
+<!-- ceesafe: skip -->
+```ceesafe
+/// The value of the digit `b`, or null if `b` is not a digit.
+private fn digit(b: u8) -> u8? {
+    if (b >= '0' && b <= '9') {
+        return Some(b - '0');
+    }
+    return null;
+}
+```
+
+```text
+tests/digit.cee:3:24: error[N0296]: 'digit' is private to src/time.cee: only code there can use it (type-system.md §2)
+  |
+3 |     Check.equalU64(7, (digit('7') ?? 0) as u64)?;
+  |                        ^^^^^
+
+tests/digit.cee:4:18: error[N0296]: 'digit' is private to src/time.cee: only code there can use it (type-system.md §2)
+  |
+4 |     Check.isTrue(digit('x').isNull(), "'x' is not a digit")?;
+  |                  ^^^^^
+```
+
+Move the test into `src/time.cee`, beside `digit`, or take `private` away so that the whole package sees the
+function.
+
 ::: warning Mistake: a sweep in the interpreter
 The sweeps use the runtime of a built program. `ceesafec test --interp --sweep alloc` is refused, with exit
 status 2:
@@ -328,8 +369,11 @@ no caller can handle, and no ordinary test shows it. Listing 11-14 passes every 
 
 ::: details Coming from Rust
 - Tests beside the code need no `mod tests` and no `use super::*`: they are functions of the same package.
-- The `tests` directory is not Cargo's. Its files are part of the package and see private items. For Cargo's
-  integration tests, which see only the public interface, write a second package.
+- The `tests` directory is not Cargo's. Its files are part of the package and see its items that are not public,
+  as `pub(crate)` items are seen across a crate. For Cargo's integration tests, which see only the public
+  interface, write a second package.
+- `private` is narrower than Rust's default privacy: it is the file, and no other file of the package sees the
+  item, not even one in `tests/`.
 - Rust has no counterpart of the sweeps in `cargo test`. A Rust `Vec::push` aborts when memory runs out; in CeeSafe
   `push` returns a `Result`, so the path exists and the sweep can test it.
 :::
@@ -338,9 +382,10 @@ no caller can handle, and no ordinary test shows it. Listing 11-14 passes every 
 
 - Tests go beside the code in `src/`, or in `tests/` (or the directories the manifest's `tests` names).
 - `ceesafec check` checks both. `ceesafec build` and `ceesafec run` leave both out.
-- Tests see the private items of their package, wherever they are.
-- To test a library as its users see it, write the tests in a second package that depends on it. A private item is
-  not found there (`N0200`).
+- Tests see the items of their package that are not `private`, wherever they are. A `private` item is seen only
+  by tests in the file that declares it (`N0296` from any other file).
+- To test a library as its users see it, write the tests in a second package that depends on it. An item that is
+  not public is not found there (`N0200`).
 - `--sweep alloc` fails each allocation of each passing test in turn. `--sweep cancel` cancels each passing async
   test at each point where it waits. A sweep run may fail, and may not panic or leak.
 - The sweeps run natively only, not with `--interp`.

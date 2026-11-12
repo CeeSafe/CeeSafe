@@ -76,9 +76,9 @@ and `main` could go on using `order` after it.
 
 ## The order gets a name
 
-An order is for something. Add the item's name as a `String` field. The two lines that make the string are
-explained in [Defining and making structs](./ch05-01-defining-structs#structs-that-own-their-fields): `create`
-makes an empty `String`, `append` adds text, and `!` stops the program if memory runs out.
+An order is for something. Add the item's name as a `String` field. The line that makes the string is
+explained in [Defining and making structs](./ch05-01-defining-structs#structs-that-own-their-fields): `String.from`
+copies text into a new `String`, and `!` stops the program if memory runs out.
 
 <span class="listing-caption"><strong>Listing 5-12</strong>, <code>main.cee</code>: The struct owns a <code>String</code>, and <code>total</code> still takes it by value. This does not compile.</span>
 
@@ -95,8 +95,7 @@ fn total(order: Order) -> u32 {
 }
 
 fn main() {
-    var item = String.create();
-    item.append("lamp")!;
+    let item = String.from("lamp")!;
     let order = Order { item: item, quantity: 3, unitPrice: 250 };
     Console.write("total in cents: ");
     Console.writeLine(total(order));
@@ -105,9 +104,9 @@ fn main() {
 ```
 
 ```text
-main.cee:17:23: error[N0250]: 'order' is used here after it was moved (on at least one path)
+main.cee:16:23: error[N0250]: 'order' is used here after it was moved (on at least one path)
    |
-17 |     Console.writeLine(order.item.view());
+16 |     Console.writeLine(order.item.view());
    |                       ^^^^^^^^^^^^^^^^^
 ```
 
@@ -142,8 +141,7 @@ fn show(order: borrow Order) {
 }
 
 fn main() {
-    var item = String.create();
-    item.append("lamp")!;
+    let item = String.from("lamp")!;
     let order = Order { item: item, quantity: 3, unitPrice: 250 };
     show(order);
     Console.write("total in cents: ");

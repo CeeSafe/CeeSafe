@@ -1,0 +1,9 @@
+fn printLine(label: StringView, value: i64) {
+    writeLabel(label);
+    Console.writeLine(value);
+}
+
+private fn writeLabel(label: StringView) {
+    Console.write(label);
+    Console.write(": ");
+}

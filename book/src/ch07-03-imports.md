@@ -29,7 +29,7 @@ tally = { path = "../tally" }
 A dependency's public item is named with the package's name, a dot, and the item's name: `tally.pair`,
 `tally.Tally`. That is its **qualified name**. It needs no `import`, and it works wherever a name can stand.
 
-<span class="listing-caption"><strong>Listing 7-13</strong>, <code>report/src/output.cee</code>: A qualified name as a parameter's type. The file has no <code>import</code>.</span>
+<span class="listing-caption"><strong>Listing 7-15</strong>, <code>report/src/output.cee</code>: A qualified name as a parameter's type. The file has no <code>import</code>.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -55,7 +55,7 @@ for it.
 Writing `tally.` every time is clear, and long. An `import` at the top of a file brings a name into that file, so
 the file can use it bare.
 
-<span class="listing-caption"><strong>Listing 7-14</strong>, <code>report/src/main.cee</code>: <code>Tally</code> is imported and used bare. <code>pair</code> is not imported, and is qualified.</span>
+<span class="listing-caption"><strong>Listing 7-16</strong>, <code>report/src/main.cee</code>: <code>Tally</code> is imported and used bare. <code>pair</code> is not imported, and is qualified.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -81,14 +81,14 @@ week mean: 21
 weekend mean: 32
 ```
 
-That is what `ceesafec run --interp` prints in `report/`, with the two files of Listings 7-13 and 7-14 in `src/`.
+That is what `ceesafec run --interp` prints in `report/`, with the two files of Listings 7-15 and 7-16 in `src/`.
 
 There are two forms:
 
 - `import tally.Tally;` brings in one item.
 - `import tally;` brings in every public item of the package.
 
-<span class="listing-caption"><strong>Listing 7-15</strong>, <code>report/src/main.cee</code>: Another <code>main</code> for the same package. With the whole package imported, <code>pair</code> and <code>Tally</code> are both bare.</span>
+<span class="listing-caption"><strong>Listing 7-17</strong>, <code>report/src/main.cee</code>: Another <code>main</code> for the same package. With the whole package imported, <code>pair</code> and <code>Tally</code> are both bare.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -120,7 +120,7 @@ Each part of the rule is checked:
 - An `import` below a function or a struct is `N0109`: imports come first.
 - The package must be in the manifest's `[dependencies]`: `import ledger;` without it is `N0310`.
 - The item must exist (`N0311`) and be public (`N0312`).
-- The import in `main.cee` does nothing for `output.cee`. That is why Listing 7-13 writes `tally.Tally`. The files
+- The import in `main.cee` does nothing for `output.cee`. That is why Listing 7-15 writes `tally.Tally`. The files
   of a package share their items. They do not share their imports.
 
 There is no way to rename what you import, and no `import` between the files of one package: those already see
@@ -150,7 +150,7 @@ built-in library. A qualified name, `tally.pair`, always means the dependency's 
 ## The built-in library needs nothing
 
 `Console`, `StringView`, `i64`, and the rest of what CeeSafe gives every program, are in scope in every file of
-every package. There is no `import` for them and no line in `[dependencies]`. Listing 7-13 calls `Console.write`
+every package. There is no `import` for them and no line in `[dependencies]`. Listing 7-15 calls `Console.write`
 in a file with no `import` at all.
 
 So an `import` in a CeeSafe file always tells you one thing: this file uses a package that the manifest lists.
@@ -162,7 +162,7 @@ The item is public and the package is a dependency, but this file has not import
 search dependencies for a bare name.
 :::
 
-<span class="listing-caption"><strong>Listing 7-16</strong>, <code>report/src/output.cee</code>: Listing 7-13 with <code>Tally</code> in place of <code>tally.Tally</code>. This does not compile, though <code>main.cee</code> imports <code>Tally</code>.</span>
+<span class="listing-caption"><strong>Listing 7-18</strong>, <code>report/src/output.cee</code>: Listing 7-15 with <code>Tally</code> in place of <code>tally.Tally</code>. This does not compile, though <code>main.cee</code> imports <code>Tally</code>.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -188,7 +188,7 @@ Suppose `report` also depends on a package `ledger`, which has its own public `p
 packages whole.
 :::
 
-<span class="listing-caption"><strong>Listing 7-17</strong>, <code>report/src/main.cee</code>: Both imports offer <code>pair</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 7-19</strong>, <code>report/src/main.cee</code>: Both imports offer <code>pair</code>. This does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -215,7 +215,7 @@ The two `import` lines are not the error: the use on line 5 is. Qualify it, as t
 A package cannot declare a function, a struct or any other item with the name of one of its dependencies.
 :::
 
-<span class="listing-caption"><strong>Listing 7-18</strong>, <code>report/src/main.cee</code>: A function called <code>tally</code> in a package that depends on <code>tally</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 7-20</strong>, <code>report/src/main.cee</code>: A function called <code>tally</code> in a package that depends on <code>tally</code>. This does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe

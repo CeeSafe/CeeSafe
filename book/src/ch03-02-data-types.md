@@ -63,7 +63,8 @@ A literal can be decimal, hexadecimal (`0x`), binary (`0b`) or octal (`0o`), wit
 readable. It takes its type from where it is used: `255` is a `u8` in `let small: u8 = 255;`. A suffix fixes the
 type (`7u16`). With nothing to go by, an integer literal is an `i32`, so `mask`, `bits` and `mode` are `i32`.
 
-A literal that does not fit its type, such as `let level: u8 = 256;`, is a compile error.
+A literal that does not fit its type, such as `let level: u8 = 256;`, is a compile error. So is arithmetic written
+only with literals when its result does not fit, such as `let level: u8 = 200 + 100;`.
 
 ## Overflow is checked
 

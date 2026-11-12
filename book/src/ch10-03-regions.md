@@ -47,8 +47,7 @@ fn secondWord(line: StringView) -> Word {
 }
 
 fn main() {
-    var line = String.create();
-    line.append("hello wide world")!;
+    let line = String.from("hello wide world")!;
     let word = secondWord(line.view());
     Console.writeLine(word.text);
     Console.writeLine(word.start);
@@ -70,7 +69,8 @@ wide
   `fn secondWord<region src>(line: StringView<src>) -> Word<src>`.
 - In `main`, `word` borrows from `line`. No text is copied: `word.text` is the four bytes inside `line`.
 
-The `!` after `append` stops the program if memory runs out; [chapter 9](./ch09-02-result) covers it.
+`String.from` makes a `String` that owns a copy of the text. The `!` after it stops the program if memory runs
+out; [chapter 9](./ch09-02-result) covers it.
 
 ::: tip Rule
 A struct or enum that holds a borrow, a view or a slice declares a region parameter: `struct S<region r>`. The
@@ -97,8 +97,7 @@ struct Word<region src> {
 fn main() {
     var word = Word { text: "none" };
     {
-        var line = String.create();
-        line.append("hello wide world")!;
+        let line = String.from("hello wide world")!;
         word = Word { text: line.view() };
     }
     Console.writeLine(word.text);
@@ -106,15 +105,15 @@ fn main() {
 ```
 
 ```text
-main.cee:11:6: error[N0243]: 'line' goes out of scope while still borrowed
+main.cee:10:6: error[N0243]: 'line' goes out of scope while still borrowed
    |
-11 |     }
+10 |     }
    |      ^
-   = note: 'line' is borrowed here (10:29)
-   = note: the borrow is used later here (12:5)
+   = note: 'line' is borrowed here (9:29)
+   = note: the borrow is used later here (11:5)
 ```
 
-`line` is destroyed at the `}` on line 11, and `word` still holds a view of it on line 12. Without the check, that
+`line` is destroyed at the `}` on line 10, and `word` still holds a view of it on line 11. Without the check, that
 line would read freed memory. The fix is to keep `line` alive as long as `word`: declare it in the outer block.
 
 On line 6, `"none"` is a string literal. Literals are part of the program and live as long as it runs, so a `Word`
@@ -156,10 +155,8 @@ fn main() {
     let y: i64 = 7;
     Console.writeLine(larger(x, y));
 
-    var pear = String.create();
-    pear.append("pear")!;
-    var apple = String.create();
-    apple.append("apple")!;
+    let pear = String.from("pear")!;
+    let apple = String.from("apple")!;
     Console.writeLine(longer(pear.view(), apple.view()));
 }
 ```

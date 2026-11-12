@@ -229,8 +229,7 @@ Build the message in a `String`, which can append a number, and write its view:
 ```ceesafe
 fn main() {
     let count = 3;
-    var message = String.create();
-    message.append("lines found: ")!;
+    var message = String.from("lines found: ")!;
     message.appendNumber(count)!;
     Console.writeErrorLine(message.view());
 }

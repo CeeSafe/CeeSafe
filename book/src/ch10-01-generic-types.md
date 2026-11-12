@@ -108,6 +108,9 @@ A value of a generic type gets its type arguments in one of three ways:
 As the name of a type, a generic struct or enum always has its type arguments: a parameter is a `Pair<i32>`, never
 a bare `Pair`. A type may have several parameters: `struct Entry<K, V> { key: K; value: V; }`.
 
+`Pair` has its method in its body. A generic enum's methods go in an `impl` block that repeats the enum's
+parameters, as do a generic struct's when they are written outside its body: `impl<T> Maybe<T> { … }`.
+
 You have used generic types already. `Vector<T>`, `HashMap<K, V>` and `Result<T, E>` are generic types of the
 library, and `T?` is an optional of any `T`. A static function of a generic type is called with the type written,
 `Vector<i32>.create()`, because `create` has no argument to infer from.

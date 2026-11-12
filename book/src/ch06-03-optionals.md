@@ -20,7 +20,7 @@ nothing. Both are written without a type name in front.
 
 ## Returning and matching an optional
 
-<span class="listing-caption"><strong>Listing 6-16</strong>, <code>main.cee</code>: A division that has no answer when the divisor is zero.</span>
+<span class="listing-caption"><strong>Listing 6-17</strong>, <code>main.cee</code>: A division that has no answer when the divisor is zero.</span>
 
 ```ceesafe
 fn divide(a: i32, b: i32) -> i32? {
@@ -62,7 +62,7 @@ A `T?` is not a `T`. Before you use the value, you say what happens when it is a
 
 ## Making and testing an optional
 
-<span class="listing-caption"><strong>Listing 6-17</strong>, <code>main.cee</code>: An optional field, a plain value that becomes an optional, and the tests for absence.</span>
+<span class="listing-caption"><strong>Listing 6-18</strong>, <code>main.cee</code>: An optional field, a plain value that becomes an optional, and the tests for absence.</span>
 
 ```ceesafe
 struct Reading {
@@ -99,7 +99,7 @@ false
 
 Two operators turn a `T?` into a `T` in one step.
 
-<span class="listing-caption"><strong>Listing 6-18</strong>, <code>main.cee</code>: <code>??</code> gives a fallback. <code>!</code> takes the value and stops the program if there is none.</span>
+<span class="listing-caption"><strong>Listing 6-19</strong>, <code>main.cee</code>: <code>??</code> gives a fallback. <code>!</code> takes the value and stops the program if there is none.</span>
 
 ```ceesafe
 fn divide(a: i32, b: i32) -> i32? {
@@ -137,7 +137,7 @@ Often the code wants to do something only when a value is present, and nothing o
 a value against a pattern and gives a `bool`. In the condition of an `if` or a `while`, the names the pattern binds
 can be used in the rest of the condition after `&&`, and in the body.
 
-<span class="listing-caption"><strong>Listing 6-19</strong>, <code>main.cee</code>: <code>is Some(n)</code> tests an optional and names its value for the body.</span>
+<span class="listing-caption"><strong>Listing 6-20</strong>, <code>main.cee</code>: <code>is Some(n)</code> tests an optional and names its value for the body.</span>
 
 ```ceesafe
 fn divide(a: i32, b: i32) -> i32? {
@@ -183,7 +183,7 @@ A function that returns an optional often calls another that does, and has nothi
 `null`. A `?` after the call says: if this is `null`, return `null` from this function now; otherwise give me the
 value.
 
-<span class="listing-caption"><strong>Listing 6-20</strong>, <code>main.cee</code>: <code>?</code> returns early with <code>null</code>.</span>
+<span class="listing-caption"><strong>Listing 6-21</strong>, <code>main.cee</code>: <code>?</code> returns early with <code>null</code>.</span>
 
 ```ceesafe
 fn divide(a: i32, b: i32) -> i32? {
@@ -218,7 +218,7 @@ shows the same `?` on `Result`, the enum that carries an error instead of `null`
 Arithmetic, printing and assignment to a `T` all refuse a `T?`.
 :::
 
-<span class="listing-caption"><strong>Listing 6-21</strong>, <code>main.cee</code>: <code>half</code> is an <code>i32?</code>, and <code>+</code> wants an <code>i32</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-22</strong>, <code>main.cee</code>: <code>half</code> is an <code>i32?</code>, and <code>+</code> wants an <code>i32</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0207 -->
 ```ceesafe
@@ -248,7 +248,7 @@ Decide the absent case first: `(half ?? 0) + 1`, or a `match`, or `if (half is S
 There is no null `i32`, null struct or null `String`.
 :::
 
-<span class="listing-caption"><strong>Listing 6-22</strong>, <code>main.cee</code>: <code>count</code> is an <code>i32</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-23</strong>, <code>main.cee</code>: <code>count</code> is an <code>i32</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0260 -->
 ```ceesafe
@@ -271,7 +271,7 @@ If the value may be absent, give it the type `i32?`. If it may not, give it a re
 `!` is a claim that the value is there. When the claim is false the program stops.
 :::
 
-<span class="listing-caption"><strong>Listing 6-23</strong>, <code>main.cee</code>: The second <code>!</code> meets <code>null</code>. The program compiles, and stops when it runs.</span>
+<span class="listing-caption"><strong>Listing 6-24</strong>, <code>main.cee</code>: The second <code>!</code> meets <code>null</code>. The program compiles, and stops when it runs.</span>
 
 <!-- ceesafe: panics -->
 ```ceesafe
@@ -299,7 +299,7 @@ with a failure status. When absence is possible, use `??`, `match` or `is Some(x
 CeeSafe has no `if let`. An `if` takes a condition in parentheses.
 :::
 
-<span class="listing-caption"><strong>Listing 6-24</strong>, <code>main.cee</code>: Rust's <code>if let</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-25</strong>, <code>main.cee</code>: Rust's <code>if let</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0100 -->
 ```ceesafe

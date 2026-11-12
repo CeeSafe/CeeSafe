@@ -35,8 +35,8 @@ The chapter assumes you can make a package ([Hello, package](./ch01-03-hello-pac
   and how to test a function that returns a `Result`.
 - [11.2 Running them](./ch11-02-running-tests): `ceesafec test`, what it prints, its options, the outcomes, leaks
   and the exit status.
-- [11.3 Organising them](./ch11-03-organising-tests): tests beside the code and in the `tests` directory, tests of
-  private functions, tests through a library's public interface, and the two sweeps.
+- [11.3 Organising them](./ch11-03-organising-tests): tests beside the code and in the `tests` directory, what the
+  tests of a package can see, tests through a library's public interface, and the two sweeps.
 
 [Chapter 12](./ch12-00-command-line-project) then builds a command-line program, and
 [section 12.4](./ch12-04-test-first) writes its tests before its code.

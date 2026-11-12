@@ -164,8 +164,7 @@ fn main() {
     Console.writeLine(firstWord(line));
     Console.writeLine(line[6..10]);
 
-    var s = String.create();
-    s.append("owned text")!;
+    let s = String.from("owned text")!;
     let word = firstWord(s);
     Console.writeLine(word);
     Console.writeLine(word.length);
@@ -179,7 +178,8 @@ owned
 5
 ```
 
-`firstWord` copies no text. Its result is a view into the text of its argument, and the compiler knows that:
+`String.from("owned text")!` makes a `String` that owns a copy of the literal's text
+([What ownership is](./ch04-01-what-ownership-is#move-types)). `firstWord` copies no text. Its result is a view into the text of its argument, and the compiler knows that:
 `word` borrows `s`, so `s` cannot be changed or destroyed while `word` is used.
 
 The `length` of a view counts bytes, and `text[i]` is a byte. Text is UTF-8, in which a character can take more
@@ -271,9 +271,7 @@ statement, so a view of it cannot be kept longer than that.
 <!-- ceesafe: fail N0243 -->
 ```ceesafe
 fn make() -> String {
-    var s = String.create();
-    s.append("made for a moment")!;
-    return s;
+    return String.from("made for a moment")!;
 }
 
 fn main() {
@@ -283,24 +281,22 @@ fn main() {
 ```
 
 ```text
-main.cee:8:5: error[N0243]: a temporary value is dropped at the end of this statement while still borrowed; bind it to a local first
+main.cee:6:5: error[N0243]: a temporary value is dropped at the end of this statement while still borrowed; bind it to a local first
   |
-8 |     let v = make().view();
+6 |     let v = make().view();
   |     ^^^^^^^^^^^^^^^^^^^^^^
-  = note: a temporary value is borrowed here (8:5)
-  = note: the borrow is used later here (9:5)
+  = note: a temporary value is borrowed here (6:5)
+  = note: the borrow is used later here (7:5)
 ```
 
 `view()` gives the `StringView` of a `String`. Nothing owns the `String` that `make()` returns, so it is destroyed
-at the `;` of line 8. Give it an owner, as the message says, or use the view inside the one statement:
+at the `;` of line 6. Give it an owner, as the message says, or use the view inside the one statement:
 
 <span class="listing-caption"><strong>Listing 4-19</strong>, <code>main.cee</code>: A view used within its statement, and a view of a value that has an owner.</span>
 
 ```ceesafe
 fn make() -> String {
-    var s = String.create();
-    s.append("made for a moment")!;
-    return s;
+    return String.from("made for a moment")!;
 }
 
 fn main() {

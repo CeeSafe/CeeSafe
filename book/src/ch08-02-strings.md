@@ -1,8 +1,8 @@
 ---
 title: Strings and string views
-summary: String owns UTF-8 text and StringView borrows it - building text with append and the number helpers, length in bytes, iterating bytes, slicing on character boundaries, comparing, searching, splitting, and converting numbers to and from text.
+summary: String owns UTF-8 text and StringView borrows it - building text with append and the number helpers, copying it with String.from and clone, length in bytes, iterating bytes, slicing on character boundaries, comparing, searching, splitting, and converting numbers to and from text.
 assumes: [ch04-02-borrowing, ch04-03-slices-and-views, ch06-03-optionals, ch08-01-vectors]
-keywords: [String, StringView, UTF-8, append, appendNumber, appendFixed, appendHex, appendPadded, bytes, split, splitOnce, trim, parseInt, parseFloat, string interpolation]
+keywords: [String, StringView, UTF-8, String.from, clone, append, appendNumber, appendFixed, appendHex, appendPadded, bytes, split, splitOnce, trim, parseInt, parseFloat, string interpolation]
 diagnostics: [N0205, N0207, N0400]
 specification: ["type-system.md §23.2"]
 ---
@@ -19,7 +19,7 @@ it. It assumes [borrowing](./ch04-02-borrowing), [optionals](./ch06-03-optionals
   `"hello"`, is a `StringView`: the text is in the program itself.
 - A **`String`** owns text on the heap. It can grow. Like a vector, it frees its memory when it goes away.
 
-<span class="listing-caption"><strong>Listing 8-12</strong>, <code>main.cee</code>: A <code>String</code> is built from views, and lends its text as a view.</span>
+<span class="listing-caption"><strong>Listing 8-15</strong>, <code>main.cee</code>: A <code>String</code> is built from views, and lends its text as a view.</span>
 
 ```ceesafe
 fn shout(text: StringView) {
@@ -46,7 +46,7 @@ Goodbye!
 ```
 
 - `String.create()` makes an empty string and allocates nothing. `String.withCapacity(n)!` makes one with room
-  for `n` bytes.
+  for `n` bytes, and `String.from(text)!` makes one that holds a copy of a text ([below](#copies-of-text)).
 - `append` adds the text of a view to the end. It may allocate, so it returns a `Result`, as `push` does.
 - `shout` takes a `StringView`, so it accepts a literal and a `String` alike: `shout(message)` borrows the
   string's text.
@@ -69,7 +69,7 @@ A `StringView` is always valid UTF-8, and a `String` only receives text from vie
 
 ## Building text
 
-<span class="listing-caption"><strong>Listing 8-13</strong>, <code>main.cee</code>: Text and numbers are appended to a <code>String</code>, each with its own call.</span>
+<span class="listing-caption"><strong>Listing 8-16</strong>, <code>main.cee</code>: Text and numbers are appended to a <code>String</code>, each with its own call.</span>
 
 ```ceesafe
 fn main() {
@@ -106,9 +106,45 @@ Each returns a `Result`. `s.clear()` empties the string and keeps its capacity.
 There is no string interpolation and no format string. Text is built with one call for each piece.
 :::
 
+## Copies of text
+
+When the text is already there, as a literal, a view or another `String`, one call makes a `String` of it.
+
+<span class="listing-caption"><strong>Listing 8-17</strong>, <code>main.cee</code>: A <code>String</code> from a literal, a clone of it, and a <code>String</code> from part of another.</span>
+
+```ceesafe
+fn main() {
+    let name = String.from("Ada")!;
+    var longer = name.clone()!;
+    longer.append(" Lovelace")!;
+    let last = String.from(longer[4..])!;
+    Console.writeLine(name);
+    Console.writeLine(longer);
+    Console.writeLine(last);
+}
+```
+
+```text
+Ada
+Ada Lovelace
+Lovelace
+```
+
+- `String.from(text)` takes a `StringView` and returns a new `String` holding a copy of it. A literal, a `String`
+  (which lends its view) and a slice of either are all accepted.
+- `s.clone()` is a second `String` with the same text: `String.from(s)`, written as a method. It reads `s` and
+  does not move it.
+- Each copy has its own memory. Appending to `longer` does not change `name`.
+- Both allocate once, for exactly the bytes they copy, and so both return a `Result`. An empty text allocates
+  nothing.
+
+Use `String.from` when the text is known at once, and `String.create()` with `append` when it is put together
+from pieces. A `StringView` has no `clone`: copying a view is an assignment, and it is still a borrow of the same
+text.
+
 ## Length and bytes
 
-<span class="listing-caption"><strong>Listing 8-14</strong>, <code>main.cee</code>: The length counts bytes. The loop counts characters.</span>
+<span class="listing-caption"><strong>Listing 8-18</strong>, <code>main.cee</code>: The length counts bytes. The loop counts characters.</span>
 
 ```ceesafe
 fn main() {
@@ -143,7 +179,7 @@ The library has no iterator over characters. In UTF-8, every byte of a character
 
 `s[lo..hi]` is a view of the bytes from `lo` up to `hi`. `s[lo..]` and `s[..hi]` leave an end out.
 
-<span class="listing-caption"><strong>Listing 8-15</strong>, <code>main.cee</code>: Three views of parts of one text.</span>
+<span class="listing-caption"><strong>Listing 8-19</strong>, <code>main.cee</code>: Three views of parts of one text.</span>
 
 ```ceesafe
 fn main() {
@@ -162,7 +198,7 @@ au lait
 
 The positions are byte positions. A slice must begin and end between characters, and the program checks it:
 
-<span class="listing-caption"><strong>Listing 8-16</strong>, <code>main.cee</code>: Byte 4 is the middle of <code>é</code>. The program panics.</span>
+<span class="listing-caption"><strong>Listing 8-20</strong>, <code>main.cee</code>: Byte 4 is the middle of <code>é</code>. The program panics.</span>
 
 <!-- ceesafe: panics -->
 ```ceesafe
@@ -190,7 +226,7 @@ is always a boundary.
 
 ## Comparing and searching
 
-<span class="listing-caption"><strong>Listing 8-17</strong>, <code>main.cee</code>: Text is compared with <code>==</code>, and searched with methods.</span>
+<span class="listing-caption"><strong>Listing 8-21</strong>, <code>main.cee</code>: Text is compared with <code>==</code>, and searched with methods.</span>
 
 ```ceesafe
 fn main() {
@@ -222,7 +258,7 @@ its view: `name.view() == "Ada"`. `indexOf` and `lastIndexOf` return an optional
 
 ## Splitting
 
-<span class="listing-caption"><strong>Listing 8-18</strong>, <code>main.cee</code>: A line is cut at a separator once, and a list is cut at every comma.</span>
+<span class="listing-caption"><strong>Listing 8-22</strong>, <code>main.cee</code>: A line is cut at a separator once, and a list is cut at every comma.</span>
 
 ```ceesafe
 fn main() {
@@ -258,7 +294,7 @@ Every piece is a view of the same text. Nothing is copied or allocated.
 
 ## Numbers from text
 
-<span class="listing-caption"><strong>Listing 8-19</strong>, <code>main.cee</code>: Parsing gives an optional, <code>null</code> when the text is not a number of that type.</span>
+<span class="listing-caption"><strong>Listing 8-23</strong>, <code>main.cee</code>: Parsing gives an optional, <code>null</code> when the text is not a number of that type.</span>
 
 ```ceesafe
 fn main() {
@@ -287,7 +323,7 @@ do not skip spaces: trim first. The other direction, a number to text, is `appen
 A literal is a `StringView`. Nothing turns it into a `String` for you, because that allocates.
 :::
 
-<span class="listing-caption"><strong>Listing 8-20</strong>, <code>main.cee</code>: A view is given to a <code>String</code> variable. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-24</strong>, <code>main.cee</code>: A view is given to a <code>String</code> variable. This does not compile.</span>
 
 <!-- ceesafe: fail N0205 -->
 ```ceesafe
@@ -304,13 +340,13 @@ main.cee:2:24: error[N0205]: expected 'String', found 'StringView'
   |                        ^^^^^
 ```
 
-Make the string and append to it: `var name = String.create(); name.append("Ada")!;`.
+Ask for the copy: `var name = String.from("Ada")!;`.
 
 ::: warning Mistake: joining text with `+`
 `+` does not join text at run time. The result would need memory, and an operator cannot report a failure.
 :::
 
-<span class="listing-caption"><strong>Listing 8-21</strong>, <code>main.cee</code>: Two views are added. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-25</strong>, <code>main.cee</code>: Two views are added. This does not compile.</span>
 
 <!-- ceesafe: fail N0207 -->
 ```ceesafe
@@ -328,13 +364,13 @@ main.cee:3:16: error[N0207]: operator '+' cannot be applied to type 'StringView'
   |                ^^^^^^^^^^^^^^^^^^^
 ```
 
-The compiler joins literals with `+` only in a constant. Append both to a `String`, as Listing 8-12 does.
+The compiler joins literals with `+` only in a constant. Append both to a `String`, as Listing 8-15 does.
 
 ::: warning Mistake: braces in a string
 `{count}` inside a string is those seven characters. The compiler warns, and the program runs.
 :::
 
-<span class="listing-caption"><strong>Listing 8-22</strong>, <code>main.cee</code>: The braces are appended as written. The compiler warns.</span>
+<span class="listing-caption"><strong>Listing 8-26</strong>, <code>main.cee</code>: The braces are appended as written. The compiler warns.</span>
 
 <!-- ceesafe: warns N0400 -->
 ```ceesafe
@@ -357,8 +393,9 @@ Write `line.append("count = ")!;` and then `line.appendNumber(count)!;`.
 
 ::: details Coming from Rust
 `String` is `String` and `StringView` is `&str`. A `String` argument is lent to a `StringView` parameter without
-`&` or `.as_str()`. There is no `format!`, no `to_string()` and no `chars()`. `s[lo..hi]` panics off a character
-boundary, as in Rust. `append` returns a `Result`.
+`&` or `.as_str()`. `String.from("…")` is `String::from` and `s.clone()` is `clone`, but each returns a `Result`,
+as `append` does. There is no `format!`, no `to_string()` and no `chars()`. `s[lo..hi]` panics off a character
+boundary, as in Rust.
 :::
 
 ::: details Coming from C#, Java, TypeScript, Go or Python
@@ -377,6 +414,7 @@ buffer that knows its length and capacity, and `append` cannot write past it.
 - `String` owns text on the heap; `StringView` borrows text. A literal is a `StringView` (`N0205`).
 - Take a `StringView` as a parameter; a `String` argument is lent to it.
 - Text is UTF-8. `length` is in bytes, `s[i]` is a byte, and `s.bytes()` is a `Slice<u8>`.
+- `String.from(text)!` makes a `String` from a view, and `s.clone()!` makes a second `String` from a first.
 - Build text with `append`, `appendNumber`, `appendFixed`, `appendHex` and `appendPadded`. There is no `+` on
   text (`N0207`) and no interpolation (`N0400`).
 - `s[lo..hi]` is a view; it panics if an end is inside a character.

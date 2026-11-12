@@ -3,7 +3,7 @@ title: Allocation failure is a value
 summary: Every operation that allocates memory, such as push, append and Box.create, returns a Result with AllocError. How to pass it on with ?, stop with !, and test the out-of-memory path with FailingAllocator and with ceesafec test --sweep alloc.
 assumes: [ch08-01-vectors, ch08-02-strings, ch09-02-result]
 keywords: [AllocError, OutOfMemory, push, append, withCapacity, Box.create, FailingAllocator, failAfter, "--sweep alloc", allocation, "out of memory"]
-diagnostics: [N0234]
+diagnostics: [N0234, N0402]
 specification: ["type-system.md §17.1", "type-system.md §18.1", "tooling.md §10.2"]
 ---
 
@@ -27,7 +27,8 @@ could fail. In CeeSafe it is an ordinary error value. Every operation that may a
 | `v.push(x)`, `v.insert(at, x)`, `v.reserve(extra)` | `Result<void, AllocError>` |
 | `Vector<T>.withCapacity(n)` | `Result<Vector<T>, AllocError>` |
 | `s.append(text)`, `s.appendNumber(n)` | `Result<void, AllocError>` |
-| `String.withCapacity(n)` | `Result<String, AllocError>` |
+| `String.withCapacity(n)`, `String.from(text)` | `Result<String, AllocError>` |
+| `s.clone()`, `v.clone()` | `Result<String, AllocError>`, `Result<Vector<T>, AllocError>` |
 | `Box.create(value)` | `Result<Box<T>, AllocError>` |
 
 `Vector<T>.create()` and `String.create()` make an empty collection and allocate nothing, so they return the
@@ -90,8 +91,7 @@ A command-line tool or an example has nothing better to do without memory than t
 
 ```ceesafe
 fn main() {
-    var line = String.create();
-    line.append("total: ")!;
+    var line = String.from("total: ")!;
     line.appendNumber(6 * 7)!;
     Console.writeLine(line.view());
 }
@@ -101,7 +101,8 @@ fn main() {
 total: 42
 ```
 
-If an `append` fails, the program panics with `unwrapped an Err value` and the line it happened on. That is why
+`String.from` makes a string that owns a copy of the text, and `appendNumber` adds to it. Both may allocate. If
+either fails, the program panics with `unwrapped an Err value` and the line it happened on. That is why
 programs throughout this book write `names.push("ada")!;`: the `!` is the program's decision about memory, in one
 character, at each place where memory is asked for.
 
@@ -260,11 +261,32 @@ fn main() {
 ```
 
 ::: warning Mistake: a bare `push`
-`v.push(1);` with nothing after it compiles, with no diagnostic. If the allocation fails, the element is not
-added and the program carries on with a shorter vector than it believes it has.
-[Section 9.2](./ch09-02-result#mistakes) shows the same mistake with a function of your own. Write `v.push(1)?;`
-or `v.push(1)!;`.
+`v.push(1);` with nothing after it compiles. If the allocation fails, the element is not added and the program
+carries on with a shorter vector than it believes it has. The compiler warns about the call, and the program
+still builds and runs.
 :::
+
+<span class="listing-caption"><strong>Listing 9-25</strong>, <code>main.cee</code>: Nothing reads the <code>Result</code> of <code>push</code>. The compiler warns.</span>
+
+<!-- ceesafe: warns N0402 -->
+```ceesafe
+fn main() {
+    var v = Vector<i32>.create();
+    v.push(1);
+    Console.writeLine(v.length);
+}
+```
+
+```text
+main.cee:3:5: warning[N0402]: the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it
+  |
+3 |     v.push(1);
+  |     ^^^^^^^^^
+```
+
+Write `v.push(1)?;` or `v.push(1)!;`. `let _ = v.push(1);` silences the warning and keeps the bug, so it is not
+the answer for an allocation. [Section 9.2](./ch09-02-result#mistakes) shows the same mistake with a function of
+your own, and `--deny-warnings`, which makes the warning an error.
 
 ::: details Coming from Rust
 `Vec::push` aborts the process when allocation fails. Here every such method is what Rust calls the `try_` form:
@@ -285,11 +307,12 @@ every call that allocates.
 
 ## Summary
 
-- An operation that allocates (`push`, `append`, `withCapacity`, `Box.create`) returns `Result<…, AllocError>`.
+- An operation that allocates (`push`, `append`, `withCapacity`, `String.from`, `clone`, `Box.create`) returns `Result<…, AllocError>`.
   `AllocError` has one variant, `OutOfMemory`.
 - In a function that returns `Result<…, AllocError>`, end the call with `?`. What the function had built is
   destroyed on the way out.
 - In a program that stops when memory runs out, end the call with `!`.
+- A bare `v.push(1);` loses the failure. The compiler warns about it (`N0402`).
 - `FailingAllocator.failAfter(n)` makes a later allocation through `FailingAllocator` fail, for a test of one
   failure path.
 - `ceesafec test --sweep alloc` runs each passing test again once for each allocation, with that allocation

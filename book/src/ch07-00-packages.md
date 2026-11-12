@@ -16,7 +16,8 @@ unit the compiler works on: `ceesafec check`, `run` and `build` take a whole pac
 of naming. CeeSafe has two levels of names and no more:
 
 - **Inside a package** every file sees every item of every other file. There is nothing to declare and nothing to
-  import. Splitting a package into files and directories is for the people who read it.
+  import. Splitting a package into files and directories is for the people who read it. A file keeps an item to
+  itself only by marking it `private`.
 - **Between packages** nothing is visible unless it is marked `public`, and the other package's name comes first:
   `tally.pair(30, 34)`.
 
@@ -35,7 +36,8 @@ The chapter builds three small packages, which are in the book's repository unde
 1. [A package and its manifest](./ch07-01-package-and-manifest): what a package is, each field of `ceesafe.toml`,
    executable and library packages, `ceesafec new`, and where a build goes.
 2. [Files and `public`](./ch07-02-files-and-public): what the files of a package see of each other, what
-   directories under `src/` mean (nothing), and what `public` opens to other packages.
+   directories under `src/` mean (nothing), what `public` opens to other packages, and what `private` keeps to
+   one file.
 3. [Imports](./ch07-03-imports): naming another package's items with its name in front, or with `import`, and what
    happens when two names clash.
 4. [Dependencies and the lock file](./ch07-04-dependencies): `[dependencies]` by path, by git and from the registry,

@@ -125,7 +125,7 @@ After `var second = first;` there are two players. Changing one does not change 
 A `String` is text that owns its memory, so it is not Copy: assigning it moves it. A struct with a `String` field
 owns that string, and the struct moves as well.
 
-The next listing makes a `String` in two lines. `String.create()` makes an empty one, and `append` adds text to it;
+The next listing makes a `String` with `String.from("Ada")!`. `String.from` copies the text into a new `String`;
 the `!` after the call stops the program if memory runs out. [Strings](./ch08-02-strings) covers `String`, and
 chapter 9 covers errors.
 
@@ -139,8 +139,7 @@ struct Player {
 }
 
 fn main() {
-    var name = String.create();
-    name.append("Ada")!;
+    let name = String.from("Ada")!;
     let first = Player { name: name, score: 0 };
     let second = first;
     Console.writeLine(second.name.view());
@@ -149,14 +148,14 @@ fn main() {
 ```
 
 ```text
-main.cee:12:5: error[N0250]: 'first.score' is used here after it was moved (on at least one path)
+main.cee:11:5: error[N0250]: 'first.score' is used here after it was moved (on at least one path)
    |
-12 |     Console.writeLine(first.score);
+11 |     Console.writeLine(first.score);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
 `let second = first;` moves the whole player into `second`. `first` is then empty, and that includes `first.score`,
-though `score` is only a number: a struct moves as one value. Two lines earlier the same thing happens to `name`.
+though `score` is only a number: a struct moves as one value. One line earlier the same thing happens to `name`.
 The literal `Player { name: name, score: 0 }` moves the string into the struct, and the variable `name` is empty
 after it.
 

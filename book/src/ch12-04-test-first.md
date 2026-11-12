@@ -257,8 +257,7 @@ fn search<region r>(query: StringView, text: StringView<r>) -> Result<Vector<Str
 }
 
 fn main() {
-    var text = String.create();
-    text.append("red herring\nblue moon\n")!;
+    var text = String.from("red herring\nblue moon\n")!;
     let found = search("red", text.view())!;
     text.clear();
     Console.writeLine(found[0]);
@@ -266,12 +265,12 @@ fn main() {
 ```
 
 ```text
-main.cee:15:5: error[N0241]: cannot borrow 'text' as mutable while 'text' is borrowed
+main.cee:14:5: error[N0241]: cannot borrow 'text' as mutable while 'text' is borrowed
    |
-15 |     text.clear();
+14 |     text.clear();
    |     ^^^^
-   = note: 'text' is borrowed here (14:31)
-   = note: the borrow is used later here (16:29)
+   = note: 'text' is borrowed here (13:31)
+   = note: the borrow is used later here (15:29)
 ```
 
 In a language without this check, `found[0]` would read memory that `clear` had emptied. Use the lines first,

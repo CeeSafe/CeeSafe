@@ -111,8 +111,7 @@ struct Order {
     unitPrice: u32;
 
     fn create(name: StringView, unitPrice: u32) -> Order {
-        var item = String.create();
-        item.append(name)!;
+        let item = String.from(name)!;
         return Order { item: item, quantity: 1, unitPrice: unitPrice };
     }
 
@@ -135,8 +134,8 @@ lamp
 ```
 
 `create` takes the name as a `StringView`, the type of text such as `"lamp"`, and copies it into a `String` that
-the order owns. `String.create()` makes an empty `String`, `append` adds text to it, and `!` stops the program if
-memory runs out; [Strings](./ch08-02-strings) covers both types.
+the order owns. `String.from(name)` makes that `String`, and `!` stops the program if memory runs out;
+[Strings](./ch08-02-strings) covers both types.
 
 `cancel` takes `this` by value. This `Order` owns a `String`, so it is not Copy, and `order.cancel()` moves the
 order into the method. The method moves the item's name out and returns it; the rest of the order is destroyed.
@@ -184,6 +183,10 @@ fn main() {
 ```
 
 `impl` has a second use, with interfaces, which [chapter 10](./ch10-02-interfaces) teaches.
+
+A method or a static function can be called from any file of the package, wherever it is written. With `private`
+before `fn`, only the file that declares it can call it; [Files and `public`](./ch07-02-files-and-public) covers
+that.
 
 ## Mistakes
 
@@ -238,8 +241,7 @@ struct Order {
 }
 
 fn main() {
-    var item = String.create();
-    item.append("lamp")!;
+    let item = String.from("lamp")!;
     let order = Order { item: item, quantity: 1 };
     let name = order.cancel();
     Console.writeLine(name.view());
@@ -248,9 +250,9 @@ fn main() {
 ```
 
 ```text
-main.cee:16:5: error[N0250]: 'order.quantity' is used here after it was moved (on at least one path)
+main.cee:15:5: error[N0250]: 'order.quantity' is used here after it was moved (on at least one path)
    |
-16 |     Console.writeLine(order.quantity);
+15 |     Console.writeLine(order.quantity);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 

@@ -18,7 +18,7 @@ and `if` from [Control flow](./ch03-05-control-flow).
 A `match` takes a value in parentheses and a list of **arms**. Each arm is a **pattern**, then `=>`, then a block.
 The arms are tried from the top, and the block of the first pattern that fits the value runs. No other arm runs.
 
-<span class="listing-caption"><strong>Listing 6-8</strong>, <code>main.cee</code>: One arm for each variant. The names in a pattern receive the variant's data.</span>
+<span class="listing-caption"><strong>Listing 6-9</strong>, <code>main.cee</code>: One arm for each variant. The names in a pattern receive the variant's data.</span>
 
 ```ceesafe
 enum Command {
@@ -76,7 +76,7 @@ compile, and the diagnostic names a value that was left out.
 *Specification: `type-system.md` §15.2.*
 :::
 
-<span class="listing-caption"><strong>Listing 6-9</strong>, <code>main.cee</code>: No arm takes <code>Command.Wait</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-10</strong>, <code>main.cee</code>: No arm takes <code>Command.Wait</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0256 -->
 ```ceesafe
@@ -114,7 +114,7 @@ places to change.
 A pattern that is only `_`, or only a name, fits every value. As the last arm, it takes whatever the arms above
 did not. This is how a `match` on a number is made exhaustive.
 
-<span class="listing-caption"><strong>Listing 6-10</strong>, <code>main.cee</code>: Two status codes have arms of their own. A name catches the rest and holds the value.</span>
+<span class="listing-caption"><strong>Listing 6-11</strong>, <code>main.cee</code>: Two status codes have arms of their own. A name catches the rest and holds the value.</span>
 
 ```ceesafe
 fn report(status: u32) {
@@ -152,7 +152,7 @@ compiler no longer tells you about the new variant. On your own enums, list the 
 A `match` can also produce a value. Then each arm is a pattern, `=>` and an **expression**, and the arms are
 separated by commas. Every arm gives a value of the same type.
 
-<span class="listing-caption"><strong>Listing 6-11</strong>, <code>main.cee</code>: A <code>match</code> as a function's whole body, and as the value of a <code>let</code>.</span>
+<span class="listing-caption"><strong>Listing 6-12</strong>, <code>main.cee</code>: A <code>match</code> as a function's whole body, and as the value of a <code>let</code>.</span>
 
 ```ceesafe
 enum Shape {
@@ -205,7 +205,7 @@ arm, or a block that ends with its value.
 
 A `match` takes more than enums: integers, characters, `bool`, and text. Patterns have a few more forms for them.
 
-<span class="listing-caption"><strong>Listing 6-12</strong>, <code>main.cee</code>: Ranges, alternatives, a guard, text and <code>bool</code> as patterns.</span>
+<span class="listing-caption"><strong>Listing 6-13</strong>, <code>main.cee</code>: Ranges, alternatives, a guard, text and <code>bool</code> as patterns.</span>
 
 ```ceesafe
 fn grade(score: u32) -> StringView => match (score) {
@@ -268,7 +268,7 @@ The arms are tried in order, so nothing below a `_` or a lone name can ever run.
 instead of ignoring it.
 :::
 
-<span class="listing-caption"><strong>Listing 6-13</strong>, <code>main.cee</code>: The catch-all is first. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-14</strong>, <code>main.cee</code>: The catch-all is first. This does not compile.</span>
 
 <!-- ceesafe: fail N0257 -->
 ```ceesafe
@@ -298,7 +298,7 @@ In a pattern, a bare name is not a variant. `Quit` is a new name that binds any 
 and the arms under it can never run.
 :::
 
-<span class="listing-caption"><strong>Listing 6-14</strong>, <code>main.cee</code>: <code>Quit</code> binds every command. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-15</strong>, <code>main.cee</code>: <code>Quit</code> binds every command. This does not compile.</span>
 
 <!-- ceesafe: fail N0257 -->
 ```ceesafe
@@ -333,7 +333,7 @@ bare name above it, and write `Command.Quit`.
 An arm of a `match` statement is a block, also when it is one call.
 :::
 
-<span class="listing-caption"><strong>Listing 6-15</strong>, <code>main.cee</code>: The first arm has no braces. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-16</strong>, <code>main.cee</code>: The first arm has no braces. This does not compile.</span>
 
 <!-- ceesafe: fail N0100 -->
 ```ceesafe

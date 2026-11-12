@@ -1,16 +1,16 @@
 ---
 title: Defining an enum
-summary: An enum is a value that is one of several variants - variants with and without data, making and passing them, comparing with ==, methods through an interface, and choosing between an enum and a struct.
+summary: An enum is a value that is one of several variants - variants with and without data, making and passing them, comparing with ==, methods and static functions in an impl block, and choosing between an enum and a struct.
 assumes: [ch05-01-defining-structs, ch05-03-methods]
-keywords: [enum, variant, payload, "==", interface, impl, struct]
-diagnostics: [N0200, N0207, N0234, N0267]
+keywords: [enum, variant, payload, "==", impl, method, static function, this, struct]
+diagnostics: [N0100, N0101, N0200, N0207]
 specification: ["type-system.md §15.1", "type-system.md §21.1"]
 ---
 
 # Defining an enum
 
-**This section teaches** how to declare an enum, make its values, pass them to functions and compare them, and
-when an enum is the right type. It assumes you can define a struct ([Defining structs](./ch05-01-defining-structs))
+**This section teaches** how to declare an enum, make its values, pass them to functions and compare them, how to
+give it methods, and when an enum is the right type. It assumes you can define a struct ([Defining structs](./ch05-01-defining-structs))
 and write a method ([Methods](./ch05-03-methods)).
 
 An **enum** is a type whose value is exactly one of a fixed list of **variants**. Where a struct says "an `x` and a
@@ -168,13 +168,11 @@ With `Status`, the tracking number exists only inside `Shipped`, and the only wa
 
 ## Methods
 
-A struct's methods are written inside its body. An enum's body holds variants only, so the ordinary way to work
-with an enum is a function that takes it, like `area` in Listing 6-2.
+An enum has methods and static functions, as a struct has. A struct's body can hold its methods. An enum's body
+holds variants only, so an enum's functions are written in an `impl` block: the word `impl`, the enum's name, and
+the functions in braces. It is the block that [Methods](./ch05-03-methods) shows for a struct.
 
-To call `shape.area()` with a dot, the enum implements an **interface**: a named list of methods that a type
-promises to have. Chapter 10 teaches interfaces; this is the smallest use of one.
-
-<span class="listing-caption"><strong>Listing 6-4</strong>, <code>main.cee</code>: <code>Shape</code> gets a method by implementing an interface.</span>
+<span class="listing-caption"><strong>Listing 6-4</strong>, <code>main.cee</code>: An <code>impl</code> block gives <code>Shape</code> a static function and a method.</span>
 
 ```ceesafe
 enum Shape {
@@ -182,11 +180,11 @@ enum Shape {
     Rect(i64, i64),
 }
 
-interface Measure {
-    fn area(borrow this) -> i64;
-}
+impl Shape {
+    fn square(side: i64) -> Shape {
+        return Shape.Rect(side, side);
+    }
 
-impl Measure for Shape {
     fn area(borrow this) -> i64 {
         match (this) {
             Shape.Circle(r) => { return 3 * r * r; }
@@ -199,19 +197,80 @@ fn main() {
     let door = Shape.Rect(2, 5);
     Console.writeLine(door.area());
     Console.writeLine(Shape.Circle(1).area());
+    Console.writeLine(Shape.square(4).area());
 }
 ```
 
 ```text
 10
 3
+16
 ```
 
-`interface Measure` says that a type with `Measure` has a method `area`. `impl Measure for Shape` writes that
-method for `Shape`. Inside it, `this` is the shape, borrowed for reading.
+- `area` has the receiver `borrow this`, so it is a method, called on a value: `door.area()`. Inside it, `this` is
+  the shape, borrowed for reading, and `match (this)` asks which variant it is.
+- `square` has no receiver, so it is a static function, called on the type: `Shape.square(4)`.
+- The receivers are a struct's: `borrow this` to read, `borrow mut this` to change, `this` to take the value.
+
+A function that takes the enum, like `area(s)` in Listing 6-2, still works. Write a method when the operation
+belongs to the type, and `shape.area()` reads better at the call.
+
+## A method that changes the value
+
+A struct's `borrow mut this` method changes fields. An enum has no fields: to go from one variant to another, the
+method assigns a whole new value to `this`.
+
+<span class="listing-caption"><strong>Listing 6-5</strong>, <code>main.cee</code>: <code>advance</code> replaces the light with its next variant.</span>
+
+```ceesafe
+enum Light {
+    Red,
+    Green,
+    Amber,
+}
+
+impl Light {
+    fn name(borrow this) -> StringView {
+        match (this) {
+            Light.Red => { return "red"; }
+            Light.Green => { return "green"; }
+            Light.Amber => { return "amber"; }
+        }
+    }
+
+    fn advance(borrow mut this) {
+        match (this) {
+            Light.Red => { this = Light.Green; }
+            Light.Green => { this = Light.Amber; }
+            Light.Amber => { this = Light.Red; }
+        }
+    }
+}
+
+fn main() {
+    var light = Light.Red;
+    Console.writeLine(light.name());
+    light.advance();
+    Console.writeLine(light.name());
+    light.advance();
+    light.advance();
+    Console.writeLine(light.name());
+}
+```
+
+```text
+red
+green
+red
+```
+
+`this = Light.Green;` replaces the value that the method was called on, so after `light.advance()` the variable
+`light` in `main` holds the new variant. The assignment needs the receiver `borrow mut this`, and the variable must
+be a `var`. `StringView` is the type of a string literal.
 
 ::: tip Rule
-An enum has no methods of its own. Write a function that takes the enum, or implement an interface for it.
+An enum's methods and static functions are written in `impl Name { … }`, never in the enum's body. In a
+`borrow mut this` method, `this = value;` replaces the value the method was called on.
 
 *Specification: `type-system.md` §21.1.*
 :::
@@ -222,7 +281,7 @@ An enum has no methods of its own. Write a function that takes the enum, or impl
 A variant is not a name on its own. The compiler looks for a variable or a function called `North` and finds none.
 :::
 
-<span class="listing-caption"><strong>Listing 6-5</strong>, <code>main.cee</code>: <code>North</code> is written without <code>Direction</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-6</strong>, <code>main.cee</code>: <code>North</code> is written without <code>Direction</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0200 -->
 ```ceesafe
@@ -250,7 +309,7 @@ Write `Direction.North`.
 the type, even between two variants that carry nothing.
 :::
 
-<span class="listing-caption"><strong>Listing 6-6</strong>, <code>main.cee</code>: <code>Shape</code> has a variant with a payload, so <code>==</code> is refused. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-7</strong>, <code>main.cee</code>: <code>Shape</code> has a variant with a payload, so <code>==</code> is refused. This does not compile.</span>
 
 <!-- ceesafe: fail N0207 -->
 ```ceesafe
@@ -274,20 +333,18 @@ main.cee:8:23: error[N0207]: '==' compares enums whose variants have no payloads
 
 Ask the question with `match`, as the message says. The next section also shows a shorter form, `s is Shape.Empty`.
 
-::: warning Mistake: methods in an `impl` block for an enum
-`impl Shape { … }` with functions in it works for a struct. For an enum it does not.
+::: warning Mistake: a function inside the enum's body
+A struct's body can hold methods. An enum's body is a list of variants, and a `fn` in it is refused.
 :::
 
-<span class="listing-caption"><strong>Listing 6-7</strong>, <code>main.cee</code>: An <code>impl</code> without <code>for</code> cannot give an enum a method. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 6-8</strong>, <code>main.cee</code>: <code>isRound</code> is written among the variants. This does not compile.</span>
 
-<!-- ceesafe: fail N0234 N0267 -->
+<!-- ceesafe: fail N0100 N0101 -->
 ```ceesafe
 enum Shape {
     Circle(i64),
     Rect(i64, i64),
-}
 
-impl Shape {
     fn isRound(borrow this) -> bool {
         match (this) {
             Shape.Circle(_) => { return true; }
@@ -302,31 +359,32 @@ fn main() {
 ```
 
 ```text
-main.cee:6:6: error[N0267]: an 'impl' without 'for' of an enum holds constants only, not functions (ADR 0074 §2.7)
+main.cee:5:5: error[N0100]: an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)
   |
-6 | impl Shape {
-  |      ^^^^^
+5 |     fn isRound(borrow this) -> bool {
+  |     ^^
 
-main.cee:16:39: error[N0234]: type 'Shape' has no methods; 'isRound' cannot be called on it
+main.cee:11:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found '}'
    |
-16 |     Console.writeLine(Shape.Circle(1).isRound());
-   |                                       ^^^^^^^
+11 | }
+   | ^
 ```
 
-Make it a function, `fn isRound(s: borrow Shape) -> bool`, called as `isRound(shape)`, or implement an interface
-as Listing 6-4 does.
+The first message says what to do: close the enum after `Rect(i64, i64),` and move `isRound` into
+`impl Shape { … }`, as Listing 6-4 does. The second message follows from the first. The compiler ends the enum at
+the `fn`, so the enum's own `}` is left over. It goes away with the fix.
 
 ::: details Coming from Rust
-The declaration is the same, with three differences. A variant is `Shape.Circle(2)`, with a dot, not
+The declaration is the same, with two differences. A variant is `Shape.Circle(2)`, with a dot, not
 `Shape::Circle(2)`, and there is no `use Shape::*` to drop the prefix. Payloads are positional only: there is no
-`Rect { w: i64, h: i64 }` variant. There is no `impl Shape { fn … }`: an enum gets methods from `impl Interface for
-Shape`.
+`Rect { w: i64, h: i64 }` variant. Methods are in `impl Shape { … }`, as in Rust, and where Rust writes
+`*self = …` in a `&mut self` method, CeeSafe writes `this = …`.
 :::
 
 ::: details Coming from C, C# or Java
 A CeeSafe enum is not a set of named integers. A variant has no number you can read or do arithmetic with, and a
 variant can carry data, which makes an enum closer to a tagged union in C or a sealed class hierarchy in C# and
-Java.
+Java. A Java enum's methods are written in its body, after the constants; a CeeSafe enum's are in an `impl` block.
 :::
 
 ::: details Coming from TypeScript
@@ -340,7 +398,8 @@ The variant is the `kind`, and `match` is the `switch (shape.kind)` that the com
 - A variant is written `Name.A` or `Name.B(value)`, always with the enum's name (`N0200` without it).
 - A payload is read with `match`, not with a field name.
 - `==` and `!=` work on enums whose variants carry no data (`N0207` otherwise).
-- An enum has no methods of its own (`N0267`): write a function, or implement an interface.
+- An enum's methods and static functions are written in `impl Name { … }`, not in its body (`N0100`).
+- In a `borrow mut this` method, `this = value;` replaces the value.
 - A struct is all of its fields at once; an enum is one of its variants.
 
 Next: [`match`](./ch06-02-match), which takes an enum value apart.

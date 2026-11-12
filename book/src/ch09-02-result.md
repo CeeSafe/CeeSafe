@@ -2,8 +2,8 @@
 title: Result, ? and !
 summary: A function that can fail returns a Result, either Ok with a value or Err with a reason. Matching one, passing an error on with ?, unwrapping with !, your own error enum, converting with @from, and the ignored Result.
 assumes: [ch06-01-defining-an-enum, ch06-02-match, ch06-03-optionals, ch09-01-panics]
-keywords: [Result, Ok, Err, "?", "!", "@from", error, enum, match, isOk, isErr, ok, err, okOr, "let _"]
-diagnostics: [N0260, N0261]
+keywords: [Result, Ok, Err, "?", "!", "@from", error, enum, match, isOk, isErr, ok, err, okOr, "let _", "--deny-warnings"]
+diagnostics: [N0260, N0261, N0402]
 specification: ["type-system.md §17"]
 ---
 
@@ -433,12 +433,13 @@ main.cee:21:15: error[N0261]: '?' would return 'Err' of type 'ParseError', but '
 The message says what to do: write `@from Parse(ParseError)`.
 
 ::: warning Mistake: calling a function and ignoring its `Result`
-The compiler does not stop you, and does not warn. A call whose `Result` is not used compiles, and the error is
-lost.
+A call whose `Result` nothing reads still compiles, and the error is lost. The compiler does not stop you, but it
+warns, once for each such call.
 :::
 
-<span class="listing-caption"><strong>Listing 9-17</strong>, <code>main.cee</code>: The second <code>save</code> fails and nobody looks. The program prints something false.</span>
+<span class="listing-caption"><strong>Listing 9-17</strong>, <code>main.cee</code>: The second <code>save</code> fails and nobody looks. The compiler warns about both calls.</span>
 
+<!-- ceesafe: warns N0402 -->
 ```ceesafe
 enum SaveError {
     Full,
@@ -459,13 +460,30 @@ fn main() {
 ```
 
 ```text
+main.cee:13:5: warning[N0402]: the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it
+   |
+13 |     save(1);
+   |     ^^^^^^^
+
+main.cee:14:5: warning[N0402]: the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it
+   |
+14 |     save(9);
+   |     ^^^^^^^
+```
+
+A warning does not stop the build. The program runs, and prints something false:
+
+```text
 saved both
 ```
 
 Make it a habit that every call of a function that returns a `Result` ends in `?` or `!`, or is the subject of a
 `match`. With `save(9)!;` this program panics with `unwrapped an Err value` instead of printing a false line. If
-you do mean to ignore the outcome, say so: `let _ = save(9);` evaluates the call and discards its value, and a
-reader sees that it was a decision.
+you do mean to ignore the outcome, say so: `let _ = save(9);` evaluates the call and discards its value. The
+compiler does not warn about it, and a reader sees that it was a decision.
+
+To make sure that no such call gets through, add `--deny-warnings` to `ceesafec check`, `build` or `test`: every
+warning is then an error, and the command fails.
 
 ::: warning Mistake: `Ok` or `Err` where no type says which `Result`
 `Ok(42)` alone does not say what the error type is. The compiler needs the whole type from somewhere: a return
@@ -498,7 +516,8 @@ more, because the return type gives it.
 - `r!` is `r.unwrap()`. There is no `expect`, and the panic message does not print the error.
 - `?` converts through an `@from` variant of the error enum, not through a `From` implementation. It is one step.
 - There are no `map`, `map_err`, `and_then` or `unwrap_or` on a `Result`. Use `match`, or `r.ok() ?? fallback`.
-- There is no `#[must_use]`: an ignored `Result` is silently discarded, with no warning.
+- There is no `#[must_use]` attribute to write. A call statement that leaves a `Result` unread gets a warning
+  (`N0402`), as Rust's `unused_must_use` lint gives, and `let _ = f();` is the written discard in both languages.
 :::
 
 ::: details Coming from Go
@@ -520,7 +539,7 @@ marked with `?` or `!` where it happens. An error crosses a function only if tha
 - `e!` gives the value, or panics with `unwrapped an Err value`.
 - `main` cannot return a `Result`: handle the error there, and return an exit status.
 - `Ok(…)` and `Err(…)` need a `Result` type from their context (`N0260`).
-- An ignored `Result` is lost without a diagnostic. End the call with `?` or `!`, `match` on it, or write
-  `let _ = f();`.
+- A call statement whose `Result` nothing reads compiles with a warning (`N0402`), and its error is lost. End the
+  call with `?` or `!`, `match` on it, or write `let _ = f();` to discard it on purpose.
 
 Next: [allocation failure](./ch09-03-allocation-failure), the error that almost every program meets first.

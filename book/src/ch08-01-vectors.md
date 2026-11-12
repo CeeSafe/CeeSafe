@@ -1,9 +1,9 @@
 ---
 title: Vectors
-summary: Vector<T>, a growable list on the heap - making one, push and its Result, checked indexing, length and capacity, iterating, pop, clear and resize, lending the elements as a slice, the closure-taking methods, and why a vector cannot grow while an element is borrowed.
+summary: Vector<T>, a growable list on the heap - making one, push and its Result, checked indexing, length and capacity, iterating, pop, clear and resize, lending the elements as a slice, the closure-taking methods, why a vector cannot grow while an element is borrowed, and clone for a second vector.
 assumes: [ch04-02-borrowing, ch04-03-slices-and-views, ch06-03-optionals]
-keywords: [Vector, push, pop, length, capacity, withCapacity, clear, resize, truncate, view, viewMut, Slice, sortBy, retain, partitionPoint, index out of bounds]
-diagnostics: [N0205, N0241, N0251]
+keywords: [Vector, push, pop, length, capacity, withCapacity, clear, resize, truncate, view, viewMut, Slice, sortBy, retain, partitionPoint, clone, index out of bounds, unused Result]
+diagnostics: [N0205, N0241, N0251, N0259, N0402]
 specification: ["type-system.md §23.1"]
 ---
 
@@ -46,8 +46,8 @@ The `!` after the call takes the success and stops the program on a failure.
 [Chapter 9](./ch09-00-error-handling) covers `Result`, and `?`, which passes the failure to the caller instead.
 
 ::: tip Rule
-Every method that may grow a vector returns a `Result`: `push`, `resize`, `withCapacity`. Write `!` or `?` after
-the call. Methods that only shrink it or read it (`pop`, `clear`, an index) return no `Result`.
+Every method that may ask for memory returns a `Result`: `push`, `resize`, `withCapacity`, `clone`. Write `!` or
+`?` after the call. Methods that only shrink it or read it (`pop`, `clear`, an index) return no `Result`.
 
 *Specification: `type-system.md` §23.1.*
 :::
@@ -357,13 +357,83 @@ destroyed 2
 Assigning to `queue[0]` destroys the element that was there. `clear`, `truncate` and `resize` destroy the elements
 they remove. `pop` does not: it moves the element out to you.
 
+## A second vector
+
+Assigning a vector to another variable moves it: there is still one vector
+([What ownership is](./ch04-01-what-ownership-is)). `v.clone()` makes a second one, with a copy of every element
+in memory of its own.
+
+<span class="listing-caption"><strong>Listing 8-10</strong>, <code>main.cee</code>: The clone is sorted and grows. The first vector stays as it was.</span>
+
+```ceesafe
+fn main() {
+    var scores = Vector<i32>.create();
+    scores.push(70)!;
+    scores.push(85)!;
+
+    var sorted = scores.clone()!;
+    sorted.push(60)!;
+    sorted.sortBy((a, b) => a - b);
+
+    Console.writeLine(scores[0]);
+    Console.writeLine(scores.length);
+    Console.writeLine(sorted[0]);
+    Console.writeLine(sorted.length);
+}
+```
+
+```text
+70
+2
+60
+3
+```
+
+- `clone` only reads the vector, so `scores` is not moved and need not be a `var` for it.
+- It allocates once, room for exactly the elements it copies, so it returns a `Result` as `push` does. A clone of
+  an empty vector allocates nothing.
+- The two vectors share nothing. Each is destroyed by its own owner.
+
+::: tip Rule
+`v.clone()` copies the elements, so the element type must be Copy: numbers, `bool`, and structs made of them. A
+vector of `String`s or of other vectors has no `clone`.
+
+*Specification: `type-system.md` §23.1.*
+:::
+
 ## Mistakes
+
+::: warning Mistake: a `push` without `!` or `?`
+A `Result` that nothing reads loses the failure it may hold. The compiler warns, and the program runs: here the
+push worked. If it had failed, the program would have gone on with an empty vector.
+:::
+
+<span class="listing-caption"><strong>Listing 8-11</strong>, <code>main.cee</code>: Nothing reads the <code>Result</code> of <code>push</code>. The compiler warns.</span>
+
+<!-- ceesafe: warns N0402 -->
+```ceesafe
+fn main() {
+    var scores = Vector<i32>.create();
+    scores.push(70);
+    Console.writeLine(scores.length);
+}
+```
+
+```text
+main.cee:3:5: warning[N0402]: the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it
+  |
+3 |     scores.push(70);
+  |     ^^^^^^^^^^^^^^^
+```
+
+Write `scores.push(70)!;`. The same warning is given for `resize`, for a `clone` whose value is dropped, and for
+any other call statement that returns a `Result`.
 
 ::: warning Mistake: an index that is not a `usize`
 An index is a `usize`. An `i32` is not converted for you, because a negative index has no meaning.
 :::
 
-<span class="listing-caption"><strong>Listing 8-10</strong>, <code>main.cee</code>: <code>i</code> is an <code>i32</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-12</strong>, <code>main.cee</code>: <code>i</code> is an <code>i32</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0205 -->
 ```ceesafe
@@ -389,31 +459,59 @@ Give the index its type, `let i: usize = 0;`. A loop variable over `0..scores.le
 would leave a hole in the vector.
 :::
 
-<span class="listing-caption"><strong>Listing 8-11</strong>, <code>main.cee</code>: A <code>String</code> cannot be moved out of the vector. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-13</strong>, <code>main.cee</code>: A <code>String</code> cannot be moved out of the vector. This does not compile.</span>
 
 <!-- ceesafe: fail N0251 -->
 ```ceesafe
 fn main() {
     var names = Vector<String>.create();
-    var name = String.create();
-    name.append("Ada")!;
-    names.push(name)!;
+    names.push(String.from("Ada")!)!;
     let first = names[0];
     Console.writeLine(first);
 }
 ```
 
 ```text
-main.cee:6:5: error[N0251]: cannot move a 'String' out of an element of the vector 'names'; only Copy values can be read from there (use 'pop()')
+main.cee:4:5: error[N0251]: cannot move a 'String' out of an element of the vector 'names'; only Copy values can be read from there (use 'pop()')
   |
-6 |     let first = names[0];
+4 |     let first = names[0];
   |     ^^^^^^^^^^^^^^^^^^^^^
 ```
 
-Borrow the element, `let first = borrow names[0];`, or take it out with `pop()`, `remove(at)` or `swapRemove(at)`.
+`String.from("Ada")!` makes a `String` from the literal ([Strings](./ch08-02-strings)), and `push` moves it into
+the vector. Borrow the element, `let first = borrow names[0];`, take it out with `pop()`, `remove(at)` or
+`swapRemove(at)`, or copy it: `let first = names[0].clone()!;`.
+
+::: warning Mistake: cloning a vector whose elements are not Copy
+`clone` copies elements as an assignment would. A `String` is not copied by an assignment, so a vector of them is
+not cloned by one call.
+:::
+
+<span class="listing-caption"><strong>Listing 8-14</strong>, <code>main.cee</code>: The elements are <code>String</code>s, which are not Copy. This does not compile.</span>
+
+<!-- ceesafe: fail N0259 -->
+```ceesafe
+fn main() {
+    var names = Vector<String>.create();
+    names.push(String.from("Ada")!)!;
+    let copy = names.clone()!;
+    Console.writeLine(copy.length);
+}
+```
+
+```text
+main.cee:4:22: error[N0259]: 'clone' copies elements, so the element type must be Copy; 'String' is not
+  |
+4 |     let copy = names.clone()!;
+  |                      ^^^^^
+```
+
+Make the second vector and push a clone of each element. With `var copy = Vector<String>.withCapacity(names.length)!;`
+the loop is `for (name in names) { copy.push(name.clone()!)!; }`.
 
 ::: details Coming from Rust
-`Vector<T>` is `Vec<T>`. `push` returns a `Result`, where Rust aborts on a failed allocation. `v[i]` panics out of
+`Vector<T>` is `Vec<T>`. `push` returns a `Result`, where Rust aborts on a failed allocation, and so does `clone`,
+which exists only for Copy elements: there is no `Clone` trait for an element to implement. `v[i]` panics out of
 range as in Rust; there is no `v.get(i)` that returns an optional. `length` and `capacity` are fields, not methods.
 `for (x in v)` borrows the vector and does not consume it.
 :::
@@ -427,12 +525,14 @@ time, so a list cannot change under a loop or a borrow that is using it.
 ## Summary
 
 - `Vector<T>.create()` makes an empty vector; `Vector<T>.withCapacity(n)!` makes one with room for `n` elements.
-- `push`, `resize` and `withCapacity` may allocate and return a `Result`: write `!` or `?`.
+- `push`, `resize`, `withCapacity` and `clone` may allocate and return a `Result`: write `!` or `?`. A `Result`
+  that nothing reads is a warning (`N0402`).
 - `v.length` and `v.capacity` are `usize` fields. `v[i]` takes a `usize` (`N0205`) and panics out of range.
 - `pop()` returns an optional. `clear()`, `truncate(n)` and `resize(n, fill)` change the length.
 - A vector lends its elements to a `Slice<T>` parameter, and with `mut v` to a `SliceMut<T>` one.
 - `sortBy`, `any`, `all`, `forEach`, `retain` and `partitionPoint` take a closure.
 - While an element or a slice of a vector is borrowed, the vector cannot change (`N0241`).
 - Only a Copy element can be read out by its index (`N0251`). A vector destroys its elements when it is destroyed.
+- `v.clone()` makes a second, independent vector. Its elements must be Copy (`N0259`).
 
 Next: [strings and string views](./ch08-02-strings), which are text kept the same way.

@@ -42,7 +42,7 @@ cause is a panic.
 
 The same operation can fall on either side. It depends on where the value came from.
 
-<span class="listing-caption"><strong>Listing 9-25</strong>, <code>main.cee</code>: A search that may find nothing returns an optional. Where the program knows the value is there, it writes <code>!</code>.</span>
+<span class="listing-caption"><strong>Listing 9-26</strong>, <code>main.cee</code>: A search that may find nothing returns an optional. Where the program knows the value is there, it writes <code>!</code>.</span>
 
 ```ceesafe
 fn indexOf(values: Slice<i32>, wanted: i32) -> usize? {
@@ -106,7 +106,7 @@ In a test, a panic is a failed test, so `!` is the natural way to say "this must
 
 A finished program handles expected failures where it can say something useful, which is often `main`:
 
-<span class="listing-caption"><strong>Listing 9-26</strong>, <code>main.cee</code>: <code>age</code> returns the failure. <code>main</code> uses <code>!</code> on text it can see is a number, and handles text it cannot.</span>
+<span class="listing-caption"><strong>Listing 9-27</strong>, <code>main.cee</code>: <code>age</code> returns the failure. <code>main</code> uses <code>!</code> on text it can see is a number, and handles text it cannot.</span>
 
 <!-- ceesafe: exits 2 -->
 ```ceesafe
@@ -154,7 +154,7 @@ and each one needs an answer to "what if it is wrong here?".
 The alternative is to check once, at the boundary, and put the checked value in a type of its own. The only way
 to get a value of that type is through the check. After that, having the value is the proof that it is valid.
 
-<span class="listing-caption"><strong>Listing 9-27</strong>, <code>main.cee</code>: A <code>Percent</code> can only be made by <code>Percent.of</code>, which checks the range once.</span>
+<span class="listing-caption"><strong>Listing 9-28</strong>, <code>main.cee</code>: A <code>Percent</code> can only be made by <code>Percent.of</code>, which checks the range once.</span>
 
 ```ceesafe
 enum RangeError {
@@ -225,7 +225,7 @@ Text that a person typed is never guaranteed to be a number. A function that pan
 into a crash.
 :::
 
-<span class="listing-caption"><strong>Listing 9-28</strong>, <code>main.cee</code>: <code>age</code> panics on input that is wrong but not a bug.</span>
+<span class="listing-caption"><strong>Listing 9-29</strong>, <code>main.cee</code>: <code>age</code> panics on input that is wrong but not a bug.</span>
 
 <!-- ceesafe: panics -->
 ```ceesafe
@@ -256,14 +256,14 @@ Then the program prints this on standard error and exits with status 134:
 ceesafe panic: age: not a number at main.cee:5:13
 ```
 
-The caller has no way to ask "is this a number?" without risking the panic. Return a `Result`, as Listing 9-26
+The caller has no way to ask "is this a number?" without risking the panic. Return a `Result`, as Listing 9-27
 does. A caller that is sure can still write `!`; a caller that is not can `match`.
 
 ::: warning Mistake: a `Result` for a bug
 The opposite mistake makes every caller handle an error that a correct caller never causes.
 :::
 
-<span class="listing-caption"><strong>Listing 9-29</strong>, <code>main.cee</code>: The loop can only pass months 1 to 12, and must unwrap an error that cannot happen.</span>
+<span class="listing-caption"><strong>Listing 9-30</strong>, <code>main.cee</code>: The loop can only pass months 1 to 12, and must unwrap an error that cannot happen.</span>
 
 ```ceesafe
 enum MonthError {
@@ -299,7 +299,7 @@ fn main() {
 The program works, but the `Result` buys nothing: each caller writes `!`, and a new error type exists for a
 condition that is a bug wherever it happens. When every sensible caller would write `!`, the function wants a
 panic, as in Listing 9-4. If months do come from outside the program, validate them at the boundary into a type,
-as Listing 9-27 does for percentages.
+as Listing 9-28 does for percentages.
 
 ::: details Coming from Rust
 The advice is the Rust Book's: `panic!` for bugs and broken contracts, `Result` for expected failures, `unwrap`

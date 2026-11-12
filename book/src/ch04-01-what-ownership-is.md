@@ -2,7 +2,7 @@
 title: What ownership is
 summary: Every value has one owner - copy types are copied and move types are moved by assignment, by a call and by return, a moved variable cannot be used (N0250), and a value is destroyed when its owner goes away.
 assumes: [ch03-01-variables, ch03-02-data-types, ch03-03-functions]
-keywords: [owner, ownership, move, copy, Copy type, move type, drop, destruction, String, stack, heap, clone]
+keywords: [owner, ownership, move, copy, Copy type, move type, drop, destruction, String, String.from, stack, heap, clone]
 diagnostics: [N0250]
 specification: ["ownership.md O1, O2, O4", "type-system.md §14"]
 ---
@@ -57,8 +57,7 @@ which is given back when the function returns. The text lives on the **heap**, m
 
 ```ceesafe
 fn main() {
-    var s = String.create();
-    s.append("hello")!;
+    let s = String.from("hello")!;
     let t = s;
     Console.writeLine(t);
 }
@@ -68,8 +67,8 @@ fn main() {
 hello
 ```
 
-`String.create()` makes an empty `String` and `append` adds text to it. Appending may need more memory, which can
-fail; the `!` stops the program if it does ([chapter 9](./ch09-00-error-handling) covers errors).
+`String.from("hello")` makes a `String` that holds a copy of the text. It asks for memory, which can fail; the `!`
+stops the program if it does ([chapter 9](./ch09-00-error-handling) covers errors).
 
 `let t = s;` does not copy the text. It **moves** the `String`: `t` is the owner now, and `s` is empty. If both
 variables owned the same text, both would free it. A move keeps the rule of one owner, and costs the same however
@@ -94,8 +93,7 @@ moves it out to the caller.
 
 ```ceesafe
 fn make() -> String {
-    var s = String.create();
-    s.append("hello")!;
+    let s = String.from("hello")!;
     return s;
 }
 
@@ -123,7 +121,8 @@ hello, world!
 
 - `make` returns `s`: the `String` moves to `a` in `main`. It is not destroyed when `make` ends, because `s` no
   longer owns it.
-- `addWorld(a)` moves the `String` into `text`, and the result moves to `b`. From here `a` is empty.
+- `addWorld(a)` moves the `String` into `text`, and the result moves to `b`. From here `a` is empty. `append` adds
+  text to the end of a `String`; it may ask for more memory, so it has a `!` too.
 - `shout(b)` moves it into `shout`'s `text`. Nothing moves it on, so it is destroyed when `shout` returns.
 
 There is one `String` in this program, and at each line exactly one variable owns it.
@@ -200,38 +199,46 @@ the usual answer.
 
 **Get it back.** A function that takes a value can return it, as `addWorld` does in Listing 4-3.
 
-**Make a second value.** CeeSafe never copies a move type for you, and `String` and `Vector<T>` have no `clone`
-method: a copy asks for memory, so you write it where it happens.
+**Make a second value.** CeeSafe never copies a move type for you: a copy asks for memory, so you write it where
+it happens. The method is `clone`.
 
-<span class="listing-caption"><strong>Listing 4-5</strong>, <code>main.cee</code>: <code>copyOf</code> makes a second <code>String</code> with the same text. <code>shout</code> takes the copy, and <code>s</code> is kept.</span>
+<span class="listing-caption"><strong>Listing 4-5</strong>, <code>main.cee</code>: <code>clone</code> makes a second <code>String</code> with the same text. <code>shout</code> takes the copy, and <code>s</code> is kept.</span>
 
 ```ceesafe
-fn copyOf(text: StringView) -> String {
-    var copy = String.create();
-    copy.append(text)!;
-    return copy;
-}
-
 fn shout(text: String) {
     Console.write(text);
     Console.writeLine("!");
 }
 
 fn main() {
-    var s = String.create();
-    s.append("hello")!;
-    shout(copyOf(s));
+    let s = String.from("hello")!;
+    var t = s.clone()!;
+    t.append(" again")!;
+    shout(s.clone()!);
     Console.writeLine(s);
+    Console.writeLine(t);
 }
 ```
 
 ```text
 hello!
 hello
+hello again
 ```
 
-`StringView` is a borrow of text, which [Slices and views](./ch04-03-slices-and-views) explains: `copyOf` reads
-the text of `s` and does not take `s`.
+`s.clone()` reads `s` and does not take it. The result is a new `String` with its own owner and its own memory:
+appending to `t` does not change `s`, and each of the three strings is destroyed on its own. A clone asks for
+memory, so it can fail, and the `!` is there as it is after `String.from`.
+
+::: tip Rule
+`s.clone()` on a `String`, and `v.clone()` on a `Vector<T>` whose elements are Copy, make a second, independent
+value. A move never does, and nothing clones for you.
+
+*Specification: `type-system.md` §23.1, §23.2.*
+:::
+
+A move costs the same for any length. A clone copies every byte or element, so use it when you need two values,
+and not to quieten the compiler where a borrow would do.
 
 ## Mistakes
 
@@ -245,8 +252,7 @@ one object. There is one name, and the other is empty.
 <!-- ceesafe: fail N0250 -->
 ```ceesafe
 fn main() {
-    var s = String.create();
-    s.append("hello")!;
+    let s = String.from("hello")!;
     let t = s;
     Console.writeLine(s);
     Console.writeLine(t);
@@ -254,16 +260,16 @@ fn main() {
 ```
 
 ```text
-main.cee:5:23: error[N0250]: 's' is used here after it was moved (on at least one path)
+main.cee:4:23: error[N0250]: 's' is used here after it was moved (on at least one path)
   |
-5 |     Console.writeLine(s);
+4 |     Console.writeLine(s);
   |                       ^
 ```
 
 The message points at the use, not at the move: look upwards from it for the place where `s` was assigned, passed
 or returned. "On at least one path" means the compiler also reports a move that happens only in one branch of an
-`if`, or in an earlier turn of a loop. To fix it, use `t`, or do not move: borrow, or make a copy as Listing 4-5
-does.
+`if`, or in an earlier turn of a loop. To fix it, use `t`, or do not move: borrow, or if the program needs two
+strings, write `let t = s.clone()!;` as Listing 4-5 does.
 
 ::: warning Mistake: passing a value to a function and using it afterwards
 A call moves as an assignment does. Nothing at the call marks it; the parameter's type, `String`, is what says the
@@ -280,18 +286,17 @@ fn shout(text: String) {
 }
 
 fn main() {
-    var s = String.create();
-    s.append("hello")!;
+    let s = String.from("hello")!;
     shout(s);
     shout(s);
 }
 ```
 
 ```text
-main.cee:10:5: error[N0250]: 's' is used here after it was moved (on at least one path)
-   |
-10 |     shout(s);
-   |     ^^^^^^^^^
+main.cee:9:5: error[N0250]: 's' is used here after it was moved (on at least one path)
+  |
+9 |     shout(s);
+  |     ^^^^^^^^^
 ```
 
 `shout` only prints the text, so it should not take the `String` at all. Declare the parameter as a borrow,
@@ -305,9 +310,9 @@ limited time that the compiler checks.
 
 ::: details Coming from Rust
 The model is Rust's: Copy and move types, moves by assignment, call and return, destruction at the end of scope in
-reverse order. A `drop` block in the struct is what `impl Drop` is. Two things differ: there is no `Clone` trait
-and no `.clone()` on `String` or `Vector<T>`, so a copy is written out; and a panic stops the program without
-running `drop` blocks.
+reverse order. A `drop` block in the struct is what `impl Drop` is. Two things differ: `clone` is a method
+of `String` and of `Vector<T>` and not a trait to derive, and it returns a `Result` because it allocates, so you
+write `s.clone()!` or `s.clone()?`; and a panic stops the program without running `drop` blocks.
 :::
 
 ::: details Coming from C or C++
@@ -325,6 +330,6 @@ destroyed twice or used afterwards.
 - Using an empty variable is `N0250`.
 - A value is destroyed once, when its owner goes away; a block's variables are destroyed in reverse order of
   declaration.
-- To keep a value, borrow it, get it back from the function, or make a second value by hand.
+- To keep a value, borrow it, get it back from the function, or make a second value with `clone()`.
 
 Next: [Borrowing](./ch04-02-borrowing), which is how most code uses a value without owning it.

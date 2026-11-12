@@ -20,7 +20,7 @@ Both are in lib/std, and a program uses them without an import. Their methods ha
 
 ## Putting and getting
 
-<span class="listing-caption"><strong>Listing 8-23</strong>, <code>main.cee</code>: A map from a product number to the number in stock.</span>
+<span class="listing-caption"><strong>Listing 8-27</strong>, <code>main.cee</code>: A map from a product number to the number in stock.</span>
 
 ```ceesafe
 fn main() {
@@ -65,7 +65,7 @@ When a missing key is an error in the program itself, `stock.get(7)!` takes the 
 
 ## Updating
 
-<span class="listing-caption"><strong>Listing 8-24</strong>, <code>main.cee</code>: <code>put</code> replaces a value and returns the old one. <code>getMut</code> changes a value where it is.</span>
+<span class="listing-caption"><strong>Listing 8-28</strong>, <code>main.cee</code>: <code>put</code> replaces a value and returns the old one. <code>getMut</code> changes a value where it is.</span>
 
 ```ceesafe
 fn main() {
@@ -96,11 +96,11 @@ fn main() {
 - `getMut(key)` returns an optional exclusive borrow of the value. Writing to `count` changes the value in the
   map.
 
-The usual "add one, or start at one" is a `getMut` with a `put` in its `null` arm; Listing 8-26 does that.
+The usual "add one, or start at one" is a `getMut` with a `put` in its `null` arm; Listing 8-30 does that.
 
 ## Removing and iterating
 
-<span class="listing-caption"><strong>Listing 8-25</strong>, <code>main.cee</code>: A pair is removed, and the others are visited by position.</span>
+<span class="listing-caption"><strong>Listing 8-29</strong>, <code>main.cee</code>: A pair is removed, and the others are visited by position.</span>
 
 ```ceesafe
 fn main() {
@@ -140,19 +140,13 @@ hash. A removal changes that order in one way: the last pair moves into the plac
 A map owns its keys and its values. Text as a key is therefore a `String`, not a `StringView`: a view borrows
 text, and the map would outlive it.
 
-<span class="listing-caption"><strong>Listing 8-26</strong>, <code>main.cee</code>: Counting words. The ordered map gives them back sorted.</span>
+<span class="listing-caption"><strong>Listing 8-30</strong>, <code>main.cee</code>: Counting words. The ordered map gives them back sorted.</span>
 
 ```ceesafe
-fn owned(text: StringView) -> String {
-    var s = String.create();
-    s.append(text)!;
-    return s;
-}
-
 fn main() {
     var counts = OrderedMap<String, u32>.create();
     for (word in "the quick fox and the lazy dog and the end".split(" ")) {
-        let key = owned(word);
+        let key = String.from(word)!;
         match (counts.getMut(key)) {
             Some(n) => { n += 1; }
             null => { counts.put(key, 1)!; }
@@ -180,7 +174,8 @@ quick 1
 the 3
 ```
 
-- `owned` makes a `String` from a view, because the map needs a key that it can own.
+- `String.from(word)!` makes a `String` from a view ([Strings](./ch08-02-strings#copies-of-text)), because the map
+  needs a key that it can own.
 - `counts.getMut(key)` lends `key` for the lookup. In the `null` arm, `put` moves `key` into the map.
 - An ordered map is visited with a **cursor**, a small value that names a position. `first()` and `last()` return
   an optional cursor, `null` for an empty map. `next(cursor)` and `previous(cursor)` return the one after or
@@ -197,7 +192,7 @@ it panics when it is used.
 Because the keys are sorted, an ordered map can also start in the middle. `seek(key)` is a cursor at the first
 key that is not before `key`, and `seekAfter(key)` at the first key after it.
 
-<span class="listing-caption"><strong>Listing 8-27</strong>, <code>main.cee</code>: The readings from day 10 onward, in order.</span>
+<span class="listing-caption"><strong>Listing 8-31</strong>, <code>main.cee</code>: The readings from day 10 onward, in order.</span>
 
 ```ceesafe
 fn main() {
@@ -231,7 +226,7 @@ integer types, `bool`, `String` and `Vector<u8>`. Floats are not keys.
 For a struct of your own, `@derive` writes the implementations from the fields.
 [Chapter 10](./ch10-02-interfaces) covers interfaces, and chapter 20 covers derives.
 
-<span class="listing-caption"><strong>Listing 8-28</strong>, <code>main.cee</code>: A struct becomes a key of both maps.</span>
+<span class="listing-caption"><strong>Listing 8-32</strong>, <code>main.cee</code>: A struct becomes a key of both maps.</span>
 
 ```ceesafe
 @derive(Equal, HashKey, OrderKey)
@@ -280,7 +275,7 @@ or largest key, or for "every key from here to there".
 expected.
 :::
 
-<span class="listing-caption"><strong>Listing 8-29</strong>, <code>main.cee</code>: The fallback is an <code>i32</code>, and the optional holds a borrow. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-33</strong>, <code>main.cee</code>: The fallback is an <code>i32</code>, and the optional holds a borrow. This does not compile.</span>
 
 <!-- ceesafe: fail N0205 -->
 ```ceesafe
@@ -298,13 +293,13 @@ main.cee:4:39: error[N0205]: expected 'borrow i32', found 'i32'
   |                                       ^^
 ```
 
-Use a `match`, as Listing 8-23 does. `remove` and `put` return the value itself, so `??` works on their results.
+Use a `match`, as Listing 8-27 does. `remove` and `put` return the value itself, so `??` works on their results.
 
 ::: warning Mistake: a struct as a key without its derives
 A map does not know how to hash or order a type of yours until you say so.
 :::
 
-<span class="listing-caption"><strong>Listing 8-30</strong>, <code>main.cee</code>: <code>Point</code> has no <code>HashKey</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-34</strong>, <code>main.cee</code>: <code>Point</code> has no <code>HashKey</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0268 -->
 ```ceesafe
@@ -326,14 +321,14 @@ main.cee:7:18: error[N0268]: 'Point' does not implement 'HashKey<Point>', which 
   |                  ^^^^^^^^^^^^^^^^^^^
 ```
 
-Add `@derive(Equal, HashKey)` above the struct, as in Listing 8-28.
+Add `@derive(Equal, HashKey)` above the struct, as in Listing 8-32.
 
 ::: warning Mistake: keeping a borrowed value across a `put`
 A `put` may move every pair, as a vector's `push` moves its elements. A value borrowed with `get` cannot be used
 after it.
 :::
 
-<span class="listing-caption"><strong>Listing 8-31</strong>, <code>main.cee</code>: <code>seven</code> borrows from the map, and is used after a <code>put</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 8-35</strong>, <code>main.cee</code>: <code>seven</code> borrows from the map, and is used after a <code>put</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0241 -->
 ```ceesafe

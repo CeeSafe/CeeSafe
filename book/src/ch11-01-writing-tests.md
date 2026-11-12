@@ -2,8 +2,8 @@
 title: How to write tests
 summary: A test is a function marked @test that takes nothing and returns void or a Result - an Err or a panic fails it. The library's checks, used with ?, and testing a function that returns a Result.
 assumes: [ch01-03-hello-package, ch03-03-functions, ch09-01-panics, ch09-02-result]
-keywords: ["@test", test, Check, CheckResult, TestFailure, equalU64, equalText, isOk, isErr, assert, N0348]
-diagnostics: [N0262, N0348]
+keywords: ["@test", test, Check, CheckResult, TestFailure, equalU64, equalText, isOk, isErr, assert, N0348, N0402, "--deny-warnings"]
+diagnostics: [N0262, N0348, N0402]
 specification: ["tooling.md §10.1"]
 ---
 
@@ -151,7 +151,7 @@ description.
 
 The package's second file reads a time from text. It can fail, so it returns a `Result`.
 
-<span class="listing-caption"><strong>Listing 11-3</strong>, <code>src/time.cee</code>: A function that reads a time, with its error type and a private helper.</span>
+<span class="listing-caption"><strong>Listing 11-3</strong>, <code>src/time.cee</code>: A function that reads a time, with its error type and a helper that is not public.</span>
 
 ```ceesafe
 /// Why a time could not be read.
@@ -253,8 +253,8 @@ panics; to make that testable, `pace` would return a `Result`.
 ## Mistakes
 
 ::: warning Mistake: a check without `?`
-A check does not stop the test. It returns a `Result`, and without `?` nobody looks at it. The compiler does not
-warn.
+A check does not stop the test. It returns a `Result`, and without `?` nobody looks at it. The test still compiles
+and runs. The compiler warns (`N0402`), and a warning is easy to miss above a list of passed tests.
 :::
 
 <span class="listing-caption"><strong>Listing 11-5</strong>, <code>src/mistakes.cee</code>: Two tests with the same wrong expectation. Only the second has the <code>?</code>.</span>
@@ -277,6 +277,10 @@ fn keepsItsCheck() -> Result<void, TestFailure> {
 `ceesafec test` in that package prints:
 
 ```text
+src/mistakes.cee:5:5: warning[N0402]: the 'Result' of this call is not used, so an error it reports is lost: handle it with '?', '!' or 'match', or write 'let _ = ...;' to discard it
+  |
+5 |     Check.equalU64(4, pace(7, 2));
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 test dropsItsCheck ... ok
 test keepsItsCheck ... failed
 
@@ -286,8 +290,13 @@ expected 4, got 3
 ceesafec test: 1 passed, 1 failed
 ```
 
-`dropsItsCheck` passes although its check fails. Give a test that uses checks the return type
-`Result<void, TestFailure>`, and end every check with `?`.
+`dropsItsCheck` passes although its check fails. The warning is the only sign of it, and `ceesafec check` prints
+the same warning. Give a test that uses checks the return type `Result<void, TestFailure>`, and end every check
+with `?`.
+
+Where tests run without a person reading the output, as on a build server, run `ceesafec test --deny-warnings`.
+A warning is then an error: the command prints `error[N0402]` for that line, runs no test, and ends with exit
+status 1.
 
 ::: warning Mistake: `??` on a Result
 `??` gives a fallback for an optional. A `Result` is not an optional.
@@ -359,6 +368,7 @@ a test of the wrong shape: one with a parameter, or one that returns `bool`.
 ::: details Coming from Rust
 - `@test` is `#[test]`. There is no `#[cfg(test)] mod tests`: `ceesafec build` leaves every `@test` function out.
 - There is no `assert_eq!` for any type. The checks are typed functions that return a `Result`, and they need `?`.
+  A check without it does not panic as `assert_eq!` does: it is an unused `Result`, with a warning.
 - There is no `#[should_panic]`. Test for an `Err`.
 :::
 
@@ -372,7 +382,8 @@ that uses checks returns a `Result`.
 - A test is a top-level function marked `@test`, with no parameters, returning `void` or `Result<void, E>`.
 - It passes by returning `Ok()` or by returning; it fails by returning an `Err`; a panic is reported as panicked.
 - The checks (`Check.equalU64`, `equalI64`, `equalText`, `equalBytes`, `isTrue`, `isFalse`, `fail`, and
-  `CheckResult<T, E>.isOk` and `isErr`) return `Result<void, TestFailure>`. End each with `?`.
+  `CheckResult<T, E>.isOk` and `isErr`) return `Result<void, TestFailure>`. End each with `?`: without it the
+  check does nothing, and the compiler only warns (`N0402`).
 - Test a function that returns a `Result` with `CheckResult` or with `match`. `??` does not apply to a `Result`
   (`N0262`).
 - No test can expect a panic. Return a `Result` from code whose failure you want to test.

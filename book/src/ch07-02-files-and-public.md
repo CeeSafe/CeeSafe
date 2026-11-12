@@ -1,16 +1,16 @@
 ---
 title: Files and public
-summary: A package's source is every .cee file under src/, and all its files share one scope whatever directory they are in. The public keyword on items, fields and methods decides what another package can use.
+summary: A package's source is every .cee file under src/, and all its files share one scope whatever directory they are in. The public keyword on items, fields and methods decides what another package can use, and private keeps an item to its own file.
 assumes: [ch07-01-package-and-manifest, ch05-01-defining-structs, ch05-03-methods]
 keywords: [file, src, directory, scope, public, internal, private, field, method, library, visibility]
-diagnostics: [N0201, N0312, N0314]
+diagnostics: [N0201, N0296, N0312, N0314]
 specification: ["type-system.md §2", "type-system.md §12", "tooling.md §4.1"]
 ---
 
 # Files and `public`
 
 **This section teaches** how a package's source is divided into files, what those files see of each other, and
-what the keyword `public` changes. It assumes [A package and its manifest](./ch07-01-package-and-manifest), and
+what the keywords `public` and `private` change. It assumes [A package and its manifest](./ch07-01-package-and-manifest), and
 structs with methods ([Defining structs](./ch05-01-defining-structs), [Methods](./ch05-03-methods)).
 
 An **item** is something declared at the top of a file: a function, a struct, an enum, a constant.
@@ -184,11 +184,54 @@ main.cee:6:11: error[N0314]: 'range' is public, but its signature names 'Range',
   |           ^^^^^
 ```
 
-::: info Two more words
-`internal` can be written where `public` goes. It says what leaving the word out says. A field can also be
-`private`: then only code in the file that declares the struct can reach it, and other files of the same package
-get the error `N0296`.
+## `private`: what one file keeps
+
+`public` opens an item to other packages. `private` goes the other way: it closes an item to the other files of
+its own package. Here is `lines.cee` of `scores` again, with the label written by a helper of its own:
+
+<span class="listing-caption"><strong>Listing 7-10</strong>, <code>scores/src/output/lines.cee</code>: <code>writeLabel</code> is private, so only this file can call it.</span>
+
+```ceesafe
+fn printLine(label: StringView, value: i64) {
+    writeLabel(label);
+    Console.writeLine(value);
+}
+
+private fn writeLabel(label: StringView) {
+    Console.write(label);
+    Console.write(": ");
+}
+```
+
+`printLine` calls `writeLabel`, because both are in `lines.cee`. `main.cee` can still call `printLine`, which is
+internal, and cannot call `writeLabel`: the second mistake below shows the error. So the file is free to change or
+remove its helper, and the compiler has checked that no other file depends on it.
+
+That gives three levels:
+
+| Written before the item | Who can use it |
+|---|---|
+| `public` | every package |
+| nothing, or `internal` | every file of its own package |
+| `private` | the file that declares it |
+
+`internal` can be written where `public` goes. It says what leaving the word out says.
+
+`private` goes where `public` goes: before a function, a struct, an enum or a constant at the top of a file, and
+before a field, a method or a static function inside a struct. A private field can be read, written and given in
+a struct literal only in the file that declares the struct.
+
+::: tip Rule
+A `private` item, field or method can be used only in the file that declares it. Its name still belongs to the
+whole package: two files of a package cannot each declare a `private fn helper`.
+
+*Specification: `type-system.md` §2, §12.*
 :::
+
+A private item is hidden from the other files, and it is not removed from the package's one scope. The compiler
+finds `writeLabel` from any file and then refuses the use, which is why its message can name the file that owns
+the function. It is also why a second `writeLabel` in another file is the error `N0201` of the first mistake
+below, private or not.
 
 ## Mistakes
 
@@ -196,7 +239,7 @@ get the error `N0296`.
 Two files of one package cannot both declare `printLine`, even in different directories. A file is not a scope.
 :::
 
-<span class="listing-caption"><strong>Listing 7-10</strong>, <code>scores/src/extra.cee</code>: A second <code>printLine</code>, added beside the files of Listings 7-4 to 7-6. The package does not compile.</span>
+<span class="listing-caption"><strong>Listing 7-11</strong>, <code>scores/src/extra.cee</code>: A second <code>printLine</code>, added beside the files of Listings 7-4 to 7-6. The package does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -215,11 +258,38 @@ src/output/lines.cee:1:4: error[N0201]: 'printLine' is already defined
 The compiler reads the files in the order of their paths, so `src/extra.cee` comes first and the message points
 at the other one. Give one of the two functions another name.
 
+::: warning Mistake: calling another file's private function
+A private function is a helper of its file. From another file of the package the name is found, and refused.
+:::
+
+<span class="listing-caption"><strong>Listing 7-12</strong>, <code>scores/src/main.cee</code>: <code>main</code> calls the private <code>writeLabel</code> of Listing 7-10. The package does not compile.</span>
+
+<!-- ceesafe: skip -->
+```ceesafe
+fn main() {
+    var card = Scorecard.empty();
+    card.record(72);
+    printLine("rounds", card.rounds);
+    writeLabel("mean");
+    Console.writeLine(card.mean());
+}
+```
+
+```text
+src/main.cee:5:5: error[N0296]: 'writeLabel' is private to src/output/lines.cee: only code there can use it (type-system.md §2)
+  |
+5 |     writeLabel("mean");
+  |     ^^^^^^^^^^
+```
+
+Call what the file offers to the package, here `printLine("mean", card.mean())`. If the function is meant for the
+whole package, remove `private` from it: it is then internal.
+
 ::: warning Mistake: calling another package's internal function
 The function exists, and the message says so. It is not yours to call.
 :::
 
-<span class="listing-caption"><strong>Listing 7-11</strong>, <code>report/src/main.cee</code>: A package that depends on <code>tally</code> calls <code>quotient</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 7-13</strong>, <code>report/src/main.cee</code>: A package that depends on <code>tally</code> calls <code>quotient</code>. This does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -242,7 +312,7 @@ what the package offers: here `Tally.mean()`.
 A public struct can keep fields to itself. From outside they cannot be read, written, or given in a struct literal.
 :::
 
-<span class="listing-caption"><strong>Listing 7-12</strong>, <code>report/src/main.cee</code>: The same package reads <code>total</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 7-14</strong>, <code>report/src/main.cee</code>: The same package reads <code>total</code>. This does not compile.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -270,7 +340,8 @@ to other packages.
 
 ::: details Coming from C# or Java
 There are no namespaces and no `using` between files of a package. The default is C#'s `internal`: visible in the
-whole package, in every file. The boundary of a `private` field is the file, not the type.
+whole package, in every file. The boundary of `private` is the file, not the type: code in the same file can use
+a struct's private fields and methods, and the struct's own methods in another file cannot.
 :::
 
 ::: details Coming from Go
@@ -285,7 +356,8 @@ already one scope. Top-level names must therefore be unique in the package.
 
 ::: details Coming from C
 There are no headers and no forward declarations. A function can be called from any file of the package, above or
-below where it is declared.
+below where it is declared. `private fn` does the work of a `static` function in a `.c` file, with one difference:
+two files cannot each have a private function of the same name.
 :::
 
 ## Summary
@@ -295,6 +367,8 @@ below where it is declared.
 - Directories and file names under `src/` mean nothing to the compiler.
 - A name is declared once in a package (`N0201`).
 - Without `public` an item, a field or a method is internal to its package; using it from another is `N0312`.
+- A `private` item, field or method belongs to the file that declares it; using it from another file is `N0296`.
+  Its name is still taken in the whole package.
 - A public item's signature may name only public types (`N0314`).
 
 Next: [Imports](./ch07-03-imports), on how a package names the public items of another.

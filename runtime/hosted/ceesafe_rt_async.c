@@ -169,7 +169,7 @@ typedef struct {
     cosmo_cond_t wake_cond;  /* signals wake_cond under wake_lock, so one that comes before the wait is kept */
     uint32_t wake_pending;
 #endif
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(CEE_FREESTANDING) /* a freestanding build has no <windows.h>, whatever its target */
     HANDLE wake_event;   /* Windows: the same, an auto-reset event cee_wait waits on (NULL until first needed) */
     HANDLE port;         /* Windows: the thread's completion port (IOCP, ADR 0035), or NULL with CEESAFE_REACTOR_POLL */
 #endif
@@ -472,7 +472,7 @@ static void cee_uring_close(void);
 static int cee_uring_eventfd(void);
 static bool cee_uring_drain(void);
 #endif
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(CEE_FREESTANDING)
 static HANDLE cee_iocp_port(void);
 #endif
 

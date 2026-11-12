@@ -914,11 +914,29 @@ fn compileObject(
         return Ok(archived);
     }
     if (linker.length == 0) {
+        var coff = hostIsWindows(); // the compiler's own target there, unless a `--target=` names another
         for (flag in flags.view()) {
             let text = flag.view();
             if (text.length >= 9 && sameText(text[..9], "--target=")) {
                 pushBytes(mut link, flag.view())?;
+                coff = containsText(text, "windows") || containsText(text, "mingw") || containsText(text, "cygwin");
             }
+        }
+        if (coff) {
+            // The Windows linkers have no relocatable link: lld-link ignores `-r` and fails on something else
+            // (profiles.md §4.3). Said here, in the driver's words.
+            var refused = ToolOutcome {
+                started: true,
+                status: 1,
+                stdout: Vector<u8>.create(),
+                stderr: Vector<u8>.create(),
+                error: IoError.Other(0),
+            };
+            appendText(
+                mut refused.stderr,
+                "ceesafec: --emit obj joins the program's objects with a relocatable link ('-r'), which the linkers for a Windows target do not have: give an ELF target, as in '--cflag --target=aarch64-unknown-none-elf', or build with '--emit lib'\n",
+            )?;
+            return Ok(refused);
         }
         pushText(mut link, "-nostdlib")?;
     }

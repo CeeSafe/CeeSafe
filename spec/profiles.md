@@ -218,6 +218,12 @@ is given (`ld.lld` for the ELF cross builds, as CosmoOS links), otherwise with t
 (passing it the `--target=…` flag). It works in
 both profiles; with `--profile freestanding` it is the normal output.
 
+A Windows (COFF) target has no relocatable link: `lld-link` has no `-r`. Where the objects would be joined by the C
+compiler for such a target (on Windows without a `--target=…`, or with one that names `windows`, `mingw` or
+`cygwin`), `ceesafec` refuses before the link and says so: give an ELF target (`--cflag
+--target=aarch64-unknown-none-elf`) or build an archive (`--emit lib`). The runtime's freestanding form includes no
+system header whatever the target, `<windows.h>` neither.
+
 Freestanding builds always add `-ffreestanding -fno-stack-protector -fno-asynchronous-unwind-tables
 -fno-unwind-tables` (c-backend §1).
 

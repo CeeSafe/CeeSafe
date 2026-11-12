@@ -24,6 +24,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -352,7 +353,12 @@ def run_test(runner, family, path, work):
 
     elif family == "freestanding":
         obj = os.path.join(work, "program.o")
-        o = cmd(["build", "--profile", "freestanding", "--emit", "obj"] + runner.cflags() + [path, "-o", obj])
+        target = []
+        if os.name == "nt" and not any(flag.startswith("--target=") for flag in runner.args.cflag):
+            # A Windows target has no relocatable link (profiles.md §4.3): the object is built for the machine's ELF target.
+            arch = "aarch64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+            target = ["--cflag", f"--target={arch}-unknown-none-elf"]
+        o = cmd(["build", "--profile", "freestanding", "--emit", "obj"] + runner.cflags() + target + [path, "-o", obj])
         if o.status != 0:
             problems.append(f"freestanding object build failed (status {o.status}): {o.stderr.strip()[:500]}")
         if not problems:

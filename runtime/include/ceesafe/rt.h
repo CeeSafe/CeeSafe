@@ -425,8 +425,11 @@ CEE_MULHIGH_NARROW(uint8_t, u8, uint32_t, 8)
 CEE_MULHIGH_NARROW(uint16_t, u16, uint32_t, 16)
 CEE_MULHIGH_NARROW(uint32_t, u32, uint64_t, 32)
 #if defined(__SIZEOF_INT128__)
+/* __extension__: GCC's -Wpedantic warns of __int128 wherever it is written, except in a declaration marked so. */
+__extension__ typedef unsigned __int128 cee_u128;
+__extension__ typedef __int128 cee_i128;
 static inline uint64_t cee_mul_high_u64(uint64_t a, uint64_t b) {
-    return (uint64_t)(((unsigned __int128)a * (unsigned __int128)b) >> 64);
+    return (uint64_t)(((cee_u128)a * (cee_u128)b) >> 64);
 }
 #elif defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_ARM64))
 #include <intrin.h>
@@ -450,7 +453,7 @@ CEE_MULHIGH_SIGNED(int8_t, i8, uint8_t, u8)
 CEE_MULHIGH_SIGNED(int16_t, i16, uint16_t, u16)
 CEE_MULHIGH_SIGNED(int32_t, i32, uint32_t, u32)
 #if defined(__SIZEOF_INT128__)
-static inline int64_t cee_mul_high_i64(int64_t a, int64_t b) { return (int64_t)(((__int128)a * (__int128)b) >> 64); }
+static inline int64_t cee_mul_high_i64(int64_t a, int64_t b) { return (int64_t)(((cee_i128)a * (cee_i128)b) >> 64); }
 #else
 CEE_MULHIGH_SIGNED(int64_t, i64, uint64_t, u64)
 #endif

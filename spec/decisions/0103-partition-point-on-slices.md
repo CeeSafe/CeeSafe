@@ -77,4 +77,6 @@ methods. The name joins the methods the checker lists in its "has no method" mes
 - Three HIR snapshots (`check-pass/async-timeout`, `effects-of`, `string-braces-warning`) number their closures one
   higher, since the library has one more function: reviewed, nothing else in them differs. `spec/api/core.md` gains
   the function.
+- Run 2026-11-12, macOS arm64, on the commit `91f890f`: `tools/contract_tests.py`, 40 ok, 2 skipped (Linux only), 0
+  failed; `tools/bootstrap_release.sh` from ceesafec 0.3.2.
 

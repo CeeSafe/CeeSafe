@@ -72,6 +72,15 @@ fixpoint iteration gives the same result as a flow-sensitive analysis.
   not go through a deref: `loans(q) ⊆ loans(t)`. A reference to a scoped value keeps that
   value's loans alive.
 - Liveness (§5) and the return check (§7) consider all loan-holding locals.
+- **A value read through a local reference (ADR 0114 §2.3).** A copy `t = Use((*x)…)` through a reference local
+  `x` whose one definition is `x = Ref(k, p)`, with no other reference on the way, reads what is stored in `p`: it
+  gets `loans(q)` for `p`'s root `q` (less the outer placeholder when `p` is reached through a reference parameter,
+  ADR 0074 §2.4), and not the loan of `x`'s own borrow, since the value does not point into `p`. If `p` is itself
+  `(*y)…` for such a local `y`, the rule applies to `y`. A deep call result (ADR 0074 §2.4) whose argument is
+  `Ref(k, (*x)…)` gets the same. Any other reference local gives all its loans, as above, and so does a `Builtin`
+  rvalue given such a place (its result may point into the place: a region's allocation). A `for` over a field's
+  elements or over an iterator field reads its items this way, so an item can be returned with a region of the
+  field's contents, as the same read through the parameter can.
 
 ## 4. Accesses
 

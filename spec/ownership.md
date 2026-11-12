@@ -73,7 +73,10 @@ function. "At point p" means on entry to the NIR statement at p.
 - **O3 — Definite initialisation.** A place may be read, borrowed, or have a
   field assigned only if it is *definitely initialised* on every path reaching
   that point. (Forward must-dataflow over NIR. The same analysis implements
-  use-after-move detection.)
+  use-after-move detection.) A place that goes through a reference, into an
+  element or into a string's text needs the field path it starts with: after
+  `let f = p.first`, the text of `p.second` is readable, since `p.second` is
+  still initialised (ADR 0114 §2.1).
 - **O4 — Exactly-once destruction.** At every point where a place goes out of
   scope (`StorageDead`), and before every assignment that overwrites an
   initialised place, the compiler inserts `drop(place)` if the place is

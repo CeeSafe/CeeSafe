@@ -50,7 +50,7 @@ fn main() {
 
 Items and members are `internal` by default: visible throughout their package. `public` makes them visible to other
 packages (see [Packages](packages.md)); `private` on a field limits it to the file that declares the struct, which
-lets a type guard an invariant.
+lets a type guard an invariant, and `private` on a method, or on an item, limits it to the file that declares it.
 
 ## Enums
 

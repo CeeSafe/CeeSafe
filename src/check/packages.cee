@@ -892,6 +892,7 @@ fn isOtherPackage(c: borrow Checker, file: u32) -> bool {
 
 /// N0312 for a method or static function of another package's struct that is not public (CheckMethodVisible).
 fn checkMethodVisible(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    checkMethodPrivate(c, function, span)?;
     let owner = c.hir.functions[function as usize].owner;
     if (owner == none()) {
         return Ok();
@@ -912,6 +913,142 @@ fn checkMethodVisible(c: borrow mut Checker, function: u32, span: Span) -> Resul
     appendText(mut message, "' is not public: only its own package can call it (type-system.md §2)")?;
     return c.error(notPublic(), span.start, span.end, message);
 }
+
+// ---- Private items (type-system.md §2, ADR 0109) ----
+
+fn isPrivateVisibility(v: Visibility) -> bool => match (v) {
+    Visibility.Private => true,
+    _ => false,
+};
+
+fn privateItemFile(c: borrow Checker, item: u32, file: u32) -> u32 =>
+    if (item != none() && isPrivateVisibility(c.front.ast.items[item as usize].visibility)) file else none();
+
+/// The file a `private` item is declared in, which alone may name it; none for an item that is not private.
+fn privateFileOf(c: borrow Checker, entity: Entity) -> u32 {
+    match (entity) {
+        Entity.Function(f) => {
+            let syntax = c.hir.functions[f as usize].syntax;
+            if (syntax != none() && isPrivateVisibility(c.front.ast.functions[syntax as usize].visibility)) {
+                return c.hir.functions[f as usize].file;
+            }
+            return none();
+        }
+        Entity.GenericFunction(g) => {
+            let syntax = c.genericFunctions[g as usize].syntax;
+            if (syntax != none() && isPrivateVisibility(c.front.ast.functions[syntax as usize].visibility)) {
+                return c.genericFunctions[g as usize].file;
+            }
+            return none();
+        }
+        Entity.Struct(s) => { return privateItemFile(c, c.structs[s as usize].item, c.structs[s as usize].file); }
+        Entity.Enum(e) => { return privateItemFile(c, c.enums[e as usize].item, c.enums[e as usize].file); }
+        Entity.Interface(i) => {
+            return privateItemFile(c, c.interfaces[i as usize].item, c.interfaces[i as usize].file);
+        }
+        Entity.Constant(k) => { return privateItemFile(c, c.constants[k as usize].item, c.constants[k as usize].file); }
+        Entity.Static(s) => { return privateItemFile(c, c.statics[s as usize].item, c.statics[s as usize].file); }
+        _ => { return none(); }
+    }
+}
+
+/// Was a private item's use at `start` in the current file reported already? A name is looked up more than once
+/// (a call's callee, a generic's instances), and is reported once.
+fn reportedPrivate(c: borrow Checker, start: u32) -> bool {
+    for (r in c.reportedPrivate.view()) {
+        if (r.file == c.file && r.start == start) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// N0296 with `text` naming what is private to `file`, at `span`, once.
+fn reportPrivate(
+    c: borrow mut Checker,
+    text: Vector<u8>,
+    file: u32,
+    verb: StringView,
+    span: Span,
+) -> Result<void, AllocError> {
+    if (reportedPrivate(c, span.start)) {
+        return Ok();
+    }
+    let here = c.file;
+    c.reportedPrivate.push(LayoutUse { typ: 0, start: span.start, end: span.end, file: here })?;
+    var message = Vector<u8>.create();
+    appendText(mut message, "'")?;
+    appendBytes(mut message, text.view())?;
+    appendText(mut message, "' is private to ")?;
+    appendBytes(mut message, c.filePaths[file as usize].view())?;
+    appendText(mut message, ": only code there can ")?;
+    appendText(mut message, verb)?;
+    appendText(mut message, " it (type-system.md §2)")?;
+    return c.error(privateItem(), span.start, span.end, message);
+}
+
+/// N0296 where a name means a `private` item of another file of its package (CheckPrivateItem, ADR 0109): the item
+/// is found, so the message can say whose it is, and the check goes on with it. Another package's private item is
+/// N0312, as any item that is not public (CheckQualified).
+fn checkPrivateItem(c: borrow mut Checker, entity: Entity, span: Span) -> Result<void, AllocError> {
+    let file = privateFileOf(c, entity);
+    if (file == none() || file == c.file || isOtherPackage(c, file)) {
+        return Ok();
+    }
+    let symbol = match (entity) {
+        Entity.Function(f) => c.hir.functions[f as usize].name,
+        Entity.GenericFunction(g) =>
+            c.front.ast.idents[c.front.ast.functions[c.genericFunctions[g as usize]
+                .syntax as usize].name as usize].symbol,
+        Entity.Struct(s) =>
+            c.front.ast.idents[c.front.ast.items[c.structs[s as usize].item as usize].name as usize].symbol,
+        Entity.Enum(e) => c.front.ast.idents[c.front.ast.items[c.enums[e as usize].item as usize].name as usize].symbol,
+        Entity.Interface(i) =>
+            c.front.ast.idents[c.front.ast.items[c.interfaces[i as usize].item as usize].name as usize].symbol,
+        Entity.Constant(k) =>
+            c.front.ast.idents[c.front.ast.items[c.constants[k as usize].item as usize].name as usize].symbol,
+        Entity.Static(s) =>
+            c.front.ast.idents[c.front.ast.items[c.statics[s as usize].item as usize].name as usize].symbol,
+        _ => none(),
+    };
+    if (symbol == none()) {
+        return Ok();
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.name(symbol))?;
+    return reportPrivate(c, text, file, "use", span);
+}
+
+/// checkPrivateItem for the name at identifier `ident`, unless a local of that name is in scope.
+fn checkPrivateName(c: borrow mut Checker, ident: u32) -> Result<void, AllocError> {
+    let id = c.front.ast.idents[ident as usize];
+    if (c.findLocal(id.symbol) != none() || environmentType(c, id.symbol) != none()) {
+        return Ok();
+    }
+    let entity = c.item(id.symbol);
+    return checkPrivateItem(c, entity, Span { start: id.start, end: id.end });
+}
+
+/// N0296 for a `private` method or static function called outside the file that declares it (the struct's, or the
+/// `impl` block's: ADR 0109).
+fn checkMethodPrivate(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    let owner = c.hir.functions[function as usize].owner;
+    let syntax = c.hir.functions[function as usize].syntax;
+    let file = c.hir.functions[function as usize].file;
+    if (owner == none() || syntax == none() || file == none() || file == c.file || isOtherPackage(c, file)) {
+        return Ok();
+    }
+    if (!isPrivateVisibility(c.front.ast.functions[syntax as usize].visibility)) {
+        return Ok();
+    }
+    var text = Vector<u8>.create();
+    appendBytes(mut text, c.typeName(owner))?;
+    appendText(mut text, ".")?;
+    appendBytes(mut text, c.name(c.hir.functions[function as usize].name))?;
+    return reportPrivate(c, text, file, "call", span);
+}
+
+fn privateItem() -> u32 => 296;
 
 fn notPublic() -> u32 => 312;
 fn unknownPackageItem() -> u32 => 311;

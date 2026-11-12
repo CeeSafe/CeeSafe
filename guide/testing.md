@@ -42,7 +42,7 @@ async fn waits() -> Result<void, AsyncError> {
   `Result<void, TestFailure>`, so a failed check returns from the test with `?`, dropping what it holds as any return
   does.
 - **Where.** Tests go beside the code, or in the package's `tests/` directory (`tests = [...]` in the manifest). They
-  see the package's private items.
+  see the package's items that are not public, except those marked `private`, which stay in their own file.
 - **`build` leaves them out**, so calling a test from other code is an error (N0348).
 
 ## Running them

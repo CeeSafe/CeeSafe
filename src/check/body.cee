@@ -418,6 +418,7 @@ fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, Al
     let span = c.front.ast.exprSpans[target as usize];
     match (c.front.ast.exprs[target as usize]) {
         ExprNode.Name(name, _) => {
+            checkPrivateName(c, name)?;
             let symbol = c.front.ast.idents[name as usize].symbol;
             match (c.lookup(symbol)?) {
                 Entity.Local(local) => {

@@ -100,6 +100,12 @@ fn main() {
   apply to their file only. A name two imports provide is an error where it is used.
 - Within a package, the name of a dependency is reserved: nothing else in the package may be called `geometry`.
 - A public function may not expose a type its users cannot see (a public function returning an internal struct).
+- There are three levels. `public` is visible to other packages. `internal`, which is what an item is when it says
+  nothing, is visible in every file of its package and nowhere else. `private` is visible only in the file that
+  declares it: a `private fn`, struct, enum, interface, constant or static, a `private` method or associated
+  constant, and a `private` field. Using one from another file is an error (N0296) that names the file it belongs
+  to. A private item's name is still taken in the whole package, so two files cannot each have a `private fn
+  helper`; and a value of a private type may travel to other files, which only cannot write its name.
 - Two packages may declare the same name: in the generated C, a dependency's items carry its package's name.
 
 ## The lock file

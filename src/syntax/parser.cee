@@ -1152,9 +1152,9 @@ struct Parser {
         var constants = Vector<u32>.create();
         var types = Vector<u32>.create();
         this.expect(TokenKind.OpenBrace)?;
+        // An inherent impl's functions and constants take any visibility (grammar.md; ADR 0109 §2.5).
         while (this.atFunction() || this.at(TokenKind.PublicKeyword) || this.at(TokenKind.At) ||
-            (inherent && (this.at(TokenKind.ConstKeyword) ||
-                (isVisibilityKeyword(this.current().kind) && this.peekIs(1, TokenKind.ConstKeyword)))) ||
+            (inherent && (this.at(TokenKind.ConstKeyword) || isVisibilityKeyword(this.current().kind))) ||
             (!inherent && (this.at(TokenKind.ConstKeyword) || this.at(TokenKind.TypeKeyword)))) {
             let functionStart = this.current().start;
             if (!inherent && this.at(TokenKind.ConstKeyword)) {

@@ -1,0 +1,4 @@
+[package]
+name = "privateitems"
+version = "0.1.0"
+kind = "executable"

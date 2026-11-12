@@ -1,0 +1,77 @@
+// `private` items and members, used in the file that declares them (type-system.md §2, ADR 0109): a function, a
+// generic function, a struct, an enum, an interface, a constant, a static, a method, a static function and an
+// associated constant, and the functions of an `impl` block, which take `internal` and `private` since ADR 0109.
+// Another file's use of them is N0296: tests/packages/private-items (tools/package_tests.py, check 31).
+private fn helper() -> i32 => 1;
+
+private fn pick<T>(a: T, b: T) -> T => a;
+
+private struct Plain {
+    v: i32;
+
+    private fn make(v: i32) -> Plain => Plain { v: v };
+    private fn twice(borrow this) -> i32 => this.v * 2;
+    private const BASE: i32 = 10;
+}
+
+private struct Pair<T> {
+    a: T;
+    b: T;
+}
+
+private enum Kind {
+    One,
+    Two(i32),
+}
+
+private interface Shape {
+    fn area(borrow this) -> i32;
+}
+
+private const LIMIT: i32 = 3;
+
+private static TABLE: [i32; 2] = [5, 6];
+
+struct Square {
+    side: i32;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> i32 => this.side * this.side;
+}
+
+impl Square {
+    private fn half(borrow this) -> i32 => this.side / 2;
+    internal fn whole(borrow this) -> i32 => this.side;
+    private fn unit() -> Square => Square { side: 1 };
+    private const SIDES: i32 = 4;
+}
+
+fn total<T: Shape>(x: borrow T) -> i32 => x.area();
+
+fn dynamic(x: borrow dyn Shape) -> i32 => x.area();
+
+fn name(k: Kind) -> i32 => match (k) {
+    Kind.One => 1,
+    Kind.Two(LIMIT) => 30,
+    Kind.Two(n) => n,
+};
+
+fn main() {
+    let p = Plain.make(helper() + LIMIT);
+    Console.writeLine(p.twice() + Plain.BASE);
+    let pair = Pair<i32> { a: pick<i32>(7, 8), b: TABLE[1] };
+    Console.writeLine(pair.a + pair.b);
+    Console.writeLine(name(Kind.One) + name(Kind.Two(3)) + name(Kind.Two(9)));
+    let s = Square { side: 6 };
+    Console.writeLine(total<Square>(borrow s) + dynamic(borrow s));
+    Console.writeLine(s.half() + s.whole() + Square.unit().side + Square.SIDES);
+    let f: fn() -> i32 = helper;
+    Console.writeLine(f());
+}
+// expect-stdout: 18
+// expect-stdout: 13
+// expect-stdout: 40
+// expect-stdout: 72
+// expect-stdout: 14
+// expect-stdout: 1

@@ -248,6 +248,7 @@ fn checkProgramWith(
         freestanding: freestanding,
         profileReports: Vector<LayoutUse>.create(),
         reportedQualified: Vector<LayoutUse>.create(),
+        reportedPrivate: Vector<LayoutUse>.create(),
         packages: packages,
         filePackage: filePackage,
         blockValueType: none(),

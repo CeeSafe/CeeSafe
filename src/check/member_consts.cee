@@ -169,5 +169,14 @@ fn memberConstantValue(c: borrow mut Checker, k: u32, span: Span) -> Result<u32,
         appendText(mut message, "' is not public: only its own package can use it (type-system.md §2)")?;
         c.error(notPublic(), span.start, span.end, message)?;
     }
+    if (m.file != c.file && !isOtherPackage(c, m.file) && privateItemFile(c, m.item, m.file) != none()) {
+        // A private associated constant, named outside the file that declares it (ADR 0109).
+        let id = c.front.ast.idents[c.front.ast.items[m.item as usize].name as usize];
+        var text = Vector<u8>.create();
+        appendBytes(mut text, c.name(ownerSymbol(c, m.owner)))?;
+        appendText(mut text, ".")?;
+        appendBytes(mut text, c.name(id.symbol))?;
+        reportPrivate(c, text, m.file, "use", span)?;
+    }
     return namedConstantValue(c, m.constant, span);
 }

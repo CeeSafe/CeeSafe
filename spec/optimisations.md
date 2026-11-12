@@ -100,6 +100,16 @@ Nothing is kept past §2.5's budget.
   local while a mutable loan of it is still in scope (§2.3), and that condition is what makes it hold: nothing can
   change the vector through the loan after the call. A `resize` through a named borrow (`p.resize(n, 0)`) gives no
   fact.
+- **An update in place** (ADR 0102): `x = x op b` on an integer local keeps, about the new value, the comparisons
+  the update cannot have made false. After `x = x - b` (and, unsigned, `x / b` and `x >> b`) the new value is at
+  most the old one: each `x ≤ u`, `x < u` and `x = u` gives `x ≤ u`, or `x < u` if it was. After `x = x + b` the new
+  value is at least the old one: each `l ≤ x`, `l < x` and `l = x` gives `l ≤ x`, or `l < x`. When `b` is a constant
+  of at least 1 and the operation is `+` or `-`, the result is strict: `x ≤ u` gives `x < u`. `b` must not be
+  negative: any unsigned operand, or a constant of at least 0 for a signed `x`. So in
+  `var n = s.length; while (n > 0) { n -= 1; … s[n] … }` the check is removed. (§2.3 ends the facts of an assigned
+  local because its old value is gone; these are the ones that hold of the new value whatever the old one was.)
+- **A reborrowed slice** (ADR 0102): `t = &(*s)` or `t = &mut (*s)` for slice locals `s` and `t`, the place being
+  `s` dereferenced and nothing more, gives `len(t) = len(s)`. `s.swap(i, j)` on a `SliceMut` local makes one.
 - **Passed checks**: after `BoundsCheck(i < L)`, `i < L`; after `RangeCheck(lo, hi, L)`, `lo ≤ hi` and `hi ≤ L`;
   after `LengthCheck(a, b)`, `a = b`. Where `i` or `L` is a compiler temporary known to equal a lasting term (§2.3),
   `BoundsCheck` also gives the fact about that term (`m < len(s)` for `t = m; u = length(s); BoundsCheck(t < u)`),
@@ -187,6 +197,8 @@ made from a reference after its target was used directly (2026-10-25): none, as 
   mutated vector, a borrowed index, `<=` bounds, a loop bounded by another slice's length, a stable vector, whose
 `push` takes only `borrow this`). `search.cee` (ADR 0100) has the binary searches that must be proved and their near
 misses: a midpoint of `(lo + hi) / 2`, an upper end that may pass the length, a search of another slice.
+`updated.cee` (ADR 0102) has the loops whose index is updated in place and their near misses: an index stepped up
+past its bound, an amount subtracted that may be 0, a product, a slice of part of the slice.
 `resized.cee` has the loops over a vector after `resize` and their near misses: a `pop` after it, a result that was
 not tested, the length of another vector, a resize through a named borrow.
 

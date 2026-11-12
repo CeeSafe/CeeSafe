@@ -1,0 +1,128 @@
+// An index updated in place keeps its bounds, and a reborrowed slice its length (optimisations.md §2.4, ADR 0102).
+// The .bce snapshot lists each index check; the near misses must keep theirs.
+
+// Removed: `n <= s.length`, and after `n -= 1`, `n < s.length`.
+fn reverseSum(s: Slice<u32>) -> u32 {
+    var total: u32 = 0;
+    var n = s.length;
+    while (n > 0) {
+        n -= 1;
+        total = total.wrappingAdd(s[n]);
+    }
+    return total;
+}
+
+// Removed, all four: `j <= i < s.length` through `j -= 1`, and `swap` reborrows the slice, whose length is the same.
+fn insertion(s: SliceMut<u32>) {
+    for (i in 1..s.length) {
+        var j = i;
+        while (j > 0 && s[j] < s[j - 1]) {
+            s.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
+// Removed, both: `i <= j` with `j < s.length` kept through `j -= 1`.
+fn scan(s: Slice<u32>, pivot: u32) -> usize {
+    if (s.length == 0) {
+        return 0;
+    }
+    var i: usize = 0;
+    var j = s.length - 1;
+    while (i <= j && s[i] < pivot) {
+        i += 1;
+    }
+    while (i <= j && s[j] >= pivot) {
+        if (j == 0) {
+            break;
+        }
+        j -= 1;
+    }
+    return i + j;
+}
+
+// Removed: halving keeps what was above, here `k < s.length`.
+fn halved(s: Slice<u32>) -> u32 {
+    if (s.length == 0) {
+        return 0;
+    }
+    var k = s.length - 1;
+    k /= 2;
+    return s[k];
+}
+
+// Kept: halving keeps `n <= s.length`; that half of `n` is less than `n` is not part of this rule.
+fn halving(s: Slice<u32>) -> u32 {
+    var total: u32 = 0;
+    var n = s.length;
+    while (n > 1) {
+        n /= 2;
+        total += s[n];
+    }
+    return total;
+}
+
+// Kept: adding keeps what was below, not what was above.
+fn stepped(s: Slice<u32>) -> u32 {
+    var i: usize = 0;
+    if (i < s.length) {
+        i += 1;
+        if (i != 7) {
+            return 0;
+        }
+        return s[i];
+    }
+    return 0;
+}
+
+// Kept: the amount subtracted may be 0, so `n` may still be the length.
+fn loweredBy(s: Slice<u32>, step: usize) -> u32 {
+    var n = s.length;
+    if (n > step) {
+        n -= step;
+        return s[n];
+    }
+    return 0;
+}
+
+// Kept: a product is not an update that keeps a bound.
+fn doubled(s: Slice<u32>) -> u32 {
+    var i: usize = 1;
+    if (i < s.length) {
+        i *= 1;
+        return s[i];
+    }
+    return 0;
+}
+
+// Kept: a slice of part of `s` has another length.
+fn tail(s: SliceMut<u32>, i: usize) -> u32 {
+    if (i < s.length && s.length > 1) {
+        let rest = borrow mut s[1..];
+        return rest[i];
+    }
+    return 0;
+}
+
+fn main() {
+    var a = [5u32, 3, 9, 1, 7];
+    insertion(borrow mut a[..]);
+    Console.writeLine(reverseSum(a[..]));
+    Console.writeLine(scan(a[..], 6));
+    Console.writeLine(halved(a[..]));
+    Console.writeLine(halving(a[..]));
+    Console.writeLine(stepped(a[..]));
+    Console.writeLine(loweredBy(a[..], 2));
+    Console.writeLine(doubled(a[..]));
+    Console.writeLine(tail(borrow mut a[..], 3));
+}
+
+// expect-stdout: 25
+// expect-stdout: 5
+// expect-stdout: 5
+// expect-stdout: 8
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 3
+// expect-stdout: 9

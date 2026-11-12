@@ -1103,6 +1103,7 @@ fn assignFacts(
             facts.push(refToFact(x, lengthTerm(borrowed)))?;
         }
         resultFacts(c, n, context, x, r, state, mut facts)?;
+        updateFacts(c, n, context, x, r, state, mut facts)?;
     }
     // `x = a op b` computes what an existing `y = a op b` holds: x equals y.
     if (placeIsLocal(n, target) && context.values[x as usize]) {
@@ -1186,6 +1187,80 @@ fn resultFacts(
             var g = f;
             g.local = x;
             facts.push(g)?;
+        }
+    }
+    return Ok();
+}
+
+/// The bounds an update in place keeps (ADR 0102): after `x = x - b` (or `x / b`, `x >> b`) the new value is at most
+/// the old one, so what was above the old value is above the new one; after `x = x + b` the new value is at least the
+/// old one, so what was below stays below. Strictly, when `b` is a constant of at least 1. The arithmetic is exact:
+/// `+` and `-` are overflow-checked, an unsigned `/` and `>>` cannot wrap, and `b` is not negative.
+fn updateFacts(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    context: borrow CheckContext,
+    x: u32,
+    r: u32,
+    state: borrow Vector<Fact>,
+    facts: borrow mut Vector<Fact>,
+) -> Result<void, AllocError> {
+    if (!context.values[x as usize]) {
+        return Ok();
+    }
+    let self = localTerm(x);
+    var down = false;
+    var up = false;
+    var strict = false;
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Binary(op, left, right) => {
+            let k = binaryIndex(op);
+            let t = n.rvalueTypes[r as usize];
+            if (!c.types.is(t, TypeKind.Integer) || !c.types.is(n.operandTypes[left as usize], TypeKind.Integer)) {
+                return Ok();
+            }
+            let signed = c.types.info(t).signed;
+            let a = termOf(c, n, context, left);
+            let b = termOf(c, n, context, right);
+            let selfLeft = isTerm(a) && sameTerm(a, self);
+            let selfRight = isTerm(b) && sameTerm(b, self);
+            if (selfLeft == selfRight) {
+                return Ok(); // neither operand is x, or both are
+            }
+            let other = if (selfLeft) b else a;
+            let constant = isTerm(other) && other.kind == termConstant();
+            // The other operand is not negative: any unsigned value, or a constant of at least 0.
+            if (signed && !(constant && wideAtMost(wideZero(), other.value))) {
+                return Ok();
+            }
+            let atLeastOne = constant && wideAtMost(wideOfU64(1), other.value);
+            if (k == 14 && selfLeft) {
+                down = true;
+                strict = atLeastOne;
+            } else if ((k == 16 || k == 12) && selfLeft && !signed) {
+                down = true;
+            } else if (k == 13) {
+                up = true;
+                strict = atLeastOne;
+            }
+        }
+        _ => {}
+    }
+    if (!down && !up) {
+        return Ok();
+    }
+    for (f in state.view()) {
+        if (f.kind != factCompare() || f.relation == relationNotEqual()) {
+            continue;
+        }
+        let isLeft = sameTerm(f.a, self) && !termMentions(f.b, x);
+        let isRight = sameTerm(f.b, self) && !termMentions(f.a, x);
+        let equal = f.relation == relationEqual();
+        let relation = if (strict || f.relation == relationBelow()) relationBelow() else relationAtMost();
+        if (down && (isLeft || (equal && isRight))) {
+            facts.push(compareFact(relation, self, if (isLeft) f.b else f.a))?; // x ≤ old x (≤ or <) u
+        } else if (up && (isRight || (equal && isLeft))) {
+            facts.push(compareFact(relation, if (isRight) f.a else f.b, self))?; // l (≤ or <) old x ≤ x
         }
     }
     return Ok();
@@ -1354,6 +1429,16 @@ fn newFacts(
                 if (wideLess(xRange.min, fromRange.min)) {
                     facts.push(compareFact(relationAtMost(), constantTerm(fromRange.min), self))?;
                 }
+            }
+        }
+        NirRvalue.Ref(_, place) => {
+            // A reborrow of a whole slice, `&mut (*s)` (ADR 0102): the same elements, so the same length.
+            let p = n.places[place as usize];
+            let source = p.local;
+            if (p.projections.count == 1 && isNirDeref(n.projections[p.projections.start as usize]) && source != x &&
+                context.lengths[x as usize] && context.lengths[source as usize] && c.types.isSlice(xType) &&
+                c.types.isSlice(locals[source as usize].typ)) {
+                return facts.push(compareFact(relationEqual(), lengthTerm(x), lengthTerm(source)));
             }
         }
         NirRvalue.Length(place) => {

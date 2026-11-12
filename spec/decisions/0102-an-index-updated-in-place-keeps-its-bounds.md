@@ -75,5 +75,6 @@ check that 0.38.0 removed is kept. The compiler emitting its own C: 8.2 s before
   may be 0, a product, a halving that needs strictness, a slice of part of the slice).
 - The interpreter evaluates every removed check on every run (`optimisations.md` §2.8).
 - Run 2026-11-12, macOS arm64: the corpus (0 failures), `tools/spec_check.py` (0 problems), the fixed point by hand
-  (two generations, identical C). Not run: `tools/contract_tests.py`, and the bootstrap from the release stage 0.
+  (two generations, identical C). On the commit `c62fd52`: `tools/contract_tests.py`, 40 ok, 2 skipped (Linux
+  only), 0 failed; `tools/bootstrap_release.sh` from ceesafec 0.3.2.
 

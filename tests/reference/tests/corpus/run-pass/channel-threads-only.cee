@@ -1,0 +1,25 @@
+// A channel between threads in a program with no async code. The channel's runtime functions (`ceesafe_chan_*`,
+// ADR 0032 §5) are in the async runtime's file, which the build left out of such a program: it did not link.
+fn main() {
+    let channel = Channel<u64>.create(8)!;
+    let sender = channel.clone();
+    let worker = Thread.spawn(move () => {
+        for (i in 1..5u64) {
+            sender.send(i * i)!;
+        }
+        sender.close();
+    })!;
+    var total: u64 = 0;
+    while (channel.recv() is Some(value)) {
+        total += value;
+    }
+    worker.join();
+    Console.writeLine(total);
+
+    // And with no thread at all.
+    let alone = Channel<u64>.create(4)!;
+    alone.send(7)!;
+    Console.writeLine(alone.recv() ?? 0);
+}
+// expect-stdout: 30
+// expect-stdout: 7

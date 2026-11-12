@@ -185,13 +185,16 @@ fn generateC(
         if (containsBytes(mainText.view(), "ceesafe_format_f")) {
             out.push(runtimeFile(4, "")?)?;
         }
+        // Channels (`ceesafe_chan_*`, ADR 0032 §5) are in the async runtime's file, and a program of threads alone
+        // may use them: without this its build did not link.
+        let tasks = containsBytes(mainText.view(), "ceesafe_async_") || containsBytes(mainText.view(), "ceesafe_chan_");
         if (containsBytes(mainText.view(), "ceesafe_thread_") || containsBytes(mainText.view(), "ceesafe_mutex_") ||
-            containsBytes(mainText.view(), "ceesafe_async_")) {
+            tasks) {
             // The async runtime starts Async.blocking's workers with the thread runtime.
             out.push(runtimeFile(5, "")?)?;
         }
-        if (containsBytes(mainText.view(), "ceesafe_async_")) {
-            out.push(runtimeFile(6, "")?)?; // async tasks (c-backend.md §3a)
+        if (tasks) {
+            out.push(runtimeFile(6, "")?)?; // async tasks and channels (c-backend.md §3a)
         }
         if (containsBytes(mainText.view(), "ceesafe_window_")) {
             out.push(runtimeFile(8, "")?)?; // native windows (type-system.md §26.13, ADR 0069)

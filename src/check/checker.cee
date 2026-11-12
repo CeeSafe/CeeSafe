@@ -203,6 +203,7 @@ struct Checker {
     freestanding: bool;                // --profile freestanding (profiles.md §4)
     profileReports: Vector<LayoutUse>;
     reportedQualified: Vector<LayoutUse>;
+    reportedPrivate: Vector<LayoutUse>;
     packages: Vector<PackageInfo>;    // the root first, then its dependencies (single-file mode: one, unnamed)
     filePackage: Vector<u32>;         // each file's package, none for the libraries
     blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
@@ -551,6 +552,8 @@ struct Checker {
                     this.error(105, span.start, span.end, message)?;
                     return Ok(this.types.error);
                 }
+                let named = this.item(ident.symbol);
+                checkPrivateItem(this, named, Span { start: ident.start, end: ident.end })?; // ADR 0109
                 var text = Vector<u8>.create();
                 appendBytes(mut text, this.name(ident.symbol))?;
                 let undeclared = match (this.item(ident.symbol)) {

@@ -107,6 +107,9 @@ fn synthStructLiteral(
         Entity.Struct(s) => s,
         _ => none(),
     };
+    if (selfEntry == none() && index != none()) {
+        checkPrivateItem(c, Entity.Struct(index), nameSpan)?; // ADR 0109
+    }
     if (index == none()) {
         var text = Vector<u8>.create();
         appendBytes(mut text, c.name(nameIdent.symbol))?;

@@ -167,6 +167,10 @@ fn resolveInterface(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocErro
         Entity.Interface(i) => i,
         _ => none(),
     };
+    if (entry != none()) {
+        let named = c.front.ast.typeSpans[syntax as usize];
+        checkPrivateItem(c, Entity.Interface(entry), named)?; // ADR 0109
+    }
     if (entry == none()) {
         var message = Vector<u8>.create();
         if (symbol == none()) {

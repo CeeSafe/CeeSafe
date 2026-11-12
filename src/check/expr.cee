@@ -159,6 +159,7 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
             return Ok(value);
         }
         ExprNode.Name(name, typeArguments) => {
+            checkPrivateName(c, name)?;
             if (expected != none() && c.types.is(expected, TypeKind.FunctionPointer)) {
                 let symbol = c.front.ast.idents[name as usize].symbol;
                 match (c.lookup(symbol)?) {
@@ -900,6 +901,7 @@ fn synthCall(
     match (c.front.ast.exprs[callee as usize]) {
         ExprNode.Name(name, typeArguments) => {
             let id = c.front.ast.idents[name as usize];
+            checkPrivateName(c, name)?;
             match (c.lookup(id.symbol)?) {
                 Entity.Function(function) => {
                     let inHarness = !sameText(c.entryName.view(), "main") && c.function != none() &&
@@ -994,6 +996,7 @@ fn synthCall(
         ExprNode.Member(target, member) => {
             match (c.front.ast.exprs[target as usize]) {
                 ExprNode.Name(targetName, typeArguments) => {
+                    checkPrivateName(c, targetName)?;
                     let targetSymbol = c.front.ast.idents[targetName as usize].symbol;
                     // `Self.create(…)` and `T.create(…)` (ADR 0086 §2.2, §2.3).
                     let namedType = if (typeArguments.count == 0) typeNamedInExpression(c, targetSymbol) else none();
@@ -1792,6 +1795,7 @@ fn invalidCast() -> u32 => 208;
 fn synthMember(c: borrow mut Checker, target: u32, member: u32, span: Span, expected: u32) -> Result<u32, AllocError> {
     match (c.front.ast.exprs[target as usize]) {
         ExprNode.Name(name, typeArguments) => {
+            checkPrivateName(c, name)?;
             let symbol = c.front.ast.idents[name as usize].symbol;
             let memberSymbol = c.front.ast.idents[member as usize].symbol;
             // `Self.MAX` and `T.NAME` (ADR 0086 §2.2, §2.4).

@@ -954,6 +954,14 @@ fn checkPattern(
             }
         }
         PatternNode.Variant(path, hasBindings, bindings) => {
+            if (path.parts.count >= 2) {
+                // `Kind.One`, `Limits.MAX`: the enum or struct named first (ADR 0109).
+                let owner = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize];
+                if (environmentType(c, owner.symbol) == none()) {
+                    let named = c.item(owner.symbol);
+                    checkPrivateItem(c, named, Span { start: owner.start, end: owner.end })?;
+                }
+            }
             if (!hasBindings && path.parts.count >= 2 && !namesVariantPath(c, path)) {
                 let constant = qualifiedConstant(c, path, span, failed)?;
                 if (constant != none()) {
@@ -1313,6 +1321,7 @@ fn constantPattern(
     span: Span,
     failed: borrow mut bool,
 ) -> Result<u32, AllocError> {
+    checkPrivateItem(c, Entity.Constant(constant), span)?; // ADR 0109
     let constType = c.hir.constants[c.constants[constant as usize].hir as usize].typ;
     if (c.types.isBottom(constType)) {
         failed = true;

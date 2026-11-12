@@ -45,6 +45,8 @@ fn resolveGenericType(
 ) -> Result<u32, AllocError> {
     let first = c.front.ast.idents[c.front.ast.at(name.parts, 0) as usize];
     if (name.parts.count == 1) {
+        let named = c.item(first.symbol);
+        checkPrivateItem(c, named, Span { start: first.start, end: first.end })?; // ADR 0109
         match (c.item(first.symbol)) {
             Entity.Struct(index) => {
                 let entry = c.structs[index as usize];

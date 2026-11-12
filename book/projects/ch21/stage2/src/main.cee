@@ -1,0 +1,78 @@
+/// The most bytes a request's head may have.
+const HEAD_LIMIT: usize = 8192;
+
+/// What can go wrong while a connection is answered.
+enum ServeError {
+    @from Io(IoError),
+    @from Memory(AllocError),
+}
+
+/// Reads from `stream` until the empty line that ends a request's head, the end of the stream, or the limit.
+fn readHead(stream: borrow mut TcpStream) -> Result<Vector<u8>, ServeError> {
+    var head = Vector<u8>.create();
+    var buffer = [0u8; 512];
+    while (head.length < HEAD_LIMIT) {
+        let n = stream.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        head.extend(buffer[0..n])?;
+        if (head.view().contains("\r\n\r\n".bytes())) {
+            break;
+        }
+    }
+    return Ok(head);
+}
+
+/// Answers one connection: reads the request, chooses the response and sends it.
+fn handle(stream: borrow mut TcpStream) -> Result<void, ServeError> {
+    let head = readHead(mut stream)?;
+    let response = match (StringView.fromUtf8(head.view())) {
+        Some(text) => answer(text),
+        null => badRequest(),
+    };
+    let text = render(borrow response)?;
+    stream.write(text.view().bytes())?;
+    stream.shutdownWrite()?;
+    return Ok();
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1", 7878)!;
+    Console.writeLine("listening on http://127.0.0.1:7878");
+    loop {
+        var stream = listener.accept()!;
+        match (handle(mut stream)) {
+            Ok() => {}
+            Err(_) => { Console.writeErrorLine("a connection failed"); }
+        }
+    }
+}
+
+/// Connects to `listener`, sends `request`, answers it with `handle`, and returns everything the client receives.
+fn fetch(listener: borrow TcpListener, request: StringView) -> Result<String, ServeError> {
+    var client = TcpStream.connect("127.0.0.1", listener.port()?)?;
+    client.write(request.bytes())?;
+    var server = listener.accept()?;
+    handle(mut server)?;
+    var reply = String.create();
+    var buffer = [0u8; 256];
+    loop {
+        let n = client.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok(reply);
+        }
+        reply.append(StringView.fromUtf8(buffer[0..n]) ?? "?")?;
+    }
+}
+
+@test
+fn servesThePages() -> Result<void, TestFailure> {
+    let listener = TcpListener.bind("127.0.0.1", 0)!;
+    let home = fetch(borrow listener, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")!;
+    Check.isTrue(home.view().startsWith("HTTP/1.1 200 OK\r\n"), "/ is 200")?;
+    Check.isTrue(home.view().endsWith(INDEX), "/ is the first page")?;
+    let missing = fetch(borrow listener, "GET /nowhere HTTP/1.1\r\nHost: localhost\r\n\r\n")!;
+    Check.isTrue(missing.view().startsWith("HTTP/1.1 404 Not Found\r\n"), "/nowhere is 404")?;
+    return Ok();
+}

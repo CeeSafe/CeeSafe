@@ -1,0 +1,16 @@
+/// Prints the readings above `limit`, and returns how many there are.
+@export("report_above")
+fn above(limit: u32) -> usize {
+    var high = Vector<u32>.create();
+    for (reading in [3u32, 9, 27]) {
+        if (reading > limit) {
+            Console.writeLine(reading);
+            high.push(reading)!;
+        }
+    }
+    return high.length;
+}
+
+fn main() {
+    let _ = above(5);
+}

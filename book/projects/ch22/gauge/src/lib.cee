@@ -1,0 +1,42 @@
+extern "C" {
+    fn board_log(value: u64);
+}
+
+/// The sum of `length` bytes at `data`.
+/// Safety: the caller passes `length` readable bytes at `data`.
+@export("gauge_sum")
+fn sum(data: *u8, length: usize) -> u32 {
+    let bytes = unsafe { Slice.fromRaw(data, length) };
+    var total: u32 = 0;
+    for (b in bytes) {
+        total += b as u32;
+    }
+    return total;
+}
+
+/// `part` as a percentage of `whole`.
+@export("gauge_percent")
+fn percent(part: u32, whole: u32) -> u32 => part * 100 / whole;
+
+/// The squares of 1 to `count`, built in memory from a local array, then added up.
+/// Safety: board_log only reads its argument.
+@export("gauge_squares")
+fn squares(count: u32) -> u32 {
+    var storage: [u8; 64] = [0; 64];
+    using memory = FixedBufferAllocator.over(mut storage);
+    match (memory.allocArray(count as usize, 0u32)) {
+        Ok(cells) => {
+            var total: u32 = 0;
+            for (i in 0..cells.length) {
+                let n = truncate<u32>(i) + 1;
+                cells[i] = n * n;
+                total += cells[i];
+            }
+            unsafe { board_log(total as u64); }
+            return total;
+        }
+        Err(e) => {
+            return 0;
+        }
+    }
+}

@@ -1,0 +1,105 @@
+/// What every block of a page can do.
+interface Block {
+    /// Appends the block to `out` as a line of plain text.
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError>;
+
+    /// The number of words in the block.
+    fn words(borrow this) -> usize;
+}
+
+struct Heading {
+    text: String;
+}
+
+struct Paragraph {
+    text: String;
+}
+
+struct Rule {}
+
+impl Block for Heading {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        out.append("# ")?;
+        out.append(this.text.view())?;
+        return out.append("\n");
+    }
+
+    fn words(borrow this) -> usize => countWords(this.text.view());
+}
+
+impl Block for Paragraph {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        out.append(this.text.view())?;
+        return out.append("\n");
+    }
+
+    fn words(borrow this) -> usize => countWords(this.text.view());
+}
+
+impl Block for Rule {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> => out.append("----\n");
+    fn words(borrow this) -> usize => 0;
+}
+
+/// The number of words in `text`: the parts between its spaces that are not empty.
+fn countWords(text: StringView) -> usize {
+    var count: usize = 0;
+    for (word in text.split(" ")) {
+        if (word.length > 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// A page of one shape: a title, then a body whose blocks are all of one type.
+struct Page<T: Block, B: Block> {
+    title: T;
+    body: Vector<B>;
+}
+
+/// The whole page as text, a line for each block.
+fn renderPage<T: Block, B: Block>(page: borrow Page<T, B>) -> Result<String, AllocError> {
+    var out = String.create();
+    page.title.render(mut out)?;
+    for (block in page.body) {
+        block.render(mut out)?;
+    }
+    return Ok(out);
+}
+
+/// The number of words on the page.
+fn wordsOnPage<T: Block, B: Block>(page: borrow Page<T, B>) -> usize {
+    var total = page.title.words();
+    for (block in page.body) {
+        total += block.words();
+    }
+    return total;
+}
+
+/// A page to show and to test with.
+fn sample() -> Result<Page<Heading, Paragraph>, AllocError> {
+    var body = Vector<Paragraph>.create();
+    body.push(Paragraph { text: String.from("The tide comes in twice a day.")? })?;
+    body.push(Paragraph { text: String.from("It goes out twice too.")? })?;
+    return Ok(Page { title: Heading { text: String.from("Tides")? }, body: body });
+}
+
+@test
+fn rendersTitleAndBody() -> Result<void, TestFailure> {
+    let text = renderPage(sample()!)!;
+    return Check.equalText("# Tides\nThe tide comes in twice a day.\nIt goes out twice too.\n", text.view());
+}
+
+@test
+fn countsWords() -> Result<void, TestFailure> {
+    return Check.equalU64(13, wordsOnPage(sample()!) as u64);
+}
+
+@test
+fn aPageOfRules() -> Result<void, TestFailure> {
+    var body = Vector<Rule>.create();
+    body.push(Rule {})!;
+    let page = Page { title: Rule {}, body: body };
+    return Check.equalText("----\n----\n", renderPage(page)!.view());
+}

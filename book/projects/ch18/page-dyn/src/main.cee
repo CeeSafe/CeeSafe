@@ -1,0 +1,8 @@
+fn main() {
+    var page = sample()!;
+    page.add(Box.create(Quote { text: String.from("Time and tide wait for no man.")!, by: String.from("proverb")! })!)!;
+    let text = page.render()!;
+    Console.write(text.view());
+    Console.write(page.words());
+    Console.writeLine(" words");
+}

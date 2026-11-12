@@ -174,8 +174,24 @@ export const chapters = [
       { title: "Tasks and threads together", file: "ch17-05-tasks-and-threads" },
     ],
   },
-  { title: "Interfaces as values", sections: [{ title: "Dynamic dispatch" }, { title: "When to use it" }, { title: "A design worked through" }] },
-  { title: "Patterns", sections: [{ title: "Where patterns go" }, { title: "Patterns that can fail" }, { title: "The syntax, whole" }] },
+  {
+    title: "Interfaces as values",
+    file: "ch18-00-interfaces-as-values",
+    sections: [
+      { title: "Dynamic dispatch", file: "ch18-01-dynamic-dispatch" },
+      { title: "When to use it", file: "ch18-02-when-to-use-it" },
+      { title: "A design worked through", file: "ch18-03-a-design-worked-through" },
+    ],
+  },
+  {
+    title: "Patterns",
+    file: "ch19-00-patterns",
+    sections: [
+      { title: "Where patterns go", file: "ch19-01-where-patterns-go" },
+      { title: "Patterns that can fail", file: "ch19-02-patterns-that-can-fail" },
+      { title: "The syntax, whole", file: "ch19-03-the-syntax-whole" },
+    ],
+  },
   {
     title: "Advanced features",
     sections: [
@@ -189,7 +205,12 @@ export const chapters = [
   { title: "A final project: a web server", sections: [] },
   {
     title: "Without an operating system",
-    sections: [{ title: "The freestanding profile" }, { title: "Kernel code" }, { title: "CeeSafe inside a host program" }],
+    file: "ch22-00-without-an-operating-system",
+    sections: [
+      { title: "The freestanding profile", file: "ch22-01-the-freestanding-profile" },
+      { title: "Kernel code", file: "ch22-02-kernel-code" },
+      { title: "CeeSafe inside a host program", file: "ch22-03-inside-a-host-program" },
+    ],
   },
 ];
 

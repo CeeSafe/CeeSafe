@@ -1,0 +1,92 @@
+/// The device's registers, in the order and sizes its manual gives.
+@repr(C)
+struct UartRegisters {
+    data: Volatile<u32>;
+    status: Volatile<u32>;
+    control: Volatile<u32>;
+}
+
+/// Status: the transmitter cannot take a byte yet.
+const TRANSMIT_FULL: u32 = 0x20;
+/// Status: no received byte is waiting.
+const RECEIVE_EMPTY: u32 = 0x10;
+/// Control: the device is switched on.
+const ENABLE: u32 = 0x01;
+
+struct Uart {
+    registers: MmioPtr<UartRegisters>;
+
+    /// Safety: `base` is the mapped address of a UART's registers, and no other `Uart` is in use.
+    unsafe fn attach(base: usize) -> Uart => Uart { registers: MmioPtr<UartRegisters>.at(base) };
+
+    fn enable(borrow mut this) {
+        this.registers.getMut().control.write(ENABLE);
+    }
+
+    fn send(borrow mut this, byte: u8) {
+        while ((this.registers.get().status.read() & TRANSMIT_FULL) != 0) {
+            Cpu.spinHint();
+        }
+        this.registers.getMut().data.write(byte as u32);
+    }
+
+    fn receive(borrow mut this) -> u8? {
+        if ((this.registers.get().status.read() & RECEIVE_EMPTY) != 0) {
+            return null;
+        }
+        return truncate<u8>(this.registers.get().data.read());
+    }
+}
+
+/// The address of the registers, 0 until `uart_start` is called.
+static BASE: AtomicUSize = AtomicUSize.constant(0);
+/// The bytes received so far, counted by the interrupt handler.
+static RECEIVED: AtomicU64 = AtomicU64.constant(0);
+/// The last byte received. Only the interrupt handler writes it.
+static mut LAST: u8 = 0;
+
+/// Switches the UART at `base` on.
+/// Safety: `base` is the mapped address of a UART's registers; the boot code calls this once, first.
+@export("uart_start")
+fn start(base: usize) {
+    BASE.store(base);
+    var uart = unsafe { Uart.attach(base) };
+    uart.enable();
+}
+
+/// Sends `length` bytes at `text`, and returns how many it sent.
+/// Safety: `uart_start` ran, the caller passes `length` readable bytes, and one caller sends at a time.
+@export("uart_write")
+fn write(text: *u8, length: usize) -> u32 {
+    var uart = unsafe { Uart.attach(BASE.load()) };
+    var sent: u32 = 0;
+    for (byte in unsafe { Slice.fromRaw(text, length) }) {
+        uart.send(byte);
+        sent += 1;
+    }
+    return sent;
+}
+
+/// The interrupt handler: takes the byte that arrived.
+/// Safety: `uart_start` ran; the handler is the only code that reads the data register and writes LAST.
+@context(irq)
+@export("uart_on_interrupt")
+fn onInterrupt() {
+    var uart = unsafe { Uart.attach(BASE.load()) };
+    match (uart.receive()) {
+        Some(byte) => {
+            unsafe { LAST = byte; }
+            let _ = RECEIVED.fetchAdd(1);
+        }
+        null => {}
+    }
+}
+
+/// How many bytes have arrived.
+@export("uart_received")
+fn received() -> u64 => RECEIVED.load();
+
+/// The last byte that arrived.
+/// Safety: a one-byte read; the caller accepts a value that an interrupt may replace at once.
+@export("uart_last")
+fn last() -> u8 => unsafe { LAST };

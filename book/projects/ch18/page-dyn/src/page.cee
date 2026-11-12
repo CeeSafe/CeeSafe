@@ -1,0 +1,48 @@
+/// A page: any number of blocks, of any types that implement `Block`, in order.
+struct Page {
+    blocks: Vector<Box<dyn Block>>;
+
+    fn create() -> Page => Page { blocks: Vector<Box<dyn Block>>.create() };
+
+    /// Adds a block to the end of the page.
+    fn add(borrow mut this, block: Box<dyn Block>) -> Result<void, AllocError> => this.blocks.push(block);
+
+    /// The whole page as text, a line for each block.
+    fn render(borrow this) -> Result<String, AllocError> {
+        var out = String.create();
+        for (block in this.blocks) {
+            block.render(mut out)?;
+        }
+        return Ok(out);
+    }
+
+    /// The number of words on the page.
+    fn words(borrow this) -> usize {
+        var total: usize = 0;
+        for (block in this.blocks) {
+            total += block.words();
+        }
+        return total;
+    }
+}
+
+/// A page to show and to test with.
+fn sample() -> Result<Page, AllocError> {
+    var page = Page.create();
+    page.add(Box.create(Heading { text: String.from("Tides")? })?)?;
+    page.add(Box.create(Paragraph { text: String.from("The tide comes in twice a day.")? })?)?;
+    page.add(Box.create(Rule {})?)?;
+    page.add(Box.create(Paragraph { text: String.from("It goes out twice too.")? })?)?;
+    return Ok(page);
+}
+
+@test
+fn rendersEachKind() -> Result<void, TestFailure> {
+    let text = sample()!.render()!;
+    return Check.equalText("# Tides\nThe tide comes in twice a day.\n----\nIt goes out twice too.\n", text.view());
+}
+
+@test
+fn countsWords() -> Result<void, TestFailure> {
+    return Check.equalU64(13, sample()!.words() as u64);
+}

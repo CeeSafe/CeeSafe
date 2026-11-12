@@ -1,0 +1,6 @@
+/// A raw reading as millivolts.
+@export("sensor_millivolts")
+fn millivolts(raw: u32) -> u32 {
+    let volts = raw as f64 * 3.3 / 4096.0;
+    return saturatingTruncate<u32>(volts * 1000.0);
+}

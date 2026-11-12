@@ -1,0 +1,148 @@
+/// The most bytes a request's head may have.
+const HEAD_LIMIT: usize = 8192;
+
+/// The most connections answered at one time.
+const CONNECTIONS: u32 = 64;
+
+/// How long a client has to send its request and take the answer, in milliseconds.
+const PATIENCE: u64 = 5000;
+
+/// What can go wrong while the server runs.
+enum ServeError {
+    NoMemory,
+    TooSlow,
+    @from Io(IoError),
+    @from Async(AsyncError),
+    @from Memory(AllocError),
+}
+
+/// Reads from `stream` until the empty line that ends a request's head, the end of the stream, or the limit.
+async fn readHead(stream: borrow AsyncTcpStream) -> Result<Vector<u8>, ServeError> {
+    var head = Vector<u8>.create();
+    var buffer = [0u8; 512];
+    while (head.length < HEAD_LIMIT) {
+        let n = await stream.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        head.extend(buffer[0..n])?;
+        if (head.view().contains("\r\n\r\n".bytes())) {
+            break;
+        }
+    }
+    return Ok(head);
+}
+
+/// Answers one connection: reads the request, chooses the response and sends it.
+async fn handle(stream: borrow AsyncTcpStream) -> Result<void, ServeError> {
+    let head = await readHead(stream)?;
+    let response = match (StringView.fromUtf8(head.view())) {
+        Some(text) => answer(text),
+        null => badRequest(),
+    };
+    let text = render(borrow response)?;
+    await stream.write(text.view().bytes())?;
+    stream.shutdownWrite()?;
+    return Ok();
+}
+
+/// The task of one connection. It owns the stream and gives the client a limited time. A connection's own
+/// failure stays here. Only a cancellation is passed on.
+async fn connection(stream: AsyncTcpStream) -> Result<void, ServeError> {
+    let result = await Async.timeout(PATIENCE, ServeError.TooSlow, async () => await handle(borrow stream));
+    match (result) {
+        Ok() => { return Ok(); }
+        Err(ServeError.Async(AsyncError.Cancelled)) => { return Err(ServeError.Async(AsyncError.Cancelled)); }
+        Err(_) => {
+            await AsyncConsole.writeError("a connection failed\n")?;
+            return Ok();
+        }
+    }
+}
+
+/// Accepts connections and starts a task in `set` for each. It ends only by an error.
+async fn acceptLoop(listener: borrow AsyncTcpListener, set: borrow TaskSet<ServeError>) -> Result<void, ServeError> {
+    loop {
+        let stream = await listener.accept()?;
+        await set.spawn(async move () => await connection(stream))?;
+    }
+}
+
+/// Serves the listener's connections, at most `CONNECTIONS` at a time.
+async fn serve(listener: borrow AsyncTcpListener) -> Result<void, ServeError> {
+    return await Async.tasks(CONNECTIONS, ServeError.NoMemory, async (set) => await acceptLoop(listener, set));
+}
+
+fn main() {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 7878)!;
+    Console.writeLine("listening on http://127.0.0.1:7878");
+    match (Async.run(serve(borrow listener))) {
+        Ok() => {}
+        Err(_) => { Console.writeErrorLine("the server failed"); }
+    }
+}
+
+/// Sends `request` to the server at `port` and puts everything it answers in `reply`.
+async fn fetch(port: u16, request: StringView, reply: borrow mut String) -> Result<void, ServeError> {
+    let client = await AsyncTcpStream.connect("127.0.0.1", port)?;
+    await client.write(request.bytes())?;
+    var buffer = [0u8; 256];
+    loop {
+        let n = await client.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok();
+        }
+        reply.append(StringView.fromUtf8(buffer[0..n]) ?? "?")?;
+    }
+}
+
+/// One side of the test's race: the server, which never finishes first.
+async fn serverSide(listener: borrow AsyncTcpListener) -> Result<bool, ServeError> {
+    await serve(listener)?;
+    return Ok(false);
+}
+
+/// The other side: three requests at the same time, each on its own connection.
+async fn clientSide(
+    port: u16,
+    home: borrow mut String,
+    about: borrow mut String,
+    missing: borrow mut String,
+) -> Result<bool, ServeError> {
+    await Async.scope(ServeError.NoMemory, (s) => {
+        s.spawn(async () => await fetch(port, "GET / HTTP/1.1\r\n\r\n", mut home));
+        s.spawn(async () => await fetch(port, "GET /about HTTP/1.1\r\n\r\n", mut about));
+        s.spawn(async () => await fetch(port, "GET /nowhere HTTP/1.1\r\n\r\n", mut missing));
+    })?;
+    return Ok(true);
+}
+
+/// Runs the server until the three clients have their answers. Their side wins the race, which cancels the server.
+async fn serveThreeClients(
+    home: borrow mut String,
+    about: borrow mut String,
+    missing: borrow mut String,
+) -> Result<void, ServeError> {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
+    let port = listener.port()?;
+    await Async.race(
+        async () => await serverSide(borrow listener),
+        async () => await clientSide(port, mut home, mut about, mut missing),
+    )?;
+    return Ok();
+}
+
+@test
+fn answersThreeClientsAtOnce() -> Result<void, TestFailure> {
+    var home = String.create();
+    var about = String.create();
+    var missing = String.create();
+    match (Async.run(serveThreeClients(mut home, mut about, mut missing))) {
+        Ok() => {}
+        Err(_) => { return Check.fail("the server or a client failed"); }
+    }
+    Check.isTrue(home.view().startsWith("HTTP/1.1 200 OK\r\n"), "/ is 200")?;
+    Check.isTrue(about.view().endsWith(ABOUT), "/about is the about page")?;
+    Check.isTrue(missing.view().startsWith("HTTP/1.1 404 Not Found\r\n"), "/nowhere is 404")?;
+    return Ok();
+}

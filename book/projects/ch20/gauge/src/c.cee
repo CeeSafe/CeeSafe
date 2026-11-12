@@ -1,0 +1,26 @@
+/// A range of values, `struct Range` in C.
+@repr(C)
+struct Range {
+    low: i32;
+    high: i32;
+}
+
+/// A unit, one byte in C.
+@repr(u8)
+enum Unit {
+    Celsius,
+    Kelvin,
+}
+
+extern "C" {
+    fn gauge_peak(values: *i32, count: usize, range: Range) -> i32;
+    fn gauge_label(range: Range, unit: Unit, out: *mut CChar, capacity: usize) -> usize;
+    fn gauge_each(values: *i32, count: usize, visit: extern "C" fn(*mut void, i32), context: *mut void);
+    fn gauge_title(name: *CChar) -> *mut CChar;
+    fn gauge_release(title: *mut CChar);
+    fn strlen(text: *CChar) -> usize;
+}
+
+/// `value`, moved into `range`. C calls it as `gauge_clamp`.
+@export("gauge_clamp")
+fn clamp(value: i32, range: Range) -> i32 => value.max(range.low).min(range.high);

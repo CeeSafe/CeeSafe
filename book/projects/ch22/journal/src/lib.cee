@@ -1,0 +1,45 @@
+/// The lines a host has added, end to end, and how many there are.
+struct Journal {
+    text: Vector<u8>;
+    lines: u64;
+}
+
+/// A new, empty journal for the host to keep, or null when there is no memory.
+@export("journal_open")
+fn open() -> *mut void {
+    match (Box.create(Journal { text: Vector<u8>.create(), lines: 0 })) {
+        Ok(journal) => {
+            return Box.intoRaw(journal) as *mut void;
+        }
+        Err(e) => {
+            return 0 as *mut void;
+        }
+    }
+}
+
+/// Adds the `length` bytes at `line` to `journal`; false when there is no memory.
+/// Safety: `journal` came from `journal_open` and is not closed; `line` has `length` readable bytes.
+@export("journal_add")
+fn add(journal: *mut void, line: *u8, length: usize) -> bool {
+    let entry = unsafe { Ptr.toBorrowMut(journal as *mut Journal) };
+    if (entry.text.extend(unsafe { Slice.fromRaw(line, length) }).isErr()) {
+        return false;
+    }
+    entry.lines += 1;
+    return true;
+}
+
+/// The number of bytes `journal` holds.
+/// Safety: `journal` came from `journal_open` and is not closed.
+@export("journal_size")
+fn size(journal: *mut void) -> u64 {
+    let entry = unsafe { Ptr.toBorrow(journal as *mut Journal) };
+    return entry.text.length as u64;
+}
+
+/// Gives `journal` back: its memory is freed here, by the code that allocated it.
+/// Safety: `journal` came from `journal_open`, and the host does not use it again.
+@export("journal_close")
+fn close(journal: *mut void) {
+    let owned: Box<Journal> = unsafe { Box.fromRaw(journal as *mut Journal) };
+}

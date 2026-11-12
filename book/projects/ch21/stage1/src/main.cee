@@ -1,0 +1,76 @@
+/// The page every request is answered with.
+const PAGE: StringView = "<!doctype html>\n<title>Harbour</title>\n<h1>The harbour is open.</h1>\n";
+
+/// What can go wrong while a connection is answered.
+enum ServeError {
+    @from Io(IoError),
+    @from Memory(AllocError),
+}
+
+/// Reads from `stream` until the empty line that ends a request's head, or the end of the stream.
+fn readHead(stream: borrow mut TcpStream) -> Result<Vector<u8>, ServeError> {
+    var head = Vector<u8>.create();
+    var buffer = [0u8; 512];
+    loop {
+        let n = stream.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok(head);
+        }
+        head.extend(buffer[0..n])?;
+        if (head.view().contains("\r\n\r\n".bytes())) {
+            return Ok(head);
+        }
+    }
+}
+
+/// Answers one connection: reads the request, and sends the page whatever the request was.
+fn handle(stream: borrow mut TcpStream) -> Result<void, ServeError> {
+    let _ = readHead(mut stream)?;
+    var response = String.create();
+    response.append("HTTP/1.1 200 OK\r\n")?;
+    response.append("Content-Type: text/html; charset=utf-8\r\n")?;
+    response.append("Content-Length: ")?;
+    response.appendNumber(PAGE.length as u64)?;
+    response.append("\r\nConnection: close\r\n\r\n")?;
+    response.append(PAGE)?;
+    stream.write(response.view().bytes())?;
+    stream.shutdownWrite()?;
+    return Ok();
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1", 7878)!;
+    Console.writeLine("listening on http://127.0.0.1:7878");
+    loop {
+        var stream = listener.accept()!;
+        match (handle(mut stream)) {
+            Ok() => {}
+            Err(_) => { Console.writeErrorLine("a connection failed"); }
+        }
+    }
+}
+
+@test
+fn answersARequest() -> Result<void, TestFailure> {
+    let listener = TcpListener.bind("127.0.0.1", 0)!;
+    let port = listener.port()!;
+    var client = TcpStream.connect("127.0.0.1", port)!;
+    client.write("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n".bytes())!;
+    var server = listener.accept()!;
+    match (handle(mut server)) {
+        Ok() => {}
+        Err(_) => { return Check.fail("the connection failed"); }
+    }
+    var reply = String.create();
+    var buffer = [0u8; 256];
+    loop {
+        let n = client.read(mut buffer[..])!;
+        if (n == 0) {
+            break;
+        }
+        reply.append(StringView.fromUtf8(buffer[0..n]) ?? "?")!;
+    }
+    Check.isTrue(reply.view().startsWith("HTTP/1.1 200 OK\r\n"), "the status line is 200 OK")?;
+    Check.isTrue(reply.view().endsWith(PAGE), "the body is the page")?;
+    return Ok();
+}

@@ -1,0 +1,7 @@
+fn main() {
+    let blocks = sample()!;
+    let text = renderPage(blocks)!;
+    Console.write(text.view());
+    Console.write(wordsOnPage(blocks));
+    Console.writeLine(" words");
+}

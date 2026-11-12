@@ -229,7 +229,7 @@ flags. The manifest holds what is true of the package in every build. Beside the
 | `tests = ["tests"]` | The directories of test files, which `check` and `test` read and `build` leaves out ([Running tests](./ch11-02-running-tests)). |
 | `float = false` | No floating-point types in this package. The option `--no-float` says the same. |
 | `profile = "freestanding"` | The package is for a machine with no operating system. The option `--profile` says the same. |
-| `c = ["src/shim.c"]` | C files compiled and linked with the program. Chapter 19 covers calling C. |
+| `c = ["src/shim.c"]` | C files compiled and linked with the program. Chapter 20 covers calling C. |
 | `links`, `lib-dirs`, `include-dirs` | System libraries to link, and where they and their headers are. |
 
 A table `[target.windows]`, `[target.macos]` or `[target.linux]` holds `links`, `lib-dirs` and `include-dirs` for

@@ -1,0 +1,16 @@
+/// Safety: `clock_main` returns the address of a C static, which lives for the whole program and which
+/// nothing else uses. The name is a literal that ends in a zero byte. The borrow `stopwatch` is made after
+/// the last call that changes the clock.
+fn main() {
+    let p = unsafe { clock_main() };
+    unsafe {
+        clock_start(p, c"kitchen".ptr());
+    }
+    while (unsafe { clock_tick(p, 250) }) {}
+    let stopwatch = unsafe { Ptr.toBorrow(p) };
+    Console.writeLine(stopwatch.laps);
+    Console.writeLine(stopwatch.ticks);
+    Console.writeLine(stopwatch.mode == CLOCK_RUNNING);
+    Console.writeLine(unsafe { clock_elapsed(p) });
+    Console.writeLine(CLOCK_MAX_LAPS);
+}

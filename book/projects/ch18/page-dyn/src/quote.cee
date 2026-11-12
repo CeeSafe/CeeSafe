@@ -1,0 +1,26 @@
+/// A kind of block added later. Nothing in `blocks.cee` or `page.cee` names it.
+struct Quote {
+    text: String;
+    by: String;
+}
+
+impl Block for Quote {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        out.append("> ")?;
+        out.append(this.text.view())?;
+        out.append(" (")?;
+        out.append(this.by.view())?;
+        return out.append(")\n");
+    }
+
+    fn words(borrow this) -> usize => countWords(this.text.view());
+}
+
+@test
+fn aQuoteOnAPage() -> Result<void, TestFailure> {
+    var page = Page.create();
+    page.add(Box.create(Rule {})!)!;
+    page.add(Box.create(Quote { text: String.from("Time and tide wait for no man.")!, by: String.from("proverb")! })!)!;
+    Check.equalText("----\n> Time and tide wait for no man. (proverb)\n", page.render()!.view())?;
+    return Check.equalU64(7, page.words() as u64);
+}

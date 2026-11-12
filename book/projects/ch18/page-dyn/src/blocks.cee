@@ -1,0 +1,73 @@
+/// What every block of a page can do.
+interface Block {
+    /// Appends the block to `out` as a line of plain text.
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError>;
+
+    /// The number of words in the block.
+    fn words(borrow this) -> usize;
+}
+
+struct Heading {
+    text: String;
+}
+
+struct Paragraph {
+    text: String;
+}
+
+struct Rule {}
+
+impl Block for Heading {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        out.append("# ")?;
+        out.append(this.text.view())?;
+        return out.append("\n");
+    }
+
+    fn words(borrow this) -> usize => countWords(this.text.view());
+}
+
+impl Block for Paragraph {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        out.append(this.text.view())?;
+        return out.append("\n");
+    }
+
+    fn words(borrow this) -> usize => countWords(this.text.view());
+}
+
+impl Block for Rule {
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> => out.append("----\n");
+    fn words(borrow this) -> usize => 0;
+}
+
+/// The number of words in `text`: the parts between its spaces that are not empty.
+fn countWords(text: StringView) -> usize {
+    var count: usize = 0;
+    for (word in text.split(" ")) {
+        if (word.length > 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// One block as text, for any type of block, known or not.
+fn renderOne<B: Block>(block: borrow B) -> Result<String, AllocError> {
+    var out = String.create();
+    block.render(mut out)?;
+    return Ok(out);
+}
+
+@test
+fn rendersAKnownBlock() -> Result<void, TestFailure> {
+    let heading = Heading { text: String.from("Tides")! };
+    return Check.equalText("# Tides\n", renderOne(heading)!.view());
+}
+
+@test
+fn rendersAnUnknownBlock() -> Result<void, TestFailure> {
+    let rule = Rule {};
+    let block: borrow dyn Block = borrow rule;
+    return Check.equalText("----\n", renderOne(block)!.view());
+}

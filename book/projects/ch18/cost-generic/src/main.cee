@@ -1,0 +1,55 @@
+interface Shape {
+    fn area(borrow this) -> u64;
+    fn grow(borrow mut this, by: u64);
+}
+
+struct Square {
+    side: u64;
+}
+
+struct Rect {
+    w: u64;
+    h: u64;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u64 => this.side * this.side;
+    fn grow(borrow mut this, by: u64) {
+        this.side += by;
+    }
+}
+
+impl Shape for Rect {
+    fn area(borrow this) -> u64 => this.w * this.h;
+    fn grow(borrow mut this, by: u64) {
+        this.w += by;
+    }
+}
+
+fn total<S: Shape>(shapes: borrow Vector<S>) -> u64 {
+    var sum: u64 = 0;
+    for (shape in shapes) {
+        sum += shape.area();
+    }
+    return sum;
+}
+
+fn main() {
+    var squares = Vector<Square>.create();
+    var rects = Vector<Rect>.create();
+    var seed: u64 = 12345;
+    for (i in 0..1000u64) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if (seed / 65536 % 2 == 0) {
+            squares.push(Square { side: i % 7 })!;
+        } else {
+            rects.push(Rect { w: i % 5, h: 3 })!;
+        }
+    }
+    var sum: u64 = 0;
+    for (pass in 0..200000u64) {
+        sum += total(squares) + total(rects);
+        squares[0].grow(pass % 2);
+    }
+    Console.writeLine(sum);
+}

@@ -1,0 +1,51 @@
+enum Shape {
+    Square(u64),
+    Rect(u64, u64),
+}
+
+impl Shape {
+    fn area(borrow this) -> u64 => match (this) {
+        Shape.Square(side) => side * side,
+        Shape.Rect(w, h) => w * h,
+    };
+
+    fn grow(borrow mut this, by: u64) {
+        match (this) {
+            Shape.Square(side) => { this = Shape.Square(side + by); }
+            Shape.Rect(w, h) => { this = Shape.Rect(w + by, h); }
+        }
+    }
+}
+
+fn total(shapes: borrow Vector<Shape>) -> u64 {
+    var sum: u64 = 0;
+    for (shape in shapes) {
+        sum += shape.area();
+    }
+    return sum;
+}
+
+fn main() {
+    var shapes = Vector<Shape>.create();
+    var seed: u64 = 12345;
+    var first: usize = 0;
+    var found = false;
+    for (i in 0..1000u64) {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        if (seed / 65536 % 2 == 0) {
+            if (!found) {
+                first = shapes.length;
+                found = true;
+            }
+            shapes.push(Shape.Square(i % 7))!;
+        } else {
+            shapes.push(Shape.Rect(i % 5, 3))!;
+        }
+    }
+    var sum: u64 = 0;
+    for (pass in 0..200000u64) {
+        sum += total(shapes);
+        shapes[first].grow(pass % 2);
+    }
+    Console.writeLine(sum);
+}

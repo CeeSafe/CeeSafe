@@ -1,0 +1,130 @@
+/// The most bytes a request's head may have.
+const HEAD_LIMIT: usize = 8192;
+
+/// How many threads answer connections.
+const THREADS: usize = 4;
+
+/// What can go wrong while the server runs.
+enum ServeError {
+    @from Io(IoError),
+    @from Memory(AllocError),
+    @from Spawn(SpawnError),
+}
+
+/// Reads from `stream` until the empty line that ends a request's head, the end of the stream, or the limit.
+fn readHead(stream: borrow mut TcpStream) -> Result<Vector<u8>, ServeError> {
+    var head = Vector<u8>.create();
+    var buffer = [0u8; 512];
+    while (head.length < HEAD_LIMIT) {
+        let n = stream.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        head.extend(buffer[0..n])?;
+        if (head.view().contains("\r\n\r\n".bytes())) {
+            break;
+        }
+    }
+    return Ok(head);
+}
+
+/// Answers one connection: reads the request, chooses the response and sends it.
+fn handle(stream: borrow mut TcpStream) -> Result<void, ServeError> {
+    let head = readHead(mut stream)?;
+    let response = match (StringView.fromUtf8(head.view())) {
+        Some(text) => answer(text),
+        null => badRequest(),
+    };
+    let text = render(borrow response)?;
+    stream.write(text.view().bytes())?;
+    stream.shutdownWrite()?;
+    return Ok();
+}
+
+/// A fixed number of threads that answer the connections given to them.
+struct Workers {
+    connections: Channel<TcpStream>;
+    threads: Vector<Thread<u64>>;
+}
+
+impl Workers {
+    /// Starts `count` threads. Each takes connections from the channel until it is closed and empty, and
+    /// returns how many it answered.
+    fn start(count: usize) -> Result<Workers, ServeError> {
+        let connections = Channel<TcpStream>.create(count * 2)?;
+        var threads = Vector<Thread<u64>>.create();
+        for (i in 0..count) {
+            let mine = connections.clone();
+            threads.push(Thread.spawn(move () => {
+                var answered: u64 = 0;
+                while (mine.recv() is Some(connection)) {
+                    var stream = connection;
+                    match (handle(mut stream)) {
+                        Ok() => { answered += 1; }
+                        Err(_) => { Console.writeErrorLine("a connection failed"); }
+                    }
+                }
+                return answered;
+            })?)?;
+        }
+        return Ok(Workers { connections: move connections, threads: move threads });
+    }
+
+    /// Gives a connection to the workers. It waits while the channel is full, and returns `false` after `finish`.
+    fn take(borrow this, stream: TcpStream) -> bool => this.connections.send(stream).isOk();
+
+    /// Closes the channel and waits for the threads. Every connection taken before is answered first.
+    /// Returns how many were answered.
+    fn finish(this) -> u64 {
+        this.connections.close();
+        var threads = this.threads;
+        var answered: u64 = 0;
+        while (threads.pop() is Some(thread)) {
+            answered += thread.join();
+        }
+        return answered;
+    }
+}
+
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1", 7878)!;
+    let workers = Workers.start(THREADS)!;
+    Console.writeLine("listening on http://127.0.0.1:7878");
+    loop {
+        let _ = workers.take(listener.accept()!);
+    }
+}
+
+/// Reads everything the server sends to `client`.
+fn readReply(client: borrow mut TcpStream) -> Result<String, ServeError> {
+    var reply = String.create();
+    var buffer = [0u8; 256];
+    loop {
+        let n = client.read(mut buffer[..])?;
+        if (n == 0) {
+            return Ok(reply);
+        }
+        reply.append(StringView.fromUtf8(buffer[0..n]) ?? "?")?;
+    }
+}
+
+@test
+fn answersThreeConnectionsAndStops() -> Result<void, TestFailure> {
+    let listener = TcpListener.bind("127.0.0.1", 0)!;
+    let port = listener.port()!;
+    let workers = Workers.start(2)!;
+    var first = TcpStream.connect("127.0.0.1", port)!;
+    var second = TcpStream.connect("127.0.0.1", port)!;
+    var third = TcpStream.connect("127.0.0.1", port)!;
+    first.write("GET / HTTP/1.1\r\n\r\n".bytes())!;
+    second.write("GET /about HTTP/1.1\r\n\r\n".bytes())!;
+    third.write("GET /nowhere HTTP/1.1\r\n\r\n".bytes())!;
+    for (i in 0..3) {
+        Check.isTrue(workers.take(listener.accept()!), "the workers take a connection")?;
+    }
+    Check.equalU64(3, workers.finish())?;
+    Check.isTrue(readReply(mut first)!.view().startsWith("HTTP/1.1 200 OK\r\n"), "/ is 200")?;
+    Check.isTrue(readReply(mut second)!.view().endsWith(ABOUT), "/about is the about page")?;
+    Check.isTrue(readReply(mut third)!.view().startsWith("HTTP/1.1 404 Not Found\r\n"), "/nowhere is 404")?;
+    return Ok();
+}

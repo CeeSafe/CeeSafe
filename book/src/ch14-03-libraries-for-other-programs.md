@@ -12,7 +12,7 @@ specification: ["type-system.md §28.3", "type-system.md §28.4", "type-system.m
 **This section teaches** how to build CeeSafe code into a program whose `main` is not CeeSafe's: a C program here,
 and in the same way a C++ or Rust program, since each of them can call C. It assumes
 [A package and its manifest](./ch07-01-package-and-manifest) and [Panics](./ch09-01-panics). You need to read a
-little C. One function uses a raw pointer and `unsafe`, which chapter 19 teaches; the text says what they do.
+little C. One function uses a raw pointer and `unsafe`, which chapter 20 teaches; the text says what they do.
 
 ## What `--emit` chooses
 
@@ -299,5 +299,5 @@ CeeSafe: if an export hands out a pointer, another export takes it back.
 - A panic ends the process. A panic hook lets the host report it first.
 - One program links one CeeSafe library, which holds every package it needs and the runtime.
 
-This is the end of chapter 14. Chapter 19 returns to C from the other side, with CeeSafe calling C functions, and
+This is the end of chapter 14. Chapter 20 returns to C from the other side, with CeeSafe calling C functions, and
 chapter 22 builds CeeSafe for a machine with no operating system.

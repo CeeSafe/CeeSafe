@@ -1,0 +1,7 @@
+fn main() {
+    let page = sample()!;
+    let text = renderPage(page)!;
+    Console.write(text.view());
+    Console.write(wordsOnPage(page));
+    Console.writeLine(" words");
+}

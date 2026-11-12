@@ -1,0 +1,78 @@
+/// One block of a page. Every kind of block there is, is listed here.
+enum Block {
+    Heading(String),
+    Paragraph(String),
+    Rule,
+}
+
+impl Block {
+    /// Appends the block to `out` as a line of plain text.
+    fn render(borrow this, out: borrow mut String) -> Result<void, AllocError> {
+        match (this) {
+            Block.Heading(text) => {
+                out.append("# ")?;
+                out.append(text.view())?;
+            }
+            Block.Paragraph(text) => { out.append(text.view())?; }
+            Block.Rule => { out.append("----")?; }
+        }
+        return out.append("\n");
+    }
+
+    /// The number of words in the block.
+    fn words(borrow this) -> usize => match (this) {
+        Block.Heading(text) => countWords(text.view()),
+        Block.Paragraph(text) => countWords(text.view()),
+        Block.Rule => 0,
+    };
+}
+
+/// The number of words in `text`: the parts between its spaces that are not empty.
+fn countWords(text: StringView) -> usize {
+    var count: usize = 0;
+    for (word in text.split(" ")) {
+        if (word.length > 0) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// The whole page as text, a line for each block.
+fn renderPage(blocks: borrow Vector<Block>) -> Result<String, AllocError> {
+    var out = String.create();
+    for (block in blocks) {
+        block.render(mut out)?;
+    }
+    return Ok(out);
+}
+
+/// The number of words on the page.
+fn wordsOnPage(blocks: borrow Vector<Block>) -> usize {
+    var total: usize = 0;
+    for (block in blocks) {
+        total += block.words();
+    }
+    return total;
+}
+
+/// A page to show and to test with.
+fn sample() -> Result<Vector<Block>, AllocError> {
+    var blocks = Vector<Block>.create();
+    blocks.push(Block.Heading(String.from("Tides")?))?;
+    blocks.push(Block.Paragraph(String.from("The tide comes in twice a day.")?))?;
+    blocks.push(Block.Rule)?;
+    blocks.push(Block.Paragraph(String.from("It goes out twice too.")?))?;
+    return Ok(blocks);
+}
+
+@test
+fn rendersEachKind() -> Result<void, TestFailure> {
+    let text = renderPage(sample()!)!;
+    return Check.equalText("# Tides\nThe tide comes in twice a day.\n----\nIt goes out twice too.\n", text.view());
+}
+
+@test
+fn countsWords() -> Result<void, TestFailure> {
+    return Check.equalU64(13, wordsOnPage(sample()!) as u64);
+}

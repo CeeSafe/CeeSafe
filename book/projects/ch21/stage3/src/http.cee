@@ -1,0 +1,188 @@
+/// What a request asks the server to do. This server knows one method.
+enum Method {
+    Get,
+    Other,
+}
+
+/// One header of a request: `Host: localhost` has the name `Host` and the value `localhost`.
+struct Header<region r> {
+    name: StringView<r>;
+    value: StringView<r>;
+}
+
+/// A request's head, as views into the text it was parsed from.
+struct Request<region r> {
+    method: Method;
+    path: StringView<r>;
+    headers: Vector<Header<r>>;
+}
+
+impl<region r> Request<r> {
+    /// The value of the header `name`, in whatever case the client wrote the name.
+    fn header(borrow this, name: StringView) -> StringView<r>? {
+        for (i in 0..this.headers.length) {
+            if (this.headers[i].name.equalsIgnoreAsciiCase(name)) {
+                return Some(this.headers[i].value);
+            }
+        }
+        return null;
+    }
+}
+
+/// Why a text is not a request's head.
+enum ParseError {
+    BadRequestLine,
+    BadVersion,
+    BadHeader,
+    @from Memory(AllocError),
+}
+
+/// Parses a request's head: the request line, then one header on each line, up to the first empty line.
+fn parseRequest<region r>(head: StringView<r>) -> Result<Request<r>, ParseError> {
+    var lines = head.split("\r\n");
+    let first = lines.next() ?? "";
+    var words = first.split(" ");
+    let method = words.next() ?? "";
+    let path = words.next() ?? "";
+    let version = words.next() ?? "";
+    if (method.length == 0 || !path.startsWith("/") || words.next().isSome()) {
+        return Err(ParseError.BadRequestLine);
+    }
+    if (version != "HTTP/1.1" && version != "HTTP/1.0") {
+        return Err(ParseError.BadVersion);
+    }
+    var headers = Vector<Header<r>>.create();
+    for (line in lines) {
+        if (line.length == 0) {
+            break;
+        }
+        match (line.splitOnce(":")) {
+            Some(pair) => {
+                if (pair.left.length == 0 || pair.left.contains(" ")) {
+                    return Err(ParseError.BadHeader);
+                }
+                headers.push(Header { name: pair.left, value: pair.right.trim() })?;
+            }
+            null => { return Err(ParseError.BadHeader); }
+        }
+    }
+    let known = if (method == "GET") Method.Get else Method.Other;
+    return Ok(Request { method: known, path: path, headers: move headers });
+}
+
+/// The pages, read from the directory `pages` when the package is compiled.
+const INDEX: StringView = embedText("../pages/index.html");
+const ABOUT: StringView = embedText("../pages/about.html");
+const NOT_FOUND: StringView = embedText("../pages/404.html");
+
+const HTML: StringView = "text/html; charset=utf-8";
+const PLAIN: StringView = "text/plain; charset=utf-8";
+
+/// An answer: a status, and a body with its type.
+struct Response<region r> {
+    status: u16;
+    reason: StringView<r>;
+    contentType: StringView<r>;
+    body: StringView<r>;
+}
+
+/// The answer to a request, chosen by its method and its path.
+fn route(request: borrow Request) -> Response<static> {
+    match (request.method) {
+        Method.Get => {}
+        Method.Other => {
+            return Response {
+                status: 405,
+                reason: "Method Not Allowed",
+                contentType: PLAIN,
+                body: "Only GET is served here.\n",
+            };
+        }
+    }
+    if (request.path == "/") {
+        return Response { status: 200, reason: "OK", contentType: HTML, body: INDEX };
+    }
+    if (request.path == "/about") {
+        return Response { status: 200, reason: "OK", contentType: HTML, body: ABOUT };
+    }
+    return Response { status: 404, reason: "Not Found", contentType: HTML, body: NOT_FOUND };
+}
+
+/// The answer to a text that is not a request.
+fn badRequest() -> Response<static> =>
+    Response { status: 400, reason: "Bad Request", contentType: PLAIN, body: "That is not an HTTP request.\n" };
+
+/// The answer to the text of a request's head: parsed and routed, or 400.
+fn answer(head: StringView) -> Response<static> => match (parseRequest(head)) {
+    Ok(request) => route(borrow request),
+    Err(_) => badRequest(),
+};
+
+/// The response as the text to send: a status line, three headers, an empty line and the body.
+fn render(response: borrow Response) -> Result<String, AllocError> {
+    var out = String.create();
+    out.append("HTTP/1.1 ")?;
+    out.appendNumber(response.status as u64)?;
+    out.append(" ")?;
+    out.append(response.reason)?;
+    out.append("\r\nContent-Type: ")?;
+    out.append(response.contentType)?;
+    out.append("\r\nContent-Length: ")?;
+    out.appendNumber(response.body.length as u64)?;
+    out.append("\r\nConnection: close\r\n\r\n")?;
+    out.append(response.body)?;
+    return Ok(out);
+}
+
+@test
+fn parsesTheRequestLine() -> Result<void, TestFailure> {
+    let request = parseRequest("GET /about HTTP/1.1\r\nHost: localhost\r\n\r\n")!;
+    Check.equalText("/about", request.path)?;
+    Check.isTrue(request.method is Method.Get, "the method is GET")?;
+    return Ok();
+}
+
+@test
+fn parsesHeaders() -> Result<void, TestFailure> {
+    let request = parseRequest("GET / HTTP/1.1\r\nHost: localhost:7878\r\nAccept:  text/html \r\n\r\n")!;
+    Check.equalU64(2, request.headers.length as u64)?;
+    Check.equalText("localhost:7878", request.header("host") ?? "")?;
+    Check.equalText("text/html", request.header("ACCEPT") ?? "")?;
+    Check.isTrue(request.header("Cookie").isNull(), "there is no Cookie header")?;
+    return Ok();
+}
+
+@test
+fn refusesWhatIsNotARequest() -> Result<void, TestFailure> {
+    Check.isTrue(parseRequest("") is Err(ParseError.BadRequestLine), "an empty text")?;
+    Check.isTrue(parseRequest("GET\r\n\r\n") is Err(ParseError.BadRequestLine), "no path")?;
+    Check.isTrue(parseRequest("GET about HTTP/1.1\r\n\r\n") is Err(ParseError.BadRequestLine), "a path without /")?;
+    Check.isTrue(parseRequest("GET / HTTP/1.1 more\r\n\r\n") is Err(ParseError.BadRequestLine), "a fourth word")?;
+    Check.isTrue(parseRequest("GET / HTTP/3\r\n\r\n") is Err(ParseError.BadVersion), "a version it does not speak")?;
+    Check.isTrue(
+        parseRequest("GET / HTTP/1.1\r\nno colon here\r\n\r\n") is Err(ParseError.BadHeader),
+        "a header without a colon",
+    )?;
+    return Ok();
+}
+
+@test
+fn routesByPath() -> Result<void, TestFailure> {
+    Check.equalU64(200, answer("GET / HTTP/1.1\r\n\r\n").status as u64)?;
+    Check.equalText(ABOUT, answer("GET /about HTTP/1.1\r\n\r\n").body)?;
+    Check.equalU64(404, answer("GET /nowhere HTTP/1.1\r\n\r\n").status as u64)?;
+    Check.equalU64(405, answer("POST / HTTP/1.1\r\n\r\n").status as u64)?;
+    Check.equalU64(400, answer("hello\r\n\r\n").status as u64)?;
+    return Ok();
+}
+
+@test
+fn rendersAResponse() -> Result<void, TestFailure> {
+    let response = Response { status: 404, reason: "Not Found", contentType: PLAIN, body: "gone\n" };
+    let text = render(borrow response)!;
+    Check.equalText(
+        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 5\r\nConnection: close\r\n\r\ngone\n",
+        text.view(),
+    )?;
+    return Ok();
+}

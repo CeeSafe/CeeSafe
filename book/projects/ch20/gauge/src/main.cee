@@ -1,0 +1,58 @@
+/// The largest of `values` after clamping to `range`.
+/// Safety: a slice's `ptr` and `length` are a pointer to that many live `i32`s, which C only reads.
+fn peak(values: Slice<i32>, range: Range) -> i32 => unsafe { gauge_peak(values.ptr, values.length, range) };
+
+/// Appends C's label for `range` to `out`.
+/// Safety: C gets the address and the size of `buffer` and writes at most that many bytes. It returns the
+/// number of bytes of text, which is less than the size, so the slice is inside `buffer`.
+fn label(range: Range, unit: Unit, out: borrow mut String) -> Result<void, AllocError> {
+    var buffer = [0u8; 32];
+    let space = buffer[..];
+    let length = unsafe { gauge_label(range, unit, space.ptr as *mut CChar, space.length) };
+    return out.append(StringView.fromUtf8(buffer[..length]) ?? "?");
+}
+
+/// Adds `value` to the `i64` that `context` points to.
+/// Safety: C passes the `context` it was given, which `total` makes from a live `i64`.
+@callback
+unsafe fn addTo(context: *mut void, value: i32) {
+    let sum = Ptr.toBorrowMut(context as *mut i64);
+    sum += value as i64;
+}
+
+/// The sum of `values`, added up by a callback that C calls once for each.
+/// Safety: `sum` is live during the call and C does not keep the pointer. `addTo` has the type C expects.
+fn total(values: Slice<i32>) -> i64 {
+    var sum: i64 = 0;
+    unsafe {
+        gauge_each(values.ptr, values.length, addTo, borrow mut sum as *mut i64 as *mut void);
+    }
+    return sum;
+}
+
+/// C's title for `name`, copied into a `String`.
+/// Safety: `name` ends in a zero byte. C returns null or a zero-terminated string that is ours until
+/// `gauge_release`; the copy is made before that, and the pointer is not used after it.
+fn title(name: CStr) -> Result<String, AllocError> {
+    let raw = unsafe { gauge_title(name.ptr()) };
+    if (raw.isNull()) {
+        return Err(AllocError.OutOfMemory);
+    }
+    let bytes = unsafe { Slice.fromRaw(raw as *u8, strlen(raw)) };
+    let copy = String.from(StringView.fromUtf8(bytes) ?? "?");
+    unsafe {
+        gauge_release(raw);
+    }
+    return copy;
+}
+
+fn main() {
+    let readings = [18, 25, 41, -3];
+    let range = Range { low: 0, high: 30 };
+    Console.writeLine(peak(readings[..], range));
+    Console.writeLine(total(readings[..]));
+    var text = String.create();
+    label(range, Unit.Celsius, mut text)!;
+    Console.writeLine(text.view());
+    Console.writeLine(title(c"north wall")!.view());
+}

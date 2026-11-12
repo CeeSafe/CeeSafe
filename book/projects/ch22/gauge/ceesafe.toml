@@ -1,0 +1,7 @@
+[package]
+name = "gauge"
+version = "0.1.0"
+kind = "object"
+profile = "freestanding"
+
+[dependencies]

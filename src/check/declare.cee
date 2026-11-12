@@ -229,6 +229,7 @@ fn checkProgramWith(
         inStaticInitializer: false,
         inConstantInitializer: false,
         inStaticType: false,
+        inLiteralArithmetic: false,
         atomicStructs: Vector<u32>.create(),
         allowImported: false,
         coreAllowImported: false,

@@ -1,0 +1,13 @@
+// An expression with a name in it is not literal arithmetic (ADR 0110, type-system.md §6), so its overflow is
+// found when it runs, as before: a parameter here, and a named constant, whose use is not a literal either. The
+// same sums written with literals alone are N0217 (check-fail/literal-arithmetic.cee).
+const BASE: u8 = 200;
+
+fn add(v: u8) -> u8 => v + 55;
+
+fn main() {
+    Console.writeLine(add(200));
+    let big: u8 = BASE + 100; // expect-panic: integer overflow
+    Console.writeLine(big);
+}
+// expect-stdout: 255

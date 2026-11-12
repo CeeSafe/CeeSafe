@@ -1428,6 +1428,16 @@ fn emitBuiltin(
         }
         return Ok();
     }
+    if (b != bfConsoleWrite() && b != bfConsoleWriteLine()) {
+        // Any other builtin evaluated for its effect, such as the `Box.intoRaw(b)` of `let _ = Box.intoRaw(b);`
+        // (ADR 0072 §2.5), is written as its rvalue and its value is dropped: only Console's two writes print.
+        var value = Vector<u8>.create();
+        appendRvalue(e, c, n, sources, f, mut value, r)?;
+        e.t(if (c.types.is(n.rvalueTypes[r as usize], TypeKind.Void)) "    " else "    (void)")?;
+        e.b(value.view())?;
+        e.t(";")?;
+        return e.emit();
+    }
     for (k in 0..arguments.count) {
         let o = n.at(arguments, k);
         let t = n.operandTypes[o as usize];

@@ -1,0 +1,32 @@
+// `let _ = e;` (ADR 0072 §2.5) and an expression statement evaluate a built-in operation, bind nothing and print
+// nothing. The C backend once wrote every built-in it had no statement form for as a `Console.write` of its
+// arguments, so `let _ = Box.intoRaw(b);` printed the pointer, and a discarded `StringView.fromUtf8(bytes)` was C
+// that did not compile.
+
+/// Safety: the pointer is the box's own, read while the allocation is live; each box made from it is given up
+/// with `Box.intoRaw` before the next is made, so the allocation is freed once, by the last.
+fn main() {
+    var v = Vector<i32>.create();
+    v.push(5)!;
+    let _ = v.capacity;
+    let _ = v.length;
+    let bytes = "hi".bytes();
+    let _ = StringView.fromUtf8(bytes);
+    StringView.fromUtf8(bytes);
+    let b = Box.create(7)!;
+    let p = Box.intoRaw(b);
+    let _ = unsafe { p.read() };
+    unsafe { p.read(); }
+    let _ = p.isNull();
+    let again: Box<i32> = unsafe { Box.fromRaw(p) };
+    let _ = Box.intoRaw(again);
+    let back: Box<i32> = unsafe { Box.fromRaw(p) };
+    let _ = 3u8.leadingZeros();
+    let _ = 3u8.wrappingAdd(4);
+    let x: i32 = back;
+    Console.writeLine(x);
+    Console.writeLine("done");
+}
+
+// expect-stdout: 7
+// expect-stdout: done

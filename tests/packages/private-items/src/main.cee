@@ -1,0 +1,60 @@
+// Every private item of src/shapes.cee and src/more.cee, named here (type-system.md §2, ADR 0109): each line that
+// ends with the code's comment is an error (two for the arm that names `Kind` and `LIMIT`), and nothing else in this
+// file is. tools/package_tests.py (check 31) compares the lines, then takes those lines out and runs what is left.
+struct Square {
+    side: i32;
+}
+
+impl Shape for Square { fn area(borrow this) -> i32 => this.side; } // N0296
+
+fn total<T: Shape>(x: borrow T) -> i32 => x.area(); // N0296
+
+fn dynamic(x: borrow dyn Shape) -> i32 => x.area(); // N0296
+
+fn takesPlain(p: Plain) -> i32 => p.v; // N0296
+
+fn takesPair(p: Pair<i32>) -> i32 => p.a; // N0296
+
+fn takesKind(k: Kind?) -> i32 => 0; // N0296
+
+fn apply(f: fn() -> i32) -> i32 => f();
+
+fn main() {
+    // Allowed: no private name is written. The generic's body is src/shapes.cee's code in every instance, and a
+    // value of a private type is held and used here.
+    let a = wrap<i32>(1, 2);
+    let p = plain();
+    let k = kindOf(a + p.v);
+    let o = Open.make();
+    let c = Cell<i32> { v: 1 };
+    Console.writeLine(o.viaSecret() + o.viaMine() + c.open());
+    {
+        let helper = 5; // a local of a private item's name is the local
+        let LIMIT = helper + 1;
+        Console.writeLine(helper + LIMIT);
+    }
+
+    let n = helper(); // N0296
+    let f = apply(helper); // N0296
+    let g = pick<i32>(1, 2); // N0296
+    let q = Plain.make(); // N0296
+    let r = Plain { v: 2 }; // N0296
+    let s = Pair<i32> { a: 1, b: 2 }; // N0296
+    let t = Kind.One; // N0296
+    let u = Kind.Two(1); // N0296
+    match (k) {
+        Kind.One => {} // N0296
+        Kind.Two(LIMIT) => {} // N0296
+        _ => {}
+    }
+    let l = LIMIT; // N0296
+    let e = TABLE[0]; // N0296
+    let m = min(1, 2); // N0296
+    let h = o.hidden; // N0296
+    let i = o.secret(); // N0296
+    let j = Open.fresh(); // N0296
+    let b = Open.BASE; // N0296
+    let d = o.mine(); // N0296
+    let x = Open.EXTRA; // N0296
+    let y = c.peek(); // N0296
+}

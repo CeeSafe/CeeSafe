@@ -116,6 +116,12 @@
 30. constant-other-file: a static's initialiser calls a generic `@constant` function of another file whose body is
     not a static initialiser for that call: one N0338, in the function's file at its line (the report once
     panicked, reading the calling file's text at the other file's offset).
+31. private-items (ADR 0109): a private function, generic function, struct, generic struct, enum, interface, constant,
+    static, method, static function and associated constant of src/shapes.cee, and an `impl` block's of
+    src/more.cee, named in src/main.cee in a call, a value, a type, a bound, `dyn`, an `impl` header, a literal and
+    a pattern: N0296 at each marked line and nowhere else, the message naming the declaring file. Without those
+    lines the program runs: a generic of shapes.cee instantiated from main.cee, values of private types held there,
+    and locals named like private items are all allowed.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -1622,10 +1628,38 @@ def main():
         if p.returncode != 1 or found != [("N0338", "zother.cee", 12)]:
             problems.append(f"constant-other-file: expected N0338 at zother.cee:12 alone: {p.returncode} {found}")
 
+        # 31. A private item is usable in its own file only (type-system.md §2, ADR 0109).
+        private = os.path.join(work, "private-items")
+        shutil.copytree(os.path.join(ROOT, "tests", "packages", "private-items"), private)
+        main_path = os.path.join(private, "src", "main.cee")
+        with open(main_path, encoding="utf-8") as f:
+            main_lines = f.read().split("\n")
+        marked = [k + 1 for k, line in enumerate(main_lines) if line.endswith("// N0296")]
+        twice = [k + 1 for k, line in enumerate(main_lines) if "Kind.Two(LIMIT)" in line]
+        p = run([compiler, "check", "--diagnostics-format=json"], private)
+        try:
+            found = sorted((d["code"], os.path.basename(d["file"]), d["start"]["line"])
+                           for d in json.loads(p.stdout)["diagnostics"])
+        except (ValueError, KeyError):
+            found = [p.stdout[:300] + p.stderr[:300]]
+        expected = sorted(("N0296", "main.cee", line) for line in marked + twice)
+        if p.returncode != 1 or len(marked) != 26 or found != expected:
+            problems.append(f"private-items: expected N0296 at main.cee's {len(marked)} marked lines "
+                            f"(line {twice} twice): {p.returncode} {found}")
+        for name, where in (("'helper'", "src/shapes.cee"), ("'Open.mine'", "src/more.cee")):
+            if name + " is private to " + where not in p.stdout:
+                problems.append(f"private-items: no message says {name} is private to {where}: {p.stdout[:300]}")
+        with open(main_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(line for line in main_lines if not line.endswith("// N0296")))
+        p = run([compiler, "run", "--interp"], private)
+        if p.returncode != 0 or p.stdout.split() != ["31", "11"]:
+            problems.append(f"private-items: without the marked lines the program should print 31 and 11: "
+                            f"{p.returncode} {p.stdout!r} {p.stderr[-300:]}")
+
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 30 checks; {len(problems)} problems")
+    print(f"package_tests: 31 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

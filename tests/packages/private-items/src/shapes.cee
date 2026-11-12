@@ -1,0 +1,66 @@
+// The private items of this package (type-system.md §2, ADR 0109): each is usable in this file only. The functions at
+// the end use every one here, where that is allowed; src/main.cee names each from outside, which is N0296.
+private fn helper() -> i32 => 1;
+
+private fn pick<T>(a: T, b: T) -> T => a;
+
+private struct Plain {
+    public v: i32;
+
+    fn make() -> Plain => Plain { v: 1 };
+}
+
+private struct Pair<T> {
+    public a: T;
+    public b: T;
+}
+
+private enum Kind {
+    One,
+    Two(i32),
+}
+
+private interface Shape {
+    fn area(borrow this) -> i32;
+}
+
+private const LIMIT: i32 = 3;
+
+private static TABLE: [i32; 2] = [5, 6];
+
+private fn min(a: i32, b: i32) -> i32 => 0;
+
+struct Open {
+    v: i32;
+    private hidden: i32;
+
+    private fn secret(borrow this) -> i32 => this.hidden;
+    private fn fresh() -> Open => Open { v: 1, hidden: 2 };
+    private const BASE: i32 = 10;
+    fn make() -> Open => Open.fresh();
+    fn viaSecret(borrow this) -> i32 => this.secret() + Open.BASE;
+}
+
+struct Cell<T> {
+    v: T;
+
+    private fn peek(borrow this) -> i32 => 4;
+    fn open(borrow this) -> i32 => this.peek();
+}
+
+// Not private, and made of private items: other files call these, and hold what they return.
+fn wrap<T>(a: T, b: T) -> T {
+    let n = helper() + LIMIT + TABLE[0] + min(1, 2);
+    let k = if (n > 0) Kind.Two(n) else Kind.One;
+    let m = match (k) {
+        Kind.One => 0,
+        Kind.Two(LIMIT) => 1,
+        Kind.Two(x) => x,
+    };
+    let pair = Pair<i32> { a: m, b: Plain.make().v };
+    return pick<T>(a, b);
+}
+
+fn plain() -> Plain => Plain.make();
+
+fn kindOf(n: i32) -> Kind => if (n == 0) Kind.One else Kind.Two(n);

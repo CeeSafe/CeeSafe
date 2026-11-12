@@ -98,6 +98,7 @@ fn main() {
         }
     })!;
     Console.writeLine("listening on http://127.0.0.1:7878, press Enter to stop");
+    Console.flush();
     match (Async.run(serveUntilStopped(borrow listener, borrow stop))) {
         Ok() => { Console.writeLine("stopped"); }
         Err(_) => {

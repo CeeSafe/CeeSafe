@@ -41,6 +41,7 @@ fn handle(stream: borrow mut TcpStream) -> Result<void, ServeError> {
 fn main() {
     let listener = TcpListener.bind("127.0.0.1", 7878)!;
     Console.writeLine("listening on http://127.0.0.1:7878");
+    Console.flush();
     loop {
         var stream = listener.accept()!;
         match (handle(mut stream)) {

@@ -203,7 +203,17 @@ export const chapters = [
       { title: "Derives and macros", file: "ch20-05-derives-and-macros" },
     ],
   },
-  { title: "A final project: a web server", sections: [] },
+  {
+    title: "A final project: a web server",
+    file: "ch21-00-web-server-project",
+    sections: [
+      { title: "One connection at a time", file: "ch21-01-one-connection" },
+      { title: "Requests and responses", file: "ch21-02-requests-and-responses" },
+      { title: "A pool of threads", file: "ch21-03-thread-pool" },
+      { title: "Async tasks", file: "ch21-04-async-tasks" },
+      { title: "Stopping gracefully", file: "ch21-05-graceful-shutdown" },
+    ],
+  },
   {
     title: "Without an operating system",
     file: "ch22-00-without-an-operating-system",

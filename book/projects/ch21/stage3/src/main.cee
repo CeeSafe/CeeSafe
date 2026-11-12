@@ -90,6 +90,7 @@ fn main() {
     let listener = TcpListener.bind("127.0.0.1", 7878)!;
     let workers = Workers.start(THREADS)!;
     Console.writeLine("listening on http://127.0.0.1:7878");
+    Console.flush();
     loop {
         let _ = workers.take(listener.accept()!);
     }

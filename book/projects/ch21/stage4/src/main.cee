@@ -76,6 +76,7 @@ async fn serve(listener: borrow AsyncTcpListener) -> Result<void, ServeError> {
 fn main() {
     let listener = AsyncTcpListener.bind("127.0.0.1", 7878)!;
     Console.writeLine("listening on http://127.0.0.1:7878");
+    Console.flush();
     match (Async.run(serve(borrow listener))) {
         Ok() => {}
         Err(_) => { Console.writeErrorLine("the server failed"); }

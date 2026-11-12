@@ -34,11 +34,15 @@ enum ParseError {
     BadRequestLine,
     BadVersion,
     BadHeader,
+    Incomplete,
     @from Memory(AllocError),
 }
 
-/// Parses a request's head: the request line, then one header on each line, up to the first empty line.
+/// Parses a request's head: the request line, then one header on each line, up to the empty line that ends it.
 fn parseRequest<region r>(head: StringView<r>) -> Result<Request<r>, ParseError> {
+    if (!head.contains("\r\n\r\n")) {
+        return Err(ParseError.Incomplete);
+    }
     var lines = head.split("\r\n");
     let first = lines.next() ?? "";
     var words = first.split(" ");
@@ -154,7 +158,8 @@ fn parsesHeaders() -> Result<void, TestFailure> {
 
 @test
 fn refusesWhatIsNotARequest() -> Result<void, TestFailure> {
-    Check.isTrue(parseRequest("") is Err(ParseError.BadRequestLine), "an empty text")?;
+    Check.isTrue(parseRequest("") is Err(ParseError.Incomplete), "an empty text")?;
+    Check.isTrue(parseRequest("\r\n\r\n") is Err(ParseError.BadRequestLine), "an empty request line")?;
     Check.isTrue(parseRequest("GET\r\n\r\n") is Err(ParseError.BadRequestLine), "no path")?;
     Check.isTrue(parseRequest("GET about HTTP/1.1\r\n\r\n") is Err(ParseError.BadRequestLine), "a path without /")?;
     Check.isTrue(parseRequest("GET / HTTP/1.1 more\r\n\r\n") is Err(ParseError.BadRequestLine), "a fourth word")?;
@@ -162,6 +167,10 @@ fn refusesWhatIsNotARequest() -> Result<void, TestFailure> {
     Check.isTrue(
         parseRequest("GET / HTTP/1.1\r\nno colon here\r\n\r\n") is Err(ParseError.BadHeader),
         "a header without a colon",
+    )?;
+    Check.isTrue(
+        parseRequest("GET / HTTP/1.1\r\nHost: localhost\r\n") is Err(ParseError.Incomplete),
+        "a head that stops before its empty line",
     )?;
     return Ok();
 }

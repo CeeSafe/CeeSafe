@@ -250,6 +250,7 @@ fn checkProgramWith(
         profileReports: Vector<LayoutUse>.create(),
         reportedQualified: Vector<LayoutUse>.create(),
         reportedPrivate: Vector<LayoutUse>.create(),
+        duplicateNames: Vector<u32>.create(),
         packages: packages,
         filePackage: filePackage,
         blockValueType: none(),
@@ -534,6 +535,10 @@ fn declare(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         appendBytes(mut message, c.name(id.symbol))?;
         appendText(mut message, "' is already defined")?;
         c.error(duplicateItem(), id.start, id.end, message)?;
+        // Noted, so that a use of the name in this file is not also called private to the first one's (ADR 0109).
+        let here = c.file;
+        c.duplicateNames.push(here)?;
+        c.duplicateNames.push(id.symbol)?;
         return Ok();
     }
     match (entry.kind) {

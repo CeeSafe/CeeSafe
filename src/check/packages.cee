@@ -1059,6 +1059,14 @@ fn checkPrivateItem(c: borrow mut Checker, entity: Entity, span: Span) -> Result
     if (symbol == none()) {
         return Ok();
     }
+    // A file that declares the name itself has N0201 for that; what it means by the name is its own item.
+    var at: usize = 0;
+    while (at + 1 < c.duplicateNames.length) {
+        if (c.duplicateNames[at] == c.file && c.duplicateNames[at + 1] == symbol) {
+            return Ok();
+        }
+        at += 2;
+    }
     var text = Vector<u8>.create();
     appendBytes(mut text, c.name(symbol))?;
     return reportPrivate(c, text, file, "use", span);

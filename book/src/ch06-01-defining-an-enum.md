@@ -3,7 +3,7 @@ title: Defining an enum
 summary: An enum is a value that is one of several variants - variants with and without data, making and passing them, comparing with ==, methods and static functions in an impl block, and choosing between an enum and a struct.
 assumes: [ch05-01-defining-structs, ch05-03-methods]
 keywords: [enum, variant, payload, "==", impl, method, static function, this, struct]
-diagnostics: [N0100, N0101, N0200, N0207]
+diagnostics: [N0100, N0200, N0207]
 specification: ["type-system.md §15.1", "type-system.md §21.1"]
 ---
 
@@ -339,7 +339,7 @@ A struct's body can hold methods. An enum's body is a list of variants, and a `f
 
 <span class="listing-caption"><strong>Listing 6-8</strong>, <code>main.cee</code>: <code>isRound</code> is written among the variants. This does not compile.</span>
 
-<!-- ceesafe: fail N0100 N0101 -->
+<!-- ceesafe: fail N0100 -->
 ```ceesafe
 enum Shape {
     Circle(i64),
@@ -363,16 +363,10 @@ main.cee:5:5: error[N0100]: an enum's body holds its variants; write its functio
   |
 5 |     fn isRound(borrow this) -> bool {
   |     ^^
-
-main.cee:11:1: error[N0101]: expected 'fn', 'const', 'struct' or 'enum', found '}'
-   |
-11 | }
-   | ^
 ```
 
-The first message says what to do: close the enum after `Rect(i64, i64),` and move `isRound` into
-`impl Shape { … }`, as Listing 6-4 does. The second message follows from the first. The compiler ends the enum at
-the `fn`, so the enum's own `}` is left over. It goes away with the fix.
+The message says what to do: close the enum after `Rect(i64, i64),` and move `isRound` into `impl Shape { … }`, as
+Listing 6-4 does.
 
 ::: details Coming from Rust
 The declaration is the same, with two differences. A variant is `Shape.Circle(2)`, with a dot, not

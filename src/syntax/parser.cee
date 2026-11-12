@@ -1316,6 +1316,21 @@ struct Parser {
                     "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)",
                 )?,
             )?;
+            // One error for the mistake: the rest of the body is passed over, to the enum's closing brace.
+            var depth: i32 = 0;
+            while (!this.at(TokenKind.EndOfFile)) {
+                let kind = this.current().kind;
+                if (depth == 0 && sameKind(kind, TokenKind.CloseBrace)) {
+                    break;
+                }
+                if (sameKind(kind, TokenKind.OpenBrace)) {
+                    depth += 1;
+                }
+                if (sameKind(kind, TokenKind.CloseBrace)) {
+                    depth -= 1;
+                }
+                this.advance();
+            }
         }
         this.expect(TokenKind.CloseBrace)?;
         let split = this.splitTypeParameters(typeParameters)?;

@@ -205,6 +205,7 @@ struct Checker {
     profileReports: Vector<LayoutUse>;
     reportedQualified: Vector<LayoutUse>;
     reportedPrivate: Vector<LayoutUse>;
+    duplicateNames: Vector<u32>;      // (file, symbol) of each second declaration of a name (N0201)
     packages: Vector<PackageInfo>;    // the root first, then its dependencies (single-file mode: one, unnamed)
     filePackage: Vector<u32>;         // each file's package, none for the libraries
     blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)

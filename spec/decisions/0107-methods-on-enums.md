@@ -192,3 +192,9 @@ absent. That is a tooling gap of ADR 0064, left for its own change.
     dependent is N0267; a public method returning an internal struct is N0314.
 - Not run here: `tools/contract_tests.py` (the integrator runs it), and no package test was added to
   `tools/package_tests.py` for the visibility cases above: proposed.
+
+## Addendum: one error for a function in the body
+
+A `fn` in an enum's body is N0100 with the advice to use an `impl` block, and the parser then passes over the rest
+of the body to the enum's closing brace, so that no second error (N0101 at that brace) follows from the first
+(`parse-fail/enum-body-function.cee`).

@@ -173,3 +173,7 @@ compiled changes.
 ADR 0107, made beside this one, gives an enum functions through `impl E { … }`. They follow §2 as a struct's do: a
 `private` function of the block is usable in the block's file only, and N0296 elsewhere in the package. The package
 test `private-items` has the case (a method and a static function of an enum in `src/more.cee`).
+
+Where two files each declare a `private` item of one name, the second declaration is N0201 (§2: one scope), and
+the uses of the name in that second file are not also reported as N0296: the file means its own item, and one error
+says so.

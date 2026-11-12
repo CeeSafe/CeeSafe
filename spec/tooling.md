@@ -899,7 +899,8 @@ A test is a top-level function marked `@test` (type-system.md §28.1): no parame
 test from anything but the generated harness, is N0348.
 
 - **Where tests are.** Beside the code in the package's sources, or in its test directories (`tests = ["tests"]` in
-  `[package]`, by default `tests`). They are part of the same package and see its private items.
+  `[package]`, by default `tests`). They are part of the same package and see its items that are not public; an item
+  marked `private` stays within its own file (type-system.md §2, ADR 0109).
 - **Build and check.** `check` checks the test directories too. `build` leaves them out, and emits no `@test`
   function. Only the root package's tests are run; a dependency's are not.
 - **Checks** (lib/std's `testing.cee`): `Check.isTrue`, `isFalse`, `equalU64`, `equalI64`, `equalText`, `equalBytes`

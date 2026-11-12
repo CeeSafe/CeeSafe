@@ -69,6 +69,24 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   file (§12). Naming another package's non-public item is N0312. A public function, constant, field or struct whose
   signature names a type its dependents cannot see (a public function returning an internal struct) is N0314. An
   `impl I for T` applies wherever `I` and `T` are both visible.
+- **Visibility within a package (ADR 0109).** A `private` item is usable only in the source file that declares it:
+  a function (an `extern` block's included), struct, enum, interface, constant or static at the top level; a method,
+  static function or associated constant in a struct's body or in an `impl T { … }` block, whose file is the
+  block's (ADR 0064 §1); and a field (§12). Naming it in another file of the package is N0296, wherever the name is written:
+  called, used as a value, in a type, a bound, an `impl` header, a struct literal or a pattern. The item is found
+  and then refused, so the message says which file it is private to, and the check goes on with the item.
+  - The package still has one scope. A private item's name is taken in the whole package: a second item of that
+    name in another file is N0201, and where the name is that of a `lib/core` item it hides the library's in every
+    file of the package, where using it is N0296.
+  - Only naming is confined. A value whose type is a private struct or enum may reach another file through a
+    function that is not private, and be held, passed on and inferred there; its fields and methods keep their own
+    visibility. A generic function's body is checked as its own file's code in every instance, whichever file asks
+    for the instance.
+  - A file under `tests/` is a file like any other (`tooling.md` §10.1): it sees the package's `internal` items,
+    not its `private` ones.
+  - In another package a private item is N0312, as any item that is not public; a private field is N0296 there too.
+  - A function of an `impl I for T` block takes no modifier but `public` (`grammar.md` §2), which has no effect: the
+    method is as visible as the interface.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
   `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
 - **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
@@ -416,10 +434,14 @@ struct Point {
   source file that declares its struct (`language-spec.md` §5: "visible within the declaring type or
   file"), and in any instance of a generic one there: read, assigned, borrowed and given in a literal.
   Anywhere else, naming it is N0296. A struct with private fields can therefore only be made by code in
-  its own file, so types that cooperate, like a lock and its guard, can share their fields. This is the one place where a visibility
-  modifier takes effect within a package (§2). It lets a type keep an invariant that safe code cannot break,
+  its own file, so types that cooperate, like a lock and its guard, can share their fields. It lets a type keep an
+  invariant that safe code cannot break,
   such as "the data is reached only through a guard" (`integrations/cosmoos/c7/sync.cee`).
   `public` and `internal` fields, and the default, stay visible throughout the package.
+- **Private methods (ADR 0109).** A method, static function or associated constant declared `private` is usable
+  only in the source file that declares it, which for one in an `impl T { … }` block is the block's file, not the
+  struct's: `v.m()`, `S.f()` and `S.NAME` elsewhere in the package are N0296 (§2). Before ADR 0109 only fields were
+  checked, and the modifier on anything else had no effect within a package.
 - **Operators.** No operator applies to struct values in M2a (`==` included: N0207).
   `Console.write` cannot print structs (N0207).
 - **Layout.** Fields are laid out in declaration order with C's rules (`@repr(C)` by default,

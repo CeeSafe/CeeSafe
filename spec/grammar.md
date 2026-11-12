@@ -154,8 +154,9 @@ InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4
 AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
 MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
                                             (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
-ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* Visibility? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
-                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5 *)
+ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* 'public'? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
+                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5;
+                                               `public` has no effect, and no other modifier is accepted: ADR 0109 §2.5 *)
 AssocTypeDef = 'type' Identifier '=' Type ';'
            | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
            | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)

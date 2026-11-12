@@ -73,8 +73,32 @@ fn main() {
 ### Closures do not outlive their block
 
 Because a closure borrows its captures, the borrow checker treats it like any reference: it cannot be returned from
-the function that made it, stored in a struct, or kept after a captured variable changes. That makes closures free
-of allocation and safe to use in kernels.
+the function that made it, kept in a struct that outlives what it captured, or kept after a captured variable
+changes. That makes closures free of allocation and safe to use in kernels.
+
+A struct holds a borrowed closure as it holds any reference: with a region parameter. The field is called by its
+name.
+
+```ceesafe
+struct Rule<region r> {
+    test: borrow(r) fn(i32) -> bool;
+}
+
+fn main() {
+    let limit = 10;
+    let rule = Rule { test: (v) => v < limit };
+    Console.writeLine(rule.test(4));
+    Console.writeLine(rule.test(40));
+}
+```
+
+```text
+true
+false
+```
+
+A struct that owns its closure holds a boxed one (next section): `onPress: Box<dyn fn(i32) -> i32>`, called as
+`b.onPress(4)`.
 
 ### Owning closures
 

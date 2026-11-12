@@ -433,28 +433,36 @@ fn main() {
 255
 ```
 
-### A function in a field is not called through the field
+### A function in a field is called as `c.step(n)`
 
-<!-- ceesafe: fail N0210 -->
+A field may hold a function, a boxed closure (`Box<dyn fn(i32) -> i32>`), or a borrowed closure when the struct has
+a region parameter. Call it by naming the field:
+
 ```ceesafe
 struct Counter {
     step: fn(i32) -> i32;
 }
 
-fn advance(c: borrow Counter, n: i32) -> i32 => (c.step)(n);
+struct Rule<region r> {
+    test: borrow(r) fn(i32) -> bool;
+}
+
+fn advance(c: borrow Counter, n: i32) -> i32 => c.step(n);
+
+fn up(n: i32) -> i32 => n + 1;
+
+fn main() {
+    let c = Counter { step: up };
+    Console.writeLine(advance(c, 41));
+    let limit = 10;
+    let rule = Rule { test: (v) => v < limit };
+    Console.writeLine(rule.test(4));
+}
 ```
 
 ```text
-main.cee:5:49: error[N0210]: this expression cannot be called
-  |
-5 | fn advance(c: borrow Counter, n: i32) -> i32 => (c.step)(n);
-  |                                                 ^^^^^^^^
-```
-
-Pass the function or closure as a parameter, and call the parameter:
-
-```ceesafe
-fn advance(step: fn(i32) -> i32, n: i32) -> i32 => step(n);
+42
+true
 ```
 
 ### A borrowed string in an enum needs a region

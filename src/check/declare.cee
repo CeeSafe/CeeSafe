@@ -483,7 +483,10 @@ fn isReservedName(c: borrow mut Checker, ident: u32) -> Result<bool, AllocError>
     var message = Vector<u8>.create();
     appendText(mut message, "'")?;
     appendBytes(mut message, c.name(id.symbol))?;
-    appendText(mut message, "' is a built-in name")?;
+    appendText(
+        mut message,
+        "' is a built-in name: the compiler knows this type or value by its name, so an item cannot take it; choose another name (type-system.md §2)",
+    )?;
     c.error(duplicateItem(), id.start, id.end, message)?;
     return Ok(true);
 }

@@ -1266,10 +1266,18 @@ fn checkSignatureIsFfiSafe(c: borrow mut Checker, function: u32, what: Slice<u8>
             appendBytes(mut message, what)?;
             appendText(mut message, " cannot take a ")?;
             appendQuotedType(mut message, c, t)?;
-            appendText(
-                mut message,
-                ": only integers, bool, raw pointers, @repr(C) structs and @repr enums cross to C (type-system.md §28.3)",
-            )?;
+            if (c.types.is(t, TypeKind.RawPointer)) {
+                // The pointer is a raw pointer; what it points to is what C cannot name.
+                appendText(
+                    mut message,
+                    ": a raw pointer crosses to C when it points to an integer, a float, bool, a @repr(C) struct or 'void'; mark the struct '@repr(C)' or pass a '*void' (type-system.md §28.3)",
+                )?;
+            } else {
+                appendText(
+                    mut message,
+                    ": only integers, bool, raw pointers, @repr(C) structs and @repr enums cross to C (type-system.md §28.3)",
+                )?;
+            }
             c.error(notFfiSafe(), span.start, span.end, message)?;
         }
     }
@@ -1289,10 +1297,17 @@ fn checkSignatureIsFfiSafe(c: borrow mut Checker, function: u32, what: Slice<u8>
         appendBytes(mut message, what)?;
         appendText(mut message, " cannot return a ")?;
         appendQuotedType(mut message, c, returnType)?;
-        appendText(
-            mut message,
-            ": only integers, bool, raw pointers, @repr(C) structs, @repr enums and void cross to C (type-system.md §28.3)",
-        )?;
+        if (c.types.is(returnType, TypeKind.RawPointer)) {
+            appendText(
+                mut message,
+                ": a raw pointer crosses to C when it points to an integer, a float, bool, a @repr(C) struct or 'void'; mark the struct '@repr(C)' or return a '*void' (type-system.md §28.3)",
+            )?;
+        } else {
+            appendText(
+                mut message,
+                ": only integers, bool, raw pointers, @repr(C) structs, @repr enums and void cross to C (type-system.md §28.3)",
+            )?;
+        }
         c.error(notFfiSafe(), span.start, span.end, message)?;
     }
     return Ok();

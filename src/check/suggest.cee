@@ -91,7 +91,7 @@ fn appendDidYouMean(
     if (fields) {
         for (field in s.fields.view()) {
             let symbol = c.types.fields[field as usize].name;
-            if (found.length < 3 && symbol != wanted && isCloseName(
+            if (found.length < 3 && symbol != wanted && !fieldIsHidden(c, s.file, field) && isCloseName(
                 name,
                 c.name(symbol),
             ) && !containsU32(found, symbol)) {
@@ -116,7 +116,11 @@ fn appendDidYouMean(
             count += s.functionNames.length;
         }
         if (fields) {
-            count += s.fields.length;
+            for (field in s.fields.view()) {
+                if (!fieldIsHidden(c, s.file, field)) {
+                    count += 1;
+                }
+            }
         }
         if (count == 0 || count > 6) {
             return Ok();
@@ -134,6 +138,9 @@ fn appendDidYouMean(
         }
         if (fields) {
             for (field in s.fields.view()) {
+                if (fieldIsHidden(c, s.file, field)) {
+                    continue;
+                }
                 if (k > 0) {
                     appendText(message, if (k + 1 == count) " and " else ", ")?;
                 }
@@ -152,6 +159,12 @@ fn appendDidYouMean(
     }
     return appendText(message, "?");
 }
+
+/// Is the field of a struct declared in `file` one the current file cannot reach: private to another file, or not
+/// public in another package (CheckPrivate's two cases)? A message does not name it.
+fn fieldIsHidden(c: borrow Checker, file: u32, field: u32) -> bool =>
+    (c.types.fields[field as usize].isPrivate && file != c.file) ||
+        (!c.types.fields[field as usize].isPublic && file != none() && isOtherPackage(c, file));
 
 /// "; did you mean …?" for a member of a built-in type (`Process.args`): the members the built-in types page lists
 /// for that type that ApiLookup finds close (ceesafe_api's suggestions), so the error and the tool agree.

@@ -320,7 +320,7 @@ fn endInstance(
         appendQuotedType(mut message, c, scoped)?;
         appendText(
             mut message,
-            ": it needs an unscoped type there (for example, it puts the value in a 'Box' or an array; type-system.md §25.4)",
+            ": it needs an unscoped type there (for example, it puts the value in a 'Box', or borrows it: a 'borrow T' of a view would be a reference to a reference; type-system.md §25.4)",
         )?;
         return c.front.diagnostics.error(scopedTypeArgument(), file, span.start, span.end, message);
     }
@@ -484,6 +484,24 @@ fn checkBounds(
                 appendText(mut message, ", which ")?;
                 appendQuotedType(mut message, c, parameter)?;
                 appendText(mut message, " requires")?;
+                let held = c.types.info(argument).pointee;
+                if (c.types.is(argument, TypeKind.Box) && held != none() && implements(c, held, required)) {
+                    // A type parameter is inferred as the argument's own type, the box; its contents are what
+                    // implements the interface.
+                    appendText(mut message, "; the box's contents, ")?;
+                    appendQuotedType(mut message, c, held)?;
+                    if (c.types.isDyn(held)) {
+                        appendText(mut message, ", implement it: pass a 'borrow ")?;
+                        appendBytes(mut message, c.typeName(held))?;
+                        appendText(mut message, "' (as in 'let r: borrow ")?;
+                        appendBytes(mut message, c.typeName(held))?;
+                        appendText(mut message, " = borrow box;'), or declare the parameter with that type")?;
+                    } else {
+                        appendText(mut message, ", implement it: name the type argument, as in 'f<")?;
+                        appendBytes(mut message, c.typeName(held))?;
+                        appendText(mut message, ">(…)', so that the box lends its contents")?;
+                    }
+                }
                 c.error(boundNotSatisfied(), span.start, span.end, message)?;
             }
         }

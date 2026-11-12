@@ -596,6 +596,7 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
             checkFromVariant(c, definition, variant, v.payload.count, id.start, id.end)?;
         }
     }
+    declareEnumMethods(c, index)?; // the functions of its `impl E { … }` blocks (ADR 0107)
     swapRegions(c, savedRegions)?;
     restoreEnvironment(c, savedEnvironment);
     c.setFile(savedFile);

@@ -101,6 +101,63 @@ true
 true
 ```
 
+### Methods on an enum
+
+An enum's body holds its variants. Its methods and static functions are written in an `impl` block, with the same
+receivers as a struct's, and are called the same way.
+
+```ceesafe
+enum Light {
+    Red,
+    Green,
+    Blinking(u32),
+}
+
+impl Light {
+    fn start() -> Light => Light.Red;                         // static: Light.start()
+
+    fn name(borrow this) -> StringView => match (this) {
+        Light.Red => "red",
+        Light.Green => "green",
+        Light.Blinking(_) => "blinking",
+    };
+
+    fn advance(borrow mut this) {                             // changes the caller's value
+        match (this) {
+            Light.Red => { this = Light.Green; }
+            Light.Green => { this = Light.Blinking(1); }
+            Light.Blinking(times) => { times += 1; }
+        }
+    }
+}
+
+fn main() {
+    var light = Light.start();
+    Console.writeLine(light.name());
+    light.advance();
+    Console.writeLine(light.name());
+    light.advance();
+    light.advance();
+    match (light) {
+        Light.Blinking(times) => { Console.writeLine(times); }
+        _ => {}
+    }
+}
+```
+
+```text
+red
+green
+2
+```
+
+- A `borrow mut this` method changes a payload through its `match` binding, or replaces the whole value with
+  `this = …`.
+- A generic enum's block names its parameters, `impl<T> Maybe<T> { … }`, and its static functions are called with
+  the type arguments: `Maybe<i32>.empty()`.
+- A function cannot have the name of a variant, and the block is written in the package that declares the enum.
+- A struct takes `impl` blocks too: `impl Point { … }` adds to the functions in its body.
+
 ### Deriving equality, hashing and ordering
 
 Structs and enums have no `==` of their own. `@derive(Equal)` gives one: the fields are compared in declaration order

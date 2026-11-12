@@ -1,6 +1,6 @@
 // Associated constants (type-system.md §10, ADR 0074 §2.7): none in a generic struct or impl yet (N0216); a name the
-// type already has, as a field, a method, a variant or a constant, is N0228; an enum's impl holds constants only
-// (N0267); `Type.NAME` without such a constant is still N0210.
+// type already has, as a field, a method, a variant or a constant, is N0228 (an enum's impl holds functions too since
+// ADR 0107, and a constant named as one is N0228); `Type.NAME` without such a constant is still N0210.
 struct Holder<T> {
     value: T;
     const LIMIT: u32 = 4; // error[N0216]
@@ -34,8 +34,10 @@ impl Mode {
     const Tls: u32 = 1; // error[N0228]
 }
 
-impl Mode { // error[N0267]
+impl Mode {
     fn port() -> u32 => 25;
+
+    const port: u32 = 25; // error[N0228]
 }
 
 fn main() {

@@ -59,6 +59,18 @@ fn checkTypeCall(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    checkEnumMethodVisible(c, function, memberSpan)?; // a function of an enum's own (ADR 0107)
+    let template = c.hir.functions[function as usize].methodTemplate;
+    if (template != none() && enumEntry != none()) {
+        // A generic static function of an enum (ADR 0107), as a struct's (checkStaticCall): no receiver to skip.
+        let explicit = c.front.ast.typeArgumentsOfMember(member);
+        let instance = instantiateMethod(c, template, memberIdent.symbol, explicit, arguments, 0, span)?;
+        if (instance == none()) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
+        return checkUserCall(c, instance, arguments, span);
+    }
     if (!noMemberTypeArguments(c, member, span)?) {
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);

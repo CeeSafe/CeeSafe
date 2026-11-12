@@ -348,6 +348,7 @@ fn processFunctionAttributes(c: borrow mut Checker) -> Result<void, AllocError> 
             let item = c.front.ast.at(items, k);
             match (c.front.ast.items[item as usize].kind) {
                 ItemKind.Struct(s) => { processMethodAttributes(c, s)?; }
+                ItemKind.Enum(_, _, _) => { processEnumMethodAttributes(c, item)?; } // ADR 0107
                 _ => {}
             }
         }

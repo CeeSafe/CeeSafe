@@ -215,6 +215,7 @@ struct Checker {
     uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks
     declaredOrder: Vector<DeclaredEntry>;
     methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
+    enumMethods: Vector<EnumMethod>;         // the functions of each `impl E { … }` block of an enum (ADR 0107)
     memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)
     fileImports: Vector<FileImport>;         // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
     // Interface records (ADR 0082 §2.7, src/check/interface_records.cee).

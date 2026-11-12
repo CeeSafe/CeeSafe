@@ -415,6 +415,26 @@ fn checkPublicSignatures(c: borrow mut Checker) -> Result<void, AllocError> {
                         }
                     }
                 }
+                Entity.Enum(e) => {
+                    // The public functions of its `impl E { … }` blocks (ADR 0107).
+                    if (c.enums[e as usize].item == item) {
+                        let enumType = c.enums[e as usize].typ;
+                        var methods = Vector<u32>.create();
+                        for (m in c.implMethods.view()) {
+                            if (m.typ == enumType && isEnumMethod(c, c.hir.functions[m.function as usize].syntax)) {
+                                methods.push(m.function)?;
+                            }
+                        }
+                        for (method in methods.view()) {
+                            let syntax = c.front.ast.functions[c.hir.functions[method as usize].syntax as usize];
+                            if (isPublicVisibility(syntax.visibility)) {
+                                var methodTypes = Vector<u32>.create();
+                                functionTypes(c, method, mut methodTypes)?;
+                                checkSignature(c, syntax.name, methodTypes.view())?;
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -903,6 +923,31 @@ fn checkMethodVisible(c: borrow mut Checker, function: u32, span: Span) -> Resul
     }
     let syntax = c.front.ast.functions[c.hir.functions[function as usize].syntax as usize];
     if (isPublicVisibility(syntax.visibility) || !isOtherPackage(c, c.types.structs[definition as usize].file)) {
+        return Ok();
+    }
+    var message = Vector<u8>.create();
+    appendQuotedType(mut message, c, owner)?;
+    message.truncate(message.length - 1);
+    appendText(mut message, ".")?;
+    appendBytes(mut message, c.name(c.hir.functions[function as usize].name))?;
+    appendText(mut message, "' is not public: only its own package can call it (type-system.md §2)")?;
+    return c.error(notPublic(), span.start, span.end, message);
+}
+
+/// As checkMethodVisible, for a function of an enum's `impl E { … }` block (ADR 0107): an interface's methods, which
+/// an enum also has, are as public as the interface.
+fn checkEnumMethodVisible(c: borrow mut Checker, function: u32, span: Span) -> Result<void, AllocError> {
+    let owner = c.hir.functions[function as usize].owner;
+    if (owner == none() || !c.types.is(owner, TypeKind.Enum)) {
+        return Ok();
+    }
+    let definition = c.types.info(owner).enumDef;
+    let f = c.hir.functions[function as usize].syntax;
+    if (definition == none() || !isEnumMethod(c, f)) {
+        return Ok();
+    }
+    let syntax = c.front.ast.functions[f as usize];
+    if (isPublicVisibility(syntax.visibility) || !isOtherPackage(c, c.types.enums[definition as usize].file)) {
         return Ok();
     }
     var message = Vector<u8>.create();

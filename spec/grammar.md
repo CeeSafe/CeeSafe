@@ -233,8 +233,8 @@ AssignOp  = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' 
 Notes:
 - Braces are **mandatory** after `if`, `else`, `while` and `loop`, so there is no dangling-else ambiguity.
 - Assignment is a statement, so `if (x = 1)` is a syntax error. The assignment target
-  must be a name or member access (N0104 otherwise). Whether it is *assignable*
-  (a `var`) is checked later.
+  must be a name, `this`, a member access or an element (N0104 otherwise). Whether it is
+  *assignable* (a `var`, or `this` in a `borrow mut this` method: ADR 0107) is checked later.
 - A `LocalDecl` without an initialiser must have a type annotation (enforced by the
   checker, not the parser).
 

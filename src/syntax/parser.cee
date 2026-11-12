@@ -1305,6 +1305,18 @@ struct Parser {
                 break;
             }
         }
+        if (this.at(TokenKind.FnKeyword)) {
+            // An enum's functions are written in an `impl` block, not in its body (ADR 0107).
+            let token = this.current();
+            this.error(
+                expectedToken(),
+                token.start,
+                token.end,
+                textMessage(
+                    "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)",
+                )?,
+            )?;
+        }
         this.expect(TokenKind.CloseBrace)?;
         let split = this.splitTypeParameters(typeParameters)?;
         let variantRange = this.list(variants)?;
@@ -2356,6 +2368,7 @@ struct Parser {
             }
             let assignable = match (this.front.ast.exprs[target as usize]) {
                 ExprNode.Name(_, _) => true,
+                ExprNode.This => true, // `this = v` in a `borrow mut this` method writes the receiver (ADR 0107)
                 ExprNode.Member(_, _) => true,
                 ExprNode.Index(_, _) => true,
                 ExprNode.Error => true,

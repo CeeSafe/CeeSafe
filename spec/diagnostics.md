@@ -50,7 +50,7 @@ diagnostics, so any cascade fails the test.
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0100 | Expected a specific token | missing `;`, `(` after `if`, `}` before `fn` |
+| N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107) | missing `;`, `(` after `if`, `}` before `fn` |
 | N0101 | Expected an item (`fn` or `const`) at the top level | `let x = 1;`, `struct S {}` (not in M1) |
 | N0102 | Expected an expression | `let a = ;` |
 | N0103 | Comparison operators chained | `a < b < c` |
@@ -102,7 +102,7 @@ Semantic checks run only when every file parsed without errors.
 | N0225 | Expression statement that is not a call | `1 + 2;` |
 | N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6) | `struct Node { next: Node; }` |
-| N0228 | Duplicate member (field or function) in a struct, or an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7) | `struct D { a: i32; a: i64; }` |
+| N0228 | Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107) | `struct D { a: i32; a: i64; }` |
 | N0229 | Struct literal does not initialise every field | `Point { x: 1 }` |
 | N0230 | Unknown field (in a literal or an access), or a function named where a field was expected | `p.z`, `p.sum` |
 | N0231 | Field initialised twice in a literal | `Point { x: 1, x: 2, y: 3 }` |
@@ -214,7 +214,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
 | N0265 | Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields, expected type or unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep (polymorphic recursion) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }` |
-| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), or a method call, constant or associated type `T.Name` that two bounds both provide | `impl Shape for Square { fn area(this) -> i64 … }` |
+| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) | `impl Shape for Square { fn area(this) -> i64 … }` |
 | N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), an impl's target that does not implement a supertrait of its interface (ADR 0086 §2.6), or a type with region parameters coerced to `dyn I` (ADR 0054) | `total(plain)` with `fn total<S: Shape>(…)` |
 | N0264 | A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray` | `arena.alloc(Res { id: 1 })`, `arena.alloc(someReference)` |
 

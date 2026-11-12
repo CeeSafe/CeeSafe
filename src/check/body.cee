@@ -413,6 +413,19 @@ fn unparenthesized(c: borrow Checker, e: u32) -> u32 => match (c.front.ast.exprs
     _ => e,
 };
 
+/// Is the body being checked a struct's drop block (its `dropFunction`)?
+fn inDropBlock(c: borrow Checker) -> bool {
+    if (c.function == none()) {
+        return false;
+    }
+    let owner = c.hir.functions[c.function as usize].owner;
+    if (owner == none()) {
+        return false;
+    }
+    let definition = c.types.info(owner).structDef;
+    return definition != none() && c.types.structs[definition as usize].dropFunction == c.function;
+}
+
 /// ResolveAssignmentTarget: the place an assignment writes, or none after reporting why it cannot.
 fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, AllocError> {
     let span = c.front.ast.exprSpans[target as usize];
@@ -465,7 +478,19 @@ fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, Al
         }
         ExprNode.Paren(_) => {}
         ExprNode.Member(_, _) => {}
-        ExprNode.This => {}
+        ExprNode.This => {
+            // `this = v` replaces the receiver and destroys the value it held (ADR 0107 §2.3). In a drop block that
+            // value is the one being destroyed: it would be destroyed again.
+            if (inDropBlock(c)) {
+                var message = Vector<u8>.create();
+                appendText(
+                    mut message,
+                    "cannot assign to 'this' in a drop block: the value is being destroyed, and replacing it would destroy it again (type-system.md §13.3)",
+                )?;
+                c.error(assignToImmutable(), span.start, span.end, message)?;
+                return Ok(none());
+            }
+        }
         ExprNode.Index(_, _) => {}
         _ => {
             var message = Vector<u8>.create();

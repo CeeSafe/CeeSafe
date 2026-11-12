@@ -37,6 +37,14 @@ fn regionScope(c: borrow Checker, f: u32, owner: u32, out: borrow mut Vector<u32
                 }
             }
         }
+        // A function of an enum's `impl<region r> E<r> { … }` names the enum's regions (ADR 0107).
+        let enumItem = enumOfMethod(c, f, owner);
+        if (enumItem != none()) {
+            match (c.front.ast.items[enumItem as usize].kind) {
+                ItemKind.Enum(_, _, regionParameters) => { pushRegionNames(c, regionParameters, out)?; }
+                _ => {}
+            }
+        }
     }
     return Ok();
 }

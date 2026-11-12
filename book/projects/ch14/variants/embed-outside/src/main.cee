@@ -1,0 +1,5 @@
+const TERMS: StringView = embedText("../../../shared/terms.txt");
+
+fn main() {
+    Console.write(TERMS);
+}

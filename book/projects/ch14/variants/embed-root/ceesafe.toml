@@ -1,0 +1,8 @@
+[package]
+name = "terms"
+kind = "executable"
+
+[embed]
+roots = ["../../shared"]
+
+[dependencies]

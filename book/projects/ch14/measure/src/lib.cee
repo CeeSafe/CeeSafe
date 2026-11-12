@@ -1,0 +1,32 @@
+/// A range of values, from `low` up to `high`.
+@repr(C)
+public struct Range {
+    public low: i64;
+    public high: i64;
+}
+
+/// How far `range` reaches.
+@export("measure_width")
+public fn width(range: Range) -> i64 => range.high - range.low;
+
+/// The mean of `count` values that add up to `sum`.
+@export("measure_mean")
+public fn mean(sum: i64, count: i64) -> i64 => sum / count;
+
+/// The number of words in `length` bytes at `text`: runs of bytes that are not spaces.
+/// Safety: the caller passes `length` readable bytes at `text`.
+@export("measure_words")
+fn words(text: *u8, length: usize) -> u64 {
+    let bytes = unsafe { Slice.fromRaw(text, length) };
+    var count: u64 = 0;
+    var inside = false;
+    for (b in bytes) {
+        if (b == ' ') {
+            inside = false;
+        } else if (!inside) {
+            inside = true;
+            count += 1;
+        }
+    }
+    return count;
+}

@@ -1,0 +1,10 @@
+const NOTICE: StringView = embedText("../data/notice.txt");
+
+fn main() {
+    Console.write(NOTICE);
+    if (cfg("NOTICE_LOUD")) {
+        Console.writeLine("LOUD");
+    } else {
+        Console.writeLine("quiet");
+    }
+}

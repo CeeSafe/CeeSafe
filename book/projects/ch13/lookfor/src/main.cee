@@ -1,0 +1,32 @@
+fn report(error: LookError) {
+    Console.writeError("lookfor: ");
+    match (error) {
+        LookError.MissingQuery => { Console.writeErrorLine("no text to look for"); }
+        LookError.MissingPath => { Console.writeErrorLine("no file to look in"); }
+        LookError.NotUtf8 => { Console.writeErrorLine("the file is not UTF-8 text"); }
+        LookError.Io(e) => { Console.writeErrorLine(e.message()); }
+        LookError.Memory(_) => { Console.writeErrorLine("out of memory"); }
+    }
+}
+
+fn main() {
+    let config = match (configure()) {
+        Ok(config) => config,
+        Err(error) => {
+            report(error);
+            Console.writeErrorLine("usage: lookfor <text> <file>");
+            Process.exit(2);
+        }
+    };
+    match (run(config)) {
+        Ok(count) => {
+            if (count == 0) {
+                Process.exit(1);
+            }
+        }
+        Err(error) => {
+            report(error);
+            Process.exit(2);
+        }
+    }
+}

@@ -1,0 +1,44 @@
+struct Node {
+    value: i32;
+    left: Box<Node>?;
+    right: Box<Node>?;
+}
+
+fn insert(slot: borrow mut (Box<Node>?), value: i32) -> Result<void, AllocError> {
+    match (slot) {
+        Some(node) => {
+            if (value < node.value) {
+                insert(mut node.left, value)?;
+            } else {
+                insert(mut node.right, value)?;
+            }
+        }
+        null => {
+            slot = Box.create(Node { value: value, left: null, right: null })?;
+        }
+    }
+    return Ok();
+}
+
+fn count(slot: borrow (Box<Node>?)) -> usize => match (slot) {
+    Some(node) => count(node.left) + 1 + count(node.right),
+    null => 0,
+};
+
+@test
+fn holdsFour() -> Result<void, AllocError> {
+    var root: Box<Node>? = null;
+    for (v in [5, 2, 8, 1]) {
+        insert(mut root, v)?;
+    }
+    assert(count(root) == 4);
+    return Ok();
+}
+
+fn main() {
+    var root: Box<Node>? = null;
+    for (v in [5, 2, 8, 1]) {
+        insert(mut root, v)!;
+    }
+    Console.writeLine(count(root));
+}

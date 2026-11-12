@@ -1,0 +1,41 @@
+struct Person {
+    name: String;
+    friend: Mutex<Arc<Person>?>;
+
+    drop {
+        Console.write(this.name);
+        Console.writeLine(" destroyed");
+    }
+}
+
+fn person(name: StringView) -> Result<Arc<Person>, AllocError> {
+    return Arc<Person>.create(Person { name: String.from(name)?, friend: Mutex<Arc<Person>?>.create(null)? });
+}
+
+fn befriend(a: borrow Arc<Person>, b: borrow Arc<Person>) {
+    var guard = a.get().friend.lock();
+    let friend = guard.data();
+    friend = b.clone();
+}
+
+@test
+fn oneWay() {
+    let ada = person("ada")!;
+    let bob = person("bob")!;
+    befriend(ada, bob);
+}
+
+@test
+fn bothWays() {
+    let ada = person("ada")!;
+    let bob = person("bob")!;
+    befriend(ada, bob);
+    befriend(bob, ada);
+}
+
+fn main() {
+    let ada = person("ada")!;
+    let bob = person("bob")!;
+    befriend(ada, bob);
+    Console.writeLine("one way");
+}

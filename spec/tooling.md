@@ -303,6 +303,11 @@ source = "path+../geometry"
 - Every other command reads the lock. It fails with N0324 if the manifest has a dependency the lock lacks or
   records differently (run `ceesafec fetch`), and with N0325 if a git checkout's manifest and sources no longer have the
   lock's hash. A missing checkout of a locked commit is fetched, unless `--offline` is given (N0323 if it cannot be).
+- A registry package's `source` is `registry+` and its index (§4.6), so a lock written with `$CEESAFE_INDEX` set
+  matches only while the variable names that index. Read with another index, the lock's entry is N0324 at the
+  dependency, naming the lock's index, the command's, and the three ways out: set `CEESAFE_INDEX` as it was for
+  `ceesafec fetch`, name the index in the dependency (`index = "…"`), or run `ceesafec fetch` to resolve from the
+  command's index.
 - A path dependency has no hash: it is code being worked on beside the package.
 - The hash is SHA-256 over, for the manifest and each source file in ordinal order, the path relative to the package
   root, a zero byte, the file's bytes and a zero byte.
@@ -317,6 +322,10 @@ source = "path+../geometry"
 - `ceesafec fetch [--offline] [--update [name]]` resolves and writes `ceesafe.lock` (§4.7).
 - `ceesafec publish` checks that the package can be published and prints its index entry (§4.8).
 - `ceesafec test` runs the package's `@test` functions (§10).
+- `ceesafec <command> --help` (or `-h`), before any `--`, prints the usage text of `ceesafec --help` and exits with
+  status 0; `ceesafec test --help` prints `test`'s own (§10.2). A usage error (status 2) prints its message and then
+  the usage text on standard error. A failure of the environment, not of the command line, prints its message
+  alone: a C compiler or archiver that cannot be run, a file or directory that cannot be written.
 - `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
   C sources with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
@@ -470,6 +479,9 @@ index's entries:
 - it type-checks with its dependencies;
 - its git working tree is clean, and its commit is on a remote branch.
 
+A package that fails a check is N0335, at what is wrong where the manifest has it: the `kind` that is not a library,
+`[package]` without a version, the dependency that is not a registry one; otherwise at the manifest's start.
+
 It then prints the index entry for the version: the remote's URL, the commit, the hash and the requirements. To
 publish, add that entry to `packages/<name>.toml` in the index by pull request. The index's continuous integration
 runs `ceesafec index-check`, which checks every new entry:
@@ -477,6 +489,8 @@ runs `ceesafec index-check`, which checks every new entry:
 - its manifest has the entry's name and version;
 - its hash and dependencies are the entry's;
 - the version is newer than every earlier entry.
+
+Each failure is reported at the entry's `[[version]]` line in `index:packages/<name>.toml`.
 
 A new package name is reviewed by the index's maintainers. Later versions from the same repository merge after the
 checks pass.

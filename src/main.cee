@@ -136,7 +136,11 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --no-float        (build, check) reject every float type and literal, for code built without FP\n",
     )?;
     appendText(out, "                    registers such as a kernel (type-system.md §35.9)\n")?;
-    appendText(out, "  -o <path>         (build) output file or directory; default: name of the first input\n")?;
+    appendText(
+        out,
+        "  -o <path>         (build) output file or directory; default: out/<name> in a package, else the name of\n",
+    )?;
+    appendText(out, "                    the first input\n")?;
     appendText(
         out,
         "  --cc <compiler>   (build) C compiler for --emit exe; default: $CC, else cc, or on Windows clang, gcc or\n",
@@ -1582,6 +1586,22 @@ fn compileFiles(
     return finish(options, checker.front.diagnostics, sources, inputs);
 }
 
+/// Whether `--help` or `-h` is among a command's arguments, before any `--` (what follows is the program's).
+fn helpAsked() -> bool {
+    var a: usize = 2;
+    while (a < Process.argumentCount()) {
+        let arg = Process.argument(a)!;
+        if (arg == "--") {
+            return false;
+        }
+        if (arg == "--help" || arg == "-h") {
+            return true;
+        }
+        a += 1;
+    }
+    return false;
+}
+
 fn main() -> i32 {
     let argument = Process.argument(1);
     if (argument == null) {
@@ -1596,6 +1616,13 @@ fn main() -> i32 {
         return 0;
     }
     if (command == "-h" || command == "--help") {
+        var out = Vector<u8>.create();
+        appendUsage(mut out)!;
+        Console.writeBytes(out.view());
+        return 0;
+    }
+    if (command != "test" && helpAsked()) {
+        // `ceesafec <command> --help`: the usage text, which marks each option with its commands; `test` has its own.
         var out = Vector<u8>.create();
         appendUsage(mut out)!;
         Console.writeBytes(out.view());

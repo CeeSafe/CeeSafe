@@ -668,6 +668,99 @@ def interface_records(compiler, work, problems):
             problems.append(f"records: {name} has mode {oct(os.stat(os.path.join(records, name)).st_mode & 0o777)}")
 
 
+def driver_messages(compiler, work, problems):
+    """32. What the driver says: help for a command, an environment failure without the usage text, a lock written
+    with another index, and the places of `publish`'s and `index-check`'s errors."""
+    base = os.path.join(work, "driver-messages")
+    tally, index, user = (os.path.join(base, name) for name in ("tally", "index", "user"))
+    remote = os.path.join(base, "remote.git")
+
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def place(output):
+        """The first diagnostic's `file:line:column: error[code]`."""
+        first = output.split("\n")[0]
+        return first.split("]")[0] + "]" if "]" in first else first
+
+    # `<command> --help` is the usage text, with status 0; after `--` it is the program's own argument.
+    write(os.path.join(user, "ceesafe.toml"), '[package]\nname = "user"\n\n[dependencies]\ntally = "^0.1"\n')
+    write(os.path.join(user, "src", "main.cee"),
+          'fn main() {\n    Console.writeLine(Process.argument(1) ?? "none");\n}\n')
+    for command in ("build", "check", "run", "fetch", "fmt"):
+        for flag in ("--help", "-h"):
+            p = run([compiler, command, flag], user)
+            if p.returncode != 0 or not p.stdout.startswith("usage: ceesafec") or p.stderr:
+                problems.append(f"help: '{command} {flag}': {p.returncode} {p.stdout[:80]!r} {p.stderr[:200]!r}")
+    p = run([compiler, "--help"], user)
+    if "default: out/<name> in a package" not in p.stdout:
+        problems.append("help: -o's default in a package is out/<name>")
+    single = os.path.join(base, "single.cee")
+    write(single, 'fn main() {\n    Console.writeLine(Process.argument(1) ?? "none");\n}\n')
+    p = run([compiler, "run", "--interp", single, "--", "--help"], base)
+    if p.returncode != 0 or p.stdout.strip() != "--help":
+        problems.append(f"help: '--help' after '--' is the program's: {p.returncode} {p.stdout!r} {p.stderr[:200]!r}")
+
+    # A C compiler that cannot be run is not a usage error's page of options: one line.
+    p = run([compiler, "build", single, "--cc", "no-such-cc-gaps2", "-o", os.path.join(base, "single")], base)
+    if p.returncode == 0 or "cannot run the C compiler 'no-such-cc-gaps2'" not in p.stderr or "usage:" in p.stderr:
+        problems.append(f"--cc: a compiler that cannot be run: {p.returncode} {p.stderr[:300]!r}")
+    p = run([compiler, "build", single, "--no-such-option"], base)
+    if p.returncode != 2 or "usage:" not in p.stderr:
+        problems.append(f"an unknown option is a usage error with the usage text: {p.returncode} {p.stderr[:200]!r}")
+
+    # A library published to an index of its own.
+    git = ["git", "-c", "user.name=test", "-c", "user.email=test@localhost"]
+    library = '[package]\nname = "tally"\nversion = "0.1.0"\nkind = "library"\n'
+    write(os.path.join(tally, "ceesafe.toml"), library)
+    write(os.path.join(tally, "src", "lib.cee"), "public fn two() -> i32 => 2;\n")
+    os.makedirs(remote)
+    run(["git", "init", "-q", "--bare"], remote)
+    for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "one"], ["remote", "add", "origin", remote],
+                 ["push", "-q", "origin", "HEAD:main"], ["fetch", "-q", "origin"]):
+        run(git + argv, tally)
+    p = run([compiler, "publish"], tally)
+    if p.returncode != 0 or not p.stdout.startswith("[[version]]"):
+        problems.append(f"publish: {p.returncode} {p.stdout[:200]!r} {p.stderr[:300]!r}")
+        return
+    entry = p.stdout
+    write(os.path.join(index, "packages", "tally.toml"), entry)
+    for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "one"]):
+        run(git + argv, index)
+
+    # A lock written with CEESAFE_INDEX set, read without it: N0324 names both indexes and the variable.
+    p = run([compiler, "fetch"], user, {"CEESAFE_INDEX": index})
+    q = run([compiler, "check"], user, {"CEESAFE_INDEX": index})
+    if p.returncode != 0 or q.returncode != 0:
+        problems.append(f"index: fetch and check with CEESAFE_INDEX: {p.stderr[:300]!r} {q.stdout[:300]!r}")
+    e = dict(os.environ)
+    e.pop("CEESAFE_INDEX", None)
+    p = subprocess.run([compiler, "check"], cwd=user, env=e, capture_output=True, text=True)
+    first = p.stderr.split("\n")[0]
+    if (p.returncode != 1 or place(p.stderr) != "ceesafe.toml:5:1: error[N0324]" or "CEESAFE_INDEX" not in first
+            or index.replace("\\", "/") not in first or "CeeSafe-index" not in first):
+        problems.append(f"index: a lock from another index: {p.returncode} {p.stderr[:500]!r}")
+
+    # index-check: a version that is not newer is reported at its own [[version]].
+    write(os.path.join(index, "packages", "tally.toml"), entry + entry)
+    p = run([compiler, "index-check", "."], index)
+    expected = f"index:packages/tally.toml:{len(entry.splitlines()) + 1}:1: error[N0328]"
+    if p.returncode != 1 or place(p.stderr) != expected or "is not newer than" not in p.stderr:
+        problems.append(f"index-check: a duplicate version at its entry ({expected}): {p.returncode} {p.stderr[:300]!r}")
+
+    # publish: N0335 at the dependency, at `kind`, at [package].
+    for text, expected in (
+            (library + '\n[dependencies]\nuser = { path = "../user" }\n', "ceesafe.toml:7:1"),
+            (library.replace("library", "executable"), "ceesafe.toml:4:8"),
+            ('# a comment\n[package]\nname = "tally"\nkind = "library"\n', "ceesafe.toml:2:1")):
+        write(os.path.join(tally, "ceesafe.toml"), text)
+        p = run([compiler, "publish"], tally)
+        if p.returncode != 1 or place(p.stderr) != expected + ": error[N0335]":
+            problems.append(f"publish: N0335 at {expected}: {p.returncode} {p.stderr[:300]!r}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--compiler", required=True)
@@ -1656,10 +1749,11 @@ def main():
             problems.append(f"private-items: without the marked lines the program should print 31 and 11: "
                             f"{p.returncode} {p.stdout!r} {p.stderr[-300:]}")
 
+        driver_messages(compiler, work, problems)
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 31 checks; {len(problems)} problems")
+    print(f"package_tests: 32 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

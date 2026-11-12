@@ -25,6 +25,16 @@ fn directoryOf(path: Slice<u8>) -> Slice<u8> {
 
 fn failBytes(message: Slice<u8>) -> i32 => fail(StringView.fromUtf8(message)!);
 
+/// A failure of the environment, not of the command line (a C compiler that cannot be run, a file that cannot be
+/// written): the message alone on stderr, without the usage text, which would push it off the screen.
+fn failPlain(message: Slice<u8>) -> i32 {
+    var out = copyBytes("ceesafec: ".bytes())!;
+    appendBytes(mut out, message)!;
+    out.push('\n')!;
+    Console.writeError(StringView.fromUtf8(out.view())!);
+    return 2;
+}
+
 /// Writes a tool's output to standard error, as the reference compiler does: its standard output, then its standard error.
 fn relayTool(outcome: borrow ToolOutcome) {
     Console.writeError(StringView.fromUtf8(outcome.stdout.view())!);
@@ -42,7 +52,7 @@ fn buildFiles(
         if (options.output.length == 0) {
             match (makeDirectories(directoryOf(defaultName.view()))) {
                 Ok() => {}
-                Err(e) => { return fail(e.message()); }
+                Err(e) => { return failPlain(e.message().bytes()); }
             }
         }
     } else {
@@ -59,7 +69,7 @@ fn buildFiles(
             Err(e) => {
                 var message = copyBytes("cannot write the C: ".bytes())!;
                 appendText(mut message, e.message())!;
-                return failBytes(message.view());
+                return failPlain(message.view());
             }
         }
     }
@@ -116,7 +126,7 @@ fn buildFiles(
     }
     match (makeDirectories(directoryOf(output.view()))) {
         Ok() => {}
-        Err(e) => { return fail(e.message()); }
+        Err(e) => { return failPlain(e.message().bytes()); }
     }
     // The objects of --emit obj are made with GCC's and clang's flags (§8.3); an executable with the compiler found.
     var compilerError = Vector<u8>.create();
@@ -129,11 +139,11 @@ fn buildFiles(
     } else locateCompiler(options.cc.view(), mut compilerError);
     let compiler = match (found) {
         Some(c) => c,
-        null => { return failBytes(compilerError.view()); }
+        null => { return failPlain(compilerError.view()); }
     };
     let work = match (Directory.temporary()) {
         Ok(d) => d,
-        Err(e) => { return fail(e.message()); }
+        Err(e) => { return failPlain(e.message().bytes()); }
     };
     let workBytes = copyBytes(work.view().bytes())!;
     // Archive members carry the program's name (ADR 0088 §2.1): --program, the package's, or the first file's.
@@ -233,7 +243,7 @@ fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output
         Err(e) => {
             var message = copyBytes("cannot write the host's headers: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
 }
@@ -270,7 +280,7 @@ fn writeLinkFile(options: borrow Options, directory: Slice<u8>, name: Slice<u8>,
         Err(e) => {
             var message = copyBytes("cannot write the link file: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
 }
@@ -292,7 +302,7 @@ fn compileIn(
         Err(e) => {
             var message = copyBytes("cannot write the C: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
     // Run in the current directory: the source paths in #line directives are relative to it (c-backend.md §7).
@@ -338,7 +348,7 @@ fn compileIn(
         appendBytes(mut message, tool.view())!;
         appendText(mut message, "': ")!;
         appendText(mut message, outcome.error.message())!;
-        return failBytes(message.view());
+        return failPlain(message.view());
     }
     if (compilerFound.msvc) {
         let shown = withoutMsvcProgress(outcome.stdout.view(), files)!;

@@ -1,0 +1,23 @@
+// `this = v` in a `borrow mut this` method (type-system.md §13.3, ADR 0107) is an assignment through a reference like
+// any other: the receiver is not replaced while a binding of its payload is still used (N0240).
+enum Slot {
+    Empty,
+    Full(Vector<u8>),
+}
+
+impl Slot {
+    fn drain(borrow mut this) -> usize {
+        match (this) {
+            Slot.Full(v) => {
+                this = Slot.Empty; // error[N0240]
+                return v.length;
+            }
+            Slot.Empty => { return 0; }
+        }
+    }
+}
+
+fn main() {
+    var s = Slot.Empty;
+    Console.writeLine(s.drain());
+}

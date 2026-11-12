@@ -1,0 +1,11 @@
+// An enum's body holds its variants (grammar.md §2, ADR 0107): its functions are written in an `impl` block, and one
+// in the body is N0100 with that advice.
+enum Shape {
+    Circle(f64),
+    Empty,
+
+    fn area(borrow this) -> f64 => 0.0; // error[N0100]
+} // error[N0101]
+
+fn main() {
+}

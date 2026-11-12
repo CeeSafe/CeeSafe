@@ -258,6 +258,7 @@ fn checkProgramWith(
         uncheckedLibrary: Vector<bool>.create(),
         declaredOrder: Vector<DeclaredEntry>.create(),
         methodFiles: Vector<MethodFile>.create(),
+        enumMethods: Vector<EnumMethod>.create(),
         memberConstants: Vector<MemberConstant>.create(),
         fileImports: Vector<FileImport>.create(),
         fileFromRecord: records.fileFromRecord,

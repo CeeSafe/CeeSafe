@@ -66,9 +66,9 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
   public). An import applies to its file only. The name before the `.` must be a dependency of the package (N0310).
 - **Visibility between packages.** Only `public` items are visible to other packages, and of a public struct only its
   `public` fields and methods; `internal`, the default, keeps an item within its package, and `private` within its
-  file (§12). Naming another package's non-public item is N0312. A public function, constant, field or struct whose
-  signature names a type its dependents cannot see (a public function returning an internal struct) is N0314. An
-  `impl I for T` applies wherever `I` and `T` are both visible.
+  file (§12). Naming another package's non-public item is N0312. A public function, constant, field, method or
+  struct whose signature names a type its dependents cannot see (a public function returning an internal struct) is
+  N0314. An `impl I for T` applies wherever `I` and `T` are both visible.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
   `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
 - **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
@@ -313,10 +313,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   Anywhere else, `+` on views stays N0207: text is joined at run time by appending to a `String`.
 - `@export` on a constant makes it C data (§28.4).
 - **Associated constants** (ADR 0074 §2.7): `const NAME: T = e;`, with a visibility as a method's, may stand in a
-  struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`,
-  a block with constants only). They follow the rules above and are reached as `Type.NAME`, and from a dependent
-  package as `dep.Type.NAME` when public (N0312 otherwise). A bare `NAME` does not reach one, inside the type's
-  methods either.
+  struct body or an inherent `impl` block (§21.1), so an enum has them too (`impl Mode { const DEFAULT: u32 = 25; }`).
+  They follow the rules above and are reached as `Type.NAME`, and from a dependent package as `dep.Type.NAME` when
+  public (N0312 otherwise). A bare `NAME` does not reach one, inside the type's methods either.
   - A constant whose name is a field, method or variant of its type, or another of its constants, is N0228.
   - A generic struct or `impl` has none yet (N0216).
   - An associated constant takes no attributes (N0290).
@@ -483,6 +482,11 @@ The algorithm that enforces these rules is in `lifetimes.md`.
 - **Writes through references.** `r = v`, `r op= v` and `r.f = v` write to the referent. This
   requires `borrow mut` (N0211: "cannot assign through a shared reference"). A reference local
   itself can never be re-pointed.
+  - `this` is such a reference in a `borrow mut this` method (ADR 0107): `this = v` replaces the receiver, dropping
+    the value it held, which is how an enum's method changes its variant (§15.1). In a `borrow this` or a by-value
+    method it is N0211, and like any assignment through a reference it waits for the loans of the receiver's parts
+    (a `match` binding of a payload still in use is N0240). In a `drop` block (§14) it is N0211 too: the receiver
+    is the value being destroyed, and replacing it would destroy it again.
 - **Reborrow of `borrow mut`.** Using a `borrow mut T` value as a call argument, an initialiser
   or a return value creates a new mutable loan of `*r`. The original reference is unusable while
   the new one is live, and usable again afterwards (B4).
@@ -636,6 +640,11 @@ fn area(s: Shape) -> i64 {
 - **Equality** (ADR 0072). For an enum none of whose variants has a payload (a *fieldless* enum), `a == b` and
   `a != b` compare the variants; both operands have that enum type and are only read. An enum with payloads is
   N0207 (compare with `match`), and so are `<`, `>` and the other orderings on any enum.
+- **Methods** (ADR 0107). An enum's body holds its variants only (a `fn` there is N0100); its methods and static
+  functions are written in `impl E { … }` blocks (§21.1), with the receivers and rules of a struct's (§12): `e.m()`,
+  `E.f()`, and `E<A>.f()` for a generic enum. A function may not have the name of a variant (N0228). A
+  `borrow mut this` method changes a payload through a `match` binding, or replaces the receiver with `this = v`
+  (§13.3).
 - **Copy and drop.** An enum is Copy iff every payload type is Copy. It needs drop iff some payload
   needs drop; destroying it destroys the payloads of the active variant. Enums have no `drop`
   block (v0).
@@ -1684,7 +1693,19 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   were written in its body: the same visibility, the same "no member named twice" rule (N0228), and generic methods
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
-  N0267. It may also hold constants (§10, ADR 0074 §2.7); a block of constants only may name an enum of its package.
+  N0267. It may also hold constants (§10, ADR 0074 §2.7).
+- **`impl E { … }`** for an enum `E` (ADR 0107) is the same block with the same rules, and the only place an enum's
+  functions are written (§15.1):
+  - methods with `this`, `borrow this` or `borrow mut this`, static functions, generic methods, constants, and
+    `Self`; each function `public` or not as a struct's (N0312 from another package; N0314 for a public function of
+    a public enum whose signature names a type that is not public);
+  - `impl<T: B> E<T> { … }` for `enum E<T: B>` and `impl<region r> E<r> { … }` for `enum E<region r>`, whose functions
+    every instance has. A static function of a generic enum is called with the type arguments, `E<i32>.f()`, or as
+    `Self.f()` inside the block (`E.f()` is N0265): unlike a variant's, they are not inferred;
+  - a function named as a variant, a constant, another function of the enum, or a method an `impl I for E` gives it
+    (a default it inherits included), is N0228: an enum has one member of each name;
+  - the block is written in the enum's package, so the built-in enums (`Result`, optionals, `AllocError`,
+    `IoError`) and a dependency's enums take none (N0267), as the libraries' structs take none.
 - An **interface** lists method signatures. An interface may be generic (`interface Comparable<T>`).
 - **Static functions and generic methods** (ADR 0086 §2.3). A method has a receiver (`this`, `borrow this`,
   `borrow mut this`), or none: a **static function** (`fn create(options: borrow Options) -> Self;`), with or without

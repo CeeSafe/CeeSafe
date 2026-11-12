@@ -540,6 +540,18 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 _ => {}
             }
         }
+        // A function of an enum's `impl E { … }` block: the receiver carries the enum's regions and type parameters,
+        // as a struct's method's does (ADR 0107).
+        let enumItem = enumOfMethod(c, f, owner);
+        if (enumItem != none()) {
+            match (c.front.ast.items[enumItem as usize].kind) {
+                ItemKind.Enum(_, enumTypes, enumRegions) => {
+                    pushRegionNames(c, enumRegions, mut ownerRegions)?;
+                    pushRegionNames(c, enumTypes, mut ownerTypeParameters)?;
+                }
+                _ => {}
+            }
+        }
     }
     for (t in ownerTypeParameters.view()) {
         typeParameters.push(t)?;

@@ -1,0 +1,92 @@
+// Methods on enums (type-system.md §21.1, ADR 0107): what stays an error. A function named as a variant, a constant,
+// another function or an interface's method of the enum is N0228; an `impl` of a generic enum's functions names the
+// enum's own parameters (N0267), and a static function of a generic enum is called with its type arguments (N0265);
+// a method is called on a value (N0233); `this` is assigned only through `borrow mut this`, and not in a drop block
+// (N0211); the built-in enums take no `impl` (N0267). A function is not written in the enum's body
+// (parse-fail/enum-body-function), and a receiver is not replaced while a payload of it is borrowed
+// (check-fail/enum-method-assigns-borrowed-this).
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+impl Named for Shape {
+    fn name(borrow this) -> u32 => 1;
+}
+
+impl Shape {
+    const LIMIT: u32 = 4;
+
+    fn area(borrow this) -> f64 => 0.0;
+
+    fn Circle() -> u32 => 1; // error[N0228]
+
+    fn name(borrow this) -> u32 => 2; // error[N0228]
+
+    fn reset(borrow this) {
+        this = Shape.Empty; // error[N0211]
+    }
+
+    fn clear(this) {
+        this = Shape.Empty; // error[N0211]
+    }
+}
+
+impl Shape {
+    fn area(borrow this) -> f64 => 1.0; // error[N0228]
+
+    const area: u32 = 1; // error[N0228]
+}
+
+struct Guard {
+    id: u32;
+
+    drop {
+        this = Guard { id: 0 }; // error[N0211]
+    }
+}
+
+enum Maybe<T> {
+    Just(T),
+    Nothing,
+}
+
+impl Maybe<i32> { // error[N0267]
+    fn get(this) -> i32 => 0;
+}
+
+impl<U> Maybe<U> { // error[N0267]
+    fn take(this) -> u32 => 0;
+}
+
+impl<T> Maybe<T> {
+    fn empty() -> Maybe<T> => Maybe.Nothing;
+
+    fn isJust(borrow this) -> bool => match (this) {
+        Maybe.Just(_) => true,
+        Maybe.Nothing => false,
+    };
+}
+
+impl Result<i32, i32> { // error[N0267]
+    fn twice(this) -> i32 => 0;
+}
+
+impl AllocError { // error[N0267]
+    fn code(this) -> i32 => 0;
+}
+
+fn main() {
+    let s = Shape.Empty;
+    Console.writeLine(s.area());
+    Console.writeLine(s.perimeter()); // error[N0234]
+    Console.writeLine(Shape.area());  // error[N0233]
+    let m = Maybe.empty();            // error[N0265]
+    let n = Maybe<i32>.empty();
+    Console.writeLine(n.isJust());
+    Console.writeLine(Shape<i32>.area()); // error[N0204]
+}

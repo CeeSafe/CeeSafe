@@ -91,6 +91,9 @@ fn ownerHasMember(c: borrow Checker, owner: u32, symbol: u32, before: usize) -> 
                     return true;
                 }
             }
+            if (enumMethodNamed(c, owner, symbol) != none()) {
+                return true; // a function of an `impl E { … }` block (ADR 0107)
+            }
         }
         _ => {}
     }

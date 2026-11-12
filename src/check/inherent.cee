@@ -1,6 +1,8 @@
 // MergeInherentImpls (ADR 0064 §1): `impl S { … }` and `impl<T> S<T> { … }` blocks add methods to a struct of the same
 // package, as if written in its body. They are merged before anything is declared, so every later pass (a generic
 // struct's methods per instance, duplicate members, generic methods, visibility) sees one list of functions.
+// An enum has no body to merge into: the functions of its `impl E { … }` blocks are listed in Checker.enumMethods and
+// declared for the enum and for each of its instances when their variants are resolved (ADR 0107).
 
 fn inherentImplError() -> u32 => 267;
 
@@ -8,6 +10,44 @@ fn inherentImplError() -> u32 => 267;
 struct MethodFile {
     function: u32;
     file: u32;
+}
+
+/// A function of an `impl E { … }` block of an enum (ADR 0107): the enum's item, the function and the block's file.
+struct EnumMethod {
+    item: u32;     // the enum's AST item
+    function: u32; // Ast.functions
+    file: u32;
+}
+
+/// The function named `symbol` that an `impl E { … }` block gives the enum item `item` (Ast.functions), or none.
+fn enumMethodNamed(c: borrow Checker, item: u32, symbol: u32) -> u32 {
+    for (m in c.enumMethods.view()) {
+        if (m.item == item &&
+            c.front.ast.idents[c.front.ast.functions[m.function as usize].name as usize].symbol == symbol) {
+            return m.function;
+        }
+    }
+    return none();
+}
+
+/// Is the AST function `f` a function of an enum's `impl E { … }` block?
+fn isEnumMethod(c: borrow Checker, f: u32) -> bool {
+    for (m in c.enumMethods.view()) {
+        if (m.function == f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The enum item whose `impl E { … }` block declares the function `f` of `owner` (ADR 0107), or none: for a struct's
+/// method, an interface's, or a free function.
+fn enumOfMethod(c: borrow Checker, f: u32, owner: u32) -> u32 {
+    if (owner == none() || !c.types.is(owner, TypeKind.Enum) || !isEnumMethod(c, f)) {
+        return none();
+    }
+    let definition = c.types.info(owner).enumDef;
+    return if (definition == none()) none() else c.types.enums[definition as usize].item;
 }
 
 /// The file of struct method `f` (an AST function): its `impl` block's when merged from one, else `structFile`.
@@ -78,16 +118,23 @@ fn parameterSymbols(c: borrow Checker, list: Range, out: borrow mut Vector<u32>)
     return Ok();
 }
 
-/// Whether the impl's target `S<…>` names the struct's own parameters in order (`impl<T> S<T>`, `impl<region r> S<r>`).
-fn sameParameters(c: borrow Checker, implTypes: Range, implRegions: Range, s: Struct) -> Result<bool, AllocError> {
+/// Whether the impl's target `S<…>` names the struct's or enum's own parameters in order (`impl<T> S<T>`,
+/// `impl<region r> S<r>`).
+fn sameParameters(
+    c: borrow Checker,
+    implTypes: Range,
+    implRegions: Range,
+    ownTypes: Range,
+    ownRegions: Range,
+) -> Result<bool, AllocError> {
     var a = Vector<u32>.create();
     var b = Vector<u32>.create();
     parameterSymbols(c, implTypes, mut a)?;
-    parameterSymbols(c, s.typeParameters, mut b)?;
+    parameterSymbols(c, ownTypes, mut b)?;
     var ar = Vector<u32>.create();
     var br = Vector<u32>.create();
     parameterSymbols(c, implRegions, mut ar)?;
-    parameterSymbols(c, s.regionParameters, mut br)?;
+    parameterSymbols(c, ownRegions, mut br)?;
     if (a.length != b.length || ar.length != br.length) {
         return Ok(false);
     }
@@ -132,8 +179,30 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         symbol,
                         packageOfFile(c, file),
                     );
-                    if (enumItem != none() && functions.count == 0) {
-                        // `impl E { const … }`: an enum's constants (ADR 0074 §2.7).
+                    if (enumItem != none()) {
+                        // `impl E { … }`: an enum's functions (ADR 0107) and constants (ADR 0074 §2.7).
+                        let enumTypes = match (c.front.ast.items[enumItem as usize].kind) {
+                            ItemKind.Enum(_, t, _) => t,
+                            _ => emptyRange(),
+                        };
+                        let enumRegions = match (c.front.ast.items[enumItem as usize].kind) {
+                            ItemKind.Enum(_, _, r) => r,
+                            _ => emptyRange(),
+                        };
+                        if (functions.count > 0 &&
+                            !sameParameters(c, typeParameters, regionParameters, enumTypes, enumRegions)?) {
+                            var message = Vector<u8>.create();
+                            appendText(
+                                mut message,
+                                "an 'impl' of an enum's methods names the enum with its own parameters, in order: 'impl<T> E<T>' for 'enum E<T>' (ADR 0107)",
+                            )?;
+                            c.error(inherentImplError(), span.start, span.end, message)?;
+                            continue;
+                        }
+                        for (j in 0..functions.count) {
+                            let f = c.front.ast.at(functions, j);
+                            c.enumMethods.push(EnumMethod { item: enumItem, function: f, file: file })?;
+                        }
                         if (typeParameters.count > 0 || regionParameters.count > 0 || enumIsGeneric(c, enumItem)) {
                             genericConstants(c, constants)?;
                         } else {
@@ -141,20 +210,11 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         }
                         continue;
                     }
-                    if (enumItem != none()) {
-                        var message = Vector<u8>.create();
-                        appendText(
-                            mut message,
-                            "an 'impl' without 'for' of an enum holds constants only, not functions (ADR 0074 §2.7)",
-                        )?;
-                        c.error(inherentImplError(), span.start, span.end, message)?;
-                        continue;
-                    }
                     if (structItem == none()) {
                         var message = Vector<u8>.create();
                         appendText(
                             mut message,
-                            "an 'impl' without 'for' adds methods to a struct of this package; this names none (ADR 0064 §1)",
+                            "an 'impl' without 'for' adds methods to a struct or enum of this package; this names none (ADR 0064 §1, ADR 0107)",
                         )?;
                         c.error(inherentImplError(), span.start, span.end, message)?;
                         continue;
@@ -164,7 +224,7 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         _ => 0,
                     };
                     let s = c.front.ast.structs[structIndex as usize];
-                    if (!sameParameters(c, typeParameters, regionParameters, s)?) {
+                    if (!sameParameters(c, typeParameters, regionParameters, s.typeParameters, s.regionParameters)?) {
                         var message = Vector<u8>.create();
                         appendText(
                             mut message,
@@ -198,4 +258,127 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     c.setFile(saved);
     return Ok();
+}
+
+/// The attributes of the functions an enum's `impl E { … }` blocks give it (ADR 0107), read once per declaration as
+/// a struct's methods' are (processMethodAttributes); `@placed` is a struct's.
+fn processEnumMethodAttributes(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
+    let savedFile = c.file;
+    var k: usize = 0;
+    while (k < c.enumMethods.length) {
+        let m = c.enumMethods[k];
+        k += 1;
+        if (m.item != item) {
+            continue;
+        }
+        c.setFile(m.file);
+        let words = "effects effectsOf context constant test";
+        var known = Vector<u32>.create();
+        let attributes = c.front.ast.functions[m.function as usize].attributes;
+        knownAttributes(c, attributes, "an enum's method", words, mut known)?;
+        for (attribute in known.view()) {
+            if (sameText(attributeName(c, attribute), "test")) {
+                let a = c.front.ast.attributes[attribute as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "a test is a free function, not a method (ADR 0049 §3.1)")?;
+                c.error(testShape(), a.start, a.end, message)?;
+            }
+        }
+        readEffectAttributes(c, m.function, known.view())?;
+    }
+    c.setFile(savedFile);
+    return Ok();
+}
+
+/// The functions an enum's `impl E { … }` blocks give it (ADR 0107), declared for the enum entry `index`: the
+/// declaration's own type, whose bodies report, or an instance of a generic enum, as a generic struct's methods are
+/// declared for each instance. They are recorded as an impl's methods are (Checker.implMethods), so a method call,
+/// `E.f(…)` and `Self.f(…)` find them where they find an interface's. A name the enum already has, as a variant or
+/// as a method of one of its impls, is N0228.
+fn declareEnumMethods(c: borrow mut Checker, index: u32) -> Result<void, AllocError> {
+    let entry = c.enums[index as usize];
+    if (entry.item == none() || c.enumMethods.length == 0) {
+        return Ok();
+    }
+    let definition = c.types.info(entry.typ).enumDef;
+    let savedFile = c.file;
+    var k: usize = 0;
+    while (k < c.enumMethods.length) {
+        let m = c.enumMethods[k];
+        k += 1;
+        if (m.item != entry.item) {
+            continue;
+        }
+        c.setFile(m.file);
+        let id = c.front.ast.idents[c.front.ast.functions[m.function as usize].name as usize];
+        if (findVariant(c, definition, id.symbol) != none() || implMethodFor(c, entry.typ, id.symbol) != none()) {
+            if (entry.template == none()) {
+                var message = Vector<u8>.create();
+                appendQuotedType(mut message, c, entry.typ)?;
+                appendText(mut message, " already has a member named ")?;
+                appendQuotedName(mut message, c, id.symbol)?;
+                c.error(duplicateMember(), id.start, id.end, message)?;
+            }
+            continue;
+        }
+        // A function with type parameters of its own is a generic method, instantiated per call (ADR 0064 §1).
+        let function = if (c.front.ast.functions[m.function as usize].typeParameters.count > 0) declareGenericMethod(
+            c,
+            m.function,
+            entry.typ,
+            entry.environment,
+            false,
+        )? else declareFunctionIn(c, m.function, entry.typ, entry.environment)?;
+        c.implMethods.push(ImplMethod { typ: entry.typ, name: id.symbol, function: function })?;
+    }
+    c.setFile(savedFile);
+    return Ok();
+}
+
+/// The enum type a call `E.f(…)` or `E<A>.f(…)` of a function of the enum's own (ADR 0107) is made on, as
+/// staticOwner finds a struct's: the enum itself, or the instance its type arguments name; none after an error.
+fn enumStaticOwner(
+    c: borrow mut Checker,
+    index: u32,
+    target: u32,
+    nameSymbol: u32,
+    typeArguments: Range,
+) -> Result<u32, AllocError> {
+    let entry = c.enums[index as usize];
+    let targetSpan = c.front.ast.exprSpans[target as usize];
+    if (!isGenericItem(c, entry.item)) {
+        if (typeArguments.count > 0) {
+            var message = Vector<u8>.create();
+            appendQuotedType(mut message, c, entry.typ)?;
+            appendText(mut message, " is not generic; write it without type arguments")?;
+            c.error(unknownType(), targetSpan.start, targetSpan.end, message)?;
+            return Ok(none());
+        }
+        return Ok(entry.typ);
+    }
+    if (typeArguments.count == 0) {
+        var message = Vector<u8>.create();
+        appendQuotedName(mut message, c, nameSymbol)?;
+        appendText(mut message, " is generic: write its type arguments, e.g. '")?;
+        appendBytes(mut message, c.name(nameSymbol))?;
+        appendText(mut message, "<i32>.…'")?;
+        c.error(cannotInferTypeArguments(), targetSpan.start, targetSpan.end, message)?;
+        return Ok(none());
+    }
+    var itemName = Vector<u8>.create();
+    appendBytes(mut itemName, c.name(nameSymbol))?;
+    let typ = resolveRegionItemType(
+        c,
+        entry.typ,
+        entry.item,
+        itemName.view(),
+        typeArguments,
+        targetSpan,
+        false,
+        index,
+    )?;
+    if (c.types.isBottom(typ)) {
+        return Ok(none());
+    }
+    return Ok(typ);
 }

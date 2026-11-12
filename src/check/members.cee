@@ -816,6 +816,16 @@ fn checkNonStructMethod(
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
+    if (declarationOf(c, structType) != none() && c.types.is(structType, TypeKind.Enum)) {
+        // A declared enum may have methods (an impl's, or its own: ADR 0107), just not this one.
+        appendText(mut message, "type ")?;
+        appendQuotedType(mut message, c, structType)?;
+        appendText(mut message, " has no method ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     appendText(mut message, "type ")?;
     appendQuotedType(mut message, c, structType)?;
     appendText(mut message, " has no methods; ")?;

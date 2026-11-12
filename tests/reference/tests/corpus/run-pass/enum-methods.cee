@@ -1,0 +1,259 @@
+// Methods on enums (type-system.md §21.1, ADR 0107): `impl E { … }` gives an enum methods (by value, `borrow this`,
+// `borrow mut this`), static functions and generic methods, as it gives a struct; `impl<T> E<T>` gives them to every
+// instance of a generic enum. They are called as a struct's are: `value.f()`, `E.f()`, `E<A>.f()` and `Self.f()`.
+// A `borrow mut this` method replaces the value with `this = v`, which drops the old one.
+// expect-stdout: 12.5
+// expect-stdout: 6
+// expect-stdout: 0
+// expect-stdout: circle
+// expect-stdout: true
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 25
+// expect-stdout: 26
+// expect-stdout: 7
+// expect-stdout: -1
+// expect-stdout: 9
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: 11
+// expect-stdout: 2
+// expect-stdout: hello
+// expect-stdout: 3
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 8
+// expect-stdout: 4
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+impl Shape {
+    const SIDES: u32 = 4;
+
+    /// A static function: `Shape.unit()`.
+    fn unit() -> Shape => Shape.Rect(1.0, 1.0);
+
+    fn area(borrow this) -> f64 {
+        match (this) {
+            Shape.Circle(r) => { return 3.125 * r * r; }
+            Shape.Rect(w, h) => { return w * h; }
+            Shape.Empty => { return 0.0; }
+        }
+    }
+
+    fn name(borrow this) -> StringView => match (this) {
+        Shape.Circle(_) => "circle",
+        Shape.Rect(_, _) => "rect",
+        Shape.Empty => "empty",
+    };
+
+    /// One method calls another, and a static function through `Self`.
+    fn isUnit(borrow this) -> bool => this.area() == Self.unit().area();
+}
+
+enum Counter {
+    Idle,
+    Counting(u32),
+}
+
+// A second block, as a struct may have.
+impl Counter {
+    fn step(borrow mut this) {
+        match (this) {
+            Counter.Idle => { this = Counter.Counting(1); }
+            Counter.Counting(n) => { n += 1; }
+        }
+    }
+
+    /// By value: the receiver is consumed.
+    fn total(this) -> u32 => match (this) {
+        Counter.Idle => 0,
+        Counter.Counting(n) => n,
+    };
+}
+
+impl Counter {
+    fn started() -> Counter => Counter.Counting(3);
+}
+
+enum Mode {
+    Plain,
+    Tls,
+}
+
+impl Mode {
+    const DEFAULT: u32 = 25;
+
+    fn port(this) -> u32 => match (this) {
+        Mode.Plain => Mode.DEFAULT,
+        Mode.Tls => Mode.DEFAULT + 1,
+    };
+
+    /// A generic method: a type parameter of its own.
+    fn pick<T: Copy>(this, plain: T, tls: T) -> T => match (this) {
+        Mode.Plain => plain,
+        Mode.Tls => tls,
+    };
+
+    /// A generic static function.
+    fn echo<U: Copy>(value: U) -> U => value;
+}
+
+enum Maybe<T: Copy> {
+    Just(T),
+    Nothing,
+}
+
+impl<T: Copy> Maybe<T> {
+    fn of(value: T) -> Maybe<T> => Maybe.Just(value);
+
+    fn none() -> Self => Maybe.Nothing;
+
+    /// Inside the impl, the enum is named with its parameters, or as `Self`.
+    fn twice(value: T) -> Self => Maybe<T>.of(Self.of(value).orElse(value));
+
+    fn orElse(this, fallback: T) -> T => match (this) {
+        Maybe.Just(v) => v,
+        Maybe.Nothing => fallback,
+    };
+
+    fn isJust(borrow this) -> bool => match (this) {
+        Maybe.Just(_) => true,
+        Maybe.Nothing => false,
+    };
+
+    fn set(borrow mut this, value: T) {
+        this = Maybe.Just(value);
+    }
+
+    /// A generic method of a generic enum.
+    fn both<U: Copy>(this, other: U, pickOther: bool, same: T) -> T => this.orElse(same);
+}
+
+enum Token<region r> {
+    Word(StringView<r>),
+    End,
+}
+
+impl<region r> Token<r> {
+    /// The enum's region is in scope, as a struct's is in its methods.
+    fn text(this) -> StringView<r> => match (this) {
+        Token.Word(w) => w,
+        Token.End => "",
+    };
+
+    fn length(borrow this) -> usize => match (this) {
+        Token.Word(w) => w.length,
+        Token.End => 0,
+    };
+}
+
+enum Slot {
+    Empty,
+    Full(Vector<u8>),
+}
+
+impl Slot {
+    /// `this = v` drops the old value: a second fill frees the first vector.
+    fn fill(borrow mut this) -> Result<void, AllocError> {
+        var v = Vector<u8>.create();
+        v.push(1)?;
+        v.push(2)?;
+        this = Slot.Full(v);
+        return Ok();
+    }
+
+    fn clear(borrow mut this) {
+        this = Slot.Empty;
+    }
+
+    fn size(borrow this) -> usize => match (this) {
+        Slot.Full(v) => v.length,
+        Slot.Empty => 0,
+    };
+
+    fn into(this) -> Vector<u8> => match (this) {
+        Slot.Full(v) => v,
+        Slot.Empty => Vector<u8>.create(),
+    };
+}
+
+struct Pair {
+    items: Vector<u8>;
+    count: u32;
+
+    /// A struct's method may assign `this` too.
+    fn reset(borrow mut this) {
+        this = Pair { items: Vector<u8>.create(), count: 0 };
+    }
+}
+
+interface Describe {
+    fn code(borrow this) -> u32;
+}
+
+// An interface's methods and the enum's own stand side by side.
+impl Describe for Mode {
+    fn code(borrow this) -> u32 => match (this) {
+        Mode.Plain => 2,
+        Mode.Tls => 3,
+    };
+}
+
+fn main() {
+    let c = Shape.Circle(2.0);
+    Console.writeLine(c.area());
+    Console.writeLine(Shape.Rect(2.0, 3.0).area());
+    Console.writeLine(Shape.Empty.area());
+    Console.writeLine(c.name());
+    Console.writeLine(Shape.unit().isUnit());
+
+    var counter = Counter.Idle;
+    counter.step();
+    counter.step();
+    counter.step();
+    Console.writeLine(counter.total());
+    var started = Counter.started();
+    started.step();
+    Console.writeLine(started.total());
+
+    Console.writeLine(Mode.Plain.port());
+    Console.writeLine(Mode.Tls.port());
+    Console.writeLine(Mode.Tls.pick<i32>(5, 7));
+
+    Console.writeLine(Maybe<i32>.none().orElse(-1));
+    let m = Maybe<i32>.of(9);
+    Console.writeLine(m.orElse(0));
+    Console.writeLine(m.isJust());
+    var n = Maybe<u8>.none();
+    n.set(5);
+    Console.writeLine(n.orElse(0));
+    Console.writeLine(Maybe<i64>.of(11).both<bool>(true, false, 0));
+    Console.writeLine(Mode.Plain.code());
+
+    let word = Token.Word("hello");
+    Console.writeLine(word.text());
+    let other = Token.Word("abc");
+    Console.writeLine(other.length());
+
+    var slot = Slot.Empty;
+    slot.fill()!;
+    slot.fill()!;
+    Console.writeLine(slot.size());
+    slot.clear();
+    Console.writeLine(slot.size());
+    slot.fill()!;
+    let bytes = slot.into();
+    Console.writeLine(bytes.length);
+    var pair = Pair { items: Vector<u8>.create(), count: 3 };
+    pair.items.push(1)!;
+    pair.reset();
+    Console.writeLine(pair.items.length);
+    Console.writeLine(Mode.echo<u8>(8));
+    Console.writeLine(Maybe<i32>.twice(4).orElse(0));
+}

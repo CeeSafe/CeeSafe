@@ -1,0 +1,42 @@
+// `r as *mut T` and `r as *T` reborrow a `borrow mut` variable or field for the cast (type-system.md §27.2, §13.3):
+// the reference is not moved, and the reborrow ends at once, since the pointer holds no loan.
+struct Counter {
+    hits: u32;
+}
+
+struct Holder<region r> {
+    counter: borrow mut(r) Counter;
+}
+
+/// Safety: `p` points at the counter `r` refers to, which lives for the call, and `r` is not used during the write.
+fn bump(r: borrow mut Counter) -> usize {
+    let p = r as *mut Counter;
+    r.hits += 1;
+    let q = r as *Counter;
+    r.hits += 1;
+    unsafe {
+        p.write(Counter { hits: p.read().hits + 10 });
+    }
+    return (p as usize) - (q as usize);
+}
+
+/// Safety: `p` points at the counter the holder refers to, which lives for the call.
+fn throughField(h: borrow mut Holder) {
+    let p = h.counter as *mut Counter;
+    h.counter.hits += 100;
+    unsafe {
+        p.write(Counter { hits: p.read().hits + 1000 });
+    }
+}
+
+fn main() {
+    var c = Counter { hits: 0 };
+    Console.writeLine(bump(mut c));
+    Console.writeLine(c.hits);
+    var h = Holder { counter: borrow mut c };
+    throughField(mut h);
+    Console.writeLine(c.hits);
+}
+// expect-stdout: 0
+// expect-stdout: 12
+// expect-stdout: 1112

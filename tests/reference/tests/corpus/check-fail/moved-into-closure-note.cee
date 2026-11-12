@@ -1,0 +1,29 @@
+// N0250 after a move into a `move` closure, after a move on one branch and after a move in a loop: each carries the
+// note "the value was moved here" (ADR 0114 §2.2).
+fn consume(text: String) { }
+
+fn intoClosure() {
+    let text = String.from("x")!;
+    let t = Thread.spawn(move () => text.length)!;
+    Console.writeLine(text); // error[N0250]
+    Console.writeLine(t.join());
+}
+
+fn onOneBranch(flag: bool) {
+    let text = String.from("x")!;
+    if (flag) {
+        consume(text);
+    } else {
+        Console.writeLine("kept");
+    }
+    Console.writeLine(text); // error[N0250]
+}
+
+fn inLoop() {
+    let text = String.from("x")!;
+    for (i in 0..2) {
+        consume(text); // error[N0250]
+    }
+}
+
+fn main() { }

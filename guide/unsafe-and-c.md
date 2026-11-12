@@ -35,6 +35,10 @@ fn main() {
 16
 ```
 
+Making a pointer from a reference does not use the reference up: `let p = r as *mut T;` reborrows a `borrow mut`
+parameter `r` for the cast, and `r` can be used afterwards. The pointer holds no loan, so nothing checks it against
+later uses of `r`: that is what the `unsafe` block answers for.
+
 `p.read()` and `p.write(v)` need `p` aligned for its type. For a value at any byte offset (a field of a packed C
 struct, a word in the middle of a buffer) use `p.readUnaligned()` and `p.writeUnaligned(v)`, which take a Copy
 type and compile to one load or store:

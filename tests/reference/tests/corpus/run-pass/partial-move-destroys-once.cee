@@ -1,0 +1,96 @@
+// A partly moved value: what stays is read through, and everything is destroyed once.
+struct Pair {
+    first: String;
+    second: String;
+}
+
+struct Outer {
+    pair: Pair;
+    items: Vector<String>;
+    boxed: Box<Pair>;
+    tail: String;
+}
+
+fn take(s: String) -> usize => s.length;
+
+fn make(tag: StringView) -> Outer {
+    var items = Vector<String>.create();
+    items.push(String.from(tag)!)!;
+    items.push(String.from("item")!)!;
+    return Outer {
+        pair: Pair { first: String.from("first")!, second: String.from("second")! },
+        items: move items,
+        boxed: Box.create(Pair { first: String.from("b1")!, second: String.from("b2")! })!,
+        tail: String.from("tail")!,
+    };
+}
+
+fn branches(flag: bool) -> usize {
+    let o = make("branch");
+    var n: usize = 0;
+    if (flag) {
+        n += take(o.pair.first);
+        Console.writeLine(o.pair.second);
+        Console.writeLine(o.items[0]);
+    } else {
+        let items = o.items;
+        n += items.length;
+        Console.writeLine(o.pair.first);
+        Console.writeLine(o.tail[0..2]);
+    }
+    Console.writeLine(o.boxed.second);
+    return n + o.tail.length;
+}
+
+fn loops() {
+    for (i in 0..3) {
+        var o = make("loop");
+        let first = o.pair.first;
+        o.items[1].append("!")!;
+        Console.writeLine(o.items[1]);
+        if (i == 1) {
+            continue;
+        }
+        let boxed = o.boxed;
+        Console.writeLine(boxed.first);
+        Console.writeLine(o.pair.second.length + first.length);
+        if (i == 2) {
+            break;
+        }
+    }
+}
+
+fn refill() {
+    var p = Pair { first: String.from("one")!, second: String.from("two")! };
+    let n = take(p.first);
+    Console.writeLine(p.second);
+    p.first = String.from("again")!;
+    Console.writeLine(p.first);
+    let whole = p;
+    Console.writeLine(whole.first.length + n);
+}
+
+fn main() {
+    Console.writeLine(branches(true));
+    Console.writeLine(branches(false));
+    loops();
+    refill();
+}
+// expect-stdout: second
+// expect-stdout: branch
+// expect-stdout: b2
+// expect-stdout: 9
+// expect-stdout: first
+// expect-stdout: ta
+// expect-stdout: b2
+// expect-stdout: 6
+// expect-stdout: item!
+// expect-stdout: b1
+// expect-stdout: 11
+// expect-stdout: item!
+// expect-stdout: item!
+// expect-stdout: b1
+// expect-stdout: 11
+// expect-stdout: two
+// expect-stdout: again
+// expect-stdout: 8

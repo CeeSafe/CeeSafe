@@ -1,0 +1,28 @@
+// The cast of a `borrow mut` to a raw pointer reborrows it (type-system.md §27.2), which is a use like any other: a
+// reference that was moved cannot be cast, and the cast is a mutable use of a variable that is lent.
+struct Counter {
+    hits: u32;
+}
+
+fn keep(r: borrow mut Counter) { }
+
+fn castAfterMove(r: borrow mut Counter) {
+    let moved = move r;
+    let p = r as *mut Counter; // error[N0250]
+    moved.hits += 1;
+}
+
+fn castWhileShared() {
+    var c = Counter { hits: 0 };
+    let shared = borrow c;
+    let p = borrow mut c as *mut Counter; // error[N0241]
+    Console.writeLine(shared.hits);
+}
+
+fn castWhileReborrowed(r: borrow mut Counter) {
+    let held: borrow mut Counter = r;
+    let p = r as *mut Counter; // error[N0241]
+    held.hits += 1;
+}
+
+fn main() { }

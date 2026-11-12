@@ -731,8 +731,10 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
             // they read. A region allocation borrows only from its region (argument 0), and the allocated value's
             // loans are the allocation's too (§19.5, §25.4).
             var sources = Vector<u32>.create();
+            var builtIn = false;
             match (n.rvalues[assignValue as usize]) {
                 NirRvalue.Builtin(function, arguments) => {
+                    builtIn = true;
                     if (function == bfArenaAlloc()) {
                         sources.push(n.at(arguments, 0))?;
                         sources.push(n.at(arguments, 1))?;
@@ -757,6 +759,12 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     let through = throughParameter(c, n, b, p);
                     if (through != none()) {
                         addDeepEdge(mut edges, p.local, t.local, through)?;
+                    } else if (!builtIn && readsThroughLocalReference(c, n, b, p)) {
+                        // A value read through a local reference carries what that reference's referent holds, as
+                        // a deep result does: not the reference's own loan (a `for` over a field's elements or over
+                        // an iterator field reads its items so). A built-in's result may point into what it was
+                        // given (a region's allocation), so it keeps every loan of the reference.
+                        deepSourceEdge(c, n, b, mut edges, references, throughs, p.local, t.local, 0)?;
                     } else {
                         addEdge(mut edges, p.local, t.local)?;
                     }
@@ -919,8 +927,19 @@ fn deepSourceEdge(
     if (through != none()) {
         return addDeepEdge(edges, place.local, result, through);
     }
+    if (readsThroughLocalReference(c, n, b, place) && place.local != argument && depth < 64) {
+        // `t = &(*x).f` for a local reference `x`: what `t` refers to is part of what `x` refers to, so it holds no
+        // more than that does.
+        return deepSourceEdge(c, n, b, edges, references, throughs, place.local, result, depth + 1);
+    }
     return addEdge(edges, place.local, result);
 }
+
+/// Is the place `(*x)…` for a reference `x` (a view too), with no other reference on the way? What it names is then
+/// stored in what `x` refers to (ADR 0074 §2.4).
+fn readsThroughLocalReference(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, p: PlaceRef) -> bool =>
+    p.projections.count > 0 && isDerefProjectionN(n.projections[p.projections.start as usize]) &&
+        isReferenceType(c, localType(n, b, p.local)) && !beyondReference(c, n, b, p);
 
 /// The parameter index if the place starts with a deref of a reference parameter; none otherwise (DerefOfParameter).
 fn derefOfParameter(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, p: PlaceRef) -> u32 =>
@@ -1634,7 +1653,14 @@ fn reportConflict(
     appendText(mut first, borrowKind)?;
     appendText(mut first, " here")?;
     notes.push(DiagnosticNote { file: b.file, start: loanSpan.start, end: loanSpan.end, message: first })?;
-    let later = findLaterUse(c, n, b, loan, position, index)?;
+    // A temporary dies inside the statement that made it, and that statement's own store of its value (a `let`
+    // whose initialiser holds the borrow) is not the use a reader looks for: prefer one after the statement.
+    let ownStatement = if (code == deadWhileBorrowed() &&
+        n.functions[b.function as usize].locals[access.place.local as usize].name == none()) span else Span {
+        start: none(),
+        end: none(),
+    };
+    let later = findLaterUse(c, n, b, loan, position, index, ownStatement)?;
     if (later.start != none()) {
         var second = Vector<u8>.create();
         appendText(mut second, "the borrow is used later here")?;
@@ -1644,7 +1670,8 @@ fn reportConflict(
 }
 
 /// The first use, strictly after the given position, of a reference that may hold the loan (FindLaterUse); a span
-/// whose start is none if there is none.
+/// whose start is none if there is none. A use by a statement that contains `within` (when its start is not none)
+/// is passed over while another use follows it.
 fn findLaterUse(
     c: borrow Checker,
     n: borrow NirProgram,
@@ -1652,7 +1679,9 @@ fn findLaterUse(
     loan: u32,
     position: u32,
     index: u32,
+    within: Span,
 ) -> Result<Span, AllocError> {
+    var passedOver = Span { start: none(), end: none() };
     let blockCount = n.functions[b.function as usize].blocks.length;
     var visited = Vector<bool>.create();
     for (k in 0..blockCount) {
@@ -1675,7 +1704,13 @@ fn findLaterUse(
             accessUses(c, n, b, accesses, mut uses)?;
             for (local in uses.view()) {
                 if (loansContain(b, local, loan)) {
-                    return Ok(spanAt(n, b, block, i));
+                    let found = spanAt(n, b, block, i);
+                    if (within.start == none() || found.start > within.start || found.end < within.end) {
+                        return Ok(found);
+                    }
+                    if (passedOver.start == none()) {
+                        passedOver = found;
+                    }
                 }
             }
             i += 1;
@@ -1689,7 +1724,7 @@ fn findLaterUse(
             }
         }
     }
-    return Ok(Span { start: none(), end: none() });
+    return Ok(passedOver);
 }
 
 // ---- §7 Returned references ----

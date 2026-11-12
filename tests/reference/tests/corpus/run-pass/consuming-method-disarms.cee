@@ -1,0 +1,45 @@
+// A by-value `this` is immutable, as every parameter is (type-system.md §12): a consuming method that changes
+// its value moves it to a variable first. It can so disarm its `drop` block, and take a field with `replace`; the
+// value is destroyed once, at the end of the method.
+struct Journal {
+    name: String;
+    armed: bool;
+
+    drop {
+        if (this.armed) {
+            Console.writeLine("dropped without finish");
+        } else {
+            Console.writeLine("dropped disarmed");
+        }
+    }
+}
+
+impl Journal {
+    fn finish(this) {
+        var me = this;
+        me.armed = false;
+        Console.writeLine("finished");
+    }
+
+    fn intoName(this) -> String {
+        var me = this;
+        me.armed = false;
+        return replace(mut me.name, String.create());
+    }
+}
+
+fn main() {
+    let j = Journal { name: String.from("j")!, armed: true };
+    j.finish();
+    let k = Journal { name: String.from("k")!, armed: true };
+    let name = k.intoName();
+    Console.writeLine(name);
+    let l = Journal { name: String.from("l")!, armed: true };
+    Console.writeLine(l.name);
+}
+// expect-stdout: finished
+// expect-stdout: dropped disarmed
+// expect-stdout: dropped disarmed
+// expect-stdout: k
+// expect-stdout: l
+// expect-stdout: dropped without finish

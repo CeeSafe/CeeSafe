@@ -225,6 +225,136 @@ struct MoveCheck {
     function: u32;
     file: u32;
     reported: Vector<u32>; // locals
+    position: usize;       // the block being checked, and the statement in it (its count for the terminator)
+    index: usize;
+}
+
+/// Is one of two move paths the other, or inside it?
+fn movePathsOverlap(d: borrow MoveData, a: u32, b: u32) -> bool {
+    var x = a;
+    while (x != none()) {
+        if (x == b) {
+            return true;
+        }
+        x = d.nodes[x as usize].parent;
+    }
+    x = b;
+    while (x != none()) {
+        if (x == a) {
+            return true;
+        }
+        x = d.nodes[x as usize].parent;
+    }
+    return false;
+}
+
+/// Does statement `s` move `path`, a part of it, or a value that holds it?
+fn statementMovesPath(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    m: borrow MoveCheck,
+    d: borrow MoveData,
+    s: u32,
+    path: u32,
+) -> Result<bool, AllocError> {
+    var places = Vector<u32>.create();
+    match (n.statements[s as usize]) {
+        NirStatement.Assign(_, value) => { movedPlaces(n, value, mut places)?; }
+        NirStatement.Eval(value) => { movedPlaces(n, value, mut places)?; }
+        NirStatement.Unpack(source, _, _) => { places.push(source)?; }
+        _ => {}
+    }
+    for (place in places.view()) {
+        let moved = movedPath(c, n, n.functions[m.function as usize].locals, d, place);
+        if (moved != none() && movePathsOverlap(d, moved, path)) {
+            return Ok(true);
+        }
+    }
+    return Ok(false);
+}
+
+/// Where `path` was moved, for N0250's note: the nearest statement, going back from the one being checked along the
+/// blocks where the path may still be moved, that moves it. A span whose start is none if there is none (the move is
+/// in the statement itself).
+fn findMoveSite(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    m: borrow MoveCheck,
+    d: borrow MoveData,
+    path: u32,
+) -> Result<Span, AllocError> {
+    let nowhere = Span { start: none(), end: none() };
+    if (!anyMaybeMoved(d, d.before[m.position][m.index], path)?) {
+        return Ok(nowhere);
+    }
+    let blockCount = n.functions[m.function as usize].blocks.length;
+    var visited = Vector<bool>.create();
+    for (k in 0..blockCount) {
+        visited.push(false)?;
+    }
+    var pendingBlocks = Vector<usize>.create();
+    var pendingIndexes = Vector<usize>.create();
+    pendingBlocks.push(m.position)?;
+    pendingIndexes.push(m.index)?;
+    var next: usize = 0;
+    while (next < pendingBlocks.length) {
+        let position = pendingBlocks[next];
+        var i = pendingIndexes[next];
+        next += 1;
+        while (i > 0) {
+            i -= 1;
+            let s = n.functions[m.function as usize].blocks[position].statements[i];
+            if (statementMovesPath(c, n, m, d, s, path)?) {
+                return Ok(n.statementSpans[s as usize]);
+            }
+        }
+        let id = n.functions[m.function as usize].blocks[position].id;
+        for (q in 0..blockCount) {
+            if (visited[q]) {
+                continue;
+            }
+            var leads = false;
+            for (successor in n.functions[m.function as usize].blocks[q].successors.view()) {
+                if (successor == id) {
+                    leads = true;
+                }
+            }
+            if (leads) {
+                let count = n.functions[m.function as usize].blocks[q].statements.length;
+                if (anyMaybeMoved(d, d.before[q][count], path)?) {
+                    visited[q] = true;
+                    pendingBlocks.push(q)?;
+                    pendingIndexes.push(count)?;
+                }
+            }
+        }
+    }
+    return Ok(nowhere);
+}
+
+/// N0250 for `path`, with a note of where it was moved.
+fn movedError(
+    c: borrow mut Checker,
+    n: borrow NirProgram,
+    m: borrow mut MoveCheck,
+    d: borrow MoveData,
+    local: u32,
+    path: u32,
+    span: Span,
+    message: Vector<u8>,
+) -> Result<void, AllocError> {
+    if (containsU32(m.reported, local)) {
+        return Ok();
+    }
+    m.reported.push(local)?;
+    var notes = Vector<DiagnosticNote>.create();
+    let site = findMoveSite(c, n, m, d, path)?;
+    if (site.start != none()) {
+        var note = Vector<u8>.create();
+        appendText(mut note, "the value was moved here")?;
+        notes.push(DiagnosticNote { file: m.file, start: site.start, end: site.end, message: note })?;
+    }
+    return c.front.diagnostics.errorWithNotes(useOfMoved(), m.file, span.start, span.end, message, notes);
 }
 
 fn nirLocalName(
@@ -335,18 +465,15 @@ fn checkUse(
     let locals = borrow n.functions[m.function as usize].locals;
     let local = n.places[place as usize].local;
     let hasDeref = !isMovePath(c, n, locals, place); // through a reference, into an element, or into an enum variant
-    // Reading through a reference needs the reference; reading a place needs the place.
-    // In a run-once function, a read through a capture needs only that capture (ADR 0074 §2.3).
-    let path = if (hasDeref && !isOnceEnvironmentLocal(c, locals, local)) d.roots[local as usize] else pathFor(
-        c,
-        n,
-        d,
-        place,
-    );
+    // Reading a place needs the place. Reading through a reference, into an element or into a string's text needs
+    // the value that holds the reference, the elements or the text: the longest move path the place starts with
+    // (`p.name` for the text of `p.name`), which is where pathFor stops. The other fields of `p` may have been moved
+    // (ownership.md O3: a partially moved value's remaining fields are owned and usable).
+    let path = pathFor(c, n, d, place);
     if (!definitelyInit(d, state, path)?) {
         var what = Vector<u8>.create();
         if (hasDeref && !isOnceEnvironmentLocal(c, locals, local)) {
-            nirLocalName(c, n, m, local, mut what)?;
+            describeNode(c, n, m, d, path, mut what)?;
         } else {
             describeNirPlace(c, n, m, place, mut what)?;
         }
@@ -355,7 +482,7 @@ fn checkUse(
         appendBytes(mut message, what.view())?;
         if (anyMaybeMoved(d, state, path)?) {
             appendText(mut message, "' is used here after it was moved (on at least one path)")?;
-            return moveError(c, m, local, useOfMoved(), span, message);
+            return movedError(c, n, m, d, local, path, span, message);
         }
         appendText(mut message, "' is read here but may not have been assigned a value")?;
         return moveError(c, m, local, possiblyUnassigned(), span, message);
@@ -442,15 +569,19 @@ fn checkWrite(
     let locals = borrow n.functions[m.function as usize].locals;
     let local = n.places[target as usize].local;
     if (!isMovePath(c, n, locals, target)) {
-        // As CheckUse of the bare local: it must be initialised (a run-once function's capture: that capture).
-        let root = if (isOnceEnvironmentLocal(c, locals, local)) pathFor(c, n, d, target) else d.roots[local as usize];
+        // As CheckUse: the value that holds the reference or the elements written through must be initialised.
+        let root = pathFor(c, n, d, target);
         if (!definitelyInit(d, state, root)?) {
             var message = Vector<u8>.create();
             appendText(mut message, "'")?;
-            nirLocalName(c, n, m, local, mut message)?;
+            if (isOnceEnvironmentLocal(c, locals, local)) {
+                nirLocalName(c, n, m, local, mut message)?;
+            } else {
+                describeNode(c, n, m, d, root, mut message)?;
+            }
             if (anyMaybeMoved(d, state, root)?) {
                 appendText(mut message, "' is used here after it was moved (on at least one path)")?;
-                return moveError(c, m, local, useOfMoved(), span, message);
+                return movedError(c, n, m, d, local, root, span, message);
             }
             appendText(mut message, "' is read here but may not have been assigned a value")?;
             return moveError(c, m, local, possiblyUnassigned(), span, message);
@@ -502,7 +633,8 @@ fn checkWrite(
         appendText(mut message, "': the rest of '")?;
         nirLocalName(c, n, m, local, mut message)?;
         appendText(mut message, "' was moved")?;
-        return moveError(c, m, local, useOfMoved(), span, message);
+        let whole = d.roots[local as usize];
+        return movedError(c, n, m, d, local, whole, span, message);
     }
     appendText(mut message, "'")?;
     nirLocalName(c, n, m, local, mut message)?;
@@ -549,13 +681,21 @@ fn checkMoveRvalue(
 
 fn checkMoves(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> Result<void, AllocError> {
     let d = analyzeMoves(c, n, n.functions[function as usize])?;
-    var m = MoveCheck { function: function, file: functionFile(c, n, function), reported: Vector<u32>.create() };
+    var m = MoveCheck {
+        function: function,
+        file: functionFile(c, n, function),
+        reported: Vector<u32>.create(),
+        position: 0,
+        index: 0,
+    };
     let blockCount = n.functions[function as usize].blocks.length;
     for (position in 0..blockCount) {
         let statementCount = n.functions[function as usize].blocks[position].statements.length;
         for (i in 0..statementCount) {
             let s = n.functions[function as usize].blocks[position].statements[i];
             let span = n.statementSpans[s as usize];
+            m.position = position;
+            m.index = i;
             var state = d.before[position][i].clone()?;
             match (n.statements[s as usize]) {
                 NirStatement.Assign(target, value) => {
@@ -580,6 +720,8 @@ fn checkMoves(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> Res
             match (n.operands[operand as usize]) {
                 NirOperand.Place(place, isMove) => {
                     let span = n.terminatorSpans[terminator as usize];
+                    m.position = position;
+                    m.index = statementCount;
                     checkUse(c, n, mut m, d, place, isMove, d.before[position][statementCount], span)?;
                 }
                 _ => {}

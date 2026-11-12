@@ -1,0 +1,53 @@
+// A read through a field needs that field (ownership.md O3): the text of a moved string, the elements of a moved
+// vector and the whole of a partially moved value are still N0250, with a note of where the move was.
+struct Pair {
+    first: String;
+    second: String;
+}
+
+struct Bag {
+    label: String;
+    items: Vector<u32>;
+}
+
+fn consume(text: String) { }
+fn consumeItems(items: Vector<u32>) { }
+fn look(p: borrow Pair) { }
+
+fn textOfMovedField() {
+    let p = Pair { first: String.from("a")!, second: String.from("b")! };
+    let f = p.first;
+    Console.writeLine(p.first); // error[N0250]
+}
+
+fn wholeAfterPartial() {
+    let p = Pair { first: String.from("a")!, second: String.from("b")! };
+    consume(move p.second);
+    look(p); // error[N0250]
+}
+
+fn elementOfMovedVector() {
+    let bag = Bag { label: String.from("a")!, items: Vector<u32>.create() };
+    consumeItems(move bag.items);
+    Console.writeLine(bag.items[0]); // error[N0250]
+}
+
+fn elementWriteIntoMovedVector() {
+    var bag = Bag { label: String.from("a")!, items: Vector<u32>.create() };
+    consumeItems(move bag.items);
+    bag.items[0] = 1; // error[N0250]
+}
+
+fn textAfterWholeMove(p: Pair) {
+    let q = p;
+    Console.writeLine(p.second); // error[N0250]
+}
+
+fn movedOnOnePath(p: Pair, flag: bool) {
+    if (flag) {
+        consume(move p.second);
+    }
+    Console.writeLine(p.second); // error[N0250]
+}
+
+fn main() { }

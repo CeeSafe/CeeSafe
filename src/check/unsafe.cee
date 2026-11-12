@@ -83,6 +83,12 @@ fn checkPointerCast(c: borrow mut Checker, operand: u32, target: u32, span: Span
         c.hir.exprSpans[operand as usize] = span;
         return Ok(operand);
     }
+    if (fromReference && f.mutableReference && targetPointer) {
+        // A `borrow mut` variable or field is reborrowed for the cast, as every use of one is (§13.3): it is not
+        // moved, and the reborrow ends at once, since the pointer holds no loan (§27.2).
+        let lent = coerce(c, operand, from, span)?;
+        return c.expr(HirExpr.Cast(lent), target, span.start, span.end);
+    }
     return c.expr(HirExpr.Cast(operand), target, span.start, span.end);
 }
 

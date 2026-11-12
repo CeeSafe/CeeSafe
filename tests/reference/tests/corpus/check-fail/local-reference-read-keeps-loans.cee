@@ -1,0 +1,120 @@
+// A value read through a local reference carries what the referent holds (ADR 0114 §2.3), and nothing less: a view
+// made from the referent is still a loan of it, what was stored through the reference is read back with its loans,
+// and a region's allocation made through a reference to the region borrows the region.
+struct Slot<region r> {
+    text: StringView<r>;
+}
+
+fn viewOfLocalString(p: StringView) -> StringView {
+    let owned = String.from("a")!;
+    let lent = borrow owned;
+    let v = lent.view();
+    return v; // error[N0244]
+}
+
+fn viewOfLocalElement(p: StringView) -> StringView {
+    var owned = Vector<String>.create();
+    owned.push(String.from("a")!)!;
+    let lent = borrow owned;
+    for (s in lent) {
+        return s.view(); // error[N0244]
+    }
+    return "";
+}
+
+fn elementDiesWhileViewed() {
+    var kept = Vector<StringView>.create();
+    {
+        var owned = Vector<String>.create();
+        owned.push(String.from("a")!)!;
+        let lent = borrow owned;
+        for (s in lent) {
+            kept.push(s.view())!;
+        }
+    } // error[N0243]
+    Console.writeLine(kept.length);
+}
+
+fn changedWhileViewed() {
+    var owned = String.from("a")!;
+    let lent = borrow owned;
+    let v = lent.view();
+    owned.append("b")!; // error[N0241]
+    Console.writeLine(v);
+}
+
+fn storedThenRead() {
+    var slot = Slot { text: "" };
+    let lent = borrow mut slot;
+    var got = Vector<StringView>.create();
+    {
+        let owned = String.from("a")!;
+        lent.text = owned.view();
+        got.push(lent.text)!;
+    } // error[N0243]
+    Console.writeLine(got[0]);
+}
+
+fn pushedThenRead() {
+    var names = Vector<StringView>.create();
+    let lent = borrow mut names;
+    var got = Vector<StringView>.create();
+    {
+        let owned = String.from("a")!;
+        lent.push(owned.view())!;
+        got.push(lent[0])!;
+    } // error[N0243]
+    Console.writeLine(got[0]);
+}
+
+fn changedUnderRead() {
+    var owned = String.from("a")!;
+    var names = Vector<StringView>.create();
+    let lent = borrow mut names;
+    lent.push(owned.view())!;
+    let got = lent[0];
+    owned.append("b")!; // error[N0241]
+    Console.writeLine(got);
+}
+
+fn payloadThenRead() {
+    var slot: StringView? = null;
+    let lent = borrow mut slot;
+    var got = Vector<StringView>.create();
+    {
+        let owned = String.from("a")!;
+        *lent = Some(owned.view());
+        match (*lent) {
+            Some(v) => { got.push(v)!; }
+            null => {}
+        }
+    } // error[N0243]
+    Console.writeLine(got[0]);
+}
+
+fn loopOverLocalIterator() {
+    var got = Vector<StringView>.create();
+    {
+        let owned = String.from("a,b")!;
+        var parts = owned.view().split(",");
+        let lent = borrow mut parts;
+        for (part in lent) {
+            got.push(part)!;
+        }
+    } // error[N0243]
+    Console.writeLine(got[0]);
+}
+
+fn regionDies() -> Result<void, AllocError> {
+    var keeper = Vector<SliceMut<u32>>.create();
+    {
+        using arena = Arena.create(SystemHeap {}, 65536u64);
+        let lent = borrow mut arena;
+        let counts = lent.allocArray(256usize, 0u32)?;
+        keeper.push(counts)?;
+    } // error[N0243]
+    Console.writeLine(keeper.length);
+    return Ok();
+}
+
+fn main() { }

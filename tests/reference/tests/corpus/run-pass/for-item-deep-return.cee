@@ -1,0 +1,79 @@
+// A `for` over a field's elements, or over an iterator field, yields items that carry what the field holds, not the
+// loan of the loop's own borrow of the field (ADR 0074 §2.4; lifetimes.md §3): a view of the text can be returned
+// with the region of the text, as the index form and the `loop`/`match` form could already.
+struct Pair<region r> {
+    name: StringView<r>;
+    value: StringView<r>;
+}
+
+struct Table<region r> {
+    pairs: Vector<Pair<r>>;
+}
+
+impl<region r> Table<r> {
+    fn find(borrow this, name: StringView) -> StringView<r>? {
+        for (pair in this.pairs) {
+            if (pair.name == name) {
+                return Some(pair.value);
+            }
+        }
+        return null;
+    }
+}
+
+struct NonEmpty<region r> {
+    parts: TextSplit<r>;
+}
+
+impl<region r> NonEmpty<r> {
+    fn next(borrow mut this) -> StringView<r>? {
+        for (part in borrow mut this.parts) {
+            if (part.length > 0) {
+                return part;
+            }
+        }
+        return null;
+    }
+}
+
+fn table<region r>(name: StringView<r>, value: StringView<r>) -> Result<Table<r>, AllocError> {
+    var pairs = Vector<Pair<r>>.create();
+    pairs.push(Pair { name: name, value: value })?;
+    return Ok(Table { pairs: move pairs });
+}
+
+fn firstOf<region r>(words: borrow Vector<StringView<r>>) -> StringView<r> {
+    for (word in words) {
+        return word;
+    }
+    return "";
+}
+
+fn main() {
+    let text = String.from("a,,b,")!;
+    for (part in NonEmpty { parts: text.view().split(",") }) {
+        Console.writeLine(part);
+    }
+    {
+        let t = table("key", text.view())!;
+        Console.writeLine(t.find("key") ?? "none");
+        Console.writeLine(t.find("other") ?? "none");
+    }
+    var words = Vector<StringView>.create();
+    words.push(text.view())!;
+    let first = firstOf(words);
+    words.clear(); // `first` views the text, not the vector
+    Console.writeLine(first);
+    let lent = borrow words;
+    var kept = Vector<StringView>.create();
+    for (word in lent) {
+        kept.push(word)!;
+    }
+    Console.writeLine(kept.length);
+}
+// expect-stdout: a
+// expect-stdout: b
+// expect-stdout: a,,b,
+// expect-stdout: none
+// expect-stdout: a,,b,
+// expect-stdout: 0

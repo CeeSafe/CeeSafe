@@ -1,0 +1,61 @@
+// An item read through a local reference carries what the reference's referent holds (ADR 0074 §2.4), and that is
+// still checked: the text an item views cannot change or die while the item lives, the vector cannot change during
+// its loop, and a view of an owned string of the field cannot be returned as if it were the text's.
+struct Table<region r> {
+    names: Vector<StringView<r>>;
+    owned: Vector<String>;
+}
+
+impl<region r> Table<r> {
+    fn ownedAsText(borrow this) -> StringView<r>? {
+        for (i in 0..this.owned.length) {
+            return Some(this.owned[i].view()); // error[N0245]
+        }
+        return null;
+    }
+}
+
+fn itemOutlivesText() {
+    var kept = Vector<StringView>.create();
+    {
+        let text = String.from("a")!;
+        var names = Vector<StringView>.create();
+        names.push(text.view())!;
+        let lent = borrow names;
+        for (name in lent) {
+            kept.push(name)!;
+        }
+    } // error[N0243]
+    Console.writeLine(kept.length);
+}
+
+fn textChangesUnderItem() {
+    var text = String.from("a")!;
+    var names = Vector<StringView>.create();
+    names.push(text.view())!;
+    var kept = Vector<StringView>.create();
+    let lent = borrow names;
+    for (name in lent) {
+        kept.push(name)!;
+    }
+    names.clear();
+    text.append("b")!; // error[N0241]
+    Console.writeLine(kept.length);
+}
+
+fn vectorChangesUnderLoop(names: borrow mut Vector<StringView>) {
+    for (name in names) {
+        names.push(name)!; // error[N0241]
+    }
+}
+
+fn iteratorOutlivesText() -> StringView {
+    let text = String.from("a,b")!;
+    var parts = text.view().split(",");
+    for (part in borrow mut parts) {
+        return part; // error[N0244]
+    }
+    return "";
+}
+
+fn main() { }

@@ -1,13 +1,17 @@
-# CeeSafe Compilation Profiles for CosmoOS (+ Freestanding Runtime Design)
+# CeeSafe Compilation Profiles
 
-Status: C0 proposal (deliverables 3 and 7); §4, the freestanding profile, is normative from M8c. Facts are cited from
+Status: §4, the `freestanding` profile, is normative (from M8c): `ceesafec` has two profiles, `--profile hosted` (the
+default) and `--profile freestanding`, and `--kernel cosmoos` adds lib/kernel to the second (ADR 0025). §1 to §3 are
+the C0 design (deliverables 3 and 7) of two further profiles for CosmoOS, `cosmoos-user` and `cosmoos-kernel`:
+`ceesafec` accepts no `--profile` of those names and no `--target`, and they are kept as the record of what a CosmoOS
+build needs (its flags, runtime and limits). Facts about CosmoOS are cited from
 `docs/research/cosmoos-platform-audit.md` **[PA §n]** and
 `docs/research/cosmoos-kernel-audit.md` **[KA §n]**.
 
 A *profile* fixes three things: (1) the language features permitted, (2) the
-runtime library linked, (3) the C flags and link recipe. Profiles are selected
-with `ceesafec build --profile <p> --target <t>`. A profile is **not** "userland
-with the standard library switched off" (prompt §2). Each feature is either
+runtime library linked, (3) the C flags and link recipe. A profile is selected
+with `ceesafec build --profile <p>`. A profile is **not** "userland
+with the standard library switched off". Each feature is either
 allowed or not, and the list below is normative.
 
 ## 1. Profile matrix

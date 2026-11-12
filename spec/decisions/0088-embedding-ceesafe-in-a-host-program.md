@@ -1,6 +1,6 @@
 # ADR 0088 — Embedding CeeSafe in a host program: a library archive, `ceesafe_init`, panic and allocator hooks, host bindings
 
-- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Stage A implemented on branch `impl/0088a` (§7), stage B on `impl/0088b` (§8). Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
+- Status: **Accepted** by the owner, 2026-11-10 ("Accept as recommended": every question for the owner answered as recommended). Stage A implemented on branch `impl/0088a` (§7), stage B on `impl/0088b` (§8). Stages C, D and E are not implemented (as of 0.40.0, 2026-11-13): `ceesafec` rejects `--emit rust`. Proposed the same day and revised after two adversarial reviews (soundness; fit with Bun).
   Raised by the Bun port's first crate swap (`~/dev/CeeSafeApps/bun/analysis/trials/csrf/REPORT.md`): `bun_csrf` was
   replaced by CeeSafe inside Bun 1.4.4 and Bun's tests passed, but the trial found that CeeSafe cannot yet live in a
   program whose `main` is not CeeSafe's (its gaps G8, G6, G2, G9, and the runtime that is never started). The trial's
@@ -13,7 +13,8 @@
 - **Depends on** a runtime bug fix that is not part of this ADR: the runtime's per-process scratch and
   `FailingAllocator` state races between threads (§1.8). It is being fixed on branch `fix/runtime-thread-state`
   (per-thread or atomic state, with an audit of every runtime global). Stage A does not ship before it.
-- Release (§2.9): stage A in 0.28.0, after that fix; stage B in 0.29.0 (0.28.0 shipped without it); stage C in 0.29.0;
+- Release (§2.9): stage A in 0.28.0, after that fix; stage B in 0.29.0 (0.28.0 shipped without it); stage C was planned for 0.29.0,
+  which shipped stage B alone, and is in no release yet;
   stage D (separately built libraries) deferred until a host needs it (§6 question 8); stage E with any release that
   has a Windows run.
 - Scope: profiles.md §4.2–§4.3 (the runtime, `--emit obj`); tooling.md §4.1, §8.3 and the `build` flags (`--emit lib`,
@@ -530,7 +531,7 @@ deferred until a host does (§6 question 8). What the reviews settled, so the st
 |---|---|---|---|
 | A | §2.1 `--emit lib`; §2.2 `ceesafe_init`/`ceesafe_shutdown` (state word, argv copy, report, failure injection), generated `main` through it; §2.3 the thread contract; §2.4 the panic hook, the panicked flag, the async aborts routed; §2.6 the `extern "C"` guards (on `fix/0.28.0`, §7) | the initialiser, G2, the C++ part of G9; G8 for one umbrella build per binary | 0.28.0, after `fix/runtime-thread-state` |
 | B | §2.5 the allocator hook (the config's `allocator`, NULL-only in stage A, so the struct does not change), the 16-byte contract in `rt.h` and `foreign.h`, the alignment check, the window layer's calls | G6 | 0.29.0 |
-| C | §2.6 `--emit rust`, signature symbols | G9 for Rust | 0.29.0 |
+| C | §2.6 `--emit rust`, signature symbols | G9 for Rust | planned for 0.29.0; not implemented (0.29.0 shipped stage B alone, and `--emit rust` is still a usage error in 0.40.0) |
 | D | §2.7 `--no-runtime`, `--emit runtime`, the version check, the package marker, visibility | G8 for separately built libraries | deferred (§6 question 8) |
 | E | §2.8 `clang-cl` and `llvm-lib` by target, MSVC archives, the Windows tests | Windows | any release with a Windows run |
 

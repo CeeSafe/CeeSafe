@@ -1235,6 +1235,16 @@ fn checkAsyncJoin(
         c.error(closureTypeUnknown(), span.start, span.end, message)?;
         return c.errorResult(span.start, span.end);
     }
+    if (isRace && c.types.is(parts[0], TypeKind.Void)) {
+        // `Raced<T>` holds the winner's value, and no field has type `void` (§40.4).
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "'Async.race''s children return a 'Result<void, E>', but its result 'Raced<T>' holds the winner's value, and no value has type 'void'; return a value from each child, as in 'Result<bool, E>' (type-system.md §40.4)",
+        )?;
+        c.error(voidNotAllowed(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
     let second = checkJoinChild(c, arguments, 1, childResult)?;
     let secondFunction = match (c.hir.exprs[second as usize]) {
         HirExpr.Closure(f, _) => f,

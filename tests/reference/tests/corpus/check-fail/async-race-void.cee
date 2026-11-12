@@ -1,0 +1,18 @@
+// `Async.race`'s children return a value (type-system.md §40.4): `Raced<T>` holds the winner's, and no value has
+// type `void` (N0226). Before, this checked; the interpreter panicked and the C did not compile ('uint0_t').
+async fn nap(ms: u64) -> Result<void, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok();
+}
+
+async fn first() -> Result<u32, AsyncError> {
+    let raced = await Async.race(async () => await nap(5000), async () => await nap(10))?; // error[N0226]
+    return Ok(raced.winner);
+}
+
+fn main() {
+    match (Async.run(first())) {
+        Ok(winner) => { Console.writeLine(winner); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}

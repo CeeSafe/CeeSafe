@@ -1,0 +1,6 @@
+// `main` cannot be async (type-system.md §11): no task calls it. `check`, the interpreter and `build` agree; before,
+// `check` and the interpreter accepted it and the C did not compile ("call to undeclared function 'ceeF_main'").
+async fn main() -> i32 { // error[N0219]
+    await AsyncConsole.writeLine("hi")!;
+    return 3;
+}

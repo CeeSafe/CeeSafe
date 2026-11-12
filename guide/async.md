@@ -207,6 +207,8 @@ task 3 failed; the others ran to the end
 
 `Async.race(a, b)` runs two async closures and keeps the first to finish; `Async.all(a, b)` runs both and fails with
 the first error. Neither allocates: their children's frames are in the caller's.
+The children of a race return a value, which `Raced<T>` holds for the winner: children with nothing to return give a
+`bool` (a `Result<void, E>` there is N0226).
 
 ```ceesafe
 async fn after(ms: u64, v: u32) -> Result<u32, AsyncError> {
@@ -347,6 +349,31 @@ also accepts IPv4 clients, whose `peerAddress()` is `V4`. Network failures have 
 `ConnectionReset`, `TimedOut`, `HostUnreachable` and the rest, the same on every platform. A blocking call made
 directly in async code would stop every task of the thread, so it is a compile error (N0295): a `File` read or a
 `Mutex` lock belongs in `Async.blocking`.
+
+The calls that do not wait (`bind`, `port`, `shutdownWrite`) return `Result<T, IoError>`, as their blocking forms do.
+In a function that returns `AsyncError`, `?` works on both kinds: it wraps an `IoError` in `AsyncError.Io`. `main`
+itself is never async (N0219): it runs the program's first task with `Async.run`.
+
+```ceesafe
+async fn serve() -> Result<u16, AsyncError> {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 0)?; // an IoError becomes AsyncError.Io
+    let port = listener.port()?;
+    await AsyncConsole.writeLine("listening")?;
+    return Ok(port);
+}
+
+fn main() {
+    match (Async.run(serve())) {
+        Ok(port) => { Console.writeLine(port > 0); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+```
+
+```text
+listening
+true
+```
 
 A static file goes to a socket with `await stream.sendFileAll(borrow file, offset, length)`: the kernel copies it from
 the page cache (`sendfile`, or `TransmitFile` on Windows), and where it cannot, lib/std reads 64 KiB at a time on a

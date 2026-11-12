@@ -1,12 +1,18 @@
 // Constant operations that would overflow, under a condition that is never true: the analysis's facts contradict
 // there, but the overflow checks stay (optimisations.md §3), so the C holds no overflowing constant expression,
-// which C compilers reject under -Werror (found by the G8c fuzz campaign, seed 9202817).
+// which C compilers reject under -Werror (found by the G8c fuzz campaign, seed 9202817). The operands are named
+// constants since ADR 0110, which makes the same operations on literals N0217: a constant's use is its value, so
+// the C is what the literals gave.
+const ONE: i32 = 1;
+const MIN: i32 = -2147483648;
+const WIDE: i32 = 65536;
+
 fn f() -> i32 {
     var y: i32 = 6;
     if ((1u16 < 0u16)) {
-        y = 1i32 + 2147483647i32;
-        y = -2147483648i32 - 1i32;
-        y = 65536i32 * 65536i32;
+        y = ONE + 2147483647i32;
+        y = MIN - ONE;
+        y = WIDE * WIDE;
         let m = -2147483648i32;
         y = -m;
     }

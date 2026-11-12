@@ -133,7 +133,8 @@ Each expression is checked against an optional expected type:
      (without expectation) and its type becomes the flexible operand's expected type;
   3. otherwise both are checked without expectation (flexible ones default to `i32`).
 
-  So `x + 1` with `x: u8` types `1` as `u8`, and `let y: u64 = 2 * 3;` types both literals as `u64`.
+  So `x + 1` with `x: u8` types `1` as `u8`, and `let y: u64 = 2 * 3;` types both literals as `u64`. Once typed,
+  an expression of integer literals alone is evaluated for operations that would panic (§6, literal arithmetic).
 
 ## 6. Operators
 
@@ -152,10 +153,18 @@ conversions.
 | unary `-` | **signed** integer | same | `-MIN` → panic |
 | unary `!` | `bool` | `bool` | |
 
-These panics are run-time behaviour, also when every operand is a literal: `let big: u8 = 200 + 100;` in a function
-compiles, and panics when it runs (each literal fits `u8`, §4; their sum is not a literal). Only an expression that
-is evaluated at compile time, the value of a `const` (§10) or of a `static` (§39.4), reports the operation that
-would panic as a compile error (N0217).
+**Literal arithmetic** (ADR 0110). An expression made only of integer literals (suffixed or not, character literals
+included), unary `-`, parentheses and the arithmetic, bitwise and shift operators is *literal arithmetic*. Wherever
+it stands in a function's body (an initialiser, an operand of a larger expression, an argument, a branch), the
+outermost such expression is evaluated when the program is compiled, once its type is known (§5), exactly as a
+constant's value is (§10). If an operation in it would panic (overflow, division or remainder by zero, `MIN / -1`,
+`-MIN`, a shift amount out of range), that is a compile error (N0217) with the constant's message, instead of a
+panic every time the statement runs: `let big: u8 = 200 + 100;` is N0217, "the result 300 does not fit in 'u8'".
+The rule finds errors and changes nothing else: the expression's type and value are what they were. It is about
+what is written, not what is known: an expression with a name (a local, a parameter, a `const`), a call, a cast or
+a float literal in it is not literal arithmetic, and panics when it runs, as the table says; so the methods below
+take any literal (`200u8.wrappingAdd(100)`), though an argument that is itself literal arithmetic is under the
+rule. The error is reported in code that is never run and in a generic function's body, once, as a type error is.
 
 **Explicit overflow behaviour** (M11, G4b; OD-6). The operators panic on overflow. Where a program wants another
 behaviour, every integer type has nine methods. Each takes one argument of the receiver's type, and a flexible
@@ -288,9 +297,9 @@ flexible literal is typed as `u32`. Other mismatches are N0207.
   `embedText` (§10.1) and a constant view's `.bytes()` (below). `==` and `!=` on constant views compare their bytes
   (`"a" + "b" == "ab"` is `true`).
 - Constants are evaluated at compile time with the runtime semantics of §6. An operation in a constant's value that
-  would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217). This is a rule for
-  constants, not for every expression of literals: the same operation in a function's body is checked when it
-  runs (§6).
+  would panic at runtime (overflow, division by zero, bad shift) is a compile error (N0217). In a function's body
+  the same holds for literal arithmetic only (§6, ADR 0110): a use of a constant there is a name, so `K + 100`
+  with `const K: u8 = 200;` is checked when it runs.
 - A constant that depends on itself is N0218.
 - Uses of a constant are replaced by its value, typed as the constant's declared type.
 - A constant's type may be a `StringView` (ADR 0064 §2) or a lib/core `CStr` (§22.3, ADR 0087 §2.4), whose value is

@@ -1,0 +1,48 @@
+// Literal arithmetic that does not panic is unchanged by ADR 0110 (type-system.md §6): it is evaluated when the
+// program is compiled only to find an operation that would panic, and its value is what it always was. The limits
+// of each type are reachable, floats are not part of the rule, and the wrapping and checked methods take literals
+// that would overflow as operators.
+
+fn take(v: u8) -> u8 => v;
+
+fn main() {
+    let most: u8 = 200 + 55;
+    Console.writeLine(most);
+    let least: i32 = -2147483647 - 1;
+    Console.writeLine(least);
+    let wide: u64 = 4294967296 * 4294967295 + 4294967295;
+    Console.writeLine(wide);
+    let nested: u8 = (200 + 100 / 2) / 2 + 1 * 3;
+    Console.writeLine(nested);
+    let shifted: u32 = (1 << 31) | (1 >> 1) ^ 5 & 4;
+    Console.writeLine(shifted);
+    let suffixed = 250u8 + 5u8 - 255;
+    Console.writeLine(suffixed);
+    let negated: i8 = -(-127) - 127 - 127 - 1;
+    Console.writeLine(negated);
+    let remainder: i32 = -7 % 2 + 7 / -2;
+    Console.writeLine(remainder);
+    Console.writeLine(take(255 - 'a' + 'a'));
+    let option: u8? = 100 + 100;
+    Console.writeLine(option ?? 0);
+    let ratio: f64 = 1.0 / 0.0 - 1.0;
+    Console.writeLine(ratio > 1.0);
+    Console.writeLine(200u8.wrappingAdd(100));
+    Console.writeLine(200u8.checkedAdd(100).isNull());
+    Console.writeLine(200u8.saturatingAdd(100));
+}
+
+// expect-stdout: 255
+// expect-stdout: -2147483648
+// expect-stdout: 18446744073709551615
+// expect-stdout: 128
+// expect-stdout: 2147483652
+// expect-stdout: 0
+// expect-stdout: -128
+// expect-stdout: -4
+// expect-stdout: 255
+// expect-stdout: 200
+// expect-stdout: true
+// expect-stdout: 44
+// expect-stdout: true
+// expect-stdout: 255

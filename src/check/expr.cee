@@ -45,6 +45,35 @@ fn isFlexible(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e a
     _ => false,
 };
 
+/// Literal arithmetic (ADR 0110, §6): only integer literals, suffixed or not, combined by unary `-`, parentheses
+/// and the arithmetic, bitwise and shift operators. No name, call, cast or float literal is in one.
+fn isLiteralArithmetic(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.IntLiteral(_, _) => true,
+    ExprNode.CharLiteral(_) => true,
+    ExprNode.Paren(inner) => isLiteralArithmetic(c, inner),
+    ExprNode.Unary(op, operand) => match (op) {
+        UnaryOp.Negate => isLiteralArithmetic(c, operand),
+        UnaryOp.Not => false,
+    },
+    ExprNode.Binary(left, op, right) => (isArithmetic(op) || isBitwise(op) || isShift(op)) &&
+        isLiteralArithmetic(c, left) && isLiteralArithmetic(c, right),
+    _ => false,
+};
+
+/// Whether `e` is the outermost literal arithmetic of an expression that nothing else evaluates when the program
+/// is compiled: a constant's value and a static's initialiser are folded whole by their own rules (§10, §39.4).
+fn foldsLiteralArithmetic(c: borrow Checker, e: u32) -> bool =>
+    !c.inLiteralArithmetic && !c.inConstantInitializer && !c.inStaticInitializer && isLiteralArithmetic(c, e);
+
+/// Literal arithmetic, checked as `value`, is evaluated as a constant's value is (ADR 0110): an operation that
+/// would panic every time it ran is N0217 here. The expression stays as it was written.
+fn literalArithmeticChecked(c: borrow mut Checker, value: u32) -> Result<u32, AllocError> {
+    if (c.types.is(c.typeOf(value), TypeKind.Integer)) {
+        let _ = fold(c, value)?;
+    }
+    return Ok(value);
+}
+
 /// The integer type a literal takes from `expected`, looking through an optional (IntegerHint).
 fn integerHint(c: borrow Checker, expected: u32) -> u32 {
     if (expected == none()) {
@@ -203,8 +232,24 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
             }
             return synthName(c, name, span);
         }
-        ExprNode.Unary(op, operand) => { return synthUnary(c, op, operand, expected, span); }
-        ExprNode.Binary(left, op, right) => { return synthBinary(c, left, op, right, expected, span); }
+        ExprNode.Unary(op, operand) => {
+            if (!foldsLiteralArithmetic(c, e)) {
+                return synthUnary(c, op, operand, expected, span);
+            }
+            c.inLiteralArithmetic = true;
+            let value = synthUnary(c, op, operand, expected, span)?;
+            c.inLiteralArithmetic = false;
+            return literalArithmeticChecked(c, value);
+        }
+        ExprNode.Binary(left, op, right) => {
+            if (!foldsLiteralArithmetic(c, e)) {
+                return synthBinary(c, left, op, right, expected, span);
+            }
+            c.inLiteralArithmetic = true;
+            let value = synthBinary(c, left, op, right, expected, span)?;
+            c.inLiteralArithmetic = false;
+            return literalArithmeticChecked(c, value);
+        }
         ExprNode.Call(callee, arguments) => {
             match (c.front.ast.exprs[callee as usize]) {
                 ExprNode.Name(name, typeArguments) => {

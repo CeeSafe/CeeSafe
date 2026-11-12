@@ -141,6 +141,10 @@ and `i64`.
 | `&& \|\| !` | `bool` | `&&` and `\|\|` short-circuit |
 | `??` | an optional and a fallback | `o ?? d`: `o`'s value, or `d` when `o` is `null` |
 
+Arithmetic written with integer literals alone is worked out by the compiler, so a sum that could only ever stop
+the program does not compile: `let big: u8 = 200 + 100;` is an error (N0217), as `1 / 0` and `1u32 << 32` are.
+With a name in it, `x + 100`, the check is made when the program runs.
+
 When overflow is expected, say what should happen:
 
 ```ceesafe

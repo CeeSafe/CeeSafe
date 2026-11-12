@@ -1,0 +1,51 @@
+// Literal arithmetic that would panic is a compile error (ADR 0110, type-system.md §6): an expression of integer
+// literals, unary `-`, parentheses and the arithmetic, bitwise and shift operators is evaluated when the program
+// is compiled, as a constant's value is, wherever it stands. An expression with a name in it is not: see
+// run-pass/literal-arithmetic.cee and run-fail/named-operand-overflow-u8.cee.
+
+fn take(v: u8) -> u8 => v;
+
+fn generic<T>(v: T) -> T {
+    let wide: u64 = 18446744073709551615 + 1; // error[N0217]
+    return v;
+}
+
+fn result() -> i32 => 2147483647 + 1; // error[N0217]
+
+fn main() {
+    let big: u8 = 200 + 100;                 // error[N0217]
+    let suffixed = 200u8 + 100u8;            // error[N0217]
+    let half = 200u8 + 100;                  // error[N0217]
+    let below: u8 = 1 - 2;                   // error[N0217]
+    let product: u8 = 16 * 16;               // error[N0217]
+    let int: i32 = 2147483647 + 1;           // error[N0217]
+    let untyped = 2147483647 + 1;            // error[N0217]
+    let low: i32 = -2147483648 - 1;          // error[N0217]
+    let long: u64 = 4294967296 * 4294967296; // error[N0217]
+    let zero: i32 = 1 / 0;                   // error[N0217]
+    let rest: i32 = 1 % 0;                   // error[N0217]
+    let least: i32 = -2147483648 / -1;       // error[N0217]
+    let shift: u32 = 1 << 32;                // error[N0217]
+    let right: u8 = 1 >> 8;                  // error[N0217]
+    let negated: i8 = -(-128);               // error[N0217]
+    let character: u8 = 'z' + 200;           // error[N0217]
+
+    // Inside a larger expression, each one is reported once, where it stands.
+    let nested: u8 = (200 + 100) / 2;      // error[N0217]
+    let inner: u8 = 1 + (200 + 100) - 100; // error[N0217]
+    let named: u8 = big + (200 + 100);     // error[N0217]
+    let compared = 200u8 + 100u8 > 5u8;    // error[N0217]
+    let option: u8? = 200 + 100;           // error[N0217]
+    let argument = take(200 + 100);        // error[N0217]
+    let element = [1u8, 255 + 1];          // error[N0217]
+    var assigned: u8 = 0;
+    assigned = 255 + 1;  // error[N0217]
+    assigned += 255 + 1; // error[N0217]
+
+    // Code that never runs is checked like any other, as its types are.
+    if (false) {
+        let dead: u8 = 200 + 100; // error[N0217]
+    }
+    Console.writeLine(generic(result()));
+    Console.writeLine(big + suffixed + half + below + product + nested + inner + named + argument + assigned);
+}

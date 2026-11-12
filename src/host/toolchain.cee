@@ -913,6 +913,7 @@ fn compileObject(
         }
         return Ok(archived);
     }
+    var foreign = Vector<u8>.create(); // on macOS, a `--target=` that is not Apple's: the triple
     if (linker.length == 0) {
         var coff = hostIsWindows(); // the compiler's own target there, unless a `--target=` names another
         for (flag in flags.view()) {
@@ -920,6 +921,11 @@ fn compileObject(
             if (text.length >= 9 && sameText(text[..9], "--target=")) {
                 pushBytes(mut link, flag.view())?;
                 coff = containsText(text, "windows") || containsText(text, "mingw") || containsText(text, "cygwin");
+                foreign.clear();
+                if (hostIsMac() && !containsText(text, "apple") && !containsText(text, "darwin") &&
+                    !containsText(text, "macos")) {
+                    appendBytes(mut foreign, text[9..])?;
+                }
             }
         }
         if (coff) {
@@ -948,7 +954,24 @@ fn compileObject(
     for (object in objects.view()) {
         pushBytes(mut link, object.view())?;
     }
-    return runTool(if (linker.length == 0) compiler else linker, link);
+    var joined = runTool(if (linker.length == 0) compiler else linker, link)?;
+    if (foreign.length > 0 && joined.started && joined.status != 0) {
+        // Apple's clang links with Apple's ld, which knows Mach-O only and fails on the ELF link's options
+        // ("ld: unknown options: -Bstatic -EL"). The linker's words stay; the way out is said after them, in the
+        // driver's (profiles.md §4.3). A clang whose own linker for the target is lld never comes here.
+        appendText(
+            mut joined.stderr,
+            "ceesafec: --emit obj joins the program's objects with the C compiler's linker, which failed for the target '",
+        )?;
+        appendBytes(mut joined.stderr, foreign.view())?;
+        appendText(
+            mut joined.stderr,
+            "': on macOS that linker is Apple's ld, which links for Apple's targets only. Name a linker for the target, as in '--ld ld.lld' (LLVM's lld), or build with '--emit lib'\n",
+        )?;
+        tool.clear();
+        appendText(tool, "ceesafec")?; // said in full here: no "the C compiler failed" line after it
+    }
+    return Ok(joined);
 }
 
 /// Removes the file at `path`, if there is one.

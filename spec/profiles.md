@@ -224,6 +224,12 @@ compiler for such a target (on Windows without a `--target=…`, or with one tha
 --target=aarch64-unknown-none-elf`) or build an archive (`--emit lib`). The runtime's freestanding form includes no
 system header whatever the target, `<windows.h>` neither.
 
+On macOS, Apple's clang joins the objects with Apple's `ld`, which links for Apple's targets only, so a cross build
+(`--cflag --target=aarch64-unknown-none-elf`) without `--ld` fails in the linker (`ld: unknown options: -Bstatic
+-EL`). When the C compiler's link fails there for a `--target=` that is not Apple's (no `apple`, `darwin` or `macos`
+in it), `ceesafec` adds, after the linker's words, that the target needs a linker of its own: `--ld ld.lld`, or an
+archive (`--emit lib`). A clang whose linker for the target is `lld` links as before.
+
 Freestanding builds always add `-ffreestanding -fno-stack-protector -fno-asynchronous-unwind-tables
 -fno-unwind-tables` (c-backend §1).
 

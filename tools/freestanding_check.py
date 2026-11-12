@@ -184,6 +184,19 @@ def main():
             if built.returncode == 0 or len(said) != 1 or "relocatable link" not in said[0]:
                 problems.append(f"freestanding/{name} (a Windows target): expected ceesafec's one-line refusal: "
                                 f"{built.returncode} {built.stderr.strip()[:400]}")
+    # On macOS Apple's clang links with Apple's ld, which has no ELF link: a cross build without `--ld` fails in the
+    # linker, and ceesafec says after the linker's words that the target needs `--ld ld.lld` (profiles.md §4.3).
+    if sys.platform == "darwin" and "Apple" in run(["clang", "--version"]).stdout:
+        with tempfile.TemporaryDirectory() as cross_build:
+            built = subprocess.run([compiler, "build", "--profile", "freestanding", "--emit", "obj", "--cc", "clang",
+                                    "--cflag", "--target=aarch64-unknown-none-elf",
+                                    os.path.join(directory, files[0]), "-o", os.path.join(cross_build, "program.o")],
+                                   capture_output=True, text=True)
+            said = built.stderr.strip().splitlines()
+            if (built.returncode == 0 or not said or not said[-1].startswith("ceesafec: --emit obj joins")
+                    or "'--ld ld.lld'" not in said[-1] or "aarch64-unknown-none-elf" not in said[-1]):
+                problems.append(f"freestanding/{files[0]} (an ELF target on macOS, no --ld): expected ceesafec's "
+                                f"advice last: {built.returncode} {built.stderr.strip()[-400:]}")
     problems += embedded(compiler, args, cross)
     for p in problems:
         print("FAIL", p)

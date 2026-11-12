@@ -7,7 +7,8 @@ comment directly before the block changes that:
 - `<!-- ceesafe: fail N0241 N0205 -->`: the block fails with exactly these codes, and a `text` block after it is exactly
   the compiler's messages;
 - `<!-- ceesafe: warns N0400 -->`: as `fail`, but the codes are warnings: the check still succeeds (ADR 0073 §2.4);
-- `<!-- ceesafe: freestanding -->`: checked with the freestanding profile, not run;
+- `<!-- ceesafe: freestanding -->`: checked with the freestanding profile, not run; it combines with `fail` and
+  `warns`, as in `<!-- ceesafe: fail N0293 freestanding -->`;
 - `<!-- ceesafe: check -->`: type-checked, not run (it calls C);
 - `<!-- ceesafe: panics -->`, `<!-- ceesafe: exits N -->`: the run's exit status (134 for a panic);
 - `<!-- ceesafe: skip -->`: not checked.
@@ -79,7 +80,9 @@ def check(cee, example):
     where = f"{page}:{line}"
     if words[:1] == ["skip"]:
         return None
+    # `freestanding` goes with any other directive, before or after it: it is the profile, not one of `fail`'s codes.
     profile = ["--profile", "freestanding"] if "freestanding" in words else []
+    words = [word for word in words if word != "freestanding"]
     with tempfile.TemporaryDirectory() as work:
         with open(os.path.join(work, "main.cee"), "w", encoding="utf-8") as f:
             f.write(code)

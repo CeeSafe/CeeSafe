@@ -91,7 +91,7 @@ Speed, in a release build against the original Rust compiled into the same test:
 | Build the index of 2,000 segments (a sort and a tree) | 66 µs | 66 µs |
 | A lookup, per call (four kinds) | 40–213 ns | 46–290 ns (13–37% slower) |
 | Add a mapping to a source map | 17.5 ns | 24.5 ns (40% slower) |
-| Build a map of 2,000 segments | 27 µs | 50–59 µs |
+| Build a map of 2,000 segments (512 different maps in turn) | 85 µs | 91 µs (5–9% slower) |
 
 Where the work is inside CeeSafe, as in building the index, it is equal. Where a small function is called across
 the boundary, it pays for
@@ -99,15 +99,15 @@ the call: the Rust is inlined into its caller by link-time optimisation, and the
 in rustc's LTO. That is a cost of a hybrid build, not of the language, and a port of the calling crate would remove
 it.
 
-Building a map was about twice as slow, and when this was first written we had not established why. We have
-since (2026-11-12, ceesafec 0.38.0): most of it is where the linker placed the sort in that test binary, not the
-code. The same machine code, on the same 2,000 segments, takes 42 to 50 µs in the test binary and 24 to 33 µs in
-another binary linked from the same archive. Moved a few bytes at a time, the sort is slow (46 to 52 µs) when it
-starts at 3 of the 16 possible offsets within a 64-byte line and fast (28 to 41 µs) at the others, and the test
-binary has it at a slow one. Rust's sort has the same hazard at 1 offset of 16 (41 µs against 21 to 28 µs). At a
-good placement the CeeSafe sort takes 24 to 28 µs against Rust's 21 to 22 µs, and the shim's copy of the segments
-adds about 3.5 µs. The machine was shared during these runs, so the figures move by a few microseconds; the
-placement effect is far larger than that.
+Building a map is the row to read with care. Timed as the others were, by building the same 2,000 segments
+again and again, it was about twice as slow (27 µs against 50 to 59 µs), and when this was first written we had
+not established why. We have since (2026-11-12, ceesafec 0.38.0): that timing measured the processor's branch
+predictor more than the code. A sort of one input repeated thousands of times is a sequence of branches the
+predictor can learn, how well depends on where the code happens to be placed in the binary, and the same machine
+code took 24 to 33 µs in one binary and 42 to 50 µs in another; Rust's sort swings the same way, from 21 to 41 µs.
+Given 512 different maps in turn, both take their real time, and the difference is small and steady: 85 µs for
+the Rust and 91 µs for the CeeSafe, 5 to 9% slower, which is the two extra copies at the boundary. The sort alone,
+on data that differs each time, takes the same time in both languages, within 2%.
 
 Two rows of the report went the other way, and are not in the table because neither is a result about the
 language: validating a 2,000-segment map was 17 to 21% faster in CeeSafe, which we did not investigate, and the
@@ -152,12 +152,12 @@ design did not fit: a method cannot return `Result<borrow T, E>` when it has two
 
 A crate of a production Rust program can be replaced by CeeSafe without its users noticing: the same API, the
 program's own tests passing, the same answers on about a million generated cases, and, where the work is done
-inside CeeSafe, Rust's speed or within about a quarter of it: equal for the hash from 1 KB up and for the index
-build, 12 to 16% behind on short keys, and 15 to 25% behind on the sort once it is placed alike. What the host program receives is C, compiled by the C compiler it already uses.
+inside CeeSafe, Rust's speed or close to it: equal for the hash from 1 KB up and for the index
+build and for the sort, and 12 to 16% behind on short keys. What the host program receives is C, compiled by the C compiler it already uses.
 
 The reports, with the numbers above and how they were measured, are in the
 [CeeBun repository](https://github.com/CeeSafe/CeeBun) under `analysis/trials/` (the compiler's scale test under
-`analysis/scale/`, the line count in its `ROADMAP.md`); the placement of the sort is measured in
+`analysis/scale/`, the line count in its `ROADMAP.md`); the map build and the sort are measured in
 [this repository's investigation](../performance-investigation-2026-11.md), §10. The Bun trial's code is at
 [CeeSafe/ceebun-trial](https://github.com/CeeSafe/ceebun-trial). For the language itself, start with
 [CeeSafe for Rust programmers](../../guide/coming-from/rust.md).

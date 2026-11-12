@@ -455,6 +455,10 @@ another in a called function would be the place to look again.
 
 ## 10. The tsrs map build: code placement (2026-11-12, after 0.38.0)
 
+**Superseded in part by §11**, the same day: the placement effect below is real, but it exists only because the
+benchmark sorts one input again and again. Read §11 before using any figure here; "what is left" and the case for
+loop alignment do not stand.
+
 §3's last item, "building a map of 2,000 segments: about twice as slow, cause not established". Measured with
 ceesafec 0.38.0, the trial at `878c330f`, on the shared machine (load 2 to 8; figures move by about ±5 µs).
 
@@ -494,4 +498,74 @@ runs each (load 2 to 4):
 `string-building` was scanned over the 16 placements too: it has no slow placement as built (about 297 ms at each),
 and aligned loops cost it the same 3% and 6% at every one. So the flag removes a rare large loss (a tight loop at an
 unlucky offset) and adds a small one everywhere. Executables grow by 16 bytes.
+
+## 11. The sort on data that differs: equal to Rust, and what §10 and §4.2 measured (2026-11-12)
+
+Taken up from §4.2 ("check elimination is where CeeSafe can pass safe Rust"), with ceesafec 0.38.0 and the sort
+benchmark of §6.1 rebuilt. Shared machine, load 1 to 4.
+
+**The checks.** `--explain-bounds-checks` and `--explain-overflow-checks` of the sort (`goslices.cee`, through the
+benchmark that instantiates it), kept of all:
+
+| | Index checks | Overflow checks |
+|---|---:|---:|
+| The trial's port, 0.37.0 | 39 of 47 | 56 of 83 |
+| The trial's port, 0.38.0 | 39 of 47 | 54 of 84 |
+| The trial's port, with the two rules below | 25 of 45 | 47 of 84 |
+| Sliced once (each helper given `data[a..b]`), 0.38.0 | 28 of 47 | 43 of 71 |
+| Sliced once, with the two rules below | 12 of 44 | 33 of 71 |
+
+The two rules are in the working tree, not released, and need an ADR: an index updated in place keeps its bounds
+(`n -= 1` keeps what was above `n`, `i += 1` what was below; today even `while (n > 0) { n -= 1; … s[n] }` keeps
+its check), and a reborrowed slice (`&mut (*s)`, which `s.swap` makes) has the length of the slice it came from.
+The sliced sort gives the same result as the port (the benchmark's checksum).
+
+**They change nothing measurable here, and neither does the language.** The benchmark of §6.1 copies the same
+2,000 segments and sorts them, 20,000 times. Each variant below was linked at 16 placements (a padding object of 0
+to 60 bytes before it), three runs each, microseconds per sort:
+
+| | Best | Median | Worst |
+|---|---:|---:|---:|
+| The trial's port, 0.38.0 | 26.0 | 33.5 | 52.3 |
+| The trial's port, with the rules | 27.8 | 33.5 | 51.6 |
+| Sliced, 0.38.0 | 22.4 | 31.5 | 51.4 |
+| Sliced, with the rules | 24.8 | 38.6 | 49.8 |
+| Rust (`rustc -C opt-level=3`) | 21.2 | 30.1 | 36.8 |
+
+Every variant, Rust too, swings by a factor of up to two with its placement, more than the variants differ. With
+the benchmark changed to fill the 2,000 segments with new random values each round (both languages; the checksums
+agree), the same 16 placements:
+
+| | Best | Median | Worst |
+|---|---:|---:|---:|
+| The trial's port, 0.38.0 | 87.1 | 87.4 | 93.1 |
+| The trial's port, with the rules | 85.5 | 86.3 | 90.7 |
+| Sliced, 0.38.0 | 86.0 | 87.3 | 90.9 |
+| Sliced, with the rules | 86.5 | 88.1 | 90.3 |
+| Rust | 86.3 | 88.1 | 90.5 |
+
+(That includes filling the segments, the same work in both.) No placement is slow, and the five are within 2% of
+each other.
+
+**What that means.**
+
+- **A sort of one input, repeated, is a benchmark of the branch predictor.** It takes a third of the time of a
+  sort of new data, because the predictor learns the branches of that input; how well depends on the addresses of
+  the branches, which is the placement effect of §10. This reading fits every measurement here but was not tested
+  by counting mispredictions.
+- **On data that differs, the CeeSafe sort is as fast as Rust's,** with 39 index checks or 12. So §10's "what is
+  left" (24–28 µs against 21–22 µs) is not a gap, and loop alignment, which §10 found cost the suite 0.4 to 0.6%,
+  buys nothing real.
+- **§4.2's table was taken with the repeated input** (§6.1's program): its rows, including "with no checks the
+  CeeSafe is 15 to 25% faster than the Rust" and the unexplained 1.08 s, differ by less than one build differs from
+  itself across placements. None of them should be relied on. Whether check elimination can put CeeSafe ahead of
+  safe Rust is not shown by this sort either way.
+- **The tsrs trial's map build**, timed in the trial's own test on 512 different maps in turn (three runs, either
+  order): Rust 84 to 86 µs, CeeSafe 90 to 92 µs, 5 to 9% slower. The shim's copy of the segments is 3.5 µs of
+  that. On one repeated map the same test gave 37 to 56 µs for Rust and 51 to 56 µs for CeeSafe across three runs.
+
+**For later benchmarks:** never time a data-dependent algorithm on one input in a loop. Five workloads of
+`benchmarks/` loop over the same data in rounds (`hash-map`, `arena`, `linked-list`, `vector-growth`,
+`string-building`); their rounds are millions of operations long, far more than a predictor holds, but they were
+not checked for this effect.
 

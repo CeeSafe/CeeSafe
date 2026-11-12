@@ -604,6 +604,6 @@ The same export on an empty map, which returns at once: 2.7 to 4.0 ns.
   18.6 ns for the same loop in Rust, 9.6 ns for the fixed-step form in CeeSafe (two checks kept in its loop) and
   10.8 ns for Rust's `partition_point`. Rewritten that way, the port's three searches give the same answers
   (909,360 questions) but the lookups did not move by more than the spread (`spans` 261–275 ns, `position`
-  unchanged), so the trial was left as it was. CeeSafe's library has no `partitionPoint` for a port to call; one
-  would need an ADR.
+  unchanged), so the trial was left as it was then. The library has had `partitionPoint` since 0.40.0 (ADR 0103),
+  and the trial uses it from its commit `56164f5c`: the same answers, and timings about where they were.
 

@@ -263,6 +263,24 @@ fn emitExterns(
 ) -> Result<void, AllocError> {
     var externs = Vector<u32>.create();
     emittedExterns(c, e, mut externs)?;
+    // A `@header` may declare one of these functions with an array parameter, `void f(unsigned long out[3])`, which
+    // CeeSafe declares as the pointer C adjusts it to (C11 §6.7.6.3p7): the two declarations are compatible, and GCC 11
+    // and later warn about the pair all the same (-Warray-parameter and -Wvla-parameter, both in -Wall).
+    var arrayParameters = false;
+    if (c.headers.length > 0) {
+        for (function in externs.view()) {
+            for (k in 0..c.hir.functions[function as usize].parameters.length) {
+                arrayParameters = arrayParameters || c.types.is(parameterType(c, function, k), TypeKind.RawPointer);
+            }
+        }
+    }
+    if (arrayParameters) {
+        e.line("#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11")?;
+        e.line("#pragma GCC diagnostic push")?;
+        e.line("#pragma GCC diagnostic ignored \"-Warray-parameter\"")?;
+        e.line("#pragma GCC diagnostic ignored \"-Wvla-parameter\"")?;
+        e.line("#endif")?;
+    }
     for (function in externs.view()) {
         let name = c.name(c.hir.functions[function as usize].name);
         let symbol = externSymbol(c, function);
@@ -333,6 +351,11 @@ fn emitExterns(
         }
         e.line("}")?;
         emitCfgClose(e, c, function)?;
+    }
+    if (arrayParameters) {
+        e.line("#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11")?;
+        e.line("#pragma GCC diagnostic pop")?;
+        e.line("#endif")?;
     }
     var variadic = false;
     for (function in externs.view()) {

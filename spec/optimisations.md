@@ -184,7 +184,7 @@ made from a reference after its target was used directly (2026-10-25): none, as 
 - On by default. `ceesafec build --no-bce` and `ceesafec run --no-bce` keep every check (`CEmitOptions.BoundsCheckElimination`,
   `InterpreterOptions.BoundsCheckElimination`).
 - `ceesafec build --explain-bounds-checks` prints each index check of the package, in source order, with
-  `removed` or `kept`.
+  `removed` or `kept`: what that build does, so with `--no-bce` every line says `kept`.
 
 ### 2.8 How it is checked
 - **The interpreter** evaluates every bounds check, removed or not. If a removed one would fail, it stops with an
@@ -268,7 +268,7 @@ the same.
   (`CEmitOptions.OverflowCheckElimination`, `InterpreterOptions.OverflowCheckElimination`). `--no-bce` and `--no-oce`
   are independent.
 - `ceesafec build --explain-overflow-checks` prints each checked `+`, `-`, `*` and negation of the package, in source
-  order, with `removed` or `kept`.
+  order, with `removed` or `kept`: what that build does, so with `--no-oce` every line says `kept`.
 
 ### 3.5 How it is checked
 - **The interpreter** evaluates every operation exactly, removed or not. If a removed one would overflow, it stops

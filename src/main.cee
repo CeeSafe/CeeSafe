@@ -1555,17 +1555,17 @@ fn compileFiles(
             explainFrames(checker, nir, sources, mut printed)!;
         }
         if (options.explainBoundsChecks) {
-            // What the C backend omits unless --no-bce is given (optimisations.md §2.7).
+            // What the C backend omits; with --no-bce, nothing (optimisations.md §2.7).
             let checks = analyzeChecks(checker, nir)!;
-            explainChecks(checker, nir, sources, checks, false, mut printed)!;
+            explainChecks(checker, nir, sources, checks, false, options.bce, mut printed)!;
         }
         if (options.explainClosureCalls) {
             explainClosureCalls(checker, nir, sources, closureReport, mut printed)!;
         }
         if (options.explainOverflowChecks) {
-            // What the C backend omits unless --no-oce is given (optimisations.md §3.4).
+            // What the C backend omits; with --no-oce, nothing (optimisations.md §3.4).
             let checks = analyzeChecks(checker, nir)!;
-            explainChecks(checker, nir, sources, checks, true, mut printed)!;
+            explainChecks(checker, nir, sources, checks, true, options.oce, mut printed)!;
         }
         Console.writeBytes(printed.view());
         for (k in 0..options.cNames.length) {

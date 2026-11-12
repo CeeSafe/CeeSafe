@@ -1,0 +1,18 @@
+// A C function whose header declares an array parameter, `void sensor_read(unsigned long out[3]);`, is declared in
+// CeeSafe with the pointer C adjusts it to. The two declarations are compatible (C11 §6.7.6.3p7), and GCC 11 and later
+// warn about the pair (-Warray-parameter, in -Wall): the generated prototypes are written with that warning off
+// (c-backend.md §2.3). ffi/c-data.cee compiles such a pair.
+
+@header("sensor.h")
+extern "C" {
+    fn sensor_read(out: *mut CULong);
+}
+
+/// Safety: `values` holds the three elements `sensor_read` writes.
+fn main() {
+    var values: [CULong; 3] = [0; 3];
+    unsafe {
+        sensor_read(borrow mut values[0] as *mut CULong);
+    }
+    Console.writeLine(values[0] as u64);
+}

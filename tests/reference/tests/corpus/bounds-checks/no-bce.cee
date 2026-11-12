@@ -1,0 +1,19 @@
+// option: no-bce
+// With `--no-bce` the build keeps every index check and every boundary check of a view's slice, and the explanation
+// says so (optimisations.md §2.7, §2.9): both below are removed without the option.
+
+fn counted(s: Slice<u8>) -> u32 {
+    var t: u32 = 0;
+    for (i in 0..s.length) { t ^= s[i] as u32; }
+    return t;
+}
+
+fn firstTwo() -> StringView {
+    let text = "plain";
+    return text[0..2];
+}
+
+fn main() {
+    Console.writeLine(counted("abc".bytes()));
+    Console.writeLine(firstTwo());
+}

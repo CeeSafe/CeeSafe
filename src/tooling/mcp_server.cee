@@ -1283,11 +1283,11 @@ fn emitCTool(server: borrow McpServer, doc: borrow JsonDoc, arguments: u32) -> R
             }
             if (bounds) {
                 let checks = analyzeChecks(checker, compiled.nir)!;
-                explainChecks(checker, compiled.nir, compiled.sources, checks, false, mut text)!;
+                explainChecks(checker, compiled.nir, compiled.sources, checks, false, true, mut text)!;
             }
             if (overflow) {
                 let checks = analyzeChecks(checker, compiled.nir)!;
-                explainChecks(checker, compiled.nir, compiled.sources, checks, true, mut text)!;
+                explainChecks(checker, compiled.nir, compiled.sources, checks, true, true, mut text)!;
             }
         }
         null => {}

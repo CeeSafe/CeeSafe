@@ -1,0 +1,19 @@
+// option: no-oce
+// With `--no-oce` the build keeps every overflow check, and the explanation says so (optimisations.md §3.4): the
+// increment and the subtraction below are removed without the option (overflow-checks/proved.cee).
+
+fn counted(s: Slice<u8>) -> u32 {
+    var t: u32 = 0;
+    for (i in 0..s.length) { t ^= s[i] as u32; }
+    return t;
+}
+
+fn difference(a: u32, b: u32) -> u32 {
+    if (b <= a) { return a - b; }
+    return 0;
+}
+
+fn main() {
+    Console.writeLine(counted("abc".bytes()));
+    Console.writeLine(difference(7, 3));
+}

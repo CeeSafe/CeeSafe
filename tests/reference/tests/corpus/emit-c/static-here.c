@@ -83,6 +83,11 @@ _Static_assert(sizeof (((struct list_node *)0)->next) == 8, "ceesafec import: st
 _Static_assert(_Generic((((struct list_node *)0)->prev), struct list_node *: 1, default: 0), "ceesafec import: struct list_node.prev is not struct list_node * (lib/kernel/list.cee:20)");
 _Static_assert(sizeof (((struct list_node *)0)->prev) == 8, "ceesafec import: struct list_node.prev is not 8 bytes (lib/kernel/list.cee:20)");
 
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-parameter"
+#pragma GCC diagnostic ignored "-Wvla-parameter"
+#endif
 void mutex_lock(struct mutex *);
 static CEE_UNUSED void ceeC_mutex_lock(struct mutex * a0) {
     mutex_lock((struct mutex *)(uintptr_t)a0);
@@ -91,6 +96,9 @@ void mutex_unlock(struct mutex *);
 static CEE_UNUSED void ceeC_mutex_unlock(struct mutex * a0) {
     mutex_unlock((struct mutex *)(uintptr_t)a0);
 }
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11
+#pragma GCC diagnostic pop
+#endif
 
 uint64_t sh_bump(void);
 static CEE_UNUSED char ceeSC_0[] = "safe.table\000";

@@ -1884,8 +1884,12 @@ fn buildClosure(
         // a ≠ b with a ≤ b: a < b.
         var pair: usize = 0;
         while (pair + 1 < closure.unequal.length) {
-            let p = findClass(mut closure, closure.unequal[pair]);
-            let q = findClass(mut closure, closure.unequal[pair + 1]);
+            // The compiler's own source stays within what its stage 0's chain accepts (docs/release.md): the
+            // index is read before the borrow.
+            let first = closure.unequal[pair];
+            let second = closure.unequal[pair + 1];
+            let p = findClass(mut closure, first);
+            let q = findClass(mut closure, second);
             pair += 2;
             if (p == q) {
                 continue; // facts that contradict: code that never runs

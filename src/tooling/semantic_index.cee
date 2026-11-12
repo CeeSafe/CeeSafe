@@ -372,6 +372,10 @@ fn walkStatement(
             }
         }
         HirStmt.LocalDecl(_, initializer) => { walkExpression(index, c, sources, initializer)?; }
+        HirStmt.LetElse(test, otherwise) => {
+            walkExpression(index, c, sources, test)?;
+            walkStatement(index, c, sources, otherwise)?;
+        }
         HirStmt.Assign(_, _, value) => { walkExpression(index, c, sources, value)?; }
         HirStmt.If(condition, thenBlock, elseBranch) => {
             walkExpression(index, c, sources, condition)?;

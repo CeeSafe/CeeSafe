@@ -20,6 +20,9 @@ fn indexesInStmt(c: borrow Checker, s: u32, symbol: u32) -> bool {
             return false;
         }
         StmtNode.Local(_, _, _, initializer) => { return indexesIn(c, initializer, symbol, false); }
+        StmtNode.LetElse(_, value, otherwise) => {
+            return indexesIn(c, value, symbol, false) || indexesInStmt(c, otherwise, symbol);
+        }
         StmtNode.Defer(body) => { return indexesInStmt(c, body, symbol); }
         StmtNode.Match(scrutinee, arms) => {
             if (indexesIn(c, scrutinee, symbol, false)) {

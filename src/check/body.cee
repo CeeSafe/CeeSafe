@@ -109,6 +109,7 @@ fn checkStmt(c: borrow mut Checker, stmt: u32) -> Result<u32, AllocError> {
         StmtNode.Local(kind, name, typ, initializer) => {
             return checkLocalDecl(c, kind, name, typ, initializer, span);
         }
+        StmtNode.LetElse(pattern, value, otherwise) => { return checkLetElse(c, pattern, value, otherwise, span); }
         StmtNode.Assign(target, op, value) => { return checkAssign(c, target, op, value, span); }
         StmtNode.If(_, _, _) => { return checkIf(c, stmt); }
         StmtNode.While(condition, body) => {
@@ -1036,6 +1037,12 @@ fn completes(c: borrow Checker, stmt: u32, loopExits: borrow mut Vector<bool>) -
         HirStmt.Return(_) => { return Ok(false); }
         HirStmt.LocalDecl(_, initializer) => {
             return Ok(initializer == none() || !diverges(c, initializer, loopExits)?);
+        }
+        HirStmt.LetElse(test, otherwise) => {
+            // ADR 0117: what follows is reached where the pattern matched; the `else` block leaves (a `break` in it
+            // is an exit of its loop).
+            completes(c, otherwise, loopExits)?;
+            return Ok(!diverges(c, test, loopExits)?);
         }
         HirStmt.Assign(_, _, value) => { return Ok(!diverges(c, value, loopExits)?); }
         HirStmt.Expression(e) => { return Ok(!diverges(c, e, loopExits)?); }

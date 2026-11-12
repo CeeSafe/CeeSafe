@@ -510,6 +510,53 @@ initialiser, is an error (N0359). In a chain outside a condition, `let big = fin
 names end with the statement, so a `RefCell` guard bound that way is released before the next one. A test that binds a payload that is not Copy moves the value only when it succeeds:
 after `if (t is Token.Word(w)) { … } else { … }`, the `else` branch still has `t`.
 
+### Bind or leave: `let … else`
+
+When the rest of a function needs what a pattern binds, `let PATTERN = value else { … };` binds the names for the
+rest of the block, and runs the `else` block when the value does not match. That block must leave: `return`, `break`,
+`continue`, or a call that does not return, such as `Process.exit` (N0213 otherwise). It does not see the names.
+
+```ceesafe
+enum Shape {
+    Circle(u32),
+    Rect(u32, u32),
+}
+
+fn area(s: Shape) -> u32 {
+    let Shape.Rect(w, h) = s else {
+        return 0;
+    };
+    return w * h;
+}
+
+fn main() {
+    Console.writeLine(area(Shape.Rect(3, 4)));
+    Console.writeLine(area(Shape.Circle(3)));
+    let items: [u32?; 4] = [1, null, 3, 100];
+    var total: u32 = 0;
+    for (item in items) {
+        let Some(n) = item else {
+            continue;
+        };
+        let 0..=9 = n else {
+            break;
+        };
+        total += n;
+    }
+    Console.writeLine(total);
+}
+```
+
+```text
+12
+0
+4
+```
+
+Any pattern may stand after `let`; the statement ends with `;` like every `let`. A payload that is not Copy moves
+out of the value when the pattern matches, and the `else` block still has the whole value. A pattern that cannot
+fail because it tests nothing (`let x = e else { … };`, and `if (n is _)` too) is a warning (N0404).
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

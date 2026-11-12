@@ -209,6 +209,13 @@ fn namesInStmt(c: borrow Checker, s: u32, parameters: borrow Vector<u32>) -> boo
             return false;
         }
         StmtNode.Local(_, _, _, initializer) => { return namesIn(c, initializer, parameters); }
+        StmtNode.LetElse(pattern, value, otherwise) => {
+            return namesIn(c, value, parameters) || namesInPattern(c, pattern, parameters) || namesInStmt(
+                c,
+                otherwise,
+                parameters,
+            );
+        }
         StmtNode.Defer(body) => { return namesInStmt(c, body, parameters); }
         StmtNode.Match(scrutinee, arms) => {
             if (namesInExpr(c, scrutinee, parameters)) {
@@ -566,6 +573,7 @@ fn returnTypes(c: borrow Checker, stmt: u32, out: borrow mut Vector<u32>) -> Res
                 returnTypes(c, otherwise, out)?;
             }
         }
+        HirStmt.LetElse(_, otherwise) => { returnTypes(c, otherwise, out)?; }
         HirStmt.While(_, body) => { returnTypes(c, body, out)?; }
         HirStmt.Loop(body) => { returnTypes(c, body, out)?; }
         HirStmt.For(_, _, _, body) => { returnTypes(c, body, out)?; }
@@ -596,6 +604,7 @@ fn returnsValue(c: borrow Checker, stmt: u32) -> bool {
         HirStmt.If(_, then, otherwise) => {
             return returnsValue(c, then) || (otherwise != none() && returnsValue(c, otherwise));
         }
+        HirStmt.LetElse(_, otherwise) => { return returnsValue(c, otherwise); }
         HirStmt.While(_, body) => { return returnsValue(c, body); }
         HirStmt.Loop(body) => { return returnsValue(c, body); }
         HirStmt.For(_, _, _, body) => { return returnsValue(c, body); }
@@ -962,6 +971,10 @@ fn walkStmt(c: borrow Checker, s: u32, walk: borrow mut FieldWalk) -> Result<voi
             if (initializer != none()) {
                 walkExpr(c, initializer, none(), none(), walk)?;
             }
+        }
+        HirStmt.LetElse(test, otherwise) => {
+            walkExpr(c, test, none(), none(), walk)?;
+            walkStmt(c, otherwise, walk)?;
         }
         HirStmt.Assign(place, _, value) => {
             walkPlace(c, place, walk)?;

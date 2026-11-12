@@ -231,6 +231,18 @@ struct HirPrinter {
                 }
                 this.close()?;
             }
+            HirStmt.LetElse(test, otherwise) => {
+                this.open()?;
+                this.text("(let-else ")?;
+                this.expr(hir, types, symbols, test)?;
+                this.close()?;
+                this.indent += 1;
+                var elseHead = Vector<u8>.create();
+                appendText(mut elseHead, "else")?;
+                this.nested(hir, types, symbols, elseHead, otherwise)?;
+                this.indent -= 1;
+                this.line(")")?;
+            }
             HirStmt.Assign(place, op, value) => {
                 this.open()?;
                 this.text("(")?;

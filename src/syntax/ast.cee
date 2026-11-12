@@ -225,6 +225,8 @@ enum StmtNode {
     Block(Range),
     /// `let`, `var` or `using`: kind, identifier, type or none, initialiser or none.
     Local(LocalKind, u32, u32, u32),
+    /// `let P = e else { … };` (ADR 0117): the pattern, the value, the block that leaves.
+    LetElse(u32, u32, u32),
     Defer(u32),
     Match(u32, Range), // scrutinee, match arms
     /// condition, then (a block), else (a block, an if, or none).

@@ -180,6 +180,11 @@ fn braceStmt(c: borrow mut Checker, scope: borrow mut BraceScope, file: u32, s: 
                 scope.names.push(c.front.ast.idents[name as usize].symbol)?;
             }
         }
+        StmtNode.LetElse(pattern, value, otherwise) => {
+            braceExpr(c, scope, file, value)?;
+            braceStmt(c, scope, file, otherwise)?;
+            bracePattern(c, scope, pattern)?;
+        }
         StmtNode.Defer(body) => { braceStmt(c, scope, file, body)?; }
         StmtNode.Match(scrutinee, arms) => {
             braceExpr(c, scope, file, scrutinee)?;

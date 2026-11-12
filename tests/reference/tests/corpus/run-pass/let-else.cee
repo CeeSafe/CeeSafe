@@ -1,0 +1,146 @@
+// `let PATTERN = e else { … };` (ADR 0117, type-system.md §15.5): the pattern's names are in scope for the rest of the
+// block; the `else` block runs when the value does not match, and leaves. A non-Copy payload moves out on a match
+// and the value stays whole in the `else` block; the statement's temporaries end with it on both paths.
+enum Shape {
+    Circle(u32),
+    Rect(u32, u32),
+}
+
+struct Named {
+    name: Vector<u8>;
+
+    drop {
+        Console.writeLine("drop Named");
+    }
+}
+
+fn make(n: u32) -> Named? {
+    if (n == 0) {
+        return null;
+    }
+    var v = Vector<u8>.create();
+    v.push(truncate<u8>(n))!;
+    return Named { name: v };
+}
+
+fn area(s: Shape) -> u32 {
+    let Shape.Rect(w, h) = s else {
+        return 0;
+    };
+    return w * h;
+}
+
+fn first(v: u32?) -> u32 {
+    let Some(n) = v else {
+        return 99;
+    };
+    return n;
+}
+
+fn parse(r: Result<u32, u32>) -> u32 {
+    let Ok(n) = r else {
+        Console.writeLine("no number");
+        Process.exit(3);
+    };
+    return n + 1;
+}
+
+fn length(n: u32) -> usize {
+    let Some(named) = make(n) else {
+        Console.writeLine("none");
+        return 0;
+    };
+    Console.writeLine("got");
+    return named.name.length;
+}
+
+// The payload moves out of `v` on a match; in the `else` block `v` is whole.
+fn size(v: Vector<u8>?) -> usize {
+    let Some(bytes) = v else {
+        return if (v.isNull()) 1000 else 2000;
+    };
+    return bytes.length;
+}
+
+// A guard taken by the scrutinee is a temporary of the statement: it is released before the next statement.
+fn cellValue(cell: borrow RefCell<Vector<u32>>) -> usize {
+    let 1..=9 = cell.read().data().length else {
+        cell.write().data().push(1)!;
+        return 0;
+    };
+    cell.write().data().push(7)!;
+    return cell.read().data().length;
+}
+
+fn sum(items: Slice<u32?>) -> u32 {
+    var total: u32 = 0;
+    for (item in items) {
+        let Some(var n) = item else {
+            continue;
+        };
+        let 0..=9 | 50 = n else {
+            break;
+        };
+        n += 1;
+        total += n;
+    }
+    return total;
+}
+
+fn nested(v: Shape?) -> u32 {
+    let Some(Shape.Circle(r)) = v else {
+        return 0;
+    };
+    let whole @ 1..=5 = r else {
+        return 1;
+    };
+    return whole * 2;
+}
+
+fn main() {
+    Console.writeLine(area(Shape.Rect(3, 4)));
+    Console.writeLine(area(Shape.Circle(3)));
+    Console.writeLine(first(7));
+    Console.writeLine(first(null));
+    Console.writeLine(parse(Ok(1)));
+    Console.writeLine(length(0));
+    Console.writeLine(length(5));
+    var bytes = Vector<u8>.create();
+    bytes.push(1)!;
+    bytes.push(2)!;
+    Console.writeLine(size(bytes));
+    Console.writeLine(size(null));
+    let cell = RefCell<Vector<u32>>.create(Vector<u32>.create());
+    Console.writeLine(cellValue(cell));
+    Console.writeLine(cellValue(cell));
+    Console.writeLine(cell.read().data().length);
+    let items: [u32?; 6] = [1, null, 3, 50, 100, 5];
+    Console.writeLine(sum(items[..]));
+    Console.writeLine(nested(Shape.Circle(4)));
+    Console.writeLine(nested(Shape.Circle(40)));
+    Console.writeLine(nested(Shape.Rect(1, 2)));
+    Console.writeLine(nested(null));
+    Console.writeLine(parse(Err(2)));
+}
+// expect-stdout: 12
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 99
+// expect-stdout: 2
+// expect-stdout: none
+// expect-stdout: 0
+// expect-stdout: got
+// expect-stdout: drop Named
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 1000
+// expect-stdout: 0
+// expect-stdout: 2
+// expect-stdout: 2
+// expect-stdout: 57
+// expect-stdout: 8
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: no number
+// expect-exit: 3

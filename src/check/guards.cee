@@ -274,6 +274,10 @@ fn guardStmt(c: borrow Checker, s: u32, guarded: Slice<u32>, found: borrow mut G
             }
         }
         HirStmt.LocalDecl(_, initializer) => { guardExpr(c, initializer, true, guarded, found); }
+        HirStmt.LetElse(test, otherwise) => {
+            guardExpr(c, test, true, guarded, found);
+            guardStmt(c, otherwise, guarded, found);
+        }
         HirStmt.Assign(place, _, assigned) => {
             if (isGuarded(guarded, placeRoot(c, place)) && found.what == 0) {
                 let span = c.hir.stmtSpans[s as usize];

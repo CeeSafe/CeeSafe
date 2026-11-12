@@ -87,7 +87,7 @@ Semantic checks run only when every file parsed without errors.
 | N0210 | Not callable, or a function or built-in used as a value | `local()`, `let f = two;` |
 | N0211 | Assignment to an immutable binding (`let`, parameter, constant, function), or an assignment or `borrow mut` of a const parameter (ADR 0083 §2.3) | `param = 3;` |
 | N0212 | Local read before it is definitely assigned | `var x: i32; return x;` |
-| N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3) | `fn f() -> i32 { }` |
+| N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3); the end of the `else` block of a `let … else` is reachable (§15.5, ADR 0117) | `fn f() -> i32 { }`, `let Some(n) = v else { log(); };` |
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
 | N0215 | `return` with or without a value contradicts the return type, or `return` in a `never` function | `return 1;` in a `void` function |
 | N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11); also ceesafec's internal check that an expression with no value, which no diagnostic explains, never reaches code generation (a defect of ceesafec, ADR 0087 §9) | `truncate<i32, u8>(x)` |
@@ -337,3 +337,4 @@ error, and the command fails (ADR 0073 §2.4).
 | N0401 | `name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10) | `fn f(tls: Conn) { tls.connect(); }` with a dependency `tls` that has `public fn connect` |
 | N0402 | A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105) | `v.push(1);` |
 | N0402 | A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6) | `let g = cell.read(); await pause();` |
+| N0404 | A pattern that tests nothing, `_` or a binding (through `name @` too), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3) | `if (n is m) { … }`, `let x = e else { return; };` |

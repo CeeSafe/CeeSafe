@@ -172,6 +172,7 @@ struct HirArm {
 enum HirStmt {
     Block(Range),
     LocalDecl(u32, u32),   // local, initialiser or none
+    LetElse(u32, u32),     // ADR 0117: the test (an `Is`, or `false` after an error), the block that leaves
     Assign(u32, u32, u32), // place, operator (binaryOpIndex + 1, or 0 for '='), value
     If(u32, u32, u32),     // condition, then (a block), else or none
     While(u32, u32),

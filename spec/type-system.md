@@ -910,6 +910,37 @@ while (parts.next() is Some(part)) { handle(part); }
 - Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
   They end at the end of that statement, with its temporaries: in `let ok = c.tryRead() is Some(g) && g.data() == 5;`
   the guard `g` is released before the next statement, so a `tryWrite()` there succeeds.
+- **A pattern that tests nothing**, `_` or a binding (through `name @` too), makes the test always true: warning
+  N0404 (`if (n is _)`, `if (n is m)`). A pattern that takes the value apart and covers its type
+  (`arr is [first, rest @ ..]` on an array) is not warned about (ADR 0117 §2.3).
+
+### 15.5 `let P = e else { … };`: bind or leave (ADR 0117)
+```text
+LetElse = 'let' Pattern '=' Expr 'else' Block ';'
+```
+```ceesafe
+fn area(s: Shape) -> u32 {
+    let Shape.Rect(w, h) = s else {
+        return 0;
+    };
+    return w * h;
+}
+```
+- **Meaning.** `e` is evaluated once and tested against `P`, as `e is P` tests it (§15.4). Where it matches, the
+  pattern's names are bound, in scope from the end of the statement to the end of the enclosing block, as a `let`'s
+  name is. Where it does not, the block runs.
+- **The block leaves.** Its end must not be reachable (N0213): every path through it ends in `return`, `break`,
+  `continue` or a call that does not return (§15.3's rule for a function that returns a value). It does not see the
+  pattern's names (N0200).
+- **Moves happen only on a match**, as for `is`: a pattern that binds a non-Copy payload of a value consumes the
+  value (§18.4), and in the block the value is whole.
+- **Temporaries** of `e` end with the statement where the pattern matches, as a `let`'s do (§14.5), and before the
+  block runs where it does not. A binding that refers into one (`let [first, rest @ ..] = make() else { … };`) is
+  N0243: bind the value to a local first. (§15.4 keeps such temporaries for a then-branch; this statement has none.)
+- **Drop points.** The bindings, and the hidden locals of a consuming test, are locals of the enclosing block:
+  destroyed at its end, in reverse order of declaration.
+- A pattern that tests nothing (`let x = e else { … };`) is warning N0404, as for `is`. `var` before the pattern
+  and a type annotation are N0100: `var x` inside the pattern makes a binding mutable.
 
 ## 16. Arrays, slices and `for` (M2d)
 

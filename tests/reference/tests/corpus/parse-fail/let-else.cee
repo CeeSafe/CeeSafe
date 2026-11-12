@@ -1,0 +1,27 @@
+// `let PATTERN = e else { … };` (ADR 0117): a pattern after `let` needs its `else` block, takes no `var` and no type,
+// and ends with `;`. Each mistake is reported once, where it is.
+fn missingElse(x: u32?) -> u32 {
+    let Some(v) = x; // error[N0100]
+    return v;
+}
+
+fn typed(x: u32?) -> u32 {
+    let n: u32? = x else { // error[N0100]
+        return 0;
+    };
+    return 1;
+}
+
+fn mutable(x: u32?) -> u32 {
+    var Some(m) = x else { // error[N0100]
+        return 0;
+    };
+    return m;
+}
+
+fn noSemicolon(x: u32?) -> u32 {
+    let Some(v) = x else {
+        return 0;
+    } // error[N0100]
+    return v;
+}

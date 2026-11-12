@@ -360,3 +360,61 @@ fn lowerIsWhile(
     b.current = exit;
     return Ok();
 }
+
+/// `let P = e else { B };` (ADR 0117): the test of `e is P`, in a scope of its own while it runs. Where it fails,
+/// what the statement made so far ends and `B` runs, which leaves. Where it holds, the statement's temporaries end,
+/// as a `let`'s do, and the bindings (and the hidden locals of a consuming test) join the enclosing block's scope,
+/// which ends them.
+fn lowerLetElse(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    test: u32,
+    otherwise: u32,
+) -> Result<void, AllocError> {
+    var scrutinee = none();
+    var pattern = none();
+    var consumes = false;
+    match (c.hir.exprs[test as usize]) {
+        HirExpr.Is(s, p, k) => {
+            scrutinee = s;
+            pattern = p;
+            consumes = k;
+        }
+        _ => {}
+    }
+    if (scrutinee == none()) {
+        lowerStmt(c, n, b, otherwise)?; // after an error in the test: only the block is left
+        return Ok();
+    }
+    let depth = truncate<u32>(b.scopes.length);
+    b.scopes.push(Vector<ScopeItem>.create())?;
+    let saved = beginStatementTemps(b)?;
+    let elseBlock = newBlock(b)?;
+    let after = newBlock(b)?;
+    if (!lowerIsTest(c, n, b, scrutinee, pattern, consumes, elseBlock, depth)?) {
+        b.openTemps.truncate(b.openTemps.length - 1);
+        b.statementTemps = saved;
+        b.scopes.truncate(depth as usize);
+        b.current = none();
+        return Ok();
+    }
+    endStatementTemps(n, b, saved)?;
+    terminate(n, b, NirTerminator.Goto(after))?;
+    var made = Vector<ScopeItem>.create();
+    for (item in b.scopes[depth as usize].view()) {
+        made.push(ScopeItem { isDefer: item.isDefer, value: item.value })?;
+    }
+    b.scopes.truncate(depth as usize);
+    b.current = elseBlock;
+    lowerStmt(c, n, b, otherwise)?;
+    if (b.current != none()) {
+        terminate(n, b, NirTerminator.Goto(after))?; // only after N0213
+    }
+    b.current = after;
+    let top = b.scopes.length - 1;
+    for (item in made.view()) {
+        b.scopes[top].push(ScopeItem { isDefer: item.isDefer, value: item.value })?;
+    }
+    return Ok();
+}

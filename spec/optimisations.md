@@ -36,10 +36,10 @@ A **term** is an integer the analysis can name at a program point:
 - an integer constant;
 - the length of a tracked slice, string view, vector or string local.
 
-A **fact** relates two terms: `a = b`, `a ≤ b`, `a < b`. Terms are mathematical integers and facts are integer
-relations. That is sound because CeeSafe's arithmetic is checked: `+`, `-`, `*` panic rather than wrap (§6), and `as`
-is lossless (§7). A **definition** `x = a op b` records how a local was computed, for `op` among `+`, `-`, `%`, `&`
-and `>>` on unsigned integers. A **condition** `c = a cmp b` records the comparison that produced a `bool` local.
+A **fact** relates two terms: `a = b`, `a ≤ b`, `a < b`, `a ≠ b` (ADR 0100). Terms are mathematical integers and
+facts are integer relations. That is sound because CeeSafe's arithmetic is checked: `+`, `-`, `*` panic rather than wrap (§6), and `as`
+is lossless (§7). A **definition** `x = a op b` records how a local was computed, for `op` among `+`, `-`, `/`, `%`,
+`&` and `>>` on unsigned integers. A **condition** `c = a cmp b` records the comparison that produced a `bool` local.
 
 ### 2.3 Tracked locals
 A fact may mention only a tracked local:
@@ -67,6 +67,14 @@ A local that is moved out is uninitialised until it is assigned again, and that 
 A fact that ends with a local but also holds of a term known to be equal to it is kept, rewritten to that term.
 So `t = length(s); m = t - 1; StorageDead(t)` still knows `m < len(s)`.
 
+When a local ends that is an operand of the definition of another term `x` (`m = lo + t`, with the temporary `t`
+ending), the definition ends, and with it everything derived through it. What the facts derive about `x` at that
+point is kept as comparisons (ADR 0100): `x = u`, `x < u`, `x ≤ u`, `u < x` or `u ≤ x` for each **lasting** term `u`
+(a constant, a length, or a local the program names) that does not mention the ending local. Only the nearest bounds
+are kept: one that another lasting term lies between is left to transitivity, and one that `x`'s type gives anyway
+(`0 ≤ x`) is no fact. These are facts derived from facts that held, about terms that have not changed, so they hold.
+Nothing is kept past §2.5's budget.
+
 ### 2.4 Where facts come from
 - **Copies**: `x = y` and `x = y as T` (lossless) give `x = y`. `x = length(s)` gives `x = len(s)`. `x = c` gives
   `x = c`, and `x = c op d` for constants and `+`, `-`, `*` gives `x` its exact value when that is in `x`'s range (M9d).
@@ -78,8 +86,24 @@ So `t = length(s); m = t - 1; StorageDead(t)` still knows `m < len(s)`.
   if `c` is true, the relation holds; if false, its negation (`a < b` false is `b ≤ a`). A copy of `c` or `!c`
   carries them, and a `Branch` on `c` adds the relation of the edge it takes. A `bool` local assigned a constant is
   known to hold it.
+- **Equality tests** (ADR 0100): a `bool` local `c = a == b` comparing integers gives: if `c` is true, `a = b`; if
+  false, `a ≠ b`. `c = a != b` gives the same with true and false exchanged. So after
+  `if (n == 0) { return; }`, `n ≠ 0`. Only for lasting terms (§2.3; a temporary that equals a length counts as the
+  length): what is known of two temporaries, as in `f(a) == f(b)`, ends with the statement.
+- **A resized vector** (ADR 0100): `r = v.resize(n, fill)`, for a tracked vector local `v` and a term `n`, gives
+  "if `r` is `Ok`, then `len(v) = n`": `resize` either makes the length `n` or fails with the vector unchanged
+  (`type-system.md` §23). A copy of `r` and its discriminant carry the implication, and the edge of a `Switch` on
+  the discriminant that only `Ok` takes adds `len(v) = n`. So after `v.resize(n, 0)?` or `v.resize(n, 0)!`, a
+  loop `for (i in 0..n)` indexes `v` with no check. The vector is the one the call's `&mut` temporary was made
+  from; any other borrow of `v`, or assignment to it, ends that. The temporary must be the call's alone: a local
+  the program does not name, which no other statement reads, copies or reborrows. This is the one fact made about a
+  local while a mutable loan of it is still in scope (§2.3), and that condition is what makes it hold: nothing can
+  change the vector through the loan after the call. A `resize` through a named borrow (`p.resize(n, 0)`) gives no
+  fact.
 - **Passed checks**: after `BoundsCheck(i < L)`, `i < L`; after `RangeCheck(lo, hi, L)`, `lo ≤ hi` and `hi ≤ L`;
-  after `LengthCheck(a, b)`, `a = b`.
+  after `LengthCheck(a, b)`, `a = b`. Where `i` or `L` is a compiler temporary known to equal a lasting term (§2.3),
+  `BoundsCheck` also gives the fact about that term (`m < len(s)` for `t = m; u = length(s); BoundsCheck(t < u)`),
+  which is the same fact on every path that made the check, whatever its temporaries were.
 
 Derived facts:
 - a < b implies a ≤ b;
@@ -96,6 +120,17 @@ Derived facts:
   below the remaining length stays below the length.
 - x = a + m and y = b + m (the same `m`) with a ≤ b give x ≤ y, and with a < b, x < y.
 
+And, from ADR 0100:
+- a ≠ b with a ≤ b gives a < b;
+- t = a − b with b < a gives 1 ≤ t;
+- x = a / b gives x ≤ a: the unsigned division did not panic, so b ≥ 1;
+- x = a / k for a constant k ≥ 2, or x = a >> k for a constant k ≥ 1, with a's lower bound (§3.2) at least 1, gives
+  x < a.
+
+Together with the offset rule these prove a binary search: in `while (lo < hi) { let m = lo + (hi - lo) / 2; … }`,
+`t = hi − lo` is at least 1, `t / 2 < t`, so `m < hi`, and with `hi ≤ len(s)` kept by the loop (§2.5), `s[m]` is in
+range and `lo + t / 2` cannot overflow (§3.3).
+
 A check `BoundsCheck(i < L)` is removed when `i < L` is derived from the facts that hold before it.
 
 ### 2.5 The analysis
@@ -105,6 +140,12 @@ a block not yet reached holds everything. At a join of two paths the analysis ke
 - an implication "if `c` is `w`, then F" of one path, if the other path knows `c` is not `w` (it holds vacuously
   there) or knows F itself;
 - a comparison or definition F of one path as "if `c` is not `w`, then F", if the other path knows `c` is `w`.
+
+- a comparison of one path, in the form the other path states it (ADR 0100): `a < b` if both state it, else
+  `a ≤ b` if each path states one of `a = b`, `a < b`, `a ≤ b`; and for `a = b` on one path, `b ≤ a` likewise. A
+  path states a relation directly, or through one equality of `a` or of `b` with another term (`hi = m` and
+  `m < len` state `hi < len`). So a loop that starts with `hi = len(s)` and assigns `hi = m` with `m < len(s)`
+  keeps `hi ≤ len(s)`. This is a reading of the facts as they stand, with no saturation: the join stays cheap.
 
 `a && b` and `a || b` lower to joins of a path that computed `b` and a path that assigned a constant, so
 `while (i < s.length && s[i] != 0)` and `if (k == 0 || n - k < 4) { return; }` keep what their tests showed.
@@ -116,7 +157,9 @@ length rather than a compiler temporary known to equal it, since the temporary m
 used. Derived facts are computed by saturation, which does not depend on the order facts were found, so the result
 is deterministic.
 
-A proof considers at most **128 facts** (M15 S3); where more hold, the check stays. The cost of saturation grows with
+A proof considers at most **128 facts** (M15 S3); where more hold, the check stays. The facts counted are the ones a
+proof reads, comparisons and definitions (ADR 0100): implications, conditions and known values are not read by the
+saturation, and in a function with many tests they are most of what holds. The cost of saturation grows with
 the number of facts, cubically, and a long straight-line function adds one at each step, so a sum of 300 terms took
 17 s to compile before the budget. That covers both this section's index checks and §3's overflow checks. The most
 facts any proof needs in the repository's programs, benchmarks and libraries, or in CosmoOS's CeeSafe sources, is 44
@@ -142,7 +185,10 @@ made from a reference after its target was used directly (2026-10-25): none, as 
 - **`tests/corpus/bounds-checks/*.cee`**: snapshots of `--explain-bounds-checks`
   (`.bce`) for loops that must be proved, and for near misses that must keep their check (a reassigned index, a
   mutated vector, a borrowed index, `<=` bounds, a loop bounded by another slice's length, a stable vector, whose
-`push` takes only `borrow this`).
+`push` takes only `borrow this`). `search.cee` (ADR 0100) has the binary searches that must be proved and their near
+misses: a midpoint of `(lo + hi) / 2`, an upper end that may pass the length, a search of another slice.
+`resized.cee` has the loops over a vector after `resize` and their near misses: a `pop` after it, a result that was
+not tested, the length of another vector, a resize through a named borrow.
 
 Stable vectors (`type-system.md` §24.2) are not tracked: their length grows through a shared borrow.
 
@@ -178,6 +224,9 @@ length's is that of `usize`, and a constant's is itself. From the facts before t
   over those with `a < u` derived;
 - a **lower bound**, the greatest of `min(l)` over the terms `l` with `l ≤ a`, and of `min(l) + 1` over those with
   `l < a`.
+
+A bound that is a constant `k` with `a ≠ k` derived moves by one (ADR 0100): an unsigned `n` with `n ≠ 0` has the
+lower bound 1, so `n - 1` cannot overflow.
 
 An operand that is not a term (an element read from memory, a field) has its type's range.
 
@@ -219,6 +268,8 @@ the same.
   (`.oce`) for operations that must be proved (counters, constant bounds, `b ≤ a` subtractions, offsets below a
   length, widened operands) and near misses that must keep their check (a counter bounded by `<=` the type's
   maximum, a sum of two unbounded values, a subtraction tested the wrong way, a signed negation that may be `MIN`).
+  `tested.cee` (ADR 0100) has the subtractions after an equality test that left, and their near misses: the test of
+  another local, a signed operand, a local changed after the test.
 
 ## 4. Placement (M5; on by default from M9e)
 

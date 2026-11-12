@@ -16,7 +16,7 @@ fn inclusive(n: u8) -> u32 {
     var i: u8 = 0;
     while (i <= n) {
         t += 1;
-        if (i == n) { return t; }
+        // No `if (i == n) { return t; }` here: with it `i < n`, and the check goes (tested.cee, ADR 0100).
         i += 1;
     }
     return t;

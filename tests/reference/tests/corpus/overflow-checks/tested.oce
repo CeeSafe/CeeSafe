@@ -1,0 +1,11 @@
+overflow-checks/tested.cee:9:12: removed
+overflow-checks/tested.cee:15:16: removed
+overflow-checks/tested.cee:25:9: removed
+overflow-checks/tested.cee:26:9: kept
+overflow-checks/tested.cee:36:12: removed
+overflow-checks/tested.cee:44:9: kept
+overflow-checks/tested.cee:48:9: removed
+overflow-checks/tested.cee:58:12: kept
+overflow-checks/tested.cee:66:12: kept
+overflow-checks/tested.cee:76:12: kept
+overflow-checks/tested.cee:84:12: kept

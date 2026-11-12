@@ -1,0 +1,87 @@
+// A vector's length after `resize` (optimisations.md §2.4, ADR 0100): on the path where `v.resize(n, fill)` gave
+// `Ok`, the length is `n`, so a loop to `n` needs no index check. The .bce snapshot lists each one.
+const N: usize = 1000;
+
+// Removed, both loops: `?` leaves on the error.
+fn filled(n: usize) -> Result<u64, AllocError> {
+    var x = Vector<u64>.create();
+    x.resize(n, 0)?;
+    for (i in 0..n) {
+        x[i] = i as u64;
+    }
+    var total: u64 = 0;
+    for (i in 0..n) {
+        total += x[i];
+    }
+    return Ok(total);
+}
+
+// Kept, then removed: the second length is 4 more than the first, whatever that was; 3 is below it.
+fn grown() -> u32 {
+    var x = Vector<u32>.create();
+    x.resize(4, 7)!;
+    x.resize(x.length + 4, 9)!;
+    return x[7] + x[3];
+}
+
+// Kept: `pop` changed the length.
+fn popped() -> u32 {
+    var x = Vector<u32>.create();
+    x.resize(4, 7)!;
+    x.pop();
+    return x[2];
+}
+
+// Kept: the result was not tested, so the resize may have failed.
+fn untested(n: usize) -> u32 {
+    var x = Vector<u32>.create();
+    let r = x.resize(n, 1);
+    if (n > 2) {
+        return x[2];
+    }
+    return 0;
+}
+
+// Removed, then kept: 8 is the length of `y`, not of `x`.
+fn another(n: usize) -> u32 {
+    var x = Vector<u32>.create();
+    var y = Vector<u32>.create();
+    x.resize(n, 1)!;
+    y.resize(8, 2)!;
+    if (n > 2) {
+        return y[7] + x[7];
+    }
+    return 0;
+}
+
+// Kept: resized through a named borrow, which changes the vector again after the call.
+fn throughBorrow() -> u32 {
+    var x = Vector<u32>.create();
+    let p = borrow mut x;
+    p.resize(10, 3)!;
+    p.truncate(6);
+    return x[5];
+}
+
+fn main() {
+    var x = Vector<i32>.create();
+    x.resize(N, 0)!;
+    for (i in 0..N) {
+        x[i] = truncate<i32>(i); // removed: the length is the constant
+    }
+    Console.writeLine(x[5]); // removed
+    Console.writeLine(filled(100)!);
+    Console.writeLine(grown());
+    Console.writeLine(popped());
+    Console.writeLine(untested(5));
+    Console.writeLine(another(12));
+    Console.writeLine(throughBorrow());
+}
+
+// expect-stdout: 5
+// expect-stdout: 4950
+// expect-stdout: 16
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 3

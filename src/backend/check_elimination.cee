@@ -126,16 +126,20 @@ fn termOrder(a: Term, b: Term) -> i32 =>
 fn relationEqual() -> u32 => 0;
 fn relationAtMost() -> u32 => 1;
 fn relationBelow() -> u32 => 2;
+fn relationNotEqual() -> u32 => 3;
 
 fn factCompare() -> u32 => 0;
 fn factDefinition() -> u32 => 1;
 fn factCondition() -> u32 => 2;
 fn factImplies() -> u32 => 3;
 fn factKnown() -> u32 => 4;
+fn factRefTo() -> u32 => 5;
+fn factOkImplies() -> u32 => 6;
 
 /// A fact (the reference's Fact records), flattened: `Compare(relation, a, b)`, `Definition(x = a op b)`,
-/// `Condition(local, op, a, b)`, `Implies(local, when, then)` whose `then` is a Compare or a Definition, and
-/// `Known(local, when)`.
+/// `Condition(local, op, a, b)`, `Implies(local, when, then)` whose `then` is a Compare or a Definition,
+/// `Known(local, when)`, `RefTo(local, a)`: the temporary `local` is `&mut` of the vector whose length is `a`, and
+/// `OkImplies(local, then)`: if the `Result` in `local`, or the discriminant in it, is `Ok`, then `then` (ADR 0100).
 struct Fact {
     kind: u32;
     local: u32;    // Condition, Implies, Known
@@ -185,6 +189,26 @@ fn impliesFact(local: u32, when: bool, then: Fact) -> Fact => Fact {
     b: then.b,
 };
 
+/// `RefTo(local, length)`.
+fn refToFact(local: u32, length: Term) -> Fact => Fact {
+    kind: factRefTo(),
+    local: local,
+    when: false,
+    inner: 0,
+    relation: 0,
+    op: 0,
+    x: noTerm(),
+    a: length,
+    b: noTerm(),
+};
+
+/// `OkImplies(local, then)` for a Compare `then`.
+fn okImpliesFact(local: u32, then: Fact) -> Fact {
+    var f = impliesFact(local, true, then);
+    f.kind = factOkImplies();
+    return f;
+}
+
 /// The `then` of an implication.
 fn impliedFact(f: Fact) -> Fact =>
     Fact { kind: f.inner, local: 0, when: false, inner: 0, relation: f.relation, op: f.op, x: f.x, a: f.a, b: f.b };
@@ -199,8 +223,11 @@ fn sameFact(f: Fact, g: Fact) -> bool {
     if (f.kind == factCondition()) {
         return f.local == g.local && f.op == g.op && sameTerm(f.a, g.a) && sameTerm(f.b, g.b);
     }
-    if (f.kind == factImplies()) {
+    if (f.kind == factImplies() || f.kind == factOkImplies()) {
         return f.local == g.local && f.when == g.when && sameFact(impliedFact(f), impliedFact(g));
+    }
+    if (f.kind == factRefTo()) {
+        return f.local == g.local && sameTerm(f.a, g.a);
     }
     if (f.kind == factCompare()) {
         return f.relation == g.relation && sameTerm(f.a, g.a) && sameTerm(f.b, g.b);
@@ -215,8 +242,11 @@ fn factMentions(f: Fact, local: u32) -> bool {
     if (f.kind == factCondition()) {
         return f.local == local || termMentions(f.a, local) || termMentions(f.b, local);
     }
-    if (f.kind == factImplies()) {
+    if (f.kind == factImplies() || f.kind == factOkImplies()) {
         return f.local == local || factMentions(impliedFact(f), local);
+    }
+    if (f.kind == factRefTo()) {
+        return f.local == local || termMentions(f.a, local);
     }
     if (f.kind == factCompare()) {
         return termMentions(f.a, local) || termMentions(f.b, local);
@@ -261,6 +291,18 @@ fn sameFacts(a: borrow Vector<Fact>, b: borrow Vector<Fact>) -> bool {
 }
 
 fn maxFacts() -> usize => 128;
+
+/// Whether a proof from these facts is within the budget (optimisations.md §2.5): a proof reads the comparisons and
+/// the definitions, whose number bounds the closure's size; implications, conditions and the rest are not read.
+fn withinBudget(facts: borrow Vector<Fact>) -> bool {
+    var count: usize = 0;
+    for (f in facts.view()) {
+        if (f.kind == factCompare() || f.kind == factDefinition()) {
+            count += 1;
+        }
+    }
+    return count <= maxFacts();
+}
 
 /// The checks proved not to fail (the reference's result sets), by statement and rvalue.
 struct CheckResults {
@@ -426,6 +468,7 @@ struct CheckContext {
     values: Vector<bool>;      // by local: integer, bool, slice and string-view locals, whose values are terms (§2.3)
     lengths: Vector<bool>;     // by local: locals whose length is a term (slices, views, vectors and strings)
     ranges: Vector<WideRange>; // by local: an integer local's type range
+    uses: Vector<u32>;         // by local: the statements that read or borrow it, in a function with a `resize`
 }
 
 fn analyzeFunctionChecks(
@@ -440,7 +483,9 @@ fn analyzeFunctionChecks(
         values: Vector<bool>.create(),
         lengths: Vector<bool>.create(),
         ranges: Vector<WideRange>.create(),
+        uses: Vector<u32>.create(),
     };
+    countUses(n, f, mut context.uses)?;
     for (local in function.locals.view()) {
         let t = local.typ;
         let isValue = c.types.is(t, TypeKind.Integer) || c.types.is(t, TypeKind.Bool) || c.types.isSlice(t) ||
@@ -521,6 +566,131 @@ fn analyzeFunctionChecks(
     return Ok();
 }
 
+/// What the facts say of `a` and `b` as they stand, with no derivation: 2 for a < b, 1 for a ≤ b, 0 for neither.
+fn statedRelation(facts: borrow Vector<Fact>, a: Term, b: Term) -> u32 {
+    if (sameTerm(a, b)) {
+        return 1;
+    }
+    if (a.kind == termConstant() && b.kind == termConstant()) {
+        return if (wideLess(a.value, b.value)) 2 else if (wideEqual(a.value, b.value)) 1 else 0;
+    }
+    var best: u32 = 0;
+    for (g in facts.view()) {
+        if (g.kind != factCompare()) {
+            continue;
+        }
+        let forward = sameTerm(g.a, a) && sameTerm(g.b, b);
+        if (g.relation == relationBelow() && forward) {
+            best = 2;
+        } else if (best == 0 && ((g.relation == relationAtMost() && forward) || (g.relation == relationEqual() &&
+            (forward || (sameTerm(g.a, b) && sameTerm(g.b, a)))))) {
+            best = 1;
+        }
+    }
+    return best;
+}
+
+/// statedRelation, also through one equality of `a` or of `b` with another term.
+fn entailedRelation(facts: borrow Vector<Fact>, a: Term, b: Term) -> u32 {
+    var best = statedRelation(facts, a, b);
+    for (g in facts.view()) {
+        if (best == 2) {
+            break;
+        }
+        if (g.kind != factCompare() || g.relation != relationEqual()) {
+            continue;
+        }
+        var found: u32 = 0;
+        if (sameTerm(g.a, a)) {
+            found = statedRelation(facts, g.b, b);
+        } else if (sameTerm(g.b, a)) {
+            found = statedRelation(facts, g.a, b);
+        }
+        if (found > best) {
+            best = found;
+        }
+        found = 0;
+        if (sameTerm(g.a, b)) {
+            found = statedRelation(facts, a, g.b);
+        } else if (sameTerm(g.b, b)) {
+            found = statedRelation(facts, a, g.a);
+        }
+        if (found > best) {
+            best = found;
+        }
+    }
+    return best;
+}
+
+/// By local, how many statements and terminators of the function read, move or borrow it (a whole-local write and a
+/// StorageDead are not uses): only for a function with a `resize`, whose fact needs the call's `&mut` temporary to be
+/// used by the call alone.
+fn countUses(n: borrow NirProgram, f: u32, uses: borrow mut Vector<u32>) -> Result<void, AllocError> {
+    let function = borrow n.functions[f as usize];
+    var resizes = false;
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.Assign(_, r) => {
+                    match (n.rvalues[r as usize]) {
+                        NirRvalue.Builtin(b, _) => {
+                            if (b == bfVectorResize()) {
+                                resizes = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if (!resizes) {
+        return Ok();
+    }
+    for (k in 0..function.locals.length) {
+        uses.push(0)?;
+    }
+    var accesses = Vector<Access>.create();
+    for (block in function.blocks.view()) {
+        for (s in block.statements.view()) {
+            match (n.statements[s as usize]) {
+                NirStatement.StorageDead(_) => { continue; }
+                _ => {}
+            }
+            accesses.clear();
+            statementAccesses(n, s, mut accesses)?;
+            noteUses(accesses, uses);
+        }
+        if (block.terminator != none()) {
+            accesses.clear();
+            terminatorAccesses(n, block.terminator, mut accesses)?;
+            noteUses(accesses, uses);
+        }
+    }
+    return Ok();
+}
+
+/// One more use for each local the accesses of one statement mention, but for a write of the whole local.
+fn noteUses(accesses: borrow Vector<Access>, uses: borrow mut Vector<u32>) {
+    for (k in 0..accesses.length) {
+        let a = accesses[k];
+        if (a.kind == accessWrite() && a.place.projections.count == 0) {
+            continue;
+        }
+        var counted = false;
+        for (j in 0..k) {
+            if (accesses[j].place.local == a.place.local && !(accesses[j].kind == accessWrite() &&
+                accesses[j].place.projections.count == 0)) {
+                counted = true;
+            }
+        }
+        if (!counted && (a.place.local as usize) < uses.length) {
+            uses[a.place.local as usize] += 1;
+        }
+    }
+}
+
 /// The facts holding on both incoming paths (Join): those in both; an implication of one path where the other knows
 /// its condition is false, or entails its fact; and, where the other path knows a bool, each comparison or definition
 /// of this path as an implication of the bool's other value.
@@ -529,6 +699,30 @@ fn joinFacts(left: borrow Vector<Fact>, right: borrow Vector<Fact>) -> Result<Ve
     for (f in left.view()) {
         if (hasFact(right, f)) {
             result.push(f)?;
+        }
+    }
+    // A comparison of one path that the other holds in another form, through at most one equality (ADR 0100):
+    // `hi = length` on one path and `hi = m`, `m < length` on the other keep `hi <= length`.
+    for (side in 0..2) {
+        let one = if (side == 0) left else right;
+        let other = if (side == 0) right else left;
+        for (f in one.view()) {
+            if (f.kind != factCompare() || f.relation == relationNotEqual() || hasFact(other, f)) {
+                continue;
+            }
+            if (f.relation == relationEqual() && hasFact(other, compareFact(relationEqual(), f.b, f.a))) {
+                addFact(mut result, f)?;
+                continue;
+            }
+            let forward = entailedRelation(other, f.a, f.b);
+            if (f.relation == relationBelow() && forward == 2) {
+                addFact(mut result, f)?;
+            } else if (forward >= 1) {
+                addFact(mut result, compareFact(relationAtMost(), f.a, f.b))?;
+            }
+            if (f.relation == relationEqual() && entailedRelation(other, f.b, f.a) >= 1) {
+                addFact(mut result, compareFact(relationAtMost(), f.b, f.a))?;
+            }
         }
     }
     for (side in 0..2) {
@@ -593,8 +787,120 @@ fn termOf(c: borrow Checker, n: borrow NirProgram, context: borrow CheckContext,
 
 fn isTerm(t: Term) -> bool => t.kind != 99;
 
-/// Ends a local's facts (Kill); a fact that also holds of an equal term is kept, rewritten to that term.
-fn killFacts(state: borrow mut Vector<Fact>, local: u32) -> Result<void, AllocError> {
+/// Whether a term outlives the statement that made it: a constant, a length, or a local the program names.
+fn isLastingTerm(n: borrow NirProgram, context: borrow CheckContext, t: Term) -> bool {
+    if (t.kind == termConstant() || t.kind == termLength()) {
+        return true;
+    }
+    if (t.kind != termLocal()) {
+        return false;
+    }
+    return n.functions[context.function as usize].locals[t.value.lo as usize].name != none();
+}
+
+/// What the facts derive about the results of the definitions that end with `local`, as comparisons with lasting
+/// terms (§2.3, ADR 0100): `m = lo + t` with `t` ending keeps `m < hi`. Only the nearest bounds: one that another
+/// lasting term lies between is left to transitivity.
+fn derivedFacts(
+    n: borrow NirProgram,
+    context: borrow CheckContext,
+    state: borrow Vector<Fact>,
+    dying: borrow Vector<Fact>,
+    local: u32,
+    derived: borrow mut Vector<Fact>,
+) -> Result<void, AllocError> {
+    var results = Vector<Term>.create();
+    for (f in dying.view()) {
+        if (f.kind != factDefinition() || termMentions(f.x, local) || f.x.kind == termSum()) {
+            continue;
+        }
+        var seen = false;
+        for (r in results.view()) {
+            if (sameTerm(r, f.x)) {
+                seen = true;
+            }
+        }
+        if (!seen) {
+            results.push(f.x)?;
+        }
+    }
+    if (results.length == 0 || !withinBudget(state)) {
+        return Ok();
+    }
+    let closure = buildClosure(context, state, results)?;
+    var others = Vector<Term>.create();
+    for (t in closure.terms.view()) {
+        if (!termMentions(t, local) && isLastingTerm(n, context, t)) {
+            others.push(t)?;
+        }
+    }
+    for (x in results.view()) {
+        let range = termRange(context, x);
+        for (t in others.view()) {
+            if (sameTerm(t, x)) {
+                continue;
+            }
+            let up = closureAtMost(closure, x, t);
+            let down = closureAtMost(closure, t, x);
+            if (up && down) {
+                if (!hasFact(state, compareFact(relationEqual(), t, x))) {
+                    derived.push(compareFact(relationEqual(), x, t))?;
+                }
+                continue;
+            }
+            if (!up && !down) {
+                continue;
+            }
+            // What x's type says anyway (`0 <= x`) is no fact.
+            if (t.kind == termConstant() && ((up && wideAtMost(range.max, t.value)) || (down && wideAtMost(
+                t.value,
+                range.min,
+            )))) {
+                continue;
+            }
+            var nearest = true;
+            for (m in others.view()) {
+                if (sameTerm(m, t) || sameTerm(m, x)) {
+                    continue;
+                }
+                let between = if (up) closureAtMost(closure, x, m) && closureAtMost(
+                    closure,
+                    m,
+                    t,
+                ) && !closureAtMost(closure, t, m) && !closureAtMost(closure, m, x) else closureAtMost(
+                    closure,
+                    t,
+                    m,
+                ) && closureAtMost(closure, m, x) && !closureAtMost(closure, m, t) && !closureAtMost(closure, x, m);
+                if (between) {
+                    nearest = false;
+                }
+            }
+            if (!nearest) {
+                continue;
+            }
+            if (up) {
+                derived.push(
+                    compareFact(if (closureBelow(closure, x, t)) relationBelow() else relationAtMost(), x, t),
+                )?;
+            } else {
+                derived.push(
+                    compareFact(if (closureBelow(closure, t, x)) relationBelow() else relationAtMost(), t, x),
+                )?;
+            }
+        }
+    }
+    return Ok();
+}
+
+/// Ends a local's facts (Kill); a fact that also holds of an equal term is kept, rewritten to that term, and so is
+/// what the facts derived about a term defined from the local (derivedFacts).
+fn killFacts(
+    n: borrow NirProgram,
+    context: borrow CheckContext,
+    state: borrow mut Vector<Fact>,
+    local: u32,
+) -> Result<void, AllocError> {
     var dying = Vector<Fact>.create();
     var living = Vector<Fact>.create();
     for (f in state.view()) {
@@ -607,6 +913,8 @@ fn killFacts(state: borrow mut Vector<Fact>, local: u32) -> Result<void, AllocEr
     if (dying.length == 0) {
         return Ok();
     }
+    var derived = Vector<Fact>.create();
+    derivedFacts(n, context, state, dying, local, mut derived)?;
     // The replacement of the local's value and of its length: the least equal term not about the local.
     var replaceFrom = Vector<Term>.create();
     var replaceTo = Vector<Term>.create();
@@ -637,6 +945,9 @@ fn killFacts(state: borrow mut Vector<Fact>, local: u32) -> Result<void, AllocEr
         state.push(f)?;
     }
     for (f in dying.view()) {
+        if (f.kind == factRefTo()) {
+            continue; // it names the vector, not a value an equal term could stand for
+        }
         let kept = rewriteFact(f, replaceFrom, replaceTo);
         if (!factMentions(kept, local) && !(kept.kind == factCompare() && kept.relation == relationEqual() && sameTerm(
             kept.a,
@@ -644,6 +955,9 @@ fn killFacts(state: borrow mut Vector<Fact>, local: u32) -> Result<void, AllocEr
         ))) {
             addFact(state, kept)?;
         }
+    }
+    for (f in derived.view()) {
+        addFact(state, f)?;
     }
     return Ok();
 }
@@ -695,6 +1009,12 @@ fn transferFact(
                     markSet(mut results.removed, s)?;
                 }
                 addFact(state, compareFact(relationBelow(), i, l))?;
+                // Also of what the temporaries equal, which outlives them and is the same fact on every path (§2.5).
+                let ni = namedTerm(n, context, i, state);
+                let nl = namedTerm(n, context, l, state);
+                if (!sameTerm(ni, i) || !sameTerm(nl, l)) {
+                    addFact(state, compareFact(relationBelow(), ni, nl))?;
+                }
             }
         }
         NirStatement.RangeCheck(low, high, length, _) => {
@@ -715,12 +1035,12 @@ fn transferFact(
                 addFact(state, compareFact(relationEqual(), l, rt))?;
             }
         }
-        NirStatement.StorageDead(local) => { killFacts(state, local)?; }
+        NirStatement.StorageDead(local) => { killFacts(n, context, state, local)?; }
         NirStatement.Unpack(_, _, targets) => {
             for (k in 0..targets.count) {
                 let target = n.at(targets, k);
                 if (target != none()) {
-                    killFacts(state, target)?;
+                    killFacts(n, context, state, target)?;
                 }
             }
         }
@@ -748,15 +1068,19 @@ fn assignFacts(
     state: borrow mut Vector<Fact>,
 ) -> Result<void, AllocError> {
     // A mutable borrow of a local's own storage may change it, or a vector's length, from here on (§2.3).
+    var borrowed = none();
     match (n.rvalues[r as usize]) {
         NirRvalue.Ref(mutable, place) => {
             if (mutable && !placeHasDeref(n, place)) {
-                killFacts(state, placeLocal(n, place))?;
+                killFacts(n, context, state, placeLocal(n, place))?;
+                if (placeIsLocal(n, place) && context.lengths[placeLocal(n, place) as usize]) {
+                    borrowed = placeLocal(n, place);
+                }
             }
         }
         NirRvalue.Slice(mutable, base, _, _) => {
             if (mutable && !placeHasDeref(n, base)) {
-                killFacts(state, placeLocal(n, base))?;
+                killFacts(n, context, state, placeLocal(n, base))?;
             }
         }
         _ => {}
@@ -775,6 +1099,10 @@ fn assignFacts(
                 facts.push(f)?;
             }
         }
+        if (borrowed != none() && borrowed != x) {
+            facts.push(refToFact(x, lengthTerm(borrowed)))?;
+        }
+        resultFacts(c, n, context, x, r, state, mut facts)?;
     }
     // `x = a op b` computes what an existing `y = a op b` holds: x equals y.
     if (placeIsLocal(n, target) && context.values[x as usize]) {
@@ -797,9 +1125,68 @@ fn assignFacts(
             _ => {}
         }
     }
-    killFacts(state, x)?;
+    killFacts(n, context, state, x)?;
     for (f in facts.view()) {
         addFact(state, f)?;
+    }
+    return Ok();
+}
+
+/// The facts of a `Result` (ADR 0100): `r = v.resize(n, fill)` gives "if `r` is `Ok`, the length of `v` is `n`",
+/// for the vector the call's `&mut` temporary was made from; a copy of `r` and its discriminant carry it.
+fn resultFacts(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    context: borrow CheckContext,
+    x: u32,
+    r: u32,
+    state: borrow Vector<Fact>,
+    facts: borrow mut Vector<Fact>,
+) -> Result<void, AllocError> {
+    var source = none();
+    match (n.rvalues[r as usize]) {
+        NirRvalue.Builtin(b, arguments) => {
+            if (b != bfVectorResize() || arguments.count != 3) {
+                return Ok();
+            }
+            let reference = trackedLocalOperand(n, n.at(arguments, 0));
+            let length = termOf(c, n, context, n.at(arguments, 1));
+            if (reference == none() || !isTerm(length) || termMentions(length, x)) {
+                return Ok();
+            }
+            // The reference must be the call's own: a temporary that nothing else reads, copies or reborrows, so
+            // that nothing changes the vector through it after the call, while the new fact holds (§2.3).
+            if (n.functions[context.function as usize].locals[reference as usize].name != none() ||
+                (reference as usize) >= context.uses.length || context.uses[reference as usize] != 1) {
+                return Ok();
+            }
+            for (f in state.view()) {
+                if (f.kind == factRefTo() && f.local == reference && f.a.kind == termLength() && !termMentions(
+                    f.a,
+                    x,
+                )) {
+                    facts.push(okImpliesFact(x, compareFact(relationEqual(), f.a, length)))?;
+                }
+            }
+            return Ok();
+        }
+        NirRvalue.Use(o) => { source = trackedLocalOperand(n, o); }
+        NirRvalue.Discriminant(place) => {
+            if (placeIsLocal(n, place)) {
+                source = placeLocal(n, place);
+            }
+        }
+        _ => {}
+    }
+    if (source == none() || source == x) {
+        return Ok();
+    }
+    for (f in state.view()) {
+        if (f.kind == factOkImplies() && f.local == source && !factMentions(impliedFact(f), x)) {
+            var g = f;
+            g.local = x;
+            facts.push(g)?;
+        }
     }
     return Ok();
 }
@@ -854,6 +1241,33 @@ fn lastingTerm(n: borrow NirProgram, context: borrow CheckContext, t: Term, stat
             other = f.a;
         }
         if (isTerm(other) && other.kind == termLength() && (!isTerm(best) || wideLess(other.value, best.value))) {
+            best = other;
+        }
+    }
+    return if (isTerm(best)) best else t;
+}
+
+/// For a compiler temporary, a lasting term known to equal it (a length first, then the least named local);
+/// otherwise the term itself.
+fn namedTerm(n: borrow NirProgram, context: borrow CheckContext, t: Term, state: borrow Vector<Fact>) -> Term {
+    let lasting = lastingTerm(n, context, t, state);
+    if (!sameTerm(lasting, t) || isLastingTerm(n, context, t)) {
+        return lasting;
+    }
+    var best = noTerm();
+    for (f in state.view()) {
+        if (f.kind != factCompare() || f.relation != relationEqual()) {
+            continue;
+        }
+        var other = noTerm();
+        if (sameTerm(f.a, t)) {
+            other = f.b;
+        } else if (sameTerm(f.b, t)) {
+            other = f.a;
+        }
+        if (isTerm(other) && other.kind == termLocal() && isLastingTerm(n, context, other) && (!isTerm(
+            best,
+        ) || wideLess(other.value, best.value))) {
             best = other;
         }
     }
@@ -963,7 +1377,7 @@ fn newFacts(
             let leftType = n.operandTypes[left as usize];
             let a = termOf(c, n, context, left);
             let b = termOf(c, n, context, right);
-            if ((k == 13 || k == 14 || k == 17 || k == 10 || k == 12) && c.types.is(
+            if ((k == 13 || k == 14 || k == 17 || k == 10 || k == 12 || k == 16) && c.types.is(
                 t,
                 TypeKind.Integer,
             ) && !c.types.info(t).signed &&
@@ -1006,6 +1420,17 @@ fn newFacts(
                 let cb = lastingTerm(n, context, b, state);
                 facts.push(impliesFact(x, true, holdsFact(k, ca, cb)))?;
                 facts.push(impliesFact(x, false, holdsFact(negateComparison(k), ca, cb)))?;
+            }
+            if ((k == 2 || k == 3) && c.types.is(leftType, TypeKind.Integer) && isTerm(a) && isTerm(b)) {
+                // `a == b` and `a != b` (ADR 0100): equal on one edge, unequal on the other.
+                // Only of lasting terms: two temporaries (`f(a) == f(b)`) end with the statement, and what was
+                // known of them would only fill the budget.
+                let ca = lastingTerm(n, context, a, state);
+                let cb = lastingTerm(n, context, b, state);
+                if (isLastingTerm(n, context, ca) && isLastingTerm(n, context, cb)) {
+                    facts.push(impliesFact(x, k == 2, compareFact(relationEqual(), ca, cb)))?;
+                    facts.push(impliesFact(x, k != 2, compareFact(relationNotEqual(), ca, cb)))?;
+                }
             }
         }
         NirRvalue.Unary(op, o) => {
@@ -1093,7 +1518,7 @@ fn provesBelow(
     i: Term,
     l: Term,
 ) -> Result<bool, AllocError> {
-    if (facts.length > maxFacts()) {
+    if (!withinBudget(facts)) {
         return Ok(false); // the check stays (optimisations.md §2.5's budget)
     }
     var queried = Vector<Term>.create();
@@ -1123,7 +1548,7 @@ fn cannotOverflow(
                 }
                 _ => {}
             }
-            if (state.length > maxFacts()) {
+            if (!withinBudget(state)) {
                 return Ok(false);
             }
             let operand = termOf(c, n, context, o);
@@ -1152,7 +1577,7 @@ fn cannotOverflow(
                     null => { return Ok(false); }
                 }
             }
-            if (state.length > maxFacts()) {
+            if (!withinBudget(state)) {
                 return Ok(false); // the check stays (optimisations.md §2.5's budget)
             }
             let a = termOf(c, n, context, left);
@@ -1229,6 +1654,7 @@ struct FactClosure {
     parent: Vector<u32>;
     atMost: Vector<bool>; // n × n, by class representatives
     below: Vector<bool>;
+    unequal: Vector<u32>; // pairs of term ids: a ≠ b
     size: usize;
 }
 
@@ -1316,10 +1742,18 @@ fn buildClosure(
         parent: Vector<u32>.create(),
         atMost: Vector<bool>.create(),
         below: Vector<bool>.create(),
+        unequal: Vector<u32>.create(),
         size: 0,
     };
     for (t in queried.view()) {
         addTermId(mut closure, t)?;
+    }
+    // 1, for "t = a - b with b < a is at least 1" and what follows from it.
+    let unitTerm = constantTerm(wideOfU64(1));
+    for (f in facts.view()) {
+        if (f.kind == factDefinition() && (f.op == 14 || f.op == 16 || f.op == 12)) {
+            addTermId(mut closure, unitTerm)?;
+        }
     }
     for (f in facts.view()) {
         if (f.kind == factCompare()) {
@@ -1404,6 +1838,9 @@ fn buildClosure(
             setBelow(mut closure, a, b);
         } else if (f.relation == relationAtMost()) {
             setAtMost(mut closure, a, b);
+        } else if (f.relation == relationNotEqual()) {
+            closure.unequal.push(a)?;
+            closure.unequal.push(b)?;
         }
     }
     for (d in definitions.view()) {
@@ -1421,8 +1858,8 @@ fn buildClosure(
         } else if (d.op == 10) {
             setAtMost(mut closure, x, a);
             setAtMost(mut closure, x, b);
-        } else if (d.op == 12) {
-            setAtMost(mut closure, x, a);
+        } else if (d.op == 12 || d.op == 16) {
+            setAtMost(mut closure, x, a); // an unsigned quotient that did not panic has a divisor of at least 1
         } else if (d.op == 13) {
             setAtMost(mut closure, a, x);
             setAtMost(mut closure, b, x);
@@ -1444,6 +1881,56 @@ fn buildClosure(
     changed = true;
     while (changed) {
         changed = transitive(mut closure)?;
+        // a ≠ b with a ≤ b: a < b.
+        var pair: usize = 0;
+        while (pair + 1 < closure.unequal.length) {
+            let p = findClass(mut closure, closure.unequal[pair]);
+            let q = findClass(mut closure, closure.unequal[pair + 1]);
+            pair += 2;
+            if (p == q) {
+                continue; // facts that contradict: code that never runs
+            }
+            if (closure.atMost[cell(closure, p, q)] && !closure.below[cell(closure, p, q)]) {
+                let k = cell(closure, p, q);
+                closure.below[k] = true;
+                changed = true;
+            }
+            if (closure.atMost[cell(closure, q, p)] && !closure.below[cell(closure, q, p)]) {
+                let k = cell(closure, q, p);
+                closure.below[k] = true;
+                changed = true;
+            }
+        }
+        for (d in definitions.view()) {
+            if (d.op == 14) {
+                // t = a - b with b < a: 1 ≤ t.
+                let t = findTerm(mut closure, d.x);
+                let a = findTerm(mut closure, d.a);
+                let b = findTerm(mut closure, d.b);
+                let unit = findTerm(mut closure, unitTerm);
+                if (closure.below[cell(closure, b, a)] && !closure.atMost[cell(closure, unit, t)]) {
+                    let k = cell(closure, unit, t);
+                    closure.atMost[k] = true;
+                    changed = true;
+                }
+            } else if ((d.op == 16 || d.op == 12) && d.b.kind == termConstant() && wideAtMost(
+                wideOfU64(if (d.op == 16) 2 else 1),
+                d.b.value,
+            )) {
+                // x = a / k with k ≥ 2, or x = a >> k with k ≥ 1, and 1 ≤ a: x < a.
+                let x = findTerm(mut closure, d.x);
+                let a = findTerm(mut closure, d.a);
+                if (!closure.below[cell(closure, x, a)] && wideAtMost(
+                    wideOfU64(1),
+                    closureLower(context, closure, d.a),
+                )) {
+                    let k = cell(closure, x, a);
+                    closure.below[k] = true;
+                    closure.atMost[k] = true;
+                    changed = true;
+                }
+            }
+        }
         for (rest in definitions.view()) {
             if (rest.op != 14) {
                 continue;
@@ -1600,7 +2087,39 @@ fn closureUpper(context: borrow CheckContext, closure: borrow FactClosure, a: Te
             bound = wideMinOf(bound, value);
         }
     }
+    // a ≠ k for a constant k that is the bound: one less.
+    var moved = true;
+    while (moved) {
+        moved = false;
+        if (!wideEqual(bound, wideMin()) && unequalToConstant(closure, ra, bound)) {
+            bound = wideSub(bound, wideOfU64(1));
+            moved = true;
+        }
+    }
     return bound;
+}
+
+/// Whether the class is known unequal to the constant `value` (a ≠ b facts, either way round).
+fn unequalToConstant(closure: borrow FactClosure, wanted: u32, value: Wide) -> bool {
+    var pair: usize = 0;
+    while (pair + 1 < closure.unequal.length) {
+        let p = findReadOnly(closure, closure.unequal[pair]);
+        let q = findReadOnly(closure, closure.unequal[pair + 1]);
+        pair += 2;
+        if (p == q || (p != wanted && q != wanted)) {
+            continue;
+        }
+        let other = if (p == wanted) q else p;
+        for (t in 0..closure.size) {
+            if (closure.terms[t].kind == termConstant() && wideEqual(
+                closure.terms[t].value,
+                value,
+            ) && findReadOnly(closure, truncate<u32>(t)) == other) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// The greatest min(l) over l with l ≤ a, and min(l) + 1 over l with l < a (Lower, §3.2).
@@ -1616,6 +2135,15 @@ fn closureLower(context: borrow CheckContext, closure: borrow FactClosure, a: Te
                 wideOfU64(1),
             ) else min;
             bound = wideMaxOf(bound, value);
+        }
+    }
+    // a ≠ k for a constant k that is the bound: one more.
+    var moved = true;
+    while (moved) {
+        moved = false;
+        if (!wideEqual(bound, wideMax()) && unequalToConstant(closure, ra, bound)) {
+            bound = wideAdd(bound, wideOfU64(1));
+            moved = true;
         }
     }
     return bound;
@@ -1659,6 +2187,58 @@ fn edgeFacts(
                 states.push(thenFacts)?;
                 targets.push(blockIndexIn(flow, otherwise))?;
                 states.push(elseFacts)?;
+                return Ok();
+            }
+        }
+        _ => {}
+    }
+    // A switch on a discriminant: the edge only `Ok` (0) takes has what the Result's facts promise (ADR 0100).
+    var okTarget = none();
+    match (n.terminators[function.blocks[block as usize].terminator as usize]) {
+        NirTerminator.Switch(value, cases, otherwise) => {
+            let local = trackedLocalOperand(n, value);
+            var promised = false;
+            for (f in state.view()) {
+                if (f.kind == factOkImplies() && f.local == local) {
+                    promised = true;
+                }
+            }
+            if (local != none() && promised) {
+                var others = false;
+                for (k in 0..cases.count) {
+                    let case = n.cases[(cases.start + k) as usize];
+                    if (case.value.magnitude == 0) {
+                        okTarget = case.target;
+                    }
+                }
+                for (k in 0..cases.count) {
+                    let case = n.cases[(cases.start + k) as usize];
+                    if (case.value.magnitude != 0 && case.target == okTarget) {
+                        others = true;
+                    }
+                }
+                if (others || otherwise == okTarget) {
+                    okTarget = none();
+                }
+            }
+            if (okTarget != none()) {
+                var seenEdges = Vector<u32>.create();
+                for (id in function.blocks[block as usize].successors.view()) {
+                    if (containsU32(seenEdges, id)) {
+                        continue;
+                    }
+                    seenEdges.push(id)?;
+                    var edge = copyFacts(state)?;
+                    if (id == okTarget) {
+                        for (f in state.view()) {
+                            if (f.kind == factOkImplies() && f.local == local) {
+                                addFact(mut edge, impliedFact(f))?;
+                            }
+                        }
+                    }
+                    targets.push(blockIndexIn(flow, id))?;
+                    states.push(edge)?;
+                }
                 return Ok();
             }
         }

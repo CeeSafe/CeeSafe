@@ -1,0 +1,111 @@
+// Subtractions after an equality test (optimisations.md §2.4 and §3.2, ADR 0100): `n != 0` makes an unsigned `n` at
+// least 1. The .oce snapshot lists each checked operation; the near misses must keep theirs.
+
+// Removed: the test left.
+fn previous(n: usize) -> usize {
+    if (n == 0) {
+        return 0;
+    }
+    return n - 1;
+}
+
+// Removed: inside the test.
+fn previousInside(n: u32) -> u32 {
+    if (n != 0) {
+        return n - 1;
+    }
+    return 0;
+}
+
+// Removed: a countdown; the sum is kept.
+fn countdown(start: u32) -> u32 {
+    var n = start;
+    var total: u32 = 0;
+    while (n != 0) {
+        n -= 1;
+        total += n;
+    }
+    return total;
+}
+
+// Removed: neither 0 nor 1, so at least 2.
+fn twoBack(n: u64) -> u64 {
+    if (n == 0 || n == 1) {
+        return 0;
+    }
+    return n - 2;
+}
+
+// Removed: `i <= n` and `i != n` give `i < n`, so `i + 1` is at most `n`. The sum is kept.
+fn inclusive(n: u8) -> u32 {
+    var t: u32 = 0;
+    var i: u8 = 0;
+    while (i <= n) {
+        t += 1;
+        if (i == n) {
+            return t;
+        }
+        i += 1;
+    }
+    return t;
+}
+
+// Kept: the test is of another local.
+fn otherTested(n: u32, m: u32) -> u32 {
+    if (m == 0) {
+        return 0;
+    }
+    return n - 1;
+}
+
+// Kept: a signed value that is not 0 may be the least one.
+fn signedPrevious(n: i32) -> i32 {
+    if (n == 0) {
+        return 0;
+    }
+    return n - 1;
+}
+
+// Kept: the local changed after the test.
+fn changedAfter(n: u32, m: u32) -> u32 {
+    var k = n;
+    if (k == 0) {
+        return 0;
+    }
+    k = m;
+    return k - 1;
+}
+
+// Kept: not 1 says nothing about 0.
+fn notOne(n: u32) -> u32 {
+    if (n == 1) {
+        return 0;
+    }
+    return n - 1;
+}
+
+fn main() {
+    Console.writeLine(previous(5));
+    Console.writeLine(previous(0));
+    Console.writeLine(previousInside(9));
+    Console.writeLine(countdown(4));
+    Console.writeLine(twoBack(10));
+    Console.writeLine(twoBack(1));
+    Console.writeLine(inclusive(255));
+    Console.writeLine(otherTested(3, 1));
+    Console.writeLine(signedPrevious(-3));
+    Console.writeLine(changedAfter(2, 8));
+    Console.writeLine(notOne(4));
+}
+
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 8
+// expect-stdout: 6
+// expect-stdout: 8
+// expect-stdout: 0
+// expect-stdout: 256
+// expect-stdout: 2
+// expect-stdout: -4
+// expect-stdout: 7
+// expect-stdout: 3

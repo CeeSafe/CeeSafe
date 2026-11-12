@@ -1,0 +1,11 @@
+bounds-checks/resized.cee:10:11: removed
+bounds-checks/resized.cee:14:20: removed
+bounds-checks/resized.cee:24:14: kept
+bounds-checks/resized.cee:24:21: removed
+bounds-checks/resized.cee:32:14: kept
+bounds-checks/resized.cee:40:18: kept
+bounds-checks/resized.cee:52:18: removed
+bounds-checks/resized.cee:52:25: kept
+bounds-checks/resized.cee:63:14: kept
+bounds-checks/resized.cee:70:11: removed
+bounds-checks/resized.cee:72:25: removed

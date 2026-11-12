@@ -1,0 +1,162 @@
+// Binary searches (optimisations.md §2.4, ADR 0100): the index of the midpoint must be proved, and the near misses
+// must keep their check; the .bce snapshot lists each one.
+
+// Proved: `hi <= s.length` is kept by the loop, `hi - lo >= 1` inside it, so `lo + (hi - lo) / 2 < hi`.
+fn lowerBound(s: Slice<u32>, wanted: u32) -> usize {
+    var lo: usize = 0;
+    var hi = s.length;
+    while (lo < hi) {
+        let middle = lo + (hi - lo) / 2;
+        if (s[middle] < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return lo;
+}
+
+// Proved: the same with a shift.
+fn lowerBoundShifted(s: Slice<u32>, wanted: u32) -> usize {
+    var lo: usize = 0;
+    var hi = s.length;
+    while (lo < hi) {
+        let middle = lo + ((hi - lo) >> 1);
+        if (s[middle] < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return lo;
+}
+
+// Proved: with an early return from the loop.
+fn find(v: Slice<u32>, wanted: u32) -> bool {
+    var lo: usize = 0;
+    var hi = v.length;
+    while (lo < hi) {
+        let middle = lo + (hi - lo) / 2;
+        let value = v[middle];
+        if (value == wanted) {
+            return true;
+        }
+        if (value < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return false;
+}
+
+// Proved: `i <= s.length` and `i != s.length`.
+fn notTheEnd(s: Slice<u32>, i: usize) -> u32 {
+    if (i <= s.length) {
+        if (i != s.length) {
+            return s[i];
+        }
+    }
+    return 0;
+}
+
+// Kept: nothing relates `(lo + hi) / 2` to `hi`.
+fn midpointOfSum(s: Slice<u32>, wanted: u32) -> usize {
+    var lo: usize = 0;
+    var hi = s.length;
+    while (lo < hi) {
+        let middle = (lo + hi) / 2;
+        if (s[middle] < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return lo;
+}
+
+// Kept: the upper end is the caller's, and may pass the length.
+fn upTo(s: Slice<u32>, wanted: u32, limit: usize) -> usize {
+    var lo: usize = 0;
+    var hi = limit;
+    while (lo < hi) {
+        let middle = lo + (hi - lo) / 2;
+        if (s[middle] < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return lo;
+}
+
+// Kept: the bounds are another slice's.
+fn inAnother(s: Slice<u32>, other: Slice<u32>, wanted: u32) -> usize {
+    var lo: usize = 0;
+    var hi = other.length;
+    while (lo < hi) {
+        let middle = lo + (hi - lo) / 2;
+        if (s[middle] < wanted) {
+            lo = middle + 1;
+        } else {
+            hi = middle;
+        }
+    }
+    return lo;
+}
+
+// Kept: a quotient by 1 is not below its dividend.
+fn wholeStep(s: Slice<u32>) -> u32 {
+    var lo: usize = 0;
+    let hi = s.length;
+    var total: u32 = 0;
+    while (lo < hi) {
+        let at = lo + (hi - lo) / 1;
+        if (at < 4) {
+            total += s[at];
+        }
+        lo = hi;
+    }
+    return total;
+}
+
+// Kept: unequal to the length says nothing without `i <= s.length`.
+fn onlyUnequal(s: Slice<u32>, i: usize) -> u32 {
+    if (i != s.length && i < 3) {
+        return s[i];
+    }
+    return 0;
+}
+
+fn main() {
+    let sorted = [1u32, 3, 5, 7, 9, 11, 13];
+    Console.writeLine(lowerBound(sorted[..], 7));
+    Console.writeLine(lowerBound(sorted[..], 0));
+    Console.writeLine(lowerBound(sorted[..], 99));
+    Console.writeLine(lowerBound(sorted[..0], 5));
+    Console.writeLine(lowerBoundShifted(sorted[..], 8));
+    Console.writeLine(find(sorted[..], 11));
+    Console.writeLine(find(sorted[..], 12));
+    Console.writeLine(notTheEnd(sorted[..], 6));
+    Console.writeLine(notTheEnd(sorted[..], 7));
+    Console.writeLine(midpointOfSum(sorted[..], 9));
+    Console.writeLine(upTo(sorted[..], 9, 7));
+    Console.writeLine(inAnother(sorted[..], sorted[..5], 4));
+    Console.writeLine(wholeStep(sorted[..]));
+    Console.writeLine(onlyUnequal(sorted[..], 2));
+}
+
+// expect-stdout: 3
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 0
+// expect-stdout: 4
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 13
+// expect-stdout: 0
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 5

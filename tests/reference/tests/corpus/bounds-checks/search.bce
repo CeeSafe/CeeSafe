@@ -1,0 +1,9 @@
+bounds-checks/search.cee:10:15: removed
+bounds-checks/search.cee:25:15: removed
+bounds-checks/search.cee:40:23: removed
+bounds-checks/search.cee:57:22: removed
+bounds-checks/search.cee:69:15: kept
+bounds-checks/search.cee:84:15: kept
+bounds-checks/search.cee:99:15: kept
+bounds-checks/search.cee:116:24: kept
+bounds-checks/search.cee:126:18: kept

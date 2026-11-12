@@ -1,7 +1,7 @@
 # ADR 0102 — An index updated in place keeps its bounds
 
 - Status: **Accepted** by the owner, 2026-11-12 ("I accept the ADR 0102 as proposed"), implemented on branch
-  `impl/0102`, on 0.38.0; not yet released. Raised while taking up
+  `impl/0102`, on 0.38.0, and released in ceesafec 0.39.0. Raised while taking up
   `docs/performance-investigation-2026-11.md` §4.2 (its §11): the sort of the tsrs trial kept 39 of its 47 index
   checks with ceesafec 0.38.0.
 - Scope: `src/backend/check_elimination.cee`; `spec/optimisations.md` §2.4 and §2.8. The analysis decides more

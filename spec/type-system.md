@@ -1988,6 +1988,12 @@ fn main() -> i32 {
     copies of `fill` up to length `n`, or truncates to `n`; `reserve` makes room for `extra` more elements and
     changes nothing else. `extend` and `resize` need a Copy `T` (N0259). They take `borrow mut this` and are
     two-phase (B5), so `v.resize(v.length + 1, 0)` is allowed; `v.extend(v.view())` is not (N0241);
+  - `v.clone()` (ADR 0108): `Result<Vector<T, A>, AllocError>`, a new vector of the same type, allocator included,
+    holding a copy of the elements. `T` must be Copy (N0259, as for `extend`). It takes `borrow this` and leaves `v`
+    as it was; the copy is a separate vector with its own buffer. It is `Vector<T, A>.withCapacity(v.length)` and an
+    `extend`: one allocation, with the capacity `withCapacity` gives for that length, and none for an empty vector.
+    If the allocation fails the result is `Err(AllocError.OutOfMemory)` and nothing was made. It is lib/core's
+    VectorCopying<T>;
   - `v.insert(at, x)`: `Result<void, AllocError>`, puts `x` at index `at` and moves the later elements up (`at ==
     length` appends); `v.remove(at)`: `T`, takes the element at `at` out and moves the later ones down;
     `v.swapRemove(at)`: `T`, takes it out and puts the last element in its place (O(1), the order is not kept)
@@ -2030,13 +2036,21 @@ fn main() -> i32 {
 ```
 - `String<A>` owns UTF-8 text in a growable buffer (`String` means `String<SystemHeap>`). It is a
   move type that needs drop, like `Vector<u8, A>`, but a distinct type.
-- **UTF-8 invariant:** text only enters a string through `append` of a `StringView`, which is
-  always valid UTF-8 (§22.2), so a string's bytes are always valid UTF-8. Its bytes cannot be
+- **UTF-8 invariant:** text only enters a string through `append` of a `StringView` (`String.from` and `clone` are
+  an `append`), which is always valid UTF-8 (§22.2), so a string's bytes are always valid UTF-8. Its bytes cannot be
   written: `s[i] = b` is rejected (N0211), and `borrow mut s[i]` and mutable slices of a string
   (N0248).
 - **Creation:** `String.create()` (no allocation) and `String.withCapacity(n)`:
   `Result<String<A>, AllocError>`; `String<A>.create()` for another allocator.
+  - `String.from(text)` (`text: StringView`, which a string literal, a `String` argument and a slice of either are;
+    ADR 0108): `Result<String<A>, AllocError>`, a new string holding a copy of `text`. It is
+    `String<A>.withCapacity(text.length)` and an `append`: one allocation, with the capacity `withCapacity` gives for
+    that length, and none for an empty text. `A` comes from the written type (`String<A>.from(text)`) or from an
+    expected `Result<String<A>, _>`, as for `withCapacity`, and is `SystemHeap` otherwise. Any other number of arguments is N0209.
+    It is lib/core's StringCopying.
 - **Members:**
+  - `s.clone()` (ADR 0108): `Result<String<A>, AllocError>`, `String<A>.from(s.view())` with the allocator of `s`.
+    It takes `borrow this` and leaves `s` as it was;
   - `s.append(text)` (`text: StringView`): `Result<void, AllocError>`, two-phase like `push`.
     Growth is as for vectors. On failure the string is unchanged;
   - `s.appendNumber(n)` (M11, G4c; `n` of any integer type, or a reference to one): appends `n` in decimal, with a

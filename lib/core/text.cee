@@ -288,3 +288,22 @@ public struct ByteSearch<region r> {
     public fn split(s: Slice<r, u8>, separator: Slice<r, u8>) -> ByteSplit<r> =>
         ByteSplit { bytes: s, separator: separator, position: 0, finished: false };
 }
+
+/// `String.from(text)` and `s.clone()` (ADR 0108, type-system.md §23.2): a new string holding a copy of a text. One
+/// allocation, sized as `withCapacity` of the length in bytes sizes it, none for an empty text. The `…Failing`
+/// function makes a string of `FailingAllocator`.
+public struct StringCopying {
+    /// A string with a copy of `text`: its length is `text.length`, its capacity at least that.
+    public fn from(text: StringView) -> Result<String, AllocError> {
+        var copy = String.withCapacity(text.length)?;
+        copy.append(text)?;
+        return Ok(copy);
+    }
+
+    /// `from` for a string of `FailingAllocator`.
+    public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, AllocError> {
+        var copy = String<FailingAllocator>.withCapacity(text.length)?;
+        copy.append(text)?;
+        return Ok(copy);
+    }
+}

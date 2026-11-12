@@ -115,6 +115,7 @@ No such file or directory
 | `StringView.fromUtf8(bytes)` | `StringView?`: `null` for bytes that are not UTF-8 |
 | `==`, `!=` | compare the bytes |
 | `String.create()`, `String.withCapacity(n)` | `String`; `Result<String, AllocError>` |
+| `String.from(view)`, `t.clone()` | `Result<String, AllocError>`: a new string with a copy of the text |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
 | `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |
@@ -172,6 +173,7 @@ hi
 | `[x; N]`, `[a, b, c]`, `a[lo..hi]`, `borrow mut a[lo..hi]` | an array; a `Slice<T>`; a `SliceMut<T>` |
 | `d.copyFrom(s)`, `d.fill(v)` | bulk writes into a `SliceMut<T>` |
 | `v.extend(s)`, `v.resize(n, fill)`, `v.reserve(extra)` | `Result<void, AllocError>`; one growth at most; `extend` and `resize` need Copy elements |
+| `v.clone()` | `Result<Vector<T>, AllocError>`: a new vector with a copy of the elements, which must be Copy |
 | `b.readBE<T>(at)`, `b.readLE<T>(at)` | `T`, an integer from bytes, big- or little-endian |
 | `b.writeBE(at, x)`, `b.writeLE(at, x)` | into a `SliceMut<u8>` (or a mutable `Vector<u8>`) |
 | `v.pushBE(x)`, `v.pushLE(x)` | `Result<void, AllocError>`: `x`'s bytes appended to a `Vector<u8>` |

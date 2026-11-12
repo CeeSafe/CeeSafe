@@ -1,7 +1,7 @@
 # ADR 0103 — `partitionPoint` on slices
 
 - Status: **Accepted** by the owner, 2026-11-12 ("Go ahead", on the proposal to prototype the closure question and
-  then add it), implemented on branch `impl/0103`, on 0.39.0; not yet released. Raised by
+  then add it), implemented on branch `impl/0103`, on 0.39.0, and released in ceesafec 0.40.0. Raised by
   `docs/performance-investigation-2026-11.md` §12: the tsrs trial's port wrote Rust's `partition_point` out three
   times as a loop, in a form that is slower than the standard one.
 - Scope: one function in `lib/core/slices.cee`; the checker's lists of slice and vector methods

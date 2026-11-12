@@ -5,6 +5,8 @@ For each freestanding corpus program:
 - host: `build --profile freestanding --emit obj`; its undefined symbols are only the allowlist (ceesafe_panic, memcpy,
   memmove, memset, memcmp) and its own extern "C" functions; linked with the program's C harness it runs with the
   expected output, status and panic;
+- a Windows (COFF) target: the runtime's freestanding form compiles, and `--emit obj` is refused in one line of
+  ceesafec's own, since the linkers for that target have no relocatable link;
 - each CosmoOS triple (x86_64-unknown-none-elf, aarch64-unknown-none-elf), cross-compiled with CosmoOS's flags: the
   same allowlist; no constructors, TLS or unwind tables, no mutable global state, no COMMON symbols; and with ld.lld,
   the one object `--emit obj --ld ld.lld` makes has the same allowlist.
@@ -171,6 +173,17 @@ def main():
                         extra = undefined(args.nm, [joined]) - allowed
                         if extra:
                             problems.append(f"{relative} ({triple} joined) leaves undefined: {', '.join(sorted(extra))}")
+    # A Windows target has no relocatable link (profiles.md §4.3): refused by ceesafec, in one line of its own, before
+    # the linker is asked. The runtime's freestanding form compiles for that target all the same (no <windows.h>).
+    with tempfile.TemporaryDirectory() as refused:
+        for name in files:
+            built = subprocess.run([compiler, "build", "--profile", "freestanding", "--emit", "obj", "--cc", "clang",
+                                    "--cflag", "--target=aarch64-pc-windows-msvc", os.path.join(directory, name),
+                                    "-o", os.path.join(refused, "program.o")], capture_output=True, text=True)
+            said = built.stderr.strip().splitlines()
+            if built.returncode == 0 or len(said) != 1 or "relocatable link" not in said[0]:
+                problems.append(f"freestanding/{name} (a Windows target): expected ceesafec's one-line refusal: "
+                                f"{built.returncode} {built.stderr.strip()[:400]}")
     problems += embedded(compiler, args, cross)
     for p in problems:
         print("FAIL", p)

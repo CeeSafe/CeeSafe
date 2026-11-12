@@ -936,6 +936,8 @@ fn compileObject(
                 mut refused.stderr,
                 "ceesafec: --emit obj joins the program's objects with a relocatable link ('-r'), which the linkers for a Windows target do not have: give an ELF target, as in '--cflag --target=aarch64-unknown-none-elf', or build with '--emit lib'\n",
             )?;
+            tool.clear();
+            appendText(tool, "ceesafec")?; // the refusal is the driver's own: no tool failed
             return Ok(refused);
         }
         pushText(mut link, "-nostdlib")?;

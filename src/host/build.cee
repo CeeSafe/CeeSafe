@@ -347,6 +347,9 @@ fn compileIn(
     } else {
         relayTool(outcome);
     }
+    if (outcome.status != 0 && sameBytes(tool.view(), "ceesafec".bytes())) {
+        return 1; // the driver's own refusal, already said (profiles.md §4.3)
+    }
     if (outcome.status != 0) {
         var message = copyBytes(what.bytes())!;
         appendBytes(mut message, tool.view())!;

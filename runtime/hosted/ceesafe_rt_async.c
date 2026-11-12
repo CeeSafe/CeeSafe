@@ -706,7 +706,7 @@ static void cee_park(cee_task *t) {
     }
     if (t->fd >= 0) {
         cee_exec.fd_count += 1u;
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(CEE_FREESTANDING)
         if (t->fd >= CEE_SOCKET_BASE) {
             cee_open_wake_pipe();
             if (cee_exec.wake_event != NULL) {

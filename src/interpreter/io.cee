@@ -574,6 +574,19 @@ fn ioBuiltin(
             storeRead(it, slice, buffer, count)?;
             return Ok(interpIoResult(c, resultType, truncate<i64>(count), 0)?);
         }
+        // ADR 0106: what Console.readLine read and did not take comes first; and what the program wrote is written
+        // before the interpreter waits for input.
+        if (buffer.length > 0 && it.stdinAt < it.stdinHeld.length) {
+            let left = it.stdinHeld.length - it.stdinAt;
+            let count = if (buffer.length < left) buffer.length else left;
+            for (k in 0..count) {
+                buffer[k] = it.stdinHeld[it.stdinAt + k];
+            }
+            it.stdinAt += count;
+            storeRead(it, slice, buffer, count)?;
+            return Ok(interpIoResult(c, resultType, truncate<i64>(count), 0)?);
+        }
+        flushOutputThrough(it);
         match (Console.read(mut buffer[..])) {
             Ok(count) => {
                 storeRead(it, slice, buffer, count)?;
@@ -959,10 +972,6 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         // ADR 0077: the interpreter describes no volume of its own, so a run stays reproducible.
         return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
     }
-    if (sameText(name, "ceesafe_host_console_flush")) {
-        flushOutput(it);
-        return Ok(hostResult(0));
-    }
     if (sameText(name, "ceesafe_host_dir_sync")) {
         // ADR 0075 §2.1: nothing to make durable in the interpreter, once the directory is there.
         let path = match (hostPath(it, arguments, 0, 1)?) {
@@ -1192,6 +1201,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_console_flush")) {
         return ":l";
+    }
+    if (sameText(name, "ceesafe_host_console_read_line")) {
+        return "Ps:l";
     }
     if (sameText(name, "ceesafe_host_rename")) {
         return "PsPs:l";
@@ -1804,6 +1816,30 @@ fn callC(
     }
     if (n0.length > 12 && sameText(n0[0..12], "ceesafe_dns_")) {
         return asyncService(it, n0, arguments); // ADR 0048's model, with the sockets'
+    }
+    if (sameText(n0, "ceesafe_host_console_flush")) {
+        // Console.flush (ADR 0077): written now, not only handed to the interpreter's own buffer (ADR 0106). It is
+        // no host I/O: the sandbox, which keeps the output, has nothing to flush, and refused the call before.
+        flushOutputThrough(it);
+        return Ok(hostResult(0));
+    }
+    if (sameText(n0, "ceesafe_host_console_read_line")) {
+        // Console.readLine's step (ADR 0106): standard input is the sandbox's given input too, so no host I/O.
+        let at = arguments[0].bits(0, 8)?;
+        let capacity = arguments[1].bits(0, 8)?;
+        if (capacity == 0) {
+            return Ok(hostFailure(errnoInvalid()));
+        }
+        it.memory.load(at, 1)?; // the buffer must be live
+        match (readLineBytes(it, capacity)) {
+            Ok(taken) => {
+                if (taken.length > 0) {
+                    it.memory.store(at, initialisedValue(taken.view()))?;
+                }
+                return Ok(hostResult(truncate<i64>(taken.length)));
+            }
+            Err(e) => { return Ok(hostFailure(errnoOf(e))); }
+        }
     }
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_host_")) {
         let result = hostService(it, n0, arguments)?;

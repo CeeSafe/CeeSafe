@@ -288,6 +288,16 @@ The interpreter must produce exactly what the native program produces:
 
 - the bytes written to standard output and standard error, in the same order: every write to
   standard error first flushes standard output (`ceesafe_rt_hosted.c`);
+- when they are written (ADR 0106), so that a program with a dialogue can be played in the interpreter. The
+  interpreter keeps the program's standard output until a line ends (or 64 KiB are kept), then hands it to its own
+  standard output, which is the C library's: a line reaches a terminal at once, and a pipe or a file in blocks, as
+  a built program's does. What the program wrote is written out, whatever the output is,
+  - before the interpreter reads its standard input for `Console.read` or `Console.readLine` (type-system.md §26.3),
+  - at `Console.flush()`,
+  - before a write to standard error, before a child process is run, and at the end, as before.
+
+  Until 0.40.0 the output was kept to the end of the run, or 64 KiB. With its output captured (`ceesafe_run`,
+  tooling.md §6.3) nothing is written before the end, as before;
 - the exit status:
   - `main`'s result, or `Process.exit`'s code (the operating system keeps the low 8 bits);
   - 134 after a panic, as `abort()` gives natively;

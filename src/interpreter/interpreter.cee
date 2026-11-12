@@ -53,7 +53,10 @@ struct Interp {
     placement: PlacementAnalysis;
     hasChecks: bool;
     checks: CheckResults;
-    stdout: Vector<u8>; // buffered, flushed before stderr is written and at the end
+    // Held until a line ends; flushed before stderr is written, before standard input is read, and at the end.
+    stdout: Vector<u8>;
+    stdinHeld: Vector<u8>; // standard input read for Console.readLine and not yet taken (ADR 0106), from stdinAt
+    stdinAt: usize;
     // With capture: what each output kept, whether either was cut, and how much of the input was read.
     capturedOutput: Vector<u8>;
     capturedError: Vector<u8>;
@@ -104,6 +107,60 @@ fn flushOutput(it: borrow mut Interp) {
     }
 }
 
+/// `Console.flush()`, and before the program waits for standard input (ADR 0106): what it wrote reaches the
+/// interpreter's own standard output, which is then written too. Console.writeError flushes standard output first,
+/// and it writes nothing here (Console.flush is newer than ceesafec 0.8.0, which builds these sources).
+fn flushOutputThrough(it: borrow mut Interp) {
+    if (it.options.capture) {
+        return;
+    }
+    flushOutput(it);
+    Console.writeError("");
+}
+
+/// The next bytes of the program's standard input for `Console.readLine` (ADR 0106, the runtime's
+/// ceesafe_host_console_read_line): up to and including a line feed, or `capacity` bytes; none at the end of the
+/// input. The input is the given one with capture; otherwise the interpreter's own, read a block at a time into
+/// `stdinHeld`, which `Console.read` takes from first.
+fn readLineBytes(it: borrow mut Interp, capacity: u64) -> Result<Vector<u8>, IoError> {
+    var taken = Vector<u8>.create();
+    if (it.options.capture) {
+        var k = it.inputRead;
+        while (k < it.options.input.length && (taken.length as u64) < capacity) {
+            let b = it.options.input[k];
+            taken.push(b)!;
+            k += 1;
+            if (b == '\n') {
+                break;
+            }
+        }
+        it.inputRead = k;
+        return Ok(taken);
+    }
+    if (it.stdinAt >= it.stdinHeld.length) {
+        flushOutputThrough(it);
+        var block = Vector<u8>.create();
+        for (k in 0..4096) {
+            block.push(0)!;
+        }
+        let count = Console.read(mut block[..])?;
+        block.truncate(count);
+        it.stdinHeld = block;
+        it.stdinAt = 0;
+    }
+    var at = it.stdinAt;
+    while (at < it.stdinHeld.length && (taken.length as u64) < capacity) {
+        let b = it.stdinHeld[at];
+        taken.push(b)!;
+        at += 1;
+        if (b == '\n') {
+            break;
+        }
+    }
+    it.stdinAt = at;
+    return Ok(taken);
+}
+
 /// Keeps what fits of `bytes` under the output limit (CappedStream.Write).
 fn capOutput(kept: borrow mut Vector<u8>, truncated: borrow mut bool, limit: u64, bytes: Slice<u8>) {
     let used = kept.length as u64;
@@ -121,7 +178,15 @@ fn writeOutput(it: borrow mut Interp, bytes: Slice<u8>) {
         return;
     }
     appendBytes(mut it.stdout, bytes)!;
-    if (it.stdout.length > 65536) {
+    // A line goes to the interpreter's own standard output when it ends (ADR 0106), which writes it at once to a
+    // terminal and in blocks to a pipe or a file, as a built program's does.
+    var ended = it.stdout.length > 65536;
+    for (b in bytes) {
+        if (b == '\n') {
+            ended = true;
+        }
+    }
+    if (ended) {
         flushOutput(it);
     }
 }
@@ -1925,6 +1990,8 @@ fn newInterp(
             ascii: Vector<bool>.create(),
         },
         stdout: Vector<u8>.create(),
+        stdinHeld: Vector<u8>.create(),
+        stdinAt: 0,
         capturedOutput: Vector<u8>.create(),
         capturedError: Vector<u8>.create(),
         truncated: false,

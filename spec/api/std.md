@@ -1463,6 +1463,22 @@ public fn flush()
 killed. Standard error is never buffered.
 Safety: the runtime only flushes the C library's standard output.
 
+### HostServices.readLine
+
+```ceesafe
+public fn readLine(line: borrow mut String) -> Result<bool, IoError>
+```
+
+`Console.readLine(mut line)` (ADR 0106): reads the next line of standard input into `line`, replacing what it
+held, without the line's ending (`\n`, or `\r\n`). `Ok(true)` with a line, which may be empty; `Ok(false)` at
+the end of the input, with `line` empty. The input's last line needs no ending. Standard output is flushed
+before the program waits for input, so a prompt is seen first.
+Errors, each with `line` empty: `InvalidInput` for a line that is not UTF-8 (the line is consumed, and the
+next call reads the one after it), `OutOfMemory`, or the read's error.
+Standard input is read a block at a time; `Console.read` takes what a `readLine` left of its block first, so
+the two can be mixed.
+Safety: the runtime writes at most the chunk's length, during the call only.
+
 ### HostServices.modified
 
 ```ceesafe
@@ -1605,6 +1621,18 @@ Fills `into` with random bytes. `Err(Unsupported)` where the system has no sourc
 error if the source fails, with `into` partly written. It has no effect, so async code and a `drop` block may
 call it.
 Safety: the runtime writes at most the slice's length, during the call only.
+
+### Random.below
+
+```ceesafe
+public fn below(n: u64) -> Result<u64, IoError>
+```
+
+A random integer `r` with `0 <= r < n`, each value equally likely (ADR 0106): `Random.below(100)! + 1` is a
+number from 1 to 100. `Err(InvalidInput)` if `n` is 0, as no integer is below it; else `fill`'s error. It
+draws eight bytes with `fill`, and again while they fall in the part of the 64-bit range that would make
+some values likelier (less than one time in two, whatever `n`), so there is no modulo bias. In the
+interpreter it follows `fill`'s fixed sequence: the same numbers every run.
 
 ## enum SocketAddress
 

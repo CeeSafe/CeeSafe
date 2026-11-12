@@ -26,6 +26,8 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_host_console_flush() -> i64;
     @effects(sleep)
+    fn ceesafe_host_console_read_line(out: *mut u8, capacity: u64) -> i64;
+    @effects(sleep)
     fn ceesafe_host_modified(path: *u8, length: u64, seconds: *mut i64, nanoseconds: *mut u32) -> i64;
     @effects(sleep)
     fn ceesafe_host_set_permissions(path: *u8, length: u64, mode: u32) -> i64;
@@ -262,6 +264,62 @@ public struct HostServices {
     /// Safety: the runtime only flushes the C library's standard output.
     public fn flush() {
         let _ = unsafe { ceesafe_host_console_flush() };
+    }
+
+    /// `Console.readLine(mut line)` (ADR 0106): reads the next line of standard input into `line`, replacing what it
+    /// held, without the line's ending (`\n`, or `\r\n`). `Ok(true)` with a line, which may be empty; `Ok(false)` at
+    /// the end of the input, with `line` empty. The input's last line needs no ending. Standard output is flushed
+    /// before the program waits for input, so a prompt is seen first.
+    /// Errors, each with `line` empty: `InvalidInput` for a line that is not UTF-8 (the line is consumed, and the
+    /// next call reads the one after it), `OutOfMemory`, or the read's error.
+    /// Standard input is read a block at a time; `Console.read` takes what a `readLine` left of its block first, so
+    /// the two can be mixed.
+    /// Safety: the runtime writes at most the chunk's length, during the call only.
+    public fn readLine(line: borrow mut String) -> Result<bool, IoError> {
+        line.clear();
+        var chunk = [0u8; 4096];
+        var longer = Vector<u8>.create(); // a line that did not fit one chunk, so far
+        loop {
+            let result = unsafe { ceesafe_host_console_read_line(borrow mut chunk[0] as *mut u8, 4096) };
+            if (result < 0) {
+                return Err(HostServices.hostError(result));
+            }
+            let count = truncate<usize>(result);
+            if (count == 0) {
+                // The end of the input: what came before it, if anything, is the last line.
+                if (longer.length == 0) {
+                    return Ok(false);
+                }
+                break;
+            }
+            let ended = chunk[count - 1] == '\n';
+            if (ended && longer.length == 0) {
+                HostServices.setLine(line, chunk[..count])?;
+                return Ok(true);
+            }
+            HostServices.pushed(longer.extend(chunk[..count]))?;
+            if (ended) {
+                break;
+            }
+        }
+        HostServices.setLine(line, longer.view())?;
+        return Ok(true);
+    }
+
+    /// Appends `bytes` to the empty `line` without their line ending, if they are UTF-8.
+    fn setLine(line: borrow mut String, bytes: Slice<u8>) -> Result<void, IoError> {
+        var end = bytes.length;
+        if (end > 0 && bytes[end - 1] == '\n') {
+            end -= 1;
+            if (end > 0 && bytes[end - 1] == '\r') {
+                end -= 1;
+            }
+        }
+        let text = match (StringView.fromUtf8(bytes[..end])) {
+            Some(t) => t,
+            null => { return Err(IoError.InvalidInput); }
+        };
+        return HostServices.pushed(line.append(text));
     }
 
     /// `File.modified(path)` (ADR 0077): when the file or directory at `path` was last modified, as a `UnixTime`
@@ -549,5 +607,28 @@ public struct Random {
     public fn fill(into: SliceMut<u8>) -> Result<void, IoError> {
         let result = unsafe { ceesafe_random_fill(into.ptr, into.length as u64) };
         return if (result < 0) Err(HostServices.hostError(result)) else Ok();
+    }
+
+    /// A random integer `r` with `0 <= r < n`, each value equally likely (ADR 0106): `Random.below(100)! + 1` is a
+    /// number from 1 to 100. `Err(InvalidInput)` if `n` is 0, as no integer is below it; else `fill`'s error. It
+    /// draws eight bytes with `fill`, and again while they fall in the part of the 64-bit range that would make
+    /// some values likelier (less than one time in two, whatever `n`), so there is no modulo bias. In the
+    /// interpreter it follows `fill`'s fixed sequence: the same numbers every run.
+    public fn below(n: u64) -> Result<u64, IoError> {
+        if (n == 0) {
+            return Err(IoError.InvalidInput);
+        }
+        let excess = 0u64.wrappingSub(n) % n; // 2^64 mod n: that many low draws are refused
+        var bytes = [0u8; 8];
+        loop {
+            Random.fill(mut bytes[..])?;
+            var draw: u64 = 0;
+            for (k in 0..8usize) {
+                draw = draw | ((bytes[k] as u64) << (8 * k));
+            }
+            if (draw >= excess) {
+                return Ok(draw % n);
+            }
+        }
     }
 }

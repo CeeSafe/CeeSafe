@@ -1,0 +1,68 @@
+// lib/std's Random.below (ADR 0106): a uniform integer below `n`, by rejection over Random.fill: the system's source
+// natively, the interpreter's fixed sequence there. Properties both hold, the native ones with failure odds below
+// 2^-90: no integer is below 0 (InvalidInput); below(1) is 0; 10,000 draws below 100 stay below it and take each of
+// the 100 values (one is missed with probability 0.99^10000 < 2^-144, times 100); 6,000 draws below 3, which is not
+// a power of two, give each value 2,000 times within 450 (12 standard deviations); below 3 * 2^62, where a plain
+// remainder would give the values under 2^62 half of the draws, they get a third (1,000 of 3,000 within 300, 11
+// standard deviations; the biased 1,500 is 19 away); and the largest `n` works.
+
+fn main() {
+    match (Random.below(0)) {
+        Ok(_) => { Console.writeLine("a number below 0"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+    var zero = true;
+    for (k in 0..100) {
+        zero = zero && Random.below(1)! == 0;
+    }
+    Console.writeLine(zero);
+    var seen = [false; 100];
+    var inside = true;
+    for (k in 0..10000) {
+        let r = Random.below(100)!;
+        if (r < 100) {
+            seen[truncate<usize>(r)] = true;
+        } else {
+            inside = false;
+        }
+    }
+    var all = true;
+    for (s in seen) {
+        all = all && s;
+    }
+    Console.writeLine(inside && all);
+    var counts = [0u32; 3];
+    for (k in 0..6000) {
+        let r = Random.below(3)!;
+        if (r < 3) {
+            counts[truncate<usize>(r)] += 1;
+        }
+    }
+    var even = counts[0] + counts[1] + counts[2] == 6000;
+    for (count in counts) {
+        even = even && count > 1550 && count < 2450;
+    }
+    Console.writeLine(even);
+    let wide: u64 = 0xC000000000000000;
+    var low = 0;
+    var below = true;
+    for (k in 0..3000) {
+        let r = Random.below(wide)!;
+        below = below && r < wide;
+        if (r < 0x4000000000000000) {
+            low += 1;
+        }
+    }
+    Console.writeLine(below && low > 700 && low < 1300);
+    let most: u64 = 0xFFFFFFFFFFFFFFFF;
+    Console.writeLine(Random.below(most)! < most);
+    let secret = Random.below(100)! + 1;
+    Console.writeLine(secret >= 1 && secret <= 100);
+}
+// expect-stdout: Invalid argument
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: true

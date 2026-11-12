@@ -33,6 +33,11 @@ through two levels of dependency, and checks the link file, an unset variable, t
 `tools/dns_check.py` (ADR 0048's timed and sanitizer cases) and `tools/wake_check.py` (a cancellation wakes only the
 tasks it reaches: 200 races beside 100 idle sockets wake at most 200) are in the contract suite too.
 
+`tools/console_input_check.py` (ADR 0106, in the contract suite; POSIX) plays a dialogue with a program through
+pipes, built and with `run --interp`: it reads each prompt before it writes the answer, with a deadline; and it
+checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
+program waits for something else.
+
 `tools/test_command_check.py` runs `ceesafec test` (ADR 0049) on `tests/packages/test-command`, whose tests have every
 outcome, and compares each with `expected.tsv` (reviewed by hand), natively and with `--interp`; it also checks
 `--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out.
@@ -64,6 +69,9 @@ Runner: `tools/run_corpus.py --compiler out/ceesafec --corpus tests/reference/te
     134 (SIGABRT) and `ceesafe panic: <reason> at <file>:<line>:` on standard error.
   - `// expect-library-panic: reason`: the same for a panic an embedded library raises at its own line (ADR 0075
     §4: an OrderedMap cursor used after a change), so `ceesafe panic: <reason> at lib/`.
+  - `// stdin: text` (ADR 0106): the program's standard input is the texts of these directives, joined with nothing
+    between them; `\n`, `\r`, `\\` and `\xNN` (one byte) are the escapes, so an input may lack a last line ending
+    or hold bytes that are not UTF-8. A test without one inherits the runner's input, as before.
 - `ffi/` programs are linked with their C harness (`NAME.c`, and `NAME.types.h` for imported C types,
   `type-system.md` §31); `freestanding/` programs with their environment.
 - `emit-c/*.cee` have reviewed snapshots of the generated `main.c`; `placement/`, `bounds-checks/`,

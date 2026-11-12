@@ -2566,6 +2566,24 @@ not cover the network kinds (N0256): a source change of 0.7.0; one that names th
   standard error; standard output is flushed first, so the two keep their relative order.
 - `Console.flush()` (ADR 0077) writes what standard output holds buffered, so it survives the process being killed.
   It is hosted only (lib/std's `HostServices.flush`). Standard error is not buffered.
+- `Console.readLine(mut line)` (ADR 0106; `line: borrow mut String`; lib/std's `HostServices.readLine`, hosted only
+  like the rest of `Console`) is `Result<bool, IoError>`: it reads the next line of standard input into `line`,
+  replacing what `line` held.
+  - `Ok(true)`: `line` is the line without its ending, `\n` or `\r\n` (a `\r` elsewhere stays); it may be empty.
+    The last line of the input needs no ending. `Ok(false)`: the end of the input, with `line` empty; a later call
+    reads again, as `Console.read` does after it answered 0.
+  - Errors, each with `line` empty: `InvalidInput` if the line is not UTF-8 (the line is consumed: the next call
+    reads the line after it); `OutOfMemory` if `line` or the line's bytes could not be allocated (what was read of
+    the line is consumed); otherwise the read's error. `line` keeps its capacity from call to call.
+  - **One buffer.** The runtime reads standard input a block at a time (4,096 bytes; `ceesafe_host_console_read_line`
+    hands lib/std the bytes up to a line feed), not a byte per system call. `Console.read` takes what that block
+    still holds before it reads the descriptor, so a program that mixes the two reads every byte once, in order.
+    One thread uses the buffer at a time; a thread that reads while another does reads the descriptor itself
+    (`readLine` a byte at a time), so no byte is lost, and which thread gets which bytes is not defined.
+  - **Standard output is flushed before standard input is read** from the system, by `readLine` and by
+    `Console.read`: a prompt written with `Console.write` is seen before the program waits for its answer.
+  - On Windows standard input is in the C runtime's text mode, as it was for `Console.read`: `\r\n` arrives as `\n`.
+  - The interpreter does the same over its own input, or over the input it was given (`ceesafe_run`).
 
 ### 26.4 TCP sockets
 - `TcpListener.bind(address, port)` (`address: StringView`, IPv4 or IPv6 text without a zone such as
@@ -2689,6 +2707,14 @@ Diagnostics: none new.
 - The interpreter answers a fixed sequence (SplitMix64 from the seed `0x2b7e151628aed2a6`, each call taking whole
   64-bit words, low byte first, and dropping what it does not use), so a run stays reproducible (§40.8). Its bytes are
   not secret.
+- `Random.below(n)` (ADR 0106; lib/std; `n: u64`) is `Result<u64, IoError>`: an integer `r` with `0 <= r < n`, each
+  of the `n` values equally likely. `Random.below(100)! + 1` is a number from 1 to 100.
+  - `n == 0` is `Err(InvalidInput)`: no integer is below 0. Otherwise the error is `fill`'s.
+  - It draws 8 bytes with `Random.fill`, read as a `u64` low byte first, and draws again while the value is below
+    `2^64 mod n`; the result is the value modulo `n`. The values kept are a whole number of ranges of `n`, so there
+    is no modulo bias; a draw is refused with probability below 1/2, whatever `n`, and never when `n` is a power of
+    two. It is written in CeeSafe; it allocates nothing.
+  - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
 ### 26.13 Native windows (ADR 0069)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,

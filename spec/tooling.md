@@ -640,6 +640,12 @@ nothing else for them.
 - 256 MiB of interpreter memory at most: the heap then reports out of memory, which the program sees as
   `AllocError.OutOfMemory`; a local or static allocation beyond it is a fault;
 - standard input is `stdin`, the arguments are `args`, and the run has no access to the server's environment.
+  `Console.read` and `Console.readLine` read `stdin`; `Console.flush()` has nothing to write, the output being
+  kept for the result (ADR 0106: until 0.40.0 the sandbox refused it as host I/O, a defect).
+
+`ceesafec run --interp` itself writes the program's output as the program goes: each line as it ends, and
+everything written so far before the program waits for standard input and at `Console.flush()`, so a program that
+asks and reads can be played in it (ADR 0106; intermediate-representation.md §5.1).
 
 A fault's exit code is 70 and a panic's 134, as for `run --interp`.
 

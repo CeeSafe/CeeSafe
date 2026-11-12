@@ -345,10 +345,9 @@ static cee_io_result cee_socket_write(int32_t id, const uint8_t *bytes, uint64_t
 static void cee_socket_close(int32_t id);
 #endif
 
-cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length) {
-    size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
+/* One read of a file descriptor (not a socket's id): the count, 0 at the end; interrupted calls are retried. */
+static cee_io_result cee_fd_read_once(int32_t fd, uint8_t *buffer, size_t chunk) {
 #ifdef _WIN32
-    if (fd >= CEE_SOCKET_BASE) return cee_socket_read(fd, buffer, chunk);
     int n;
     do {
         n = _read(fd, buffer, (unsigned)chunk);
@@ -360,6 +359,77 @@ cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length) {
     } while (n < 0 && errno == EINTR);
 #endif
     return n < 0 ? ceesafe_io_errno() : ceesafe_io_ok((int64_t)n);
+}
+
+/* ---- Standard input (ADR 0106): one buffer, shared by `Console.readLine` and `Console.read`. ----
+ * `Console.readLine` fills the buffer with one read of descriptor 0 and takes a line's bytes from it; `Console.read`
+ * takes what the buffer holds before it reads the descriptor, so a program that mixes the two loses no byte and
+ * reads them in order. Standard output is flushed before each read of the descriptor, so a prompt is on the screen
+ * before the program waits for its answer.
+ * One thread uses the buffer at a time (cee_stdin_busy, by compare-and-swap; the holder may wait in its read). A
+ * thread that finds it busy does not wait for it: it reads the descriptor itself, `Console.readLine` one byte at a
+ * time, so that it takes nothing past its line's end. Which of two threads reading at once gets which bytes is not
+ * defined, as it never was; no byte is lost or read twice. */
+static uint8_t cee_stdin_bytes[4096];
+static size_t cee_stdin_at;  /* the next byte to give */
+static size_t cee_stdin_end; /* one past the last byte read */
+static uint32_t cee_stdin_busy;
+
+/* `Console.read`: what the buffer holds, else one read of standard input. */
+static cee_io_result cee_stdin_read(uint8_t *buffer, size_t chunk) {
+    if (chunk != 0u && ceesafe_atomic_cas_u32(&cee_stdin_busy, 0u, 1u) == 0u) {
+        size_t held = cee_stdin_end - cee_stdin_at;
+        if (held != 0u) {
+            size_t take = held < chunk ? held : chunk;
+            memcpy(buffer, cee_stdin_bytes + cee_stdin_at, take);
+            cee_stdin_at += take;
+            ceesafe_atomic_store_u32(&cee_stdin_busy, 0u);
+            return ceesafe_io_ok((int64_t)take);
+        }
+        ceesafe_atomic_store_u32(&cee_stdin_busy, 0u);
+    }
+    (void)fflush(stdout);
+    return cee_fd_read_once(0, buffer, chunk);
+}
+
+/* `Console.readLine`'s step (lib/std's HostServices.readLine): copies bytes of standard input to `out`, which has
+ * room for `capacity` (at least 1), up to and including the first line feed, or `capacity` bytes if none comes
+ * before. Returns how many it copied, 0 at the end of the input, or a negated errno with nothing copied. It writes
+ * only `out[0..capacity]`, during the call; the bytes are as read, not checked to be UTF-8. */
+int64_t ceesafe_host_console_read_line(uint8_t *out, uint64_t capacity) {
+    if (capacity == 0u) return -(int64_t)EINVAL;
+    if (ceesafe_atomic_cas_u32(&cee_stdin_busy, 0u, 1u) != 0u) {
+        (void)fflush(stdout);
+        cee_io_result one = cee_fd_read_once(0, out, 1u);
+        return one.error != 0 ? -(int64_t)one.error : one.value;
+    }
+    if (cee_stdin_at == cee_stdin_end) {
+        (void)fflush(stdout);
+        cee_io_result filled = cee_fd_read_once(0, cee_stdin_bytes, sizeof cee_stdin_bytes);
+        if (filled.error != 0 || filled.value == 0) {
+            ceesafe_atomic_store_u32(&cee_stdin_busy, 0u);
+            return filled.error != 0 ? -(int64_t)filled.error : 0;
+        }
+        cee_stdin_at = 0u;
+        cee_stdin_end = (size_t)filled.value;
+    }
+    size_t held = cee_stdin_end - cee_stdin_at;
+    size_t take = held < capacity ? held : (size_t)capacity;
+    const uint8_t *feed = memchr(cee_stdin_bytes + cee_stdin_at, '\n', take);
+    if (feed != NULL) take = (size_t)(feed - (cee_stdin_bytes + cee_stdin_at)) + 1u;
+    memcpy(out, cee_stdin_bytes + cee_stdin_at, take);
+    cee_stdin_at += take;
+    ceesafe_atomic_store_u32(&cee_stdin_busy, 0u);
+    return (int64_t)take;
+}
+
+cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length) {
+    size_t chunk = length > (1u << 30) ? (size_t)1u << 30 : (size_t)length;
+    if (fd == 0) return cee_stdin_read(buffer, chunk);
+#ifdef _WIN32
+    if (fd >= CEE_SOCKET_BASE) return cee_socket_read(fd, buffer, chunk);
+#endif
+    return cee_fd_read_once(fd, buffer, chunk);
 }
 
 cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length) {

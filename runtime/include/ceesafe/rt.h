@@ -1366,7 +1366,8 @@ int64_t ceesafe_host_spawn(void const *arguments, uint64_t count, uint8_t const 
    creates a missing file, 4 creates a new one (ADR 0075 §2.1); `value` is the descriptor. */
 cee_io_result ceesafe_file_open(cee_str path, uint32_t mode);
 cee_io_result ceesafe_file_remove(cee_str path);
-/* Reads up to `length` bytes (0 at the end); retries interrupted calls. */
+/* Reads up to `length` bytes (0 at the end); retries interrupted calls. Descriptor 0 is standard input: what
+   `Console.readLine` left in its buffer comes first, and standard output is flushed before the read (ADR 0106). */
 cee_io_result ceesafe_fd_read(int32_t fd, uint8_t *buffer, uint64_t length);
 /* Writes all `length` bytes, or fails. */
 cee_io_result ceesafe_fd_write(int32_t fd, const uint8_t *bytes, uint64_t length);
@@ -1425,6 +1426,9 @@ int32_t ceesafe_win_syscall(int32_t number, ...);
 #endif
 int64_t ceesafe_host_set_permissions(uint8_t const *path, uint64_t length, uint32_t mode);
 int64_t ceesafe_host_console_flush(void);
+/* `Console.readLine`'s step (ADR 0106): bytes of standard input, up to and including a line feed or `capacity`
+   bytes; the count, 0 at the end of the input, or a negated errno. */
+int64_t ceesafe_host_console_read_line(uint8_t *out, uint64_t capacity);
 /* The drop glue of File, TcpListener and TcpStream: closes the descriptor, ignoring errors. */
 void ceesafe_fd_drop(int32_t *fd);
 

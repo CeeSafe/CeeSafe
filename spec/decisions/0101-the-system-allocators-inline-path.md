@@ -1,6 +1,7 @@
 # ADR 0101 — The system allocator's inline path
 
-- Status: **Proposed**, 2026-11-12, implemented in the working tree and not released. Raised by
+- Status: **Accepted** by the owner, 2026-11-12, with the release that carries it: implemented on 0.37.0 and
+  released in ceesafec 0.38.0. Raised by
   `docs/performance-investigation-2026-11.md` §4.5: `binary-trees`, `small-objects` and `linked-list` were 1.13 to
   1.28 times Rust's time, and the investigation asked for the allocation path to be measured before anything else.
 - Scope: the runtime (`runtime/include/ceesafe/rt.h`, `runtime/core/ceesafe_rt_core.c`,

@@ -1,6 +1,7 @@
 # ADR 0100 — Check elimination: equality tests, binary searches and resized vectors
 
-- Status: **Proposed**, 2026-11-12, implemented in the working tree and not released. Raised by
+- Status: **Accepted** by the owner, 2026-11-12, with the release that carries it: implemented on 0.37.0 and
+  released in ceesafec 0.38.0. Raised by
   `docs/performance-investigation-2026-11.md` §4.2, items 1 and 2: in the tsrs trial's span map, a binary search
   kept its index check and the overflow check of its midpoint, and `idx - 1` after `if (idx == 0) { return …; }`
   kept its overflow check. All three are provable.

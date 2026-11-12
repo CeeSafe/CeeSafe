@@ -1,6 +1,7 @@
 # ADR 0099 — `resize` of a vector with no buffer takes zeroed memory
 
-- Status: **Proposed**, 2026-11-12, implemented in the working tree and not released. Raised by
+- Status: **Accepted** by the owner, 2026-11-12, with the release that carries it: implemented on 0.37.0 and
+  released in ceesafec 0.38.0. Raised by
   `docs/performance-investigation-2026-11.md` §4.1: the `hash-map` workload was 1.43 times Rust's time, and the cause
   measured there was filling two tables of 4,194,304 `u64`, not its index checks.
 - Scope: the C emitter's `resize` helper (`src/backend/c_helpers.cee`, `ceeVZ_…`), one runtime function

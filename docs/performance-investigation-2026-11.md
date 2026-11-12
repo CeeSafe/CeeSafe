@@ -1,7 +1,7 @@
 # Performance against Rust: findings of 2026-11-11, for a later session
 
 **Status:** an investigation, not a plan that anyone accepted. §9 records what a session of 2026-11-12 implemented
-from it (in the working tree: ADRs 0099 to 0101, proposed, not released) and what it measured and left; §1 to §8 are
+from it (ADRs 0099 to 0101, released in ceesafec 0.38.0) and what it measured and left; §1 to §8 are
 as written on 2026-11-11. Each finding says whether
 it was **measured**, **read in the source** or is a **hypothesis**. Written so that a session with no other context
 can pick an item, reproduce its number and fix it.

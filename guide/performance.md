@@ -32,8 +32,7 @@ check takes 0.95×.
 | **geometric mean** | **0.92** | 1.00 | 1.08 | 0.95 | | |
 
 Times are each language's median wall time over five runs (after one discarded run) divided by Rust's; lower is
-faster. Measured 2026-11-12 on an Apple M-series Mac (arm64, macOS), with ceesafec 0.37.0 and ADRs 0099 to 0101,
-rustc 1.99.1 and Apple clang 21. The machine was shared with other work, so a spread of several percent between runs
+faster. Measured 2026-11-12 on an Apple M-series Mac (arm64, macOS), with ceesafec 0.38.0, rustc 1.99.1 and Apple clang 21. The machine was shared with other work, so a spread of several percent between runs
 is normal here (the C column of `heap-alloc` and `arena` shows it): compare ratios, not single milliseconds, and
 measure again before deciding anything on a small difference.
 
@@ -41,7 +40,7 @@ Peak memory is the same as Rust's or lower everywhere (`arena`: 3.1 MiB against 
 against Rust's 460 KiB. ceesafec compiles each program in about half a second, against rustc's 0.4 s on these
 single-file programs, since it runs the C compiler after its own work.
 
-The same suite with ceesafec 0.37.0 as released took 0.98× Rust's time. What moved it:
+The same suite with ceesafec 0.37.0 took 0.98× Rust's time. What moved it (ADRs 0099 to 0101):
 
 | Workload | Before | Now | What changed |
 |---|---:|---:|---|

@@ -110,6 +110,24 @@ At `-O2` clang does not clone a recursive function for a constant argument, so a
 the const parameter removes them, as Rust's const generics do. `main.c` takes the flags as arguments (C has no const
 parameters), and in the same three runs took 3.27–3.67 s.
 
+## A call through `dyn`
+
+One measurement of what a method call costs in each of the three ways to write code for several kinds of value: a
+generic with a bound, an enum with `match`, and `dyn` ([Generics](generics.md)). The programs are the book's
+`book/projects/ch18/cost-generic`, `cost-enum` and `cost-dyn`: 1,000 shapes, squares and rectangles in an order a
+small random number generator chooses, whose `area` (one multiplication) is summed 200,000 times, so 200 million
+calls. Measured 2026-11-13 on an Apple M1 with Apple clang 21 and ceesafec 0.40.0, `ceesafec build`, the lowest
+wall-clock time of the whole program in 30 runs of each, on a machine shared with other work:
+
+| Way | Time | For each call |
+|---|---:|---:|
+| generic: a `Vector<Square>` and a `Vector<Rect>`, each summed by its own instance | 107 ms | 0.5 ns |
+| enum: a `Vector<Shape>`, `area` a `match` | 215 ms | 1.1 ns |
+| `dyn`: a `Vector<Box<dyn Shape>>` | 908 ms | 4.5 ns |
+
+The three print the same sum. This is the smallest possible method, so it shows the cost of the call alone at its
+largest: a method that does real work hides it. It is one machine and one workload, not a rule.
+
 ## Run it yourself
 
 ```sh

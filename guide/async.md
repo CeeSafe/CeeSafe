@@ -104,7 +104,7 @@ async fn gather() -> Result<u32, Failure> {
     var fast: u32 = 0;
     await Async.scope(Failure.OutOfMemory, (s) => {
         s.spawn(async () => {
-            await pause(30)?;
+            await pause(200)?;
             await say("slow done")?;
             slow = 100;
             return Ok();
@@ -133,7 +133,7 @@ slow done
 120
 ```
 
-The two children wait at the same time, so the whole takes about 30 ms, not 40. They write with `AsyncConsole`:
+The two children wait at the same time, so the whole takes about 200 ms, not 210. They write with `AsyncConsole`:
 `Console.writeLine` blocks its thread, which async code may not do (N0295, below). The rules that keep this safe are the
 borrow checker's:
 
@@ -216,7 +216,7 @@ async fn after(ms: u64, v: u32) -> Result<u32, AsyncError> {
 
 async fn fastest() -> Result<u32, AsyncError> {
     let r: Result<Raced<u32>, AsyncError> = await Async.race(
-        async () => await after(30, 1),
+        async () => await after(300, 1),
         async () => await after(5, 2),
     );
     let raced = r?;
@@ -302,8 +302,8 @@ async fn after(ms: u64, v: u32) -> Result<u32, FetchError> {
 }
 
 async fn fetch() -> Result<u32, FetchError> {
-    let quick = await Async.timeout(50, FetchError.TimedOut, async () => await after(5, 1))?;
-    match (await Async.timeout(5, FetchError.TimedOut, async () => await after(50, 2))) {
+    let quick = await Async.timeout(500, FetchError.TimedOut, async () => await after(5, 1))?;
+    match (await Async.timeout(5, FetchError.TimedOut, async () => await after(500, 2))) {
         Ok(v) => { return Ok(quick * 10 + v); }
         Err(FetchError.TimedOut) => { return Ok(quick * 10 + 9); } // the slow one ran out of time
         Err(e) => { return Err(e); }

@@ -59,7 +59,7 @@ run code in a sandbox. The specification is embedded in `ceesafec`, so its answe
 - An `async move` child (`s.spawn`, `set.spawn`, `Async.timeout`/`race`/`all`) owns its captures and may move them.
 - A view of a temporary, `make().view()`, lasts until the end of its statement: to keep it, bind the value to a local.
 - There is no string interpolation: `"x = {x}"` prints `{x}` (warning N0400); write the value in a call of its own.
-- Pass a function or closure as a parameter and call the parameter; a field holding one cannot be called.
+- A function or closure in a field is called as `c.step(n)`; a struct that borrows a closure has a region parameter.
 - A `StringView` inside an enum or struct needs a region parameter; for fixed messages, use an enum of reasons.
 - A method cannot have the name of a field.
 - Look a name up before deciding it does not exist: MCP `ceesafe_api` (`TextWriter.decimal`, `Process.argument`), or

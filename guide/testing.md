@@ -61,4 +61,6 @@ Each is reported as passed, failed, panicked, crashed (a signal), exited (it cal
 (`--timeout`, 60 seconds by default) or leaked, natively and with `--interp`. A leak fails a test: CeeSafe has no
 garbage collector, so memory still allocated at the end is a bug. A failing test's output is shown under its name, and
 a test failing with its own enum names the variant. A `--filter` that matches no test is an error, and `--sweep` runs
-natively only. `ceesafec test --help` lists the options.
+natively only. Under `--sweep alloc`, a run in which a `!` of the tests' own files meets the failed allocation is
+counted apart ("unwrapped by the test itself"), not as a failure; `--sweep-strict` makes it one. `ceesafec test --help`
+lists the options.

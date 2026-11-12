@@ -369,9 +369,11 @@ violations that stay in bounds.
 - **Arguments.** `argv[0]` is the first source file's path. The arguments after `--` follow it.
 - **Configuration.** The CLI reads `CEESAFE_FAIL_ALLOC_AT` and `CEESAFE_ALLOC_REPORT` as
   `ceesafe_platform_config` does (leading digits).
-- **Files and sockets** use the host C library through P/Invoke (`open`, `read`, `write`,
-  `close`, `unlink`, `socket`, …) on Linux and macOS, with the same flags and errno mapping as
-  `ceesafe_rt_io.c`. On Windows, I/O is an interpreter fault ("unsupported").
+- **Files and sockets** are the host's, through lib/core's `File`, `TcpListener` and `TcpStream` (the interpreter is
+  a CeeSafe program): a descriptor the interpreted program holds names an entry of the interpreter's table. Errors
+  reach the program with the host's errno numbers (Linux, macOS or Windows) and the same mapping as
+  `ceesafe_rt_io.c`. What the stage-0 library cannot do (a file's modification time, its permissions) is
+  `IoError.Unsupported`.
 - **Working directory.** An optional working directory resolves relative file paths and is
   where child processes start. Tests use it, since they run in parallel in one process. The CLI
   uses the process's own directory.

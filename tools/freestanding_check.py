@@ -14,7 +14,8 @@ For each freestanding corpus program:
 And the embedded build (ADR 0088 §5), for demo.cee: `--emit lib` writes the archive with ceesafe/embed.h's
 freestanding form beside it; the archive's undefined symbols are the allowlist's; a C embedder including that header
 compiles with the profile's flags and warnings for each triple (with llvm-ar), and on the host links the archive,
-whose ceesafe_init takes the config's size and refuses another.
+whose ceesafe_init returns 0 for a config of the right size and CEESAFE_INIT_SIZE for any other size. (It keeps no
+state, so a second call with the right size returns 0 again: ADR 0088 §2.2.)
 
 usage: python3 tools/freestanding_check.py --compiler PATH [--corpus DIR] [--nm llvm-nm] [--objdump llvm-objdump]
            [--lld ld.lld] [--ar llvm-ar]

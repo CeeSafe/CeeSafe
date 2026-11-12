@@ -208,6 +208,49 @@ not use it. A value both read must be `Share`, and one that a closure changes mu
 its referent here. `splitAtMut` gives two halves that each closure may change. If a thread cannot be started, `both`
 runs `a` and then `b` on this thread, so it never fails.
 
+## Passing values: `Channel`
+
+A `Channel<T>` (lib/std) carries values of a `Send` type from one thread to another through a buffer of fixed size.
+Every handle may send and receive, and `clone` makes another handle to the same channel, so each thread owns one.
+
+```ceesafe
+fn main() {
+    let channel = Channel<u64>.create(16)!;
+    let sender = channel.clone();
+    let producer = Thread.spawn(move () => {
+        for (i in 1..11u64) {
+            match (sender.send(i * i)) {
+                Ok() => {}
+                Err(_) => { return; }
+            }
+        }
+        sender.close();
+    })!;
+    var sum: u64 = 0;
+    while (true) {
+        match (channel.recv()) {
+            Some(v) => { sum += v; }
+            null => { break; }
+        }
+    }
+    producer.join();
+    Console.writeLine(sum);
+}
+```
+
+```text
+385
+```
+
+- `Channel<T>.create(capacity)` allocates the buffer once, so it returns a `Result`. The capacity is at least 1.
+- `send(value)` waits while the channel is full. On a closed channel it gives the value back as `Err(value)`.
+- `recv()` waits while the channel is empty, and is `null` once the channel is closed and empty.
+- `trySend` and `tryRecv` never wait; `close()` ends the channel for every handle, and `isClosed()` asks.
+- The values still buffered are dropped with the last handle.
+- Tasks use the same channel with `sendAsync` and `recvAsync` ([Async tasks](async.md)).
+- The interpreter runs threads one at a time, and reports a thread that waits to send on a full channel as a
+  deadlock: there, give the channel room for what is sent before the receiver runs, as above.
+
 ## Async tasks on several threads
 
 An `Async.run` uses one thread. To spread a scope's children over several, run it with `Async.runWorkers(4, task)`

@@ -1,0 +1,12 @@
+fn pace(total: u64, laps: u64) -> u64 => total / laps;
+
+@test
+fn dropsItsCheck() {
+    Check.equalU64(4, pace(7, 2));
+}
+
+@test
+fn keepsItsCheck() -> Result<void, TestFailure> {
+    Check.equalU64(4, pace(7, 2))?;
+    return Ok();
+}

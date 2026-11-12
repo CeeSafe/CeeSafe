@@ -1,0 +1,21 @@
+fn squares(n: i32) -> Result<Vector<i32>, AllocError> {
+    var v = Vector<i32>.create();
+    for (i in 0..n) {
+        v.push(i * i)?;
+    }
+    return Ok(v);
+}
+
+@test
+fn makesTen() -> Result<void, AllocError> {
+    let v = squares(10)?;
+    assert(v.length == 10);
+    return Ok();
+}
+
+fn main() {
+    match (squares(10)) {
+        Ok(v) => { Console.writeLine(v.length); }
+        Err(AllocError.OutOfMemory) => { Console.writeLine("out of memory"); }
+    }
+}

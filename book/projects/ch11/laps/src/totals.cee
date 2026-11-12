@@ -1,0 +1,24 @@
+/// The time on the clock at the end of each lap: the running totals of `laps`.
+public fn totals(laps: Slice<u64>) -> Result<Vector<u64>, AllocError> {
+    var clock = Vector<u64>.create();
+    var now: u64 = 0;
+    for (lap in laps) {
+        now += lap;
+        clock.push(now)?;
+    }
+    return Ok(clock);
+}
+
+@test
+fn totalsRun() -> Result<void, TestFailure> {
+    let laps = [60u64, 62, 58, 61, 59];
+    match (totals(laps[..])) {
+        Ok(clock) => {
+            Check.equalU64(5, clock.length as u64)?;
+            Check.equalU64(60, clock[0])?;
+            Check.equalU64(300, clock[4])?;
+        }
+        Err(_) => { return Check.fail("out of memory"); }
+    }
+    return Ok();
+}

@@ -1,0 +1,31 @@
+@test
+fn readsSeconds() -> Result<void, TestFailure> {
+    let parsed = seconds("75");
+    CheckResult<u64, TimeError>.isOk(borrow parsed, "\"75\" is a time")?;
+    Check.equalU64(75, parsed.ok() ?? 0)?;
+    return Ok();
+}
+
+@test
+fn readsMinutesAndSeconds() -> Result<void, TestFailure> {
+    match (seconds("1:15")) {
+        Ok(s) => { Check.equalU64(75, s)?; }
+        Err(_) => { return Check.fail("\"1:15\" is a time"); }
+    }
+    return Ok();
+}
+
+@test
+fn refusesALetter() -> Result<void, TestFailure> {
+    let parsed = seconds("1:x5");
+    CheckResult<u64, TimeError>.isErr(borrow parsed, "a letter is not a digit")?;
+    return Ok();
+}
+
+@test
+fn refusesNoText() -> Result<void, TestFailure> {
+    match (seconds("")) {
+        Err(TimeError.Empty) => { return Ok(); }
+        _ => { return Check.fail("expected Err(TimeError.Empty)"); }
+    }
+}

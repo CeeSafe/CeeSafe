@@ -1,0 +1,1 @@
+public fn pair(first: i64, second: i64) -> i64 => first - second;

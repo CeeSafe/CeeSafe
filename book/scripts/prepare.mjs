@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendices, chapters, writtenPages } from "../toc.mjs";
+import { appendices, chapters, written, writtenPages } from "../toc.mjs";
 
 const book = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(book, "src");
@@ -45,14 +45,16 @@ function parse(file) {
  *  then perhaps a `text` block with what it prints or the compiler says. */
 function listingsOf(file, body) {
   const listings = [];
-  const pattern = /<span class="listing-caption"><strong>Listing ([0-9]+-[0-9]+)<\/strong>(?:, <code>([^<]+)<\/code>)?: (.*?)<\/span>\s*\n+(?:<!-- ceesafe: ([^>]*?) -->\n)?```ceesafe\n([\s\S]*?)\n```(?:\s*\n+```text\n([\s\S]*?)\n```)?/g;
+  const pattern = /<span class="listing-caption"><strong>Listing ([0-9]+-[0-9]+)<\/strong>(?:, <code>([^<]+)<\/code>)?: (.*?)<\/span>\s*\n+(?:<!-- ceesafe: ([^>]*?) -->\n)?```([a-z]*)\n([\s\S]*?)\n```(?:\s*\n+```text\n([\s\S]*?)\n```)?/g;
   for (const match of body.matchAll(pattern)) {
-    const [, number, name, caption, directive, code, result] = match;
-    const path = `listings/${file}-${number}.cee`;
+    const [, number, name, caption, directive, language, code, result] = match;
+    const extension = language === "ceesafe" ? "cee" : language === "" || language === "text" ? "txt" : language;
+    const path = `listings/${file}-${number}.${extension}`;
     listings.push({
       number,
       section: file,
       file: name ?? "main.cee",
+      language: language || "text",
       caption: caption.replace(/<[^>]+>/g, ""),
       check: directive?.trim() ?? "runs",
       output: result ?? null,
@@ -93,23 +95,15 @@ for (const page of pages) {
   });
 }
 
-// A diagnostic a header names must be one a listing of the section shows (Decision 0011 §5).
-for (const section of sections) {
-  const shown = listings.filter((l) => l.section === section.id).map((l) => `${l.check} ${l.output ?? ""}`).join(" ");
-  for (const code of section.diagnostics) {
-    if (!shown.includes(code)) {
-      throw new Error(`book/src/${section.id}.md names ${code}, which none of its listings shows`);
-    }
-  }
-}
+// What the pages must satisfy (headers, numbering, diagnostics, links) is checked by tools/book_check.py.
 
 const planned = [];
 chapters.forEach((chapter, c) => {
-  if (!chapter.file) {
+  if (!written(chapter)) {
     planned.push(`${c + 1}. ${chapter.title}`);
   }
   chapter.sections.forEach((section, s) => {
-    if (!section.file) {
+    if (!written(section)) {
       planned.push(`${c + 1}.${s + 1}. ${section.title}`);
     }
   });

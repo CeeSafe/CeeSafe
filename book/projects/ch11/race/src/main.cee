@@ -1,0 +1,8 @@
+import laps;
+
+fn main() {
+    match (seconds("2:05")) {
+        Ok(s) => { Console.writeLine(s); }
+        Err(_) => { Console.writeLine("not a time"); }
+    }
+}

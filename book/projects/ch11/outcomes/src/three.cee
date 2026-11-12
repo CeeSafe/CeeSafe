@@ -1,0 +1,8 @@
+/// Three lap times. It unwraps each push, so it panics if memory runs out.
+fn threeLaps() -> Vector<u64> {
+    var laps = Vector<u64>.create();
+    laps.push(60)!;
+    laps.push(62)!;
+    laps.push(58)!;
+    return laps;
+}

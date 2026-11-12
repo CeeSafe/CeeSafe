@@ -1,0 +1,3 @@
+fn main() {
+    Console.writeLine(tally.quotient(7, 2));
+}

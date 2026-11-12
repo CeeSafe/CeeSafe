@@ -1,0 +1,5 @@
+fn tally(first: i64, second: i64) -> i64 => first + second;
+
+fn main() {
+    Console.writeLine(tally(30, 34));
+}

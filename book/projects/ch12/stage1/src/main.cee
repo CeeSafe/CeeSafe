@@ -1,0 +1,20 @@
+fn main() {
+    let query = match (Process.argument(1)) {
+        Some(text) => text,
+        null => {
+            Console.writeLine("usage: lookfor <text> <file>");
+            Process.exit(2);
+        }
+    };
+    let path = match (Process.argument(2)) {
+        Some(text) => text,
+        null => {
+            Console.writeLine("usage: lookfor <text> <file>");
+            Process.exit(2);
+        }
+    };
+    Console.write("looking for: ");
+    Console.writeLine(query);
+    Console.write("in the file: ");
+    Console.writeLine(path);
+}

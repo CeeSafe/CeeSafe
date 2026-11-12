@@ -1,7 +1,7 @@
 ---
 title: Borrowing
 summary: Using a value without taking it - borrow T reads, borrow mut T reads and writes and needs mut at the call. The one rule (many readers or one writer, while a borrow is live), when a borrow ends, and the diagnostics N0240 and N0242.
-assumes: [ch01-03-hello-package]
+assumes: [ch01-03-hello-package, ch04-01-what-ownership-is]
 keywords: [borrow, "borrow mut", mut, reference, live, shared, exclusive, aliasing]
 diagnostics: [N0240, N0242]
 specification: ["ownership.md B1", "lifetimes.md §5"]
@@ -10,8 +10,8 @@ specification: ["ownership.md B1", "lifetimes.md §5"]
 # Borrowing
 
 **This section teaches** how a function uses a value without taking it away from its owner, and the one rule the
-compiler enforces about that. It assumes you can write and call a function ([Hello, package](./ch01-03-hello-package));
-section 4.1, on what an owner is, will come before it.
+compiler enforces about that. It assumes you can write and call a function ([Hello, package](./ch01-03-hello-package))
+and know what an owner and a move are ([What ownership is](./ch04-01-what-ownership-is)).
 
 Every value has one owner. Passing a value to a function can hand it over, and then the caller no longer has it.
 Most functions do not want that. They want to look at a value, or change it where it is, and leave it with its
@@ -25,7 +25,7 @@ There are two kinds:
 
 ## Borrowing for a call
 
-<span class="listing-caption"><strong>Listing 4-5</strong>, <code>main.cee</code>: One function reads a counter and another changes it. Neither takes it.</span>
+<span class="listing-caption"><strong>Listing 4-8</strong>, <code>main.cee</code>: One function reads a counter and another changes it. Neither takes it.</span>
 
 ```ceesafe
 struct Counter {
@@ -81,7 +81,7 @@ This is what makes a borrow safe to use: while you hold one, the value cannot ch
 
 ## When a borrow ends
 
-<span class="listing-caption"><strong>Listing 4-6</strong>, <code>main.cee</code>: The borrow <code>r</code> is last used on line 4, so line 5 may change <code>total</code>.</span>
+<span class="listing-caption"><strong>Listing 4-9</strong>, <code>main.cee</code>: The borrow <code>r</code> is last used on line 4, so line 5 may change <code>total</code>.</span>
 
 ```ceesafe
 fn main() {
@@ -104,10 +104,10 @@ is over and `total` is free to change.
 ## Mistakes
 
 ::: warning Mistake: changing a value that is still borrowed
-Swap the two middle lines of Listing 4-6, and the borrow is live across the change.
+Swap the two middle lines of Listing 4-9, and the borrow is live across the change.
 :::
 
-<span class="listing-caption"><strong>Listing 4-7</strong>, <code>main.cee</code>: <code>r</code> is used after <code>total</code> changes. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-10</strong>, <code>main.cee</code>: <code>r</code> is used after <code>total</code> changes. This does not compile.</span>
 
 <!-- ceesafe: fail N0240 -->
 ```ceesafe
@@ -129,14 +129,14 @@ main.cee:4:5: error[N0240]: cannot assign to 'total' while 'total' is borrowed
 ```
 
 The message gives the three places that matter: the change (line 4), where the borrow was made (3:5), and the later
-use that keeps it live (5:5). To fix it, finish using the borrow before the change, as Listing 4-6 does, or read
+use that keeps it live (5:5). To fix it, finish using the borrow before the change, as Listing 4-9 does, or read
 `total` again after it.
 
 ::: warning Mistake: reading a value while it is exclusively borrowed
 An exclusive borrow shuts out reads too, not only writes.
 :::
 
-<span class="listing-caption"><strong>Listing 4-8</strong>, <code>main.cee</code>: <code>total</code> is read while <code>r</code> may still write it. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-11</strong>, <code>main.cee</code>: <code>total</code> is read while <code>r</code> may still write it. This does not compile.</span>
 
 <!-- ceesafe: fail N0242 -->
 ```ceesafe
@@ -187,4 +187,4 @@ points to. Those three guarantees are what the rule buys.
   cannot be used at all (`N0242`).
 - A borrow is live until its last use, not until the end of its block.
 
-Next, section 4.3: slices and views, which are borrows of part of a collection.
+Next: [Slices and views](./ch04-03-slices-and-views), which are borrows of part of a collection.

@@ -1,0 +1,20 @@
+public struct Tally {
+    public count: i64;
+    total: i64;
+
+    public fn empty() -> Tally => Tally { count: 0, total: 0 };
+
+    public fn add(borrow mut this, value: i64) {
+        this.count += 1;
+        this.total += value;
+    }
+
+    public fn mean(borrow this) -> i64 => quotient(this.total, this.count);
+}
+
+public fn pair(first: i64, second: i64) -> Tally {
+    var t = Tally.empty();
+    t.add(first);
+    t.add(second);
+    return t;
+}

@@ -1,0 +1,7 @@
+import laps;
+
+@test
+fn readsATime() -> Result<void, TestFailure> {
+    Check.equalU64(125, seconds("2:05").ok() ?? 0)?;
+    return Ok();
+}

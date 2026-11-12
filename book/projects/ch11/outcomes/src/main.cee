@@ -1,0 +1,6 @@
+/// The average of `count` laps that took `total` seconds together, rounded down.
+fn average(total: u64, count: u64) -> u64 => total / count;
+
+fn main() {
+    Console.writeLine(average(180, 3));
+}

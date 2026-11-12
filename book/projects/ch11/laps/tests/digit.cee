@@ -1,0 +1,6 @@
+@test
+fn digitReadsOnlyDigits() -> Result<void, TestFailure> {
+    Check.equalU64(7, (digit('7') ?? 0) as u64)?;
+    Check.isTrue(digit('x').isNull(), "'x' is not a digit")?;
+    return Ok();
+}

@@ -7,8 +7,10 @@
   human and AI." The documentation site stays as it is.
 - Relates to: Decision 0006 (the specification, and the guide's examples being checked), the guide (`guide/`), the
   site (`site/`), `guide/for-agents.md` and the MCP server (`spec/tooling.md` §6).
-- Built so far, as a prototype (`book/`): the site, the machine-readable files of §5, chapter 1 and section 4.2.
-  Not yet: `tools/book_check.py`, the print page, the version written by the build, publishing.
+- Built so far (`book/`): the site, the machine-readable files of §5, chapters 1 to 12 (54 pages, 275 listings,
+  25 packages under `book/projects/`), `tools/book_check.py` in the contract suite, and the authors' guide
+  `book/WRITING.md`. Not yet: chapters 13 to 22 and the appendices, the print page, the version written by the
+  build, publishing.
 
 ## 1. Context
 

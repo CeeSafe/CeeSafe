@@ -1,0 +1,6 @@
+@test
+async fn waitsTwice() -> Result<void, AsyncError> {
+    await Timer.sleep(1)?;
+    await Timer.sleep(1)?;
+    return Ok();
+}

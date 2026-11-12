@@ -1,0 +1,3 @@
+fn printLine(label: StringView, value: i64) {
+    Console.writeLine(value);
+}

@@ -1,0 +1,5 @@
+fn printLine(label: StringView, value: i64) {
+    Console.write(label);
+    Console.write(": ");
+    Console.writeLine(value);
+}

@@ -1,0 +1,50 @@
+fn readAll(path: StringView) -> Result<Vector<u8>, IoError> {
+    var file = File.open(path)?;
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 4096];
+    loop {
+        let n = file.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        match (bytes.extend(buffer[0..n])) {
+            Ok() => {}
+            Err(_) => { return Err(IoError.OutOfMemory); }
+        }
+    }
+    return Ok(bytes);
+}
+
+fn main() {
+    let query = match (Process.argument(1)) {
+        Some(text) => text,
+        null => {
+            Console.writeLine("usage: lookfor <text> <file>");
+            Process.exit(2);
+        }
+    };
+    let path = match (Process.argument(2)) {
+        Some(text) => text,
+        null => {
+            Console.writeLine("usage: lookfor <text> <file>");
+            Process.exit(2);
+        }
+    };
+    Console.write("looking for: ");
+    Console.writeLine(query);
+    let bytes = match (readAll(path)) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            Console.write("lookfor: ");
+            Console.writeLine(error.message());
+            Process.exit(2);
+        }
+    };
+    match (StringView.fromUtf8(bytes.view())) {
+        Some(text) => { Console.write(text); }
+        null => {
+            Console.writeLine("lookfor: the file is not UTF-8 text");
+            Process.exit(2);
+        }
+    }
+}

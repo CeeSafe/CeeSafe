@@ -1,12 +1,13 @@
 # The book
 
 The source of *The CeeSafe Programming Language* (Decision 0011): a book in the shape of the Rust Book, for people
-and for AI models, beside the documentation site (`site/`). **A prototype:** chapter 1 and section 4.2 are written.
+and for AI models, beside the documentation site (`site/`). Chapters 1 to 12, the course, are written; 13 to 22 and the appendices are planned.
 
 | Path | What |
 |---|---|
 | `toc.mjs` | the table of contents: every chapter and section, written or planned |
 | `src/*.md` | one file for each written page; its name is the page's stable identifier |
+| `projects/` | the packages the chapters show: programs of several files, tests, the projects, and variants that are there to fail (`.book-expect`) |
 | `src/public/` | **generated**, not committed: `llms.txt`, `llms-full.txt`, `index.json`, each page's Markdown, each listing as a file |
 | `scripts/prepare.mjs` | writes `src/public/` |
 | `.vitepress/` | the site: the numbered sidebar from `toc.mjs`, the theme |
@@ -20,11 +21,14 @@ vp run dev            # a local server with live reload
 vp run build          # fails on a dead link, or a page without its header
 ```
 
-Every `ceesafe` block is a whole program, checked as the guide's are:
+Every `ceesafe` block is a whole program, checked as the guide's are, and the pages and the packages under
+`projects/` have their own check (it is one of the contract tests):
 
 ```sh
-python3 tools/guide_check.py --ceesafec out/ceesafec --guide book/src
+python3 tools/book_check.py --ceesafec out/ceesafec
 ```
+
+How a chapter is written: `WRITING.md`.
 
 ## A page
 

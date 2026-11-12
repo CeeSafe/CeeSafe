@@ -1,0 +1,14 @@
+import tally.Tally;
+
+fn main() {
+    var week = Tally.empty();
+    week.add(18);
+    week.add(21);
+    week.add(24);
+    Console.write("days: ");
+    Console.writeLine(week.count);
+    printMean("week", week);
+
+    let weekend = tally.pair(30, 34);
+    printMean("weekend", weekend);
+}

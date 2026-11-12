@@ -1,0 +1,8 @@
+[package]
+name = "report"
+version = "0.1.0"
+kind = "executable"
+ceesafec = ">=0.40.0"
+
+[dependencies]
+tally = { path = "../tally" }

@@ -1,0 +1,76 @@
+/// What the program was asked to do.
+struct Config<region r> {
+    query: StringView<r>;
+    path: StringView<r>;
+}
+
+/// The ways a run can fail.
+enum LookError {
+    MissingQuery,
+    MissingPath,
+    NotUtf8,
+    @from Io(IoError),
+    @from Memory(AllocError),
+}
+
+/// The configuration, from the program's arguments.
+fn configure() -> Result<Config<static>, LookError> {
+    let query = match (Process.argument(1)) {
+        Some(text) => text,
+        null => { return Err(LookError.MissingQuery); }
+    };
+    let path = match (Process.argument(2)) {
+        Some(text) => text,
+        null => { return Err(LookError.MissingPath); }
+    };
+    return Ok(Config { query: query, path: path });
+}
+
+/// The whole file's bytes.
+fn readAll(path: StringView) -> Result<Vector<u8>, LookError> {
+    var file = File.open(path)?;
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 4096];
+    loop {
+        let n = file.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        bytes.extend(buffer[0..n])?;
+    }
+    return Ok(bytes);
+}
+
+/// The lines of `text` that contain `query`, in order.
+fn search<region r>(query: StringView, text: StringView<r>) -> Result<Vector<StringView<r>>, AllocError> {
+    var found = Vector<StringView<r>>.create();
+    for (line in text.split("\n")) {
+        if (line.contains(query)) {
+            found.push(line)?;
+        }
+    }
+    return Ok(found);
+}
+
+/// Reads the file, searches it and prints the lines found.
+fn run(config: borrow Config) -> Result<void, LookError> {
+    let bytes = readAll(config.path)?;
+    let text = match (StringView.fromUtf8(bytes.view())) {
+        Some(text) => text,
+        null => { return Err(LookError.NotUtf8); }
+    };
+    let found = search(config.query, text)?;
+    for (line in found) {
+        Console.writeLine(line);
+    }
+    return Ok();
+}
+
+@test
+fn findsOneLine() -> Result<void, TestFailure> {
+    let text = "one fish\ntwo fish\nred herring\n";
+    let found = search("red", text)!;
+    Check.equalU64(1, found.length as u64)?;
+    Check.equalText("red herring", found[0])?;
+    return Ok();
+}

@@ -1,0 +1,122 @@
+/// What the program was asked to do.
+struct Config<region r> {
+    query: StringView<r>;
+    path: StringView<r>;
+    ignoreCase: bool;
+}
+
+/// The ways a run can fail.
+enum LookError {
+    MissingQuery,
+    MissingPath,
+    NotUtf8,
+    @from Io(IoError),
+    @from Memory(AllocError),
+}
+
+/// The configuration, from the program's arguments and its environment.
+fn configure() -> Result<Config<static>, LookError> {
+    let query = match (Process.argument(1)) {
+        Some(text) => text,
+        null => { return Err(LookError.MissingQuery); }
+    };
+    let path = match (Process.argument(2)) {
+        Some(text) => text,
+        null => { return Err(LookError.MissingPath); }
+    };
+    let ignoreCase = Environment.variable("LOOKFOR_IGNORE_CASE").isSome();
+    return Ok(Config { query: query, path: path, ignoreCase: ignoreCase });
+}
+
+/// The whole file's bytes.
+fn readAll(path: StringView) -> Result<Vector<u8>, LookError> {
+    var file = File.open(path)?;
+    var bytes = Vector<u8>.create();
+    var buffer = [0u8; 4096];
+    loop {
+        let n = file.read(mut buffer[..])?;
+        if (n == 0) {
+            break;
+        }
+        bytes.extend(buffer[0..n])?;
+    }
+    return Ok(bytes);
+}
+
+/// The lines of `text` that contain `query`, in order.
+fn search<region r>(query: StringView, text: StringView<r>) -> Result<Vector<StringView<r>>, AllocError> {
+    var found = Vector<StringView<r>>.create();
+    for (line in text.split("\n")) {
+        if (line.contains(query)) {
+            found.push(line)?;
+        }
+    }
+    return Ok(found);
+}
+
+/// Whether `line` contains `query`, taking `A` to `Z` and `a` to `z` as the same letters.
+fn containsIgnoreCase(line: StringView, query: StringView) -> bool {
+    if (query.length > line.length) {
+        return false;
+    }
+    let bytes = line.bytes();
+    for (start in 0..line.length - query.length + 1) {
+        if (bytes[start..start + query.length].equalsIgnoreAsciiCase(query.bytes())) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// As `search`, but a letter matches in either case.
+fn searchIgnoreCase<region r>(query: StringView, text: StringView<r>) -> Result<Vector<StringView<r>>, AllocError> {
+    var found = Vector<StringView<r>>.create();
+    for (line in text.split("\n")) {
+        if (containsIgnoreCase(line, query)) {
+            found.push(line)?;
+        }
+    }
+    return Ok(found);
+}
+
+/// Reads the file, searches it and prints the lines found.
+fn run(config: borrow Config) -> Result<void, LookError> {
+    let bytes = readAll(config.path)?;
+    let text = match (StringView.fromUtf8(bytes.view())) {
+        Some(text) => text,
+        null => { return Err(LookError.NotUtf8); }
+    };
+    let found = if (config.ignoreCase) searchIgnoreCase(config.query, text)? else search(config.query, text)?;
+    for (line in found) {
+        Console.writeLine(line);
+    }
+    return Ok();
+}
+
+@test
+fn findsOneLine() -> Result<void, TestFailure> {
+    let text = "one fish\ntwo fish\nred herring\n";
+    let found = search("red", text)!;
+    Check.equalU64(1, found.length as u64)?;
+    Check.equalText("red herring", found[0])?;
+    return Ok();
+}
+
+@test
+fn caseMatters() -> Result<void, TestFailure> {
+    let text = "Red sky\nred herring\nblue moon\n";
+    let found = search("red", text)!;
+    Check.equalU64(1, found.length as u64)?;
+    Check.equalText("red herring", found[0])?;
+    return Ok();
+}
+
+@test
+fn caseIgnored() -> Result<void, TestFailure> {
+    let text = "Red sky\nred herring\nblue moon\n";
+    let found = searchIgnoreCase("rEd", text)!;
+    Check.equalU64(2, found.length as u64)?;
+    Check.equalText("Red sky", found[0])?;
+    Check.equalText("red herring", found[1])?;
+    return Ok();
+}

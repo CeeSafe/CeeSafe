@@ -3,3 +3,5 @@ node_modules/
 .vitepress/cache/
 # Written by scripts/prepare.mjs: the machine-readable book.
 src/public/
+# Builds of the projects' packages.
+projects/**/out/

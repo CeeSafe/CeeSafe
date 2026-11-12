@@ -1,0 +1,34 @@
+enum LapError {
+    TooSlow,
+}
+
+@test
+fn returnsItsOwnError() -> Result<void, LapError> {
+    if (average(500, 2) > 200) {
+        return Err(LapError.TooSlow);
+    }
+    return Ok();
+}
+
+@test
+fn printsThenFails() -> Result<void, TestFailure> {
+    Console.writeLine("the average is");
+    Console.writeLine(average(7, 2));
+    return Check.fail("on purpose");
+}
+
+@test
+fn forgetsABox() {
+    match (Box.create(5u32)) {
+        Ok(b) => { let p = Box.intoRaw(b); }
+        Err(_) => {}
+    }
+}
+
+@test
+fn spins() {
+    var laps: u64 = 0;
+    while (true) {
+        laps = (laps + 1) % 1000;
+    }
+}

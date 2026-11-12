@@ -1,0 +1,8 @@
+import tally;
+
+fn main() {
+    let weekend = pair(30, 34);
+    var both = Tally.empty();
+    both.add(weekend.mean());
+    printMean("both", both);
+}

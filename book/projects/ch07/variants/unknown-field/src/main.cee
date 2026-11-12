@@ -1,0 +1,8 @@
+fn main() {
+    var card = Scorecard.empty();
+    card.record(72);
+    card.record(85);
+    card.record(92);
+    printLine("rounds", card.rounds);
+    printLine("mean", card.mean());
+}

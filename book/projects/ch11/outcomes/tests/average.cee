@@ -1,0 +1,17 @@
+@test
+fn averages() -> Result<void, TestFailure> {
+    Check.equalU64(60, average(180, 3))?;
+    return Ok();
+}
+
+@test
+fn averageRoundsUp() -> Result<void, TestFailure> {
+    Check.equalU64(4, average(7, 2))?;
+    return Ok();
+}
+
+@test
+fn averageOfNoLaps() -> Result<void, TestFailure> {
+    Check.equalU64(0, average(0, 0))?;
+    return Ok();
+}

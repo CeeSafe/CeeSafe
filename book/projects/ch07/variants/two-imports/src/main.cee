@@ -1,0 +1,7 @@
+import tally;
+import ledger;
+
+fn main() {
+    let weekend = pair(30, 34);
+    printMean("weekend", weekend);
+}

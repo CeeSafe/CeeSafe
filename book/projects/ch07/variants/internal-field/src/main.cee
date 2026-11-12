@@ -1,0 +1,7 @@
+import tally.Tally;
+
+fn main() {
+    var week = Tally.empty();
+    week.add(18);
+    Console.writeLine(week.total);
+}

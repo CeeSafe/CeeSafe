@@ -1,0 +1,13 @@
+struct Scorecard {
+    rounds: i64;
+    total: i64;
+
+    fn empty() -> Scorecard => Scorecard { rounds: 0, total: 0 };
+
+    fn record(borrow mut this, score: i64) {
+        this.rounds += 1;
+        this.total += score;
+    }
+
+    fn mean(borrow this) -> i64 => this.total / this.rounds;
+}

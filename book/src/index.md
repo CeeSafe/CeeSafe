@@ -27,7 +27,7 @@ This book teaches the language from the start, and is the place to look a rule u
 Every listing in this book is a whole program. The compiler has checked each one, and run it; what is printed
 beneath a listing is what it printed.
 
-::: info This is a prototype
-Chapter 1 and section 4.2 are written, to show what a chapter and a section look like. The table of contents shows
-the rest of the plan; a title in grey is not written yet.
+::: info The book is being written
+Chapters 1 to 12, the course, are written. The table of contents shows the rest of the plan; a title in grey is not
+written yet.
 :::

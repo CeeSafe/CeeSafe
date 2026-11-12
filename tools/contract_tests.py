@@ -16,8 +16,8 @@
   cancellation wake count (tools/wake_check.py), `ceesafec test` on its fixture (tools/test_command_check.py),
   the collection
   properties, the freestanding checks;
-- CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the debugger scripts, and the MCP
-  server's name lookup (tools/mcp_api_check.py).
+- CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the book (tools/book_check.py,
+  Decision 0011), the debugger scripts, and the MCP server's name lookup (tools/mcp_api_check.py).
 - `extern "C"` blocks generated from C headers (tools/cbind_check.py; ADR 0095).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
 Each step's last line is printed.
@@ -162,6 +162,7 @@ def main():
             ("freestanding", py + [f"{HERE}/freestanding_check.py", "--compiler", cee, "--corpus", corpus]),
             ("spec", py + [f"{HERE}/spec_check.py", "--ceesafec", cee]),
             ("guide", py + [f"{HERE}/guide_check.py", "--ceesafec", cee]),
+            ("book", py + [f"{HERE}/book_check.py", "--ceesafec", cee]),
             ("debugger", py + [f"{HERE}/debugger_check.py", "--ceesafec", cee]),
             ("mcp api", py + [f"{HERE}/mcp_api_check.py", "--compiler", cee]),
             ("cbind", py + [f"{HERE}/cbind_check.py", "--ceesafec", cee]),

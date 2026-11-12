@@ -1,0 +1,5 @@
+fn printMean(label: StringView, t: borrow Tally) {
+    Console.write(label);
+    Console.write(" mean: ");
+    Console.writeLine(t.mean());
+}

@@ -1,6 +1,14 @@
 // The book's table of contents (Decision 0011 §4): the one list the sidebar, llms.txt and index.json are made from.
-// A chapter or section with a `file` is written (book/src/<file>.md); one without is planned, and shown without a
-// link. A section's `file` is its stable identifier: it does not change when the title does.
+// A chapter or section with a `file` whose page exists (book/src/<file>.md) is written; any other is planned, and
+// shown without a link. A section's `file` is its stable identifier: it does not change when the title does.
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const source = join(dirname(fileURLToPath(import.meta.url)), "src");
+
+/** Whether the page of this entry is written. */
+export const written = (entry) => entry.file !== undefined && existsSync(join(source, `${entry.file}.md`));
 
 export const front = [
   { title: "The CeeSafe Programming Language", file: "index" },
@@ -17,44 +25,104 @@ export const chapters = [
       { title: "Hello, package", file: "ch01-03-hello-package" },
     ],
   },
-  { title: "Programming a guessing game", sections: [] },
+  { title: "Programming a guessing game", file: "ch02-00-guessing-game", sections: [] },
   {
     title: "Common programming concepts",
+    file: "ch03-00-common-concepts",
     sections: [
-      { title: "Variables" },
-      { title: "Data types" },
-      { title: "Functions" },
-      { title: "Comments" },
-      { title: "Control flow" },
+      { title: "Variables", file: "ch03-01-variables" },
+      { title: "Data types", file: "ch03-02-data-types" },
+      { title: "Functions", file: "ch03-03-functions" },
+      { title: "Comments", file: "ch03-04-comments" },
+      { title: "Control flow", file: "ch03-05-control-flow" },
     ],
   },
   {
     title: "Understanding ownership",
+    file: "ch04-00-ownership",
     sections: [
-      { title: "What ownership is" },
+      { title: "What ownership is", file: "ch04-01-what-ownership-is" },
       { title: "Borrowing", file: "ch04-02-borrowing" },
-      { title: "Slices and views" },
+      { title: "Slices and views", file: "ch04-03-slices-and-views" },
     ],
   },
-  { title: "Structs", sections: [{ title: "Defining and making structs" }, { title: "An example program" }, { title: "Methods" }] },
-  { title: "Enums and pattern matching", sections: [{ title: "Defining an enum" }, { title: "match" }, { title: "Optionals" }] },
+  {
+    title: "Structs",
+    file: "ch05-00-structs",
+    sections: [
+      { title: "Defining and making structs", file: "ch05-01-defining-structs" },
+      { title: "An example program", file: "ch05-02-example-structs" },
+      { title: "Methods", file: "ch05-03-methods" },
+    ],
+  },
+  {
+    title: "Enums and pattern matching",
+    file: "ch06-00-enums",
+    sections: [
+      { title: "Defining an enum", file: "ch06-01-defining-an-enum" },
+      { title: "match", file: "ch06-02-match" },
+      { title: "Optionals", file: "ch06-03-optionals" },
+    ],
+  },
   {
     title: "Packages and files",
+    file: "ch07-00-packages",
     sections: [
-      { title: "A package and its manifest" },
-      { title: "Files and public" },
-      { title: "Imports" },
-      { title: "Dependencies and the lock file" },
+      { title: "A package and its manifest", file: "ch07-01-package-and-manifest" },
+      { title: "Files and public", file: "ch07-02-files-and-public" },
+      { title: "Imports", file: "ch07-03-imports" },
+      { title: "Dependencies and the lock file", file: "ch07-04-dependencies" },
     ],
   },
-  { title: "Common collections", sections: [{ title: "Vectors" }, { title: "Strings and string views" }, { title: "Hash maps and ordered maps" }] },
+  {
+    title: "Common collections",
+    file: "ch08-00-collections",
+    sections: [
+      { title: "Vectors", file: "ch08-01-vectors" },
+      { title: "Strings and string views", file: "ch08-02-strings" },
+      { title: "Hash maps and ordered maps", file: "ch08-03-maps" },
+    ],
+  },
   {
     title: "Error handling",
-    sections: [{ title: "Panics" }, { title: "Result, ? and !" }, { title: "Allocation failure is a value" }, { title: "To panic or not" }],
+    file: "ch09-00-error-handling",
+    sections: [
+      { title: "Panics", file: "ch09-01-panics" },
+      { title: "Result, ? and !", file: "ch09-02-result" },
+      { title: "Allocation failure is a value", file: "ch09-03-allocation-failure" },
+      { title: "To panic or not", file: "ch09-04-to-panic-or-not" },
+    ],
   },
-  { title: "Generics, interfaces and regions", sections: [{ title: "Generic types and functions" }, { title: "Interfaces" }, { title: "Regions" }] },
-  { title: "Writing tests", sections: [{ title: "How to write tests" }, { title: "Running them" }, { title: "Organising them" }] },
-  { title: "A project: a command-line program", sections: [] },
+  {
+    title: "Generics, interfaces and regions",
+    file: "ch10-00-generics",
+    sections: [
+      { title: "Generic types and functions", file: "ch10-01-generic-types" },
+      { title: "Interfaces", file: "ch10-02-interfaces" },
+      { title: "Regions", file: "ch10-03-regions" },
+    ],
+  },
+  {
+    title: "Writing tests",
+    file: "ch11-00-testing",
+    sections: [
+      { title: "How to write tests", file: "ch11-01-writing-tests" },
+      { title: "Running them", file: "ch11-02-running-tests" },
+      { title: "Organising them", file: "ch11-03-organising-tests" },
+    ],
+  },
+  {
+    title: "A project: a command-line program",
+    file: "ch12-00-command-line-project",
+    sections: [
+      { title: "Accepting command-line arguments", file: "ch12-01-arguments" },
+      { title: "Reading a file", file: "ch12-02-reading-a-file" },
+      { title: "Refactoring for clarity and errors", file: "ch12-03-refactoring" },
+      { title: "Adding the search, test first", file: "ch12-04-test-first" },
+      { title: "Working with the environment", file: "ch12-05-environment" },
+      { title: "Errors to standard error", file: "ch12-06-standard-error" },
+    ],
+  },
   { title: "Closures and iteration", sections: [{ title: "Closures" }, { title: "Iteration" }, { title: "The project improved" }, { title: "What they cost" }] },
   { title: "More about packages", sections: [{ title: "Build settings" }, { title: "Publishing" }, { title: "Libraries and objects for other programs" }] },
   {
@@ -109,11 +177,11 @@ export const appendices = [
 export function writtenPages() {
   const pages = front.map((p) => ({ ...p, number: "" }));
   chapters.forEach((chapter, c) => {
-    if (chapter.file) {
+    if (written(chapter)) {
       pages.push({ title: chapter.title, file: chapter.file, number: `${c + 1}` });
     }
     chapter.sections.forEach((section, s) => {
-      if (section.file) {
+      if (written(section)) {
         pages.push({ title: section.title, file: section.file, number: `${c + 1}.${s + 1}` });
       }
     });

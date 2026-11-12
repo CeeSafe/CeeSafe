@@ -1,0 +1,6 @@
+@test
+fn keepsThreeLaps() -> Result<void, TestFailure> {
+    let laps = threeLaps();
+    Check.equalU64(3, laps.length as u64)?;
+    return Ok();
+}

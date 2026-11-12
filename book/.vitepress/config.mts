@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitepress";
-import { appendices, chapters, front } from "../toc.mjs";
+import { appendices, chapters, front, written } from "../toc.mjs";
 
 // The book (Decision 0011): a second site beside the documentation site, in the Rust Book's shape. CeeSafe code is
 // highlighted by the VS Code extension's grammar, as on the documentation site.
@@ -13,11 +13,11 @@ const sidebar = [
   { items: front.map((page) => ({ text: page.title, link: link(page.file) })) },
   ...chapters.map((chapter, c) => ({
     text: `${c + 1}. ${chapter.title}`,
-    link: chapter.file ? link(chapter.file) : undefined,
-    collapsed: !chapter.file && !chapter.sections.some((s) => s.file),
+    link: written(chapter) ? link(chapter.file) : undefined,
+    collapsed: !written(chapter) && !chapter.sections.some((s) => written(s)),
     items: chapter.sections.map((section, s) => ({
       text: `${c + 1}.${s + 1}. ${section.title}`,
-      link: section.file ? link(section.file) : undefined,
+      link: written(section) ? link(section.file) : undefined,
     })),
   })),
   { text: "Appendices", collapsed: true, items: appendices.map((appendix) => ({ text: appendix.title })) },
@@ -45,7 +45,7 @@ export default defineConfig({
     outline: { level: [2, 3], label: "In this section" },
     docFooter: { prev: "Previous", next: "Next" },
     footer: {
-      message: "A prototype (Decision 0011): chapter 1 and section 4.2 are written.",
+      message: "In progress: chapters 1 to 12, the course, are written.",
       copyright: "Copyright © 2026 Veeran Puthumkara.",
     },
   },

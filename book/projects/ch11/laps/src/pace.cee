@@ -1,0 +1,14 @@
+/// The average seconds for one lap, when `laps` laps took `total` seconds.
+public fn pace(total: u64, laps: u64) -> u64 => total / laps;
+
+@test
+fn paceIsTheAverage() -> Result<void, TestFailure> {
+    Check.equalU64(60, pace(180, 3))?;
+    Check.equalU64(61, pace(183, 3))?;
+    return Ok();
+}
+
+@test
+fn paceRoundsDown() {
+    assert(pace(7, 2) == 3, "7 / 2 rounds down to 3");
+}

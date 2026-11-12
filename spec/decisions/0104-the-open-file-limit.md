@@ -3,7 +3,7 @@
 - Status: **Accepted** by the owner, 2026-11-12 (every question of §6 answered as recommended: §2.1 and §2.2 accepted,
   `IoError.TooManyOpenFiles` in the same release, no raise at start by the runtime, released alone as soon as it
   passes; the owner said 0.39.0, which went to ADR 0102, an index updated in place keeps its bounds, and 0.40.0 to
-  ADR 0103, `partitionPoint`, the same day, so this ADR is 0104 and its release 0.41.0). Raised by CosmoStore's CEESAFE_GAPS G32
+  ADR 0103, `partitionPoint`, the same day, so this ADR is 0104), implemented on branch `impl/0104`, on 0.40.0, and released in ceesafec 0.41.0. Raised by CosmoStore's CEESAFE_GAPS G32
   (`~/dev/CeeSafeApps/cosmostore/CEESAFE_GAPS.md`) and its ADR-0039
   (`~/dev/CeeSafeApps/cosmostore/docs/adr/0039-out-of-descriptors-the-journal-keeps-going.md`).
 - Scope: lib/std `host.cee` (a new `ProcessLimits`), the hosted runtime (`ceesafe_rt_io.c`, `rt.h`), the interpreter,

@@ -755,6 +755,15 @@ static inline void cee_slice_copy(void *destination, const void *source, uint64_
     if (count != 0u) ceesafe_mem_move(destination, source, (size_t)count * size);
 }
 
+/* Whether every byte of an object is zero: `resize`'s fill value, for the zeroed allocation (ADR 0099). */
+static inline bool cee_all_zero(const void *object, size_t size) {
+    const unsigned char *bytes = (const unsigned char *)object;
+    for (size_t i = 0u; i < size; i++) {
+        if (bytes[i] != 0u) return false;
+    }
+    return true;
+}
+
 /* `d.fill(v)` for a one-byte element. */
 static inline void cee_slice_fill_byte(void *destination, uint8_t value, uint64_t count) {
     if (count != 0u) ceesafe_mem_set(destination, value, (size_t)count);
@@ -906,6 +915,52 @@ void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator);
 void *ceesafe_alloc_zeroed(size_t size, uint32_t allocator);
 /* ceesafe_realloc (one attempt, the block unchanged and still live on failure) and ceesafe_free: in
    ceesafe/foreign.h. */
+#if !defined(CEE_FREESTANDING) && !defined(CEESAFE_EMBED_FREESTANDING)
+/*
+ * The system allocator's fast path (ADR 0101). Hosted only: a freestanding build has no C library, and its generated
+ * C sees CEESAFE_EMBED_FREESTANDING (from its embed.h, included above), its runtime files CEE_FREESTANDING. ceesafe_alloc_watched is zero when an allocation is the C library's
+ * and nothing watches it: the runtime neither counts nor fails allocations (CEE_ALLOC_WATCH_COUNTED clear), and the
+ * platform functions are the C library's with their first block noted (CEE_ALLOC_WATCH_PLATFORM clear). Then
+ * ceesafe_alloc and ceesafe_free of CEE_ALLOC_SYSTEM are malloc and free, inline: one relaxed load and an untaken
+ * branch beside the call. Otherwise, and for every other allocator, the functions in ceesafe_rt_core.c, which do
+ * exactly what they did. The word starts watched, and is changed only by ceesafe_alloc_watch.
+ *
+ * The names are macros from here on, for the generated code and the rest of the runtime; ceesafe_rt_core.c, which
+ * defines the functions, removes them. A package's C files see ceesafe/foreign.h alone and call the functions.
+ */
+#include <stdlib.h>
+#define CEE_ALLOC_WATCH_COUNTED 1u
+#define CEE_ALLOC_WATCH_PLATFORM 2u
+extern uint32_t ceesafe_alloc_watched;
+void ceesafe_alloc_watch(uint32_t bit, bool on);
+
+static inline bool cee_alloc_unwatched(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile const uint32_t *)&ceesafe_alloc_watched == 0u;
+#else
+    return __builtin_expect(__atomic_load_n(&ceesafe_alloc_watched, __ATOMIC_RELAXED) == 0u, 1);
+#endif
+}
+
+static inline void *cee_alloc_inline(size_t size, uint32_t allocator) {
+    if (allocator == CEE_ALLOC_SYSTEM && cee_alloc_unwatched()) {
+        return malloc(size == 0u ? 1u : size);
+    }
+    return ceesafe_alloc(size, allocator);
+}
+
+static inline void cee_free_inline(void *p, uint32_t allocator) {
+    if (allocator == CEE_ALLOC_SYSTEM && cee_alloc_unwatched()) {
+        free(p);
+        return;
+    }
+    ceesafe_free(p, allocator);
+}
+
+#define ceesafe_alloc(size, allocator) cee_alloc_inline(size, allocator)
+#define ceesafe_free(p, allocator) cee_free_inline(p, allocator)
+#endif
+
 /* A vector's block changes sides (Vector.intoForeign, Vector.fromForeign; ADR 0090 §2.3): the report's `live` loses
    or gains it, and its last line counts both. Not allocation attempts. */
 void ceesafe_alloc_given(void);
@@ -1096,6 +1151,7 @@ extern cee_max_align_t ceesafe_vec_empty;
  * NULL, with nothing changed, if the size overflows or the allocation fails.
  */
 void *ceesafe_vec_grow(void *ptr, uint64_t len, uint64_t *cap, uint64_t extra, uint64_t size, uint32_t allocator);
+void *ceesafe_vec_zeroed(uint64_t *cap, uint64_t count, uint64_t size, uint32_t allocator);
 
 /* ---- Stable vectors and slot maps (type-system.md §24) ------------------------------------ */
 

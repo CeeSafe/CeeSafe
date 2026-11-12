@@ -2054,6 +2054,31 @@ fn emitVectorBulkHelpers(
     e.t("){ .tag = 0 });")?;
     e.emit()?;
     e.line("    }")?;
+    // A vector with no buffer and a fill of zero bytes: the zeroed allocation, which for a large buffer is memory
+    // the operating system has not touched yet (ADR 0099). The same capacity, attempt and failure as the growth.
+    e.line("    if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {")?;
+    e.line("        uint64_t cap = 0u;")?;
+    e.t("        void *p = ceesafe_vec_zeroed(&cap, n, sizeof(")?;
+    e.b(element.view())?;
+    e.t("), ")?;
+    e.b(allocator)?;
+    e.t(");")?;
+    e.emit()?;
+    e.t("        if (p == NULL) return ")?;
+    e.b(error)?;
+    e.t(";")?;
+    e.emit()?;
+    e.t("        v->ptr = (")?;
+    e.b(element.view())?;
+    e.t(" *)p;")?;
+    e.emit()?;
+    e.line("        v->cap = cap;")?;
+    e.line("        v->len = n;")?;
+    e.t("        return ((")?;
+    e.b(result)?;
+    e.t("){ .tag = 0 });")?;
+    e.emit()?;
+    e.line("    }")?;
     e.t("    ")?;
     e.b(result)?;
     e.t(" room = ceeVR_")?;

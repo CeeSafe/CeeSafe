@@ -642,6 +642,16 @@ Heap (M3b):
   `malloc`/`realloc`/`free`, which also serve CosmoOS userland). They count attempts and live
   allocations; a reallocation is one attempt, and on failure its block is unchanged and still live. `ceesafe_fail_after`/`ceesafe_fail_reset`
   implement `FailingAllocator`.
+- **The inline path** (ADR 0101; hosted only). In `rt.h`, `ceesafe_alloc` and `ceesafe_free` are macros for two inline
+  functions: for `CEE_ALLOC_SYSTEM`, when the word `ceesafe_alloc_watched` is zero, they are `malloc` (of at least
+  one byte) and `free`; otherwise, and for every other allocator, the functions above. The word is zero exactly when
+  allocations are not counted (no report, no `CEESAFE_FAIL_ALLOC_AT`, not `ceesafec test`) and the platform functions
+  are the C library's with their first block handed out (no host hook). So a counted run, an injected failure and a
+  host's allocator see every allocation, as before. The generated C and the runtime's other files use the macros;
+  `ceesafe_rt_core.c` and a package's C files call the functions.
+- **`ceesafe_vec_zeroed(&cap, n, size, allocator)`** (ADR 0099): the first buffer of a vector, of at least `n`
+  elements and at least 4, every byte zero, from `ceesafe_alloc_zeroed`; `resize`'s helper calls it when the vector
+  has no buffer and the fill value's bytes are all zero (`cee_all_zero`), and writes nothing.
 - **Threads** (M13 G4, type-system.md §38): `runtime/hosted/ceesafe_rt_thread.c`, linked only when the generated C calls
   `ceesafe_thread_*`, `ceesafe_mutex_*` or `ceesafe_atomic_*`.
   - `ceesafe_thread_start`/`join` run over POSIX threads, or Win32 threads on Windows.
@@ -861,8 +871,8 @@ Heap (M3b):
   - **The host's allocator** (ADR 0088 §2.5). The hosted platform functions (`ceesafe_platform_alloc`, `_alloc_zeroed`,
     `_realloc`, `_free`) call the hook `ceesafe_init` copied, else the C library's `malloc`, `calloc`, `realloc` and
     `free`; the test is a load and an untaken branch, marked unlikely. They are under the accounting (`ceesafe_alloc`
-    counts and fault-injects first, so an injected failure never reaches the hook) and are the only allocation
-    calls of the runtime: the executor's and the I/O layer's buffers, and the window layer's, except the two X11
+    counts and fault-injects first, so an injected failure never reaches the hook) and, while a hook is installed,
+    are the only allocation calls of the runtime (the inline path of ADR 0101 is taken only with no hook): the executor's and the I/O layer's buffers, and the window layer's, except the two X11
     image buffers, which `XDestroyImage` frees with the C library's `free`. The hook is given at least 1 byte,
     never NULL to free, and `realloc(NULL, n)` is its alloc. A block it returns that is not `CEE_HEAP_ALIGN`-aligned
     is `ceesafe_panic_runtime(CEE_PANIC_ALLOCATOR, "ceesafe_allocator.<function> returned a misaligned block")`,

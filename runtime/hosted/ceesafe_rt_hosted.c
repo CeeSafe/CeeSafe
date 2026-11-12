@@ -85,6 +85,21 @@ static void *ceesafe_note_allocated(void *p) {
     return p;
 }
 
+/* A block from the C library, with no hook installed: noted, and from now on rt.h's inline allocation may be used
+   as far as this file is concerned (ADR 0101). The word is read first: it is written once in a program's life. */
+static void *ceesafe_note_direct(void *p) {
+    (void)ceesafe_note_allocated(p);
+#if defined(_MSC_VER) && !defined(__clang__)
+    uint32_t watched = *(volatile const uint32_t *)&ceesafe_alloc_watched;
+#else
+    uint32_t watched = __atomic_load_n(&ceesafe_alloc_watched, __ATOMIC_RELAXED);
+#endif
+    if (p != NULL && (watched & CEE_ALLOC_WATCH_PLATFORM) != 0u) {
+        ceesafe_alloc_watch(CEE_ALLOC_WATCH_PLATFORM, false);
+    }
+    return p;
+}
+
 /* The host's allocator (ADR 0088 §2.5), copied by ceesafe_init (ceesafe_platform_use_allocator) before it publishes
    STARTED, and read without a fence on every allocation after: embed.h's ordering contract makes ceesafe_init happen
    before every call into CeeSafe. Until then, and in a program that never installs one, the C library's, whose blocks
@@ -101,6 +116,8 @@ static bool host_allocator_used;
 #endif
 
 void ceesafe_platform_use_allocator(const ceesafe_allocator *allocator) {
+    /* Watched until the C library's functions hand out a block again (ADR 0101): never, while a hook is installed. */
+    ceesafe_alloc_watch(CEE_ALLOC_WATCH_PLATFORM, true);
     if (allocator != NULL) {
         host_allocator = *allocator;
         host_allocator_used = true;
@@ -127,7 +144,7 @@ void *ceesafe_platform_alloc(size_t size) {
         void *p = host_allocator.alloc(host_allocator.context, size == 0u ? 1u : size);
         return ceesafe_note_allocated(ceesafe_hook_block(p, "ceesafe_allocator.alloc returned a misaligned block"));
     }
-    return ceesafe_note_allocated(malloc(size));
+    return ceesafe_note_direct(malloc(size));
 }
 
 void *ceesafe_platform_alloc_zeroed(size_t size) {
@@ -136,7 +153,7 @@ void *ceesafe_platform_alloc_zeroed(size_t size) {
         return ceesafe_note_allocated(
             ceesafe_hook_block(p, "ceesafe_allocator.alloc_zeroed returned a misaligned block"));
     }
-    return ceesafe_note_allocated(calloc(1u, size));
+    return ceesafe_note_direct(calloc(1u, size));
 }
 
 void *ceesafe_platform_realloc(void *block, size_t size) {
@@ -147,7 +164,7 @@ void *ceesafe_platform_realloc(void *block, size_t size) {
         void *p = host_allocator.realloc(host_allocator.context, block, size == 0u ? 1u : size);
         return ceesafe_note_allocated(ceesafe_hook_block(p, "ceesafe_allocator.realloc returned a misaligned block"));
     }
-    return ceesafe_note_allocated(realloc(block, size));
+    return ceesafe_note_direct(realloc(block, size));
 }
 
 void ceesafe_platform_free(void *p) {

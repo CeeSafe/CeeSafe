@@ -9,6 +9,11 @@
  */
 #include "ceesafe/rt.h"
 
+/* This file defines ceesafe_alloc and ceesafe_free, and its own calls are to them: rt.h's inline fast path (ADR 0101)
+   is for the generated code and the other runtime files. */
+#undef ceesafe_alloc
+#undef ceesafe_free
+
 const char *ceesafe_panic_reason(cee_panic_kind kind) {
     switch (kind) {
     case CEE_PANIC_OVERFLOW: return "integer overflow";
@@ -161,6 +166,17 @@ void *ceesafe_vec_grow(void *ptr, uint64_t len, uint64_t *cap, uint64_t extra, u
     if (size == 0u || next > (uint64_t)SIZE_MAX / size) return NULL;
     /* A first buffer is allocated; a later one is reallocated, which keeps the old block on failure. */
     void *fresh = *cap == 0u ? ceesafe_alloc((size_t)(next * size), allocator) : ceesafe_realloc(ptr, (size_t)(next * size), allocator);
+    if (fresh == NULL) return NULL;
+    *cap = next;
+    return fresh;
+}
+
+/* A first buffer of at least `count` elements, every byte zero (ADR 0099): what ceesafe_vec_grow gives a vector with
+   no buffer, from the zeroed allocation. One attempt and one live block, as there. */
+void *ceesafe_vec_zeroed(uint64_t *cap, uint64_t count, uint64_t size, uint32_t allocator) {
+    uint64_t next = count < 4u ? 4u : count;
+    if (size == 0u || next > (uint64_t)SIZE_MAX / size) return NULL;
+    void *fresh = ceesafe_alloc_zeroed((size_t)(next * size), allocator);
     if (fresh == NULL) return NULL;
     *cap = next;
     return fresh;
@@ -384,6 +400,32 @@ static inline void config_set_u64(uint64_t *p, uint64_t v) {
     __atomic_store_n(p, v, __ATOMIC_RELAXED);
 #endif
 }
+#ifndef CEE_FREESTANDING
+/* Whether rt.h's inline allocation may not be used (ADR 0101), by reason: zero when by none. It starts with the
+   platform's reason, which the platform functions clear at their first block from the C library. */
+uint32_t ceesafe_alloc_watched = CEE_ALLOC_WATCH_PLATFORM;
+
+void ceesafe_alloc_watch(uint32_t bit, bool on) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    if (on) {
+        (void)_InterlockedOr((volatile long *)&ceesafe_alloc_watched, (long)bit);
+    } else {
+        (void)_InterlockedAnd((volatile long *)&ceesafe_alloc_watched, ~(long)bit);
+    }
+#else
+    if (on) {
+        (void)__atomic_fetch_or(&ceesafe_alloc_watched, bit, __ATOMIC_RELAXED);
+    } else {
+        (void)__atomic_fetch_and(&ceesafe_alloc_watched, ~bit, __ATOMIC_RELAXED);
+    }
+#endif
+}
+#endif
+
+/* Sets whether allocations are counted, and with it whether they may bypass this file (ADR 0101): every write of
+   alloc_counting. An attempt can fail only when counting (alloc_fail_at needs the attempt's number). */
+static void set_alloc_counting(uint32_t counting);
+
 /* FailingAllocator's countdown (type-system.md §18.1): process-wide, and changed from every thread, so atomic
    (ceesafe_atomic_*). failAfter stores `failing_left` before `failing_armed`, so an allocation that sees the flag sees
    the count it was armed with. */
@@ -395,9 +437,23 @@ static uint64_t failing_left;     /* successes FailingAllocator still allows */
 uint64_t ceesafe_test_cancel_at;
 bool ceesafe_test_reports;
 
+static void set_alloc_counting(uint32_t counting) {
+#ifndef CEE_FREESTANDING
+    if (counting != 0u) {
+        ceesafe_alloc_watch(CEE_ALLOC_WATCH_COUNTED, true); /* before the counters are read */
+    }
+#endif
+    config_set_u32(&alloc_counting, counting);
+#ifndef CEE_FREESTANDING
+    if (counting == 0u) {
+        ceesafe_alloc_watch(CEE_ALLOC_WATCH_COUNTED, false);
+    }
+#endif
+}
+
 void ceesafe_test_begin(uint64_t fail_alloc_at, uint64_t cancel_at) {
     config_set_u32(&alloc_report, 1u);
-    config_set_u32(&alloc_counting, 1u);
+    set_alloc_counting(1u);
     config_set_u64(&alloc_fail_at, fail_alloc_at);
     ceesafe_test_cancel_at = cancel_at;
     ceesafe_test_reports = true;
@@ -709,7 +765,7 @@ static int32_t rt_init(const ceesafe_config *config, bool generated_main) {
     }
     config_set_u64(&alloc_fail_at, fail_at);
     config_set_u32(&alloc_report, report ? 1u : 0u);
-    config_set_u32(&alloc_counting, report || fail_at != 0u ? 1u : 0u);
+    set_alloc_counting(report || fail_at != 0u ? 1u : 0u);
     ceesafe_args_set(arguments != NULL ? given.argc : 0, arguments);
     ceesafe_atomic_store_u32(&rt_state, CEE_RT_STARTED); /* publishes everything above */
     return 0;

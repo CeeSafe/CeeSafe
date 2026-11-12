@@ -1,0 +1,81 @@
+// v.resize(n, fill) on a vector with no buffer and a fill of zero bytes takes the zeroed allocation (ADR 0099): the
+// same lengths, capacities and elements as the growth and the fill loop give. A fill that is zero in value but not
+// in bytes (-0.0), a fill that is not zero, and a vector that has a buffer already take the loop.
+struct Pair {
+    key: u32;
+    flag: bool;
+    weight: f64;
+}
+
+fn sumOf(values: Slice<u64>) -> u64 {
+    var total: u64 = 0;
+    for (v in values) {
+        total += v;
+    }
+    return total;
+}
+
+fn run() -> Result<void, AllocError> {
+    var zeros = Vector<u64>.create();
+    zeros.resize(100000, 0)?;
+    Console.writeLine(zeros.length);
+    Console.writeLine(zeros.capacity);
+    Console.writeLine(sumOf(zeros.view()));
+    zeros[99999] = 7;
+    zeros.resize(100002, 5)?; // it has a buffer now: the growth and the loop
+    Console.writeLine(sumOf(zeros.view()));
+    var small = Vector<u8>.create();
+    small.resize(1, 0)?;
+    Console.writeLine(small.length);
+    Console.writeLine(small.capacity); // 4, the first buffer of a growth
+    Console.writeLine(small[0]);
+    var none = Vector<u32>.create();
+    none.resize(0, 0)?;
+    Console.writeLine(none.length);
+    Console.writeLine(none.capacity);
+    var ones = Vector<u32>.create();
+    ones.resize(1000, 1)?;
+    var total: u32 = 0;
+    for (v in ones) {
+        total += v;
+    }
+    Console.writeLine(total);
+    var floats = Vector<f64>.create();
+    floats.resize(3, 0.0)?;
+    Console.writeLine(1.0 / floats[2] > 0.0); // +0.0
+    var negative = Vector<f64>.create();
+    negative.resize(3, -0.0)?;
+    Console.writeLine(1.0 / negative[2] < 0.0); // -0.0 is kept: its sign bit is not zero
+    var pairs = Vector<Pair>.create();
+    pairs.resize(50, Pair { key: 0, flag: false, weight: 0.0 })?;
+    Console.writeLine(pairs.length);
+    Console.writeLine(pairs[49].key);
+    Console.writeLine(pairs[49].flag);
+    Console.writeLine(pairs[49].weight == 0.0);
+    var marked = Vector<Pair>.create();
+    marked.resize(50, Pair { key: 0, flag: true, weight: 0.0 })?;
+    Console.writeLine(marked[49].flag);
+    return Ok();
+}
+
+fn main() {
+    run()!;
+}
+
+// expect-stdout: 100000
+// expect-stdout: 100000
+// expect-stdout: 0
+// expect-stdout: 17
+// expect-stdout: 1
+// expect-stdout: 4
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 0
+// expect-stdout: 1000
+// expect-stdout: true
+// expect-stdout: true
+// expect-stdout: 50
+// expect-stdout: 0
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: true

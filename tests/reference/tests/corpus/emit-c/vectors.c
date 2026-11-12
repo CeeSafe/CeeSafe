@@ -192,6 +192,15 @@ static ceeR_vE10AllocError ceeVZ_VUi32S10SystemHeap(ceeV_Ui32S10SystemHeap *v, u
         v->len = n;
         return ((ceeR_vE10AllocError){ .tag = 0 });
     }
+    if (v->cap == 0u && cee_all_zero(&fill, sizeof fill)) {
+        uint64_t cap = 0u;
+        void *p = ceesafe_vec_zeroed(&cap, n, sizeof(int32_t), CEE_ALLOC_SYSTEM);
+        if (p == NULL) return ((ceeR_vE10AllocError){ .tag = 1, .u.v_Err = { .f__0 = ((ceeE_AllocError){ .tag = 0 }) } });
+        v->ptr = (int32_t *)p;
+        v->cap = cap;
+        v->len = n;
+        return ((ceeR_vE10AllocError){ .tag = 0 });
+    }
     ceeR_vE10AllocError room = ceeVR_VUi32S10SystemHeap(v, n - v->len);
     if (room.tag != 0) return room;
     for (uint64_t i = v->len; i < n; i++) v->ptr[i] = fill;

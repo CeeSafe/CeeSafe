@@ -410,6 +410,10 @@ item of the same name shadows.
 If a function named `main` exists, it must take no parameters and return `i32` or
 `void` (N0219). Whether `main` is *required* is decided by `ceesafec build` (increment 1c).
 
+`main` cannot be `async` (N0219): the program's entry is a call, and a call of an async fn is a task that runs only
+when something awaits or runs it (§40.1). A program with async code writes `fn main()` and runs its first task with
+`Async.run(…)` (§40.4), where it also says what an error of the task does to the exit code.
+
 ## 12. Structs (M2a)
 
 ```ceesafe
@@ -4293,9 +4297,14 @@ fn main() {
   value with region parameters. That is **N0332**: the box would outlive the loan.
 - **Mutation.** A body that assigns to a capture, borrows it mutably or calls a mutating method on it changes the
   closure's own copy. It makes the literal a `dyn mut fn`: where a `dyn fn` is expected, that is N0299. A captured
-  value cannot be moved out of a boxed body (N0251): it belongs to the closure, which may be called again.
-- **Run-once environments** (ADR 0074 §2.3). An `async move` child (§40.4, §40.5) runs its body at most once, so its
-  body may move each capture out, once: `s.spawn(async move () => await serve(stream))`. A second move is N0250, and
+  value cannot be moved out of a boxed body (N0251, which names the captured variable): it belongs to the closure,
+  which may be called again. There is no closure type that is called once; the literals below are the ones known to
+  run once. A capture of a Copy type that the body changes, where the function reads the variable after the literal,
+  is warning **N0403** (ADR 0113): the closure changed its copy, and the read sees the old value.
+- **Run-once environments** (ADR 0074 §2.3, ADR 0112). An `async move` child (§40.4, §40.5) and the literal of
+  `Thread.spawn(move () => …)` (§38.2) run their body at most once, so the
+  body may move each capture out, once: `s.spawn(async move () => await serve(stream))`,
+  `Thread.spawn(move () => text)`. A second move is N0250, and
   a capture whose type has a drop block cannot be partly moved (N0252). The body drops, as it returns, the captures it
   did not move, as a function drops its locals (§14.5): one that may or may not have been moved has a drop flag. A
   cancelled body returns along a normal path (§40.6), so it drops them there too; a child that never starts drops its
@@ -4505,6 +4514,11 @@ fn main() {
   - The literal takes no parameters. Its captures must be `Send` (**N0334**), and so must `T` (**N0334**).
   - `Thread.spawn` also takes a `Box<dyn fn() -> T + Send>`.
   - A move literal is allowed here as well as in `Box.create` (amending §36.5).
+  - The thread calls the literal's body once, so it is a run-once environment (§36.5, ADR 0112): the body may move a
+    capture out, as in `Thread.spawn(move () => text)`, whose thread gives the string back through `join`. The body
+    drops the captures it did not move as it returns, on the new thread; if the thread cannot be started, `spawn`
+    drops them all. A boxed closure passed to `spawn` is an ordinary owning closure, and moves nothing out (N0251).
+  - A capture that holds a loan is **N0332**, as for any move literal: the thread could outlive it.
 - **`Thread<T>`** is a move type that needs drop. `t.join()` consumes it, waits for the thread to finish, and
   returns its `T`. Dropping a `Thread<T>` that was not joined waits for it and destroys its result. There are no
   detached threads: every thread a program starts has ended before `main` returns.
@@ -4521,6 +4535,11 @@ fn main() {
   - `m.lock()` waits for the lock and returns a `MutexGuard<T>`, scoped to `m` like C7's guards. Its `data()` lends
     `borrow mut T`, and its drop unlocks. The data is held in a `RawCell<T>` (§41.1), since the guard changes it while
     the mutex is shared. `T: Send` already refuses every loan-holding `T`, so N0351 cannot arise there.
+  - `m.tryLock()` (ADR 0112) is `MutexGuard<T>?`: the guard if no thread holds the lock, else null, at once. It
+    never waits, so it has no effect and async code may call it. The thread that holds the lock gets null too: the
+    lock is not recursive.
+  - A guard unlocks where it is dropped: at the end of its block, or earlier where it is moved away, as by
+    `let _ = guard;` (§14.3).
 
   - `lock` has the `sleep` effect.
 - **Atomics**: `AtomicU32`, `AtomicU64`, `AtomicUSize` and `AtomicBool`, in every profile (ADR 0026). Each operation
@@ -4878,7 +4897,7 @@ except `run` and `blocking`'s closure produces a task, so it is written after `a
 | `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295. The operand is a call of an async fn: `Async.scope`, `all`, `race`, `timeout` and the others are awaited inside one, so as the operand they are N0342 (0.15.2) |
 | `Async.runWorkers(n, f(…))` | `T` | `Async.run` with `n` workers, this thread among them (`n: u32`; ADR 0038): `n − 1` more threads, started for the run and joined when it returns, may take its `spawnSend` children (§40.5). A worker that cannot start is skipped: the result is the same. Hosted only |
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
-| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body |
+| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body. `T` cannot be `void` (N0226): `Raced<T>` holds the winner's value, and no value has that type; children with nothing to return give a `bool` |
 | `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`, run at once; the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6. Without an expected type or an expression body for `a`, `E` is `AsyncError`. The two may not capture one local where either changes it (N0241) |
 | `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds. The body's result type is the expected one; without one, an expression body's own, and a block body's `Result<void, AsyncError>` |
 | `Async.timeout(ms, timedOut, body)`, `Async.deadline(at, timedOut, body)` | `Result<T, E>` | ADR 0046. Runs `body`, an async closure of result `Result<T, E>`, beside a deadline `ms: u64` milliseconds from the call (`timeout`) or at `at: u64` on `Timer.now()`'s clock (`deadline`). If the body returns first, its result is the result. Once the deadline passes first, the body is cancelled and awaited: a late `Ok` is kept, and any `Err` becomes `timedOut: E`, which is evaluated before the body starts and dropped if unused. A cancellation from outside gives the body's own result, never `timedOut`; a tie is decided by which task runs first, as in `race`. The body's type comes from an expected `Result<T, E>`, else from its expression body |
@@ -4903,7 +4922,10 @@ held across `await`, its waiters served first come, first served), and channels 
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
 `tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or
 null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null). Its operations return `Result<T, AsyncError>`,
-where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`.
+where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`. `Io` is `@from` (§17.4, ADR 0111): in a function
+that returns `Result<_, AsyncError>`, `?` on a `Result<_, IoError>` (a socket's `bind`, `port` or `shutdownWrite`,
+which do not wait) returns `Err(AsyncError.Io(e))`. A channel's `create(0)` panics ("a channel needs a capacity of at
+least 1", ADR 0032 §3.1).
 
 **Socket addresses** (lib/std's `net.cee`, ADR 0044):
 

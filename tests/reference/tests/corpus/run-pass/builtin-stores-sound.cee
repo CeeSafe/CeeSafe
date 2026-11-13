@@ -1,0 +1,50 @@
+// The built-ins that store, and a store target held by value, used soundly (type-system.md §25.6, §25.7 rule 3;
+// ADR 0131 §2.12, §2.13): what is stored lives as long as where it is stored, so each of these checks and runs.
+// `replace` and `swap` exchange values that hold the same text; `fill`, `copyFrom`, `extend` and `resize` copy views
+// of a text that outlives the vector; a `Sink` passed by value stores a view whose region its signature shares.
+struct Sink<region r> {
+    out: borrow mut(r) Vector<StringView<r>>;
+}
+fn put<region r>(s: Sink<r>, v: StringView<r>) {
+    s.out.push(v)!;
+}
+fn fillT<T: Copy>(d: SliceMut<T>, v: T) {
+    d.fill(v);
+}
+fn main() {
+    let text = String.from("alpha beta gamma")!;
+    var keep = Vector<StringView>.create();
+    keep.push(text.view()[0..5])!;
+    keep.push(text.view()[6..10])!;
+    let old = replace(mut keep[0], text.view()[11..16]);
+    Console.writeLine(old);
+    swap(mut keep[0], mut keep[1]);
+    Console.writeLine(keep[0]);
+    keep.resize(4, text.view()[6..7])!;
+    Console.writeLine(keep[3]);
+    let source = [text.view()[0..2], text.view()[2..4]];
+    keep.extend(source[..])!;
+    Console.writeLine(keep.length);
+    keep.viewMut()[0..2].copyFrom(source[..]);
+    Console.writeLine(keep[1]);
+    keep.viewMut()[4..6].fill(text.view()[15..16]);
+    Console.writeLine(keep[5]);
+    fillT<StringView>(keep.viewMut(), text.view()[0..5]);
+    Console.writeLine(keep[0]);
+    put(Sink { out: borrow mut keep }, text.view()[6..10]);
+    Console.writeLine(keep[6]);
+    var bytes = Vector<u8>.create();
+    bytes.extend(text.bytes()[0..3])!;
+    bytes.resize(5, 33)!;
+    Console.writeLine(bytes.length);
+}
+
+// expect-stdout: alpha
+// expect-stdout: beta
+// expect-stdout: b
+// expect-stdout: 6
+// expect-stdout: ph
+// expect-stdout: a
+// expect-stdout: alpha
+// expect-stdout: beta
+// expect-stdout: 5

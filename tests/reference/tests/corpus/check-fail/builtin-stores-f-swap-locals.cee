@@ -1,0 +1,19 @@
+// Store built-ins: swap, replace, arena allocation, slot maps, stable vectors; concrete and generic.
+struct Holder<region r> {
+    text: StringView<r>;
+}
+fn finish(d: StringView) {
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(d);
+    Console.writeLine(fresh.view());
+}
+fn local() -> String => String.from("local local local local local local local local")!;
+fn main() {
+    var a = Holder { text: "static" };
+    if (true) {
+        let t = local();
+        var b = Holder { text: t.view() };
+        swap(mut a, mut b);
+    } // error[N0243]
+    finish(a.text);
+}

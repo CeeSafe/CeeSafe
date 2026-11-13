@@ -1,0 +1,31 @@
+// The ADR's own refused programs, rewritten with `replace` / `swap` in place of an assignment or a push.
+struct Owner {
+    text: String;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+fn finish(d: StringView) {
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(d);
+    Console.writeLine(fresh.view());
+}
+fn local() -> String => String.from("local local local local local local local local")!;
+fn same(x: StringView) -> StringView => x;
+fn bad(into: borrow mut Holder) {
+    let t = local();
+    let v = t.view();
+    let g = () => { // error[N0272]
+        let old = replace(mut into.text, v);
+    };
+    g();
+}
+fn main() {
+    var h = Holder { text: "static" };
+    bad(mut h);
+    finish(h.text);
+}

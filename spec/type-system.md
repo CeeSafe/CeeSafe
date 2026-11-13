@@ -2692,6 +2692,14 @@ parameter without `static`. A function's **flows** are then:
 - **through a stored value** (ADR 0131): where the result flows from parameter `i` and parameter `j` flows into `i`
   (next), the result flows from `j` too. The checker keeps one loan set for what a reference refers to, so the old
   value that `fn put(borrow mut this, key: K, value: V) -> V?` takes out of a map holds what `key` put in;
+- **store targets** (ADR 0131 §2.13). A type is **written through** when a write through a value of it can reach
+  memory that outlives the value and can hold a loan: a `borrow mut T` or a `SliceMut<T>` whose `T` may hold a
+  loan (or is a `dyn` type); and a struct, an enum, an optional or an array that holds one, at any depth
+  (`struct Sink<region r> { out: borrow mut(r) Vector<StringView<r>>; }`, `Sink?`). A shared reference is not, nor
+  a `Box`, which holds no scoped value. Every parameter of such a type is a target of flows, by value as by
+  reference, with the flow names of its type: `fn put(s: Sink, v: StringView)` has no flow into `s` and its body's
+  `s.out.push(v)` is N0272; `fn put<region r>(s: Sink<r>, v: StringView<r>)` has one. The one definition decides
+  N0272 in the callee, the store a caller records, and N0298 (§36.1);
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
   with `j`: the callee may store `j`'s loans into what `i` refers to. A `borrow mut dyn I` is such a parameter
   whatever `I` is: its referent may be a scoped implementation (§37.2).
@@ -2725,9 +2733,31 @@ With one loan set per value:
    loans must all come from parameters that flow into `p` (§25.6): otherwise N0272. What `p`'s own referent held (its
    deep loans, not the loan of `p` itself) may always go back into it (ADR 0075 §8): `let x = take(mut this.a);
    this.b.push(x)!;`.
-3. `push`, `insert` and `append` write their argument through their receiver (rule 2).
+3. **Every built-in is classified by what it does with loans** (ADR 0131 §2.12; `builtinLoans` in
+   `src/nir/borrow.cee` names each one, and a function that uses one it does not name is N0216):
+   - *stores its other operands through its first* (rule 2): `push` (a vector's, a stable vector's), a slot map's
+     `insert`, `extend`, `resize`, `fill`, `copyFrom`;
+   - *exchanges what its two operands refer to*: `swap(mut a, mut b)`, each written through the other; and
+     `replace(mut place, value)`, a swap with a temporary, so `value` is written through `place` and the result
+     carries what `place` held;
+   - *reads*: every other built-in of the safe language (`pop`, an index, `view`, a slice, `clear`, `truncate`,
+     `retain`, a slot map's `get` and `remove`, the I/O, the arithmetic, the async and thread built-ins, …). It
+     stores nothing, and its result carries its operands' loans (rule 5: what a reference operand refers to holds,
+     for a result that is not itself a reference, slice or view);
+   - *a call through a function value, a closure or a C function pointer*: its result carries every argument's
+     loans; it stores nothing between its arguments (§36.1), except rule 4's last sentence;
+   - *raw*: a write through, or a value made from, a raw pointer (`write`, `writeVolatile`, `writeUnaligned`,
+     `Slice.fromRaw`, `Box.fromRaw`, a vector's `adopt`): no loan is followed, the `unsafe` block answers (§27.1).
+
+   A reference or a slice that is stored gives what it refers to holds, not its own loan (`extend`'s and
+   `copyFrom`'s source, `swap`'s operands), and nothing is stored where the receiver's referent can hold no loan
+   (bytes into a `Vector<u8>`). `String.append` stores bytes.
 4. At a call, an argument that flows into a `borrow mut` parameter adds its loans to what that
-   argument refers to.
+   argument refers to. The same for every **store target** (§25.6). And an argument passed **by value** that is
+   written through (it holds a `borrow mut`) is written through itself at every call, of a function, a method, a
+   function value or a closure: the callee may store what the value holds through the reference it holds
+   (`fn put(s: Two) { s.a.push(s.b)!; }` for `Two { a: borrow mut keep, b: t.view() }`), so what `keep` holds
+   after the call includes what the value held (ADR 0131 §2.13).
 5. In generic code, values whose type mentions a type parameter carry loans like scoped values, unless it mentions
    it only inside a `dyn` type (an interface's arguments, a `dyn fn`'s signature): a `dyn` value carries no loans of
    its own (§37.2), so `Box<dyn Handler<S>>` is stored where `S` is a type parameter as it is for a concrete `S`.

@@ -543,6 +543,61 @@ struct TypeTable {
         return 0xFFFFFFFF;
     }
 
+    /// May a write through a value of this type reach memory that outlives the value (type-system.md §25.6, ADR 0131
+    /// §2.13)? A `borrow mut` or a `SliceMut`; or a struct, enum, optional or array that holds one, at any depth. A
+    /// shared reference is not: nothing is written through it. Such a parameter is a target of flows, by value too.
+    fn writableThrough(borrow this, id: u32, depth: u32) -> bool {
+        if (id == 0xFFFFFFFF || depth > 12) {
+            return false;
+        }
+        let t = this.types[id as usize];
+        if (isKind(t.kind, TypeKind.Reference)) {
+            // Only where what it refers to can hold a loan: nothing is stored in a `borrow mut Vector<u8>`.
+            return t.mutableReference && t.pointee != 0xFFFFFFFF &&
+                (this.isScoped(t.pointee) || this.mentionsParameterOutsideDyn(t.pointee) ||
+                    isKind(this.types[t.pointee as usize].kind, TypeKind.Dyn) || this.isScopedElement(t.pointee));
+        }
+        if (isKind(t.kind, TypeKind.Dyn) || isKind(t.kind, TypeKind.RawPointer) || isKind(t.kind, TypeKind.Box)) {
+            return false; // a box owns what it holds, and holds no scoped value (§25.4)
+        }
+        if (!this.isScoped(id)) {
+            return false;
+        }
+        if (t.structDef != 0xFFFFFFFF) {
+            let s = borrow this.structs[t.structDef as usize];
+            for (k in 0..s.fields.length) {
+                if (this.writableThrough(this.fields[s.fields[k] as usize].typ, depth + 1)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (t.enumDef != 0xFFFFFFFF) {
+            let e = borrow this.enums[t.enumDef as usize];
+            if (e.optionType != 0xFFFFFFFF) {
+                return this.writableThrough(e.optionType, depth + 1);
+            }
+            if (e.resultOk != 0xFFFFFFFF) {
+                return this.writableThrough(e.resultOk, depth + 1) || this.writableThrough(e.resultErr, depth + 1);
+            }
+            for (v in e.variants.view()) {
+                for (f in this.variants[v as usize].payload.view()) {
+                    if (this.writableThrough(this.fields[f as usize].typ, depth + 1)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        return t.element != 0xFFFFFFFF && this.writableThrough(t.element, depth + 1);
+    }
+
+    /// An unsized `[T]` (a slice's pointee) whose elements may hold a loan.
+    fn isScopedElement(borrow this, id: u32) -> bool {
+        let t = this.types[id as usize];
+        return t.element != 0xFFFFFFFF && (this.isScoped(t.element) || this.mentionsParameterOutsideDyn(t.element));
+    }
+
     fn anyOutsideDyn(borrow this, r: Range) -> bool {
         for (k in 0..r.count) {
             if (this.mentionsParameterOutsideDyn(this.listAt(r, k))) {

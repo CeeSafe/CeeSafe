@@ -263,6 +263,24 @@ fn emitExterns(
 ) -> Result<void, AllocError> {
     var externs = Vector<u32>.create();
     emittedExterns(c, e, mut externs)?;
+    // A `@header` may declare one of these functions with an array parameter, `void f(unsigned long out[3])`, which
+    // CeeSafe declares as the pointer C adjusts it to (C11 §6.7.6.3p7): the two declarations are compatible, and GCC 11
+    // and later warn about the pair all the same (-Warray-parameter and -Wvla-parameter, both in -Wall).
+    var arrayParameters = false;
+    if (c.headers.length > 0) {
+        for (function in externs.view()) {
+            for (k in 0..c.hir.functions[function as usize].parameters.length) {
+                arrayParameters = arrayParameters || c.types.is(parameterType(c, function, k), TypeKind.RawPointer);
+            }
+        }
+    }
+    if (arrayParameters) {
+        e.line("#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11")?;
+        e.line("#pragma GCC diagnostic push")?;
+        e.line("#pragma GCC diagnostic ignored \"-Warray-parameter\"")?;
+        e.line("#pragma GCC diagnostic ignored \"-Wvla-parameter\"")?;
+        e.line("#endif")?;
+    }
     for (function in externs.view()) {
         let name = c.name(c.hir.functions[function as usize].name);
         let symbol = externSymbol(c, function);
@@ -333,6 +351,11 @@ fn emitExterns(
         }
         e.line("}")?;
         emitCfgClose(e, c, function)?;
+    }
+    if (arrayParameters) {
+        e.line("#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11")?;
+        e.line("#pragma GCC diagnostic pop")?;
+        e.line("#endif")?;
     }
     var variadic = false;
     for (function in externs.view()) {
@@ -767,6 +790,22 @@ fn emitExports(
     return Ok();
 }
 
+/// A `cfg` condition, "X" or "!X", as C's `#if` tests it (ADR 0080 §3.3): `defined(X) && X`, or `!(defined(X) && X)`.
+/// That is `X`, or `!X`, in every build, an undefined macro being 0 in `#if`; it is written out so that a build which
+/// does not define the macro gets no -Wundef warning, which is in the strict set (c-backend.md §1).
+fn appendCfgTest(out: borrow mut Vector<u8>, cfg: Slice<u8>) -> Result<void, AllocError> {
+    let negated = cfg.length > 0 && cfg[0] == '!';
+    let name = if (negated) cfg[1..] else cfg;
+    appendText(out, if (negated) "!(defined(" else "defined(")?;
+    appendBytes(out, name)?;
+    appendText(out, ") && ")?;
+    appendBytes(out, name)?;
+    if (negated) {
+        appendText(out, ")")?;
+    }
+    return Ok();
+}
+
 /// `#if NAME` before an `@cfg("NAME")` export's C (ADR 0043): its symbol is in the builds where the macro is non-zero.
 fn emitCfgOpen(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Result<void, AllocError> {
     let cfg = c.hir.functions[function as usize].cfgName;
@@ -774,7 +813,7 @@ fn emitCfgOpen(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Resu
         return Ok();
     }
     e.t("#if ")?;
-    e.b(c.hir.textOf(cfg))?;
+    appendCfgTest(mut e.buf, c.hir.textOf(cfg))?;
     return e.emit();
 }
 
@@ -970,7 +1009,7 @@ fn exportsHeader(
         let cfg = c.hir.functions[function as usize].cfgName;
         if (cfg.count != 0) {
             appendText(out, "#if ")?;
-            appendBytes(out, c.hir.textOf(cfg))?;
+            appendCfgTest(out, c.hir.textOf(cfg))?;
             appendText(out, "\n")?;
         }
         appendExportSignature(c, out, function, true)?;

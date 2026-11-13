@@ -290,7 +290,8 @@ arguments, N0100 now adds "write `(e as T) < x` for a comparison".
 - **G15.** `ceesafec test --sweep alloc` puts each injected failure into one of three classes:
   - **handled**: the test passed;
   - **unwrapped by the test**: the panic is `!` or `?`'s unwrap at a position inside an `@test` function's own
-    body;
+    body (as implemented, in any file that declares an `@test` function: see "Changes on implementation", item 6;
+    tooling.md §10.2 states the rule);
   - **failed**: any other panic, a leak, a crash or a wrong result.
 
   Only *failed* runs fail the sweep. The report shows the count of each, and lists the failed ones.

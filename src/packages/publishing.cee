@@ -4,9 +4,11 @@
 fn publishRefuse(
     report: borrow mut PackageReport,
     manifest: borrow Manifest,
+    start: u32,
+    end: u32,
     message: Vector<u8>,
 ) -> Result<void, AllocError> =>
-    report.error(335, manifest.file, 0, 0, message);
+    report.error(335, manifest.file, start, end, message);
 
 /// Runs git in the package's directory: its trimmed output, or null if it failed.
 fn gitIn(directory: Slice<u8>, words: borrow Vector<Vector<u8>>, extra: Slice<u8>) -> Result<Vector<u8>?, AllocError> {
@@ -97,13 +99,15 @@ fn publishCheck(
         m.t("' has kind = \"")?;
         m.t(if (manifest.kind == 2) "relocatableobject" else "executable")?;
         m.t("\"")?;
-        publishRefuse(report, manifest, m.out)?;
+        publishRefuse(report, manifest, manifest.kindStart, manifest.kindEnd, m.out)?;
         return Ok(null);
     }
     if (!manifest.hasVersion) {
         publishRefuse(
             report,
             manifest,
+            manifest.packageStart,
+            manifest.packageEnd,
             copyBytes("[package] needs a version to publish: version = \"MAJOR.MINOR.PATCH\"".bytes())?,
         )?;
         return Ok(null);
@@ -114,7 +118,7 @@ fn publishCheck(
             m.t("'")?;
             m.b(d.name.view())?;
             m.t("' is a path or git dependency: a published package depends only on the registry (tooling.md §4.8)")?;
-            publishRefuse(report, manifest, m.out)?;
+            publishRefuse(report, manifest, d.start, d.end, m.out)?;
             return Ok(null);
         }
     }
@@ -129,7 +133,7 @@ fn publishCheck(
         m.t("'")?;
         m.b(manifest.name.view())?;
         m.t("' does not type-check")?;
-        publishRefuse(report, manifest, m.out)?;
+        publishRefuse(report, manifest, 0, 0, m.out)?;
         return Ok(null);
     }
     let dir = manifest.directory.view();
@@ -138,7 +142,13 @@ fn publishCheck(
         null => Vector<u8>.create(),
     };
     if (commit.length != 40) {
-        publishRefuse(report, manifest, copyBytes("the package is not in a git repository with a commit".bytes())?)?;
+        publishRefuse(
+            report,
+            manifest,
+            0,
+            0,
+            copyBytes("the package is not in a git repository with a commit".bytes())?,
+        )?;
         return Ok(null);
     }
     var clean = false;
@@ -152,6 +162,8 @@ fn publishCheck(
         publishRefuse(
             report,
             manifest,
+            0,
+            0,
             copyBytes(
                 "the package has uncommitted changes: commit them, so the published commit is what you checked".bytes(),
             )?,
@@ -167,7 +179,7 @@ fn publishCheck(
         m.t("commit ")?;
         m.b(commit[0..12])?;
         m.t(" is on no remote branch: push it first")?;
-        publishRefuse(report, manifest, m.out)?;
+        publishRefuse(report, manifest, 0, 0, m.out)?;
         return Ok(null);
     }
     let url = match (gitIn(dir, words("remote", "get-url", "origin", "", 3)?, "".bytes())?) {
@@ -178,6 +190,8 @@ fn publishCheck(
         publishRefuse(
             report,
             manifest,
+            0,
+            0,
             copyBytes("the repository has no remote 'origin': the index needs a URL to fetch the commit from".bytes())?,
         )?;
         return Ok(null);
@@ -240,7 +254,7 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
                 m.t(" is not newer than ")?;
                 previous.appendTo(mut m.out)?;
                 m.t(", which comes before it")?;
-                report.error(328, source, 0, 0, m.out)?;
+                report.error(328, source, entry.start, entry.end, m.out)?;
             }
             hasPrevious = true;
             previous = entry.version;
@@ -254,7 +268,7 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
                     entry.version.appendTo(mut m.out)?;
                     m.t(": ")?;
                     m.b(git.lastError.view())?;
-                    report.error(323, source, 0, 0, m.out)?;
+                    report.error(323, source, entry.start, entry.end, m.out)?;
                     continue;
                 }
             };
@@ -285,7 +299,7 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
                 } else {
                     m.t("(no version)")?;
                 }
-                report.error(328, source, 0, 0, m.out)?;
+                report.error(328, source, entry.start, entry.end, m.out)?;
             }
             let hash = packageHash(manifest)?;
             if (!sameBytes(hash.view(), entry.hash.view())) {
@@ -297,7 +311,7 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
                 m.t(": the commit's hash is ")?;
                 m.b(hash.view())?;
                 m.t(", not the entry's")?;
-                report.error(328, source, 0, 0, m.out)?;
+                report.error(328, source, entry.start, entry.end, m.out)?;
             }
             // The manifest's registry dependencies, by name, against the entry's.
             var local = false;
@@ -333,7 +347,7 @@ fn checkIndex(directory: Slice<u8>, report: borrow mut PackageReport, offline: b
                 m.t("' ")?;
                 m.b(versionText.view())?;
                 m.t(": the entry's dependencies are not its manifest's registry dependencies")?;
-                report.error(328, source, 0, 0, m.out)?;
+                report.error(328, source, entry.start, entry.end, m.out)?;
             }
         }
     }

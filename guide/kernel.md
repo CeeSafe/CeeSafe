@@ -17,7 +17,9 @@ C library or an operating system:
 - `--no-float` (or `float = false`) rejects floating point, for code compiled without FP registers.
 
 `ceesafec build --emit obj` then writes one relocatable object, with only the undefined symbols the environment
-provides, ready for the kernel's own build to link.
+provides, ready for the kernel's own build to link. Beside the object it writes the headers the kernel's C includes:
+`ceesafe/rt.h`, which declares the `ceesafe_panic` the environment defines, and `ceesafe_exports.h` when the code has
+exports (`-o build/crc.o` gives `build/ceesafe/rt.h`: compile the C with `-I build`).
 
 <!-- ceesafe: freestanding -->
 ```ceesafe

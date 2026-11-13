@@ -96,17 +96,38 @@ fn isCSourceName(name: Slice<u8>) -> bool =>
 
 /// What the packages' manifests add to a native build (ADR 0047): libraries and their directories, in link order
 /// (dependents first, a repeated library at its last place, a repeated directory at its first), and the C files of
-/// packages with include directories, compiled apart with them.
+/// packages with include directories, compiled apart with them. `includeDirs` are every package's include
+/// directories, in the library directories' order, for the generated C, whose `@header`s they find (ADR 0120).
 struct NativeBuild {
     links: Vector<Vector<u8>>;
     libDirs: Vector<Vector<u8>>;
     separate: Vector<SeparateC>;
+    includeDirs: Vector<Vector<u8>>;
 
     fn create() -> NativeBuild => NativeBuild {
         links: Vector<Vector<u8>>.create(),
         libDirs: Vector<Vector<u8>>.create(),
         separate: Vector<SeparateC>.create(),
+        includeDirs: Vector<Vector<u8>>.create(),
     };
+}
+
+/// The user's flags, then every package's include directories (ADR 0120): the flags of the generated C's compile.
+fn generatedFlags(
+    userFlags: borrow Vector<Vector<u8>>,
+    native: borrow NativeBuild,
+    msvc: bool,
+) -> Result<Vector<Vector<u8>>, AllocError> {
+    var flags = Vector<Vector<u8>>.create();
+    for (flag in userFlags.view()) {
+        pushBytes(mut flags, flag.view())?;
+    }
+    for (d in native.includeDirs.view()) {
+        var flag = copyBytes((if (msvc) "/I" else "-I").bytes())?;
+        appendBytes(mut flag, d.view())?;
+        flags.push(flag)?;
+    }
+    return Ok(flags);
 }
 
 /// A package's C file compiled apart, with that package's include directories (ADR 0047 §3.3).
@@ -250,6 +271,8 @@ fn compileExecutable(
         Some(failed) => { return Ok(failed); }
         null => {}
     }
+    // From here on, the generated C and the C files compiled with it: the packages' include directories too.
+    let withIncludes = generatedFlags(userFlags, native, compiler.msvc)?;
     if (compiler.msvc) {
         if (freestanding) {
             return Ok(ToolOutcome {
@@ -271,14 +294,14 @@ fn compileExecutable(
                 files,
                 output,
                 debug,
-                userFlags,
+                withIncludes,
                 freestanding,
                 native,
                 objects,
                 jobs,
             );
         }
-        var arguments = msvcArguments(directory, files, output, debug, userFlags)?;
+        var arguments = msvcArguments(directory, files, output, debug, withIncludes)?;
         // The objects with the sources (before /Fo:), the libraries after /link.
         var at: usize = 0;
         while (at < arguments.length && !(arguments[at].length >= 4 && sameText(arguments[at][..4], "/Fo:"))) {
@@ -303,7 +326,7 @@ fn compileExecutable(
             files,
             output,
             debug,
-            userFlags,
+            withIncludes,
             freestanding,
             native,
             objects,
@@ -311,7 +334,7 @@ fn compileExecutable(
         );
     }
     var arguments = Vector<Vector<u8>>.create();
-    pushCompileFlags(mut arguments, directory, debug, userFlags, freestanding)?;
+    pushCompileFlags(mut arguments, directory, debug, withIncludes, freestanding)?;
     for (file in files.view()) {
         if (isCSourceName(file.name.view())) {
             arguments.push(joinPath(directory, file.name.view())?)?;
@@ -872,6 +895,11 @@ fn compileObject(
         for (flag in flags.view()) {
             pushBytes(mut arguments, flag.view())?;
         }
+        for (d in native.includeDirs.view()) {
+            // Every package's include directories, for the generated C's `@header`s (ADR 0120).
+            pushText(mut arguments, "-I")?;
+            pushBytes(mut arguments, d.view())?;
+        }
         pushText(mut arguments, "-c")?;
         pushBytes(mut arguments, source.view())?;
         pushText(mut arguments, "-o")?;
@@ -913,6 +941,7 @@ fn compileObject(
         }
         return Ok(archived);
     }
+    var foreign = Vector<u8>.create(); // on macOS, a `--target=` that is not Apple's: the triple
     if (linker.length == 0) {
         var coff = hostIsWindows(); // the compiler's own target there, unless a `--target=` names another
         for (flag in flags.view()) {
@@ -920,6 +949,11 @@ fn compileObject(
             if (text.length >= 9 && sameText(text[..9], "--target=")) {
                 pushBytes(mut link, flag.view())?;
                 coff = containsText(text, "windows") || containsText(text, "mingw") || containsText(text, "cygwin");
+                foreign.clear();
+                if (hostIsMac() && !containsText(text, "apple") && !containsText(text, "darwin") &&
+                    !containsText(text, "macos")) {
+                    appendBytes(mut foreign, text[9..])?;
+                }
             }
         }
         if (coff) {
@@ -948,7 +982,24 @@ fn compileObject(
     for (object in objects.view()) {
         pushBytes(mut link, object.view())?;
     }
-    return runTool(if (linker.length == 0) compiler else linker, link);
+    var joined = runTool(if (linker.length == 0) compiler else linker, link)?;
+    if (foreign.length > 0 && joined.started && joined.status != 0) {
+        // Apple's clang links with Apple's ld, which knows Mach-O only and fails on the ELF link's options
+        // ("ld: unknown options: -Bstatic -EL"). The linker's words stay; the way out is said after them, in the
+        // driver's (profiles.md §4.3). A clang whose own linker for the target is lld never comes here.
+        appendText(
+            mut joined.stderr,
+            "ceesafec: --emit obj joins the program's objects with the C compiler's linker, which failed for the target '",
+        )?;
+        appendBytes(mut joined.stderr, foreign.view())?;
+        appendText(
+            mut joined.stderr,
+            "': on macOS that linker is Apple's ld, which links for Apple's targets only. Name a linker for the target, as in '--ld ld.lld' (LLVM's lld), or build with '--emit lib'\n",
+        )?;
+        tool.clear();
+        appendText(tool, "ceesafec")?; // said in full here: no "the C compiler failed" line after it
+    }
+    return Ok(joined);
 }
 
 /// Removes the file at `path`, if there is one.

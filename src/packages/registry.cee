@@ -11,6 +11,8 @@ struct IndexEntry {
     dependencyNames: Vector<Vector<u8>>;
     dependencyRequirements: Vector<Vector<u8>>;
     yanked: bool;
+    start: u32; // its [[version]] header in the index's file
+    end: u32;
 }
 
 /// A package's versions, loaded once: `valid` false after N0328.
@@ -156,6 +158,8 @@ fn loadIndexPackage(
                 dependencyNames: dependencyNames,
                 dependencyRequirements: dependencyRequirements,
                 yanked: yanked,
+                start: t.start,
+                end: t.end,
             },
         )?;
     }
@@ -258,6 +262,8 @@ fn copyIndexEntry(e: borrow IndexEntry) -> Result<IndexEntry, AllocError> {
             dependencyNames: names,
             dependencyRequirements: requirements,
             yanked: e.yanked,
+            start: e.start,
+            end: e.end,
         },
     );
 }

@@ -268,7 +268,12 @@ Everything else is unchanged. Heap boxes, and every other site, use the drop glu
   prototypes use C's own types so that they are compatible with the C library's declarations: the
   generated code includes no C library header (unless a `@header` names one), but clang and GCC know the library functions'
   types (`-Wincompatible-library-redeclaration`, `-Wbuiltin-declaration-mismatch`), and C11
-  6.5.2.2 makes a call through an incompatible type undefined.
+  6.5.2.2 makes a call through an incompatible type undefined. A `@header` may declare the same function with an
+  array parameter (`void f(unsigned long out[3]);`), which CeeSafe declares as the pointer C adjusts it to
+  (`*mut CULong`): the two declarations are compatible (C11 §6.7.6.3p7), but GCC 11 and later warn about the pair
+  (`-Warray-parameter`, `-Wvla-parameter`, both in `-Wall`). So in a program with a `@header` and an extern
+  function with a pointer parameter, the prototypes and wrappers are written between `#pragma GCC diagnostic push`,
+  `ignored` for those two warnings, and `pop`, for GCC 11 and later only.
 - **Exports.** Each `@export` function gets a non-`static` wrapper under its symbol, with the C
   types, that converts the arguments (checking `@repr` enums), calls `ceeF_<name>`, and converts the
   result. Nothing else in the generated code has external linkage except `main`. In a hosted build the wrapper,

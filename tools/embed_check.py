@@ -161,12 +161,20 @@ def main():
                      b.returncode == 0 and os.path.isfile(os.path.join(named, "embed_api.h")) and
                      not os.path.exists(os.path.join(named, "ceesafe_exports.h")) and
                      "embed_sum" in open(os.path.join(named, "embed_api.h"), encoding="utf-8").read(), b.stderr[-300:])
-        # --emit obj stays as 0.27.0 had it (ADR 0088 §2.1): an object, and no header beside it.
+        # --emit obj writes the same headers beside its object (ADR 0121; none before it), and no rt.h in a hosted
+        # build. A file of the user's at a header's path is left as it is, with a line saying so, and the build succeeds.
         plain = os.path.join(work, "plain")
         b = build("--emit", "obj", "-o", os.path.join(plain, "embed.o"))
-        check.expect("--emit obj writes no header beside the object",
-                     b.returncode == 0 and not os.path.exists(os.path.join(plain, "ceesafe_exports.h")) and
-                     not os.path.exists(os.path.join(plain, "ceesafe")), f"{b.stderr[-300:]} {os.listdir(plain)}")
+        check.expect("--emit obj writes ceesafe/embed.h and ceesafe_exports.h beside the object",
+                     b.returncode == 0 and os.path.isfile(os.path.join(plain, "ceesafe_exports.h")) and
+                     os.listdir(os.path.join(plain, "ceesafe")) == ["embed.h"], f"{b.stderr[-300:]} {os.listdir(plain)}")
+        with open(os.path.join(plain, "ceesafe_exports.h"), "w") as handle:
+            handle.write("/* the user's own exports */\n")
+        b = build("--emit", "obj", "-o", os.path.join(plain, "embed.o"))
+        check.expect("--emit obj leaves a user's ceesafe_exports.h as it is and says so",
+                     b.returncode == 0 and "ceesafe_exports.h' as it is" in b.stderr and
+                     open(os.path.join(plain, "ceesafe_exports.h")).read() == "/* the user's own exports */\n",
+                     f"{b.returncode} {b.stderr[-300:]}")
         # A user's file under a header's name is never overwritten: the build fails and names it. A header ceesafec
         # wrote (its banner first) is replaced.
         mine = os.path.join(work, "mine")

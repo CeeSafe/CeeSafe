@@ -12,10 +12,10 @@ extern "C" {
 #endif
 
 
-#if CFG_ON
+#if defined(CFG_ON) && CFG_ON
 int32_t cfg_on_fn(void);
 #endif
-#if CFG_OFF
+#if defined(CFG_OFF) && CFG_OFF
 int32_t cfg_off_fn(void);
 #endif
 int32_t cfg_inner(void);

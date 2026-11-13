@@ -1,0 +1,27 @@
+@header("meter.h")
+extern "C" {
+    struct meter {
+        count: u32;
+        step: u32;
+    }
+    fn meter_main() -> *mut meter;
+    fn meter_start(meter: *mut meter, step: u32);
+    fn meter_tick(meter: *mut meter);
+}
+
+/// The count after three ticks of C's meter, stepping by `step`.
+/// Safety: `meter_main` returns the address of a C static, which lives for the whole program and which nothing else
+/// uses during the calls. The borrow is made after the last call that changes the meter.
+public fn ticked(step: u32) -> u32 {
+    let p = unsafe { meter_main() };
+    unsafe {
+        meter_start(p, step);
+    }
+    for (k in 0..3) {
+        unsafe {
+            meter_tick(p);
+        }
+    }
+    let m = unsafe { Ptr.toBorrow(p) };
+    return m.count;
+}

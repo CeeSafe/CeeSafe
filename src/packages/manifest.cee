@@ -109,6 +109,10 @@ struct Manifest {
     hasVersion: bool;
     version: Vector<u8>;
     kind: u32;
+    kindStart: u32; // the `kind` value's place in the manifest, or the [package] header's
+    kindEnd: u32;
+    packageStart: u32; // the [package] header's
+    packageEnd: u32;
     freestanding: bool;
     floatAllowed: bool; // float = false is --no-float
     kernel: bool;       // kernel = "cosmoos": lib/kernel is part of the build (ADR 0025)
@@ -296,6 +300,10 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
         hasVersion: false,
         version: Vector<u8>.create(),
         kind: 0,
+        kindStart: package.start,
+        kindEnd: package.end,
+        packageStart: package.start,
+        packageEnd: package.end,
         freestanding: false,
         floatAllowed: true,
         kernel: false,
@@ -328,6 +336,8 @@ fn parseManifest(file: u32, directory: Vector<u8>, report: borrow mut PackageRep
                     "executable",
                 ) || sameText(v.text.view(), "library") || sameText(v.text.view(), "object"));
             if (valid) {
+                manifest.kindStart = v.start;
+                manifest.kindEnd = v.end;
                 manifest.kind = if (sameText(
                     v.text.view(),
                     "library",

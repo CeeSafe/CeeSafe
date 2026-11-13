@@ -111,6 +111,11 @@ def compile_options(text):
         options.append("--debug-assertions")
     if "// option: no-debug-assertions" in stripped:
         options.append("--no-debug-assertions")
+    # The eliminations off (optimisations.md §2.7, §3.4): the explanations then say `kept` for every check.
+    if "// option: no-bce" in stripped:
+        options.append("--no-bce")
+    if "// option: no-oce" in stripped:
+        options.append("--no-oce")
     return options
 
 

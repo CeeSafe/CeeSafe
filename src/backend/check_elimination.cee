@@ -2396,12 +2396,15 @@ fn addCheckLine(c: borrow Checker, lines: borrow mut Vector<CheckLine>, line: Ch
 }
 
 /// `--explain-bounds-checks` and `--explain-overflow-checks` (Explain, ExplainOverflow): the package's own files.
+/// `eliminating` is false under `--no-bce` (or, for `overflow`, `--no-oce`): every check is then `kept`, as it is in
+/// the C the same command writes.
 fn explainChecks(
     c: borrow Checker,
     n: borrow NirProgram,
     sources: borrow Vector<SourceText>,
     results: borrow CheckResults,
     overflow: bool,
+    eliminating: bool,
     out: borrow mut Vector<u8>,
 ) -> Result<void, AllocError> {
     var lines = Vector<CheckLine>.create();
@@ -2436,6 +2439,10 @@ fn explainChecks(
                         }
                         _ => {}
                     }
+                }
+                if (!eliminating) {
+                    // --no-bce or --no-oce: the build keeps every check, whatever the analysis proved.
+                    verdict = if (verdict >= 2) 2 else 0;
                 }
                 if (start != none()) {
                     let position = sources[file as usize].position(start as usize);

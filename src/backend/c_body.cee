@@ -525,7 +525,7 @@ fn emitFlatBody(
                 e.line("    ;")?;
             }
             e.t("#if ")?;
-            e.b(block.cfg.view())?;
+            appendCfgTest(mut e.buf, block.cfg.view())?;
             e.emit()?;
         }
         for (s in block.statements.view()) {
@@ -542,7 +542,7 @@ fn emitFlatBody(
                     // `if (cfg("X"))`: C's preprocessor chooses the branch (ADR 0080 §3.3).
                     configuredBranch = true;
                     e.t("#if ")?;
-                    e.b(block.branchCfg.view())?;
+                    appendCfgTest(mut e.buf, block.branchCfg.view())?;
                     e.emit()?;
                     e.t("    goto bb")?;
                     e.d(then as u64)?;

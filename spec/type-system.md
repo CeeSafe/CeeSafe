@@ -2047,8 +2047,12 @@ lib/core's `CStr<region r>` is a Copy view of UTF-8 text with a NUL byte after i
 - `CStr.fromBytesWithNul<region r>(b: Slice<r, u8>) -> CStr<r>?` takes bytes whose last byte is their only NUL and
   whose text before it is UTF-8 (as `view()` returns a `StringView`); otherwise it is `null`. The `CStr` is a view of
   `b`: returning one made from a local `Vector`'s bytes is N0244, as for any view.
-- Its fields are private to lib/core (N0296): only `c"…"` and `fromBytesWithNul` make one, so its NUL is always
-  there. lib/core's `TextWriter`, whose `cText()` relies on the zero after what it wrote, keeps its fields private
+- `CStr.fromPtr<region r>(p: *CChar) -> CStr<r>?` (unsafe, §27.3; ADR 0122) is the C string at `p`, for a pointer
+  C gave: the bytes up to the first NUL, counted in CeeSafe (no `strlen`), as a view of them. It is `null` for a null
+  `p` and for bytes that are not UTF-8. The caller's contract: `p` is null, or points to bytes that end in a NUL and
+  that are neither changed nor freed while the result is used; like `Slice.fromRaw`'s, the result holds no loan.
+- Its fields are private to lib/core (N0296): only `c"…"`, `fromBytesWithNul` and the unsafe `fromPtr` make one, so
+  outside `unsafe` code its NUL is always there. lib/core's `TextWriter`, whose `cText()` relies on the zero after what it wrote, keeps its fields private
   for the same reason.
 - A struct field of type `CStr` needs a region parameter, as a `StringView`'s does (N0270).
 - Like a `StringView`, a `CStr` may be a constant's type (§10) and a static's (§39.2), initialised by a `c"…"`.
@@ -3158,6 +3162,9 @@ when the C is compiled for the host's own kind of system (hosted Windows, or any
     function (N0200). Both blocks are checked in every build, as one program.
   - A configured C function or field may be used only inside a `cfg` block of its own condition (N0350), so every
     build's C compiles. A configured export is not configured CeeSafe code: its CeeSafe function exists in every build.
+  - A macro the build does not define is 0, as in C's `#if`. The emitted test is written `#if defined(NAME) && NAME`
+    (`#if !(defined(NAME) && NAME)` for `"!NAME"`), here and for a configured export, which is `#if NAME` without
+    `-Wundef`'s warning (c-backend.md §1) in a build that leaves the macro undefined.
   - The interpreter takes every macro as 0: `cfg("NAME")` is false, `cfg("!NAME")` true.
   - A switch read at run time through a C constant macro (§39.4, `static DEBUG: bool = CONFIG_DEBUG_ON();`) remains
     for code every build can compile.

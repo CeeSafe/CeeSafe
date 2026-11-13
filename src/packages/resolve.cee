@@ -409,14 +409,17 @@ fn locate(
         }
         let requirement = parseRequirement(spec.version.view())?!;
         var good = false;
+        var otherIndex = false; // the lock has a version that satisfies, from another index than this command's
         var found: usize = 0;
         match (w.findLocked(spec.name.view())) {
             Some(k) => {
                 let e = borrow w.locked[k];
-                if (e.hasCommit && e.hasRepository && e.hasVersion && sameBytes(e.source.view(), source.view())) {
+                if (e.hasCommit && e.hasRepository && e.hasVersion && startsWithText(e.source.view(), "registry+")) {
                     match (parseVersion(e.version.view())?) {
                         Some(v) => {
-                            good = requirement.isSatisfiedBy(v);
+                            let satisfied = requirement.isSatisfiedBy(v);
+                            good = satisfied && sameBytes(e.source.view(), source.view());
+                            otherIndex = satisfied && !good;
                             found = k;
                         }
                         null => {}
@@ -424,6 +427,26 @@ fn locate(
                 }
             }
             null => {}
+        }
+        if (otherIndex) {
+            // The lock was written with another index: most often CEESAFE_INDEX was set for `fetch` and is not set
+            // now. The usual advice, `fetch`, would ask this command's index, which may not have the package.
+            var m = Words.create();
+            m.t("ceesafe.lock records '")?;
+            m.b(spec.name.view())?;
+            m.t("' from the index '")?;
+            m.b(w.locked[found].source[9..])?;
+            m.t("', but this command reads the index '")?;
+            m.b(source[9..])?;
+            if (spec.hasIndex) {
+                m.t("', which the manifest names: run 'ceesafec fetch'")?;
+            } else {
+                m.t("': set CEESAFE_INDEX as it was for 'ceesafec fetch', or name the index in the manifest (")?;
+                m.b(spec.name.view())?;
+                m.t(" = { version = \"...\", index = \"...\" }), or run 'ceesafec fetch' to resolve from this index")?;
+            }
+            w.error(report, 324, dependent, spec, m.out)?;
+            return Ok(null);
         }
         if (!good) {
             var m = Words.create();

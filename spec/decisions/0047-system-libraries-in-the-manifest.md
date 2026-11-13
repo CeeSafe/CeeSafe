@@ -83,7 +83,8 @@ A package with `include-dirs` has its own C files compiled apart:
 - with `-c` (or `cl /c`), the build's flags and its directories (`-I`, `/I`), into the build's work directory;
 - the objects then go into the build's command in place of those C files.
 
-The generated C, and other packages' C, never see those directories.
+The generated C, and other packages' C, never see those directories. (Amended by ADR 0120: the generated C, which
+includes every package's `@header`s, has them on its include path, and so have the C files compiled with it.)
 
 ### 3.4 Building by hand
 

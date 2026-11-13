@@ -25,6 +25,16 @@ fn directoryOf(path: Slice<u8>) -> Slice<u8> {
 
 fn failBytes(message: Slice<u8>) -> i32 => fail(StringView.fromUtf8(message)!);
 
+/// A failure of the environment, not of the command line (a C compiler that cannot be run, a file that cannot be
+/// written): the message alone on stderr, without the usage text, which would push it off the screen.
+fn failPlain(message: Slice<u8>) -> i32 {
+    var out = copyBytes("ceesafec: ".bytes())!;
+    appendBytes(mut out, message)!;
+    out.push('\n')!;
+    Console.writeError(StringView.fromUtf8(out.view())!);
+    return 2;
+}
+
 /// Writes a tool's output to standard error, as the reference compiler does: its standard output, then its standard error.
 fn relayTool(outcome: borrow ToolOutcome) {
     Console.writeError(StringView.fromUtf8(outcome.stdout.view())!);
@@ -42,7 +52,7 @@ fn buildFiles(
         if (options.output.length == 0) {
             match (makeDirectories(directoryOf(defaultName.view()))) {
                 Ok() => {}
-                Err(e) => { return fail(e.message()); }
+                Err(e) => { return failPlain(e.message().bytes()); }
             }
         }
     } else {
@@ -59,7 +69,7 @@ fn buildFiles(
             Err(e) => {
                 var message = copyBytes("cannot write the C: ".bytes())!;
                 appendText(mut message, e.message())!;
-                return failBytes(message.view());
+                return failPlain(message.view());
             }
         }
     }
@@ -116,7 +126,7 @@ fn buildFiles(
     }
     match (makeDirectories(directoryOf(output.view()))) {
         Ok() => {}
-        Err(e) => { return fail(e.message()); }
+        Err(e) => { return failPlain(e.message().bytes()); }
     }
     // The objects of --emit obj are made with GCC's and clang's flags (§8.3); an executable with the compiler found.
     var compilerError = Vector<u8>.create();
@@ -129,11 +139,11 @@ fn buildFiles(
     } else locateCompiler(options.cc.view(), mut compilerError);
     let compiler = match (found) {
         Some(c) => c,
-        null => { return failBytes(compilerError.view()); }
+        null => { return failPlain(compilerError.view()); }
     };
     let work = match (Directory.temporary()) {
         Ok(d) => d,
-        Err(e) => { return fail(e.message()); }
+        Err(e) => { return failPlain(e.message().bytes()); }
     };
     let workBytes = copyBytes(work.view().bytes())!;
     // Archive members carry the program's name (ADR 0088 §2.1): --program, the package's, or the first file's.
@@ -157,7 +167,7 @@ fn buildFiles(
     }
     if (library) {
         // A file of the user's where a header would go fails the build before anything is compiled or archived.
-        let blocked = writeHostHeaders(options, files, output.view(), false);
+        let blocked = writeHostHeaders(options, files, output.view(), false, false);
         if (blocked != 0) {
             removeTree(workBytes.view());
             return blocked;
@@ -175,12 +185,10 @@ fn buildFiles(
     );
     removeTree(workBytes.view());
     if (status == 0 && object) {
-        if (library) {
-            // ADR 0088 §2.1: `--emit obj` stays as 0.27.0 had it, without the host's headers.
-            let headers = writeHostHeaders(options, files, output.view(), true);
-            if (headers != 0) {
-                return headers;
-            }
+        // The headers of the object's or the archive's user, beside it (ADR 0088 §2.1, ADR 0121).
+        let headers = writeHostHeaders(options, files, output.view(), true, !library);
+        if (headers != 0) {
+            return headers;
         }
         var linkPath = copyBytes(output.view())!;
         appendText(mut linkPath, ".link.txt")!;
@@ -194,7 +202,17 @@ fn buildFiles(
 /// 0, or 1 after reporting a failure. Each starts with ceesafec's banner, and a file already at its path is replaced
 /// only if it starts with that banner too: a file of the user's that happens to have the name is never overwritten.
 /// With `write` false, only that check is made.
-fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output: Slice<u8>, write: bool) -> i32 {
+/// `--emit obj` (`object`, ADR 0121) writes the same headers and, in a freestanding build, `ceesafe/rt.h` and
+/// `ceesafe/foreign.h` too, which declare what the environment defines (`ceesafe_panic`, profiles.md §4.2). There a
+/// file ceesafec did not write is left as it is, with one line saying so, and the build succeeds: an object came
+/// without headers before, so a build that kept its own there still works.
+fn writeHostHeaders(
+    options: borrow Options,
+    files: borrow Vector<CFile>,
+    output: Slice<u8>,
+    write: bool,
+    object: bool,
+) -> i32 {
     var directory = copyBytes(directoryOf(output))!;
     if (directory.length == 0) {
         directory.push('.')!;
@@ -202,7 +220,9 @@ fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output
     var headers = Vector<CFile>.create();
     for (file in files.view()) {
         let name = file.name.view();
-        if (sameText(name, "ceesafe/embed.h") || sameBytes(name, options.exportsHeader.view())) {
+        let environment = object && options.freestanding &&
+            (sameText(name, "ceesafe/rt.h") || sameText(name, "ceesafe/foreign.h"));
+        if (environment || sameText(name, "ceesafe/embed.h") || sameBytes(name, options.exportsHeader.view())) {
             var text = Vector<u8>.create();
             if (!startsWithBytes(file.text.view(), generatedBanner().bytes())) {
                 appendText(mut text, "/* Generated by ")!;
@@ -212,6 +232,15 @@ fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output
             appendBytes(mut text, file.text.view())!;
             var path = Vector<u8>.create();
             appendPath(mut path, directory.view(), name)!;
+            if (object && !replaceableHeader(path.view())) {
+                var kept = copyBytes("--emit obj: left '".bytes())!;
+                appendBytes(mut kept, path.view())!;
+                appendText(mut kept, "' as it is: ceesafec did not write it (its first line is not ")!;
+                appendText(mut kept, "\"/* Generated by ceesafec\")")!;
+                Console.writeError("ceesafec: ");
+                Console.writeErrorLine(StringView.fromUtf8(kept.view())!);
+                continue;
+            }
             if (!replaceableHeader(path.view())) {
                 var message = copyBytes("--emit lib: will not overwrite '".bytes())!;
                 appendBytes(mut message, path.view())!;
@@ -233,7 +262,7 @@ fn writeHostHeaders(options: borrow Options, files: borrow Vector<CFile>, output
         Err(e) => {
             var message = copyBytes("cannot write the host's headers: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
 }
@@ -264,13 +293,19 @@ fn writeLinkFile(options: borrow Options, directory: Slice<u8>, name: Slice<u8>,
     if (text.length == 0) {
         return 0;
     }
-    let path = if (nameIsPath) joinPath(directory, name)! else copyBytes(name)!;
+    // Not joinPath, which makes an absolute path: `-o` may name a directory relative to the working directory.
+    var path = Vector<u8>.create();
+    if (nameIsPath) {
+        appendPath(mut path, directory, name)!;
+    } else {
+        appendBytes(mut path, name)!;
+    }
     match (writeFile(StringView.fromUtf8(path.view())!, text.view())) {
         Ok() => { return 0; }
         Err(e) => {
             var message = copyBytes("cannot write the link file: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
 }
@@ -292,7 +327,7 @@ fn compileIn(
         Err(e) => {
             var message = copyBytes("cannot write the C: ".bytes())!;
             appendText(mut message, e.message())!;
-            return failBytes(message.view());
+            return failPlain(message.view());
         }
     }
     // Run in the current directory: the source paths in #line directives are relative to it (c-backend.md §7).
@@ -338,7 +373,7 @@ fn compileIn(
         appendBytes(mut message, tool.view())!;
         appendText(mut message, "': ")!;
         appendText(mut message, outcome.error.message())!;
-        return failBytes(message.view());
+        return failPlain(message.view());
     }
     if (compilerFound.msvc) {
         let shown = withoutMsvcProgress(outcome.stdout.view(), files)!;

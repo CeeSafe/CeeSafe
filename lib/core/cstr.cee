@@ -24,6 +24,26 @@ public struct CStr<region r> {
         };
     }
 
+    /// The C string at `p` (ADR 0122): the bytes up to its first NUL, counted here, when they are UTF-8 text; else
+    /// null. A null `p` gives null too.
+    /// Safety: `p` is null, or points to bytes that end in a NUL and that are neither changed nor freed while the
+    /// result, or a view taken from it, is used.
+    public unsafe fn fromPtr(p: *CChar) -> CStr<r>? {
+        if (p.isNull()) {
+            return null;
+        }
+        let start = p as *u8;
+        var n: usize = 0;
+        while (unsafe { start.add(n).read() } != 0) {
+            n += 1;
+        }
+        let b: Slice<r, u8> = unsafe { Slice.fromRaw(start, n + 1) };
+        return match (StringView.fromUtf8(b[..n])) {
+            Some(text) => CStr { text: text, bytes: b },
+            null => null,
+        };
+    }
+
     /// The address of the first byte, for C: the text is followed by its NUL.
     public fn ptr(borrow this) -> *CChar => this.bytes.ptr as *CChar;
 

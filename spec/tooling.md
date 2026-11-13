@@ -211,7 +211,7 @@ tests = ["tests"]            # test directories (§10): default "tests"; their f
 ceesafec = ">=0.20.0"        # the compiler this package needs (ADR 0076): a requirement, as a dependency's (§4.7)
 links = ["ssl", "crypto"]    # system libraries to link (ADR 0047): -lssl -lcrypto; ssl.lib crypto.lib with cl
 lib-dirs = ["$OPENSSL_DIR/lib"]          # where they are; absolute, or relative to the package
-include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files only
+include-dirs = ["$OPENSSL_DIR/include"]  # headers for this package's own C files and its @headers (ADR 0120)
 
 [target.windows]             # also [target.macos] and [target.linux]: added after [package]'s on that system
 links = ["libssl", "libcrypto"]
@@ -246,7 +246,12 @@ syntax) and N0321 (a missing, unknown or invalid field), with the line.
   included. Packages are taken dependents first (by their longest path from the root). A library named twice keeps
   its last place, so it follows what uses it; a directory keeps its first.
 - A package with `include-dirs` has its own C files compiled apart, with `-c` and those directories, and the objects
-  join the build. No other C file sees its directories.
+  join the build.
+- The generated C has every package's include directories on its include path (ADR 0120), since it includes every
+  package's `@header`s (type-system.md §31.2): `-I<dir>` (`/I<dir>`) after the runtime's directory and the `--cflag`s,
+  dependents first, a repeated directory at its first place. The C files of packages without `include-dirs`, which
+  are compiled with the generated C, find them too; another package's separately compiled C files do not. With
+  `--emit c`, whoever compiles the C passes them.
 - `--emit c` writes the link line as `ceesafe_link.txt` beside the C, and `--emit obj` and `--emit lib` as
   `<output>.link.txt`, when the
   manifests name any: one argument per line, each separately compiled C file after its include directories, then the
@@ -303,6 +308,11 @@ source = "path+../geometry"
 - Every other command reads the lock. It fails with N0324 if the manifest has a dependency the lock lacks or
   records differently (run `ceesafec fetch`), and with N0325 if a git checkout's manifest and sources no longer have the
   lock's hash. A missing checkout of a locked commit is fetched, unless `--offline` is given (N0323 if it cannot be).
+- A registry package's `source` is `registry+` and its index (§4.6), so a lock written with `$CEESAFE_INDEX` set
+  matches only while the variable names that index. Read with another index, the lock's entry is N0324 at the
+  dependency, naming the lock's index, the command's, and the three ways out: set `CEESAFE_INDEX` as it was for
+  `ceesafec fetch`, name the index in the dependency (`index = "…"`), or run `ceesafec fetch` to resolve from the
+  command's index.
 - A path dependency has no hash: it is code being worked on beside the package.
 - The hash is SHA-256 over, for the manifest and each source file in ordinal order, the path relative to the package
   root, a zero byte, the file's bytes and a zero byte.
@@ -317,6 +327,10 @@ source = "path+../geometry"
 - `ceesafec fetch [--offline] [--update [name]]` resolves and writes `ceesafe.lock` (§4.7).
 - `ceesafec publish` checks that the package can be published and prints its index entry (§4.8).
 - `ceesafec test` runs the package's `@test` functions (§10).
+- `ceesafec <command> --help` (or `-h`), before any `--`, prints the usage text of `ceesafec --help` and exits with
+  status 0; `ceesafec test --help` prints `test`'s own (§10.2). A usage error (status 2) prints its message and then
+  the usage text on standard error. A failure of the environment, not of the command line, prints its message
+  alone: a C compiler or archiver that cannot be run, a file or directory that cannot be written.
 - `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
   C sources in `out/<name>-c/` with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
@@ -470,6 +484,9 @@ index's entries:
 - it type-checks with its dependencies;
 - its git working tree is clean, and its commit is on a remote branch.
 
+A package that fails a check is N0335, at what is wrong where the manifest has it: the `kind` that is not a library,
+`[package]` without a version, the dependency that is not a registry one; otherwise at the manifest's start.
+
 It then prints the index entry for the version: the remote's URL, the commit, the hash and the requirements. To
 publish, add that entry to `packages/<name>.toml` in the index by pull request. The index's continuous integration
 runs `ceesafec index-check`, which checks every new entry:
@@ -477,6 +494,8 @@ runs `ceesafec index-check`, which checks every new entry:
 - its manifest has the entry's name and version;
 - its hash and dependencies are the entry's;
 - the version is newer than every earlier entry.
+
+Each failure is reported at the entry's `[[version]]` line in `index:packages/<name>.toml`.
 
 A new package name is reviewed by the index's maintainers. Later versions from the same repository merge after the
 checks pass.
@@ -766,7 +785,9 @@ per host binary: two archives built separately each carry the runtime and clash 
   `build/ceesafe_exports.h`, so a host compiles with `-I build`. `--emit c` writes the same two into its output
   directory, beside `main.c` (the exports header again only when the program has exports). Each starts with `/* Generated by ceesafec`, and a
   file already at either path is replaced only if it starts so too: otherwise the build fails (status 1) before
-  compiling, naming the file, and leaves it as it was. `--emit obj` writes no header, as in 0.27.0.
+  compiling, naming the file, and leaves it as it was. `--emit obj` writes the same headers beside its object, and in a
+  freestanding build `ceesafe/rt.h` and `ceesafe/foreign.h` too (ADR 0121, profiles.md §4.3); there a file that does
+  not start so is left as it is, with a line saying so, and the build succeeds.
 - `--ar <archiver>` names the archiver, a path or a name looked up on `PATH`; by default it is `llvm-ar` beside an
   LLVM clang (`clang-18` beside `llvm-ar-18`; the C compiler found as for `--emit obj`, on `PATH` when it has no
   directory), else `ar` on `PATH` (Apple's `ar` indexes bitcode members).
@@ -947,10 +968,13 @@ Each test's outcome:
 - **`--sweep alloc`** runs each passing test again once per allocation attempt, the k-th failing. **`--sweep cancel`**
   runs it once per suspension point, the k-th cancelling its root task, sampled past 200 as `tools/cancel_sweep.py`
   is. A run may fail; it may not panic, crash, time out or leak.
-- **The tests' own unwraps** (ADR 0075 §2.16). Under `--sweep alloc`, a run that panics "unwrapped an Err value" or
-  "unwrapped null" at a position in a file that declares an `@test` function (a test's or a test helper's `!`
-  meeting the injected failure) is not a failure: the summary counts such runs as unwrapped by the test itself.
-  `--sweep-strict` counts them as failures, as every other panic is.
+- **A sweep's unwraps** (ADR 0075 §2.16 and §7 item 6). Under `--sweep alloc`, a run that panics with "unwrapped an
+  Err value" or "unwrapped null" at a position in a file that declares an `@test` function (of the root package) is
+  not a sweep failure: it is counted apart, and the summary ends `(N unwrapped by the test itself)`
+  (`sweepUnwrappedByTest` in the JSON). The rule is by file, not by function: the tests' helpers count, and so does
+  any other function of such a file, the code under test included when a source file holds its own `@test`s. An
+  unwrap in a file without tests is a sweep failure. **`--sweep-strict`** makes every such panic a sweep failure:
+  the sweep for code that must return the error.
 
 ### 10.3 The harness protocol (version 1)
 

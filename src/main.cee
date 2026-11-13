@@ -5,7 +5,7 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "\n")?;
     appendText(
         out,
-        "Without files, parse, check, build, run, doc and fmt use the package of the nearest ceesafe.toml\n",
+        "Without files, parse, check, build, run, fix, doc and fmt use the package of the nearest ceesafe.toml\n",
     )?;
     appendText(out, "(tooling.md §4); --offline uses only what is already fetched.\n")?;
     appendText(out, "\n")?;
@@ -33,13 +33,14 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "           --whole-program   check the packages as one program, without records, every package's own\n",
     )?;
     appendText(out, "                             diagnostics in full (the oracle the others agree with)\n")?;
+    appendText(out, "           --record          make the package's interface record in that way and print it\n")?;
     appendText(out, "           It takes no --jobs: the check is one process, which then makes the records it can\n")?;
     appendText(out, "  build    compile the package to C, and by default to an executable; .c files are compiled\n")?;
     appendText(out, "           and linked with it (type-system.md §28.6)\n")?;
     appendText(out, "  run      run the package with the NIR reference interpreter (--interp)\n")?;
     appendText(
         out,
-        "  test     run the package's @test functions, each as its own process (ADR 0049): --filter <text>, --list,\n           --interp, --jobs <n>, --timeout <seconds>, --sweep alloc|cancel, --format text|json\n",
+        "  test     run the package's @test functions, each as its own process (ADR 0049): --filter <text>, --list,\n           --interp, --jobs <n>, --timeout <seconds>, --sweep alloc|cancel, --sweep-strict, --format text|json;\n           ceesafec test --help lists them\n",
     )?;
     appendText(out, "  fmt      rewrite the files (or the .cee files under a directory) in the canonical style\n")?;
     appendText(out, "           (formatting.md); --check lists the files that would change, --stdout prints one\n")?;
@@ -99,6 +100,10 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "                    (parse, check, build, run, fmt, fix) diagnostics as text on standard error (default),\n",
     )?;
     appendText(out, "                    or as one JSON document on standard output, with fixes (tooling.md §5.1)\n")?;
+    appendText(
+        out,
+        "  --dry-run         (fix) change no file: print the first round's edits instead (tooling.md §5.3)\n",
+    )?;
     appendText(out, "  --dump-ast        (parse) print the AST of each file\n")?;
     appendText(out, "  --dump-hir        (check) print the typed HIR of the package\n")?;
     appendText(out, "  --dump-nir        (build) print the NIR of the package\n")?;
@@ -141,6 +146,20 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
         "  --no-float        (build, check) reject every float type and literal, for code built without FP\n",
     )?;
     appendText(out, "                    registers such as a kernel (type-system.md §35.9)\n")?;
+    appendText(
+        out,
+        "  --offline         (parse, check, build, run, fix, test, fetch, index-check) in a package, use only the\n",
+    )?;
+    appendText(out, "                    dependencies already fetched and never run git (tooling.md §4.3)\n")?;
+    appendText(
+        out,
+        "  --record          (check) make the package's interface record and print it (tooling.md §4.4.1)\n",
+    )?;
+    appendText(
+        out,
+        "  --sweep-strict    (test --sweep alloc) a panic from an unwrap in a test's own file fails the sweep too\n",
+    )?;
+    appendText(out, "                    (tooling.md §10.2)\n")?;
     appendText(
         out,
         "  -o <path>         (build) output file or directory; default: out/<name> in a package, else the name of\n",
@@ -982,10 +1001,8 @@ fn loadPackage(
     };
     let directory = match (findManifestDirectory(cwd.view())!) {
         Some(d) => d,
-        null => {
-            fail("no CeeSafe input files, and no ceesafe.toml here or above");
-            return 1;
-        }
+        // Nothing to work on is a usage error (tooling.md §4.4): status 2, as `fmt` and `doc` give.
+        null => { return fail("no CeeSafe input files, and no ceesafe.toml here or above"); }
     };
     var report = PackageReport.create();
     let noUpdate = Vector<Vector<u8>>.create();
@@ -1010,8 +1027,7 @@ fn loadPackage(
             }
             message.append(StringView.fromUtf8(workspace.root.sources[k].view())!)!;
         }
-        fail(message.view());
-        return 1;
+        return fail(message.view());
     }
     if (!options.profileGiven) {
         options.freestanding = workspace.root.freestanding;
@@ -1047,10 +1063,11 @@ fn loadPackage(
             }
             let status = addCFile(mut options, path.view());
             if (status != 0) {
-                return 1;
+                return status; // a usage error's, as for a C file named on the command line
             }
-            if (addHeadersBeside(mut options, path.view()) != 0) {
-                return 1;
+            let headers = addHeadersBeside(mut options, path.view());
+            if (headers != 0) {
+                return headers;
             }
         }
     }
@@ -1607,7 +1624,25 @@ fn helpAsked() -> bool {
     return false;
 }
 
+/// `CEESAFE_FAIL_ALLOC_AT=k` is for the program under test (tooling.md §12.3): under `run --interp` the interpreter
+/// fails the interpreted program's k-th attempt. But ceesafec is a built CeeSafe program too, whose runtime has read
+/// the variable and will fail ceesafec's own k-th attempt, which no code here could take. So, before anything else
+/// allocates, ceesafec makes attempts whose failure it does take, until the k-th has failed: no later attempt has
+/// that number. A vector's block, since a box may be placed on the stack and then is no attempt.
+fn spendInjectedFailure() {
+    let at = environmentNumber("CEESAFE_FAIL_ALLOC_AT");
+    var made: u64 = 0;
+    while (made < at) {
+        match (Vector<u8>.withCapacity(1)) {
+            Ok(_) => {}
+            Err(_) => { break; }
+        }
+        made += 1;
+    }
+}
+
 fn main() -> i32 {
+    spendInjectedFailure();
     let argument = Process.argument(1);
     if (argument == null) {
         var out = Vector<u8>.create();

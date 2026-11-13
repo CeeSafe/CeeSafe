@@ -368,7 +368,8 @@ violations that stay in bounds.
   caller. The CLI uses the process's own.
 - **Arguments.** `argv[0]` is the first source file's path. The arguments after `--` follow it.
 - **Configuration.** The CLI reads `CEESAFE_FAIL_ALLOC_AT` and `CEESAFE_ALLOC_REPORT` as
-  `ceesafe_platform_config` does (leading digits).
+  `ceesafe_platform_config` does (leading digits), for the interpreted program. The compiler's own runtime reads
+  them too: its allocations are never the ones that fail, and its report follows the program's (`tooling.md` §12.3).
 - **Files and sockets** are the host's, through lib/core's `File`, `TcpListener` and `TcpStream` (the interpreter is
   a CeeSafe program): a descriptor the interpreted program holds names an entry of the interpreter's table. Errors
   reach the program with the host's errno numbers (Linux, macOS or Windows) and the same mapping as

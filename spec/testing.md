@@ -49,6 +49,13 @@ subscription's drop, is ended by the next; and a program with no subscription is
 outcome, and compares each with `expected.tsv` (reviewed by hand), natively and with `--interp`; it also checks
 `--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out.
 
+`tools/cli_check.py` (in the contract suite as `cli`) holds the command line to `tooling.md` §4.4 and §12: every
+command with nothing to work on is a usage error with status 2; every option the compiler's sources read is in
+`ceesafec --help` or `ceesafec test --help`, or is one of §12.2's internal options, and none of those is in a
+help text; the table of §12.1 names, for each option, exactly the commands that accept it; and with
+`CEESAFE_FAIL_ALLOC_AT=k` a program run with `run --interp` gives what its build gives for every k, the compiler
+never panicking, in `check` and `build` too, while `CEESAFE_ALLOC_REPORT=1` gives the program's report first.
+
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH
 --package DIR`. That is how a package outside this repository (CeeSafe.Web's gates) uses them.

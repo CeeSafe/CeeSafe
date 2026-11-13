@@ -507,7 +507,14 @@ fn testHelp() {
     Console.writeLine("  --timeout <seconds>   a test running longer has timed out (default 60)");
     Console.writeLine("  --sweep alloc|cancel  run each passing test again under every failed allocation or every");
     Console.writeLine("                        cancellation point (native only)");
+    Console.writeLine("  --sweep-strict        with --sweep alloc: a panic from an unwrap in a test's own file fails");
+    Console.writeLine("                        the sweep too");
     Console.writeLine("  --format text|json    the report's form");
+    Console.writeLine("  --deny-warnings       treat the check's warnings as errors: no test runs");
+    Console.writeLine(
+        "the test program is built as `ceesafec build` builds, so test takes build's options too, such as",
+    );
+    Console.writeLine("--cc, --cflag and -g (ceesafec --help lists them; tooling.md §12.1 says what each does here)");
     Console.writeLine(
         "outcomes: passed, failed, panicked, crashed (a signal or exception), exited (the test ended the",
     );

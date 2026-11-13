@@ -333,7 +333,18 @@ source = "path+../geometry"
   alone and also exits with status 2: a C compiler or archiver that cannot be run (`ceesafec: cannot run the C
   compiler '<path>': <reason>`), a file or directory that cannot be written. A C compiler that runs and fails is
   status 1.
-- `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
+- A command with nothing to work on is a usage error, with status 2 and the usage text like any other, in every
+  command that works on files or on a package (`parse`, `check` with any of its options, `build`, `run`, `fix`,
+  `test`, `fmt`, `doc`):
+  - no file arguments and no `ceesafe.toml` in the current directory or above it: `no CeeSafe input files, and no
+    ceesafe.toml here or above` (`fmt` and `doc`: `no CeeSafe input files`; `fetch`, `publish` and `agents`, which
+    take no files: `no ceesafe.toml here or above`);
+  - a package with no `.cee` file under its source directories: `package '<name>' has no .cee files under <dirs>`;
+  - a C file that cannot be read, or two of one name, whether the command line names it or the manifest's `c` does.
+
+  Until 0.42.0 `parse`, `check`, `build`, `run`, `fix` and `test` printed the first two with the usage text but
+  exited with status 1, and so did a C file of the manifest; `tools/cli_check.py` now holds every command to 2.
+- `ceesafec parse`, `check`, `build`, `run`, `fix`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
   C sources in `out/<name>-c/` with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
   them. `fmt` formats the package's own sources, not its dependencies'.
@@ -950,6 +961,11 @@ test from anything but the generated harness, is N0348.
    at a time (default 1), each as its own process. `--list` prints the names instead. A `--filter` that no name
    contains is an error (exit status 1), so a mistyped filter cannot pass. `ceesafec test --help` lists the options.
 
+Steps 1 and 2 are a check and a build, so `test` also takes `--deny-warnings`, `--offline`,
+`--diagnostics-format` and the options of `build`: the C compiler and its flags (`--cc`, `--cflag`), `-g` and the
+other options that change the generated C. §12.1 lists them all, with the ones that do nothing in `test` because
+its output is always the executable `out/<name>-tests` (`-o`, `--emit`, `--ar`, `--ld`, `--lib-main`).
+
 Each test's outcome:
 
 | Outcome | When |
@@ -995,6 +1011,10 @@ compiled but not run.
     to standard error.
   - The runner reads these lines, the panic report, the allocation report (`ceesafe alloc: attempts=… live=…`), the
     cancellation report (`points=…`) and the exit status.
+- **In the interpreter.** `test --interp` runs one test as `ceesafec run --interp --ceesafe-harness <harness> --
+  --ceesafe-test <name> …` in the package's directory. `--ceesafe-harness <file>` is `run`'s internal option
+  (§12.2): it adds the generated harness and the package's tests to the program and makes `ceesafeTestMain` its
+  entry.
 
 ## 11. Bindings from C headers: `ceesafec cbind` (ADR 0095, ADR 0127)
 
@@ -1112,3 +1132,93 @@ command does not read have no node, and the pass is one loop without recursion (
 the oracle of `tools/cbind_check.py` (in the contract suite as `cbind`), which runs both on `tests/cbind/` and on the
 book's header and requires the same bytes apart from the generator's name in the first line, and checks the
 command's options, errors and choice of compiler. A change of what is generated is made in both.
+
+## 12. The command line's options
+
+`ceesafec --help` prints the usage text: every command, and every public option with the commands it is for;
+`ceesafec test --help` and `ceesafec cbind --help` print those commands' own. This section says which command
+accepts which option, as the compiler behaves, which options are internal, and what the allocation variables of the
+environment apply to. `tools/cli_check.py` (in the contract suite as `cli`) runs the commands and compares them
+with this section, with the two help texts and with the exit statuses of §4.4.
+
+### 12.1 Which command accepts which option
+
+`parse`, `check`, `build`, `run`, `fix` and `test` read their options with one reader, so each of them **accepts**
+(does not answer `unknown option`) some options that do nothing in it. The table is how the compiler behaves, not
+a promise: an option a command accepts without its doing anything there may become a warning or a usage error in a
+later release, by a decision of its own. A script should give a command only the options the third column names
+for it.
+
+`test` checks the package and then builds its test program as `build` does (§10.2), so it accepts every option of
+`build`.
+
+| Option | Accepted by | Does its work in | Elsewhere |
+|---|---|---|---|
+| `--all` | check | check | |
+| `--ar` | build, test | build, with `--emit lib` | test: nothing, no library is made. Without `--emit lib` it is a usage error in both |
+| `--cc` | build, test | build, test | |
+| `--ceesafe-harness` | run | run | internal (§12.2) |
+| `--cflag` | build, test | build, test | |
+| `--debug-assertions` | build, run, test | build | run, test: nothing, since they evaluate `debugAssert` unless `--no-debug-assertions` is given |
+| `--deny-warnings` | parse, check, build, fix, test | check, build, fix, test | parse: nothing |
+| `--diagnostics-format` | parse, check, build, run, fix, test | all six | `fmt`, `doc`, `fetch`, `publish` and `index-check` take it too; `new`, `agents` and `explain` accept it and have no diagnostics to print |
+| `--dry-run` | fix | fix | |
+| `--dump-ast` | parse, check, build, run, fix, test | parse | check, without files: prints nothing, and the package is checked as `--whole-program` checks it. build, run, fix, test: nothing |
+| `--dump-hir` | parse, check, build, run, fix, test | check | run, fix (in each round) and test (in its check) print the HIR too. build prints nothing. parse: nothing. With it, build, run and test do not report the warnings of a program without errors |
+| `--dump-nir` | build, test | build, test (the test program's) | |
+| `--dump-tokens` | parse, check, build, run, fix, test | parse | internal (§12.2). Elsewhere as `--dump-ast` |
+| `--emit` | build, test | build | test: nothing, the test program is an executable; a value that is not `c`, `exe`, `obj` or `lib` is still a usage error |
+| `--explain-allocations`, `--explain-bounds-checks`, `--explain-closure-calls`, `--explain-frames`, `--explain-overflow-checks` | build, test | build, test (the test program's) | |
+| `--exports-header` | build, test | build, test | |
+| `--filter`, `--format`, `--list`, `--sweep`, `--sweep-strict`, `--timeout` | test | test | |
+| `--flat-c` | build, test | build, test | |
+| `--interp` | run, test | run, test | |
+| `--jobs` | build, test | build, with `--split` (without it a usage error); test: the tests run at once, and with `--split` the C files compiled at once | check answers `unknown option`: it is one process |
+| `--kernel`, `--profile`, `--no-float` | parse, check, build, run, fix, test | check, build, fix, test | parse: nothing. run: nothing, the interpreter runs hosted code with floats |
+| `--ld` | build, test | build, with `--emit obj` | test: nothing. With `--emit lib` it is a usage error in both |
+| `--lib-main` | build, test | build, with `--emit lib` | test: nothing. Without `--emit lib` it is a usage error in both |
+| `--library-diagnostics` | parse, check, build, run, fix, test | check, build, run, fix, test | internal (§12.2). parse: nothing |
+| `--line-directives`, `-g` | build, test | build, test | |
+| `--no-bce`, `--no-closure-specialisation`, `--no-debug-assertions`, `--no-oce`, `--no-placement` | build, run, test | build, run, test | |
+| `--offline` | parse, check, build, run, fix, test | all six, in a package | `fetch` and `index-check` have their own |
+| `--package`, `--record`, `--whole-program` | check | check | |
+| `--program`, `--split` | build, test | build, test | |
+| `-o` | build, test | build | test: nothing, the test program is `out/<name>-tests` |
+
+`--help` and `-h`, before any `--`, are every command's (§4.4). The other commands read their own options and
+answer any other with a usage error: `fmt` (`--check`, `--stdout`), `doc` (§1), `fetch` (§4.7), `index-check`
+(§4.8), `new` and `agents` (§7), `explain` and `publish` (none), `cbind` (§11.1).
+
+### 12.2 Internal options
+
+Three options are for the compiler's own tests and tools. `ceesafec --help` does not list them, no test pins what
+they print for a user, and they may change or go in any release:
+
+| Option | What it does | Used by |
+|---|---|---|
+| `--dump-tokens` | with `parse`, prints each file's tokens on standard output | the lexer's development (`docs/p2-frontend.md`) |
+| `--library-diagnostics` | reports the diagnostics in the embedded libraries' own files too, which are otherwise dropped | the contract suite's `library` step (`testing.md` §1) |
+| `--ceesafe-harness <file>` | with `run`, adds the generated test harness and the package's tests, with the harness's entry | `ceesafec test --interp` (§10.3) |
+
+Every other option the compiler accepts is public: the usage text lists it, or `ceesafec test --help` does.
+
+### 12.3 The allocation variables
+
+`CEESAFE_ALLOC_REPORT` and `CEESAFE_FAIL_ALLOC_AT` (ADR 0059) are for the program under test: a built program's
+runtime reads them when `main` starts, and under `ceesafec run --interp` the interpreter reads them for the
+interpreted program and numbers its attempts as the runtime would (`intermediate-representation.md` §5.1, §5.4).
+`ceesafec` is itself a built CeeSafe program, so its own runtime reads them as well. What that means:
+
+- **`CEESAFE_FAIL_ALLOC_AT=k` never fails an allocation `ceesafec` needs**, in any command. Before it reads its
+  arguments, `ceesafec` makes allocation attempts of its own whose failure it takes, until its k-th has failed; no
+  later attempt of the compiler has that number. Under `run --interp` the interpreted program's k-th attempt then
+  fails, as the built program's does. The cost is those k attempts, which is time only for a very large k (about
+  2.5 s for 100,000,000 where it was measured). Until 0.42.0 the compiler's own k-th attempt failed and it panicked
+  (`unwrapped an Err value at src/main.cee:…`).
+- **`CEESAFE_ALLOC_REPORT=1` prints two reports under `run --interp`**: first the interpreted program's, when it
+  ends, and then, as the last line, `ceesafec`'s own, whose `attempts` are the compiler's and include the ones
+  above. The program's report is the first `ceesafe alloc: attempts=` line of standard error, which is what
+  `tools/run_corpus.py --interp --check-leaks` reads. The other commands print the compiler's report alone. The
+  compiler cannot turn its own report off: the runtime has read the variable before `main` runs.
+- Under `ceesafec test` a test's report and its failing attempt are the harness's (`ceesafe_test_begin`, §10.3),
+  which override the variables in the test's process.

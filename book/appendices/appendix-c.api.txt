@@ -1,0 +1,191 @@
+AppendFormatted	public interface AppendFormatted { fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>; fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>; fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>; fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>; }
+ByteOrder	public struct ByteOrder
+ByteOrder.readI16BE	public fn readI16BE(s: Slice<u8>, at: usize) -> i16
+ByteOrder.readI16LE	public fn readI16LE(s: Slice<u8>, at: usize) -> i16
+ByteOrder.readI32BE	public fn readI32BE(s: Slice<u8>, at: usize) -> i32
+ByteOrder.readI32LE	public fn readI32LE(s: Slice<u8>, at: usize) -> i32
+ByteOrder.readI64BE	public fn readI64BE(s: Slice<u8>, at: usize) -> i64
+ByteOrder.readI64LE	public fn readI64LE(s: Slice<u8>, at: usize) -> i64
+ByteOrder.readI8BE	public fn readI8BE(s: Slice<u8>, at: usize) -> i8
+ByteOrder.readI8LE	public fn readI8LE(s: Slice<u8>, at: usize) -> i8
+ByteOrder.readU16BE	public fn readU16BE(s: Slice<u8>, at: usize) -> u16
+ByteOrder.readU16LE	public fn readU16LE(s: Slice<u8>, at: usize) -> u16
+ByteOrder.readU32BE	public fn readU32BE(s: Slice<u8>, at: usize) -> u32
+ByteOrder.readU32LE	public fn readU32LE(s: Slice<u8>, at: usize) -> u32
+ByteOrder.readU64BE	public fn readU64BE(s: Slice<u8>, at: usize) -> u64
+ByteOrder.readU64LE	public fn readU64LE(s: Slice<u8>, at: usize) -> u64
+ByteOrder.readU8BE	public fn readU8BE(s: Slice<u8>, at: usize) -> u8
+ByteOrder.readU8LE	public fn readU8LE(s: Slice<u8>, at: usize) -> u8
+ByteOrder.writeI16BE	public fn writeI16BE(s: SliceMut<u8>, at: usize, x: i16)
+ByteOrder.writeI16LE	public fn writeI16LE(s: SliceMut<u8>, at: usize, x: i16)
+ByteOrder.writeI32BE	public fn writeI32BE(s: SliceMut<u8>, at: usize, x: i32)
+ByteOrder.writeI32LE	public fn writeI32LE(s: SliceMut<u8>, at: usize, x: i32)
+ByteOrder.writeI64BE	public fn writeI64BE(s: SliceMut<u8>, at: usize, x: i64)
+ByteOrder.writeI64LE	public fn writeI64LE(s: SliceMut<u8>, at: usize, x: i64)
+ByteOrder.writeI8BE	public fn writeI8BE(s: SliceMut<u8>, at: usize, x: i8)
+ByteOrder.writeI8LE	public fn writeI8LE(s: SliceMut<u8>, at: usize, x: i8)
+ByteOrder.writeU16BE	public fn writeU16BE(s: SliceMut<u8>, at: usize, x: u16)
+ByteOrder.writeU16LE	public fn writeU16LE(s: SliceMut<u8>, at: usize, x: u16)
+ByteOrder.writeU32BE	public fn writeU32BE(s: SliceMut<u8>, at: usize, x: u32)
+ByteOrder.writeU32LE	public fn writeU32LE(s: SliceMut<u8>, at: usize, x: u32)
+ByteOrder.writeU64BE	public fn writeU64BE(s: SliceMut<u8>, at: usize, x: u64)
+ByteOrder.writeU64LE	public fn writeU64LE(s: SliceMut<u8>, at: usize, x: u64)
+ByteOrder.writeU8BE	public fn writeU8BE(s: SliceMut<u8>, at: usize, x: u8)
+ByteOrder.writeU8LE	public fn writeU8LE(s: SliceMut<u8>, at: usize, x: u8)
+ByteSearch	public struct ByteSearch<region r>
+ByteSearch.contains	public fn contains(s: Slice<r, u8>, needle: Slice<u8>) -> bool
+ByteSearch.endsWith	public fn endsWith(s: Slice<r, u8>, suffix: Slice<u8>) -> bool
+ByteSearch.equalsIgnoreAsciiCase	public fn equalsIgnoreAsciiCase(s: Slice<r, u8>, other: Slice<u8>) -> bool
+ByteSearch.indexOf	public fn indexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize?
+ByteSearch.indexOfByte	public fn indexOfByte(s: Slice<r, u8>, b: u8) -> usize?
+ByteSearch.lastIndexOf	public fn lastIndexOf(s: Slice<r, u8>, needle: Slice<u8>) -> usize?
+ByteSearch.split	public fn split(s: Slice<r, u8>, separator: Slice<r, u8>) -> ByteSplit<r>
+ByteSearch.splitOnce	public fn splitOnce(s: Slice<r, u8>, separator: Slice<u8>) -> ByteHalves<r>?
+ByteSearch.startsWith	public fn startsWith(s: Slice<r, u8>, prefix: Slice<u8>) -> bool
+ByteSearch.trim	public fn trim(s: Slice<r, u8>) -> Slice<r, u8>
+ByteSearch.trimEnd	public fn trimEnd(s: Slice<r, u8>) -> Slice<r, u8>
+ByteSearch.trimStart	public fn trimStart(s: Slice<r, u8>) -> Slice<r, u8>
+HashMap	public struct HashMap<K: HashKey<K>, V>
+HashMap.clear	public fn clear(borrow mut this)
+HashMap.contains	public fn contains(borrow this, key: borrow K) -> bool
+HashMap.create	public fn create() -> HashMap<K, V>
+HashMap.get	public fn get(borrow this, key: borrow K) -> borrow(this) V?
+HashMap.getMut	public fn getMut(borrow mut this, key: borrow K) -> borrow mut(this) V?
+HashMap.keyAt	public fn keyAt(borrow this, i: usize) -> borrow(this) K
+HashMap.length	public fn length(borrow this) -> usize
+HashMap.put	public fn put(borrow mut this, key: K, value: V) -> Result<V?, AllocError>
+HashMap.remove	public fn remove(borrow mut this, key: borrow K) -> V?
+HashMap.valueAt	public fn valueAt(borrow this, i: usize) -> borrow(this) V
+HashMap.withSeed	public fn withSeed(k0: u64, k1: u64) -> HashMap<K, V>
+NumberParsing	public struct NumberParsing
+NumberParsing.parseF32	public fn parseF32(s: Slice<u8>) -> f32?
+NumberParsing.parseF64	public fn parseF64(s: Slice<u8>) -> f64?
+NumberParsing.parseI16	public fn parseI16(s: Slice<u8>) -> i16?
+NumberParsing.parseI16Radix	public fn parseI16Radix(s: Slice<u8>, radix: u32) -> i16?
+NumberParsing.parseI32	public fn parseI32(s: Slice<u8>) -> i32?
+NumberParsing.parseI32Radix	public fn parseI32Radix(s: Slice<u8>, radix: u32) -> i32?
+NumberParsing.parseI64	public fn parseI64(s: Slice<u8>) -> i64?
+NumberParsing.parseI64Radix	public fn parseI64Radix(s: Slice<u8>, radix: u32) -> i64?
+NumberParsing.parseI8	public fn parseI8(s: Slice<u8>) -> i8?
+NumberParsing.parseI8Radix	public fn parseI8Radix(s: Slice<u8>, radix: u32) -> i8?
+NumberParsing.parseIsize	public fn parseIsize(s: Slice<u8>) -> isize?
+NumberParsing.parseIsizeRadix	public fn parseIsizeRadix(s: Slice<u8>, radix: u32) -> isize?
+NumberParsing.parseU16	public fn parseU16(s: Slice<u8>) -> u16?
+NumberParsing.parseU16Radix	public fn parseU16Radix(s: Slice<u8>, radix: u32) -> u16?
+NumberParsing.parseU32	public fn parseU32(s: Slice<u8>) -> u32?
+NumberParsing.parseU32Radix	public fn parseU32Radix(s: Slice<u8>, radix: u32) -> u32?
+NumberParsing.parseU64	public fn parseU64(s: Slice<u8>) -> u64?
+NumberParsing.parseU64Radix	public fn parseU64Radix(s: Slice<u8>, radix: u32) -> u64?
+NumberParsing.parseU8	public fn parseU8(s: Slice<u8>) -> u8?
+NumberParsing.parseU8Radix	public fn parseU8Radix(s: Slice<u8>, radix: u32) -> u8?
+NumberParsing.parseUsize	public fn parseUsize(s: Slice<u8>) -> usize?
+NumberParsing.parseUsizeRadix	public fn parseUsizeRadix(s: Slice<u8>, radix: u32) -> usize?
+OptionalResults	public struct OptionalResults<T, E>
+OptionalResults.okOr	public fn okOr(o: T?, e: E) -> Result<T, E>
+OrderedMap	public struct OrderedMap<K: OrderKey<K>, V>
+OrderedMap.clear	public fn clear(borrow mut this)
+OrderedMap.contains	public fn contains(borrow this, key: borrow K) -> bool
+OrderedMap.create	public fn create() -> OrderedMap<K, V>
+OrderedMap.first	public fn first(borrow this) -> OrderedCursor?
+OrderedMap.get	public fn get(borrow this, key: borrow K) -> borrow(this) V?
+OrderedMap.getMut	public fn getMut(borrow mut this, key: borrow K) -> borrow mut(this) V?
+OrderedMap.isEmpty	public fn isEmpty(borrow this) -> bool
+OrderedMap.keyAt	public fn keyAt(borrow this, at: OrderedCursor) -> borrow(this) K
+OrderedMap.last	public fn last(borrow this) -> OrderedCursor?
+OrderedMap.length	public fn length(borrow this) -> usize
+OrderedMap.next	public fn next(borrow this, at: OrderedCursor) -> OrderedCursor?
+OrderedMap.previous	public fn previous(borrow this, at: OrderedCursor) -> OrderedCursor?
+OrderedMap.put	public fn put(borrow mut this, key: K, value: V) -> Result<V?, AllocError>
+OrderedMap.remove	public fn remove(borrow mut this, key: borrow K) -> V?
+OrderedMap.seek	public fn seek(borrow this, key: borrow K) -> OrderedCursor?
+OrderedMap.seekAfter	public fn seekAfter(borrow this, key: borrow K) -> OrderedCursor?
+OrderedMap.valueAt	public fn valueAt(borrow this, at: OrderedCursor) -> borrow(this) V
+OrderedMap.valueAtMut	public fn valueAtMut(borrow mut this, at: OrderedCursor) -> borrow mut(this) V
+ResultMethods	public struct ResultMethods<T, E>
+ResultMethods.err	public fn err(r: Result<T, E>) -> E?
+ResultMethods.isErr	public fn isErr(r: borrow Result<T, E>) -> bool
+ResultMethods.isOk	public fn isOk(r: borrow Result<T, E>) -> bool
+ResultMethods.ok	public fn ok(r: Result<T, E>) -> T?
+SliceAlgorithms	public struct SliceAlgorithms<T>
+SliceAlgorithms.all	@effectsOf(test) public fn all(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> bool
+SliceAlgorithms.any	@effectsOf(test) public fn any(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> bool
+SliceAlgorithms.forEach	@effectsOf(visit) public fn forEach(s: Slice<T>, visit: borrow mut fn(borrow T))
+SliceAlgorithms.partitionPoint	@effectsOf(test) public fn partitionPoint(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> usize
+SliceAlgorithms.retain	@effectsOf(keep) public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
+SliceAlgorithms.sortBy	@effectsOf(cmp) public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
+SliceSplitting	public struct SliceSplitting<region r, T>
+SliceSplitting.splitAt	public fn splitAt(s: Slice<r, T>, mid: usize) -> SliceHalves<r, T>
+SliceSplitting.splitAtMut	public fn splitAtMut(s: SliceMut<r, T>, mid: usize) -> SliceHalvesMut<r, T>
+StringCopying	public struct StringCopying
+StringCopying.from	public fn from(text: StringView) -> Result<String, AllocError>
+StringCopying.fromFailing	public fn fromFailing(text: StringView) -> Result<String<FailingAllocator>, AllocError>
+TextSearch	public struct TextSearch<region r>
+TextSearch.contains	public fn contains(s: StringView<r>, needle: StringView) -> bool
+TextSearch.endsWith	public fn endsWith(s: StringView<r>, suffix: StringView) -> bool
+TextSearch.equalsIgnoreAsciiCase	public fn equalsIgnoreAsciiCase(s: StringView<r>, other: StringView) -> bool
+TextSearch.indexOf	public fn indexOf(s: StringView<r>, needle: StringView) -> usize?
+TextSearch.indexOfByte	public fn indexOfByte(s: StringView<r>, b: u8) -> usize?
+TextSearch.lastIndexOf	public fn lastIndexOf(s: StringView<r>, needle: StringView) -> usize?
+TextSearch.split	public fn split(s: StringView<r>, separator: StringView<r>) -> TextSplit<r>
+TextSearch.splitOnce	public fn splitOnce(s: StringView<r>, separator: StringView) -> TextHalves<r>?
+TextSearch.startsWith	public fn startsWith(s: StringView<r>, prefix: StringView) -> bool
+TextSearch.trim	public fn trim(s: StringView<r>) -> StringView<r>
+TextSearch.trimEnd	public fn trimEnd(s: StringView<r>) -> StringView<r>
+TextSearch.trimStart	public fn trimStart(s: StringView<r>) -> StringView<r>
+VectorBytes	public struct VectorBytes
+VectorBytes.appendFixed	public fn appendFixed(v: borrow mut Vector<u8>, value: f64, digits: u32) -> Result<void, AllocError>
+VectorBytes.appendHex	public fn appendHex(v: borrow mut Vector<u8>, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>
+VectorBytes.appendOctal	public fn appendOctal(v: borrow mut Vector<u8>, value: u64) -> Result<void, AllocError>
+VectorBytes.appendPadded	public fn appendPadded( v: borrow mut Vector<u8>, text: StringView, width: usize, align: TextAlign, fill: u32, ) -> Result<void, AllocError>
+VectorBytes.pushI16BE	public fn pushI16BE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI16BEFailing	public fn pushI16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI16LE	public fn pushI16LE(v: borrow mut Vector<u8>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI16LEFailing	public fn pushI16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i16) -> Result<void, AllocError>
+VectorBytes.pushI32BE	public fn pushI32BE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI32BEFailing	public fn pushI32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI32LE	public fn pushI32LE(v: borrow mut Vector<u8>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI32LEFailing	public fn pushI32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i32) -> Result<void, AllocError>
+VectorBytes.pushI64BE	public fn pushI64BE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI64BEFailing	public fn pushI64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI64LE	public fn pushI64LE(v: borrow mut Vector<u8>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI64LEFailing	public fn pushI64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i64) -> Result<void, AllocError>
+VectorBytes.pushI8BE	public fn pushI8BE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushI8BEFailing	public fn pushI8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushI8LE	public fn pushI8LE(v: borrow mut Vector<u8>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushI8LEFailing	public fn pushI8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: i8) -> Result<void, AllocError>
+VectorBytes.pushU16BE	public fn pushU16BE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU16BEFailing	public fn pushU16BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU16LE	public fn pushU16LE(v: borrow mut Vector<u8>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU16LEFailing	public fn pushU16LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u16) -> Result<void, AllocError>
+VectorBytes.pushU32BE	public fn pushU32BE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU32BEFailing	public fn pushU32BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU32LE	public fn pushU32LE(v: borrow mut Vector<u8>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU32LEFailing	public fn pushU32LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u32) -> Result<void, AllocError>
+VectorBytes.pushU64BE	public fn pushU64BE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU64BEFailing	public fn pushU64BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU64LE	public fn pushU64LE(v: borrow mut Vector<u8>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU64LEFailing	public fn pushU64LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u64) -> Result<void, AllocError>
+VectorBytes.pushU8BE	public fn pushU8BE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
+VectorBytes.pushU8BEFailing	public fn pushU8BEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+VectorBytes.pushU8LE	public fn pushU8LE(v: borrow mut Vector<u8>, x: u8) -> Result<void, AllocError>
+VectorBytes.pushU8LEFailing	public fn pushU8LEFailing(v: borrow mut Vector<u8, FailingAllocator>, x: u8) -> Result<void, AllocError>
+VectorCopying	public struct VectorCopying<T: Copy>
+VectorCopying.clone	public fn clone(s: Slice<T>) -> Result<Vector<T>, AllocError>
+VectorCopying.cloneFailing	public fn cloneFailing(s: Slice<T>) -> Result<Vector<T, FailingAllocator>, AllocError>
+VectorEditing	public struct VectorEditing<T>
+VectorEditing.insert	public fn insert(v: borrow mut Vector<T>, at: usize, x: T) -> Result<void, AllocError>
+VectorEditing.insertFailing	public fn insertFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize, x: T) -> Result<void, AllocError>
+VectorEditing.remove	public fn remove(v: borrow mut Vector<T>, at: usize) -> T
+VectorEditing.removeFailing	public fn removeFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+VectorEditing.swapRemove	public fn swapRemove(v: borrow mut Vector<T>, at: usize) -> T
+VectorEditing.swapRemoveFailing	public fn swapRemoveFailing(v: borrow mut Vector<T, FailingAllocator>, at: usize) -> T
+VectorForeign	public struct VectorForeign<T: Copy>
+VectorForeign.fromForeign	public unsafe fn fromForeign(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
+VectorForeign.fromForeignFailing	public unsafe fn fromForeignFailing( pointer: *mut T, length: usize, capacity: usize, ) -> Vector<T, FailingAllocator>
+VectorForeign.intoForeign	public unsafe fn intoForeign(v: Vector<T>) -> VectorParts<T>
+VectorForeign.intoForeignFailing	public unsafe fn intoForeignFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>
+VectorRaw	public struct VectorRaw<T>
+VectorRaw.fromRaw	public unsafe fn fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>
+VectorRaw.fromRawFailing	public unsafe fn fromRawFailing(pointer: *mut T, length: usize, capacity: usize) -> Vector<T, FailingAllocator>
+VectorRaw.intoRaw	public fn intoRaw(v: Vector<T>) -> VectorParts<T>
+VectorRaw.intoRawFailing	public fn intoRawFailing(v: Vector<T, FailingAllocator>) -> VectorParts<T>

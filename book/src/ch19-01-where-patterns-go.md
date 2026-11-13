@@ -1,6 +1,6 @@
 ---
 title: Where patterns go
-summary: The three places a pattern is written - the arms of a match, after the operator is, and a let with an else block - where the names an is pattern binds can be used, and what to write in a plain let, for and parameters, which take only a name.
+summary: The three places a pattern is written - the arms of a match, after the operator is, and a let with an else block - where the names an is pattern binds can be used, and what to write in a plain let, for and parameters, which take a name, or for a plain let a struct pattern that cannot fail.
 assumes: [ch06-02-match, ch06-03-optionals]
 keywords: [pattern, match, is, binding, "if let", "while let", "let else", N0359]
 diagnostics: [N0100, N0200, N0359]
@@ -20,7 +20,7 @@ and when it fits, the names in the pattern **bind** parts of it. CeeSafe has thr
 - a `let` with an `else` block, `let PATTERN = e else { … };`.
 
 Everything else that introduces a name (a plain `let`, `var`, `for`, a function's or a closure's parameters) takes
-a name and no pattern.
+a name and no pattern. There is one exception: a plain `let` takes a struct pattern that cannot fail.
 
 ## In the arms of a `match`
 
@@ -179,9 +179,13 @@ A pattern that binds nothing may be used anywhere, also under `!` and `||`: `!(t
 ## Where only a name goes, and `let … else`
 
 A plain `let` and a `var` take one name, or `_` to throw a value away (`let _ = f();`). `for (item in items)` takes
-one name. A parameter is a name and a type. None of them takes a pattern, so the taking apart is done by a `match`
-or an `is` next to them. A `let` takes a pattern when an `else` block follows the value, to say what happens when
-the value does not fit.
+one name. A parameter is a name and a type. None of them takes a pattern that can fail, so the taking apart is
+done by a `match` or an `is` next to them. A `let` takes such a pattern when an `else` block follows the value, to
+say what happens when the value does not fit.
+
+A plain `let` takes one kind of pattern without an `else`: a struct pattern that every value of the struct fits,
+such as `let Point { x, y } = p;`, which binds the two fields. No `else` block could ever run there.
+[The syntax, whole](./ch19-03-the-syntax-whole) teaches struct patterns.
 
 <span class="listing-caption"><strong>Listing 19-4</strong>, <code>main.cee</code>: A loop over optionals with <code>is</code> in its body, and a <code>let … else</code> that takes a value out or leaves the function.</span>
 
@@ -319,8 +323,8 @@ do.
 ::: details Coming from Rust
 `is` is one construct where Rust has four. `if let P = e` is `if (e is P)`. `while let P = e` is
 `while (e is P)`. `matches!(e, P)` is `e is P`. A let chain is `e is P && …`. `let P = e else { … };` is Rust's
-`let … else`. There are no tuples, so there is nothing for `let (a, b) = …` to take apart, and a plain
-`let`, `for` and parameters take a name only. A struct's fields are read with `.`, not taken apart.
+`let … else`. There are no tuples, so there is nothing for `let (a, b) = …` to take apart. `for` and parameters
+take a name only. A plain `let` takes a name, or a struct pattern that cannot fail: `let Point { x, y } = p;`.
 :::
 
 ::: details Coming from C#
@@ -333,7 +337,7 @@ and `case P when cond` is the arm `P if (cond) =>`.
 ## Summary
 
 - A pattern is written in an arm of a `match` (statement or expression), after `is`, and in a `let … else`.
-  Nowhere else.
+  A pattern that can fail goes nowhere else.
 - `e is P` is a `bool`, the test of a `match` with the one arm `P`. After `is` the pattern runs as far as it can,
   so `|` there joins patterns.
 - The names an `is` pattern binds are usable after `&&` in the same chain, and in the block of the `if` or the
@@ -341,6 +345,7 @@ and `case P when cond` is the arm `P if (cond) =>`.
 - A guard, `if (cond)`, follows a pattern in a `match` arm only.
 - A plain `let`, `var`, `for` and parameters take a name. To take a value out or leave, write
   `let P = e else { … };`, whose block must leave.
+- A plain `let` also takes a struct pattern that cannot fail: `let Point { x, y } = p;`.
 
 Next: [Patterns that can fail](./ch19-02-patterns-that-can-fail), and how the compiler checks that a `match`
 misses nothing.

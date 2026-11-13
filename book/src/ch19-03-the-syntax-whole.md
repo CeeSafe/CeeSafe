@@ -1,9 +1,9 @@
 ---
 title: The syntax, whole
-summary: Every form of pattern with a listing - wildcard, names, literals and constants, ranges, variants and nesting, alternatives, name @ pattern, text and slices - and how a name takes its value by copy, by move or by borrow.
+summary: Every form of pattern with a listing - wildcard, names, literals and constants, ranges, variants and nesting, alternatives, name @ pattern, text, slices and structs - and how a name takes its value by copy, by move or by borrow.
 assumes: [ch19-01-where-patterns-go, ch19-02-patterns-that-can-fail, ch04-02-borrowing]
-keywords: [pattern, literal, range, variant, nested, "or-pattern", "@", var, slice pattern, "match (borrow x)", "match (this)", N0203, N0250, N0356]
-diagnostics: [N0203, N0250, N0356]
+keywords: [pattern, literal, range, variant, nested, "or-pattern", "@", var, slice pattern, "match (borrow x)", "match (this)", "struct pattern", N0203, N0229, N0250, N0356]
+diagnostics: [N0203, N0229, N0250, N0356]
 specification: ["type-system.md §15.2", "type-system.md §18.4", "grammar.md §2"]
 ---
 
@@ -26,6 +26,7 @@ reference with a listing for each form. It assumes [Where patterns go](./ch19-01
 | variant | `Shape.Rect(w, h)`, `Shape.Rect`, `Some(p)`, `Ok(p)`, `Err(p)` | that variant, when each inner pattern fits |
 | text | `"get"` | a `StringView` with that text |
 | slice | `[]`, `[a, b]`, `[first, ..]`, `[x, rest @ ..]` | a slice or an array of that shape |
+| struct | `Point { x, y: 0 }`, `Point { x: 0, .. }` | a value of that struct, when each field's pattern fits |
 | alternatives | `p \| q` | what `p` fits or `q` fits |
 | name and pattern | `d @ '0'..='9'` | what the pattern fits, and binds the whole value |
 | parentheses | `(p \| q)` | what the pattern inside fits |
@@ -414,12 +415,17 @@ Three more facts about moves:
 A name bound through a borrow cannot be `var`. And `whole @ Err(inner)` cannot move the same `String` into both
 names: bind one of them.
 
-## What a pattern cannot say
+## Structs, and two values at once
 
-There are no patterns for structs, and none for two values at once, because there are no tuples. A struct's
-fields are tested in a guard, and two values are matched one inside the other.
+A struct pattern is written like a struct literal: the struct's name, then its fields in braces. A field alone,
+`x`, binds the field to the name `x`, and `var x` binds a name that can be assigned. `y: 0` tests the field with a
+pattern, which may be any pattern. Every field is named, or the pattern ends with `..`, which stands for the
+others. A struct pattern goes wherever a pattern goes, and inside other patterns.
 
-<span class="listing-caption"><strong>Listing 19-26</strong>, <code>main.cee</code>: A struct inside a variant is bound and tested in a guard. Two enums are matched by a <code>match</code> in a <code>match</code>.</span>
+There are no tuples, so there is no pattern for two values at once. To match two values together, put them in a
+small struct.
+
+<span class="listing-caption"><strong>Listing 19-26</strong>, <code>main.cee</code>: A struct pattern inside a variant, two enums matched together through a struct, and a plain <code>let</code> that takes a struct apart.</span>
 
 ```ceesafe
 struct Point {
@@ -437,36 +443,55 @@ enum Light {
     Green,
 }
 
+struct Crossing {
+    north: Light;
+    east: Light;
+}
+
 fn describe(e: Event) -> StringView => match (e) {
-    Event.Click(p) if (p.x == 0 && p.y == 0) => "a click at the origin",
+    Event.Click(Point { x: 0, y: 0 }) => "a click at the origin",
+    Event.Click(Point { x: 0, .. }) => "a click on the left edge",
     Event.Click(_) => "a click",
     Event.Quit => "quit",
 };
 
-fn safe(north: Light, east: Light) -> bool => match (north) {
-    Light.Green => match (east) {
-        Light.Green => false,
-        Light.Red => true,
-    },
-    Light.Red => true,
+fn safe(north: Light, east: Light) -> bool => match (Crossing { north: north, east: east }) {
+    Crossing { north: Light.Green, east: Light.Green } => false,
+    Crossing { .. } => true,
 };
 
 fn main() {
     Console.writeLine(describe(Event.Click(Point { x: 0, y: 0 })));
+    Console.writeLine(describe(Event.Click(Point { x: 0, y: 7 })));
     Console.writeLine(describe(Event.Click(Point { x: 3, y: 0 })));
     Console.writeLine(safe(Light.Green, Light.Red));
     Console.writeLine(safe(Light.Green, Light.Green));
+    let Point { x, var y } = Point { x: 2, y: 3 };
+    y += x;
+    Console.writeLine(y);
 }
 ```
 
 ```text
 a click at the origin
+a click on the left edge
 a click
 true
 false
+5
 ```
 
-A struct itself cannot be the value of a `match` or an `is`: test its fields with `if`, or match one field.
+A `match` on a struct is checked for coverage through its fields, as a `match` on an enum is through its
+variants. Without its last arm, `safe` does not compile (`N0256`).
+
+A struct pattern whose field patterns are all names, `_` or such struct patterns cannot fail. That is the one
+pattern a plain `let` takes without an `else` block, as the last lines of `main` show.
+
+Fields follow the rule for names above. A binding copies a Copy field. A field that is not Copy moves out of a
+value: after `is` and in a `let`, the other fields can still be read and the value as a whole cannot be used
+(`N0250`), and a `match` consumes the whole value. Through a borrow, the names are borrows of the fields. A struct
+with a `drop` block cannot lose a field this way: [Destruction](./ch15-02-destruction) shows the one pattern that
+takes such a struct apart.
 
 ## Mistakes
 
@@ -569,11 +594,42 @@ main.cee:8:24: error[N0356]: this alternative does not bind 'k', which the first
 Give `Event.Tick` an arm of its own. The same message appears for `x @ 'a' | 'b'`, which reads as
 `(x @ 'a') | 'b'`: write `x @ ('a' | 'b')`.
 
+::: warning Mistake: leaving a field out of a struct pattern
+A struct pattern names every field. To leave fields out, say so with `..`.
+:::
+
+<span class="listing-caption"><strong>Listing 19-30</strong>, <code>main.cee</code>: The pattern says nothing about <code>y</code>. This does not compile.</span>
+
+<!-- ceesafe: fail N0229 -->
+```ceesafe
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn main() {
+    let p = Point { x: 0, y: 4 };
+    if (p is Point { x: 0 }) {
+        Console.writeLine("on the y axis");
+    }
+}
+```
+
+```text
+main.cee:8:14: error[N0229]: this pattern does not name 'y' of 'Point': name every field, or end the pattern with '..' (ADR 0123)
+  |
+8 |     if (p is Point { x: 0 }) {
+  |              ^^^^^^^^^^^^^^
+```
+
+Write `Point { x: 0, .. }`. The rule means that a field added to the struct later is never ignored by accident.
+
 ::: details Coming from Rust
 What is the same: `_`, literals, `..=` and `..` ranges, nested variants, `|`, `name @ pattern`, slice patterns with
 `..` and `rest @ ..`, guards (here with parentheses). What is not there:
 
-- **Tuple and struct patterns.** No `(a, b)` and no `Point { x, y }`: see Listing 19-26.
+- **Tuple patterns.** No `(a, b)`: match a small struct, as Listing 19-26 does. A struct pattern names every
+  field or ends with `..`, as in Rust.
 - **`ref`, `ref mut`, `&` and `box` patterns.** How a name binds is decided by the matched value: write
   `match (borrow x)` or `match (borrow mut x)`. A payload that is itself a borrow is bound and matched in a second
   `match`.
@@ -590,7 +646,8 @@ counterparts. What is not there:
 
 - **Type patterns** (`is int n`, `is Circle c`). A value's type is known when the program is compiled. The cases
   of an enum are told apart by variant patterns.
-- **Property and positional patterns** (`{ X: 0 }`, `(0, _)`). Test fields in a guard.
+- **Positional patterns** (`(0, _)`). A property pattern, `{ X: 0 }`, is the struct pattern `Point { x: 0, .. }`:
+  it starts with the struct's name, and `..` stands for the fields it leaves out.
 - **Relational patterns** (`> 5`, `>= 0 and < 10`). Write a range, `0..10`, or a guard.
 - **`and` and `not`.** Write a guard, or `!(e is P)` around the test.
 - `var n` does not mean "of any type": it means the binding can be assigned.
@@ -599,12 +656,14 @@ counterparts. What is not there:
 ## Summary
 
 - The forms: `_`, a name (`var` for one that changes), literals and constants, ranges `a..=b` and `a..b`, variants
-  with a pattern in each position, text, slices, alternatives `p | q`, `name @ p`, and parentheses.
+  with a pattern in each position, text, slices, structs, alternatives `p | q`, `name @ p`, and parentheses.
 - Patterns nest to any depth. A variant pattern lists all of its data or none.
 - Alternatives bind the same names (`N0356`). `@` binds tighter than `|`.
 - A name copies a Copy part and moves any other part out of a value, which consumes the value (`N0250` on a later
   use). On a borrow, names are borrows: `match (borrow x)`, `match (borrow mut x)`, `match (this)`.
 - A pattern name is a new local and cannot repeat an existing one (`N0203`).
-- There are no struct, tuple, float or type patterns: bind and use a guard, or nest a `match`.
+- A struct pattern, `P { x, y: 0, .. }`, names every field or ends with `..` (`N0229`). One that cannot fail may
+  stand in a plain `let`. Two values are matched together through a small struct.
+- There are no tuple, float or type patterns: bind and use a guard, or match a small struct.
 
 This is the end of the chapter. Chapter 20 turns to advanced features.

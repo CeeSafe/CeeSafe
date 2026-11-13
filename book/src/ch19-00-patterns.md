@@ -18,7 +18,8 @@ Earlier chapters used patterns where they needed them. [`match`](./ch06-02-match
 a good deal that is new to know: the exact places, the exact rules, and the forms those chapters had no need of.
 
 CeeSafe keeps patterns in three places only: the arms of a `match`, after the operator `is`, and a `let` with an
-`else` block. A plain `let`, a `for` and a parameter take a name and nothing more. That is fewer places than Rust
+`else` block. A `for` and a parameter take a name and nothing more, and a plain `let` takes a name or a struct
+pattern that cannot fail. That is fewer places than Rust
 or C# have, and the first section says what to write where those languages would use a pattern.
 
 The chapter has three sections:

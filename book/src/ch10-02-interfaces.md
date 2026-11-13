@@ -391,5 +391,10 @@ are as in Rust. What differs:
 - The library's interfaces are `Copy`, `Iterator<T>`, `OrderKey<K>`, `HashKey<K>` and the equality that
   `@derive(Equal)` gives.
 - An `impl` lives in the package of its interface or of its type (`N0267`).
+- Where an interface's method returns a type parameter, as `fn get(borrow this) -> T` does, an `impl` may return
+  what the value holds, and it may not lend the value's own storage: `this.text.view()` as that result is `N0245`.
+  Generic code is checked against the interface, which does not say that the result borrows from the value.
+- A bound `T: Send` says that a `T` holds no borrow, so generic code may return such a `T` from a closure or keep
+  it after the value it came from is gone. [Send and Share](./ch16-04-send-and-share) covers `Send`.
 
 Next: [Regions](./ch10-03-regions), for structs that hold a borrow.

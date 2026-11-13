@@ -124,7 +124,15 @@ fn buildNirFunction(c: borrow mut Checker, n: borrow mut NirProgram, f: u32) -> 
     }
     b.current = newBlock(mut b)?;
     let parameterCount = truncate<u32>(c.hir.functions[f as usize].parameters.length);
-    if (c.hir.functions[f as usize].hasInstanceError) {
+    // A closure written in such an instance holds its errors too (a capture that was refused has no place): the
+    // function a closure's literal is in, and so on outward.
+    var unchecked = false;
+    var at = f;
+    while (at != none() && !unchecked) {
+        unchecked = c.hir.functions[at as usize].hasInstanceError;
+        at = c.hir.functions[at as usize].writtenIn;
+    }
+    if (unchecked) {
         // An instance that does not check (§20.4): never compiled, since N0222 or another error stops first; it is
         // not lowered, as it may hold errors.
         terminate(n, mut b, NirTerminator.Unreachable)?;

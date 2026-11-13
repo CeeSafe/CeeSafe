@@ -219,6 +219,7 @@ struct HirFunction {
     body: u32;               // a block statement, or none
     typeArguments: Range;    // TypeTable.lists
     isClosure: bool;
+    writtenIn: u32; // a closure: the function its literal is in, or none
     closureEnvironment: u32;
     isDynMethod: bool;
     dynSlot: u32;
@@ -234,10 +235,12 @@ struct HirFunction {
     /// and what it refers to holds only what that parameter's referent holds. A deep result through a temporary
     /// that holds such a call's result follows the call's argument.
     resultThrough: u32;
-    mutableFlows: Vector<u64>; // (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i
-    environment: Range;        // its type environment (the checker's envPairs)
-    genericEntry: u32;         // for an instance of a generic function: the checker's GenericFunctionEntry, else none
-    methodTemplate: u32;       // for a generic method's generic version: its GenericFunctionEntry, else none (ADR 0064)
+    /// (i << 32) | j: parameter j's loans may be stored through `borrow mut` parameter i. With bit 63, a deep flow
+    /// (ADR 0131): only what reference parameter j's referent holds, not a loan of j itself.
+    mutableFlows: Vector<u64>;
+    environment: Range;  // its type environment (the checker's envPairs)
+    genericEntry: u32;   // for an instance of a generic function: the checker's GenericFunctionEntry, else none
+    methodTemplate: u32; // for a generic method's generic version: its GenericFunctionEntry, else none (ADR 0064)
     instantiationDepth: u32;
     siteFile: u32; // where an instance was made, or none
     siteStart: u32;
@@ -467,6 +470,7 @@ struct HirProgram {
             body: none(),
             typeArguments: emptyRange(),
             isClosure: false,
+            writtenIn: 0xFFFFFFFF,
             closureEnvironment: none(),
             isDynMethod: false,
             dynSlot: 0,

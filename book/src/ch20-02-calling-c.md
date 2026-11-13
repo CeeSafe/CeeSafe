@@ -349,14 +349,14 @@ bool clock_tick(struct clock *clock, uint64_t ticks);
 uint64_t clock_elapsed(const struct clock *clock);
 ```
 
-The block can be written by hand, or generated. `tools/cbind.py`, in CeeSafe's repository, reads a header with
-`clang` and writes the block:
+The block can be written by hand, or generated. `ceesafec cbind` reads a header with `clang`, which must be
+installed, and writes the block. It compiles and runs nothing. Run it in the package's directory:
 
 ```sh
-python3 tools/cbind.py --header clock.h -I c -o src/clock.cee
+ceesafec cbind --header clock.h -I c -o src/clock.cee
 ```
 
-<span class="listing-caption"><strong>Listing 20-16</strong>, <code>clock/src/clock.cee</code>: What <code>cbind.py</code> wrote for the header.</span>
+<span class="listing-caption"><strong>Listing 20-16</strong>, <code>clock/src/clock.cee</code>: What <code>ceesafec cbind</code> wrote for the header.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
@@ -523,7 +523,7 @@ only zero byte and gives an optional.
 - `@export("name")` is `#[no_mangle] pub extern "C" fn`, `@repr(C)` is `#[repr(C)]`, and `c"…"` with `CStr` is
   Rust's `c"…"` with `&CStr`. There is no `CString`: copy into a `String` or a buffer;
 - a callback is marked `@callback`, and its type is written `extern "C" fn(…)`;
-- `tools/cbind.py` does `bindgen`'s work, and the exports header is written by the compiler, with no `cbindgen`;
+- `ceesafec cbind` does `bindgen`'s work, and the exports header is written by the compiler, with no `cbindgen`;
 - an imported struct is seen through the header at build time. Its layout is never copied into CeeSafe.
 :::
 
@@ -551,7 +551,7 @@ Values cross as they are, which is why only C's own types may cross.
 - `@export("name")` gives a function a C name. `@callback` gives it a C address, to pass where C wants a function
   pointer, with a `void *` for its data.
 - Each side frees what it allocated.
-- `@header` imports a C struct by the fields you name. `tools/cbind.py` writes the block from the header.
+- `@header` imports a C struct by the fields you name. `ceesafec cbind` writes the block from the header.
 - Wrap each C function in a small safe function. The interpreter runs no C.
 
 Next: [More on interfaces and generics](./ch20-03-more-interfaces-and-generics), back in safe code.

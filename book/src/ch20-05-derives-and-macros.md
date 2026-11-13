@@ -258,8 +258,8 @@ least   7
   may not change anything. `assert` is always evaluated.
 
 When code really must be generated, as a table of a thousand entries or declarations from a C header are,
-generate it in the open: a script writes a `.cee` file whose first line says it is generated, and the file is
-checked, formatted and read like any other. `tools/cbind.py` in [Calling C](./ch20-02-calling-c) is one such
+generate it in the open: a tool writes a `.cee` file whose first line says it is generated, and the file is
+checked, formatted and read like any other. `ceesafec cbind` in [Calling C](./ch20-02-calling-c) is one such
 generator, and the compiler's own sources use several.
 
 ## Mistakes

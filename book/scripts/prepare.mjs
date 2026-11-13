@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { appendices, chapters, written, writtenPages } from "../toc.mjs";
+import { appendices, appendixTitle, chapters, written, writtenPages } from "../toc.mjs";
 import { withVersion } from "../version.mjs";
 
 const book = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -127,7 +127,7 @@ const lines = [
   "## Planned, not written yet",
   "",
   ...planned.map((title) => `- ${title}`),
-  ...appendices.map((appendix) => `- Appendix ${appendix.title}`),
+  ...appendices.filter((appendix) => !written(appendix)).map((appendix) => `- ${appendixTitle(appendix)}`),
   "",
 ];
 writeFileSync(join(output, "llms.txt"), lines.join("\n"));

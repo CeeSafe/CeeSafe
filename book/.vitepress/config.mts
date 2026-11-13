@@ -21,7 +21,11 @@ const sidebar = [
       link: written(section) ? link(section.file) : undefined,
     })),
   })),
-  { text: "Appendices", collapsed: true, items: appendices.map((appendix) => ({ text: appendix.title })) },
+  {
+    text: "Appendices",
+    collapsed: !appendices.some((a) => written(a)),
+    items: appendices.map((appendix) => ({ text: appendix.title, link: written(appendix) ? link(appendix.file) : undefined })),
+  },
 ];
 
 export default defineConfig({

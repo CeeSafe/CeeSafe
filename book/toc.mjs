@@ -226,18 +226,21 @@ export const chapters = [
 ];
 
 export const appendices = [
-  { title: "A: Keywords" },
-  { title: "B: Operators and symbols" },
-  { title: "C: Built-in types and their methods" },
-  { title: "D: Derives" },
-  { title: "E: The ceesafec command" },
-  { title: "F: Diagnostics" },
-  { title: "G: Coming from another language" },
-  { title: "H: The grammar" },
-  { title: "I: For AI models" },
-  { title: "J: Versions" },
-  { title: "Glossary" },
+  { title: "A: Keywords", file: "appendix-a-keywords" },
+  { title: "B: Operators and symbols", file: "appendix-b-operators" },
+  { title: "C: Built-in types and their methods", file: "appendix-c-built-in-types" },
+  { title: "D: Derives", file: "appendix-d-derives" },
+  { title: "E: The ceesafec command", file: "appendix-e-ceesafec" },
+  { title: "F: Diagnostics", file: "appendix-f-diagnostics" },
+  { title: "G: Coming from another language", file: "appendix-g-coming-from" },
+  { title: "H: The grammar", file: "appendix-h-grammar" },
+  { title: "I: For AI models", file: "appendix-i-for-ai-models" },
+  { title: "J: Versions", file: "appendix-j-versions" },
+  { title: "Glossary", file: "glossary" },
 ];
+
+/** An appendix's title as a page's: "Appendix A: Keywords", "Glossary". */
+export const appendixTitle = (appendix) => (/^[A-Z]: /.test(appendix.title) ? `Appendix ${appendix.title}` : appendix.title);
 
 /** Every written page in reading order, with its number ("1.2") where it has one. */
 export function writtenPages() {
@@ -252,5 +255,10 @@ export function writtenPages() {
       }
     });
   });
+  for (const appendix of appendices) {
+    if (written(appendix)) {
+      pages.push({ title: appendixTitle(appendix), file: appendix.file, number: "" });
+    }
+  }
   return pages;
 }

@@ -3,7 +3,7 @@ title: Patterns that can fail
 summary: Which patterns fit every value and which do not, how the compiler decides that the arms of a match cover every value of each type, why a guarded arm does not count, and how it finds arms, alternatives and ranges that can never match.
 assumes: [ch19-01-where-patterns-go, ch06-02-match, ch09-02-result]
 keywords: [pattern, exhaustive, refutable, irrefutable, unreachable, guard, catch-all, N0256, N0257, N0357]
-diagnostics: [N0256, N0257, N0357]
+diagnostics: [N0256, N0257, N0357, N0404]
 specification: ["type-system.md §15.2", "type-system.md §15.4"]
 ---
 
@@ -28,13 +28,15 @@ Each place for a pattern treats the two kinds in its own way:
 
 | Place | A pattern that can fail | A pattern that cannot fail |
 |---|---|---|
-| after `is` | the usual case: the test is the question | accepted; the test is always `true` |
+| after `is` | the usual case: the test is the question | accepted; the test is always `true`, and `_` or a lone name gets a warning |
+| `let … else` | the usual case: the `else` block takes the rest | accepted; the `else` block never runs, with the same warning |
 | one arm of a `match` | the usual case | a catch-all: it must be the last arm |
 | all arms of a `match` together | refused: the `match` must cover every value | required |
-| `let`, `for`, parameters | cannot be written | only its two plainest forms, a name and `_` |
+| a plain `let`, `for`, parameters | cannot be written | only its two plainest forms, a name and `_` |
 
-<span class="listing-caption"><strong>Listing 19-8</strong>, <code>main.cee</code>: Three patterns that cannot fail. <code>is</code> accepts them, and the compiler says nothing.</span>
+<span class="listing-caption"><strong>Listing 19-8</strong>, <code>main.cee</code>: Three patterns that cannot fail. <code>is</code> accepts them, and the compiler warns about the two that test nothing.</span>
 
+<!-- ceesafe: warns N0404 -->
 ```ceesafe
 enum Light {
     Red,
@@ -57,12 +59,20 @@ fn main() {
 ```
 
 ```text
-every i32 fits _
-5
-one of the two it must be
+main.cee:8:14: warning[N0404]: this pattern tests nothing: it matches every value, so the test is always true; drop the test, and name the value with 'let' (type-system.md §15.4)
+  |
+8 |     if (n is _) {
+  |              ^
+
+main.cee:11:14: warning[N0404]: this pattern tests nothing: it matches every value, so the test is always true; drop the test, and name the value with 'let' (type-system.md §15.4)
+   |
+11 |     if (n is m) {
+   |              ^
 ```
 
-An `is` that is always true is legal, and useless. The check that matters is the one on `match`.
+The program runs, and prints all three lines. An `is` that is always true is legal, and useless: for `_` and for a
+lone name the compiler says so. The third pattern takes the value apart and happens to hold every `Light`, and gets
+no warning. The check that matters is the one on `match`.
 
 ## A `match` covers every value
 
@@ -279,10 +289,10 @@ main.cee:5:5: error[N0257]: this arm can never match: earlier arms match every v
   |
 5 |     _ => "other",
   |     ^
+  = note: the earlier arm 'LIMT' is a new name, which matches every value: no constant of that name is in scope (a misspelt constant?) (4:5)
 ```
 
-When an arm "can never match" and the arms above look as if they could fail, check the spelling of every bare name
-above it.
+The note names the bare name that took everything. Correct its spelling.
 
 ::: warning Mistake: a `match` on text without a catch-all
 No list of text literals holds every text. The value the diagnostic names is `_`: it has no particular text to
@@ -315,9 +325,9 @@ Add `_ => 0,` as the last arm.
 ::: details Coming from Rust
 Rust's words are *refutable* (can fail) and *irrefutable* (cannot). Rust needs the words because `let`, `for` and
 parameters take irrefutable patterns and `if let` takes refutable ones. In CeeSafe the only irrefutable patterns
-outside `match` and `is` are a name and `_`, so the question arises for a `match` only. Two differences in the
-checks: an unreachable arm is an error here, where Rust warns, and an always-true `is` gets no warning, where
-Rust warns about an irrefutable `if let`.
+outside `match`, `is` and `let … else` are a name and `_`, so the question arises for a `match` only. One
+difference in the checks: an unreachable arm is an error here, where Rust warns. An `is` or a `let … else` whose
+pattern is `_` or a name gets a warning (N0404), as Rust's irrefutable `if let` does.
 :::
 
 ::: details Coming from C#, Java or TypeScript
@@ -330,7 +340,7 @@ none that throws.
 
 - A pattern can fail when some value of the type does not fit it. `_`, a name, and alternatives that hold every
   value cannot fail.
-- `is` takes either kind. The arms of a `match` together must not fail (`N0256`, which names a value that
+- `is` takes either kind, and warns about a `_` or a lone name (`N0404`). The arms of a `match` together must not fail (`N0256`, which names a value that
   fits no arm).
 - Enums are covered by their variants, `bool` by `true` and `false`, optionals by `null` and `Some`, a `Result` by
   `Ok` and `Err`, integers by literals and ranges that hold every value, slices by their lengths. Text needs a

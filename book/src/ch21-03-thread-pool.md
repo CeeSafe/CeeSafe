@@ -268,6 +268,7 @@ main.cee:7:5: error[N0250]: 'stream' is used here after it was moved (on at leas
   |
 7 |     stream.write("HTTP/1.1 200 OK\r\n\r\n".bytes())!;
   |     ^^^^^^
+  = note: the value was moved here (6:5)
 ```
 
 In a language without this check, two threads would write to one connection, and the client would get the two

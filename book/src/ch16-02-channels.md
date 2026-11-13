@@ -296,6 +296,7 @@ main.cee:8:23: error[N0250]: 'channel' is used here after it was moved (on at le
   |
 8 |     Console.writeLine(channel.recv() ?? 0);
   |                       ^^^^^^^
+  = note: the value was moved here (3:31)
 ```
 
 Clone a handle for the thread before the spawn (`let sender = channel.clone();`) and use `sender` in the closure.

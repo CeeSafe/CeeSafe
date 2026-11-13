@@ -349,13 +349,13 @@ fn main() {
 ```
 
 ```text
-main.cee:2:5: error[N0210]: this expression cannot be called
+main.cee:2:5: error[N0210]: this expression cannot be called: CeeSafe has no macros, and 'println' is not declared; print with 'Console.writeLine(value)' or 'Console.write(value)'
   |
 2 |     println!("total");
   |     ^^^^^^^^
 ```
 
-The message does not mention macros. Write `Console.writeLine("total");`. For text with values in it, there is
+Write `Console.writeLine("total");`. For text with values in it, there is
 no format string either: call `Console.write` once for each piece, and `Console.writeLine` for the last.
 
 ::: details Coming from Rust

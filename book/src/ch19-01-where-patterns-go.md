@@ -1,10 +1,10 @@
 ---
 title: Where patterns go
-summary: The two places a pattern is written - the arms of a match and after the operator is - where the names an is pattern binds can be used, and what to write in let, for and parameters, which take only a name.
+summary: The three places a pattern is written - the arms of a match, after the operator is, and a let with an else block - where the names an is pattern binds can be used, and what to write in a plain let, for and parameters, which take only a name.
 assumes: [ch06-02-match, ch06-03-optionals]
 keywords: [pattern, match, is, binding, "if let", "while let", "let else", N0359]
 diagnostics: [N0100, N0200, N0359]
-specification: ["type-system.md §15.2", "type-system.md §15.3", "type-system.md §15.4", "grammar.md §2"]
+specification: ["type-system.md §15.2", "type-system.md §15.3", "type-system.md §15.4", "type-system.md §15.5", "grammar.md §2"]
 ---
 
 # Where patterns go
@@ -13,13 +13,14 @@ specification: ["type-system.md §15.2", "type-system.md §15.3", "type-system.m
 where it may not. It assumes [`match`](./ch06-02-match) and [Optionals](./ch06-03-optionals).
 
 A pattern describes a shape a value may have, such as `Some(n)` or `0..=9`. A value **fits** a pattern or does not,
-and when it fits, the names in the pattern **bind** parts of it. CeeSafe has two places for a pattern:
+and when it fits, the names in the pattern **bind** parts of it. CeeSafe has three places for a pattern:
 
 - an arm of a `match`;
-- the right side of the operator `is`.
+- the right side of the operator `is`;
+- a `let` with an `else` block, `let PATTERN = e else { … };`.
 
-Everything else that introduces a name (`let`, `var`, `for`, a function's or a closure's parameters) takes a name
-and no pattern.
+Everything else that introduces a name (a plain `let`, `var`, `for`, a function's or a closure's parameters) takes
+a name and no pattern.
 
 ## In the arms of a `match`
 
@@ -175,13 +176,14 @@ binds a name anywhere else is refused (`N0359`).
 
 A pattern that binds nothing may be used anywhere, also under `!` and `||`: `!(token is Token.End)` is fine.
 
-## Where only a name goes
+## Where only a name goes, and `let … else`
 
-`let` and `var` take one name, or `_` to throw a value away (`let _ = f();`). `for (item in items)` takes one
-name. A parameter is a name and a type. None of them takes a pattern, so the taking apart is done by a `match` or
-an `is` next to them.
+A plain `let` and a `var` take one name, or `_` to throw a value away (`let _ = f();`). `for (item in items)` takes
+one name. A parameter is a name and a type. None of them takes a pattern, so the taking apart is done by a `match`
+or an `is` next to them. A `let` takes a pattern when an `else` block follows the value, to say what happens when
+the value does not fit.
 
-<span class="listing-caption"><strong>Listing 19-4</strong>, <code>main.cee</code>: A loop over optionals with <code>is</code> in its body, and a <code>let</code> that takes a value out or leaves the function.</span>
+<span class="listing-caption"><strong>Listing 19-4</strong>, <code>main.cee</code>: A loop over optionals with <code>is</code> in its body, and a <code>let … else</code> that takes a value out or leaves the function.</span>
 
 ```ceesafe
 fn total(items: Slice<i32?>) -> i32 {
@@ -195,9 +197,8 @@ fn total(items: Slice<i32?>) -> i32 {
 }
 
 fn half(value: i32?) -> i32 {
-    let n = match (value) {
-        Some(n) => n,
-        null => { return -1; }
+    let Some(n) = value else {
+        return -1;
     };
     return n / 2;
 }
@@ -216,10 +217,18 @@ fn main() {
 -1
 ```
 
-`half` shows the way to write "take the value out, or leave". The `match` is the value of the `let`. Its first arm
-gives the value. Its second arm is a block that never finishes, because it returns, so it needs no value. After
-the `let`, `n` is a plain `i32` for the rest of the function. A block that ends in `break`, `continue` or a panic
-works the same way.
+`half` shows the way to write "take the value out, or leave". The value is tested against the pattern, as `is`
+tests it. When it fits, the pattern's names are bound for the rest of the enclosing block: after the statement, `n`
+is a plain `i32`. When it does not fit, the `else` block runs. That block cannot use the names, and it must leave:
+with `return`, `break`, `continue`, or a call that does not return, such as a panic. A block whose end can be
+reached is refused (N0213). The statement ends with `;`, as every `let` does.
+
+::: tip Rule
+`let P = e else { B };` evaluates `e` once. If the value fits `P`, the names of `P` are in scope to the end of the
+enclosing block. If not, `B` runs, and `B` must leave.
+
+*Specification: `type-system.md` §15.5.*
+:::
 
 ## Mistakes
 
@@ -280,13 +289,13 @@ main.cee:5:12: error[N0200]: cannot find 'n' in this scope
   |            ^
 ```
 
-Write the `let` with a `match`, as `half` in Listing 19-4 does.
+Write `let Some(n) = value else { return -1; };`, as `half` in Listing 19-4 does.
 
-::: warning Mistake: a pattern in a `let`
-A `let` takes a name. A pattern there is a syntax error, and the message speaks of the `(`, not of patterns.
+::: warning Mistake: a pattern in a `let` without `else`
+A pattern that can fail needs an `else` block for the values that do not fit.
 :::
 
-<span class="listing-caption"><strong>Listing 19-7</strong>, <code>main.cee</code>: A <code>let</code> with a pattern. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 19-7</strong>, <code>main.cee</code>: A <code>let</code> with a pattern and no <code>else</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0100 -->
 ```ceesafe
@@ -298,39 +307,40 @@ fn main() {
 ```
 
 ```text
-main.cee:3:13: error[N0100]: expected ';', found '('
+main.cee:3:20: error[N0100]: expected 'else', found ';': 'let' with a pattern that can fail is 'let PATTERN = e else { … };', whose block leaves (return, break, continue, or a call that does not return) when the value does not match (ADR 0117); to test and go on, write 'if (e is PATTERN) { … }' or a 'match'
   |
 3 |     let Some(v) = x;
-  |             ^
+  |                    ^
 ```
 
-Write `if (x is Some(v)) { … }`, or the `let` with a `match` of Listing 19-4, or `let v = x ?? 0;` when a fallback
-will do.
+Write `let Some(v) = x else { return; };`, or `if (x is Some(v)) { … }`, or `let v = x ?? 0;` when a fallback will
+do.
 
 ::: details Coming from Rust
-There is one construct where Rust has four. `if let P = e` is `if (e is P)`. `while let P = e` is `while (e is P)`.
-`matches!(e, P)` is `e is P`. A let chain is `e is P && …`. There is no `let … else`: write
-`let v = match (e) { P => v, _ => { return; } };`. There are no tuples, so there is nothing for `let (a, b) = …` to
-take apart, and `let`, `for` and parameters take a name only. A struct's fields are read with `.`, not taken apart.
+`is` is one construct where Rust has four. `if let P = e` is `if (e is P)`. `while let P = e` is
+`while (e is P)`. `matches!(e, P)` is `e is P`. A let chain is `e is P && …`. `let P = e else { … };` is Rust's
+`let … else`. There are no tuples, so there is nothing for `let (a, b) = …` to take apart, and a plain
+`let`, `for` and parameters take a name only. A struct's fields are read with `.`, not taken apart.
 :::
 
 ::: details Coming from C#
 `is` looks the same and binds differently. In C#, `if (!(o is int n)) return;` leaves `n` usable after the `if`.
-In CeeSafe a name bound by `is` never leaves the `if`'s first block: use a `match` whose other arm returns. There is
+In CeeSafe a name bound by `is` never leaves the `if`'s first block: write `let P = e else { return; };`. There is
 no `is not`: write `!(e is P)` with a pattern that binds nothing. A `switch` expression is a `match` expression,
 and `case P when cond` is the arm `P if (cond) =>`.
 :::
 
 ## Summary
 
-- A pattern is written in an arm of a `match` (statement or expression) and after `is`. Nowhere else.
+- A pattern is written in an arm of a `match` (statement or expression), after `is`, and in a `let … else`.
+  Nowhere else.
 - `e is P` is a `bool`, the test of a `match` with the one arm `P`. After `is` the pattern runs as far as it can,
   so `|` there joins patterns.
 - The names an `is` pattern binds are usable after `&&` in the same chain, and in the block of the `if` or the
   body of the `while` whose condition the chain is. Elsewhere a binding pattern is `N0359`.
 - A guard, `if (cond)`, follows a pattern in a `match` arm only.
-- `let`, `var`, `for` and parameters take a name. To take a value out or leave, write a `let` whose value is a
-  `match` with an arm that returns.
+- A plain `let`, `var`, `for` and parameters take a name. To take a value out or leave, write
+  `let P = e else { … };`, whose block must leave.
 
 Next: [Patterns that can fail](./ch19-02-patterns-that-can-fail), and how the compiler checks that a `match`
 misses nothing.

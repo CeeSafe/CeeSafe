@@ -17,14 +17,14 @@ Earlier chapters used patterns where they needed them. [`match`](./ch06-02-match
 `Ok(value)` and `Err(error)`. This chapter gathers them into one account. It adds little that is new to use, and
 a good deal that is new to know: the exact places, the exact rules, and the forms those chapters had no need of.
 
-CeeSafe keeps patterns in two places only: the arms of a `match`, and after the operator `is`. A `let`, a `for`
-and a parameter take a name and nothing more. That is fewer places than Rust or C# have, and the first section
-says what to write where those languages would use a pattern.
+CeeSafe keeps patterns in three places only: the arms of a `match`, after the operator `is`, and a `let` with an
+`else` block. A plain `let`, a `for` and a parameter take a name and nothing more. That is fewer places than Rust
+or C# have, and the first section says what to write where those languages would use a pattern.
 
 The chapter has three sections:
 
-1. [Where patterns go](./ch19-01-where-patterns-go): `match` arms and `value is pattern`, where the names of an
-   `is` pattern can be used, and the places that take only a name.
+1. [Where patterns go](./ch19-01-where-patterns-go): `match` arms, `value is pattern` and `let … else`, where the
+   names of an `is` pattern can be used, and the places that take only a name.
 2. [Patterns that can fail](./ch19-02-patterns-that-can-fail): which patterns fit every value and which do not,
    how the compiler decides that a `match` covers every value, and how it finds an arm that can never run.
 3. [The syntax, whole](./ch19-03-the-syntax-whole): every form of pattern with a listing, and how a name in a

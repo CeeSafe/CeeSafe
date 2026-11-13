@@ -104,8 +104,10 @@ control
 other
 ```
 
-Ranges are for integers. Both bounds are written, and both are integer or character literals: a range has no open
-end, and a constant cannot be a bound.
+Ranges are for integers. Both bounds are written: a range has no open end. A bound is an integer or character
+literal, or the bare name of a constant of the matched type. With `const LOW: u8 = 10;` in scope, `0..LOW` and
+`LOW..=99` are ranges on a `u8`. A local variable or an expression such as `LOW + 1` is not a bound: test it in a
+guard.
 
 ## Variants, nesting and `_`
 
@@ -499,6 +501,7 @@ main.cee:12:5: error[N0250]: 'm' is used here after it was moved (on at least on
    |
 12 |     if (m is Message.Stop) {
    |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the value was moved here (8:5)
 ```
 
 Write `match (borrow m)` in the first `match`. Then `s` is a `borrow String`, and `m` keeps its text.
@@ -575,7 +578,8 @@ What is the same: `_`, literals, `..=` and `..` ranges, nested variants, `|`, `n
   `match (borrow x)` or `match (borrow mut x)`. A payload that is itself a borrow is bound and matched in a second
   `match`.
 - **Open ranges.** No `10..` or `..=9`: write both bounds.
-- **Constants and paths as range bounds.** `LOW..=HIGH` is a syntax error: write the literals, or a guard.
+- **Paths and expressions as range bounds.** `LOW..=HIGH` is accepted for two constants in scope. `T.LOW..=9` and
+  `LOW + 1..=9` are not: name the value with a `const`, or write a guard.
 - **`mut` bindings** are written `var n`.
 - **Shadowing.** A pattern name cannot reuse a local's name.
 :::

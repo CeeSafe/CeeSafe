@@ -258,7 +258,8 @@ for:
 
 - Between tasks, use an `AsyncMutex<T>`: `var guard = await m.lock()?;`. A task that finds it locked waits without
   blocking, and the guard may be held across an `await`. Waiting tasks get the lock in the order they asked.
-- For a short update shared with threads, lock the `Mutex` inside `Async.blocking(() => …)`, or use an atomic.
+- For a short update shared with threads, lock the `Mutex` inside `Async.blocking(() => …)`, or use an atomic. A
+  task may also call `tryLock()`, which never waits and returns `null` when the lock is held.
 - Or keep the state in one task and send it messages through a channel.
 
 ::: details Coming from Rust

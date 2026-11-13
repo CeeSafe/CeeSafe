@@ -108,6 +108,7 @@ main.cee:16:23: error[N0250]: 'order' is used here after it was moved (on at lea
    |
 16 |     Console.writeLine(order.item.view());
    |                       ^^^^^^^^^^^^^^^^^
+   = note: the value was moved here (15:23)
 ```
 
 Nothing in `total` changed, but its meaning did. With a `String` field, `Order` is no longer Copy. Passing it by

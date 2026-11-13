@@ -3,5 +3,6 @@ name = "clock"
 version = "0.1.0"
 kind = "executable"
 c = ["c/clock.c"]
+include-dirs = ["c"]
 
 [dependencies]

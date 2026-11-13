@@ -212,7 +212,7 @@ If a host needs the code of several CeeSafe packages, make one package that depe
 
 ## Objects and C source
 
-`ceesafec build --emit obj` writes the same code as one object file, `out/measure.o`, and no headers. The host
+`ceesafec build --emit obj` writes the same code as one object file, `out/measure.o`, with the same two headers beside it. The host
 links it as it links the library: `cc -I out host/main.c out/measure.o -o out/host`. A library lets the linker
 leave out what the program does not use, so prefer `--emit lib` unless the host's link needs an object. A package
 whose manifest says `kind = "object"` builds its object with a plain `ceesafec build`.

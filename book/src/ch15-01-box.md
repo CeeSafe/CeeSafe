@@ -342,7 +342,7 @@ fn main() {
 ```
 
 ```text
-main.cee:7:5: error[N0211]: cannot assign to 'slot': parameters are immutable
+main.cee:7:5: error[N0211]: cannot assign to 'slot': parameters are immutable; its type is an optional 'borrow mut' reference, not a reference to an optional: write 'borrow mut (T?)' to change the caller's optional through it
   |
 7 |     slot = Box.create(Node { value: value, next: null })!;
   |     ^^^^

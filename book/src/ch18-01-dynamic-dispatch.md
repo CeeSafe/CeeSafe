@@ -496,7 +496,7 @@ fn main() {
 ```
 
 ```text
-main.cee:17:23: error[N0268]: 'Box<dyn Shape>' does not implement 'Shape', which 'S' requires
+main.cee:17:23: error[N0268]: 'Box<dyn Shape>' does not implement 'Shape', which 'S' requires; the box's contents, 'dyn Shape', implement it: pass a 'borrow dyn Shape' (as in 'let r: borrow dyn Shape = borrow box;'), or declare the parameter with that type
    |
 17 |     Console.writeLine(doubled(boxed));
    |                       ^^^^^^^^^^^^^^

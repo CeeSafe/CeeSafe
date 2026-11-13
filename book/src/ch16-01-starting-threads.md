@@ -3,7 +3,7 @@ title: Starting threads
 summary: Starting a thread with Thread.spawn and waiting for its result with join, what a thread's closure may capture (it owns what it uses and cannot borrow), what a panic in a thread does, and Thread.both, which runs two closures that borrow from the caller.
 assumes: [ch04-01-what-ownership-is, ch04-02-borrowing, ch08-01-vectors, ch09-02-result]
 keywords: [Thread.spawn, join, "Thread<T>", move closure, capture, Thread.both, SpawnError, panic, fork-join]
-diagnostics: [N0241, N0250, N0332]
+diagnostics: [N0241, N0250, N0332, N0403]
 specification: ["type-system.md §38.2", "type-system.md §38.6", "type-system.md §36.5", "ownership.md T1", "ownership.md T4"]
 ---
 
@@ -85,7 +85,7 @@ fn main() {
 ```
 
 After the call of `Thread.spawn`, `names` belongs to the thread. `main` cannot use it again, so no value is in two
-threads at once. When the thread ends, it destroys the vector as any owner does.
+threads at once. When the thread's body returns, it destroys the vector as any owner does.
 
 ::: tip Rule
 A thread's closure owns its captures: a value it uses is moved into it (or copied, if it is `Copy`), and it captures
@@ -97,6 +97,27 @@ back.
 
 "Safe to move to another thread" is a property of the type, named `Send`. Numbers, strings, vectors and structs of
 them have it. [Send and Share](./ch16-04-send-and-share) gives the whole list.
+
+The thread's body runs once, so it may also move a capture out, for example to give it back as its result:
+
+```ceesafe
+fn main() {
+    let text = String.from("one two three")!;
+    let worker = Thread.spawn(move () => {
+        Console.writeLine(text.length);
+        return text;
+    })!;
+    let back = worker.join();
+    Console.writeLine(back);
+}
+```
+
+```text
+13
+one two three
+```
+
+A capture the body does not move out is destroyed when the body returns, on the thread.
 
 ## Several threads
 
@@ -260,6 +281,7 @@ main.cee:5:23: error[N0250]: 'names' is used here after it was moved (on at leas
   |
 5 |     Console.writeLine(names.length);
   |                       ^^^^^^^^^^^^
+  = note: the value was moved here (4:31)
 ```
 
 Read what you need before the spawn, or have the thread return it. If both threads need the value, see
@@ -282,13 +304,13 @@ fn main() {
 ```
 
 ```text
-main.cee:4:31: error[N0332]: this 'move' closure captures 'view', a 'StringView', which holds a loan: the box could outlive it (type-system.md §36.5)
+main.cee:4:31: error[N0332]: this 'move' closure captures 'view', a 'StringView', which holds a loan: the thread could outlive it; move the value itself in, or share it through an 'Arc' (type-system.md §38.2)
   |
 4 |     let worker = Thread.spawn(move () => view.length)!;
   |                               ^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-"The box" in the message is where a `move` closure keeps its captures. Capture `text` itself, so the string moves
+Capture `text` itself, so the string moves
 into the thread and the closure calls `text.view()` there, or use `Thread.both`. Leaving out `move` is no way
 around it: `Thread.spawn` accepts only a `move` closure (N0333).
 
@@ -296,8 +318,9 @@ around it: `Thread.spawn` accepts only a `move` closure (N0333).
 A `Copy` value is copied into the closure. The thread changes its copy.
 :::
 
-<span class="listing-caption"><strong>Listing 16-9</strong>, <code>main.cee</code>: The thread adds 1 to its own copy of <code>hits</code>. The program compiles, and prints 0.</span>
+<span class="listing-caption"><strong>Listing 16-9</strong>, <code>main.cee</code>: The thread adds 1 to its own copy of <code>hits</code>. The compiler warns.</span>
 
+<!-- ceesafe: warns N0403 -->
 ```ceesafe
 fn main() {
     var hits: u64 = 0;
@@ -310,10 +333,14 @@ fn main() {
 ```
 
 ```text
-0
+main.cee:3:31: warning[N0403]: this 'move' closure changes its own copy of 'hits': the type is Copy, so the closure took a copy, and the 'hits' read after it is unchanged; return the value from the closure, or share it through an atomic, a 'Mutex' or a 'Channel'
+  |
+3 |     let worker = Thread.spawn(move () => {
+  |                               ^^^^^^^^^^^^
 ```
 
-Return the value from the thread and take it from `join`, or use `Thread.both`, whose closures change the caller's
+It is a warning, so the program still runs, and prints 0. The compiler warns only when the variable is used again
+after the closure, as `hits` is in the last line. Return the value from the thread and take it from `join`, or use `Thread.both`, whose closures change the caller's
 variables.
 
 ::: warning Mistake: two closures of `Thread.both` changing one variable
@@ -369,7 +396,8 @@ frame that has gone.
 - `Thread.spawn(move () => body)!` starts a thread and gives a `Thread<T>`; `join()` waits for it and returns the
   body's result.
 - A spawned thread owns its captures: values move in (`N0250` if you use them afterwards), `Copy` values are
-  copied, and borrows are refused (`N0332`).
+  copied (`N0403` if the thread changes its copy and the variable is used later), and borrows are refused
+  (`N0332`). The body runs once, so it may move a capture out, as its result for example.
 - A handle that is not joined is joined when it is destroyed. No thread outlives `main`.
 - A panic in any thread ends the program.
 - `Thread.both(a, b)` runs two closures that may borrow from the caller, under the usual borrowing rule (`N0241`).

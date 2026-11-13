@@ -152,6 +152,7 @@ main.cee:11:5: error[N0250]: 'first.score' is used here after it was moved (on a
    |
 11 |     Console.writeLine(first.score);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the value was moved here (9:5)
 ```
 
 `let second = first;` moves the whole player into `second`. `first` is then empty, and that includes `first.score`,

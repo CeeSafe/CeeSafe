@@ -50,7 +50,8 @@ fn main() {
 - `await double(v)` runs the task `double(v)` until it returns, and its value is what the task returned: an `i32`
   here. `await` is allowed only inside async code.
 - `Async.run(task)` does the same from ordinary code: it runs the task on this thread until it returns, and gives
-  its result. `main` is an ordinary function, so a program enters async code through `Async.run`.
+  its result. `main` is an ordinary function, so a program enters async code through `Async.run`. The compiler
+  refuses an `async fn main` (N0219): no task would call it.
 
 ::: tip Rule
 A call of an async fn is a task. A task runs only when it is awaited, passed to `Async.run`, or spawned in a scope.
@@ -283,7 +284,7 @@ an `await` needs no extra rule. Cancellation is not a drop at an `.await`: it is
 
 ::: details Coming from JavaScript, TypeScript, C# or Python
 A call without `await` does not start the work "in the background" and give a promise or a `Task`. It is a compile
-error (N0342). To run two things at once, use a scope. There is no `async` `main`: `main` calls `Async.run`.
+error (N0342). To run two things at once, use a scope. There is no `async` `main` (N0219): `main` calls `Async.run`.
 :::
 
 ::: details Coming from Go

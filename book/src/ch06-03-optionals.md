@@ -323,7 +323,9 @@ Write `if (found is Some(n)) { … }`: the value first, then `is`, then the patt
 ::: details Coming from Rust
 `T?` is `Option<T>`, `null` is `None`, and `Some` is `Some`. `o ?? d` is `o.unwrap_or_else(|| d)`, `o!` is
 `o.unwrap()`, and `o?` is the same. `if (o is Some(x))` and `while (o is Some(x))` replace `if let` and
-`while let`. A `T` converts to `T?` by itself where one is expected; Rust needs `Some(…)`.
+`while let`. `let Some(x) = o else { return; };` is Rust's `let … else`, which
+[Where patterns go](./ch19-01-where-patterns-go) teaches. A `T` converts to `T?` by itself where one is expected;
+Rust needs `Some(…)`.
 :::
 
 ::: details Coming from C#, TypeScript, Java or Go

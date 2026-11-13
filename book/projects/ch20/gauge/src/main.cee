@@ -38,8 +38,8 @@ fn title(name: CStr) -> Result<String, AllocError> {
     if (raw.isNull()) {
         return Err(AllocError.OutOfMemory);
     }
-    let bytes = unsafe { Slice.fromRaw(raw as *u8, strlen(raw)) };
-    let copy = String.from(StringView.fromUtf8(bytes) ?? "?");
+    let text = unsafe { CStr.fromPtr(raw) };
+    let copy = String.from(if (text is Some(t)) t.view() else "?");
     unsafe {
         gauge_release(raw);
     }

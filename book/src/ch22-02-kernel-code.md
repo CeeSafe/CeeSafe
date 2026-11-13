@@ -238,8 +238,7 @@ int main(void) {
 
 ```sh
 ceesafec build
-ceesafec build --emit c
-cc -I out/uart-c host/main.c out/uart.o -o out/host
+cc -I out host/main.c out/uart.o -o out/host
 ./out/host
 ```
 

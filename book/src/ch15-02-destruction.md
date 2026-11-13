@@ -380,15 +380,14 @@ fn main() {
 ```
 
 ```text
-main.cee:5:9: error[N0261]: '?' returns 'Err' from the function, so 'drop' must return 'Result<_, AllocError>'
+main.cee:5:9: error[N0261]: '?' cannot be used in a 'drop' block: it returns 'Err' from the function, and a 'drop' block returns nothing, so the error has nowhere to go; handle it here with 'match', or discard it with 'let _ = …;'
   |
 5 |         this.codes.push(0)?;
   |         ^^^^^^^^^^^^^^^^^^^
 ```
 
-The message suggests a return type, but a `drop` block cannot have one. Decide in the block what a failure means:
-`match` on the result, or discard it with `let _ = …;`. Better, do the work that can fail in a method such as
-`save` in Listing 15-11.
+Decide in the block what a failure means, as the message says: `match` on the result, or discard it with
+`let _ = …;`. Better, do the work that can fail in a method such as `save` in Listing 15-11.
 
 ::: warning Mistake: moving a `using` binding
 A `using` binding stays where it is until its block ends.

@@ -341,7 +341,7 @@ fn main() {
 ```
 
 ```text
-main.cee:12:15: error[N0205]: 'for' iterates over an array, a slice, a range 'a..b' or an iterator; the method 'next' of 'Countdown' has the wrong shape; an iterator has 'fn next(borrow mut this) -> T?'
+main.cee:12:15: error[N0205]: 'for' iterates over an array, a slice, a vector, a range 'a..b' or an iterator; the method 'next' of 'Countdown' has the wrong shape; an iterator has 'fn next(borrow mut this) -> T?'
    |
 12 |     for (n in Countdown { left: 3 }) {
    |               ^^^^^^^^^^^^^^^^^^^^^

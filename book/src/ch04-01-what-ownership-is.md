@@ -264,10 +264,11 @@ main.cee:4:23: error[N0250]: 's' is used here after it was moved (on at least on
   |
 4 |     Console.writeLine(s);
   |                       ^
+  = note: the value was moved here (3:5)
 ```
 
-The message points at the use, not at the move: look upwards from it for the place where `s` was assigned, passed
-or returned. "On at least one path" means the compiler also reports a move that happens only in one branch of an
+The message points at the use, and its note gives the line and column of the move: `3:5` is `let t = s;`. "On at
+least one path" means the compiler also reports a move that happens only in one branch of an
 `if`, or in an earlier turn of a loop. To fix it, use `t`, or do not move: borrow, or if the program needs two
 strings, write `let t = s.clone()!;` as Listing 4-5 does.
 
@@ -297,6 +298,7 @@ main.cee:9:5: error[N0250]: 's' is used here after it was moved (on at least one
   |
 9 |     shout(s);
   |     ^^^^^^^^^
+  = note: the value was moved here (8:5)
 ```
 
 `shout` only prints the text, so it should not take the `String` at all. Declare the parameter as a borrow,

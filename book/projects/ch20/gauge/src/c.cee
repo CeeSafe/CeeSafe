@@ -18,7 +18,6 @@ extern "C" {
     fn gauge_each(values: *i32, count: usize, visit: extern "C" fn(*mut void, i32), context: *mut void);
     fn gauge_title(name: *CChar) -> *mut CChar;
     fn gauge_release(title: *mut CChar);
-    fn strlen(text: *CChar) -> usize;
 }
 
 /// `value`, moved into `range`. C calls it as `gauge_clamp`.

@@ -324,10 +324,10 @@ main.cee:9:9: error[N0257]: this arm can never match: earlier arms match every v
   |
 9 |         Command.Wait(seconds) => { Console.writeLine(seconds); }
   |         ^^^^^^^^^^^^^^^^^^^^^
+  = note: the earlier arm 'Quit' is a new name, which matches every value: no constant of that name is in scope (a misspelt constant?) (8:9)
 ```
 
-The message points at the arm below, not at `Quit`. When an arm "can never match" and you see no reason, look for a
-bare name above it, and write `Command.Quit`.
+The message points at the arm below, and its note names the bare `Quit` above it. Write `Command.Quit`.
 
 ::: warning Mistake: a statement's arm without a block
 An arm of a `match` statement is a block, also when it is one call.

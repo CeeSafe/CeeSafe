@@ -254,6 +254,7 @@ main.cee:15:5: error[N0250]: 'order.quantity' is used here after it was moved (o
    |
 15 |     Console.writeLine(order.quantity);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the value was moved here (13:5)
 ```
 
 Read what you need before the call, or make the method `borrow this` if it does not need to own the value.

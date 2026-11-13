@@ -187,13 +187,12 @@ int main(void) {
 }
 ```
 
-Build the object, then the C source as well, because the object comes without headers and `ceesafe/rt.h` (the
-types of `ceesafe_panic`) and `ceesafe_exports.h` are written beside the C:
+Build the object. Its headers are written beside it: `out/ceesafe/rt.h` (the types of `ceesafe_panic`) and
+`out/ceesafe_exports.h`.
 
 ```sh
 ceesafec build
-ceesafec build --emit c
-cc -I out/gauge-c host/main.c out/gauge.o -o out/host
+cc -I out host/main.c out/gauge.o -o out/host
 ./out/host
 ```
 

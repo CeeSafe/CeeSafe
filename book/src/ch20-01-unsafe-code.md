@@ -291,6 +291,7 @@ main.cee:7:27: error[N0250]: 'name' is used here after it was moved (on at least
   |
 7 |         Console.writeLine(name.length);
   |                           ^^^^^^^^^^^
+  = note: the value was moved here (5:9)
 ```
 
 ::: warning Mistake: a pointer that leaves its object

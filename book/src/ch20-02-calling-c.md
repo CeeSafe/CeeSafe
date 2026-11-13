@@ -124,7 +124,6 @@ extern "C" {
     fn gauge_each(values: *i32, count: usize, visit: extern "C" fn(*mut void, i32), context: *mut void);
     fn gauge_title(name: *CChar) -> *mut CChar;
     fn gauge_release(title: *mut CChar);
-    fn strlen(text: *CChar) -> usize;
 }
 
 /// `value`, moved into `range`. C calls it as `gauge_clamp`.
@@ -263,8 +262,8 @@ fn title(name: CStr) -> Result<String, AllocError> {
     if (raw.isNull()) {
         return Err(AllocError.OutOfMemory);
     }
-    let bytes = unsafe { Slice.fromRaw(raw as *u8, strlen(raw)) };
-    let copy = String.from(StringView.fromUtf8(bytes) ?? "?");
+    let text = unsafe { CStr.fromPtr(raw) };
+    let copy = String.from(if (text is Some(t)) t.view() else "?");
     unsafe {
         gauge_release(raw);
     }
@@ -281,8 +280,10 @@ is dropped by CeeSafe. Never pass one side's block to the other side's `free`.
 *Specification: `type-system.md` §28.6.*
 :::
 
-A string that C returns has no length. `strlen` finds it, `Slice.fromRaw` makes a slice of the bytes, and the
-copy must be finished before the block is released. Check a returned pointer with `isNull()` before any use.
+A string that C returns has no length. `CStr.fromPtr(p)` counts the bytes up to the zero and gives a `CStr?` that
+views them where they are. It is `null` for a null pointer and for bytes that are not UTF-8. It is unsafe: the
+bytes must end in a zero, and must not change or be freed while the view is used. So the copy must be finished
+before the block is released. Check a returned pointer with `isNull()` before any other use.
 
 A package's own C files can also allocate through CeeSafe's allocator, with `ceesafe_alloc`, `ceesafe_realloc`
 and `ceesafe_free` from the header `ceesafe/foreign.h`. Then `ceesafec test --sweep alloc`, which
@@ -407,11 +408,16 @@ fn main() {
 }
 ```
 
-The generated C includes `clock.h`, so the C compiler must find it. The manifest has no field for that; pass the
-directory at each build:
+The generated C includes `clock.h`, so the C compiler must find it. The manifest names the directory, beside the
+C file:
+
+```toml
+c = ["c/clock.c"]
+include-dirs = ["c"]
+```
 
 ```sh
-ceesafec build --cflag -Ic
+ceesafec build
 ./out/clock
 ```
 
@@ -538,10 +544,10 @@ Values cross as they are, which is why only C's own types may cross.
   `Safety:` line.
 - Integers, floats, `bool`, raw pointers, `@repr(C)` structs, `@repr(u8)` enums and `extern "C" fn` pointers
   cross. Nothing else does (`N0291`).
-- A slice crosses as `ptr` and `length`. Text crosses as `c"…"` or a `CStr`, and comes back through `strlen`,
-  `Slice.fromRaw` and `StringView.fromUtf8`.
+- A slice crosses as `ptr` and `length`. Text crosses as `c"…"` or a `CStr`, and comes back through
+  `CStr.fromPtr`.
 - `c = ["file.c"]` in the manifest builds C files with the program. They include `ceesafe_exports.h` for the
-  `@repr` types and the `@export` functions.
+  `@repr` types and the `@export` functions. `include-dirs = ["dir"]` names the directories of their headers.
 - `@export("name")` gives a function a C name. `@callback` gives it a C address, to pass where C wants a function
   pointer, with a `void *` for its data.
 - Each side frees what it allocated.

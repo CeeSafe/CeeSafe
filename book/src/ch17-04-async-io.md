@@ -203,7 +203,8 @@ read or in several, and it appends them in order. A real server would accept in 
 connection through a task set ([Scopes](./ch17-02-scopes#task-sets-children-started-later)).
 
 The error enum has two `@from` variants because the program meets two error types: `IoError` from the calls that
-do not wait, and `AsyncError` from those that do. With them, every `?` in the listing converts by itself.
+do not wait, and `AsyncError` from those that do. With them, every `?` in the listing converts by itself. In a
+function whose error type is `AsyncError`, `?` on an `IoError` converts too, to `AsyncError.Io`.
 
 ## Channels between tasks
 
@@ -297,16 +298,22 @@ Async code cannot make a call that may block its thread.
 *Specification: `type-system.md` §40.1.*
 :::
 
-::: warning Mistake: `?` on an `IoError` in a function that returns `AsyncError`
-The calls that do not wait (`bind`, `port`, `shutdownWrite`) return `IoError`, not `AsyncError`.
+::: warning Mistake: `?` on an `IoError` with an error enum that converts only `AsyncError`
+The calls that do not wait (`bind`, `port`, `shutdownWrite`) return `IoError`, not `AsyncError`. `?` converts an
+error in one step, to a variant that holds exactly its type.
 :::
 
-<span class="listing-caption"><strong>Listing 17-29</strong>, <code>main.cee</code>: <code>bind</code>'s error is an <code>IoError</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 17-29</strong>, <code>main.cee</code>: <code>bind</code>'s error is an <code>IoError</code>, and <code>ServeError</code> has no variant for one. This does not compile.</span>
 
 <!-- ceesafe: fail N0261 -->
 ```ceesafe
-async fn listen() -> Result<AsyncTcpListener, AsyncError> {
+enum ServeError {
+    @from Async(AsyncError),
+}
+
+async fn listen() -> Result<AsyncTcpListener, ServeError> {
     let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
+    await AsyncConsole.writeLine("bound")?;
     return Ok(listener);
 }
 
@@ -319,15 +326,15 @@ fn main() {
 ```
 
 ```text
-main.cee:2:20: error[N0261]: '?' would return 'Err' of type 'IoError', but 'listen' returns errors of type 'AsyncError'; mark a variant of the function's error enum '@from' to convert, as in '@from Variant(IoError)'
+main.cee:6:20: error[N0261]: '?' would return 'Err' of type 'IoError', but 'listen' returns errors of type 'ServeError'; mark a variant of the function's error enum '@from' to convert, as in '@from Variant(IoError)'
   |
-2 |     let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
+6 |     let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-`AsyncError.Io` holds an `IoError`, but it is not an `@from` variant, so `?` does not use it. Either match and
-wrap by hand, `Err(e) => { return Err(AsyncError.Io(e)); }`, or give the program an error enum with both `@from`
-variants, as Listing 17-26 does.
+`AsyncError` has a variant for an `IoError`, but `?` does not go through it to reach `ServeError`. Add
+`@from Io(IoError)` to the enum, as Listing 17-26 does. A function that returns `AsyncError` itself needs nothing:
+`AsyncError.Io` is an `@from` variant, so there the same `?` compiles and returns `Err(AsyncError.Io(e))`.
 
 ::: details Coming from Rust
 There is no `AsyncRead` trait to import and no runtime crate to choose: the async I/O types are in the standard
@@ -346,7 +353,8 @@ There, blocking calls in async code compile and stall the program at run time. H
 - `AsyncFiles` opens, reads and writes files; `AsyncTcpListener` and `AsyncTcpStream` are TCP; `Channel<T>` with
   `sendAsync` and `recvAsync` carries values between tasks.
 - Each returns `Result<T, AsyncError>`: `Cancelled`, `TimedOut` or `Io(IoError)`. The calls that do not wait
-  return `IoError`, so an error enum with `@from` variants for both lets `?` work everywhere (`N0261` otherwise).
+  return `IoError`. `?` converts one to `AsyncError.Io`, or to an `@from` variant of the program's own error enum,
+  which needs one for each of the two types (`N0261` otherwise).
 - A `read` that returns 0 means the end: of the file, or of what the other side sends.
 
 Next: [Tasks and threads together](./ch17-05-tasks-and-threads).

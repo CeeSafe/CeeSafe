@@ -348,13 +348,13 @@ fn main() {
 ```
 
 ```text
-main.cee:7:30: error[N0230]: 'Arc<Settings>' has no field named 'width'; it has 'inner'
+main.cee:7:30: error[N0230]: 'Arc<Settings>' has no field named 'width'
   |
 7 |     Console.writeLine(shared.width);
   |                              ^^^^^
 ```
 
-Write `shared.get().width`. The field `inner` that the message names is the `Arc`'s own, and it is private.
+Write `shared.get().width`.
 
 ::: warning Mistake: changing the value of an `Arc`
 `get()` lends a shared borrow, and a field cannot be assigned through one.

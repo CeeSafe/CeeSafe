@@ -2,7 +2,7 @@
 title: Shared state
 summary: One value that several threads change in place - a Mutex and its guard, Arc to own a value from several spawned threads, atomics for counters and flags, how long a lock is held, and deadlock, which the compiler does not prevent.
 assumes: [ch16-01-starting-threads, ch04-02-borrowing, ch09-02-result]
-keywords: [Mutex, MutexGuard, lock, Arc, clone, AtomicU64, AtomicBool, fetchAdd, compareExchange, deadlock, OnceLock]
+keywords: [Mutex, MutexGuard, lock, tryLock, Arc, clone, AtomicU64, AtomicBool, fetchAdd, compareExchange, deadlock, OnceLock]
 diagnostics: [N0248]
 specification: ["type-system.md §38.3", "ownership.md T2", "ownership.md T3"]
 ---
@@ -261,6 +261,27 @@ ceesafe interp: fault: deadlock: a thread locks a mutex it already holds at lib/
 
 A built program has no such check: it waits for ever. Listing 16-19 is the fix, a block that ends the first guard.
 
+A thread that would rather do something else than wait calls `tryLock()`. It never waits: it returns the guard if
+the lock is free, and `null` if any thread holds it, the calling thread included.
+
+```ceesafe
+fn main() {
+    let total = Mutex<u64>.create(0)!;
+    var first = total.lock();
+    let data = first.data();
+    data += 5;
+    if (total.tryLock() is Some(second)) {
+        Console.writeLine("free");
+    } else {
+        Console.writeLine("held");
+    }
+}
+```
+
+```text
+held
+```
+
 The classic deadlock takes two threads and two locks. One thread locks `a` and then asks for `b`, while the other
 has locked `b` and asks for `a`. Each waits for the other, for ever, and only when the timing is unlucky, so tests
 can pass for a long time. The defences are habits, not checks:
@@ -294,7 +315,7 @@ fn main() {
 ```
 
 ```text
-main.cee:4:23: error[N0248]: cannot borrow 'guard' as mutable: 'guard' is not mutable; bind it with 'using' (a scoped value cannot be a 'var')
+main.cee:4:23: error[N0248]: cannot borrow 'guard' as mutable: 'guard' was declared with 'let'; use 'var' for a mutable variable, or bind it with 'using'
   |
 4 |     Console.writeLine(guard.data());
   |                       ^^^^^
@@ -359,7 +380,8 @@ unlock call is made for you where the guard ends. The atomics are C11's `_Atomic
 
 - A `Mutex<T>` owns its value. `lock()` gives a guard, `guard.data()` lends the value as `borrow mut T`, and the end
   of the guard unlocks. Declare the guard with `var`.
-- A lock is held as long as its guard lives: use a block to end it early.
+- A lock is held as long as its guard lives: use a block to end it early. `tryLock()` asks for the lock without
+  waiting, and returns `null` if it is held.
 - `Arc<T>` gives a value several owners for spawned threads: `clone()` adds one, `get()` lends `borrow T` only.
   Shared and changeable is `Arc<Mutex<T>>`, or an `Arc` of an atomic.
 - Atomics (`AtomicU32`, `AtomicU64`, `AtomicUSize`, `AtomicBool`) change through a shared borrow, one indivisible

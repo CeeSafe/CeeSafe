@@ -300,7 +300,7 @@ fn lines(journal: *Journal) -> u64 {
 ```
 
 ```text
-main.cee:8:19: error[N0291]: exported function 'lines' cannot take a '*Journal': only integers, bool, raw pointers, @repr(C) structs and @repr enums cross to C (type-system.md §28.3)
+main.cee:8:19: error[N0291]: exported function 'lines' cannot take a '*Journal': a raw pointer crosses to C when it points to an integer, a float, bool, a @repr(C) struct or 'void'; mark the struct '@repr(C)' or pass a '*void' (type-system.md §28.3)
   |
 8 | fn lines(journal: *Journal) -> u64 {
   |                   ^^^^^^^^

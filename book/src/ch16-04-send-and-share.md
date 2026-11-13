@@ -316,15 +316,14 @@ fn main() {
 ```
 
 ```text
-main.cee:14:18: error[N0334]: 'Stats' is not Share, but 'T' must be ('T: Share'; type-system.md §38.1)
+main.cee:14:18: error[N0334]: 'Stats' is not Share, but 'T' must be ('T: Share'; type-system.md §38.1); its field 'reads' is a 'Cell<u64>', which is not Share
    |
 14 |     let shared = Arc<Stats>.create(again)!;
    |                  ^^^^^^^^^^
 ```
 
 There is one error, on line 14. The spawn on line 8 is accepted: `Stats` is `Send`, and after the move only one
-thread has it. The message does not say which field is the cause: look for a cell, a `StableVector` or a
-`Box<dyn …>` among the fields, and the fields of the fields. Then make the field an `AtomicU64`, or share an
+thread has it. The message names the field that is the cause. Make it an `AtomicU64`, or share an
 `Arc<Mutex<Stats>>`.
 
 ::: details Coming from Rust

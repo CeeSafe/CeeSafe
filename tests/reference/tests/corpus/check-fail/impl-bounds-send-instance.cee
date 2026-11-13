@@ -1,0 +1,22 @@
+// An instance that does not meet a block's `Send` bound does not have the block's function (ADR 0130, N0334).
+struct Disk {
+    n: u32;
+}
+
+struct Runner<T> {
+    last: T;
+}
+
+impl<T: Send> Runner<T> {
+    fn withDisk(borrow this, f: fn(borrow Disk) -> T) -> T {
+        let disk = Disk { n: 7 };
+        return f(disk);
+    }
+}
+
+fn name(d: borrow Disk) -> StringView => "disk";
+
+fn main() {
+    let v = Runner<StringView> { last: "no" };
+    let _ = v.withDisk(name); // error[N0334]
+}

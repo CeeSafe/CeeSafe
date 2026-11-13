@@ -1,0 +1,19 @@
+// The other side of run-pass/impl-bounds-send-result: without the block's `Send` bound the function is refused
+// (ADR 0131: a `T` may hold a borrow of `disk`). The instance that does not meet the bound is in
+// check-fail/impl-bounds-send-instance: that error is the type checker's and this one the borrow checker's.
+struct Disk {
+    n: u32;
+}
+
+struct Plain<T> {
+    last: T;
+}
+
+impl<T> Plain<T> {
+    fn withDisk(borrow this, f: fn(borrow Disk) -> T) -> T {
+        let disk = Disk { n: 7 };
+        return f(disk); // error[N0244]
+    }
+}
+
+fn main() {}

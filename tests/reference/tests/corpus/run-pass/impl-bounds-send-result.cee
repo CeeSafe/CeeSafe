@@ -1,0 +1,44 @@
+// ADR 0130 with ADR 0131: a `Send` bound on an inherent impl block counts, so a function of the block may return a
+// `T` made from a local (a `T: Send` holds no borrow). 0.42.1, which ignores a block's bounds, refuses `withDisk`
+// here with N0244 and needs the bound on the struct; the owner (2026-11-13): "make it accepted in the next
+// release". The same block on `Share`, and the instance that does not meet the bound, are beside it.
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 2
+struct Disk {
+    n: u32;
+}
+
+struct Runner<T> {
+    last: T;
+}
+
+impl<T: Send> Runner<T> {
+    fn withDisk(borrow this, f: fn(borrow Disk) -> T) -> T {
+        let disk = Disk { n: 7 };
+        return f(disk);
+    }
+}
+
+struct Reader<T> {
+    last: T;
+}
+
+impl<T: Share> Reader<T> {
+    fn withDisk(borrow this, f: fn(borrow Disk) -> T) -> T {
+        let disk = Disk { n: 8 };
+        return f(disk);
+    }
+}
+
+fn count(d: borrow Disk) -> u32 => d.n;
+
+fn main() {
+    let r = Runner<u32> { last: 0 };
+    Console.writeLine(r.withDisk(count));
+    let s = Reader<u32> { last: 0 };
+    Console.writeLine(s.withDisk(count));
+    // An instance that does not meet the bound has the struct, not the block's function.
+    let v = Runner<StringView> { last: "no" };
+    Console.writeLine(v.last.length);
+}

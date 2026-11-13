@@ -22,6 +22,8 @@
 - `extern "C"` blocks generated from C headers, by `ceesafec cbind` and by its oracle tools/cbind.py
   (tools/cbind_check.py; ADR 0095, ADR 0127).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
+- The command line (tools/cli_check.py; tooling.md §4.4 and §12): usage errors' status, the help texts, which command
+  accepts which option, and the allocation variables under `run --interp`.
 Each step's last line is printed.
 
 usage: python3 tools/contract_tests.py --ceesafec PATH
@@ -162,6 +164,7 @@ def main():
             ("embedding", py + [f"{HERE}/embed_check.py", "--compiler", cee]),
             ("wakes", py + [f"{HERE}/wake_check.py", "--compiler", cee]),
             ("tests", py + [f"{HERE}/test_command_check.py", "--compiler", cee]),
+            ("cli", py + [f"{HERE}/cli_check.py", "--compiler", cee]),
             ("collections", py + [f"{HERE}/collection_properties.py", "--compiler", cee, "--sweep"]),
             ("freestanding", py + [f"{HERE}/freestanding_check.py", "--compiler", cee, "--corpus", corpus]),
             ("spec", py + [f"{HERE}/spec_check.py", "--ceesafec", cee]),

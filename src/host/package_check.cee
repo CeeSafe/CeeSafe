@@ -159,10 +159,8 @@ fn loadWorkspaceData(options: borrow mut Options, data: borrow mut WorkspaceData
     };
     let directory = match (findManifestDirectory(cwd.view())!) {
         Some(d) => d,
-        null => {
-            fail("no CeeSafe input files, and no ceesafe.toml here or above");
-            return 1;
-        }
+        // Nothing to work on is a usage error (tooling.md §4.4): status 2, as loadPackage gives.
+        null => { return fail("no CeeSafe input files, and no ceesafe.toml here or above"); }
     };
     let noUpdate = Vector<Vector<u8>>.create();
     let resolved = resolveWorkspace(directory.view(), mut data.report, false, options.offline, false, noUpdate)!;
@@ -186,8 +184,7 @@ fn loadWorkspaceData(options: borrow mut Options, data: borrow mut WorkspaceData
             }
             message.append(StringView.fromUtf8(workspace.root.sources[k].view())!)!;
         }
-        fail(message.view());
-        return 1;
+        return fail(message.view());
     }
     if (!options.profileGiven) {
         options.freestanding = workspace.root.freestanding;

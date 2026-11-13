@@ -400,6 +400,11 @@ fn appendThreadUnsafeField(
     if (definition == none() || c.types.structs[definition as usize].isThreadSafe) {
         return Ok();
     }
+    // A library type's fields are private: `Cell<u32>` is not Share by design, not because of its `raw`.
+    let file = c.types.structs[definition as usize].file;
+    if (file != none() && c.fileIsLibrary[file as usize]) {
+        return Ok();
+    }
     let count = c.types.structs[definition as usize].fields.length;
     for (k in 0..count) {
         let field = c.types.structs[definition as usize].fields[k];

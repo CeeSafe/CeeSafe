@@ -6,7 +6,7 @@ keywords: [diagnostic, error, warning, code, explain, fix, "--diagnostics-format
 
 # Appendix F: Diagnostics
 
-This appendix lists every diagnostic code of `ceesafec` %ceesafec-version%: 154 errors and 5 warnings. Find the code from your
+This appendix lists every diagnostic code of `ceesafec` %ceesafec-version%: 154 errors and 6 warnings. Find the code from your
 message (`error[N0249]`) in the tables, which are in the order of the numbers. Each row says what went wrong and the
 usual fix, and links to the sections of the book that show the diagnostic in a listing, with its message and the
 corrected program. A code that no section shows links to its table in the specification.

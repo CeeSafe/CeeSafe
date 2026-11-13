@@ -17,7 +17,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     11 =>
         "A raw `\"\"\"` string literal laid out wrongly: text after the opening `\"\"\"` on its line, or a content line that is not blank and is indented less than the closing `\"\"\"` (`grammar.md` §1.6, ADR 0074 §2.6)",
     100 =>
-        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107)",
+        "Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7)",
     101 => "Expected an item (`fn` or `const`) at the top level",
     102 => "Expected an expression",
     103 => "Comparison operators chained",
@@ -249,10 +249,12 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     401 =>
         "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
     402 =>
-        "Two warnings share this code. (1) A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105). (2) A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6)",
+        "A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105)",
     403 =>
         "A `move` closure literal (a boxed closure's, `Thread.spawn`'s, an `async move` child's) whose body changes a captured variable of a Copy type, where the function names the variable again after the literal: the closure took a copy and changes that, so the later read sees the old value (`type-system.md` §36.5, ADR 0113)",
     404 =>
         "A pattern that tests nothing, `_`, a binding (through `name @` too) or a struct pattern of such field patterns (ADR 0123 §2.4), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3)",
+    405 =>
+        "A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6). Until ADR 0129 it was reported as N0402",
     _ => "",
 };

@@ -1,0 +1,24 @@
+// A name that nothing declares, written with type arguments, is an unknown name (N0200 in an expression, N0204 in a
+// type) with the types of a close name, before anything about where type arguments go or which types take them
+// (diagnostics.md, "Suggestions"). `Vec<i32>.new()` was N0216, "type arguments go on a call…".
+fn known(x: i32) -> i32 => x;
+
+struct Pair<T> {
+    a: T;
+    b: T;
+}
+
+fn main() {
+    let a = Vec<i32>.new(); // error[N0200]: did you mean 'Vector'…
+    let b = Vec.new(); // error[N0200]: the same
+    let c = Map<i32, i32>.new(); // error[N0200]
+    let d: Option<i32> = null; // error[N0204]: an optional type is written 'T?'
+    let e: Vec<i32> = Vector<i32>.create(); // error[N0204]: unknown type 'Vec'
+    let f = foo<i32>(1); // error[N0200]: cannot find function 'foo'
+    let g: Par<i32> = Pair<i32> { a: 1, b: 2 }; // error[N0204]: did you mean 'Pair'?
+    let h: Vectr = Vector<i32>.create(); // error[N0204]: did you mean 'Vector'?
+    // These name something that exists: the complaint is about the type arguments.
+    let i = known<i32>; // error[N0216]
+    let j: Vector<i32, i32, i32> = Vector<i32>.create(); // error[N0204]
+    let l = Vector<i32>.new(); // error[N0200]: 'Vector' has no function 'new'; use 'Vector.create()'
+}

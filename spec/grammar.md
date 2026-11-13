@@ -130,6 +130,11 @@ is N0100 with the hint that ranges there are half-open (`0..10`).
 optional of an optional). The expression `x??`, `?` applied twice, is written `(x?)?`: a `??` that no operand follows
 is N0100 with that hint.
 
+`::` is not a token. Where other languages write it, CeeSafe writes `.` (an enum's variant `E.V`, a type's function
+`S<T>.f()`, a package's item `p.x`), and type arguments follow a name directly (`f<T>(…)`). Two adjacent colons are
+N0100, which says so and has a fix (`tooling.md` §5.2); the rest of the file is then read as if the `::` were a `.`,
+or, before `<`, as if it were not there, so that it is the only error the `::` causes.
+
 Any other character is N0001 (unexpected character).
 
 ## 2. Syntactic grammar

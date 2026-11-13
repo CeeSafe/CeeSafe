@@ -222,6 +222,13 @@ fn synth(c: borrow mut Checker, e: u32, expected: u32) -> Result<u32, AllocError
                         }
                         return functionValue(c, instance, span);
                     }
+                    Entity.None => {
+                        // Nothing has this name (`Vec<i32>.new()`): that comes before where type arguments go.
+                        if (!isBareContainerName(c.name(symbol)) && isNoItem(c, symbol)) {
+                            cannotFind(c, symbol, span)?;
+                            return c.errorResult(span.start, span.end);
+                        }
+                    }
                     _ => {}
                 }
                 var message = Vector<u8>.create();
@@ -2029,5 +2036,10 @@ fn cannotFind(c: borrow mut Checker, symbol: u32, span: Span) -> Result<void, Al
     appendText(mut message, "cannot find ")?;
     appendQuotedName(mut message, c, symbol)?;
     appendText(mut message, " in this scope")?;
+    // A capitalised name is, by the convention every library follows, a type's: the types close to it (`Vec.new()`).
+    let text = c.name(symbol);
+    if (text.length > 0 && text[0] >= 'A' && text[0] <= 'Z') {
+        appendTypeDidYouMean(c, mut message, symbol)?;
+    }
     return c.error(undefinedName(), span.start, span.end, message);
 }

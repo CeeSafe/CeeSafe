@@ -32,7 +32,7 @@ LINES = book_appendix_gen.INPUTS + "/appendix-f.lines.txt"
 SOURCES = f"{INTRO}, appendix-f.lines.txt, {CATALOG} and the chapters' `diagnostics:` headers"
 
 SITE = "https://ceesafe.github.io/CeeSafe/reference/diagnostics#"
-WARNINGS = {"N0400", "N0401", "N0402", "N0403", "N0404"}  # the codes src/ reports with diagnostics.warning(…)
+WARNINGS = {"N0400", "N0401", "N0402", "N0403", "N0404", "N0405"}  # the codes src/ reports with diagnostics.warning(…)
 NOT_GIVEN = {
     "N0002": "Unassigned. No release has given it.",
     "N0223": "Unassigned. No release has given it.",
@@ -75,7 +75,7 @@ GROUPS = [
      "The codes of the features that came after the groups above were numbered - `dyn`, owning closures, threads, "
      "statics, async, tests, cells, const parameters, patterns, `debugAssert`, embedded files and the package "
      "cache. The specification lists them in one table under \"Build\"."),
-    ("Warnings (N0400 to N0404)", range(400, 500), "warnings-n0400–n0499",
+    ("Warnings (N0400 to N0405)", range(400, 500), "warnings-n0400–n0499",
      "A warning is printed as `warning[N0400]`. It never stops `check`, `build`, `run` or `test`, and never changes "
      "the exit status, unless the command has `--deny-warnings`, which makes each warning an error "
      "([9.2](./ch09-02-result), [14.1](./ch14-01-build-settings)). Warnings are given for your own package's files "

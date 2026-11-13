@@ -548,6 +548,51 @@ you are unsure of, look the name up: `ceesafe_api` with `TextWriter`, `TextWrite
 `Process.argument` returns the entries, or the closest names. Without MCP, the [built-in types](builtins.md) and the
 [lib/core](../spec/api/core.md) and [lib/std](../spec/api/std.md) pages list every name.
 
+A type's name from another language is answered the same way, and so is a method on an enum or a number:
+
+<!-- ceesafe: fail N0200 -->
+```ceesafe
+fn main() {
+    let v = Vec<i32>.new();
+}
+```
+
+```text
+main.cee:2:13: error[N0200]: cannot find 'Vec' in this scope; did you mean 'Vector', 'VectorRaw' or 'VectorBytes'?
+  |
+2 |     let v = Vec<i32>.new();
+  |             ^^^^^^^^
+```
+
+<!-- ceesafe: fail N0234 -->
+```ceesafe
+fn describe(e: IoError) -> StringView => e.text();
+```
+
+```text
+main.cee:1:44: error[N0234]: type 'IoError' has no method 'text'; it has 'message'
+  |
+1 | fn describe(e: IoError) -> StringView => e.text();
+  |                                            ^^^^
+```
+
+CeeSafe has no `::`. A variant, a type's function and a package's item are all reached with `.`, and the compiler
+says so (`ceesafec fix` rewrites it):
+
+<!-- ceesafe: fail N0100 -->
+```ceesafe
+fn main() {
+    let v = Vector<i32>::create();
+}
+```
+
+```text
+main.cee:2:24: error[N0100]: expected '.', found '::': '::' is not CeeSafe; a member, an enum's variant, a type's function and a package's item are all written with '.' (grammar.md §1.7)
+  |
+2 |     let v = Vector<i32>::create();
+  |                        ^^
+```
+
 ### Reserved words are not names
 
 Some keywords read like ordinary names: `own`, `type`, `move`, `drop`, `where`, `class`, `yield`, `macro`, `using`,
@@ -667,7 +712,8 @@ fn main() {
 
 `ceesafe_fix` and `ceesafec fix` repair these without being asked twice: a `let` that is assigned (`var`), an argument for a
 `borrow mut` parameter without `mut`, a `mut` where the parameter is a shared `borrow`, `as` between integer types that
-can lose information (`truncate<T>(…)`, which wraps), and a `;` missing after a statement.
+can lose information (`truncate<T>(…)`, which wraps), a `;` missing after a statement, and a `::` from Rust or C++
+(`.`, or nothing before type arguments: `Vector<i32>.create()`, `pick<i32>(1, 2)`).
 
 ## Where to read more
 

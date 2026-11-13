@@ -127,6 +127,8 @@ struct Lexer {
                 this.lexString(text, start, diagnostics)?;
             } else if (c == '\'') {
                 this.lexChar(text, start, diagnostics)?;
+            } else if (c == ':' && this.ch(text, 1) == ':') {
+                this.lexPathSeparator(text, start, diagnostics)?;
             } else if (!this.lexPunctuation(text, start)?) {
                 // One whole character: a UTF-8 sequence, or one ill-formed subpart.
                 let d = decodeUtf8(text, this.pos);
@@ -695,6 +697,49 @@ struct Lexer {
         appendText(mut message, "invalid escape sequence")?;
         this.error(diagnostics, invalidEscape(), start, this.pos, message)?;
         return Ok(if (split) -2 else -1);
+    }
+
+    /// `::`, which is not a token of CeeSafe (grammar.md §1.7): N0100 with a sure fix (tooling.md §5.2). It is what
+    /// other languages write where CeeSafe writes `.`, so the rest of the file is read as if it were one: `E::V` as
+    /// `E.V`, `S<T>::f()` as `S<T>.f()`. Before `<` (`f::<T>()`) it stands for nothing, and is left out.
+    fn lexPathSeparator(
+        borrow mut this,
+        text: Slice<u8>,
+        start: usize,
+        diagnostics: borrow mut Diagnostics,
+    ) -> Result<void, AllocError> {
+        this.pos += 2;
+        let beforeTypeArguments = this.ch(text, 0) == '<';
+        var message = Vector<u8>.create();
+        var title = Vector<u8>.create();
+        var replacement = Vector<u8>.create();
+        if (beforeTypeArguments) {
+            appendText(
+                mut message,
+                "'::' is not CeeSafe: type arguments follow the name directly, 'f<T>(…)' (grammar.md §1.7)",
+            )?;
+            appendText(mut title, "remove '::'")?;
+        } else {
+            appendText(
+                mut message,
+                "expected '.', found '::': '::' is not CeeSafe; a member, an enum's variant, a type's function and a package's item are all written with '.' (grammar.md §1.7)",
+            )?;
+            appendText(mut title, "write '.'")?;
+            appendText(mut replacement, ".")?;
+        }
+        diagnostics.errorWithFix(
+            expectedToken(),
+            this.file,
+            truncate<u32>(start),
+            truncate<u32>(this.pos),
+            message,
+            title,
+            replacement,
+        )?;
+        if (!beforeTypeArguments) {
+            this.add(TokenKind.Dot, start, 0)?;
+        }
+        return Ok();
     }
 
     fn lexPunctuation(borrow mut this, text: Slice<u8>, start: usize) -> Result<bool, AllocError> {

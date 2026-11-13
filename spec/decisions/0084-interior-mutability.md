@@ -226,7 +226,7 @@ to `dyn I + Send` and to `dyn I` (the same value and tables), never the other wa
 | Closures | a `borrow fn` may capture a cell shared and change it while the caller holds another shared loan (Bun's `&Cell<bool>` drop guards, `VirtualMachine.rs:6610`) |
 | `dyn` | a `borrow this` method behind `borrow dyn I` may change the object's cells; `dyn I + Send` needs only `Send`, `dyn I + Share` needs `Share` (§2.5) |
 | Conditions | a guard temporary ends with the condition or the block that uses its bindings (§2.4) |
-| Async | a cell in a task frame is fine (frames never move, A1). A `CellRef`/`CellRefMut` live across an `await` is warning N0402: another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures |
+| Async | a cell in a task frame is fine (frames never move, A1). A `CellRef`/`CellRefMut` live across an `await` is warning N0402 (N0405 since ADR 0129): another task resumed meanwhile panics on the same cell. Tasks that cross threads already need `Send` captures |
 | Statics | refused (N0337), as in Rust. Bun's 86 thread-local cells wait for thread-locals (§4) |
 | Profiles | all three cells are in lib/core, so in every profile, the kernel included; they have no effect |
 | Interpreter | runs them as ordinary memory; the conflict panic is the same in both back ends |

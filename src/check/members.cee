@@ -688,17 +688,6 @@ fn noMemberTypeArguments(c: borrow mut Checker, member: u32, span: Span) -> Resu
     return Ok(false);
 }
 
-fn isIntegerMethodName(name: Slice<u8>) -> bool =>
-    sameText(name, "wrappingAdd") || sameText(name, "wrappingSub") || sameText(name, "wrappingMul") ||
-        sameText(name, "checkedAdd") || sameText(name, "checkedSub") || sameText(name, "checkedMul") ||
-        sameText(name, "saturatingAdd") || sameText(name, "saturatingSub") || sameText(name, "saturatingMul") ||
-        sameText(name, "mulHigh") || sameText(name, "min") || sameText(name, "max") || sameText(name, "abs") ||
-        sameText(name, "unsignedAbs");
-
-fn isFloatMethodName(name: Slice<u8>) -> bool =>
-    sameText(name, "bits") || sameText(name, "sqrt") || sameText(name, "abs") || sameText(name, "floor") ||
-        sameText(name, "ceil") || sameText(name, "min") || sameText(name, "max");
-
 /// `o.isSome()` and `o.isNull()` (ADR 0072 §2.2): `o != null` and `o == null`, reading `o` through a shared borrow,
 /// so it is not consumed; `o.asBorrow()` and `o.asBorrowMut()`, optional borrows (ADR 0074 §2.5). Other methods are
 /// N0234, with a hint naming these, `??` and `match`.
@@ -814,23 +803,36 @@ fn checkNonStructMethod(
         appendQuotedType(mut message, c, structType)?;
         appendText(mut message, " has no method ")?;
         appendQuotedName(mut message, c, memberIdent.symbol)?;
-        appendNumberDidYouMean(c, mut message, c.types.is(structType, TypeKind.Float), memberIdent.symbol)?;
+        appendNumberDidYouMean(c, mut message, structType, memberIdent.symbol)?;
         c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
     }
-    if (declarationOf(c, structType) != none() && c.types.is(structType, TypeKind.Enum)) {
-        // A declared enum may have methods (an impl's, or its own: ADR 0107), just not this one.
-        appendText(mut message, "type ")?;
-        appendQuotedType(mut message, c, structType)?;
-        appendText(mut message, " has no method ")?;
-        appendQuotedName(mut message, c, memberIdent.symbol)?;
-        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
-        checkArgumentsLoosely(c, arguments)?;
-        return c.errorResult(span.start, span.end);
-    }
+    // A type with methods (an enum's own, ADR 0107; an impl's; IoError's `message`, §26.2), just not this one: the
+    // message names them, as it does a struct's members. So does a declared enum without any, which may be given some.
     appendText(mut message, "type ")?;
     appendQuotedType(mut message, c, structType)?;
+    appendText(mut message, " has no method ")?;
+    appendQuotedName(mut message, c, memberIdent.symbol)?;
+    let builtin = if (structType == c.ioErrorType) "message" else "";
+    let hasMethods = appendMethodChoices(c, mut message, structType, builtin, memberIdent.symbol)?;
+    if (hasMethods || (declarationOf(c, structType) != none() && c.types.is(structType, TypeKind.Enum))) {
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
+    message.truncate(0);
+    appendText(mut message, "type ")?;
+    appendQuotedType(mut message, c, structType)?;
+    if (isParameter && c.types.typeParameters[c.types.info(structType).typeParameter as usize].bounds.length > 0) {
+        // It has its bounds' methods (§21), and none of them has this name.
+        appendText(mut message, " has no method ")?;
+        appendQuotedName(mut message, c, memberIdent.symbol)?;
+        appendText(mut message, ": none of its bounds declares it")?;
+        c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     appendText(mut message, " has no methods; ")?;
     appendQuotedName(mut message, c, memberIdent.symbol)?;
     if (isParameter) {

@@ -325,6 +325,82 @@ hello
 Plain functions that take and return borrows never need region parameters; only types that *store* borrows,
 and functions that pass such types through, do. Regions are a compile-time idea: they cost nothing at run time.
 
+### One region that outlives another
+
+Two region parameters are unrelated: a value borrowed for one cannot be returned or stored as borrowed for the
+other.
+
+<!-- ceesafe: fail N0245 -->
+```ceesafe
+fn orDefault<region a, region b>(word: StringView<a>, fallback: StringView<b>) -> StringView<a> =>
+    if (word.length > 0) word else fallback;
+
+fn main() {
+    Console.writeLine(orDefault("", "none"));
+}
+```
+
+```text
+main.cee:2:5: error[N0245]: the returned reference may be derived from parameter 'fallback', which the return type does not list
+  |
+2 |     if (word.length > 0) word else fallback;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+A **bound** on a region parameter relates them. `region b: a` says that `b` outlives `a`: what is borrowed for `b`
+may be used where `a` is required (never the other way round).
+
+```ceesafe
+fn orDefault<region a, region b: a>(word: StringView<a>, fallback: StringView<b>) -> StringView<a> =>
+    if (word.length > 0) word else fallback;
+
+fn main() {
+    let fallback = String.from("none")!;
+    {
+        let line = String.from("")!;
+        Console.writeLine(orDefault(line.view(), fallback.view()));
+    }
+}
+```
+
+```text
+none
+```
+
+The bound is a promise the caller pays for: the result may now hold the borrow of the `fallback` argument, so it
+cannot be kept after that argument's value is gone. The message names the bound.
+
+<!-- ceesafe: fail N0243 -->
+```ceesafe
+fn orDefault<region a, region b: a>(word: StringView<a>, fallback: StringView<b>) -> StringView<a> =>
+    if (word.length > 0) word else fallback;
+
+fn main() {
+    let line = String.from("word")!;
+    var kept = Vector<StringView>.create();
+    {
+        let fallback = String.from("none")!;
+        kept.push(orDefault(line.view(), fallback.view()))!;
+    }
+    Console.writeLine(kept[0]);
+}
+```
+
+```text
+main.cee:10:6: error[N0243]: 'fallback' goes out of scope while still borrowed
+   |
+10 |     }
+   |      ^
+   = note: 'fallback' is borrowed here (9:42)
+   = note: the borrow is used later here (11:28)
+   = note: 'orDefault' declares 'region b: a' ('b' outlives 'a'), so its result may hold the borrow passed here (9:19)
+```
+
+A struct or an enum may bound its regions too (`struct Parser<region scratch, region input: scratch>`); its
+functions then see the bound, and an `impl` block for it writes the same one. A bound names region parameters only,
+joined by `+` for several; `static`, a type, the region itself or a cycle is N0273. The rules are in
+[type-system.md §25.8](../spec/type-system.md).
+
 ## What the checker does not do
 
 The borrow checker works within one function at a time, using the signatures of the functions it calls. It is

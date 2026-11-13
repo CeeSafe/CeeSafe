@@ -1,7 +1,7 @@
 # ADR 0127 — `ceesafec cbind`: the C binding generator as a command of the compiler
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead with the first three"), implemented on branch
-  `impl/0127`; not yet released. Raised by the writers of the language's book (chapter 20; gaps2 D14): the generator
+  `impl/0127`; released in ceesafec 0.43.0. Raised by the writers of the language's book (chapter 20; gaps2 D14): the generator
   of `extern "C"` blocks is `tools/cbind.py`, in CeeSafe's repository, and a user who installed a released
   `ceesafec` has neither the script nor, necessarily, Python, so they write the blocks by hand.
 - Scope: the driver (`src/tooling/cbind.cee`, a new command; `src/main.cee`, the usage text and the dispatch);

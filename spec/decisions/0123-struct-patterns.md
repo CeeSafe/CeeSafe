@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead with the first three"; for a struct with a `drop`
   block, "I go with your suggestions": a destructuring that suppresses the drop), implemented on branch
-  `impl/0123`; not yet released. Raised while writing the language's book (chapter 19; gaps C18 and B9 of the
+  `impl/0123`; released in ceesafec 0.43.0. Raised while writing the language's book (chapter 19; gaps C18 and B9 of the
   second round): patterns took apart enums, optionals and slices only, two values could not be matched at once,
   and a consuming method of a struct with a `drop` block could not hand out its fields.
   **Tightened on 2026-11-13** by the owner's decision ("Go ahead and tackle those still open"), before any

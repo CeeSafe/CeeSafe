@@ -2,7 +2,7 @@
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead and tackle those still open"), implemented on branch
   `fix/open-checker`; the owner accepted conditional methods (§2.3) on 2026-11-13 ("go"), on the condition that the
-  decision of §2.6 be explicit, which branch `fix/interface-result-loans` implements; not yet released. It completes ADR 0064 §1 and ADR 0107, which let an `impl<T: B> S<T> { … }`
+  decision of §2.6 be explicit, which branch `fix/interface-result-loans` implements; released in ceesafec 0.43.0. It completes ADR 0064 §1 and ADR 0107, which let an `impl<T: B> S<T> { … }`
   block write a bound and said nothing of what it means when the struct or enum does not have it.
 - Scope: the checker (`src/check/bounded_impls.cee`, new; `inherent.cee`, `structs.cee`, `generics.cee`,
   `declare.cee`, `members.cee`, `self_types.cee`, `closures.cee`), one flag of a HIR function (`src/hir/hir.cee`);

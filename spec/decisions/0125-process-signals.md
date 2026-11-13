@@ -1,7 +1,7 @@
 # ADR 0125 — Process signals: `ProcessSignals`
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead with the first three"), implemented on branch `impl/0125`;
-  not yet released. Raised by the book's authors (chapter 21, "a final project: a web server"): a program could not
+  released in ceesafec 0.43.0. Raised by the book's authors (chapter 21, "a final project: a web server"): a program could not
   notice Ctrl+C or `SIGTERM`, so the book's server stops when Enter is pressed on standard input.
 - Scope: lib/std (`lib/std/host.cee`: `ProcessSignal`, `ProcessSignals`; `lib/std/channel.cee`: one accessor for the
   library's own use); the hosted runtime (`runtime/hosted/ceesafe_rt_async.c`, `rt.h`); the interpreter

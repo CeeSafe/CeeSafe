@@ -1,7 +1,7 @@
 # ADR 0132 — A code of its own for a `RefCell` guard across `await`: N0405
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead and tackle those still open"), implemented on branch
-  `fix/open-messages`; not yet released. Raised by the writer of the book's Appendix F, whose row for N0402 had to
+  `fix/open-messages`; released in ceesafec 0.43.0. Raised by the writer of the book's Appendix F, whose row for N0402 had to
   describe two unrelated warnings.
 - Scope: the number one warning is reported with (`src/nir/effect_check.cee`); `spec/diagnostics.md`,
   `spec/type-system.md` §41.3; the test `check-pass/refcell-await.cee`; the book's Appendix F. No change to when

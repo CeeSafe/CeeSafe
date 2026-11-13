@@ -1,7 +1,7 @@
 # ADR 0126 — Shutting a listener down: `listener.shutdown()`
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead with the first three"), implemented on branch `impl/0125`;
-  not yet released. Raised by the book's authors (chapter 21): a thread waiting in `accept` could not be told to
+  released in ceesafec 0.43.0. Raised by the book's authors (chapter 21): a thread waiting in `accept` could not be told to
   stop, so a server of threads had no graceful shutdown; they asked for "a way to close a listener early".
 - Scope: the built-in `TcpListener` (checker `src/check/io.cee`, `src/hir/builtins.cee`, the C backend, the
   interpreter); the hosted runtime (`runtime/hosted/ceesafe_rt_io.c`, `rt.h`); `spec/type-system.md` §26.4 and

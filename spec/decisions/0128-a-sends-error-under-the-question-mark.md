@@ -1,7 +1,7 @@
 # ADR 0128 — A send's error under `?`: `AsyncError.Closed` and `@into`
 
 - Status: **Accepted** by the owner, 2026-11-13 ("I go with your suggestions"), implemented on branch `impl/0128`;
-  not yet released. It completes ADR 0111, whose §4 left `sendAsync`'s error open. Raised by the book (Decision 0011;
+  released in ceesafec 0.43.0. It completes ADR 0111, whose §4 left `sendAsync`'s error open. Raised by the book (Decision 0011;
   gaps2 A3): chapter 17's Listing 17-27 carries a four-line match whose only work is to turn a `SendError<i32>` into
   an `AsyncError`.
 - Scope: one variant in `lib/core/async.cee`, one method in `lib/std/channel.cee`; one attribute, `@into`, read by

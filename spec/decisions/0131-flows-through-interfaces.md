@@ -2,9 +2,9 @@
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Ship 0.42.1 sooner. Follow with 0.42.2"). §2.1 to §2.11 (the
   first three rounds) are released in ceesafec 0.42.1, with the rule that a type parameter bounded by `Send` or
-  `Share` holds no loan; §2.12 and §2.13 (the fourth round: built-in stores and store targets, which 0.42.1's own
-  copy of this ADR lists in its §10 as known not to be covered) are implemented on branch
-  `fix/interface-result-loans` and not yet released. Proposed by the integrator after an independent soundness
+  `Share` holds no loan; a fourth round (built-in stores and store targets, §10) was
+  broken by a fourth review, which found a regression in it, and is not in ceesafec 0.43.0: it stays on branch
+  `fix/interface-result-loans`. Proposed by the integrator after an independent soundness
   review found the hole. Its first
   form (flows through interfaces, and a loan "of the function's own storage" kept by such a value) was broken by a
   second independent review the same day; §2 is the second form, which replaces it. A third review broke the
@@ -296,3 +296,31 @@ sound iterator, `for`, collect, callbacks, a with-resource function under `T: Se
 - A way to write, on a signature, that a result of a type parameter's type borrows from a named parameter (the
   `borrow(a, b) T` of reference results), which would let `make` of §5 be written as it stands.
 - A region parameter on an interface.
+
+## 10. Known not to be covered by 0.42.1 and 0.43.0
+
+The third review found three more families of programs without `unsafe` that pass `check` and read freed memory.
+None needs a type parameter, an interface or a closure: they are in plain code, 0.42.0 accepts them too, and
+0.42.1 was released without their fix so that the fix above was not held back. 0.42.2 follows with it.
+
+1. **A store by a built-in.** `replace(mut a, v)`, `swap(mut a, mut b)`, `fill`, `copyFrom`, `extend` and `resize`
+   put a value into a place and record no store. A program is not refused when it puts a view of a local into a
+   place that outlives the local with one of them and reads it afterwards: `swap(mut outer, mut inner)` for two
+   structs that hold a view, `keep.viewMut().fill(t.view())`, `keep.extend(views[..])`, `keep.resize(2, t.view())`,
+   where `keep` or `outer` outlives `t`. The same store written as an assignment or a `push` is refused (N0243).
+2. **What `replace` returns.** The old value that `replace(mut a, v)` gives back carries no loan, so a view of a
+   local taken out of `a` by `replace` may be kept after the local is gone.
+3. **A `borrow mut` held in a scoped value passed by value.** Only a `borrow mut` parameter is a target of stores
+   (§25.6). A function that takes a struct with a `borrow mut(r) Vector<StringView<r>>` field by value and pushes
+   or assigns through that field stores where no caller sees it: `fn put(s: Sink, v: StringView) { s.out.push(v)!; }`
+   called as `put(Sink { out: borrow mut keep }, t.view())`.
+
+The first two also reopen, where they are used, what §2 closes, because a body's stores and results are held to
+its flows only where the checker sees a store or a loan: the `get` of §1 written
+`var x = Holder { text: this.text.view() }; let old = replace(mut x, Holder { text: "static" }); return old.text;`
+checks, and so do an impl's method, a closure and a function taken as a value that store with `replace` what
+their flows do not let them store (the probes `q_source_lend_replace`, `q_impl_unlisted_replace`,
+`q_f4_closure_replace`, `q_closure_param_replace`, `q_concrete_param_replace_unrelated`).
+
+Until the release that closes them: a program that uses none of the six built-ins on values that hold a borrow, and passes no struct that
+holds a `borrow mut` by value to a function that stores through it, is not affected.

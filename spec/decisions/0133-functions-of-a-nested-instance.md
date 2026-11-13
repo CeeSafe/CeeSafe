@@ -1,7 +1,7 @@
 # ADR 0133 — The functions of a nested instance wait for a use; an instantiation has a size
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead and tackle those still open"; "Also fix" the checker
-  hang), implemented on branch `fix/generic-instances`; not yet released.
+  hang), implemented on branch `fix/generic-instances`; released in ceesafec 0.43.0.
 - Scope: when a generic struct's or enum's instance gets its functions (`src/check/lazy_instances.cee`,
   `generics.cee`, `structs.cee`), what N0266 covers, and how often one fault in generic code is reported;
   `spec/type-system.md` §20.3, §20.4, `spec/diagnostics.md` (N0266). No new diagnostic code.

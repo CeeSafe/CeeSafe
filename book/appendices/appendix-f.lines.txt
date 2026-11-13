@@ -8,7 +8,7 @@ N0008	A number literal has a digit its radix does not have (`0b102`), or a radix
 N0009	A number literal ends in a suffix that is not a type it can have (`12abc`, `1f32`). Use an integer type's name on an integer literal, and a float type's on a float literal, `1.0f32`.
 N0010	A digit separator `_` is not between two digits (`1__0`, `0x_FF`, `1_.5`). Put each `_` between two digits.
 N0011	A raw `"""` string literal is laid out wrongly - text follows the opening `"""` on its line, or a line of the text is indented less than the closing `"""`. Start the text on the next line, and indent it at least as far as the closing `"""`.
-N0100	The parser needed one particular token and found another, most often a missing `;`, `(` or `}`. The message names the token it expected. A `fn` in an enum's body gives this too, since an enum's functions go in an `impl` block.
+N0100	The parser needed one particular token and found another, most often a missing `;`, `(` or `}`. The message names the token it expected. A `fn` in an enum's body gives this too, since an enum's functions go in an `impl` block, and so does `::`, which is written `.`.
 N0101	Something that is not an item stands at the top level of a file, such as a `let` or another statement. Move it into a function, or declare a `const`.
 N0102	An expression is missing where one is needed (`let a = ;`). Write the value.
 N0103	Comparison operators are chained (`a < b < c`). Write two comparisons joined by `&&`.

@@ -1,0 +1,35 @@
+// ADR 0123 §2.6, condition 4, for the two kinds of field pattern that check-fail/struct-pattern-take-apart does
+// not have: a slice pattern and a string pattern can fail, so a pattern with one only reads a struct with a `drop`
+// block, and is N0252 where it would move another field out. With every field bound, the value is taken apart.
+struct Packet<region r> {
+    name: Vector<u8>;
+    bytes: [u8; 2];
+    tag: StringView<r>;
+
+    drop {}
+}
+
+fn slice<region r>(p: Packet<r>) -> usize {
+    if (p is Packet { name, bytes: [first, ..], tag: _ }) { // error[N0252]
+        return name.length + (first as usize);
+    }
+    return 0;
+}
+
+fn text<region r>(p: Packet<r>) -> usize {
+    if (p is Packet { name, bytes: _, tag: "x" }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn reads<region r>(p: Packet<r>) -> bool {
+    return p is Packet { name: _, bytes: [1, ..], tag: "x" };
+}
+
+fn whole<region r>(p: Packet<r>) -> usize {
+    let Packet { name, bytes, tag } = p;
+    return name.length + (bytes[0] as usize) + tag.length;
+}
+
+fn main() {}

@@ -83,6 +83,18 @@ arguments, with up to three types of a close name: the built-in generic types, a
 can name (`Vec` gives `Vector`). So is a capitalised name that is not found in an expression (`Vec.new()`). `Option`
 and `Optional` are told how an optional type is written (`T?`).
 
+A struct literal and a struct pattern name a type, so a name that nothing declares is N0204 "unknown type" there
+too, with the same suggestions, with or without type arguments (`Vec<i32> { x: 1 }`, `p is Pont { x, y }`). "is not
+a struct type" (N0234 in a literal) and "this pattern names another type than the value's" (N0205 in a pattern) are
+said only of a name that is something: an enum, an interface, a function, a constant, a local, a built-in type. A
+struct pattern of an unknown name is then checked as a pattern of the value's own type, so its bindings are
+declared and the name is the one thing reported.
+
+One fault is one diagnostic. A struct pattern that would move a field out of a value whose type has a `drop` block
+(N0252) is reported once, at the innermost struct pattern that refuses the move: a pattern around it, of a struct
+that has a `drop` block too, does not report the same binding again. It reports only a binding of its own (two
+fields refused are two diagnostics).
+
 Semantic checks run only when every file parsed without errors.
 
 | Code | Meaning | Example |

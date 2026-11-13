@@ -314,6 +314,7 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
     if (bound == none()) {
         return coerceToDynFunction(c, value, implementation, dynType, expected, span);
     }
+    completeMembers(c, implementation, span)?; // an instance whose impls waited for a use (lazy_instances.cee)
     if (c.types.isScoped(implementation) && implements(c, implementation, bound) && !expectsReference) {
         // A type with region parameters implements interfaces for bounds only (ADR 0054 §3.2): a `dyn` value carries
         // no loans (§37).
@@ -414,7 +415,9 @@ fn coerceToDynFunction(
             recorded = true;
         }
     }
-    if (!recorded) {
+    // Generic code's closure needs no table: each instance of the function records its own, for its types (as the
+    // coercion to `dyn I` above and a thread's closure: the table named the uninstantiated closure in C).
+    if (!recorded && !functionIsGeneric(c, body) && !c.types.isGeneric(dynType)) {
         let functions = [body];
         let list = c.hir.list(functions[..])?;
         c.dynTables.push(DynTable { implementation: environment, dynType: dynType, methods: list })?;

@@ -274,13 +274,21 @@ fn endInstance(
         }
     }
     let failed = first != none();
+    if (instance != none() && isGenericRepeat(c, instance)) {
+        // Generic code met again in a type that names type parameters: what its generic version reported is dropped,
+        // and what it did not stays, where it is. Its body is not compiled either way.
+        c.hir.functions[instance as usize].hasInstanceError = failed;
+        c.front.diagnostics.keepSince(mark, instantiationTooDeep(), true, mark);
+        return Ok();
+    }
     var firstMessage = Vector<u8>.create();
     var firstCode: u32 = 0;
     if (failed) {
         appendBytes(mut firstMessage, c.front.diagnostics.items[first as usize].message.view())?;
         firstCode = c.front.diagnostics.items[first as usize].code;
     }
-    dropDiagnosticsSince(c, mark);
+    // N0266 stays where it was found: the 65th instantiation is in generic code, whichever instance met it.
+    c.front.diagnostics.keepSince(mark, instantiationTooDeep(), false, mark);
     if (failed && firstCode == cellOfLoans()) {
         // A cell of a loan-holding type inside the instance is the use's error (ADR 0084 §2.1).
         for (r in c.scopedInstanceReports.view()) {
@@ -745,6 +753,7 @@ fn checkBounds(
             var boundName = Vector<u8>.create();
             appendBytes(mut boundName, c.types.rangeText(original.name))?;
             let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
+            completeMembers(c, argument, span)?; // a bound asked of an instance is a use of it (§20.4)
             if (!implements(c, argument, required)) {
                 var message = Vector<u8>.create();
                 appendQuotedType(mut message, c, argument)?;
@@ -836,6 +845,21 @@ fn instantiateStruct(
     }
     let item = c.front.ast.items[entry.item as usize];
     let symbol = c.front.ast.idents[item.name as usize].symbol;
+    if (instanceTooDeep(c, symbol, span)? || argumentsTooLarge(c, symbol, arguments, span)?) {
+        return Ok(template); // N0266: the declaration's own type stands in
+    }
+    // The functions of an instance first made in a body are one instantiation deeper than the body (§20.4). The 65th
+    // waits for a use, which is N0266; one with a drop block is used where it is made.
+    let depth = instanceDepthHere(c);
+    let dropSyntax = match (item.kind) {
+        ItemKind.Struct(k) => c.front.ast.structs[k as usize].dropBlock,
+        _ => none(),
+    };
+    if (depth > 64 && dropSyntax != none()) {
+        reportTooDeep(c, symbol, span)?;
+        return Ok(template);
+    }
+    let firstFunction = c.hir.functions.length;
     var text = Vector<u8>.create();
     qualifiedName(c, entry.file, c.name(symbol), mut text)?; // QualifiedIn(template.Source, …)
     var name = Vector<u8>.create();
@@ -855,6 +879,7 @@ fn instantiateStruct(
     c.structs.push(StructEntry { item: entry.item, file: entry.file, typ: typ, environment: env, template: template })?;
     let index = truncate<u32>(c.structs.length - 1);
     addInstance(mut c.structInstances, template, index)?;
+    let waits = noteInstance(c, typ, index, false, depth > 64)?; // its functions wait for a use (lazy_instances.cee)
     if (c.membersResolved) {
         c.instantiating += 1;
         let mark = diagnosticsMark(c);
@@ -864,10 +889,17 @@ fn instantiateStruct(
         c.instantiating -= 1;
         finishLateTypes(c)?;
     }
+    if (waits) {
+        raiseDepth(c, firstFunction, depth);
+        return Ok(index);
+    }
     if (c.implsReady) {
+        let savedOwner = enterMembers(c, typ);
         attachGenericImpls(c, typ)?; // ADR 0054
+        c.memberOwner = savedOwner;
     }
     noteBoundedEntry(c, index, false)?; // ADR 0130
+    raiseDepth(c, firstFunction, depth);
     return Ok(index);
 }
 
@@ -895,6 +927,11 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
     }
     let item = c.front.ast.items[entry.item as usize];
     let symbol = c.front.ast.idents[item.name as usize].symbol;
+    if (instanceTooDeep(c, symbol, span)? || argumentsTooLarge(c, symbol, arguments, span)?) {
+        return Ok(template); // N0266: the declaration's own type stands in
+    }
+    let depth = instanceDepthHere(c); // as a struct instance's
+    let firstFunction = c.hir.functions.length;
     var text = Vector<u8>.create();
     qualifiedName(c, entry.file, c.name(symbol), mut text)?; // QualifiedIn(template.Source, …)
     var name = Vector<u8>.create();
@@ -919,6 +956,7 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
     )?;
     addInstance(mut c.enumInstances, template, truncate<u32>(c.enums.length - 1))?;
     let index = truncate<u32>(c.enums.length - 1);
+    let waits = noteInstance(c, typ, index, true, depth > 64)?; // its functions wait for a use (lazy_instances.cee)
     if (c.membersResolved) {
         c.instantiating += 1;
         let mark = diagnosticsMark(c);
@@ -928,10 +966,16 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
         c.instantiating -= 1;
         finishLateTypes(c)?;
     }
+    if (waits) {
+        return Ok(index);
+    }
     if (c.implsReady) {
+        let savedOwner = enterMembers(c, typ);
         attachGenericImpls(c, typ)?; // ADR 0054
+        c.memberOwner = savedOwner;
     }
     noteBoundedEntry(c, index, true)?; // ADR 0130
+    raiseDepth(c, firstFunction, depth);
     return Ok(index);
 }
 
@@ -962,7 +1006,10 @@ fn instantiateFunction(c: borrow mut Checker, g: u32, arguments: Slice<u32>, spa
     }
     let decl = c.front.ast.functions[entry.syntax as usize];
     let symbol = c.front.ast.idents[decl.name as usize].symbol;
-    let depth = (if (c.function == none()) 0u32 else c.hir.functions[c.function as usize].instantiationDepth) + 1;
+    if (argumentsTooLarge(c, symbol, arguments, span)?) {
+        return Ok(none());
+    }
+    let depth = currentInstantiationDepth(c) + 1;
     if (depth > 64) {
         var message = Vector<u8>.create();
         appendText(mut message, "instantiating ")?;
@@ -1390,7 +1437,7 @@ fn checkGenericCall(
         mut found,
     )?;
     if (ok && found.length == 1 && isFieldlessEnum(c, found[0]) && isDerivedKeyHelper(c, g, nameSymbol) &&
-        !boundsHold(c, parameterTypes[0], found[0])?) {
+        !boundsHold(c, parameterTypes[0], found[0], span)?) {
         return derivedIndexCall(c, g, arguments, span); // a fieldless-enum field without its own derive
     }
     let instance = if (ok) instantiateFunction(c, g, found.view(), span)? else none();
@@ -1410,8 +1457,9 @@ fn isDerivedKeyHelper(c: borrow Checker, g: u32, nameSymbol: u32) -> bool {
     return sameText(c.name(nameSymbol), "deriveHash") || sameText(c.name(nameSymbol), "deriveCompare");
 }
 
-/// Does `argument` satisfy the interface bounds of type parameter `parameter` (as checkBounds, without reporting)?
-fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32) -> Result<bool, AllocError> {
+/// Does `argument` satisfy the interface bounds of type parameter `parameter` (as checkBounds, without reporting an
+/// unmet bound)? Asking is a use of `argument`, at `span`: an instance whose functions waited gets them (§20.4).
+fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32, span: Span) -> Result<bool, AllocError> {
     var mapping = Vector<TypeMapping>.create();
     mapping.push(TypeMapping { from: parameter, to: argument })?;
     let boundCount = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.length;
@@ -1426,6 +1474,7 @@ fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32) -> Result<bo
         var boundName = Vector<u8>.create();
         appendBytes(mut boundName, c.types.rangeText(original.name))?;
         let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
+        completeMembers(c, argument, span)?; // the call that asks is the use
         if (!implements(c, argument, required)) {
             return Ok(false);
         }

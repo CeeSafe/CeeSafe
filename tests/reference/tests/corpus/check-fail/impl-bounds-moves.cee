@@ -45,9 +45,9 @@ struct Through<T> {
     left: T;
 }
 
-// Reported for the impl and again for the struct's own type, which gets the impl too (ADR 0054).
+// Reported once, for the impl: the struct's own type gets the impl too (ADR 0054), and repeats it (§20.3).
 impl<T> First<T> for Through<T> {
-    fn head(borrow this) -> T => this.left; // error[N0251] // error[N0251]
+    fn head(borrow this) -> T => this.left; // error[N0251]
 }
 
 struct Nest<T> {

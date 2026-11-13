@@ -1,0 +1,397 @@
+// Instances whose functions wait for a use (type-system.md §20.4, "Functions of a nested instance").
+//
+// An instance of a generic struct or enum gets its declaration's functions when it is made, and declaring a function
+// resolves the types of its signature. A function whose signature names a larger or a fresh instance of its own type
+// (`fn nest(borrow this) -> Pair<Pair<T>>`, `fn with<U>(…) -> Pair<U>` in `Pair<T>`) would so make instances without
+// end. So an instance made while the members of an instance of the same declaration are being resolved (directly, or
+// through instances of other declarations) gets its fields or variants only; its functions, the impls that match it
+// and its bounded blocks' functions are declared at its first use: a method or function looked up on it, or a bound
+// asked of it. Each such step is one nested instantiation: more than 64 are N0266, as for a generic function.
+
+/// The instantiation depth of the code being checked: its function's, or the one of the functions being declared.
+fn currentInstantiationDepth(c: borrow Checker) -> u32 {
+    let mine = if (c.function == none()) 0u32 else c.hir.functions[c.function as usize].instantiationDepth;
+    return if (mine > c.completingDepth) mine else c.completingDepth;
+}
+
+/// The instantiation depth of the functions of an instance first made here: one more than the code's that makes it,
+/// in a body or in the functions declared for a use; 0 in a declaration, which no instantiation is.
+fn instanceDepthHere(c: borrow Checker) -> u32 =>
+    if (c.function != none() || c.completingDepth > 0) currentInstantiationDepth(c) + 1 else 0u32;
+
+/// The functions declared from `first` on are at least `depth` instantiations deep.
+fn raiseDepth(c: borrow mut Checker, first: usize, depth: u32) {
+    for (k in first..c.hir.functions.length) {
+        if (c.hir.functions[k].instantiationDepth < depth) {
+            c.hir.functions[k].instantiationDepth = depth;
+        }
+    }
+}
+
+/// The instance `typ` was made under (Checker.memberOwner then), or none.
+fn instanceParent(c: borrow Checker, typ: u32) -> u32 => match (c.instanceParents.get(Word { value: typ as u64 })) {
+    Some(parent) => truncate<u32>(parent.value & 0xFFFFFFFF),
+    null => none(),
+};
+
+/// Was the instance `typ` made for a field's or a payload's type of the instance it was made under?
+fn madeForMember(c: borrow Checker, typ: u32) -> bool => match (c.instanceParents.get(Word { value: typ as u64 })) {
+    Some(parent) => (parent.value & 0x100000000) == 0 && truncate<u32>(parent.value & 0xFFFFFFFF) != none(),
+    null => false,
+};
+
+/// Is `typ` an instance of a generic struct or enum (not the declaration's own type)?
+fn isMadeInstance(c: borrow Checker, typ: u32) -> bool => match (c.instanceParents.get(Word { value: typ as u64 })) {
+    Some(_) => true,
+    null => false,
+};
+
+/// How many instances hold `typ` by a chain of fields' and payloads' types: itself, the one whose member it was
+/// made for, and so on (an instance made for a signature waits for a use, and is counted there).
+fn instanceNesting(c: borrow Checker, typ: u32) -> u32 {
+    var count: u32 = 1;
+    var p = typ;
+    while (p != none()) {
+        if (madeForMember(c, p)) {
+            count += 1;
+        }
+        p = instanceParent(c, p);
+    }
+    return count;
+}
+
+/// N0266 where an instance would be the 65th nested in the instances whose members are being resolved: a field or
+/// payload whose type names a larger instance of its own declaration, which no finite set of instances holds.
+fn instanceTooDeep(c: borrow mut Checker, name: u32, span: Span) -> Result<bool, AllocError> {
+    if (c.memberOwner == none() || c.inSignature || instanceNesting(c, c.memberOwner) < 64) {
+        return Ok(false);
+    }
+    reportTooDeep(c, name, span)?;
+    return Ok(true);
+}
+
+fn reportTooDeep(c: borrow mut Checker, name: u32, span: Span) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "instantiating ")?;
+    appendQuotedName(mut message, c, name)?;
+    appendText(mut message, " here makes more than 64 nested instantiations (polymorphic recursion?)")?;
+    return c.error(instantiationTooDeep(), span.start, span.end, message);
+}
+
+/// A new instance: what it was made under, and whether its functions wait for a use: an instance of its declaration
+/// is among the ones it is nested in, or (`force`) they would be the 65th nested instantiation.
+fn noteInstance(
+    c: borrow mut Checker,
+    typ: u32,
+    index: u32,
+    isEnum: bool,
+    force: bool,
+) -> Result<bool, AllocError> {
+    let parent = c.memberOwner;
+    let made: u64 = if (c.inSignature) 0x100000000 else 0;
+    c.instanceParents.put(Word { value: typ as u64 }, Word { value: (parent as u64) | made })?;
+    let item = declarationOf(c, typ);
+    var waits = force;
+    var p = parent;
+    while (p != none()) {
+        if (declarationOf(c, p) == item) {
+            waits = true;
+        }
+        p = instanceParent(c, p);
+    }
+    if (waits) {
+        let flag: u64 = if (isEnum) 0x100000000 else 0;
+        c.pendingMembers.put(Word { value: typ as u64 }, Word { value: (index as u64) | flag })?;
+        c.pendingCount += 1;
+    }
+    return Ok(waits);
+}
+
+/// Do the functions of `typ` still wait for a use?
+fn membersWait(c: borrow Checker, typ: u32) -> bool {
+    if (c.pendingCount == 0) {
+        return false;
+    }
+    return match (c.pendingMembers.get(Word { value: typ as u64 })) {
+        Some(entry) => (entry.value & 0x200000000) == 0,
+        null => false,
+    };
+}
+
+/// Enters the members of the instance `typ`: the instances made until leaveMembers are nested in it. Returns the
+/// owner to restore.
+fn enterMembers(c: borrow mut Checker, typ: u32) -> u32 {
+    let saved = c.memberOwner;
+    if (typ != none() && isMadeInstance(c, typ)) {
+        c.memberOwner = typ;
+    }
+    return saved;
+}
+
+/// A use of `typ`, at `span`: if its functions wait, they are declared now, with the impls and bounded blocks an
+/// instance gets when it is made. Their bodies are checked with the other functions' (the body pass), one
+/// instantiation deeper than the code that uses them; past 64 it is N0266 here, and the instance stays without them.
+fn completeMembers(c: borrow mut Checker, typ: u32, span: Span) -> Result<void, AllocError> {
+    if (c.pendingCount == 0 || typ == none()) {
+        return Ok();
+    }
+    var word: u64 = 0x200000000;
+    match (c.pendingMembers.get(Word { value: typ as u64 })) {
+        Some(entry) => { word = entry.value; }
+        null => {}
+    }
+    if ((word & 0x200000000) != 0) {
+        return Ok();
+    }
+    let index = truncate<u32>(word & 0xFFFFFFFF);
+    let isEnum = (word & 0x100000000) != 0;
+    let item = if (isEnum) c.enums[index as usize].item else c.structs[index as usize].item;
+    let entryFile = if (isEnum) c.enums[index as usize].file else c.structs[index as usize].file;
+    let symbol = c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol;
+    let depth = currentInstantiationDepth(c) + 1;
+    if (depth > 64) {
+        return reportTooDeep(c, symbol, span);
+    }
+    var visiting = Vector<u32>.create();
+    if (typeWeight(c, typ, mut visiting)? > typeWeightLimit()) {
+        return reportTooLarge(c, symbol, span);
+    }
+    c.pendingMembers.put(Word { value: typ as u64 }, Word { value: word | 0x200000000 })?;
+    c.pendingCount -= 1;
+    let savedDepth = c.completingDepth;
+    c.completingDepth = depth;
+    let savedGenericMethod = c.genericMethod;
+    let before = c.hir.functions.length;
+    var arguments = Vector<u32>.create();
+    let list = if (isEnum) c.types.enums[c.types.info(typ).enumDef as usize].typeArguments
+        else c.types.structs[c.types.info(typ).structDef as usize].typeArguments;
+    listTypes(c, list, mut arguments)?;
+    var text = Vector<u8>.create();
+    qualifiedName(c, entryFile, c.name(symbol), mut text)?;
+    c.instantiating += 1;
+    let mark = diagnosticsMark(c);
+    if (isEnum) {
+        declareEnumMethodsOf(c, index)?;
+    } else {
+        resolveStructPart(c, index, false, true)?;
+    }
+    // Reported in the generic version; what these arguments cannot take (N0274, N0351) is reported at this use, as
+    // an instance made at once reports it where it is written. The instance was first written in a signature of its
+    // own declaration, which is no place for it: the fault is the use with these arguments.
+    let file = c.file;
+    endInstance(c, mark, arguments.view(), text.view(), file, span, none())?;
+    c.instantiating -= 1;
+    c.genericMethod = savedGenericMethod;
+    finishLateTypes(c)?;
+    if (c.implsReady) {
+        let savedOwner = enterMembers(c, typ);
+        attachGenericImpls(c, typ)?; // ADR 0054
+        c.memberOwner = savedOwner;
+    }
+    noteBoundedEntry(c, index, isEnum)?; // ADR 0130
+    raiseDepth(c, before, depth);
+    c.completingDepth = savedDepth;
+    return Ok();
+}
+
+/// declareEnumMethods for an enum instance whose functions waited: in its file, regions and type environment, as
+/// resolveEnumVariants declares them.
+fn declareEnumMethodsOf(c: borrow mut Checker, index: u32) -> Result<void, AllocError> {
+    let entry = c.enums[index as usize];
+    let savedFile = c.file;
+    {
+        let fileToSet = entry.file;
+        c.setFile(fileToSet);
+    }
+    let regionParameters = match (c.front.ast.items[entry.item as usize].kind) {
+        ItemKind.Enum(_, _, r) => r,
+        _ => emptyRange(),
+    };
+    var scope = Vector<u32>.create();
+    pushRegionNames(c, regionParameters, mut scope)?;
+    let savedRegions = swapRegions(c, scope)?;
+    let savedEnvironment = enterEnvironment(c, entry.environment)?;
+    let savedOwner = enterMembers(c, entry.typ);
+    let before = c.hir.functions.length;
+    declareEnumMethods(c, index)?;
+    markInstanceRepeats(c, entry.typ, before);
+    c.memberOwner = savedOwner;
+    swapRegions(c, savedRegions)?;
+    restoreEnvironment(c, savedEnvironment);
+    c.setFile(savedFile);
+    return Ok();
+}
+
+/// The functions declared from `before` on for the instance `typ`, when its arguments name type parameters, repeat
+/// the generic version's: the declaration's own functions report, and these are checked as an instance's are, their
+/// findings dropped (§20.3: one fault in the source is one diagnostic). A concrete instance's are instantiations
+/// already (functionIsInstantiation).
+fn markInstanceRepeats(c: borrow mut Checker, typ: u32, before: usize) {
+    if (isMadeInstance(c, typ)) {
+        markRepeatsOf(c, typ, before);
+    }
+}
+
+/// As markInstanceRepeats, for any type: a generic impl's methods declared again for a type that names parameters,
+/// the declaration's own included (ADR 0054).
+fn markRepeatsOf(c: borrow mut Checker, typ: u32, before: usize) {
+    if (!c.types.isGeneric(typ)) {
+        return;
+    }
+    for (k in before..c.hir.functions.length) {
+        if (c.hir.functions[k].owner == typ) {
+            c.hir.functions[k].repeatsGeneric = true;
+        }
+    }
+}
+
+/// Is `owner` the instance a bounded block is checked in (ADR 0130)? Its block's functions report there; its other
+/// functions are repeats whose findings under the block's bounds are not the program's.
+fn checksBoundedBlock(c: borrow Checker, owner: u32) -> bool {
+    for (b in c.boundedImpls.view()) {
+        if (b.conditional && b.checkedIn != none()) {
+            let typ = if (b.isEnum) c.enums[b.checkedIn as usize].typ else c.structs[b.checkedIn as usize].typ;
+            if (typ == owner) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Is `function` a repeat of generic code in a type whose arguments name type parameters (markRepeatsOf)? What it finds that the generic version did not is still reported.
+fn isGenericRepeat(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    return f.repeatsGeneric && f.owner != none() && functionIsGeneric(c, function) && !checksBoundedBlock(c, f.owner);
+}
+
+/// Is `function` a bounded block's (ADR 0130), declared for an instance that names type parameters and is not the
+/// one the block is checked in? Then it repeats what that instance reports.
+fn repeatsBoundedBlock(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    if (f.owner == none() || f.repeatsGeneric || !isMadeInstance(c, f.owner) || !c.types.isGeneric(f.owner)) {
+        return false;
+    }
+    let block = boundedImplOf(c, f.syntax);
+    if (block == none() || !c.boundedImpls[block as usize].conditional) {
+        return false;
+    }
+    let b = c.boundedImpls[block as usize];
+    if (b.checkedIn == none()) {
+        return false;
+    }
+    let reports = if (b.isEnum) c.enums[b.checkedIn as usize].typ else c.structs[b.checkedIn as usize].typ;
+    return reports != f.owner;
+}
+
+// ---- The size of a type argument ----
+//
+// Polymorphic recursion may double its type at each step (`f<T>` calling `f<Two<T>>` with `Two<T> { left: T; right:
+// T; }`): 64 steps would name a type of 2^64 members, which no pass that walks a type's members could finish. So a
+// type argument has a size too, counted as the types it names and the members it holds, and an instantiation whose
+// arguments exceed the limit is N0266 like the 65th nested one.
+
+/// The most types and members the type arguments of one instantiation may be made of.
+fn typeWeightLimit() -> u64 => 1048576;
+
+/// How many types and members `typ` is made of: itself, the types it names (a pointee, an element, a function type's
+/// parameters and result, type arguments) and the types of its fields or payloads, each counted where it occurs,
+/// except that a type argument's first use as a field's or payload's whole type is the argument itself; more than the
+/// limit is the limit plus one. A type met inside itself (through a box) counts once.
+fn typeWeight(c: borrow mut Checker, typ: u32, visiting: borrow mut Vector<u32>) -> Result<u64, AllocError> {
+    if (typ == none()) {
+        return Ok(0);
+    }
+    match (c.typeWeights.get(Word { value: typ as u64 })) {
+        Some(known) => { return Ok(known.value); }
+        null => {}
+    }
+    if (containsU32(visiting, typ)) {
+        c.weightCuts += 1;
+        return Ok(1);
+    }
+    if (visiting.length == 0 && !c.membersResolved) {
+        // Fields and payloads are still being resolved: the counts so far are of this moment, kept for this count only.
+        c.typeWeights = Map<Word, Word>.create();
+    }
+    let cuts = c.weightCuts;
+    visiting.push(typ)?;
+    let limit = typeWeightLimit();
+    let t = c.types.info(typ);
+    var named = Vector<u32>.create();
+    var held = Vector<u32>.create();
+    named.push(t.pointee)?;
+    named.push(t.element)?;
+    named.push(t.result)?;
+    listTypes(c, t.parameters, mut named)?;
+    if (t.structDef != none()) {
+        listTypes(c, c.types.structs[t.structDef as usize].typeArguments, mut named)?;
+        for (f in c.types.structs[t.structDef as usize].fields.view()) {
+            held.push(c.types.fields[f as usize].typ)?;
+        }
+    }
+    if (t.enumDef != none()) {
+        listTypes(c, c.types.enums[t.enumDef as usize].typeArguments, mut named)?;
+        named.push(c.types.enums[t.enumDef as usize].resultOk)?;
+        named.push(c.types.enums[t.enumDef as usize].resultErr)?;
+        named.push(c.types.enums[t.enumDef as usize].optionType)?;
+        for (v in c.types.enums[t.enumDef as usize].variants.view()) {
+            for (f in c.types.variants[v as usize].payload.view()) {
+                held.push(c.types.fields[f as usize].typ)?;
+            }
+        }
+    }
+    var weight: u64 = 1;
+    var used = Vector<u32>.create(); // the named types a member has been already
+    for (p in held.view()) {
+        if (p != none() && containsU32(named, p) && !containsU32(used, p)) {
+            used.push(p)?;
+            continue;
+        }
+        if (weight <= limit) {
+            weight += typeWeight(c, p, visiting)?;
+        }
+    }
+    for (p in named.view()) {
+        if (weight <= limit) {
+            weight += typeWeight(c, p, visiting)?;
+        }
+    }
+    if (weight > limit) {
+        weight = limit + 1;
+    }
+    visiting.pop();
+    // Not kept for a type counted inside itself, whose count is partial.
+    if (visiting.length == 0 || weight > limit || c.weightCuts == cuts) {
+        c.typeWeights.put(Word { value: typ as u64 }, Word { value: weight })?;
+    }
+    return Ok(weight);
+}
+
+/// N0266 where the type arguments of a new instantiation of `name` are made of more than typeWeightLimit types and
+/// members.
+fn argumentsTooLarge(c: borrow mut Checker, name: u32, arguments: Slice<u32>, span: Span) -> Result<bool, AllocError> {
+    let limit = typeWeightLimit();
+    var weight: u64 = 0;
+    for (a in arguments) {
+        if (weight <= limit) {
+            var visiting = Vector<u32>.create();
+            weight += typeWeight(c, a, mut visiting)?;
+        }
+    }
+    if (weight <= limit) {
+        return Ok(false);
+    }
+    reportTooLarge(c, name, span)?;
+    return Ok(true);
+}
+
+fn reportTooLarge(c: borrow mut Checker, name: u32, span: Span) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(mut message, "instantiating ")?;
+    appendQuotedName(mut message, c, name)?;
+    appendText(mut message, " here makes a type of more than ")?;
+    appendDecimal(mut message, typeWeightLimit())?;
+    appendText(mut message, " types and members (polymorphic recursion?)")?;
+    return c.error(instantiationTooDeep(), span.start, span.end, message);
+}

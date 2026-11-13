@@ -1,0 +1,175 @@
+// A function of a generic type whose signature names a larger or a fresh instance of its own type (type-system.md
+// §20.4, "Functions of a nested instance"): `Pair<Pair<T>>` and `Pair<U>` in `Pair<T>`. The checker once made
+// instances without end for either (a hang). The instances a program uses are finitely many here, and each expected
+// line follows from the values built: a method, a static function, a generic method, a closure in a method, an
+// interface's generic impl, a bound asked of a nested instance, a bounded block (ADR 0130), an enum's block
+// (ADR 0107), an interface's default constant, and two structs whose methods name each other's instances. A nested
+// instance's functions are declared at its first use, whatever the use: a method call, a static function, `==` of a
+// derived `Equal`, a coercion to `dyn`, and a `for` loop's `next`.
+interface Nester<R> {
+    fn nested(borrow this) -> R;
+}
+
+interface Counted {
+    const SIDES: u32 = 2;
+
+    fn count(borrow this) -> u32;
+}
+
+struct Pair<T: Copy> {
+    left: T;
+    right: T;
+
+    fn nest(borrow this) -> Pair<Pair<T>> => Pair<Pair<T>> {
+        left: Pair<T> { left: this.left, right: this.right },
+        right: Pair<T> { left: this.right, right: this.left },
+    };
+
+    fn with<U: Copy>(borrow this, a: U, b: U) -> Pair<U> => Pair<U> { left: a, right: b };
+
+    fn twice(a: T) -> Pair<Pair<T>> {
+        let one = Pair<T> { left: a, right: a };
+        return one.nest();
+    }
+
+    fn viaClosure(borrow this) -> Pair<Pair<T>> {
+        let make = (p: borrow Pair<T>) => p.nest();
+        return make(this);
+    }
+}
+
+impl<T: Copy> Nester<Pair<Pair<T>>> for Pair<T> {
+    fn nested(borrow this) -> Pair<Pair<T>> => this.nest();
+}
+
+impl<T: Copy> Counted for Pair<T> {
+    fn count(borrow this) -> u32 => 2;
+}
+
+impl<T: Copy + Counted> Pair<T> {
+    fn total(borrow this) -> u32 => this.left.count() + this.right.count();
+
+    fn deeper(borrow this) -> Pair<Pair<T>> => this.nest();
+}
+
+fn countOf<S: Counted>(s: borrow S) -> u32 => s.count();
+
+fn sidesOf<S: Counted>(s: borrow S) -> u32 => S.SIDES;
+
+enum Tree<T: Copy> {
+    Leaf(T),
+    Two(T, T),
+}
+
+impl<T: Copy> Tree<T> {
+    fn lift(this) -> Tree<Tree<T>> => Tree<Tree<T>>.Leaf(this);
+
+    fn both(this) -> Tree<Tree<T>> => Tree<Tree<T>>.Two(this, this);
+
+    fn first(this) -> T => match (this) {
+        Tree.Leaf(a) => a,
+        Tree.Two(a, _) => a,
+    };
+}
+
+struct Ping<T: Copy> {
+    value: T;
+
+    fn pong(borrow this) -> Pong<Ping<T>> => Pong<Ping<T>> { value: Ping<T> { value: this.value } };
+}
+
+struct Pong<T: Copy> {
+    value: T;
+
+    fn ping(borrow this) -> Ping<Pong<T>> => Ping<Pong<T>> { value: Pong<T> { value: this.value } };
+}
+
+interface Shape {
+    fn area(borrow this) -> u32;
+}
+
+@derive(Equal)
+struct Cell<T: Copy> {
+    v: T;
+    left: u32;
+
+    fn nest(borrow this) -> Cell<Cell<T>> => Cell<Cell<T>> { v: Cell<T> { v: this.v, left: this.left }, left: 2 };
+
+    fn next(borrow mut this) -> u32? {
+        if (this.left == 0) {
+            return null;
+        }
+        this.left -= 1;
+        return Some(this.left);
+    }
+
+    fn make(v: T) -> Cell<T> => Cell<T> { v: v, left: 1 };
+}
+
+impl<T: Copy> Shape for Cell<T> {
+    fn area(borrow this) -> u32 => 4 + this.left;
+}
+
+fn uses() {
+    let c = Cell<i32> { v: 1, left: 3 };
+    let n = c.nest();
+    Console.writeLine(n == n);
+    let s: borrow dyn Shape = borrow n;
+    Console.writeLine(s.area());
+    var it = c.nest();
+    for (x in it) {
+        Console.writeLine(x);
+    }
+    let m = Cell<Cell<Cell<i32>>>.make(n);
+    Console.writeLine(m.v.v.left + m.left);
+    let deep = n.nest().nest();
+    Console.writeLine(deep == deep);
+}
+
+fn main() {
+    let p = Pair<i32> { left: 1, right: 2 };
+    let q = p.nest();
+    Console.writeLine(q.left.right + q.right.right);
+    let r = q.nest();
+    Console.writeLine(r.right.left.left);
+    let w = p.with(true, false);
+    Console.writeLine(if (w.left && !w.right) 3 else 0);
+    let t = Pair<u8>.twice(7);
+    Console.writeLine(t.right.left);
+    let v = p.viaClosure();
+    Console.writeLine(v.left.left);
+    let n = p.nested();
+    Console.writeLine(n.right.right);
+    Console.writeLine(countOf(n));
+    Console.writeLine(countOf(r));
+    Console.writeLine(q.total());
+    Console.writeLine(q.deeper().left.left.right);
+    Console.writeLine(sidesOf(r) + sidesOf(q.deeper()));
+    let leaf = Tree<i32>.Leaf(9);
+    let lifted = leaf.lift().both();
+    Console.writeLine(lifted.first().first().first());
+    let ping = Ping<i32> { value: 11 };
+    let back = ping.pong().ping().pong();
+    Console.writeLine(back.value.value.value.value);
+    uses();
+}
+
+// expect-stdout: 3
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 2
+// expect-stdout: 4
+// expect-stdout: 2
+// expect-stdout: 4
+// expect-stdout: 9
+// expect-stdout: 11
+// expect-stdout: true
+// expect-stdout: 6
+// expect-stdout: 1
+// expect-stdout: 0
+// expect-stdout: 4
+// expect-stdout: true

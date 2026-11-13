@@ -241,6 +241,81 @@ struct Diagnostics {
         this.items.truncate(kept);
     }
 
+    /// Is the diagnostic at `index` reported already by one before `before`: the same code at the same place, and with
+    /// `sameMessage` the same message too?
+    fn isRepeat(borrow this, index: usize, before: usize, sameMessage: bool) -> bool {
+        let d = borrow this.items[index];
+        for (i in 0..before) {
+            let e = borrow this.items[i];
+            if (e.code == d.code && e.start == d.start && e.end == d.end && e.file == d.file &&
+                e.isError == d.isError && (!sameMessage || sameBytes(e.message.view(), d.message.view()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Of the diagnostics from `mark` on, keeps the ones of code `always` and, with `news`, the ones no diagnostic
+    /// before `declared` reports already (the same code at the same place: one fault in generic code, met again in an
+    /// instance). The others are removed, and so are the new ones when one of code `always` is among them: they follow
+    /// from it. Returns whether a kept one is an error that is not of code `always`.
+    fn keepSince(borrow mut this, mark: usize, always: u32, news: bool, declared: usize) -> bool {
+        var kept = mark;
+        var newError = false;
+        var keepNews = news;
+        for (i in mark..this.items.length) {
+            if (this.items[i].code == always) {
+                keepNews = false;
+            }
+        }
+        for (i in mark..this.items.length) {
+            let isAlways = this.items[i].code == always;
+            if (!isAlways && (!keepNews || this.isRepeat(i, if (declared < mark) declared else mark, false))) {
+                continue;
+            }
+            if (isAlways && this.isRepeat(i, kept, false)) {
+                continue; // one place, one such diagnostic, whatever limit was met there
+            }
+            if (!isAlways && this.items[i].isError) {
+                newError = true;
+            }
+            if (kept != i) {
+                this.items.swap(kept, i);
+            }
+            kept += 1;
+        }
+        this.items.truncate(kept);
+        return newError;
+    }
+
+    /// If a diagnostic from `mark` on is of code `code`, removes the others from `mark` on: they follow from it.
+    fn keepCause(borrow mut this, mark: usize, code: u32) {
+        var found = false;
+        for (i in mark..this.items.length) {
+            if (this.items[i].code == code) {
+                found = true;
+            }
+        }
+        if (found) {
+            this.keepSince(mark, code, false, mark);
+        }
+    }
+
+    /// Removes each diagnostic that repeats an earlier one in code, place and message: it is one finding.
+    fn removeRepeats(borrow mut this) {
+        var kept: usize = 0;
+        for (i in 0..this.items.length) {
+            if (this.isRepeat(i, kept, true)) {
+                continue;
+            }
+            if (kept != i) {
+                this.items.swap(kept, i);
+            }
+            kept += 1;
+        }
+        this.items.truncate(kept);
+    }
+
     /// Whether any diagnostic so far is in `file`.
     fn anyIn(borrow this, file: u32) -> bool {
         for (i in 0..this.items.length) {

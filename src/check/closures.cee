@@ -741,6 +741,8 @@ fn newClosureFunction(
     if (c.function != none() && c.hir.functions[c.function as usize].repeatsGeneric) {
         c.hir.functions[function as usize].repeatsGeneric = true; // as the function it is written in (ADR 0130)
     }
+    // A closure's calls are as deep in instantiations as the function it is written in (§20.4).
+    c.hir.functions[function as usize].instantiationDepth = currentInstantiationDepth(c);
     var pairs = Vector<EnvPair>.create();
     for (pair in c.typeEnvironment.view()) {
         pairs.push(pair)?;
@@ -760,6 +762,7 @@ fn newClosureFunction(
         let definition = c.types.info(environmentType).structDef;
         c.types.structs[definition as usize].isClosureEnvironment = true;
         c.types.structs[definition as usize].closureId = id;
+        c.types.structs[definition as usize].inGenericCode = environmentIsGeneric(c, environment);
         c.hir.functions[function as usize].closureEnvironment = environmentType;
         // Named `env`, but in no scope: the body cannot name it (its captures lower to places in it).
         let envName = c.intern("env")?;

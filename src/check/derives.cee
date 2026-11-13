@@ -602,7 +602,8 @@ fn orderKeyText(shape: borrow DeriveShape) -> Result<Vector<u8>, AllocError> {
 // ---- `==` on derived types (src/check/equality.cee) ----
 
 /// lib/core's `DerivedEqual` method for `typ`, a struct or enum `@derive(Equal)` gave one; else none.
-fn derivedEqualMethod(c: borrow mut Checker, typ: u32) -> Result<u32, AllocError> {
+fn derivedEqualMethod(c: borrow mut Checker, typ: u32, span: Span) -> Result<u32, AllocError> {
+    completeMembers(c, typ, span)?; // an instance whose impls waited for a use: the comparison
     var found = false;
     for (i in c.implementations.view()) {
         if (i.typ == typ && isDerivedEqualInterface(c, i.interfaceEntry)) {
@@ -672,7 +673,10 @@ fn derivedEquality(
         return c.expr(HirExpr.Binary(op, l, r), boolType, span.start, span.end);
     }
     let method =
-        if (c.types.is(lt, TypeKind.Struct) || c.types.is(lt, TypeKind.Enum)) derivedEqualMethod(c, lt)? else none();
+        if (c.types.is(
+            lt,
+            TypeKind.Struct,
+        ) || c.types.is(lt, TypeKind.Enum)) derivedEqualMethod(c, lt, span)? else none();
     let sequence = sequenceElement(c, lt) != none() || (c.types.is(lt, TypeKind.Array) && !c.types.isUnsized(lt));
     if (method == none() && !sequence) { // checkEquality compares slices, arrays and vectors element by element
         if (inDerivedEqual(c) && !hasPlainEquality(c, lt)) {

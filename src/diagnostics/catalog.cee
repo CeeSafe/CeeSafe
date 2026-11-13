@@ -121,7 +121,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>
         "Type arguments that cannot be inferred: a generic call whose arguments and unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter (a call's expected type is not used: `let m: Maybe<i32> = make();` needs `make<i32>()`), or a struct literal or enum value whose fields, payloads and expected type do not. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
-    266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
+    266 =>
+        "Generic instantiation nested more than 64 deep, or with type arguments made of more than 1048576 types and members (polymorphic recursion): a function's, or the functions of a struct or enum instance at their first use (type-system.md §20.4)",
     267 =>
         "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107)",
     268 =>

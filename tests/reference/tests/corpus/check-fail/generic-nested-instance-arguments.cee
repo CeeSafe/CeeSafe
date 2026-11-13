@@ -1,0 +1,23 @@
+// What a nested instance's functions cannot take is reported where the instance is first used (type-system.md
+// §20.4, "Functions of a nested instance"), as an instance made at once reports it where it is written: never in
+// the signature of its own declaration that first names it. `Slot<Slot<borrow u32>>` is first named by `nest`'s
+// return type, in generic code (no error on that line), and gets its functions at `t.nest()`: its `cell` would
+// make a cell of a loan-holding type (N0351; ADR 0084 §2.1), so that use is the error. `Slot<borrow u32>` itself is
+// made at once: its error is where it is written, and at its `cell`, as before.
+struct Slot<T> {
+    value: T;
+
+    fn nest(this) -> Slot<Slot<T>> => Slot<Slot<T>> { value: this };
+
+    fn cell(this) -> RawCell<T> => RawCell<T>.create(this.value); // error[N0351]
+
+    fn boxed(this) -> Result<Box<T>, AllocError> => Box.create(this.value);
+}
+
+fn main() {
+    let n: u32 = 4;
+    let s = Slot<borrow u32> { value: borrow n }; // error[N0351]
+    let t = s.nest();
+    let u = t.nest(); // error[N0351]
+    Console.writeLine(1);
+}

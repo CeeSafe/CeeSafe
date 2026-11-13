@@ -346,6 +346,7 @@ fn checkStaticCall(
         let failAfter = sameText(c.name(memberIdent.symbol), "failAfter");
         return checkFailingAllocatorCall(c, failAfter, arguments, span);
     }
+    completeMembers(c, typ, span)?; // an instance whose functions waited for a use (lazy_instances.cee)
     let definition = c.types.info(typ).structDef;
     var function = findStructFunction(c, definition, memberIdent.symbol);
     if (function == none()) {

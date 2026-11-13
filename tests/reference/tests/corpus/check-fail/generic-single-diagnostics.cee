@@ -1,0 +1,85 @@
+// One fault in generic code is one diagnostic (type-system.md §20.3), however many instances the program names. The
+// declaration reports; an instance whose arguments name type parameters (`Twice<U>` in a generic function, `Wrap`'s
+// field of type `Twice<T>`, a nested `Twice<Twice<U>>`, the type a generic impl is written for, the instance a
+// bounded block is checked in, ADR 0130) is checked again and once reported each fault again: a duplicate member
+// (N0228), an error in a method's body, in an interface's generic impl, in a bounded block's function and in an
+// enum's function; and a generic function or generic method called from generic code, whose instance for the
+// caller's parameter is generic too. Two errors on one line are still two, and an error only one instance has is
+// still reported where the instance is used (N0222: check-fail/generic-struct-method-instance,
+// check-fail/derive-instance).
+interface First<T> {
+    fn head(borrow this) -> T;
+}
+
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+struct Twice<T> {
+    left: T;
+    left: T; // error[N0228]
+
+    fn bad(borrow this) -> i32 {
+        let x: bool = 1; // error[N0205]
+        let y: bool = 2; let z: u8 = true; // error[N0205] // error[N0205]
+        return 2;
+    }
+
+    fn bad(borrow this) -> i32 => 3; // error[N0228]
+}
+
+struct Wrap<T> {
+    inner: Twice<T>;
+
+    fn wrong(borrow this) -> bool => 5; // error[N0205]
+}
+
+fn use<U>(w: borrow Wrap<Twice<U>>, t: borrow Twice<Twice<U>>) -> i32 => 1;
+
+fn again<V>(w: borrow Wrap<V>, t: borrow Twice<V>) -> i32 => 1;
+
+struct Through<T> {
+    left: T;
+}
+
+impl<T> First<T> for Through<T> {
+    fn head(borrow this) -> T => missing; // error[N0200]
+}
+
+fn through<W>(t: borrow Through<W>, u: borrow Through<Through<W>>) -> i32 => 1;
+
+struct Other<T> {
+    left: T;
+}
+
+impl<T: Named> Other<T> {
+    fn named(borrow this) -> u32 => this.left.name() + absent; // error[N0200]
+}
+
+fn other<X: Named>(o: borrow Other<X>, p: borrow Other<Other<X>>) -> i32 => 1;
+
+enum Choice<T> {
+    One(T),
+    One(T), // error[N0228]
+}
+
+impl<T> Choice<T> {
+    fn pick(borrow this) -> bool => 7; // error[N0205]
+}
+
+fn choose<Y>(c: borrow Choice<Y>, d: borrow Choice<Choice<Y>>) -> i32 => 1;
+
+struct Holder<T> {
+    v: T;
+
+    fn pick<U>(borrow this, u: U) -> bool => 9; // error[N0205]
+}
+
+fn plain<T>(x: T) -> bool => 8; // error[N0205]
+
+fn calls<Z>(z: Z, h: borrow Holder<Z>) -> bool => plain(z) && h.pick(z);
+
+fn main() {
+    let w = Wrap<i32> { inner: Twice<i32> { left: 1 } };
+    Console.writeLine(w.inner.left);
+}

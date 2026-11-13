@@ -341,6 +341,7 @@ fn checkPendingAssocBounds(c: borrow mut Checker) -> Result<void, AllocError> {
     for (k in 0..c.pendingAssocBounds.length) {
         let p = c.pendingAssocBounds[k];
         c.setFile(p.file);
+        completeMembers(c, p.assigned, Span { start: p.start, end: p.end })?;
         let met = if (p.bound == none()) c.types.isCopy(p.assigned) else implements(c, p.assigned, p.bound);
         if (!met) {
             var message = Vector<u8>.create();
@@ -460,6 +461,7 @@ fn uniqueBoundDeclaring(c: borrow mut Checker, typ: u32, name: u32, kind: u32, s
 fn resolveProjection(c: borrow mut Checker, owner: u32, nameIdent: Ident, span: Span) -> Result<u32, AllocError> {
     let name = nameIdent.symbol;
     if (!c.types.is(owner, TypeKind.TypeParameter)) {
+        completeMembers(c, owner, span)?; // an instance whose impls waited for a use (lazy_instances.cee)
         let assigned = implTypeFor(c, owner, name);
         if (assigned != none()) {
             return Ok(assigned);

@@ -283,6 +283,35 @@ fn docImplements(entry: borrow mut DocItem, impls: borrow Vector<DocImpl>) -> Re
     return Ok();
 }
 
+/// The public functions that the file's `impl E { … }` blocks give the type named by `nameIdent` (ADR 0107), as
+/// members of the entry `parent`.
+fn docInherentFunctions(
+    file: borrow DocFile,
+    index: u32,
+    nameIdent: u32,
+    parent: u32,
+    out: borrow mut Vector<DocItem>,
+) -> Result<void, AllocError> {
+    let ast = borrow file.front.ast;
+    let unit = borrow ast.units[0];
+    for (k in 0..unit.items.count) {
+        match (ast.items[ast.at(unit.items, k) as usize].kind) {
+            ItemKind.InherentImpl(forType, functions, _, _, _) => {
+                if (sameBytes(docTypeName(file, forType), identName(file, nameIdent))) {
+                    for (m in 0..functions.count) {
+                        let f = ast.at(functions, m);
+                        if (isPublic(ast.functions[f as usize].visibility)) {
+                            out.push(docFunction(file, index, f, parent)?)?;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    return Ok();
+}
+
 /// The file's public items, in order, with their methods after them (FileEntries.Entries).
 fn docEntries(
     file: borrow DocFile,
@@ -372,7 +401,9 @@ fn docEntries(
                 }
                 var entry = docEntry(file, index, 4, item.name, first, docMembers(header, members)?, none())?;
                 docImplements(mut entry, impls)?;
+                let parent = truncate<u32>(out.length);
                 out.push(entry)?;
+                docInherentFunctions(file, index, item.name, parent, out)?; // an enum's `impl E { … }` (ADR 0107)
             }
             ItemKind.Interface(methods, _) => {
                 let header = docTextOf(

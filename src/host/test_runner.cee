@@ -145,7 +145,7 @@ fn harnessSource(tests: borrow Vector<TestEntry>) -> Result<Vector<u8>, AllocErr
                     1 => "            Err(f) => { return TestRun.failed(f.message.view()); }\n",
                     2 => "            Err(e) => { return TestRun.failedWith(e.message()); }\n",
                     3 =>
-                        "            Err(AsyncError.Io(e)) => { return TestRun.failedWith(e.message()); }\n            Err(AsyncError.Cancelled) => { return TestRun.failedWith(\"cancelled\"); }\n            Err(AsyncError.TimedOut) => { return TestRun.failedWith(\"timed out\"); }\n",
+                        "            Err(AsyncError.Io(e)) => { return TestRun.failedWith(e.message()); }\n            Err(AsyncError.Cancelled) => { return TestRun.failedWith(\"cancelled\"); }\n            Err(AsyncError.TimedOut) => { return TestRun.failedWith(\"timed out\"); }\n            Err(AsyncError.Closed) => { return TestRun.failedWith(\"closed\"); }\n",
                     _ => "            Err(_) => { return TestRun.failedWith(\"returned Err\"); }\n",
                 },
             )?;

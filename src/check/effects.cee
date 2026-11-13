@@ -62,7 +62,7 @@ fn isAttributeWord(name: Slice<u8>) -> bool =>
             name,
             "align",
         ) || sameText(name, "noncopy") || sameText(name, "placed") || sameText(name, "callback") ||
-        sameText(name, "cfg") || sameText(name, "test") || sameText(name, "derive");
+        sameText(name, "cfg") || sameText(name, "test") || sameText(name, "derive") || sameText(name, "into");
 
 /// Reports repeated attributes and unknown ones (N0290), and returns those named in `known` (KnownAttributes).
 fn knownAttributes(
@@ -564,6 +564,7 @@ fn processConstantAttributes(c: borrow mut Checker, item: u32) -> Result<void, A
 fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocError> {
     let functions = c.front.ast.structs[s as usize].functions;
     var placedCount: u32 = 0;
+    var intoCount: u32 = 0;
     let savedFile = c.file;
     for (k in 0..functions.count) {
         let member = c.front.ast.at(functions, k);
@@ -571,10 +572,13 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
             let fileToSet = methodFileOf(c, member, savedFile);
             c.setFile(fileToSet);
         }
-        let words = "effects effectsOf context placed constant test";
+        let words = "effects effectsOf context placed constant test into";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[member as usize].attributes;
         knownAttributes(c, attributes, "a method", words, mut known)?;
+        if (readIntoAttribute(c, member, known.view(), intoCount)?) {
+            intoCount += 1; // ADR 0128
+        }
         for (attribute in known.view()) {
             if (sameText(attributeName(c, attribute), "test")) {
                 let a = c.front.ast.attributes[attribute as usize];
@@ -622,6 +626,48 @@ fn processMethodAttributes(c: borrow mut Checker, s: u32) -> Result<void, AllocE
     }
     c.setFile(savedFile);
     return Ok();
+}
+
+/// `@into` on a method (ADR 0128; type-system.md §17.4): `fn name(this) -> F` is the conversion `?` makes from the
+/// method's type into `F`. `earlier` is the number of `@into` methods the type has already: it has at most one.
+/// Returns whether `member` is now one; a wrong shape or a second one is N0290.
+fn readIntoAttribute(c: borrow mut Checker, member: u32, known: Slice<u32>, earlier: u32) -> Result<bool, AllocError> {
+    var accepted = false;
+    for (attribute in known) {
+        if (!sameText(attributeName(c, attribute), "into")) {
+            continue;
+        }
+        let a = c.front.ast.attributes[attribute as usize];
+        let decl = c.front.ast.functions[member as usize];
+        var problem: u32 = 0;
+        if (a.hasParentheses) {
+            problem = 1;
+        } else if (receiverIndex(decl.receiver) != 1 || decl.parameters.count != 0 || decl.returnType == none() ||
+            decl.typeParameters.count != 0 || decl.isAsync || decl.isUnsafe) {
+            problem = 2;
+        } else if (earlier > 0) {
+            problem = 3;
+        }
+        if (problem != 0) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "'@into' ")?;
+            appendText(
+                mut message,
+                match (problem) {
+                    1 => "takes no arguments",
+                    2 =>
+                        "needs the form 'fn name(this) -> F': a method that takes the value and nothing else and returns the type '?' converts into, with no type parameters of its own, neither 'async' nor 'unsafe'",
+                    _ => "is given to a second method; a type has one conversion for '?'",
+                },
+            )?;
+            appendText(mut message, " (type-system.md §17.4)")?;
+            c.error(invalidAttribute(), a.start, a.end, message)?;
+        } else {
+            c.intoMethods.push(member)?;
+            accepted = true;
+        }
+    }
+    return Ok(accepted);
 }
 
 /// The parameters an `@effectsOf(…)` names (EffectsOfParameters, §32.5), as indices into the function's parameters;

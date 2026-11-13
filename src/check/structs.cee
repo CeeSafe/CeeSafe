@@ -862,3 +862,28 @@ fn fromVariant(c: borrow Checker, target: u32, source: u32) -> u32 {
     }
     return none();
 }
+
+/// The `@into` method of the type `source` that returns `target`, or none (ADR 0128): `?` calls it on an error of
+/// type `source` in a function whose errors are `target`s. The method is the one of this instance of `source`.
+/// With no `target`: the type's `@into` method, whatever it returns (for N0261's text).
+fn intoMethod(c: borrow Checker, source: u32, target: u32) -> u32 {
+    if (source == none() || source == target) {
+        return none();
+    }
+    let definition = c.types.info(source).structDef;
+    for (syntax in c.intoMethods.view()) {
+        let name = c.front.ast.idents[c.front.ast.functions[syntax as usize].name as usize].symbol;
+        var function = none();
+        if (definition != none()) {
+            function = findStructFunction(c, definition, name);
+        }
+        if (function == none()) {
+            function = implMethodFor(c, source, name);
+        }
+        if (function != none() && c.hir.functions[function as usize].syntax == syntax &&
+            (target == none() || c.hir.functions[function as usize].returnType == target)) {
+            return function;
+        }
+    }
+    return none();
+}

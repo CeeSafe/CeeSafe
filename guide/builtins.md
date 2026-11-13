@@ -313,6 +313,7 @@ Medium
 | `embed("path")`, `embedText("path")` | a file's bytes as a `Slice<u8>`, or as UTF-8 text, read when the package is checked; the path is relative to the source file and stays inside the package ([Constants](basics.md#embedded-files)) |
 | `r.isOk()`, `r.isErr()`, `r.ok()`, `r.err()`, `o.okOr(e)` | a `Result`'s tests and conversions; an optional as a `Result` |
 | `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
+| `@into fn name(this) -> F` (a method, one per type) | `?` turns an error of the method's type into an `F` by calling it, in a function returning `Result<_, F>`; lib/std's `SendError<T>.reason()` is one |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |
 | `checkedTruncate<T>(f)`, `saturatingTruncate<T>(f)` | a float to an integer: `T?` (`null` where `truncate` would panic); the nearest bound (NaN gives 0) |
 | `round<T>(x)` | to a float type, rounding to nearest |

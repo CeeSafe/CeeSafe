@@ -222,6 +222,7 @@ fn checkProgramWith(
         testFunctions: Vector<u32>.create(),
         entryName: entryName,
         placedMethods: Vector<u32>.create(),
+        intoMethods: Vector<u32>.create(),
         moveBodies: Vector<MoveBody>.create(),
         unsafeDepth: 0,
         usedUnsafe: false,

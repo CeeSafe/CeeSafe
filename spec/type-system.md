@@ -1232,11 +1232,22 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
 - **`e?` (propagate).**
   - `e` must have a `Result<T, E>` type (N0262). The enclosing function must return
     `Result<U, E>` with the same `E`, or `Result<U, F>` where `F` is an enum with an `@from` variant whose payload
-    is `E` (N0261 otherwise, naming the `@from` variant that would fix it).
+    is `E`, or where `E` has an `@into` method whose result type is `F` (N0261 otherwise, naming the `@from` variant
+    that would fix it). They are tried in this order: a function's own `@from` variant comes before the error's
+    `@into` method.
   - **`@from`** (ADR 0075 §2.3): `enum F { @from Io(IoError), … }` marks a variant with exactly one payload (N0262
     otherwise), and an enum has at most one `@from` variant per payload type (N0262). `e?` then returns
     `Err(F.Io(x))` for `Err(x)`. The conversion is one step, and only `?` makes it: `return Err(x)` still names the
     variant.
+  - **`@into`** (ADR 0128): the conversion declared on the error's side, for an error that the function's error
+    type cannot hold. A method of a struct, or of an enum's `impl E { … }` block, may be marked `@into`; it has the
+    form `fn name(this) -> F`: the value as its receiver and no other parameter, a result type, no type parameters
+    of its own (its type's are fine), neither `async` nor `unsafe`; and a type has at most one (N0290 otherwise).
+    `e?` then returns `Err(x.name())` for `Err(x)`: the error moves into the call, which destroys what it does not
+    keep. The call is checked as one written at the `?`: the method must be visible there, and its effects are
+    effects of the enclosing function (§32). It is one step too: an `@into` result is not converted again through an
+    `@from` variant, and N0261 then says what the error converts into. lib/std's `SendError<T>.reason()` is `@into`
+    (§40.4): `await ch.sendAsync(v)?` in a function that returns `Result<_, AsyncError>`.
   - If `e` is `Ok(v)`, the value of `e?` is `v` (of type `T`; `void` if `T` is `void`).
   - If `e` is `Err(x)`, the function returns `Err(x)` at once, exactly like a `return`
     statement. The statement's temporaries end, then every scope is left (drops and deferred
@@ -1267,8 +1278,8 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
   whatever the number of instances of a generic function, and not for a statement that has an error of its own.
 
 Diagnostics: N0260 (no expected `Result` type for `Ok`/`Err`), N0261 (`?` in a function whose
-return type is not a `Result` with the same error type or an `@from` variant for it), N0262 (`?` or `!` on a
-non-`Result`, or a misused `@from`).
+return type is not a `Result` with the same error type, an `@from` variant for it, or the result type of the
+error's `@into` method), N0262 (`?` or `!` on a non-`Result`, or a misused `@from`), N0290 (a misused `@into`).
 
 ### 17.6 Methods of `Result<T, E>` (ADR 0075 §2.3)
 - `r.isOk()` and `r.isErr()` (`borrow this`): `bool`.
@@ -3059,6 +3070,7 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@effects(…)` | a function, method or `extern` function | the effects it may have (§32.2) |
 | `@effectsOf(p, …)` | a function or method | its effects at a call include those of the closure or function passed for each named parameter (§32.5) |
 | `@from` | a variant of an enum, with exactly one payload | `?` converts an error of the payload's type into this variant (ADR 0075; §17.4) |
+| `@into` | a method `fn m(this) -> F` of a struct or of an enum's `impl` block, one per type | `?` converts an error of the method's type into `F` by calling it (ADR 0128; §17.4) |
 | `@context(atomic)`, `@context(irq)` | a function or method; `atomic` also a struct | a context that forbids effects (§32.3) |
 | `@placed` | a method `fn m(borrow mut this)` | the type's placement initialiser (§33.3) |
 | `@callback` | a top-level function | a C address without a symbol, for C callbacks (§34.1) |
@@ -5033,10 +5045,27 @@ held across `await`, its waiters served first come, first served), and channels 
 `clone`, `close`, blocking `send`/`recv` for threads, `await sendAsync`/`recvAsync` for tasks; `trySend` and
 `tryRecv`, which never wait and have no effect, and `isClosed()`, ADR 0060: `tryRecv` is the next buffered value or
 null, empty or closed, and a channel is drained when `isClosed()` and then `tryRecv()` is null). Its operations return `Result<T, AsyncError>`,
-where `AsyncError` has `Cancelled`, `TimedOut` and `Io(IoError)`. `Io` is `@from` (§17.4, ADR 0111): in a function
-that returns `Result<_, AsyncError>`, `?` on a `Result<_, IoError>` (a socket's `bind`, `port` or `shutdownWrite`,
-which do not wait) returns `Err(AsyncError.Io(e))`. A channel's `create(0)` panics ("a channel needs a capacity of at
-least 1", ADR 0032 §3.1).
+where `AsyncError` has four variants:
+
+| Variant | Meaning | What `?` converts into it, in a function that returns `Result<_, AsyncError>` |
+|---|---|---|
+| `Cancelled` | the task was cancelled while it waited (§40.7) | `SendError.Cancelled(v)`, dropping `v` |
+| `TimedOut` | a shield's time is up (§40.7); the usual `timedOut` value of `Async.timeout` | nothing |
+| `Io(IoError)` | the kernel refused the operation | an `IoError`: `Io` is `@from` (§17.4, ADR 0111), for a socket's `bind`, `port` or `shutdownWrite`, which do not wait |
+| `Closed` | the other side of this channel, or this endpoint, was closed, so the operation can never succeed (ADR 0128) | `SendError.Closed(v)`, dropping `v` |
+
+**A send's error** (ADR 0128). `await ch.sendAsync(v)` returns `Result<void, SendError<T>>`, and `SendError<T>` is
+`Closed(T)` or `Cancelled(T)`: a send that fails gives the value back (ADR 0032 §3.3). `SendError<T>.reason()`
+drops the value and returns `AsyncError.Closed` or `AsyncError.Cancelled`; it is `@into` (§17.4), so
+`await ch.sendAsync(v)?` in a function that returns `Result<_, AsyncError>` returns `Err(error.reason())`, and the
+value is destroyed there. A program that wants the value back matches on the `SendError`. The sends that give the
+value back without a reason do not convert: `trySend(v)` (`Err(v)` from a channel that is full or closed) and the
+blocking `send(v)` (`Err(v)`: closed) return `Result<void, T>`, and `?` on them is N0261 unless `T` is itself an
+error the function converts. A full channel is an answer, not a failure of the channel: the caller of `trySend`
+reads it, and tests `isClosed()` to tell the two apart. `Closed` is never the end of a stream: a receive from a
+closed, drained channel is `Ok(null)`.
+
+A channel's `create(0)` panics ("a channel needs a capacity of at least 1", ADR 0032 §3.1).
 
 **Socket addresses** (lib/std's `net.cee`, ADR 0044):
 

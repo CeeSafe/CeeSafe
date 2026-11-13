@@ -35,11 +35,13 @@ extern "C" {
 
 /// Why an async operation failed (type-system.md §40.4, §40.7). `Io` is `@from` (ADR 0111): in a function that
 /// returns `Result<_, AsyncError>`, `?` on a `Result<_, IoError>` (a socket's `bind`, `port`, `shutdownWrite`)
-/// returns `Err(AsyncError.Io(e))`.
+/// returns `Err(AsyncError.Io(e))`. `Closed` (ADR 0128): the other side of this channel, or this endpoint, was closed,
+/// so the operation can never succeed; it is what `?` makes of a send to a closed channel (`SendError.reason`).
 public enum AsyncError {
     Cancelled,
     TimedOut,
     @from Io(IoError),
+    Closed,
 }
 
 /// Time for tasks: the monotonic clock in milliseconds.

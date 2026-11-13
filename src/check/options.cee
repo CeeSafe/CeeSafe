@@ -440,6 +440,20 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
             c.tryConversions.put(Word { value: tried as u64 }, Word { value: conversion as u64 })?;
             return Ok(tried);
         }
+        let into = if (returnsResult) intoMethod(c, err, resultErr(c, returnType)) else none();
+        if (into != none()) {
+            // `?` calls the error type's `@into` method, which returns the function's error type (ADR 0128). The
+            // call is checked as one written on the error would be (visibility, profile, effects at its place); only
+            // its callee is kept, since the error itself exists in the lowering alone.
+            let name = c.hir.functions[into as usize].name;
+            findMethod(c, err, name, span)?;
+            let receiver = c.expr(HirExpr.Error, err, span.start, span.end)?;
+            let noArguments = Range { start: 0, count: 0 };
+            checkUserCallWith(c, into, noArguments, span, receiver)?;
+            let tried = c.expr(HirExpr.Try(operand), ok, span.start, span.end)?;
+            c.tryConversions.put(Word { value: tried as u64 }, Word { value: (into as u64) | 0x100000000 })?;
+            return Ok(tried);
+        }
         if (!returnsResult || resultErr(c, returnType) != err) {
             if (returnType == none() || !c.types.isBottom(returnType)) {
                 var message = Vector<u8>.create();
@@ -457,6 +471,17 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
                     appendText(mut message, "Variant(")?;
                     appendBytes(mut message, c.typeName(err))?;
                     appendText(mut message, ")'")?;
+                    let other = intoMethod(c, err, none());
+                    if (other != none()) {
+                        // The error converts, but not into this function's error type (ADR 0128).
+                        appendText(mut message, "; ")?;
+                        appendQuotedType(mut message, c, err)?;
+                        appendText(mut message, " converts into ")?;
+                        appendQuotedType(mut message, c, c.hir.functions[other as usize].returnType)?;
+                        appendText(mut message, " only (its '@into' method ")?;
+                        appendQuotedName(mut message, c, c.hir.functions[other as usize].name)?;
+                        appendText(mut message, "), and '?' converts in one step")?;
+                    }
                 } else if (inDropBlock(c)) {
                     appendText(
                         mut message,

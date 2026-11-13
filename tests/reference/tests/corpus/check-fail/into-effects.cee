@@ -1,0 +1,28 @@
+// ADR 0128: the conversion `?` makes through an `@into` method is a call, so the method's effects are effects of
+// the function that holds the `?` (type-system.md §17.4, §32).
+enum AppError {
+    Refused,
+    Other,
+}
+
+struct Costly {
+    code: u32;
+
+    @into
+    fn up(this) -> AppError {
+        let text = String.from("x")!;
+        return if (text.length == 1) AppError.Other else AppError.Refused;
+    }
+}
+
+fn costly() -> Result<void, Costly> => Err(Costly { code: 1 });
+
+@effects()
+fn quiet() -> Result<void, AppError> {
+    costly()?; // error[N0295]
+    return Ok();
+}
+
+fn main() {
+    let _ = quiet();
+}

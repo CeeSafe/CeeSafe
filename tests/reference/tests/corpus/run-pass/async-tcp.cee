@@ -60,6 +60,7 @@ fn main() {
         Err(AsyncError.Io(e)) => { Console.writeLine(e.message()); }
         Err(AsyncError.Cancelled) => { Console.writeLine("cancelled"); }
         Err(AsyncError.TimedOut) => { Console.writeLine("timed out"); }
+        Err(AsyncError.Closed) => { Console.writeLine("closed"); } // ADR 0128: the variant is new
     }
 }
 // expect-stdout: 12

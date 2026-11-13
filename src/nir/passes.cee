@@ -89,7 +89,23 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     var n = buildNir(c)?;
     refuseUncheckedLibraryCalls(c, n)?;
     // Generic code is checked once, in its generic version; instantiations repeat it (type-system.md §20.3).
+    // A closure's body before the function it is written in, an inner closure's before its outer one's: what a
+    // closure stores through its captures is a store of the function that makes it (ADR 0131). Closures are made
+    // after the function they are written in, so they go first, last made first; then the rest in order.
+    var order = Vector<usize>.create();
+    var last = n.functions.length;
+    while (last > 0) {
+        last -= 1;
+        if (c.hir.functions[n.functions[last].source as usize].isClosure) {
+            order.push(last)?;
+        }
+    }
     for (k in 0..n.functions.length) {
+        if (!c.hir.functions[n.functions[k].source as usize].isClosure) {
+            order.push(k)?;
+        }
+    }
+    for (k in order.view()) {
         let source = n.functions[k].source;
         let unchecked = (source as usize) < c.uncheckedLibrary.length && c.uncheckedLibrary[source as usize];
         if (!functionIsInstantiation(c, source) && !unchecked) {

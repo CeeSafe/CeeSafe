@@ -1919,26 +1919,28 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   - the block is written in the enum's package, so the built-in enums (`Result`, optionals, `AllocError`,
     `IoError`) and a dependency's enums take none (N0267), as the libraries' structs take none.
 - An **interface** lists method signatures. An interface may be generic (`interface Comparable<T>`).
-- **An impl's method keeps the interface's flows** (ADR 0131). Its types are the interface's, with the interface's
-  arguments in place of its parameters (N0267 otherwise), and so are its flows (§25.6): it may have no flow that the
-  interface's method lacks, taken as generic code sees it, with the interface's parameters and `Self` opaque.
-  Generic code is checked once against the interface (§20.3) and a `dyn` call knows nothing else, so a flow the
-  impl added would be a loan its caller does not know of. N0267, when the impl's method
-  - has a result that may borrow from a parameter that the interface's result does not flow from
-    (`fn make(text: StringView<r>) -> Holder<r>` for `fn make(text: StringView) -> Self`);
-  - has a result that borrows from a reference parameter itself where the interface's result is a deep result of it
-    (§25.6): `fn get(borrow this) -> StringView => this.text.view()` for `fn get(borrow this) -> T` in
+- **An impl's method has the interface's flows** (ADR 0131). Its types are the interface's, with the interface's
+  arguments in place of its parameters (N0267 otherwise). Its flows (§25.6) are its own narrowed to the interface's
+  method's, taken as generic code sees it, with the interface's parameters and `Self` opaque: generic code is checked
+  once against the interface (§20.3) and a `dyn` call knows nothing else, so a flow the interface lacks is one no
+  such caller knows of. The method's body is checked against the narrowed flows, and so is a direct call of it. So,
+  in the body, where it happens and only if it happens:
+  - a result that borrows from a parameter that the interface's result does not flow from is N0245
+    (`fn make(text: StringView<r>) -> Holder<r> => Holder { text: text }` for `fn make(text: StringView) -> Self`);
+  - a result that borrows from a reference parameter itself, where the interface's result is a deep result of it
+    (§25.6), is N0245: `fn get(borrow this) -> StringView => this.text.view()` for `fn get(borrow this) -> T` in
     `impl Source<StringView> for Owner`. The result of `get` is declared `T`, so it holds what the receiver holds,
     not a borrow of the receiver: a type that holds a view gives it (`impl<region r> Source<StringView<r>> for
     Holder<r>` with `-> StringView<r> => this.text`), static data is written `-> StringView<static>`, and a type
     that lends its own storage implements an interface whose method returns the borrowing type itself
     (`fn get(borrow this) -> StringView;`);
-  - may store a parameter's loans through a `borrow mut` parameter where the interface's method has no such flow
-    (`fn put(borrow mut this, v: StringView<r>)` for `fn put(borrow mut this, v: StringView)`; the interface is
-    written `interface Sink<T> { fn put(borrow mut this, v: T); }`).
+  - a parameter's loan stored through a `borrow mut` parameter, where the interface's method has no such flow, is
+    N0272 (`this.text = v` in `fn put(borrow mut this, v: StringView<r>)` for `fn put(borrow mut this, v:
+    StringView)`; the interface is written `interface Sink<T> { fn put(borrow mut this, v: T); }`).
 
-  A deep flow fits where the interface has the flow, deep or not. An inherited default and an instance of a generic
-  impl repeat a generic version that was compared.
+  A signature that only could do so by the regions it names (`fn find(borrow this, k: StringView<r>) ->
+  StringView<r>` for `fn find(borrow this, k: K) -> V`, whose body returns what the receiver holds) is no error. An
+  inherited default and an instance of a generic impl repeat a generic version whose body was checked so.
 - **Static functions and generic methods** (ADR 0086 §2.3). A method has a receiver (`this`, `borrow this`,
   `borrow mut this`), or none: a **static function** (`fn create(options: borrow Options) -> Self;`), with or without
   a default. Through a bound it is called as `T.create(o)`, in a default as `Self.create(o)`, and on a concrete type
@@ -2597,6 +2599,11 @@ Each parameter and the result of a function have **flow names**:
   method's receiver has the struct's, and `Self` in a parameter or the result has the interface's parameters
   (ADR 0131). So `fn get(borrow this) -> T` in `interface Source<T>` has a deep result of `this` (below), and
   `fn put(borrow mut this, v: T)` the flow `this` ← `v`;
+- for a function type (`fn(StringView) -> U`, a `borrow fn`, a closure's type): the names of its result's type. A
+  function value gives its result, so a parameter `f: fn(StringView) -> U` flows to a result `U` (ADR 0131); a
+  `borrow fn` then is a deep source: its result holds what the closure's captures hold. Through a `borrow mut fn`
+  nothing is stored: it is no target of flows;
+- `Self` in a struct's or an enum's own function has the type's parameters and regions;
 - for what a `borrow dyn I<T>` or `borrow mut dyn I<T>` refers to: the names of `I`'s arguments, since it may be a
   scoped implementation (§37.2). An owned `dyn` value (`Box<dyn I<T>>`) and a `dyn I + Send` have none;
 - for a parameter of scoped type without written regions: a fresh name of its own (elision);
@@ -2636,6 +2643,18 @@ parameter without `static`. A function's **flows** are then:
     `borrow T` result tied to one reference parameter alone, whose pointee names only regions that parameter's
     referent holds (none of its own). So `o.inner().first()` with `inner(borrow this) -> borrow Inner<r>` is tied to
     `r`, not to `o`. A pointee that names no region but may hold loans (`-> borrow Inner`) is not followed.
+- **what a function value may be given** (ADR 0131). A function that takes a function value whose result may hold
+  a loan (`f: fn(StringView) -> U`, with `U` not Send or Share; not a `dyn fn`, whose result borrows from nothing
+  it is given, §36.5) can hand it anything it was given and return what comes back. Its result therefore may
+  borrow from **every scoped parameter**, as a scoped result of a function with one scoped parameter does by
+  elision, and not as a deep result: `fn apply<U>(o: borrow Owner, f: fn(StringView) -> U) -> U =>
+  f(o.text.view())` checks, and `apply(owner, same)` is a borrow of `owner` for a generic caller as for a concrete
+  one. Without such a parameter a result flows only from the parameters it shares a name with:
+  `fn make<S: Build<StringView>>(hint: StringView) -> S => S.build(hint)` is N0245 in its body, and is written
+  `fn make<T, S: Build<T>>(hint: T) -> S`, where the bound gives `hint` the result's name;
+- **through a stored value** (ADR 0131): where the result flows from parameter `i` and parameter `j` flows into `i`
+  (next), the result flows from `j` too. The checker keeps one loan set for what a reference refers to, so the old
+  value that `fn put(borrow mut this, key: K, value: V) -> V?` takes out of a map holds what `key` put in;
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
   with `j`: the callee may store `j`'s loans into what `i` refers to. A `borrow mut dyn I` is such a parameter
   whatever `I` is: its referent may be a scoped implementation (§37.2).
@@ -2668,13 +2687,21 @@ With one loan set per value:
    type `T` under `T: Send` holds none, and a closure may return one it captured (§36.2), as in
    `fn through<T: Send>(value: T) -> T => Thread.spawn(move () => value)!.join()`. A `T` with other bounds only,
    `Copy` included, may be a reference.
-   What such a value holds of the function's parameters, its type says: every place it can go shares a flow name
-   with where it came from (§25.6), so those loans are not followed from copy to copy. A loan of **the function's
-   own storage** is not in its type (ADR 0131): a call gave it one, `S.build(text.view())` for a local `text` under
-   `S: Build<StringView>`, or `f(borrow buffer)` for an `f: fn(borrow Buffer) -> T`, and the value keeps it wherever
-   it is copied or moved, so returning it is N0244 and storing it through a parameter N0272. In a closure's body a
-   borrow of a capture is such a loan (N0245, §36.2); and a call of a closure gives a result of such a type its
-   arguments' loans, not the closure's own.
+   **Such a value is followed exactly as a scoped value is** (ADR 0131), through every copy, move, aggregate,
+   payload and call: nothing about its loans is taken from its type. A call may make one from anything it is given
+   (`S.build(text.view())` under `S: Build<StringView>`; `f(o.text.view())` for an `f: fn(StringView) -> U`), so:
+   - a call's result carries the loans its callee's flows give it (§25.6), whatever the result's type; a call
+     through a function value gives its result the loans of every argument; a call of a closure, those and what
+     the closure's captures hold (§36.2);
+   - a built-in that gives a value of such a type (an element, a payload, what `pop`, an index or a pointer reads)
+     gives what its operand holds, not a borrow of the operand's own storage, since such a value is not a reference,
+     slice or view into it;
+   - returning the value is checked as a scoped result is (N0244 for a loan of a local, N0245 for a parameter that
+     the result does not flow from), and storing it through a parameter as a scoped value is (N0272).
+
+   Where one of these refuses a value of a type parameter's type, the message says how the program tells that the
+   parameter is no reference: "if 'T' never holds one, bound it: 'T: Send'". A raw pointer is no loan (§27.1):
+   `*mut T` carries none, and what is read through it is `unsafe` code's to answer for.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
    them, so they must still be live (N0243 otherwise).
 
@@ -4377,6 +4404,18 @@ fn identity<T>(x: T) -> T => x;
   function's address, and a call is an indirect call.
 
 ### 36.2 Closures (G8b)
+**A closure's statements are the enclosing function's, for loans** (ADR 0131). Its body is checked first, and what
+it does with its captures is accounted where the closure is made:
+- its result may hold what its captures hold (never a borrow of a capture itself: N0245 in its body), so a call
+  `g()` gives its result the loans the closure's environment holds, as a deep result (§25.6), and those of the
+  call's arguments. `let g = () => s.get(); return g();` returns what `s` holds and, `s` being captured by
+  reference, a loan of `s`: N0244 for a local `s` unless the result's type holds no loan (`T: Send`);
+- a closure whose body stores what it captures through one of its captures (`() => into.keep(v)`, `() =>
+  out.push(v)`, `() => { into.text = v; }`, `() => { into = Holder { text: v }; }`, an inner closure that does) is a
+  store, where the closure is made, of every other capture's loans through that capture: N0272 there if `into` is a
+  `borrow mut` parameter and `v` a view of a local, exactly as the statement written inline. Whether the closure is
+  called does not matter. A closure's own parameter stored through a capture is N0272 in its body, as before.
+
 ```ceesafe
 fn countIf(values: Slice<i32>, keep: borrow fn(i32) -> bool) -> i32 {
     var n = 0;

@@ -1,0 +1,44 @@
+// A function value's result of a type parameter's type, made from a view of what dies (type-system.md §25.7 rule 5,
+// ADR 0131): in an async function, through a generic struct's generic method by reference and by value, through an
+// interface's generic method and its default, through a closure that calls the function value, and through a
+// vector. Every `bad…` is refused, and so is `Box2.with`, which hands its own by-value receiver's contents out.
+struct Owner {
+    text: String;
+}
+struct Box2<T> {
+    v: T;
+
+    fn map<U>(borrow this, f: fn(borrow T) -> U) -> U => f(this.v);
+    fn with<U>(this, f: fn(borrow T) -> U) -> U => f(this.v); // error[N0245] // error[N0244] // error[N0244] // error[N0244]
+}
+interface Visit {
+    fn visit<U>(borrow this, f: fn(StringView) -> U) -> U;
+
+    fn twice<U>(borrow this, f: fn(StringView) -> U) -> U => this.visit<U>(f);
+}
+impl Visit for Owner {
+    fn visit<U>(borrow this, f: fn(StringView) -> U) -> U => f(this.text.view());
+}
+fn same(s: StringView) -> StringView => s;
+fn viewOf(o: borrow Owner) -> StringView => o.text.view();
+
+async fn bad1<U>(o: Owner, f: fn(StringView) -> U) -> U => f(o.text.view()); // error[N0244]
+fn bad2<U>(f: fn(borrow Owner) -> U) -> U {
+    let b = Box2<Owner> { v: Owner { text: String.from("local")! } };
+    return b.map<U>(f); // error[N0244]
+}
+fn bad3<U>(f: fn(borrow Owner) -> U) -> U => Box2<Owner> { v: Owner { text: String.from("local")! } }.with<U>(f);
+fn bad4<U, V: Visit>(v: V, f: fn(StringView) -> U) -> U => v.visit<U>(f); // error[N0245] // error[N0244]
+fn bad5<U, V: Visit>(v: V, f: fn(StringView) -> U) -> U => v.twice<U>(f); // error[N0245] // error[N0244]
+fn bad7<U>(o: Owner, f: fn(StringView) -> U) -> U {
+    let inner = (x: StringView) => f(x); // error[N0245] // error[N0245]
+    return inner(o.text.view()); // error[N0244]
+}
+fn bad8<U>(o: Owner, f: fn(StringView) -> U) -> Result<U, AllocError> {
+    var all = Vector<U>.create();
+    all.push(f(o.text.view()))?;
+    return Ok(all.pop()!); // error[N0244]
+}
+fn main() {
+    Console.writeLine(bad4<StringView, Owner>(Owner { text: String.from("local")! }, same));
+}

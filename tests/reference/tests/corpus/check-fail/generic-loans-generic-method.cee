@@ -1,0 +1,24 @@
+// A generic METHOD of an interface: the impl hands a view of its own storage to a function value whose result is the
+// method's own type parameter U; the result then holds a borrow of the receiver that no flow declares.
+interface MapS {
+    fn mapS<U>(borrow this, f: fn(StringView) -> U) -> U;
+}
+struct Owner {
+    text: String;
+}
+impl MapS for Owner {
+    fn mapS<U>(borrow this, f: fn(StringView) -> U) -> U => f(this.text.view());
+}
+fn same(s: StringView) -> StringView => s;
+
+fn launder<U, M: MapS>(m: M, f: fn(StringView) -> U) -> U => m.mapS<U>(f); // error[N0245] // error[N0244]
+
+fn main() {
+    let dangling = launder<StringView, Owner>(
+        Owner { text: String.from("other other other other other other other other")! },
+        same,
+    );
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(dangling);
+    Console.writeLine(fresh.view());
+}

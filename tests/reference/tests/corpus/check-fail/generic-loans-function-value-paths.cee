@@ -1,0 +1,89 @@
+// A value that a function value makes from a view of a local or of a parameter, of the function value's result
+// type `U` (type-system.md §25.7 rule 5, ADR 0131): it carries the loan wherever it goes, as a view would: through a
+// field's function, an out-parameter, a struct, an optional and `match`, a `Result` and `?`, a move, two generic
+// helpers, a loop, a vector, a closure, and a struct the caller gave. Every `bad…` is refused.
+struct Owner {
+    text: String;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Keeper<T> {
+    kept: Vector<T>;
+    f: fn(StringView) -> T;
+}
+struct Slot<T> {
+    v: T;
+}
+fn same(s: StringView) -> StringView => s;
+fn hold(s: StringView) -> Holder => Holder { text: s };
+
+// a function value kept in a struct field
+fn bad1<U>(o: Owner, k: borrow Keeper<U>) -> U => k.f(o.text.view()); // error[N0244]
+// stored through an out-parameter
+fn bad2<U>(o: borrow Owner, out: borrow mut Vector<U>, f: fn(StringView) -> U) -> Result<void, AllocError> =>
+    out.push(f(o.text.view())); // error[N0272]
+// into a slot of a local, then returned
+fn bad3<U>(f: fn(StringView) -> U) -> Slot<U> {
+    let t = String.from("local")!;
+    return Slot<U> { v: f(t.view()) }; // error[N0244]
+}
+// through an optional and a match
+fn bad4<U>(f: fn(StringView) -> U?) -> U? {
+    let t = String.from("local")!;
+    return match (f(t.view())) { // error[N0244]
+        Some(u) => u,
+        null => null,
+    };
+}
+// through a Result and `?`
+fn bad5<U>(f: fn(StringView) -> Result<U, AllocError>) -> Result<U, AllocError> {
+    let t = String.from("local")!;
+    let u = f(t.view())?;
+    return Ok(u); // error[N0244]
+}
+// through a generic helper that takes a function value: its result borrows from its scoped arguments
+fn apply<U>(o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+fn bad6<U>(f: fn(StringView) -> U) -> U {
+    let o = Owner { text: String.from("local")! };
+    let u = apply<U>(o, f);
+    let moved = u;
+    return moved; // error[N0244]
+}
+// two levels of generic callers
+fn twice<U>(o: borrow Owner, f: fn(StringView) -> U) -> U => apply<U>(o, f);
+fn bad7<U>(f: fn(StringView) -> U) -> U {
+    let o = Owner { text: String.from("local")! };
+    return twice<U>(o, f); // error[N0244]
+}
+// a loop that keeps the last
+fn bad8<U: Copy>(f: fn(StringView) -> U, first: U) -> U {
+    var last = first;
+    let t = String.from("local")!;
+    for (k in 0..3) {
+        last = f(t.view());
+    }
+    return last; // error[N0244]
+}
+// a vector of U built from a local, returned
+fn bad9<U>(f: fn(StringView) -> U) -> Result<Vector<U>, AllocError> {
+    let t = String.from("local")!;
+    var out = Vector<U>.create();
+    out.push(f(t.view()))?;
+    return Ok(out); // error[N0244]
+}
+// a closure that maps, handed to a helper
+fn call<U>(g: borrow fn() -> U) -> U => g();
+fn bad10<U>(f: fn(StringView) -> U) -> U {
+    let t = String.from("local")!;
+    return call<U>(() => f(t.view())); // error[N0245] // error[N0244]
+}
+// stored in a struct the caller gave
+fn bad11<U>(k: borrow mut Keeper<U>) -> Result<void, AllocError> {
+    let t = String.from("local")!;
+    return k.kept.push(k.f(t.view())); // error[N0272]
+}
+
+fn main() {
+    Console.writeLine(bad6<StringView>(same));
+}

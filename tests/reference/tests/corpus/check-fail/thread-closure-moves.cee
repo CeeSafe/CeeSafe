@@ -35,7 +35,7 @@ fn throughBox() {
 
 fn throughClosure<T: Copy>(value: T) -> T {
     let f = () => value; // error[N0245]
-    return f();
+    return f(); // error[N0244]
 }
 
 fn main() {

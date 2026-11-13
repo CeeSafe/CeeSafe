@@ -72,13 +72,13 @@ impl Spawned<StringView> for Fifth { // error[N0334]
     fn item(borrow this) -> StringView<static> => "static";
 }
 fn bound<S: Source<StringView>>(s: borrow S) -> usize => 0; // error[N0334]
-fn generic<T, S: Source<T>>(s: borrow S) -> usize => 0;     // error[N0334]
+fn generic<T, S: Source<T>>(s: borrow S) -> usize => 0; // error[N0334]
 fn generic2<T: Send, S: Source<T>>(s: borrow S) -> usize => 0;
 fn viaDyn(s: borrow dyn Source<StringView>) -> usize => 0; // error[N0334]
-fn boxed(s: Box<dyn Twice<String>>) -> usize => 0;         // error[N0268]
-fn wrapped(x: borrow Wrap<Cell<i32>>) -> i32 => 1;         // error[N0334]
-fn noisy(x: borrow Wrap<Noisy>) -> i32 => 1;               // error[N0334]
-struct Keeps<S: Source<Slice<u8>>> {                       // error[N0334]
+fn boxed(s: Box<dyn Twice<String>>) -> usize => 0; // error[N0268]
+fn wrapped(x: borrow Wrap<Cell<i32>>) -> i32 => 1; // error[N0334]
+fn noisy(x: borrow Wrap<Noisy>) -> i32 => 1; // error[N0334]
+struct Keeps<S: Source<Slice<u8>>> { // error[N0334]
     s: S;
 }
 fn main() {}

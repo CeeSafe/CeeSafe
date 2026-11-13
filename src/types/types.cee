@@ -457,8 +457,8 @@ struct TypeTable {
     /// loan.
     fn mentionsParameterOutsideDyn(borrow this, id: u32) -> bool {
         let t = this.types[id as usize];
-        if (isKind(t.kind, TypeKind.Dyn)) {
-            return false;
+        if (isKind(t.kind, TypeKind.Dyn) || isKind(t.kind, TypeKind.RawPointer)) {
+            return false; // a raw pointer is no loan (§27.1): what is read through it is `unsafe` code's to answer for
         }
         if (isKind(t.kind, TypeKind.TypeParameter)) {
             let p = borrow this.typeParameters[t.typeParameter as usize];
@@ -485,6 +485,59 @@ struct TypeTable {
             }
         }
         return this.anyOutsideDyn(t.parameters) || (t.result != none() && this.mentionsParameterOutsideDyn(t.result));
+    }
+
+    /// The first type parameter that makes `id` a type that may hold a loan (mentionsParameterOutsideDyn), or none:
+    /// the one a message names when it says that a `Send` bound would tell that it holds none.
+    fn loanParameter(borrow this, id: u32) -> u32 {
+        let t = this.types[id as usize];
+        if (isKind(t.kind, TypeKind.Dyn) || isKind(t.kind, TypeKind.RawPointer)) {
+            return 0xFFFFFFFF;
+        }
+        if (isKind(t.kind, TypeKind.TypeParameter)) {
+            return if (this.mentionsParameterOutsideDyn(id)) id else 0xFFFFFFFF;
+        }
+        if (t.pointee != 0xFFFFFFFF && this.loanParameter(t.pointee) != 0xFFFFFFFF) {
+            return this.loanParameter(t.pointee);
+        }
+        if (t.element != 0xFFFFFFFF && this.loanParameter(t.element) != 0xFFFFFFFF) {
+            return this.loanParameter(t.element);
+        }
+        if (t.structDef != 0xFFFFFFFF) {
+            let found = this.loanParameterIn(this.structs[t.structDef as usize].typeArguments);
+            if (found != 0xFFFFFFFF) {
+                return found;
+            }
+        }
+        if (t.enumDef != 0xFFFFFFFF) {
+            let e = borrow this.enums[t.enumDef as usize];
+            let found = this.loanParameterIn(e.typeArguments);
+            if (found != 0xFFFFFFFF) {
+                return found;
+            }
+            if (e.resultOk != 0xFFFFFFFF) {
+                let ok = this.loanParameter(e.resultOk);
+                return if (ok != 0xFFFFFFFF) ok else this.loanParameter(e.resultErr);
+            }
+            if (e.optionType != 0xFFFFFFFF) {
+                return this.loanParameter(e.optionType);
+            }
+        }
+        let inParameters = this.loanParameterIn(t.parameters);
+        if (inParameters != 0xFFFFFFFF) {
+            return inParameters;
+        }
+        return if (t.result != 0xFFFFFFFF) this.loanParameter(t.result) else 0xFFFFFFFF;
+    }
+
+    fn loanParameterIn(borrow this, r: Range) -> u32 {
+        for (k in 0..r.count) {
+            let found = this.loanParameter(this.listAt(r, k));
+            if (found != 0xFFFFFFFF) {
+                return found;
+            }
+        }
+        return 0xFFFFFFFF;
     }
 
     fn anyOutsideDyn(borrow this, r: Range) -> bool {

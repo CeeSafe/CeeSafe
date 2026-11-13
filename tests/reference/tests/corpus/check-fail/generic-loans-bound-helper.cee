@@ -1,0 +1,55 @@
+// A bound's static function makes an S from a view of a parameter; generic callers.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Owner {
+    text: String;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+// m1: from a reference parameter's referent
+fn m1<S: Build<StringView>>(o: borrow Owner) -> S => S.build(o.text.view()); // error[N0245] // error[N0245] // error[N0245] // error[N0245]
+// m2: from a view parameter
+fn m2<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245] // error[N0245] // error[N0245]
+// l1: generic caller drops the owner
+fn l1<S: Build<StringView>>(o: Owner) -> S => m1<S>(o);
+// l2: generic caller with a local string
+fn l2<S: Build<StringView>>() -> S {
+    let t = String.from("local local local local local local local local")!;
+    return m2<S>(t.view());
+}
+// l3: and then through Source to a T
+fn l3<T, S: Build<StringView> + Source<T>>(o: Owner) -> T {
+    let s = m1<S>(o);
+    return s.get();
+}
+fn l4<T, S: Build<StringView> + Source<T>>(o: Owner, d: T) -> T {
+    let s = m1<S>(o);
+    return s.get();
+}
+fn l5<T, S: Build<StringView> + Source<T>>(d: T) -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = m2<S>(t.view());
+    return s.get();
+}
+fn main() {
+    let h = Holder {
+        text: l4<StringView, Holder>(
+            Owner { text: String.from("other other other other other other other other")! },
+            "s",
+        ),
+    };
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(h.text);
+    Console.writeLine(fresh.view());
+}

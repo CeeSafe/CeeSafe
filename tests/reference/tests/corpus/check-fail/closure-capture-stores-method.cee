@@ -1,0 +1,23 @@
+// No interface, no generics at all: a closure stores a view of a local through a captured `borrow mut`, by a method.
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+
+fn stash(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+
+fn main() {
+    var h = Holder { text: "static" };
+    stash(mut h);
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(h.text);
+    Console.writeLine(fresh.view());
+}

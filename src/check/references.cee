@@ -586,6 +586,17 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
         ownerTypeParameters.push(c.selfSymbol)?;
         bounded.push(interfaceParameters)?;
     }
+    var selfRegions = Vector<u32>.create();
+    if (interfaceEntry == none() && owner != none()) {
+        // `Self` in a struct's or an enum's own function is the type with its parameters and regions (ADR 0086 §2.2).
+        for (t in ownerTypeParameters.view()) {
+            selfNames.push(t)?;
+        }
+        for (r in ownerRegions.view()) {
+            selfRegions.push(r)?;
+        }
+        ownerTypeParameters.push(c.selfSymbol)?;
+    }
     for (t in ownerTypeParameters.view()) {
         typeParameters.push(t)?;
     }
@@ -611,7 +622,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             }
         }
         written.push(set.length)?;
-        closeFlowNames(c, function, bounded, selfNames, mut set)?;
+        closeFlowNames(c, function, bounded, selfNames, selfRegions, mut set)?;
         let local = c.hir.functions[function as usize].parameters[i];
         var hasRegion = false;
         for (n in set.view()) {
@@ -629,7 +640,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     if (decl.returnType != none() && mayHoldLoans(c, returnType)) {
         var resultNames = Vector<u64>.create();
         collectFlowNames(c, decl.returnType, function, true, mut resultNames)?;
-        closeFlowNames(c, function, bounded, selfNames, mut resultNames)?;
+        closeFlowNames(c, function, bounded, selfNames, selfRegions, mut resultNames)?;
         var sources = Vector<u32>.create();
         for (i in 0..parameterCount) {
             if (overlaps(c.flowNames[i], resultNames)) {
@@ -646,9 +657,19 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 named = true;
             }
         }
+        // An interface's method whose result is written with the interface's type parameters has its flows from
+        // those names, whatever the interface is given for them: `fn find(borrow this, k: K) -> V?` flows from the
+        // receiver for `Lookup<StringView, StringView>` as for `Lookup<K, V>`, and is not elided (ADR 0131).
+        var byName = false;
+        for (n in resultNames.view()) {
+            if (interfaceEntry != none() && isTypeFlowName(n)) {
+                byName = true;
+            }
+        }
         // A result that names only `static` borrows from no parameter, so it is not elided (ADR 0068).
         var resolved = Vector<u32>.create();
-        if (hasSourceList || (c.types.isScoped(returnType) && !named && !writesStatic(c, decl.returnType))) {
+        if (hasSourceList ||
+            (c.types.isScoped(returnType) && !named && !byName && !writesStatic(c, decl.returnType))) {
             resolveReturnSources(c, f, function, mut resolved)?; // v0: `borrow(a, b)`, or elision (§13.5)
             for (i in resolved.view()) {
                 if (!containsU32(sources, i)) {
@@ -668,6 +689,20 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 resolved.push(single)?;
             }
         }
+        // A function with a parameter that is a function value whose result may hold a loan can hand it anything
+        // it was given, and return what comes back (`fn apply<U>(o: borrow Owner, f: fn(StringView) -> U) -> U =>
+        // f(o.text.view())`): its result may borrow from every scoped parameter, as a scoped result of a function
+        // with one scoped parameter does by elision (ADR 0131). Not deep: it may be a borrow of the referent itself.
+        var widened = Vector<u32>.create();
+        if (c.types.mentionsParameterOutsideDyn(returnType) && takesMakingFunction(c, function)) {
+            for (i in 0..parameterCount) {
+                let local = c.hir.functions[function as usize].parameters[i];
+                if (c.types.isScoped(c.hir.locals[local as usize].typ) && !containsU32(sources, truncate<u32>(i))) {
+                    sources.push(truncate<u32>(i))?;
+                    widened.push(truncate<u32>(i))?;
+                }
+            }
+        }
         sortU32(mut sources);
         // A deep result of a reference parameter (ADR 0074 §2.4) names none of the reference's own regions (its
         // elided one, or those written on it), only regions of its pointee.
@@ -679,6 +714,9 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             let local = c.hir.functions[function as usize].parameters[i as usize];
             let t = c.hir.locals[local as usize].typ;
             if (!c.types.is(t, TypeKind.Reference) || c.types.isSlice(t) || c.types.isStringView(t)) {
+                continue;
+            }
+            if (containsU32(widened, i)) {
                 continue;
             }
             if (bareParameter) {
@@ -755,12 +793,21 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             let p = c.front.ast.parameters[c.front.ast.at(decl.parameters, truncate<u32>(i - receiverOffset)) as usize];
             match (c.front.ast.types[p.typ as usize]) {
                 TypeNode.Reference(_, _, _, pointee) => {
-                    collectReferentNames(c, pointee, function, false, mut target)?;
+                    // Through a `borrow mut fn`, the function is called, and nothing is stored: its result's names
+                    // (collectFlowNames) are what it gives, not what it can be given to keep.
+                    let callable = match (c.front.ast.types[pointee as usize]) {
+                        TypeNode.Function(_, _, _) => true,
+                        TypeNode.FunctionPointer(_, _, _) => true,
+                        _ => false,
+                    };
+                    if (!callable) {
+                        collectReferentNames(c, pointee, function, false, mut target)?;
+                    }
                 }
                 _ => {}
             }
             targetWritten = target.length;
-            closeFlowNames(c, function, bounded, selfNames, mut target)?;
+            closeFlowNames(c, function, bounded, selfNames, selfRegions, mut target)?;
         }
         var kept = Vector<u64>.create();
         var keptWritten = Vector<u64>.create();
@@ -792,10 +839,56 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
             }
         }
     }
+    // What may be stored through a parameter that the result flows from may be in the result (ADR 0131): the checker
+    // keeps one loan set for what a reference refers to, so a `V` read from a map holds what a `K` put into it held.
+    if (decl.returnType != none() && mayHoldLoans(c, c.hir.functions[function as usize].returnType)) {
+        var grew = true;
+        while (grew) {
+            grew = false;
+            for (flow in flows.view()) {
+                let target = flowTarget(flow);
+                let source = flowSource(flow);
+                if (containsU32(c.hir.functions[function as usize].returnSources, target) && !containsU32(
+                    c.hir.functions[function as usize].returnSources,
+                    source,
+                )) {
+                    c.hir.functions[function as usize].returnSources.push(source)?;
+                    let local = c.hir.functions[function as usize].parameters[source as usize];
+                    let t = c.hir.locals[local as usize].typ;
+                    if (flowIsDeep(flow) && c.types.is(t, TypeKind.Reference) && !c.types.isSlice(t) &&
+                        !c.types.isStringView(t)) {
+                        c.hir.functions[function as usize].deepSources.push(source)?;
+                    }
+                    grew = true;
+                }
+            }
+        }
+        sortU32(mut c.hir.functions[function as usize].returnSources);
+    }
     c.hir.functions[function as usize].mutableFlows = flows;
     c.flowNames = Vector<Vector<u64>>.create();
     c.flowTypeParameters = Vector<u32>.create();
     return Ok();
+}
+
+/// Does the function take a function value whose result may hold a loan (a `fn`, a `borrow fn` or a closure whose
+/// result mentions a type parameter that is not Send or Share)? Not a `dyn fn`: its result borrows from nothing it
+/// is given (§36.5).
+fn takesMakingFunction(c: borrow Checker, function: u32) -> bool {
+    for (local in c.hir.functions[function as usize].parameters.view()) {
+        var t = c.hir.locals[local as usize].typ;
+        if (c.types.is(t, TypeKind.Reference)) {
+            t = c.types.info(t).pointee;
+        }
+        if (c.types.isDyn(t)) {
+            continue;
+        }
+        let result = c.types.info(t).result;
+        if (result != none() && c.types.mentionsParameterOutsideDyn(result)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// A type parameter's flow names include those of its bounds' arguments (§25.6, ADR 0131): a value of type `S` under
@@ -806,6 +899,7 @@ fn closeFlowNames(
     function: u32,
     bounded: borrow Vector<Range>,
     selfNames: borrow Vector<u32>,
+    selfRegions: borrow Vector<u32>,
     names: borrow mut Vector<u64>,
 ) -> Result<void, AllocError> {
     var k: usize = 0;
@@ -820,6 +914,9 @@ fn closeFlowNames(
         if (symbol == c.selfSymbol) {
             for (t in selfNames.view()) {
                 addName(names, typeFlowName(t))?;
+            }
+            for (r in selfRegions.view()) {
+                addName(names, regionFlowName(r))?;
             }
             continue;
         }
@@ -950,6 +1047,14 @@ fn collectFlowNames(
                 }
             }
             return Ok();
+        }
+        // A function value gives its result: a parameter `f: fn(StringView) -> U` shares `U` with a result `U`
+        // (ADR 0131). A `borrow fn` or a closure then is a deep source: what its captures hold.
+        TypeNode.Function(_, _, result) => {
+            return if (result == none()) Ok() else collectFlowNames(c, result, function, inResult, names);
+        }
+        TypeNode.FunctionPointer(_, _, result) => {
+            return if (result == none()) Ok() else collectFlowNames(c, result, function, inResult, names);
         }
         TypeNode.Generic(name, arguments) => {
             if (name.parts.count != 1) {

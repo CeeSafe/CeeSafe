@@ -343,6 +343,15 @@ fn checkStaticCall(
     if (function == none()) {
         function = implMethodFor(c, typ, memberIdent.symbol); // an impl's static function (ADR 0086 §2.3)
     }
+    if (function == none() && reportUnmetImplBounds(
+        c,
+        typ,
+        memberIdent.symbol,
+        Span { start: memberIdent.start, end: memberIdent.end },
+    )?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, typ)?;
@@ -588,6 +597,10 @@ fn checkMethodCall(
             return Ok(taken);
         }
     }
+    if (function == none() && reportUnmetImplBounds(c, structType, memberIdent.symbol, memberSpan)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         if (definition != none() && findField(c, definition, memberIdent.symbol) != none()) {
@@ -807,6 +820,18 @@ fn checkNonStructMethod(
         c.error(notAStruct(), memberIdent.start, memberIdent.end, message)?;
         checkArgumentsLoosely(c, arguments)?;
         return c.errorResult(span.start, span.end);
+    }
+    if (declarationOf(c, structType) != none() && c.types.is(structType, TypeKind.Enum)) {
+        // A function of a bounded impl block that this instance's arguments do not meet (ADR 0130).
+        if (reportUnmetImplBounds(
+            c,
+            structType,
+            memberIdent.symbol,
+            Span { start: memberIdent.start, end: memberIdent.end },
+        )?) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
     }
     // A type with methods (an enum's own, ADR 0107; an impl's; IoError's `message`, §26.2), just not this one: the
     // message names them, as it does a struct's members. So does a declared enum without any, which may be given some.

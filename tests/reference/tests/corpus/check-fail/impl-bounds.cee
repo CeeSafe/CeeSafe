@@ -1,0 +1,107 @@
+// The bounds of an `impl<T: B> S<T> { … }` block (type-system.md §21.1, ADR 0130): its functions are those of the
+// instances whose arguments meet the bounds. Every other instance does not have them: N0268 where one is called or
+// named, N0334 for `Send` and `Share`, on a struct and on an enum, for a method and for a static function, from
+// generic code whose parameter lacks the bound, and from the struct's own body. A bound that names no interface is
+// N0204, and a name the type already has is N0228 whatever the bounds.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+impl Named for i32 {
+    fn name(borrow this) -> u32 => 7;
+}
+
+struct Pointing {
+    at: *u64;
+}
+
+struct Pair<T> {
+    left: T;
+    right: T;
+}
+
+/// The struct's own body, and a block without the bound, are code for every instance.
+struct Inner<T> {
+    value: T;
+
+    fn again(borrow this) -> T => this.get(); // error[N0268]
+}
+
+impl<T: Copy> Inner<T> {
+    fn get(borrow this) -> T => this.value;
+}
+
+impl<T> Inner<T> {
+    fn another(borrow this) -> T => this.get(); // error[N0268]
+}
+
+impl<T: Copy> Pair<T> {
+    fn first(borrow this) -> T => this.left;
+    fn twin(value: T) -> Pair<T> => Pair<T> { left: value, right: value };
+}
+
+impl<T: Named> Pair<T> {
+    fn names(borrow this) -> u32 => this.left.name() + this.right.name();
+}
+
+impl<T: Send> Pair<T> {
+    fn ship(this) -> T => Thread.spawn(move () => this.left)!.join();
+}
+
+impl<T: Missing> Pair<T> { // error[N0204]
+    fn lost(borrow this) -> u32 => 0;
+}
+
+/// One member of each name, whatever the bounds of the blocks that give them.
+struct Solo<T> {
+    value: T;
+}
+
+impl<T: Copy> Solo<T> {
+    fn get(borrow this) -> T => this.value;
+}
+
+impl<T: Named> Solo<T> {
+    fn get(borrow this) -> u32 => this.value.name(); // error[N0228]
+}
+
+enum Choice<T> {
+    One(T),
+    Two(T, T),
+}
+
+impl<T: Copy> Choice<T> {
+    fn first(borrow this) -> T => match (this) {
+        Choice.One(a) => a,
+        Choice.Two(a, _) => a,
+    };
+    fn one(value: T) -> Choice<T> => Choice<T>.One(value);
+}
+
+impl<T: Named> Choice<T> {
+    fn one(value: T) -> u32 => value.name(); // error[N0228]
+}
+
+fn unbounded<U>(p: borrow Pair<U>) -> U => p.first(); // error[N0268]
+
+fn named<U: Named>(p: borrow Pair<U>) -> U => p.first(); // error[N0268]
+
+fn chosen<U>(c: borrow Choice<U>) -> U => c.first(); // error[N0268]
+
+fn main() {
+    let text = Pair<String> { left: String.from("a")!, right: String.from("b")! };
+    let _ = text.first();                   // error[N0268]
+    let _ = text.names();                   // error[N0268]
+    let _ = Pair<String>.twin(String.from("c")!); // error[N0268]
+    let n = 4u64;
+    let raw = Pair<Pointing> { left: Pointing { at: borrow n as *u64 }, right: Pointing { at: borrow n as *u64 } };
+    let _ = raw.ship(); // error[N0334]
+    let choice = Choice<String>.One(String.from("d")!);
+    let _ = choice.first();                        // error[N0268]
+    let _ = Choice<String>.one(String.from("e")!); // error[N0268]
+    let numbers = Pair<i32> { left: 1, right: 2 };
+    Console.writeLine(numbers.first());
+    Console.writeLine(numbers.names());
+    Console.writeLine(unbounded(numbers) + named(numbers));
+    Console.writeLine(chosen(Choice<i32>.One(3)));
+}

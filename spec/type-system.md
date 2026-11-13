@@ -1891,6 +1891,21 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
   N0267. It may also hold constants (§10, ADR 0074 §2.7).
+- **Bounds on the block's parameters** (ADR 0130). The block may bound its type parameters, by interfaces and by
+  `Copy`, `Send` and `Share` (§21.2, §38.1): `impl<T: Copy> Pair<T> { … }`. Where `S`'s own parameters have those
+  bounds (`impl<T: B> S<T>` for `struct S<T: B>`), the block restates them and its functions are every instance's.
+  Otherwise the block is **bounded**:
+  - in its functions `T` has `S`'s bounds and the block's: a field of type `T` read through a reference is a copy
+    under `T: Copy` (§14), the methods of `B` are called on a `T` under `T: B`, and a `T: Send` holds no loan
+    (§25.7);
+  - its functions, methods and static functions alike, belong to the instances of `S` whose type arguments meet the
+    block's bounds, and to no other. Using one on another instance is N0268, or N0334 for `Send` and `Share`, and
+    the message gives the bound that fails. `S`'s own generic type is such an instance where its parameter lacks the
+    bound: in `S`'s body, in a block without the bound, and in generic code `fn f<U>(p: borrow S<U>)`;
+  - `S` still has one member of each name: a name that two blocks give is N0228 whatever their bounds;
+  - a bound that names no interface is N0204, as on any type parameter.
+
+  An enum's blocks take bounds in the same way.
 - **`impl E { … }`** for an enum `E` (ADR 0107) is the same block with the same rules, and the only place an enum's
   functions are written (§15.1):
   - methods with `this`, `borrow this` or `borrow mut this`, static functions, generic methods, constants, and
@@ -2606,6 +2621,10 @@ With one loan set per value:
 5. In generic code, values whose type mentions a type parameter carry loans like scoped values, unless it mentions
    it only inside a `dyn` type (an interface's arguments, a `dyn fn`'s signature): a `dyn` value carries no loans of
    its own (§37.2), so `Box<dyn Handler<S>>` is stored where `S` is a type parameter as it is for a concrete `S`.
+   Nor does a type parameter bounded by `Send` or `Share` bring a loan: no scoped type is Send (§38.1), so a value of
+   type `T` under `T: Send` holds none, and a closure may return one it captured (§36.2), as in
+   `fn through<T: Send>(value: T) -> T => Thread.spawn(move () => value)!.join()`. A `T` with other bounds only,
+   `Copy` included, may be a reference.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
    them, so they must still be live (N0243 otherwise).
 
@@ -4711,7 +4730,8 @@ fn main() {
   - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>`, and with `+ Share` (§38.4);
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
-  - references, slices, views and every other scoped type (§19.1);
+  - references, slices, views and every other scoped type (§19.1), a scoped `@threadSafe` type included (§38.3):
+    no type that may hold a loan is Send, which §25.7 rule 5 relies on;
   - closures (`borrow fn`), function values aside (`fn(…)` and `extern "C" fn(…)` are `Send`, and `Share`: a code
     address, the same in every thread; ADR 0091 §2.1);
   - raw pointers and imported C types;
@@ -4738,7 +4758,11 @@ fn main() {
 
 ### 38.2 Spawning and joining
 - **`Thread.spawn(move () => body)`** starts a thread that runs the move literal's body (§36.5) and returns
-  `Result<Thread<T>, SpawnError>`, where `T` is the body's result type. `SpawnError` is the enum
+  `Result<Thread<T>, SpawnError>`, where `T` is the body's result type: an expression body's type, and for a block
+  the type of its first `return` with a value (`void` if it has none), unless a `Thread<T>` is expected. Every other
+  `return` of the block is checked against that type, and so is a `?` or a `return` without a value written before
+  it, once it is known (N0261, N0215). The first `return`'s value is checked with no expected type, as an expression
+  body is: `Ok(v)` or `Err(e)` alone there is N0260. `SpawnError` is the enum
   `SpawnError.Resources` (the thread or its closure could not be allocated).
   - The literal takes no parameters. Its captures must be `Send` (**N0334**), and so must `T` (**N0334**).
   - `Thread.spawn` also takes a `Box<dyn fn() -> T + Send>`.
@@ -5127,10 +5151,10 @@ after `await`; `checkpoint` and `isCancelled` are plain calls that never suspend
 | `Async.run(f(…))` | `T`, the task's result | Runs the task on this thread until it returns. Sync code only: it has `sleep` and `alloc`, so in async code it is N0295. The operand is a call of an async fn: `Async.scope`, `all`, `race`, `timeout` and the others are awaited inside one, so as the operand they are N0342 (0.15.2) |
 | `Async.runWorkers(n, f(…))` | `T` | `Async.run` with `n` workers, this thread among them (`n: u32`; ADR 0038): `n − 1` more threads, started for the run and joined when it returns, may take its `spawnSend` children (§40.5). A worker that cannot start is skipped: the result is the same. Hosted only |
 | `Async.scope(oom, body)`, `Async.scopeIn(alloc, oom, body)` | `Result<void, E>` | §40.5 |
-| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body. `T` cannot be `void` (N0226): `Raced<T>` holds the winner's value, and no value has that type; children with nothing to return give a `bool` |
+| `Async.race(a, b)` | `Result<Raced<T>, E>` | Two async closures of result `Result<T, E>`, run at once. The first to return decides: an `Ok` wins and the other is cancelled and awaited; `Raced<T>` (lib/std) holds `winner: u32` (0 or 1), `value: T`, and `other: T?`, the loser's value if it also returned `Ok`. An `Err` first is the result. The children's type comes from an expected `Result<Raced<T>, E>`, else from `a`'s expression body, or from the first `return` of `a`'s block if `a` is `async move` (as a thread's block, §38.2). `T` cannot be `void` (N0226): `Raced<T>` holds the winner's value, and no value has that type; children with nothing to return give a `bool` |
 | `Async.all(a, b)` | `Result<void, E>` | Two async closures of result `Result<void, E>`, run at once; the first `Err` cancels the other and is the result. Results travel through captures, as in §38.6. Without an expected type or an expression body for `a`, `E` is `AsyncError`. The two may not capture one local where either changes it (N0241) |
 | `Async.shield(ms, body)` | the body's result | Runs an async closure with cancellation ignored (§40.7) for at most `ms: u64` milliseconds. The body's result type is the expected one; without one, an expression body's own, and a block body's `Result<void, AsyncError>` |
-| `Async.timeout(ms, timedOut, body)`, `Async.deadline(at, timedOut, body)` | `Result<T, E>` | ADR 0046. Runs `body`, an async closure of result `Result<T, E>`, beside a deadline `ms: u64` milliseconds from the call (`timeout`) or at `at: u64` on `Timer.now()`'s clock (`deadline`). If the body returns first, its result is the result. Once the deadline passes first, the body is cancelled and awaited: a late `Ok` is kept, and any `Err` becomes `timedOut: E`, which is evaluated before the body starts and dropped if unused. A cancellation from outside gives the body's own result, never `timedOut`; a tie is decided by which task runs first, as in `race`. The body's type comes from an expected `Result<T, E>`, else from its expression body |
+| `Async.timeout(ms, timedOut, body)`, `Async.deadline(at, timedOut, body)` | `Result<T, E>` | ADR 0046. Runs `body`, an async closure of result `Result<T, E>`, beside a deadline `ms: u64` milliseconds from the call (`timeout`) or at `at: u64` on `Timer.now()`'s clock (`deadline`). If the body returns first, its result is the result. Once the deadline passes first, the body is cancelled and awaited: a late `Ok` is kept, and any `Err` becomes `timedOut: E`, which is evaluated before the body starts and dropped if unused. A cancellation from outside gives the body's own result, never `timedOut`; a tie is decided by which task runs first, as in `race`. The body's type comes from an expected `Result<T, E>`, else from its expression body, or from the first `return` of its block if it is `async move` (as a thread's block, §38.2) |
 | `Async.checkpoint(cancelled)` | `Result<void, E>` | `Err(cancelled)` if the current task is cancelled and not shielded, else `Ok`: a cancellation point for long computations. A call of lib/std's `AsyncControl<E>.checkpoint` |
 | `Async.isCancelled()` | `bool` | Whether the current task is cancelled and not shielded (`AsyncControl<E>.isCancelled`) |
 | `Async.blocking(closure)` | `T` | Runs a sync closure literal with no parameters on a worker thread and waits for it without blocking other tasks. Its captures follow §38.6's rule and `T` must be `Send` (N0334). If no worker can be started, it runs on the calling thread: the result is the same. The body's effects are the worker's (the task has `suspend`), and the wait is not cancelled: a cancelled task still waits for its worker |

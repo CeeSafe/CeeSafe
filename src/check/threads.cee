@@ -154,7 +154,9 @@ fn checkThreadSpawn(
             recorded = true;
         }
     }
-    if (!recorded) {
+    // Generic code's closure needs no table: each instance of the function records its own, for its types (as a
+    // generic coercion to `dyn I`, bug B12: the table named the uninstantiated closure in C).
+    if (!recorded && !functionIsGeneric(c, function) && !c.types.isGeneric(dynType)) {
         let functions = [function];
         let list = c.hir.list(functions[..])?;
         c.dynTables.push(DynTable { implementation: environmentType, dynType: dynType, methods: list })?;

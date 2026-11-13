@@ -1,0 +1,414 @@
+// Bounded inherent impls (ADR 0130): `impl<T: B> S<T> { … }` for a struct or enum whose own `T` does not have the
+// bound `B`. Its functions are those of the instances whose type arguments meet the block's bounds, and no other's:
+// in their bodies `T` has the struct's or enum's bounds and the block's. A block whose bounds the declaration's own
+// imply (`impl<T: B> S<T>` for `struct S<T: B>`) is not one of these: its functions are every instance's, as if
+// written in the body (ADR 0064 §1, ADR 0107).
+//
+// The functions of a bounded block are checked once, in the instance of the struct or enum for the block's own
+// parameters (`S<T>` with the block's `T`), where they report; they are declared again for every other instance that
+// meets the bounds, as a generic struct's functions are for each instance. They are declared once Copy and drop are
+// known and every impl is processed, since a bound is decided by them.
+
+/// An `impl<T: B> S<T> { … }` block of functions with a bound on a type parameter.
+struct BoundedImpl {
+    item: u32; // the struct's or enum's AST item
+    isEnum: bool;
+    file: u32;
+    typeParameters: Range; // the block's own (Ast.typeParameters)
+    functions: Range;      // Ast.functions, in Ast.lists
+    start: u32;            // the block's target, `S<T>`
+    end: u32;
+    /// Do its functions belong to some instances only? False until resolveImplBounds, and for a block whose bounds
+    /// the declaration's own imply.
+    conditional: bool;
+    parameters: Range; // the block's parameters as types, with the declaration's bounds and its own (TypeTable.lists)
+    checkedIn: u32;    // the instance for those parameters (Checker.structs or Checker.enums), or none
+}
+
+/// Does a list of type parameters (Ast.typeParameters) write a bound?
+fn writesBounds(c: borrow Checker, list: Range) -> bool {
+    for (k in 0..list.count) {
+        if (c.front.ast.typeParameters[c.front.ast.at(list, k) as usize].bounds.count > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// The bounded block whose functions belong to some instances only that function `f` (Ast.functions) is written in
+/// (Checker.boundedImpls), or none.
+fn boundedImplOf(c: borrow Checker, f: u32) -> u32 {
+    for (k in 0..c.boundedImpls.length) {
+        let b = borrow c.boundedImpls[k];
+        if (!b.conditional) {
+            continue;
+        }
+        for (j in 0..b.functions.count) {
+            if (c.front.ast.at(b.functions, j) == f) {
+                return truncate<u32>(k);
+            }
+        }
+    }
+    return none();
+}
+
+/// The declaration's own entry for an item: Checker.structs or Checker.enums, or none.
+fn declarationEntry(c: borrow Checker, item: u32, isEnum: bool) -> u32 {
+    if (isEnum) {
+        for (k in 0..c.enums.length) {
+            if (c.enums[k].item == item && c.enums[k].template == none()) {
+                return truncate<u32>(k);
+            }
+        }
+        return none();
+    }
+    for (k in 0..c.structs.length) {
+        if (c.structs[k].item == item && c.structs[k].template == none()) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
+
+/// The type arguments of a struct's or enum's entry (TypeTable.lists): for the declaration, its own parameters.
+fn entryArguments(c: borrow Checker, index: u32, isEnum: bool) -> Range {
+    if (isEnum) {
+        return c.types.enums[c.types.info(c.enums[index as usize].typ).enumDef as usize].typeArguments;
+    }
+    return c.types.structs[c.types.info(c.structs[index as usize].typ).structDef as usize].typeArguments;
+}
+
+/// `bound` with its arguments' type parameters replaced by `map`.
+fn mappedBound(c: borrow mut Checker, bound: u32, map: Slice<TypeMapping>) -> Result<u32, AllocError> {
+    let original = c.types.bounds[bound as usize];
+    var substituted = Vector<u32>.create();
+    for (a in 0..original.arguments.count) {
+        let argumentType = c.types.listAt(original.arguments, a);
+        substituted.push(substitute(c, argumentType, map)?)?;
+    }
+    var boundName = Vector<u8>.create();
+    appendBytes(mut boundName, c.types.rangeText(original.name))?;
+    return c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view());
+}
+
+/// The bounds of a type parameter (TypeTable.bounds), copied.
+fn boundsOf(c: borrow Checker, parameter: u32) -> Result<Vector<u32>, AllocError> {
+    var out = Vector<u32>.create();
+    for (b in c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.view()) {
+        out.push(b)?;
+    }
+    return Ok(out);
+}
+
+/// Declares the parameters of every bounded block and decides which blocks are conditional (ResolveImplBounds, ADR
+/// 0130): those with a bound that the struct's or enum's own parameters do not have. A conditional block's
+/// parameters get the declaration's bounds too, so they are arguments for it. Run once the interfaces, structs and
+/// enums are declared and the impls processed, before any member is resolved.
+fn resolveImplBounds(c: borrow mut Checker) -> Result<void, AllocError> {
+    let saved = c.file;
+    for (k in 0..c.boundedImpls.length) {
+        let b = c.boundedImpls[k];
+        let entry = declarationEntry(c, b.item, b.isEnum);
+        if (entry == none()) {
+            continue;
+        }
+        c.setFile(b.file);
+        var declared = Vector<u32>.create();
+        listTypes(c, entryArguments(c, entry, b.isEnum), mut declared)?;
+        var parameters = Vector<u32>.create();
+        var pairs = Vector<EnvPair>.create();
+        declareTypeParametersAs(c, b.typeParameters, mut parameters, mut pairs, true)?;
+        if (parameters.length != declared.length) {
+            continue; // region parameters aside, sameParameters made them the same
+        }
+        var toOwn = Vector<TypeMapping>.create();
+        var toBlock = Vector<TypeMapping>.create();
+        for (j in 0..declared.length) {
+            toOwn.push(TypeMapping { from: parameters[j], to: declared[j] })?;
+            toBlock.push(TypeMapping { from: declared[j], to: parameters[j] })?;
+        }
+        var implied = true;
+        for (j in 0..declared.length) {
+            let blockInfo = c.types.info(parameters[j]).typeParameter as usize;
+            let ownInfo = c.types.info(declared[j]).typeParameter as usize;
+            let ownCopy = c.types.typeParameters[ownInfo].copyBound;
+            let ownSend = c.types.typeParameters[ownInfo].sendBound;
+            let ownShare = c.types.typeParameters[ownInfo].shareBound;
+            if ((c.types.typeParameters[blockInfo].copyBound && !ownCopy) ||
+                (c.types.typeParameters[blockInfo].shareBound && !ownShare) ||
+                (c.types.typeParameters[blockInfo].sendBound && !ownSend && !ownShare)) {
+                implied = false;
+            }
+            let ownBounds = boundsOf(c, declared[j])?;
+            let blockBounds = boundsOf(c, parameters[j])?;
+            for (bound in blockBounds.view()) {
+                let required = mappedBound(c, bound, toOwn.view())?;
+                if (!containsBound(c, ownBounds, required)) {
+                    implied = false;
+                }
+            }
+        }
+        if (implied) {
+            continue;
+        }
+        for (j in 0..declared.length) {
+            let ownInfo = c.types.info(declared[j]).typeParameter as usize;
+            let info = c.types.info(parameters[j]).typeParameter;
+            if (c.types.typeParameters[ownInfo].copyBound) {
+                c.types.typeParameters[info as usize].copyBound = true;
+            }
+            if (c.types.typeParameters[ownInfo].sendBound) {
+                c.types.typeParameters[info as usize].sendBound = true;
+            }
+            if (c.types.typeParameters[ownInfo].shareBound) {
+                c.types.typeParameters[info as usize].shareBound = true;
+            }
+            let ownBounds = boundsOf(c, declared[j])?;
+            for (bound in ownBounds.view()) {
+                let required = mappedBound(c, bound, toBlock.view())?;
+                let blockBounds = boundsOf(c, parameters[j])?;
+                if (!containsBound(c, blockBounds, required)) {
+                    c.types.typeParameters[info as usize].bounds.push(required)?;
+                }
+            }
+            closeBounds(c, info)?;
+        }
+        let list = c.types.addList(parameters.view())?;
+        c.boundedImpls[k].parameters = list;
+        c.boundedImpls[k].conditional = true;
+        c.conditionalImpls += 1;
+    }
+    c.setFile(saved);
+    return Ok();
+}
+
+/// A struct or enum entry whose bounded blocks' functions are still to be declared: now, or once the outermost
+/// instantiation is complete and its types' Copy and drop are known (finishLateTypes).
+fn noteBoundedEntry(c: borrow mut Checker, index: u32, isEnum: bool) -> Result<void, AllocError> {
+    if (!c.boundedReady || c.conditionalImpls == 0) {
+        return Ok();
+    }
+    let flag: u64 = if (isEnum) 0x100000000 else 0;
+    c.boundedPending.push((index as u64) | flag)?;
+    if (c.instantiating == 0 && !c.boundedDraining) {
+        drainBoundedEntries(c)?;
+    }
+    return Ok();
+}
+
+fn drainBoundedEntries(c: borrow mut Checker) -> Result<void, AllocError> {
+    c.boundedDraining = true;
+    var k: usize = 0;
+    while (k < c.boundedPending.length) {
+        let word = c.boundedPending[k];
+        k += 1;
+        attachBoundedFunctions(c, truncate<u32>(word & 0xFFFFFFFF), (word >> 32) != 0)?;
+    }
+    c.boundedPending.truncate(0);
+    c.boundedDraining = false;
+    return Ok();
+}
+
+/// Every struct and enum made so far gets the functions of the bounded blocks it meets (ADR 0130); the ones made
+/// from here on get them as they are instantiated.
+fn attachBoundedToAll(c: borrow mut Checker) -> Result<void, AllocError> {
+    c.boundedReady = true;
+    if (c.conditionalImpls == 0) {
+        return Ok();
+    }
+    for (k in 0..c.structs.length) {
+        c.boundedPending.push(truncate<u32>(k) as u64)?;
+    }
+    for (k in 0..c.enums.length) {
+        c.boundedPending.push((truncate<u32>(k) as u64) | 0x100000000)?;
+    }
+    return drainBoundedEntries(c);
+}
+
+/// Marks the functions an entry has so far as repeats of their generic version (HirFunction.repeatsGeneric).
+fn markRepeats(c: borrow mut Checker, typ: u32, isEnum: bool) {
+    if (!isEnum) {
+        let definition = c.types.info(typ).structDef;
+        for (k in 0..c.types.structs[definition as usize].functions.length) {
+            let function = c.types.structs[definition as usize].functions[k];
+            c.hir.functions[function as usize].repeatsGeneric = true;
+        }
+        let dropFunction = c.types.structs[definition as usize].dropFunction;
+        if (dropFunction != none()) {
+            c.hir.functions[dropFunction as usize].repeatsGeneric = true;
+        }
+    }
+    for (k in 0..c.implMethods.length) {
+        if (c.implMethods[k].typ == typ) {
+            let function = c.implMethods[k].function;
+            c.hir.functions[function as usize].repeatsGeneric = true;
+        }
+    }
+}
+
+/// Declares, for the struct or enum entry `index`, the functions of each bounded block of its declaration whose
+/// bounds its type arguments meet (AttachBoundedFunctions, ADR 0130). The declaration's own entry meets none (its
+/// parameters lack a bound, or the block would not be conditional): for it, the instance for the block's parameters
+/// is made, in which the block's functions are checked and report.
+fn attachBoundedFunctions(c: borrow mut Checker, index: u32, isEnum: bool) -> Result<void, AllocError> {
+    let item = if (isEnum) c.enums[index as usize].item else c.structs[index as usize].item;
+    let typ = if (isEnum) c.enums[index as usize].typ else c.structs[index as usize].typ;
+    let template = if (isEnum) c.enums[index as usize].template else c.structs[index as usize].template;
+    let environment = if (isEnum) c.enums[index as usize].environment else c.structs[index as usize].environment;
+    if (item == none()) {
+        return Ok();
+    }
+    let savedFile = c.file;
+    var marked = false;
+    for (k in 0..c.boundedImpls.length) {
+        let b = c.boundedImpls[k];
+        if (!b.conditional || b.isEnum != isEnum || b.item != item) {
+            continue;
+        }
+        var parameters = Vector<u32>.create();
+        listTypes(c, b.parameters, mut parameters)?;
+        c.setFile(b.file);
+        if (template == none()) {
+            if (b.checkedIn == none()) {
+                let span = Span { start: b.start, end: b.end };
+                let instance = if (isEnum) instantiateEnum(c, index, parameters.view(), span)? else instantiateStruct(
+                    c,
+                    index,
+                    parameters.view(),
+                    span,
+                )?;
+                c.boundedImpls[k].checkedIn = instance;
+            }
+            continue;
+        }
+        var arguments = Vector<u32>.create();
+        listTypes(c, entryArguments(c, index, isEnum), mut arguments)?;
+        if (arguments.length != parameters.length) {
+            continue;
+        }
+        let mark = diagnosticsMark(c);
+        checkBounds(c, parameters.view(), arguments.view(), Span { start: 0, end: 0 })?;
+        let met = diagnosticsMark(c) == mark;
+        dropDiagnosticsSince(c, mark);
+        if (!met) {
+            continue; // the instance does not have the block's functions
+        }
+        // The instance a block is checked in reports that block's functions alone: its others, and the functions of
+        // the other blocks it meets, repeat a generic version that reports them.
+        var checksABlock = false;
+        for (other in c.boundedImpls.view()) {
+            if (other.conditional && other.isEnum == isEnum && other.checkedIn == index) {
+                checksABlock = true;
+            }
+        }
+        if (checksABlock && !marked) {
+            markRepeats(c, typ, isEnum);
+            marked = true;
+        }
+        let reports = b.checkedIn == index;
+        for (j in 0..b.functions.count) {
+            let f = c.front.ast.at(b.functions, j);
+            let id = c.front.ast.idents[c.front.ast.functions[f as usize].name as usize];
+            // A name the type already has was reported where its members were resolved (N0228).
+            if (implMethodFor(c, typ, id.symbol) != none()) {
+                continue;
+            }
+            if (isEnum) {
+                if (findVariant(c, c.types.info(typ).enumDef, id.symbol) != none()) {
+                    continue;
+                }
+            } else {
+                let definition = c.types.info(typ).structDef;
+                if (findStructFunction(c, definition, id.symbol) != none() || findField(
+                    c,
+                    definition,
+                    id.symbol,
+                ) != none()) {
+                    continue;
+                }
+            }
+            let declared = diagnosticsMark(c);
+            let function = if (c.front.ast.functions[f as usize].typeParameters.count > 0) declareGenericMethod(
+                c,
+                f,
+                typ,
+                environment,
+                false,
+            )? else declareFunctionIn(c, f, typ, environment)?;
+            if (!reports) {
+                dropDiagnosticsSince(c, declared);
+                c.hir.functions[function as usize].repeatsGeneric = checksABlock;
+            }
+            if (isEnum) {
+                c.implMethods.push(ImplMethod { typ: typ, name: id.symbol, function: function })?;
+            } else {
+                let definition = c.types.info(typ).structDef;
+                c.types.structs[definition as usize].functions.push(function)?;
+                c.types.structs[definition as usize].functionNames.push(id.symbol)?;
+            }
+        }
+    }
+    c.setFile(savedFile);
+    return Ok();
+}
+
+/// For a method or function `name` that `typ` does not have: is it one of a bounded block of its declaration, whose
+/// bounds `typ`'s arguments do not meet (ADR 0130)? Then that is the error, reported here, with the bound that
+/// fails (N0268, or N0334 for Send and Share).
+fn reportUnmetImplBounds(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<bool, AllocError> {
+    if (c.conditionalImpls == 0 || typ == none()) {
+        return Ok(false);
+    }
+    let info = c.types.info(typ);
+    let isEnum = info.enumDef != none();
+    if (!isEnum && info.structDef == none()) {
+        return Ok(false);
+    }
+    let index = if (isEnum) enumEntryOfType(c, typ) else structEntryOfType(c, typ);
+    if (index == none()) {
+        return Ok(false);
+    }
+    let item = if (isEnum) c.enums[index as usize].item else c.structs[index as usize].item;
+    for (k in 0..c.boundedImpls.length) {
+        let b = c.boundedImpls[k];
+        if (!b.conditional || b.isEnum != isEnum || b.item != item) {
+            continue;
+        }
+        var declares = false;
+        for (j in 0..b.functions.count) {
+            let f = c.front.ast.at(b.functions, j);
+            if (c.front.ast.idents[c.front.ast.functions[f as usize].name as usize].symbol == name) {
+                declares = true;
+            }
+        }
+        if (!declares) {
+            continue;
+        }
+        var parameters = Vector<u32>.create();
+        listTypes(c, b.parameters, mut parameters)?;
+        var arguments = Vector<u32>.create();
+        listTypes(c, entryArguments(c, index, isEnum), mut arguments)?;
+        if (arguments.length != parameters.length) {
+            continue;
+        }
+        let mark = diagnosticsMark(c);
+        checkBounds(c, parameters.view(), arguments.view(), span)?;
+        if (diagnosticsMark(c) == mark) {
+            continue;
+        }
+        var reason = Vector<u8>.create();
+        appendBytes(mut reason, c.front.diagnostics.items[mark].message.view())?;
+        let code = c.front.diagnostics.items[mark].code;
+        dropDiagnosticsSince(c, mark);
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, typ)?;
+        appendText(mut message, " does not have ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, ", which its 'impl' block gives the instances that meet the block's bounds: ")?;
+        appendBytes(mut message, reason.view())?;
+        appendText(mut message, " (type-system.md §21.1; ADR 0130)")?;
+        c.error(code, span.start, span.end, message)?;
+        return Ok(true);
+    }
+    return Ok(false);
+}

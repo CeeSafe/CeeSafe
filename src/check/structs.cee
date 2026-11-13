@@ -393,6 +393,9 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
             c.error(duplicateMember(), id.start, id.end, message)?;
             continue;
         }
+        if (boundedImplOf(c, f) != none()) {
+            continue; // declared later, for the instances that meet its block's bounds (ADR 0130)
+        }
         let ownTypeParameters = c.front.ast.functions[f as usize].typeParameters;
         var function = none();
         if (ownTypeParameters.count > 0) {

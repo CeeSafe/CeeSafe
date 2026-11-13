@@ -1,0 +1,82 @@
+// The result type of a run-once literal's block with no expected type is its first `return`'s (type-system.md §38.2,
+// §40.4). A first `return` whose value has no type of its own is reported as it is in an expression body (N0260 for
+// `Ok(…)` and `Err(…)`); a `?` before it must suit the type it gives (N0261), a `return` after it must have it
+// (N0205), a `return` without a value before it lacks one (N0215), and a block that returns no value is `void`, which
+// no `?` can leave (N0261). None of these reaches code generation unexplained (N0216).
+enum Failure {
+    TimedOut,
+    Empty,
+}
+
+async fn work(text: String) -> Result<usize, Failure> {
+    match (await Timer.sleep(1)) {
+        Ok() => { return Ok(text.length); }
+        Err(_) => { return Err(Failure.Empty); }
+    }
+}
+
+async fn okFirst() -> usize {
+    let text = String.from("abc")!;
+    let r = await Async.timeout(100, Failure.TimedOut, async move () => {
+        let moved = text;
+        return Ok(moved.length); // error[N0260]
+    });
+    return 0;
+}
+
+async fn errFirst() -> usize {
+    let text = String.from("abc")!;
+    let r = await Async.timeout(100, Failure.TimedOut, async move () => {
+        if (text.length == 0) {
+            return Err(Failure.Empty); // error[N0260]
+        }
+        return await work(text);
+    });
+    return 0;
+}
+
+async fn expressionBody() -> usize {
+    let text = String.from("abc")!;
+    let r = await Async.timeout(100, Failure.TimedOut, async move () => Ok(text.length)); // error[N0260]
+    return 0;
+}
+
+async fn tryBefore() -> usize {
+    let text = String.from("abc")!;
+    let r = await Async.timeout(100, Failure.TimedOut, async move () => {
+        await Timer.sleep(1)?; // error[N0261]
+        return await work(text);
+    });
+    return 0;
+}
+
+fn threads() {
+    let text = String.from("abc")!;
+    let mixed = Thread.spawn(move () => {
+        if (text.length == 0) {
+            return 1u32;
+        }
+        return text.length; // error[N0205]
+    })!;
+    let bare = Thread.spawn(move () => {
+        if (LIMIT == 0) {
+            return; // error[N0215]
+        }
+        return 1u32;
+    })!;
+    let nothing = Thread.spawn(move () => {
+        let copy = String.from("x")?; // error[N0261]
+    })!;
+    let optional = Thread.spawn(move () => {
+        let copy = String.from("x")?; // error[N0261]
+        return Some(copy.length);
+    })!;
+}
+
+const LIMIT: u32 = 4;
+
+fn main() {
+    threads();
+    Console.writeLine(Async.run(okFirst()) + Async.run(errFirst()) + Async.run(expressionBody()));
+    Console.writeLine(Async.run(tryBefore()));
+}

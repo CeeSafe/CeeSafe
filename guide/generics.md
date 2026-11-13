@@ -305,6 +305,10 @@ fn main() {
 - A struct with region parameters implements an interface with its regions named, `impl<region r> Body for
   RequestBody<r> { … }`, and is used through bounds; it does not convert to `dyn Body`, since a `dyn` value holds no
   loans.
+- A block of a struct's or enum's own functions takes bounds in the same way: `impl<T: Copy> Pair<T> { fn
+  first(borrow this) -> T => this.left; }` gives `first` to the pairs of a Copy type, where reading the field is a
+  copy, and to no other. `Pair<String>` does not have it (N0268 where it is called), and the other functions of
+  `Pair<T>` cannot call it.
 
 ## Const parameters
 

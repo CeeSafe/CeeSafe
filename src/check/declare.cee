@@ -193,6 +193,11 @@ fn checkProgramWith(
         asyncScopes: Vector<AsyncScopeContext>.create(),
         copyCaptures: false,
         runOnceLiteral: false,
+        inferReturn: none(),
+        inferredTries: Vector<InferredTry>.create(),
+        inferTriesStart: 0,
+        inferredReturns: Vector<Span>.create(),
+        inferReturnsStart: 0,
         asyncAdapter: false,
         sendSpawns: Vector<u32>.create(),
         asyncSites: 0,
@@ -263,6 +268,11 @@ fn checkProgramWith(
         declaredOrder: Vector<DeclaredEntry>.create(),
         methodFiles: Vector<MethodFile>.create(),
         enumMethods: Vector<EnumMethod>.create(),
+        boundedImpls: Vector<BoundedImpl>.create(),
+        conditionalImpls: 0,
+        boundedReady: false,
+        boundedPending: Vector<u64>.create(),
+        boundedDraining: false,
         memberConstants: Vector<MemberConstant>.create(),
         fileImports: Vector<FileImport>.create(),
         fileFromRecord: records.fileFromRecord,
@@ -375,11 +385,13 @@ fn checkProgramWith(
     processFunctionAttributes(mut c)?;
     declareInterfaceDefaults(mut c)?; // ADR 0086 §2.1
     processImpls(mut c)?;
+    resolveImplBounds(mut c)?; // ADR 0130
     resolveAllMembers(mut c)?;
     checkPendingDynInstances(mut c)?;
     checkLayoutUses(mut c)?;
     checkStructRecursion(mut c)?;
     computeCopyAndDrop(mut c)?;
+    attachBoundedToAll(mut c)?;      // ADR 0130: a bound is decided by Copy and the impls
     checkPendingAssocBounds(mut c)?; // ADR 0086 §2.5
     checkForeignInterfaces(mut c)?;
     checkPublicSignatures(mut c)?;

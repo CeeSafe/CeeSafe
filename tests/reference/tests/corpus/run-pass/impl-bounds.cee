@@ -1,0 +1,165 @@
+// The bounds of an `impl<T: B> S<T> { … }` block count in its functions (type-system.md §21.1, ADR 0130): a field of
+// type `T` read through a reference is a copy under `T: Copy`, and an interface's methods are called under its bound.
+// The functions are those of the instances that meet the bounds: a struct's and an enum's, methods and static
+// functions, a generic method, a block that adds a bound to the struct's own, one that restates them, two blocks with
+// different bounds, a const parameter beside the bounded one, a nested instance, a call from generic code with the
+// bound, and an interface's generic impl beside them. Each expected line follows from the values the program builds.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+interface First<T> {
+    fn head(borrow this) -> T;
+}
+
+impl Named for i32 {
+    fn name(borrow this) -> u32 => 7;
+}
+
+impl Named for String {
+    fn name(borrow this) -> u32 => truncate<u32>(this.length);
+}
+
+struct Pair<T> {
+    left: T;
+    right: T;
+}
+
+struct Tagged<T, U> {
+    value: T;
+    tag: U;
+}
+
+impl<T: Copy> Pair<T> {
+    fn first(borrow this) -> T => this.left;
+    fn second(borrow this) -> T => this.right;
+    fn twin(value: T) -> Pair<T> => Pair<T> { left: value, right: value };
+    /// Calls the block's own functions.
+    fn sum(borrow this, add: borrow fn(T, T) -> T) -> T => add(this.first(), this.second());
+    /// A generic method of a bounded block.
+    fn tagged<U: Copy>(borrow this, tag: U) -> Tagged<T, U> => Tagged<T, U> { value: this.first(), tag: tag };
+}
+
+impl<T: Named> Pair<T> {
+    fn names(borrow this) -> u32 => this.left.name() + this.right.name();
+}
+
+impl<T: Copy + Named> Pair<T> {
+    fn firstName(borrow this) -> u32 => this.first().name();
+}
+
+impl<T: Copy> First<T> for Pair<T> {
+    fn head(borrow this) -> T => this.left;
+}
+
+/// The struct has one bound, the block adds another: both hold in the block.
+struct Kept<T: Named> {
+    value: T;
+}
+
+impl<T: Copy> Kept<T> {
+    fn copyName(borrow this) -> u32 {
+        let copy = this.value;
+        return copy.name() + this.value.name();
+    }
+}
+
+/// The block restates the struct's bound: its functions are every instance's.
+struct Counted<T: Copy> {
+    value: T;
+    count: u32;
+}
+
+impl<T: Copy> Counted<T> {
+    fn get(borrow mut this) -> T {
+        this.count += 1;
+        return this.value;
+    }
+}
+
+/// A const parameter beside the bounded one.
+struct Row<T: Copy, const N: usize> {
+    cells: [T; N];
+}
+
+impl<T: Named, const N: usize> Row<T, N> {
+    fn nameAt(borrow this, index: usize) -> u32 => this.cells[index].name() + truncate<u32>(N);
+}
+
+enum Choice<T> {
+    One(T),
+    Two(T, T),
+}
+
+impl<T: Copy> Choice<T> {
+    fn first(borrow this) -> T => match (this) {
+        Choice.One(a) => a,
+        Choice.Two(a, _) => a,
+    };
+    fn both(value: T) -> Choice<T> => Choice<T>.Two(value, value);
+}
+
+impl<T> Choice<T> {
+    fn count(borrow this) -> u32 => match (this) {
+        Choice.One(_) => 1,
+        Choice.Two(_, _) => 2,
+    };
+}
+
+fn firstOf<U: Copy>(p: borrow Pair<U>) -> U => p.first();
+
+fn chosen<U: Copy>(c: borrow Choice<U>) -> U => c.first();
+
+/// A nested instance in generic code: `Pair<U>` is Copy as `U` is, so both calls are the bounded block's.
+fn deepFirst<U: Copy>(p: borrow Pair<Pair<U>>) -> U => p.first().first();
+
+fn main() {
+    let p = Pair<i32> { left: 1, right: 2 };
+    Console.writeLine(p.first() * 10 + p.second());
+    Console.writeLine(p.names());
+    Console.writeLine(p.firstName());
+    Console.writeLine(p.head());
+    Console.writeLine(firstOf(p));
+    let twin = Pair<u8>.twin(9);
+    Console.writeLine(twin.first() + twin.second());
+    Console.writeLine(p.sum((a, b) => a + b));
+    // A nested instance is Copy as its fields are, so it has the block's functions too.
+    let nested = Pair<Pair<i32>> { left: Pair<i32>.twin(p.first()), right: p };
+    Console.writeLine(nested.first().second() * 10 + nested.second().second());
+    Console.writeLine(Pair<Pair<i32>>.twin(p).second().first());
+    let tagged = p.tagged(true);
+    Console.writeLine(tagged.tag);
+    // A pair of strings has the functions of the `Named` block, and of none that needs Copy.
+    let words = Pair<String> { left: String.from("ab")!, right: String.from("cde")! };
+    Console.writeLine(words.names());
+    let kept = Kept<i32> { value: 5 };
+    Console.writeLine(kept.copyName());
+    var counted = Counted<u64> { value: 40, count: 0 };
+    Console.writeLine(counted.get() + counted.get() + counted.count as u64);
+    let row = Row<i32, 3> { cells: [4, 5, 6] };
+    Console.writeLine(row.nameAt(1));
+    Console.writeLine(deepFirst(nested));
+    let choice = Choice<i32>.both(6);
+    Console.writeLine(choice.first() + chosen(choice));
+    Console.writeLine(choice.count());
+    let text = Choice<String>.One(String.from("f")!);
+    Console.writeLine(text.count());
+}
+// expect-stdout: 12
+// expect-stdout: 14
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 18
+// expect-stdout: 3
+// expect-stdout: 12
+// expect-stdout: 1
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: 14
+// expect-stdout: 82
+// expect-stdout: 10
+// expect-stdout: 1
+// expect-stdout: 12
+// expect-stdout: 2
+// expect-stdout: 1

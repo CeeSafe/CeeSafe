@@ -1,7 +1,9 @@
 // What a closure may move out of its captures (type-system.md §36.5, §38.2, ADR 0112). The literal of `Thread.spawn`
 // runs once and may move each capture out, once (N0250 for a second move). A boxed closure, and a closure that is
 // lent, may be called again: N0251, which names the captured variable (never the body's hidden `env`). A closure's
-// result of a type parameter's type is N0245, which does not name `env` either.
+// result of the type of a type parameter that may be a reference is N0245, which does not name `env` either; with a
+// `Send` bound the parameter holds no loan (§25.7 rule 5), and a thread's closure returns it
+// (run-pass/generic-send-loans).
 fn apply(f: borrow mut fn() -> String) -> String => f();
 
 fn twice() {
@@ -31,8 +33,9 @@ fn throughBox() {
     let _ = Thread.spawn(f)!.join();
 }
 
-fn throughThread<T: Send + Copy>(value: T) -> T {
-    return Thread.spawn(move () => value)!.join(); // error[N0245]
+fn throughClosure<T: Copy>(value: T) -> T {
+    let f = () => value; // error[N0245]
+    return f();
 }
 
 fn main() {
@@ -40,5 +43,5 @@ fn main() {
     boxed();
     lent();
     throughBox();
-    Console.writeLine(throughThread<i32>(4));
+    Console.writeLine(throughClosure<i32>(4));
 }

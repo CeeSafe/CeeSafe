@@ -100,7 +100,8 @@ A value that two threads *read* at once must also be `Share`. Most `Send` types 
 `push` changes it through a shared reference, nor a `Box<dyn I + Send>`, whose contents the compiler cannot see, nor
 anything that holds one. Put such a value behind a `Mutex` to share it.
 
-`Send` and `Share` can also bound a generic function: `fn run<T: Send>(value: T)`.
+`Send` and `Share` can also bound a generic function: `fn run<T: Send>(value: T)`. Such a `T` holds no reference, so
+a thread's closure may give it back: `Thread.spawn(move () => value)!.join()`.
 
 ## Sharing: `Arc`, `Mutex` and atomics
 

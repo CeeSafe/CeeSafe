@@ -387,7 +387,7 @@ A program's build has no use for them.
 | 1 | The command's own check failed: a test did not pass (`test`), no test's name contains the `--filter` text (`test`), a file would change (`fmt --check`), a public item has no documentation comment (`doc --missing`), the package cannot be published (`publish`), a dependency cannot be resolved (`fetch`). |
 | 1 | The C compiler or the archiver ran and reported an error (`build`, `test`). |
 | 1 | `lsp` only: the input ended before the client's `shutdown` request. |
-| 2 | A usage error: no command, an unknown command or option, an option without its argument or with a wrong one, a file that cannot be read or is not a `.cee` or `.c` file, `run` without `--interp`. The message is followed by the usage text on standard error. |
+| 2 | A usage error: no command, an unknown command or option, an option without its argument or with a wrong one, a file that cannot be read or is not a `.cee` or `.c` file, `run` without `--interp`, or nothing to work on: no files and no `ceesafe.toml` in the current directory or above it, or a package with no `.cee` files. The message is followed by the usage text on standard error. |
 | 2 | `explain` with a code that does not exist, `check --package` with a name the lock does not have, or a C compiler that cannot be started. The message is printed alone. |
 | 70 | `run --interp` only: the interpreter stopped the program at a use of freed, out-of-bounds or uninitialised memory, or a bad free. |
 | 134 | `run --interp` only: the program panicked. A built program that panics ends with the same status. |
@@ -409,13 +409,13 @@ A program's build has no use for them.
 | `ProgramFiles`, `ProgramFiles(x86)` | `build` on Windows | Where LLVM's clang and Visual Studio are looked for. | those places are not searched |
 | `NUMBER_OF_PROCESSORS` | `build --split` on Windows | The default of `--jobs`. | 1 |
 
-A program that `ceesafec build` made reads two variables of its own when it starts. `ceesafec test` finds leaks
-from the same report.
+A program that `ceesafec build` made reads two variables of its own when it starts, and `ceesafec run --interp`
+reads them for the program it runs. `ceesafec test` finds leaks from the same report.
 
 | Variable | Read by | What it does |
 |---|---|---|
-| `CEESAFE_ALLOC_REPORT` | a built program | With the value `1`, the program prints `ceesafe alloc: attempts=<n> live=<m>` on standard error when `main` returns: how many allocations it asked for, and how many were still live ([22.3](./ch22-03-inside-a-host-program)). |
-| `CEESAFE_FAIL_ALLOC_AT` | a built program | With the value `k`, the program's allocation number `k` fails, so the code that handles `AllocError` runs ([22.3](./ch22-03-inside-a-host-program)). |
+| `CEESAFE_ALLOC_REPORT` | a built program, and `run --interp` for the program it runs | With the value `1`, the program prints `ceesafe alloc: attempts=<n> live=<m>` on standard error when `main` returns: how many allocations it asked for, and how many were still live ([22.3](./ch22-03-inside-a-host-program)). Under `run --interp` a second line of the same form follows it, which counts the compiler's own allocations: the program's is the first. |
+| `CEESAFE_FAIL_ALLOC_AT` | a built program, and `run --interp` for the program it runs | With the value `k`, the program's allocation number `k` fails, so the code that handles `AllocError` runs ([22.3](./ch22-03-inside-a-host-program)). It never fails an allocation of the compiler itself. |
 
 ## The manifest: `ceesafe.toml`
 

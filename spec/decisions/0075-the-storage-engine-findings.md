@@ -296,6 +296,9 @@ arguments, N0100 now adds "write `(e as T) < x` for a comparison".
 
   Only *failed* runs fail the sweep. The report shows the count of each, and lists the failed ones.
   `--sweep-strict` keeps today's behaviour.
+
+  *Amended by ADR 0129:* the second class is an unwrap at a position in test-only code, which is an `@test` function
+  or a file of a test directory; the by-file rule of item 6 is withdrawn.
 - **G16.** A package's C files are compiled with their own source directory first on the quoted include path
   (`-iquote <dir>`; `/I<dir>` on MSVC), so a header beside a `.c` file is found. They are still compiled from the
   build copy. guide/packages.md says so.
@@ -354,7 +357,8 @@ the interpreter must give the same results.
 6. **§2.16, G15.** A sweep panic counts as the tests' own when it is an unwrap in any file that declares an `@test`
    function, not only inside an `@test` body. Test helpers live in those files: CosmoStore's sweep went from 63
    failures in 200 runs to 0, all 63 being helpers' and tests' unwraps. `ceesafec test` writes `test-spans.txt` for
-   this. `--sweep-strict` keeps the old count.
+   this. `--sweep-strict` keeps the old count. *Withdrawn by ADR 0129:* the rule exempted production code whose
+   file holds tests; a helper is test-only when it is in a file of a test directory.
 7. **§2.16, G16.** The headers beside a package's C file are copied with it into the build's `c/` directory, instead
    of an `-iquote` flag, so `--emit c`'s output stays self-contained. Two different headers of one name are an error.
 8. **§2.4.** `OrderKey`'s method is `compareKey`, not `compare`. A user's `impl Comparable<u8> for u8 { fn compare … }`

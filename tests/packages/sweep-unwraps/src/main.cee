@@ -1,0 +1,75 @@
+// Production code and its tests in one file (ADR 0129). Each test allocates once, so `--sweep alloc` runs it once
+// more, that allocation failing. tools/test_command_check.py finds the lines by their `sweep:` comments.
+
+struct Cell {
+    value: i32;
+}
+
+/// Production code that returns the failure.
+fn boxed(value: i32) -> Result<Box<Cell>, AllocError> => Box.create(Cell { value: value });
+
+/// Production code that stops the program on it.
+fn stops(value: i32) -> i32 {
+    let b = boxed(value)!; // sweep: production
+    return b.value;
+}
+
+/// A generic production function: an instance made by a test is production code still.
+fn stopsWith<T>(value: T) -> Box<T> {
+    return Box.create(value)!; // sweep: generic
+}
+
+/// A helper only the tests call, but in a source file: `build` compiles it, so it is production code.
+fn helperBeside() -> i32 {
+    let b = boxed(3)!; // sweep: helper beside
+    return b.value;
+}
+
+/// The failure returned: handled.
+@test
+fn returnsIt() -> Result<void, AllocError> {
+    let b = boxed(1)?;
+    assert(b.value == 1);
+    return Ok();
+}
+
+/// (a) The test's own `!`, in the same file as production code: set apart.
+@test
+fn unwrapsItself() {
+    let b = boxed(1)!;
+    assert(b.value == 1);
+}
+
+/// (a) The same when the test's body is an expression.
+@test
+fn unwrapsInExpressionBody() => assert(boxed(6)!.value == 6);
+
+/// (a) A closure written in a test is the test's code.
+@test
+fn unwrapsInItsClosure() {
+    let make = (v: i32) => boxed(v)!.value;
+    assert(make(4) == 4);
+}
+
+/// (b) Production code's `!`, reached from a test of the same file: a sweep failure.
+@test
+fn callsProduction() {
+    assert(stops(2) == 2);
+}
+
+/// (b) The same through a generic function.
+@test
+fn callsGeneric() {
+    let b = stopsWith(Cell { value: 5 });
+    assert(b.value == 5);
+}
+
+/// (c) A helper in a source file: a sweep failure. (The other side of the boundary is in tests/more.cee.)
+@test
+fn callsHelperBeside() {
+    assert(helperBeside() == 3);
+}
+
+fn main() {
+    Console.writeLine(stops(1));
+}

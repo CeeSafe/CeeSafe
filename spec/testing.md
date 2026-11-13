@@ -40,7 +40,9 @@ program waits for something else.
 
 `tools/test_command_check.py` runs `ceesafec test` (ADR 0049) on `tests/packages/test-command`, whose tests have every
 outcome, and compares each with `expected.tsv` (reviewed by hand), natively and with `--interp`; it also checks
-`--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out.
+`--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out. On
+`tests/packages/sweep-unwraps` it checks which unwraps `--sweep alloc` sets apart (ADR 0129): those of test-only
+code, and not production code's, though a test called it and its file holds tests.
 
 Both sweeps also take an executable package instead, built in its directory with its manifest:
 `tools/cancel_sweep.py --compiler PATH --package DIR` (repeatable) and `tools/fault_sweep.py --compiler PATH

@@ -32,7 +32,7 @@ Hello, CeeSafe
 | `bool` | `true`, `false` |
 | `StringView` | a read-only view of UTF-8 text; string literals have this type |
 
-Later chapters add structs, enums, arrays, references, optionals (`T?`), results (`Result<T, E>`), boxes and
+Later chapters add structs, enums, arrays, borrows, optionals (`T?`), results (`Result<T, E>`), boxes and
 collections. There is no `char`: text is UTF-8 bytes, and a character literal such as `'k'` is an integer.
 
 ## Variables

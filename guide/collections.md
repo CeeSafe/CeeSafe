@@ -32,7 +32,7 @@ prove the index is in range, as in both loops above.
 ## Slices
 
 `Slice<T>` is a borrowed view of consecutive elements, and `SliceMut<T>` a borrowed view that can change them. They
-are a pointer and a length, they follow every rule for references, and they are how functions take "some elements":
+are a pointer and a length, they follow every rule for borrows, and they are how functions take "some elements":
 
 ```ceesafe
 fn total(values: Slice<i64>) -> i64 {
@@ -218,7 +218,7 @@ fn main() {
 
 ## Stable references: `SlotMap` and `StableVector`
 
-Sometimes values must refer to each other, as in a graph. A reference stored in a value would borrow the collection
+Sometimes values must refer to each other, as in a graph. A borrow stored in a value would borrow the collection
 for as long as the value lives. A `SlotMap` gives out **handles** instead: plain values that name an element, can be
 stored anywhere, and are checked on every use, so a handle to a removed element finds nothing instead of something
 else.

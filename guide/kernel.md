@@ -126,7 +126,7 @@ The CosmoOS integration (the repository's `integrations/cosmoos/`) builds the re
   and returns `Err` when the kernel has none;
 - `SpinLock<T>`, `IrqSpinLock<T>` and `Mutex<T>` that hold the data they protect: the data is reachable only through a
   guard, the guard unlocks when it is destroyed, and a spin guard is an atomic context;
-- `KRef<T>`, a reference-counted kernel object whose final release may sleep, so dropping one under a spin lock does
+- `KRef<T>`, a reference-counted kernel object whose final release may sleep, so destroying one under a spin lock does
   not compile;
 - C kernel state (lists, locks, kernel objects) embedded by value in CeeSafe structs, built in place and never moved;
 - a loadable module whose state, `init` and teardown are CeeSafe.

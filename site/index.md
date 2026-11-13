@@ -13,6 +13,9 @@ hero:
       text: Get started
       link: /guide/getting-started
     - theme: alt
+      text: Read the book
+      link: https://ceesafe.github.io/CeeSafe/book/
+    - theme: alt
       text: What CeeSafe is
       link: /guide/introduction
     - theme: alt

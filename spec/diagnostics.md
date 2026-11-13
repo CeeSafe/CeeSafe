@@ -267,7 +267,7 @@ Names across packages (N0310–N0319; `type-system.md` §2, ADR 0013):
 | N0314 | A public item's signature names a type that other packages cannot see | `public fn make() -> Hidden` with `struct Hidden` internal |
 | N0315 | An item or a type parameter has the name of one of the package's dependencies (a local, parameter, loop variable or binding may, ADR 0074 §2.10) | `struct geometry { … }` |
 
-Packages (N0320–N0329; `tooling.md` §4, ADR 0013):
+Packages (N0320–N0329 and N0335; `tooling.md` §4, ADR 0013):
 
 | Code | Meaning | Example |
 |---|---|---|
@@ -283,7 +283,7 @@ Packages (N0320–N0329; `tooling.md` §4, ADR 0013):
 | N0329 | No versions satisfy the requirements: the conflicting requirements and where each came from (§4.7) | `^2.1 (from geometry 1.4.0) and ^1.0 (from plot 0.3.0)` |
 | N0335 | `ceesafec publish`: the package cannot be published as it is (§4.8) | a path dependency, or uncommitted changes |
 
-Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36.5, ADR 0015):
+Dynamic dispatch, owning closures and `Send` (N0330–N0334; `type-system.md` §37, §36.5, §38, ADR 0015):
 
 | Code | Meaning | Example |
 |---|---|---|
@@ -292,32 +292,73 @@ Dynamic dispatch and owning closures (N0330–N0339; `type-system.md` §37, §36
 | N0332 | A `move` literal captures a scoped value: a reference, view, slice, closure, or a value with region parameters (`type-system.md` §36.5) | `let v = s.view(); Box.create(move () => v.length)` |
 | N0333 | A `move` literal anywhere but as the value of `Box.create`/`createIn` with an expected `Box<dyn fn…>` | `let f = move (x: u64) => x;` |
 | N0334 | A value that is not `Send` where it must cross to another thread: a spawned closure's capture or result, a `dyn … + Send` coercion's source, a `Send` bound's argument, or, for `Thread.both`, a capture that may not be used from two threads at once or an argument that is not a closure literal or `fn()` value; for `s.spawnSend`, the same rule on its captures, an error type that is not `Send`, or a scope with a user allocator (`type-system.md` §38, §38.6, §40.5, ADR 0038) | `Thread.spawn(move () => view.length)` with `view: StringView` |
+
+`@effectsOf`, statics, `offsetOf` and `callerAddress` (N0336–N0340; `type-system.md` §32.5, §39, §30.1, §28.4):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0336 | `@effectsOf` that names no parameter, or a parameter that is not of a function or closure type, or has no names (`type-system.md` §32.5) | `@effectsOf(n)` with `n: i32`; `@effectsOf()` |
 | N0337 | A static that cannot be one: a `static` whose type is not `Share`, or a generic or local one (`type-system.md` §39) | `static C: Cell = …` with `Cell` not `Share` |
 | N0338 | Not a static initialiser: an initialiser or `@constant` body outside §39.4, or a C constant macro called elsewhere | `static N: u64 = compute();` |
 | N0339 | `offsetOf<T>(field)` whose `T` is not a struct, or has no field of that name (`type-system.md` §30.1, ADR 0030) | `offsetOf<u32>(x)`; `offsetOf<Pair>(c)` |
 | N0340 | `callerAddress()` outside the body of an `@export` function, including in a closure inside one (`type-system.md` §28.4, ADR 0030) | `fn f() -> usize => callerAddress();` |
+
+Async functions and tasks (N0341–N0345 and N0349; `type-system.md` §40, ADR 0031):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0341 | `await` outside the body of an async fn or async closure: in a sync function or closure, a `drop` block or a deferred statement (`type-system.md` §40.2, ADR 0031) | `fn f() { await g(); }` |
 | N0342 | A task that is not awaited, run or spawned: a call of an async fn, an async closure, or a call with an async closure for an `@effectsOf` parameter, anywhere else; an `await` whose operand is not a task; an `Async.run` or `Async.runWorkers` operand that is not a call of an async fn (`Async.run(Async.scope(…))`); or an `@effectsOf` function that uses such a closure other than by calling it or passing it on to an `@effectsOf` parameter (`type-system.md` §40.1, §40.3, §32.5) | `let t = fetch(url);` |
 | N0343 | Recursion through `await` where no frame stack takes it (ADR 0056): in the freestanding profile, an async fn whose frame would contain itself, directly or through a call through `dyn` that may reach it; in any profile, a cycle through a `race` or `all` child, or an `@effectsOf` function's async instance calling itself with its closure (`type-system.md` §40.1, §32.5, ADRs 0036, 0037) | `async fn walk(n: u32) { if (n > 0) { await walk(n - 1); } }` |
 | N0344 | A scope's child that captures one of the scope body's own locals, which end before the child does, other than a `Copy` value it only reads, which it copies, or what an `async move` child moves (`type-system.md` §40.5, ADR 0033) | `Async.scope(E.Oom, (s) => { var n = 0; s.spawn(async () => { n += 1; return Ok(); }); })` |
 | N0345 | `Async.park()` or `Async.waker()` outside the library (`type-system.md` §40.4) | `await Async.park();` in a program |
-| N0346 | A member of an imported union whose type has bit patterns that are not values: anything but an integer, a raw pointer, an array of these, or an imported type whose fields are such (`type-system.md` §31.1, ADR 0041 §3.2) | `union u { on: bool; n: u32; }` in `extern "C"` |
-| N0348 | A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1) | `@test fn t(x: u32) {}` |
 | N0349 | A task set's child that captures a value holding a loan (a reference, a slice, a `StringView`, a struct with region parameters, the set itself): it may outlive the code that started it (`type-system.md` §40.5, ADR 0053 §3.2) | `await set.spawn(async move () => { let k = n + 1; return Ok(); })` with `n: borrow u32` |
+
+Imported unions, C variadic functions and configured items (N0346, N0347 and N0350; `type-system.md` §31.1, §28.2, §28.4):
+
+| Code | Meaning | Example |
+|---|---|---|
+| N0346 | A member of an imported union whose type has bit patterns that are not values: anything but an integer, a raw pointer, an array of these, or an imported type whose fields are such (`type-system.md` §31.1, ADR 0041 §3.2) | `union u { on: bool; n: u32; }` in `extern "C"` |
 | N0347 | A further argument of a C variadic function whose type C's default argument promotions would change or that cannot pass through `...`: an integer narrower than 32 bits, `bool`, `f32`, or anything but `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` and raw pointers (`type-system.md` §28.2, ADR 0041 §3.3) | `printf(f, b)` with `b: u8` |
+| N0350 | A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg("X")` used outside `if (cfg("X")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3) | `fields.debugOnly` outside `if (cfg("CONFIG_DEBUG"))` |
+
+Tests (N0348; `tooling.md` §10, ADR 0049):
+
+| Code | Meaning | Example |
+|---|---|---|
+| N0348 | A `@test` function of the wrong shape: a method, with parameters or arguments, generic, exported, or returning anything but `void` or `Result<void, E>`; or a call of a test from anything but the generated harness (`build` leaves tests out) (`tooling.md` §10, ADR 0049 §3.1) | `@test fn t(x: u32) {}` |
+
+Cells and const parameters (N0351–N0354; `type-system.md` §41.1, §20.5, ADRs 0084 and 0083):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0351 | A cell of a loan-holding type: `RawCell<T>`, `Cell<T>` or `RefCell<T>`, directly or inside a generic struct, with a `T` that holds loans (a reference, view, closure or other scoped type), whose contents could then outlive what they borrow (`type-system.md` §41.1, ADR 0084 §2.1) | `RefCell<StringView>`, `Cell<borrow u32>` |
 | N0352 | A const parameter of a type that cannot be one: anything but `bool`, an integer type or a fieldless enum the program or a dependency declares (a float, `StringView`, a struct, an enum with payloads, an imported C enum, a type parameter) (`type-system.md` §20.5, ADR 0083 §2.2) | `fn f<const X: f64>()` |
 | N0353 | A const argument that is not a constant: a run-time value (a local, a parameter, a call), an interface constant read through a type parameter (`H.NAME`), or an expression over a const parameter, as a generic argument or an array length (`type-system.md` §20.5, ADR 0083 §2.3, §2.4) | `run<ts>()` with `ts: bool`; `[u8; N + 1]` |
 | N0354 | A generic argument of the wrong kind: a type for a const parameter, or a value (a literal, a constant, an enum variant, a const parameter) for a type parameter or where a type is expected (`type-system.md` §20.5, ADR 0083 §2.4) | `Grouped<u32>` for `struct Grouped<const N: usize>`; `Vector<true>` |
+
+Patterns (N0355–N0359; `type-system.md` §15.2, §15.4, ADR 0085):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0355 | A `match` guard that moves, assigns or `mut`-lends the scrutinee, a place inside it or one of the arm's bindings, or that awaits: the guard only reads them (`type-system.md` §15.2, ADR 0085 §2.2) | `Slot.Full(r) if (consume(r)) =>` with `r` not Copy |
 | N0356 | The alternatives of an or-pattern bind different names, or one name with different types or `var`-ness (`type-system.md` §15.2, ADR 0085 §2.3) | `Some(x) \| null =>` |
 | N0357 | An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4) | `'z'..='a' =>` |
 | N0358 | A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3); a range pattern's bound that is a name but not a constant's (ADR 0118) | `HALF =>` with `const HALF: f64`, `0..=top =>` with a local `top` |
 | N0359 | An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8) | `if (!(x is Some(n))) { … }` |
+
+`debugAssert` and embedded files (N0360–N0362; `type-system.md` §8, §10.1, ADR 0087):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0360 | A `debugAssert` whose condition or message may change what exists before the call, which release builds would not do: an assignment, `mut` loan, move or drop of a place declared outside the arguments, a write through a raw pointer or to a `static mut`, I/O or another `sleep` or `suspend` operation, a call of a C function (even one declared `@effects()`) or through a closure, function value or `dyn` method, an early exit (`?`), a `break` or `continue` out of the arguments, a process exit, or a call or drop that does one of these at any depth; the message names the chain of calls (`type-system.md` §8, ADR 0087 §2.5) | `debugAssert(events.next() != null)` with `events` declared before the call |
 | N0361 | An `embedText` file whose bytes are not UTF-8 (`type-system.md` §10.1, ADR 0087 §2.8) | `embedText("logo.png")` |
 | N0362 | An `embed` or `embedText` path that cannot be embedded: not a string literal or constant view; empty, absolute, or holding `\`, `:`, `$`, `%` or a leading `~`; no file there, or a real path (every symbolic link resolved, of the file opened) outside the package's directory and its `[embed] roots`, which one message names without telling the two apart; a directory or not a regular file; larger than 16 MiB; or a source with no file on disk (`type-system.md` §10.1, ADR 0087 §2.8) | `embed("../../.ssh/id_ed25519")` |
+
+Split builds and a dependency that does not check (N0363 and N0364; `c-backend.md` §2.4, `tooling.md` §4.4, ADR 0082):
+
+| Code | Meaning | Example |
+|---|---|---|
 | N0363 | Two CeeSafe files of a `build --split` whose C units' paths, `c/<package>/<path in the package>.c`, differ only in letter case: on macOS's and Windows's file systems they would be one file (`c-backend.md` §2.4, ADR 0082 §2.1). Reported at the later file | `src/Util.cee` and `src/util.cee` in one package |
 | N0364 | A package of the closure that does not check, reported by `check` in a package at the line of its manifest that leads to it (the first such dependency), once for the whole package instead of its own diagnostics, with a note at its first error and `ceesafec check --package <name>` to see them all (`tooling.md` §4.4, ADR 0082 §2.7, §8.5). Whether the cache held its record or not, the report is the same, and the check stops where the whole program's would. `check --all` and `--whole-program` report the package's own diagnostics instead | `mid = { path = "../mid" }` when `mid`, or a package it depends on, has a type error |
 
@@ -332,10 +373,8 @@ error, and the command fails (ADR 0073 §2.4).
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0350 | A configured item used where its condition may not hold: a C function, an imported field or an export declared `@cfg("X")` used outside `if (cfg("X")) { … }` and outside an export configured so (type-system.md §28.4, ADR 0080 §3.3) | `fields.debugOnly` outside `if (cfg("CONFIG_DEBUG"))` |
 | N0400 | A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\{` means the brace and does not warn (`grammar.md` §1.6) | `let x = 3; Console.writeLine("x = {x}");` |
 | N0401 | `name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10) | `fn f(tls: Conn) { tls.connect(); }` with a dependency `tls` that has `public fn connect` |
-| N0402 | A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105) | `v.push(1);` |
-| N0402 | A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6) | `let g = cell.read(); await pause();` |
+| N0402 | Two warnings share this code. (1) A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105). (2) A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6) | (1) `v.push(1);` (2) `let g = cell.read(); await pause();` |
 | N0403 | A `move` closure literal (a boxed closure's, `Thread.spawn`'s, an `async move` child's) whose body changes a captured variable of a Copy type, where the function names the variable again after the literal: the closure took a copy and changes that, so the later read sees the old value (`type-system.md` §36.5, ADR 0113) | `var hits = 0; let t = Thread.spawn(move () => { hits += 1; })!; t.join(); Console.writeLine(hits);` |
 | N0404 | A pattern that tests nothing, `_` or a binding (through `name @` too), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3) | `if (n is m) { … }`, `let x = e else { return; };` |

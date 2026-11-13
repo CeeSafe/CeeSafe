@@ -142,5 +142,6 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
         checkEffects(c, n)?;
         checkCoroutines(c, mut n)?; // recursion through `await`: stacked awaits (ADR 0056), N0343 where none can be
     }
+    c.front.diagnostics.removeRepeats(); // one finding, one diagnostic
     return Ok(n);
 }

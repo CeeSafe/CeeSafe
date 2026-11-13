@@ -630,8 +630,8 @@ fn implRegionsOf(c: borrow Checker, f: u32) -> Range {
 /// are for its instances; the generic version reported their problems.
 fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocError> {
     let constructor = declarationOf(c, typ);
-    if (constructor == none()) {
-        return Ok();
+    if (constructor == none() || membersWait(c, typ)) {
+        return Ok(); // an instance whose functions wait gets its impls with them, at its first use
     }
     // The templates for this declaration alone: every instance asks, so a scan of every template was quadratic.
     var candidates = Vector<u32>.create();
@@ -698,8 +698,10 @@ fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocErro
         var pairs = Vector<EnvPair>.create();
         zipEnvironment(c, typeSyntax, arguments.view(), mut pairs)?;
         let environment = storeEnvironment(c, pairs.view())?;
+        let firstFunction = c.hir.functions.length;
         implementFor(c, template.item, typ, required, environment, false)?;
-        dropDiagnosticsSince(c, mark);
+        markRepeatsOf(c, typ, firstFunction); // the impl's own target reports (one fault, one diagnostic)
+        c.front.diagnostics.keepSince(mark, instantiationTooDeep(), false, mark);
         c.setFile(savedFile);
     }
     return Ok();
@@ -1154,6 +1156,7 @@ fn verifyUserAllocator(c: borrow mut Checker, typ: u32, span: Span) -> Result<bo
 /// The methods a value of `typ` has (FindMethod, §21): its own, those of its impls, or for a type parameter, its
 /// bounds'. None if there is none of that name; reports an ambiguous bound.
 fn findMethod(c: borrow mut Checker, typ: u32, name: u32, span: Span) -> Result<u32, AllocError> {
+    completeMembers(c, typ, span)?; // an instance whose functions waited for a use (lazy_instances.cee)
     let definition = c.types.info(typ).structDef;
     if (definition != none()) {
         let ownBound = findStructFunction(c, definition, name);

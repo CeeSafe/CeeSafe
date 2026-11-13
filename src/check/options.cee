@@ -474,6 +474,7 @@ fn settleTry(c: borrow mut Checker, tried: u32, t: u32, returnType: u32, span: S
     }
     let err = resultErr(c, t);
     let returnsResult = returnType != none() && isResultType(c, returnType);
+    completeMembers(c, err, span)?; // an `@into` method of an instance whose functions waited for a use
     let conversion = if (returnsResult) fromVariant(c, resultErr(c, returnType), err) else none();
     if (conversion != none()) {
         // `?` wraps the error in the return type's `@from` variant (ADR 0075 §2.3).

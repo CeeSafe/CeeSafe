@@ -300,6 +300,15 @@ fn checkProgramWith(
         templatesOf: Map<Word, Vector<u32>>.create(),
         structInstances: Map<Word, Vector<u32>>.create(),
         enumInstances: Map<Word, Vector<u32>>.create(),
+        memberOwner: none(),
+        inSignature: false,
+        instanceParents: Map<Word, Word>.create(),
+        pendingMembers: Map<Word, Word>.create(),
+        pendingCount: 0,
+        pendingSites: Vector<SpanIn>.create(),
+        completingDepth: 0,
+        typeWeights: Map<Word, Word>.create(),
+        weightCuts: 0,
     };
     // The constructor: the builtins' names, `this`, and a scratch frame's two parts.
     for (k in 0..builtinCount()) {
@@ -422,6 +431,9 @@ fn checkProgramWith(
         } else if (c.hir.functions[f].registered && !c.hir.functions[f].isClosure && !isExtern &&
             !bodyFromRecord(c, truncate<u32>(f))) {
             let function = truncate<u32>(f);
+            if (repeatsBoundedBlock(c, function)) {
+                c.hir.functions[f].repeatsGeneric = true; // reported in the instance its block is checked in
+            }
             if (functionIsInstantiation(c, function)) {
                 // Its generic version reports (§20.3); a scoped type argument the body cannot take is N0274.
                 var arguments = Vector<u32>.create();
@@ -442,7 +454,10 @@ fn checkProgramWith(
                 checkDynInstance(mut c, function, arguments.view())?;
                 endInstance(mut c, mark, arguments.view(), name.view(), siteFile, siteSpan, function)?;
             } else {
+                let mark = diagnosticsMark(c);
                 checkFunctionBody(mut c, function)?;
+                // After N0266 a type stands in for the instance that was not made: what else the body finds follows.
+                c.front.diagnostics.keepCause(mark, instantiationTooDeep());
             }
         }
         f += 1;
@@ -456,6 +471,7 @@ fn checkProgramWith(
     finishFunctionFacts(mut c)?;
     finishAtomicStructs(mut c);
     finishProgramTables(mut c)?;
+    c.front.diagnostics.removeRepeats(); // one finding, one diagnostic
     return Ok(c);
 }
 
@@ -697,8 +713,13 @@ fn declareFunctionIn(c: borrow mut Checker, f: u32, owner: u32, environment: Ran
     let saved = swapRegions(c, scope)?;
     let savedEnvironment = enterEnvironment(c, environment)?;
     let savedSelf = c.selfType;
-    c.selfType = owner; // `Self` (ADR 0086 §2.2): the method's owner; none for a function
+    c.selfType = owner;                      // `Self` (ADR 0086 §2.2): the method's owner; none for a function
+    let savedOwner = enterMembers(c, owner); // an instance's function: its signature's instances are nested in it
+    let savedSignature = c.inSignature;
+    c.inSignature = true;
     let function = declareFunctionCore(c, f, owner, environment)?;
+    c.inSignature = savedSignature;
+    c.memberOwner = savedOwner;
     c.selfType = savedSelf;
     restoreEnvironment(c, savedEnvironment);
     swapRegions(c, saved)?;

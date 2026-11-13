@@ -1,0 +1,103 @@
+// Polymorphic recursion that needs instances without end is N0266 where the 65th nested instantiation, or a type of
+// more than 1048576 types and members, would be made (type-system.md §20.4): never a hang. Once each, at the use:
+// a method that calls itself on a larger instance of its type, two structs whose methods do so through each other,
+// an enum's function (ADR 0107), an interface's generic impl, a bounded block's function (ADR 0130), a static
+// function, a closure in a generic function, a generic function whose type argument doubles, a field whose type is a
+// larger instance behind a box, and a drop block that makes one. The functions that only name the larger instance
+// (`nest`, `lift`) are no errors: run-pass/generic-nested-instances.
+interface Deep {
+    fn deep(borrow this) -> u32;
+}
+
+struct Pair<T: Copy> {
+    left: T;
+    right: T;
+
+    fn nest(borrow this) -> Pair<Pair<T>> => Pair<Pair<T>> {
+        left: Pair<T> { left: this.left, right: this.right },
+        right: Pair<T> { left: this.right, right: this.left },
+    };
+
+    fn depth(borrow this) -> u32 =>
+        1 + this.nest().depth(); // error[N0266]
+
+    fn build(a: T) -> u32 =>
+        Pair<Pair<T>>.build(Pair<T> { left: a, right: a }); // error[N0266]
+}
+
+impl<T: Copy> Deep for Pair<T> {
+    fn deep(borrow this) -> u32 =>
+        this.nest().deep(); // error[N0266]
+}
+
+struct Bounded<T> {
+    value: T;
+}
+
+impl<T: Copy> Bounded<T> {
+    fn more(borrow this) -> u32 =>
+        Bounded<Bounded<T>> { value: Bounded<T> { value: this.value } }.more(); // error[N0266]
+}
+
+struct Ping<T: Copy> {
+    value: T;
+
+    fn pong(borrow this) -> u32 =>
+        Pong<Ping<T>> { value: Ping<T> { value: this.value } }.ping(); // error[N0266]
+}
+
+struct Pong<T: Copy> {
+    value: T;
+
+    fn ping(borrow this) -> u32 =>
+        Ping<Pong<T>> { value: Pong<T> { value: this.value } }.pong(); // error[N0266]
+}
+
+enum Tree<T: Copy> {
+    Leaf(T),
+}
+
+impl<T: Copy> Tree<T> {
+    fn lift(this) -> Tree<Tree<T>> => Tree<Tree<T>>.Leaf(this);
+
+    fn height(this) -> u32 =>
+        1 + this.lift().height(); // error[N0266]
+}
+
+struct One<T: Copy> {
+    value: T;
+}
+
+fn viaClosure<T: Copy>(x: T) -> u32 {
+    let again = (y: T) =>
+        viaClosure(One<T> { value: y }); // error[N0266]
+    return again(x);
+}
+
+struct Two<T> {
+    left: T;
+    right: T;
+}
+
+fn grow<T: Copy>(x: T) -> u32 =>
+    grow(Two<T> { left: x, right: x }); // error[N0266]
+
+struct Chain<T> {
+    value: T;
+    next: Box<Chain<Chain<T>>>?; // error[N0266]
+}
+
+struct Held<T> {
+    count: u32;
+    marker: T?;
+
+    drop {
+        let inner = Held<Held<T>> { count: this.count, marker: null }; // error[N0266]
+        Console.writeLine(inner.count);
+    }
+}
+
+fn main() {
+    let p = Pair<i32> { left: 1, right: 2 };
+    Console.writeLine(p.left);
+}

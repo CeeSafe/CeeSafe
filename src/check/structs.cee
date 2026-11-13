@@ -174,13 +174,31 @@ fn declareEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
 fn resolveAllMembers(c: borrow mut Checker) -> Result<void, AllocError> {
     var s: usize = 0;
     var e: usize = 0;
+    // The declarations come first in each list. An instance repeats its declaration's findings (N0228, a field's
+    // type): one fault is one diagnostic. What an instance alone finds stays, for each instance that finds it.
+    var structsDeclared = none() as usize;
+    var enumsDeclared = none() as usize;
     while (s < c.structs.length || e < c.enums.length) {
         while (s < c.structs.length) {
+            let mark = diagnosticsMark(c);
+            if (c.structs[s].template != none() && structsDeclared > mark) {
+                structsDeclared = mark;
+            }
             resolveStructMembers(c, truncate<u32>(s))?;
+            if (c.structs[s].template != none()) {
+                c.front.diagnostics.keepSince(mark, instantiationTooDeep(), true, structsDeclared);
+            }
             s += 1;
         }
         while (e < c.enums.length) {
+            let mark = diagnosticsMark(c);
+            if (c.enums[e].template != none() && enumsDeclared > mark) {
+                enumsDeclared = mark;
+            }
             resolveEnumVariants(c, truncate<u32>(e))?;
+            if (c.enums[e].template != none()) {
+                c.front.diagnostics.keepSince(mark, instantiationTooDeep(), true, enumsDeclared);
+            }
             e += 1;
         }
     }
@@ -277,8 +295,15 @@ fn checkMemberType(
     return Ok(typ);
 }
 
-/// ResolveStructMembers: fields, the drop block (a `borrow mut this` method named `drop`), then functions.
+/// ResolveStructMembers: fields, the drop block (a `borrow mut this` method named `drop`), then functions; an
+/// instance whose functions wait for a use (lazy_instances.cee) gets them then.
 fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, AllocError> {
+    let waits = membersWait(c, c.structs[index as usize].typ);
+    return resolveStructPart(c, index, true, !waits);
+}
+
+/// The members of a struct entry: with `fields` its fields and drop block, with `functions` its functions.
+fn resolveStructPart(c: borrow mut Checker, index: u32, fields: bool, functions: bool) -> Result<void, AllocError> {
     let entry = c.structs[index as usize];
     if (entry.item == none()) {
         return Ok(); // a built-in allocator: no members
@@ -300,10 +325,20 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
     let savedRegions = swapRegions(c, scope)?;
     let savedEnvironment = enterEnvironment(c, entry.environment)?;
     let hasRegions = s.regionParameters.count > 0 || entry.template != none();
+    let savedOwner = enterMembers(c, entry.typ);
+    let savedSignature = c.inSignature;
+    c.inSignature = false;
+    let firstFunction = c.hir.functions.length;
     var memberNames = Vector<u32>.create();
+    if (!fields) {
+        for (f in c.types.structs[definition as usize].fields.view()) {
+            memberNames.push(c.types.fields[f as usize].name)?; // resolved when the instance was made
+        }
+    }
     var unionFirsts = Vector<u32>.create(); // a union's first member: its AST field, then its field (ADR 0041 §3.2)
     var unionFields = Vector<u32>.create();
-    for (k in 0..s.fields.count) {
+    let fieldCount = if (fields) s.fields.count else 0;
+    for (k in 0..fieldCount) {
         let astField = c.front.ast.at(s.fields, k);
         let field = c.front.ast.fields[astField as usize];
         let typeSpan = c.front.ast.typeSpans[field.typ as usize];
@@ -340,7 +375,7 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
         c.types.fields[added as usize].isPrivate = isVisibility(field.visibility, 3);
         c.types.fields[added as usize].isPublic = isVisibility(field.visibility, 1);
     }
-    if (s.dropBlock != none()) {
+    if (fields && s.dropBlock != none()) {
         // The drop block is checked as a `borrow mut this` method that user code cannot call.
         let blockSpan = c.front.ast.stmtSpans[s.dropBlock as usize];
         let dropSpan = Span { start: s.dropStart, end: blockSpan.end }; // the DropBlock's span
@@ -374,7 +409,8 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
         let dropFunction = declareFunctionIn(c, syntax, entry.typ, entry.environment)?;
         c.types.structs[definition as usize].dropFunction = dropFunction;
     }
-    for (k in 0..s.functions.count) {
+    let functionCount = if (functions) s.functions.count else 0;
+    for (k in 0..functionCount) {
         let f = c.front.ast.at(s.functions, k);
         {
             let fileToSet = methodFileOf(c, f, entry.file);
@@ -433,6 +469,9 @@ fn resolveStructMembers(c: borrow mut Checker, index: u32) -> Result<void, Alloc
         c.types.structs[definition as usize].functions.push(function)?;
         c.types.structs[definition as usize].functionNames.push(id.symbol)?;
     }
+    markInstanceRepeats(c, entry.typ, firstFunction);
+    c.inSignature = savedSignature;
+    c.memberOwner = savedOwner;
     swapRegions(c, savedRegions)?;
     restoreEnvironment(c, savedEnvironment);
     c.setFile(savedFile);
@@ -566,6 +605,9 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
     pushRegionNames(c, regionParameters, mut scope)?;
     let savedRegions = swapRegions(c, scope)?;
     let savedEnvironment = enterEnvironment(c, entry.environment)?;
+    let savedOwner = enterMembers(c, entry.typ);
+    let savedSignature = c.inSignature;
+    c.inSignature = false;
     for (k in 0..variants.count) {
         let v = c.front.ast.variants[c.front.ast.at(variants, k) as usize];
         let id = c.front.ast.idents[v.name as usize];
@@ -600,7 +642,13 @@ fn resolveEnumVariants(c: borrow mut Checker, index: u32) -> Result<void, AllocE
             checkFromVariant(c, definition, variant, v.payload.count, id.start, id.end)?;
         }
     }
-    declareEnumMethods(c, index)?; // the functions of its `impl E { … }` blocks (ADR 0107)
+    if (!membersWait(c, entry.typ)) {
+        let firstFunction = c.hir.functions.length;
+        declareEnumMethods(c, index)?; // the functions of its `impl E { … }` blocks (ADR 0107)
+        markInstanceRepeats(c, entry.typ, firstFunction);
+    }
+    c.inSignature = savedSignature;
+    c.memberOwner = savedOwner;
     swapRegions(c, savedRegions)?;
     restoreEnvironment(c, savedEnvironment);
     c.setFile(savedFile);

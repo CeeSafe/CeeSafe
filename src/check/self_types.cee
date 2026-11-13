@@ -28,6 +28,7 @@ fn checkTypeCall(
     if (structEntry != none()) {
         return checkStaticCall(c, structEntry, member, arguments, calleeSpan, span);
     }
+    completeMembers(c, typ, memberSpan)?; // an instance whose functions waited for a use
     var function = implMethodFor(c, typ, memberIdent.symbol);
     let enumEntry = enumEntryOfType(c, typ);
     if (function == none() && enumEntry != none() && reportUnmetImplBounds(c, typ, memberIdent.symbol, memberSpan)?) {

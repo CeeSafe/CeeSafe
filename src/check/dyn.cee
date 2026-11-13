@@ -314,6 +314,7 @@ fn coerceToDyn(c: borrow mut Checker, e: u32, expected: u32, span: Span) -> Resu
     if (bound == none()) {
         return coerceToDynFunction(c, value, implementation, dynType, expected, span);
     }
+    completeMembers(c, implementation, span)?; // an instance whose impls waited for a use (lazy_instances.cee)
     if (c.types.isScoped(implementation) && implements(c, implementation, bound) && !expectsReference) {
         // A type with region parameters implements interfaces for bounds only (ADR 0054 §3.2): a `dyn` value carries
         // no loans (§37).

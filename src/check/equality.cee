@@ -147,7 +147,7 @@ fn checkEquality(
         return c.expr(HirExpr.BoolConst(false), boolType, span.start, span.end);
     }
     let elementMethod = if (isEqualityElement(c, element)) none() else if (c.types.is(element, TypeKind.Struct) ||
-        c.types.is(element, TypeKind.Enum)) derivedEqualMethod(c, element)? else none();
+        c.types.is(element, TypeKind.Enum)) derivedEqualMethod(c, element, span)? else none();
     if (elementMethod != none()) {
         return derivedElementsEquality(c, op, left, right, element, span);
     }

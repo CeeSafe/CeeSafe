@@ -86,7 +86,6 @@ fn noteInstance(
     index: u32,
     isEnum: bool,
     force: bool,
-    span: Span,
 ) -> Result<bool, AllocError> {
     let parent = c.memberOwner;
     let made: u64 = if (c.inSignature) 0x100000000 else 0;
@@ -102,9 +101,7 @@ fn noteInstance(
     }
     if (waits) {
         let flag: u64 = if (isEnum) 0x100000000 else 0;
-        let site = (c.pendingSites.length as u64) << 34;
-        c.pendingSites.push(SpanIn { file: c.file, start: span.start, end: span.end })?;
-        c.pendingMembers.put(Word { value: typ as u64 }, Word { value: (index as u64) | flag | site })?;
+        c.pendingMembers.put(Word { value: typ as u64 }, Word { value: (index as u64) | flag })?;
         c.pendingCount += 1;
     }
     return Ok(waits);
@@ -178,9 +175,11 @@ fn completeMembers(c: borrow mut Checker, typ: u32, span: Span) -> Result<void, 
     } else {
         resolveStructPart(c, index, false, true)?;
     }
-    // Reported in the generic version; what these arguments cannot take, where the instance was written first.
-    let site = c.pendingSites[truncate<usize>(word >> 34)];
-    endInstance(c, mark, arguments.view(), text.view(), site.file, Span { start: site.start, end: site.end }, none())?;
+    // Reported in the generic version; what these arguments cannot take (N0274, N0351) is reported at this use, as
+    // an instance made at once reports it where it is written. The instance was first written in a signature of its
+    // own declaration, which is no place for it: the fault is the use with these arguments.
+    let file = c.file;
+    endInstance(c, mark, arguments.view(), text.view(), file, span, none())?;
     c.instantiating -= 1;
     c.genericMethod = savedGenericMethod;
     finishLateTypes(c)?;

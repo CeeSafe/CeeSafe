@@ -1769,6 +1769,8 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
     it gets them at its **first use**. A use is a method or function called or named on it, a constant or associated
     type asked of it, a bound asked of it (as a type argument, or by a coercion to `dyn I`), `==` on it, or `?`
     looking for its `@into` method. An instance's functions are declared together, and all their bodies are checked.
+    What their signatures cannot take for the instance's arguments (N0274, N0351) is reported at that first use, as
+    an instance that gets its functions at once reports it where it is written: not in the signature that named it.
   - The functions of an instance first named or first used in a body are one instantiation deeper than that body;
     those of an instance named in a declaration (a field's type, a non-generic function's signature) are at depth 0.
     So a program that names finitely many instances (`p.nest().nest()`) is checked and compiled, and one whose calls

@@ -262,9 +262,8 @@ struct Checker {
     memberOwner: u32;                 // the instance whose members' types are being resolved, or none
     inSignature: bool;                // and they are a function's signature's, not a field's or a payload's
     instanceParents: Map<Word, Word>; // by instance type: the memberOwner it was made under, or none
-    pendingMembers: Map<Word, Word>;  // by instance type: its entry (an enum's with bit 32), bit 33 once it has them, its site from bit 34
+    pendingMembers: Map<Word, Word>;  // by instance type: its entry (an enum's with bit 32); bit 33 once it has them
     pendingCount: usize;              // how many still wait
-    pendingSites: Vector<SpanIn>;     // where each was written first: what its functions' types cannot take is reported there
     completingDepth: u32;             // the instantiation depth of the functions being declared for a use
     typeWeights: Map<Word, Word>;     // by type: how many types and members it is made of (typeWeight), once known
     weightCuts: u32;                  // how often typeWeight met a type inside itself: a count made across one is partial

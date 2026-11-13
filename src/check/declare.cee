@@ -305,7 +305,6 @@ fn checkProgramWith(
         instanceParents: Map<Word, Word>.create(),
         pendingMembers: Map<Word, Word>.create(),
         pendingCount: 0,
-        pendingSites: Vector<SpanIn>.create(),
         completingDepth: 0,
         typeWeights: Map<Word, Word>.create(),
         weightCuts: 0,

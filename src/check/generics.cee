@@ -652,7 +652,7 @@ fn instantiateStruct(
     c.structs.push(StructEntry { item: entry.item, file: entry.file, typ: typ, environment: env, template: template })?;
     let index = truncate<u32>(c.structs.length - 1);
     addInstance(mut c.structInstances, template, index)?;
-    let waits = noteInstance(c, typ, index, false, depth > 64, span)?; // its functions wait for a use (lazy_instances.cee)
+    let waits = noteInstance(c, typ, index, false, depth > 64)?; // its functions wait for a use (lazy_instances.cee)
     if (c.membersResolved) {
         c.instantiating += 1;
         let mark = diagnosticsMark(c);
@@ -729,7 +729,7 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
     )?;
     addInstance(mut c.enumInstances, template, truncate<u32>(c.enums.length - 1))?;
     let index = truncate<u32>(c.enums.length - 1);
-    let waits = noteInstance(c, typ, index, true, depth > 64, span)?; // its functions wait for a use (lazy_instances.cee)
+    let waits = noteInstance(c, typ, index, true, depth > 64)?; // its functions wait for a use (lazy_instances.cee)
     if (c.membersResolved) {
         c.instantiating += 1;
         let mark = diagnosticsMark(c);
@@ -1210,7 +1210,7 @@ fn checkGenericCall(
         mut found,
     )?;
     if (ok && found.length == 1 && isFieldlessEnum(c, found[0]) && isDerivedKeyHelper(c, g, nameSymbol) &&
-        !boundsHold(c, parameterTypes[0], found[0])?) {
+        !boundsHold(c, parameterTypes[0], found[0], span)?) {
         return derivedIndexCall(c, g, arguments, span); // a fieldless-enum field without its own derive
     }
     let instance = if (ok) instantiateFunction(c, g, found.view(), span)? else none();
@@ -1230,8 +1230,9 @@ fn isDerivedKeyHelper(c: borrow Checker, g: u32, nameSymbol: u32) -> bool {
     return sameText(c.name(nameSymbol), "deriveHash") || sameText(c.name(nameSymbol), "deriveCompare");
 }
 
-/// Does `argument` satisfy the interface bounds of type parameter `parameter` (as checkBounds, without reporting)?
-fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32) -> Result<bool, AllocError> {
+/// Does `argument` satisfy the interface bounds of type parameter `parameter` (as checkBounds, without reporting an
+/// unmet bound)? Asking is a use of `argument`, at `span`: an instance whose functions waited gets them (§20.4).
+fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32, span: Span) -> Result<bool, AllocError> {
     var mapping = Vector<TypeMapping>.create();
     mapping.push(TypeMapping { from: parameter, to: argument })?;
     let boundCount = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.length;
@@ -1246,7 +1247,7 @@ fn boundsHold(c: borrow mut Checker, parameter: u32, argument: u32) -> Result<bo
         var boundName = Vector<u8>.create();
         appendBytes(mut boundName, c.types.rangeText(original.name))?;
         let required = c.types.addBound(original.interfaceEntry, boundName.view(), substituted.view())?;
-        completeMembers(c, argument, Span { start: 0, end: 0 })?;
+        completeMembers(c, argument, span)?; // the call that asks is the use
         if (!implements(c, argument, required)) {
             return Ok(false);
         }

@@ -65,24 +65,36 @@ fn rowFor(text: Slice<u8>, code: Slice<u8>) -> Result<CatalogEntry?, AllocError>
         if (line.length == 0 || line[0] != '|') {
             continue;
         }
-        // The cells between the bars, as String.Split('|') gives them.
+        // The cells between the bars; `\|` is a bar inside a cell (Markdown's escape), not a cell's end.
         var bars = Vector<usize>.create();
         for (k in 0..line.length) {
-            if (line[k] == '|') {
+            if (line[k] == '|' && (k == 0 || line[k - 1] != '\\')) {
                 bars.push(k)?;
             }
         }
         if (bars.length < 3 || !cellIsCode(line[bars[0] + 1..bars[1]], code)) {
             continue;
         }
-        let meaning = copyBytes(trimmed(line[bars[1] + 1..bars[2]]))?;
+        let meaning = cellText(trimmed(line[bars[1] + 1..bars[2]]))?;
         var example = Vector<u8>.create();
         if (bars.length > 3) {
-            example = copyBytes(trimmed(line[bars[2] + 1..bars[3]]))?;
+            example = cellText(trimmed(line[bars[2] + 1..bars[3]]))?;
         }
         return Ok(CatalogEntry { meaning: meaning, example: example });
     }
     return Ok(null);
+}
+
+/// A table cell's text: `\|` in it is `|`.
+fn cellText(cell: Slice<u8>) -> Result<Vector<u8>, AllocError> {
+    var out = Vector<u8>.create();
+    for (k in 0..cell.length) {
+        if (cell[k] == '\\' && k + 1 < cell.length && cell[k + 1] == '|') {
+            continue;
+        }
+        out.push(cell[k])?;
+    }
+    return Ok(out);
 }
 
 /// The code's entry: the diagnostics table first, then the specification's other documents in path order.

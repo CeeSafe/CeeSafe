@@ -1,0 +1,20 @@
+// Tests in the test directory (ADR 0129).
+
+/// A test here unwraps: set apart.
+@test
+fn unwrapsInTestDirectory() {
+    let b = boxed(8)!;
+    assert(b.value == 8);
+}
+
+/// A test here that reaches production code's `!`: a sweep failure, at the production position.
+@test
+fn callsProductionFromTestDirectory() {
+    assert(stops(9) == 9);
+}
+
+/// (c) A helper in the test directory (helpers.cee): set apart.
+@test
+fn callsHelperInTests() {
+    assert(helperInTests() == 7);
+}

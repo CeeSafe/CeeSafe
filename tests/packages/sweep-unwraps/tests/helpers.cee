@@ -1,0 +1,7 @@
+// A file of the test directory with no `@test` of its own: `build` leaves it out, so all of it is test-only code
+// (ADR 0129 §2.1).
+
+fn helperInTests() -> i32 {
+    let b = boxed(7)!;
+    return b.value;
+}

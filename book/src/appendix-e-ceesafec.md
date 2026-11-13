@@ -1,13 +1,13 @@
 ---
 title: "Appendix E: The ceesafec command"
-summary: Every command and option of ceesafec 0.42.0 with its argument, what it does and its default, then the exit statuses, the environment variables it reads, the keys of ceesafe.toml and the files it reads and writes.
+summary: Every command and option of ceesafec with its argument, what it does and its default, then the exit statuses, the environment variables it reads, the keys of ceesafe.toml and the files it reads and writes.
 keywords: [ceesafec, command, option, flag, parse, check, build, run, test, fmt, fix, new, agents, fetch, publish, index-check, doc, explain, lsp, mcp, "--emit", "--diagnostics-format", "exit status", "ceesafe.toml", "ceesafe.lock", CEESAFE_HOME, CEESAFE_INDEX]
 specification: ["tooling.md §1", "tooling.md §4", "tooling.md §5", "tooling.md §7", "tooling.md §8", "tooling.md §10"]
 ---
 
 # Appendix E: The `ceesafec` command
 
-This appendix lists every command of `ceesafec` 0.42.0 and every option each one takes, one table for each
+This appendix lists every command of `ceesafec` %ceesafec-version% and every option each one takes, one table for each
 command. After the commands come the exit statuses, the environment variables, the keys of `ceesafe.toml`, and the
 files `ceesafec` reads and writes. Every row can be read without the rows around it. The chapters that teach a
 command are linked from its heading, and `ceesafec --help` prints a summary of the same options.
@@ -51,7 +51,7 @@ ceesafec <command> [options] <file.cee>... [<file.c>...] [-- <program arguments>
 
 | Option | Argument | What it does | Default |
 |---|---|---|---|
-| `--version` | none | As the first word after `ceesafec`, prints the compiler's name and version, `ceesafec 0.42.0`, and exits with status 0. | not given |
+| `--version` | none | As the first word after `ceesafec`, prints the compiler's name and version, `ceesafec %ceesafec-version%`, and exits with status 0. | not given |
 | `--help` | none | As the first word after `ceesafec`, or after any command and before a `--`, prints the usage text and exits with status 0. `ceesafec test --help` prints the options of `test` instead. | not given |
 | `-h` | none | The same as `--help`. | not given |
 

@@ -169,7 +169,7 @@ def render(root):
         out.append("")
     need(placed == given, f"no group of GROUPS ({SCRIPT}) holds {names(given - placed)}")
     out += ["## Codes that are not given", "",
-            "The catalog has three codes that release 0.42.0 never reports. They are listed so that every code "
+            "The catalog has three codes that release %ceesafec-version% never reports. They are listed so that every code "
             "`ceesafec explain` knows is on this page. A code is never used again for another meaning.", "",
             "| Code | Status |", "|---|---|"]
     for code, status in sorted(NOT_GIVEN.items()):

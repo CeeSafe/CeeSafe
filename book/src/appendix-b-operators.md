@@ -1,6 +1,6 @@
 ---
 title: "Appendix B: Operators and symbols"
-summary: Every operator and punctuation symbol of CeeSafe 0.42.0 with its meaning, the types it takes, whether it can panic and the section that teaches it, one precedence table, and the familiar operators that CeeSafe does not have.
+summary: Every operator and punctuation symbol of CeeSafe with its meaning, the types it takes, whether it can panic and the section that teaches it, one precedence table, and the familiar operators that CeeSafe does not have.
 keywords: [operator, precedence, associativity, symbol, punctuation, overflow, panic, "??", "?", "!", "=>", "->", "..", "..=", "@", "_", "~", "++", "::", shift, comparison, assignment, N0102, N0103, N0207]
 diagnostics: [N0102]
 specification: ["grammar.md §1.7", "grammar.md §2.1", "type-system.md §6", "type-system.md §35.3"]
@@ -13,7 +13,7 @@ assignment operators, and the punctuation. For each it gives the meaning, the ty
 stop the program with a panic. One table gives the precedence of the operators. The last section names the
 operators of other languages that CeeSafe does not have, and what to write instead.
 
-The tables are the compiler's own lists for release 0.42.0: the tokens are those of `tokenText` in
+The tables are the compiler's own lists for release %ceesafec-version%: the tokens are those of `tokenText` in
 `src/syntax/token.cee`, and the precedence levels are those of the parser and of
 [the grammar](https://ceesafe.github.io/CeeSafe/reference/grammar), §2.1. The words of the language are in
 [Appendix A](./appendix-a-keywords).
@@ -184,7 +184,7 @@ These are not tokens of their own: the compiler reads them as part of a literal 
 
 ## What CeeSafe does not have
 
-Each row is something that another language has and CeeSafe 0.42.0 rejects, with what to write instead.
+Each row is something that another language has and CeeSafe %ceesafec-version% rejects, with what to write instead.
 
 | Not in CeeSafe | Write instead | Taught in |
 |---|---|---|

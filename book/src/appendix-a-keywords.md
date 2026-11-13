@@ -1,6 +1,6 @@
 ---
 title: "Appendix A: Keywords"
-summary: Every reserved word of CeeSafe 0.42.0 with its meaning and the section that teaches it, the words that are special only in one place and stay usable as names, and every attribute.
+summary: Every reserved word of CeeSafe with its meaning and the section that teaches it, the words that are special only in one place and stay usable as names, and every attribute.
 keywords: [keyword, reserved word, contextual word, identifier, attribute, is, region, dyn, union, own, type, move, drop, where, "@test", "@from", "@derive", N0100, N0290]
 diagnostics: [N0100]
 specification: ["grammar.md §1.3", "grammar.md §2", "type-system.md §28.1"]
@@ -13,7 +13,7 @@ name. The **contextual words** have a meaning in one place of the grammar and ar
 The **attributes** are the names that may follow `@` before a declaration. Look a word up in the first column; the
 last column names the section that teaches it.
 
-The tables are the compiler's own lists for release 0.42.0: the reserved words are those of `keywordText` in
+The tables are the compiler's own lists for release %ceesafec-version%: the reserved words are those of `keywordText` in
 `src/syntax/token.cee`, the contextual words are those the parser compares a name with, and the attributes are
 those the checker accepts. The grammar is in
 [the specification](https://ceesafe.github.io/CeeSafe/reference/grammar).

@@ -132,7 +132,7 @@ checked for each instance, at the first `==` on a value of that instance: `Wrap<
 
 ## Diagnostics
 
-Each message below is the compiler's own, from release 0.42.0. A diagnostic about a derive points at the derive's
+Each message below is the compiler's own, from release %ceesafec-version%. A diagnostic about a derive points at the derive's
 name inside the attribute, not at the field, because the fault is in the code the derive writes.
 
 | What is wrong | The compiler reports | The fix |

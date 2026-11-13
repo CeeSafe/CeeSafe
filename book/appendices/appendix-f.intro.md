@@ -1,12 +1,12 @@
 ---
 title: "Appendix F: Diagnostics"
-summary: Every diagnostic code that ceesafec 0.42.0 can report, error or warning, with one line on what went wrong and the usual fix, and the section of the book that shows it.
+summary: Every diagnostic code that ceesafec can report, error or warning, with one line on what went wrong and the usual fix, and the section of the book that shows it.
 keywords: [diagnostic, error, warning, code, explain, fix, "--diagnostics-format", "--deny-warnings", N0100, N0200, N0205, N0241, N0249, N0250, N0402]
 ---
 
 # Appendix F: Diagnostics
 
-This appendix lists every diagnostic code of `ceesafec` 0.42.0: 154 errors and 5 warnings. Find the code from your
+This appendix lists every diagnostic code of `ceesafec` %ceesafec-version%: 154 errors and 5 warnings. Find the code from your
 message (`error[N0249]`) in the tables, which are in the order of the numbers. Each row says what went wrong and the
 usual fix, and links to the sections of the book that show the diagnostic in a listing, with its message and the
 corrected program. A code that no section shows links to its table in the specification.
@@ -73,7 +73,7 @@ $ ceesafec fix --dry-run main.cee
 main.cee:3:26: write 'mut' before the argument: '' -> 'mut '
 ```
 
-Release 0.42.0 has fixes for six codes: N0100 (a missing `;`), N0201 (an extern declaration that repeats a
+Release %ceesafec-version% has fixes for six codes: N0100 (a missing `;`), N0201 (an extern declaration that repeats a
 dependency's), N0208 (`as` to `truncate`), N0211 and N0248 (`let` to `var`), and N0249 (`mut` added or removed). No
 chapter of the book teaches `fix`. The page
 [The ceesafec command](https://ceesafe.github.io/CeeSafe/guide/ceesafec) of the guide does.

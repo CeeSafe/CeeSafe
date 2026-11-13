@@ -1,0 +1,134 @@
+// Legitimate programs that must keep working: generic interfaces whose results are type parameters, implemented by
+// types that hold what they give out, used through bounds and `dyn`.
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+interface Stream<T> {
+    fn next(borrow mut this) -> T?;
+}
+interface Sink<T> {
+    fn put(borrow mut this, v: T) -> Result<void, AllocError>;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Number {
+    n: i32;
+}
+struct Named {
+    name: String;
+}
+struct Words<region r> {
+    text: StringView<r>;
+    position: usize;
+}
+struct Bag<region r> {
+    kept: Vector<StringView<r>>;
+}
+struct Wrap<T: Copy> {
+    v: T;
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl Source<i32> for Number {
+    fn get(borrow this) -> i32 => this.n;
+}
+impl Source<String> for Named {
+    fn get(borrow this) -> String => String.from(this.name.view())!;
+}
+impl<T: Copy> Source<T> for Wrap<T> {
+    fn get(borrow this) -> T => this.v;
+}
+impl<region r> Stream<StringView<r>> for Words<r> {
+    fn next(borrow mut this) -> StringView<r>? {
+        let text = this.text;
+        let start = this.position;
+        if (start >= text.length) {
+            return null;
+        }
+        var end = start;
+        while (end < text.length && text.bytes()[end] != 32) {
+            end += 1;
+        }
+        this.position = if (end < text.length) end + 1 else end;
+        return text[start..end];
+    }
+}
+impl<region r> Sink<StringView<r>> for Bag<r> {
+    fn put(borrow mut this, v: StringView<r>) -> Result<void, AllocError> => this.kept.push(v);
+}
+fn drain<T, S: Source<T>>(s: S) -> T => s.get();
+fn pick<T, S: Source<T>>(s: borrow S) -> T => s.get();
+fn viaDyn<T>(s: borrow dyn Source<T>) -> T => s.get();
+fn first<T, I: Stream<T>>(it: borrow mut I) -> T? => it.next();
+fn collect<T, I: Stream<T>>(it: borrow mut I, out: borrow mut Vector<T>) -> Result<void, AllocError> {
+    while (true) {
+        match (it.next()) {
+            Some(x) => { out.push(x)?; }
+            null => { break; }
+        }
+    }
+    return Ok();
+}
+fn pour<T, I: Stream<T>, K: Sink<T>>(it: borrow mut I, sink: borrow mut K) -> Result<void, AllocError> {
+    while (true) {
+        match (it.next()) {
+            Some(x) => { sink.put(x)?; }
+            null => { break; }
+        }
+    }
+    return Ok();
+}
+fn count<T, I: Stream<T>>(it: borrow mut I) -> usize {
+    var n: usize = 0;
+    while (it.next().isSome()) {
+        n += 1;
+    }
+    return n;
+}
+fn main() {
+    let text = String.from("alpha beta gamma delta")!;
+    let h = Holder { text: text.view() };
+    Console.writeLine(pick<StringView, Holder>(h));
+    Console.writeLine(viaDyn<StringView>(h));
+    Console.writeLine(drain<StringView, Holder>(Holder { text: text.view() }));
+    Console.writeLine(drain<i32, Number>(Number { n: 7 }));
+    let made = drain<String, Named>(Named { name: String.from("owned")! });
+    Console.writeLine(made.view());
+    Console.writeLine(drain<StringView, Wrap<StringView>>(Wrap<StringView> { v: text.view() }));
+    var words = Words { text: text.view(), position: 0 };
+    match (first<StringView, Words>(mut words)) {
+        Some(w) => { Console.writeLine(w); }
+        null => {}
+    }
+    var all = Vector<StringView>.create();
+    collect<StringView, Words>(mut words, mut all)!;
+    for (w in all.view()) {
+        Console.writeLine(w);
+    }
+    // The iterator is free again once the call is over: what `all` holds is the text, not the iterator.
+    Console.writeLine(count<StringView, Words>(mut words));
+    all.push("more")!;
+    Console.writeLine(all.length);
+    var again = Words { text: text.view(), position: 0 };
+    var bag = Bag { kept: Vector<StringView>.create() };
+    pour<StringView, Words, Bag>(mut again, mut bag)!;
+    Console.writeLine(bag.kept.length);
+    Console.writeLine(bag.kept[3]);
+}
+
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: 7
+// expect-stdout: owned
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha
+// expect-stdout: beta
+// expect-stdout: gamma
+// expect-stdout: delta
+// expect-stdout: 0
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: delta

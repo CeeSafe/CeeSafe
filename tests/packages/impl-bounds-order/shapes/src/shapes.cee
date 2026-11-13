@@ -1,0 +1,62 @@
+// The dependency of impl-bounds-order (ADR 0130 §2.6): a struct and an enum with bounded `impl` blocks, the
+// interfaces that bound them, and, after the blocks, a type of its own with the impl that meets one.
+
+public struct Pair<T> {
+    public left: T;
+    public right: T;
+}
+
+impl<T: Named> Pair<T> {
+    public fn names(borrow this) -> u32 => this.left.name() + this.right.name();
+}
+
+impl<T: Copy> Pair<T> {
+    public fn first(borrow this) -> T => this.left;
+}
+
+impl<T: Send + Sized> Pair<T> {
+    public fn across(this) -> usize => Thread.spawn(move () => this.left.size() + this.right.size())!.join();
+}
+
+public enum Either<T> {
+    One(T),
+    Other,
+}
+
+impl<T: Named> Either<T> {
+    public fn name(borrow this) -> u32 => match (this) {
+        Self.One(v) => v.name(),
+        Self.Other => 0,
+    };
+}
+
+/// A pair of two values.
+public fn pair<T>(left: T, right: T) -> Pair<T> => Pair<T> { left: left, right: right };
+
+public fn one<T>(value: T) -> Either<T> => Either<T>.One(value);
+
+public fn other<T>() -> Either<T> => Either<T>.Other;
+
+public interface Named {
+    fn name(borrow this) -> u32;
+}
+
+public interface Sized {
+    fn size(borrow this) -> usize;
+}
+
+public struct Circle {
+    public r: u32;
+}
+
+impl Named for Circle {
+    public fn name(borrow this) -> u32 => this.r;
+}
+
+public struct Label {
+    public text: String;
+}
+
+impl Sized for Label {
+    public fn size(borrow this) -> usize => this.text.length;
+}

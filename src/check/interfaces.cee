@@ -113,6 +113,14 @@ fn declareInterface(c: borrow mut Checker, item: u32) -> Result<void, AllocError
     c.interfaces[index as usize].parameters = c.types.addList(parameters.view())?;
     let methods = interfaceMethods(c, index);
     for (k in 0..methods.count) {
+        // ResolveFlows gives an interface's method the interface's flow names, whatever it is declared for (§25.6).
+        let method = c.front.ast.at(methods, k) as usize;
+        while (c.interfaceOfMethod.length <= method) {
+            c.interfaceOfMethod.push(none())?;
+        }
+        c.interfaceOfMethod[method] = index;
+    }
+    for (k in 0..methods.count) {
         // A method without a receiver is a static function (ADR 0086 §2.3).
         let f = c.front.ast.functions[c.front.ast.at(methods, k) as usize];
         if (f.regionParameters.count > 0) {
@@ -216,6 +224,11 @@ fn resolveInterface(c: borrow mut Checker, syntax: u32) -> Result<u32, AllocErro
     if (bottom) {
         return Ok(none());
     }
+    // The interface's own parameters' bounds, wherever it is instantiated: an impl's header, a bound, a `dyn` type,
+    // a supertrait (§21.2). A default's body takes them as facts, so `T: Send` there holds no loan (§25.7 rule 5).
+    var parameters = Vector<u32>.create();
+    listTypes(c, c.interfaces[entry as usize].parameters, mut parameters)?;
+    checkBounds(c, parameters.view(), resolved.view(), span)?;
     // Named from its declaration, with its package's name for a dependency's (qualifiedName), however the use spells
     // it: the first use names the type, and whichever package that is, the name is one (ADR 0082 §2.7).
     let name = interfaceDisplayName(c, entry)?;
@@ -844,6 +857,12 @@ fn implementFor(
         } else {
             let expected = expectedSignature(c, signature, forType, environment, hir)?;
             signatureMismatch(c, expected, hir, mut problem)?;
+            if (problem.length == 0 && first) {
+                // The types agree; so must the flows (§21.1, ADR 0131). An instance of a generic impl repeats its
+                // generic version, which was compared.
+                let declared = interfaceView(c, interfaceEntry, signature, hir)?;
+                flowMismatch(c, declared, hir, mut problem)?;
+            }
         }
         if (problem.length > 0) {
             var message = Vector<u8>.create();
@@ -1112,6 +1131,83 @@ fn signatureMismatch(
         appendQuotedType(out, c, e.returnType)?;
         appendText(out, ", not ")?;
         return appendQuotedType(out, c, a.returnType);
+    }
+    return Ok();
+}
+
+/// The interface's method `signature` as generic code sees it (ADR 0131): declared for the interface's `Self`, with
+/// the interface's type parameters opaque. Its flows are those every implementation must stay within, since a
+/// generic body is checked once against them and never again for an instance (§20.3).
+fn interfaceView(c: borrow mut Checker, entry: u32, signature: u32, actual: u32) -> Result<u32, AllocError> {
+    let selfType = interfaceSelf(c, entry)?;
+    let environment = interfaceEnvironment(c, entry)?;
+    let savedFile = c.file;
+    {
+        let fileToSet = c.interfaces[entry as usize].file;
+        c.setFile(fileToSet);
+    }
+    // What the interface's own declaration has wrong is reported where it is declared or used, not once per impl.
+    let mark = c.front.diagnostics.items.length;
+    let function = expectedSignature(c, signature, selfType, environment, actual)?;
+    dropDiagnosticsSince(c, mark);
+    c.setFile(savedFile);
+    return Ok(function);
+}
+
+fn appendParameterName(
+    out: borrow mut Vector<u8>,
+    c: borrow Checker,
+    function: u32,
+    i: u32,
+) -> Result<void, AllocError> {
+    let local = c.hir.functions[function as usize].parameters[i as usize];
+    return appendQuotedName(out, c, c.hir.locals[local as usize].name);
+}
+
+/// Empty if the impl's method `actual` has no flow that the interface's method `declared` lacks (§21.1, ADR 0131);
+/// else the first that it adds. A caller through a bound or a `dyn` type knows only the interface's flows: a result
+/// that borrowed from another parameter, or from the receiver itself where the interface's result holds only what
+/// the receiver holds (a deep result, §25.6), or a parameter stored through another, would outlive what it borrows.
+fn flowMismatch(c: borrow Checker, declared: u32, actual: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let d = borrow c.hir.functions[declared as usize];
+    let a = borrow c.hir.functions[actual as usize];
+    if (d.parameters.length != a.parameters.length) {
+        return Ok();
+    }
+    for (i in a.returnSources.view()) {
+        if (!containsU32(d.returnSources, i)) {
+            appendText(out, "its result may borrow from ")?;
+            appendParameterName(out, c, actual, i)?;
+            appendText(
+                out,
+                ", but the interface's method declares no such flow, so a caller through the interface would not know of the borrow (type-system.md §21.1)",
+            )?;
+            return Ok();
+        }
+        if (containsU32(d.deepSources, i) && !containsU32(a.deepSources, i)) {
+            appendText(out, "its result may borrow from ")?;
+            appendParameterName(out, c, actual, i)?;
+            appendText(
+                out,
+                " itself, but the interface's result may hold only what that parameter's referent holds, such as a copy of a view field, not a borrow of its storage; name the type's region in the result ('StringView<r>' under 'impl<region r>'), write 'StringView<static>' for static data, or have the interface's method return the borrowing type itself (type-system.md §21.1, §25.6)",
+            )?;
+            return Ok();
+        }
+    }
+    for (flow in a.mutableFlows.view()) {
+        // A deep flow stores less than a flow of the source's own loan does: it fits either.
+        let plain = flow & (deepFlowBit() ^ 0xFFFFFFFFFFFFFFFF);
+        if (!containsU64(d.mutableFlows, plain) && !(flowIsDeep(flow) && containsU64(d.mutableFlows, flow))) {
+            appendText(out, "it may store what ")?;
+            appendParameterName(out, c, actual, flowSource(flow))?;
+            appendText(out, " borrows through ")?;
+            appendParameterName(out, c, actual, flowTarget(flow))?;
+            appendText(
+                out,
+                ", but the interface's method declares no such flow, so a caller through the interface would not know of the borrow; give the interface a type parameter for the stored type (type-system.md §21.1)",
+            )?;
+            return Ok();
+        }
     }
     return Ok();
 }

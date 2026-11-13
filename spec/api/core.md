@@ -274,7 +274,7 @@ capture the set (N0349). The calls are the checker's (src/check/async.cee): thes
 ## struct AsyncTasks
 
 ```ceesafe
-public struct AsyncTasks<E: Copy>
+public struct AsyncTasks<E: Copy + Send>
 ```
 
 `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): `Async.tasksIn` with the system heap.
@@ -293,7 +293,7 @@ public async fn run(
 ## struct AsyncTasksIn
 
 ```ceesafe
-public struct AsyncTasksIn<E: Copy, A>
+public struct AsyncTasksIn<E: Copy + Send, A>
 ```
 
 `await Async.tasksIn(alloc, limit, oom, async (set) => …)` (ADR 0053): the body runs in the awaiting task, as the

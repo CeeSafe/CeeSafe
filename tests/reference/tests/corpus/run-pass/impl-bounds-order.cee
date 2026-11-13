@@ -1,0 +1,85 @@
+// Whether an instance meets the bounds of an `impl<T: B> S<T> { … }` block is decided once every impl, field and
+// Copy type is known, whatever the order of the declarations (type-system.md §21.1, ADR 0130 §2.6): here each use
+// comes first, the struct and its blocks next, and what decides the bounds last: the impls of the bounding
+// interface, and the fields that make a type Copy or Send. An order that decided earlier would leave these
+// instances without the blocks' functions. Each expected line follows from the values the program builds.
+fn main() {
+    let named = Pair<Late> { left: Late { n: 3 }, right: Late { n: 4 } };
+    Console.writeLine(named.names());
+    let copied = Pair<Small> { left: Small { n: 5 }, right: Small { n: 6 } };
+    Console.writeLine(copied.first().n);
+    let sent = Pair<Owned> { left: Owned { text: String.from("ab")! }, right: Owned { text: String.from("cde")! } };
+    Console.writeLine(sent.across());
+    Console.writeLine(holds(Holder { inner: Pair<Late> { left: Late { n: 1 }, right: Late { n: 1 } } }));
+    let state = Either<Late>.One(Late { n: 9 });
+    Console.writeLine(state.name());
+}
+
+fn holds(h: Holder) -> u32 => h.inner.names();
+
+struct Holder {
+    inner: Pair<Late>;
+}
+
+struct Pair<T> {
+    left: T;
+    right: T;
+}
+
+impl<T: Named> Pair<T> {
+    fn names(borrow this) -> u32 => this.left.name() + this.right.name();
+}
+
+impl<T: Copy> Pair<T> {
+    fn first(borrow this) -> T => this.left;
+}
+
+impl<T: Send + Sized> Pair<T> {
+    fn across(this) -> usize => Thread.spawn(move () => this.left.size() + this.right.size())!.join();
+}
+
+enum Either<T> {
+    One(T),
+    Other,
+}
+
+impl<T: Named> Either<T> {
+    fn name(borrow this) -> u32 => match (this) {
+        Self.One(v) => v.name(),
+        Self.Other => 0,
+    };
+}
+
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+interface Sized {
+    fn size(borrow this) -> usize;
+}
+
+struct Late {
+    n: u32;
+}
+
+struct Small {
+    n: u32;
+}
+
+struct Owned {
+    text: String;
+}
+
+impl Named for Late {
+    fn name(borrow this) -> u32 => this.n;
+}
+
+impl Sized for Owned {
+    fn size(borrow this) -> usize => this.text.length;
+}
+
+// expect-stdout: 7
+// expect-stdout: 5
+// expect-stdout: 5
+// expect-stdout: 2
+// expect-stdout: 9

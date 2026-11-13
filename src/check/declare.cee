@@ -216,6 +216,8 @@ fn checkProgramWith(
         pendingAssocBounds: Vector<PendingAssocBound>.create(),
         supertraitsReady: false,
         pendingBounds: Vector<PendingBounds>.create(),
+        pendingThreadBounds: Vector<PendingBounds>.create(),
+        membersReady: false,
         pendingAllocators: Vector<PendingAllocator>.create(),
         pendingElements: Vector<PendingElement>.create(),
         pendingDynInstances: Vector<PendingDynInstance>.create(),
@@ -296,6 +298,7 @@ fn checkProgramWith(
         nirLoopErrors: false,
         instanceErrors: false,
         regionImpls: Vector<u32>.create(),
+        interfaceOfMethod: Vector<u32>.create(),
         implementationsOf: Map<Word, Vector<u32>>.create(),
         templatesOf: Map<Word, Vector<u32>>.create(),
         structInstances: Map<Word, Vector<u32>>.create(),
@@ -391,8 +394,9 @@ fn checkProgramWith(
     checkLayoutUses(mut c)?;
     checkStructRecursion(mut c)?;
     computeCopyAndDrop(mut c)?;
-    attachBoundedToAll(mut c)?;      // ADR 0130: a bound is decided by Copy and the impls
-    checkPendingAssocBounds(mut c)?; // ADR 0086 §2.5
+    checkPendingThreadBounds(mut c)?; // Send and Share are decided by the fields (§38.1)
+    attachBoundedToAll(mut c)?;       // ADR 0130: a bound is decided by Copy and the impls
+    checkPendingAssocBounds(mut c)?;  // ADR 0086 §2.5
     checkForeignInterfaces(mut c)?;
     checkPublicSignatures(mut c)?;
     checkPendingElements(mut c)?;

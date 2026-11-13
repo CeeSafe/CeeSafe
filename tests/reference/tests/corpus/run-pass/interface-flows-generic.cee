@@ -1,0 +1,176 @@
+// Generic code over interfaces whose results are type parameters, with implementations that hold what they give out:
+// defaults, associated types, static functions, a generic struct, `for`, threads and closures.
+interface Source<T> {
+    fn get(borrow this) -> T;
+
+    fn both(borrow this) -> Wrapper<T> => Wrapper<T> { inner: this.get() };
+}
+interface Stream<T> {
+    fn next(borrow mut this) -> T?;
+}
+interface Tried<T> {
+    fn tried(borrow this) -> Result<T, Failure>;
+}
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Item {
+    type Value;
+    fn value(borrow this) -> Self.Value;
+}
+enum Failure {
+    Empty,
+}
+struct Wrapper<T> {
+    inner: T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Named {
+    name: String;
+}
+struct Words<region r> {
+    text: StringView<r>;
+    position: usize;
+}
+struct Adapter<T, S: Source<T>> {
+    inner: S;
+    count: usize;
+
+    fn get(borrow this) -> T => this.inner.get();
+    fn take(this) -> T => this.inner.get();
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+struct Label {
+    n: i32;
+}
+impl Source<StringView> for Label {
+    fn get(borrow this) -> StringView<static> => "a name";
+}
+impl Source<String> for Named {
+    fn get(borrow this) -> String => String.from(this.name.view())!;
+}
+impl<region r> Tried<StringView<r>> for Holder<r> {
+    fn tried(borrow this) -> Result<StringView<r>, Failure> =>
+        if (this.text.length == 0) Err(Failure.Empty) else Ok(this.text);
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Item for Holder<r> {
+    type Value = StringView<r>;
+    fn value(borrow this) -> StringView<r> => this.text;
+}
+impl Item for Named {
+    type Value = usize;
+    fn value(borrow this) -> usize => this.name.length;
+}
+impl<region r> Stream<StringView<r>> for Words<r> {
+    fn next(borrow mut this) -> StringView<r>? {
+        let text = this.text;
+        let start = this.position;
+        if (start >= text.length) {
+            return null;
+        }
+        var end = start;
+        while (end < text.length && text.bytes()[end] != 32) {
+            end += 1;
+        }
+        this.position = if (end < text.length) end + 1 else end;
+        return text[start..end];
+    }
+}
+
+fn drain<T, S: Source<T>>(s: S) -> T => s.get();
+fn wrapped<T, S: Source<T>>(s: borrow S) -> Wrapper<T> => s.both();
+fn tryGet<T, S: Tried<T>>(s: borrow S) -> Result<T, Failure> => s.tried();
+fn make<T, S: Build<T>>(v: T) -> S => S.build(v);
+fn valueOf<S: Item>(s: borrow S) -> S.Value => s.value();
+fn adapted<T, S: Source<T>>(s: S) -> T {
+    let a = Adapter<T, S> { inner: s, count: 0 };
+    return a.get();
+}
+fn taken<T, S: Source<T>>(s: S) -> T => Adapter<T, S> { inner: s, count: 0 }.take();
+fn looped<T, I: Stream<T>>(it: borrow mut I, out: borrow mut Vector<T>) -> Result<void, AllocError> {
+    for (x in it) {
+        out.push(x)?;
+    }
+    return Ok();
+}
+fn longest<T, I: Stream<T>, K: Source<usize>>(it: borrow mut I, limit: borrow K) -> usize {
+    var n: usize = 0;
+    for (x in it) {
+        n += 1;
+        if (n >= limit.get()) {
+            break;
+        }
+    }
+    return n;
+}
+fn onThread<T: Send, S: Source<T> + Send>(s: S) -> T => Thread.spawn(move () => s.get())!.join();
+fn later<T: Send + Copy, S: Source<T>>(s: borrow S) -> T {
+    let v = s.get();
+    let again = () => v;
+    return again();
+}
+
+struct Limit {
+    n: usize;
+}
+impl Source<usize> for Limit {
+    fn get(borrow this) -> usize => this.n;
+}
+
+fn main() {
+    let text = String.from("alpha beta gamma delta")!;
+    let h = Holder { text: text.view() };
+    Console.writeLine(wrapped<StringView, Holder>(h).inner);
+    Console.writeLine(h.both().inner);
+    match (tryGet<StringView, Holder>(h)) {
+        Ok(v) => { Console.writeLine(v); }
+        Err(_) => { Console.writeLine("empty"); }
+    }
+    let built = make<StringView, Holder>(text.view()[0..5]);
+    Console.writeLine(built.text);
+    Console.writeLine(valueOf<Holder>(h));
+    let named = Named { name: String.from("owned")! };
+    Console.writeLine(valueOf<Named>(named));
+    Console.writeLine(drain<StringView, Label>(Label { n: 1 }));
+    Console.writeLine(adapted<StringView, Holder>(Holder { text: text.view() }));
+    Console.writeLine(taken<StringView, Holder>(Holder { text: text.view() }));
+    var words = Words { text: text.view(), position: 0 };
+    var all = Vector<StringView>.create();
+    looped<StringView, Words>(mut words, mut all)!;
+    Console.writeLine(all.length);
+    Console.writeLine(all[2]);
+    var more = Words { text: text.view(), position: 0 };
+    Console.writeLine(longest<StringView, Words, Limit>(mut more, Limit { n: 3 }));
+    let moved = onThread<String, Named>(Named { name: String.from("threaded")! });
+    Console.writeLine(moved.view());
+    Console.writeLine(later<usize, Limit>(Limit { n: 9 }));
+    for (part in text.view().split(" ")) {
+        Console.writeLine(part);
+    }
+}
+
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: 5
+// expect-stdout: a name
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: alpha beta gamma delta
+// expect-stdout: 4
+// expect-stdout: gamma
+// expect-stdout: 3
+// expect-stdout: threaded
+// expect-stdout: 9
+// expect-stdout: alpha
+// expect-stdout: beta
+// expect-stdout: gamma
+// expect-stdout: delta

@@ -1,0 +1,52 @@
+// An interface's parameter bounded by `Send` (type-system.md §21.2, §25.7 rule 5): its defaults move a `T` to a
+// thread and take one back, since a `T: Send` holds no loan; the bound is checked where the interface is implemented
+// (check-fail/interface-parameter-bounds), so only such arguments arrive. With `StringView` for `T`, which nothing
+// checked, 0.42.0's checker panicked in the instance of `back` (`index out of bounds at src/nir/nir_builder.cee`).
+interface Source<T: Send> {
+    fn get(borrow this) -> T;
+
+    fn through(borrow this) -> usize {
+        let v = this.get();
+        let t = Thread.spawn(move () => {
+            let kept = v;
+            return 1usize;
+        })!;
+        return t.join();
+    }
+
+    fn back(borrow this) -> T {
+        let v = this.get();
+        return Thread.spawn(move () => v)!.join();
+    }
+}
+
+struct Owner {
+    text: String;
+}
+
+struct Number {
+    n: i32;
+}
+
+impl Source<String> for Owner {
+    fn get(borrow this) -> String => String.from(this.text.view())!;
+}
+
+impl Source<i32> for Number {
+    fn get(borrow this) -> i32 => this.n;
+}
+
+fn main() {
+    let a = Owner { text: String.from("first")! };
+    Console.writeLine(a.through());
+    let s = a.back();
+    Console.writeLine(s.view());
+    let n = Number { n: 41 };
+    Console.writeLine(n.through());
+    Console.writeLine(n.back() + 1);
+}
+
+// expect-stdout: 1
+// expect-stdout: first
+// expect-stdout: 1
+// expect-stdout: 42

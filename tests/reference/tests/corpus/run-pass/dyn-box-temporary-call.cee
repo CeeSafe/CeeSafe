@@ -1,0 +1,52 @@
+// A method of a `dyn` type called on the contents of a box that a call returned, `make().name()` for a
+// `Box<dyn Named>` (type-system.md §37.3): the contents are borrowed where they are, in the box, which lives to the
+// end of the statement. A `dyn` value has no temporary to be copied to: ceesafec once made one, and its C backend
+// panicked (`integer overflow at src/backend/c_body.cee`), in 0.42.0 too. With and without `+ Send`, from a plain and
+// a generic function, and from a thread's closure that makes the box.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+struct N {
+    n: u32;
+}
+
+impl Named for N {
+    fn name(borrow this) -> u32 => this.n;
+}
+
+fn plain(value: N) -> Box<dyn Named + Send> {
+    let b: Box<dyn Named + Send> = Box.create(value)!;
+    return b;
+}
+
+fn generic<T: Send + Named>(value: T) -> Box<dyn Named + Send> {
+    let b: Box<dyn Named + Send> = Box.create(value)!;
+    return b;
+}
+
+fn threadPlain(value: N) -> Box<dyn Named + Send> {
+    return Thread.spawn(move () => {
+        let b: Box<dyn Named + Send> = Box.create(value)!;
+        return b;
+    })!.join();
+}
+
+fn threadGeneric<T: Send + Named>(value: T) -> Box<dyn Named + Send> {
+    return Thread.spawn(move () => {
+        let b: Box<dyn Named + Send> = Box.create(value)!;
+        return b;
+    })!.join();
+}
+
+fn main() {
+    Console.writeLine(plain(N { n: 1 }).name());
+    Console.writeLine(generic(N { n: 2 }).name());
+    Console.writeLine(threadPlain(N { n: 3 }).name());
+    Console.writeLine(threadGeneric(N { n: 4 }).name());
+}
+
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4

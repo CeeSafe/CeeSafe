@@ -1,0 +1,20 @@
+// The types of src/main.cee's instances, and what decides the bounds they meet: declared in another file.
+struct Local {
+    n: u32;
+}
+
+struct Small {
+    n: u32;
+}
+
+struct Owned {
+    text: String;
+}
+
+impl shapes.Named for Local {
+    public fn name(borrow this) -> u32 => this.n;
+}
+
+impl shapes.Sized for Owned {
+    public fn size(borrow this) -> usize => this.text.length;
+}

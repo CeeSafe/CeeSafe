@@ -49,6 +49,8 @@ struct Loan {
 struct ThroughWrite {
     holder: u32;
     sources: Vector<u32>;
+    /// By source: the parameter whose outer placeholder it does not carry (a deep flow's source, ADR 0131), or none.
+    drops: Vector<u32>;
     shared: bool;
     span: Span;
 }
@@ -253,6 +255,9 @@ fn localType(n: borrow NirProgram, b: borrow Borrows, local: u32) -> u32 =>
 /// parameter (§25.7 rule 5).
 fn holdsLoans(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, local: u32) -> bool =>
     mayHoldLoans(c, localType(n, b, local));
+
+fn holdsScoped(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, local: u32) -> bool =>
+    c.types.isScoped(localType(n, b, local));
 
 fn isReferenceType(c: borrow Checker, typ: u32) -> bool => c.types.is(typ, TypeKind.Reference);
 
@@ -468,13 +473,27 @@ fn recordWrite(
     if (sources.length == 0) {
         return Ok();
     }
+    var drops = Vector<u32>.create();
     for (source in sources.view()) {
         addEdge(edges, source, holder)?;
+        drops.push(none())?;
     }
     if (throughReference) {
-        b.throughWrites.push(ThroughWrite { holder: holder, sources: sources, shared: shared, span: span })?;
+        b.throughWrites.push(
+            ThroughWrite { holder: holder, sources: sources, drops: drops, shared: shared, span: span },
+        )?;
     }
     return Ok();
+}
+
+/// Is there an edge that carries at least what one from `from` to `to` without `dropOuter`'s outer placeholder does?
+fn hasEdgeDropping(edges: borrow Vector<LoanEdge>, from: u32, to: u32, dropOuter: u32) -> bool {
+    for (edge in edges.view()) {
+        if (edge.from == from && edge.to == to && (edge.dropOuter == dropOuter || edge.dropOuter == none())) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn operandPlaceLocal(n: borrow NirProgram, operand: u32) -> u32 {
@@ -490,6 +509,8 @@ fn collectWrites(
     b: borrow mut Borrows,
     s: u32,
     edges: borrow mut Vector<LoanEdge>,
+    references: borrow Vector<u32>,
+    throughs: borrow Vector<u32>,
 ) -> Result<void, AllocError> {
     let span = n.statementSpans[s as usize];
     let value = match (n.statements[s as usize]) {
@@ -532,11 +553,35 @@ fn collectWrites(
             let count = c.hir.functions[callee as usize].mutableFlows.length;
             for (k in 0..count) {
                 let flow = c.hir.functions[callee as usize].mutableFlows[k];
-                let target = truncate<u32>(flow >> 32);
-                let source = truncate<u32>(flow & 0xFFFFFFFF);
+                let target = flowTarget(flow);
+                let source = flowSource(flow);
                 if (target < arguments.count && source < arguments.count) {
                     let receiver = operandPlaceLocal(n, n.at(arguments, target));
-                    if (receiver != none()) {
+                    let given = operandPlaceLocal(n, n.at(arguments, source));
+                    if (receiver != none() && given != none() && flowIsDeep(flow)) {
+                        // A deep flow stores what the source argument refers to holds, as a deep result carries it
+                        // (ADR 0131): not the loan of the argument itself.
+                        var deep = Vector<LoanEdge>.create();
+                        deepSourceEdge(c, n, b, mut deep, references, throughs, given, receiver, 0)?;
+                        var sources = Vector<u32>.create();
+                        var drops = Vector<u32>.create();
+                        for (edge in deep.view()) {
+                            edges.push(LoanEdge { from: edge.from, to: edge.to, dropOuter: edge.dropOuter })?;
+                            sources.push(edge.from)?;
+                            drops.push(edge.dropOuter)?;
+                        }
+                        if (sources.length > 0) {
+                            b.throughWrites.push(
+                                ThroughWrite {
+                                    holder: receiver,
+                                    sources: sources,
+                                    drops: drops,
+                                    shared: false,
+                                    span: span,
+                                },
+                            )?;
+                        }
+                    } else if (receiver != none()) {
                         var operands = Vector<u32>.create();
                         operands.push(n.at(arguments, source))?;
                         let sources = carriers(c, n, b, operands)?;
@@ -550,7 +595,17 @@ fn collectWrites(
     return Ok();
 }
 
-fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<void, AllocError> {
+/// LoanEdge.dropOuter for an edge that carries only the loans of the function's own storage: places not reached
+/// through a reference (a local, a by-value parameter, what a local `String` or `Vector` owns).
+fn ownStorageOnly() -> u32 => 0xFFFFFFFE;
+
+fn propagate(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow mut Borrows,
+    edges: borrow Vector<LoanEdge>,
+) -> Result<void, AllocError> {
+    let inClosure = c.hir.functions[n.functions[b.function as usize].source as usize].closureEnvironment != none();
     var changed = true;
     while (changed) {
         changed = false;
@@ -561,7 +616,15 @@ fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<vo
             let count = b.pointsTo[edge.from as usize].length;
             for (k in 0..count) {
                 let loan = b.pointsTo[edge.from as usize][k];
-                if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
+                if (edge.dropOuter == ownStorageOnly()) {
+                    // In a closure's body, what its environment refers to is the storage of the function it is
+                    // written in: a borrow of a capture is such a loan too (§36.2).
+                    let place = b.loans[loan as usize].place;
+                    let captured = inClosure && place.local == 0;
+                    if (!b.loans[loan as usize].hasPlace || (derefsReference(c, n, b, place) && !captured)) {
+                        continue;
+                    }
+                } else if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
                     b.loans[loan as usize].parameterIndex == edge.dropOuter) {
                     continue;
                 }
@@ -629,7 +692,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
         let statementCount = n.functions[b.function as usize].blocks[position].statements.length;
         for (i in 0..statementCount) {
             let s = n.functions[b.function as usize].blocks[position].statements[i];
-            collectWrites(c, n, b, s, mut edges)?;
+            collectWrites(c, n, b, s, mut edges, references, throughs)?;
             var assignTarget: u32 = none();
             var assignValue: u32 = none();
             match (n.statements[s as usize]) {
@@ -740,6 +803,13 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                         sources.push(n.at(arguments, 1))?;
                     } else if (function == bfArenaAllocArray()) {
                         sources.push(n.at(arguments, 0))?;
+                    } else if (function == bfCallClosure() && !holdsScoped(c, n, b, t.local)) {
+                        // A closure's result of a type parameter's type takes its arguments' loans, not the closure's
+                        // (its first operand): what such a result holds of the closure's captures is what they held,
+                        // which its type says, and a borrow of a capture is refused in the closure's body (§36.2).
+                        for (k in 1..arguments.count) {
+                            sources.push(n.at(arguments, k))?;
+                        }
                     } else {
                         rvalueOperands(n, assignValue, mut sources)?;
                     }
@@ -768,6 +838,12 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     } else {
                         addEdge(mut edges, p.local, t.local)?;
                     }
+                } else if (holdsLoans(c, n, b, p.local) && mayHoldLoans(c, n.operandTypes[o as usize])) {
+                    // A value of a type parameter's type (§25.7 rule 5). What it holds of the parameters, its type
+                    // says: every place it may go shares a flow name with where it came from (§25.6). A loan of this
+                    // function's own storage is not in its type: a call gave it one (`S.build(local.view())` under
+                    // `S: Build<StringView>`), and it keeps it wherever it is copied or moved (ADR 0131).
+                    edges.push(LoanEdge { from: p.local, to: t.local, dropOuter: ownStorageOnly() })?;
                 }
             }
         }
@@ -775,7 +851,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
     // Writes through references reach what the references' loans point to, which depends on the loans computed so
     // far: iterate until nothing changes (§25.7 rule 2).
     while (true) {
-        propagate(b, edges)?;
+        propagate(c, n, b, edges)?;
         var added = false;
         for (w in 0..b.throughWrites.length) {
             let holder = b.throughWrites[w].holder;
@@ -787,9 +863,11 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     continue;
                 }
                 let to = loan.place.local;
-                for (source in b.throughWrites[w].sources.view()) {
-                    if (!hasEdge(edges, source, to)) {
-                        addEdge(mut edges, source, to)?;
+                for (j in 0..b.throughWrites[w].sources.length) {
+                    let source = b.throughWrites[w].sources[j];
+                    let dropOuter = b.throughWrites[w].drops[j];
+                    if (!hasEdgeDropping(edges, source, to, dropOuter)) {
+                        edges.push(LoanEdge { from: source, to: to, dropOuter: dropOuter })?;
                         added = true;
                     }
                 }
@@ -968,6 +1046,7 @@ fn appendLocalNameOr(
 /// parameters that the signature lets flow into that parameter (CheckParameterWrites).
 fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) -> Result<void, AllocError> {
     let source = n.functions[b.function as usize].source;
+    var reported = Vector<u64>.create();
     for (write in b.throughWrites.view()) {
         var targets = Vector<u32>.create();
         for (id in b.pointsTo[write.holder as usize].view()) {
@@ -984,9 +1063,11 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
             continue;
         }
         var stored = Vector<u32>.create();
-        for (s in write.sources.view()) {
-            for (id in b.pointsTo[s as usize].view()) {
-                if (!containsU32(stored, id)) {
+        for (k in 0..write.sources.length) {
+            for (id in b.pointsTo[write.sources[k] as usize].view()) {
+                let dropped = write.drops[k] != none() && b.loans[id as usize].outer &&
+                    b.loans[id as usize].parameterIndex == write.drops[k];
+                if (!dropped && !containsU32(stored, id)) {
                     stored.push(id)?;
                 }
             }
@@ -1000,8 +1081,12 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
                 // never the loan of the reference itself.
                 let ownContents = !storedLoan.hasPlace && !storedLoan.outer && from == target;
                 let flow = (target as u64) << 32 | from as u64;
-                if (!ownContents &&
-                    (from == none() || !containsU64(c.hir.functions[source as usize].mutableFlows, flow))) {
+                // Through a deep flow only what the source's referent holds may be stored (ADR 0131): not the loan
+                // of the reference itself, nor a borrow of its referent's own storage.
+                let itself = if (storedLoan.hasPlace) !beyondReference(c, n, b, storedLoan.place) else storedLoan.outer;
+                let allowed = from != none() && (containsU64(c.hir.functions[source as usize].mutableFlows, flow) ||
+                    (!itself && containsU64(c.hir.functions[source as usize].mutableFlows, flow | deepFlowBit())));
+                if (!ownContents && !allowed) {
                     foreign = id;
                     break;
                 }
@@ -1009,6 +1094,12 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
             if (foreign == none()) {
                 continue;
             }
+            // One call may write the same loan to a target by two of its flows: one report.
+            let key = (write.span.start as u64) << 32 | foreign as u64;
+            if (containsU64(reported, key)) {
+                break;
+            }
+            reported.push(key)?;
             let loan = borrow b.loans[foreign as usize];
             var name = Vector<u8>.create();
             appendLocalNameOr(c, n, b, target, "?", mut name)?;

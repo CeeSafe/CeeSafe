@@ -1,0 +1,45 @@
+// A scoped implementation behind `borrow mut dyn` (type-system.md §25.6, §37.2, ADR 0131): a method that stores its
+// argument is called through the `dyn` type, from generic code whose signature lets the value flow there
+// (`sink: borrow mut dyn Keep<T>` and `v: T` share `T`), and the caller's holder then holds the caller's text.
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+fn feed<T>(sink: borrow mut dyn Keep<T>, v: T) {
+    sink.keep(v);
+}
+fn feedTwice<T: Copy>(sink: borrow mut dyn Keep<T>, first: T, second: T) {
+    sink.keep(first);
+    sink.keep(second);
+}
+fn read<T>(source: borrow dyn Source<T>) -> T => source.get();
+fn main() {
+    let kept = String.from("kept")!;
+    let other = String.from("other")!;
+    var h = Holder { text: "static" };
+    Console.writeLine(read<StringView>(h));
+    feed<StringView>(mut h, kept.view());
+    Console.writeLine(h.text);
+    feedTwice<StringView>(mut h, kept.view(), other.view());
+    Console.writeLine(read<StringView>(h));
+    h.keep("again");
+    Console.writeLine(h.get());
+}
+
+// expect-stdout: static
+// expect-stdout: kept
+// expect-stdout: other
+// expect-stdout: again

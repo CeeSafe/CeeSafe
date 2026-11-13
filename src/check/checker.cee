@@ -166,6 +166,8 @@ struct Checker {
     pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5, §2.6
     supertraitsReady: bool;                        // resolveSupertraits has run (ADR 0086 §2.6)
     pendingBounds: Vector<PendingBounds>;
+    pendingThreadBounds: Vector<PendingBounds>; // Send and Share bounds met before the types had their fields
+    membersReady: bool;                         // every declared struct and enum has its fields (§38.1's facts)
     pendingAllocators: Vector<PendingAllocator>;
     pendingElements: Vector<PendingElement>;
     pendingDynInstances: Vector<PendingDynInstance>; // ADR 0064 §3.1: checked once members are resolved
@@ -241,6 +243,7 @@ struct Checker {
     nirLoopErrors: bool;                       // errors were found by the end of the per-function NIR checks
     instanceErrors: bool;                      // errors were found by the end of the instances' checks (N0222)
     regionImpls: Vector<u32>;                  // the impls (in c.impls) with region parameters
+    interfaceOfMethod: Vector<u32>;            // by AST function: the interface (c.interfaces) that declares it, or none
     implementationsOf: Map<Word, Vector<u32>>; // c.implementations by interface entry, in order
     templatesOf: Map<Word, Vector<u32>>;       // c.implTemplates by their target's declaration, in order
     structInstances: Map<Word, Vector<u32>>;   // c.structs' instances by template, in order

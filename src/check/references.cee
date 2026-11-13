@@ -498,6 +498,12 @@ fn isElided(name: u64) -> bool => (name >> 32) == 2;
 fn isTypeFlowName(name: u64) -> bool => (name >> 32) == 3;
 fn typeFlowName(symbol: u32) -> u64 => (3u64 << 32) | symbol as u64;
 
+/// A mutable flow (HirFunction.mutableFlows): `(target << 32) | source`, with `deepFlowBit` for a deep one.
+fn deepFlowBit() -> u64 => 1u64 << 63;
+fn flowIsDeep(flow: u64) -> bool => (flow >> 63) == 1;
+fn flowTarget(flow: u64) -> u32 => truncate<u32>((flow >> 32) & 0x7FFFFFFF);
+fn flowSource(flow: u64) -> u32 => truncate<u32>(flow & 0xFFFFFFFF);
+
 fn addName(names: borrow mut Vector<u64>, name: u64) -> Result<void, AllocError> {
     for (n in names.view()) {
         if (n == name) {
@@ -533,6 +539,9 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     var ownerTypeParameters = Vector<u32>.create();
     var typeParameters = Vector<u32>.create();
     pushRegionNames(c, decl.typeParameters, mut typeParameters)?;
+    // The declarations whose type parameters' bounds are in scope: a bounded parameter has its bounds' names too.
+    var bounded = Vector<Range>.create();
+    bounded.push(decl.typeParameters)?;
     if (owner != none()) {
         let definition = c.types.info(owner).structDef;
         let item = if (definition == none()) none() else c.types.structs[definition as usize].item;
@@ -541,6 +550,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 ItemKind.Struct(k) => {
                     pushRegionNames(c, c.front.ast.structs[k as usize].regionParameters, mut ownerRegions)?;
                     pushRegionNames(c, c.front.ast.structs[k as usize].typeParameters, mut ownerTypeParameters)?;
+                    bounded.push(c.front.ast.structs[k as usize].typeParameters)?;
                 }
                 _ => {}
             }
@@ -553,10 +563,28 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 ItemKind.Enum(_, enumTypes, enumRegions) => {
                     pushRegionNames(c, enumRegions, mut ownerRegions)?;
                     pushRegionNames(c, enumTypes, mut ownerTypeParameters)?;
+                    bounded.push(enumTypes)?;
                 }
                 _ => {}
             }
         }
+    }
+    // An interface's method, whatever it is declared for (a bound's type parameter, `Self`, a `dyn` type, or the
+    // type that inherits a default): its receiver carries the interface's type parameters and `Self`, as a struct's
+    // method's receiver carries the struct's (§25.6, ADR 0131). So `fn get(borrow this) -> T` has a deep result.
+    var selfNames = Vector<u32>.create();
+    let interfaceEntry = if ((f as usize) < c.interfaceOfMethod.length) c.interfaceOfMethod[f as usize] else none();
+    if (interfaceEntry != none()) {
+        let interfaceParameters = match (c.front.ast.items[c.interfaces[interfaceEntry as usize].item as usize].kind) {
+            ItemKind.Interface(_, t) => t,
+            _ => emptyRange(),
+        };
+        pushRegionNames(c, interfaceParameters, mut selfNames)?;
+        for (t in selfNames.view()) {
+            ownerTypeParameters.push(t)?;
+        }
+        ownerTypeParameters.push(c.selfSymbol)?;
+        bounded.push(interfaceParameters)?;
     }
     for (t in ownerTypeParameters.view()) {
         typeParameters.push(t)?;
@@ -565,6 +593,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     let parameterCount = c.hir.functions[function as usize].parameters.length;
     let receiverOffset = parameterCount - decl.parameters.count as usize;
     var names = Vector<Vector<u64>>.create();
+    var written = Vector<usize>.create(); // how many of a parameter's names are its own, not a bound's
     for (i in 0..parameterCount) {
         var set = Vector<u64>.create();
         if (i < receiverOffset) {
@@ -581,6 +610,8 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 staticParameterError(c, p.typ)?;
             }
         }
+        written.push(set.length)?;
+        closeFlowNames(c, function, bounded, selfNames, mut set)?;
         let local = c.hir.functions[function as usize].parameters[i];
         var hasRegion = false;
         for (n in set.view()) {
@@ -598,6 +629,7 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     if (decl.returnType != none() && mayHoldLoans(c, returnType)) {
         var resultNames = Vector<u64>.create();
         collectFlowNames(c, decl.returnType, function, true, mut resultNames)?;
+        closeFlowNames(c, function, bounded, selfNames, mut resultNames)?;
         var sources = Vector<u32>.create();
         for (i in 0..parameterCount) {
             if (overlaps(c.flowNames[i], resultNames)) {
@@ -703,39 +735,106 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     for (i in 0..parameterCount) {
         let local = c.hir.functions[function as usize].parameters[i];
         let t = c.hir.locals[local as usize].typ;
-        if (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference || !mayHoldLoans(
-            c,
-            c.types.info(t).pointee,
-        )) {
+        if (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference) {
+            continue;
+        }
+        // What a `borrow mut dyn I` refers to may be a scoped implementation, which is a `dyn` value only behind a
+        // reference (§37.2): a method may store a loan in it, as in any other referent that may hold one.
+        let pointeeType = c.types.info(t).pointee;
+        if (!mayHoldLoans(c, pointeeType) && !c.types.isDyn(pointeeType)) {
             continue;
         }
         var target = Vector<u64>.create();
+        var targetWritten: usize = 0;
         if (i < receiverOffset) {
             for (n in c.flowNames[i].view()) {
                 target.push(n)?;
             }
+            targetWritten = written[i];
         } else {
             let p = c.front.ast.parameters[c.front.ast.at(decl.parameters, truncate<u32>(i - receiverOffset)) as usize];
             match (c.front.ast.types[p.typ as usize]) {
-                TypeNode.Reference(_, _, _, pointee) => { collectFlowNames(c, pointee, function, false, mut target)?; }
+                TypeNode.Reference(_, _, _, pointee) => {
+                    collectReferentNames(c, pointee, function, false, mut target)?;
+                }
                 _ => {}
             }
+            targetWritten = target.length;
+            closeFlowNames(c, function, bounded, selfNames, mut target)?;
         }
         var kept = Vector<u64>.create();
-        for (n in target.view()) {
-            if (!isElided(n)) {
-                kept.push(n)?;
+        var keptWritten = Vector<u64>.create();
+        for (k in 0..target.length) {
+            if (!isElided(target[k])) {
+                kept.push(target[k])?;
+                if (k < targetWritten) {
+                    keptWritten.push(target[k])?;
+                }
             }
         }
         for (j in 0..parameterCount) {
             if (j != i && overlaps(c.flowNames[j], kept)) {
-                flows.push((i as u64) << 32 | j as u64)?;
+                // A flow that only a bound gives (`it: borrow mut I` into `out: borrow mut Vector<T>` under
+                // `I: Stream<T>`) is deep when its source is a reference (ADR 0131): what the bound's methods give
+                // holds what the referent holds, never a loan of the reference itself, so only that may be stored.
+                var direct = false;
+                for (k in 0..written[j]) {
+                    for (y in keptWritten.view()) {
+                        if (c.flowNames[j][k] == y) {
+                            direct = true;
+                        }
+                    }
+                }
+                let source = c.hir.locals[c.hir.functions[function as usize].parameters[j] as usize].typ;
+                let deep = !direct && c.types.is(source, TypeKind.Reference) && !c.types.isSlice(source) &&
+                    !c.types.isStringView(source);
+                flows.push((if (deep) deepFlowBit() else 0u64) | (i as u64) << 32 | j as u64)?;
             }
         }
     }
     c.hir.functions[function as usize].mutableFlows = flows;
     c.flowNames = Vector<Vector<u64>>.create();
     c.flowTypeParameters = Vector<u32>.create();
+    return Ok();
+}
+
+/// A type parameter's flow names include those of its bounds' arguments (§25.6, ADR 0131): a value of type `S` under
+/// `S: Source<T>` may give a `T` that holds what it holds, so the two share a name, and `Self` in an interface has the
+/// interface's parameters (`selfNames`). `bounded` holds the type parameter lists in scope.
+fn closeFlowNames(
+    c: borrow Checker,
+    function: u32,
+    bounded: borrow Vector<Range>,
+    selfNames: borrow Vector<u32>,
+    names: borrow mut Vector<u64>,
+) -> Result<void, AllocError> {
+    var k: usize = 0;
+    while (k < names.length) {
+        // The names added here are looked at in turn, so a bound's bound counts too.
+        let name = names[k];
+        k += 1;
+        if (!isTypeFlowName(name)) {
+            continue;
+        }
+        let symbol = truncate<u32>(name & 0xFFFFFFFF);
+        if (symbol == c.selfSymbol) {
+            for (t in selfNames.view()) {
+                addName(names, typeFlowName(t))?;
+            }
+            continue;
+        }
+        for (list in bounded.view()) {
+            for (j in 0..list.count) {
+                let p = c.front.ast.typeParameters[c.front.ast.at(list, j) as usize];
+                if (p.isRegion || c.front.ast.idents[p.name as usize].symbol != symbol) {
+                    continue;
+                }
+                for (b in 0..p.bounds.count) {
+                    collectFlowNames(c, c.front.ast.at(p.bounds, b), function, false, names)?;
+                }
+            }
+        }
+    }
     return Ok();
 }
 
@@ -794,6 +893,25 @@ fn outerFlowNames(
     }
 }
 
+/// The flow names of what a reference written `borrow P` refers to. What a `borrow dyn I<T>` refers to may be a
+/// scoped implementation (§37.2), which holds what its interface's arguments name; an owned `dyn` value, as in a
+/// `Box<dyn I<T>>`, holds no loan (§25.7 rule 5), nor does a `dyn I + Send` (§38.4).
+fn collectReferentNames(
+    c: borrow Checker,
+    pointee: u32,
+    function: u32,
+    inResult: bool,
+    names: borrow mut Vector<u64>,
+) -> Result<void, AllocError> {
+    match (c.front.ast.types[pointee as usize]) {
+        TypeNode.Dyn(inner, _, marker) => {
+            return if (marker == 0) collectFlowNames(c, inner, function, inResult, names) else Ok();
+        }
+        _ => {}
+    }
+    return collectFlowNames(c, pointee, function, inResult, names);
+}
+
 /// The flow names a type written in a signature mentions (CollectFlowNames). In a result (`inResult`), `borrow(p)`
 /// adds parameter `p`'s names (c.flowNames), less its type parameters'.
 fn collectFlowNames(
@@ -821,10 +939,11 @@ fn collectFlowNames(
                     addName(names, regionFlowName(symbol))?;
                 }
             }
-            return collectFlowNames(c, pointee, function, inResult, names);
+            return collectReferentNames(c, pointee, function, inResult, names);
         }
         TypeNode.Named(name) => {
-            if (name.parts.count == 1) {
+            // `T`, or a projection `T.Item` (ADR 0086 §2.5): what an associated type of `T` holds, a `T` gave it.
+            if (name.parts.count >= 1) {
                 let symbol = c.front.ast.idents[c.front.ast.at(name.parts, 0) as usize].symbol;
                 if (containsU32(c.flowTypeParameters, symbol)) {
                     addName(names, typeFlowName(symbol))?;

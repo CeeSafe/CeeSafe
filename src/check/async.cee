@@ -439,7 +439,7 @@ fn checkAsyncScope(c: borrow mut Checker, all: Range, withAllocator: bool, span:
 }
 
 /// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053 §3.1): a call of lib/core's `AsyncTasks<E>.run`, whose
-/// async instance awaits the body in this task (ADR 0037). `E` is `oom`'s type, and must be Copy (N0268).
+/// async instance awaits the body in this task (ADR 0037). `E` is `oom`'s type, and must be Copy (N0268) and Send (N0334; ADR 0131).
 fn checkAsyncTasks(
     c: borrow mut Checker,
     arguments: Range,

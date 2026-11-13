@@ -1,0 +1,128 @@
+// An impl's method keeps the interface's flows (type-system.md §21.1, ADR 0131): generic code is checked once against
+// the interface, and a `dyn` call knows nothing else. So a method that lends the receiver's own storage where the
+// interface's result is declared with a type parameter (a deep result: it holds what the receiver holds), or whose
+// result or receiver takes the loan of a parameter that the interface does not let flow there, is N0267. The first
+// two are the programs that used freed memory in 0.42.0: a generic function, and a default method, returned the
+// view after dropping the value it borrowed from.
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+fn drain<T, S: Source<T>>(s: S) -> T => s.get();
+impl Source<StringView> for Owner {
+    fn get(borrow this) -> StringView => this.text.view(); // error[N0267]
+}
+
+interface Last<T> {
+    fn item(borrow this) -> T;
+
+    fn last(borrow this, other: Self) -> T => other.item();
+}
+impl Last<StringView> for Owner {
+    fn item(borrow this) -> StringView => this.text.view(); // error[N0267]
+}
+
+interface Later<T> {
+    async fn later(borrow this) -> T;
+}
+impl Later<StringView> for Owner {
+    async fn later(borrow this) -> StringView => this.text.view(); // error[N0267]
+}
+
+struct Owner {
+    text: String;
+    parts: Vector<String>;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Wrapper<T> {
+    inner: T;
+}
+enum Failure {
+    Empty,
+}
+
+interface GetMut<T> {
+    fn getMut(borrow mut this) -> T;
+}
+impl GetMut<StringView> for Owner {
+    fn getMut(borrow mut this) -> StringView => this.text.view(); // error[N0267]
+}
+
+interface Maybe<T> {
+    fn maybe(borrow this) -> T?;
+}
+impl Maybe<StringView> for Owner {
+    fn maybe(borrow this) -> StringView? => this.text.view(); // error[N0267]
+}
+
+interface Tried<T> {
+    fn tried(borrow this) -> Result<T, Failure>;
+}
+impl Tried<StringView> for Owner {
+    fn tried(borrow this) -> Result<StringView, Failure> => Ok(this.text.view()); // error[N0267]
+}
+
+interface Wrapped<T> {
+    fn wrapped(borrow this) -> Wrapper<T>;
+}
+impl Wrapped<StringView> for Owner {
+    fn wrapped(borrow this) -> Wrapper<StringView> => Wrapper<StringView> { inner: this.text.view() }; // error[N0267]
+}
+
+interface Many<T> {
+    fn many(borrow this) -> Result<Vector<T>, AllocError>;
+}
+impl Many<StringView> for Owner {
+    fn many(borrow this) -> Result<Vector<StringView>, AllocError> { // error[N0267]
+        var out = Vector<StringView>.create();
+        out.push(this.text.view())?;
+        return Ok(out);
+    }
+}
+
+interface Bytes<T> {
+    fn bytes(borrow this) -> T;
+}
+impl Bytes<Slice<u8>> for Owner {
+    fn bytes(borrow this) -> Slice<u8> => this.text.bytes(); // error[N0267]
+}
+
+interface Next<T> {
+    fn next(borrow mut this) -> T?;
+}
+impl Next<StringView> for Owner {
+    fn next(borrow mut this) -> StringView? { // error[N0267]
+        if (this.parts.length == 0) {
+            return null;
+        }
+        return this.parts[0].view();
+    }
+}
+
+interface Stash {
+    fn stash(borrow mut this, v: StringView);
+}
+impl<region r> Stash for Holder<r> {
+    fn stash(borrow mut this, v: StringView<r>) { // error[N0267]
+        this.text = v;
+    }
+}
+
+interface Build {
+    fn build(text: StringView) -> Self;
+}
+impl<region r> Build for Holder<r> {
+    fn build(text: StringView<r>) -> Holder<r> => Holder { text: text }; // error[N0267]
+}
+
+interface Item {
+    type Value;
+    fn value(borrow this) -> Self.Value;
+}
+impl Item for Owner {
+    type Value = StringView;
+    fn value(borrow this) -> StringView => this.text.view(); // error[N0267]
+}
+
+fn main() {}

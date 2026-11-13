@@ -117,7 +117,9 @@ fn main() {
 one two three
 ```
 
-A capture the body does not move out is destroyed when the body returns, on the thread.
+A capture the body does not move out is destroyed when the body returns, on the thread. A closure whose body
+runs at most once, and so may move its captures out, has a **run-once environment**. A boxed closure has not: it
+may be called again, so its captures stay in it.
 
 ## Several threads
 
@@ -375,7 +377,7 @@ and add them afterwards, as Listing 16-6 does, or use an atomic ([Shared state](
 
 - `spawn` returns a `Result`, since CeeSafe reports a failed allocation instead of aborting;
 - `join` returns `T`, not `Result<T, _>`: a panic in a thread ends the process, so there is no panic to carry back;
-- dropping the handle joins the thread; it does not detach it;
+- destroying the handle joins the thread, where Rust's drop of a `JoinHandle` detaches it;
 - `Thread.both` is a small `std::thread::scope` for exactly two closures, one of which runs on the calling thread.
 :::
 

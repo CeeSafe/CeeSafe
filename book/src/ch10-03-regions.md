@@ -181,12 +181,17 @@ region shared by the parameters and the result. With one borrowed parameter, it 
 *Specification: `lifetimes.md` §7; `type-system.md` §25.6.*
 :::
 
-The diagnostics say "reference" for a borrow and "scoped type" for a type that holds one.
+Leaving the source out where there is one borrowed parameter is the **elision rule**. Each "the result may borrow
+from this parameter" is a **flow** of the function. The compiler holds the body to the function's flows, and each
+caller keeps the arguments they name borrowed while it uses the result.
+
+The diagnostics say "reference" for a borrow ([Borrowing](./ch04-02-borrowing) says why) and "scoped type" for a
+type that holds one.
 
 ## When to own instead
 
 A struct with a region is cheap, because it copies nothing, and short-lived, because it is tied to another value.
-That suits a value used and dropped while its source stays put: a token of a line being parsed, a field of a
+That suits a value used and destroyed while its source stays put: a token of a line being parsed, a field of a
 record being read. It does not suit a value that must outlive its source: one returned from the function that
 made the text, stored for later, or kept after the text changes. Such a struct **owns** its data: a `String`
 where the other holds a `StringView`, a `Vector<T>` for a `Slice<T>`.

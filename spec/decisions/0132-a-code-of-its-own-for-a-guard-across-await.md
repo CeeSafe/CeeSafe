@@ -1,4 +1,4 @@
-# ADR 0129 — A code of its own for a `RefCell` guard across `await`: N0405
+# ADR 0132 — A code of its own for a `RefCell` guard across `await`: N0405
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead and tackle those still open"), implemented on branch
   `fix/open-messages`; not yet released. Raised by the writer of the book's Appendix F, whose row for N0402 had to
@@ -6,6 +6,10 @@
 - Scope: the number one warning is reported with (`src/nir/effect_check.cee`); `spec/diagnostics.md`,
   `spec/type-system.md` §41.3; the test `check-pass/refcell-await.cee`; the book's Appendix F. No change to when
   either warning is given, to its text or to what a program means.
+- Numbering: written as ADR 0129 on branch `fix/open-messages` and renumbered before any release (the owner,
+  2026-11-13: "go"). 0129 was the number of the withdrawn ADR "which unwraps a sweep sets apart" (branch
+  `impl/0129`, reverted the same day: a sweep's unwraps stay set apart by file, ADR 0075 §2.16) and is not used
+  again.
 
 ## 1. Context
 

@@ -255,6 +255,6 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     404 =>
         "A pattern that tests nothing, `_`, a binding (through `name @` too) or a struct pattern of such field patterns (ADR 0123 §2.4), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3)",
     405 =>
-        "A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6). Until ADR 0129 it was reported as N0402",
+        "A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6). Until ADR 0132 it was reported as N0402",
     _ => "",
 };

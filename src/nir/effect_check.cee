@@ -1880,4 +1880,4 @@ fn guardAcrossSuspension(
     return c.front.diagnostics.warning(guardAcrossAwait(), file, span.start, span.end, message);
 }
 
-fn guardAcrossAwait() -> u32 => 405; // its own code since ADR 0129 (N0402 is the unused `Result`, ADR 0105)
+fn guardAcrossAwait() -> u32 => 405; // its own code since ADR 0132 (N0402 is the unused `Result`, ADR 0105)

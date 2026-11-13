@@ -138,6 +138,16 @@ fn isOnceEnvironmentReference(c: borrow Checker, typ: u32) -> bool {
     return definition != none() && c.types.structs[definition as usize].isOnceEnvironment;
 }
 
+/// Is `typ` a run-once environment itself (ADR 0074 §2.3, ADR 0112)? Its body dropped what it did not move, so whoever
+/// ran the body frees the environment without dropping it.
+fn isOnceEnvironmentStruct(c: borrow Checker, typ: u32) -> bool {
+    if (!c.types.is(typ, TypeKind.Struct)) {
+        return false;
+    }
+    let definition = c.types.info(typ).structDef;
+    return definition != none() && c.types.structs[definition as usize].isOnceEnvironment;
+}
+
 /// Is `local` a run-once function's `env` (local 0, its first parameter)?
 fn isOnceEnvironmentLocal(c: borrow Checker, locals: borrow Vector<NirLocal>, local: u32) -> bool =>
     local == 0 && locals.length > 0 && isOnceEnvironmentReference(c, locals[0].typ);

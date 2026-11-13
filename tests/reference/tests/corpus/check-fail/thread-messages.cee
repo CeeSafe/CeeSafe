@@ -1,0 +1,39 @@
+// Thread errors whose messages say where to look (type-system.md §38). N0334 for a struct of the program names its
+// first field that is not Send or not Share; N0248 for a guard declared with `let` says to use `var` (a guard may be
+// a `var`, §19.1); N0332 for a loan captured by `Thread.spawn` speaks of the thread, not of a box. A guard from
+// `tryLock` is scoped to its mutex, as `lock`'s is (N0245).
+struct Stats {
+    count: i32;
+    cell: Cell<i32>;
+}
+
+struct Pointing {
+    count: i32;
+    at: *i32;
+}
+
+fn send<T: Send>(value: T) {}
+
+fn loan() {
+    var n = 0;
+    let r = borrow mut n;
+    let t = Thread.spawn(move () => { r += 1; })!; // error[N0332]
+    t.join();
+}
+
+fn escaping() -> MutexGuard<i32>? { // error[N0245]
+    let m = Mutex<i32>.create(1)!;
+    return m.tryLock();
+}
+
+fn main() {
+    let shared = Arc<Stats>.create(Stats { count: 0, cell: Cell<i32>.create(0) })!; // error[N0334]
+    let n = 1;
+    send(Pointing { count: 0, at: borrow n as *i32 }); // error[N0334]
+    let m = Mutex<i32>.create(0)!;
+    let guard = m.lock();
+    let data = guard.data(); // error[N0248]
+    data += 1;
+    loan();
+    let _ = escaping();
+}

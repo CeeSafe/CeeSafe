@@ -100,6 +100,8 @@ fn checkThreadSpawn(
         moveInto = c.types.dynFunctionOf(none0.view(), known, allEffects(), true, false)?;
     }
     let literalSpan = c.front.ast.exprSpans[c.front.ast.at(arguments, 0) as usize];
+    // The thread runs the literal's body once: it may move its captures out, and drops the rest (§36.5, ADR 0112).
+    c.runOnceLiteral = true;
     let environment = checkClosureWith(c, literal, none(), moveInto, true, literalSpan)?;
     if (c.isBottom(environment)) {
         return c.errorResult(span.start, span.end);

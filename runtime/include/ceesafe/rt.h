@@ -986,6 +986,8 @@ void ceesafe_thread_join(cee_thread *t);
 /* A platform mutex in allocated memory, or NULL. */
 void *ceesafe_mutex_create(void);
 void ceesafe_mutex_lock(void *m);
+/* True if the lock was free and is now held; never waits (ADR 0112). */
+bool ceesafe_mutex_try_lock(void *m);
 void ceesafe_mutex_unlock(void *m);
 void ceesafe_mutex_destroy(void *m);
 /* The lock a OnceLock's initialiser runs under (ADR 0096): one for the process, not allocated, and recursive, so an

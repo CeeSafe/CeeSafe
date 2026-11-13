@@ -165,7 +165,9 @@ fn emitDynTables(e: borrow mut CEmitter, c: borrow Checker) -> Result<void, Allo
         names.push(copyBytes(name.view())?)?;
         let implementation = cTypeName(c, table.implementation)?;
         var dropName = copyBytes("NULL".bytes())?;
-        if (c.types.needsDrop(table.implementation)) {
+        // A thread's run-once environment has no drop here: its body dropped what it did not move (ADR 0112), and
+        // this table is reached only after the body ran (ceeTJ_).
+        if (c.types.needsDrop(table.implementation) && !isOnceEnvironmentStruct(c, table.implementation)) {
             dropName = copyBytes(name.view())?;
             appendText(mut dropName, "_drop")?;
             e.t("static CEE_UNUSED void ")?;

@@ -385,6 +385,42 @@ struct SpanIn {
 
 // ---- bounds ----
 
+/// For N0334 on a struct of the program: the first field that is not Send (or, with `share`, not Share), so the
+/// message says where to look. A library type that is thread-bound by design (`@threadSafe` or not) names none.
+fn appendThreadUnsafeField(
+    message: borrow mut Vector<u8>,
+    c: borrow Checker,
+    argument: u32,
+    share: bool,
+) -> Result<void, AllocError> {
+    if (!c.types.is(argument, TypeKind.Struct)) {
+        return Ok();
+    }
+    let definition = c.types.info(argument).structDef;
+    if (definition == none() || c.types.structs[definition as usize].isThreadSafe) {
+        return Ok();
+    }
+    let count = c.types.structs[definition as usize].fields.length;
+    for (k in 0..count) {
+        let field = c.types.structs[definition as usize].fields[k];
+        let fieldType = c.types.fields[field as usize].typ;
+        let fieldName = c.types.fields[field as usize].name;
+        var safe = c.types.isSendType(fieldType)?;
+        if (share) {
+            safe = c.types.isShare(fieldType)?;
+        }
+        if (!safe) {
+            appendText(message, "; its field ")?;
+            appendQuotedName(message, c, fieldName)?;
+            appendText(message, " is a ")?;
+            appendQuotedType(message, c, fieldType)?;
+            appendText(message, if (share) ", which is not Share" else ", which is not Send")?;
+            return Ok();
+        }
+    }
+    return Ok();
+}
+
 /// Do `arguments` satisfy the bounds of `parameters` (CheckBounds, §21.2)? Reported as N0268 (N0334 for Send and
 /// Share); deferred until every impl is known.
 fn checkBounds(
@@ -452,6 +488,7 @@ fn checkBounds(
                 mut message,
                 ": Send'): it holds a loan, a raw pointer or another value tied to one thread (type-system.md §38.1)",
             )?;
+            appendThreadUnsafeField(mut message, c, argument, false)?;
             c.error(notSend(), span.start, span.end, message)?;
         }
         if (shareBound && !c.types.isShare(argument)?) {
@@ -462,6 +499,7 @@ fn checkBounds(
             appendText(mut message, " must be ('")?;
             appendBytes(mut message, c.typeName(parameter))?;
             appendText(mut message, ": Share'; type-system.md §38.1)")?;
+            appendThreadUnsafeField(mut message, c, argument, true)?;
             c.error(notSend(), span.start, span.end, message)?;
         }
         let boundCount = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.length;

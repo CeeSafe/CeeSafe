@@ -813,7 +813,12 @@ fn finishMoveLiteral(
             appendQuotedName(mut message, c, local.name)?;
             appendText(mut message, ", a ")?;
             appendQuotedType(mut message, c, local.typ)?;
-            appendText(mut message, ", which holds a loan: the box could outlive it (type-system.md §36.5)")?;
+            // `Thread.spawn`'s literal is the one sync literal that runs once (threads.cee): no box is written there.
+            appendText(
+                mut message,
+                if (c.runOnceLiteral) ", which holds a loan: the thread could outlive it; move the value itself in, or share it through an 'Arc' (type-system.md §38.2)"
+                    else ", which holds a loan: the box could outlive it (type-system.md §36.5)",
+            )?;
             c.error(moveCaptureScoped(), span.start, span.end, message)?;
             return c.errorResult(span.start, span.end);
         }

@@ -1,0 +1,64 @@
+// The literal of `Thread.spawn(move () => …)` runs once (type-system.md §38.2, ADR 0112), so its body may move a
+// capture out: a thread gives back what it was given. The body drops the captures it did not move, on its thread;
+// one moved on some paths only has a drop flag.
+struct Noisy {
+    name: String;
+
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.name);
+    }
+}
+
+fn named(text: StringView) -> Noisy => Noisy { name: String.from(text)! };
+
+fn main() {
+    // Moved out whole: the thread returns the string it captured.
+    let text = String.from("moved through a thread")!;
+    let back = Thread.spawn(move () => text)!.join();
+    Console.writeLine(back);
+
+    // One capture moved, one kept: the body drops the one it kept as it returns.
+    let kept = named("kept");
+    let given = named("given");
+    let thread = Thread.spawn(move () => {
+        Console.writeLine(kept.name);
+        return given;
+    })!;
+    let returned = thread.join();
+    Console.writeLine("joined");
+    Console.writeLine(returned.name);
+
+    // Moved on one path only.
+    for (k in 0..2) {
+        let maybe = named(if (k == 0) "path a" else "path b");
+        let moved = Thread.spawn(move () => {
+            if (k == 0) {
+                let taken = maybe;
+                Console.writeLine("taken");
+            }
+            return k;
+        })!.join();
+        Console.writeLine(moved);
+    }
+
+    // A thread that is never joined: dropping it waits for it, and its result is dropped.
+    let unjoined = named("unjoined");
+    {
+        let waiting = Thread.spawn(move () => unjoined)!;
+    }
+    Console.writeLine("end");
+}
+// expect-stdout: moved through a thread
+// expect-stdout: kept
+// expect-stdout: drop kept
+// expect-stdout: joined
+// expect-stdout: given
+// expect-stdout: taken
+// expect-stdout: drop path a
+// expect-stdout: 0
+// expect-stdout: drop path b
+// expect-stdout: 1
+// expect-stdout: drop unjoined
+// expect-stdout: end
+// expect-stdout: drop given

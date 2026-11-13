@@ -44,7 +44,8 @@ export default defineConfig({
     siteTitle: "The CeeSafe Book",
     nav: [
       { text: "Documentation", link: "https://ceesafe.github.io/CeeSafe/" },
-      { text: "For AI", link: "/llms.txt", target: "_blank" },
+      // VitePress does not put the base before a link to a file that is not a page: it is written out.
+      { text: "For AI", link: "/CeeSafe/book/llms.txt", target: "_blank" },
     ],
     sidebar,
     socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/CeeSafe" }],

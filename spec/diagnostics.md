@@ -124,7 +124,7 @@ errors carry notes ("borrowed here", "the borrow is used later here").
 | N0242 | Read of a place while it is mutably borrowed | `let m = borrow mut x; print(x); m = 1;` |
 | N0243 | A place or temporary goes out of scope while borrowed | `let r = same(five()); use(r)` |
 | N0244 | Returning a reference to a local or temporary (E1) | `return borrow x;` with `x` local |
-| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
+| N0245 | Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5) | `fn f(a: borrow T, b: borrow T) -> borrow T`; `fn f(borrow this) -> Slice<r, u8> => this.buf[0..2]` |
 | N0246 | Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1) | `struct S { r: borrow i64; }` |
 | N0247 | `borrow` of something that is not a place | `borrow 5`, `take(mut five())` |
 | N0248 | `borrow mut` (or a `borrow mut this` call) on an immutable place | `borrow mut param`, `shared.grow()` |
@@ -160,7 +160,7 @@ references, so the borrow checker reports their conflicts as N0240–N0245.
 | Code | Meaning | Example |
 |---|---|---|
 | N0270 | A scoped field or payload in a struct or enum without region parameters | `struct S { v: StringView; }` |
-| N0272 | Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067) | `fn put(v: borrow mut Vector<StringView>, s: StringView) { v.push(s)!; }` |
+| N0272 | Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067); a closure that stores one capture's loan through another is such a store where the closure is made (type-system.md §36.2, ADR 0131) | `fn put(v: borrow mut Vector<StringView>, s: StringView) { v.push(s)!; }` |
 | N0273 | An unknown region name, region arguments on a type without region parameters, the wrong number of them, or `static` in a parameter's type (ADR 0068) | `StringView<nowhere>`, `Plain<r>` |
 | N0274 | A generic used with a scoped type argument where it needs an unscoped one (it boxes `T`, makes an array of `T`, …) | `boxed<StringView>(s)` with `fn boxed<T>(v: T) -> Box<T>` |
 

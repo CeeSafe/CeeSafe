@@ -1,0 +1,156 @@
+// A struct with a `drop` block is taken apart only by a pattern that cannot fail (ADR 0123 §2.6, condition 4;
+// type-system.md §15.2): every field's pattern is a binding, `_`, or a struct pattern of such patterns. A pattern
+// that names every field but tests one only reads the value, in the file that declares the struct too: where it
+// would move a field out, it is N0252, for each kind of pattern that can fail, in `is`, `let … else` and `match`,
+// under `Some` and nested. The same patterns with every field bound are accepted, as is a guard on such an arm.
+const LIMIT: u32 = 8;
+
+enum Kind {
+    Plain,
+    Named(Vector<u8>),
+    Sized(u32),
+}
+
+struct Guard {
+    name: Vector<u8>;
+    n: u32;
+
+    drop {}
+}
+
+struct Flagged {
+    name: Vector<u8>;
+    on: bool;
+    kind: Kind;
+
+    drop {}
+}
+
+struct Holder {
+    guard: Guard;
+    n: u32;
+
+    drop {}
+}
+
+struct Open {
+    guard: Guard;
+    n: u32;
+}
+
+fn literal(g: Guard) -> usize {
+    if (g is Guard { name, n: 8 }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn range(g: Guard) -> usize {
+    if (g is Guard { name, n: 1..=8 }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn constant(g: Guard) -> usize {
+    if (g is Guard { name, n: LIMIT }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn alternatives(g: Guard) -> usize {
+    if (g is Guard { name, n: 1 | 2 }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn boolean(f: Flagged) -> usize {
+    if (f is Flagged { name, on: true, kind: _ }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn variant(f: Flagged) -> usize {
+    if (f is Flagged { name, on: _, kind: Kind.Plain }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+fn variantPayload(f: Flagged) -> usize {
+    if (f is Flagged { name: _, on: _, kind: Kind.Named(text) }) { // error[N0252]
+        return text.length;
+    }
+    return 0;
+}
+
+fn inLetElse(g: Guard) -> usize {
+    let Guard { name, n: 8 } = g else { // error[N0252]
+        return 0;
+    };
+    return name.length;
+}
+
+fn inMatch(g: Guard) -> usize {
+    match (g) {
+        Guard { name, n: 8 } => { return name.length; } // error[N0252]
+        Guard { name, n: _ } => { return name.length + 1; }
+    }
+}
+
+fn underSome(g: Guard?) -> usize {
+    if (g is Some(Guard { name, n: 8 })) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+// The nested pattern tests: it reads `guard`, and cannot move its name out.
+fn nestedTests(o: Open) -> usize {
+    if (o is Open { guard: Guard { name, n: 8 }, n: _ }) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+// The outer pattern tests, so it reads the holder: the nested one cannot take the holder's guard apart.
+fn outerTests(h: Holder) -> u32 {
+    if (h is Holder { guard: Guard { name: _, n }, n: 2 }) { // error[N0252]
+        return n;
+    }
+    return 0;
+}
+
+// A nested pattern that can fail makes the outer one a reading pattern too: the holder is whole afterwards.
+fn outerOfNestedTest(h: Holder) -> usize {
+    if (h is Holder { guard: Guard { name: _, n: 8 }, n }) {
+        return h.guard.name.length + n as usize;
+    }
+    return 0;
+}
+
+// Accepted: every field bound, then the test, afterwards or in a guard; a reading pattern leaves the value usable.
+fn boundThenTested(g: Guard) -> usize {
+    let Guard { name, n } = g;
+    return if (n == 8) name.length else 0;
+}
+
+fn guarded(g: Guard) -> usize {
+    match (g) {
+        Guard { name, n } if (n == 8) => { return name.length; }
+        Guard { name: _, n: _ } => { return 0; }
+    }
+}
+
+fn readsThenUses(g: Guard) -> usize {
+    if (g is Guard { name: _, n: 8 }) {
+        return g.name.length;
+    }
+    let Guard { name, n: _ } = g;
+    return name.length;
+}
+
+fn main() {}

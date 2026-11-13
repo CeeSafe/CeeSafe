@@ -603,10 +603,11 @@ struct File {
 - Moving a field out of a value whose type has a `drop` block is N0252: the `drop` block needs the
   whole value. Moving out of `this` inside `drop` is impossible anyway (§14.3).
 - **Taking the value apart** (ADR 0123 §2.6) is the one way to end such a value without its `drop` block: a struct
-  pattern that names every field (no `..`), in the file that declares the struct, matched against a value (not a
-  reference). Where it matches, every field moves out, into its binding or a hidden local of the scope, and the
-  block does not run; the fields that are not bound are destroyed as their own types say. `let S { a, b: _ } =
-  this;` in a consuming method is the usual form (§15.2, §15.5).
+  pattern that names every field (no `..`) with a pattern that cannot fail (a binding, `_`, or such a struct
+  pattern), in the file that declares the struct, matched against a value (not a reference). Where it is reached,
+  every field moves out, into its binding or a hidden local of the scope, and the block does not run; the fields
+  that are not bound are destroyed as their own types say. `let S { a, b: _ } = this;` in a consuming method is
+  the usual form (§15.2, §15.5). A pattern that tests a field never takes the value apart.
 - Only a struct has a `drop` block. An enum has none (`drop` in an enum's body is N0100): destroying an enum value
   destroys the payloads of the variant it holds, each as its own type says, so an enum is a move type, and needs
   drop, exactly when one of its payload types does. A variant that owns a resource holds a struct with a `drop`
@@ -766,14 +767,26 @@ and `E.V…` there are patterns.
     which is then partially moved (§14.4: its other fields stay usable, the whole is N0250); in a `match`, out of
     the consumed scrutinee (§18.4). A nested variant pattern that binds a non-Copy payload moves its field to a
     hidden local of the scope and unpacks that.
-  - **A struct with a `drop` block** (§14.2). A pattern without `..`, in the file that declares the struct, on a
-    value, *takes the value apart* where it matches: the value is consumed whatever its fields' types, each field
-    moves into its binding or, for `_` or any other pattern, into a hidden local of the scope (matched in turn,
-    destroyed at the scope's end), and the `drop` block does not run. Where it does not match, nothing moves.
-    Any other struct pattern on such a value only reads: one that would move a field out is N0252. `name @ P { … }`
-    with a pattern that takes the value apart is N0250. A nested pattern follows the same rule: `Outer { part:
-    Part { id: 8 }, .. }` takes `part` apart, out of the `Outer` (N0252 if `Outer` has a `drop` block and is not
-    taken apart itself); `Part { id: 8, .. }` only tests it.
+  - **A struct with a `drop` block** (§14.2). A struct pattern *takes the value apart* when it is on a value, has
+    no `..`, is in the file that declares the struct, and cannot fail: every field's pattern is irrefutable
+    (below: a binding, `_`, `name @ P` with such a `P`, or a struct pattern of irrefutable field patterns). The
+    value is then consumed whatever its fields' types, each field moves into its binding or, for `_` or a nested
+    pattern, into a hidden local of the scope (bound from in turn, destroyed at the scope's end), and the `drop`
+    block does not run. Any other struct pattern on such a value only reads, the value being destroyed later
+    with its block running: one with `..`, one in another file, and one with a field pattern that can fail
+    (`Part { id: 8 }`, a range, a constant, a variant, a string or slice pattern, an or-pattern); one that would
+    move a field out is N0252. So a `drop` block is never skipped because a field had a certain value: to take
+    apart and test, bind every field and test what was bound, afterwards or in an arm's guard.
+    - The rule is about the struct pattern alone. Under a pattern that can fail, `Some(Builder { name, parts })`
+      or `Outer { kind: 1, part: Part { id } }`, the payload or field is taken apart where the whole pattern
+      matches, and nothing moves where it does not. At the top of an `is` or a `let … else` such a pattern always
+      matches (N0404); `let P { … } = e;` is its usual place.
+    - A nested pattern follows the same rule on its field: `Outer { part: Part { id }, .. }` takes `part` apart,
+      out of the `Outer` (N0252 if `Outer` has a `drop` block and is not taken apart itself); `Part { id, .. }` and
+      `Part { id: 8 }` only read it.
+    - An arm with a guard may take the value apart: the guard runs before anything moves (§18.4), so where it is
+      false the value is whole and the next arm is tried. Each alternative of an or-pattern is decided on its own.
+      `name @ P { … }` with a pattern that takes the value apart is N0250.
   - **Coverage.** A struct has one constructor, whose arguments are its fields in declared order (`_` for a field
     not named); the usefulness algorithm below is otherwise unchanged. `match (p) { Point { x: 0, y } => …,
     Point { x, y: 0 } => … }` is N0256 (`Point { x: -2147483648, y: -2147483648 }` is not covered); a witness names

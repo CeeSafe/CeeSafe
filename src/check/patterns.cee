@@ -1601,8 +1601,8 @@ fn patternMovesOutOfDropType() -> u32 => 252;
 /// alone (a binding of its name, or the constant of that name) or with a pattern for its value; every field named
 /// unless the pattern ends with `..`. A field the code could not read cannot be named (N0296, ADR 0109). A binding
 /// copies, moves the field out of a value (a partial move, ADR 0114), or refers to it through a reference. On a
-/// value of a struct with a `drop` block, a pattern without `..` in the file that declares the struct takes the
-/// value apart (§2.6); any other that would move a field out is N0252.
+/// value of a struct with a `drop` block, a pattern without `..` in the file that declares the struct, whose field
+/// patterns cannot fail, takes the value apart (§2.6); any other that would move a field out is N0252.
 fn checkStructPattern(
     c: borrow mut Checker,
     path: QualifiedName,
@@ -1729,8 +1729,16 @@ fn checkStructPattern(
     }
     var apart = false;
     if (reference == none() && hasDropFunction(c, typ)) {
-        // ADR 0123 §2.6: explicit and total, and only where the struct is declared.
-        apart = ok && !hasRest && c.types.structs[definition as usize].file == c.file;
+        // ADR 0123 §2.6: explicit and total, only where the struct is declared, and a destructuring, not a test:
+        // a pattern that can fail on a field only reads the value.
+        let total = ok && !hasRest && c.types.structs[definition as usize].file == c.file;
+        var tests = false;
+        for (i in 0..fieldCount) {
+            if (!isIrrefutable(c, trees[i])) {
+                tests = true;
+            }
+        }
+        apart = total && !tests;
         if (!apart) {
             var moved = none();
             for (i in 0..fieldCount) {
@@ -1750,7 +1758,12 @@ fn checkStructPattern(
                 appendQuotedType(mut message, c, typ)?;
                 appendText(
                     mut message,
-                    ", which has a drop block: a pattern that names every field of a struct with a drop block consumes it; end the field's pattern with '..' to only read it, or name every field of this struct too, in the file that declares it (ADR 0123 §2.6)",
+                    ", which has a drop block: a pattern that binds every field of a struct with a drop block consumes it; end the field's pattern with '..' to only read it, or ",
+                )?;
+                appendText(
+                    mut message,
+                    if (total) "bind every field of this struct too, with a name or '_', and test what was bound (ADR 0123 §2.6)"
+                        else "bind every field of this struct too, in the file that declares it (ADR 0123 §2.6)",
                 )?;
                 c.error(patternMovesOutOfDropType(), span.start, span.end, message)?;
                 failed = true;
@@ -1763,7 +1776,8 @@ fn checkStructPattern(
                 appendQuotedType(mut message, c, typ)?;
                 appendText(
                     mut message,
-                    ", which has a drop block: only a pattern that names every field, without '..', in the file that declares the struct takes such a value apart (ADR 0123 §2.6); match on a reference to bind without moving",
+                    if (total) ", which has a drop block: this pattern tests a field, so it only reads the value; to take the value apart, bind every field with a name or '_', then test what was bound, in a guard or afterwards (ADR 0123 §2.6); match on a reference to bind without moving"
+                        else ", which has a drop block: only a pattern that binds every field with a name or '_', without '..', in the file that declares the struct takes such a value apart (ADR 0123 §2.6); match on a reference to bind without moving",
                 )?;
                 c.error(patternMovesOutOfDropType(), span.start, span.end, message)?;
                 failed = true;

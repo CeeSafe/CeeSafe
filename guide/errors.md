@@ -104,6 +104,50 @@ not two digits
 
 The same works on optionals: `o?` returns `null` from a function that returns an optional.
 
+Where the error types differ, `?` converts in one step, if a declaration says how. The function's error enum may hold
+the other error in a variant marked `@from`; or the other error's type may have a method marked `@into`, of the form
+`fn name(this) -> F`, that makes the function's error of it (one such method per type):
+
+```ceesafe
+enum LoadError {
+    @from Parse(ParseError), // `?` on a Result<_, ParseError> returns Err(LoadError.Parse(e))
+    Missing,
+}
+
+enum ParseError {
+    Empty,
+}
+
+struct Refused {
+    line: u32;
+    text: String;
+
+    @into
+    fn error(this) -> LoadError => LoadError.Missing; // `?` on a Result<_, Refused> returns Err(e.error())
+}
+
+fn parse(text: StringView) -> Result<u32, ParseError> => if (text.length == 0) Err(ParseError.Empty) else Ok(1);
+
+fn find(line: u32) -> Result<u32, Refused> => Err(Refused { line: line, text: String.from("no such line")! });
+
+fn load(text: StringView) -> Result<u32, LoadError> => Ok(parse(text)? + find(7)?);
+
+fn main() {
+    match (load("x")) {
+        Err(LoadError.Missing) => { Console.writeLine("missing"); }
+        _ => { Console.writeLine("other"); }
+    }
+}
+```
+
+```text
+missing
+```
+
+`@from` keeps the error; `@into` is for an error the function's type cannot hold, or should not: the method takes the
+error by value, so what it does not keep (the `String` here) is destroyed. Only `?` converts: `return Err(e)` names
+the variant or calls the method itself.
+
 ## `!`: this cannot fail
 
 `e!` is the value inside `Ok` (or a present optional's value). If it is an `Err` (or `null`), the program panics. Use

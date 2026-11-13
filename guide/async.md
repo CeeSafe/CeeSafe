@@ -343,7 +343,8 @@ The library's waiting operations are async functions, in the hosted profile:
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |
 | Requests to stop | `ProcessSignals.subscribe()` (not async), then `waitAsync()`: Ctrl+C (`SIGINT`) or `SIGTERM` (see below) |
 
-Each returns `Result<T, AsyncError>`, whose cases are `Cancelled`, `TimedOut` and `Io(IoError)`. A socket's address is
+Each returns `Result<T, AsyncError>`, whose cases are `Cancelled`, `TimedOut`, `Io(IoError)` and `Closed` (the other
+side of this channel, or this endpoint, was closed, so the operation can never succeed). A socket's address is
 a `SocketAddress`, `V4` or `V6`, made from text by `SocketAddresses.parse("[::1]:8080")` or
 `SocketAddresses.parseIp("::1", 8080)`, and written back with `a.write(mut w)`. A listener on `SocketAddresses.v6Any(port)`
 also accepts IPv4 clients, whose `peerAddress()` is `V4`. Network failures have their own `IoError` kinds,
@@ -375,6 +376,52 @@ fn main() {
 listening
 true
 ```
+
+### A channel that was closed
+
+A send that fails gives the value back: `await ch.sendAsync(v)` returns `Result<void, SendError<T>>`, and
+`SendError<T>` is `Closed(v)` or `Cancelled(v)`. Match on it to keep the value. Where the value does not matter, write
+`?`: in a function that returns `AsyncError` it drops the value and returns `AsyncError.Closed` or
+`AsyncError.Cancelled`.
+
+```ceesafe
+async fn produce(ch: borrow Channel<String>) -> Result<void, AsyncError> {
+    await ch.sendAsync(String.from("one")!)?;
+    ch.close();
+    await ch.sendAsync(String.from("two")!)?; // closed: "two" is dropped, the error is AsyncError.Closed
+    return Ok();
+}
+
+async fn work() -> Result<void, AsyncError> {
+    let ch = Channel<String>.create(4)!;
+    match (await produce(borrow ch)) {
+        Err(AsyncError.Closed) => { await AsyncConsole.writeLine("the channel is closed")?; }
+        _ => {}
+    }
+    match (await ch.sendAsync(String.from("three")!)) {
+        Err(SendError.Closed(text)) => { await AsyncConsole.writeLine(text.view())?; } // the value came back
+        _ => {}
+    }
+    return Ok();
+}
+
+fn main() {
+    Async.run(work())!;
+}
+```
+
+```text
+the channel is closed
+three
+```
+
+`?` finds this conversion on the error's own type: `SendError<T>.reason()` is marked `@into`, and a type of yours may
+have one such method too, `@into fn name(this) -> F` (see [Errors](errors.md#-pass-the-error-on)). `trySend` and the
+blocking `send` return the value alone (`Result<void, T>`), with no reason, so `?` does not convert them: a full
+channel is an answer to read, not a failure, and `ch.isClosed()` tells the two apart.
+
+A program that matched every case of `AsyncError` without a `_` arm needs one more arm since `Closed` was added:
+`AsyncError.Closed => …`.
 
 A static file goes to a socket with `await stream.sendFileAll(borrow file, offset, length)`: the kernel copies it from
 the page cache (`sendfile`, or `TransmitFile` on Windows), and where it cannot, lib/std reads 64 KiB at a time on a

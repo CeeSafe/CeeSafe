@@ -1,0 +1,97 @@
+// ADR 0128: what `?` still refuses around a channel's sends, and the shape of an `@into` method.
+// `SendError<T>` converts into `AsyncError` and nothing else, in one step; the sends that do not return a
+// `SendError` (`send`, `trySend`: the value itself comes back, from a channel that is closed or only full) do not
+// convert at all.
+
+enum AppError {
+    @from Async(AsyncError),
+    Other,
+}
+
+async fn full(ch: borrow Channel<String>) -> Result<void, AsyncError> {
+    ch.trySend(String.from("a")!)?; // error[N0261]
+    return Ok();
+}
+
+fn blocking(ch: borrow Channel<String>) -> Result<void, AsyncError> {
+    ch.send(String.from("a")!)?; // error[N0261]
+    return Ok();
+}
+
+// One step: `SendError<String>` to `AsyncError` to `AppError` is two.
+async fn twoSteps(ch: borrow Channel<String>) -> Result<void, AppError> {
+    await ch.sendAsync(String.from("a")!)?; // error[N0261]
+    return Ok();
+}
+
+async fn otherError(ch: borrow Channel<String>) -> Result<void, IoError> {
+    await ch.sendAsync(String.from("a")!)?; // error[N0261]
+    return Ok();
+}
+
+// Only `?` converts: a `return` names the conversion.
+async fn returned(ch: borrow Channel<String>) -> Result<void, AsyncError> {
+    return await ch.sendAsync(String.from("a")!); // error[N0205]
+}
+
+// The shape of an `@into` method: `fn name(this) -> F`, once in a type.
+struct Refused {
+    code: u32;
+
+    @into(AppError) // error[N0290]
+    fn a(this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn b(borrow this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn c(this, extra: u32) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn d<T>(this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn e(this) {}
+
+    @into // error[N0290]
+    async fn f(this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn g() -> AppError => AppError.Other;
+
+    @into
+    fn first(this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn second(this) -> IoError => IoError.InvalidInput;
+}
+
+enum Reason {
+    Bad,
+}
+
+impl Reason {
+    @into
+    fn first(this) -> AppError => AppError.Other;
+
+    @into // error[N0290]
+    fn second(this) -> IoError => IoError.InvalidInput;
+}
+
+@into // error[N0290]
+fn free(r: Refused) -> AppError => AppError.Other;
+
+// The one accepted method converts into its own result type only.
+fn refuse() -> Result<void, Refused> => Err(Refused { code: 1 });
+
+fn converts() -> Result<void, AppError> {
+    refuse()?;
+    return Ok();
+}
+
+fn doesNot() -> Result<void, IoError> {
+    refuse()?; // error[N0261]
+    return Ok();
+}
+
+fn main() {}

@@ -265,6 +265,7 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
 fn processEnumMethodAttributes(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
     let savedFile = c.file;
     var k: usize = 0;
+    var intoCount: u32 = 0;
     while (k < c.enumMethods.length) {
         let m = c.enumMethods[k];
         k += 1;
@@ -272,10 +273,13 @@ fn processEnumMethodAttributes(c: borrow mut Checker, item: u32) -> Result<void,
             continue;
         }
         c.setFile(m.file);
-        let words = "effects effectsOf context constant test";
+        let words = "effects effectsOf context constant test into";
         var known = Vector<u32>.create();
         let attributes = c.front.ast.functions[m.function as usize].attributes;
         knownAttributes(c, attributes, "an enum's method", words, mut known)?;
+        if (readIntoAttribute(c, m.function, known.view(), intoCount)?) {
+            intoCount += 1; // ADR 0128
+        }
         for (attribute in known.view()) {
             if (sameText(attributeName(c, attribute), "test")) {
                 let a = c.front.ast.attributes[attribute as usize];

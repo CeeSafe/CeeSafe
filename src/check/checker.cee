@@ -177,6 +177,7 @@ struct Checker {
     testFunctions: Vector<u32>;                      // HIR functions declared `@test` (ADR 0049), in declaration order
     entryName: Vector<u8>;                           // the program's entry: "main", or the test harness's (ADR 0049)
     placedMethods: Vector<u32>;                      // Ast.functions declared `@placed`
+    intoMethods: Vector<u32>;                        // Ast.functions declared `@into` (ADR 0128)
     moveBodies: Vector<MoveBody>;                    // move literals' environments and bodies (§36.5)
     unsafeDepth: u32;                                // > 0 in an unsafe context (§27.4)
     usedUnsafe: bool;                                // the body has an `unsafe` block or expression
@@ -211,7 +212,7 @@ struct Checker {
     blockValueType: u32;              // the value block being checked: its branch's type, or none (ADR 0073 §2.3)
     blockValueResult: u32;            // and the type its value turned out to have, or none
     packageDeclared: Map<Word, Word>; // the names each package declares, public or not (PackageScope.Declared)
-    tryConversions: Map<Word, Word>;  // a `?` expression: the `@from` variant its error goes into (ADR 0075 §2.3)
+    tryConversions: Map<Word, Word>;  // a `?`: its `@from` variant (ADR 0075 §2.3) or, with bit 32, its `@into` method (ADR 0128)
     packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
     uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks
     declaredOrder: Vector<DeclaredEntry>;

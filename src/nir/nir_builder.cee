@@ -4254,11 +4254,26 @@ fn lowerResultAccess(
         let errVariant = c.types.enums[returnDefinition as usize].variants[1];
         let key = Word { value: e as u64 };
         var conversion = none();
+        var isMethod = false;
         match (c.tryConversions.get(borrow key)) {
-            Some(found) => { conversion = truncate<u32>(found.value); }
+            Some(found) => {
+                conversion = truncate<u32>(found.value);
+                isMethod = found.value > 0xFFFFFFFF;
+            }
             null => {}
         }
-        if (conversion != none()) {
+        if (conversion != none() && isMethod) {
+            // The error type's `@into` method makes the function's error of it (ADR 0128): the error moves into the
+            // call, which destroys what it does not keep.
+            let target = c.types.fields[c.types.variants[errVariant as usize].payload[0] as usize].typ;
+            let inner = [payload];
+            let innerList = n.list(inner[..])?;
+            let called = n.rvalue(NirRvalue.Call(conversion, innerList), target, b.span)?;
+            let converted = newTemp(b, target)?;
+            let convertedPlace = localPlace(n, converted)?;
+            assign(n, b, convertedPlace, called)?;
+            payload = readPlace(c, n, b, convertedPlace)?;
+        } else if (conversion != none()) {
             {
                 // The error goes into the return type's `@from` variant first (ADR 0075 §2.3).
                 let from = conversion;

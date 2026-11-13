@@ -2,7 +2,7 @@
   (fn counted () -> i32
     (block
       (var hits#0: i32 = 0:i32)
-      (let t#1: Thread<void> = (unwrap (Process.exit (closure 1034 (move hits#0) (block (+= hits#0 1:i32))):{closure environment 1 in counted})):Thread<void>)
+      (let t#1: Thread<void> = (unwrap (Process.exit (closure 1015 (move hits#0) (block (+= hits#0 1:i32))):{closure environment 1 in counted})):Thread<void>)
       (expr (Process.exit t#1))
       (return hits#0)
     )
@@ -10,14 +10,14 @@
   (fn counter () -> Box<dyn mut fn() -> u64>
     (block
       (var count#0: u64 = 0:u64)
-      (return (as (unwrap (Process.exit (closure 1035 (move count#0) (block (+= count#0 1:u64) (return count#0))):{closure environment 1 in counter})):Box<{closure environment 1 in counter}> Box<dyn mut fn() -> u64>))
+      (return (as (unwrap (Process.exit (closure 1016 (move count#0) (block (+= count#0 1:u64) (return count#0))):{closure environment 1 in counter})):Box<{closure environment 1 in counter}> Box<dyn mut fn() -> u64>))
     )
   )
   (fn readBefore () -> i32
     (block
       (var seen#0: i32 = 4:i32)
       (let before#1: i32 = seen#0)
-      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1036 (move seen#0) (block (+= seen#0 1:i32))):{closure environment 1 in readBefore})):Thread<void>)
+      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1017 (move seen#0) (block (+= seen#0 1:i32))):{closure environment 1 in readBefore})):Thread<void>)
       (expr (Process.exit t#2))
       (return before#1)
     )
@@ -26,21 +26,21 @@
     (block
       (var base#0: i32 = 4:i32)
       (+= base#0 1:i32)
-      (let t#1: Thread<i32> = (unwrap (Process.exit (closure 1037 (move base#0) (block (return (+ base#0 1:i32):i32))):{closure environment 1 in onlyRead})):Thread<i32>)
+      (let t#1: Thread<i32> = (unwrap (Process.exit (closure 1018 (move base#0) (block (return (+ base#0 1:i32):i32))):{closure environment 1 in onlyRead})):Thread<i32>)
       (return (+ (Process.exit t#1) base#0):i32)
     )
   )
   (fn moved () -> usize
     (block
       (var names#0: Vector<i32> = (Process.exit))
-      (let t#1: Thread<Vector<i32>> = (unwrap (Process.exit (closure 1038 (move names#0) (block (expr (unwrap (Process.exit (borrow-mut names#0) 1:i32)):void) (return names#0))):{closure environment 1 in moved})):Thread<Vector<i32>>)
+      (let t#1: Thread<Vector<i32>> = (unwrap (Process.exit (closure 1019 (move names#0) (block (expr (unwrap (Process.exit (borrow-mut names#0) 1:i32)):void) (return names#0))):{closure environment 1 in moved})):Thread<Vector<i32>>)
       (return (length (Process.exit t#1)):usize)
     )
   )
   (fn boxed () -> u64
     (block
       (var total#0: u64 = 0:u64)
-      (var add#1: Box<dyn mut fn(u64)> = (as (unwrap (Process.exit (closure 1039 (move total#0) (block (+= total#0 n#1))):{closure environment 1 in boxed})):Box<{closure environment 1 in boxed}> Box<dyn mut fn(u64)>))
+      (var add#1: Box<dyn mut fn(u64)> = (as (unwrap (Process.exit (closure 1020 (move total#0) (block (+= total#0 n#1))):{closure environment 1 in boxed})):Box<{closure environment 1 in boxed}> Box<dyn mut fn(u64)>))
       (expr (call dyn mut fn(u64).call (borrow-mut (*add#1)) 3:u64):void)
       (return total#0)
     )
@@ -48,7 +48,7 @@
   (fn child () -> Result<void, AsyncError>
     (block
       (var steps#0: i32 = 0:i32)
-      (expr (try (async-scope 0 (AsyncError.Cancelled) (block (expr (spawn 0 (closure 1040 (move steps#0) (block (+= steps#0 1:i32) (return (Result<void, AsyncError>.Ok)))):{closure environment 1 in child})))):Result<void, AsyncError>):void)
+      (expr (try (async-scope 0 (AsyncError.Cancelled) (block (expr (spawn 0 (closure 1021 (move steps#0) (block (+= steps#0 1:i32) (return (Result<void, AsyncError>.Ok)))):{closure environment 1 in child})))):Result<void, AsyncError>):void)
       (expr (try (await (call AsyncConsole.writeLine (value (if (== steps#0 0:i32):bool (block (yield "unchanged")) (else (block (yield "changed"))))):StringView):Result<void, AsyncError>):Result<void, AsyncError>):void)
       (return (Result<void, AsyncError>.Ok))
     )
@@ -56,7 +56,7 @@
   (fn each ((x#0: T)) -> i32
     (block
       (var count#1: i32 = 0:i32)
-      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1041 (move x#0 move count#1) (block (let mine#1: T = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
+      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1022 (move x#0 move count#1) (block (let mine#1: T = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
       (expr (Process.exit t#2))
       (return count#1)
     )
@@ -120,7 +120,7 @@
   (fn each ((x#0: i32)) -> i32
     (block
       (var count#1: i32 = 0:i32)
-      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1079 (move x#0 move count#1) (block (let mine#1: i32 = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
+      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1060 (move x#0 move count#1) (block (let mine#1: i32 = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
       (expr (Process.exit t#2))
       (return count#1)
     )
@@ -128,7 +128,7 @@
   (fn each ((x#0: u8)) -> i32
     (block
       (var count#1: i32 = 0:i32)
-      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1080 (move x#0 move count#1) (block (let mine#1: u8 = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
+      (let t#2: Thread<void> = (unwrap (Process.exit (closure 1061 (move x#0 move count#1) (block (let mine#1: u8 = x#0) (+= count#1 1:i32))):{closure environment 1 in each})):Thread<void>)
       (expr (Process.exit t#2))
       (return count#1)
     )

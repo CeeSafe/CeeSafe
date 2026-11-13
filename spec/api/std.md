@@ -767,6 +767,17 @@ public enum SendError<T> {
 
 Why `sendAsync` gave a value back: the channel is closed, or the task was cancelled (ADR 0032 §3.3).
 
+### SendError.reason
+
+```ceesafe
+@into
+public fn reason(this) -> AsyncError
+```
+
+Why the send failed, without the value, which is dropped: `AsyncError.Closed` or `AsyncError.Cancelled`. It is
+`@into` (ADR 0128; type-system.md §17.4): in a function that returns `Result<_, AsyncError>`,
+`await channel.sendAsync(v)?` returns `Err(error.reason())`. Match on the error instead to keep the value.
+
 ## struct Channel
 
 ```ceesafe
@@ -863,7 +874,8 @@ public async fn sendAsync(borrow this, value: T) -> Result<void, SendError<T>>
 ```
 
 Sends `value` from a task, parking it while the channel is full: other tasks of its thread run meanwhile. A
-closed channel or a cancelled task gives the value back.
+closed channel or a cancelled task gives the value back. Under `?` in a function that returns `AsyncError`
+the value is dropped and the error is `AsyncError.Closed` or `AsyncError.Cancelled` (`SendError.reason`).
 Safety: as `send`; the wait node is in this task's frame and leaves the queue before the task returns.
 
 ### Channel.recvAsync

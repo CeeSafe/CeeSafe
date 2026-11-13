@@ -1,0 +1,183 @@
+// ADR 0128: `?` on a send's error in a function that returns `Result<_, AsyncError>`. `SendError<T>.reason` is
+// `@into`: `?` calls it, so a closed channel is `AsyncError.Closed`, a cancelled send is `AsyncError.Cancelled`, and
+// the value that was not sent is dropped exactly once (a String here, and a struct that counts its drops).
+// expect-stdout: sent: 2
+// expect-stdout: closed: Closed
+// expect-stdout: generic: Closed
+// expect-stdout: timed out: TimedOut
+// expect-stdout: cancelled: Cancelled
+// expect-stdout: kept: back
+// expect-stdout: own: Parse(Empty)
+// expect-stdout: drops: 2
+// expect-stdout: received: one two
+
+static DROPS: AtomicU32 = AtomicU32.constant(0);
+
+struct Tracked {
+    id: u32;
+
+    drop {
+        DROPS.fetchAdd(1);
+    }
+}
+
+fn name(e: AsyncError) -> StringView => match (e) {
+    AsyncError.Cancelled => "Cancelled",
+    AsyncError.TimedOut => "TimedOut",
+    AsyncError.Io(_) => "Io",
+    AsyncError.Closed => "Closed",
+};
+
+// The four-line match of ADR 0111 §4 is one `?`.
+async fn produce(ch: borrow Channel<String>, count: borrow mut u32) -> Result<void, AsyncError> {
+    await ch.sendAsync(String.from("one")!)?;
+    count += 1;
+    await ch.sendAsync(String.from("two")!)?;
+    count += 1;
+    ch.close();
+    await ch.sendAsync(String.from("three")!)?; // closed: the String is dropped, the error is Closed
+    count += 1;
+    return Ok();
+}
+
+// An instance of a generic function converts its own `SendError<T>`.
+async fn sendOne<T: Send>(ch: borrow Channel<T>, value: T) -> Result<void, AsyncError> {
+    await ch.sendAsync(value)?;
+    return Ok();
+}
+
+async fn tracked() -> Result<void, AsyncError> {
+    let ch = Channel<Tracked>.create(1)!;
+    ch.close();
+    await sendOne(borrow ch, Tracked { id: 1 })?;
+    return Ok();
+}
+
+// A cancelled send: the body of a timeout that has passed. The timeout's own error replaces the body's, so the body
+// records what `?` made of its send.
+static CANCELLED: AtomicU32 = AtomicU32.constant(0);
+
+async fn blocked(ch: borrow Channel<Tracked>) -> Result<void, AsyncError> {
+    await ch.sendAsync(Tracked { id: 2 })?;        // room for one
+    match (await sendOne(ch, Tracked { id: 3 })) { // full: waits, and is cancelled
+        Ok(_) => {}
+        Err(e) => {
+            match (e) {
+                AsyncError.Cancelled => { CANCELLED.store(1); }
+                _ => {}
+            }
+            return Err(e);
+        }
+    }
+    return Ok();
+}
+
+// The value is still there for a program that matches.
+async fn keep(ch: borrow Channel<String>) -> Result<void, AsyncError> {
+    match (await ch.sendAsync(String.from("back")!)) {
+        Ok(_) => {}
+        Err(e) => {
+            match (e) {
+                SendError.Closed(text) => {
+                    await AsyncConsole.write("kept: ")?;
+                    await AsyncConsole.writeLine(text.view())?;
+                }
+                SendError.Cancelled(_) => {}
+            }
+        }
+    }
+    return Ok();
+}
+
+// A program's own error type with an `@into` method, and a function that is not async.
+enum ParseError {
+    Empty,
+    TooLong(String),
+}
+
+enum AppError {
+    Parse(ParseError),
+    Other,
+}
+
+struct Refused {
+    why: ParseError;
+    text: String;
+
+    @into
+    fn error(this) -> AppError => AppError.Parse(this.why);
+}
+
+fn parse(text: StringView) -> Result<u32, Refused> {
+    if (text.length == 0) {
+        return Err(Refused { why: ParseError.Empty, text: String.from("nothing to parse")! });
+    }
+    return Ok(truncate<u32>(text.length));
+}
+
+fn parseBoth(a: StringView, b: StringView) -> Result<u32, AppError> => Ok(parse(a)? + parse(b)?);
+
+async fn run() -> Result<void, AsyncError> {
+    let ch = Channel<String>.create(4)!;
+    var count: u32 = 0;
+    let produced = await produce(borrow ch, mut count);
+    var line = String.from("sent: ")!;
+    line.appendNumber(count)!;
+    await AsyncConsole.writeLine(line.view())?;
+    match (produced) {
+        Ok(_) => {}
+        Err(e) => {
+            await AsyncConsole.write("closed: ")?;
+            await AsyncConsole.writeLine(name(e))?;
+        }
+    }
+    match (await tracked()) {
+        Ok(_) => {}
+        Err(e) => {
+            await AsyncConsole.write("generic: ")?;
+            await AsyncConsole.writeLine(name(e))?;
+        }
+    }
+    let full = Channel<Tracked>.create(1)!;
+    let timed = await Async.timeout(20, AsyncError.TimedOut, async () => await blocked(borrow full));
+    match (timed) {
+        Ok(_) => {}
+        Err(e) => {
+            await AsyncConsole.write("timed out: ")?;
+            await AsyncConsole.writeLine(name(e))?;
+        }
+    }
+    await AsyncConsole.writeLine(if (CANCELLED.load() == 1) "cancelled: Cancelled" else "cancelled: no")?;
+    await keep(borrow ch)?;
+    match (parseBoth("abc", "")) {
+        Ok(_) => {}
+        Err(e) => {
+            match (e) {
+                AppError.Parse(ParseError.Empty) => { await AsyncConsole.writeLine("own: Parse(Empty)")?; }
+                _ => { await AsyncConsole.writeLine("own: other")?; }
+            }
+        }
+    }
+    var counted = String.from("drops: ")!;
+    counted.appendNumber(DROPS.load())!; // the tracked value of the closed channel and the cancelled one
+    await AsyncConsole.writeLine(counted.view())?;
+    var received = String.from("received:")!;
+    loop {
+        match (ch.tryRecv()) {
+            Some(text) => {
+                received.append(" ")!;
+                received.append(text.view())!;
+            }
+            null => { break; }
+        }
+    }
+    await AsyncConsole.writeLine(received.view())?;
+    return Ok();
+}
+
+fn main() -> i32 {
+    match (Async.run(run())) {
+        Ok(_) => { return 0; }
+        Err(_) => { return 1; }
+    }
+}

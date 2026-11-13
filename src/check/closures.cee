@@ -748,6 +748,7 @@ fn newClosureFunction(
     let environment = storeEnvironment(c, pairs.view())?;
     c.hir.functions[function as usize].environment = environment;
     c.hir.functions[function as usize].isClosure = true;
+    c.hir.functions[function as usize].writtenIn = c.function;
     placeClosure(c, function)?;
     if (withEnvironment) {
         // Named by its place (placeClosure), the same in every check.

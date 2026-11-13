@@ -654,7 +654,9 @@ fn checkMethodCall(
                 let place = toPlace(c, receiver)?;
                 if (place != none()) {
                     argument = c.expr(HirExpr.Borrow(false, place), shared, targetSpan.start, targetSpan.end)?;
-                } else if (isPathThroughReference(c, receiver, false)?) {
+                } else if (isPathThroughReference(c, receiver, false)? || c.types.isDyn(c.typeOf(receiver))) {
+                    // A `dyn` value has no temporary to be copied to: the contents of a box that a call returned
+                    // (`make().name()` for a `Box<dyn Named>`) are borrowed where they are, and lowering spills the box.
                     argument = c.expr(HirExpr.BorrowPath(false, receiver), shared, targetSpan.start, targetSpan.end)?;
                 } else {
                     argument = c.expr(HirExpr.BorrowTemp(false, receiver), shared, targetSpan.start, targetSpan.end)?;

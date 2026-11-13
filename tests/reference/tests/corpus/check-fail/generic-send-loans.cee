@@ -1,0 +1,33 @@
+// What a type parameter may hold (type-system.md §25.7 rule 5, §38.1): one bounded by `Send` or `Share` holds no loan,
+// since no scoped type is Send; every other one may be a reference, a view or a slice, whatever else bounds it. So a
+// closure's result of such a type is still N0245: it may borrow from what the closure captures. The same functions
+// with a `Send` bound are run-pass/generic-send-loans.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+fn unbounded<T>(value: T) -> u32 {
+    let f = () => borrow value; // error[N0245]
+    let _ = f();
+    return 0;
+}
+
+fn copyOnly<T: Copy>(value: T) -> T {
+    let f = () => value; // error[N0245]
+    return f();
+}
+
+fn named<T: Copy + Named>(value: T) -> T {
+    let f = () => value; // error[N0245]
+    return f();
+}
+
+fn main() {
+    Console.writeLine(unbounded<i32>(1));
+    Console.writeLine(copyOnly<i32>(2));
+    Console.writeLine(named<i32>(3));
+}
+
+impl Named for i32 {
+    fn name(borrow this) -> u32 => 1;
+}

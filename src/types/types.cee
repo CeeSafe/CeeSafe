@@ -452,14 +452,17 @@ struct TypeTable {
     }
 
     /// isGeneric for loans (§25.7 rule 5 with §37.2): a type parameter seen only inside a `dyn` type (its interface's
-    /// arguments, a `dyn fn`'s signature) brings no loan, since a `dyn` value carries none of its own.
+    /// arguments, a `dyn fn`'s signature) brings no loan, since a `dyn` value carries none of its own. Nor does a
+    /// parameter bounded by `Send` or `Share`: no scoped type is Send (§38.1; isSendCore), so its argument holds no
+    /// loan.
     fn mentionsParameterOutsideDyn(borrow this, id: u32) -> bool {
         let t = this.types[id as usize];
         if (isKind(t.kind, TypeKind.Dyn)) {
             return false;
         }
         if (isKind(t.kind, TypeKind.TypeParameter)) {
-            return this.typeParameters[t.typeParameter as usize].valueType == none(); // a const parameter holds no loan
+            let p = borrow this.typeParameters[t.typeParameter as usize];
+            return p.valueType == none() && !p.sendBound && !p.shareBound; // a const parameter holds no loan
         }
         if ((t.pointee != none() && this.mentionsParameterOutsideDyn(t.pointee)) ||
             (t.element != none() && this.mentionsParameterOutsideDyn(t.element))) {
@@ -1764,11 +1767,12 @@ struct TypeTable {
             TypeKind.Resource => { return Ok(true); }
             TypeKind.Struct => {
                 let s = borrow this.structs[t.structDef as usize];
-                if (s.isThreadSafe) {
-                    return Ok(true);
-                }
+                // A scoped type is never Send, a `@threadSafe` one included (§38.1): rule 5 of §25.7 relies on it.
                 if (s.isImported || this.isScoped(id)) {
                     return Ok(false);
+                }
+                if (s.isThreadSafe) {
+                    return Ok(true);
                 }
                 let skip: usize = if (s.isMoveEnvironment) 1 else 0;
                 for (k in skip..s.fields.length) {

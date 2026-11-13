@@ -98,7 +98,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2)",
     251 => "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy",
     252 =>
-        "Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, or outside the file that declares the struct (ADR 0123 §2.6)",
+        "Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, one outside the file that declares the struct, or one that tests a field (the message then says to bind every field and test what was bound; ADR 0123 §2.6)",
     253 => "Move out of a `using` binding",
     254 => "`return`, `break`, `continue` or `defer` inside a deferred statement",
     256 =>

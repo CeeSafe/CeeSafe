@@ -1,7 +1,8 @@
-// A struct with a `drop` block is taken apart by a struct pattern that names every field, in the file that declares
-// it (ADR 0123 §2.6, type-system.md §14.2): where the pattern matches, every field moves out, into its binding or a
-// hidden local that is destroyed at the end of the scope, and the `drop` block does not run. Where it does not
-// match, nothing moves, and the value is dropped as usual. A pattern with `..`, or on a reference, only reads.
+// A struct with a `drop` block is taken apart by a struct pattern that names every field with a binding or `_`, in
+// the file that declares it (ADR 0123 §2.6, type-system.md §14.2): every field moves out, into its binding or a
+// hidden local that is destroyed at the end of the scope, and the `drop` block does not run. Where an enclosing
+// pattern or a guard fails, nothing moves, and the value is dropped as usual. A pattern with `..`, one that tests
+// a field, or one on a reference, only reads (run-pass/struct-pattern-take-apart has the testing patterns).
 struct Part {
     id: u32;
 
@@ -57,12 +58,13 @@ fn make(n: u32) -> Builder {
 
 fn inMatch(b: Builder) -> u32 {
     match (b) {
-        Builder { count: 1, name, part, spare } => {
+        // A pattern that takes the value apart binds every field (§2.6, condition 4): the test is the guard's.
+        Builder { count, name, part, spare } if (count == 1) => {
             Console.writeLine("one");
             return part.id + spare.id + truncate<u32>(name.length);
         }
         // The nested pattern takes the part apart too: its block does not run either.
-        Builder { count: 2, name: _, part: Part { id }, spare: _ } => {
+        Builder { count, name: _, part: Part { id }, spare: _ } if (count == 2) => {
             Console.writeLine("two");
             return id;
         }
@@ -74,7 +76,9 @@ fn inMatch(b: Builder) -> u32 {
 }
 
 fn inIs(b: Builder) -> u32 {
-    if (b is Builder { count: 5, name: _, part: _, spare }) {
+    // The test only reads, though it names every field; where it held, the body takes the value apart.
+    if (b is Builder { count: 5, name: _, part: _, spare: _ }) {
+        let Builder { count: _, name: _, part: _, spare } = b;
         Console.writeLine("five");
         return spare.id;
     }

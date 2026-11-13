@@ -491,7 +491,8 @@ Fields follow the rule for names above. A binding copies a Copy field. A field t
 value: after `is` and in a `let`, the other fields can still be read and the value as a whole cannot be used
 (`N0250`), and a `match` consumes the whole value. Through a borrow, the names are borrows of the fields. A struct
 with a `drop` block cannot lose a field this way: [Destruction](./ch15-02-destruction) shows the one pattern that
-takes such a struct apart.
+takes such a struct apart. It gives every field a name or `_` and tests none, so a pattern that tests a field of
+such a struct only reads it.
 
 ## Mistakes
 

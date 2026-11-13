@@ -626,9 +626,10 @@ other fields can still be read, the whole value cannot be used (N0250). Through 
 bindings refer to the fields and nothing moves. A `match` consumes its value as a whole, as it does for an enum.
 
 A struct with a `drop` block cannot lose a field (N0252), since its block needs the whole value. One pattern may
-take it apart: a pattern that names every field, without `..`, in the file that declares the struct. Where it
-matches, the value is consumed, each field moves into its name (or is destroyed, for `_`), and the `drop` block
-does not run. That is how a builder finishes into its parts:
+take it apart: a pattern in the file that declares the struct that names every field, without `..`, each with a
+name, `_`, or a struct pattern made of those. Such a pattern cannot fail. The value is consumed, each field moves
+into its name (or is destroyed, for `_`), and the `drop` block does not run. That is how a builder finishes into
+its parts:
 
 ```ceesafe
 struct Report {
@@ -668,8 +669,12 @@ report abandoned
 ```
 
 With `..`, on a reference, or in another file, a pattern on such a struct only reads it: it may test fields and
-bind Copy ones, and the value is dropped later as usual. A type that wants other files to take it apart gives them
-a method like `finish`.
+bind Copy ones, and the value is dropped later as usual. So does a pattern that tests a field, even one that names
+them all: `if (r is Report { lines: _, title: 2 })` leaves `r` whole, and its `drop` block runs later. A `drop`
+block is never skipped because a field had a certain value. A pattern that tests a field and would move another
+out, `Report { lines, title: 2 }`, is N0252. To take the value apart only in some cases, bind every field and test
+afterwards, or in a `match` arm's guard: `Report { lines, title } if (title == 2) => …`. When the guard is false
+nothing has moved. A type that wants other files to take it apart gives them a method like `finish`.
 
 ## Optionals
 

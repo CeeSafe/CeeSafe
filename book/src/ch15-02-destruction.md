@@ -213,8 +213,8 @@ discarded without saving
 
 `save` borrows the document exclusively, because it sets `saved`, and the document can be used after the call. A
 method that takes `this` by value ends the document in the call, and it cannot change `this`. Such a method keeps
-the `drop` block from running in another way: it takes the value apart with a struct pattern, as the first mistake
-below shows.
+the `drop` block from running in another way: it takes the value apart with a struct pattern that gives every
+field a name or `_`, as the first mistake below shows.
 
 ## `using`: a value that stays for its block
 
@@ -359,8 +359,9 @@ main.cee:11:5: error[N0252]: cannot move 'n.name' out of 'n': 'Named' has a drop
 
 Borrow the field (`n.name.view()`), clone it, or give the struct a method that takes `this` by value and returns
 what the caller needs. That method takes the value apart with a struct pattern, which
-[The syntax, whole](./ch19-03-the-syntax-whole) teaches. A pattern that names every field, without `..`, in the
-file that declares the struct, moves every field out of a value, and the `drop` block does not run:
+[The syntax, whole](./ch19-03-the-syntax-whole) teaches. In the file that declares the struct, a pattern that
+names every field, without `..`, and gives each one a name or `_`, moves every field out of a value, and the
+`drop` block does not run:
 
 ```ceesafe
 struct Named {
@@ -387,8 +388,14 @@ fn main() {
 x
 ```
 
-A field that is not wanted is named with `_`, as in `Named { name, id: _ }`, and is destroyed. With `..`, or in
-another file, a pattern on such a struct only tests fields and binds Copy ones, and moving a field out is `N0252`.
+A field that is not wanted is named with `_`, as in `Named { name, id: _ }`, and is destroyed. A field that is
+itself a struct may take a struct pattern made the same way.
+
+Such a pattern cannot fail, so taking a value apart is never the result of a test. A pattern that tests a field,
+as `Named { name: _, id: 8 }` does, only reads the value, even though it names every field: the value stays whole,
+and its `drop` block runs later. So does a pattern with `..`, and any pattern in another file. A pattern that only
+reads may test fields and bind Copy ones, and moving a field out with it is `N0252`. To take a value apart only
+when a field has a certain value, give every field a name and test the name afterwards.
 
 ::: warning Mistake: `?` in a `drop` block
 A `drop` block has no caller to give an error to.
@@ -485,8 +492,8 @@ main.cee:5:17: error[N0254]: a deferred statement cannot contain 'return', 'brea
 A `drop` block is `impl Drop`, and the order is Rust's: locals in reverse, then a struct's own block, then its
 fields in declaration order. `defer` has no counterpart in the language. There is no `std::mem::drop(x)`: write
 `let _ = move x;`. There is no `mem::forget` and no `ManuallyDrop` in safe code. As in Rust, a struct with a
-`drop` block cannot lose a field. Unlike Rust, the struct's own file can take it apart with a pattern that names
-every field. A panic does not unwind, so
+`drop` block cannot lose a field. Unlike Rust, the struct's own file can take it apart with a pattern that gives
+every field a name or `_` and tests none. A panic does not unwind, so
 no `drop` block runs after one.
 :::
 
@@ -508,8 +515,8 @@ in reverse. `defer` replaces the `goto cleanup;` chain.
 - Locals are destroyed in reverse declaration order, then by-value parameters. A temporary is destroyed at the end
   of its statement. A moved value is destroyed by its last owner.
 - A `drop` block cannot be called, cannot fail (`N0261`), and cannot move out of or replace `this`. A field cannot
-  be moved out of a struct that has one (`N0252`). In the struct's own file, a struct pattern that names every
-  field takes a value apart, and the block does not run.
+  be moved out of a struct that has one (`N0252`). In the struct's own file, a struct pattern that gives every
+  field a name or `_` takes a value apart, and the block does not run. A pattern that tests a field only reads.
 - A panic and `Process.exit` run no `drop` block and no deferred statement.
 - `using x = e;` declares a local that cannot be moved (`N0253`) and lasts for its block.
 - `defer s;` runs `s` at the end of the block on every path, and `s` cannot leave the block (`N0254`).

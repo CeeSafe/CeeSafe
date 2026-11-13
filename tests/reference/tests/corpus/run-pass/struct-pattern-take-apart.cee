@@ -1,0 +1,310 @@
+// Taking a struct with a `drop` block apart is a destructuring, never a test (ADR 0123 §2.6, condition 4;
+// type-system.md §15.2). A pattern that names every field but tests one only reads: the value stays whole and its
+// `drop` block runs once, where the value's owner ends, whether the test held or not. A pattern whose fields are
+// all bindings, `_` or such struct patterns takes the value apart: the block does not run. Under `Some`, in a
+// field of another pattern, and in an arm with a guard, that holds where the whole pattern (and the guard) does.
+const LIMIT: u32 = 3;
+
+enum Kind {
+    Plain,
+    Sized(u32),
+}
+
+struct Part {
+    id: u32;
+
+    drop {
+        Console.write("drop Part ");
+        Console.writeLine(this.id);
+    }
+}
+
+struct Builder {
+    name: Vector<u8>;
+    part: Part;
+    kind: Kind;
+    count: u32;
+
+    drop {
+        Console.write("drop Builder ");
+        Console.writeLine(this.count);
+    }
+
+    fn finish(this) -> Vector<u8> {
+        let Builder { name, part: _, kind: _, count: _ } = this;
+        return name;
+    }
+}
+
+struct Wrapper {
+    inner: Builder;
+    tag: u32;
+
+    drop {
+        Console.write("drop Wrapper ");
+        Console.writeLine(this.tag);
+    }
+}
+
+fn make(n: u32) -> Builder {
+    var name = Vector<u8>.create();
+    name.push(truncate<u8>(n))!;
+    let kind = if (n % 2 == 0) Kind.Sized(n * 10) else Kind.Plain;
+    return Builder { name: name, part: Part { id: n }, kind: kind, count: n };
+}
+
+// Each of these names every field and tests one: the builder is dropped, whole, when the function returns.
+fn literal(b: Builder) -> bool {
+    if (b is Builder { name: _, part: _, kind: _, count: 1 }) {
+        return true;
+    }
+    return false;
+}
+
+fn range(b: Builder) -> u32 {
+    if (b is Builder { name: _, part: Part { id, .. }, kind: _, count: 1..=2 }) {
+        return id;
+    }
+    return 0;
+}
+
+fn constant(b: Builder) -> bool {
+    if (b is Builder { name: _, part: _, kind: _, count: LIMIT }) {
+        return true;
+    }
+    return false;
+}
+
+fn variant(b: Builder) -> u32 {
+    let Builder { name: _, part: _, kind: Kind.Sized(size), count: _ } = b else {
+        return 0;
+    };
+    return size;
+}
+
+fn alternatives(b: Builder) -> bool {
+    if (b is Builder { name: _, part: _, kind: _, count: 5 | 6 }) {
+        return true;
+    }
+    return false;
+}
+
+// The nested pattern names every field of `Part` and tests it: the part stays in its builder.
+fn nestedTest(b: Builder) -> bool {
+    if (b is Builder { name: _, part: Part { id: 7 }, kind: _, count: _ }) {
+        return true;
+    }
+    return false;
+}
+
+fn underSome(b: Builder?) -> bool {
+    if (b is Some(Builder { name: _, part: _, kind: _, count: 8 })) {
+        return true;
+    }
+    return false;
+}
+
+// `whole @` a pattern that only reads: the value moves into `whole`, once, and is dropped when the arm ends.
+fn named(b: Builder) -> u32 {
+    match (b) {
+        whole @ Builder { name: _, part: _, kind: _, count: 9 } => { return whole.part.id + 100; }
+        _ => { return 0; }
+    }
+}
+
+// After a test that held, the value is still whole: the body may take it apart.
+fn testThenApart(b: Builder) -> usize {
+    if (b is Builder { name: _, part: _, kind: Kind.Sized(_), count: _ }) {
+        let Builder { name, part: _, kind: _, count: _ } = b;
+        return name.length + 10;
+    }
+    return 0;
+}
+
+// A match: the first arm reads, the second takes the value apart when its guard holds, the last reads.
+fn inMatch(b: Builder) -> u32 {
+    match (b) {
+        Builder { name: _, part: _, kind: _, count: 11 } => {
+            Console.writeLine("eleven");
+            return 11;
+        }
+        Builder { name, part, kind: _, count } if (count == 12 && name.length == 1) => {
+            Console.writeLine("twelve");
+            return part.id;
+        }
+        Builder { count, .. } => {
+            Console.writeLine("other");
+            return count;
+        }
+    }
+}
+
+// Pure destructurings: no `drop Builder`.
+fn apartUnderSome(b: Builder?) -> u32 {
+    let Some(Builder { name, part: _, kind: _, count }) = b else {
+        return 0;
+    };
+    return count + truncate<u32>(name.length);
+}
+
+fn apartInIs(b: Builder?) -> u32 {
+    if (b is Some(Builder { name: _, part, kind: _, count: _ })) {
+        return part.id;
+    }
+    return 0;
+}
+
+fn apartInMatch(b: Builder?) -> u32 {
+    match (b) {
+        Some(Builder { name: _, part: Part { id }, kind: _, count: _ }) => { return id; }
+        null => { return 0; }
+    }
+}
+
+// Nested: the wrapper, its builder and the builder's part are all taken apart.
+fn apartNested(w: Wrapper) -> u32 {
+    let Wrapper { inner: Builder { name: _, part: Part { id }, kind: _, count: _ }, tag } = w;
+    return id + tag;
+}
+
+// The nested pattern has `..`: it cannot fail, so the wrapper is taken apart; its builder, which the nested
+// pattern only reads, is dropped whole at the end of the scope.
+fn apartOuterOnly(w: Wrapper) -> u32 {
+    let Wrapper { inner: Builder { count, .. }, tag: _ } = w;
+    return count;
+}
+
+// The outer pattern tests `tag`, so the wrapper is only read.
+fn wrapperTested(w: Wrapper) -> u32 {
+    if (w is Wrapper { inner: Builder { count, .. }, tag: 1 }) {
+        return count;
+    }
+    return 0;
+}
+
+fn main() {
+    Console.writeLine(literal(make(1)));
+    Console.writeLine(literal(make(21)));
+    Console.writeLine(range(make(2)));
+    Console.writeLine(range(make(22)));
+    Console.writeLine(constant(make(3)));
+    Console.writeLine(constant(make(23)));
+    Console.writeLine(variant(make(4)));
+    Console.writeLine(variant(make(25)));
+    Console.writeLine(alternatives(make(6)));
+    Console.writeLine(alternatives(make(26)));
+    Console.writeLine(nestedTest(make(7)));
+    Console.writeLine(nestedTest(make(27)));
+    Console.writeLine(underSome(make(8)));
+    Console.writeLine(underSome(make(28)));
+    Console.writeLine(underSome(null));
+    Console.writeLine(named(make(9)));
+    Console.writeLine(named(make(29)));
+    Console.writeLine(testThenApart(make(10)));
+    Console.writeLine(testThenApart(make(31)));
+    Console.writeLine(inMatch(make(11)));
+    Console.writeLine(inMatch(make(12)));
+    Console.writeLine(inMatch(make(13)));
+    Console.writeLine("apart");
+    Console.writeLine(make(14).finish().length);
+    Console.writeLine(apartUnderSome(make(15)));
+    Console.writeLine(apartUnderSome(null));
+    Console.writeLine(apartInIs(make(16)));
+    Console.writeLine(apartInIs(null));
+    Console.writeLine(apartInMatch(make(17)));
+    Console.writeLine(apartInMatch(null));
+    Console.writeLine(apartNested(Wrapper { inner: make(18), tag: 100 }));
+    Console.writeLine(apartOuterOnly(Wrapper { inner: make(19), tag: 200 }));
+    Console.writeLine(wrapperTested(Wrapper { inner: make(20), tag: 1 }));
+    Console.writeLine(wrapperTested(Wrapper { inner: make(30), tag: 2 }));
+    Console.writeLine("end");
+}
+// expect-stdout: drop Builder 1
+// expect-stdout: drop Part 1
+// expect-stdout: true
+// expect-stdout: drop Builder 21
+// expect-stdout: drop Part 21
+// expect-stdout: false
+// expect-stdout: drop Builder 2
+// expect-stdout: drop Part 2
+// expect-stdout: 2
+// expect-stdout: drop Builder 22
+// expect-stdout: drop Part 22
+// expect-stdout: 0
+// expect-stdout: drop Builder 3
+// expect-stdout: drop Part 3
+// expect-stdout: true
+// expect-stdout: drop Builder 23
+// expect-stdout: drop Part 23
+// expect-stdout: false
+// expect-stdout: drop Builder 4
+// expect-stdout: drop Part 4
+// expect-stdout: 40
+// expect-stdout: drop Builder 25
+// expect-stdout: drop Part 25
+// expect-stdout: 0
+// expect-stdout: drop Builder 6
+// expect-stdout: drop Part 6
+// expect-stdout: true
+// expect-stdout: drop Builder 26
+// expect-stdout: drop Part 26
+// expect-stdout: false
+// expect-stdout: drop Builder 7
+// expect-stdout: drop Part 7
+// expect-stdout: true
+// expect-stdout: drop Builder 27
+// expect-stdout: drop Part 27
+// expect-stdout: false
+// expect-stdout: drop Builder 8
+// expect-stdout: drop Part 8
+// expect-stdout: true
+// expect-stdout: drop Builder 28
+// expect-stdout: drop Part 28
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: drop Builder 9
+// expect-stdout: drop Part 9
+// expect-stdout: 109
+// expect-stdout: drop Builder 29
+// expect-stdout: drop Part 29
+// expect-stdout: 0
+// expect-stdout: drop Part 10
+// expect-stdout: 11
+// expect-stdout: drop Builder 31
+// expect-stdout: drop Part 31
+// expect-stdout: 0
+// expect-stdout: eleven
+// expect-stdout: drop Builder 11
+// expect-stdout: drop Part 11
+// expect-stdout: 11
+// expect-stdout: twelve
+// expect-stdout: drop Part 12
+// expect-stdout: 12
+// expect-stdout: other
+// expect-stdout: drop Builder 13
+// expect-stdout: drop Part 13
+// expect-stdout: 13
+// expect-stdout: apart
+// expect-stdout: drop Part 14
+// expect-stdout: 1
+// expect-stdout: drop Part 15
+// expect-stdout: 16
+// expect-stdout: 0
+// expect-stdout: drop Part 16
+// expect-stdout: 16
+// expect-stdout: 0
+// expect-stdout: 17
+// expect-stdout: 0
+// expect-stdout: 118
+// expect-stdout: drop Builder 19
+// expect-stdout: drop Part 19
+// expect-stdout: 19
+// expect-stdout: drop Wrapper 1
+// expect-stdout: drop Builder 20
+// expect-stdout: drop Part 20
+// expect-stdout: 20
+// expect-stdout: drop Wrapper 2
+// expect-stdout: drop Builder 30
+// expect-stdout: drop Part 30
+// expect-stdout: 0
+// expect-stdout: end

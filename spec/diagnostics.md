@@ -139,7 +139,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 |---|---|---|
 | N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2) | `consume(r); consume(r);` |
 | N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
-| N0252 | Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, or outside the file that declares the struct (ADR 0123 §2.6) | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
+| N0252 | Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, one outside the file that declares the struct, or one that tests a field (the message then says to bind every field and test what was bound; ADR 0123 §2.6) | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |
 | N0254 | `return`, `break`, `continue` or `defer` inside a deferred statement | `defer return 1;` |
 | N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2). Also a `let` without `else` whose struct pattern can fail (ADR 0123 §2.4) | `match (s) { Shape.Empty => { } }` |

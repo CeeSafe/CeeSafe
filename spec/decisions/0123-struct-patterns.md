@@ -5,6 +5,9 @@
   `impl/0123`; not yet released. Raised while writing the language's book (chapter 19; gaps C18 and B9 of the
   second round): patterns took apart enums, optionals and slices only, two values could not be matched at once,
   and a consuming method of a struct with a `drop` block could not hand out its fields.
+  **Tightened on 2026-11-13** by the owner's decision ("Go ahead and tackle those still open"), before any
+  release, on branch `fix/open-take-apart`: a pattern takes a struct with a `drop` block apart only if it cannot
+  fail on the value's fields (§2.6, condition 4; the rule it replaces is in §3).
 - Scope: grammar.md §2 (`LocalDecl`, notes); type-system.md §15.2 (the pattern, usefulness), §15.4 and §15.5
   (irrefutable patterns, `let` without `else`), §14.2 and §18.4 (moves, a struct taken apart);
   diagnostics.md (N0229, N0230, N0231, N0250, N0252, N0256, N0404: wording and new causes; no new code);
@@ -115,12 +118,16 @@ A struct pattern **takes apart** a value of a struct type with a `drop` block wh
 
 1. the scrutinee is a value, not a reference;
 2. the pattern names every field: it has no `..`;
-3. the pattern is in the file that declares the struct.
+3. the pattern is in the file that declares the struct;
+4. the pattern cannot fail: every field's pattern is irrefutable (§2.4), that is a binding (`x`, `var x`,
+   `x: y`, `x: var y`), `_`, `name @ P` with `P` irrefutable, or a struct pattern, of a field that is a struct,
+   whose own field patterns are all irrefutable.
 
-Where such a pattern matches, the value is consumed, whatever its fields' types: each field moves out, into its
-binding or, for `_` or a pattern that is not a binding, into a hidden local of the scope (destroyed at its end,
-after being matched in turn); and **the `drop` block does not run**, since no value is left for it. Where the
-pattern does not match, nothing moves, and the value is dropped as usual, whole. So:
+Taking a value apart is thus a destructuring, never a test: a `drop` block is not skipped because a field had a
+certain value. Where such a pattern is reached, the value is consumed, whatever its fields' types: each field
+moves out, into its binding or, for `_` or a nested pattern, into a hidden local of the scope (destroyed at its
+end, after its own pattern has bound from it); and **the `drop` block does not run**, since no value is left for
+it. So:
 
 ```ceesafe
 struct Builder {
@@ -135,26 +142,60 @@ struct Builder {
 }
 ```
 
-Any other struct pattern on a value of such a type (with `..`, or in another file) only reads: it may test fields
-and bind Copy ones, and the value is dropped later, its block running. If it would move a field out, it is N0252,
-whose message states this rule.
+Any other struct pattern on a value of such a type (with `..`, in another file, or with a field pattern that can
+fail: a literal, a range, a constant's name, a variant, a string or slice pattern, an or-pattern, at any depth)
+only reads: it may test fields and bind Copy ones, and the value is dropped later, whole, its block running. If it
+would move a field out, it is N0252, whose message states this rule and, for a pattern that fails condition 4
+only, says to bind every field and test what was bound. So `if (p is Part { id: 8 })` tests `p` and leaves it,
+exactly as `Part { id: 8, .. }` does, and
 
-The rule holds for a nested pattern as for a whole one. In `Outer { part: Part { id: 8 }, .. }`, with `Part` a
-struct with a `drop` block declared in this file, the inner pattern names every field of `Part`, so a match takes
-`part` apart, moving it out of the `Outer`: fine when `Outer` has no `drop` block (a partial move) or is itself
-taken apart, N0252 otherwise. To test the field and leave it, write `Part { id: 8, .. }`.
+```ceesafe
+match (b) {
+    Builder { name, parts: [] } => …,                      // N0252: tests `parts`, would move `name`
+    Builder { name, parts } if (parts.length == 0) => …,   // bind every field, then test
+    Builder { name: _, parts } => …,
+}
+```
+
+Where the pattern stands:
+
+- **`let P { … } = e;`** needs an irrefutable pattern anyway (§2.4): with conditions 1 to 3 it takes `e` apart.
+- **At the top of an `is`, a `let … else` or a `match` arm**, a pattern that takes the scrutinee apart always
+  matches (N0404 after `is` and in `let … else`, as for any irrefutable pattern; in a `match` it is a last arm, or
+  a guarded one).
+- **Inside a pattern that can fail**, the rule is about the struct pattern alone. In `Some(Builder { name, parts
+  })` the variant pattern may fail, and nothing moves then; where it matches, the payload is taken apart. The same
+  holds for a field of an enclosing struct pattern whose other fields are tested, `Outer { kind: 1, part: Part {
+  id } }`.
+- **A nested struct pattern** follows the rule on its own field. In `Outer { part: Part { id }, .. }`, with `Part`
+  a struct with a `drop` block declared in this file, the inner pattern takes `part` apart, moving it out of the
+  `Outer`: fine when `Outer` has no `drop` block (a partial move) or is itself taken apart, N0252 otherwise. To
+  read the field and leave it, write `Part { id, .. }`, or test it: `Part { id: 8 }` only reads. Under condition 4
+  a nested pattern must itself be irrefutable; it need not take its own field apart (`Builder { name, part: Part {
+  id, .. } }` takes the `Builder` apart, and its `part`, moved to a hidden local, is destroyed at the end of the
+  scope with its block running). The conservative choice was made: a nested pattern that can fail would again
+  make the outer destructor's fate depend on a field's value.
+- **An or-pattern**: each alternative is decided on its own. Since an alternative that takes the scrutinee apart
+  always matches, the alternatives after it are unreachable (N0257); under a variant, `Some(P { a, b }) | …` takes
+  the payload apart where that alternative matches.
+- **A guard**: an arm with a guard may take the value apart. The guard runs after the pattern is tested and before
+  anything moves: bindings of Copy values are copied and the others are read in place (ADR 0085 §2.2), so when
+  the guard is false the value is still whole, the next arm is tried, and the `drop` block runs on whichever path
+  ends the value without taking it apart. This is how a `match` tests a struct with a `drop` block and takes it
+  apart in one arm.
+- **`name @ P { … }`** with a `P` that takes the value apart is N0250: the value moves once.
 
 Why this is sound: every field is accounted for by the pattern (moved to a binding, or to a hidden local that is
 destroyed), so nothing leaks and nothing is destroyed twice; the value's own destruction is off on exactly the
-paths where the pattern matched, which the move checker already tracks for a consumed value (the lowering is
+paths where the pattern was reached, which the move checker already tracks for a consumed value (the lowering is
 §18.4's `Unpack`, of a struct). Why it is explicit: the pattern lists every field, so adding a field to the struct
-makes each such pattern an error (N0229) until it says what happens to the new field. Why the file: skipping a
+makes each such pattern an error (N0229) until it says what happens to the new field. Why it cannot fail: a test
+that happens to name every field would otherwise skip the destructor when it holds and run it when it does not,
+and the reader of `if (p is Part { id: 8 })` sees a test. Why the file: skipping a
 destructor is the type author's decision. A `drop` block may release what a Copy field names (a file descriptor,
 a lock's index); outside the file, code could otherwise leak that or, worse for an invariant, keep using it. The
 file is the unit `private` already uses (ADR 0109), and needs no new keyword; a type that wants others to take it
 apart offers a consuming method.
-
-`name @ P { … }` with a `P` that takes the value apart is N0250: the value moves once.
 
 ## 3. Alternatives
 
@@ -172,6 +213,12 @@ apart offers a consuming method.
   stop the block from running); **an attribute or a `forget` function** (new surface, and `forget` leaks fields
   unless it is this pattern again); **allow it in any file** (lets any code skip a destructor); **only when a
   non-Copy field is bound** (then `let Fd { fd } = this;` would copy `fd` and still close it).
+- **Any pattern for a field, including one that can fail** (the rule as first accepted: conditions 1 to 3 only;
+  where the pattern did not match, nothing moved and the value was dropped whole). Then `if (p is Part { id: 8 })`,
+  in the declaring file, skipped `Part`'s `drop` block whenever `id` was 8, merely by testing a field, and to test
+  and leave the value one had to remember `Part { id: 8, .. }`. Dropped on 2026-11-13, before any release: skipping
+  a destructor must not be the side effect of a test. What it allowed is written with a guard, or by binding
+  every field and testing afterwards.
 
 ## 4. Implementation
 
@@ -207,6 +254,9 @@ refutable `let`, N0256 and N0257 by usefulness, N0252, N0250 for `@`, `var` thro
 apart, a field of a `drop` struct, in a loop); `run-pass/struct-patterns` (Copy and non-Copy fields, nested both
 ways, generic, regions, `Self`, constants, ranges, or-patterns, slices, `match`/`is`/`let … else`/`let`, loops),
 `run-pass/struct-pattern-drop` (a builder that finishes into its parts, in `let`, `match` with a guard, `is`,
-under `Some`, nested `drop` structs; what runs and what does not), `run-pass/is-field-payload` (the fix of §5):
+under `Some`, nested `drop` structs; what runs and what does not), `check-fail/struct-pattern-take-apart` and
+`run-pass/struct-pattern-take-apart` (condition 4 of §2.6: each kind of field pattern that can fail only reads,
+and is N0252 where it would move; a pattern that cannot fail still takes the value apart, in `let`, `let … else`,
+`match`, `is`, under `Some`, nested, with a guard), `run-pass/is-field-payload` (the fix of §5):
 natively, with `--interp` and with `--check-leaks`; the formatter's snapshot; `tests/packages/private-items` (a
 private field and a private struct in a pattern: N0296; a `drop` struct of another file: N0252).

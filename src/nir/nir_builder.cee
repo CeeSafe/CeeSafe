@@ -1504,7 +1504,8 @@ fn movePattern(
     }
     var source = place;
     if (n.places[place as usize].projections.count > 0) {
-        let holder = newLocal(b, placeType(c, n, b, place))?;
+        let holderType = placeType(c, n, b, place); // read first: 0.8.0 of the release's chain refuses it as an argument
+        let holder = newLocal(b, holderType)?;
         addToScope(b, holder)?;
         source = localPlace(n, holder)?;
         let read = readPlace(c, n, b, place)?;

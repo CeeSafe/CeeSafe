@@ -20,7 +20,8 @@ fn libraryFunction(
         return Ok(none());
     }
     let entry = instantiateStruct(c, template, arguments, span)?;
-    completeMembers(c, c.structs[entry as usize].typ, span)?;
+    let entryType = c.structs[entry as usize].typ; // read first: 0.8.0 of the release's chain refuses it as an argument
+    completeMembers(c, entryType, span)?;
     let definition = c.types.info(c.structs[entry as usize].typ).structDef;
     return Ok(findStructFunction(c, definition, name));
 }

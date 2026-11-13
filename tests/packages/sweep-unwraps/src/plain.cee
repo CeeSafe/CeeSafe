@@ -1,0 +1,6 @@
+// Production code in a file without tests: its unwrap is a sweep failure under either option.
+
+fn stopsElsewhere(value: i32) -> i32 {
+    let b = boxed(value)!; // sweep: production elsewhere
+    return b.value;
+}

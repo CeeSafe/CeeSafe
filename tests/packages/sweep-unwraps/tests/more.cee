@@ -1,0 +1,18 @@
+// Tests in the test directory.
+
+/// A helper of the tests, in a file with tests: set apart.
+fn helperInTests() -> i32 {
+    let b = boxed(7)!; // sweep: helper
+    return b.value;
+}
+
+@test
+fn callsHelperInTests() {
+    assert(helperInTests() == 7);
+}
+
+/// Production code's `!` in a file without tests: a sweep failure, at the production position.
+@test
+fn callsProductionElsewhere() {
+    assert(stopsElsewhere(9) == 9);
+}

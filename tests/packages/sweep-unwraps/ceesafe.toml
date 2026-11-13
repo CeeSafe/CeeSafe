@@ -1,0 +1,5 @@
+# The fixture for a sweep's unwraps, a rule by file (ADR 0075 §2.16 G15, spec/tooling.md §10.2;
+# tools/test_command_check.py).
+[package]
+name = "su"
+version = "0.1.0"

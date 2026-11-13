@@ -1,0 +1,43 @@
+// Production code and its tests in one file. ADR 0075 §2.16 (G15) sets a sweep's unwraps apart by file: an unwrap
+// anywhere in a file that declares an `@test` is not a `--sweep alloc` failure, the production function's included;
+// `--sweep-strict` counts every one. Each test allocates once, so the sweep runs it once more, that allocation
+// failing. tools/test_command_check.py finds the lines by their `sweep:` comments.
+
+struct Cell {
+    value: i32;
+}
+
+/// Production code that returns the failure.
+fn boxed(value: i32) -> Result<Box<Cell>, AllocError> => Box.create(Cell { value: value });
+
+/// Production code that stops the program on it, in a file with tests.
+fn stops(value: i32) -> i32 {
+    let b = boxed(value)!; // sweep: production beside tests
+    return b.value;
+}
+
+/// The failure returned: handled, under either option.
+@test
+fn returnsIt() -> Result<void, AllocError> {
+    let b = boxed(1)?;
+    assert(b.value == 1);
+    return Ok();
+}
+
+/// The test's own `!`: set apart; a failure under `--sweep-strict`.
+@test
+fn unwrapsItself() {
+    let b = boxed(1)!; // sweep: the test itself
+    assert(b.value == 1);
+}
+
+/// The production function's `!`, in this file: set apart too, since the rule is by file; a failure under
+/// `--sweep-strict`.
+@test
+fn callsProductionBeside() {
+    assert(stops(2) == 2);
+}
+
+fn main() {
+    Console.writeLine(stops(1) + stopsElsewhere(1));
+}

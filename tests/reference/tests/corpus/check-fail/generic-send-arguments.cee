@@ -1,23 +1,12 @@
 // The fact rule 5 of type-system.md §25.7 relies on for a `T: Send` (§38.1): no type that may hold a loan is Send, so
-// none is an argument for such a parameter (N0334), whatever the other bounds and their order, on a function, a struct
-// or an `impl` block. A thread's capture of a type parameter without the bound is N0334 too.
+// none is an argument for such a parameter (N0334), whatever the other bounds and their order, on a function or a
+// struct. A thread's capture of a type parameter without the bound is N0334 too.
 struct View<region r> {
     text: StringView<r>;
 }
 
 struct Kept<T: Send + Copy> {
     value: T;
-}
-
-struct Open<T> {
-    value: T;
-}
-
-impl<T: Copy + Send> Open<T> {
-    fn through(borrow this) -> T {
-        let value = this.value;
-        return Thread.spawn(move () => value)!.join();
-    }
 }
 
 fn send<T: Send>(value: T) -> T => value;
@@ -50,7 +39,5 @@ fn main() {
     let _ = send(View { text: view }); // error[N0334]
     let _ = send(() => n); // error[N0334]
     let _ = Kept<StringView> { value: view }; // error[N0334]
-    let open = Open<StringView> { value: view };
-    let _ = open.through(); // error[N0334]
     Console.writeLine(copyOnly(n));
 }

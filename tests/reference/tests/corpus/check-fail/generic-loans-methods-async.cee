@@ -9,7 +9,7 @@ struct Box2<T> {
     v: T;
 
     fn map<U>(borrow this, f: fn(borrow T) -> U) -> U => f(this.v);
-    fn with<U>(this, f: fn(borrow T) -> U) -> U => f(this.v); // error[N0245] // error[N0244] // error[N0244] // error[N0244]
+    fn with<U>(this, f: fn(borrow T) -> U) -> U => f(this.v); // error[N0245] // error[N0244]
 }
 interface Visit {
     fn visit<U>(borrow this, f: fn(StringView) -> U) -> U;

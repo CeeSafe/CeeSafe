@@ -32,9 +32,18 @@ struct Pair<T: Copy> {
         return one.nest();
     }
 
+    fn nestedSides(borrow this) -> u32 {
+        let nested = this.nest();
+        let _ = nested;
+        return 4;
+    }
+
     fn viaClosure(borrow this) -> Pair<Pair<T>> {
-        let make = (p: borrow Pair<T>) => p.nest();
-        return make(this);
+        // The closure makes the nested instance and counts it: a closure that returned it would hold `p`'s loan,
+        // since a `T` without a `Send` bound may hold a borrow (ADR 0131).
+        let sides = (p: borrow Pair<T>) => p.nestedSides();
+        assert(sides(this) == 4);
+        return this.nest();
     }
 }
 

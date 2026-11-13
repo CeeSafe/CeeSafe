@@ -18,9 +18,9 @@ impl<region r> Source<StringView<r>> for Holder<r> {
     fn get(borrow this) -> StringView<r> => this.text;
 }
 // m1: from a reference parameter's referent
-fn m1<S: Build<StringView>>(o: borrow Owner) -> S => S.build(o.text.view()); // error[N0245] // error[N0245] // error[N0245] // error[N0245]
+fn m1<S: Build<StringView>>(o: borrow Owner) -> S => S.build(o.text.view()); // error[N0245]
 // m2: from a view parameter
-fn m2<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245] // error[N0245] // error[N0245]
+fn m2<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245]
 // l1: generic caller drops the owner
 fn l1<S: Build<StringView>>(o: Owner) -> S => m1<S>(o);
 // l2: generic caller with a local string

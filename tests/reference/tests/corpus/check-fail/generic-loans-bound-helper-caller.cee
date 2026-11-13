@@ -16,7 +16,7 @@ impl<region r> Source<StringView<r>> for Holder<r> {
     fn get(borrow this) -> StringView<r> => this.text;
 }
 
-fn make<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245] // error[N0245]
+fn make<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245]
 
 fn leak<T, S: Build<StringView> + Source<T>>(d: T) -> T {
     let t = String.from("local local local local local local local local")!;

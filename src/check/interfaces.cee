@@ -858,10 +858,10 @@ fn implementFor(
             let expected = expectedSignature(c, signature, forType, environment, hir)?;
             signatureMismatch(c, expected, hir, mut problem)?;
             if (problem.length == 0 && first) {
-                // The types agree; so must the flows (§21.1, ADR 0131). An instance of a generic impl repeats its
-                // generic version, which was compared.
+                // The types agree; the flows are the interface's (§21.1, ADR 0131). An instance of a generic impl
+                // repeats its generic version, whose body was checked with them.
                 let declared = interfaceView(c, interfaceEntry, signature, hir)?;
-                flowMismatch(c, declared, hir, mut problem)?;
+                keepInterfaceFlows(c, declared, hir)?;
             }
         }
         if (problem.length > 0) {
@@ -1154,61 +1154,48 @@ fn interfaceView(c: borrow mut Checker, entry: u32, signature: u32, actual: u32)
     return Ok(function);
 }
 
-fn appendParameterName(
-    out: borrow mut Vector<u8>,
-    c: borrow Checker,
-    function: u32,
-    i: u32,
-) -> Result<void, AllocError> {
-    let local = c.hir.functions[function as usize].parameters[i as usize];
-    return appendQuotedName(out, c, c.hir.locals[local as usize].name);
-}
-
-/// Empty if the impl's method `actual` has no flow that the interface's method `declared` lacks (§21.1, ADR 0131);
-/// else the first that it adds. A caller through a bound or a `dyn` type knows only the interface's flows: a result
-/// that borrowed from another parameter, or from the receiver itself where the interface's result holds only what
-/// the receiver holds (a deep result, §25.6), or a parameter stored through another, would outlive what it borrows.
-fn flowMismatch(c: borrow Checker, declared: u32, actual: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
-    let d = borrow c.hir.functions[declared as usize];
-    let a = borrow c.hir.functions[actual as usize];
-    if (d.parameters.length != a.parameters.length) {
+/// Gives the impl's method `actual` the flows of the interface's method `declared` where its own are wider (§21.1,
+/// ADR 0131). A caller through a bound or a `dyn` type knows only the interface's flows, and generic code is checked
+/// once against them; so the method's body is checked against them too: a result that borrows from a parameter the
+/// interface's result does not flow from, or from a reference parameter itself where the interface's result holds
+/// only what it refers to holds (a deep result, §25.6), or a parameter stored through another, is the body's error
+/// (N0245, N0272), where it happens. A signature that merely could do so, by the regions it names, is no error.
+fn keepInterfaceFlows(c: borrow mut Checker, declared: u32, actual: u32) -> Result<void, AllocError> {
+    if (c.hir.functions[declared as usize].parameters.length != c.hir.functions[actual as usize].parameters.length) {
         return Ok();
     }
-    for (i in a.returnSources.view()) {
-        if (!containsU32(d.returnSources, i)) {
-            appendText(out, "its result may borrow from ")?;
-            appendParameterName(out, c, actual, i)?;
-            appendText(
-                out,
-                ", but the interface's method declares no such flow, so a caller through the interface would not know of the borrow (type-system.md §21.1)",
-            )?;
-            return Ok();
+    var sources = Vector<u32>.create();
+    var deep = Vector<u32>.create();
+    var flows = Vector<u64>.create();
+    {
+        let d = borrow c.hir.functions[declared as usize];
+        let a = borrow c.hir.functions[actual as usize];
+        for (i in a.returnSources.view()) {
+            if (!containsU32(d.returnSources, i)) {
+                continue;
+            }
+            sources.push(i)?;
+            if (containsU32(d.deepSources, i) || containsU32(a.deepSources, i)) {
+                deep.push(i)?;
+            }
         }
-        if (containsU32(d.deepSources, i) && !containsU32(a.deepSources, i)) {
-            appendText(out, "its result may borrow from ")?;
-            appendParameterName(out, c, actual, i)?;
-            appendText(
-                out,
-                " itself, but the interface's result may hold only what that parameter's referent holds, such as a copy of a view field, not a borrow of its storage; name the type's region in the result ('StringView<r>' under 'impl<region r>'), write 'StringView<static>' for static data, or have the interface's method return the borrowing type itself (type-system.md §21.1, §25.6)",
-            )?;
-            return Ok();
-        }
-    }
-    for (flow in a.mutableFlows.view()) {
-        // A deep flow stores less than a flow of the source's own loan does: it fits either.
-        let plain = flow & (deepFlowBit() ^ 0xFFFFFFFFFFFFFFFF);
-        if (!containsU64(d.mutableFlows, plain) && !(flowIsDeep(flow) && containsU64(d.mutableFlows, flow))) {
-            appendText(out, "it may store what ")?;
-            appendParameterName(out, c, actual, flowSource(flow))?;
-            appendText(out, " borrows through ")?;
-            appendParameterName(out, c, actual, flowTarget(flow))?;
-            appendText(
-                out,
-                ", but the interface's method declares no such flow, so a caller through the interface would not know of the borrow; give the interface a type parameter for the stored type (type-system.md §21.1)",
-            )?;
-            return Ok();
+        for (flow in a.mutableFlows.view()) {
+            let plain = flow & (deepFlowBit() ^ 0xFFFFFFFFFFFFFFFF);
+            if (containsU64(d.mutableFlows, plain)) {
+                flows.push(flow)?;
+            } else if (containsU64(d.mutableFlows, plain | deepFlowBit())) {
+                flows.push(plain | deepFlowBit())?;
+            }
         }
     }
+    let through = c.hir.functions[actual as usize].resultThrough;
+    if (through != none() && (!containsU32(sources, through) || containsU32(deep, through))) {
+        c.hir.functions[actual as usize].resultThrough = none();
+    }
+    c.hir.functions[actual as usize].returnSources = sources;
+    c.hir.functions[actual as usize].deepSources = deep;
+    c.hir.functions[actual as usize].mutableFlows = flows;
+    c.hir.functions[actual as usize].keepsInterfaceFlows = true;
     return Ok();
 }
 

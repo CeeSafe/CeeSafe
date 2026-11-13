@@ -469,6 +469,124 @@ fn checkThreadBound(c: borrow mut Checker, parameter: u32, argument: u32, span: 
     return Ok();
 }
 
+/// An instance with a scoped argument, written before the templates had their fields: whether the template keeps
+/// that parameter in a cell is asked once they have (checkPendingThreadBounds).
+struct PendingCell {
+    template: u32;
+    arguments: Range;
+    file: u32;
+    start: u32;
+    end: u32;
+}
+
+/// Does `t` mention the type `parameter`?
+fn typeMentions(c: borrow Checker, t: u32, parameter: u32, depth: u32) -> bool {
+    if (t == parameter) {
+        return true;
+    }
+    if (t == none() || depth > 16) {
+        return false;
+    }
+    let info = c.types.info(t);
+    if (info.pointee != none() && typeMentions(c, info.pointee, parameter, depth + 1)) {
+        return true;
+    }
+    if (info.element != none() && typeMentions(c, info.element, parameter, depth + 1)) {
+        return true;
+    }
+    if (c.types.optionType(t) != none() && typeMentions(c, c.types.optionType(t), parameter, depth + 1)) {
+        return true;
+    }
+    if (info.structDef != none()) {
+        let list = c.types.structs[info.structDef as usize].typeArguments;
+        for (k in 0..list.count) {
+            if (typeMentions(c, c.types.listAt(list, k), parameter, depth + 1)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Does a value of type `t` keep a value whose type mentions `parameter` in a cell (an `@interiorMutable` struct's
+/// contents, §41.1), directly or in a struct it holds?
+fn keepsInCell(c: borrow Checker, t: u32, parameter: u32, depth: u32) -> bool {
+    if (t == none() || depth > 16) {
+        return false;
+    }
+    let info = c.types.info(t);
+    if (info.structDef != none()) {
+        let s = borrow c.types.structs[info.structDef as usize];
+        if (s.isInteriorMutable) {
+            for (k in 0..s.typeArguments.count) {
+                if (typeMentions(c, c.types.listAt(s.typeArguments, k), parameter, 0)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        for (k in 0..s.fields.length) {
+            if (keepsInCell(c, c.types.fields[s.fields[k] as usize].typ, parameter, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (c.types.optionType(t) != none()) {
+        return keepsInCell(c, c.types.optionType(t), parameter, depth + 1);
+    }
+    return (info.pointee != none() && keepsInCell(c, info.pointee, parameter, depth + 1)) ||
+        (info.element != none() && keepsInCell(c, info.element, parameter, depth + 1));
+}
+
+/// N0351 for an instance of struct `template` whose scoped argument the template keeps in a cell (§41.1, ADR 0084
+/// §2.1): `Cell<StringView>`, a field `cell: Cell<StringView<r>>`.
+fn checkCellContents(
+    c: borrow mut Checker,
+    template: u32,
+    arguments: Slice<u32>,
+    span: Span,
+) -> Result<void, AllocError> {
+    if (!c.membersReady) {
+        let list = c.types.addList(arguments)?;
+        let file = c.file;
+        return c.pendingCells.push(
+            PendingCell { template: template, arguments: list, file: file, start: span.start, end: span.end },
+        );
+    }
+    let generic = c.structs[template as usize].typ;
+    let definition = c.types.info(generic).structDef;
+    let parameters = c.types.structs[definition as usize].typeArguments;
+    for (k in 0..arguments.length) {
+        if (k >= parameters.count as usize || !c.types.isScoped(arguments[k])) {
+            continue;
+        }
+        if (keepsInCell(c, generic, c.types.listAt(parameters, truncate<u32>(k)), 0)) {
+            // Once where it is written: an instance of its body that fails for the same reason says no more.
+            let file = c.file;
+            var reported = false;
+            for (r in c.scopedInstanceReports.view()) {
+                if (r.file == file && r.start == span.start && r.end == span.end) {
+                    reported = true;
+                }
+            }
+            if (reported) {
+                continue;
+            }
+            c.scopedInstanceReports.push(SpanIn { file: file, start: span.start, end: span.end })?;
+            var message = Vector<u8>.create();
+            appendText(mut message, "a cell cannot hold ")?;
+            appendQuotedType(mut message, c, arguments[k])?;
+            appendText(
+                mut message,
+                ", which holds loans; hold a raw pointer or an owned value instead (type-system.md §41.1; ADR 0084 §2.1)",
+            )?;
+            c.error(cellOfLoans(), span.start, span.end, message)?;
+        }
+    }
+    return Ok();
+}
+
 /// The Send and Share bounds of the types that declarations name, once every struct and enum has its fields: before
 /// that a type looks Send and Share whatever it holds.
 fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
@@ -485,6 +603,17 @@ fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
         checkThreadBound(c, parameter, argument, Span { start: p.start, end: p.end })?;
     }
     c.pendingThreadBounds.truncate(0);
+    for (k in 0..c.pendingCells.length) {
+        let p = c.pendingCells[k];
+        {
+            let fileToSet = p.file;
+            c.setFile(fileToSet);
+        }
+        var arguments = Vector<u32>.create();
+        listTypes(c, p.arguments, mut arguments)?;
+        checkCellContents(c, p.template, arguments.view(), Span { start: p.start, end: p.end })?;
+    }
+    c.pendingCells.truncate(0);
     c.setFile(saved);
     return Ok();
 }
@@ -681,6 +810,17 @@ fn instantiateStruct(
                 c.error(cellOfLoans(), span.start, span.end, message)?;
             }
         }
+    }
+    // A struct that keeps a parameter in a cell (lib/core's `Cell<T>`, `RefCell<T>`, whose field is the cell): the
+    // same rule where the instance is written, not as an error of the library's body at each use (ADR 0131).
+    var anyScoped = false;
+    for (a in arguments) {
+        if (c.types.isScoped(a)) {
+            anyScoped = true;
+        }
+    }
+    if (anyScoped && !c.types.structs[definition as usize].isInteriorMutable) {
+        checkCellContents(c, template, arguments, span)?;
     }
     // Its template's instances alone: a scan of every struct was quadratic in the instances.
     let known = instancesOf(c.structInstances, template)?;

@@ -536,6 +536,34 @@ fn collectWrites(
         _ => {}
     }
     match (n.rvalues[value as usize]) {
+        // A closure whose body stores what it captures through one of its captures (`() => into.keep(v)`): the
+        // statements are the enclosing function's, so the store is too, where the closure is made (§36.2, ADR 0131).
+        // The capture that is written through receives the loans of every other capture.
+        NirRvalue.Aggregate(fields) => {
+            let made = match (n.statements[s as usize]) {
+                NirStatement.Assign(target, _) => closureOfEnvironment(c, n, b, n.places[target as usize].local),
+                _ => none(),
+            };
+            if (made != none()) {
+                for (k in c.hir.functions[made as usize].captureStores.view()) {
+                    if (k + 1 >= fields.count) {
+                        continue;
+                    }
+                    let receiver = operandPlaceLocal(n, n.at(fields, k + 1));
+                    if (receiver == none()) {
+                        continue;
+                    }
+                    var operands = Vector<u32>.create();
+                    for (j in 1..fields.count) {
+                        if (j != k + 1) {
+                            operands.push(n.at(fields, j))?;
+                        }
+                    }
+                    let sources = carriers(c, n, b, operands)?;
+                    recordWrite(b, edges, receiver, sources, true, false, span)?;
+                }
+            }
+        }
         // Rule 3: collection writes store their argument through the receiver.
         NirRvalue.Builtin(function, arguments) => {
             if (function == bfVectorPush() || function == bfSlotMapInsert() || function == bfStableVectorPush()) {
@@ -595,17 +623,105 @@ fn collectWrites(
     return Ok();
 }
 
-/// LoanEdge.dropOuter for an edge that carries only the loans of the function's own storage: places not reached
-/// through a reference (a local, a by-value parameter, what a local `String` or `Vector` owns).
-fn ownStorageOnly() -> u32 => 0xFFFFFFFE;
+/// The closure whose environment local `local` is, when it is one (a HIR function), or none.
+fn closureOfEnvironment(c: borrow Checker, n: borrow NirProgram, b: borrow Borrows, local: u32) -> u32 {
+    let t = localType(n, b, local);
+    let definition = c.types.info(t).structDef;
+    if (definition == none() || !c.types.structs[definition as usize].isClosureEnvironment) {
+        return none();
+    }
+    for (k in 0..c.hir.functions.length) {
+        if (c.hir.functions[k].closureEnvironment == t) {
+            return truncate<u32>(k);
+        }
+    }
+    return none();
+}
 
-fn propagate(
-    c: borrow Checker,
-    n: borrow NirProgram,
-    b: borrow mut Borrows,
-    edges: borrow Vector<LoanEdge>,
-) -> Result<void, AllocError> {
-    let inClosure = c.hir.functions[n.functions[b.function as usize].source as usize].closureEnvironment != none();
+/// A closure's body, checked: the captures through which it stores what its environment holds (HirFunction.
+/// captureStores), for the function that makes the closure (collectWrites). A write through a place reached through
+/// the environment's field `k + 1` (a captured `borrow mut`, or a local captured by mutable reference) that stores
+/// a loan the environment gave: another capture's, since a closure's own parameter stored so is N0272 in its body.
+fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) -> Result<void, AllocError> {
+    let source = n.functions[b.function as usize].source;
+    let environment = c.hir.functions[source as usize].closureEnvironment;
+    if (environment == none()) {
+        return Ok();
+    }
+    let definition = c.types.info(environment).structDef;
+    var found = Vector<u32>.create();
+    for (write in b.throughWrites.view()) {
+        var given = false;
+        for (k in 0..write.sources.length) {
+            for (id in b.pointsTo[write.sources[k] as usize].view()) {
+                let loan = borrow b.loans[id as usize];
+                if ((loan.hasPlace && loan.place.local == 0) || (!loan.hasPlace && loan.parameterIndex == 0)) {
+                    given = true;
+                }
+            }
+        }
+        if (!given) {
+            continue;
+        }
+        for (id in b.pointsTo[write.holder as usize].view()) {
+            let loan = borrow b.loans[id as usize];
+            if (!loan.hasPlace || loan.place.local != 0 || loan.place.projections.count < 2) {
+                continue;
+            }
+            let second = n.projections[(loan.place.projections.start + 1) as usize];
+            for (k in 1..c.types.structs[definition as usize].fields.length) {
+                if (c.types.structs[definition as usize].fields[k] == second.field &&
+                    !containsU32(found, truncate<u32>(k - 1))) {
+                    found.push(truncate<u32>(k - 1))?;
+                }
+            }
+        }
+    }
+    // A value assigned to a place reached through a capture (`into.text = v`, `into = Holder { text: v }`).
+    for (block in n.functions[b.function as usize].blocks.view()) {
+        for (statement in block.statements.view()) {
+            match (n.statements[statement as usize]) {
+                NirStatement.Assign(target, value) => {
+                    let t = toPlaceRef(n, target);
+                    if (t.local != 0 || t.projections.count < 3 || !mayHoldLoans(c, placeRefType(c, n, b, t))) {
+                        continue;
+                    }
+                    var operands = Vector<u32>.create();
+                    rvalueOperands(n, value, mut operands)?;
+                    let sources = carriers(c, n, b, operands)?;
+                    var given = false;
+                    for (local in sources.view()) {
+                        for (id in b.pointsTo[local as usize].view()) {
+                            let loan = borrow b.loans[id as usize];
+                            if ((loan.hasPlace && loan.place.local == 0) ||
+                                (!loan.hasPlace && loan.parameterIndex == 0)) {
+                                given = true;
+                            }
+                        }
+                    }
+                    if (!given) {
+                        continue;
+                    }
+                    let second = n.projections[(t.projections.start + 1) as usize];
+                    for (k in 1..c.types.structs[definition as usize].fields.length) {
+                        if (c.types.structs[definition as usize].fields[k] == second.field &&
+                            !containsU32(found, truncate<u32>(k - 1))) {
+                            found.push(truncate<u32>(k - 1))?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    c.hir.functions[source as usize].captureStores = found;
+    return Ok();
+}
+
+/// LoanEdge.dropOuter for an edge that carries no parameter's own loan (its outer placeholder), whichever it is.
+fn everyOuter() -> u32 => 0xFFFFFFFE;
+
+fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<void, AllocError> {
     var changed = true;
     while (changed) {
         changed = false;
@@ -616,16 +732,8 @@ fn propagate(
             let count = b.pointsTo[edge.from as usize].length;
             for (k in 0..count) {
                 let loan = b.pointsTo[edge.from as usize][k];
-                if (edge.dropOuter == ownStorageOnly()) {
-                    // In a closure's body, what its environment refers to is the storage of the function it is
-                    // written in: a borrow of a capture is such a loan too (§36.2).
-                    let place = b.loans[loan as usize].place;
-                    let captured = inClosure && place.local == 0;
-                    if (!b.loans[loan as usize].hasPlace || (derefsReference(c, n, b, place) && !captured)) {
-                        continue;
-                    }
-                } else if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
-                    b.loans[loan as usize].parameterIndex == edge.dropOuter) {
+                if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
+                    (edge.dropOuter == everyOuter() || b.loans[loan as usize].parameterIndex == edge.dropOuter)) {
                     continue;
                 }
                 if (addPointsTo(b, edge.to, loan)?) {
@@ -757,7 +865,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                 // A reborrow through q, or a borrow of a scoped value of q, keeps q's loans alive while the new
                 // reference lives.
                 if (holdsLoans(c, n, b, place.local) &&
-                    (derefsReference(c, n, b, place) || c.types.isScoped(placeRefType(c, n, b, place)))) {
+                    (derefsReference(c, n, b, place) || mayHoldLoans(c, placeRefType(c, n, b, place)))) {
                     let through = throughParameter(c, n, b, place);
                     if (through != none() && beyondReference(c, n, b, place)) {
                         // A borrow of what a reference stored in the parameter's referent points to.
@@ -795,21 +903,25 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
             // loans are the allocation's too (§19.5, §25.4).
             var sources = Vector<u32>.create();
             var builtIn = false;
+            // A built-in that gives a value of a type parameter's type gives what its operand holds (an element, a
+            // payload, what a pointer reads), never a borrow of the operand's own storage: its result is not a
+            // reference, a slice or a view, the only things a built-in borrows into. A call through a function value
+            // or a closure is not such a built-in: its result may borrow from anything it was given (ADR 0131).
+            var stored = false;
+            // A closure's result may hold what the closure's captures hold, not a borrow of the closure itself
+            // (§36.2): its first operand, the closure, is a deep source.
+            var closureCall = false;
             match (n.rvalues[assignValue as usize]) {
                 NirRvalue.Builtin(function, arguments) => {
                     builtIn = true;
+                    closureCall = function == bfCallClosure();
+                    stored = !holdsScoped(c, n, b, t.local) && function != bfCallClosure() &&
+                        function != bfCallFunction() && function != bfCallPointer();
                     if (function == bfArenaAlloc()) {
                         sources.push(n.at(arguments, 0))?;
                         sources.push(n.at(arguments, 1))?;
                     } else if (function == bfArenaAllocArray()) {
                         sources.push(n.at(arguments, 0))?;
-                    } else if (function == bfCallClosure() && !holdsScoped(c, n, b, t.local)) {
-                        // A closure's result of a type parameter's type takes its arguments' loans, not the closure's
-                        // (its first operand): what such a result holds of the closure's captures is what they held,
-                        // which its type says, and a borrow of a capture is refused in the closure's body (§36.2).
-                        for (k in 1..arguments.count) {
-                            sources.push(n.at(arguments, k))?;
-                        }
                     } else {
                         rvalueOperands(n, assignValue, mut sources)?;
                     }
@@ -822,14 +934,24 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     continue;
                 }
                 let p = toPlaceRef(n, place);
+                // A value whose type mentions a type parameter carries its loans as a scoped value does (§25.7
+                // rule 5, ADR 0131).
                 if (holdsLoans(c, n, b, p.local) &&
-                    (c.types.isScoped(n.operandTypes[o as usize]) || derefsReference(c, n, b, p))) {
+                    (mayHoldLoans(c, n.operandTypes[o as usize]) || derefsReference(c, n, b, p))) {
                     // A value read through a reference parameter carries what its referent holds, not the
                     // parameter's own loan (ADR 0074 §2.4).
                     let through = throughParameter(c, n, b, p);
                     if (through != none()) {
                         addDeepEdge(mut edges, p.local, t.local, through)?;
-                    } else if (!builtIn && readsThroughLocalReference(c, n, b, p)) {
+                    } else if (closureCall && o == sources[0] && p.projections.count == 0 &&
+                        !hasOuterPlaceholder(c, n, b, p.local) && references[p.local as usize] == none()) {
+                        // A copy of a reference to a closure: every loan it holds but a parameter's own.
+                        edges.push(LoanEdge { from: p.local, to: t.local, dropOuter: everyOuter() })?;
+                    } else if ((stored || (closureCall && o == sources[0])) && p.projections.count == 0 &&
+                        isReferenceType(c, localType(n, b, p.local)) &&
+                        !c.types.isSlice(localType(n, b, p.local)) && !c.types.isStringView(localType(n, b, p.local))) {
+                        deepSourceEdge(c, n, b, mut edges, references, throughs, p.local, t.local, 0)?;
+                    } else if ((!builtIn || stored) && readsThroughLocalReference(c, n, b, p)) {
                         // A value read through a local reference carries what that reference's referent holds, as
                         // a deep result does: not the reference's own loan (a `for` over a field's elements or over
                         // an iterator field reads its items so). A built-in's result may point into what it was
@@ -838,12 +960,6 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
                     } else {
                         addEdge(mut edges, p.local, t.local)?;
                     }
-                } else if (holdsLoans(c, n, b, p.local) && mayHoldLoans(c, n.operandTypes[o as usize])) {
-                    // A value of a type parameter's type (§25.7 rule 5). What it holds of the parameters, its type
-                    // says: every place it may go shares a flow name with where it came from (§25.6). A loan of this
-                    // function's own storage is not in its type: a call gave it one (`S.build(local.view())` under
-                    // `S: Build<StringView>`), and it keeps it wherever it is copied or moved (ADR 0131).
-                    edges.push(LoanEdge { from: p.local, to: t.local, dropOuter: ownStorageOnly() })?;
                 }
             }
         }
@@ -851,7 +967,7 @@ fn computeLoans(c: borrow Checker, n: borrow NirProgram, b: borrow mut Borrows) 
     // Writes through references reach what the references' loans point to, which depends on the loans computed so
     // far: iterate until nothing changes (§25.7 rule 2).
     while (true) {
-        propagate(c, n, b, edges)?;
+        propagate(b, edges)?;
         var added = false;
         for (w in 0..b.throughWrites.length) {
             let holder = b.throughWrites[w].holder;
@@ -1124,6 +1240,17 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
             )?;
             appendBytes(mut message, name.view())?;
             appendText(mut message, ": borrow mut X<r>, v: Y<r>)' (type-system.md §25.6)")?;
+            if (c.hir.functions[source as usize].keepsInterfaceFlows) {
+                appendText(
+                    mut message,
+                    "; the interface's method declares no such flow, so a caller through the interface would not know of the borrow: give the interface a type parameter for the stored type (type-system.md §21.1)",
+                )?;
+            } else {
+                let targetType = localType(n, b, target);
+                if (isReferenceType(c, targetType)) {
+                    appendSendHint(c, c.types.info(targetType).pointee, mut message)?;
+                }
+            }
             c.front.diagnostics.errorWithNotes(
                 foreignLoanStored(),
                 b.file,
@@ -1820,6 +1947,22 @@ fn findLaterUse(
 
 // ---- §7 Returned references ----
 
+/// For a value whose type mentions a type parameter that may be a reference (§25.7 rule 5): how the program says
+/// that it is not one.
+fn appendSendHint(c: borrow Checker, typ: u32, out: borrow mut Vector<u8>) -> Result<void, AllocError> {
+    let parameter = c.types.loanParameter(typ);
+    if (parameter == none()) {
+        return Ok();
+    }
+    appendText(out, "; a value of type '")?;
+    appendBytes(out, c.typeName(parameter))?;
+    appendText(out, "' may hold a borrow: if '")?;
+    appendBytes(out, c.typeName(parameter))?;
+    appendText(out, "' never holds one, bound it: '")?;
+    appendBytes(out, c.typeName(parameter))?;
+    return appendText(out, ": Send' (type-system.md §25.7)");
+}
+
 fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) -> Result<void, AllocError> {
     let source = n.functions[b.function as usize].source;
     if (!mayHoldLoans(c, c.hir.functions[source as usize].returnType)) {
@@ -1864,6 +2007,7 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 appendText(mut message, ", which is local to '")?;
                 appendBytes(mut message, c.name(c.hir.functions[source as usize].name))?;
                 appendText(mut message, "'")?;
+                appendSendHint(c, c.hir.functions[source as usize].returnType, mut message)?;
                 var notes = Vector<DiagnosticNote>.create();
                 var note = Vector<u8>.create();
                 appendText(mut note, "borrowed here")?;
@@ -1887,12 +2031,23 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 }
                 reportedDeep = true;
                 var message = Vector<u8>.create();
-                appendText(mut message, "the returned reference may point into what parameter '")?;
-                appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
-                appendText(
-                    mut message,
-                    "' refers to, but the return type names only regions that its referent holds; name the parameter's own region instead (e.g. '-> Slice<u8>', elided)",
-                )?;
+                if (c.hir.functions[source as usize].keepsInterfaceFlows) {
+                    // Narrowed to the interface's flows (§21.1, ADR 0131): the advice is the impl's.
+                    appendText(mut message, "the result may borrow from '")?;
+                    appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                    appendText(
+                        mut message,
+                        "' itself, but the interface's method lets its result hold only what that parameter's referent holds, such as a copy of a view field: generic code is checked against the interface, where this result is a type parameter. Name the type's region in the result ('StringView<r>' under 'impl<region r>'), write 'StringView<static>' for static data, or have the interface's method return the borrowing type itself (type-system.md §21.1, §25.6)",
+                    )?;
+                } else {
+                    appendText(mut message, "the returned reference may point into what parameter '")?;
+                    appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                    appendText(
+                        mut message,
+                        "' refers to, but the return type names only regions that its referent holds; name the parameter's own region instead (e.g. '-> Slice<u8>', elided)",
+                    )?;
+                    appendSendHint(c, c.hir.functions[source as usize].returnType, mut message)?;
+                }
                 var notes = Vector<DiagnosticNote>.create();
                 if (loan.hasPlace) {
                     var note = Vector<u8>.create();
@@ -1919,16 +2074,25 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                         mut message,
                         "this closure's result may hold a reference derived from what the closure captures, and a closure's result cannot borrow from the closure; a type parameter without a 'Send' bound may be a reference, so return a value of a type known to own its data (type-system.md §36.2, §25.7)",
                     )?;
+                } else if (c.hir.functions[source as usize].keepsInterfaceFlows) {
+                    appendText(mut message, "the result may be derived from parameter '")?;
+                    appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                    appendText(
+                        mut message,
+                        "', but the interface's method declares no such flow, so a caller through the interface would not know of the borrow (type-system.md §21.1)",
+                    )?;
                 } else {
                     appendText(mut message, "the returned reference may be derived from parameter '")?;
                     appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
                     appendText(mut message, "', which the return type does not list")?;
-                    if (c.hir.functions[source as usize].returnSources.length == 0) {
+                    if (c.hir.functions[source as usize].returnSources.length == 0 &&
+                        c.types.isScoped(c.hir.functions[source as usize].returnType)) {
                         appendText(
                             mut message,
                             "; a 'static' result may hold only static data, such as a string literal",
                         )?;
                     }
+                    appendSendHint(c, c.hir.functions[source as usize].returnType, mut message)?;
                 }
                 c.front.diagnostics.error(returnSourceMismatch(), b.file, span.start, span.end, message)?;
             }
@@ -2006,6 +2170,7 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         b.blockOf[n.functions[function as usize].blocks[position].id as usize] = truncate<u32>(position);
     }
     computeLoans(c, n, mut b)?;
+    noteCaptureStores(c, n, b)?;
     collectHolders(c, n, mut b)?;
     for (k in 0..b.loans.length) {
         b.reached.push(Vector<bool>.create())?;

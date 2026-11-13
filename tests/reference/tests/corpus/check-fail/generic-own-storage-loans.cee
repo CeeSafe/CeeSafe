@@ -74,7 +74,7 @@ fn storeBuilt<S: Build<StringView>>(out: borrow mut Vector<S>) -> Result<void, A
 fn throughClosure<S: Build<StringView>>(hint: StringView) -> S {
     let s = String.from("local")!;
     let make = () => S.build(s.view()); // error[N0245]
-    return make();
+    return make(); // error[N0244]
 }
 fn withBuffer<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
     let buffer = Buffer { text: String.from("local")! };

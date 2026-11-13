@@ -1,0 +1,18 @@
+// No interface: a function value whose result is a type parameter is given a view of what a reference parameter
+// refers to; the U result holds a borrow of that parameter, which no flow name declares. A generic caller drops it.
+struct Owner {
+    text: String;
+}
+fn apply<U>(o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+fn launder<U>(o: Owner, f: fn(StringView) -> U) -> U => apply<U>(o, f); // error[N0244]
+fn same(s: StringView) -> StringView => s;
+
+fn main() {
+    let dangling = launder<StringView>(
+        Owner { text: String.from("other other other other other other other other")! },
+        same,
+    );
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(dangling);
+    Console.writeLine(fresh.view());
+}

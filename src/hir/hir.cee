@@ -267,6 +267,11 @@ struct HirFunction {
     /// A function of the instance a bounded `impl` block's functions are checked in that is not one of them (ADR
     /// 0130): the struct's or enum's own generic version reports it.
     repeatsGeneric: bool;
+    /// A method of an impl of an interface: its flows are narrowed to the interface's method's (ADR 0131).
+    keepsInterfaceFlows: bool;
+    /// A closure: the captures (by index) through which its body stores what the others hold (ADR 0131), known once
+    /// its body is borrow-checked, which is before the function it is written in.
+    captureStores: Vector<u32>;
 }
 
 struct HirConstant {
@@ -511,6 +516,8 @@ struct HirProgram {
             asyncInstanceOf: 0xFFFFFFFF,
             inheritedDefault: false,
             repeatsGeneric: false,
+            keepsInterfaceFlows: false,
+            captureStores: Vector<u32>.create(),
         })?;
         return Ok(truncate<u32>(this.functions.length - 1));
     }

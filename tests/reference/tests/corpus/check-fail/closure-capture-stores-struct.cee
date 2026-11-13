@@ -1,0 +1,23 @@
+// No interface, no generic function: a closure stores a view of a local through a captured `borrow mut`, by a method.
+struct Slot<T> {
+    v: T;
+
+    fn put(borrow mut this, v: T) {
+        this.v = v;
+    }
+}
+
+fn stash(into: borrow mut Slot<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.put(v); // error[N0272]
+    g();
+}
+
+fn main() {
+    var slot = Slot<StringView> { v: "static" };
+    stash(mut slot);
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(slot.v);
+    Console.writeLine(fresh.view());
+}

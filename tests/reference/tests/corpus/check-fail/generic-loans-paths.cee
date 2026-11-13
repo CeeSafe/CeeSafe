@@ -1,0 +1,156 @@
+// Change (b): a value of a type parameter's type (or a projection) holding a loan of a local, through many paths.
+// Every function here should be refused.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+interface Item {
+    type Value;
+    fn value(borrow this) -> Self.Value;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Pair<A, B> {
+    a: A;
+    b: B;
+}
+enum Either<A, B> {
+    Left(A),
+    Right(B),
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Item for Holder<r> {
+    type Value = StringView<r>;
+    fn value(borrow this) -> StringView<r> => this.text;
+}
+
+// q1: projection result of a local-loan-holding S
+fn q1<S: Build<StringView> + Item>() -> S.Value {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    return s.value(); // error[N0244]
+}
+// q2: through a second type parameter by a bound
+fn q2<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    return s.get(); // error[N0244]
+}
+// q3: struct field and read-back
+fn q3<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let p = Pair<S, i32> { a: S.build(t.view()), b: 1 };
+    let Pair { a, .. } = p;
+    return a.get(); // error[N0244]
+}
+// q4: enum and match
+fn q4<T, S: Build<StringView> + Source<T>>() -> T? {
+    let t = String.from("local local local local local local local local")!;
+    let e: Either<S, i32> = Either.Left(S.build(t.view()));
+    match (e) {
+        Either.Left(s) => { return s.get(); } // error[N0244]
+        Either.Right(_) => { return null; }
+    }
+}
+// q5: optional and ??, !
+fn q5<T, S: Build<StringView> + Source<T>>(d: T) -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s: S? = S.build(t.view());
+    let o: T? = s!.get();
+    return o ?? d; // error[N0244]
+}
+// q6: vector push/pop
+fn q6<T, S: Build<StringView> + Source<T>>() -> T? {
+    let t = String.from("local local local local local local local local")!;
+    var v = Vector<T>.create();
+    let s = S.build(t.view());
+    v.push(s.get())!;
+    return v.pop(); // error[N0244]
+}
+// q7: array
+fn q7<T: Copy, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let arr = [s.get(), s.get()];
+    return arr[1]; // error[N0244]
+}
+// q8: closure capture then call
+fn q8<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => s.get(); // error[N0245]
+    return g(); // error[N0244]
+}
+// q9: closure with an argument
+fn q9<T, S: Build<StringView> + Source<T>>(n: i32) -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = (k: i32) => s.get(); // error[N0245]
+    return g(n); // error[N0244]
+}
+fn call<T>(f: borrow fn() -> T) -> T => f();
+// q10: closure passed to a generic helper
+fn q10<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    return call<T>(() => s.get()); // error[N0245] // error[N0244]
+}
+fn ident<T>(x: T) -> T => x;
+fn viaBorrow<T, S: Source<T>>(s: borrow S) -> T => s.get();
+// q11: through generic helpers
+fn q11<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    return ident<T>(viaBorrow<T, S>(s)); // error[N0244]
+}
+// q12: Box create then deref
+fn q12<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let b = Box.create(S.build(t.view()))!;
+    return b.get(); // error[N0244]
+}
+// q13: out parameter
+fn q13<T, S: Build<StringView> + Source<T>>(out: borrow mut Vector<T>) {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    out.push(s.get())!; // error[N0272]
+}
+// q14: out parameter Pair field assign
+fn q14<T, S: Build<StringView> + Source<T>>(out: borrow mut Pair<T, i32>) {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    out.a = s.get(); // error[N0272]
+}
+// q15: loop variable
+fn q15<T, S: Build<StringView> + Source<T>>(d: T) -> T {
+    let t = String.from("local local local local local local local local")!;
+    var r = d;
+    for (i in 0..2) {
+        let s = S.build(t.view());
+        r = s.get();
+    }
+    return r; // error[N0244]
+}
+// q16: while with var reassign through Pair
+fn q16<T, S: Build<StringView> + Source<T>>(d: T) -> Pair<T, T> {
+    let t = String.from("local local local local local local local local")!;
+    var p = Pair<T, T> { a: d, b: d }; // error[N0250]
+    let s = S.build(t.view());
+    p.b = s.get();
+    return p; // error[N0244]
+}
+
+fn main() {
+    let d = q2<StringView, Holder>();
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(d);
+    Console.writeLine(fresh.view());
+}

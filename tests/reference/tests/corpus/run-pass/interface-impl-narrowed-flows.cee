@@ -1,0 +1,48 @@
+// An impl whose signature names one region for the key and the value, as its interface's arguments make it, but
+// whose body returns only what the receiver holds: no error. And the with-resource function under `T: Send`.
+interface Lookup<K, V> {
+    fn find(borrow this, k: K) -> V?;
+}
+struct Table<region r> {
+    keys: Vector<StringView<r>>;
+    values: Vector<StringView<r>>;
+}
+impl<region r> Lookup<StringView<r>, StringView<r>> for Table<r> {
+    fn find(borrow this, k: StringView<r>) -> StringView<r>? {
+        for (i in 0..this.keys.length) {
+            if (this.keys[i] == k) {
+                return this.values[i];
+            }
+        }
+        return null;
+    }
+}
+struct Disk {
+    data: String;
+}
+fn withFile<T: Send>(f: fn(borrow Disk) -> T) -> T {
+    let file = Disk { data: String.from("data")! };
+    return f(file);
+}
+fn size(d: borrow Disk) -> usize => d.data.length;
+fn findTwo(table: borrow Table) -> StringView {
+    // The key is a local: the result holds what the table holds, not the key.
+    let key = String.from("two")!;
+    return table.find(key.view()) ?? "none";
+}
+fn main() {
+    let text = String.from("one=1,two=2")!;
+    var table = Table { keys: Vector<StringView>.create(), values: Vector<StringView>.create() };
+    table.keys.push(text.view()[0..3])!;
+    table.values.push(text.view()[4..5])!;
+    table.keys.push(text.view()[6..9])!;
+    table.values.push(text.view()[10..11])!;
+    let found = findTwo(table);
+    Console.writeLine(found);
+    Console.writeLine(table.find("one") ?? "none");
+    Console.writeLine(withFile<usize>(size));
+}
+
+// expect-stdout: 2
+// expect-stdout: 1
+// expect-stdout: 4

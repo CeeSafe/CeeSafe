@@ -1,0 +1,20 @@
+// A block-bodied closure copies a captured T that holds a loan of a local, and returns the copy.
+struct Buffer {
+    text: String;
+}
+fn textOf(b: borrow Buffer) -> StringView => b.text.view();
+
+fn leak<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local local local local local local local local")! };
+    let r = f(buffer);
+    let g: borrow fn() -> T = () => {
+        let x = r;
+        return x; // error[N0245]
+    };
+    return g(); // error[N0244]
+}
+
+fn main() {
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(fresh.view());
+}

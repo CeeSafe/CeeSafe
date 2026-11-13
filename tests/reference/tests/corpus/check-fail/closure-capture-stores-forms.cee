@@ -1,0 +1,80 @@
+// Closures that store a view of a local through a captured `borrow mut`: concrete, dyn, generic-struct variants.
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+interface KeepView {
+    fn keepView(borrow mut this, v: StringView);
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+struct Slot<T> {
+    v: T;
+
+    fn put(borrow mut this, v: T) {
+        this.v = v;
+    }
+}
+// w1: concrete field assignment in a closure
+fn w1(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => { // error[N0272]
+        into.text = v; // error[N0272]
+    };
+    g();
+}
+// w2: concrete method in a closure
+fn w2(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+// w3: through borrow mut dyn
+fn w3(into: borrow mut dyn Keep<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+// w4: a vector of views
+fn w4(into: borrow mut Vector<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.push(v); // error[N0272] // error[N0272]
+    g()!;
+}
+// w5: generic struct method
+fn w5(into: borrow mut Slot<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.put(v); // error[N0272]
+    g();
+}
+// w6: generic T, value from a function value given a borrow of a local
+struct Buffer {
+    text: String;
+}
+fn w6<T>(f: fn(borrow Buffer) -> T, into: borrow mut Vector<T>) {
+    let buffer = Buffer { text: String.from("local local local local local local")! };
+    let g = () => into.push(f(buffer)); // error[N0272] // error[N0272] // error[N0272]
+    g()!;
+}
+// w7: the closure takes the view as an argument
+fn w7<K: Keep<StringView>>(into: borrow mut K) {
+    let t = String.from("local local local local local local local local")!;
+    let g = (v: StringView) => into.keep(v); // error[N0272]
+    g(t.view());
+}
+// w8: generic bound, no closure (control: must be refused)
+fn w8<K: Keep<StringView>>(into: borrow mut K) {
+    let t = String.from("local local local local local local local local")!;
+    into.keep(t.view()); // error[N0272]
+}
+fn main() {}

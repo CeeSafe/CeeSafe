@@ -1,0 +1,27 @@
+// A closure in generic code stores a view of a local through a captured `borrow mut` parameter (a bound's method).
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+
+fn stash<K: Keep<StringView>>(into: borrow mut K) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+
+fn main() {
+    var h = Holder { text: "static" };
+    stash<Holder>(mut h);
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(h.text);
+    Console.writeLine(fresh.view());
+}

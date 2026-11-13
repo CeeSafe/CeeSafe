@@ -34,6 +34,47 @@ fn main() {
 - A `Thread<T>` that is dropped without `join` is joined then: every thread ends before `main` returns.
 - A panic in any thread ends the whole program.
 
+The thread runs the closure's body once, so the body may move a captured value out, for instance to give it back.
+What the body does not move out, it drops when it returns, on its thread:
+
+```ceesafe
+fn main() {
+    var line = String.from("made by main")!;
+    let worker = Thread.spawn(move () => {
+        line.append(", finished by a thread")!;
+        return line;
+    })!;
+    let finished = worker.join();
+    Console.writeLine(finished);
+}
+```
+
+```text
+made by main, finished by a thread
+```
+
+A value whose type is Copy (a number, a `bool`) is copied into the closure, and the closure changes its copy. If the
+function reads the variable afterwards, the compiler warns (N0403), since the read sees the old value:
+
+<!-- ceesafe: warns N0403 -->
+```ceesafe
+fn main() {
+    var hits = 0;
+    let t = Thread.spawn(move () => { hits += 1; })!;
+    t.join();
+    Console.writeLine(hits);
+}
+```
+
+```text
+main.cee:3:26: warning[N0403]: this 'move' closure changes its own copy of 'hits': the type is Copy, so the closure took a copy, and the 'hits' read after it is unchanged; return the value from the closure, or share it through an atomic, a 'Mutex' or a 'Channel'
+  |
+3 |     let t = Thread.spawn(move () => { hits += 1; })!;
+  |                          ^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+Return the count from the closure (`join` gives it back), or share it as the next sections show.
+
 ## What may cross: `Send`
 
 A value may move to another thread if it is `Send`. Plain data, strings, vectors and boxes are. References are not,
@@ -93,6 +134,33 @@ fn main() {
 
 ```text
 1000
+```
+
+`lock` waits until the lock is free. `tryLock` never waits: it returns the guard, or null if a thread holds the lock
+(the calling thread included). A guard unlocks where it is dropped: at the end of its block, or earlier where it is
+moved away, as by `let _ = guard;`.
+
+```ceesafe
+fn main() {
+    let m = Mutex<u64>.create(1)!;
+    var guard = m.lock();
+    let data = guard.data();
+    data += 1;
+    Console.writeLine(m.tryLock().isSome()); // held: no guard
+    let _ = guard;                           // unlocks here
+    match (m.tryLock()) {
+        Some(free) => {
+            var second = free;
+            Console.writeLine(second.data());
+        }
+        null => { Console.writeLine("busy"); }
+    }
+}
+```
+
+```text
+false
+2
 ```
 
 For a counter or a flag, an atomic is simpler: `AtomicU64`, `AtomicU32`, `AtomicUSize` and `AtomicBool` change

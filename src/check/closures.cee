@@ -837,6 +837,18 @@ fn finishMoveLiteral(
             }
         }
     }
+    // A Copy capture the body changes: the closure changes its own copy (§36.5). Noted for N0403 (ADR 0113), which is
+    // reported if the function reads the variable after the literal.
+    for (capture in captures) {
+        if (isMutableCapture(capture.mode) && c.types.isCopy(c.hir.locals[capture.local as usize].typ)) {
+            c.copiedChanges.push(c.file)?;
+            c.copiedChanges.push(span.start)?;
+            c.copiedChanges.push(span.end)?;
+            c.copiedChanges.push(capture.local)?;
+            c.copiedChanges.push(c.hir.locals[capture.local as usize].name)?;
+            c.copiedChanges.push(0)?;
+        }
+    }
     var moved = Vector<HirCapture>.create();
     for (capture in captures) {
         let t = c.hir.locals[capture.local as usize].typ;

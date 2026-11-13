@@ -32,3 +32,58 @@ fn warnUnusedResults(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     return Ok();
 }
+
+// N0403 (ADR 0113): a `move` closure literal whose body changes a captured variable of a Copy type, where the
+// function reads the variable after the literal. The closure took a copy and changes that, so the later read sees
+// the old value. Each is noted where the literal is checked (finishMoveLiteral) as six words of `copiedChanges`:
+// file, start, end, the local, its name, and whether a later read was seen (synthName).
+
+fn n0403() -> u32 => 403;
+
+/// A use of `local` at `span`: marks the noted literals before it that changed their copy of it.
+fn noteUseAfterCopiedChange(c: borrow mut Checker, local: u32, span: Span) {
+    var at: usize = 0;
+    while (at + 5 < c.copiedChanges.length) {
+        if (c.copiedChanges[at + 3] == local && c.copiedChanges[at] == c.file &&
+            span.start >= c.copiedChanges[at + 2]) {
+            c.copiedChanges[at + 5] = 1;
+        }
+        at += 6;
+    }
+}
+
+fn warnCopiedChanges(c: borrow mut Checker) -> Result<void, AllocError> {
+    var at: usize = 0;
+    while (at + 5 < c.copiedChanges.length) {
+        let file = c.copiedChanges[at];
+        let start = c.copiedChanges[at + 1];
+        let end = c.copiedChanges[at + 2];
+        let name = c.copiedChanges[at + 4];
+        let used = c.copiedChanges[at + 5] != 0;
+        // Once for a literal and variable: a generic function's body is checked for each of its instances.
+        var seen = false;
+        var earlier: usize = 0;
+        while (earlier < at) {
+            if (c.copiedChanges[earlier] == file && c.copiedChanges[earlier + 1] == start &&
+                c.copiedChanges[earlier + 4] == name && c.copiedChanges[earlier + 5] != 0) {
+                seen = true;
+            }
+            earlier += 6;
+        }
+        at += 6;
+        if (seen || !used || !isLintedFile(c, file)) {
+            continue;
+        }
+        var message = Vector<u8>.create();
+        appendText(mut message, "this 'move' closure changes its own copy of ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, ": the type is Copy, so the closure took a copy, and the ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(
+            mut message,
+            " read after it is unchanged; return the value from the closure, or share it through an atomic, a 'Mutex' or a 'Channel'",
+        )?;
+        c.front.diagnostics.warning(n0403(), file, start, end, message)?;
+    }
+    return Ok();
+}

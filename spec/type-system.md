@@ -1919,6 +1919,26 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   - the block is written in the enum's package, so the built-in enums (`Result`, optionals, `AllocError`,
     `IoError`) and a dependency's enums take none (N0267), as the libraries' structs take none.
 - An **interface** lists method signatures. An interface may be generic (`interface Comparable<T>`).
+- **An impl's method keeps the interface's flows** (ADR 0131). Its types are the interface's, with the interface's
+  arguments in place of its parameters (N0267 otherwise), and so are its flows (§25.6): it may have no flow that the
+  interface's method lacks, taken as generic code sees it, with the interface's parameters and `Self` opaque.
+  Generic code is checked once against the interface (§20.3) and a `dyn` call knows nothing else, so a flow the
+  impl added would be a loan its caller does not know of. N0267, when the impl's method
+  - has a result that may borrow from a parameter that the interface's result does not flow from
+    (`fn make(text: StringView<r>) -> Holder<r>` for `fn make(text: StringView) -> Self`);
+  - has a result that borrows from a reference parameter itself where the interface's result is a deep result of it
+    (§25.6): `fn get(borrow this) -> StringView => this.text.view()` for `fn get(borrow this) -> T` in
+    `impl Source<StringView> for Owner`. The result of `get` is declared `T`, so it holds what the receiver holds,
+    not a borrow of the receiver: a type that holds a view gives it (`impl<region r> Source<StringView<r>> for
+    Holder<r>` with `-> StringView<r> => this.text`), static data is written `-> StringView<static>`, and a type
+    that lends its own storage implements an interface whose method returns the borrowing type itself
+    (`fn get(borrow this) -> StringView;`);
+  - may store a parameter's loans through a `borrow mut` parameter where the interface's method has no such flow
+    (`fn put(borrow mut this, v: StringView<r>)` for `fn put(borrow mut this, v: StringView)`; the interface is
+    written `interface Sink<T> { fn put(borrow mut this, v: T); }`).
+
+  A deep flow fits where the interface has the flow, deep or not. An inherited default and an instance of a generic
+  impl repeat a generic version that was compared.
 - **Static functions and generic methods** (ADR 0086 §2.3). A method has a receiver (`this`, `borrow this`,
   `borrow mut this`), or none: a **static function** (`fn create(options: borrow Options) -> Self;`), with or without
   a default. Through a bound it is called as `T.create(o)`, in a default as `Self.create(o)`, and on a concrete type
@@ -2008,6 +2028,12 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
 - **At every instantiation** (a call, type or value that gives `T`), each bound must hold: the
   argument implements the interface (for a type parameter argument, its own bounds include it),
   or is Copy for `Copy`. Otherwise it is N0268, reported where the instantiation is written.
+- **An interface's own parameters' bounds** (`interface Source<T: Send>`) are checked wherever the interface is
+  given arguments: in an impl's header, a bound, a `dyn` type and a supertrait (N0268; N0334 for `Send` and `Share`).
+  A default's body takes them as facts.
+- `Send` and `Share` are decided by a type's fields (§38.1), so for a type that a declaration names they are checked
+  once every struct and enum has its fields (ADR 0131): `struct Wrap<T: Share>` refuses a field or a parameter of
+  type `Wrap<Cell<i32>>`.
 - Dispatch is static: an instantiation calls `T`'s `impl` method directly (monomorphisation).
 
 ### 21.3 Slices of move types (correction to §16.1)
@@ -2562,7 +2588,17 @@ one set (ADR 0006). Region arguments matter only for the checks of §25.2–§25
 ### 25.6 Signatures: flows
 Each parameter and the result of a function have **flow names**:
 - the regions written in their types; `borrow(p)` in the result contributes `p`'s flow names;
-- the type parameters their types mention;
+- the type parameters their types mention, a projection `P.Item` (§21.1) counting as `P`; and, for each of those,
+  the type parameters that its bounds' arguments mention (ADR 0131): under `S: Source<T>` a parameter of type `S`
+  has the name `T` too, since an `S` gives a `T` that holds what it holds. So `fn drain<T, S: Source<T>>(s: S) -> T`
+  has the flow result ← `s`;
+- for a method of an interface, whatever it is declared for (a bound's type parameter, `Self`, a `dyn` type, the
+  type that inherits a default): the receiver has the interface's type parameters and `Self`, as a struct's
+  method's receiver has the struct's, and `Self` in a parameter or the result has the interface's parameters
+  (ADR 0131). So `fn get(borrow this) -> T` in `interface Source<T>` has a deep result of `this` (below), and
+  `fn put(borrow mut this, v: T)` the flow `this` ← `v`;
+- for what a `borrow dyn I<T>` or `borrow mut dyn I<T>` refers to: the names of `I`'s arguments, since it may be a
+  scoped implementation (§37.2). An owned `dyn` value (`Box<dyn I<T>>`) and a `dyn I + Send` have none;
 - for a parameter of scoped type without written regions: a fresh name of its own (elision);
 - for a result of scoped type without written regions: the flow names of the single scoped
   parameter (v0 elision); with several scoped parameters and none written, N0245 (as in v0).
@@ -2601,7 +2637,14 @@ parameter without `static`. A function's **flows** are then:
     referent holds (none of its own). So `o.inner().first()` with `inner(borrow this) -> borrow Inner<r>` is tied to
     `r`, not to `o`. A pointee that names no region but may hold loans (`-> borrow Inner`) is not followed.
 - **parameter `i` ← parameter `j`**, for `i` of type `borrow mut T` whose `T` shares a flow name
-  with `j`: the callee may store `j`'s loans into what `i` refers to.
+  with `j`: the callee may store `j`'s loans into what `i` refers to. A `borrow mut dyn I` is such a parameter
+  whatever `I` is: its referent may be a scoped implementation (§37.2).
+  A flow that only a bound gives (`it: borrow mut I` into `out: borrow mut Vector<T>` under `I: Stream<T>`: the two
+  share `T` through the bound alone) is a **deep flow** when `j` is a reference that is not a view (ADR 0131): the
+  callee may store what `j`'s referent holds, never a loan of `j` itself nor of its referent's own storage (N0272),
+  and at a call the argument contributes what it refers to holds, as for a deep result. So after
+  `collect(mut words, mut all)` the vector holds what the iterator's text is borrowed from, and neither argument
+  stays borrowed.
 
 A v0 signature (no regions) has exactly its v0 return sources and no parameter flows.
 
@@ -2625,6 +2668,13 @@ With one loan set per value:
    type `T` under `T: Send` holds none, and a closure may return one it captured (§36.2), as in
    `fn through<T: Send>(value: T) -> T => Thread.spawn(move () => value)!.join()`. A `T` with other bounds only,
    `Copy` included, may be a reference.
+   What such a value holds of the function's parameters, its type says: every place it can go shares a flow name
+   with where it came from (§25.6), so those loans are not followed from copy to copy. A loan of **the function's
+   own storage** is not in its type (ADR 0131): a call gave it one, `S.build(text.view())` for a local `text` under
+   `S: Build<StringView>`, or `f(borrow buffer)` for an `f: fn(borrow Buffer) -> T`, and the value keeps it wherever
+   it is copied or moved, so returning it is N0244 and storing it through a parameter N0272. In a closure's body a
+   borrow of a capture is such a loan (N0245, §36.2); and a call of a closure gives a result of such a type its
+   arguments' loans, not the closure's own.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
    them, so they must still be live (N0243 otherwise).
 
@@ -5330,7 +5380,8 @@ returns; the spawn has the effects of its `allocate` and `deallocate`. `body` is
 **Task sets** (ADR 0053): children started while the set runs, from any function the set is passed to.
 
 - **`await Async.tasks(limit, oom, async (set) => …)`** is `Result<void, E>`, `E` being `oom`'s type, which must be
-  `Copy` (N0268). It is a call of lib/core's `AsyncTasks<E>.run` (ADR 0037): the body runs in the awaiting task, as
+  `Copy` (N0268) and `Send` (N0334; ADR 0131: the body is a function value called with a borrow of the set, so an
+  `E` that could hold a loan could hold one of the set). It is a call of lib/core's `AsyncTasks<E>.run` (ADR 0037): the body runs in the awaiting task, as
   the set's owner, with `set: borrow TaskSet<E>`, and may pass the set to the functions it calls. When the body has
   returned, the set waits for every child. Its children's tasks and frames come from the system heap, so it is hosted
   only (N0293). **`await Async.tasksIn(alloc, limit, oom, body)`** takes them from `alloc`'s allocator type instead

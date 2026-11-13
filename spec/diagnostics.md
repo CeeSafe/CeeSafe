@@ -180,13 +180,18 @@ or a bad `for` sequence or range is N0205; writing an element of a `let` array o
 element type N0205. Slices are
 references, so the borrow checker reports their conflicts as N0240–N0245.
 
+A conflict with a borrow (N0240 to N0243) has a note for a call that was given the borrowed value and whose callee
+may keep it by a region parameter's bound alone (type-system.md §25.8, ADR 0134): "'pick' declares 'region b: a'
+('b' outlives 'a'), so its result may hold the borrow passed here", or "… so it may store the borrow passed here
+through another argument".
+
 ### Region parameters (N0270–N0279; `type-system.md` §25, M6x)
 
 | Code | Meaning | Example |
 |---|---|---|
 | N0270 | A scoped field or payload in a struct or enum without region parameters | `struct S { v: StringView; }` |
 | N0272 | Storing a value through a `borrow mut` parameter whose loans the signature does not let flow into it, or storing a value with any loan into a `static mut` (ADR 0067); a closure that stores one capture's loan through another is such a store where the closure is made (type-system.md §36.2, ADR 0131) | `fn put(v: borrow mut Vector<StringView>, s: StringView) { v.push(s)!; }` |
-| N0273 | An unknown region name, region arguments on a type without region parameters, the wrong number of them, or `static` in a parameter's type (ADR 0068) | `StringView<nowhere>`, `Plain<r>` |
+| N0273 | An unknown region name, region arguments on a type without region parameters, the wrong number of them, or `static` in a parameter's type (ADR 0068); a region parameter's bound that is not another region parameter in scope: an unknown name, a type, `static`, the region itself, a bound written twice, or a cycle (type-system.md §25.8, ADR 0134) | `StringView<nowhere>`, `Plain<r>`, `fn f<region a: nosuch>(…)` |
 | N0274 | A generic used with a scoped type argument where it needs an unscoped one (it boxes `T`, makes an array of `T`, …) | `boxed<StringView>(s)` with `fn boxed<T>(v: T) -> Box<T>` |
 
 N0271 is unassigned: destroying a value that holds loans while their referents are gone reports N0243.
@@ -239,7 +244,7 @@ pointer type is N0216, and an `unsafe main` is N0219. (An `unsafe` interface met
 | N0263 | An allocator argument that is not an allocator type (`SystemHeap`, `FailingAllocator`, or for `Box` since C5 a struct without fields implementing `Allocator`) | `Box<i32, Point>`, `Box.createIn(point, 1)` |
 | N0265 | Type arguments that cannot be inferred: a generic call whose arguments and unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter (a call's expected type is not used: `let m: Maybe<i32> = make();` needs `make<i32>()`), or a struct literal or enum value whose fields, payloads and expected type do not. Not reported when an argument has an error of its own (ADR 0075 §2.16) | `let d = Maybe.Nothing;`, `let e = make();` |
 | N0266 | Generic instantiation nested more than 64 deep, or with type arguments made of more than 1048576 types and members (polymorphic recursion): a function's, or the functions of a struct or enum instance at their first use (type-system.md §20.4) | `fn deep<T>(x: Maybe<T>) { deep(Maybe.Just(x)); }`, `fn depth(borrow this) -> u32 => 1 + this.nest().depth();` in a `Pair<T>` with `fn nest(borrow this) -> Pair<Pair<T>>` |
-| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) | `impl Shape for Square { fn area(this) -> i64 … }` |
+| N0267 | An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107) or without restating its region parameters' bounds exactly (type-system.md §25.8, ADR 0134) | `impl Shape for Square { fn area(this) -> i64 … }` |
 | N0268 | A type argument that does not satisfy a bound of its type parameter (an interface it does not implement, or `Copy`), an impl's associated type that does not meet its declared bounds (ADR 0086 §2.5), an impl's target that does not implement a supertrait of its interface (ADR 0086 §2.6), or a type with region parameters coerced to `dyn I` (ADR 0054), or a function of a bounded `impl` block used on an instance that does not meet the block's bounds (ADR 0130; N0334 for `Send` and `Share`) | `total(plain)` with `fn total<S: Shape>(…)` |
 | N0264 | A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray` | `arena.alloc(Res { id: 1 })`, `arena.alloc(someReference)` |
 
@@ -252,6 +257,9 @@ Generic code (M6a) reuses codes:
   §2.3);
 - an interface's method, or a method of an `impl` of an interface, with region parameters of its own is N0216 (ADR
   0074 §2.4);
+- a bound on a region parameter of an `impl` of an interface is N0216 (type-system.md §25.8, ADR 0134); a bound
+  on any other region parameter that is not a region parameter in scope is N0273, and a type parameter bounded by
+  a region is N0204;
 - a generic `main` is N0219;
 - naming something that is not an interface as a bound or in an `impl` is N0204;
 - a method on a type parameter that no bound declares is N0234;

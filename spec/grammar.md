@@ -174,7 +174,12 @@ ImplDecl   = 'impl' TypeParams? Type 'for' Type '{' (Attribute* 'public'? Functi
                                                impl with TypeParams *)
 AssocTypeDef = 'type' Identifier '=' Type ';'
 MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' ArgList? ')'   (* type arguments: ADR 0064 §1 *)
-TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
+TypeParam  = 'region' Identifier (':' Identifier ('+' Identifier)*)?
+                                                               (* M6x: a region, before any type parameter; §25.1.
+                                                                  Its bounds, the regions it outlives: ADR 0134,
+                                                                  type-system.md §25.8. The parser reads a Type
+                                                                  for each; one that is not a region parameter's
+                                                                  name is N0273 *)
            | 'const' Identifier ':' Type                       (* ADR 0083: a const parameter; type-system.md §20.5 *)
            | Identifier (':' Type ('+' Type)*)?                (* bounds: M6b *)
 (* `region` is contextual: only `region` followed by a name declares a region. In a type, a region

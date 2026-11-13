@@ -198,6 +198,8 @@ once the view is used after it.
   (iterated to a fixpoint); calls apply their signature flows; and a loan conflicts only at points
   reachable from where it was created (holders such as a vector receive loans after their own
   definition). Destroying a value whose `drop` may read its loans is a use of them.
+  A bound on a region parameter (`region b: a`, `type-system.md` §25.8, ADR 0134) is such a signature flow and
+  nothing more: the checker compares no two regions at a call.
 - Index-sensitive disjointness (`a[i]` versus `a[j]`) came in 2d with arrays, conservatively: all elements
   overlap. Since M13 G5, two different **constant** indices are different places, so `borrow mut a[0]` and
   `borrow mut a[2]` may be live together. That is sound because a constant index names one element whatever the

@@ -2573,6 +2573,8 @@ fn split<region r>(line: StringView<r>) -> Result<Vector<StringView<r>>, AllocEr
   does: `fn first<region a>(borrow this, other: borrow(a) Vector<u8>) -> Slice<a, u8>`. Its region names may not
   repeat the struct's or the impl's (N0202). An interface's methods, and the methods of an `impl` of an interface,
   may not (N0216): conformance compares the signatures, which would have to match the region lists.
+- A region parameter may have **bounds**, other region parameters in scope: `fn pick<region a, region b: a>(…)`
+  says that `b` outlives `a` (§25.8, ADR 0134).
 
 ### 25.2 Region arguments
 - A type with region parameters takes region arguments first, then its type arguments:
@@ -2702,6 +2704,9 @@ parameter without `static`. A function's **flows** are then:
   `collect(mut words, mut all)` the vector holds what the iterator's text is borrowed from, and neither argument
   stays borrowed.
 
+A region's **bound** adds flows (§25.8, ADR 0134): where `region b: a` is in scope, a result or a store target
+that names `a` is read, in every rule above, as naming `b` too.
+
 A v0 signature (no regions) has exactly its v0 return sources and no parameter flows.
 
 **The flows are the declaration's** (ADR 0131 §2.9). A function's flows are computed once, for its declaration,
@@ -2754,6 +2759,77 @@ With one loan set per value:
    them, so they must still be live (N0243 otherwise).
 
 Diagnostics: N0270, N0272, N0273, N0274 (`diagnostics.md`).
+
+### 25.8 Bounds on region parameters (ADR 0134)
+
+```ceesafe
+// `b` outlives `a`: what is borrowed for `b` may be used where `a` is required.
+fn prefer<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y;
+
+fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+struct Parser<region scratch, region input: scratch> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note;
+}
+```
+
+A region parameter may be followed by `:` and one or more region parameters in scope, joined by `+`. `region b: a`
+says that **`b` outlives `a`**: a value that holds what is borrowed for `b` may be used where one borrowed for `a`
+is required, and not the reverse. Without the bound each function above is refused: `prefer` and `orNote` with
+N0245, `keep` with N0272.
+
+**Meaning.** Regions are erased and a value has one loan set (§25.5); a region in a signature is a flow name
+(§25.6). So "outlives" is a statement about flows, not a comparison of lifetimes:
+
+- **In the signature.** Before a result's sources and a store target's flows are computed (§25.6), the target's flow
+  names are closed: every region parameter in scope that has one of the names as a bound is added, again and again
+  until none is. The parameters' own names are not changed. The relation is therefore transitive (`region c: b`,
+  `region b: a`: `c` flows where `a` is required) and one-way: a target that names `b` gains nothing from
+  `region b: a`. The region written on a reference counts as any other: with `region b: a`, a parameter
+  `source: borrow(b) String` is a source of a result `StringView<a>`, and not a deep one, so the result may be
+  `source.view()`.
+- **In the body.** The body is held to those flows, as to any others: what the bound adds is no longer N0245 or
+  N0272.
+- **At a call.** The caller applies the callee's flows (§25.7 rule 4): the result takes the loans of the `b`
+  arguments, and what a store target refers to takes them. The caller is not asked to show that the `b` arguments'
+  referents outlive the `a` arguments': it is held to what the callee may have done. A value typed with `a` that
+  the call gave is not used after a `b` argument's referent is destroyed (N0243) or while it is written (N0240 to
+  N0242). The diagnostic has a note that names the callee and the bound: "'prefer' declares 'region b: a' ('b'
+  outlives 'a'), so its result may hold the borrow passed here".
+- **For every instance.** The flows a bound gives are the declaration's (§25.6): a generic function's instances, a
+  generic struct's functions for an instance, and a dependency's callers have them.
+
+A function that passes its own regions to a function with a bound restates the bound, or its body is N0245 or
+N0272: `fn forward<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => prefer(x, y)`.
+
+**Where a bound is written.**
+
+- On a function's or a method's own region parameters. A method's may be bounded by its struct's, enum's or
+  inherent impl's regions (`fn label<region l: scratch>(…)` in `Parser`).
+- On a struct's or an enum's region parameters. The bound is in scope in the type's functions, in its body and in
+  its inherent impls, with the meaning above. **An instance is not checked against it**: a value has one loan set,
+  so an instance is not used after any borrow it holds is gone, whichever region a field is written with.
+- An inherent impl (`impl<region scratch, region input: scratch> Parser<scratch, input>`) restates its type's region
+  bounds exactly, as it names its parameters in order: N0267 otherwise. A block is not conditional on a region
+  bound, as it may be on a type bound (§21.1).
+- An impl of an interface (`impl<region r> I for S<r>`) writes no bound on its region parameters (N0216), and its
+  methods see none: their flows are their interface's (§21.1), and an interface has no regions (N0216, §25.1).
+- A function type and a closure have no region parameters. A function with region parameters is no function value
+  (N0298, §36.1), with a bound or without.
+
+**What a bound may name** (N0273 otherwise): a region parameter in scope, other than the bounded one, once. Not a
+type, an interface or a type parameter; not `static` (no call checks that an argument is static data, §25.6, and
+static data may be used for any region as it is); and no cycle (`region a: b, region b: a`): regions that outlive
+each other are one region, which is written as one. A type parameter is not bounded by a region (N0204).
+
+Diagnostics: N0273, N0267, N0216; N0245, N0272 and N0240 to N0243 for what the bound does not give
+(`diagnostics.md`).
 
 ## 26. Program arguments, files and sockets (C3)
 

@@ -235,31 +235,232 @@ fn sharedStart(a: Slice<u8>, b: Slice<u8>) -> usize {
 }
 
 /// "; did you mean …?" for a method of a number (`x.clamp(…)`): the integer or float methods whose names are close.
+/// The names are the ones the checker accepts (integerMethodNames, floatMethodNames), then the type's impl methods.
 fn appendNumberDidYouMean(
     c: borrow Checker,
     message: borrow mut Vector<u8>,
-    isFloat: bool,
+    typ: u32,
     wanted: u32,
 ) -> Result<void, AllocError> {
-    let integers =
-        "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul mulHigh min max abs unsignedAbs";
-    let floats = "bits sqrt abs floor ceil min max";
-    let list = (if (isFloat) floats else integers).bytes();
-    let name = c.name(wanted);
+    let names = if (c.types.is(typ, TypeKind.Float)) floatMethodNames() else integerMethodNames();
     var members = Vector<Vector<u8>>.create();
+    let _ = methodNamesOf(c, typ, names, wanted, mut members)?;
+    return appendNameChoices(message, members);
+}
+
+/// The names close to `wanted` (isCloseName; up to three, into `close`) among the methods a value of `typ` has without
+/// being a struct: the built-in ones of `builtin` (names separated by spaces, or empty) and those of the type's impls,
+/// an enum's own `impl E { … }` among them (ADR 0107), that the current file may call. Returns how many methods there
+/// are, close or not.
+fn methodNamesOf(
+    c: borrow Checker,
+    typ: u32,
+    builtin: StringView,
+    wanted: u32,
+    close: borrow mut Vector<Vector<u8>>,
+) -> Result<usize, AllocError> {
+    let name = c.name(wanted);
+    var count: usize = 0;
+    let list = builtin.bytes();
     var start: usize = 0;
     for (k in 0..list.length + 1) {
         if (k == list.length || list[k] == ' ') {
-            let candidate = list[start..k];
-            if (members.length < 3 && isCloseName(name, candidate)) {
-                var m = Vector<u8>.create();
-                appendBytes(mut m, candidate)?;
-                members.push(m)?;
+            if (k > start) {
+                count += 1;
+                if (close.length < 3 && isCloseName(name, list[start..k])) {
+                    var m = Vector<u8>.create();
+                    appendBytes(mut m, list[start..k])?;
+                    close.push(m)?;
+                }
             }
             start = k + 1;
         }
     }
-    return appendNameChoices(message, members);
+    var seen = Vector<u32>.create();
+    for (m in c.implMethods.view()) {
+        if (m.typ != typ || containsU32(seen, m.name) || methodIsHidden(c, m.function)) {
+            continue;
+        }
+        seen.push(m.name)?;
+        count += 1;
+        if (close.length < 3 && isCloseName(name, c.name(m.name))) {
+            var text = Vector<u8>.create();
+            appendBytes(mut text, c.name(m.name))?;
+            close.push(text)?;
+        }
+    }
+    return Ok(count);
+}
+
+/// Is `function`, a method of an impl, one the current file cannot call: private to another file (ADR 0109), or an
+/// enum's own and not public in another package (ADR 0107)? A message does not name it.
+fn methodIsHidden(c: borrow Checker, function: u32) -> bool {
+    let syntax = c.hir.functions[function as usize].syntax;
+    let file = c.hir.functions[function as usize].file;
+    if (syntax == none() || file == none() || file == c.file) {
+        return false;
+    }
+    let visibility = c.front.ast.functions[syntax as usize].visibility;
+    if (isOtherPackage(c, file)) {
+        return isEnumMethod(c, syntax) && !isPublicVisibility(visibility);
+    }
+    return isPrivateVisibility(visibility);
+}
+
+/// What follows "type 'T' has no method 'm'" for a type that is not a struct (an enum, a number): "; did you mean …?"
+/// with its methods of a close name, else "; it has …" with all of them when they are at most six, as for a struct's
+/// members (appendDidYouMean). Returns whether the type has any method.
+fn appendMethodChoices(
+    c: borrow Checker,
+    message: borrow mut Vector<u8>,
+    typ: u32,
+    builtin: StringView,
+    wanted: u32,
+) -> Result<bool, AllocError> {
+    var close = Vector<Vector<u8>>.create();
+    let count = methodNamesOf(c, typ, builtin, wanted, mut close)?;
+    if (close.length > 0 || count == 0 || count > 6) {
+        appendNameChoices(message, close)?;
+        return Ok(count > 0);
+    }
+    // Nothing close: a few methods are short enough to list.
+    appendText(message, "; it has ")?;
+    var k: usize = 0;
+    let list = builtin.bytes();
+    var start: usize = 0;
+    for (j in 0..list.length + 1) {
+        if (j == list.length || list[j] == ' ') {
+            if (j > start) {
+                if (k > 0) {
+                    appendText(message, if (k + 1 == count) " and " else ", ")?;
+                }
+                message.push('\'')?;
+                appendBytes(message, list[start..j])?;
+                message.push('\'')?;
+                k += 1;
+            }
+            start = j + 1;
+        }
+    }
+    var seen = Vector<u32>.create();
+    for (m in c.implMethods.view()) {
+        if (m.typ != typ || containsU32(seen, m.name) || methodIsHidden(c, m.function)) {
+            continue;
+        }
+        seen.push(m.name)?;
+        if (k > 0) {
+            appendText(message, if (k + 1 == count) " and " else ", ")?;
+        }
+        appendQuotedName(message, c, m.name)?;
+        k += 1;
+    }
+    return Ok(true);
+}
+
+/// "; did you mean …?" for `wanted`, a name used as a type that no type has (`Vec<i32>`): the built-in generic types
+/// (builtinGenericTypeNames) and the structs and enums the current file can name, whose names are close (isCloseName;
+/// `Vec` finds `Vector`). For `Option` and `Optional`, how an optional type is written. Nothing when none is close.
+fn appendTypeDidYouMean(c: borrow Checker, message: borrow mut Vector<u8>, wanted: u32) -> Result<void, AllocError> {
+    let name = c.name(wanted);
+    if (sameText(name, "Option") || sameText(name, "Optional")) {
+        return appendText(message, "; an optional type is written 'T?' (type-system.md §22.1)");
+    }
+    var close = Vector<Vector<u8>>.create();
+    let list = builtinGenericTypeNames().bytes();
+    var start: usize = 0;
+    for (k in 0..list.length + 1) {
+        if (k == list.length || list[k] == ' ') {
+            if (isCloseName(name, list[start..k])) {
+                var m = Vector<u8>.create();
+                appendBytes(mut m, list[start..k])?;
+                close.push(m)?;
+            }
+            start = k + 1;
+        }
+    }
+    for (entry in c.structs.view()) {
+        if (entry.item != none() && entry.template == none()) {
+            addCloseTypeName(c, name, entry.typ, mut close)?;
+        }
+    }
+    for (entry in c.enums.view()) {
+        if (entry.template == none()) {
+            addCloseTypeName(c, name, entry.typ, mut close)?;
+        }
+    }
+    // The three with the fewest edits, in the order found. A name within a misspelling's distance (`Par`, `Pair`)
+    // leaves out those that only contain the name (`IoParts`).
+    let third = name.length / 3;
+    let limit: usize = if (third < 1) 1 else if (third > 3) 3 else third;
+    var nearest: usize = 65;
+    for (k in 0..close.length) {
+        nearest = smaller(nearest, nameDistance(name, close[k].view(), 64));
+    }
+    var chosen = Vector<Vector<u8>>.create();
+    var used = Vector<bool>.create();
+    for (k in 0..close.length) {
+        used.push(false)?;
+    }
+    while (chosen.length < 3) {
+        var best = close.length;
+        var bestDistance: usize = 0;
+        for (k in 0..close.length) {
+            let distance = nameDistance(name, close[k].view(), 64);
+            if (!used[k] && (nearest > limit || distance <= limit) &&
+                (best == close.length || distance < bestDistance)) {
+                best = k;
+                bestDistance = distance;
+            }
+        }
+        if (best == close.length) {
+            break;
+        }
+        used[best] = true;
+        var m = Vector<u8>.create();
+        appendBytes(mut m, close[best].view())?;
+        chosen.push(m)?;
+    }
+    return appendNameChoices(message, chosen);
+}
+
+/// Adds the name of the struct or enum type `typ` (without its type parameters) to `close` if it is close to `name`,
+/// the current file can name it, and it is not there yet.
+fn addCloseTypeName(
+    c: borrow Checker,
+    name: Slice<u8>,
+    typ: u32,
+    close: borrow mut Vector<Vector<u8>>,
+) -> Result<void, AllocError> {
+    let full = c.typeName(typ);
+    var end = full.length;
+    for (k in 0..full.length) {
+        if (end == full.length && full[k] == '<') {
+            end = k;
+        }
+    }
+    let candidate = full[..end];
+    if (!isCloseName(name, candidate)) {
+        return Ok();
+    }
+    let visible = match (c.front.symbols.find(candidate)) {
+        Some(s) => match (c.item(s.id)) {
+            Entity.Struct(_) => true,
+            Entity.Enum(_) => true,
+            _ => false,
+        },
+        null => false,
+    };
+    if (!visible) {
+        return Ok();
+    }
+    for (k in 0..close.length) {
+        if (sameBytes(close[k].view(), candidate)) {
+            return Ok();
+        }
+    }
+    var m = Vector<u8>.create();
+    appendBytes(mut m, candidate)?;
+    return close.push(m);
 }
 
 fn appendNameChoices(message: borrow mut Vector<u8>, names: borrow Vector<Vector<u8>>) -> Result<void, AllocError> {

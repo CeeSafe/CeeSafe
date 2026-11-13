@@ -358,106 +358,82 @@ fn checkIoErrorMessage(c: borrow mut Checker, receiver: u32, span: Span) -> Resu
     return c.expr(HirExpr.BuiltinCall(bfIoErrorMessage(), list), view, span.start, span.end);
 }
 
-/// The built-in arithmetic methods of integer types (IntegerMethod, §6, M11), or none.
+/// The names of the built-in methods of integer types, separated by spaces: the arithmetic ones (IntegerMethod, §6,
+/// M11), then the bit methods (ADR 0071 §2.3). This list is the only one: integerMethod accepts exactly these names,
+/// and the "did you mean" of an unknown method (appendNumberDidYouMean) reads them here.
+fn integerMethodNames() -> StringView =>
+    "wrappingAdd wrappingSub wrappingMul checkedAdd checkedSub checkedMul saturatingAdd saturatingSub saturatingMul mulHigh min max abs unsignedAbs rotateLeft rotateRight wrappingShl wrappingShr leadingZeros trailingZeros countOnes byteSwap";
+
+/// The names of the built-in methods of a float value (FloatMethod, §35.5, §35.8), as integerMethodNames.
+fn floatMethodNames() -> StringView => "bits sqrt abs floor ceil min max";
+
+/// Which word of `names` (words separated by one space) `name` is, counting from 0, or none.
+fn wordIndex(names: StringView, name: Slice<u8>) -> u32 {
+    let list = names.bytes();
+    var start: usize = 0;
+    var index: u32 = 0;
+    for (k in 0..list.length + 1) {
+        if (k == list.length || list[k] == ' ') {
+            if (sameBytes(list[start..k], name)) {
+                return index;
+            }
+            start = k + 1;
+            index += 1;
+        }
+    }
+    return none();
+}
+
+/// The built-in method of integer types that `name` names, or none: the function at the name's place in
+/// integerMethodNames, so a name is accepted if and only if it is in that list.
 fn integerMethod(name: Slice<u8>) -> u32 {
-    if (sameText(name, "wrappingAdd")) {
-        return bfWrappingAdd();
+    let index = wordIndex(integerMethodNames(), name);
+    if (index == none()) {
+        return none();
     }
-    if (sameText(name, "wrappingSub")) {
-        return bfWrappingSub();
-    }
-    if (sameText(name, "wrappingMul")) {
-        return bfWrappingMul();
-    }
-    if (sameText(name, "checkedAdd")) {
-        return bfCheckedAdd();
-    }
-    if (sameText(name, "checkedSub")) {
-        return bfCheckedSub();
-    }
-    if (sameText(name, "checkedMul")) {
-        return bfCheckedMul();
-    }
-    if (sameText(name, "saturatingAdd")) {
-        return bfSaturatingAdd();
-    }
-    if (sameText(name, "saturatingSub")) {
-        return bfSaturatingSub();
-    }
-    if (sameText(name, "saturatingMul")) {
-        return bfSaturatingMul();
-    }
-    if (sameText(name, "mulHigh")) {
-        return bfIntMulHigh();
-    }
-    if (sameText(name, "min")) {
-        return bfIntMin();
-    }
-    if (sameText(name, "max")) {
-        return bfIntMax();
-    }
-    if (sameText(name, "abs")) {
-        return bfIntAbs();
-    }
-    if (sameText(name, "unsignedAbs")) {
-        return bfIntUnsignedAbs();
-    }
-    return integerBitMethod(name);
+    let functions = [
+        bfWrappingAdd(),
+        bfWrappingSub(),
+        bfWrappingMul(),
+        bfCheckedAdd(),
+        bfCheckedSub(),
+        bfCheckedMul(),
+        bfSaturatingAdd(),
+        bfSaturatingSub(),
+        bfSaturatingMul(),
+        bfIntMulHigh(),
+        bfIntMin(),
+        bfIntMax(),
+        bfIntAbs(),
+        bfIntUnsignedAbs(),
+        bfIntRotateLeft(),
+        bfIntRotateRight(),
+        bfIntWrappingShl(),
+        bfIntWrappingShr(),
+        bfIntLeadingZeros(),
+        bfIntTrailingZeros(),
+        bfIntCountOnes(),
+        bfIntByteSwap(),
+    ];
+    return functions[index as usize];
 }
 
-/// The bit methods of integers (ADR 0071 §2.3), or none.
-fn integerBitMethod(name: Slice<u8>) -> u32 {
-    if (sameText(name, "rotateLeft")) {
-        return bfIntRotateLeft();
-    }
-    if (sameText(name, "rotateRight")) {
-        return bfIntRotateRight();
-    }
-    if (sameText(name, "wrappingShl")) {
-        return bfIntWrappingShl();
-    }
-    if (sameText(name, "wrappingShr")) {
-        return bfIntWrappingShr();
-    }
-    if (sameText(name, "leadingZeros")) {
-        return bfIntLeadingZeros();
-    }
-    if (sameText(name, "trailingZeros")) {
-        return bfIntTrailingZeros();
-    }
-    if (sameText(name, "countOnes")) {
-        return bfIntCountOnes();
-    }
-    if (sameText(name, "byteSwap")) {
-        return bfIntByteSwap();
-    }
-    return none();
-}
-
-/// The built-in methods of a float value (FloatMethod, §35.5, §35.8), or none.
+/// The built-in method of a float value that `name` names, or none: as integerMethod, from floatMethodNames.
 fn floatMethod(name: Slice<u8>) -> u32 {
-    if (sameText(name, "bits")) {
-        return bfFloatBits();
+    let index = wordIndex(floatMethodNames(), name);
+    if (index == none()) {
+        return none();
     }
-    if (sameText(name, "sqrt")) {
-        return bfFloatSqrt();
-    }
-    if (sameText(name, "abs")) {
-        return bfFloatAbs();
-    }
-    if (sameText(name, "floor")) {
-        return bfFloatFloor();
-    }
-    if (sameText(name, "ceil")) {
-        return bfFloatCeil();
-    }
-    if (sameText(name, "min")) {
-        return bfFloatMin();
-    }
-    if (sameText(name, "max")) {
-        return bfFloatMax();
-    }
-    return none();
+    let functions = [
+        bfFloatBits(),
+        bfFloatSqrt(),
+        bfFloatAbs(),
+        bfFloatFloor(),
+        bfFloatCeil(),
+        bfFloatMin(),
+        bfFloatMax(),
+    ];
+    return functions[index as usize];
 }
 
 /// `x.wrappingAdd(y)`, `x.min(y)` and the rest (CheckIntegerMethod): one argument of the receiver's type; never panics.

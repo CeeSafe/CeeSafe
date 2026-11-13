@@ -1,0 +1,68 @@
+// A method that does not exist on a value that is not a struct is N0234, and the message names the methods the type
+// has (diagnostics.md, "Suggestions"): an enum's own (ADR 0107) and its impls', the library's enums', a number's
+// built-in ones, which are the names the checker accepts. Only a type without any "has no methods".
+enum Shape {
+    Circle(i32),
+    Square(i32),
+}
+
+impl Shape {
+    fn area(borrow this) -> i32 => 1;
+}
+
+enum Tree<T> {
+    Leaf(T),
+    Empty,
+}
+
+impl<T> Tree<T> {
+    fn size(borrow this) -> u32 => 1;
+}
+
+enum Plain {
+    A,
+    B,
+}
+
+interface Show {
+    fn show(borrow this) -> i32;
+}
+
+impl Show for i32 {
+    fn show(borrow this) -> i32 => 1;
+}
+
+fn generic<T: Show>(t: T) {
+    t.zzz(); // error[N0234]: none of its bounds declares it
+}
+
+fn unbounded<T>(t: T) {
+    t.zzz(); // error[N0234]: needs a bound
+}
+
+fn main() {
+    let e = IoError.NotFound;
+    e.zzz(); // error[N0234]: it has 'message'
+    let _ = e.message();
+    let s = Shape.Circle(1);
+    s.zzz(); // error[N0234]: it has 'area'
+    s.aera(); // error[N0234]: did you mean 'area'?
+    let t = Tree<i32>.Leaf(1);
+    t.siz(); // error[N0234]: did you mean 'size'?
+    let p = Plain.A;
+    p.zzz(); // error[N0234]: a declared enum without methods
+    let a = AllocError.OutOfMemory;
+    a.zzz(); // error[N0234]: has no methods
+    let n = 5u32;
+    let _ = n.rotateLef(1); // error[N0234]: did you mean 'rotateLeft'?
+    let _ = n.leadingZero(); // error[N0234]: did you mean 'leadingZeros'?
+    let _ = n.byteSwp(); // error[N0234]: did you mean 'byteSwap'?
+    let _ = n.countOne(); // error[N0234]
+    let _ = n.trailingZero(); // error[N0234]
+    let _ = n.wrappingSh(1); // error[N0234]
+    let _ = n.rotateRigt(1); // error[N0234]
+    let _ = 5i32.shw(); // error[N0234]: did you mean 'show'? (an impl's method)
+    let f = 1.5;
+    let _ = f.sqroot(); // error[N0234]: did you mean 'sqrt'?
+    let _ = n.rotateLeft(1) + n.leadingZeros() + n.byteSwap();
+}

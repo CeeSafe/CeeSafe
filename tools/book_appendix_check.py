@@ -524,13 +524,13 @@ def _appendix_c(root, ceesafec, where):
     listed = probe_members(ceesafec)
     for what, _, parts in C_PROBES:
         need(listed[what], f"the compiler's message for {what}", parts, all_of_it=parts[0] in C_WHOLE_PARTS)
-    # 2. The number methods: the names the checker resolves on an integer and on a float. (The lists of
-    # src/check/suggest.cee, for "did you mean", are copies of the first and the third.)
+    # 2. The number methods: the names the checker resolves on an integer and on a float, each one list of names
+    # separated by spaces, which integerMethod and floatMethod accept and "did you mean" (src/check/suggest.cee) reads.
     numbers = read(root, "src/check/io.cee")
-    for function, part, least in (("integerMethod", "Integers", 10), ("integerBitMethod", "Integers", 5),
-                                  ("floatMethod", "Floats", 5)):
-        body = between(numbers, f"fn {function}(", "\n}\n", "src/check/io.cee")
-        names = at_least(re.findall(r'sameText\(name, "([A-Za-z]+)"\)', body), least,
+    for function, part, least in (("integerMethodNames", "Integers", 15), ("floatMethodNames", "Floats", 5)):
+        body = between(numbers, f"fn {function}(", ";\n", "src/check/io.cee")
+        texts = re.findall(r'"([A-Za-z ]+)"', body)
+        names = at_least(texts[0].split() if len(texts) == 1 else [], least,
                          f"the names of {function} (src/check/io.cee)")
         need(names, f"{function} (src/check/io.cee)", [part], all_of_it=True)
     # 3. The built-in functions.

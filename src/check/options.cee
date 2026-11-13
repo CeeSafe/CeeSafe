@@ -35,6 +35,24 @@ fn resolveOptionalType(c: borrow mut Checker, inner: u32, allowSources: bool) ->
     return optionOf(c, value);
 }
 
+/// The built-in types that take type arguments (resolveGenericType's names), separated by spaces: what the "did you
+/// mean" of an unknown type name is chosen from (appendTypeDidYouMean), with the structs and enums in scope.
+fn builtinGenericTypeNames() -> StringView =>
+    "Vector String Slice SliceMut Result Box Pool PoolBox SlotMap StableVector Handle Thread";
+
+/// Does `symbol` name nothing the current file can reach: no item, no built-in and no type parameter in scope?
+fn isNoItem(c: borrow Checker, symbol: u32) -> bool {
+    let nothing = match (c.item(symbol)) {
+        Entity.None => true,
+        _ => false,
+    };
+    let builtin = match (c.builtins.get(Word { value: symbol as u64 })) {
+        Some(_) => true,
+        null => false,
+    };
+    return nothing && !builtin && environmentType(c, symbol) == none();
+}
+
 /// `Name<…>` for the built-in generic types; S2c resolves `Result<T, E>` and reports the wrong-arity and unknown
 /// cases; the containers come with S3 and user generics with S4.
 fn resolveGenericType(
@@ -152,6 +170,13 @@ fn resolveGenericType(
         appendText(mut message, "<T, A>'")?;
     } else if (sameText(n, "Handle")) {
         appendText(mut message, "'Handle' takes one type argument: 'Handle<T>'")?;
+    } else if (name.parts.count == 1 && c.types.lookup(n) == none() &&
+        wordIndex(builtinGenericTypeNames(), n) == none() && isNoItem(c, first.symbol)) {
+        // No type has this name (`Vec<i32>`): that, and the names close to it, before anything about type arguments.
+        appendText(mut message, "unknown type '")?;
+        appendBytes(mut message, n)?;
+        appendText(mut message, "'")?;
+        appendTypeDidYouMean(c, mut message, first.symbol)?;
     } else {
         appendText(
             mut message,

@@ -606,6 +606,9 @@ struct Checker {
                     appendText(mut message, "unknown type '")?;
                     appendBytes(mut message, text.view())?;
                     appendText(mut message, "'")?;
+                    if (isNoItem(this, ident.symbol)) {
+                        appendTypeDidYouMean(this, mut message, ident.symbol)?;
+                    }
                     this.error(unknownType(), span.start, span.end, message)?;
                     return Ok(this.types.error);
                 }

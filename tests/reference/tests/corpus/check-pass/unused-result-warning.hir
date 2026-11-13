@@ -43,7 +43,7 @@
       )
       (var v#0: Vector<i32> = (Process.exit))
       (expr (Process.exit (borrow-mut v#0) 4:i32))
-      (let g#1: fn() -> Result<void, AllocError> = (closure 1013 () (block (return (call save 5:i32):Result<void, AllocError>))):fn() -> Result<void, AllocError>)
+      (let g#1: fn() -> Result<void, AllocError> = (closure 1036 () (block (return (call save 5:i32):Result<void, AllocError>))):fn() -> Result<void, AllocError>)
       (expr (Process.exit g#1))
       (if (> (length v#0):usize 0:usize):bool
         (block

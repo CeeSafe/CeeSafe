@@ -197,7 +197,7 @@ task 3 failed; the others ran to the end
 ```
 
 - `Async.tasks(limit, oom, body)` runs `body` with the set, then waits for every task it started. The set's error type
-  is `oom`'s, and must be `Copy`.
+  is `oom`'s, and must be `Copy` and `Send`.
 - `await set.spawn(async move () => …)` waits while `limit` tasks run; `set.trySpawn(…)` is `false` instead.
 - One task's error does not stop the others: the set reports the first. The body's error cancels them all.
 - A task may outlive the function that started it, so it owns what it captures: no references or views (N0349).

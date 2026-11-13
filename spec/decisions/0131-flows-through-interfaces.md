@@ -1,7 +1,11 @@
 # ADR 0131 — A value of a type parameter's type is followed as a scoped value is
 
-- Status: **Proposed** by the integrator on 2026-11-13 after an independent soundness review found the hole;
-  implemented on branch `fix/interface-result-loans`; awaits the owner's acceptance; not yet released. Its first
+- Status: **Accepted** by the owner, 2026-11-13 ("Ship 0.42.1 sooner. Follow with 0.42.2"). §2.1 to §2.11 (the
+  first three rounds) are released in ceesafec 0.42.1, with the rule that a type parameter bounded by `Send` or
+  `Share` holds no loan; §2.12 and §2.13 (the fourth round: built-in stores and store targets, which 0.42.1's own
+  copy of this ADR lists in its §10 as known not to be covered) are implemented on branch
+  `fix/interface-result-loans` and not yet released. Proposed by the integrator after an independent soundness
+  review found the hole. Its first
   form (flows through interfaces, and a loan "of the function's own storage" kept by such a value) was broken by a
   second independent review the same day; §2 is the second form, which replaces it. A third review broke the
   second form's implementation in three ways, one of them a regression against 0.42.0: §2.9 to §2.11 and §4 are the

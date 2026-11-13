@@ -244,7 +244,12 @@ fn appendNumberDidYouMean(
 ) -> Result<void, AllocError> {
     let names = if (c.types.is(typ, TypeKind.Float)) floatMethodNames() else integerMethodNames();
     var members = Vector<Vector<u8>>.create();
-    let _ = methodNamesOf(c, typ, names, wanted, mut members)?;
+    // The count is not needed here. (A named local, not `let _`: ceesafec 0.8.0, which builds this file in the
+    // release's chain, does not have it.)
+    let found = methodNamesOf(c, typ, names, wanted, mut members)?;
+    if (found == 0) {
+        return appendNameChoices(message, members);
+    }
     return appendNameChoices(message, members);
 }
 

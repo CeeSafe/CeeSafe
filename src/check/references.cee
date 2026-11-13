@@ -1154,7 +1154,12 @@ fn inheritFlows(c: borrow mut Checker, f: u32, function: u32) -> Result<void, Al
     if (c.declaredFlows[f as usize].function == function) {
         return Ok();
     }
-    let _ = missingDeclaredFlows(c, f, function, true)?;
+    // The count is for the self-check below; here the flows are added and it is not needed. (A named local, not
+    // `let _`: ceesafec 0.8.0, which builds this file in the release's chain, does not have it.)
+    let added = missingDeclaredFlows(c, f, function, true)?;
+    if (added > 0) {
+        return Ok();
+    }
     return Ok();
 }
 

@@ -115,8 +115,16 @@ fn synthStructLiteral(
         appendBytes(mut text, c.name(nameIdent.symbol))?;
         let unknown = c.types.lookup(text.view()) == none() && isNone(c.lookup(nameIdent.symbol)?);
         var message = Vector<u8>.create();
-        appendQuotedName(mut message, c, nameIdent.symbol)?;
-        appendText(mut message, " is not a struct type")?;
+        if (unknown && isNoItem(c, nameIdent.symbol)) {
+            // Nothing has this name (`Vec<i32> { … }`): that, and the types close to it, as a type position says it;
+            // "is not a struct type" is for a name that is something else.
+            appendText(mut message, "unknown type ")?;
+            appendQuotedName(mut message, c, nameIdent.symbol)?;
+            appendTypeDidYouMean(c, mut message, nameIdent.symbol)?;
+        } else {
+            appendQuotedName(mut message, c, nameIdent.symbol)?;
+            appendText(mut message, " is not a struct type")?;
+        }
         c.error(if (unknown) unknownType() else notAStruct(), nameSpan.start, nameSpan.end, message)?;
         for (k in 0..fields.count) {
             let init = c.front.ast.fieldInits[c.front.ast.at(fields, k) as usize];

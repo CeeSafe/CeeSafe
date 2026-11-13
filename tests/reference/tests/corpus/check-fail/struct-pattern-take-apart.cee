@@ -38,6 +38,13 @@ struct Open {
     n: u32;
 }
 
+struct Both {
+    a: Guard;
+    b: Guard;
+
+    drop {}
+}
+
 fn literal(g: Guard) -> usize {
     if (g is Guard { name, n: 8 }) { // error[N0252]
         return name.length;
@@ -128,6 +135,84 @@ fn outerTests(h: Holder) -> u32 {
 fn outerOfNestedTest(h: Holder) -> usize {
     if (h is Holder { guard: Guard { name: _, n: 8 }, n }) {
         return h.guard.name.length + n as usize;
+    }
+    return 0;
+}
+
+// One move refused is one diagnostic, at the innermost pattern that refuses it (the runner counts: a second N0252
+// on any line of these patterns would be unexpected). Both structs have a `drop` block, and the nested pattern
+// tests: it is reported on the nested pattern's line, and not again on the line the outer pattern starts.
+fn refusedOnceNested(h: Holder) -> usize {
+    if (h is Holder {
+        guard: Guard { name, n: 8 }, // error[N0252]
+        n: _
+    }) {
+        return name.length;
+    }
+    return 0;
+}
+
+// The same with `..`: neither pattern takes its value apart.
+fn refusedOnceWithRest(h: Holder) -> usize {
+    if (h is Holder {
+        guard: Guard { name, .. }, // error[N0252]
+        ..
+    }) {
+        return name.length;
+    }
+    return 0;
+}
+
+// And on one line, with `Some` around it: still one.
+fn refusedOnceUnderSome(h: Holder?) -> usize {
+    if (h is Some(Holder { guard: Guard { name, n: 8 }, n: _ })) { // error[N0252]
+        return name.length;
+    }
+    return 0;
+}
+
+// Only the outer pattern is at fault: the nested one binds every field, and would take the guard apart, but the
+// outer one tests `n` and only reads the holder. Reported where the outer pattern starts.
+fn outerRefusesMove(h: Holder) -> usize {
+    if (h is Holder { // error[N0252]
+        guard: Guard { name, n: _ },
+        n: 2
+    }) {
+        return name.length;
+    }
+    return 0;
+}
+
+// Only the nested pattern is at fault: the outer struct has no `drop` block.
+fn nestedRefusesMove(o: Open) -> usize {
+    if (o is Open {
+        guard: Guard { name, n: 8 }, // error[N0252]
+        n: _
+    }) {
+        return name.length;
+    }
+    return 0;
+}
+
+// Two fields, each refused where it stands: two diagnostics, and none for the pattern around them.
+fn twoFieldsRefused(p: Both) -> usize {
+    if (p is Both {
+        a: Guard { name, n: 8 }, // error[N0252]
+        b: Guard { name: other, n: 9 } // error[N0252]
+    }) {
+        return name.length + other.length;
+    }
+    return 0;
+}
+
+// A nested pattern refused, and a field the outer pattern itself would move out: the outer one reports its own
+// binding (`b`), not the nested one's again.
+fn nestedAndOwnField(p: Both) -> usize {
+    if (p is Both { // error[N0252]
+        a: Guard { name, n: 8 }, // error[N0252]
+        b
+    }) {
+        return name.length + b.name.length;
     }
     return 0;
 }

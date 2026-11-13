@@ -165,7 +165,9 @@ fn finishFixRound(
     for (f in files.view()) {
         let source = borrow sources[f as usize];
         let text = fixedText(diagnostics, source, f, taken)!;
-        let path = StringView.fromUtf8(source.path.view())!;
+        // Where the file was read, not the path diagnostics name: that one is the file's name alone for a file
+        // outside the working directory (c-backend.md §7), which is another file or none.
+        let path = StringView.fromUtf8(if (source.readPath.length > 0) source.readPath.view() else source.path.view())!;
         match (writeFile(path, text.view())) {
             Ok() => {}
             Err(e) => {
@@ -176,6 +178,26 @@ fn finishFixRound(
                 message.append(e.message())!;
                 return fail(message.view());
             }
+        }
+        // The next round reads the file again: a fix has taken only if what it reads is the fixed text, and that
+        // is not the text this round read. Otherwise the rounds would repeat the same fixes to the last one.
+        var holds = !sameBytes(text.view(), source.text.view());
+        if (holds) {
+            match (readFile(path)) {
+                Ok(bytes) => {
+                    let read = SourceText.create(path.bytes(), bytes.view())!; // without a byte order mark
+                    holds = sameBytes(read.text.view(), text.view());
+                }
+                Err(_) => { holds = false; }
+            }
+        }
+        if (!holds) {
+            report(json, diagnostics, sources);
+            var message = copyBytes("ceesafec fix: the fixes written to '".bytes())!;
+            appendBytes(mut message, path.bytes())!;
+            appendText(mut message, "' did not take: the file does not read back with them; no fix is counted\n")!;
+            Console.writeError(StringView.fromUtf8(message.view())!);
+            return 1;
         }
     }
     if (!json) {

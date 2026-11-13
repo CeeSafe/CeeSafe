@@ -1517,6 +1517,45 @@ fn firstMovingBinding(c: borrow Checker, pattern: u32) -> u32 {
     }
 }
 
+/// firstMovingBinding, without the bindings under a struct pattern that was refused where it stands: a pattern on a
+/// struct with a `drop` block that does not take it apart has reported its moving binding itself (N0252, in
+/// checkStructPattern), and the patterns around it do not report that move again.
+fn firstMoveNotRefused(c: borrow Checker, pattern: u32) -> u32 {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.At(local, inner) => {
+            if (!c.types.isCopy(c.hir.locals[local as usize].typ)) {
+                return local;
+            }
+            return firstMoveNotRefused(c, inner);
+        }
+        HirPattern.Variant(_, listed, payload) => {
+            if (listed) {
+                for (k in 0..payload.count) {
+                    let found = firstMoveNotRefused(c, c.hir.at(payload, k));
+                    if (found != none()) {
+                        return found;
+                    }
+                }
+            }
+            return none();
+        }
+        HirPattern.Or(alternatives) => { return firstMoveNotRefused(c, c.hir.at(alternatives, 0)); }
+        HirPattern.Struct(typ, fields, apart) => {
+            if (!apart && hasDropFunction(c, typ)) {
+                return none();
+            }
+            for (k in 0..fields.count) {
+                let found = firstMoveNotRefused(c, c.hir.at(fields, k));
+                if (found != none()) {
+                    return found;
+                }
+            }
+            return none();
+        }
+        _ => { return firstMovingBinding(c, pattern); }
+    }
+}
+
 /// Does a match of the pattern take a struct with a `drop` block apart (ADR 0123 §2.6), at any depth?
 fn takesApart(c: borrow Checker, pattern: u32) -> bool {
     match (c.hir.patterns[pattern as usize]) {
@@ -1629,7 +1668,21 @@ fn checkStructPattern(
         return c.hir.addPattern(HirPattern.Wildcard);
     }
     let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize];
-    if (!namesStruct(c, path, typ)) {
+    var same = namesStruct(c, path, typ);
+    if (!same && path.parts.count == 1 && c.types.lookup(c.name(first.symbol)) == none() &&
+        isNoItem(c, first.symbol) && isNone(c.lookup(first.symbol)?)) {
+        // Nothing has this name (`p is Pont { x, y }`): an unknown type, with the types close to it, as a struct
+        // literal and a type position say it. The pattern is then checked as one of the value's type, so that its
+        // bindings exist and the misspelt name is the only thing reported.
+        var message = Vector<u8>.create();
+        appendText(mut message, "unknown type ")?;
+        appendQuotedName(mut message, c, first.symbol)?;
+        appendTypeDidYouMean(c, mut message, first.symbol)?;
+        c.error(unknownType(), path.start, path.end, message)?;
+        failed = true;
+        same = true;
+    }
+    if (!same) {
         var message = Vector<u8>.create();
         appendText(mut message, "this pattern names another type than the value's, ")?;
         appendQuotedType(mut message, c, typ)?;
@@ -1740,10 +1793,12 @@ fn checkStructPattern(
         }
         apart = total && !tests;
         if (!apart) {
+            // One move refused is one diagnostic, at the innermost pattern that refuses it: a nested pattern that
+            // reported its binding is not reported again here.
             var moved = none();
             for (i in 0..fieldCount) {
                 if (moved == none()) {
-                    moved = firstMovingBinding(c, trees[i]);
+                    moved = firstMoveNotRefused(c, trees[i]);
                 }
             }
             var nestedApart = false;

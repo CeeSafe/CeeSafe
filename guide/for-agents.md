@@ -564,6 +564,36 @@ main.cee:2:13: error[N0200]: cannot find 'Vec' in this scope; did you mean 'Vect
   |             ^^^^^^^^
 ```
 
+A struct literal and a struct pattern name a type too, and say the same of a name that nothing declares:
+
+<!-- ceesafe: fail N0204 -->
+```ceesafe
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn sum(p: Point) -> i32 {
+    if (p is Pont { x, y }) {
+        return x + y;
+    }
+    let v = Vec<i32> { x: 1 };
+    return 0;
+}
+```
+
+```text
+main.cee:7:14: error[N0204]: unknown type 'Pont'; did you mean 'Point'?
+  |
+7 |     if (p is Pont { x, y }) {
+  |              ^^^^
+
+main.cee:10:13: error[N0204]: unknown type 'Vec'; did you mean 'Vector', 'VectorRaw' or 'VectorBytes'?
+   |
+10 |     let v = Vec<i32> { x: 1 };
+   |             ^^^
+```
+
 <!-- ceesafe: fail N0234 -->
 ```ceesafe
 fn describe(e: IoError) -> StringView => e.text();

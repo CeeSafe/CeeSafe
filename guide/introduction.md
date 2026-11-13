@@ -36,10 +36,10 @@ closing account 7
 In safe code, which is all code outside an `unsafe` block, CeeSafe rules out:
 
 - **use after free and double free:** every value has one owner, and it is destroyed exactly once;
-- **dangling references:** a reference cannot outlive what it refers to, which the compiler checks without lifetime
+- **dangling pointers:** a borrow cannot outlive what it borrows, which the compiler checks without lifetime
   annotations in most code;
-- **data races between a reference and a write:** while something is borrowed it cannot be changed, and while it is
-  borrowed mutably nothing else can read it;
+- **data races between a borrow and a write:** while something is borrowed it cannot be changed, and while it is
+  borrowed exclusively nothing else can read it;
 - **out-of-bounds access and reading uninitialised memory:** indexes are checked, and a variable must be assigned
   before it is read;
 - **silent integer overflow:** arithmetic that overflows stops the program, in every build. Where wrapping is meant,
@@ -50,8 +50,8 @@ at the end of its scope, or when its owner is, in an order the language defines.
 
 ## What makes it different
 
-- **Lifetimes without annotations, mostly.** A function that takes and returns references names the parameters its
-  result borrows from (`-> borrow(a, b) T`). Only types that store references, and functions over them, declare
+- **Lifetimes without annotations, mostly.** A function that takes and returns borrows names the parameters its
+  result borrows from (`-> borrow(a, b) T`). Only types that store borrows, and functions over them, declare
   region parameters.
 - **Allocation is explicit and pluggable.** Each allocation chooses its allocator: the system heap, an arena, a pool,
   a fixed buffer, a scratch frame, or your own. Allocation failure is a value (`Result<T, AllocError>`), handled or

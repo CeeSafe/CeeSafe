@@ -117,6 +117,8 @@ Nothing but an `await` suspends a task: the code between two awaits runs without
 *Specification: `type-system.md` §40.2.*
 :::
 
+An `await` is therefore a **suspension point**: a place where the task may stop and be resumed later.
+
 ## Borrows, methods and recursion
 
 An async function takes borrows as any function does, and may hold a borrow across an `await`. A method may be
@@ -188,7 +190,7 @@ fn main() {
 ```
 
 A frame cannot contain itself, so for a recursive `await` the callee's frame comes from a stack of frames that the
-task keeps, which grows as a call stack does.
+task keeps, its **frame stack**, which grows as a call stack does.
 
 ## Mistakes
 
@@ -247,7 +249,7 @@ Make `show` async, and then its callers must await it or run it. That is how asy
 function that waits to `main`, where one `Async.run` ends it. The other way round needs no change: async code calls
 ordinary functions freely, as long as they do not block.
 
-::: warning Mistake: dropping the `Result` of a wait
+::: warning Mistake: discarding the `Result` of a wait
 A wait that fails says so in its `Result`. A statement that ignores it loses a cancellation.
 :::
 

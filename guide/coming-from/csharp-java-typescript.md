@@ -66,7 +66,7 @@ takes it by value. Calling `deposit` needs `a` to be a `var`.
 
 **Values, not references.** Assigning a struct copies it (if every field is copyable) or moves it, never shares it.
 Two variables never point to the same object unless one *borrows* the other, and a borrow is checked: while something
-is borrowed mutably, nothing else can use it.
+is borrowed exclusively, nothing else can use it.
 
 **Destruction is deterministic.** An object is destroyed when its owner goes out of scope, by assignment, or when the
 object that owns it is destroyed. A `drop` block runs then, exactly once: closing a file or releasing a lock does not

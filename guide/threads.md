@@ -31,11 +31,11 @@ fn main() {
 
 - The vector is moved into the thread. The spawner cannot use it afterwards, so nothing is shared.
 - Spawning can fail (no memory, no thread): `Thread.spawn` returns a `Result`, here unwrapped with `!`.
-- A `Thread<T>` that is dropped without `join` is joined then: every thread ends before `main` returns.
+- A `Thread<T>` that is destroyed without `join` is joined then: every thread ends before `main` returns.
 - A panic in any thread ends the whole program.
 
 The thread runs the closure's body once, so the body may move a captured value out, for instance to give it back.
-What the body does not move out, it drops when it returns, on its thread:
+What the body does not move out, it destroys when it returns, on its thread:
 
 ```ceesafe
 fn main() {
@@ -77,7 +77,7 @@ Return the count from the closure (`join` gives it back), or share it as the nex
 
 ## What may cross: `Send`
 
-A value may move to another thread if it is `Send`. Plain data, strings, vectors and boxes are. References are not,
+A value may move to another thread if it is `Send`. Plain data, strings, vectors and boxes are. Borrows are not,
 nor anything that holds one, nor raw pointers. The compiler infers it, and reports N0334 where it fails:
 
 <!-- ceesafe: fail N0334 -->
@@ -97,10 +97,10 @@ main.cee:4:26: error[N0334]: this thread's closure captures 'address', a '*u64',
 ```
 
 A value that two threads *read* at once must also be `Share`. Most `Send` types are, but not a `StableVector`, whose
-`push` changes it through a shared reference, nor a `Box<dyn I + Send>`, whose contents the compiler cannot see, nor
+`push` changes it through a shared borrow, nor a `Box<dyn I + Send>`, whose contents the compiler cannot see, nor
 anything that holds one. Put such a value behind a `Mutex` to share it.
 
-`Send` and `Share` can also bound a generic function: `fn run<T: Send>(value: T)`. Such a `T` holds no reference, so
+`Send` and `Share` can also bound a generic function: `fn run<T: Send>(value: T)`. Such a `T` holds no borrow, so
 a thread's closure may give it back: `Thread.spawn(move () => value)!.join()`.
 
 ## Sharing: `Arc`, `Mutex` and atomics
@@ -127,7 +127,7 @@ fn main() {
             }
         })!)!;
     }
-    threads.clear(); // dropping the threads joins them
+    threads.clear(); // destroying the threads joins them
     var guard = tally.get().lock();
     Console.writeLine(guard.data().count);
 }
@@ -138,7 +138,7 @@ fn main() {
 ```
 
 `lock` waits until the lock is free. `tryLock` never waits: it returns the guard, or null if a thread holds the lock
-(the calling thread included). A guard unlocks where it is dropped: at the end of its block, or earlier where it is
+(the calling thread included). A guard unlocks where it is destroyed: at the end of its block, or earlier where it is
 moved away, as by `let _ = guard;`.
 
 ```ceesafe
@@ -165,7 +165,7 @@ false
 ```
 
 For a counter or a flag, an atomic is simpler: `AtomicU64`, `AtomicU32`, `AtomicUSize` and `AtomicBool` change
-through a shared reference with `load`, `store`, `swap`, `compareExchange`, `fetchAdd` and `fetchSub`, and the
+through a shared borrow with `load`, `store`, `swap`, `compareExchange`, `fetchAdd` and `fetchSub`, and the
 integer ones with `fetchOr` and `fetchAnd`.
 
 Those are sequentially consistent: every thread sees every atomic operation in one order. That is the simple rule,
@@ -315,7 +315,7 @@ fn main() {
 - `send(value)` waits while the channel is full. On a closed channel it gives the value back as `Err(value)`.
 - `recv()` waits while the channel is empty, and is `null` once the channel is closed and empty.
 - `trySend` and `tryRecv` never wait; `close()` ends the channel for every handle, and `isClosed()` asks.
-- The values still buffered are dropped with the last handle.
+- The values still buffered are destroyed with the last handle.
 - Tasks use the same channel with `sendAsync` and `recvAsync` ([Async tasks](async.md)).
 - The interpreter runs threads one at a time, and reports a thread that waits to send on a full channel as a
   deadlock: there, give the channel room for what is sent before the receiver runs, as above.

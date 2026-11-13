@@ -24,7 +24,7 @@ no element.
 
 ## Slicing an array
 
-<span class="listing-caption"><strong>Listing 4-12</strong>, <code>main.cee</code>: One function adds up any run of elements.</span>
+<span class="listing-caption"><strong>Listing 4-13</strong>, <code>main.cee</code>: One function adds up any run of elements.</span>
 
 ```ceesafe
 fn sum(values: Slice<i32>) -> i32 {
@@ -66,7 +66,7 @@ fn main() {
 A range of a variable gives a `Slice<T>`. For a `SliceMut<T>`, say so: `mut a[lo..hi]` as an argument, as for any
 `borrow mut` parameter, or `borrow mut a[lo..hi]` elsewhere.
 
-<span class="listing-caption"><strong>Listing 4-13</strong>, <code>main.cee</code>: A function sets two elements to zero through a <code>SliceMut</code>, and <code>main</code> writes one through another.</span>
+<span class="listing-caption"><strong>Listing 4-14</strong>, <code>main.cee</code>: A function sets two elements to zero through a <code>SliceMut</code>, and <code>main</code> writes one through another.</span>
 
 ```ceesafe
 fn clear(values: SliceMut<i32>) {
@@ -103,7 +103,7 @@ A `Vector<T>` is a list that grows; `push` adds an element, and its `!` stops th
 ([chapter 8](./ch08-01-vectors) covers vectors). A vector is sliced as an array is, and it can also be passed
 whole where a `Slice<T>` is expected.
 
-<span class="listing-caption"><strong>Listing 4-14</strong>, <code>main.cee</code>: The same <code>sum</code> takes a vector, and part of one.</span>
+<span class="listing-caption"><strong>Listing 4-15</strong>, <code>main.cee</code>: The same <code>sum</code> takes a vector, and part of one.</span>
 
 ```ceesafe
 fn sum(values: Slice<i32>) -> i32 {
@@ -147,7 +147,7 @@ except through it.
 A `StringView` is a shared borrow of text. A string literal is one, a range of a `StringView` is another, and a
 `String` lends its text where a `StringView` is expected.
 
-<span class="listing-caption"><strong>Listing 4-15</strong>, <code>main.cee</code>: <code>firstWord</code> returns a view of part of the text it was given.</span>
+<span class="listing-caption"><strong>Listing 4-16</strong>, <code>main.cee</code>: <code>firstWord</code> returns a view of part of the text it was given.</span>
 
 ```ceesafe
 fn firstWord(text: StringView) -> StringView {
@@ -193,7 +193,7 @@ and parts of either.
 A slice knows its length, and every index and every range is checked against it when the program runs. An index
 outside the slice stops the program with a panic. It never reads the memory beside the slice.
 
-<span class="listing-caption"><strong>Listing 4-16</strong>, <code>main.cee</code>: The slice has two elements. The second call asks for a third, and the program panics.</span>
+<span class="listing-caption"><strong>Listing 4-17</strong>, <code>main.cee</code>: The slice has two elements. The second call asks for a third, and the program panics.</span>
 
 <!-- ceesafe: panics -->
 ```ceesafe
@@ -233,7 +233,7 @@ A vector that grows may move its elements to a larger piece of memory. A slice m
 old one. In C++ this compiles and fails at run time; in CeeSafe the borrow rule rejects it.
 :::
 
-<span class="listing-caption"><strong>Listing 4-17</strong>, <code>main.cee</code>: <code>s</code> is used after <code>v</code> grows. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-18</strong>, <code>main.cee</code>: <code>s</code> is used after <code>v</code> grows. This does not compile.</span>
 
 <!-- ceesafe: fail N0241 -->
 ```ceesafe
@@ -266,7 +266,7 @@ A value that is made in an expression and not given a name is a temporary. It is
 statement, so a view of it cannot be kept longer than that.
 :::
 
-<span class="listing-caption"><strong>Listing 4-18</strong>, <code>main.cee</code>: <code>v</code> would be a view of a <code>String</code> that is already destroyed. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-19</strong>, <code>main.cee</code>: <code>v</code> would be a view of a <code>String</code> that is already destroyed. This does not compile.</span>
 
 <!-- ceesafe: fail N0243 -->
 ```ceesafe
@@ -292,7 +292,7 @@ main.cee:6:5: error[N0243]: a temporary value is dropped at the end of this stat
 `view()` gives the `StringView` of a `String`. Nothing owns the `String` that `make()` returns, so it is destroyed
 at the `;` of line 6. Give it an owner, as the message says, or use the view inside the one statement:
 
-<span class="listing-caption"><strong>Listing 4-19</strong>, <code>main.cee</code>: A view used within its statement, and a view of a value that has an owner.</span>
+<span class="listing-caption"><strong>Listing 4-20</strong>, <code>main.cee</code>: A view used within its statement, and a view of a value that has an owner.</span>
 
 ```ceesafe
 fn make() -> String {

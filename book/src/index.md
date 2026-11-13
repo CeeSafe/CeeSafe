@@ -27,8 +27,15 @@ This book teaches the language from the start, and is the place to look a rule u
   table of contents with one sentence for each section. Every section is also plain Markdown at its own address
   with `.md` added, and the whole book is one file, [`llms-full.txt`](/CeeSafe/book/llms-full.txt){target="_blank"}.
 
-Every listing in this book is a whole program. The compiler has checked each one, and run it; what is printed
-beneath a listing is what it printed.
+Every listing in this book is a whole file, and the compiler has been given each one. What happens then depends
+on the kind of listing, which the page says:
+
+- **A program** is checked and run, and what is printed beneath it is what it printed.
+- **A mistake**, shown on purpose, must be refused: beneath it is the compiler's own message.
+- **A file of a larger package** is checked, and tested, with its package under `book/projects/`.
+
+[Appendix I](./appendix-i-for-ai-models#the-kinds-of-listing) has the kinds in full, with how many of each the
+book holds.
 
 The book is whole: chapters 1 to 22, Appendices A to J and the glossary. The rules in full are the
 [specification](https://ceesafe.github.io/CeeSafe/reference/), and every member of every library type is on the

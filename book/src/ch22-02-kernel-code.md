@@ -170,7 +170,7 @@ of a function marked `@constant` (a function whose body is one such expression).
 
 ::: tip Rule
 A `static` has a type that is safe to share and is used through shared borrows. Every use of a `static mut` is
-unsafe. Both are initialised at compile time, and neither is ever dropped.
+unsafe. Both are initialised at compile time, and neither is ever destroyed.
 
 *Specification: `type-system.md` §39.1 to §39.4.*
 :::

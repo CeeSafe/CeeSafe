@@ -1,0 +1,87 @@
+name: checks
+
+# What the documents say is what the compiler does. When a release is tagged (v<version>, as release.yml), and when
+# started by hand, ceesafec is built from the tree and the three document checks of the contract suite run against it
+# (spec/testing.md §4):
+#
+#   tools/book_check.py   every listing of the book, checked and run or refused as its page says; the packages under
+#                         book/projects/; the appendices against the compiler's own lists
+#   tools/guide_check.py  every example of the guide
+#   tools/spec_check.py   the specification, its links, the diagnostics' explanations, the API pages
+#
+# The site builds (docs.yml) do not compile a listing. The owner (2026-11-14) runs this on release tags only, not on
+# pull requests or pushes to main: it reports on the release's commit beside release.yml and does not hold the
+# release back. Run it on a branch from the Actions page ("Run workflow") before merging a change to the book or the
+# compiler. The whole contract suite (tools/contract_tests.py) is run before a release (docs/release.md), not here.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # The fallback's stage 0 (Decision 0009; the same as release.yml's).
+  STAGE0_TAG: v0.3.2
+  STAGE0_ASSET: ceesafec-linux-x64.tar.gz
+  STAGE0_SHA256: 59c1810bba0bb90ec96756eda28869c847a0a332fd9e055043a18a5f45b09d22 # v0.3.2's SHA256SUMS
+
+jobs:
+  documents:
+    name: book, guide and specification against the compiler
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the fallback's chain builds earlier commits; Appendix J is compared with the tags
+      - name: A released ceesafec
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The latest release builds the tree at once unless the tree has library code that release lacks and uses
+          # it in the compiler's own sources; then the chain from the stage 0 does (the next step).
+          mkdir -p released
+          for try in 1 2 3 4 5; do
+            gh release download -R "$GITHUB_REPOSITORY" -p ceesafec-linux-x64.tar.gz -p SHA256SUMS -D released --clobber && break
+            [ "$try" = 5 ] && exit 1
+            echo "the latest release: download failed (try $try), retrying in 30 s"; sleep 30
+          done
+          (cd released && grep ' ceesafec-linux-x64.tar.gz$' SHA256SUMS | sha256sum -c - && tar -xzf ceesafec-linux-x64.tar.gz)
+          find released -name ceesafec -type f -exec {} --version \;
+      - name: ceesafec from the tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          released=$(find "$PWD/released" -name ceesafec -type f | head -1)
+          mkdir -p out
+          if "$released" build -o out/first; then
+            echo "built by $("$released" --version)"
+          else
+            echo "::notice::the latest release does not build this tree: bootstrapping from $STAGE0_TAG (tools/bootstrap_release.sh)"
+            for try in 1 2 3 4 5; do
+              gh release download "$STAGE0_TAG" -R "$GITHUB_REPOSITORY" -p "$STAGE0_ASSET" -O stage0.tar.gz --clobber && break
+              [ "$try" = 5 ] && exit 1
+              sleep 30
+            done
+            echo "$STAGE0_SHA256  stage0.tar.gz" | sha256sum -c -
+            mkdir -p stage0 && tar -xzf stage0.tar.gz -C stage0
+            sh tools/bootstrap_release.sh "$PWD/stage0/ceesafec" HEAD out/first
+          fi
+          # The checks run on the compiler the tree's own compiler builds: what a release would ship.
+          out/first build -o out/ceesafec
+          out/ceesafec --version
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # tools/book_check.py reads book/toc.mjs with node
+      - name: The specification
+        run: python3 tools/spec_check.py --ceesafec out/ceesafec
+      - name: The guide's examples
+        run: python3 tools/guide_check.py --ceesafec out/ceesafec
+      - name: The book's listings, packages and appendices
+        run: python3 tools/book_check.py --ceesafec out/ceesafec

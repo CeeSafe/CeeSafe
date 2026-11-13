@@ -218,9 +218,11 @@ E1–E4 deliberately trade expressiveness for an implementation of tractable siz
 
 ### Unsafe
 
-- **U1 — Capabilities.** Raw pointer dereference, pointer arithmetic, calls to
-  `extern` or `unsafe fn`, `transmute`, access to `static mut`, MMIO and inline
-  assembly are allowed only inside `unsafe { }` or an `unsafe fn`.
+- **U1 — Capabilities.** Reading and writing through a raw pointer, pointer arithmetic, making a
+  reference, a slice, a box or a vector from raw parts, a call to an `extern` function or an
+  `unsafe fn` or through a C function pointer, and every use of a `static mut` are allowed only
+  inside `unsafe { }` or an `unsafe fn` (N0280 otherwise). The operations are listed in `unsafe.md`
+  §1 and `type-system.md` §27.3, §29.5 and §39.3; there are no others.
 - **U2 — Contract.** Every `unsafe` block must preserve O1–O5, B1–B5, E1–E4,
   R1–R4, H1–H3 and T1–T3 *as observed by safe code*. Every `unsafe fn` and every safe
   function containing `unsafe` must state its contract in a `/// Safety:` doc

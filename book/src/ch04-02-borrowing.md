@@ -1,8 +1,8 @@
 ---
 title: Borrowing
-summary: Using a value without taking it - borrow T reads, borrow mut T reads and writes and needs mut at the call. The one rule (many readers or one writer, while a borrow is live), when a borrow ends, and the diagnostics N0240 and N0242.
+summary: Using a value without taking it - a shared borrow (borrow T) reads, an exclusive borrow (borrow mut T) reads and writes and needs mut at the call. The one rule (many readers or one writer, while a borrow is live), when a borrow ends, the reborrow that passes an exclusive borrow on, and the diagnostics N0240 and N0242.
 assumes: [ch01-03-hello-package, ch04-01-what-ownership-is]
-keywords: [borrow, "borrow mut", mut, reference, live, shared, exclusive, aliasing]
+keywords: [borrow, "borrow mut", mut, "shared borrow", "exclusive borrow", reborrow, place, reference, live, aliasing]
 diagnostics: [N0240, N0242]
 specification: ["ownership.md B1", "lifetimes.md §5"]
 ---
@@ -61,14 +61,14 @@ An argument for a `borrow mut` parameter is written `mut x`. An argument for a `
 So every place where a call may change a value shows it.
 :::
 
-`counter` is declared with `var`, not `let`, because it changes. A `let` cannot be borrowed mutably.
+`counter` is declared with `var`, not `let`, because it changes. A `let` cannot be borrowed exclusively.
 
 ## The rule
 
 ::: tip Rule: many readers or one writer
 While a borrow is **live**, the value it borrows may not be:
 
-- changed, mutably borrowed, moved or destroyed, if the borrow is shared;
+- changed, exclusively borrowed, moved or destroyed, if the borrow is shared;
 - used in any way, if the borrow is exclusive.
 
 *Specification: `ownership.md`, invariant B1.*
@@ -101,13 +101,61 @@ fn main() {
 `borrow total` makes a shared borrow by hand and `r` holds it. After line 4 nothing uses `r` again, so the borrow
 is over and `total` is free to change.
 
+What follows `borrow` or `borrow mut` must be a **place**: a variable, a field of one, or what another borrow
+leads to. A value without a name, such as the result of a call, is not a place. Bind it to a variable first.
+
+## Passing an exclusive borrow on
+
+A function that has an exclusive borrow often gives it to another function, and wants it back.
+
+<span class="listing-caption"><strong>Listing 4-10</strong>, <code>main.cee</code>: <code>recordTwice</code> lends its exclusive borrow to <code>record</code> twice, and then uses it itself.</span>
+
+```ceesafe
+struct Counter {
+    hits: u64;
+}
+
+fn record(c: borrow mut Counter) {
+    c.hits += 1;
+}
+
+fn recordTwice(c: borrow mut Counter) {
+    record(c);
+    record(c);
+    c.hits += 10;
+}
+
+fn main() {
+    var counter = Counter { hits: 0 };
+    recordTwice(mut counter);
+    Console.writeLine(counter.hits);
+}
+```
+
+```text
+12
+```
+
+In `recordTwice`, `c` is an exclusive borrow, and an exclusive borrow is never copied: two copies would be two
+writers. Nor does `record(c)` take `c` away. The call makes a **reborrow**: a new exclusive borrow of the same
+counter, lent to `record`. While the reborrow is live, `c` cannot be used. It ends when the call returns, and `c`
+is usable again, so the second call and the last line compile. The argument is written `c`, because `c` already
+is an exclusive borrow.
+
+::: tip Rule
+Passing an exclusive borrow to a function, or giving it to a `let`, reborrows it. The original cannot be used
+while the new borrow is live, and can be used again afterwards.
+
+*Specification: `type-system.md` §13.3; `ownership.md`, invariant B4.*
+:::
+
 ## Mistakes
 
 ::: warning Mistake: changing a value that is still borrowed
 Swap the two middle lines of Listing 4-9, and the borrow is live across the change.
 :::
 
-<span class="listing-caption"><strong>Listing 4-10</strong>, <code>main.cee</code>: <code>r</code> is used after <code>total</code> changes. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-11</strong>, <code>main.cee</code>: <code>r</code> is used after <code>total</code> changes. This does not compile.</span>
 
 <!-- ceesafe: fail N0240 -->
 ```ceesafe
@@ -136,7 +184,7 @@ use that keeps it live (5:5). To fix it, finish using the borrow before the chan
 An exclusive borrow shuts out reads too, not only writes.
 :::
 
-<span class="listing-caption"><strong>Listing 4-11</strong>, <code>main.cee</code>: <code>total</code> is read while <code>r</code> may still write it. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 4-12</strong>, <code>main.cee</code>: <code>total</code> is read while <code>r</code> may still write it. This does not compile.</span>
 
 <!-- ceesafe: fail N0242 -->
 ```ceesafe
@@ -159,9 +207,15 @@ main.cee:4:5: error[N0242]: cannot use 'total' while 'total' is mutably borrowed
 
 Read through the borrow instead (`Console.writeLine(r)`), or read `total` after the last use of `r`.
 
+::: info The compiler's words
+The compiler's messages call an exclusive borrow *mutably borrowed*, and a borrow a *reference*, as the
+specification does. This book says *exclusive borrow* and *borrow*, and *shared* and *exclusive* for the two
+kinds, because those words say the rule.
+:::
+
 ::: details Coming from Rust
-`borrow T` is `&T` and `borrow mut T` is `&mut T`, with the same rule and the same non-lexical lifetimes. Three
-things differ:
+Rust's reference `&T` is CeeSafe's shared borrow `borrow T`, and `&mut T` is the exclusive borrow `borrow mut T`,
+with the same rule, the same non-lexical lifetimes and the same reborrowing. Three things differ:
 
 - a shared borrow for a parameter is implicit at the call: `show(counter)`, not `show(&counter)`;
 - an exclusive one is written `mut counter`, not `&mut counter`;
@@ -182,10 +236,11 @@ points to. Those three guarantees are what the rule buys.
 
 ## Summary
 
-- `borrow T` reads; `borrow mut T` reads and writes.
+- `borrow T`, a shared borrow, reads; `borrow mut T`, an exclusive borrow, reads and writes.
 - Call a `borrow mut` parameter with `mut x`; a `borrow` parameter with `x`.
 - While a shared borrow is live, the value cannot change (`N0240`). While an exclusive borrow is live, the value
   cannot be used at all (`N0242`).
 - A borrow is live until its last use, not until the end of its block.
+- Passing an exclusive borrow on reborrows it: it is lent for the call, and usable again afterwards.
 
 Next: [Slices and views](./ch04-03-slices-and-views), which are borrows of part of a collection.

@@ -373,7 +373,8 @@ main.cee:3:24: error[N0246]: a 'Box' cannot hold a reference or slice in v0
   |                        ^^^^^^^^^^^
 ```
 
-Box the `String` itself, or keep the view in a local. The diagnostics say "reference" for a borrow.
+Box the `String` itself, or keep the view in a local. The diagnostics say "reference" for a borrow
+([Borrowing](./ch04-02-borrowing) says why).
 
 ::: details Coming from Rust
 `Box<T>` is `Box<T>`, with three differences. `Box.create` returns a `Result`, where `Box::new` aborts when memory

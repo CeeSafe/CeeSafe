@@ -168,7 +168,7 @@ The searches and parsers work on a `String` too, and on bytes: a `Slice<u8>` (or
 `Slice<u8>` where a view takes and gives `StringView`. Every view they return stays valid UTF-8. Floats parse
 correctly rounded, and accept `inf`, `infinity` and `nan` in any case.
 
-A `StringView` is a reference: a variable holding one is a `let`, and a struct or enum holding one needs a region
+A `StringView` is a borrow: a variable holding one is a `let`, and a struct or enum holding one needs a region
 parameter. For formatting into a fixed buffer without allocating, use lib/core's `TextWriter` (`text`, `byte`,
 `bytes`, `decimal` for a `u64`, `signed` for an `i64`, `hex`, then `written`).
 
@@ -255,7 +255,7 @@ fn main() {
 ```
 
 Indexes are `usize`. A range of two literals that the body indexes with is a `usize` range. Arrays and slices may
-hold views (`[StringView; 3]`, `Slice<StringView>`), but not `borrow T` references. Slice a variable, not a call's
+hold views (`[StringView; 3]`, `Slice<StringView>`), but not `borrow T` borrows. Slice a variable, not a call's
 result: bind it to a local first.
 
 ```ceesafe

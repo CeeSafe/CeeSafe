@@ -1,6 +1,6 @@
 ---
 title: Closures
-summary: Functions as values and closures - the literal (x) => body, capturing by shared borrow, by mutable borrow and by move, the types fn, borrow fn and borrow mut fn, closures in fields, and boxed closures that outlive their function.
+summary: Functions as values and closures - the literal (x) => body, capturing by shared borrow, by exclusive borrow and by move, the types fn, borrow fn and borrow mut fn, closures in fields, and boxed closures that outlive their function.
 assumes: [ch03-03-functions, ch04-02-borrowing, ch10-03-regions]
 keywords: [closure, function value, fn, "borrow fn", "borrow mut fn", capture, move, "dyn fn", Box, environment]
 diagnostics: [N0236, N0240, N0245, N0299]
@@ -226,8 +226,8 @@ fn main() {
 changes the closure's own `count`.
 
 ::: tip Rule
-A move literal is written only as the argument of `Box.create(…)` where a `Box<dyn fn…>` or
-`Box<dyn mut fn…>` is expected. It may not capture a borrow, a view, a slice or another closure: the box
+A move literal is written in two places: as the argument of `Box.create(…)` where a `Box<dyn fn…>` or
+`Box<dyn mut fn…>` is expected, and as the closure a thread runs ([Starting threads](./ch16-01-starting-threads)). It may not capture a borrow, a view, a slice or another closure: the box
 would outlive what they borrow.
 
 *Specification: `type-system.md` §36.5.*

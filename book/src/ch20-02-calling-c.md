@@ -275,7 +275,7 @@ In C, `gauge_title` calls `malloc` and `gauge_release` calls `free`.
 
 ::: tip Rule
 Memory is freed by the side that allocated it. A block from C goes back to a C function, and a `Box` or `Vector`
-is dropped by CeeSafe. Never pass one side's block to the other side's `free`.
+is destroyed by CeeSafe. Never pass one side's block to the other side's `free`.
 
 *Specification: `type-system.md` §28.6.*
 :::

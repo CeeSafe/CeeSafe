@@ -27,7 +27,7 @@ for you. This page assumes you know Rust well.
 | `x as u8` (truncates) | `truncate<u8>(x)` | `as` only converts where nothing can be lost |
 | `wrapping_add`, `checked_add`, `saturating_add` | `wrappingAdd`, `checkedAdd`, `saturatingAdd` | |
 | `\|x\| x + 1` | `(x) => x + 1` | a closure literal borrows its captures and cannot escape |
-| `Box::new(move \|x\| x + n)` | `Box.create(move (x) => x + n)!` | a `Box<dyn fn(u64) -> u64>`, which owns its captures |
+| `let f: Box<dyn Fn(u64) -> u64> = Box::new(move \|x\| x + n);` | `let f: Box<dyn fn(u64) -> u64> = Box.create(move (x) => x + n)!;` | it owns its captures; the type is written where the box is made: a typed `let`, a parameter, a field or a result |
 | `match x { A => …, }` | `match (x) { E.A => { … } }` | variants are qualified; statement arms are blocks |
 | `Some(n) if n > 3 =>`, `A \| B`, `0..=9`, `x @ P` | `Some(n) if (n > 3) =>`, `A \| B`, `0..=9`, `x @ P` | the guard is parenthesised |
 | `"get" =>`, `b"cjs" =>`, `[first, rest @ ..] =>` | `"get" =>`, `"cjs" =>`, `[first, rest @ ..] =>` | a string pattern is typed by the value: a `StringView` or a `Slice<u8>` |
@@ -122,9 +122,26 @@ holds `Box<dyn I>`.
 
 **Closures borrow, unless they are boxed.** A closure literal borrows what it captures and has a reference type
 (`borrow fn(i32) -> bool`, `borrow mut fn(i32)`), so it cannot be returned or stored. A `move` closure owns its
-captures and is boxed where it is made: `Box.create(move (x: u64) => x + n)!` is a `Box<dyn fn(u64) -> u64>`, and one
-that changes its captures a `Box<dyn mut fn()>`. There is no `Fn`/`FnMut`/`FnOnce` trait or `impl Fn`: a parameter
-takes `borrow fn(…)` or `borrow mut fn(…)`.
+captures and is boxed where it is made, where a `Box<dyn fn(…) -> R>` is expected (N0333 anywhere else, a `let`
+without a type included): `let add: Box<dyn fn(u64) -> u64> = Box.create(move (x) => x + n)!;`, and one that changes
+its captures is a `Box<dyn mut fn()>`. There is no `Fn`/`FnMut`/`FnOnce` trait or `impl Fn`: a parameter takes
+`borrow fn(…)` or `borrow mut fn(…)`.
+
+```ceesafe
+fn adder(n: u64) -> Result<Box<dyn fn(u64) -> u64>, AllocError> {
+    let add: Box<dyn fn(u64) -> u64> = Box.create(move (x) => x + n)?;
+    return Ok(add);
+}
+
+fn main() {
+    let add = adder(2)!;
+    Console.writeLine(add(40));
+}
+```
+
+```text
+42
+```
 
 **Threads and tasks.** `Thread.spawn(move () => …)` and `Thread.both` run threads; `Arc`, `Mutex` and lib/core's
 atomics share state, and `Send` and `Share` are Rust's `Send` and `Sync`. `async fn` and `await` run tasks on lib/std's

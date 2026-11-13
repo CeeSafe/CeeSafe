@@ -14,9 +14,9 @@ has neither, and tracks ownership at compile time instead, which is what lets it
 | `panic`, `recover` | panics abort; no recovery | |
 | `defer` | `defer` | runs at the end of the block, not the function |
 | slices `[]T` (growable) | `Vector<T>` (owns, grows) and `Slice<T>` (borrows) | a slice cannot outlive what it views |
-| maps | not built in yet | `SlotMap` for handles |
+| `map[K]V` | `HashMap<K, V>`, `OrderedMap<K, V>` | library types, not syntax: `put`, `get`, `remove`; a `HashMap` iterates in insertion order, an `OrderedMap` in key order |
 | `nil` | `null`, only for optionals (`T?`) | |
-| interfaces, satisfied implicitly | interfaces, implemented explicitly with `impl` | generic bounds, resolved at compile time |
+| interfaces, satisfied implicitly | interfaces, implemented explicitly with `impl` | generic bounds, resolved at compile time; `Box<dyn I>` and `borrow dyn I` for an interface value |
 | generics `[T any]` | `<T>` | |
 | goroutines, channels | async tasks in a scope, `Channel<T>` (`sendAsync`, `recvAsync`; `send`, `recv` between threads) | a task never outlives its scope; see [Async tasks](../async.md) |
 | `gofmt` | `ceesafec fmt` | one canonical style, no options |
@@ -105,12 +105,14 @@ and each of those returns a `Result`: out of memory is an error, not a crash.
 
 **Errors propagate with `?`** instead of `if err != nil`. The error type is part of the signature, usually an enum.
 
-**Interfaces are explicit and static.** A type implements an interface with an `impl` block, and interfaces are used
-as generic bounds, resolved at compile time. There is no interface value holding "some type", and no type switch.
+**Interfaces are explicit, and static by default.** A type implements an interface with an `impl` block, and
+interfaces are mostly used as generic bounds, resolved at compile time. An interface value holding "some type" is
+written as one, `Box<dyn Shape>` or `borrow dyn Shape`, and its calls are dispatched at run time. There is no type
+switch: a value that is one of several known types is an enum, taken apart by `match`.
 
 **Overflow is checked.** Integer arithmetic that overflows stops the program; Go wraps silently.
 
 ## Things you will miss
 
-Goroutines that outlive their caller, `select` over many channels (`Async.race` takes two tasks), maps, interface values and type switches, struct embedding, the standard library,
-and Go's fast tooling for large codebases.
+Goroutines that outlive their caller, `select` over many channels (`Async.race` takes two tasks), map literals and
+`m[k]` syntax, type switches, struct embedding, the standard library, and Go's fast tooling for large codebases.

@@ -1,0 +1,79 @@
+// Closures that move one capture's loan into another capture: every function must be refused.
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+struct Pair<region r> {
+    inner: Holder<r>;
+    n: i32;
+}
+fn byMethod(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+fn byField(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => { // error[N0272]
+        into.text = v; // error[N0272]
+    };
+    g();
+}
+fn byWhole(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => { // error[N0272]
+        into = Holder { text: v };
+    };
+    g();
+}
+fn byNested(into: borrow mut Pair) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => into.inner.keep(v); // error[N0272]
+    g();
+}
+fn byPush(into: borrow mut Vector<StringView>) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => into.push(v); // error[N0272] // error[N0272]
+    g()!;
+}
+fn notCalled(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+}
+fn inner(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    let g = () => { // error[N0272] // error[N0272]
+        let h = () => into.keep(v); // error[N0272]
+        h();
+    };
+    g();
+}
+fn localHolder() -> StringView {
+    var h = Holder { text: "static" };
+    {
+        let t = String.from("local")!;
+        let v = t.view();
+        let g = () => h.keep(v);
+        g();
+    }
+    return h.text; // error[N0244]
+}
+fn viaHelper(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    let v = t.view();
+    run(() => into.keep(v)); // error[N0272]
+}
+fn run(f: borrow mut fn() -> void) {
+    f();
+}
+fn main() {}

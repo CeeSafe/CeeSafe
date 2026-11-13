@@ -1,0 +1,32 @@
+// ADR 0131's hole 5 with one more call: the bound's static function is called in a generic helper, with a parameter;
+// the generic caller gives the helper a view of a local and returns what comes back.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+
+fn make<S: Build<StringView>>(hint: StringView) -> S => S.build(hint); // error[N0245] // error[N0245]
+
+fn leak<T, S: Build<StringView> + Source<T>>(d: T) -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = make<S>(t.view());
+    return s.get();
+}
+
+fn main() {
+    let dangling = leak<StringView, Holder>("static");
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(dangling);
+    Console.writeLine(fresh.view());
+}

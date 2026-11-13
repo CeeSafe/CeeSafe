@@ -1,0 +1,30 @@
+// A closure in generic code captures a value that holds a loan of a local; its result, a T, is returned.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+
+fn leak<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => s.get(); // error[N0245]
+    return g(); // error[N0244]
+}
+
+fn main() {
+    let dangling = leak<StringView, Holder>();
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(dangling);
+    Console.writeLine(fresh.view());
+}

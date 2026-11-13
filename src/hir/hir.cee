@@ -260,6 +260,11 @@ struct HirFunction {
     cfgName: Range;         // Hir.text
     asyncInstanceOf: u32;   // an async instance's original (ADR 0037 §3.3), or none
     inheritedDefault: bool; // an interface default's instance for an impl that inherits it (ADR 0086 §2.1)
+    /// A method of an impl of an interface: its flows are narrowed to the interface's method's (ADR 0131).
+    keepsInterfaceFlows: bool;
+    /// A closure: the captures (by index) through which its body stores what the others hold (ADR 0131), known once
+    /// its body is borrow-checked, which is before the function it is written in.
+    captureStores: Vector<u32>;
 }
 
 struct HirConstant {
@@ -503,6 +508,8 @@ struct HirProgram {
             cfgName: Range { start: 0, count: 0 },
             asyncInstanceOf: 0xFFFFFFFF,
             inheritedDefault: false,
+            keepsInterfaceFlows: false,
+            captureStores: Vector<u32>.create(),
         })?;
         return Ok(truncate<u32>(this.functions.length - 1));
     }

@@ -1,0 +1,73 @@
+// Closures whose call stores one capture's loan into another capture: does the enclosing function see it?
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+    fn swapWith(borrow mut this, other: borrow mut Holder<r>) {
+        let x = this.text;
+        this.text = other.text; // error[N0272]
+        other.text = x; // error[N0272]
+    }
+}
+fn keepFree<region r>(h: borrow mut Holder<r>, v: StringView<r>) {
+    h.text = v;
+}
+// x1: a local holder outlives the text; method in closure
+fn x1() -> StringView {
+    var h = Holder { text: "static" };
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => h.keep(v);
+    g();
+    return h.text; // error[N0244]
+}
+// x2: free function in closure
+fn x2(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => keepFree(mut into, v); // error[N0272]
+    g();
+}
+// x3: the local-holding holder is captured; flows between two captured holders
+fn x3(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    var mine = Holder { text: t.view() };
+    let g = () => into.swapWith(mut mine); // error[N0272] // error[N0272] // error[N0272] // error[N0272]
+    g();
+}
+// x4: vector of views, via a user function
+fn pushTo<region r>(out: borrow mut Vector<StringView<r>>, v: StringView<r>) {
+    out.push(v)!;
+}
+fn x4(into: borrow mut Vector<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => pushTo(mut into, v); // error[N0272]
+    g();
+}
+// x5: closure never called in the function but passed on
+fn run(f: borrow mut fn() -> void) {
+    f();
+}
+fn x5(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    run(() => into.keep(v)); // error[N0272]
+}
+// x6: view computed inside the closure from a captured String
+fn x6(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let g = () => into.keep(t.view()); // error[N0272] // error[N0272] // error[N0272]
+    g();
+}
+// x7: block body, method call as a statement
+fn x7(into: borrow mut Holder) {
+    let t = String.from("local local local local local local local local")!;
+    let g = () => { // error[N0272] // error[N0272]
+        into.keep(t.view()); // error[N0272]
+    };
+    g();
+}
+fn main() {}

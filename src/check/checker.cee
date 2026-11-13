@@ -166,6 +166,7 @@ struct Checker {
     pendingAssocBounds: Vector<PendingAssocBound>; // ADR 0086 §2.5, §2.6
     supertraitsReady: bool;                        // resolveSupertraits has run (ADR 0086 §2.6)
     pendingBounds: Vector<PendingBounds>;
+    pendingCells: Vector<PendingCell>;          // instances with a scoped argument, until the fields are known
     pendingThreadBounds: Vector<PendingBounds>; // Send and Share bounds met before the types had their fields
     membersReady: bool;                         // every declared struct and enum has its fields (§38.1's facts)
     pendingAllocators: Vector<PendingAllocator>;

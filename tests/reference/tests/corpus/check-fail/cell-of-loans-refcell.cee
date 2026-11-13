@@ -1,0 +1,39 @@
+// RefCell of scoped contents: stores through a shared borrow. Each should be refused.
+interface Keep<T> {
+    fn keep(borrow this, v: T);
+}
+struct Stash<region r> {
+    cell: RefCell<Vector<StringView<r>>>; // error[N0351]
+}
+struct One<region r> {
+    text: StringView<r>;
+}
+impl<region r> Keep<StringView<r>> for Stash<r> {
+    fn keep(borrow this, v: StringView<r>) {
+        var w = this.cell.write();
+        w.data().push(v)!;
+    }
+}
+fn stash<T, K: Keep<T>>(k: borrow K, v: T) {
+    k.keep(v);
+}
+// BAD 2: through the generic stash
+fn bad2() -> usize {
+    let s = Stash { cell: RefCell<Vector<StringView>>.create(Vector<StringView>.create()) }; // error[N0351]
+    {
+        let t = String.from("local local local local local local local local")!;
+        stash<StringView, Stash>(s, t.view());
+    }
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    let r = s.cell.read();
+    Console.writeLine(r.data()[0]);
+    return r.data().length;
+}
+// BAD 3: generic body
+fn bad3<K: Keep<StringView>>(k: borrow K) {
+    let t = String.from("local local local local local local local local")!;
+    k.keep(t.view());
+}
+fn main() {
+    Console.writeLine(bad2());
+}

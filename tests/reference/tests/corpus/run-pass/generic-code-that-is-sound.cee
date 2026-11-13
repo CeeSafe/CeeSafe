@@ -1,0 +1,99 @@
+// Realistic generic code that is sound: what does the fix refuse?
+interface Compare<T> {
+    fn less(borrow this, a: T, b: T) -> bool;
+}
+struct Splitter<region r> {
+    text: StringView<r>;
+    at: usize;
+}
+impl<region r> Iterator<StringView<r>> for Splitter<r> {
+    fn next(borrow mut this) -> StringView<r>? {
+        if (this.at >= this.text.length) {
+            return null;
+        }
+        let start = this.at;
+        var end = start;
+        while (end < this.text.length && this.text.bytes()[end] != 44) {
+            end += 1;
+        }
+        this.at = end + 1;
+        return this.text[start..end];
+    }
+}
+struct ByLength {
+    n: i32;
+}
+impl Compare<StringView> for ByLength {
+    fn less(borrow this, a: StringView, b: StringView) -> bool => a.length < b.length;
+}
+fn smallest<T: Copy, C: Compare<T>>(c: borrow C, a: T, b: T) -> T => if (c.less(a, b)) a else b;
+fn count<T, I: Iterator<T>>(it: borrow mut I) -> usize {
+    var n: usize = 0;
+    for (x in it) {
+        n += 1;
+    }
+    return n;
+}
+fn lastOf<T, I: Iterator<T>>(it: borrow mut I, d: T) -> T {
+    var last = d;
+    for (x in it) {
+        last = x;
+    }
+    return last;
+}
+fn collect<T, I: Iterator<T>>(it: borrow mut I) -> Vector<T> {
+    var out = Vector<T>.create();
+    for (x in it) {
+        out.push(x)!;
+    }
+    return out;
+}
+struct Joined<region r> {
+    a: StringView<r>;
+    b: StringView<r>;
+}
+struct Disk {
+    data: String;
+}
+// the with-resource pattern
+fn withFileSend<T: Send>(f: fn(borrow Disk) -> T) -> T {
+    let file = Disk { data: String.from("data")! };
+    return f(file);
+}
+struct List {
+    next: Box<List>?;
+    v: i32;
+}
+fn sendList(l: List) -> i32 => Thread.spawn(move () => l.v)!.join();
+fn each<T: Copy>(xs: borrow Vector<T>, f: borrow mut fn(T) -> void) {
+    for (i in 0..xs.length) {
+        f(xs[i]);
+    }
+}
+fn main() {
+    let text = String.from("alpha,be,gamma")!;
+    var sp = Splitter { text: text.view(), at: 0 };
+    Console.writeLine(count<StringView, Splitter>(mut sp));
+    var sp2 = Splitter { text: text.view(), at: 0 };
+    var sp3 = Splitter { text: text.view(), at: 0 };
+    let all = collect<StringView, Splitter>(mut sp3);
+    Console.writeLine(all[1]);
+    var sp4 = Splitter { text: text.view(), at: 0 };
+    for (part in sp4) {
+        Console.writeLine(part);
+    }
+    var total: usize = 0;
+    each<StringView>(all, (v: StringView) => {
+        total += v.length;
+    });
+    Console.writeLine(total);
+    Console.writeLine(sendList(List { next: null, v: 7 }));
+}
+
+// expect-stdout: 3
+// expect-stdout: be
+// expect-stdout: alpha
+// expect-stdout: be
+// expect-stdout: gamma
+// expect-stdout: 12
+// expect-stdout: 7

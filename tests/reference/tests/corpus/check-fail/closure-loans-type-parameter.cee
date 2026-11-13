@@ -1,0 +1,118 @@
+// Variants of f1: closures in generic code whose captures hold a loan of a local. Each should be refused.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Buffer {
+    text: String;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+fn call<T>(f: borrow fn() -> T) -> T => f();
+fn callDyn<T>(f: borrow dyn fn() -> T) -> T => f();
+
+// v1: the closure captures a T value directly
+fn v1<T: Copy, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let v = s.get();
+    let g = () => v; // error[N0245]
+    return g(); // error[N0244]
+}
+// v2: the closure returns the S itself (copy)
+fn v2<S: Build<StringView> + Copy>() -> S {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => s; // error[N0245]
+    return g(); // error[N0244]
+}
+// v3: closure with an argument
+fn v3<T, S: Build<StringView> + Source<T>>(n: i32) -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = (k: i32) => s.get(); // error[N0245]
+    return g(n); // error[N0244]
+}
+// v4: closure passed to a generic helper as borrow fn
+fn v4<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    return call<T>(() => s.get()); // error[N0245] // error[N0244]
+}
+// v5: as borrow dyn fn
+fn v5<T, S: Build<StringView> + Source<T>>() -> T {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => s.get(); // error[N0245]
+    return call<T>(g); // error[N0244]
+}
+// v6: the closure stores into an out-parameter given as its argument
+fn v6<T, S: Build<StringView> + Source<T>>(out: borrow mut Vector<T>) {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = (o: borrow mut Vector<T>) => o.push(s.get()); // error[N0272]
+    g(mut out)!;
+}
+// v7: the closure stores into a captured out-parameter
+fn v7<T, S: Build<StringView> + Source<T>>(out: borrow mut Vector<T>) {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => out.push(s.get()); // error[N0272]
+    g()!;
+}
+// v8: a Keep bound: closure keeps the local's view in a parameter
+fn v8<K: Keep<StringView>>(into: borrow mut K) {
+    let t = String.from("local local local local local local local local")!;
+    let v = t.view();
+    let g = () => into.keep(v); // error[N0272]
+    g();
+}
+// v9: function value with a borrow of a local, in a closure
+fn v9<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local local local local local local")! };
+    let g = () => f(buffer); // error[N0245]
+    return g(); // error[N0244]
+}
+// v10: function value result captured then returned by a closure
+fn v10<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local local local local local local")! };
+    let r = f(buffer);
+    let g = () => r; // error[N0245]
+    return g(); // error[N0244]
+}
+// v11: nested closures
+fn v11<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local local local local local local")! };
+    let r = f(buffer);
+    let g = () => r; // error[N0245]
+    let h = () => g(); // error[N0245]
+    return h(); // error[N0244]
+}
+// v12: a block-bodied closure with a local copy
+fn v12<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local local local local local local")! };
+    let r = f(buffer);
+    let g: borrow fn() -> T = () => {
+        let x = r;
+        return x; // error[N0245]
+    };
+    return g(); // error[N0244]
+}
+fn main() {}

@@ -211,6 +211,7 @@ fn checkProgramWith(
         pendingAssocBounds: Vector<PendingAssocBound>.create(),
         supertraitsReady: false,
         pendingBounds: Vector<PendingBounds>.create(),
+        pendingCells: Vector<PendingCell>.create(),
         pendingThreadBounds: Vector<PendingBounds>.create(),
         membersReady: false,
         pendingAllocators: Vector<PendingAllocator>.create(),

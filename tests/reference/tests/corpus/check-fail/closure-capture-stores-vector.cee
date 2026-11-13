@@ -1,0 +1,31 @@
+// A closure in generic code pushes a T that holds a loan of a local into a captured out-parameter.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+
+fn fill<T, S: Build<StringView> + Source<T>>(out: borrow mut Vector<T>) {
+    let t = String.from("local local local local local local local local")!;
+    let s = S.build(t.view());
+    let g = () => out.push(s.get()); // error[N0272]
+    g()!;
+}
+
+fn main() {
+    var all = Vector<StringView>.create();
+    fill<StringView, Holder>(mut all);
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(all[0]);
+    Console.writeLine(fresh.view());
+}

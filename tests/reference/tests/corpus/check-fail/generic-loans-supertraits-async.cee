@@ -1,0 +1,55 @@
+// Supertraits, dyn upcasts, Self-typed parameters, two receivers, async. Callers marked BAD should be refused.
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+interface Sub<T>: Source<T> {
+    fn again(borrow this) -> T => this.get();
+}
+interface Plain: Source<StringView> {
+    fn n(borrow this) -> i32;
+}
+interface Later<T> {
+    async fn later(borrow this) -> T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Sub<StringView<r>> for Holder<r> {}
+impl<region r> Later<StringView<r>> for Holder<r> {
+    async fn later(borrow this) -> StringView<r> => this.text;
+}
+fn viaSub<T, S: Sub<T>>(s: S) -> T => s.again();
+fn viaSuper<T, S: Sub<T>>(s: S) -> T => s.get();
+fn viaDynSub<T>(s: borrow dyn Sub<T>) -> T => s.get();
+async fn awaited<T, L: Later<T>>(l: L) -> T => await l.later();
+async fn awaitedKept<T, L: Later<T>>(l: borrow L, out: borrow mut Vector<T>) {
+    let v = await l.later();
+    out.push(v)!;
+}
+
+fn bad1() -> StringView {
+    let t = String.from("local local local local local local local local")!;
+    return viaSub<StringView, Holder>(Holder { text: t.view() }); // error[N0244]
+}
+fn bad2() -> StringView {
+    let t = String.from("local local local local local local local local")!;
+    return viaSuper<StringView, Holder>(Holder { text: t.view() }); // error[N0244]
+}
+fn bad3() -> StringView {
+    let t = String.from("local local local local local local local local")!;
+    let h = Holder { text: t.view() };
+    return viaDynSub<StringView>(h); // error[N0244]
+}
+async fn bad7() -> StringView {
+    let t = String.from("local local local local local local local local")!;
+    return await awaited<StringView, Holder>(Holder { text: t.view() }); // error[N0244]
+}
+async fn bad8(out: borrow mut Vector<StringView>) {
+    let t = String.from("local local local local local local local local")!;
+    let h = Holder { text: t.view() };
+    await awaitedKept<StringView, Holder>(h, mut out); // error[N0272]
+}
+fn main() {}

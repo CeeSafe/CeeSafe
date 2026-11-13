@@ -1,0 +1,76 @@
+// Stores through a shared receiver (interior mutability), and generic callers. BAD callers should be refused.
+interface Keep<T> {
+    fn keep(borrow this, v: T);
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+struct Stash<region r> {
+    cell: Cell<StringView<r>>; // error[N0351]
+}
+impl<region r> Keep<StringView<r>> for Stash<r> {
+    fn keep(borrow this, v: StringView<r>) {
+        this.cell.set(v);
+    }
+}
+impl<region r> Source<StringView<r>> for Stash<r> {
+    fn get(borrow this) -> StringView<r> => this.cell.get();
+}
+fn stash<T, K: Keep<T>>(k: borrow K, v: T) {
+    k.keep(v);
+}
+fn viaDyn<T>(k: borrow dyn Keep<T>, v: T) {
+    k.keep(v);
+}
+// BAD 1: generic body keeps a local's view in a parameter
+fn bad1<K: Keep<StringView>>(k: borrow K) {
+    let t = String.from("local local local local local local local local")!;
+    k.keep(t.view());
+}
+// BAD 2: concrete caller: the stash outlives the text
+fn bad2() -> StringView {
+    let s = Stash { cell: Cell<StringView>.create("static") }; // error[N0351]
+    {
+        let t = String.from("local local local local local local local local")!;
+        stash<StringView, Stash>(s, t.view());
+    }
+    return s.cell.get();
+}
+// BAD 3: through dyn
+fn bad3() -> StringView {
+    let s = Stash { cell: Cell<StringView>.create("static") }; // error[N0351]
+    {
+        let t = String.from("local local local local local local local local")!;
+        viaDyn<StringView>(s, t.view());
+    }
+    return s.get();
+}
+// BAD 4: direct Cell
+fn bad4() -> StringView {
+    let c = Cell<StringView>.create("static"); // error[N0351]
+    {
+        let t = String.from("local local local local local local local local")!;
+        c.set(t.view());
+    }
+    return c.get();
+}
+// BAD 5: generic caller of generic stash
+fn bad5<K: Keep<StringView>>(k: borrow K) {
+    let t = String.from("local local local local local local local local")!;
+    stash<StringView, K>(k, t.view());
+}
+// BAD 6: generic T from a bound, kept in a parameter that outlives the source
+fn bad6<T, S: Source<T>, K: Keep<T>>(s: S, k: borrow K) {
+    k.keep(s.get());
+}
+fn bad6caller(k: borrow Stash) {
+    let t = String.from("local local local local local local local local")!;
+    let inner = Stash { cell: Cell<StringView>.create(t.view()) }; // error[N0351]
+    bad6<StringView, Stash, Stash>(inner, k);
+}
+fn main() {
+    let d = bad2();
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(d);
+    Console.writeLine(fresh.view());
+}

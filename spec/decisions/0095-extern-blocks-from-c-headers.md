@@ -5,6 +5,9 @@
   copies the C declarations it uses by hand.
 - Scope: a tool, `tools/cbind.py`, shipped with a release, and its tests; `guide/unsafe-and-c.md`. No language,
   checker or emitter change.
+- Amended by ADR 0127 (2026-11-13): the generator is also a command of the compiler, `ceesafec cbind`, which
+  writes the same file and is what users run (tooling.md §11). §2.1's command line and §2.6's "Not part of
+  `ceesafec`" describe the script, which stays as the oracle of the command's check.
 
 ## 1. Context
 

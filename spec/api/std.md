@@ -2141,6 +2141,16 @@ public fn lock(borrow this) -> MutexGuard<T>
 Waits for the lock; the guard lends the data until it is dropped.
 Safety: `raw` is the lock made in create, destroyed only in drop, when no guard can be live (B-rules).
 
+### Mutex.tryLock
+
+```ceesafe
+public fn tryLock(borrow this) -> MutexGuard<T>?
+```
+
+The guard if no thread holds the lock, else null, at once: it never waits (ADR 0112). The thread that holds
+the lock gets null too. It has no effect, so async code may call it.
+Safety: as `lock`; the guard exists only when the lock was taken.
+
 ## struct MutexGuard
 
 ```ceesafe

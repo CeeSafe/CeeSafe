@@ -149,11 +149,13 @@ An allocator a `Box<T, A>` can use: a struct without fields that implements this
 public enum AsyncError {
     Cancelled,
     TimedOut,
-    Io(IoError),
+    @from Io(IoError),
 }
 ```
 
-Why an async operation failed (type-system.md §40.4, §40.7).
+Why an async operation failed (type-system.md §40.4, §40.7). `Io` is `@from` (ADR 0111): in a function that
+returns `Result<_, AsyncError>`, `?` on a `Result<_, IoError>` (a socket's `bind`, `port`, `shutdownWrite`)
+returns `Err(AsyncError.Io(e))`.
 
 ## struct Timer
 

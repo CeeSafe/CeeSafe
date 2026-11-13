@@ -1,0 +1,29 @@
+// `::` is not a token of CeeSafe (grammar.md §1.7): N0100 at each, with a fix (tooling.md §5.2), and no other error,
+// since the file is then read as if each were a `.`, or, before `<`, were not there. Without that, the first line of
+// `main` was N0103, "comparison operators cannot be chained".
+enum Colour {
+    Red,
+    Green,
+}
+
+struct Point {
+    x: i32;
+
+    fn origin() -> Point => Point { x: 0 };
+}
+
+fn pick<T>(a: T, b: T) -> T => a;
+
+fn main() {
+    var v = Vector<i32>::create(); // error[N0100]
+    v.push(pick::<i32>(1, 2))!; // error[N0100]
+    let c = Colour::Red; // error[N0100]
+    let p = Point::origin(); // error[N0100]
+    let s = match (c) {
+        Colour::Red => p.x, // error[N0100]
+        Colour::Green => 2, // error[N0100]
+    };
+    Console::writeLine(s); // error[N0100]
+    let w = a::b::c; // error[N0100] // error[N0100]
+    let t: Vector<i32> = Vector::<i32>::create(); // error[N0100] // error[N0100]
+}

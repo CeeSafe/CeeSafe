@@ -1,0 +1,27 @@
+// A boxed closure's result borrows from neither its parameters nor its captures (type-system.md §36.5; an
+// assumption of ADR 0131 §4, A4): a call through a `dyn fn` gives its result no loan, so the closure's body must
+// not return one. Each closure here is refused in its body.
+struct Buffer {
+    text: String;
+}
+fn fromParameter() -> Box<dyn fn(borrow Buffer) -> StringView> {
+    let b: Box<dyn fn(borrow Buffer) -> StringView> = Box.create(move (b: borrow Buffer) => b.text.view())!; // error[N0245]
+    return b;
+}
+fn fromParameterGeneric<T: Copy>(make: fn(borrow Buffer) -> T) -> Box<dyn fn(borrow Buffer) -> T> {
+    let b: Box<dyn fn(borrow Buffer) -> T> = Box.create(move (b: borrow Buffer) => make(b))!; // error[N0245] // error[N0245]
+    return b;
+}
+fn fromCapture<T: Copy>(x: T) -> Box<dyn fn() -> T> {
+    let b: Box<dyn fn() -> T> = Box.create(move () => x)!; // error[N0245]
+    return b;
+}
+fn fromOwned() -> Box<dyn fn() -> usize> {
+    let owned = String.from("owned")!;
+    let b: Box<dyn fn() -> usize> = Box.create(move () => owned.view().length)!;
+    return b;
+}
+fn main() {
+    let f = fromOwned();
+    Console.writeLine(f());
+}

@@ -1,0 +1,47 @@
+// A function value that stores one argument through another: more ways to get one.
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn set(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+    fn swap(borrow mut this, v: StringView<r>) -> StringView<r> {
+        let old = this.text;
+        this.text = v;
+        return old;
+    }
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+struct Bag<T> {
+    items: Vector<T>;
+
+    fn add(borrow mut this, v: T) {
+        this.items.push(v)!;
+    }
+}
+fn pushT<T>(out: borrow mut Vector<T>, v: T) {
+    out.push(v)!;
+}
+fn keepT<T, K: Keep<T>>(k: borrow mut K, v: T) {
+    k.keep(v);
+}
+fn feed<T: Copy>(out: borrow mut Vector<T>, first: T, f: fn(StringView) -> T) {
+    let g: fn(borrow mut Vector<T>, T) = pushT<T>; // error[N0298]
+    let t = String.from("local local local local local local local local")!;
+    g(mut out, f(t.view()));
+}
+fn same(x: StringView) -> StringView => x;
+fn main() {
+    var out = Vector<StringView>.create();
+    feed<StringView>(mut out, "x", same); // error[N0274]
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(out[0]);
+    Console.writeLine(fresh.view());
+}

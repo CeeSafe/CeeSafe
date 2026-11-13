@@ -257,6 +257,8 @@ struct Checker {
     nirLoopErrors: bool;                       // errors were found by the end of the per-function NIR checks
     instanceErrors: bool;                      // errors were found by the end of the instances' checks (N0222)
     regionImpls: Vector<u32>;                  // the impls (in c.impls) with region parameters
+    declaredFlows: Vector<DeclaredFlows>;      // by AST function: its declaration's flows (ADR 0131 §2.9)
+    flowsWaiting: Vector<u32>;                 // HIR functions declared before their declaration's flows were known
     interfaceOfMethod: Vector<u32>;            // by AST function: the interface (c.interfaces) that declares it, or none
     implementationsOf: Map<Word, Vector<u32>>; // c.implementations by interface entry, in order
     templatesOf: Map<Word, Vector<u32>>;       // c.implTemplates by their target's declaration, in order

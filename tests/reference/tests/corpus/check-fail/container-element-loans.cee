@@ -1,0 +1,83 @@
+// Unreached areas, part 1: containers. Every `bad…` must be refused; `good…` must be accepted.
+struct Owner {
+    text: String;
+}
+// an element that is a view: the vector may change while the element is kept (it holds the text, not the vector)
+fn good1(v: borrow mut Vector<StringView>) -> StringView {
+    let x = v[v.length - 1];
+    v.push("more")!;
+    return x;
+}
+fn good2<T: Copy>(v: borrow mut Vector<T>, more: T) -> T {
+    let x = v[0];
+    v.push(more)!;
+    return x;
+}
+// a borrow INTO the storage: the vector may not change while it is kept
+fn bad1(v: borrow mut Vector<String>) -> usize {
+    let x = v[0].view();
+    v.push(String.from("more")!)!; // error[N0241]
+    return x.length;
+}
+fn bad2(v: borrow mut Vector<u8>) -> u8 {
+    let s = v.view();
+    v.push(1)!; // error[N0241]
+    return s[0];
+}
+fn bad3(v: borrow mut Vector<Owner>) -> usize {
+    let first = borrow v[0];
+    v.push(Owner { text: String.from("x")! })!; // error[N0241]
+    return first.text.length;
+}
+// an iterator over a vector while it is pushed to
+fn bad4(v: borrow mut Vector<String>) -> usize {
+    var n: usize = 0;
+    for (s in v.view()) {
+        v.push(String.from("again")!)!; // error[N0241]
+        n += s.length;
+    }
+    return n;
+}
+// an element view outliving the vector
+fn bad5() -> StringView {
+    var v = Vector<String>.create();
+    v.push(String.from("local")!)!;
+    return v[0].view(); // error[N0244]
+}
+// a popped element that is a view of a local
+fn bad6() -> StringView {
+    let t = String.from("local")!;
+    var v = Vector<StringView>.create();
+    v.push(t.view())!;
+    return v.pop()!; // error[N0244]
+}
+// generic: element of type T holding a local's loan, through last/pop/index/remove
+fn bad7<T: Copy>(make: fn(StringView) -> T) -> T {
+    let t = String.from("local")!;
+    var v = Vector<T>.create();
+    v.push(make(t.view()))!;
+    return v[v.length - 1]; // error[N0244]
+}
+fn bad8<T>(make: fn(StringView) -> T) -> T {
+    let t = String.from("local")!;
+    var v = Vector<T>.create();
+    v.push(make(t.view()))!;
+    return v.pop()!; // error[N0244]
+}
+fn bad9<T: Copy>(make: fn(StringView) -> T) -> T {
+    let t = String.from("local")!;
+    var v = Vector<T>.create();
+    v.push(make(t.view()))!;
+    return v[0]; // error[N0244]
+}
+fn bad10<T: Copy>(make: fn(StringView) -> T) -> T? {
+    let t = String.from("local")!;
+    let o: T? = make(t.view());
+    return o; // error[N0244]
+}
+fn bad11<T: Copy>(make: fn(StringView) -> T) -> [T; 2] {
+    let t = String.from("local")!;
+    let x = make(t.view());
+    return [x, x]; // error[N0244]
+}
+fn main() {}

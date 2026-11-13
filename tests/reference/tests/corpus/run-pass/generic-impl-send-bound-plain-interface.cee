@@ -1,0 +1,16 @@
+// The same with a body that needs no bound.
+interface Get {
+    fn get(borrow this) -> u32;
+}
+struct V<T> {
+    n: u32;
+}
+impl<T: Send> Get for V<T> {
+    fn get(borrow this) -> u32 => this.n;
+}
+fn main() {
+    let v = V<u32> { n: 4 };
+    Console.writeLine(v.get());
+}
+
+// expect-stdout: 4

@@ -108,6 +108,13 @@ fn functionValue(c: borrow mut Checker, function: u32, span: Span) -> Result<u32
             mut why,
             "a function with region parameters: a function type cannot say how loans flow between its arguments",
         )?;
+    } else if (c.hir.functions[function as usize].mutableFlows.length > 0) {
+        // The same for flows that a type parameter or a bound gives (ADR 0131 §2.10): a call through a function
+        // value stores nothing through its arguments.
+        appendText(
+            mut why,
+            "a function that may store what one argument borrows through another, a 'borrow mut' one: a function type cannot say how loans flow between its arguments, so write the call where the function value would be called",
+        )?;
     } else if (owner == none() && sameBytes(c.name(name), c.entryName.view())) {
         appendText(mut why, "the program's entry point")?;
     } else if (syntax.isAsync && !c.asyncAdapter) {

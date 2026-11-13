@@ -623,7 +623,8 @@ fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     c.pendingCells.truncate(0);
     c.setFile(saved);
-    return Ok();
+    // The generic impls whose Send and Share bounds waited for the fields (attachGenericImpls).
+    return attachToInstances(c);
 }
 
 /// What decideBounds answers.

@@ -1,0 +1,18 @@
+// A boxed move closure that keeps a value of a type parameter's type made from a view of a local, and reads it later.
+fn same(s: StringView) -> StringView => s;
+fn show(s: StringView) -> usize {
+    Console.writeLine(s);
+    return s.length;
+}
+fn later<T: Copy>(make: fn(StringView) -> T, size: fn(T) -> usize) -> Box<dyn fn() -> usize> {
+    let t = String.from("local local local local local local local local")!;
+    let x = make(t.view());
+    let b: Box<dyn fn() -> usize> = Box.create(move () => size(x))!;
+    return b;
+}
+fn main() {
+    let job = later<StringView>(same, show); // error[N0274]
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(job());
+    Console.writeLine(fresh.view());
+}

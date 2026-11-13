@@ -693,9 +693,19 @@ fn attachGenericImpls(c: borrow mut Checker, typ: u32) -> Result<void, AllocErro
             continue;
         }
         let mark = diagnosticsMark(c);
+        let pending = c.pendingBounds.length;
+        let pendingThread = c.pendingThreadBounds.length;
         checkBounds(c, parameters.view(), arguments.view(), Span { start: 0, end: 0 })?;
         let met = diagnosticsMark(c) == mark;
         dropDiagnosticsSince(c, mark);
+        if (c.pendingBounds.length != pending || c.pendingThreadBounds.length != pendingThread) {
+            // The check put itself off (a Send or Share bound before the fields are known): its silence is no
+            // answer, and its report would come later with no position. Not yet: every instance is asked again
+            // once the fields are known (checkPendingThreadBounds; ADR 0131 §2.11).
+            c.pendingBounds.truncate(pending);
+            c.pendingThreadBounds.truncate(pendingThread);
+            continue;
+        }
         if (!met) {
             continue; // the instance does not implement the interface
         }
@@ -1198,6 +1208,11 @@ fn keepInterfaceFlows(c: borrow mut Checker, declared: u32, actual: u32) -> Resu
     c.hir.functions[actual as usize].deepSources = deep;
     c.hir.functions[actual as usize].mutableFlows = flows;
     c.hir.functions[actual as usize].keepsInterfaceFlows = true;
+    // The narrowed flows are this method's declaration's (ADR 0131 §2.9): its instances have at least these.
+    let syntax = c.hir.functions[actual as usize].syntax;
+    if ((syntax as usize) < c.declaredFlows.length && c.declaredFlows[syntax as usize].function == actual) {
+        recordDeclaredFlows(c, syntax, actual)?;
+    }
     return Ok();
 }
 

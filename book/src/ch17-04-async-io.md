@@ -30,8 +30,8 @@ The library has more of each kind, and UDP sockets (`AsyncUdpSocket`) and name l
 besides: the reference is https://ceesafe.github.io/CeeSafe/guide/async.
 
 ::: tip Rule
-The async operations return `Result<T, AsyncError>`. `AsyncError` is `Cancelled`, `TimedOut` or `Io(IoError)`: the
-task was cancelled, a shield's time ran out, or the operating system refused.
+The async operations return `Result<T, AsyncError>`. `AsyncError` is `Cancelled`, `TimedOut`, `Io(IoError)` or
+`Closed`: the task was cancelled, a shield's time ran out, the operating system refused, or the channel was closed.
 
 *Specification: `type-system.md` §40.4.*
 :::
@@ -216,10 +216,7 @@ A `Channel<T>` ([Channels](./ch16-02-channels) teaches it for threads) also carr
 ```ceesafe
 async fn produce(ch: borrow Channel<u32>) -> Result<void, AsyncError> {
     for (n in 1..4u32) {
-        match (await ch.sendAsync(n)) {
-            Ok() => {}
-            Err(_) => { return Err(AsyncError.Cancelled); }
-        }
+        await ch.sendAsync(n)?;
     }
     ch.close();
     return Ok();
@@ -253,9 +250,13 @@ fn main() {
 6
 ```
 
-`sendAsync` waits while the channel is full, so a fast producer cannot run ahead of a slow consumer. Its error
-holds the value that was not sent, because the channel was closed or the task cancelled. `recvAsync` gives
-`Some(value)`, or `null` once the channel is closed and empty.
+`sendAsync` waits while the channel is full, so a fast producer cannot run ahead of a slow consumer. Its error is
+a `SendError<T>`, which holds the value that was not sent: `SendError.Closed(value)` when the channel was closed,
+`SendError.Cancelled(value)` when the task was cancelled. Match on it to get the value back. `?` drops the value
+and returns `Err(AsyncError.Closed)` or `Err(AsyncError.Cancelled)`: `SendError<T>` has a method, `reason()`,
+marked `@into`, and `?` converts an error through such a method of the error's own type as it does through an
+`@from` variant of the function's error enum. `recvAsync` gives `Some(value)`, or `null` once the channel is
+closed and empty.
 
 ## Mistakes
 
@@ -352,7 +353,8 @@ There, blocking calls in async code compile and stall the program at run time. H
 - Tasks wait with `Timer.sleep`, and write with `AsyncConsole`, not `Console`.
 - `AsyncFiles` opens, reads and writes files; `AsyncTcpListener` and `AsyncTcpStream` are TCP; `Channel<T>` with
   `sendAsync` and `recvAsync` carries values between tasks.
-- Each returns `Result<T, AsyncError>`: `Cancelled`, `TimedOut` or `Io(IoError)`. The calls that do not wait
+- Each returns `Result<T, AsyncError>`: `Cancelled`, `TimedOut`, `Io(IoError)` or `Closed`. `sendAsync` returns a
+  `SendError<T>` with the unsent value, which `?` turns into `Closed` or `Cancelled`. The calls that do not wait
   return `IoError`. `?` converts one to `AsyncError.Io`, or to an `@from` variant of the program's own error enum,
   which needs one for each of the two types (`N0261` otherwise).
 - A `read` that returns 0 means the end: of the file, or of what the other side sends.

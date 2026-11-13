@@ -1,8 +1,8 @@
 ---
 title: Stopping gracefully
-summary: The last stage of the web server - a closed channel asks the server to stop, a race cancels the accepting loop, and a shield lets each open connection finish its answer within a time limit, with a test that stops the server in the middle of a request.
+summary: The last stage of the web server - Ctrl+C is caught with ProcessSignals and closes a channel that asks the server to stop, a race cancels the accepting loop, and a shield lets each open connection finish its answer within a time limit, with a test that stops the server in the middle of a request.
 assumes: [ch21-04-async-tasks, ch17-03-timeouts-races-cancellation, ch17-05-tasks-and-threads, ch16-02-channels]
-keywords: [graceful shutdown, cancellation, "Async.shield", "Async.race", Channel, close, recvAsync, "Console.readLine", "Process.exit", in flight]
+keywords: [graceful shutdown, cancellation, "Async.shield", "Async.race", Channel, close, recvAsync, ProcessSignals, ProcessSignal, waitAsync, "Ctrl+C", SIGINT, SIGTERM, "TcpListener.shutdown", "Process.exit", in flight]
 diagnostics: [N0295]
 specification: ["type-system.md §40.7", "type-system.md §40.5"]
 ---
@@ -150,42 +150,55 @@ async fn serveUntilStopped(listener: borrow AsyncTcpListener, stop: borrow Chann
 - `serverSide` moved here from the test of section 21.4. As there, the race needs a value from each side, and
   nothing reads the `bool`.
 
-In `main`, the request to stop comes from the keyboard: the server stops when you press Enter.
+In `main`, the request to stop comes from outside the program. Ctrl+C in the terminal sends the process the signal
+`SIGINT`, and the command `kill` sends `SIGTERM`. By default either one ends the process at once: nothing is
+destroyed, and an answer in flight is cut. `ProcessSignals.subscribe()` changes that for as long as its value
+lives. The request is then kept for the program, and `await signals.waitAsync()` returns it, as
+`ProcessSignal.Interrupt` or `ProcessSignal.Terminate`.
 
-<span class="listing-caption"><strong>Listing 21-31</strong>, <code>src/main.cee</code>: <code>main</code> starts a thread that waits for a line of input and closes the channel.</span>
+<span class="listing-caption"><strong>Listing 21-31</strong>, <code>src/main.cee</code>: A task waits for Ctrl+C and closes the channel, beside the server.</span>
 
 <!-- ceesafe: skip -->
 ```ceesafe
+/// Closes `stop` when the process is asked to stop: Ctrl+C in its terminal, or `kill`.
+async fn stopOnSignal(signals: borrow ProcessSignals, stop: borrow Channel<bool>) -> Result<void, ServeError> {
+    let _ = await signals.waitAsync()?;
+    stop.close();
+    return Ok();
+}
+
+/// The server, and beside it the wait for a request to stop.
+async fn run(listener: borrow AsyncTcpListener, signals: borrow ProcessSignals) -> Result<void, ServeError> {
+    let stop = Channel<bool>.create(1)?;
+    return await Async.all(
+        async () => await serveUntilStopped(listener, borrow stop),
+        async () => await stopOnSignal(signals, borrow stop),
+    );
+}
+
 fn main() {
     let listener = AsyncTcpListener.bind("127.0.0.1", 7878)!;
-    let stop = Channel<bool>.create(1)!;
-    let closer = stop.clone();
-    let watcher = Thread.spawn(move () => {
-        var line = String.create();
-        if (Console.readLine(mut line) is Ok(true)) {
-            closer.close();
-        }
-    })!;
-    Console.writeLine("listening on http://127.0.0.1:7878, press Enter to stop");
+    let signals = ProcessSignals.subscribe()!;
+    Console.writeLine("listening on http://127.0.0.1:7878, press Ctrl+C to stop");
     Console.flush();
-    match (Async.run(serveUntilStopped(borrow listener, borrow stop))) {
+    match (Async.run(run(borrow listener, borrow signals))) {
         Ok() => { Console.writeLine("stopped"); }
         Err(_) => {
             Console.writeErrorLine("the server failed");
             Process.exit(1);
         }
     }
-    watcher.join();
 }
 ```
 
-- Reading the keyboard blocks, so it cannot be done in a task. A thread does it, with its own handle to the
-  channel. A channel joins threads and tasks: the thread calls `close`, and the task waits in `recvAsync`.
-- `Console.readLine(mut line)` returns `Ok(true)` when it has read a line and `Ok(false)` at the end of input. The
-  watcher closes the channel only for a line. A server started with no keyboard, by another program, sees the end
-  of input at once and must go on serving.
-- If the server fails, `main` leaves with `Process.exit(1)`. Returning would wait at the end of `main` for the
-  watcher, which may wait for a key that never comes.
+- `subscribe` is called in `main`, before the server starts, and its value lives until `main` ends. A process has
+  one subscription at a time: a second `subscribe` returns `Err(IoError.AlreadyExists)`.
+- `stopOnSignal` does not care which of the two signals came, so it throws the value away and closes the channel.
+  The server's side sees the closed channel as before, and the test below still closes it by hand.
+- `Async.all` runs both sides until both have returned. After Ctrl+C, `stopOnSignal` returns at once, and
+  `serveUntilStopped` returns when the connections in flight are answered.
+- While `signals` lives, a second Ctrl+C does not end the program either: it waits to be read. The shield's time
+  limit is what bounds the stop.
 
 Run it, and try it with a client that is slow on purpose. In a second terminal, send half a request, wait two
 seconds, and send the rest:
@@ -194,7 +207,7 @@ seconds, and send the rest:
 (printf 'GET /about HT'; sleep 2; printf 'TP/1.1\r\n\r\n') | nc 127.0.0.1 7878 | head -1
 ```
 
-Press Enter in the server's terminal during those two seconds. The server prints `stopped` only when the two
+Press Ctrl+C in the server's terminal during those two seconds. The server prints `stopped` only when the two
 seconds are over, and the client has its answer:
 
 ```text
@@ -202,7 +215,7 @@ HTTP/1.1 200 OK
 ```
 
 ```text
-listening on http://127.0.0.1:7878, press Enter to stop
+listening on http://127.0.0.1:7878, press Ctrl+C to stop
 stopped
 ```
 
@@ -276,41 +289,96 @@ test routesByPath ... ok
 ceesafec test: 7 passed, 0 failed
 ```
 
+## The same stop for a server of threads
+
+A server of threads, as in [section 21.3](./ch21-03-thread-pool), waits in the blocking `accept`, which no
+cancellation reaches. Two calls stop it. `signals.wait()` blocks a thread until the request to stop comes. Then
+`listener.shutdown()` makes every `accept` on that listener, the one a thread is waiting in and every later one,
+return `Err(IoError.ConnectionAborted)`. Both calls borrow the listener, so the threads share it through an `Arc`
+([Shared state](./ch16-03-shared-state)).
+
+<span class="listing-caption"><strong>Listing 21-33</strong>, <code>main.cee</code>: One thread accepts and answers. The main thread waits for Ctrl+C and shuts the listener down.</span>
+
+<!-- ceesafe: check -->
+```ceesafe
+fn answer(stream: TcpStream) {
+    var client = stream;
+    let _ = client.write("HTTP/1.1 200 OK\r\n\r\nhello\n".bytes());
+}
+
+fn main() {
+    let listener = Arc<TcpListener>.create(TcpListener.bind("127.0.0.1", 7878)!)!;
+    let signals = ProcessSignals.subscribe()!;
+    let accepting = listener.clone();
+    let acceptor = Thread.spawn(move () => {
+        var answered: u32 = 0;
+        loop {
+            match (accepting.get().accept()) {
+                Ok(stream) => {
+                    answer(stream);
+                    answered += 1;
+                }
+                Err(_) => { break; }
+            }
+        }
+        return answered;
+    })!;
+    Console.writeLine("listening on http://127.0.0.1:7878, press Ctrl+C to stop");
+    Console.flush();
+    let _ = signals.wait();
+    listener.get().shutdown()!;
+    Console.writeLine(acceptor.join());
+}
+```
+
+After two requests and Ctrl+C, the compiled program prints:
+
+```text
+listening on http://127.0.0.1:7878, press Ctrl+C to stop
+2
+```
+
+The accepting thread finishes the answer it is writing, then finds its `accept` refused and leaves the loop, and
+`main` joins it. With the pool of section 21.3, the accepting thread gives each stream to `workers.take` and
+calls `workers.finish()` after the loop, which answers what the workers hold. `shutdown` does not close the
+socket: the listener closes when its last owner is destroyed.
+
+Try a server of threads compiled, with `ceesafec build`. The interpreter runs one thread at a time, so there a
+thread that waits in `accept` or in `signals.wait()` cannot be woken by another.
+
 ## Mistakes
 
-::: warning Mistake: waiting for the keyboard in a task
-`Console.readLine` blocks until a line is typed. In a task it would stop the server it is meant to watch over.
+::: warning Mistake: the blocking wait for a signal in a task
+`signals.wait()` blocks its thread until a signal comes. In a task it would stop the server it is meant to watch
+over.
 :::
 
-<span class="listing-caption"><strong>Listing 21-33</strong>, <code>main.cee</code>: An async function reads a line. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 21-34</strong>, <code>main.cee</code>: An async function waits with the blocking call. This does not compile.</span>
 
 <!-- ceesafe: fail N0295 -->
 ```ceesafe
-async fn waitForEnter(stop: borrow Channel<bool>) -> Result<void, AsyncError> {
-    var line = String.create();
-    if (Console.readLine(mut line) is Ok(true)) {
-        stop.close();
-    }
+async fn stopAsked(signals: borrow ProcessSignals) -> Result<void, AsyncError> {
+    let _ = signals.wait();
     return Ok();
 }
 
 fn main() {
-    let stop = Channel<bool>.create(1)!;
-    match (Async.run(waitForEnter(borrow stop))) {
-        Ok() => { Console.writeLine(stop.isClosed()); }
+    let signals = ProcessSignals.subscribe()!;
+    match (Async.run(stopAsked(borrow signals))) {
+        Ok() => { Console.writeLine("stopped"); }
         Err(_) => { Console.writeLine("failed"); }
     }
 }
 ```
 
 ```text
-main.cee:3:9: error[N0295]: 'waitForEnter' is an async fn, which must not block its thread (type-system.md §40.1), but this may sleep: it calls 'HostServices.readLine', which calls 'ceesafe_host_console_read_line', declared @effects(sleep)
+main.cee:2:5: error[N0295]: 'stopAsked' is an async fn, which must not block its thread (type-system.md §40.1), but this may sleep: it calls 'ProcessSignals.wait', which calls 'Channel<u32>.recv', which calls 'ceesafe_chan_wait', declared @effects(sleep)
   |
-3 |     if (Console.readLine(mut line) is Ok(true)) {
-  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+2 |     let _ = signals.wait();
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-Do the blocking wait on a thread, as `main` does, and tell the tasks through a channel.
+Write `await signals.waitAsync()?` in a task, as Listing 21-31 does. `signals.wait()` is for a thread.
 
 ::: warning Mistake: a shield with no end
 A shield's time is the longest a stop can take. A very large number brings back the client that connects, says
@@ -342,7 +410,10 @@ until the context's deadline. Here the deadline is the shield's time, set for ea
 - A shield around each connection is both the client's time limit and what lets an answer finish during a stop.
 - A closed channel is a request to stop that threads and tasks can both make and see. `Async.race` turns it into
   the cancellation of the server.
-- A blocking wait, such as `Console.readLine`, belongs on a thread (`N0295` in a task).
+- `ProcessSignals.subscribe()` keeps Ctrl+C and `SIGTERM` for the program. A task waits for one with
+  `await signals.waitAsync()`, and a thread with `signals.wait()`, which is `N0295` in a task.
+- `listener.shutdown()` ends the blocking `accept` of a `TcpListener` from another thread: every `accept` returns
+  `Err(IoError.ConnectionAborted)`.
 - Test the stop itself: a request in flight, the stop, and the answer.
 
 ## Where to go from here

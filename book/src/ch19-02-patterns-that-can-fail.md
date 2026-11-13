@@ -32,7 +32,7 @@ Each place for a pattern treats the two kinds in its own way:
 | `let … else` | the usual case: the `else` block takes the rest | accepted; the `else` block never runs, with the same warning |
 | one arm of a `match` | the usual case | a catch-all: it must be the last arm |
 | all arms of a `match` together | refused: the `match` must cover every value | required |
-| a plain `let`, `for`, parameters | cannot be written | only its two plainest forms, a name and `_` |
+| a plain `let`, `for`, parameters | cannot be written | a name and `_`; a plain `let` also takes a struct pattern whose fields are such patterns |
 
 <span class="listing-caption"><strong>Listing 19-8</strong>, <code>main.cee</code>: Three patterns that cannot fail. <code>is</code> accepts them, and the compiler warns about the two that test nothing.</span>
 
@@ -325,7 +325,8 @@ Add `_ => 0,` as the last arm.
 ::: details Coming from Rust
 Rust's words are *refutable* (can fail) and *irrefutable* (cannot). Rust needs the words because `let`, `for` and
 parameters take irrefutable patterns and `if let` takes refutable ones. In CeeSafe the only irrefutable patterns
-outside `match`, `is` and `let … else` are a name and `_`, so the question arises for a `match` only. One
+outside `match`, `is` and `let … else` are a name, `_`, and in a plain `let` a struct pattern made of them, so the
+question arises for a `match` only. One
 difference in the checks: an unreachable arm is an error here, where Rust warns. An `is` or a `let … else` whose
 pattern is `_` or a name gets a warning (N0404), as Rust's irrefutable `if let` does.
 :::

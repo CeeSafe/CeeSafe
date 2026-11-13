@@ -13,6 +13,10 @@ Then every `ceesafe` block is compiled and run as the guide's are (tools/guide_c
 every package under book/projects/ is checked, and tested if it has tests. A package that is there to show a failure
 says so in a file `.book-expect` beside its ceesafe.toml: `check fails N0312 N0201` (the check must fail, with those
 codes) or `test fails` (the check passes and `ceesafec test` must fail).
+Last, each appendix that is written is compared with the compiler's own lists, in both directions: the keywords,
+the operators, the built-in members, the derives, the commands and options, the diagnostic codes and the sections
+that show them, the grammar, the MCP tools, the releases, and the glossary's order (tools/book_appendix_check.py,
+which says what each is compared with).
 
 usage: python3 tools/book_check.py --ceesafec out/ceesafec [--jobs N]
 """
@@ -24,6 +28,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+import book_appendix_check
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 BOOK = os.path.join(ROOT, "book")
@@ -184,9 +190,13 @@ def main():
                         problems.append(f"{where}: ceesafec test passes, and .book-expect says it fails")
                 elif test.returncode != 0:
                     problems.append(f"{where}: ceesafec test fails: {tail[-1] if tail else ''}")
+    # The appendices against the compiler's own lists.
+    faults, appendices = book_appendix_check.check(ROOT, cee, ids)
+    problems.extend(faults)
     for problem in problems:
         print("FAIL " + problem)
-    print(f"book_check: {len(pages)} pages, {listings} listings, {packages} packages; {examples}; {len(problems)} problems")
+    print(f"book_check: {len(pages)} pages, {listings} listings, {packages} packages; {examples}; {appendices}; "
+          f"{len(problems)} problems")
     return 1 if problems else 0
 
 

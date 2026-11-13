@@ -7,10 +7,11 @@
   human and AI." The documentation site stays as it is.
 - Relates to: Decision 0006 (the specification, and the guide's examples being checked), the guide (`guide/`), the
   site (`site/`), `guide/for-agents.md` and the MCP server (`spec/tooling.md` §6).
-- Built so far (`book/`): the site, the machine-readable files of §5, chapters 1 to 12 (54 pages, 275 listings,
-  25 packages under `book/projects/`), `tools/book_check.py` in the contract suite, and the authors' guide
-  `book/WRITING.md`. Not yet: chapters 13 to 22 and the appendices, the print page, the version written by the
-  build, publishing.
+- Built so far (`book/`): the site, the machine-readable files of §5, chapters 1 to 22 (104 pages, 571 listings,
+  55 packages under `book/projects/`, at release 0.42.0), `tools/book_check.py` in the contract suite, the authors'
+  guide `book/WRITING.md`, the version written by the build (`book/version.mjs`, from the compiler's source), and
+  publishing: `.github/workflows/docs.yml` builds the book and deploys it with the documentation site, at
+  <https://ceesafe.github.io/CeeSafe/book/>. Not yet: Appendices A to J and the glossary, and the print page.
 
 ## 1. Context
 

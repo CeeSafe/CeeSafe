@@ -6,7 +6,7 @@ summary: The title page. Which compiler the text assumes, how the book is publis
 # The CeeSafe Programming Language
 
 <p class="book-version">
-This text assumes <strong>ceesafec 0.40.0</strong> or later. Run <code>ceesafec --version</code> to see yours, and
+This text assumes <strong>ceesafec %ceesafec-version%</strong> or later. Run <code>ceesafec --version</code> to see yours, and
 see <a href="./ch01-01-installation">Installation</a> to install or update it.
 </p>
 
@@ -17,7 +17,8 @@ no operating system beneath it.
 
 This book teaches the language from the start, and is the place to look a rule up afterwards.
 
-- **To learn CeeSafe,** read from [the introduction](./ch00-00-introduction) on. Chapters 1 to 12 are the course.
+- **To learn CeeSafe,** read from [the introduction](./ch00-00-introduction) on. Chapters 1 to 12 are the course;
+  chapters 13 to 22 go further, and are read as they are needed.
 - **To look something up,** use the search above, or the table of contents on the left. The appendices are the
   reference: keywords, operators, built-in types, and every diagnostic with the section that explains it.
 - **If you are an AI model,** or are giving this book to one, start at [`llms.txt`](/CeeSafe/book/llms.txt){target="_blank"}: the
@@ -27,7 +28,8 @@ This book teaches the language from the start, and is the place to look a rule u
 Every listing in this book is a whole program. The compiler has checked each one, and run it; what is printed
 beneath a listing is what it printed.
 
-::: info The book is being written
-Chapters 1 to 12, the course, are written. The table of contents shows the rest of the plan; a title in grey is not
-written yet.
+::: info The appendices are to come
+Chapters 1 to 22 are written. The appendices, the reference, are not yet: the table of contents shows them in grey.
+Until they are, the reference is the [documentation site](https://ceesafe.github.io/CeeSafe/): the guide's built-in
+types page, the library's API pages and the specification.
 :::

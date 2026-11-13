@@ -1,7 +1,9 @@
 # The book
 
 The source of *The CeeSafe Programming Language* (Decision 0011): a book in the shape of the Rust Book, for people
-and for AI models, beside the documentation site (`site/`). Chapters 1 to 12, the course, are written; 13 to 22 and the appendices are planned.
+and for AI models, beside the documentation site (`site/`). Chapters 1 to 22 are written (1 to 12 are
+the course); the appendices and the glossary are planned. It is published with the documentation site, at
+<https://ceesafe.github.io/CeeSafe/book/> (`.github/workflows/docs.yml`).
 
 | Path | What |
 |---|---|
@@ -10,6 +12,7 @@ and for AI models, beside the documentation site (`site/`). Chapters 1 to 12, th
 | `projects/` | the packages the chapters show: programs of several files, tests, the projects, and variants that are there to fail (`.book-expect`) |
 | `src/public/` | **generated**, not committed: `llms.txt`, `llms-full.txt`, `index.json`, each page's Markdown, each listing as a file |
 | `scripts/prepare.mjs` | writes `src/public/` |
+| `version.mjs` | the compiler's version, read from `src/backend/c_program.cee`: a page writes `%ceesafec-version%` |
 | `.vitepress/` | the site: the numbered sidebar from `toc.mjs`, the theme |
 
 ## Working on it

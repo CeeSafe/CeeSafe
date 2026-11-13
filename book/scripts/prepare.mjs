@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendices, chapters, written, writtenPages } from "../toc.mjs";
+import { withVersion } from "../version.mjs";
 
 const book = join(dirname(fileURLToPath(import.meta.url)), "..");
 const source = join(book, "src");
@@ -17,7 +18,7 @@ const base = "https://ceesafe.github.io/CeeSafe/book/";
 
 /** A page's header (the `key: value` lines and `key: [a, b]` lists between the first two `---`) and its body. */
 function parse(file) {
-  const text = readFileSync(join(source, `${file}.md`), "utf8");
+  const text = withVersion(readFileSync(join(source, `${file}.md`), "utf8"));
   const match = text.match(/^---\n([\s\S]*?)\n---\n/);
   if (!match) {
     throw new Error(`book/src/${file}.md has no header`);

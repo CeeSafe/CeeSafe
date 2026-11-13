@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitepress";
 import { appendices, chapters, front, written } from "../toc.mjs";
+import { withVersion } from "../version.mjs";
 
 // The book (Decision 0011): a second site beside the documentation site, in the Rust Book's shape. CeeSafe code is
 // highlighted by the VS Code extension's grammar, as on the documentation site.
@@ -32,6 +33,12 @@ export default defineConfig({
   head: [["link", { rel: "icon", type: "image/svg+xml", href: "/CeeSafe/logo.svg" }]],
   markdown: {
     languages: [{ ...ceesafe, name: "ceesafe", aliases: ["CeeSafe", "cee"] }],
+    // The compiler's version where a page writes %ceesafec-version% (version.mjs).
+    config: (md) => {
+      md.core.ruler.before("normalize", "ceesafec-version", (state) => {
+        state.src = withVersion(state.src);
+      });
+    },
   },
   themeConfig: {
     siteTitle: "The CeeSafe Book",
@@ -45,7 +52,7 @@ export default defineConfig({
     outline: { level: [2, 3], label: "In this section" },
     docFooter: { prev: "Previous", next: "Next" },
     footer: {
-      message: "In progress: chapters 1 to 12, the course, are written.",
+      message: "Chapters 1 to 22 are written; the appendices are to come.",
       copyright: "Copyright © 2026 Veeran Puthumkara.",
     },
   },

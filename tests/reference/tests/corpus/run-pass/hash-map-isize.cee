@@ -1,0 +1,76 @@
+// lib/std's HashKey for isize (type-system.md §24.3: "the integer types"), which only OrderKey had: a HashMap keyed
+// by isize. The expected lines follow from the map's rules (§24.3), worked out by hand and not taken from a run:
+// `put` returns the old value, iteration is in insertion order, a removal moves the last entry into the gap, and an
+// isize feeds the hasher what an i64 of the same value does, as i8, i16 and i32 do.
+
+fn show(map: borrow HashMap<isize, i32>) {
+    for (i in 0..map.length()) {
+        let key: isize = *map.keyAt(i);
+        let value: i32 = *map.valueAt(i);
+        Console.write(key);
+        Console.write("=");
+        Console.write(value);
+        Console.write(" ");
+    }
+    Console.writeLine(map.length());
+}
+
+fn main() {
+    var map = HashMap<isize, i32>.create();
+    let low: isize = -2147483648;
+    let high: isize = 2147483647;
+    let zero: isize = 0;
+    let one: isize = 1;
+    let _ = map.put(-1, 10)!;
+    let _ = map.put(zero, 20)!;
+    let _ = map.put(low, 30)!;
+    let _ = map.put(high, 40)!;
+    show(map);
+    match (map.put(-1, 11)!) {
+        Some(old) => { Console.writeLine(old); }
+        null => { Console.writeLine("-"); }
+    }
+    Console.writeLine(map.contains(low));
+    Console.writeLine(map.contains(one));
+    match (map.get(high)) {
+        Some(value) => { Console.writeLine(*value); }
+        null => { Console.writeLine("-"); }
+    }
+    match (map.remove(zero)) {
+        Some(value) => { Console.writeLine(value); }
+        null => { Console.writeLine("-"); }
+    }
+    show(map);
+
+    // -500 to 499: a thousand keys, of which -1 is there already, beside `low` and `high`.
+    var key: isize = -500;
+    while (key < 500) {
+        let _ = map.put(key, 1)!;
+        key += 1;
+    }
+    Console.writeLine(map.length());
+    var sum: i64 = 0;
+    for (i in 0..map.length()) {
+        sum += *map.keyAt(i) as i64;
+    }
+    Console.writeLine(sum);
+
+    var asIsize = Hasher.create(1, 2);
+    var asI64 = Hasher.create(1, 2);
+    let n: isize = -5;
+    let m: i64 = -5;
+    deriveHash<isize>(n, mut asIsize);
+    deriveHash<i64>(m, mut asI64);
+    Console.writeLine(asIsize.finish() == asI64.finish());
+}
+
+// expect-stdout: -1=10 0=20 -2147483648=30 2147483647=40 4
+// expect-stdout: 10
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: 40
+// expect-stdout: 20
+// expect-stdout: -1=11 2147483647=40 -2147483648=30 3
+// expect-stdout: 1002
+// expect-stdout: -501
+// expect-stdout: true

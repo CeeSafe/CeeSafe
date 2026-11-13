@@ -177,6 +177,11 @@ impl HashKey<i64> for i64 {
     fn sameAs(borrow this, other: borrow i64) -> bool => this == other;
 }
 
+impl HashKey<isize> for isize {
+    fn hash(borrow this, h: borrow mut Hasher) { h.u64(truncate<u64>(this as i64)); }
+    fn sameAs(borrow this, other: borrow isize) -> bool => this == other;
+}
+
 impl HashKey<bool> for bool {
     fn hash(borrow this, h: borrow mut Hasher) { h.u64(if (this) 1 else 0); }
     fn sameAs(borrow this, other: borrow bool) -> bool => this == other;

@@ -9,6 +9,8 @@ Appendices A to J and the glossary are written. It is published with the documen
 |---|---|
 | `toc.mjs` | the table of contents: every chapter and section, written or planned |
 | `src/*.md` | one file for each written page; its name is the page's stable identifier |
+| `appendices/` | the hand-written inputs of the generated appendices (not pages): `appendix-f.intro.md` and `appendix-f.lines.txt`, `appendix-h.template.md`, `appendix-c.api.txt` |
+| `../tools/gen_appendix_c.py`, `gen_appendix_f.py`, `gen_appendix_h.py` | the generators of Appendices C, F and H (below); `../tools/book_appendix_gen.py` is what they share |
 | `projects/` | the packages the chapters show: programs of several files, tests, the projects, and variants that are there to fail (`.book-expect`) |
 | `src/public/` | **generated**, not committed: `llms.txt`, `llms-full.txt`, `index.json`, each page's Markdown, each listing as a file |
 | `scripts/prepare.mjs` | writes `src/public/` |
@@ -32,6 +34,28 @@ python3 tools/book_check.py --ceesafec out/ceesafec
 ```
 
 How a chapter is written: `WRITING.md`.
+
+## Regenerating the appendices
+
+Three appendices are generated, and say so in a comment under their title. Never edit those pages: change the
+input, then run the generator from the repository's root and commit the page with it.
+
+| Page | Command | Written from |
+|---|---|---|
+| `src/appendix-c-built-in-types.md` | `python3 tools/gen_appendix_c.py` | the text and the rows in the script itself; the "Taught in" column from the chapters that name each member |
+| `src/appendix-f-diagnostics.md` | `python3 tools/gen_appendix_f.py` | `appendices/appendix-f.intro.md` (the opening), `appendices/appendix-f.lines.txt` (a line for each code), the codes of `src/diagnostics/catalog.cee`, the chapters' `diagnostics:` headers; the groups are in the script |
+| `src/appendix-h-grammar.md` | `python3 tools/gen_appendix_h.py` | `appendices/appendix-h.template.md` (the text, with `@@NAME@@` where productions go), `spec/grammar.md`, `spec/type-system.md` §15.2 |
+
+- A generator takes no argument and runs no compiler. With `--check` it writes nothing and exits 1, with the lines
+  that differ, when the committed page is not what it would write.
+- `tools/book_check.py` makes the same comparison, so a page that is stale fails the contract suite with the
+  command to run. A page goes stale when the grammar changes (H), when the catalog gets a code or a chapter's
+  header names another diagnostic (F), and when a chapter starts or stops naming a member (C).
+- A new diagnostic code needs its line in `appendix-f.lines.txt` first: the generator says which code has none.
+- Appendix C's rows give a member's signature as a program writes the call, so they are not copied from the API
+  pages. `appendices/appendix-c.api.txt` records the declarations of `spec/api/` the rows were written from; when
+  one changes, the generator names it and writes nothing. Correct the member's row in `tools/gen_appendix_c.py`,
+  then run `python3 tools/gen_appendix_c.py --api` to record the declarations, and the generator again.
 
 ## A page
 

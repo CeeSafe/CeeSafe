@@ -55,7 +55,10 @@ specification: ["type-system.md §2"]
 ```
 
 - `summary` must not contain a colon followed by a space (the header is read by a simple parser). Use a dash.
-- `diagnostics` lists the codes this page shows in a listing, and only those.
+- `diagnostics` lists the codes this page shows in a listing, and only those. Appendix F's "Shown in" column is
+  written from these lists: after a change to one, run `python3 tools/gen_appendix_f.py` and commit the page. (A
+  section that starts or stops naming a built-in type's member can change Appendix C's "Taught in" column the same
+  way: `python3 tools/gen_appendix_c.py`. `tools/book_check.py` says when either is needed.)
 - `specification` only if you have opened the file and found the section.
 
 Then the parts, in this order:

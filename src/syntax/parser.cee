@@ -2148,7 +2148,10 @@ struct Parser {
                     let low = this.nameBound()?;
                     return this.rangePattern(start, low);
                 }
-                if (!this.peekIs(1, TokenKind.Dot) && !this.peekIs(1, TokenKind.OpenParen)) {
+                if (!this.peekIs(1, TokenKind.Dot) && !this.peekIs(1, TokenKind.OpenParen) && !this.peekIs(
+                    1,
+                    TokenKind.OpenBrace,
+                )) {
                     // A bare name (ADR 0085 §2.6): a constant if one is in scope, else a binding.
                     let name = this.parseIdentifier()?;
                     return this.front.ast.addPattern(PatternNode.Binding(name, false), start, this.endFrom(start));
@@ -2159,6 +2162,9 @@ struct Parser {
                 // `Self.Idle`, `Self.Busy(n)`, `Self.TAB` (ADR 0086 §2.2): a path whose first part is `Self`.
                 if (this.peekIs(1, TokenKind.Dot) && this.peekIs(2, TokenKind.Identifier)) {
                     return this.pathPattern(start);
+                }
+                if (this.peekIs(1, TokenKind.OpenBrace)) {
+                    return this.pathPattern(start); // `Self { x, y }` (ADR 0123)
                 }
             }
             _ => {}
@@ -2214,9 +2220,13 @@ struct Parser {
         return this.front.ast.addPattern(PatternNode.Slice(range), start, this.endFrom(start));
     }
 
-    /// `A.B`, `A.B(bindings)` or `A(bindings)`: a variant, or a qualified constant (ADR 0085 §2.6).
+    /// `A.B`, `A.B(bindings)` or `A(bindings)`: a variant, or a qualified constant (ADR 0085 §2.6); `A { fields }`: a
+    /// struct pattern (ADR 0123).
     fn pathPattern(borrow mut this, start: u32) -> Result<u32, AllocError> {
         let path = this.parseQualifiedName()?;
+        if (this.at(TokenKind.OpenBrace)) {
+            return this.structPattern(start, path);
+        }
         var hasBindings = false;
         var bindings = Vector<u32>.create();
         if (this.eat(TokenKind.OpenParen)) {
@@ -2246,6 +2256,61 @@ struct Parser {
             start,
             this.endFrom(start),
         );
+    }
+
+    /// At the `{` of `P { x, var y, z: PATTERN, .. }` (ADR 0123): each field once by its name, alone (a binding of
+    /// that name) or with its pattern; `..`, last, stands for the fields not named.
+    fn structPattern(borrow mut this, start: u32, path: QualifiedName) -> Result<u32, AllocError> {
+        this.advance(); // `{`
+        var fields = Vector<u32>.create();
+        var hasRest = false;
+        while (!this.at(TokenKind.CloseBrace) && !this.at(TokenKind.EndOfFile)) {
+            if (this.at(TokenKind.DotDot)) {
+                this.advance();
+                hasRest = true;
+                this.eat(TokenKind.Comma);
+                if (!this.at(TokenKind.CloseBrace)) {
+                    this.errorFound(
+                        expectedToken(),
+                        "expected '}' after '..', found ",
+                        ": '..' stands for the fields the pattern does not name, and comes last (ADR 0123)",
+                    )?;
+                }
+                break;
+            }
+            let isMutable = this.eat(TokenKind.VarKeyword);
+            let name = this.parseIdentifier()?;
+            var nested = none();
+            if (!isMutable && this.eat(TokenKind.Colon)) {
+                nested = this.parsePattern()?;
+            }
+            this.front.ast.bindings.push(Binding { name: name, mutable: isMutable, nested: nested })?;
+            fields.push(truncate<u32>(this.front.ast.bindings.length - 1))?;
+            if (!this.eat(TokenKind.Comma)) {
+                break;
+            }
+        }
+        if (!this.at(TokenKind.CloseBrace)) {
+            // Recover inside the pattern, as a struct literal does: its own '}' is not the enclosing block's.
+            this.expect(TokenKind.CloseBrace)?;
+            var depth: i32 = 0;
+            while (!this.at(TokenKind.EndOfFile) && !(depth == 0 && this.at(TokenKind.Semicolon))) {
+                let kind = this.advance().kind;
+                if (sameKind(kind, TokenKind.OpenBrace)) {
+                    depth += 1;
+                } else if (sameKind(kind, TokenKind.CloseBrace)) {
+                    let was = depth;
+                    depth -= 1;
+                    if (was == 0) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            this.advance();
+        }
+        let range = this.list(fields)?;
+        return this.front.ast.addPattern(PatternNode.Struct(path, range, hasRest), start, this.endFrom(start));
     }
 
     fn literalPattern(borrow mut this, start: u32, negated: bool) -> Result<u32, AllocError> {
@@ -2319,8 +2384,9 @@ struct Parser {
         TokenKind.NullKeyword => true,
         TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
         TokenKind.Identifier =>
-            this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At),
-        TokenKind.SelfTypeKeyword => this.peekIs(1, TokenKind.Dot),
+            this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At) ||
+                this.peekIs(1, TokenKind.OpenBrace),
+        TokenKind.SelfTypeKeyword => this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.OpenBrace),
         TokenKind.OpenParen => true,
         TokenKind.StringLiteral => true,
         TokenKind.OpenBracket => true,
@@ -2399,7 +2465,10 @@ struct Parser {
     fn startsLetPattern(borrow this) -> bool => match (this.current().kind) {
         TokenKind.Identifier =>
             this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At) ||
-                this.peekIs(1, TokenKind.Pipe) || this.peekIs(1, TokenKind.DotDot) || this.peekIs(
+                this.peekIs(1, TokenKind.OpenBrace) || this.peekIs(1, TokenKind.Pipe) || this.peekIs(
+                1,
+                TokenKind.DotDot,
+            ) || this.peekIs(
                 1,
                 TokenKind.DotDotEquals,
             ),
@@ -2424,12 +2493,20 @@ struct Parser {
     }
 
     /// `else { … };` of a `let … else` (ADR 0117). Without the `else`, the statement is reported once, with what to
-    /// write, and read as far as its `;`.
+    /// write, and read as far as its `;`; a struct pattern may stand without one (`let P { x, y } = e;`, ADR 0123:
+    /// the checker requires that it cannot fail), its block empty and of no width.
     fn finishLetElse(borrow mut this, start: u32, pattern: u32, value: u32) -> Result<u32, AllocError> {
         var otherwise = none();
+        let isStruct = match (this.front.ast.patterns[pattern as usize]) {
+            PatternNode.Struct(_, _, _) => true,
+            _ => false,
+        };
         if (this.at(TokenKind.ElseKeyword)) {
             this.advance();
             otherwise = this.parseBlock()?;
+        } else if (isStruct && this.at(TokenKind.Semicolon)) {
+            let at = this.current().start;
+            otherwise = this.front.ast.addStmt(StmtNode.Block(emptyRange()), at, at)?;
         } else {
             this.errorFound(
                 expectedToken(),

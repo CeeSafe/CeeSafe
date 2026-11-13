@@ -949,7 +949,8 @@ fn emitStatement(
         NirStatement.Unpack(source, variant, targets) => {
             let sourceType = placeTypeIn(c, n, f, source);
             let place = appendPlaceIn(e, c, n, sources, f, source)?;
-            let payload = borrow c.types.variants[variant as usize].payload;
+            // Without a variant, a struct taken apart (ADR 0123 §2.6): its fields are the payloads.
+            let isStruct = variant == none();
             for (k in 0..targets.count) {
                 let target = n.at(targets, k);
                 if (target == none()) {
@@ -958,9 +959,13 @@ fn emitStatement(
                 e.t("    ")?;
                 appendLocalNameIn(c, n, mut e.buf, f, target)?;
                 e.t(" = ")?;
-                appendPayloadPlace(c, mut e.buf, sourceType, place.view(), variant)?;
+                if (isStruct) {
+                    e.b(place.view())?;
+                } else {
+                    appendPayloadPlace(c, mut e.buf, sourceType, place.view(), variant)?;
+                }
                 e.t(".")?;
-                appendFieldName(c, mut e.buf, payload[k as usize])?;
+                appendFieldName(c, mut e.buf, unpackedField(c, sourceType, variant, k))?;
                 e.t(";")?;
                 e.emit()?;
             }

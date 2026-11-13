@@ -140,12 +140,8 @@ fn lowerIsTest(
         let alternative = alternatives[j];
         let fail = if (j + 1 < alternatives.length) newBlock(b)? else finalFail;
         testPattern(c, n, b, alternative, place, fail)?;
-        let unpacks = consumes && match (c.hir.patterns[alternative as usize]) {
-            HirPattern.Variant(_, listed, _) => listed,
-            _ => false,
-        };
-        if (unpacks) {
-            unpackPattern(c, n, b, alternative, place)?;
+        if (consumes) {
+            movePattern(c, n, b, alternative, place)?;
         } else {
             bindPattern(c, n, b, alternative, place, isReference)?;
         }
@@ -407,7 +403,13 @@ fn lowerLetElse(
     }
     b.scopes.truncate(depth as usize);
     b.current = elseBlock;
-    lowerStmt(c, n, b, otherwise)?;
+    let otherwiseSpan = stmtSpan(c, otherwise);
+    if (otherwiseSpan.end == otherwiseSpan.start) {
+        // `let P { x, y } = e;` (ADR 0123): the pattern cannot fail, so nothing reaches here.
+        terminate(n, b, NirTerminator.Unreachable)?;
+    } else {
+        lowerStmt(c, n, b, otherwise)?;
+    }
     if (b.current != none()) {
         terminate(n, b, NirTerminator.Goto(after))?; // only after N0213
     }

@@ -103,9 +103,9 @@ Semantic checks run only when every file parsed without errors.
 | N0226 | `void` used other than as a return type, or `never` other than as a function's return type | `var e: void;`, `fn f(x: never)` |
 | N0227 | Struct contains itself by value (infinite size); reported at the field that closes the cycle. Also an interface that is its own supertrait (ADR 0086 §2.6) | `struct Node { next: Node; }` |
 | N0228 | Duplicate member (field or function) in a struct, an associated constant named like a field, method, variant or another constant of its type (ADR 0074 §2.7), or a function of an enum's `impl` named like a variant, another function or an interface's method of the enum (ADR 0107) | `struct D { a: i32; a: i64; }` |
-| N0229 | Struct literal does not initialise every field | `Point { x: 1 }` |
-| N0230 | Unknown field (in a literal or an access), or a function named where a field was expected | `p.z`, `p.sum` |
-| N0231 | Field initialised twice in a literal | `Point { x: 1, x: 2, y: 3 }` |
+| N0229 | Struct literal does not initialise every field; a struct pattern without `..` does not name every field (ADR 0123) | `Point { x: 1 }` |
+| N0230 | Unknown field (in a literal, an access or a struct pattern), or a function named where a field was expected | `p.z`, `p.sum` |
+| N0231 | Field initialised twice in a literal, or named twice in a struct pattern (ADR 0123) | `Point { x: 1, x: 2, y: 3 }` |
 | N0232 | `this` outside a method, or a `this` parameter outside a struct | `fn f() -> i32 => this;` |
 | N0233 | Method called as a static function, or a static function called on a value | `Point.sum()`, `p.origin()` |
 | N0234 | Field access, method call or literal on something that is not a struct (an optional has only `isSome` and `isNull`, ADR 0072) | `n.x` with `n: i32` |
@@ -137,12 +137,12 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5). A note says where the value was moved (ADR 0114 §2.2) | `consume(r); consume(r);` |
+| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5), or `P` takes it apart (ADR 0123 §2.6). A note says where the value was moved (ADR 0114 §2.2) | `consume(r); consume(r);` |
 | N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
-| N0252 | Move of a field out of a value whose type has a `drop` block | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
+| N0252 | Move of a field out of a value whose type has a `drop` block, by an expression or by a struct pattern that does not take the value apart: one with `..`, or outside the file that declares the struct (ADR 0123 §2.6) | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |
 | N0254 | `return`, `break`, `continue` or `defer` inside a deferred statement | `defer return 1;` |
-| N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2) | `match (s) { Shape.Empty => { } }` |
+| N0256 | `match` that does not cover every value (add the missing variants or `_`); arms with a guard do not count (ADR 0085 §2.2). Also a `let` without `else` whose struct pattern can fail (ADR 0123 §2.4) | `match (s) { Shape.Empty => { } }` |
 | N0257 | Unreachable `match` arm: a duplicate pattern, or any arm after `_`; a guarded arm too, when earlier unguarded arms match all it does | `1 => { } 1 => { }` |
 | N0258 | *Retired in M3c:* a non-Copy payload bound from a value scrutinee now moves out, and the match consumes the scrutinee (`type-system.md` §18.4) | — |
 | N0259 | Invalid array (`type-system.md` §16): a length that is not an integer literal, a `usize` constant or a `usize` const parameter (ADR 0083 §2.7), from 1 to 2^48 − 1 (also in an instance: `Grouped<0>`, §20.5), an element type that is not Copy, or an array larger than 2^31 − 1 bytes; since M9b also `copyFrom` or `fill` on a slice whose element type is not Copy (§16.5), and since ADR 0071 a vector's `extend` or `resize`; since ADR 0090 `Vector.intoForeign` or `Vector.fromForeign` on a vector whose element type is not Copy (§23.3); since ADR 0075 `[]` where no slice is expected (a static's array may hold non-Copy elements without a `drop` block) | `[Res; 2]`, `[i32; 0]`, `let e = [];` |
@@ -338,4 +338,4 @@ error, and the command fails (ADR 0073 §2.4).
 | N0402 | A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105) | `v.push(1);` |
 | N0402 | A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6) | `let g = cell.read(); await pause();` |
 | N0403 | A `move` closure literal (a boxed closure's, `Thread.spawn`'s, an `async move` child's) whose body changes a captured variable of a Copy type, where the function names the variable again after the literal: the closure took a copy and changes that, so the later read sees the old value (`type-system.md` §36.5, ADR 0113) | `var hits = 0; let t = Thread.spawn(move () => { hits += 1; })!; t.join(); Console.writeLine(hits);` |
-| N0404 | A pattern that tests nothing, `_` or a binding (through `name @` too), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3) | `if (n is m) { … }`, `let x = e else { return; };` |
+| N0404 | A pattern that tests nothing, `_`, a binding (through `name @` too) or a struct pattern of such field patterns (ADR 0123 §2.4), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3) | `if (n is m) { … }`, `let x = e else { return; };` |

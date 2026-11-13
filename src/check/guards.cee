@@ -45,6 +45,11 @@ fn patternLocals(c: borrow Checker, pattern: u32, out: borrow mut Vector<u32>) -
                 }
             }
         }
+        HirPattern.Struct(_, fields, _) => {
+            for (k in 0..fields.count) {
+                patternLocals(c, c.hir.at(fields, k), out)?;
+            }
+        }
         HirPattern.Wildcard => {}
         HirPattern.Literal(_) => {}
         HirPattern.Range(_, _) => {}

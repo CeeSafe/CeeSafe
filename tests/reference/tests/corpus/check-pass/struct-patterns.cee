@@ -1,0 +1,64 @@
+// Struct patterns in the HIR (ADR 0123): a pattern for each field in declared order (`_` for one not named); a
+// binding's type by value and through a reference; `apart` on a pattern that takes a struct with a `drop` block
+// apart; an irrefutable pattern after `is` and in `let … else` is N0404.
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+struct Named {
+    name: Vector<u8>;
+    at: Point;
+}
+
+struct Guard {
+    name: Vector<u8>;
+    n: u32;
+
+    drop {}
+
+    fn finish(this) -> Vector<u8> {
+        let Self { name, n: _ } = this;
+        return name;
+    }
+}
+
+fn classify(p: Point) -> i32 {
+    match (p) {
+        Point { y: 0, x } => { return x; }
+        Point { x: 1..=9, .. } => { return 1; }
+        Point { .. } => { return 0; }
+    }
+}
+
+fn byValue(v: Named) -> usize {
+    let Named { name, at: Point { x: 0, .. } } = v else {
+        return 0;
+    };
+    return name.length;
+}
+
+fn byReference(v: borrow mut Named) -> i32 {
+    let Named { name, at: Point { x, y: _ } } = v;
+    name.clear();
+    return *x;
+}
+
+fn reads(g: borrow Guard, h: Guard) -> u32 {
+    if (g is Guard { n: 1, name: _ } && h is Guard { n: m @ 2..=9, .. }) {
+        return m;
+    }
+    return 0;
+}
+
+fn always(p: Point) -> i32 {
+    if (p is Point { x, y }) { // warning[N0404]
+        return x + y;
+    }
+    let Point { x: a, y: b } = p else { // warning[N0404]
+        return 0;
+    };
+    return a + b;
+}
+
+fn main() {}

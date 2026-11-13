@@ -1,0 +1,89 @@
+(program
+  (fn classify ((p#0: Point)) -> i32
+    (block
+      (match p#0
+        (arm Point { x: (x#1: i32), y: 0 }
+          (block
+            (return x#1)
+          )
+        )
+        (arm Point { x: 1..=9, y: _ }
+          (block
+            (return 1:i32)
+          )
+        )
+        (arm Point { x: _, y: _ }
+          (block
+            (return 0:i32)
+          )
+        )
+      )
+    )
+  )
+  (fn byValue ((v#0: Named)) -> usize
+    (block
+      (let-else (is-move v#0 Named { name: (name#1: Vector<u8>), at: Point { x: 0, y: _ } })
+        (else
+          (block
+            (return 0:usize)
+          )
+        )
+      )
+      (return (length name#1):usize)
+    )
+  )
+  (fn byReference ((v#0: borrow mut Named)) -> i32
+    (block
+      (let-else (is v#0 Named { name: (name#1: borrow mut Vector<u8>), at: Point { x: (x#2: borrow mut i32), y: _ } })
+        (else
+          (block)
+        )
+      )
+      (expr (Process.exit (borrow-mut (*name#1))))
+      (return (deref x#2):i32)
+    )
+  )
+  (fn reads ((g#0: borrow Guard) (h#1: Guard)) -> u32
+    (block
+      (if (&& (is g#0 Guard { name: _, n: 1 }) (is h#1 Guard { name: _, n: (m#2 @ 2..=9) })):bool
+        (block
+          (return m#2)
+        )
+      )
+      (return 0:u32)
+    )
+  )
+  (fn always ((p#0: Point)) -> i32
+    (block
+      (if (is p#0 Point { x: (x#1: i32), y: (y#2: i32) })
+        (block
+          (return (+ x#1 y#2):i32)
+        )
+      )
+      (let-else (is p#0 Point { x: (a#3: i32), y: (b#4: i32) })
+        (else
+          (block
+            (return 0:i32)
+          )
+        )
+      )
+      (return (+ a#3 b#4):i32)
+    )
+  )
+  (fn main () -> void
+    (block)
+  )
+  (fn Guard.drop ((this#0: borrow mut Guard)) -> void
+    (block)
+  )
+  (fn Guard.finish ((this#0: Guard)) -> Vector<u8>
+    (block
+      (let-else (is-move this#0 apart Guard { name: (name#1: Vector<u8>), n: _ })
+        (else
+          (block)
+        )
+      )
+      (return name#1)
+    )
+  )
+)

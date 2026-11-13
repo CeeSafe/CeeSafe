@@ -1,0 +1,76 @@
+// Struct patterns and moves (ADR 0123 §2.5, §2.6): a binding of a field that is not Copy moves the field out of the
+// value, which is then partially moved; a `match` consumes its scrutinee; a struct with a `drop` block that is
+// taken apart is gone; a field of such a struct cannot be taken apart out of it. Where the test fails, nothing
+// moved; a field the pattern did not bind stays usable after `is` and `let`.
+struct Named {
+    name: Vector<u8>;
+    other: Vector<u8>;
+    n: u32;
+}
+
+struct Guard {
+    name: Vector<u8>;
+    n: u32;
+
+    drop {}
+}
+
+struct Holder {
+    guard: Guard;
+    n: u32;
+
+    drop {}
+}
+
+fn useAfterMove(v: Named) -> usize {
+    let Named { name, .. } = v;
+    return name.length + v.name.length; // error[N0250]
+}
+
+fn otherFieldStays(v: Named) -> usize {
+    let Named { name, .. } = v;
+    return name.length + v.other.length + v.n as usize;
+}
+
+fn wholeWhereItFailed(v: Named) -> usize {
+    if (v is Named { name, n: 1, .. }) {
+        return name.length;
+    }
+    let w = v;
+    return w.name.length;
+}
+
+fn wholeAfterPartial(v: Named) -> usize {
+    let Named { name, .. } = v;
+    let w = v; // error[N0250]
+    return name.length + w.name.length;
+}
+
+fn matchConsumes(v: Named) -> usize {
+    match (v) {
+        Named { name, n: 0, .. } => { return name.length; }
+        _ => {}
+    }
+    return v.other.length; // error[N0250]
+}
+
+fn apartThenUse(g: Guard) -> u32 {
+    let Guard { name: _, n } = g;
+    return n + g.n; // error[N0250]
+}
+
+fn apartOfField(h: Holder) -> u32 {
+    let Guard { name: _, n } = h.guard; // error[N0252]
+    return n;
+}
+
+fn apartInLoop(g: Guard) -> u32 {
+    var total = 0u32;
+    for (k in 0..3u32) {
+        let Guard { name: _, n } = g; // error[N0250]
+        total += n + k;
+    }
+    return total;
+}
+
+fn main() {}

@@ -227,6 +227,7 @@ Statement = Block
 LocalDecl = ('let' | 'var') Identifier (':' Type)? ('=' Expr)? ';'
           | 'let' '_' '=' Expr ';'          (* ADR 0072: evaluates Expr and destroys its value, as `Expr;` *)
           | 'let' Pattern '=' Expr 'else' Block ';'   (* ADR 0117; type-system.md §15.5: Block must leave *)
+          | 'let' StructPattern '=' Expr ';'          (* ADR 0123; §15.5: the pattern cannot fail *)
 IfStmt    = 'if' '(' Expr ')' Block ('else' (IfStmt | Block))?
 AssignOp  = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>='
 ```
@@ -239,9 +240,13 @@ Notes:
 - A `LocalDecl` without an initialiser must have a type annotation (enforced by the
   checker, not the parser).
 - After `let`, a pattern is read when one starts there that cannot be a declared name: a literal, `null`, `-1`,
-  `(`, `[`, a string, `|`, or a name followed by `(`, `.`, `@` or `|` (ADR 0117). Then `else` and its block are
-  required: `let Some(v) = x;` is N0100, and so are `var` and a type annotation with `else`. A single name followed
-  by `=` is a declaration; when `else` follows its value, it is a `let … else` whose pattern is that name.
+  `(`, `[`, a string, `|`, or a name followed by `(`, `.`, `@`, `{` or `|` (ADR 0117, ADR 0123). Then `else` and its
+  block are required: `let Some(v) = x;` is N0100, and so are `var` and a type annotation with `else`. Only a struct
+  pattern, `let P { x, y } = e;`, may stand without `else` (ADR 0123 §2.4). A single name followed by `=` is a
+  declaration; when `else` follows its value, it is a `let … else` whose pattern is that name.
+- A struct pattern (ADR 0123; type-system.md §15.2) is a name followed by `{`. In a pattern that cannot be a struct
+  literal or a block: an arm's block follows `=>`, and a condition that tests with `is` is parenthesised
+  (`if (p is P { x: 0, .. }) { … }`).
 
 ### 2.1 Expressions and precedence
 

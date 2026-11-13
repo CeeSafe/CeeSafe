@@ -1,0 +1,68 @@
+(unit
+  (struct default Point
+    (field default x i32)
+    (field default y i32)
+  )
+  (struct default Line
+    (field default from Point)
+    (field default to Point)
+  )
+  (enum default Shape
+    (variant Dot Point)
+    (variant Empty)
+  )
+  (fn default f (params (p Point) (l Line) (s Shape)) (returns i32)
+    (block
+      (let-else (struct Point x var y) = p
+        (block)
+      )
+      (let-else (struct Line (from (struct Point (x 0) (y fy))) to) = l
+        (block
+          (return 0)
+        )
+      )
+      (let-else (struct geometry.Point (x gx) ..) = p
+        (block)
+      )
+      (match l
+        (arm (struct Line (from (struct Point (x (..= 1 3)) ..)) (to _))
+          (block
+            (return 1)
+          )
+        )
+        (arm (struct Line (from (@ at (struct Point ..))) ..) (if (> (. at x) 2))
+          (block
+            (return 2)
+          )
+        )
+        (arm (or (struct Line ..) (struct Line))
+          (block
+            (return 3)
+          )
+        )
+      )
+      (match s
+        (arm (Shape.Dot (struct Point (x (or 7 8)) (y _)))
+          (block
+            (return 4)
+          )
+        )
+        (arm (Shape.Dot (struct Self (x sx) ..))
+          (block
+            (return sx)
+          )
+        )
+        (arm _
+          (block)
+        )
+      )
+      (if (&& (is p (struct Point (x (neg 1)) ..)) (== (. (new Point (x 1) (y 2)) x) 1))
+        (block
+          (return 5)
+        )
+      )
+      (let same = (is p (struct Point ..)))
+      (return (+ (+ (+ (+ x y) fy) (. to x)) gx))
+    )
+  )
+)

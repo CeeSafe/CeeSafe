@@ -458,6 +458,22 @@ struct HirPrinter {
                 this.text(")")?;
             }
             HirPattern.String(text, _) => { this.quoted(hir.textOf(text))?; }
+            HirPattern.Struct(typ, fields, takesApart) => {
+                if (takesApart) {
+                    this.text("apart ")?;
+                }
+                this.bytes(types.name(typ))?;
+                this.text(" {")?;
+                let definition = types.info(typ).structDef;
+                for (k in 0..fields.count) {
+                    this.text(if (k > 0) ", " else " ")?;
+                    let field = types.structs[definition as usize].fields[k as usize];
+                    this.bytes(symbols.name(Symbol { id: types.fields[field as usize].name }))?;
+                    this.text(": ")?;
+                    this.patternText(hir, types, symbols, hir.at(fields, k))?;
+                }
+                this.text(" }")?;
+            }
             HirPattern.Slice(items, restAt, restLocal) => {
                 this.text("[")?;
                 for (k in 0..items.count) {

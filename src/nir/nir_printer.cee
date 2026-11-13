@@ -328,6 +328,9 @@ fn printNirStatement(
             }
             appendText(out, ") = unpack ")?;
             printNirPlace(c, n, function, source, out)?;
+            if (variant == none()) {
+                return Ok(); // a struct taken apart (ADR 0123 §2.6)
+            }
             appendText(out, " as ")?;
             return appendBytes(out, c.name(c.types.variants[variant as usize].name));
         }

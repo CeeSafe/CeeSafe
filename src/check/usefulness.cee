@@ -16,6 +16,8 @@ struct Constructor {
     arity: usize;
     isString: bool;
     text: Range; // Hir.text
+    /// A struct's one constructor (ADR 0123): the struct type, its fields the arguments; none for any other.
+    structType: u32;
 }
 
 struct Matrix {
@@ -25,6 +27,9 @@ struct Matrix {
 }
 
 fn sameConstructor(c: borrow Checker, a: Constructor, b: Constructor) -> bool {
+    if (a.structType != none() || b.structType != none()) {
+        return a.structType == b.structType;
+    }
     if (a.isString || b.isString) {
         return a.isString && b.isString && sameBytes(c.hir.textOf(a.text), c.hir.textOf(b.text));
     }
@@ -79,7 +84,12 @@ fn constructorOf(c: borrow Checker, pattern: u32, found: borrow mut Constructor)
                 arity: payloadCount(c, variant),
                 isString: false,
                 text: emptyRange(),
+                structType: none(),
             };
+            return true;
+        }
+        HirPattern.Struct(typ, _, _) => {
+            found = structConstructor(c, typ);
             return true;
         }
         HirPattern.Literal(value) => {
@@ -113,7 +123,16 @@ fn intervalConstructor(low: IntValue, high: IntValue) -> Constructor => Construc
     arity: 0,
     isString: false,
     text: emptyRange(),
+    structType: none(),
 };
+
+/// The one constructor of a struct (ADR 0123): its fields are its arguments.
+fn structConstructor(c: borrow Checker, typ: u32) -> Constructor {
+    var k = noConstructor();
+    k.structType = typ;
+    k.arity = c.types.structs[c.types.info(typ).structDef as usize].fields.length;
+    return k;
+}
 
 /// A pattern's arguments for its constructor: its payload patterns, or `_` for each without a list (Arguments).
 fn pushArguments(
@@ -132,6 +151,12 @@ fn pushArguments(
                 return Ok();
             }
         }
+        HirPattern.Struct(_, fields, _) => {
+            for (i in 0..fields.count) {
+                out.push(c.hir.at(fields, i))?;
+            }
+            return Ok();
+        }
         _ => {}
     }
     return pushWildcards(wildcard, k.arity, out);
@@ -149,6 +174,12 @@ fn pushArgumentTypes(c: borrow Checker, k: Constructor, out: borrow mut Vector<u
     if (k.isVariant) {
         for (i in 0..k.arity) {
             out.push(payloadType(c, k.variant, i))?;
+        }
+    }
+    if (k.structType != none()) {
+        let definition = c.types.info(k.structType).structDef;
+        for (i in 0..k.arity) {
+            out.push(c.types.fields[c.types.structs[definition as usize].fields[i] as usize].typ)?;
         }
     }
     return Ok();
@@ -172,6 +203,10 @@ fn allConstructors(c: borrow Checker, typ: u32, out: borrow mut Vector<Construct
     if (c.types.is(typ, TypeKind.Bool)) {
         out.push(intervalConstructor(intValue(0), intValue(0)))?;
         out.push(intervalConstructor(intValue(1), intValue(1)))?;
+        return Ok(true);
+    }
+    if (c.types.is(typ, TypeKind.Struct) && c.types.info(typ).structDef != none()) {
+        out.push(structConstructor(c, typ))?; // ADR 0123: a struct has one
         return Ok(true);
     }
     return Ok(false);
@@ -431,6 +466,38 @@ fn renderConstructor(
             out.push(')')?;
         }
         return Ok();
+    }
+    if (k.structType != none()) {
+        // `P { x: 0, .. }` (ADR 0123): the fields the witness constrains; `..` for the others.
+        let definition = c.types.info(k.structType).structDef;
+        let item = c.types.structs[definition as usize].item;
+        if (item == none()) {
+            appendBytes(out, c.typeName(k.structType))?;
+        } else {
+            appendBytes(out, c.name(c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol))?;
+        }
+        appendText(out, " { ")?;
+        var omitted = false;
+        for (i in from..to) {
+            if (arguments[i].length == 1 && arguments[i][0] == '_') {
+                omitted = true;
+                continue;
+            }
+            let field = c.types.structs[definition as usize].fields[i - from];
+            appendBytes(out, c.name(c.types.fields[field as usize].name))?;
+            appendText(out, ": ")?;
+            appendBytes(out, arguments[i].view())?;
+            appendText(out, ", ")?;
+        }
+        if (omitted) {
+            return appendText(out, ".. }");
+        }
+        if (to > from) {
+            out.truncate(out.length - 2);
+            return appendText(out, " }");
+        }
+        out.truncate(out.length - 1);
+        return appendText(out, "}");
     }
     if (c.types.is(typ, TypeKind.Bool)) {
         return appendText(out, if (k.value.magnitude != 0) "true" else "false");

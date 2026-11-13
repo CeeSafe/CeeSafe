@@ -938,7 +938,10 @@ fn fmtWalkStmt(l: borrow mut FmtLayout, ast: borrow Ast, s: u32) -> Result<void,
             let last = exprLast(l, ast, value);
             l.addContinuation(first - 1, false, last, priorityInitializer())?;
             fmtWalkExpr(l, ast, value)?;
-            fmtWalkBlock(l, ast, otherwise)?;
+            // `let P { x, y } = e;` (ADR 0123) has no block.
+            if (ast.stmtSpans[otherwise as usize].end > ast.stmtSpans[otherwise as usize].start) {
+                fmtWalkBlock(l, ast, otherwise)?;
+            }
         }
         StmtNode.Defer(body) => { fmtWalkStmt(l, ast, body)?; }
         StmtNode.Match(scrutinee, arms) => {
@@ -1008,6 +1011,29 @@ fn fmtWalkPattern(l: borrow mut FmtLayout, ast: borrow Ast, p: u32) -> Result<vo
                     if (nested != none()) {
                         fmtWalkPattern(l, ast, nested)?;
                     }
+                }
+            }
+        }
+        PatternNode.Struct(path, fields, hasRest) => {
+            // `P { x, y: 0, .. }` (ADR 0123): a list in braces, as a struct literal's fields are.
+            let pathLast = l.last(path.end);
+            let open = l.find(pathLast + 1, TokenKind.OpenBrace);
+            if (fields.count > 0 || hasRest) {
+                let container = l.addContainer(open, false, true, priorityList())?;
+                for (k in 0..fields.count) {
+                    let b = ast.bindings[ast.at(fields, k) as usize];
+                    let nameToken = l.first(ast.idents[b.name as usize].start);
+                    let first = if (b.mutable) nameToken - 1 else nameToken;
+                    let last = if (b.nested != none()) l.last(ast.patternSpans[b.nested as usize].end) else nameToken;
+                    l.addElement(container, first, last)?;
+                    if (b.nested != none()) {
+                        fmtWalkPattern(l, ast, b.nested)?;
+                    }
+                }
+                if (hasRest) {
+                    let close = l.matching[open as usize];
+                    let rest = if (l.isKind(close - 1, TokenKind.Comma)) close - 2 else close - 1;
+                    l.addElement(container, rest, rest)?;
                 }
             }
         }
@@ -1403,7 +1429,13 @@ fn plan(l: borrow mut FmtLayout) -> Result<void, AllocError> {
             let hasTrailing = last + 1 < close && l.isKind(last + 1, TokenKind.Comma);
             // A match-expression arm whose value is a block takes no comma (formatting.md §3.3).
             let endsInBlock = l.containers[ci].lines && l.isKind(last, TokenKind.CloseBrace);
-            if (broken && !hasTrailing && !endsInBlock) {
+            // A struct pattern's `..` is its last item and takes no comma (ADR 0123).
+            let endsInRest = l.isKind(last, TokenKind.DotDot);
+            if (endsInRest) {
+                if (hasTrailing) {
+                    l.dropped[(last + 1) as usize] = true;
+                }
+            } else if (broken && !hasTrailing && !endsInBlock) {
                 l.commaAfter[last as usize] = true;
             } else if (!broken && hasTrailing) {
                 l.dropped[(last + 1) as usize] = true;
@@ -1500,6 +1532,10 @@ fn spaceBetween(l: borrow FmtLayout, previous: u32, token: u32) -> bool {
     }
     if (sameKind(b, TokenKind.DotDot) && containsToken(l.spacedAts.view(), previous)) {
         return true; // `rest @ ..` (ADR 0085 §2.7)
+    }
+    if ((sameKind(b, TokenKind.DotDot) && sameKind(l.kindAt(previous), TokenKind.OpenBrace)) ||
+        (sameKind(b, TokenKind.CloseBrace) && sameKind(l.kindAt(previous), TokenKind.DotDot))) {
+        return true; // `P { .. }`, `P { x, .. }` (ADR 0123)
     }
     if (sameKind(b, TokenKind.CloseParen) || sameKind(b, TokenKind.CloseBracket) || sameKind(b, TokenKind.Comma) ||
         sameKind(b, TokenKind.Semicolon) || sameKind(b, TokenKind.Dot) || sameKind(b, TokenKind.DotDot) ||

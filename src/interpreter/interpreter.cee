@@ -1707,14 +1707,18 @@ fn execute(
         }
         NirStatement.Unpack(source, variant, targets) => {
             let sourceType = placeTypeOf(c, n, frame, source);
-            let base = address(it, c, n, frame, source, false)? + enumUnionOffset(c, sourceType);
-            let payload = borrow c.types.variants[variant as usize].payload;
+            // Without a variant, a struct taken apart (ADR 0123 §2.6): its fields are the payloads.
+            let isStruct = variant == none();
+            let base = address(it, c, n, frame, source, false)? + (if (isStruct) 0u64 else enumUnionOffset(
+                c,
+                sourceType,
+            ));
             for (i in 0..targets.count) {
                 let target = n.at(targets, i);
                 if (target == none()) {
                     continue;
                 }
-                let field = borrow c.types.fields[payload[i as usize] as usize];
+                let field = borrow c.types.fields[unpackedField(c, sourceType, variant, i) as usize];
                 let value = it.memory.load(base + (field.offset as u64), typeSize(c, field.typ)?)?;
                 var targetAddress = frame.locals[target as usize];
                 if (!it.memory.isLive(targetAddress)) {

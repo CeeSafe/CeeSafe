@@ -603,6 +603,11 @@ struct File {
   fields that need drop are destroyed **after** it, in declaration order.
 - Moving a field out of a value whose type has a `drop` block is N0252: the `drop` block needs the
   whole value. Moving out of `this` inside `drop` is impossible anyway (§14.3).
+- **Taking the value apart** (ADR 0123 §2.6) is the one way to end such a value without its `drop` block: a struct
+  pattern that names every field (no `..`), in the file that declares the struct, matched against a value (not a
+  reference). Where it matches, every field moves out, into its binding or a hidden local of the scope, and the
+  block does not run; the fields that are not bound are destroyed as their own types say. `let S { a, b: _ } =
+  this;` in a consuming method is the usual form (§15.2, §15.5).
 - Only a struct has a `drop` block. An enum has none (`drop` in an enum's body is N0100): destroying an enum value
   destroys the payloads of the variant it holds, each as its own type says, so an enum is a move type, and needs
   drop, exactly when one of its payload types does. A variant that owns a resource holds a struct with a `drop`
@@ -736,13 +741,46 @@ Bound     = Literal | Identifier                                   -- a constant
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
+          | StructPattern                                          -- structs: ADR 0123
 SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
+StructPattern = QualifiedName '{' (FieldPattern ',')* (FieldPattern | '..' ','?)? '}'   -- '..': the fields not named
+FieldPattern  = Identifier ':' Pattern | 'var'? Identifier         -- `x` is `x: x`, `var x` is `x: var x`
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
 A payload that is a single identifier is a binding, unless it names a constant (below); `Some(…)`, `Ok(…)`, `Err(…)`
 and `E.V…` there are patterns.
+- **Struct patterns** (ADR 0123). `P { x, var y, z: 0, .. }` matches a value of the struct `P`, or a reference to
+  one, when each field pattern matches its field. `match`, `is` and `let` take a struct scrutinee.
+  - `P` names the value's struct as a literal does, without type arguments (`Point`, `Pair`, `geometry.Point`,
+    `Self`); another type's name, or a value that is not a CeeSafe struct, is N0205. Field types are the
+    instance's.
+  - Each field is named at most once (N0231) and must exist (N0230). A field the code could not read as `v.f`
+    cannot be named: N0296 for a `private` field from another file, N0312 across packages (§2, §12).
+  - Every field is named, or the pattern ends with `..`, which stands for the others (N0229 otherwise).
+  - `x` alone is `x: x`: a binding of the field's name, or the constant of that name if one is in scope (below);
+    `var x` is `x: var x`. A field of a reference type takes a binding or `_` (another pattern is N0205, as for a
+    payload).
+  - **Bindings.** Through a reference, a binding refers to its field (`var` is N0246). On a value, a Copy field
+    is copied, and a field that is not Copy moves out: after `is` and in `let`, out of the scrutinee where it is,
+    which is then partially moved (§14.4: its other fields stay usable, the whole is N0250); in a `match`, out of
+    the consumed scrutinee (§18.4). A nested variant pattern that binds a non-Copy payload moves its field to a
+    hidden local of the scope and unpacks that.
+  - **A struct with a `drop` block** (§14.2). A pattern without `..`, in the file that declares the struct, on a
+    value, *takes the value apart* where it matches: the value is consumed whatever its fields' types, each field
+    moves into its binding or, for `_` or any other pattern, into a hidden local of the scope (matched in turn,
+    destroyed at the scope's end), and the `drop` block does not run. Where it does not match, nothing moves.
+    Any other struct pattern on such a value only reads: one that would move a field out is N0252. `name @ P { … }`
+    with a pattern that takes the value apart is N0250. A nested pattern follows the same rule: `Outer { part:
+    Part { id: 8 }, .. }` takes `part` apart, out of the `Outer` (N0252 if `Outer` has a `drop` block and is not
+    taken apart itself); `Part { id: 8, .. }` only tests it.
+  - **Coverage.** A struct has one constructor, whose arguments are its fields in declared order (`_` for a field
+    not named); the usefulness algorithm below is otherwise unchanged. `match (p) { Point { x: 0, y } => …,
+    Point { x, y: 0 } => … }` is N0256 (`Point { x: -2147483648, y: -2147483648 }` is not covered); a witness names
+    the fields it constrains and writes `..` for the rest.
+  - **Irrefutable patterns**: `_`, a binding, `name @ P` with `P` irrefutable, and a struct pattern whose field
+    patterns are all irrefutable. A variant pattern never is (§15.4, §15.5 use this).
 - This section's `match` is a **statement**; §15.3 has the expression form. Arms are tried in order; the first
   that matches, and whose guard holds, runs its block.
 - **Guards** (ADR 0085 §2.2). `P if (g) => …`: the guard `g` is a `bool` (N0205 otherwise), parenthesised like every
@@ -942,9 +980,10 @@ while (parts.next() is Some(part)) { handle(part); }
 - Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
   They end at the end of that statement, with its temporaries: in `let ok = c.tryRead() is Some(g) && g.data() == 5;`
   the guard `g` is released before the next statement, so a `tryWrite()` there succeeds.
-- **A pattern that tests nothing**, `_` or a binding (through `name @` too), makes the test always true: warning
-  N0404 (`if (n is _)`, `if (n is m)`). A pattern that takes the value apart and covers its type
-  (`arr is [first, rest @ ..]` on an array) is not warned about (ADR 0117 §2.3).
+- **A pattern that tests nothing**, an irrefutable one (§15.2: `_`, a binding, through `name @` too, or a struct
+  pattern of such field patterns, ADR 0123 §2.4), makes the test always true: warning N0404 (`if (n is _)`,
+  `if (n is m)`, `if (p is Point { x, y })`: write `let Point { x, y } = p;`, §15.5). A slice pattern that covers
+  its type (`arr is [first, rest @ ..]` on an array) is not warned about (ADR 0117 §2.3).
 
 ### 15.5 `let P = e else { … };`: bind or leave (ADR 0117)
 ```text
@@ -973,6 +1012,14 @@ fn area(s: Shape) -> u32 {
   destroyed at its end, in reverse order of declaration.
 - A pattern that tests nothing (`let x = e else { … };`) is warning N0404, as for `is`. `var` before the pattern
   and a type annotation are N0100: `var x` inside the pattern makes a binding mutable.
+- **`let P { … } = e;`** (ADR 0123 §2.4): a struct pattern may stand without `else`. It must be irrefutable (§15.2;
+  N0256 otherwise: add `else`, or test with `is`). Everything else is as above with a block that is never
+  reached: the names' scope, the moves (a field that is not Copy moves out of `e`; a struct with a `drop` block
+  is taken apart, §14.2), the temporaries and the drop points.
+  ```ceesafe
+  let Point { x, y } = p;
+  let Line { from: Point { x: x0, .. }, to: _ } = line;
+  ```
 
 ## 16. Arrays, slices and `for` (M2d)
 
@@ -1397,6 +1444,13 @@ Binding = Identifier | 'var' Identifier | '_'
   - in any other arm (`_`, `E.V` without a list, a variant without payload), the value is
     destroyed when the match statement ends.
 - Otherwise (Copy payloads only, or a reference scrutinee) the rules of §15.2 apply unchanged.
+- **Struct patterns** (ADR 0123 §2.5, §2.6). A match also consumes its scrutinee when an arm's struct pattern binds
+  a field that is not Copy, or takes a struct with a `drop` block apart (§15.2). In such an arm the bound fields
+  move out of the consumed value, and the rest of it is destroyed when the match ends; a value taken apart has
+  every field moved out, the unbound ones into hidden locals of the arm. A payload matched by a struct pattern
+  moves into a hidden local, out of which the pattern binds. What is unpacked or taken apart is always a whole
+  local: after `is` or in `let`, a field or payload of a larger value moves into a hidden local first, and the
+  rest of that value stays where it is.
 - N0258 is no longer reported (since M3c).
 
 ### 18.5 Destroying deep structures (R-9)

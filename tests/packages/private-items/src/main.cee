@@ -57,6 +57,14 @@ fn main() {
     let d = o.mine(); // N0296
     let x = Open.EXTRA; // N0296
     let y = c.peek(); // N0296
+    // Struct patterns (ADR 0123): a field the code cannot read cannot be named, nor a private struct; a struct
+    // with a drop block is taken apart only in its own file (N0252 here), and read or unsealed by its method.
+    if (o is Open { hidden: 2, .. }) {} // N0296
+    if (p is Plain { v: 1 }) {} // N0296
+    let Sealed { label } = seal(); // N0252
+    if (o is Open { v: 1, .. }) {
+        let unsealed = seal().unseal();
+    }
     let light = Light.On;
     let lightHidden = light.hidden(); // N0296
     let lightDark = Light.dark(); // N0296

@@ -1,0 +1,29 @@
+// Struct patterns (ADR 0123, formatting.md §4): written like a struct literal, `..` the last item.
+struct Point { x: i32; y: i32; }
+struct Line { from: Point; to: Point; label: u32; }
+fn f(p: Point, l: Line) -> i32 {
+    let Point { x, var y } = p;
+    y += 1;
+    let Line { from: Point { x: 0, y: fy }, to, .. } = l else { return 0; };
+    match (l) {
+        Line { from: Point { x: 1..=3, .. }, to: _, label: 7 | 8 } => { return 1; }
+        Line { label: tag @ 1..=9, .. } if (tag > 2) => { return 2; }
+        Line {
+            from: Point { x: veryLongBindingNameNumberOne, y: veryLongBindingNameNumberTwo },
+            to: Point { x: veryLongBindingNameNumberThree, y: veryLongBindingNameNumberFour },
+            label: _,
+        } => { return veryLongBindingNameNumberOne; }
+        Line {
+            from: Point { x: veryLongBindingNameNumberOne, y: veryLongBindingNameNumberTwo },
+            to: Point { x: veryLongBindingNameNumberThree, .. },
+            ..
+        } => { return veryLongBindingNameNumberThree; }
+        Line {
+            label,
+            ..
+        } => { return 3; }
+    }
+    if (p is Point { .. }) { return x + y + fy + to.x; }
+    if (p is Point {}) { return 0; }
+    return 0;
+}

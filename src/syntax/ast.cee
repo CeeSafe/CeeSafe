@@ -210,9 +210,13 @@ enum PatternNode {
     Slice(Range),
     /// `..` or `name @ ..` in a slice pattern (ADR 0085 §2.7): the name (an identifier), or none.
     Rest(u32),
+    /// `P { x, var y, z: 0, .. }` (ADR 0123): the struct's name, the fields (Ast.bindings: `name` the field's
+    /// identifier, `nested` its pattern, or none for the shorthand `x` or `var x`), whether it ends with `..`.
+    Struct(QualifiedName, Range, bool),
 }
 
-/// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern.
+/// One position of a variant pattern: a binding (an identifier or none for `_`), or a nested pattern. One field of a
+/// struct pattern (ADR 0123): the field's name, and its pattern or none for the shorthand.
 struct Binding {
     name: u32;
     mutable: bool;
@@ -225,7 +229,8 @@ enum StmtNode {
     Block(Range),
     /// `let`, `var` or `using`: kind, identifier, type or none, initialiser or none.
     Local(LocalKind, u32, u32, u32),
-    /// `let P = e else { … };` (ADR 0117): the pattern, the value, the block that leaves.
+    /// `let P = e else { … };` (ADR 0117): the pattern, the value, the block that leaves. `let P { … } = e;` (ADR
+    /// 0123), a struct pattern that cannot fail, has an empty block of no width.
     LetElse(u32, u32, u32),
     Defer(u32),
     Match(u32, Range), // scrutinee, match arms

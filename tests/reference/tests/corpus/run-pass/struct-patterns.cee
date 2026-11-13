@@ -1,0 +1,275 @@
+// Struct patterns (ADR 0123, type-system.md §15.2): `P { x, var y, z: PATTERN, .. }` in `match`, after `is`, in
+// `let … else` and in `let` without `else`; nested in variant patterns and around them; with literals, ranges,
+// constants, or-patterns, strings and slices for fields. A Copy field is copied; a field that is not Copy moves out
+// of a value (the rest of the value stays usable after `is` and `let`), and is referred to through a reference.
+struct Point {
+    x: i32;
+    y: i32;
+
+    fn isOrigin(this) -> bool => this is Self { x: 0, y: 0 };
+
+    fn swapped(this) -> Point {
+        let Self { x, y } = this;
+        return Point { x: y, y: x };
+    }
+}
+
+struct Line {
+    from: Point;
+    to: Point;
+}
+
+struct Named {
+    name: Vector<u8>;
+    tag: Vector<u8>?;
+    n: u32;
+}
+
+struct Pair<T> {
+    first: T;
+    second: T;
+
+    fn intoFirst(this) -> T {
+        let Self { first, .. } = this;
+        return first;
+    }
+}
+
+struct View<region r> {
+    text: StringView<r>;
+    count: u32;
+}
+
+struct Secret {
+    private key: u32;
+    label: u32;
+
+    fn make(k: u32) -> Secret => Secret { key: k, label: k + 1 };
+
+    fn sum(borrow this) -> u32 {
+        let Secret { key, label } = this;
+        return *key + *label;
+    }
+}
+
+enum Shape {
+    Dot(Point),
+    Segment(Line),
+    Empty,
+}
+
+const ORIGIN: i32 = 0;
+
+fn classify(p: Point) -> u32 {
+    match (p) {
+        Point { x: 0, y: 0 } => { return 0; }
+        Point { x: 0, y } => { return if (y > 0) 1 else 2; }
+        Point { x, y: 0 } => { return if (x > 0) 3 else 4; }
+        Point { x, y } => { return if (x + y > 0) 5 else 6; }
+    }
+}
+
+fn quadrant(p: borrow Point) -> StringView => match (p) {
+    Point { x: 0..=1000, y: 0..=1000 } => "I",
+    Point { x: -1000..=-1, y: 0..=1000 } => "II",
+    Point { .. } => "low",
+};
+
+fn axis(p: Point) -> i32 => match (p) {
+    Point { x: ORIGIN, y: n } | Point { x: n, y: ORIGIN } => n,
+    Point { .. } => -1,
+};
+
+fn shape(s: Shape) -> i32 {
+    match (s) {
+        Shape.Dot(Point { x, y }) => { return x + y; }
+        Shape.Segment(Line { from: Point { x: 0, y }, to }) => { return y + to.x; }
+        Shape.Segment(Line { from, .. }) => { return from.x; }
+        Shape.Empty => { return -1; }
+    }
+}
+
+fn word(v: View) -> u32 {
+    match (v) {
+        View { text: "get", count } => { return count; }
+        View { text, count: 0 } => { return truncate<u32>(text.length); }
+        View { text: _, count } => { return count + 100; }
+    }
+}
+
+fn sumPoints(points: Slice<Point>) -> i32 {
+    var total = 0;
+    for (p in points) {
+        if (p is Point { x, y: 1..=9 }) {
+            total += x;
+        }
+    }
+    if (points is [Point { x: 1, .. }, Point { y, .. }, ..]) {
+        total += y * 100;
+    }
+    return total;
+}
+
+fn bytes(n: u8) -> Vector<u8> {
+    var v = Vector<u8>.create();
+    v.push(n)!;
+    return v;
+}
+
+fn makeNamed(n: u32, withTag: bool) -> Named {
+    var tag: Vector<u8>? = null;
+    if (withTag) {
+        var t = bytes(7);
+        t.push(8)!;
+        tag = t;
+    }
+    return Named { name: bytes(truncate<u8>(n)), tag: tag, n: n };
+}
+
+// The name moves out; the rest of `v` is destroyed at the end of the function.
+fn takeName(v: Named) -> usize {
+    let Named { name, .. } = v;
+    return name.length;
+}
+
+// On a match the tag's payload and the name move out; in the `else` block `v` is whole.
+fn takeTag(v: Named) -> usize {
+    let Named { tag: Some(t), name, n: _ } = v else {
+        return 100 + v.name.length;
+    };
+    return t.length + name.length;
+}
+
+// After a partial move the other fields are still there; where the test failed, nothing moved.
+fn viaIs(v: Named) -> usize {
+    if (v is Named { n: 1..=9, name, .. }) {
+        return name.length + v.n as usize;
+    }
+    return v.name.length + 50;
+}
+
+fn byReference(v: borrow Named) -> usize {
+    if (v is Named { name, tag: Some(t), .. }) {
+        return name.length + t.length;
+    }
+    let Named { name, n, .. } = v;
+    return name.length + *n as usize;
+}
+
+fn generic(p: Pair<i32>) -> i32 {
+    let Pair { first, var second } = p;
+    second += 1;
+    return first * second;
+}
+
+fn firstOf<T>(p: Pair<T>) -> T {
+    let Pair { first, second: _ } = p;
+    return first;
+}
+
+fn optionalFields(p: Pair<Vector<u8>?>) -> usize {
+    if (p is Pair { first: Some(a), second: null }) {
+        return a.length;
+    }
+    if (p is Pair { first: Some(a), second: Some(b) }) {
+        return a.length + b.length + 10;
+    }
+    return 99;
+}
+
+fn guarded(v: Named) -> usize {
+    match (v) {
+        Named { name, n, .. } if (n > 5 && name.length == 1) => { return 1; }
+        Named { tag: Some(t), .. } => { return t.length; }
+        Named { .. } => { return 0; }
+    }
+}
+
+fn main() {
+    Console.writeLine(classify(Point { x: 0, y: 0 }));
+    Console.writeLine(classify(Point { x: 0, y: 3 }));
+    Console.writeLine(classify(Point { x: 4, y: 0 }));
+    Console.writeLine(classify(Point { x: -4, y: 3 }));
+    Console.writeLine(quadrant(Point { x: 1, y: 1 }));
+    Console.writeLine(quadrant(Point { x: -1, y: 1 }));
+    Console.writeLine(quadrant(Point { x: -1, y: -1 }));
+    Console.writeLine(axis(Point { x: 0, y: 7 }));
+    Console.writeLine(axis(Point { x: 8, y: 0 }));
+    Console.writeLine(axis(Point { x: 8, y: 8 }));
+    Console.writeLine(Point { x: 0, y: 0 }.isOrigin());
+    Console.writeLine(Point { x: 1, y: 2 }.swapped().x);
+    Console.writeLine(shape(Shape.Dot(Point { x: 2, y: 3 })));
+    Console.writeLine(shape(Shape.Segment(Line { from: Point { x: 0, y: 3 }, to: Point { x: 4, y: 5 } })));
+    Console.writeLine(shape(Shape.Segment(Line { from: Point { x: 9, y: 3 }, to: Point { x: 4, y: 5 } })));
+    Console.writeLine(shape(Shape.Empty));
+    Console.writeLine(word(View { text: "get", count: 5 }));
+    Console.writeLine(word(View { text: "post", count: 0 }));
+    Console.writeLine(word(View { text: "post", count: 2 }));
+    let points = [Point { x: 1, y: 1 }, Point { x: 2, y: 2 }, Point { x: 3, y: 0 }, Point { x: 4, y: 4 }];
+    Console.writeLine(sumPoints(points[..]));
+    Console.writeLine(Secret.make(4).sum());
+    Console.writeLine(takeName(makeNamed(1, true)));
+    Console.writeLine(takeTag(makeNamed(1, true)));
+    Console.writeLine(takeTag(makeNamed(1, false)));
+    Console.writeLine(viaIs(makeNamed(3, true)));
+    Console.writeLine(viaIs(makeNamed(30, true)));
+    Console.writeLine(byReference(makeNamed(3, true)));
+    Console.writeLine(byReference(makeNamed(3, false)));
+    Console.writeLine(generic(Pair { first: 3, second: 4 }));
+    Console.writeLine(firstOf(Pair { first: makeNamed(5, true), second: makeNamed(6, false) }).n);
+    Console.writeLine(Pair { first: bytes(1), second: bytes(2) }.intoFirst().length);
+    Console.writeLine(optionalFields(Pair { first: bytes(1), second: null }));
+    Console.writeLine(optionalFields(Pair { first: bytes(1), second: bytes(2) }));
+    Console.writeLine(optionalFields(Pair { first: null, second: bytes(2) }));
+    Console.writeLine(guarded(makeNamed(6, true)));
+    Console.writeLine(guarded(makeNamed(2, true)));
+    Console.writeLine(guarded(makeNamed(2, false)));
+    // In a loop: each pass takes a new value apart.
+    var total: usize = 0;
+    for (k in 0..3u32) {
+        let Named { name, tag, n } = makeNamed(k, k == 1);
+        total += name.length + n as usize;
+        if (tag is Some(t)) {
+            total += t.length;
+        }
+    }
+    Console.writeLine(total);
+}
+// expect-stdout: 0
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 6
+// expect-stdout: I
+// expect-stdout: II
+// expect-stdout: low
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: -1
+// expect-stdout: true
+// expect-stdout: 2
+// expect-stdout: 5
+// expect-stdout: 7
+// expect-stdout: 9
+// expect-stdout: -1
+// expect-stdout: 5
+// expect-stdout: 4
+// expect-stdout: 102
+// expect-stdout: 207
+// expect-stdout: 9
+// expect-stdout: 1
+// expect-stdout: 3
+// expect-stdout: 101
+// expect-stdout: 4
+// expect-stdout: 51
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 15
+// expect-stdout: 5
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 12
+// expect-stdout: 99
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0
+// expect-stdout: 8

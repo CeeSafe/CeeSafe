@@ -3,11 +3,13 @@
 CeeSafe manages memory without a garbage collector by tracking, at compile time, who owns each value and who is
 looking at it. This chapter explains the rules, why they hold, and what the compiler says when a program breaks
 them. The formal rules are in [Ownership](../spec/ownership.md) and
-[References and the borrow checker](../spec/lifetimes.md).
+[References and the borrow checker](../spec/lifetimes.md). The specification's noun for a borrow is "reference", and
+its rules and the compiler's messages say "mutable" and "mutably borrowed" for an exclusive borrow. This guide says
+*borrow*, *shared borrow* and *exclusive borrow*.
 
 ## Copy types and move types
 
-Integers, floats, `bool`, references and string views are **Copy**: assigning one copies it, and both copies stay
+Integers, floats, `bool`, shared borrows and string views are **Copy**: assigning one copies it, and both copies stay
 usable. A struct or enum is Copy when everything in it is Copy and it has no `drop` block.
 
 Everything else is a **move type**: boxes, vectors, strings, files, and any struct that owns one or has a `drop`
@@ -143,11 +145,11 @@ cleanup
 
 ## Borrowing
 
-Most code does not want to take ownership; it wants to look at a value or change it in place. A **reference** does
+Most code does not want to take ownership; it wants to look at a value or change it in place. A **borrow** does
 that without moving:
 
-- `borrow T` is a shared reference: it can read, and any number can exist at once;
-- `borrow mut T` is an exclusive reference: it can read and write, and while it is in use nothing else can touch
+- `borrow T` is a **shared borrow**: it can read, and any number can exist at once;
+- `borrow mut T` is an **exclusive borrow**: it can read and write, and while it is in use nothing else can touch
   the value.
 
 ```ceesafe
@@ -180,11 +182,11 @@ the argument, so that every place where a value may change is visible where it i
 
 ### The rule
 
-While a borrow is **live**, meaning the reference or anything made from it is still used later, the borrowed value
+While a borrow is **live**, meaning the borrow or anything made from it is still used later, the borrowed value
 may not be:
 
-- changed, mutably borrowed or destroyed, if the borrow is shared;
-- used in any way, if the borrow is mutable.
+- changed, exclusively borrowed or destroyed, if the borrow is shared;
+- used in any way, if the borrow is exclusive.
 
 The compiler checks this within each function, on every path. A borrow ends at its last use, not at the end of its
 scope.
@@ -211,10 +213,10 @@ main.cee:4:5: error[N0240]: cannot assign to 'total' while 'total' is borrowed
 Moving the `Console.writeLine(r)` above the `+=` fixes it: the borrow is then dead before the write. The same rule
 is what stops a vector from growing while an element is borrowed, since growing can move its elements.
 
-### Returning references
+### Returning borrows
 
-A function that returns a reference must return something borrowed from its parameters, never from its own locals.
-With one reference parameter, that is assumed. With several, the result names the ones it may borrow from:
+A function that returns a borrow must return something borrowed from its parameters, never from its own locals.
+With one borrowed parameter, that is assumed. With several, the result names the ones it may borrow from:
 
 ```ceesafe
 fn larger(a: borrow i64, b: borrow i64) -> borrow(a, b) i64 => if (a > b) a else b;
@@ -243,7 +245,7 @@ fn main() {
 ```
 
 The caller then knows how long the result stays valid: as long as the arguments it borrows from. Returning a
-reference to a local is rejected, since the local is gone when the function returns:
+borrow of a local is rejected, since the local is gone when the function returns:
 
 <!-- ceesafe: fail N0244 -->
 ```ceesafe
@@ -265,9 +267,9 @@ main.cee:3:5: error[N0244]: cannot return a reference to 'copy', which is local 
   = note: borrowed here (3:12)
 ```
 
-### Two mutable borrows
+### Two exclusive borrows
 
-Two `borrow mut` references to one value can never be live together, even as two arguments of one call:
+Two exclusive borrows of one value can never be live together, even as two arguments of one call:
 
 <!-- ceesafe: fail N0241 -->
 ```ceesafe
@@ -290,10 +292,10 @@ main.cee:7:18: error[N0241]: cannot borrow 'x' as mutable while 'x' is mutably b
   = note: the borrow is used later here (7:5)
 ```
 
-## References in structs: regions
+## Borrows in structs: regions
 
-A struct that holds a reference or a view must say so, with a **region parameter**: the region is the lifetime of
-what the reference points into. Values of such a type cannot outlive that region.
+A struct that holds a borrow or a view must say so, with a **region parameter**: the region is the lifetime of
+what the borrow points into. Values of such a type cannot outlive that region.
 
 ```ceesafe
 struct Word<region src> {
@@ -320,7 +322,7 @@ fn main() {
 hello
 ```
 
-Plain functions that take and return references never need region parameters; only types that *store* references,
+Plain functions that take and return borrows never need region parameters; only types that *store* borrows,
 and functions that pass such types through, do. Regions are a compile-time idea: they cost nothing at run time.
 
 ## What the checker does not do
@@ -328,7 +330,7 @@ and functions that pass such types through, do. Regions are a compile-time idea:
 The borrow checker works within one function at a time, using the signatures of the functions it calls. It is
 deliberately simpler than Rust's: some correct programs are rejected. When that happens, the usual fixes are to end
 a borrow earlier, copy a value out, split a function, or use an index or a [slot map handle](collections.md) instead
-of a stored reference.
+of a stored borrow.
 
 ## Next
 

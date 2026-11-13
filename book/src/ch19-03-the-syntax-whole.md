@@ -329,7 +329,7 @@ written.
 
 To match a value you own without consuming it, borrow it in the parentheses: `match (borrow m)`.
 
-<span class="listing-caption"><strong>Listing 19-24</strong>, <code>main.cee</code>: The same value matched three times: read through a borrow, changed through a mutable borrow, then consumed.</span>
+<span class="listing-caption"><strong>Listing 19-24</strong>, <code>main.cee</code>: The same value matched three times: read through a borrow, changed through an exclusive borrow, then consumed.</span>
 
 ```ceesafe
 enum Message {
@@ -369,7 +369,7 @@ hello!
 A parameter of type `borrow Message` is already a borrow, and so is `this` in a method that takes `borrow this` or
 `borrow mut this`. Matching them needs no `borrow` in the parentheses.
 
-<span class="listing-caption"><strong>Listing 19-25</strong>, <code>main.cee</code>: <code>match (this)</code> in two methods. In <code>tick</code>, <code>n</code> is a mutable borrow of the count inside the enum.</span>
+<span class="listing-caption"><strong>Listing 19-25</strong>, <code>main.cee</code>: <code>match (this)</code> in two methods. In <code>tick</code>, <code>n</code> is an exclusive borrow of the count inside the enum.</span>
 
 ```ceesafe
 enum Counter {

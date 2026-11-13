@@ -4460,10 +4460,19 @@ fn identity<T>(x: T) -> T => x;
 ### 36.2 Closures (G8b)
 **A closure's statements are the enclosing function's, for loans** (ADR 0131). Its body is checked first, and what
 it does with its captures is accounted where the closure is made:
-- its result may hold what its captures hold (never a borrow of a capture itself: N0245 in its body), so a call
-  `g()` gives its result the loans the closure's environment holds, as a deep result (§25.6), and those of the
-  call's arguments. `let g = () => s.get(); return g();` returns what `s` holds and, `s` being captured by
-  reference, a loan of `s`: N0244 for a local `s` unless the result's type holds no loan (`T: Send`);
+- a call `g()` gives its result the loans the closure's environment holds, as a deep result (§25.6), and those of
+  the call's arguments. `let g = () => s.get(); return g();` in `fn first<T, S: Source<T>>(s: S) -> T` returns what
+  `s` holds and, `s` being captured by reference, a loan of `s`. It is refused in two places, because the closure's
+  body and the function it is written in are checked apart, the body first, and each reports what it finds:
+  - **N0245 at `s.get()`, in the closure's body.** The body is checked as a function whose hidden first parameter
+    is the closure's environment, and the environment is no source of the closure's result (a closure's type has no
+    names to write a source list with, §36.1). So a result that may hold a loan (of a scoped type, or of a type
+    that mentions a type parameter without a `Send` bound, §25.7 rule 5) and is made from a capture is N0245
+    there, whatever the enclosing function does with the closure, and even if it never calls it;
+  - **N0244 at `return g();`, in `first`.** The call's result holds a loan of `s`, a local of `first`, and `first`
+    returns it.
+
+  Neither is reported when the result's type holds no loan (`T: Send`);
 - a closure whose body stores what it captures through one of its captures (`() => into.keep(v)`, `() =>
   out.push(v)`, `() => { into.text = v; }`, `() => { into = Holder { text: v }; }`, an inner closure that does) is a
   store, where the closure is made, of every other capture's loans through that capture: N0272 there if `into` is a
@@ -4908,7 +4917,8 @@ fn main() {
   body is: `Ok(v)` or `Err(e)` alone there is N0260. `SpawnError` is the enum
   `SpawnError.Resources` (the thread or its closure could not be allocated).
   - The literal takes no parameters. Its captures must be `Send` (**N0334**), and so must `T` (**N0334**).
-  - `Thread.spawn` also takes a `Box<dyn fn() -> T + Send>`.
+  - `Thread.spawn` also takes a `Box<dyn mut fn() -> T + Send>` (§38.3); any other argument that is not a move
+    literal, a `Box<dyn fn() -> T + Send>` among them, is **N0333**.
   - A move literal is allowed here as well as in `Box.create` (amending §36.5).
   - The thread calls the literal's body once, so it is a run-once environment (§36.5, ADR 0112): the body may move a
     capture out, as in `Thread.spawn(move () => text)`, whose thread gives the string back through `join`. The body

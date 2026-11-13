@@ -136,8 +136,8 @@ destroy 1
 - `make(2);` makes a value that nothing owns. It is destroyed at the end of the statement. `let _ = make(3);`
   discards a value in writing, with the same effect.
 - `consume(b)` moves `b` into the parameter `n`. When `consume` returns, its local `100` is destroyed, then `n`.
-- `b` is moved only if the condition holds. The compiler cannot know that, so it keeps a hidden flag beside `b`
-  and tests it at the end of `main`. Here the flag says "moved", and nothing happens.
+- `b` is moved only if the condition holds. The compiler cannot know that, so it keeps a hidden flag beside `b`,
+  a **drop flag**, and tests it at the end of `main`. Here the flag says "moved", and nothing happens.
 - `move early` moves the value out of `early`, and `let _ =` discards it. Together they destroy a value before
   its block ends.
 
@@ -328,7 +328,9 @@ Use `defer` for one function's own business.
 ## Mistakes
 
 ::: warning Mistake: moving a field out of a struct that has a `drop` block
-The `drop` block will run on the whole value, so no part of it can be missing.
+Moving one field out of a struct is a **partial move**. A struct without a `drop` block allows it, and cannot be
+used as a whole until the field is assigned again. A `drop` block will run on the whole value, so no part of it
+can be missing.
 :::
 
 <span class="listing-caption"><strong>Listing 15-14</strong>, <code>main.cee</code>: <code>name</code> is moved out of a struct whose <code>drop</code> block reads it. This does not compile.</span>

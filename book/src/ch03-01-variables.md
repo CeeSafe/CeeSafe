@@ -224,7 +224,8 @@ fn main() {
 If the two values are the same thing at different times, such as a running total, use one `var` and assign to it.
 
 ::: warning Mistake: reading a `var` before it has a value
-A `var` declared without a value must be assigned on every path before it is read.
+A `var` declared without a value must be assigned on every path before it is read. The check is called
+**definite initialisation**.
 :::
 
 <span class="listing-caption"><strong>Listing 3-8</strong>, <code>main.cee</code>: <code>total</code> has no value when it is printed. This does not compile.</span>

@@ -9,10 +9,10 @@ it wrongly. What it removes is undefined behaviour.
 | C / C++ | CeeSafe | Notes |
 |---|---|---|
 | `int32_t x = 1;` | `let x: i32 = 1;` (or `var` to change it) | |
-| `T *`, `const T *` | `borrow mut T`, `borrow T` in safe code; `*mut T`, `*T` in `unsafe` | references are never null and never dangle |
+| `T *`, `const T *` | `borrow mut T`, `borrow T` in safe code; `*mut T`, `*T` in `unsafe` | borrows are never null and never dangle |
 | `malloc` / `free`, `new` / `delete` | `Box.create(v)`; freed by its owner | allocation failure is a `Result`, not `NULL` or an exception |
 | `std::unique_ptr<T>` | `Box<T>` | |
-| `std::vector<T>` | `Vector<T>` | growing it while an element is referenced is a compile error |
+| `std::vector<T>` | `Vector<T>` | growing it while an element is borrowed is a compile error |
 | `std::string`, `std::string_view` | `String`, `StringView` | UTF-8 only |
 | `std::optional<T>` | `T?` | |
 | destructors, RAII | `drop { … }` blocks; destruction at scope end | moves leave nothing behind to destroy twice |
@@ -62,7 +62,7 @@ main.cee:5:5: error[N0241]: cannot borrow 'v' as mutable while 'v[0]' is borrowe
   = note: the borrow is used later here (6:5)
 ```
 
-The fixes are the ones you would reach for anyway: copy the value (`let first = v[0];`), or take the reference after
+The fixes are the ones you would reach for anyway: copy the value (`let first = v[0];`), or take the borrow after
 the last push.
 
 ## No undefined behaviour
@@ -75,7 +75,7 @@ Every operation that is undefined in C is defined in CeeSafe, by a check or by a
 | out-of-bounds access | stops the program |
 | use after free, double free | compile errors |
 | reading uninitialised memory | a compile error |
-| null dereference | there are no null references; optionals must be checked |
+| null dereference | a borrow is never null; optionals must be checked |
 | shift by the width or more | stops the program |
 | unsequenced modifications | evaluation order is left to right |
 | strict aliasing violations | the generated C never relies on them |

@@ -40,8 +40,8 @@ fn main() {
 
 - A **struct literal** names every field exactly once.
 - The **receiver** says how a method gets its struct: `this` (a copy, or a move), `borrow this` (read-only access) or
-  `borrow mut this` (changes the caller's value). Calling a `borrow mut this` method needs a `var` (or a mutable
-  reference); the call borrows it for the duration of the call.
+  `borrow mut this` (changes the caller's value). Calling a `borrow mut this` method needs a `var` (or an exclusive
+  borrow); the call borrows it for the duration of the call.
 - A struct is **Copy**, copied on assignment, when every field is Copy and it has no `drop` block. Otherwise it
   moves: see [Ownership](ownership.md).
 - Fields are laid out in declaration order with C's rules, so a struct is the same in C.
@@ -723,7 +723,7 @@ true
   `a ?? b ?? c` takes the first value present.
 - `o!` is the value; on `null` it stops the program with "unwrapped null".
 - `o?` is the value; on `null` the enclosing function returns `null` (it must return an optional).
-- A reference can be optional (`borrow T?`), and so can a box (`Box<T>?`); both are one pointer.
+- A borrow can be optional (`borrow T?`), and so can a box (`Box<T>?`); both are one pointer.
 
 ## Results
 

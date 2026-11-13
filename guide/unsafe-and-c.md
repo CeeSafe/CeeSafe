@@ -8,7 +8,7 @@ allocator. For those there is `unsafe`, kept small and visible. The contract uns
 ## Raw pointers
 
 `*T` and `*mut T` are raw pointers: plain addresses, Copy, with no borrow attached. **Making** a pointer is safe;
-**using** one (`read`, `write`, `add`, turning it back into a reference) is allowed only inside `unsafe`.
+**using** one (`read`, `write`, `add`, turning it back into a borrow) is allowed only inside `unsafe`.
 
 ```ceesafe
 /// Safety: `p` points to `n` initialised `u32`s that nothing else writes while this runs.
@@ -35,7 +35,7 @@ fn main() {
 16
 ```
 
-Making a pointer from a reference does not use the reference up: `let p = r as *mut T;` reborrows a `borrow mut`
+Making a pointer from a borrow does not use the borrow up: `let p = r as *mut T;` reborrows a `borrow mut`
 parameter `r` for the cast, and `r` can be used afterwards. The pointer holds no loan, so nothing checks it against
 later uses of `r`: that is what the `unsafe` block answers for.
 
@@ -608,7 +608,7 @@ then `setLength`. Nothing is filled twice. What is written above the length is l
 To return a buffer the host will own, give it up with `Vector.intoForeign`; to work on a vector the host owns, take
 it with `Vector.fromForeign` and give it back the same way. Both need one allocator on both sides (the host's, given
 to `ceesafe_init`, or the C library's when none was given) and a Copy element type, and both are unsafe: the block
-leaves, or joins, the blocks CeeSafe must free. A value with drop glue still goes back through an export.
+leaves, or joins, the blocks CeeSafe must free. A value whose destruction runs code still goes back through an export.
 
 <!-- ceesafe: check -->
 ```ceesafe

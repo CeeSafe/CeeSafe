@@ -9,8 +9,9 @@ specification: ["type-system.md §41.1", "type-system.md §41.2", "type-system.m
 
 # Cells
 
-**This section teaches** the cell types `Cell`, `RefCell` and `OnceCell`: what they allow, which check each one
-moves from the compiler to the running program, and when that trade is worth making. It assumes
+**This section teaches** the cell types `Cell`, `RefCell` and `OnceCell`: what they allow, which of them moves a
+check from the compiler to the running program (`RefCell` and `OnceCell` do; `Cell` needs none), and when that
+trade is worth making. It assumes
 [borrowing](./ch04-02-borrowing), [methods](./ch05-03-methods), [optionals](./ch06-03-optionals),
 [regions](./ch10-03-regions) and [destruction](./ch15-02-destruction).
 
@@ -191,7 +192,7 @@ busy: someone is reading
 1
 ```
 
-The last two lines each make a guard, use it, and drop it at the `;`. Keeping guards that short is the way to
+The last two lines each make a guard and use it, and the guard is destroyed at the `;`. Keeping guards that short is the way to
 avoid the panic: take the guard, do the work, and let it go before calling code that may use the cell.
 
 `RefCell` has three more operations that need no guard in your hands. `cell.replace(v)` stores `v` and returns

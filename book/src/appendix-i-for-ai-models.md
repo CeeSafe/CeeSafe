@@ -58,20 +58,30 @@ Each entry of `listings` is one numbered listing:
 | `file` | text | The file's name as the caption gives it. `main.cee` is a program of one file. A path such as `scores/src/main.cee` is a file of a package. |
 | `language` | text | `ceesafe`, or another language's name, such as `toml` or `c`. |
 | `caption` | text | The sentence that says what the listing shows. |
-| `check` | text | What the book's check does with it. The table below gives the values. |
+| `check` | text | The kind of listing: what the book's check does with it. [The kinds of listing](#the-kinds-of-listing) gives the values. |
 | `output` | text or `null` | Exactly what the program prints, or exactly what the compiler says, as the page shows it beneath the listing. `null` when the page shows neither. |
 | `url` | text | The address of the listing's file. |
 
-| Value of `check` | What it means |
-|---|---|
-| `runs` | The listing is a whole program. It compiles, runs and exits with status 0, and `output` is what it prints. |
-| `fail N0240` | It must not compile. The compiler reports the codes named, and `output` is the compiler's message. |
-| `warns N0400` | It compiles and runs, and the compiler gives the warnings named. |
-| `panics` | It compiles, and panics when it runs. |
-| `exits 3` | It compiles, runs, and exits with that status. |
-| `check` | It is type-checked and not run, because it reads input or calls C. |
-| `freestanding` | It is checked with `--profile freestanding`. |
-| `skip` | It is one file of a package of several files, or part of one, and may not compile alone. The page names the file. |
+### The kinds of listing
+
+Every listing is a whole file: nothing is hidden, and nothing is to be added around it. Its `check` says what
+kind it is, which is what the book's check (`tools/book_check.py`) does with it. "Passes the check" below means
+`ceesafec check` reports no error: the file parses, type-checks and borrow-checks. A listing is run in the
+interpreter (`ceesafec run --interp`), with no arguments and an empty standard input. Where the page shows an
+output beneath a listing, it is compared with the run, or with the compiler's messages, character for character.
+
+| Value of `check` | Passes the check? | Is it run? | What the book's check requires |
+|---|---|---|---|
+| `runs` | yes | yes | It exits with status 0 and prints `output`. This is the kind of a listing with no other mark. A file without `fn main` is checked and not run. |
+| `exits 3` | yes | yes | It exits with that status and prints `output`. |
+| `panics` | yes | yes | It panics when it runs (status 134). |
+| `warns N0400` | yes, with warnings | no | The compiler gives exactly the warnings named, and `output` is its messages. |
+| `check` | yes | no | Nothing more. It is not run, because it reads input or calls C. |
+| `fail N0240` | **no** | no | The compiler refuses it with exactly the codes named, and `output` is its messages. |
+| `skip` | not alone | not alone | It is byte for byte a file, or a run of lines of a file, of a package under `book/projects/`. The package is checked, and tested if it has tests. The caption gives the file's path. |
+
+`freestanding` is not a kind of its own: it goes with `fail` or `warns`, or stands alone, and means the file is
+checked with `--profile freestanding` and not run.
 
 An entry of `sections`, shortened:
 
@@ -107,11 +117,13 @@ An entry of `sections`, shortened:
 
 Three things about the listings matter to a model:
 
-- **A listing is a whole file.** A listing whose `check` is not `skip` compiles as it stands. There is nothing to
-  add around it and nothing hidden.
+- **A listing is a whole file.** Unless its `check` is `skip`, there is nothing to add around it and nothing
+  hidden: a `runs` listing passes the check and runs as it stands, and a `fail` listing is refused as it stands. A `skip`
+  listing is one file of a package; the package is what compiles.
 - **A listing that fails is there on purpose.** Read `check` before copying code: about a third of the book's
   listings are mistakes, shown with the diagnostic they get.
-- **The output is real.** Each `output` was compared with a run of the listing when the book was built.
+- **The output is real.** Each `output` is compared with a run of the listing, or with the compiler's messages,
+  by the book's check, which is part of the tests every release must pass.
 
 The book teaches. For a name's exact signature, use the library's pages and the specification, which are the
 authority where the book and they differ. They have their own files of the same kind:

@@ -28,7 +28,7 @@ A function value is one pointer, and calling it is an indirect call.
 ## Closures
 
 A closure is a function written inline, `(parameters) => body`, that can use the variables around it. It borrows
-what it captures, so it is a kind of reference: its type is `borrow fn(…) -> R` if it only reads what it captures,
+what it captures, so it is a kind of borrow: its type is `borrow fn(…) -> R` if it only reads what it captures,
 and `borrow mut fn(…) -> R` if it changes something.
 
 ```ceesafe
@@ -72,11 +72,11 @@ fn main() {
 
 ### Closures do not outlive their block
 
-Because a closure borrows its captures, the borrow checker treats it like any reference: it cannot be returned from
+Because a closure borrows its captures, the borrow checker treats it like any borrow: it cannot be returned from
 the function that made it, kept in a struct that outlives what it captured, or kept after a captured variable
 changes. That makes closures free of allocation and safe to use in kernels.
 
-A struct holds a borrowed closure as it holds any reference: with a region parameter. The field is called by its
+A struct holds a borrowed closure as it holds any borrow: with a region parameter. The field is called by its
 name.
 
 ```ceesafe
@@ -104,7 +104,7 @@ A struct that owns its closure holds a boxed one (next section): `onPress: Box<d
 
 A `move` literal moves what it captures into the closure, so the closure can outlive the function that made it. It
 is boxed, with an allocation you can see and handle, as a `Box<dyn fn(…) -> R>`. A closure that changes what it
-captured is a `Box<dyn mut fn(…) -> R>`, and calling it needs mutable access.
+captured is a `Box<dyn mut fn(…) -> R>`, and calling it needs exclusive access to the box.
 
 ```ceesafe
 fn adder(n: u64) -> Box<dyn fn(u64) -> u64> {
@@ -144,7 +144,7 @@ fn main() {
 
 - The literal goes straight into `Box.create(…)` where a `Box<dyn fn…>` is expected; its parameter types come from
   there.
-- A captured variable is moved in, and cannot be used afterwards (a Copy one is copied). It cannot hold a reference.
+- A captured variable is moved in, and cannot be used afterwards (a Copy one is copied). It cannot hold a borrow.
 - The body changes the closure's own copy of what it captured, and cannot move it out.
 
 ## Methods that take closures

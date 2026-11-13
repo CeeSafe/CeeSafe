@@ -395,7 +395,9 @@ main.cee:3:28: error[N0264]: a region cannot hold a 'String': it needs drop, and
   |                            ^^^^^^^^^^^^^^^^^^^
 ```
 
-Keep the bytes of the text in the arena with `allocArray`, or keep the `String` outside it.
+A type **needs drop**, in the compiler's words, when destroying a value of it runs code: it has a `drop` block,
+or a part that needs drop. Keep the bytes of the text in the arena with `allocArray`, or keep the `String` outside
+it.
 
 ::: warning Mistake: returning memory of a local arena
 The arena ends with the function, and its allocations with it.

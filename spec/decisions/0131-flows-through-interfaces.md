@@ -186,7 +186,7 @@ fields are known. A message never suggests a bound that cannot be written (`C.Ou
 | F1 `make<S: Build<StringView>>(hint: StringView) -> S => S.build(hint)` | 2.1, 2.2: `hint` has no name of `S` | N0245 in `make` |
 | F2 `launder<U>(o: Owner, f) -> U => apply<U>(o, f)` | 2.2: `apply`'s result borrows from `o`, a local of `launder` | N0244 in `launder` |
 | F2 with a generic method `mapS<U>` of an interface | 2.3 narrows the impl's method to the interface's flows; its body returns a borrow of `this` | N0245 in the impl |
-| F3 `let g = () => s.get(); return g();` and its variants | 2.5: the result holds what `g` captured | N0244; N0272 for `() => out.push(s.get())` |
+| F3 `let g = () => s.get(); return g();` and its variants | 2.5: the result holds what `g` captured | N0245 at `s.get()` in the closure's body (the existing rule: its result is made from a capture, and the environment is no source of it) and N0244 at `return g();` (the call's result holds a loan of the local `s`); N0272 for `() => out.push(s.get())` |
 | F4 `let g = () => into.keep(v);` | 2.5: a store through `into` of `v`'s loan, where `g` is made | N0272 |
 
 ## 4. Why it is sound: the assumptions, and what enforces each
@@ -216,8 +216,8 @@ rest on A8 plus the existing rules for where a closure may be kept.
 - **With-resource and mapper functions over an unbounded result.**
   `fn withFile<T>(f: fn(borrow Disk) -> T) -> T { let file = …; return f(file); }` is N0244: `T` could be a view
   of `file`. Written `fn withFile<T: Send>(…)`. This is the commonest cost.
-- **A closure that returns a `T` got from a captured local.** `let g = () => s.get(); return g();` is N0244 when
-  `s` is a local or a by-value parameter, though with an implementation that holds a view the value would have been
+- **A closure that returns a `T` got from a captured local.** `let g = () => s.get(); return g();` is N0244 at the
+  `return` when `s` is a local or a by-value parameter (after N0245 in the closure's body, §36.2), though with an implementation that holds a view the value would have been
   fine: the closure borrows `s`, and its result may hold what it captured. Written without the closure, or with
   `T: Send`.
 - **A closure whose result of a type parameter's type is made from its own parameter**, `(x: StringView) => f(x)`

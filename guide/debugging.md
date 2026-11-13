@@ -91,7 +91,7 @@ fn main() {
 
 Since a release build leaves the call out, the condition and message must not change anything that exists before
 them, or the two builds would behave differently. The compiler checks this, through every function they call: no
-assignment, `mut` argument, move or drop of an outer variable, no I/O, no C call, no call through a closure or `dyn`,
+assignment, `mut` argument, move or destruction of an outer variable, no I/O, no C call, no call through a closure or `dyn`,
 and no way out but their end: no `?`, no `break` or `continue` to a loop outside them, no `Process.exit`. They may
 read, allocate, and change their own locals. To assert on something that changes, do the change first:
 

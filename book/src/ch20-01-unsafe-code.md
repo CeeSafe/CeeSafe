@@ -99,7 +99,7 @@ Each operation has a condition that must hold when it runs. If it does not, the 
 behaviour: it may crash, or go on with wrong data.
 
 - `p.read()` needs `p` to be non-null, aligned for `T`, and to point to a live, initialised `T`.
-- `p.write(v)` needs the same of the storage, and nothing may hold a borrow of it. The old value is not dropped.
+- `p.write(v)` needs the same of the storage, and nothing may hold a borrow of it. The old value is not destroyed.
 - A borrow or slice made from a pointer must be used only while its target is live and nothing else changes it.
 - The values safe code relies on must stay valid: a `bool` is 0 or 1, a `StringView` is UTF-8.
 
@@ -163,12 +163,12 @@ then checked against `bytes` like callers of any method. The promise that cannot
 
 ## A box as a raw pointer
 
-`Box.intoRaw(box)` takes a box and returns the address of its contents as a `*mut T`. Nothing is dropped or freed:
+`Box.intoRaw(box)` takes a box and returns the address of its contents as a `*mut T`. Nothing is destroyed or freed:
 the memory is now yours to give back. It is a safe call, since a leak is not undefined behaviour.
 `Box.fromRaw(p)` makes the box again, and is unsafe: `p` must have come from `Box.intoRaw` of a box of exactly
 that type, and be given back once. The box type comes from where the result goes.
 
-<span class="listing-caption"><strong>Listing 20-3</strong>, <code>main.cee</code>: A struct that keeps a heap block as a raw pointer, and frees it by making the box again in its <code>drop</code>.</span>
+<span class="listing-caption"><strong>Listing 20-3</strong>, <code>main.cee</code>: A struct that keeps a heap block as a raw pointer, and frees it by making the box again in its <code>drop</code> block.</span>
 
 ```ceesafe
 struct Slot {
@@ -190,8 +190,8 @@ struct Slot {
         }
     }
 
-    /// Safety: `place` came from `Box.intoRaw` of a `Box<u64>`, and a `Slot` is dropped once, so the box is
-    /// made again once and frees the block.
+    /// Safety: `place` came from `Box.intoRaw` of a `Box<u64>`, and a `Slot` is destroyed once, so the box
+    /// is made again once and frees the block.
     drop {
         let box: Box<u64> = unsafe { Box.fromRaw(this.place) };
     }

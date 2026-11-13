@@ -14,7 +14,7 @@ trip you up.
 | If you know | Read | The biggest changes |
 |---|---|---|
 | Rust | [CeeSafe for Rust programmers](rust.md) | no lifetime syntax on plain borrows; allocators per allocation; checks in every build; no macros or traits-as-types |
-| Zig | [CeeSafe for Zig programmers](zig.md) | use-after-free and dangling references are compile errors; checks never turn off; generics instead of `comptime` |
+| Zig | [CeeSafe for Zig programmers](zig.md) | use-after-free and dangling pointers are compile errors; checks never turn off; generics instead of `comptime` |
 | C or C++ | [CeeSafe for C and C++ programmers](c-and-cpp.md) | the compiler tracks ownership and borrows; no undefined behaviour; no preprocessor |
 | C#, Java or TypeScript | [CeeSafe for C#, Java and TypeScript programmers](csharp-java-typescript.md) | no garbage collector, no classes or inheritance, no exceptions, no null references |
 | Go | [CeeSafe for Go programmers](go.md) | no garbage collector; errors propagate with `?`; interfaces are explicit and static; no goroutines yet |

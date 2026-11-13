@@ -50,7 +50,8 @@ GROUPS = [
      "The type checker's diagnostics - names, types, constants, assignments, and the paths through a function."),
     ("Borrows (N0240 to N0249)", range(240, 250), "references-and-borrows-n0240–n0249-lifetimes-md",
      "The borrow checker's diagnostics. It runs only on a program that type-checks, and its errors carry notes that "
-     "say where the borrow was taken and where it is used later. The messages say \"reference\" for a borrow."),
+     "say where the borrow was taken and where it is used later. The messages say \"reference\" for a borrow and \"mutably borrowed\" for an exclusive "
+     "one: [Borrowing](./ch04-02-borrowing) says why."),
     ("Moves, destruction, `match` and arrays (N0250 to N0259)", range(250, 260),
      "moves-and-destruction-n0250–n0259-type-system-md-§14",
      "The move checker also runs only on a program that type-checks. A move of a value that is borrowed is N0240."),

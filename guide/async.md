@@ -200,7 +200,7 @@ task 3 failed; the others ran to the end
   is `oom`'s, and must be `Copy` and `Send`.
 - `await set.spawn(async move () => …)` waits while `limit` tasks run; `set.trySpawn(…)` is `false` instead.
 - One task's error does not stop the others: the set reports the first. The body's error cancels them all.
-- A task may outlive the function that started it, so it owns what it captures: no references or views (N0349).
+- A task may outlive the function that started it, so it owns what it captures: no borrows or views (N0349).
   Share through `Arc` or a `Channel`, or pass values in.
 
 ## Racing and joining two tasks
@@ -243,7 +243,7 @@ The loser is cancelled and awaited before `race` returns; if it also returned `O
 
 A task is cancelled when a sibling fails, when it loses a race, or when the task that owns its scope is cancelled.
 Cancelling only sets a flag: the task's next waiting operation (a sleep, a read, a channel receive) returns
-`Err(AsyncError.Cancelled)` at once, and the task returns through its own `?`s, dropping its locals as any function
+`Err(AsyncError.Cancelled)` at once, and the task returns through its own `?`s, destroying its locals as any function
 does. Code between two `await`s is never interrupted. A long computation can look with `Async.isCancelled()` or
 `Async.checkpoint(error)`.
 
@@ -501,7 +501,7 @@ fn main() {
 ## How it runs
 
 Each async fn has a **frame** holding its locals and what it is waiting for. Its size is known at compile time
-(`ceesafec build --explain-frames` prints it), and it never moves, which is why a reference to a local may be held
+(`ceesafec build --explain-frames` prints it), and it never moves, which is why a borrow of a local may be held
 across an `await`. An awaited call's frame is inside its caller's, so `await` itself allocates nothing; children of a
 scope get theirs from the scope's allocator.
 

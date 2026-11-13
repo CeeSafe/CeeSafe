@@ -39,7 +39,7 @@ async fn waits() -> Result<void, AsyncError> {
 - **Shape.** A test takes no parameters and returns `void` or `Result<void, E>`. An `Err` is its failure, and so is a
   panic. It may be `async`.
 - **Checks.** `Check`'s functions (`isTrue`, `equalU64`, `equalText`, `equalBytes`, `fail`, …) return
-  `Result<void, TestFailure>`, so a failed check returns from the test with `?`, dropping what it holds as any return
+  `Result<void, TestFailure>`, so a failed check returns from the test with `?`, destroying what it holds as any return
   does.
 - **Where.** Tests go beside the code, or in the package's `tests/` directory (`tests = [...]` in the manifest). They
   see the package's items that are not public, except those marked `private`, which stay in their own file.

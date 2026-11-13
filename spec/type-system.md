@@ -1740,6 +1740,14 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
   would be wrong for some type argument is rejected at the definition, **whether or not it is ever
   instantiated** (for example, using a `T` twice is N0250).
 - Generic declarations that are never used produce no C code.
+- **One fault is one diagnostic.** Generic code is met again wherever a type names it with type parameters still
+  open: `Twice<U>` in a generic function, a field of type `Twice<T>` in another generic struct, the type a generic
+  impl is written for, the struct's own type that gets that impl too (ADR 0054), the instance a bounded block is
+  checked in (ADR 0130). Such a copy is checked as an instantiation is (§20.4), and what the declaration reported is
+  not reported again: neither a member's error (N0228, a field's type) nor a body's. Only what the copy finds that
+  the declaration did not (a diagnostic of another code or at another place) is reported, where it is; the
+  ownership checks, which depend on the code alone, are not run on it again. Two diagnostics equal in code, place
+  and message are one finding and are reported once, whatever found them.
 
 ### 20.4 Instantiation (monomorphisation)
 - Every distinct use (`largest<i32>`, `Pair<Res>`) is an **instantiation**: a copy of the
@@ -1750,7 +1758,33 @@ EnumDecl     = 'enum' Identifier TypeParams? '{' … '}'
 - The layout is that of the substituted declaration. Recursion is checked per instantiation
   (N0227).
 - Instantiation is depth-limited: a chain of more than 64 nested instantiations (polymorphic
-  recursion such as `f<T>` calling `f<Box<T>>`) is N0266.
+  recursion such as `f<T>` calling `f<Box<T>>`) is N0266. A closure is as deep as the function it is written in.
+- **Functions of a nested instance.** A function of a generic struct or enum (in its body, an `impl` block of its
+  own, a bounded block, or an interface's generic impl) may name a larger or a fresh instance of its own type in its
+  signature: `fn nest(borrow this) -> Pair<Pair<T>>`, `fn with<U>(…) -> Pair<U>` in `Pair<T>`. Naming an instance
+  does not need that instance's functions, so:
+  - An instance gets its fields or variants, and its drop block, when it is first named. It gets its functions, the
+    generic impls that match it and its bounded blocks' functions then too, unless it is named in the signature of a
+    function of an instance of the same declaration (directly, or through instances of other declarations): then
+    it gets them at its **first use**. A use is a method or function called or named on it, a constant or associated
+    type asked of it, a bound asked of it (as a type argument, or by a coercion to `dyn I`), `==` on it, or `?`
+    looking for its `@into` method. An instance's functions are declared together, and all their bodies are checked.
+  - The functions of an instance first named or first used in a body are one instantiation deeper than that body;
+    those of an instance named in a declaration (a field's type, a non-generic function's signature) are at depth 0.
+    So a program that names finitely many instances (`p.nest().nest()`) is checked and compiled, and one whose calls
+    need instances without end (`fn depth(borrow this) -> u32 => 1 + this.nest().depth()`, a drop block that makes
+    a larger instance, two structs whose methods do so through each other) is N0266 where the 65th would be used.
+  - A field or payload whose type names a larger instance of its own declaration, even behind a box or an optional
+    (`next: Box<Chain<Chain<T>>>?`), needs every one of them, since each must be dropped: N0266 at the 65th nested.
+  - An instantiation is size-limited too. Polymorphic recursion may double its type at each step (`f<T>` calling
+    `f<Two<T>>` where `Two<T>` holds two `T`s), and the 64th such type would have 2^64 members. A type's size here is
+    the number of types and members it is made of: 1 for itself, plus that of each type it names (a pointee, an
+    element, type arguments, a function type's parameters and result) and of each field's or payload's type, counted
+    where it occurs, except that a type argument's first use as a field's or payload's whole type is the argument
+    itself. A new instantiation of a function, struct or enum whose type arguments together are more than 1048576,
+    or the first use of a waiting instance that is itself more than that, is N0266.
+  - After N0266 the declaration's own type stands in for an instance that was not made, and the other diagnostics
+    of that body are not reported: they follow from it.
 - **Unit payloads** (ADR 0074 §2.1). `Result<void, E>.Ok` has no payload (§17.1), but a pattern may bind one name
   to it, and `Ok(e)` may pass one argument of type `void`, so `Ok(v) => Ok(v)` means the same at `T = void` as at
   any other `T`, in a generic body and written out by hand:

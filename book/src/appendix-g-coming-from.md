@@ -49,18 +49,21 @@ Most rows are a change of spelling.
 | `&T`, `&mut T` | `borrow T`, `borrow mut T` | [4.2](./ch04-02-borrowing) |
 | `f(&x)` | `f(x)`. A shared borrow is implicit at the call. | [4.2](./ch04-02-borrowing) |
 | `f(&mut x)` | `f(mut x)` | [4.2](./ch04-02-borrowing) |
-| `*r += 1;` for `r: &mut i32` | `r += 1;`. There is no `*r` on a borrow. | [4.2](./ch04-02-borrowing) |
+| `*r += 1;` for `r: &mut i32` | `r += 1;`. A borrow is read and written through with no `*`. `*r += 1;` is accepted and means the same. | [4.2](./ch04-02-borrowing) |
 | `&[T]`, `&mut [T]`, `&str` | `Slice<T>`, `SliceMut<T>`, `StringView` | [4.3](./ch04-03-slices-and-views) |
 | `&a[1..4]` | `a[1..4]` | [4.3](./ch04-03-slices-and-views) |
 | `&mut a[1..4]` as an argument | `mut a[1..4]` | [4.3](./ch04-03-slices-and-views) |
 | `fn f<'a>(a: &'a T, b: &T) -> &'a T` | `fn f(a: borrow T, b: borrow T) -> borrow(a) T`. The result names the parameters it borrows from. | [10.3](./ch10-03-regions) |
 | `struct S<'a> { s: &'a str }` | `struct S<region r> { s: StringView<r>; }` | [10.3](./ch10-03-regions) |
-| `'static`, as in `S<'static>` | `static`, as in `S<static>` | [10.3](./ch10-03-regions) |
+| `'static`, as in `S<'static>` | `static`, as in `S<static>`. It is written in a result's type or in a body, never in a parameter's type. | [10.3](./ch10-03-regions) |
 | `impl Drop for S { fn drop(&mut self) { … } }` | `drop { … }` in the struct's body | [15.2](./ch15-02-destruction) |
 | `drop(x);` | `let _ = move x;` | [15.2](./ch15-02-destruction) |
 | `Box::new(v)` | `Box.create(v)!`. `create` returns a `Result`, because it allocates. | [15.1](./ch15-01-box) |
-| `cell.borrow()`, `cell.borrow_mut()` on a `RefCell` | `cell.read()`, `cell.write()` | [15.4](./ch15-04-cells) |
-| `Arc::new(v)`, `*a` | `Arc<T>.create(v)!`, `a.get()` | [15.5](./ch15-05-shared-ownership) |
+| `Cell<T>`, `c.get()`, `c.set(v)` | `Cell<T>`, `c.get()`, `c.set(v)` | [15.4](./ch15-04-cells) |
+| `cell.borrow()`, `cell.borrow_mut()` on a `RefCell` | `cell.read()`, `cell.write()`. Each returns a guard, and `guard.data()` lends the value. | [15.4](./ch15-04-cells) |
+| `Arc::new(v)`, `*a` | `Arc<T>.create(v)!`, `a.get()`. `T` must be `Share`. | [15.5](./ch15-05-shared-ownership) |
+| `static X: T = …;`, `static mut X: T = …;` | The same. The type of a `static` must be `Share`, and every use of a `static mut` is in `unsafe`. | [22.2](./ch22-02-kernel-code) |
+| `const fn` | `@constant` before the function, which a static's initialiser may then call | [22.2](./ch22-02-kernel-code) |
 
 ### Structs, enums, patterns and optionals
 
@@ -113,8 +116,12 @@ Most rows are a change of spelling.
 | `impl Iterator for S { type Item = u32; … }` | `impl Iterator<u32> for S { … }`. The item is a parameter of the interface. | [13.2](./ch13-02-iteration) |
 | `fn f<const N: usize>()`, `f::<3>()` | `fn f<const N: usize>()`, `f<3>()` | [20.3](./ch20-03-more-interfaces-and-generics) |
 | `\|x\| x + 1` | `(x) => x + 1` | [13.1](./ch13-01-closures) |
+| `fn(i32) -> i32` | `fn(i32) -> i32`, for a function or a closure that captures nothing | [13.1](./ch13-01-closures) |
 | `&dyn Fn(i32) -> bool`, `&mut dyn FnMut(i32)` | `borrow fn(i32) -> bool`, `borrow mut fn(i32)` | [13.1](./ch13-01-closures) |
+| `impl Fn(i32) -> bool` as a parameter | `borrow fn(i32) -> bool`. There is no type parameter for a closure. | [13.1](./ch13-01-closures) |
 | `let add: Box<dyn Fn(i32) -> i32> = Box::new(move \|n\| n + x);` | `let add: Box<dyn fn(i32) -> i32> = Box.create(move (n) => n + x)!;` | [13.1](./ch13-01-closures) |
+| `Box<dyn FnMut() -> u64>` | `Box<dyn mut fn() -> u64>` | [13.1](./ch13-01-closures) |
+| `Box<dyn Fn() -> u64 + Send>` | `Box<dyn fn() -> u64 + Send>` | [18.1](./ch18-01-dynamic-dispatch) |
 | `Box<dyn Shape>`, `&dyn Shape` | `Box<dyn Shape>`, `borrow dyn Shape` | [18.1](./ch18-01-dynamic-dispatch) |
 
 ### Threads, tasks, unsafe code and tools
@@ -122,10 +129,28 @@ Most rows are a change of spelling.
 | Rust | CeeSafe | Section |
 |---|---|---|
 | `std::thread::spawn(move \|\| …)`, `h.join()` | `Thread.spawn(move () => …)!`, `h.join()` | [16.1](./ch16-01-starting-threads) |
-| `Arc<Mutex<T>>`, `m.lock().unwrap()` | `Arc<Mutex<T>>`, `var guard = m.lock();` and then `guard.data()` | [16.3](./ch16-03-shared-state) |
-| `Send`, `Sync` | `Send`, `Share` | [16.4](./ch16-04-send-and-share) |
-| `f().await` | `await f()` | [17.1](./ch17-01-tasks-and-await) |
+| `std::thread::scope(\|s\| { s.spawn(a); s.spawn(b); })` | `Thread.both(() => …, () => …)`, for two closures that may borrow | [16.1](./ch16-01-starting-threads) |
+| `mpsc::sync_channel(n)` | `Channel<T>.create(n)!` | [16.2](./ch16-02-channels) |
+| `Arc<Mutex<T>>`, `a.lock().unwrap()` | `Arc<Mutex<T>>`, `var guard = a.get().lock();` and then `guard.data()` | [16.3](./ch16-03-shared-state) |
+| `m.try_lock()` | `m.tryLock()`, an optional | [16.3](./ch16-03-shared-state) |
+| `AtomicU64::new(0)`, `n.fetch_add(1, Ordering::SeqCst)` | `AtomicU64.create(0)`, `n.fetchAdd(1)` | [16.3](./ch16-03-shared-state) |
+| `OnceLock<T>` | `OnceLock<T>` | [16.3](./ch16-03-shared-state) |
+| `Send`, `Sync` | `Send`, `Share`. The compiler infers both, a program cannot declare either, and no borrow is `Send`. | [16.4](./ch16-04-send-and-share) |
+| `async fn f() -> T`, `f().await` | `async fn f() -> T`, `await f()` | [17.1](./ch17-01-tasks-and-await) |
+| `#[tokio::main]`, `block_on(f())` | `Async.run(f())` in `fn main()` | [17.1](./ch17-01-tasks-and-await) |
+| `tokio::spawn(f())` | `s.spawn(async () => …);` in an `Async.scope`, or `await set.spawn(async move () => …)?;` in `Async.tasks` | [17.2](./ch17-02-scopes) |
+| `tokio::join!(a, b)` | `await Async.all(async () => …, async () => …)` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| `tokio::select!` over two futures | `await Async.race(async () => …, async () => …)` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| `tokio::time::timeout(d, f())` | `await Async.timeout(ms, error, async () => …)` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| `tokio::task::spawn_blocking(f)` | `await Async.blocking(() => …)` | [17.5](./ch17-05-tasks-and-threads) |
+| `tokio::sync::Mutex<T>` | `AsyncMutex<T>` | [17.5](./ch17-05-tasks-and-threads) |
+| `unsafe { … }`, `unsafe fn` | The same | [20.1](./ch20-01-unsafe-code) |
 | `*const T`, `*mut T`, `*p` | `*T`, `*mut T`, `p.read()` | [20.1](./ch20-01-unsafe-code) |
+| `&x as *const T`, `std::ptr::null()`, `p.is_null()` | `borrow x as *T`, `0 as *T`, `p.isNull()` | [20.1](./ch20-01-unsafe-code) |
+| `&*p`, `&mut *p` | `Ptr.toBorrow(p)`, `Ptr.toBorrowMut(p)` | [20.1](./ch20-01-unsafe-code) |
+| `std::slice::from_raw_parts(p, n)` | `Slice.fromRaw(p, n)` | [20.1](./ch20-01-unsafe-code) |
+| `Box::into_raw(b)`, `Box::from_raw(p)` | `Box.intoRaw(b)`, `Box.fromRaw(p)` | [20.1](./ch20-01-unsafe-code) |
+| `extern "C" { fn abs(x: i32) -> i32; }` | The same | [20.2](./ch20-02-calling-c) |
 | `// SAFETY:` by convention | `/// Safety:` on the function, required by the compiler | [20.1](./ch20-01-unsafe-code) |
 | `#[no_mangle] pub extern "C" fn name()` | `@export("name")` on the function | [14.3](./ch14-03-libraries-for-other-programs) |
 | `#[repr(C)]` | `@repr(C)` | [20.2](./ch20-02-calling-c) |
@@ -149,6 +174,10 @@ In Rust and not in CeeSafe:
 - `impl Trait`, blanket implementations over a bare `T`, `where` clauses, and operator traits such as `Add`;
 - tuple and struct patterns, `ref` and `&` patterns, and open ranges;
 - `FnOnce`, and a `loop` with `break value`;
+- `Pin`, and a `Future` kept as a value: a task is awaited, run or spawned where its call is written
+  ([17.1](./ch17-01-tasks-and-await));
+- `unsafe impl Send` and `unsafe impl Sync`: the compiler infers `Send` and `Share`
+  ([16.4](./ch16-04-send-and-share)), and `std::mem::transmute`;
 - unwinding and `catch_unwind`: a panic always ends the process;
 - `mod`, `use crate::…`, `pub(crate)`, workspaces, features and build scripts.
 
@@ -215,7 +244,13 @@ looking at it. What it removes is undefined behaviour.
 | `#include "tally.h"` for a library | `import tally;`, for a dependency named in `ceesafe.toml` | [7.3](./ch07-03-imports) |
 | `#if NAME` … `#else` … `#endif` | `if (cfg("NAME")) { … } else { … }`. Both blocks are type-checked. | [14.1](./ch14-01-build-settings) |
 | A raw `T *` in low-level code | `*T` or `*mut T`, with `p.read()`, `p.write(v)` and `p.add(n)` in `unsafe` | [20.1](./ch20-01-unsafe-code) |
-| `(T *)0` | `0 as *T` | [20.1](./ch20-01-unsafe-code) |
+| `&x`, to get a `T *` | `borrow x as *T`, or `borrow mut x as *mut T` | [20.1](./ch20-01-unsafe-code) |
+| `p[i]` on a raw pointer | `p.add(i).read()` in `unsafe` | [20.1](./ch20-01-unsafe-code) |
+| `(T *)0`, `(uintptr_t)p` | `0 as *T`, `p as usize` | [20.1](./ch20-01-unsafe-code) |
+| `void *` | `*void`, or `*mut void` | [20.2](./ch20-02-calling-c) |
+| A struct that C code also uses | `@repr(C)` before the struct | [20.2](./ch20-02-calling-c) |
+| A function passed to C as a function pointer | `@callback` before the function, and the type `extern "C" fn(…)` | [20.2](./ch20-02-calling-c) |
+| `static int count;` at file level | `static mut COUNT: i32 = 0;`, used in `unsafe`, or an atomic in a `static` | [22.2](./ch22-02-kernel-code) |
 | A prototype for a C function | A declaration in `extern "C" { … }` | [20.2](./ch20-02-calling-c) |
 | `"text"` passed to C | `c"text"`, a `CStr`, and `.ptr()` | [20.2](./ch20-02-calling-c) |
 | `volatile uint32_t status;` | `status: Volatile<u32>;` | [22.2](./ch22-02-kernel-code) |
@@ -240,6 +275,10 @@ looking at it. What it removes is undefined behaviour.
 | `template <typename T> T id(T x)` | `fn id<T>(x: T) -> T`, checked once against its bounds | [10.1](./ch10-01-generic-types) |
 | A class with `virtual` functions | `interface`, `impl I for T`, and `dyn I` | [18.1](./ch18-01-dynamic-dispatch) |
 | `[&](int x) { return x + 1; }` | `(x) => x + 1` | [13.1](./ch13-01-closures) |
+| `[=](int x) { return x + n; }` kept in a `std::function<int(int)>` | `Box.create(move (x) => x + n)!` where a `Box<dyn fn(i32) -> i32>` is expected | [13.1](./ch13-01-closures) |
+| `std::shared_ptr<T>` that several threads change | `Arc<Mutex<T>>` | [16.3](./ch16-03-shared-state) |
+| `std::call_once`, a local `static` built on first use | `OnceLock<T>` | [16.3](./ch16-03-shared-state) |
+| A `constexpr` function | `@constant` before the function, which a static's initialiser may then call | [22.2](./ch22-02-kernel-code) |
 | `throw`, `try`, `catch` | `Result<T, E>`, `Err(e)`, `?` and `match` | [9.2](./ch09-02-result) |
 | A `mutable` member | A `Cell<T>` field | [15.4](./ch15-04-cells) |
 | `std::lock_guard<std::mutex> g(m);` | `var guard = m.lock();` on a `Mutex<T>` | [16.3](./ch16-03-shared-state) |
@@ -255,8 +294,9 @@ In C or C++ and not in CeeSafe:
 - pointer arithmetic and casts between pointer types in safe code;
 - unions and bit fields in CeeSafe's own types, and inline assembly;
 - variadic functions, except to declare a C one in an `extern` block;
-- in C++, classes with inheritance, overloads, operator overloading, default arguments, exceptions and `constexpr`
-  functions.
+- in C++, classes with inheritance, overloads, operator overloading, default arguments and exceptions;
+- in C++, `std::weak_ptr` (use a `SlotMap` and handles, [15.5](./ch15-05-shared-ownership)), and a `std::future`
+  or a coroutine kept as a value.
 
 In CeeSafe and not in C or C++:
 
@@ -288,6 +328,7 @@ collector and a run time, and CeeSafe has neither.
 | `os.Args[i]`, `len(os.Args)` | `Process.argument(i)`, an optional, and `Process.argumentCount()` | [12.1](./ch12-01-arguments) |
 | `os.LookupEnv("NAME")` | `Environment.variable("NAME")`, an optional | [12.5](./ch12-05-environment) |
 | `os.Exit(1)` | `Process.exit(1);` | [12.6](./ch12-06-standard-error) |
+| `b := a` for a struct | `let b = a;`. It copies a struct whose fields are all Copy, and moves any other: `a` cannot be used afterwards. | [4.1](./ch04-01-what-ownership-is) |
 | `*T` as a parameter | `borrow T`, or `borrow mut T` with `f(mut x)` at the call | [4.2](./ch04-02-borrowing) |
 | `[]T` that grows, `append(s, x)` | `Vector<T>`, `v.push(x)!;` | [8.1](./ch08-01-vectors) |
 | `[]T` as a parameter, `a[1:4]`, `len(a)` | `Slice<T>`, `a[1..4]`, `a.length` | [4.3](./ch04-03-slices-and-views) |
@@ -304,15 +345,25 @@ collector and a run time, and CeeSafe has neither.
 | `type Shape interface { Area() int64 }` | `interface Shape { fn area(borrow this) -> i64; }`, and `impl Shape for T { … }` for each type | [10.2](./ch10-02-interfaces) |
 | `func f[T any](x T) T` | `fn f<T>(x: T) -> T` | [10.1](./ch10-01-generic-types) |
 | A value of an interface type | `borrow dyn Shape`, or `Box<dyn Shape>` | [18.1](./ch18-01-dynamic-dispatch) |
-| `func(x int32) int32 { return x + 1 }` | `(x) => x + 1` | [13.1](./ch13-01-closures) |
+| `func(x int32) int32 { return x + 1 }` | `(x) => x + 1`. It borrows what it captures and cannot be returned. | [13.1](./ch13-01-closures) |
+| A `func` value that is returned or kept in a field | `Box<dyn fn(i32) -> i32>`, made with `Box.create(move (x) => …)!` | [13.1](./ch13-01-closures) |
 | `go f()` with a `sync.WaitGroup` | `s.spawn(async () => await f());` in an `Async.scope` | [17.2](./ch17-02-scopes) |
+| An `errgroup.Group` | `Async.scope`: the first child that fails cancels the others | [17.2](./ch17-02-scopes) |
 | `go f()` on a thread of its own | `Thread.spawn(move () => …)!` | [16.1](./ch16-01-starting-threads) |
 | `make(chan T, n)` | `Channel<T>.create(n)!`, with `n` at least 1 | [16.2](./ch16-02-channels) |
 | `ch <- v` | `ch.send(v)`, a `Result` | [16.2](./ch16-02-channels) |
 | `v, ok := <-ch` | `ch.recv()`, an optional | [16.2](./ch16-02-channels) |
 | `close(ch)` | `ch.close();` | [16.2](./ch16-02-channels) |
+| `ch <- v`, `<-ch` in a task | `await ch.sendAsync(v)`, `await ch.recvAsync()` | [17.4](./ch17-04-async-io) |
 | `sync.Mutex` beside the data | `Mutex<T>` around the data | [16.3](./ch16-03-shared-state) |
+| `m.TryLock()` | `m.tryLock()`, an optional | [16.3](./ch16-03-shared-state) |
+| `atomic.AddUint64(&n, 1)` | `n.fetchAdd(1)` on an `AtomicU64` | [16.3](./ch16-03-shared-state) |
+| `sync.Once` | `OnceLock<T>` | [16.3](./ch16-03-shared-state) |
+| `time.Sleep(d)` in a goroutine | `await Timer.sleep(ms)` in a task | [17.1](./ch17-01-tasks-and-await) |
 | `context.WithTimeout` around a call | `Async.timeout(ms, error, async () => …)` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| `ctx.Err() != nil` | `Async.isCancelled()`, or `Async.checkpoint(error)?` to return | [17.3](./ch17-03-timeouts-races-cancellation) |
+| `unsafe.Pointer` | `*void`, or `*mut void` | [20.2](./ch20-02-calling-c) |
+| `C.f()` with cgo | A declaration in `extern "C" { … }`, and a call in `unsafe` | [20.2](./ch20-02-calling-c) |
 | A name with a capital first letter | `public` | [7.2](./ch07-02-files-and-public) |
 | `go.mod`, `go.sum` | `ceesafe.toml`, `ceesafe.lock` | [7.4](./ch07-04-dependencies) |
 | `go mod download`, `go build`, `go test`, `gofmt` | `ceesafec fetch`, `ceesafec build`, `ceesafec test`, `ceesafec fmt` | [1.3](./ch01-03-hello-package) |
@@ -370,6 +421,7 @@ inheritance, no exception and no null reference. A row names its language where 
 | `class Point { … }` | `struct Point { … }`. A struct is a value, not a reference to an object. | [5.1](./ch05-01-defining-structs) |
 | `new Point(1, 2)` | `Point { x: 1, y: 2 }` | [5.1](./ch05-01-defining-structs) |
 | A constructor | A function with no `this` that returns the struct: `fn create() -> Point` | [5.3](./ch05-03-methods) |
+| `b = a` for an object | `let b = a;`. It moves the value, and `a` cannot be used afterwards. A struct whose fields are all Copy is copied. | [4.1](./ch04-01-what-ownership-is) |
 | A method that reads fields | `fn total(borrow this) -> u32` | [5.3](./ch05-03-methods) |
 | A method that changes fields | `fn add(borrow mut this, n: u32)` | [5.3](./ch05-03-methods) |
 | A `static` method | A function in the struct with no `this`, called as `Point.create()` | [5.3](./ch05-03-methods) |
@@ -398,13 +450,19 @@ inheritance, no exception and no null reference. A row names its language where 
 | `string` | `String`, which owns its text, and `StringView`, which borrows it | [8.2](./ch08-02-strings) |
 | C# `Dictionary<K, V>`, Java `HashMap<K, V>`, TypeScript `Map<K, V>` | `HashMap<K, V>` | [8.3](./ch08-03-maps) |
 | `d[k] = v;`, `m.put(k, v);`, `m.set(k, v);` | `let _ = m.put(k, v)!;` | [8.3](./ch08-03-maps) |
-| `x => x + 1` | `(x) => x + 1` | [13.1](./ch13-01-closures) |
+| `x => x + 1` | `(x) => x + 1`. It borrows what it captures and cannot be returned. | [13.1](./ch13-01-closures) |
+| C# `Func<int, bool>`, Java `Predicate<Integer>`, as a parameter | `borrow fn(i32) -> bool` | [13.1](./ch13-01-closures) |
+| A lambda that is returned or kept in a field | `Box<dyn fn(i32) -> i32>`, made with `Box.create(move (x) => …)!` | [13.1](./ch13-01-closures) |
 | `throw new E();` | `return Err(E.Reason);` in a function that returns `Result<T, E>` | [9.2](./ch09-02-result) |
 | `try { … } catch (E e) { … }` | `match (f()) { Ok(v) => { … } Err(e) => { … } }` | [9.2](./ch09-02-result) |
 | An exception that passes through a method | `f()?` | [9.2](./ch09-02-result) |
 | C# `ref` and `out` parameters | `borrow mut T`, and `f(mut x)` at the call | [4.2](./ch04-02-borrowing) |
 | C# `Dispose()`, Java `close()` | `drop { … }` in the struct's body. It runs where the owner ends. | [15.2](./ch15-02-destruction) |
 | C# `using var f = Open();` | `using f = open();` | [15.2](./ch15-02-destruction) |
+| `try { … } finally { f(); }` | `defer f();`, which runs at the end of its block | [15.2](./ch15-02-destruction) |
+| C# `Lazy<T>` | `OnceCell<T>`, or `OnceLock<T>` between threads | [15.4](./ch15-04-cells) |
+| C# `unsafe { … }` and `int*` | `unsafe { … }` and `*i32`, in a function with a `/// Safety:` comment | [20.1](./ch20-01-unsafe-code) |
+| C# `[DllImport]`, Java JNI | A declaration in `extern "C" { … }`, and a call in `unsafe` | [20.2](./ch20-02-calling-c) |
 | C# `[Test]`, Java `@Test` | `@test` | [11.1](./ch11-01-writing-tests) |
 | `Assert.AreEqual(a, b);`, `assertEquals(a, b);` | `Check.equalU64(a, b)?;` | [11.1](./ch11-01-writing-tests) |
 
@@ -418,6 +476,12 @@ inheritance, no exception and no null reference. A row names its language where 
 | C# `Task.WhenAll`, TypeScript `Promise.all` | `Async.scope`, or `Async.all` | [17.2](./ch17-02-scopes) |
 | C# `Task.WhenAny`, TypeScript `Promise.race` | `Async.race`, which stops the loser | [17.3](./ch17-03-timeouts-races-cancellation) |
 | C# `CancellationToken` | Nothing to pass: cancellation belongs to the task | [17.3](./ch17-03-timeouts-races-cancellation) |
+| C# `cts.CancelAfter(ms)` | `Async.timeout(ms, error, async () => …)` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| C# `token.ThrowIfCancellationRequested()` | `Async.checkpoint(error)?;` | [17.3](./ch17-03-timeouts-races-cancellation) |
+| C# `await Task.Delay(ms)` | `await Timer.sleep(ms)` | [17.1](./ch17-01-tasks-and-await) |
+| C# `Task.Run(() => Work())` | `await Async.blocking(() => work())` | [17.5](./ch17-05-tasks-and-threads) |
+| C# `SemaphoreSlim(1, 1)` held across an `await` | `AsyncMutex<T>` | [17.5](./ch17-05-tasks-and-threads) |
+| C# `Interlocked.Increment(ref n)`, Java `AtomicLong` | `n.fetchAdd(1)` on an `AtomicU64` | [16.3](./ch16-03-shared-state) |
 | C# `new Thread(…).Start()`, Java `new Thread(…).start()` | `Thread.spawn(move () => …)!` | [16.1](./ch16-01-starting-threads) |
 | C# `lock (o) { … }`, Java `synchronized (o) { … }` | `var guard = m.lock();` on a `Mutex<T>` that holds the data | [16.3](./ch16-03-shared-state) |
 | Java `ArrayBlockingQueue<T>`, C# `BlockingCollection<T>` | `Channel<T>` | [16.2](./ch16-02-channels) |
@@ -459,6 +523,7 @@ after free and dangling pointers compile errors, and has one build mode.
 | `const x = 1;` | `let x = 1;` | [3.1](./ch03-01-variables) |
 | `var x: u32 = 1;` | `var x: u32 = 1;` | [3.1](./ch03-01-variables) |
 | `fn f(a: i32) i32` | `fn f(a: i32) -> i32` | [3.3](./ch03-03-functions) |
+| `fn fail() noreturn` | `fn fail() -> never` | [3.3](./ch03-03-functions) |
 | `pub fn` | `public fn` | [7.2](./ch07-02-files-and-public) |
 | `while (i < n) : (i += 1) { … }` | `for (i in 0..n) { … }` | [3.5](./ch03-05-control-flow) |
 | `for (items) \|x\| { … }` | `for (x in items) { … }` | [13.2](./ch13-02-iteration) |
@@ -496,6 +561,16 @@ after free and dangling pointers compile errors, and has one build mode.
 | `extern fn strlen(s: [*:0]const u8) usize;` | `fn strlen(text: *CChar) -> usize;` in `extern "C" { … }` | [20.2](./ch20-02-calling-c) |
 | `export fn name() void` | `@export("name")` on the function | [14.3](./ch14-03-libraries-for-other-programs) |
 | `fn visit(x: i32) callconv(.C) void`, passed to C | `@callback` on the function | [20.2](./ch20-02-calling-c) |
+| `extern struct` | `@repr(C)` before the struct | [20.2](./ch20-02-calling-c) |
+| `[*]T`, `p[i]`, `p + n` | `*mut T`, `p.add(i).read()`, `p.add(n)`, in `unsafe` | [20.1](./ch20-01-unsafe-code) |
+| `@intFromPtr(p)`, `@ptrFromInt(n)` | `p as usize`, `n as *T` | [20.1](./ch20-01-unsafe-code) |
+| `*volatile u32` | `Volatile<u32>` | [22.2](./ch22-02-kernel-code) |
+| `var count: u32 = 0;` at the top level | `static mut COUNT: u32 = 0;`, used in `unsafe`, or an atomic in a `static` | [22.2](./ch22-02-kernel-code) |
+| `*const fn (i32) i32` | `fn(i32) -> i32` | [13.1](./ch13-01-closures) |
+| A function with a context pointer | A closure: `borrow fn(i32) -> i32` | [13.1](./ch13-01-closures) |
+| `std.Thread.spawn(.{}, f, .{})`, `t.join()` | `Thread.spawn(move () => …)!`, `t.join()` | [16.1](./ch16-01-starting-threads) |
+| `std.Thread.Mutex` beside the data | `Mutex<T>` around the data | [16.3](./ch16-03-shared-state) |
+| `std.atomic.Value(u64)`, `v.fetchAdd(1, .seq_cst)` | `AtomicU64`, `v.fetchAdd(1)` | [16.3](./ch16-03-shared-state) |
 | `zig build`, `zig test`, `zig fmt` | `ceesafec build`, `ceesafec test`, `ceesafec fmt` | [1.3](./ch01-03-hello-package) |
 | `-target x86_64-freestanding` | `--profile freestanding` | [22.1](./ch22-01-the-freestanding-profile) |
 
@@ -503,7 +578,8 @@ after free and dangling pointers compile errors, and has one build mode.
 
 In Zig and not in CeeSafe:
 
-- `comptime`: there is no evaluation of functions at compile time, no `@typeInfo` and no reflection;
+- `comptime`: the compiler evaluates constants, and a `@constant` function in a static's initialiser
+  ([22.2](./ch22-02-kernel-code)), and no other code. There is no `@typeInfo` and no reflection;
 - `@cImport` of a whole header: C functions are declared in an `extern` block
   ([20.2](./ch20-02-calling-c));
 - error sets that join by themselves: `?` needs the function's error type, or an `@from` variant;

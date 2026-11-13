@@ -8,7 +8,8 @@ keywords: [glossary, term, definition, borrow, reference, pointer, trait, lifeti
 
 This page defines every term the book uses in a technical sense, in alphabetical order. Each row stands alone: the
 term, what it means in CeeSafe, and the section that introduces it. A word from another language that CeeSafe does
-not use, such as "reference", "trait" or "lifetime", has a row that points to CeeSafe's term, in italics.
+not use, such as "trait" or "lifetime", has a row that points to CeeSafe's term, in italics. So has a word that
+the specification or the diagnostics use where the book uses another, such as "reference", "loan" or "dropped".
 
 Where one word has two meanings in the book, each meaning has its own row, with the meaning in parentheses after
 the word. Names of the library, such as `Vector` and `Mutex`, are here only when the book uses them as terms.
@@ -30,6 +31,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | associated type | A type that an interface declares by name and that each `impl` chooses. | [20.3](./ch20-03-more-interfaces-and-generics) |
 | async closure | A closure written `async () => body`, whose call is a task. A scope starts its children from async closures. | [17.2](./ch17-02-scopes) |
 | async function | A function declared `async fn`. Its call is a task, and its body may use `await`. | [17.1](./ch17-01-tasks-and-await) |
+| `async move` | An async closure written `async move () => body`, which owns what it captures. A child of a task set must be one, and a child of a scope, of `Async.race`, of `Async.all` or of `Async.timeout` may be one. | [17.2](./ch17-02-scopes) |
 | atomic | An integer or a `bool` whose every operation happens as one step that no other thread can interrupt, such as `AtomicU64`. | [16.3](./ch16-03-shared-state) |
 | attribute | A name after `@`, written before a declaration, that changes how the compiler treats it: `@test`, `@derive(Equal)`, `@export("name")`. | [20.5](./ch20-05-derives-and-macros) |
 | await | The operator that runs a task and gives its result: `await f()`. It is the only place where a task can be suspended. | [17.1](./ch17-01-tasks-and-await) |
@@ -41,7 +43,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | binding | Giving a name in a pattern the part of the value that fits there. The name can be used in the arm, or after the `let`. | [6.2](./ch06-02-match), [19.1](./ch19-01-where-patterns-go) |
 | block (a thread) | To keep a thread while waiting, so that nothing else can run on it. A task must never block. It waits with `await`. | [17.4](./ch17-04-async-io) |
 | block (of code) | Statements between `{` and `}`. A block is a scope, and as the branch of an `if` or `match` expression it can end with its value. | [3.5](./ch03-05-control-flow) |
-| borrow | Permission to use a value without owning it, written `borrow T` (shared) or `borrow mut T` (exclusive). The compiler checks that the value outlives it. Diagnostics call a borrow a "reference". | [4.2](./ch04-02-borrowing) |
+| borrow | Permission to use a value without owning it, written `borrow T` (shared) or `borrow mut T` (exclusive). The compiler checks that the value outlives it. The specification and the diagnostics call a borrow a "reference". | [4.2](./ch04-02-borrowing) |
 | bound | A requirement on a type parameter, written after a colon: `T: Copy`, `T: Shape`. Generic code may do with a `T` only what its bounds allow. | [10.1](./ch10-01-generic-types), [10.2](./ch10-02-interfaces) |
 | boundary | The places where a program meets what it does not control: input, files, arguments, the network. Failures there are expected failures. | [9.4](./ch09-04-to-panic-or-not) |
 | bounds check | The test, made at each index, that the index is less than the length. A failed one is a panic. | [4.3](./ch04-03-slices-and-views), [9.1](./ch09-01-panics) |
@@ -52,20 +54,22 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | Term | Meaning | Section |
 |---|---|---|
 | C string literal | Text written `c"…"`. The compiler adds the zero byte that ends a C string. | [20.2](./ch20-02-calling-c) |
+| callback | A CeeSafe function that C code calls through a function pointer. `@callback` before the function gives it a C address, and its name is then a value of the type `extern "C" fn(…)`. | [20.2](./ch20-02-calling-c) |
 | cancellation | Telling a task that it is no longer wanted. Its next wait returns the error `Cancelled`, and it ends by returning. | [17.3](./ch17-03-timeouts-races-cancellation) |
-| cancellation point | A place where a task can notice that it was cancelled: one of the library's waits, such as a sleep, a read, a write or a channel receive. | [17.3](./ch17-03-timeouts-races-cancellation) |
-| capture | A variable from around a closure that the closure's body uses. A closure literal borrows its captures, and a `move` literal owns them. | [13.1](./ch13-01-closures) |
+| cancellation point | A place where a task can notice that it was cancelled: one of the library's waits, such as a sleep, a read, a write or a channel receive, or a call of `Async.checkpoint`. | [17.3](./ch17-03-timeouts-races-cancellation) |
+| capture | A variable from around a closure that the closure's body uses. A closure literal borrows its captures, exclusively those that its body changes, and a `move` literal owns them. | [13.1](./ch13-01-closures) |
 | cast | CeeSafe has none that cuts bits off. See *conversion*. | [3.2](./ch03-02-data-types) |
 | catch-all | An arm whose pattern fits every value, `_` or a name. It must be the last arm. | [6.2](./ch06-02-match), [19.2](./ch19-02-patterns-that-can-fail) |
-| cell | A value that can be changed through a shared borrow: `Cell`, `RefCell`, `OnceCell`. Each moves one check from the compiler to the running program. | [15.4](./ch15-04-cells) |
+| cell | A value that can be changed through a shared borrow. `Cell<T>` copies a Copy value in and out, `RefCell<T>` lends its value through guards and panics where two accesses conflict, and `OnceCell<T>` is written once. A cell is a move type, and it is not `Share`. | [15.4](./ch15-04-cells) |
 | `cfg` block | A block that is compiled only in some builds, chosen by a setting of the build. | [14.1](./ch14-01-build-settings) |
 | channel | A queue that one thread or task puts values into and another takes them out of. It is bounded: it never holds more than its capacity. | [16.2](./ch16-02-channels) |
 | check (in a test) | A function of the library that compares two values in a test, such as `Check.equalU64`. The test fails when a check does. | [11.1](./ch11-01-writing-tests) |
 | check (the command) | `ceesafec check`: parse, type-check and borrow-check a package without building it. | [1.3](./ch01-03-hello-package) |
-| child | A task that a scope or a task set started. The scope waits for every child before it returns. | [17.2](./ch17-02-scopes) |
+| checkpoint | `Async.checkpoint(error)`: a call that returns `Err(error)` if the current task is cancelled, and `Ok()` otherwise. It never waits, and it gives a long computation a *cancellation point*. | [17.3](./ch17-03-timeouts-races-cancellation) |
+| child | A task started by a scope or a task set, or as one of the two closures of `Async.race` or `Async.all`. What started it does not return before the child has. | [17.2](./ch17-02-scopes) |
 | class | CeeSafe has none. See *struct*, *method* and *interface*. | [5.1](./ch05-01-defining-structs) |
-| closure | A function written where it is used, such as `(v) => v > limit`, that can use the variables around it. | [13.1](./ch13-01-closures) |
-| closure literal | The written form of a closure, `(x) => x + 1`. It is a borrow of its environment, so making one allocates nothing and it cannot outlive what it captures. | [13.1](./ch13-01-closures) |
+| closure | A function written where it is used, such as `(v) => v > limit`, that uses variables around it, its captures. Its type is `borrow fn(…)`, or `borrow mut fn(…)` if it changes a capture. A literal that captures nothing is a *function value*. | [13.1](./ch13-01-closures) |
+| closure literal | The written form of a closure, `(x) => x + 1`. It is a borrow of its environment, so making one allocates nothing, and it cannot be returned or used after the block it is written in. | [13.1](./ch13-01-closures) |
 | collection | A value that holds a number of values decided while the program runs: a vector, a string, a map. It keeps its elements on the heap and owns them. | [8](./ch08-00-collections) |
 | compiler | `ceesafec`, the program that checks CeeSafe and compiles it to C. | [1.1](./ch01-01-installation) |
 | const parameter | A generic parameter that stands for a value, not a type, such as the length of an array. | [20.3](./ch20-03-more-interfaces-and-generics) |
@@ -74,7 +78,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | consume | To take a value by value, so that it cannot be used afterwards: a `match` on a move type consumes it, and `join` consumes a thread's handle. | [19.3](./ch19-03-the-syntax-whole) |
 | context | Where kernel code runs, which limits what it may do. `@context(irq)` marks an interrupt handler, and the compiler checks that nothing it calls sleeps or allocates. See also *unsafe context*. | [22.2](./ch22-02-kernel-code) |
 | conversion | Changing a value's type. `as` converts only when nothing can be lost. `truncate`, `checkedTruncate` and `saturatingTruncate` say what happens when the value does not fit. | [3.2](./ch03-02-data-types), [20.4](./ch20-04-arithmetic) |
-| Copy type | A type whose values are copied when assigned or passed, so the original stays usable: integers, floats, `bool`, and arrays and structs made only of them. | [4.1](./ch04-01-what-ownership-is) |
+| Copy type | A type whose values are copied when assigned or passed, so the original stays usable: integers, floats, `bool`, shared borrows, `Slice<T>`, `StringView`, function values and raw pointers, and an array, an optional, an enum or a struct whose parts are all Copy. A struct with a `drop` block or marked `@noncopy` is not Copy. | [4.1](./ch04-01-what-ownership-is) |
 | crate | CeeSafe's term is *package*. | [7.1](./ch07-01-package-and-manifest) |
 | cursor | A small value that names a position in an ordered map, used to visit its entries in order from a key. | [8.3](./ch08-03-maps) |
 
@@ -86,14 +90,16 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | deadlock | Two threads or tasks each waiting for something the other holds, so that neither goes on. The compiler does not prevent it. | [16](./ch16-00-threads), [16.3](./ch16-03-shared-state) |
 | debug assertion | A check written `debugAssert(condition, message)`. A debug build compiles it, and it panics when the condition is false. Other builds compile nothing of it. | [14.1](./ch14-01-build-settings) |
 | default method | A method that has a body in its interface. An `impl` that leaves it out gets that body. | [10.2](./ch10-02-interfaces) |
+| `defer` | A statement, `defer s;`, that runs `s` when the enclosing block ends on any path: at its end, or at a `break`, a `continue` or a `return` that leaves it. Deferred statements and the destruction of locals run in the reverse of the order they are written in. | [15.2](./ch15-02-destruction) |
 | dependency | A package that another package uses and names in its manifest, by a path, a git repository or a version requirement. | [7.3](./ch07-03-imports), [7.4](./ch07-04-dependencies) |
 | derive | To have the compiler write an `impl`: `@derive(Equal, HashKey, OrderKey)` before a struct or an enum. | [20.5](./ch20-05-derives-and-macros) |
-| destruction | The end of a value: its `drop` block runs, its fields are destroyed, and its memory is given back. The compiler puts it where the value's owner ends. Diagnostics say "dropped". | [4.1](./ch04-01-what-ownership-is), [15.2](./ch15-02-destruction) |
+| destruction | The end of a value: its `drop` block runs, its fields are destroyed, and its memory is given back. The compiler puts it where the value's owner ends. The specification and the diagnostics also say "dropped". | [4.1](./ch04-01-what-ownership-is), [15.2](./ch15-02-destruction) |
 | destructor | CeeSafe's term is *`drop` block*. | [15.2](./ch15-02-destruction) |
 | diagnostic | A message from the compiler about the source: an error, which stops the build, or a warning. Each has a code, such as `N0240`. | [Introduction](./ch00-00-introduction) |
 | documentation comment | A comment that starts `///` and describes the declaration after it. `ceesafec doc` makes a page from them. | [3.4](./ch03-04-comments) |
-| drop | The book says a value is destroyed. See *destruction*. `drop` is the keyword of a *`drop` block*. | [15.2](./ch15-02-destruction) |
-| `drop` block | Code in a struct, written `drop { … }`, that runs when a value of the struct is destroyed. A struct with one is a move type. | [15.2](./ch15-02-destruction) |
+| drop | The specification and the diagnostics say that a value is dropped where the book says that it is destroyed. See *destruction*. `drop` is also the keyword of a *`drop` block*. | [15.2](./ch15-02-destruction) |
+| `drop` block | Code in a struct, written `drop { … }`, that runs once when a value of the struct is destroyed, before its fields are destroyed. A struct with one is a move type. An enum cannot have one. | [15.2](./ch15-02-destruction) |
+| `dyn fn` | `dyn fn(T) -> R`: the `dyn` type of a closure that owns its captures, and `dyn mut fn(T) -> R` of one that changes them. It is used in a box: see *owning closure*. | [13.1](./ch13-01-closures) |
 | `dyn` type | `dyn I`: a value whose own type is not known where it is used, only the interface `I` that it implements. It is used behind a borrow or in a box. | [18.1](./ch18-01-dynamic-dispatch) |
 | dynamic dispatch | A call of a method through a `dyn` value. The function is found while the program runs, in the value's table. | [18.1](./ch18-01-dynamic-dispatch) |
 | dyn-compatible | Said of an interface that has a `dyn` type: every method takes `borrow this` or `borrow mut this` and has no type parameters, and the interface has no static function, associated type or constant. | [18.1](./ch18-01-dynamic-dispatch) |
@@ -102,7 +108,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 
 | Term | Meaning | Section |
 |---|---|---|
-| effect | Something a function may do that a context forbids: sleeping or allocating. The compiler works it out for CeeSafe code, and `@effects(…)` states it for a C function. | [22.2](./ch22-02-kernel-code) |
+| effect | Something a function may do that a context forbids: block its thread (`sleep`), allocate (`alloc`) or suspend its task (`suspend`). The compiler works it out for CeeSafe code, and `@effects(…)` states it for a C function. | [22.2](./ch22-02-kernel-code) |
 | enum | A type whose value is exactly one of a fixed list of variants. A variant can carry a payload. | [6.1](./ch06-01-defining-an-enum) |
 | environment (freestanding) | The code that surrounds a freestanding object and starts it: a kernel, a boot loader, a board's start-up file. | [22.1](./ch22-01-the-freestanding-profile) |
 | environment (of a closure) | The hidden value a closure is made of, which holds the borrows, or for a `move` literal the values, of what it captures. | [13.3](./ch13-03-project-improved), [13.4](./ch13-04-what-they-cost) |
@@ -125,11 +131,12 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 |---|---|---|
 | field | One named value in a struct, with its type. It is reached as `value.field`, and in a method as `this.field`. | [5.1](./ch05-01-defining-structs) |
 | fit | A value fits a pattern or does not. When it fits, the names in the pattern bind parts of it. | [6.2](./ch06-02-match), [19.1](./ch19-01-where-patterns-go) |
+| fork-join | Running two closures at the same time and going on only when both have ended: `Thread.both(a, b)` runs `a` on a new thread and `b` on the calling one. The closures may borrow the caller's variables, because the call returns only after both. | [16.1](./ch16-01-starting-threads) |
 | frame (of a task) | The block of memory, of a size the compiler knows, that holds a task's parameters and the locals it needs across a wait. | [17.1](./ch17-01-tasks-and-await) |
 | frame (scratch) | See *scratch frame*. | [15.3](./ch15-03-allocators) |
 | freestanding | The profile in which nothing is there but the processor and memory: no operating system and no C library. | [22.1](./ch22-01-the-freestanding-profile) |
 | function pointer | For CeeSafe code see *function value*. C's function pointer has the type `extern "C" fn(…)`, and a `@callback` function is a value of it. | [20.2](./ch20-02-calling-c) |
-| function value | A function used as a value: passed, kept in a variable or in a field. Its type is `fn(T) -> R`, and it captures nothing. | [13.1](./ch13-01-closures) |
+| function value | A function used as a value: passed, kept in a variable or in a field. Its type is `fn(T) -> R`. It captures nothing, it is Copy, and a closure literal that captures nothing is one. | [13.1](./ch13-01-closures) |
 | future | CeeSafe has no value that stands for a task still running. See *task*. | [17](./ch17-00-async) |
 
 ## G
@@ -154,7 +161,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 
 | Term | Meaning | Section |
 |---|---|---|
-| `impl` | A block that implements an interface for a type, `impl Shape for Square { … }`, giving each method a body. An `impl` block without an interface adds methods to a struct or an enum. | [5.3](./ch05-03-methods), [10.2](./ch10-02-interfaces) |
+| `impl` | A block that implements an interface for a type, `impl Shape for Square { … }`, giving each method a body. An `impl` block without an interface adds methods to a struct or an enum. Where it implements an interface, a method's result may borrow from its parameters only as the interface's method says. | [5.3](./ch05-03-methods), [10.2](./ch10-02-interfaces) |
 | import | A line that lets a file use a dependency's items by their plain names: `import tally.Tally;` for one item, `import tally;` for every public one. | [7.3](./ch07-03-imports) |
 | index (of an element) | The position of an element in an array, a slice or a vector. It starts at 0 and its type is `usize`. | [3.2](./ch03-02-data-types) |
 | index (of packages) | A git repository that lists the published versions of each library and where each is. The registry is one. | [7.4](./ch07-04-dependencies), [14.2](./ch14-02-publishing) |
@@ -162,7 +169,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | inheritance | CeeSafe has none between structs. An interface can require another: see *supertrait*. | [20.3](./ch20-03-more-interfaces-and-generics) |
 | interface | A named list of methods. A type implements it with an `impl`, and a bound `T: I` accepts only the types that do. | [10.2](./ch10-02-interfaces) |
 | interface constant | A constant that an interface declares, with or without a default value, and that each `impl` can set. | [20.3](./ch20-03-more-interfaces-and-generics) |
-| interior mutability | The book says a value can be changed through a shared borrow. See *cell*. | [15.4](./ch15-04-cells) |
+| interior mutability | The specification's name for changing a value through a shared borrow. See *cell*. | [15.4](./ch15-04-cells) |
 | internal | Said of an item without `public`: only its own package can use it, in any of its files. | [7.2](./ch07-02-files-and-public) |
 | interpreter | The part of the compiler that runs a program directly, with no C compiler: `ceesafec run --interp`. | [1.2](./ch01-02-hello-world) |
 | item | Something declared at the top of a file: a function, a struct, an enum, an interface, a constant. | [7.2](./ch07-02-files-and-public) |
@@ -175,11 +182,12 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | lambda | CeeSafe's term is *closure*. | [13.1](./ch13-01-closures) |
 | leak | Memory that was allocated and never freed. `ceesafec test` reports a test that leaves some as `leaked`. A cycle of `Arc` owners makes one. | [11.2](./ch11-02-running-tests), [15.5](./ch15-05-shared-ownership) |
 | library | A package whose kind is `library`: it has no `main`, and other packages depend on it. | [7.1](./ch07-01-package-and-manifest) |
-| lifetime | CeeSafe's terms are *live*, for how long a borrow lasts, and *region*, for the name a type gives to what it borrows from. | [10.3](./ch10-03-regions) |
+| lifetime | CeeSafe's terms are *live*, for how long a borrow lasts, and *region*, for the name of what a borrow borrows from. | [10.3](./ch10-03-regions) |
 | listener | A socket bound to an address and a port, from which a server accepts connections: a `TcpListener`. | [21.1](./ch21-01-one-connection) |
 | listing | A numbered example in this book. It is a whole program, shown with what it prints or the diagnostic it gets. | [Introduction](./ch00-00-introduction) |
 | literal | A value written out in the source: `42`, `2.5`, `true`, `"text"`. In a pattern, only that value fits it. | [3.2](./ch03-02-data-types), [6.2](./ch06-02-match) |
 | live | Said of a borrow from where it is made to the last place where it, or anything made from it, is used. It is not live to the end of its block. | [4.2](./ch04-02-borrowing) |
+| loan | The specification's and the diagnostics' word for one borrowing of a value, which lasts while the borrow is *live*. A type that "holds a loan" is a *scoped type*. | [4.2](./ch04-02-borrowing), [16.1](./ch16-01-starting-threads) |
 | lock | See *mutex*. | [16.3](./ch16-03-shared-state) |
 | lock file | `ceesafe.lock`, which `ceesafec fetch` writes. It records exactly which version of each dependency the package builds with. | [7.4](./ch07-04-dependencies) |
 | loopback | The address `127.0.0.1`, which names your own machine. Nothing sent to it leaves the machine. | [21](./ch21-00-web-server-project) |
@@ -195,10 +203,10 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | method | A function declared in a struct, an enum or an `impl` whose first parameter is `this`. It is called as `value.method(…)`. | [5.3](./ch05-03-methods) |
 | module | CeeSafe has none. All the files of a *package* share one scope, and another package's items are reached by a *qualified name* or an *import*. | [7.2](./ch07-02-files-and-public) |
 | monomorphisation | The book says that each use of a *generic* with different type arguments is compiled as its own copy. | [10.1](./ch10-01-generic-types) |
-| move | Handing a value to a new owner by assigning it, passing it or returning it. The old variable cannot be used afterwards. | [4.1](./ch04-01-what-ownership-is) |
-| `move` literal | A closure written `move (x) => body`, which owns what it captures: each capture is moved in, or copied if its type is Copy. A thread's closure is one. | [13.1](./ch13-01-closures), [16.1](./ch16-01-starting-threads) |
-| move type | A type that owns something, so that assigning a value of it moves the value: `String`, `Vector<T>`, `Box<T>`, a struct with a field of a move type or with a `drop` block. | [4.1](./ch04-01-what-ownership-is) |
-| mutable borrow | CeeSafe's term is *exclusive borrow*. | [4.2](./ch04-02-borrowing) |
+| move | Handing a value to a new owner by assigning it, passing it or returning it. The old variable cannot be used afterwards. `move x` moves explicitly, also a value of a Copy type. | [4.1](./ch04-01-what-ownership-is), [15.2](./ch15-02-destruction) |
+| `move` literal | A closure written `move (x) => body`, which owns what it captures: each capture is moved in, or copied if its type is Copy. It is written where a `Box<dyn fn(…)>` is made or as the closure of `Thread.spawn`, and it cannot capture a borrow. | [13.1](./ch13-01-closures), [16.1](./ch16-01-starting-threads) |
+| move type | A type that is not Copy, so that assigning or passing a value of it moves the value: `String`, `Vector<T>`, `Box<T>`, a struct or an enum with a part of a move type, and a struct with a `drop` block or marked `@noncopy`. | [4.1](./ch04-01-what-ownership-is) |
+| mutable borrow | The book's term is *exclusive borrow*. The specification's rules and the diagnostics say "mutable" and "mutably borrowed" for the same thing. | [4.2](./ch04-02-borrowing) |
 | mutex | A `Mutex<T>`: a value and a lock. `lock()` waits until the lock is free and returns a guard, and the value is reached only through the guard. | [16.3](./ch16-03-shared-state) |
 
 ## N
@@ -222,13 +230,14 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | overflow | A result of arithmetic that does not fit its type. The operators panic on it, and the `checked`, `saturating` and `wrapping` methods say what to do in its place. | [3.2](./ch03-02-data-types), [20.4](./ch20-04-arithmetic) |
 | owner | The variable, or the other value, that holds a value. Every value has exactly one, and the value is destroyed when its owner ends. | [4.1](./ch04-01-what-ownership-is) |
 | ownership | The rules by which the compiler knows, for every value, who its owner is: one owner, moves, borrows, and destruction at the owner's end. | [4](./ch04-00-ownership) |
+| owning closure | A `Box<dyn fn(T) -> R>` made from a *`move` literal*: a closure that owns its captures, so it can be returned, kept in a field or a collection, and outlive the function that made it. | [13.1](./ch13-01-closures) |
 
 ## P
 
 | Term | Meaning | Section |
 |---|---|---|
 | package | A directory with a manifest, `ceesafe.toml`, and source files under `src/`. It is the unit that is built, tested, depended on and published. | [1.3](./ch01-03-hello-package), [7.1](./ch07-01-package-and-manifest) |
-| panic | The stop of a program at a bug: an index out of bounds, an overflow, an unwrapped `null`, a failed `assert`. It prints `ceesafe panic: …` on standard error and ends the process with exit status 134. It cannot be caught. | [9.1](./ch09-01-panics) |
+| panic | The stop of a program at a bug: an index out of bounds, an overflow, an unwrapped `null`, a failed `assert`. It prints `ceesafe panic: …` on standard error and ends the process with exit status 134. It cannot be caught, and no `drop` block or `defer` runs after it. | [9.1](./ch09-01-panics) |
 | panic hook | A function of a host program that the runtime calls when CeeSafe panics, before the process ends. | [14.3](./ch14-03-libraries-for-other-programs) |
 | parameter | A name and a type in a function's declaration, `width: i32`. A call gives one argument for each. | [3.3](./ch03-03-functions) |
 | pattern | A form that a value fits or does not, and that can bind names to parts of the value. Patterns go in the arms of a `match`, after `is`, and in a `let` with an `else`. | [6.2](./ch06-02-match), [19.1](./ch19-01-where-patterns-go) |
@@ -250,16 +259,18 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 
 | Term | Meaning | Section |
 |---|---|---|
+| race | `Async.race(a, b)`: a call that runs two async closures at the same time. The first to return decides the result: after an `Ok`, the other is cancelled and awaited before the call returns. | [17.3](./ch17-03-timeouts-races-cancellation) |
 | range | `lo..hi`: the integers from `lo` up to, but not including, `hi`. A `for` loops over one, and `a[lo..hi]` takes a slice. | [3.5](./ch03-05-control-flow), [4.3](./ch04-03-slices-and-views) |
 | raw pointer | An address with a type, `*T` or `*mut T`. It is Copy, may be null and may outlive its target, and the borrow rule does not see it. It is read and written only in an unsafe context. | [20.1](./ch20-01-unsafe-code) |
 | receiver | The first parameter of a method: `borrow this`, `borrow mut this`, or `this` by value. It is the value before the dot in a call. | [5.3](./ch05-03-methods) |
-| reference | CeeSafe's term is *borrow*. The compiler's diagnostics say "reference" for a borrow. | [4.2](./ch04-02-borrowing) |
+| reference | The book's term is *borrow*. The specification and the diagnostics say "reference" for a value of type `borrow T` or `borrow mut T`. | [4.2](./ch04-02-borrowing) |
 | reference count | The count of owners that an `Arc` keeps beside its value. See *shared ownership*. | [15.5](./ch15-05-shared-ownership) |
 | refutable, irrefutable | The book says that a pattern "can fail" or "cannot fail": some value does not fit it, or every value does. A pattern that can fail needs another arm or an `else`. | [19.2](./ch19-02-patterns-that-can-fail) |
-| region | The name a type gives to what it borrows from, so that the compiler can check that a value of the type does not outlive it. `static` is the region of what lives as long as the program. Diagnostics also call an arena's memory a region. | [10.3](./ch10-03-regions) |
-| region parameter | A region declared by a struct or an enum that holds a borrow, a view or a slice: `struct Word<region r>`, with a field `StringView<r>`. | [10.3](./ch10-03-regions) |
+| region | A name for what a borrow borrows from, written in a type as `StringView<r>` or `borrow(r) T`, so that the compiler can check that a value of the type does not outlive it. `static` is the region of what lives as long as the program. The specification and the diagnostics also call an allocator's memory, such as an arena's, a region. | [10.3](./ch10-03-regions) |
+| region parameter | A region declared by a struct, an enum or a function, before its type parameters: `struct Word<region r>`, with a field `StringView<r>`. A struct or an enum that holds a borrow, a view or a slice must declare one. | [10.3](./ch10-03-regions) |
 | register | One of the few words at a fixed address through which a device shows itself to the processor. It is read and written with volatile accesses. | [22.2](./ch22-02-kernel-code) |
 | registry | The default index of published packages, where `ceesafec fetch` looks up a dependency that names only a version requirement. | [7.4](./ch07-04-dependencies), [14.2](./ch14-02-publishing) |
+| `@repr(C)` | An attribute that makes a struct compatible with C: C code sees a `struct` of the same name and fields, so a value of it can cross to C. | [20.2](./ch20-02-calling-c) |
 | `Result` | `Result<T, E>`: the type of a function's answer when it can fail. Its value is `Ok(v)` or `Err(e)`. | [9.2](./ch09-02-result) |
 | return type | The type after `->` in a function's declaration. A function without one returns nothing. | [3.3](./ch03-03-functions) |
 | runtime | The C code that the compiler adds to every program it builds: allocation, panics, threads and the executor. A host starts it with `ceesafe_init`. | [14.3](./ch14-03-libraries-for-other-programs) |
@@ -268,23 +279,25 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 
 | Term | Meaning | Section |
 |---|---|---|
+| `Safety:` comment | A documentation comment with a line that starts `Safety:`. The compiler requires one on every `unsafe fn`, where it says what the caller must guarantee, and on every function that contains an `unsafe` block, where it says why the unsafe code is sound. The compiler does not check that it is true. | [20.1](./ch20-01-unsafe-code) |
 | scope (of a name) | The part of the program where a name can be used: from a variable's declaration to the end of its block. All the files of a package share one scope for items. | [3.1](./ch03-01-variables), [7.2](./ch07-02-files-and-public) |
-| scope (of tasks) | `Async.scope`: a call that starts several tasks, its children, and returns only when every one of them has returned. | [17.2](./ch17-02-scopes) |
-| scoped type | The diagnostics' word for a type that holds a borrow, such as `StringView` or a struct with a region parameter. | [10.3](./ch10-03-regions) |
+| scope (of tasks) | `Async.scope`: a call that starts several tasks, its children, and returns only when every one of them has returned. The first child that fails cancels the others. | [17.2](./ch17-02-scopes) |
+| scoped type | The specification's and the diagnostics' word for a type whose values may hold a borrow: a borrow, a slice, a `StringView`, a closure, a struct or an enum with a region parameter, and an optional, a `Result`, a collection or a generic type with a scoped part. In generic code a value of a type parameter's type is treated as scoped, unless the parameter is bounded by `Send` or `Share`. | [10.3](./ch10-03-regions), [10.2](./ch10-02-interfaces) |
 | scratch frame | Short-lived memory opened with `Scratch.enter()` and bound with `using`. Allocations come from the frame, and the end of its block releases them all. | [15.3](./ch15-03-allocators) |
-| `Send` | Said of a type whose values may be moved to another thread. | [16.4](./ch16-04-send-and-share) |
+| `Send` | Said of a type whose values may be moved to another thread. The compiler works it out from the type's parts, and a program cannot declare it. No type that can hold a borrow or a raw pointer is `Send`, so a bound `T: Send` also says that a `T` holds no borrow. | [16.4](./ch16-04-send-and-share), [10.2](./ch10-02-interfaces) |
 | shadowing | Declaring a name again while it is in scope. CeeSafe has none: it is an error. | [3.1](./ch03-01-variables) |
-| `Share` | Said of a type of which several threads may read one value at the same time, through shared borrows. | [16.4](./ch16-04-send-and-share) |
-| shared borrow | A `borrow T`. There can be many at once, and while one is live the value cannot be changed, moved or destroyed. | [4.2](./ch04-02-borrowing) |
-| shared ownership | One value with several owners, which is destroyed when the last owner is. `Arc<T>` is the one type that has it. | [15.5](./ch15-05-shared-ownership) |
+| `Share` | Said of a type of which several threads may use one value at the same time, through shared borrows: a `Send` type that owns nothing that changes through a shared borrow, such as a cell. A mutex and an atomic are `Share`. | [16.4](./ch16-04-send-and-share) |
+| shared borrow | A `borrow T`. There can be many at once, and while one is live the value cannot be changed, moved or destroyed. Only the contents of a *cell* change through one. | [4.2](./ch04-02-borrowing) |
+| shared ownership | One value with several owners, which is destroyed when the last owner is. `Arc<T>` is the one type that has it: `T` must be `Share`, and an owner gets only a shared borrow of the value. | [15.5](./ch15-05-shared-ownership) |
 | shield | `Async.shield(ms, body)`: an async closure in which waits ignore a cancellation, for at most `ms` milliseconds. It is for cleanup that has to wait. | [17.3](./ch17-03-timeouts-races-cancellation) |
 | slice | A borrow of consecutive elements of an array or a vector: `Slice<T>` is shared and `SliceMut<T>` is exclusive. | [4.3](./ch04-03-slices-and-views) |
 | smart pointer | See *box* and *shared ownership*. | [15](./ch15-00-memory) |
+| spawn | To start a thread or a child task. `Thread.spawn(move () => …)` starts a thread and returns its *handle*, `s.spawn(async () => …)` starts a child of a scope, and `set.spawn(async move () => …)` a child of a task set. | [16.1](./ch16-01-starting-threads), [17.2](./ch17-02-scopes) |
 | stack | The memory of the running functions, where local variables live. A function's part is given back when it returns. | [4.1](./ch04-01-what-ownership-is) |
 | standard error | The stream a program writes messages about the run to: errors, warnings, usage. `Console.writeErrorLine` writes to it. | [12.6](./ch12-06-standard-error) |
 | standard output | The stream a program writes its results to. `Console.writeLine` writes to it. | [12.6](./ch12-06-standard-error) |
 | statement | One step of a function's body, ended by `;` or by a block: a declaration, an assignment, a call, an `if`, a loop. | [3.3](./ch03-03-functions) |
-| static (an item) | One value for the whole run, at a fixed address, declared at the top level with `static`. Its type must be safe to share, and a `static mut` is used only in unsafe code. | [22.2](./ch22-02-kernel-code) |
+| static (an item) | One value for the whole run, at a fixed address, declared at the top level with `static`. Its type must be `Share`, or static text or read-only C data, and it is never destroyed. Every use of a `static mut` is allowed only in an *unsafe context*. | [22.2](./ch22-02-kernel-code) |
 | static function | A function in a struct or an enum with no `this`. It is called on the type, `Order.create(…)`, and is how a value is made. | [5.3](./ch05-03-methods) |
 | `static` (the region) | The region of data that lives as long as the program runs, such as a string literal. | [10.3](./ch10-03-regions) |
 | stream | One network connection, read and written as bytes: a `TcpStream`. See also *standard output* and *standard error*. | [21.1](./ch21-01-one-connection) |
@@ -292,7 +305,7 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | string view | A `StringView`: a shared borrow of text. A string literal is one, and a `String` lends one. | [4.3](./ch04-03-slices-and-views), [8.2](./ch08-02-strings) |
 | struct | A type that groups named values, its fields, and can have methods. | [5.1](./ch05-01-defining-structs) |
 | struct literal | The expression that makes a value of a struct, with every field named: `Player { score: 0, lives: 3 }`. | [5.1](./ch05-01-defining-structs) |
-| structured concurrency | The rule that the code which starts a task does not go on until the task has returned. No task runs loose in the background. | [17](./ch17-00-async), [17.2](./ch17-02-scopes) |
+| structured concurrency | The rule that every task has an owner that waits for it: a task is awaited where it is called, or it is a *child*, and what started a child returns only after the child has. No task runs loose in the background. | [17](./ch17-00-async), [17.2](./ch17-02-scopes) |
 | supertrait | An interface that another interface requires: in `interface Shape: Named`, `Named` is a supertrait of `Shape`. It is the one place where CeeSafe uses the word "trait". | [20.3](./ch20-03-more-interfaces-and-generics) |
 | suspend | Said of a task that gives up its thread at an `await` until what it waits for is ready. | [17.1](./ch17-01-tasks-and-await) |
 | sweep | A run of `ceesafec test` that runs each passing test again and again with one failure put in at each possible place: `--sweep alloc` for allocations, `--sweep cancel` for cancellations. | [11.3](./ch11-03-organising-tests) |
@@ -302,24 +315,27 @@ the word. Names of the library, such as `Vector` and `Mutex`, are here only when
 | Term | Meaning | Section |
 |---|---|---|
 | table (of a `dyn` value) | The constant data a `dyn` value points to beside its value: how to destroy the value, its size, and one function for each method of the interface. | [18.1](./ch18-01-dynamic-dispatch) |
-| task | A call of an async function: a function call that can stop where it has to wait and let another task use the thread. | [17.1](./ch17-01-tasks-and-await) |
-| task set | `Async.tasks`: a scope that takes new children while it runs, such as one task for each connection that arrives. | [17.2](./ch17-02-scopes) |
+| task | A call of an async function or of an async closure: a function call that can stop where it has to wait and let another task use the thread. It is not a value: it runs only when it is awaited, given to `Async.run` or spawned, where the call is written. | [17.1](./ch17-01-tasks-and-await) |
+| task set | `Async.tasks`: a call that runs a body with a set, to which the body and the functions it calls add children while it runs, such as one task for each connection that arrives. A child owns what it captures, a child's error does not cancel the others, and the call returns when the body and every child have returned. | [17.2](./ch17-02-scopes) |
 | temporary | A value that is made in an expression and not given a name. It is destroyed at the end of its statement. | [4.3](./ch04-03-slices-and-views) |
 | test | A function marked `@test`, which runs part of the program and checks the answer. `ceesafec test` runs each one as its own process. | [11.1](./ch11-01-writing-tests) |
 | thread | A part of a program that the operating system runs at the same time as its other threads. `Thread.spawn` starts one. | [16.1](./ch16-01-starting-threads) |
+| timeout | `Async.timeout(ms, error, body)`: a call that runs an async closure beside a deadline `ms` milliseconds away. If the deadline passes first, the body is cancelled and awaited, and an error from it becomes `error`. | [17.3](./ch17-03-timeouts-races-cancellation) |
 | trait | CeeSafe's term is *interface*. | [10.2](./ch10-02-interfaces) |
 | tuple | CeeSafe has none. Use a *struct* with named fields. | [3.2](./ch03-02-data-types) |
 | type alias | CeeSafe has none. Write the type, or make a struct. | [3.2](./ch03-02-data-types) |
 | type argument | The type that a use of a generic puts in place of a type parameter: the `u8` in `Vector<u8>`. A call usually infers it. | [10.1](./ch10-01-generic-types) |
-| type parameter | A name that stands for a type in a generic function or type, written between angle brackets after its name. | [10.1](./ch10-01-generic-types) |
+| type parameter | A name that stands for a type in a generic function or type, written between angle brackets after its name. Generic code treats a value of its type as one that may hold a borrow, unless a bound `T: Send` or `T: Share` rules that out. | [10.1](./ch10-01-generic-types), [10.2](./ch10-02-interfaces) |
 
 ## U
 
 | Term | Meaning | Section |
 |---|---|---|
 | unreachable | Said of an arm when every value it would take is taken by the arms above it. | [19.2](./ch19-02-patterns-that-can-fail) |
-| unsafe context | The inside of `unsafe { … }` or the body of an `unsafe fn`. Only there may code read or write through a raw pointer or call C. | [20.1](./ch20-01-unsafe-code) |
+| unsafe context | The inside of `unsafe { … }` or the body of an `unsafe fn`. Only there may code read or write through a raw pointer, do arithmetic on one, call C or an `unsafe fn`, or use a `static mut`. It relaxes no other check. | [20.1](./ch20-01-unsafe-code) |
+| `unsafe fn` | A function declared `unsafe fn`. Its body is an *unsafe context*, and a call of it is allowed only in one, because the caller must keep what its *`Safety:` comment* asks. | [20.1](./ch20-01-unsafe-code) |
 | unwrap | To take the value out of an optional or a `Result` with `!`. The program panics if there is none. | [6.3](./ch06-03-optionals), [9.2](./ch09-02-result) |
+| `using` | A declaration, `using x = e;`, of a variable that cannot be moved or assigned as a whole, so that its value is destroyed exactly at the end of its block: a guard, an arena, a scratch frame. | [15.2](./ch15-02-destruction) |
 | UTF-8 | The encoding of all text in CeeSafe. A `String` and a `StringView` are bytes that are valid UTF-8, and their lengths count bytes. | [8.2](./ch08-02-strings) |
 
 ## V

@@ -1195,6 +1195,10 @@ fn synthCall(
             }
             return checkMethodCall(c, target, member, arguments, span);
         }
+        ExprNode.Paren(inner) => {
+            // `(b.onPress)(4)`: the parentheses change nothing; the callee is what they hold.
+            return synthCall(c, inner, arguments, expected, span);
+        }
         _ => {}
     }
     var message = Vector<u8>.create();

@@ -11,5 +11,6 @@ fn f(local: i32) {
     let fnValue = two; // a function value since M11 G8a (type-system.md §36.1)
     let console = Console; // error[N0210]
     let member = Console.writeLine; // error[N0210]
-    (two)(1, 2); // error[N0210]
+    (two)(1, 2); // a parenthesised callee is what it holds: a call of `two` (run-pass/callee-forms.cee)
+    (local)(); // error[N0210]
 }

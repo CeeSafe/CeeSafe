@@ -3184,6 +3184,7 @@ struct Parser {
                     TokenKind.FalseKeyword => true,
                     TokenKind.BorrowKeyword => true,
                     TokenKind.MutKeyword => true,
+                    TokenKind.StaticKeyword => true, // a region argument: `Vector<StringView<static>>.create()`
                     TokenKind.Star => true,
                     TokenKind.Question => true,
                     TokenKind.QuestionQuestion => true,

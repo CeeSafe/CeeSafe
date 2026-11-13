@@ -48,6 +48,21 @@ struct Cell<T> {
     fn open(borrow this) -> i32 => this.peek();
 }
 
+// A struct with a `drop` block (ADR 0123 §2.6): a pattern that names every field takes it apart here, in the file
+// that declares it; in src/main.cee the same pattern is N0252.
+struct Sealed {
+    label: Vector<u8>;
+
+    drop {}
+
+    fn unseal(this) -> Vector<u8> {
+        let Sealed { label } = this;
+        return label;
+    }
+}
+
+fn seal() -> Sealed => Sealed { label: Vector<u8>.create() };
+
 // Not private, and made of private items: other files call these, and hold what they return.
 fn wrap<T>(a: T, b: T) -> T {
     let n = helper() + LIMIT + TABLE[0] + min(1, 2);

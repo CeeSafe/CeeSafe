@@ -655,6 +655,10 @@ fn rewritePackageNames(
                 let joined = joinQualified(front, dependencies, q)?;
                 front.ast.patterns[k] = PatternNode.Variant(joined, parenthesised, bindings);
             }
+            PatternNode.Struct(q, fields, hasRest) => {
+                let joined = joinQualified(front, dependencies, q)?;
+                front.ast.patterns[k] = PatternNode.Struct(joined, fields, hasRest);
+            }
             _ => {}
         }
     }

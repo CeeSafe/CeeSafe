@@ -1,0 +1,45 @@
+// `s.o is Some(v)` on a field of a local, with a payload that is not Copy (type-system.md §18.4, ADR 0123 §5): the
+// field moves to a hidden local, which is unpacked; the other fields of `s` stay in place and are destroyed with it.
+// (Before ADR 0123 the unpack marked all of `s` moved, and `s.a` leaked: run with --check-leaks.)
+struct S {
+    a: Vector<u8>;
+    o: Vector<u8>?;
+}
+
+fn make(withO: bool) -> S {
+    var a = Vector<u8>.create();
+    a.push(1)!;
+    var o: Vector<u8>? = null;
+    if (withO) {
+        var v = Vector<u8>.create();
+        v.push(2)!;
+        v.push(3)!;
+        o = v;
+    }
+    return S { a: a, o: o };
+}
+
+fn length(s: S) -> usize {
+    if (s.o is Some(v)) {
+        return v.length + s.a.length;
+    }
+    return s.a.length;
+}
+
+fn orZero(s: S) -> usize {
+    let Some(v) = s.o else {
+        return 0;
+    };
+    return v.length;
+}
+
+fn main() {
+    Console.writeLine(length(make(true)));
+    Console.writeLine(length(make(false)));
+    Console.writeLine(orZero(make(true)));
+    Console.writeLine(orZero(make(false)));
+}
+// expect-stdout: 3
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 0

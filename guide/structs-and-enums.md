@@ -557,6 +557,120 @@ Any pattern may stand after `let`; the statement ends with `;` like every `let`.
 out of the value when the pattern matches, and the `else` block still has the whole value. A pattern that cannot
 fail because it tests nothing (`let x = e else { … };`, and `if (n is _)` too) is a warning (N0404).
 
+### Structs in patterns
+
+A struct pattern is written like a struct literal: the struct's name, then its fields. A field alone, `x`, binds
+the field to a name `x` (`var x` to one that can change); `y: 0` tests the field against a pattern, which can be
+any pattern, another struct's or a variant's included. Every field is named, or the pattern ends with `..`, which
+stands for the others. Struct patterns go wherever a pattern does, and inside variant patterns: `Some(Point { x,
+y })`. CeeSafe has no tuples: to match two values at once, put them in a small struct.
+
+```ceesafe
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+enum Square {
+    Empty,
+    Piece(u32),
+}
+
+struct Step {
+    from: Square;
+    to: Square;
+}
+
+fn place(p: Point) -> StringView => match (p) {
+    Point { x: 0, y: 0 } => "origin",
+    Point { x: 0, .. } => "on the y axis",
+    Point { y: 0, .. } => "on the x axis",
+    Point { x: 1..=9, y: 1..=9 } => "near",
+    Point { .. } => "far",
+};
+
+fn step(from: Square, to: Square) -> u32 {
+    match (Step { from: from, to: to }) {
+        Step { from: Square.Empty, .. } => { return 0; }
+        Step { from: Square.Piece(p), to: Square.Empty } => { return p; }
+        Step { from: Square.Piece(p), to: Square.Piece(q) } => { return p + q; }
+    }
+}
+
+fn main() {
+    Console.writeLine(place(Point { x: 0, y: 4 }));
+    Console.writeLine(place(Point { x: 3, y: 4 }));
+    Console.writeLine(step(Square.Piece(5), Square.Empty));
+    Console.writeLine(step(Square.Piece(5), Square.Piece(2)));
+    let Point { x, var y } = Point { x: 2, y: 3 };
+    y += x;
+    Console.writeLine(y);
+}
+```
+
+```text
+on the y axis
+near
+5
+7
+5
+```
+
+The `match` is checked for coverage through the fields: without its last arm, `place` is N0256, which names a
+point no arm matches. A struct pattern whose fields are all names, `_` or such struct patterns cannot fail, so it
+may stand in a plain `let`, as in `main`: `let Point { x, var y } = p;` (after `is` or with `else`, such a pattern
+is N0404). A field the code could not read, a `private` one from another file, cannot be named in a pattern either.
+
+A binding copies a Copy field. A field that is not Copy moves out of the value, which is then partly moved: its
+other fields can still be read, the whole value cannot be used (N0250). Through a reference (`borrow Point`),
+bindings refer to the fields and nothing moves. A `match` consumes its value as a whole, as it does for an enum.
+
+A struct with a `drop` block cannot lose a field (N0252), since its block needs the whole value. One pattern may
+take it apart: a pattern that names every field, without `..`, in the file that declares the struct. Where it
+matches, the value is consumed, each field moves into its name (or is destroyed, for `_`), and the `drop` block
+does not run. That is how a builder finishes into its parts:
+
+```ceesafe
+struct Report {
+    lines: Vector<u32>;
+    title: u32;
+
+    drop {
+        Console.writeLine("report abandoned");
+    }
+
+    fn create(title: u32) -> Report => Report { lines: Vector<u32>.create(), title: title };
+
+    fn add(borrow mut this, line: u32) {
+        this.lines.push(line)!;
+    }
+
+    fn finish(this) -> Vector<u32> {
+        let Report { lines, title: _ } = this;
+        return lines;
+    }
+}
+
+fn main() {
+    var kept = Report.create(1);
+    kept.add(10);
+    kept.add(20);
+    let lines = kept.finish();
+    Console.writeLine(lines.length);
+    var dropped = Report.create(2);
+    dropped.add(30);
+}
+```
+
+```text
+2
+report abandoned
+```
+
+With `..`, on a reference, or in another file, a pattern on such a struct only reads it: it may test fields and
+bind Copy ones, and the value is dropped later as usual. A type that wants other files to take it apart gives them
+a method like `finish`.
+
 ## Optionals
 
 `T?` is a `T` or `null`. A plain `T` converts to `T?` wherever one is expected.

@@ -968,10 +968,6 @@ fn lowerNestedMatch(
             let alternative = alternatives[j];
             let fail = if (j + 1 < alternatives.length) newBlock(b)? else next;
             testPattern(c, n, b, alternative, place, fail)?;
-            let unpacks = consumes && match (c.hir.patterns[alternative as usize]) {
-                HirPattern.Variant(_, listed, _) => listed,
-                _ => false,
-            };
             if (arm.guard != none()) {
                 let savedCaptures = b.captures.length;
                 if (consumes) {
@@ -985,14 +981,10 @@ fn lowerNestedMatch(
                 lowerGuard(c, n, b, arm.guard, depth, fail)?;
                 b.captures.truncate(savedCaptures);
                 if (b.current != none() && consumes) {
-                    if (unpacks) {
-                        unpackPattern(c, n, b, alternative, place)?;
-                    } else {
-                        bindPattern(c, n, b, alternative, place, false)?;
-                    }
+                    movePattern(c, n, b, alternative, place)?;
                 }
-            } else if (unpacks) {
-                unpackPattern(c, n, b, alternative, place)?;
+            } else if (consumes) {
+                movePattern(c, n, b, alternative, place)?;
             } else {
                 bindPattern(c, n, b, alternative, place, byReference)?;
             }
@@ -1205,7 +1197,26 @@ fn patternBinds(c: borrow Checker, pattern: u32) -> bool {
             }
             return false;
         }
-        HirPattern.Or(alternatives) => { return patternBinds(c, c.hir.at(alternatives, 0)); }
+        HirPattern.Or(alternatives) => {
+            // Every alternative binds the same names; one that takes a struct apart (ADR 0123) counts as binding.
+            for (k in 0..alternatives.count) {
+                if (patternBinds(c, c.hir.at(alternatives, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        HirPattern.Struct(_, fields, apart) => {
+            if (apart) {
+                return true;
+            }
+            for (i in 0..fields.count) {
+                if (patternBinds(c, c.hir.at(fields, i))) {
+                    return true;
+                }
+            }
+            return false;
+        }
         HirPattern.At(_, _) => { return true; }
         HirPattern.Slice(items, _, restLocal) => {
             if (restLocal != none()) {
@@ -1278,6 +1289,37 @@ fn expandAlternatives(c: borrow mut Checker, pattern: u32, out: borrow mut Vecto
             for (ci in 0..combinations.length) {
                 let list = c.hir.list(combinations[ci].view())?;
                 let rebuilt = c.hir.addPattern(HirPattern.Variant(variant, true, list))?;
+                out.push(rebuilt)?;
+            }
+            return Ok();
+        }
+        HirPattern.Struct(typ, fields, apart) => {
+            // Every combination of the fields' alternatives, as for a variant's payloads (ADR 0123).
+            var combinations = Vector<Vector<u32>>.create();
+            combinations.push(Vector<u32>.create())?;
+            for (i in 0..fields.count) {
+                var expanded = Vector<u32>.create();
+                let inner = c.hir.at(fields, i);
+                expandAlternatives(c, inner, mut expanded)?;
+                var grown = Vector<Vector<u32>>.create();
+                for (ci in 0..combinations.length) {
+                    for (e in expanded.view()) {
+                        var longer = Vector<u32>.create();
+                        for (xi in 0..combinations[ci].length) {
+                            longer.push(combinations[ci][xi])?;
+                        }
+                        longer.push(e)?;
+                        grown.push(longer)?;
+                    }
+                }
+                combinations = grown;
+            }
+            if (combinations.length == 1) {
+                return out.push(pattern);
+            }
+            for (ci in 0..combinations.length) {
+                let list = c.hir.list(combinations[ci].view())?;
+                let rebuilt = c.hir.addPattern(HirPattern.Struct(typ, list, apart))?;
                 out.push(rebuilt)?;
             }
             return Ok();
@@ -1379,8 +1421,125 @@ fn guardBindPattern(
                 }
             }
         }
+        HirPattern.Struct(typ, fields, _) => {
+            for (i in 0..fields.count) {
+                let inner = structFieldPlace(c, n, place, typ, i)?;
+                let hoisted = c.hir.at(fields, i);
+                guardBindPattern(c, n, b, hoisted, inner)?;
+            }
+        }
         HirPattern.Slice(_, _, _) => { bindPattern(c, n, b, pattern, place, false)?; } // copies and references only
         _ => {}
+    }
+    return Ok();
+}
+
+/// The field an Unpack's target `k` takes: the variant's payload, or without a variant the struct's field (ADR 0123).
+fn unpackedField(c: borrow Checker, sourceType: u32, variant: u32, k: u32) -> u32 {
+    if (variant == none()) {
+        return c.types.structs[c.types.info(sourceType).structDef as usize].fields[k as usize];
+    }
+    return c.types.variants[variant as usize].payload[k as usize];
+}
+
+/// Field `index` of a struct of type `typ` at `place` (ADR 0123).
+fn structFieldPlace(
+    c: borrow Checker,
+    n: borrow mut NirProgram,
+    place: u32,
+    typ: u32,
+    index: u32,
+) -> Result<u32, AllocError> {
+    let field = c.types.structs[c.types.info(typ).structDef as usize].fields[index as usize];
+    return projectPlace(n, place, fieldProjectionN(field));
+}
+
+/// Binds a matched pattern's names where the match consumes the value (MovePattern, §18.4, ADR 0123 §2.5): a
+/// variant pattern that lists payloads unpacks them, a struct pattern moves what it binds out of its fields or, for a
+/// struct with a `drop` block, takes the value apart; anything else binds as BindPattern does, a value that is not
+/// Copy moving into its name. What is unpacked or taken apart is a whole local: a field or a payload of another
+/// value moves into a hidden one first, so that the rest of that value stays where it is.
+fn movePattern(
+    c: borrow mut Checker,
+    n: borrow mut NirProgram,
+    b: borrow mut Lowering,
+    pattern: u32,
+    place: u32,
+) -> Result<void, AllocError> {
+    var wholeValue = false;
+    var structType = none();
+    var structFields = emptyRange();
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Variant(_, listed, _) => { wholeValue = listed && !c.types.isCopy(placeType(c, n, b, place)); }
+        HirPattern.Struct(typ, fields, apart) => {
+            wholeValue = apart;
+            structType = typ;
+            structFields = fields;
+        }
+        _ => {}
+    }
+    if (structType == none() && !wholeValue) {
+        return bindPattern(c, n, b, pattern, place, false);
+    }
+    if (!wholeValue) {
+        // A struct without a drop block: each field's pattern on the field, where it is (a partial move, ADR 0114).
+        for (i in 0..structFields.count) {
+            let inner = structFieldPlace(c, n, place, structType, i)?;
+            let hoisted = c.hir.at(structFields, i);
+            if (bindsNonCopy(c, hoisted)) {
+                movePattern(c, n, b, hoisted, inner)?;
+            } else {
+                bindPattern(c, n, b, hoisted, inner, false)?; // copies: the field stays
+            }
+        }
+        return Ok();
+    }
+    var source = place;
+    if (n.places[place as usize].projections.count > 0) {
+        let holder = newLocal(b, placeType(c, n, b, place))?;
+        addToScope(b, holder)?;
+        source = localPlace(n, holder)?;
+        let read = readPlace(c, n, b, place)?;
+        let value = useRvalue(n, read)?;
+        assign(n, b, source, value)?;
+    }
+    if (structType == none()) {
+        return unpackPattern(c, n, b, pattern, source);
+    }
+    // ADR 0123 §2.6: every field moves out, into its binding or a hidden local of the scope, and nothing is left for
+    // the drop block, which does not run.
+    var targets = Vector<u32>.create();
+    var holderPatterns = Vector<u32>.create();
+    var holders = Vector<u32>.create();
+    for (i in 0..structFields.count) {
+        let field = c.types.structs[c.types.info(structType).structDef as usize].fields[i as usize];
+        let fieldType = c.types.fields[field as usize].typ;
+        let inner = c.hir.at(structFields, i);
+        var target = none();
+        var bound = none();
+        match (c.hir.patterns[inner as usize]) {
+            HirPattern.Binding(hirLocal) => { bound = hirLocal; }
+            _ => {}
+        }
+        if (bound != none()) {
+            target = nirLocalOf(c, bound);
+            addToScope(b, target)?;
+        } else if (c.types.isCopy(fieldType)) {
+            let innerPlace = projectPlace(n, source, fieldProjectionN(field))?;
+            bindPattern(c, n, b, inner, innerPlace, false)?; // copies, read before the value is taken apart
+        } else {
+            target = newLocal(b, fieldType)?;
+            addToScope(b, target)?;
+            holderPatterns.push(inner)?;
+            holders.push(target)?;
+        }
+        targets.push(target)?;
+    }
+    let list = n.list(targets.view())?;
+    emit(n, b, NirStatement.Unpack(source, none(), list))?;
+    for (k in 0..holders.length) {
+        let holderPlace = localPlace(n, holders[k])?;
+        movePattern(c, n, b, holderPatterns[k], holderPlace)?;
     }
     return Ok();
 }
@@ -1451,6 +1610,14 @@ fn testPattern(
                     let hoisted1 = c.hir.at(payload, i);
                     testPattern(c, n, b, hoisted1, inner, fail)?;
                 }
+            }
+        }
+        HirPattern.Struct(typ, fields, _) => {
+            // ADR 0123: a struct always matches; each field's pattern is tested on the field, in declared order.
+            for (i in 0..fields.count) {
+                let inner = structFieldPlace(c, n, place, typ, i)?;
+                let hoisted3 = c.hir.at(fields, i);
+                testPattern(c, n, b, hoisted3, inner, fail)?;
             }
         }
         HirPattern.String(text, _) => {
@@ -1566,6 +1733,13 @@ fn bindPattern(
                     let hoisted2 = c.hir.at(payload, i);
                     bindPattern(c, n, b, hoisted2, inner, byReference)?;
                 }
+            }
+        }
+        HirPattern.Struct(typ, fields, _) => {
+            for (i in 0..fields.count) {
+                let inner = structFieldPlace(c, n, place, typ, i)?;
+                let hoisted4 = c.hir.at(fields, i);
+                bindPattern(c, n, b, hoisted4, inner, byReference)?;
             }
         }
         HirPattern.Slice(items, restAt, restLocal) => {
@@ -1740,6 +1914,19 @@ fn unpackPattern(
                     addToScope(b, target)?;
                 }
             }
+            HirPattern.Struct(_, _, _) => {
+                // ADR 0123: a Copy payload's fields are read where they are; any other moves to a hidden local, out
+                // of which the struct pattern binds.
+                if (c.types.isCopy(payloadType)) {
+                    let innerPlace = payloadPlace(n, place, variant, field)?;
+                    bindPattern(c, n, b, inner, innerPlace, false)?;
+                } else {
+                    target = newLocal(b, payloadType)?;
+                    addToScope(b, target)?;
+                    holderPatterns.push(inner)?;
+                    holders.push(target)?;
+                }
+            }
             HirPattern.Variant(_, listed, _) => {
                 if (listed && c.types.isCopy(payloadType)) {
                     // A Copy payload is not moved: its nested bindings are copies, read before the unpack consumes it.
@@ -1768,7 +1955,7 @@ fn unpackPattern(
     emit(n, b, NirStatement.Unpack(place, variant, list))?;
     for (k in 0..holders.length) {
         let holderPlace = localPlace(n, holders[k])?;
-        unpackPattern(c, n, b, holderPatterns[k], holderPlace)?;
+        movePattern(c, n, b, holderPatterns[k], holderPlace)?;
     }
     return Ok();
 }

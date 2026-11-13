@@ -1,0 +1,46 @@
+// Struct patterns (ADR 0123): `..` comes last and once; a field is a name, alone or with `:` and a pattern; `var`
+// goes with the name alone; only a struct pattern may be a `let` without `else`.
+fn restFirst(p: Point) -> i32 {
+    if (p is Point { .., x }) { // error[N0100]
+        return x;
+    }
+    return 0;
+}
+
+fn restTwice(p: Point) -> i32 {
+    if (p is Point { x, .., .. }) { // error[N0100]
+        return x;
+    }
+    return 0;
+}
+
+fn noName(p: Point) -> i32 {
+    if (p is Point { 0, y }) { // error[N0100]
+        return y;
+    }
+    return 0;
+}
+
+fn noColon(p: Point) -> i32 {
+    if (p is Point { x = 0, .. }) { // error[N0100]
+        return 1;
+    }
+    return 0;
+}
+
+fn varWithPattern(p: Point) -> i32 {
+    if (p is Point { var x: 0, .. }) { // error[N0100]
+        return 1;
+    }
+    return 0;
+}
+
+fn unclosed(p: Point) -> i32 {
+    let Point { x, y = p; // error[N0100]
+    return x;
+}
+
+fn stillNeedsElse(p: Point?) -> i32 {
+    let Some(Point { x, .. }) = p; // error[N0100]
+    return x;
+}

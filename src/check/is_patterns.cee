@@ -71,7 +71,7 @@ fn checkIsTest(
     patternSyntax: u32,
     binds: bool,
     span: Span,
-) -> Result<u32, AllocError> => checkPatternTest(c, operandSyntax, patternSyntax, binds, false, span);
+) -> Result<u32, AllocError> => checkPatternTest(c, operandSyntax, patternSyntax, binds, false, false, span);
 
 fn alwaysMatches() -> u32 => 404;
 
@@ -86,7 +86,14 @@ fn checkLetElse(
     span: Span,
 ) -> Result<u32, AllocError> {
     let mark = c.scopes.length;
-    let test = checkPatternTest(c, valueSyntax, patternSyntax, true, true, span)?;
+    // `let P { x, y } = e;` (ADR 0123): no `else`, so the pattern must not be able to fail.
+    let elseSpan = c.front.ast.stmtSpans[otherwiseSyntax as usize];
+    let isStruct = match (c.front.ast.patterns[patternSyntax as usize]) {
+        PatternNode.Struct(_, _, _) => true,
+        _ => false,
+    };
+    let plain = isStruct && elseSpan.end == elseSpan.start;
+    let test = checkPatternTest(c, valueSyntax, patternSyntax, true, true, plain, span)?;
     // The bindings leave the scope while the `else` block is checked.
     var bound = Vector<ScopeEntry>.create();
     var i = mark;
@@ -115,14 +122,16 @@ fn checkLetElse(
     return c.hir.addStmt(HirStmt.LetElse(test, otherwise), span.start, span.end);
 }
 
-/// The test of `e is P` and of `let P = e else { … };`. A pattern that matches every value of the type is warning
-/// N0404: the test is always true (the `else` block never runs).
+/// The test of `e is P` and of `let P = e else { … };`. A pattern that cannot fail (isIrrefutable) is warning
+/// N0404: the test is always true (the `else` block never runs). A `let` without `else` (`plain`, ADR 0123) needs
+/// such a pattern (N0256 otherwise).
 fn checkPatternTest(
     c: borrow mut Checker,
     operandSyntax: u32,
     patternSyntax: u32,
     binds: bool,
     letElse: bool,
+    plain: bool,
     span: Span,
 ) -> Result<u32, AllocError> {
     let boolType = c.types.boolType;
@@ -134,7 +143,7 @@ fn checkPatternTest(
     if (!failed && !c.types.is(typ, TypeKind.Enum) && !c.types.is(typ, TypeKind.Integer) && !c.types.is(
         typ,
         TypeKind.Bool,
-    ) && !c.types.is(typ, TypeKind.Array)) {
+    ) && !c.types.is(typ, TypeKind.Array) && !c.types.is(typ, TypeKind.Struct)) {
         let operandSpan = c.front.ast.exprSpans[operandSyntax as usize];
         var message = Vector<u8>.create();
         appendText(mut message, "cannot match on a value of type ")?;
@@ -162,10 +171,19 @@ fn checkPatternTest(
             c.error(isBindsNowhere(), patternSpan.start, patternSpan.end, message)?;
         }
     }
-    if (!failed) {
-        let testsNothing = match (c.hir.patterns[testedPattern(c, tree) as usize]) {
-            HirPattern.Wildcard => true,
-            HirPattern.Binding(_) => true,
+    if (!failed && plain && !isIrrefutable(c, tree)) {
+        let refutableSpan = c.front.ast.patternSpans[patternSyntax as usize];
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "this pattern can fail, and a 'let' without 'else' needs one that cannot (every field a name, '_' or such a struct pattern); add 'else { … }' whose block leaves, or test with 'if (e is PATTERN)' (ADR 0123 §2.4)",
+        )?;
+        c.error(nonExhaustiveMatch(), refutableSpan.start, refutableSpan.end, message)?;
+    }
+    if (!failed && !plain) {
+        let testsNothing = isIrrefutable(c, tree);
+        let isStruct = match (c.hir.patterns[testedPattern(c, tree) as usize]) {
+            HirPattern.Struct(_, _, _) => true,
             _ => false,
         };
         let patternSpan = c.front.ast.patternSpans[patternSyntax as usize];
@@ -180,7 +198,13 @@ fn checkPatternTest(
         if (testsNothing && !reported) {
             var message = Vector<u8>.create();
             appendText(mut message, "this pattern tests nothing: it matches every value")?;
-            if (letElse) {
+            if (isStruct) {
+                appendText(
+                    mut message,
+                    if (letElse) ", so the 'else' block never runs; write 'let PATTERN = value;' without it (ADR 0123 §2.4)"
+                        else ", so the test is always true; drop the test, and take the value apart with 'let PATTERN = value;' (ADR 0123 §2.4)",
+                )?;
+            } else if (letElse) {
                 appendText(
                     mut message,
                     ", so the 'else' block never runs; write 'let name = value;' (ADR 0117)",

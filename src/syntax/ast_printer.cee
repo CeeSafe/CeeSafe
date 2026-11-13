@@ -877,6 +877,30 @@ struct AstPrinter {
                 }
                 this.text(")")?;
             }
+            PatternNode.Struct(path, fields, hasRest) => {
+                this.text("(struct ")?;
+                this.qualifiedName(ast, symbols, path)?;
+                for (k in 0..fields.count) {
+                    let b = ast.bindings[ast.at(fields, k) as usize];
+                    this.text(" ")?;
+                    if (b.nested != none()) {
+                        this.text("(")?;
+                        this.name(ast, symbols, b.name)?;
+                        this.text(" ")?;
+                        this.patternText(ast, symbols, b.nested)?;
+                        this.text(")")?;
+                    } else {
+                        if (b.mutable) {
+                            this.text("var ")?;
+                        }
+                        this.name(ast, symbols, b.name)?;
+                    }
+                }
+                if (hasRest) {
+                    this.text(" ..")?;
+                }
+                this.text(")")?;
+            }
             PatternNode.Rest(name) => {
                 if (name == none()) {
                     this.text("..")?;

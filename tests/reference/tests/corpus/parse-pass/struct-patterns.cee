@@ -1,0 +1,40 @@
+// Struct patterns (ADR 0123): a name, then the fields in braces, each alone (`x`, `var x`) or with a pattern, and
+// `..` last for the fields not named; in arms, after `is`, in `let … else`, in `let` without `else`, in a payload
+// and around one. A struct literal in the same places stays a literal.
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+struct Line {
+    from: Point;
+    to: Point;
+}
+
+enum Shape {
+    Dot(Point),
+    Empty,
+}
+
+fn f(p: Point, l: Line, s: Shape) -> i32 {
+    let Point { x, var y } = p;
+    let Line { from: Point { x: 0, y: fy }, to, } = l else {
+        return 0;
+    };
+    let geometry.Point { x: gx, .. } = p;
+    match (l) {
+        Line { from: Point { x: 1..=3, .. }, to: _ } => { return 1; }
+        Line { from: at @ Point { .. }, .. } if (at.x > 2) => { return 2; }
+        Line { .. } | Line {} => { return 3; }
+    }
+    match (s) {
+        Shape.Dot(Point { x: 7 | 8, y: _ }) => { return 4; }
+        Shape.Dot(Self { x: sx, .., }) => { return sx; }
+        _ => {}
+    }
+    if (p is Point { x: -1, .. } && Point { x: 1, y: 2 }.x == 1) {
+        return 5;
+    }
+    let same = p is Point { .. };
+    return x + y + fy + to.x + gx;
+}

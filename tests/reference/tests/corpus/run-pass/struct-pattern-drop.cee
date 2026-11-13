@@ -1,0 +1,211 @@
+// A struct with a `drop` block is taken apart by a struct pattern that names every field, in the file that declares
+// it (ADR 0123 §2.6, type-system.md §14.2): where the pattern matches, every field moves out, into its binding or a
+// hidden local that is destroyed at the end of the scope, and the `drop` block does not run. Where it does not
+// match, nothing moves, and the value is dropped as usual. A pattern with `..`, or on a reference, only reads.
+struct Part {
+    id: u32;
+
+    drop {
+        Console.write("drop Part ");
+        Console.writeLine(this.id);
+    }
+}
+
+struct Builder {
+    name: Vector<u8>;
+    part: Part;
+    spare: Part;
+    count: u32;
+
+    drop {
+        Console.writeLine("drop Builder");
+    }
+
+    // A builder that finishes into its parts (gap B9): `this` is consumed, its `drop` block does not run.
+    fn finish(this) -> Vector<u8> {
+        let Builder { name, part: _, spare: _, count: _ } = this;
+        return name;
+    }
+
+    fn intoPart(this) -> Part {
+        let Self { name: _, part, spare: _, count } = this;
+        Console.writeLine(count);
+        return part;
+    }
+}
+
+// The block releases what a Copy field names: taking the value apart hands the field out without closing it.
+struct Fd {
+    fd: i32;
+
+    drop {
+        Console.write("close ");
+        Console.writeLine(this.fd);
+    }
+
+    fn intoRaw(this) -> i32 {
+        let Fd { fd } = this;
+        return fd;
+    }
+}
+
+fn make(n: u32) -> Builder {
+    var name = Vector<u8>.create();
+    name.push(truncate<u8>(n))!;
+    return Builder { name: name, part: Part { id: n }, spare: Part { id: n + 100 }, count: n };
+}
+
+fn inMatch(b: Builder) -> u32 {
+    match (b) {
+        Builder { count: 1, name, part, spare } => {
+            Console.writeLine("one");
+            return part.id + spare.id + truncate<u32>(name.length);
+        }
+        // The nested pattern takes the part apart too: its block does not run either.
+        Builder { count: 2, name: _, part: Part { id }, spare: _ } => {
+            Console.writeLine("two");
+            return id;
+        }
+        _ => {
+            Console.writeLine("other");
+            return 0;
+        }
+    }
+}
+
+fn inIs(b: Builder) -> u32 {
+    if (b is Builder { count: 5, name: _, part: _, spare }) {
+        Console.writeLine("five");
+        return spare.id;
+    }
+    Console.writeLine("not five");
+    return b.count;
+}
+
+fn underSome(b: Builder?) -> u32 {
+    let Some(Builder { name, part: _, spare: _, count }) = b else {
+        return 0;
+    };
+    return count + truncate<u32>(name.length);
+}
+
+// A guard that fails has moved nothing: the next arm takes the value apart.
+fn guarded(b: Builder) -> u32 {
+    match (b) {
+        Builder { count, name, part: _, spare: _ } if (count > 6 && name.length == 1) => {
+            Console.writeLine("guard held");
+            return count;
+        }
+        Builder { count: _, name: _, part: _, spare } => {
+            Console.writeLine("guard failed");
+            return spare.id;
+        }
+    }
+}
+
+// Through a reference and with `..`, a pattern reads: the value is dropped later, its block running.
+fn peek(b: borrow Builder) -> u32 {
+    if (b is Builder { count: 1..=8, name, part, spare: _ }) {
+        return part.id + truncate<u32>(name.length);
+    }
+    return 0;
+}
+
+fn reads(b: Builder) -> u32 {
+    if (b is Builder { count, part: Part { id: 8, .. }, .. }) {
+        Console.writeLine("read");
+        return count;
+    }
+    return 0;
+}
+
+fn mutable(b: Builder) -> usize {
+    let Builder { var name, part: _, spare: _, count: _ } = b;
+    name.push(1)!;
+    return name.length;
+}
+
+fn main() {
+    let name = make(1).finish();
+    Console.writeLine(name.length);
+    let part = make(2).intoPart();
+    Console.writeLine(part.id);
+    Console.writeLine(Fd { fd: 9 }.intoRaw());
+    Console.writeLine(inMatch(make(1)));
+    Console.writeLine(inMatch(make(2)));
+    Console.writeLine(inMatch(make(3)));
+    Console.writeLine(inIs(make(5)));
+    Console.writeLine(inIs(make(4)));
+    Console.writeLine(underSome(make(6)));
+    Console.writeLine(underSome(null));
+    Console.writeLine(guarded(make(7)));
+    Console.writeLine(guarded(make(3)));
+    let kept = make(8);
+    Console.writeLine(peek(kept));
+    Console.writeLine(reads(kept));
+    Console.writeLine(mutable(make(9)));
+    // In a loop: each pass takes a new builder apart.
+    var total = 0u32;
+    for (k in 20..22u32) {
+        let Builder { name: _, part: _, spare: _, count } = make(k);
+        total += count;
+    }
+    Console.writeLine(total);
+    Console.writeLine("end");
+}
+// expect-stdout: drop Part 101
+// expect-stdout: drop Part 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: drop Part 102
+// expect-stdout: 2
+// expect-stdout: 9
+// expect-stdout: one
+// expect-stdout: drop Part 101
+// expect-stdout: drop Part 1
+// expect-stdout: 103
+// expect-stdout: two
+// expect-stdout: drop Part 102
+// expect-stdout: 2
+// expect-stdout: other
+// expect-stdout: drop Builder
+// expect-stdout: drop Part 3
+// expect-stdout: drop Part 103
+// expect-stdout: 0
+// expect-stdout: five
+// expect-stdout: drop Part 105
+// expect-stdout: drop Part 5
+// expect-stdout: 105
+// expect-stdout: not five
+// expect-stdout: drop Builder
+// expect-stdout: drop Part 4
+// expect-stdout: drop Part 104
+// expect-stdout: 4
+// expect-stdout: drop Part 106
+// expect-stdout: drop Part 6
+// expect-stdout: 7
+// expect-stdout: 0
+// expect-stdout: guard held
+// expect-stdout: drop Part 107
+// expect-stdout: drop Part 7
+// expect-stdout: 7
+// expect-stdout: guard failed
+// expect-stdout: drop Part 103
+// expect-stdout: drop Part 3
+// expect-stdout: 103
+// expect-stdout: 9
+// expect-stdout: read
+// expect-stdout: drop Builder
+// expect-stdout: drop Part 8
+// expect-stdout: drop Part 108
+// expect-stdout: 8
+// expect-stdout: drop Part 109
+// expect-stdout: drop Part 9
+// expect-stdout: 2
+// expect-stdout: drop Part 120
+// expect-stdout: drop Part 20
+// expect-stdout: drop Part 121
+// expect-stdout: drop Part 21
+// expect-stdout: 41
+// expect-stdout: end
+// expect-stdout: drop Part 2

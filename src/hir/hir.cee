@@ -149,6 +149,10 @@ enum HirPattern {
     /// `[a, .., z]` (ADR 0085 §2.7): the item patterns (the prefix, then the suffix), where `..` sits (the prefix's
     /// length) or none without one, the local `rest @ ..` binds or none.
     Slice(Range, u32, u32),
+    /// `P { x, y: 0, .. }` (ADR 0123): the struct type, a pattern for each of its fields in their declared order (`_`
+    /// for one the pattern does not name), and whether a match takes the value apart: every field moves out, into its
+    /// binding or a hidden local, and the struct's `drop` block does not run (ADR 0123 §2.6).
+    Struct(u32, Range, bool),
 }
 
 struct HirArmBinding {

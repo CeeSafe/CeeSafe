@@ -310,6 +310,7 @@ fn hasNested(c: borrow Checker, pattern: u32) -> bool {
         PatternNode.Binding(_, _) => { return true; }
         PatternNode.Slice(_) => { return true; }
         PatternNode.Rest(_) => { return true; }
+        PatternNode.Struct(_, _, _) => { return true; }
         PatternNode.Literal(literal) => { return isStringLiteral(c, literal); }
         PatternNode.Variant(path, hasBindings, bindings) => {
             if (!hasBindings && path.parts.count >= 2 && !namesVariantPath(c, path)) {
@@ -373,7 +374,8 @@ fn checkMatch(
     let scrutineeSpan = c.front.ast.exprSpans[scrutineeSyntax as usize];
     var ok = !c.types.isBottom(typ);
     // A `StringView`, a slice or an array (ADR 0085 §2.7): matched by string and slice patterns, on the nested path.
-    let isView = c.types.is(typ, TypeKind.Array);
+    // A struct (ADR 0123) too: matched by struct patterns.
+    let isView = c.types.is(typ, TypeKind.Array) || c.types.is(typ, TypeKind.Struct);
     if (ok && !isView && !c.types.is(
         typ,
         TypeKind.Enum,
@@ -429,6 +431,7 @@ fn checkMatch(
             PatternNode.Binding(_, _) => { patternFailed = true; }
             PatternNode.Slice(_) => { patternFailed = true; }
             PatternNode.Rest(_) => { patternFailed = true; }
+            PatternNode.Struct(_, _, _) => { patternFailed = true; }
             PatternNode.Wildcard => { wildcard = true; }
             PatternNode.Literal(literal) => {
                 if (ok) {
@@ -767,7 +770,26 @@ fn unreachableAlternatives(
 
 fn bindsNonCopy(c: borrow Checker, pattern: u32) -> bool {
     match (c.hir.patterns[pattern as usize]) {
-        HirPattern.Or(alternatives) => { return bindsNonCopy(c, c.hir.at(alternatives, 0)); }
+        HirPattern.Or(alternatives) => {
+            // Every alternative binds the same names; one may take a struct apart where another does not (ADR 0123).
+            for (k in 0..alternatives.count) {
+                if (bindsNonCopy(c, c.hir.at(alternatives, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        HirPattern.Struct(_, fields, apart) => {
+            if (apart) {
+                return true; // the value is consumed whatever its fields are (ADR 0123 §2.6)
+            }
+            for (k in 0..fields.count) {
+                if (bindsNonCopy(c, c.hir.at(fields, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
         HirPattern.Binding(local) => { return !c.types.isCopy(c.hir.locals[local as usize].typ); }
         HirPattern.At(local, inner) => {
             return !c.types.isCopy(c.hir.locals[local as usize].typ) || bindsNonCopy(c, inner);
@@ -937,6 +959,17 @@ fn checkPattern(
             // `name @ P` (ADR 0085 §2.5): binds the value P matched, as a payload binding would.
             let local = declarePatternBinding(c, name, false, typ, reference, alternatives)?;
             let tree = checkPattern(c, inner, typ, reference, failed, alternatives)?;
+            if (reference == none() && firstMovingBinding(c, tree) == none() && takesApart(c, tree)) {
+                let ident = c.front.ast.idents[name as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "'")?;
+                appendBytes(mut message, c.name(ident.symbol))?;
+                appendText(
+                    mut message,
+                    " @ …' moves the value that the struct pattern takes apart; bind the value or its fields, not both (ADR 0123 §2.6)",
+                )?;
+                c.error(atMovesTwice(), span.start, span.end, message)?;
+            }
             if (reference == none() && !c.types.isCopy(typ)) {
                 let moved = firstMovingBinding(c, tree);
                 if (moved != none()) {
@@ -966,6 +999,9 @@ fn checkPattern(
             return c.hir.addPattern(HirPattern.Variant(variantAt(c, typ, 0), false, emptyRange()));
         }
         PatternNode.Slice(items) => { return checkSlicePattern(c, items, typ, reference, span, failed, alternatives); }
+        PatternNode.Struct(path, fields, hasRest) => {
+            return checkStructPattern(c, path, fields, hasRest, typ, reference, span, failed, alternatives);
+        }
         PatternNode.Rest(_) => {
             // The parser makes `..` only as an item of a slice pattern, which checkSlicePattern reads.
             failed = true;
@@ -1468,8 +1504,274 @@ fn firstMovingBinding(c: borrow Checker, pattern: u32) -> u32 {
             return none();
         }
         HirPattern.Or(alternatives) => { return firstMovingBinding(c, c.hir.at(alternatives, 0)); }
+        HirPattern.Struct(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let found = firstMovingBinding(c, c.hir.at(fields, k));
+                if (found != none()) {
+                    return found;
+                }
+            }
+            return none();
+        }
         _ => { return none(); }
     }
+}
+
+/// Does a match of the pattern take a struct with a `drop` block apart (ADR 0123 §2.6), at any depth?
+fn takesApart(c: borrow Checker, pattern: u32) -> bool {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.At(_, inner) => { return takesApart(c, inner); }
+        HirPattern.Variant(_, listed, payload) => {
+            if (listed) {
+                for (k in 0..payload.count) {
+                    if (takesApart(c, c.hir.at(payload, k))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        HirPattern.Or(alternatives) => {
+            for (k in 0..alternatives.count) {
+                if (takesApart(c, c.hir.at(alternatives, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        HirPattern.Struct(_, fields, apart) => {
+            if (apart) {
+                return true;
+            }
+            for (k in 0..fields.count) {
+                if (takesApart(c, c.hir.at(fields, k))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        _ => { return false; }
+    }
+}
+
+/// Can the pattern not fail (ADR 0123 §2.4)? `_`, a binding, `name @ P` with such a P, and a struct pattern whose
+/// field patterns all are.
+fn isIrrefutable(c: borrow Checker, pattern: u32) -> bool {
+    match (c.hir.patterns[pattern as usize]) {
+        HirPattern.Wildcard => { return true; }
+        HirPattern.Binding(_) => { return true; }
+        HirPattern.At(_, inner) => { return isIrrefutable(c, inner); }
+        HirPattern.Struct(_, fields, _) => {
+            for (k in 0..fields.count) {
+                if (!isIrrefutable(c, c.hir.at(fields, k))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        _ => { return false; }
+    }
+}
+
+/// Does the pattern's name name the struct `typ` is: its own name, `Self`, or an item that is that struct
+/// (`geometry.Point`, which PackageNames joined into one name)?
+fn namesStruct(c: borrow Checker, path: QualifiedName, typ: u32) -> bool {
+    if (path.parts.count != 1) {
+        return false;
+    }
+    let symbol = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize].symbol;
+    if (symbol == c.selfSymbol) {
+        return environmentType(c, symbol) == typ;
+    }
+    let item = c.types.structs[c.types.info(typ).structDef as usize].item;
+    if (item == none()) {
+        return sameBytes(c.name(symbol), c.typeName(typ));
+    }
+    match (c.item(symbol)) {
+        Entity.Struct(index) => { return c.structs[index as usize].item == item; }
+        _ => {}
+    }
+    return c.front.ast.idents[c.front.ast.items[item as usize].name as usize].symbol == symbol;
+}
+
+/// N0252's number: a field moved out of a value whose type has a `drop` block.
+fn patternMovesOutOfDropType() -> u32 => 252;
+
+/// `P { x, var y, z: PATTERN, .. }` (ADR 0123) on a struct, or a reference to one: each field named at most once,
+/// alone (a binding of its name, or the constant of that name) or with a pattern for its value; every field named
+/// unless the pattern ends with `..`. A field the code could not read cannot be named (N0296, ADR 0109). A binding
+/// copies, moves the field out of a value (a partial move, ADR 0114), or refers to it through a reference. On a
+/// value of a struct with a `drop` block, a pattern without `..` in the file that declares the struct takes the
+/// value apart (§2.6); any other that would move a field out is N0252.
+fn checkStructPattern(
+    c: borrow mut Checker,
+    path: QualifiedName,
+    fields: Range,
+    hasRest: bool,
+    typ: u32,
+    reference: u32,
+    span: Span,
+    failed: borrow mut bool,
+    alternatives: borrow mut Alternatives,
+) -> Result<u32, AllocError> {
+    let definition = if (c.types.is(typ, TypeKind.Struct)) c.types.info(typ).structDef else none();
+    var usable = definition != none();
+    if (usable) {
+        let d = borrow c.types.structs[definition as usize];
+        usable = !d.isUnion && !d.isImported && !d.isClosureEnvironment;
+    }
+    if (!usable) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "a struct pattern needs a struct, but the value has type ")?;
+        appendQuotedType(mut message, c, shownType(c, typ, reference))?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize];
+    if (!namesStruct(c, path, typ)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "this pattern names another type than the value's, ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(typeMismatch(), path.start, path.end, message)?;
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
+    if (first.symbol != c.selfSymbol) {
+        let named = c.item(first.symbol);
+        checkPrivateItem(c, named, Span { start: first.start, end: first.end })?; // ADR 0109
+    }
+    let fieldCount = c.types.structs[definition as usize].fields.length;
+    var trees = Vector<u32>.create();
+    for (unused in 0..fieldCount) {
+        trees.push(none())?;
+    }
+    var ok = true;
+    for (k in 0..fields.count) {
+        let b = c.front.ast.bindings[c.front.ast.at(fields, k) as usize];
+        let ident = c.front.ast.idents[b.name as usize];
+        let at = Span { start: ident.start, end: ident.end };
+        let field = resolveField(c, typ, b.name)?; // N0230, N0296, and a configured field's condition
+        if (field == none()) {
+            ok = false;
+            continue;
+        }
+        var index: usize = 0;
+        while (c.types.structs[definition as usize].fields[index] != field) {
+            index += 1;
+        }
+        if (trees[index] != none()) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "field ")?;
+            appendQuotedName(mut message, c, ident.symbol)?;
+            appendText(mut message, " is named twice in this pattern")?;
+            c.error(duplicateFieldInit(), at.start, at.end, message)?;
+            ok = false;
+            continue;
+        }
+        let t = c.types.fields[field as usize].typ;
+        if (b.nested != none()) {
+            let plain = match (c.front.ast.patterns[b.nested as usize]) {
+                PatternNode.Wildcard => true,
+                PatternNode.Binding(_, _) => true,
+                _ => false,
+            };
+            if (!plain && c.types.is(t, TypeKind.Reference) && !viewPattern(c, b.nested, t)) {
+                let nestedSpan = c.front.ast.patternSpans[b.nested as usize];
+                var message = Vector<u8>.create();
+                appendText(mut message, "this field is a reference (")?;
+                appendQuotedType(mut message, c, t)?;
+                appendText(mut message, "): bind it and match on it separately (type-system.md §15.2)")?;
+                c.error(typeMismatch(), nestedSpan.start, nestedSpan.end, message)?;
+                ok = false;
+                trees[index] = c.hir.addPattern(HirPattern.Wildcard)?;
+                continue;
+            }
+            trees[index] = checkPattern(c, b.nested, t, reference, failed, alternatives)?;
+        } else if (!b.mutable && constantNamed(c, b.name) != none()) {
+            // A field written alone is `f: f`: a constant of that name in scope is that constant (ADR 0085 §2.6).
+            let constant = constantNamed(c, b.name);
+            trees[index] = constantPattern(c, constant, t, at, failed)?;
+        } else {
+            let local = declarePatternBinding(c, b.name, b.mutable, t, reference, alternatives)?;
+            trees[index] = c.hir.addPattern(HirPattern.Binding(local))?;
+        }
+    }
+    if (!hasRest && ok) {
+        var missing = Vector<u8>.create();
+        for (i in 0..fieldCount) {
+            if (trees[i] == none()) {
+                if (missing.length > 0) {
+                    appendText(mut missing, ", ")?;
+                }
+                let field = c.types.structs[definition as usize].fields[i];
+                appendQuotedName(mut missing, c, c.types.fields[field as usize].name)?;
+            }
+        }
+        if (missing.length > 0) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this pattern does not name ")?;
+            appendBytes(mut message, missing.view())?;
+            appendText(mut message, " of ")?;
+            appendQuotedType(mut message, c, typ)?;
+            appendText(mut message, ": name every field, or end the pattern with '..' (ADR 0123)")?;
+            c.error(missingField(), span.start, span.end, message)?;
+            ok = false;
+        }
+    }
+    for (i in 0..fieldCount) {
+        if (trees[i] == none()) {
+            trees[i] = c.hir.addPattern(HirPattern.Wildcard)?;
+        }
+    }
+    if (!ok) {
+        failed = true;
+    }
+    var apart = false;
+    if (reference == none() && hasDropFunction(c, typ)) {
+        // ADR 0123 §2.6: explicit and total, and only where the struct is declared.
+        apart = ok && !hasRest && c.types.structs[definition as usize].file == c.file;
+        if (!apart) {
+            var moved = none();
+            for (i in 0..fieldCount) {
+                if (moved == none()) {
+                    moved = firstMovingBinding(c, trees[i]);
+                }
+            }
+            var nestedApart = false;
+            for (i in 0..fieldCount) {
+                if (takesApart(c, trees[i])) {
+                    nestedApart = true;
+                }
+            }
+            if (moved == none() && nestedApart) {
+                var message = Vector<u8>.create();
+                appendText(mut message, "a field's pattern here takes its value apart, out of a value of ")?;
+                appendQuotedType(mut message, c, typ)?;
+                appendText(
+                    mut message,
+                    ", which has a drop block: a pattern that names every field of a struct with a drop block consumes it; end the field's pattern with '..' to only read it, or name every field of this struct too, in the file that declares it (ADR 0123 §2.6)",
+                )?;
+                c.error(patternMovesOutOfDropType(), span.start, span.end, message)?;
+                failed = true;
+            }
+            if (moved != none()) {
+                var message = Vector<u8>.create();
+                appendText(mut message, "cannot move ")?;
+                appendQuotedName(mut message, c, c.hir.locals[moved as usize].name)?;
+                appendText(mut message, " out of a value of ")?;
+                appendQuotedType(mut message, c, typ)?;
+                appendText(
+                    mut message,
+                    ", which has a drop block: only a pattern that names every field, without '..', in the file that declares the struct takes such a value apart (ADR 0123 §2.6); match on a reference to bind without moving",
+                )?;
+                c.error(patternMovesOutOfDropType(), span.start, span.end, message)?;
+                failed = true;
+            }
+        }
+    }
+    let list = c.hir.list(trees.view())?;
+    return c.hir.addPattern(HirPattern.Struct(typ, list, apart));
 }
 
 /// `lo..=hi` or `lo..hi` on an integer (ADR 0085 §2.4): both bounds typed by the value, as literals are (§4); as

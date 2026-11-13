@@ -245,6 +245,15 @@ fn bracePattern(c: borrow Checker, scope: borrow mut BraceScope, p: u32) -> Resu
                 bracePattern(c, scope, b.nested)?;
             }
         }
+        PatternNode.Struct(_, fields, _) => {
+            for (k in 0..fields.count) {
+                let b = c.front.ast.bindings[c.front.ast.at(fields, k) as usize];
+                if (b.nested == none()) {
+                    scope.names.push(c.front.ast.idents[b.name as usize].symbol)?;
+                }
+                bracePattern(c, scope, b.nested)?;
+            }
+        }
         PatternNode.Or(alternatives) => {
             for (k in 0..alternatives.count) {
                 bracePattern(c, scope, c.front.ast.at(alternatives, k))?;

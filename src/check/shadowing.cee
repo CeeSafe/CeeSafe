@@ -182,6 +182,16 @@ fn shadowPattern(
                 shadowPattern(front, dependencies, scope, b.nested)?;
             }
         }
+        PatternNode.Struct(_, fields, _) => {
+            // ADR 0123: a field written alone binds its name; with a pattern, the name is the field's only.
+            for (k in 0..fields.count) {
+                let b = front.ast.bindings[front.ast.at(fields, k) as usize];
+                if (b.nested == none()) {
+                    shadowBind(front, dependencies, scope, b.name)?;
+                }
+                shadowPattern(front, dependencies, scope, b.nested)?;
+            }
+        }
         PatternNode.Or(alternatives) => {
             for (k in 0..alternatives.count) {
                 shadowPattern(front, dependencies, scope, front.ast.at(alternatives, k))?;

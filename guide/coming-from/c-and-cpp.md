@@ -18,9 +18,10 @@ it wrongly. What it removes is undefined behaviour.
 | destructors, RAII | `drop { … }` blocks; destruction at scope end | moves leave nothing behind to destroy twice |
 | `std::move(x)` | assignment moves by default; `move x` to end a use early | using a moved value is a compile error |
 | exceptions, `errno`, return codes | `Result<T, E>` and `?` | |
-| `assert`, `abort` | panics: bounds, overflow, unwrap | always on |
+| `assert`, `abort` | `assert(cond)`, `panic(message)`; the built-in checks panic too: bounds, overflow, unwrap | always on; `debugAssert` is the one that release builds leave out |
 | templates | generics with interface bounds | checked once, before use; no SFINAE |
-| `#include`, the preprocessor | packages and `import` | no macros, no conditional compilation |
+| `#include`, the preprocessor | packages and `import` | no macros |
+| `#if CONFIG_DEBUG` … `#else` … `#endif` | `if (cfg("CONFIG_DEBUG")) { … } else { … }` | both branches are checked; the C compiler keeps one. See [Unsafe code and C](../unsafe-and-c.md) |
 | `struct` layout | the same as C's, in declaration order | `@repr(C)` to cross the boundary |
 | `volatile` | `Volatile<T>`, `p.readVolatile()` | |
 | `-fsanitize=address,undefined` | needed only for `unsafe` code; `ceesafec run --interp` checks it | |
@@ -94,6 +95,7 @@ See [Unsafe code and C](../unsafe-and-c.md) and [Kernel code](../kernel.md).
 
 ## Things you will miss
 
-The preprocessor, inline assembly, unions (enums with payloads replace tagged unions), bit fields, pointer
-arithmetic in safe code, varargs, goto, and in C++, classes with inheritance and virtual functions, operator
-overloading, overloads, exceptions, and `constexpr` evaluation.
+Macros, inline assembly, unions of your own (enums with payloads replace tagged unions; a C union is imported from
+its header), bit fields, pointer arithmetic in safe code, varargs functions of your own (C's can be called), goto,
+and in C++, classes with inheritance (an interface and `dyn` give virtual calls), operator overloading, overloads,
+exceptions, and `constexpr` evaluation.

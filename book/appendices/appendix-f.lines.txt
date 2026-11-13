@@ -1,0 +1,159 @@
+N0001	A character that starts no token, such as `#`, or a letter that is not ASCII outside a literal or a comment. Remove it, or put the text in a string literal.
+N0003	A block comment opened with `/*` is never closed. Add the `*/`.
+N0004	An integer literal does not fit in 64 bits. Write a smaller number.
+N0005	A string literal has no closing `"` before the end of its line or of the file. Close it, or use a raw `"""` literal for text of several lines.
+N0006	A literal has an escape that does not exist (`"\q"`), a `\u{...}` that is not a Unicode scalar value, or a NUL byte in a `c"…"` literal. Use an escape the language has.
+N0007	A character literal is empty, holds more than one character, or is not closed. Write one character between the `'` marks, and use a string literal for text.
+N0008	A number literal has a digit its radix does not have (`0b102`), or a radix prefix with no digits (`0x`). Correct the digits.
+N0009	A number literal ends in a suffix that is not a type it can have (`12abc`, `1f32`). Use an integer type's name on an integer literal, and a float type's on a float literal, `1.0f32`.
+N0010	A digit separator `_` is not between two digits (`1__0`, `0x_FF`, `1_.5`). Put each `_` between two digits.
+N0011	A raw `"""` string literal is laid out wrongly - text follows the opening `"""` on its line, or a line of the text is indented less than the closing `"""`. Start the text on the next line, and indent it at least as far as the closing `"""`.
+N0100	The parser needed one particular token and found another, most often a missing `;`, `(` or `}`. The message names the token it expected. A `fn` in an enum's body gives this too, since an enum's functions go in an `impl` block.
+N0101	Something that is not an item stands at the top level of a file, such as a `let` or another statement. Move it into a function, or declare a `const`.
+N0102	An expression is missing where one is needed (`let a = ;`). Write the value.
+N0103	Comparison operators are chained (`a < b < c`). Write two comparisons joined by `&&`.
+N0104	The left side of an assignment cannot be assigned (`1 = 2;`, `f() = 3;`). Assign to a variable, a field or an element.
+N0105	A type is missing where one is needed (`fn f(x: ) {}`), or `Self` is written outside an interface, an `impl` and a struct's or enum's body. Write the type's name.
+N0106	A `namespace` declaration is not the first thing in its file. Move it to the top.
+N0107	A struct's body holds something that is not a field or a `fn` (`struct A { 42; }`), or an imported C union has no member. Write each field as `name: Type;`.
+N0108	A `match` arm starts with something that is not a pattern (`+ => …`). Write `_`, a literal, a range, a name, `name @ P`, `[…]` or a variant such as `E.V(…)`.
+N0109	An `import` declaration comes after an item. Move every `import` above the first item of the file.
+N0110	The source is nested more than 1,000 levels deep (blocks, parentheses, or one chain of operators or calls), and the rest of the file is not parsed. Split the expression or the function.
+N0200	A name that nothing declares - a variable, a function, or a member of a built-in type (`Console.print`). Check the spelling - the message suggests names that exist.
+N0201	Two items of the package have one name, two C declarations have one C name, or an item takes a reserved built-in name such as `Result` or `Box`. Rename one.
+N0202	Two parameters of a function have one name. Rename one.
+N0203	A `let` or `var` declares a name that a local or parameter in scope already has. CeeSafe has no shadowing of locals, so choose another name, or assign to the existing `var`.
+N0204	A type name that nothing declares (`int`), or a generic type without its type arguments or with the wrong number of them. Use the real name (`i32`), or import the package that declares it.
+N0205	A value has another type than its place needs (`let a: bool = 1;`, `if (n)` with a number). CeeSafe converts nothing silently, so convert the value yourself, or change the declared type.
+N0206	An integer literal does not fit its type (`256u8`, `let c: i8 = 128;`). Use a wider type or a smaller value.
+N0207	An operator is used on types it does not take - two different integer types (`u8` and `i32`), a bitwise operator on a signed integer, `-` on an unsigned one, or `==` on a struct or an enum with payloads. Convert one operand so that both have one type, or give the type its `==` with `@derive(Equal)`.
+N0208	An `as` conversion could lose information (`a as u32` with `a: i32`). Use `truncate<T>(x)` to wrap, or `checkedTruncate` or `saturatingTruncate` to check or clamp.
+N0209	A call has the wrong number of arguments, or `Ok` or `Err` the wrong number of values. Give exactly what the declaration takes.
+N0210	Something that is not a function is called (`local()`), or a function or built-in is used as a value where it cannot be. Call only functions and closures.
+N0211	An assignment to something that cannot change - a `let` local, a parameter, a constant, or an element of a `let` array. Declare the variable with `var`.
+N0212	A local is read before every path has given it a value (`var x: i32; return x;`). Give it a value at its declaration, or on each path before the read.
+N0213	A function that returns a value can reach its end without a `return`, or the `else` block of a `let … else` can finish without leaving. End every path with `return`, and make the `else` block leave.
+N0214	`break` or `continue` is outside a loop. Remove it, or move it into the loop.
+N0215	A `return` does not agree with the function's return type - a value in a `void` function, no value in a function that returns one, or any `return` in a `never` function. Change the `return` or the return type.
+N0216	A construct the compiler does not support where it is written, such as a constant of a raw pointer type, or region parameters on an interface's method. The message says which. The code also reports an internal fault of `ceesafec`.
+N0217	A constant's value, or arithmetic on literals anywhere, is not a constant expression or would panic when evaluated (`const C: u8 = 200 + 100;`). Use a value that fits the type, or compute it at run time.
+N0218	A constant's value depends on the constant itself (`const A: i32 = A + 1;`). Break the cycle.
+N0219	`main` has a signature it cannot have - parameters, type parameters, `async` or `unsafe`. Write `fn main()` or `fn main() -> i32`.
+N0220	A `let` has no initialiser (`let a: i32;`). Give it its value, or declare it with `var` and a type and assign it later.
+N0221	A `var` has neither a type nor an initialiser (`var c;`). Write one of them.
+N0222	A generic function or type does not check for the type arguments it is used with, and no other error says why. Use type arguments that the generic's body can work with.
+N0224	A call that returns `void` is used as a value (`let d = nothing();`), or a `let` takes an expression of type `never`. Write the call as a statement.
+N0225	An expression that is not a call is used as a statement (`1 + 2;`), so its value is lost. Use the value, or remove the statement.
+N0226	`void` is used other than as a return type (`var e: void;`), or `never` other than as a function's return type. Use them only there.
+N0227	A struct holds itself by value, directly or through other structs, so its size would have no end. Put the inner value in a `Box`. An interface that is its own supertrait gives this too.
+N0228	Two members of one type have one name - two fields, a field and a method, an associated constant and another member, or a function of an enum and a variant. Rename one.
+N0229	A struct literal leaves out a field (`Point { x: 1 }`). Give every field a value.
+N0230	A field the struct does not have, in a literal or an access (`p.z`), or a method named where a field is needed. Check the name - the message suggests members that exist.
+N0231	A struct literal gives one field twice. Remove one.
+N0232	`this` is used in a function that is not a method, or a `this` parameter is declared outside a type. Use `this` only in methods.
+N0233	A method is called on the type (`Point.sum()`), or a static function on a value (`p.origin()`). Call a method on a value, and a static function on the type's name.
+N0234	A field, a method or a struct literal is used on a type that has none - a number, a type parameter no bound of which declares the method, or an optional, which has only `isSome` and `isNull`. Take the value out of the optional first, or add the bound.
+N0235	A block that is a branch of an `if` or `match` expression ends with a statement, so it has no value. End the block with its value, without `;`.
+N0236	A closure's type cannot be inferred - a parameter has no type, or a block body returns a value, where no function or closure type is expected (`let f = (x) => x + 1;`). Write the parameters' types.
+N0240	A place is assigned, or moved, while a borrow of it is used later. Finish with the borrow first, or copy the value you need out of it.
+N0241	A borrow conflicts with a borrow that is still in use - two `borrow mut` of one place, or a `borrow mut` while a shared borrow lives. Finish with the first borrow before you take the second.
+N0242	A place is read while a `borrow mut` of it is still in use. Read through the borrow, or after its last use.
+N0243	A value goes out of scope, or a temporary ends with its statement, while a borrow of it is used later. Bind the value to a local that lives long enough.
+N0244	A function returns a borrow of one of its own locals or of a temporary, which ends when the function returns. Return the value itself, or borrow from a parameter.
+N0245	A function that returns a borrow does not say rightly which parameters the result borrows from - the `borrow(...)` list is missing where there are several candidates, or leaves out a parameter the result comes from. Name the sources in the return type, `-> borrow(a, b) T`.
+N0246	A borrow is in a place that cannot hold one - a struct field, a constant, a `var` local, or a borrow of a borrow. Own the value in that place, or keep the borrow in a `let` local.
+N0247	`borrow` is applied to something that is not a place, such as a literal or a call's result (`borrow 5`, `take(mut five())`). Bind the value to a local first.
+N0248	`borrow mut`, or a method that takes `borrow mut this`, is used on something that cannot change - a `let` local, a parameter or a shared borrow. Declare the local with `var`.
+N0249	An argument lacks `mut` where the parameter is `borrow mut`, or has `mut` where the parameter is not. Write `f(mut x)` for a `borrow mut` parameter, and only there.
+N0250	A value is used after it was moved, on at least one path, or a struct is read as a whole after one of its fields was moved. A note says where the move was. Pass a borrow in place of the move, or do not use the value again.
+N0251	A value that is not Copy is moved out of something reached through a borrow (`let a = r.a;` with `r` a borrow). Borrow the part in place of moving it.
+N0252	A field is moved out of a value whose type has a `drop` block, which needs the whole value when it runs. Borrow the field.
+N0253	A `using` binding is moved. It is destroyed at the end of its block, so borrow it.
+N0254	`return`, `break`, `continue`, `defer` or `?` is inside a deferred statement. A deferred statement runs to its end, so handle an error inside it.
+N0256	A `match` does not cover every value of what it matches. Add the missing variants or a `_` arm. An arm with a guard does not count.
+N0257	A `match` arm can never run - its pattern repeats an earlier one, or it comes after `_`. Remove it, or move it up.
+N0259	An array that cannot exist - a length that is not a constant of at least 1, an element type that is not Copy (`[Res; 2]`), more than 2^31 − 1 bytes, or `[]` where no slice is expected. Also `fill`, `copyFrom`, `extend` or `resize` with elements that are not Copy. Use a `Vector` for such elements, and for a length known only at run time.
+N0260	`Ok(…)`, `Err(…)` or `null` stands where nothing fixes its type (`let a = Ok(1);`, `let n = null;`), or where another type is expected. Give the variable a type.
+N0261	`?` is in a function that cannot return what `?` would pass on - the function does not return a `Result` with the same error type, or an error enum with an `@from` variant for it, or `?` is on an optional and the function does not return an optional. Change the return type, convert the error, or handle it with `match`.
+N0262	`?` or `!` is on a value that is not a `Result` or an optional, or the left side of `??` is not an optional. Remove the operator. An `@from` variant without exactly one payload gives this too.
+N0263	An allocator argument is not an allocator type (`Box<i32, Point>`). Use `SystemHeap`, `FailingAllocator`, or a struct without fields that implements `Allocator`.
+N0264	A value that an arena or a scratch frame cannot hold - one that needs a drop, or a scoped value such as a borrow. Allocate only plain data there.
+N0265	The type arguments of a generic call, a struct literal or an enum value cannot be worked out from its arguments (`let d = Maybe.Nothing;`, `let e = make();`). Write them, `make<i32>()` - the type the call's result goes to is not used.
+N0266	Generic instantiation is nested more than 64 deep, as when a generic function calls itself with a larger type each time. Remove the recursion in the types.
+N0267	An `impl` does not match its interface, or cannot exist - a method is missing, extra, or differs in its receiver, a parameter or the return type, the `impl` is repeated or overlaps another, or it is outside the package of both its interface and its type. Make each method agree with the interface's declaration.
+N0268	A type argument does not meet a bound of its type parameter - it does not implement the interface, or is not `Copy`. Implement the interface for the type, or use a type that has it.
+N0270	A struct or enum has a field or payload of a scoped type, such as `StringView` or a borrow, and no region parameter. Declare one, `struct S<region r>`, or hold an owned value such as a `String`.
+N0272	A function stores a value that holds a borrow through a `borrow mut` parameter, and its signature does not say the borrow may go there (`v.push(s)` with `v: borrow mut Vector<StringView>`), or it stores one in a `static mut`. The signature must say that the parameter may hold what the stored value borrows from.
+N0273	A region name that nothing declares, region arguments on a type without region parameters or the wrong number of them, or `static` in a parameter's type. Declare the region, `<region r>`, and use it.
+N0274	A scoped type such as `StringView` is the type argument of a generic that needs an unscoped one, because it boxes the value or makes an array of it. Pass an owned type.
+N0280	An unsafe operation outside an unsafe context - a read or write through a raw pointer, a call of an `unsafe fn` or of a C function, a `fromRaw` function, or a use of a `static mut`. Put it in an `unsafe { … }` block, in a function whose doc comment has a `Safety:` line.
+N0281	A raw pointer to a type it cannot point to - a borrow, a slice, a `StringView` or another scoped type, or `never`. Point to the value itself.
+N0282	An operation the raw pointer does not allow - a write through a `*T` (it needs a `*mut T`), a read or write of a type that is not Copy, or any access through `*void`. Use a pointer of the right type.
+N0283	An `unsafe fn`, or a function that contains `unsafe`, has no doc comment with a `Safety:` line. Add `/// Safety: …` above it, saying why the code is sound.
+N0290	An attribute that does not exist, is in the wrong place, is repeated or has wrong arguments (`@inline fn f() {}`), a `@derive` of anything but `Equal`, `HashKey` and `OrderKey`, an ABI other than `"C"`, or an extern declaration with a body. Use the attribute as its section shows it.
+N0291	A type that cannot cross to C is in an extern declaration, an `@export` function or a `@repr(C)` struct, such as a slice or a `Box`. Pass a raw pointer and a length, or a `@repr(C)` struct.
+N0292	A C name that C does not allow or that CeeSafe keeps for itself - not an identifier, a C keyword, or one that starts with `ceesafe_`, `cee_` or `CEE_`. Choose another name.
+N0293	Under `--profile freestanding`, the code names something that needs an operating system (`Console`, `Process`, `File`, the heap and the collections that use it), or declares `main`. Use the parts of the library the profile has, or build for the hosted profile.
+N0294	An imported C type whose size CeeSafe does not know is used by value - as a parameter, a result, a field or an element - or is read, written or stepped over through a pointer. Use it only through a raw pointer.
+N0295	An operation has an effect (`sleep`, `alloc`, `suspend`) its context forbids - a blocking call in an async function, a call beyond a function's `@effects` list, or one in `@context(atomic)` or `@context(irq)` code. In async code use the async form, such as `AsyncConsole`, and elsewhere move the operation out.
+N0296	A `private` field or item is named outside the source file that declares it. Use it only in its own file, or remove `private`.
+N0297	A float type, a float literal or `fromBits` is in a build with `--no-float`. Use integers.
+N0298	A function that cannot be a value is used as one - an `extern` or `unsafe` function, one with region parameters, `main`, or an async function. Pass a closure that calls it.
+N0299	A closure of the wrong kind for the type expected - one that captures where a plain `fn` is expected, one that changes what it captures where a `borrow fn` is expected, or one with effects the expected type does not list. Change the parameter's type to the kind of closure you pass.
+N0300	`ceesafec build` is to make an executable, and the program has no `main` function. Add `fn main()`, or make the package a library.
+N0310	An `import`, or a struct literal `p.T { … }`, names a package that is not a dependency of this one. Add it under `[dependencies]` in `ceesafe.toml`, or correct the name.
+N0311	A dependency has no item of that name (`geometry.Pointt`). Check the spelling.
+N0312	An item of another package, or a field or method of one of its structs, exists and is not `public`. Mark it `public` in its package, or use what is public.
+N0313	A name written without its package is provided by two imports. Write `package.Name`.
+N0314	A `public` item's signature names a type that other packages cannot see. Make that type `public` too.
+N0315	An item or a type parameter has the name of one of the package's dependencies. Rename it.
+N0320	`ceesafe.toml` or `ceesafe.lock` is not valid in the subset of TOML that CeeSafe reads, for example a string without quotes. Correct the line the message names.
+N0321	A field of the manifest is missing, unknown or has a value it cannot have (`kind = "binary"`), or a dependency is an executable. `kind` is `"executable"` or `"library"`.
+N0322	A path dependency's directory or its `ceesafe.toml` is missing, or the package there has another name than the key. Correct the path or the key.
+N0323	A git dependency cannot be fetched or resolved, or is not in the cache when `--offline` is given. Check the address and the tag, and run `ceesafec fetch` with a network.
+N0324	`ceesafe.lock` is missing, or does not match the manifest. Run `ceesafec fetch`.
+N0325	A fetched dependency's manifest and sources do not match the hash in `ceesafe.lock`, as when a file in the cache was edited. Put the files back as they were fetched.
+N0326	One package name is reached through two different sources. Make every package that depends on it name the same source.
+N0327	Packages depend on each other in a cycle. Remove one of the dependencies.
+N0328	A version, a version requirement or an index entry is not valid (`shapes = "1.x"`). Write a version as `1.4.0`, and a requirement such as `^1.0`.
+N0329	No version of a dependency satisfies every requirement on it. The message lists the requirements that conflict and where each comes from, so loosen one.
+N0335	`ceesafec publish` refuses the package as it is, for example with a path dependency or with changes that are not committed. The message says what to change.
+N0330	`dyn I` is used as a value's own type - a local, a parameter, a field, an element or a type argument. Put it behind a borrow or in a box, `borrow dyn I` or `Box<dyn I>`.
+N0331	`dyn I` for an interface that cannot be used so - a method takes `this` by value, has no receiver, has type parameters or names `Self`, or the interface has an associated type or a constant, or requires `Copy`. Use a generic with a bound.
+N0332	A `move` closure captures a scoped value - a borrow, a view, a slice or a closure - which it could outlive. Capture an owned value, such as a `String` in place of a `StringView`.
+N0333	A `move` closure literal stands where no owning closure is expected (`let f = move (x: u64) => x;`). Write it directly as the argument of `Box.create` where a `Box<dyn fn…>` is expected.
+N0334	A value that is not `Send` must cross to another thread - a capture or the result of a spawned closure, or the argument of a `Send` bound - such as a `StringView` or a borrow. Move an owned value, or share one with `Arc`.
+N0336	`@effectsOf` names no parameter, or a parameter that is not of a function or closure type. Name a parameter that is a closure.
+N0337	A `static` that cannot be one - its type is not `Share`, or it is generic, or it is declared inside a function. Use a `Share` type, such as an atomic or a `Mutex`, at the top level.
+N0338	A `static`'s initialiser, or the body of a `@constant` function, is not something the compiler can evaluate before the program runs (`static N: u64 = compute();`). Use literals, constants and struct literals.
+N0339	`offsetOf<T>(field)` where `T` is not a struct, or has no field of that name. Name a struct and one of its fields.
+N0340	`callerAddress()` is outside the body of an `@export` function, or in a closure inside one. Call it only in the exported function itself.
+N0341	`await` is outside an async function or async closure, or in a `drop` block or a deferred statement. Make the function an `async fn`, or run the task from ordinary code with `Async.run`.
+N0342	A task is made and not used - an async function is called without `await` (`let t = fetch(url);`), or `await` is given something that is not a task. Write `await f()`, or hand the call to `Async.run` or to a scope's `spawn`.
+N0343	An async function awaits itself, directly or through other calls, where its frame cannot hold itself - in the freestanding profile, or through a `race` or `all` child. Write the recursion as a loop.
+N0344	A child of an `Async.scope` captures a local of the scope's own body, which ends before the child does. Declare the local outside the scope, or make the child `async move` so that it takes the value.
+N0345	`Async.park()` or `Async.waker()` is in a program. They are for the library only.
+N0346	A member of an imported C union has a type some bit patterns of which are not values, such as `bool`. Use integers, raw pointers, or arrays of them.
+N0347	An argument that goes through the `...` of a C variadic function has a type C would change or cannot take, such as `u8`, `bool` or `f32`. Convert it to `i32`, `u32`, `i64`, `u64`, `isize`, `usize`, `f64` or a raw pointer.
+N0348	A `@test` function of the wrong shape - a method, with parameters, generic, exported, or returning anything but `void` or `Result<void, E>` - or a test called from the program's own code. Write `@test fn name()`.
+N0349	A child spawned into a task set captures a value that holds a borrow - a borrow, a slice, a `StringView` - and may outlive the code that started it. Give the child owned values.
+N0350	Something declared `@cfg("X")` - a C function, an imported field or an export - is used outside an `if (cfg("X")) { … }` block. Put the use inside one.
+N0351	A `Cell`, `RefCell` or `RawCell` holds a type that holds borrows (`RefCell<StringView>`), so its contents could outlive what they borrow. Put an owned type in the cell.
+N0352	A const parameter has a type it cannot have (`fn f<const X: f64>()`). Use `bool`, an integer type or an enum without payloads.
+N0353	A const argument or an array length is not a constant - a local, a parameter, a call, or an expression over a const parameter (`[u8; N + 1]`). Use a literal, a constant, or the const parameter alone.
+N0354	A generic argument of the wrong kind - a type where a const parameter needs a value (`Grouped<u32>`), or a value where a type is needed (`Vector<true>`). Give each parameter its kind.
+N0355	A `match` guard moves, assigns or mutably borrows the matched value or one of the arm's bindings, or awaits. A guard only reads, so do that work in the arm's body.
+N0356	The alternatives of an or-pattern bind different names, or one name with different types, as `Some(x)` and `null` in one arm do. Make every alternative bind the same names, or write separate arms.
+N0357	A range pattern matches nothing - `lo..=hi` with `lo` above `hi`, or `lo..hi` with `lo` not below `hi`. Put the bounds in order.
+N0358	A pattern names a constant that cannot be a pattern - anything but an integer or a `bool`, such as an `f64` - or a range pattern's bound is a name that is not a constant's. Bind the value and compare it in a guard, `x if (x == HALF) =>`.
+N0359	An `e is P` test binds names where the test is not known to be true - under `!` or a logical or, or as a whole `let` initialiser or argument. Make it a condition of an `if` or `while`, or use `match` or `let … else`.
+N0360	A `debugAssert` whose condition or message does more than read - it assigns, moves, does I/O, calls C, or exits - which a release build, where the assertion is left out, would not do. Compute the value in a statement before, and assert on that.
+N0361	A file given to `embedText` is not UTF-8. Use `embed`, which gives the bytes.
+N0362	A path given to `embed` or `embedText` cannot be embedded - it is not a string literal or a constant, is absolute, names no file, names a file over 16 MiB, or leads outside the package's directory and its `[embed] roots`. Use a relative path inside the package.
+N0363	Two source files of a `build --split` have paths that differ only in the case of their letters, which the file systems of macOS and Windows take as one file. Rename one.
+N0364	A dependency, or a package it depends on, has errors. `check` reports it once, at the line of `ceesafe.toml` that leads to it - `ceesafec check --package NAME` shows that package's own diagnostics.
+N0400	A string literal has `{name}`, and `name` is a variable in scope. CeeSafe has no string interpolation, so the braces are printed as written. Write the value in a call of its own, or `\{` where you mean a brace.
+N0401	`name.x` where `name` is a local with the name of a dependency that has a public item `x`. The local hides the dependency there, so rename the local if you mean the package's item.
+N0402	A call whose value is a `Result` is used as a statement, so an error it reports is lost (`v.push(1);`). Handle it with `?`, `!` or `match`, or discard it with `let _ = …;`. The same code warns of a `RefCell` guard that is still live at an `await`.
+N0403	A `move` closure changes a captured variable of a Copy type, and the function reads the variable after the closure. The closure changed its own copy, so the read sees the old value. Share the value, with an atomic for example, or return it from the closure.
+N0404	A pattern after `is` or in a `let … else` is `_` or a plain name, which matches every value, so the test is always true and the `else` block never runs. Write a pattern that can fail, such as `Some(n)`, or a plain `let`.

@@ -1,8 +1,7 @@
-# Type System and Static Semantics — M1 subset
+# Type System and Static Semantics
 
-Status: normative for Milestone 1 (increment 1b implements it). Later milestones extend these
-rules. Where `language-spec.md` describes a later feature, it does not apply until then. Error
-codes are listed in `diagnostics.md`.
+Status: normative. It began as the rules of Milestone 1, and each later milestone and ADR extended them: a
+section's heading or text names the milestone or ADR that added it. Error codes are listed in `diagnostics.md`.
 
 ## 1. Types
 
@@ -737,11 +736,11 @@ PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | '(' Pattern ')'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
           | Bound '..=' Bound | Bound '..' Bound                  -- ranges: ADR 0085 §2.4
-Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
           | StructPattern                                          -- structs: ADR 0123
+Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
 SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
 StructPattern = QualifiedName '{' (FieldPattern ',')* (FieldPattern | '..' ','?)? '}'   -- '..': the fields not named
 FieldPattern  = Identifier ':' Pattern | 'var'? Identifier         -- `x` is `x: x`, `var x` is `x: var x`
@@ -3169,7 +3168,9 @@ An item may be preceded by attributes `@name` or `@name(arguments)` (grammar §2
 | `@callback` | a top-level function | a C address without a symbol, for C callbacks (§34.1) |
 | `@align(n)` | a non-generic struct | at least `n`-byte alignment (M8d, §29.4) |
 | `@noncopy` | a struct | a move type even if every field is Copy (OD-7; M8d) |
-| `@cfg("NAME")` | an `@export` function | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043), §28.4 |
+| `@threadSafe` | a struct of the libraries, or of a package whose `ceesafe.toml` says `trusted = true` (ADR 0025) | the type is `Send` and `Share` by declaration (§38.3); N0290 in any other package |
+| `@interiorMutable` | lib/core's `RawCell` | its contents change through a shared loan (§41.1; ADR 0084 §2.1); N0290 anywhere else |
+| `@cfg("NAME")`, `@cfg("!NAME")` | an `@export` function; an `extern "C"` function, or a field of an imported struct or union (ADR 0080) | its C symbol only in builds where the C macro `NAME` is non-zero (ADR 0043); a C function or member that only those builds have, used only inside `if (cfg("NAME"))` (N0350), §28.4 |
 | `@test` | a top-level function with no parameters, not generic, not exported, returning `void` or `Result<void, E>` | a test that `ceesafec test` runs (ADR 0049; tooling.md §10); `build` leaves it out, and only the generated harness may call it (**N0348** otherwise) |
 | `@derive(Equal, HashKey, OrderKey)` | a struct or enum | one or more of these, each once: `==` and `!=`, a `HashKey` impl, an `OrderKey` impl (ADR 0087 §2.3, §28.7) |
 

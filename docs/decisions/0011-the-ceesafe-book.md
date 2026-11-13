@@ -11,7 +11,9 @@
   55 packages under `book/projects/`, at release 0.42.0), `tools/book_check.py` in the contract suite, the authors'
   guide `book/WRITING.md`, the version written by the build (`book/version.mjs`, from the compiler's source), and
   publishing: `.github/workflows/docs.yml` builds the book and deploys it with the documentation site, at
-  <https://ceesafe.github.io/CeeSafe/book/>. Not yet: Appendices A to J and the glossary, and the print page.
+  <https://ceesafe.github.io/CeeSafe/book/>. Appendices A to J and the glossary were written on 2026-11-13 (11 pages), each table
+  built from the compiler's own lists and checked against them by `tools/book_check.py`. Not yet: the print page,
+  and in `index.json` the version that introduced each section (§5).
 
 ## 1. Context
 

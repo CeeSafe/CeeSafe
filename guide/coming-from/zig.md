@@ -12,7 +12,7 @@ checks on in every build.
 |---|---|---|
 | `const x = 1;` / `var x: u32 = 1;` | `let x = 1;` / `var x: u32 = 1;` | |
 | `[4]u8`, `[]u8`, `[]const u8` | `[u8; 4]`, `SliceMut<u8>`, `Slice<u8>` | slices are borrows: they cannot outlive their array |
-| `?T`, `null`, `orelse`, `.?` | `T?`, `null`, `match`, `!` | |
+| `?T`, `null`, `orelse`, `.?` | `T?`, `null`, `??`, `!` | `o ?? fallback`; `if (o is Some(v))` for `if (o) \|v\|` |
 | `!T`, `error.X`, `try`, `catch` | `Result<T, E>`, `Err(E.X)`, `?`, `match` | errors are ordinary enums |
 | `catch unreachable` | `!` (postfix) | |
 | `defer`, `errdefer` | `defer` | locals are destroyed automatically: most `defer`s are unnecessary |
@@ -21,7 +21,7 @@ checks on in every build.
 | `std.heap.ArenaAllocator` | `Arena` | allocations borrow the arena: none survives it |
 | `std.heap.FixedBufferAllocator` | `FixedBufferAllocator` | |
 | `+%`, `+\|`, `@addWithOverflow` | `wrappingAdd`, `saturatingAdd`, `checkedAdd` | |
-| `@intCast`, `@truncate` | `as` (lossless only), `truncate<T>` | |
+| `@intCast`, `@truncate` | `as` (lossless only), `truncate<T>` | `truncate` wraps an integer; `checkedTruncate<T>` gives `null` and `saturatingTruncate<T>` clamps where the value does not fit |
 | `comptime` generics | `<T>` generics with interface bounds | no compile-time execution |
 | `comptime` flags and sizes (`comptime ts: bool`) | const parameters: `fn parse<const TS: bool>()`, `[u8; N]` | `bool`, integer and enum values, one copy per value |
 | `@cImport` | `extern "C"` declarations; C structs imported by `@header` | |

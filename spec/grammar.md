@@ -1,10 +1,10 @@
-# CeeSafe Grammar — M1 subset
+# CeeSafe Grammar
 
-Status: normative for Milestone 1 (increment 1a implements the lexer and parser for exactly
-this grammar). Later milestones extend it. Any syntax not listed here is rejected
-by the parser, even if `language-spec.md` shows it for a later milestone.
+Status: normative. It began as the grammar of Milestone 1, and each later milestone and ADR extended it: a
+production's comment names the milestone or ADR that added it. Any syntax not listed here is rejected by the parser.
 
 Notation: EBNF. `'x'` is a literal token, `X?` optional, `X*` zero or more, `X+` one or more.
+`(* … *)` is a comment.
 
 ## 1. Lexical grammar
 
@@ -31,9 +31,9 @@ Identifier = IdentStart IdentContinue*      (not a keyword)
 IdentStart = 'A'..'Z' | 'a'..'z' | '_'
 IdentContinue = IdentStart | '0'..'9'
 ```
-A lone `_` is the token `Underscore` (reserved; no meaning in M1).
+A lone `_` is the token `Underscore`: the wildcard of a pattern (type-system.md §15.2) and of `let _ = e;` (§2).
 
-Keywords (all reserved, whether or not M1 uses them):
+Keywords (all reserved, whether or not the language uses them yet):
 ```
 as borrow break const continue defer drop else enum extern false fn for if impl
 import in interface internal let loop match move mut namespace null own private
@@ -56,6 +56,8 @@ expression (`Self { … }`, `Self.create(…)`, `Self.MAX`) and as the first par
 ```
 IntLiteral = (Decimal | '0x' HexDigits | '0b' BinDigits | '0o' OctDigits) IntSuffix?
 IntSuffix  = 'i8'|'i16'|'i32'|'i64'|'isize'|'u8'|'u16'|'u32'|'u64'|'usize'
+Decimal    = Digit ('_'? Digit)*                (* HexDigits, BinDigits and OctDigits likewise, with their digits *)
+Digit      = '0'..'9'
 ```
 - `_` separators are allowed only *between* digits (`1_000`, `0xFF_FF`). A separator
   at the start or end of the digit sequence, or doubled, is error N0010.
@@ -106,6 +108,9 @@ FloatSuffix = 'f32' | 'f64'
 - `'c'`: exactly one Unicode scalar value or one escape. Otherwise N0007. Its value is the scalar value, as an
   integer literal (`type-system.md` §4, M11); it may also be a pattern.
 
+In §2, `StringLiteral` is the token of `"..."`, of a raw `"""` literal and of `c"..."`, and `CharLiteral` that of
+`'c'`.
+
 ### 1.7 Punctuation and operators
 ```
 ( ) { } [ ] , ; : . .. ..= @ ? ?? -> =>
@@ -127,7 +132,7 @@ is N0100 with that hint.
 
 Any other character is N0001 (unexpected character).
 
-## 2. Syntactic grammar (M1)
+## 2. Syntactic grammar
 
 ```
 CompilationUnit = NamespaceDecl? ImportDecl* Item* EOF
@@ -135,7 +140,8 @@ NamespaceDecl   = 'namespace' QualifiedName ';'     (* retired by ADR 0013: acce
 ImportDecl      = 'import' Identifier ('.' Identifier)? ';'   (* M10 T5: a dependency, or one of its items; type-system.md §2 *)
 QualifiedName   = Identifier ('.' Identifier)*
 
-Item       = Attribute* Visibility? (FunctionDecl | ConstDecl | StaticDecl | StructDecl | EnumDecl | ExternBlock)
+Item       = Attribute* Visibility? (FunctionDecl | ConstDecl | StaticDecl | StructDecl | EnumDecl | InterfaceDecl
+                                     | ImplDecl | ExternBlock)
 Attribute  = '@' Identifier ('(' AttributeArg (',' AttributeArg)* ')')?   (* M8b; type-system.md §28.1 *)
 AttributeArg = Identifier | StringLiteral | IntLiteral
 ExternBlock = 'extern' StringLiteral '{' (ExternFn | ExternStruct | ExternUnion | ExternEnum | ExternConst | ExternStatic)* '}'  (* M8b; §28.2 *)
@@ -154,13 +160,15 @@ InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4
 AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
 MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
                                             (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
-ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* 'public'? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
-                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5;
-                                               `public` has no effect, and no other modifier is accepted: ADR 0109 §2.5 *)
+ImplDecl   = 'impl' TypeParams? Type 'for' Type '{' (Attribute* 'public'? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
+                                            (* M6b; §21; TypeParams: ADR 0054; attributes C7a; ConstDecl and
+                                               AssocTypeDef: ADR 0086 §2.4, §2.5; `public` has no effect, and no other
+                                               modifier is accepted: ADR 0109 §2.5 *)
+           | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'
+                                            (* inherent: ADR 0064 §1; §21.1; ConstDecl: ADR 0074 §2.7, and N0216 in an
+                                               impl with TypeParams *)
 AssocTypeDef = 'type' Identifier '=' Type ';'
-           | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
-           | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
-MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
+MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' ArgList? ')'   (* type arguments: ADR 0064 §1 *)
 TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
            | 'const' Identifier ':' Type                       (* ADR 0083: a const parameter; type-system.md §20.5 *)
            | Identifier (':' Type ('+' Type)*)?                (* bounds: M6b *)
@@ -198,11 +206,16 @@ Type = QualifiedName
                                                G8b′: `@effects(…)` before `fn`, §36.3 *)
      | Identifier '<' GenericArg (',' GenericArg)* '>'   (* M6a: an instantiation of a generic struct or enum; also
                                                   Box, Pool, … *)
+     | 'extern' StringLiteral 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M8d: a pointer to a C function,
+                                                  `extern "C" fn(i32) -> i32`; type-system.md §29.5 *)
      | '*' 'mut'? Type                         (* M8a: raw pointer; type-system.md §27 *)
-     | 'dyn' Type                              (* M13 G2: an interface instantiation; only behind `borrow` or in
+     | 'dyn' Type DynMarker*                   (* M13 G2: an interface instantiation; only behind `borrow` or in
                                                   `Box<…>`; type-system.md §37. `dyn` is a keyword only here *)
-     | 'dyn' 'mut'? Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M13 G3: an owning closure's type, §36.5 *)
-Sources = '(' Identifier (',' Identifier)* ')'   (* only if a type follows the ')'; else '(' Type ')' *)
+     | 'dyn' 'mut'? Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)? DynMarker*
+                                               (* M13 G3: an owning closure's type, §36.5 *)
+DynMarker = '+' ('Send' | 'Share')               (* type-system.md §38.4; `Share`: ADR 0084 §2.5 *)
+Sources = '(' Source (',' Source)* ')'           (* only if a type follows the ')'; else '(' Type ')' *)
+Source  = Identifier | 'this' | 'static'         (* a parameter, the receiver, or a region (type-system.md §25.2) *)
 GenericArg = Type | ConstArg                     (* ADR 0083; type-system.md §20.5 *)
 ConstArg   = 'true' | 'false' | IntLiteral | '(' Expr ')'
            (* a name or `E.V` parses as a Type; the parameter's kind decides (N0354). `'(' Expr ')'` only in a type:
@@ -231,6 +244,10 @@ LocalDecl = ('let' | 'var') Identifier (':' Type)? ('=' Expr)? ';'
 IfStmt    = 'if' '(' Expr ')' Block ('else' (IfStmt | Block))?
 AssignOp  = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>='
 ```
+
+`MatchStmt`, its `Arm` and `Pattern` (with `Bound`, `SliceItem`, `Literal`, `Payload` and `Binding`) are defined
+once, in type-system.md §15.2, beside the rules that give them meaning; `Guard` is in §2.1 below. `Expr` is defined by
+§2.1: its precedence table, over the operands that `Primary`, `Postfix` and `Await` produce.
 
 Notes:
 - Braces are **mandatory** after `if`, `else`, `while` and `loop`, so there is no dangling-else ambiguity.
@@ -267,14 +284,15 @@ comparisons, which are **non-associative**: `a < b < c` is error N0103, and `??`
 | 9 | `* / %` | |
 | 10 | `as` | `Expr 'as' Type`, left-assoc (`x as u32 as u64`). A primitive type name (`u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `f32`, `f64`, `bool`, `char`) takes no type arguments, so `a as u64 < b` is `(a as u64) < b` (ADR 0075 §2.13) |
 | 11 | unary `- !`, `*` (ADR 0075 §2.14: reading through a reference), `borrow`, `borrow mut`, `move`; `await` (L1) | prefix, right-assoc (`- -x`); `await`'s operand: below |
-| 12 | postfix: call `(...)`, member `.name` | |
+| 12 | postfix: call `(...)`, member `.name`, index and slice `[...]`, `?` (propagate), `!` (unwrap) | left to right: `Postfix` below |
 
 The ordering puts bitwise operators **above** comparisons (as in Rust and Swift), so
 `x & 1 == 0` parses as `(x & 1) == 0`. This avoids a well-known C/C# pitfall.
 
 ```
-Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'false'
+Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'false' | 'null'
         | Identifier GenericArgs? | '(' Expr ')' | 'this'
+        | 'Self' | 'Self' '{' FieldInits? '}'               (* ADR 0086 §2.2; §1.3 *)
         | 'unsafe' '{' Expr '}'                              (* M8a: an unsafe expression *)
         | IfExpr | MatchExpr                                 (* M11 (G5): type-system.md §15.3 *)
         | '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)   (* M11 (G8b): a closure, §36.2 *)
@@ -288,6 +306,7 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | '[' Expr ':' Expr (',' Expr ':' Expr)* ','? ']'   (* an array by index, in a static's initialiser:
                                                         type-system.md §39.4, ADR 0091 §2.3 *)
 IsTest  = Operand 'is' Pattern                       (* level 3; Pattern: type-system.md §15.2, §15.4 *)
+Operand = Expr                                       (* of levels 4 to 12: what a level 3 operator takes on its left *)
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'

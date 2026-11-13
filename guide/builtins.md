@@ -317,7 +317,7 @@ Medium
 | `enum E { @from Io(IoError), … }` | `?` turns an `IoError` into `E.Io(e)` in a function returning `Result<_, E>` |
 | `@into fn name(this) -> F` (a method, one per type) | `?` turns an error of the method's type into an `F` by calling it, in a function returning `Result<_, F>`; lib/std's `SendError<T>.reason()` is one |
 | `truncate<T>(x)` | wraps an integer; a float to an integer rounds toward zero and panics out of range or on NaN |
-| `checkedTruncate<T>(f)`, `saturatingTruncate<T>(f)` | a float to an integer: `T?` (`null` where `truncate` would panic); the nearest bound (NaN gives 0) |
+| `checkedTruncate<T>(x)`, `saturatingTruncate<T>(x)` | an integer or a float to an integer `T`: a `T?` that is `null` where `T` cannot hold the value (where `truncate` would wrap an integer or panic on a float); the nearest bound of `T` (NaN gives 0) |
 | `round<T>(x)` | to a float type, rounding to nearest |
 | `f.sqrt()`, `f.abs()`, `f.floor()`, `f.ceil()`, `f.min(g)`, `f.max(g)`, `f.bits()` | floats |
 
@@ -331,6 +331,8 @@ fn main() {
     Console.writeLine(n.max(3));
     let wide: i64 = 300;
     Console.writeLine(truncate<u8>(wide));
+    Console.writeLine(checkedTruncate<u8>(wide).isNull());
+    Console.writeLine(saturatingTruncate<u8>(wide));
     let f: f64 = 2.75;
     Console.writeLine(truncate<i32>(f));
     Console.writeLine(round<f32>(wide));
@@ -344,6 +346,8 @@ fn main() {
 7
 3
 44
+true
+255
 2
 300
 2
@@ -462,6 +466,8 @@ fn numbers() {
     let f: f64 = 2.0;
     let ct: u8? = checkedTruncate<u8>(f);
     let st: u8 = saturatingTruncate<u8>(f);
+    let ci: i8? = checkedTruncate<i8>(x);
+    let si: u16 = saturatingTruncate<u16>(x);
     let r: f64 = f.sqrt().abs().ceil().min(1.0).max(0.5);
     let bits: u64 = f.bits();
     let w: u32 = 0x80000001;

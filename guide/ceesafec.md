@@ -11,7 +11,9 @@ directory or above. Outside one, give the files.
 |---|---|
 | `ceesafec new <name> [--lib] [--agent <names>] [--no-agent]` | make a package: `ceesafe.toml`, `src/main.cee` (or `src/lib.cee`), and `AGENTS.md` for [AI agents](for-agents.md) |
 | `ceesafec agents [--agent <names>]` | write or refresh the package's agent instructions |
-| `ceesafec fetch [--offline]` | resolve the package's dependencies and write `ceesafe.lock` |
+| `ceesafec fetch [--offline] [--update [name]]` | resolve the package's dependencies and write `ceesafe.lock`; `--update` chooses registry versions afresh, for every package or for the one named ([Packages](packages.md#the-registry)) |
+| `ceesafec publish` | check that the library can be published (N0335 where it cannot) and print its entry for the package index; it writes nothing |
+| `ceesafec index-check [--offline] [directory]` | check a package index's entries against their commits, for the index's own CI |
 | `ceesafec check` | parse, type-check and borrow-check; the fastest way to find errors |
 | `ceesafec build` | compile to C, then with the C compiler to `out/<name>` (or `-o`) |
 | `ceesafec run --interp` | run the program in the reference interpreter |
@@ -33,6 +35,9 @@ directory or above. Outside one, give the files.
 | `--emit exe` | an executable (the default) |
 | `--emit c` | the generated C sources, to look at or to build yourself |
 | `--emit obj` | one relocatable object, for a kernel or another program's link (`--ld ld.lld` joins objects for ELF cross builds) |
+| `--emit lib` | a static library, `out/<name>.a`, one member per C file, for a host program whose `main` is not CeeSafe's; the host's headers (`ceesafe/embed.h`, and the exports header if the program has exports) are written beside it |
+| `--ar <archiver>`, `--lib-main` | with `--emit lib` (without it, a usage error): the archiver (default `llvm-ar` beside an LLVM clang, else `ar`); keep the C `main` of a package that has a CeeSafe `main` |
+| `--exports-header <name>` | the name of the header written for `@export` functions (default `ceesafe_exports.h`) |
 | `--cc <compiler>` | the C compiler; default `$CC`, else `cc`, or on Windows clang, gcc or Visual Studio's `cl`, found and set up ([tooling](../spec/tooling.md) §8) |
 | `--cflag <flag>` | an extra C compiler flag (repeatable); the default is `-O2` |
 | `-g` | a debug build: `#line` directives and `-g -O0` (see [Debugging](debugging.md)) |
@@ -60,7 +65,8 @@ The optimisations never remove a check that could fail; their preconditions are 
 
 ## Exit status and errors
 
-`ceesafec` exits with 0 on success, 1 when the program has errors, and 2 for a usage error. Diagnostics go to standard
+`ceesafec` exits with 0 on success, 1 when the program has errors, and 2 for a usage error, or when it cannot run the
+C compiler or write a file. Diagnostics go to standard
 error as `file:line:column: error[code]: message`, followed by the source line, notes, and a hint where there is one.
 The codes are listed in [Diagnostics](../spec/diagnostics.md).
 

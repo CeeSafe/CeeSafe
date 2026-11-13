@@ -330,7 +330,9 @@ source = "path+../geometry"
 - `ceesafec <command> --help` (or `-h`), before any `--`, prints the usage text of `ceesafec --help` and exits with
   status 0; `ceesafec test --help` prints `test`'s own (§10.2). A usage error (status 2) prints its message and then
   the usage text on standard error. A failure of the environment, not of the command line, prints its message
-  alone: a C compiler or archiver that cannot be run, a file or directory that cannot be written.
+  alone and also exits with status 2: a C compiler or archiver that cannot be run (`ceesafec: cannot run the C
+  compiler '<path>': <reason>`), a file or directory that cannot be written. A C compiler that runs and fails is
+  status 1.
 - `ceesafec build`, `check`, `run`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
   C sources in `out/<name>-c/` with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
@@ -507,7 +509,8 @@ same diagnostics as JSON, and can apply the fixes the compiler is sure of.
 
 ### 5.1 `--diagnostics-format=json`
 
-`check`, `build`, `run` and `parse` accept `--diagnostics-format=json` (or `=text`, the default). With `json`,
+`check`, `build`, `run`, `parse`, `fmt` and `fix` (§5.3) accept `--diagnostics-format=json` (or `=text`, the
+default; the value may also be a separate argument, `--diagnostics-format json`). With `json`,
 diagnostics are not written to standard error; instead one JSON document is written to standard output, as one line,
 after the command's own work. `build` still writes its outputs, and `run` still runs the program, if there are no
 errors; the program's own output then precedes the document. The exit status is unchanged. `"severity"` is `"error"` or `"warning"`,
@@ -670,8 +673,9 @@ A fault's exit code is 70 and a panic's 134, as for `run --interp`.
 
 ### 6.4 Resources
 
-Each embedded document is a resource `ceesafe://docs/<path>` (for example `ceesafe://docs/docs/type-system.md`,
-`ceesafe://docs/site/guide/basics.md`), `text/markdown`, named by its first heading. `resources/read` returns its text.
+Each embedded document is a resource `ceesafe://docs/<path>`, with its path in the repository (for example
+`ceesafe://docs/spec/type-system.md`, `ceesafe://docs/guide/basics.md`), `text/markdown`, named by its first heading.
+`resources/list` lists them all, and `resources/read` returns one's text.
 An unknown URI is the error -32002 (resource not found).
 
 ### 6.5 Prompts

@@ -57,7 +57,6 @@ export default defineConfig({
     outline: { level: [2, 3], label: "In this section" },
     docFooter: { prev: "Previous", next: "Next" },
     footer: {
-      message: "Chapters 1 to 22 are written; the appendices are to come.",
       copyright: "Copyright © 2026 Veeran Puthumkara.",
     },
   },

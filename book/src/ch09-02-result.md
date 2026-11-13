@@ -515,6 +515,8 @@ more, because the return type gives it.
 
 - `r!` is `r.unwrap()`. There is no `expect`, and the panic message does not print the error.
 - `?` converts through an `@from` variant of the error enum, not through a `From` implementation. It is one step.
+  An error type may instead have one method marked `@into` that makes the function's error of it, as a channel's
+  `SendError<T>` does ([Async I/O](./ch17-04-async-io)).
 - There are no `map`, `map_err`, `and_then` or `unwrap_or` on a `Result`. Use `match`, or `r.ok() ?? fallback`.
 - There is no `#[must_use]` attribute to write. A call statement that leaves a `Result` unread gets a warning
   (`N0402`), as Rust's `unused_must_use` lint gives, and `let _ = f();` is the written discard in both languages.

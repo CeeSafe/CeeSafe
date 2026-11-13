@@ -104,7 +104,7 @@ served
 thread ([Async I/O](./ch17-04-async-io) explains). Both return `Result<void, AsyncError>`, because a wait can fail:
 the write may fail, and any wait may be cancelled
 ([Timeouts, races and cancellation](./ch17-03-timeouts-races-cancellation)). `AsyncError` is an enum with the
-variants `Cancelled`, `TimedOut` and `Io(IoError)`.
+variants `Cancelled`, `TimedOut`, `Io(IoError)` and `Closed`.
 
 `await` binds tighter than `?`, so `await Timer.sleep(ms)?` awaits the task and then applies `?` to its `Result`.
 The whole breakfast takes 120 milliseconds: the toast does not start until the tea is done. Running them at the

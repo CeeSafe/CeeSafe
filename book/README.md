@@ -33,6 +33,10 @@ Every `ceesafe` block is a whole program, checked as the guide's are, and the pa
 python3 tools/book_check.py --ceesafec out/ceesafec
 ```
 
+`.github/workflows/checks.yml` builds ceesafec from the tree and runs it, with the guide's and the specification's
+checks, on every pull request and every push to `main` that touches the book, the documents or the compiler: the
+site build alone (`docs.yml`) does not compile a listing.
+
 How a chapter is written: `WRITING.md`.
 
 ## Regenerating the appendices

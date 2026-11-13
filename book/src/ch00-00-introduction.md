@@ -36,8 +36,8 @@ Every section has the same parts, in the same order.
 
 **What it teaches,** in a sentence at the top, and which earlier sections it assumes.
 
-**Listings.** A listing is a whole program, with a number and the name of its file. You can copy it into that file
-and run it. Beneath it is what it prints:
+**Listings.** A listing is a whole file, with a number and the file's name. Most are programs: you can copy one
+into that file and run it. Beneath it is what it prints:
 
 <span class="listing-caption"><strong>Listing 0-1</strong>, <code>main.cee</code>: A listing, and what it prints.</span>
 
@@ -51,8 +51,9 @@ fn main() {
 42
 ```
 
-Some listings are there to show what the compiler refuses. Beneath those is the compiler's message, with its code
-(`N0100`, say). Appendix F lists every code and the section that explains it, so an error on your screen leads back
+Some listings are there to show what the compiler refuses: they do not compile, and are not meant to. Beneath
+those is the compiler's message, with its code (`N0100`, say). A listing whose caption names a path, such as
+`scores/src/main.cee`, is one file of a package of several, and builds with the others. Appendix F lists every code and the section that explains it, so an error on your screen leads back
 to the page that teaches the rule.
 
 **Rules** are in boxes like this one, each with the part of the specification it comes from:

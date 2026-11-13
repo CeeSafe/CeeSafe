@@ -90,6 +90,15 @@ fn cbIsName(text: Slice<u8>) -> bool {
 /// CeeSafe's keywords: the lexer's own table (the script has a copy, which tools/cbind_check.py compares with it).
 fn cbIsKeyword(name: Slice<u8>) -> bool => keywordOf(name) != null;
 
+/// The script's reserved: does the C standard reserve the name, `__…` or `_` and an uppercase letter (type-system.md
+/// §28.2; the rule of src/check/ffi.cee, checkCName)? Such a C type's name is N0292, so the type has no CeeSafe
+/// spelling: it is not declared, and neither is what needs it. `struct __va_list_tag`, a `va_list` of x86-64, is one.
+fn cbIsReserved(name: Slice<u8>) -> bool =>
+    startsWithAt(name, 0, "__") || (name.length > 1 && name[0] == '_' && name[1] >= 'A' && name[1] <= 'Z');
+
+/// Why a type the header defines is not declared when C reserves its name.
+fn cbReservedNote() -> StringView => "a type whose name C reserves: CeeSafe has no name for it (N0292)";
+
 fn cbJoin(a: StringView, b: Slice<u8>, c: StringView) -> Vector<u8> {
     var out = cbFrom(a);
     appendBytes(mut out, b)!;
@@ -1106,6 +1115,9 @@ fn cbTypeOf(r: borrow mut CbReading, spelled: Slice<u8>, depth: u32, member: boo
         let prefix = if (isConst) "*" else "*mut ";
         if (isTypedef && toPointer) {
             // A pointer to a function pointer, such as a table of them: the typedef's name, an opaque C type.
+            if (cbIsReserved(inner)) {
+                return null;
+            }
             r.used.add(inner);
             return if (cbIsKeyword(inner)) null else cbJoin(prefix, inner, "");
         }
@@ -1152,6 +1164,9 @@ fn cbTypeOf(r: borrow mut CbReading, spelled: Slice<u8>, depth: u32, member: boo
     }
     let tagged = plain[tag..];
     if (tagged.length > 0 && cbIsName(tagged)) {
+        if (cbIsReserved(tagged)) {
+            return null;
+        }
         r.used.add(tagged);
         return if (cbIsKeyword(tagged)) null else copyBytes(tagged)!;
     }
@@ -1159,6 +1174,9 @@ fn cbTypeOf(r: borrow mut CbReading, spelled: Slice<u8>, depth: u32, member: boo
         return null;
     }
     if (cbHasRecord(r, plain) || cbHasEnum(r, plain)) { // a typedef that is the type's only name
+        if (cbIsReserved(plain)) {
+            return null;
+        }
         r.used.add(plain);
         return copyBytes(plain)!;
     }
@@ -1359,6 +1377,10 @@ fn cbDeclareTypes(r: borrow mut CbReading) {
         if (!r.records.values[k].here) {
             continue;
         }
+        if (cbIsReserved(name.view())) {
+            cbNote(r, name.view(), cbReservedNote().bytes());
+            continue;
+        }
         if (r.records.values[k].isUnion) {
             if (ctype && cbClaim(r, name.view(), "a union")) {
                 var lines = Vector<Vector<u8>>.create();
@@ -1461,6 +1483,10 @@ fn cbDeclareTypes(r: borrow mut CbReading) {
         if (constants.length == 0) {
             continue;
         }
+        if (cbIsReserved(name.view())) {
+            cbNote(r, name.view(), cbReservedNote().bytes());
+            continue;
+        }
         let values = cbValuesOf(r, node);
         if (!values.given || cbIsKeyword(name.view()) || !cbClaim(r, name.view(), "an enum")) {
             cbNoteOnce(r, name.view(), "an enum whose values clang does not give".bytes());
@@ -1483,7 +1509,9 @@ fn cbDeclareTypes(r: borrow mut CbReading) {
     }
     for (k in 0..r.pointerTypedefs.count()) {
         let name = copyBytes(r.pointerTypedefs.name(k))!;
-        if (!cbIsKeyword(name.view()) && cbClaim(r, name.view(), "a typedef")) {
+        if (cbIsReserved(name.view())) {
+            cbNote(r, name.view(), cbReservedNote().bytes());
+        } else if (!cbIsKeyword(name.view()) && cbClaim(r, name.view(), "a typedef")) {
             var lines = Vector<Vector<u8>>.create();
             lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
             lines.push(cbJoin("struct ", name.view(), ";"))!;

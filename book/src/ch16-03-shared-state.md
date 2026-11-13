@@ -56,7 +56,7 @@ fn main() {
 - `total.lock()` waits until the lock is free, takes it, and returns a **guard**, a `MutexGuard<u64>`.
 - `guard.data()` lends the value as a `borrow mut u64`. Bind it to a name, then read or change the value through
   that name. `guard.data() += 1` is not an assignment the language accepts (N0104).
-- The guard is declared with `var`, because `data()` borrows it mutably.
+- The guard is declared with `var`, because `data()` borrows it exclusively.
 - When the guard is destroyed, at the end of the loop body here, the lock is released.
 
 There is no way to reach the value without a guard, and no call to forget: the lock is held exactly as long as the
@@ -300,7 +300,7 @@ never ends.
 ## Mistakes
 
 ::: warning Mistake: a guard declared with `let`
-`data()` borrows the guard mutably, so the guard must be mutable.
+`data()` borrows the guard exclusively, so the guard must be a `var`.
 :::
 
 <span class="listing-caption"><strong>Listing 16-24</strong>, <code>main.cee</code>: The guard is a <code>let</code>. This does not compile.</span>

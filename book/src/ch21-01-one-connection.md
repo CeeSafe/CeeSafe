@@ -267,7 +267,7 @@ response is written before the client reads it. Both are small enough to wait in
 ## Mistakes
 
 ::: warning Mistake: not looking at the result of `write`
-A write to a connection fails when the client has gone. A call statement that drops the `Result` hides that.
+A write to a connection fails when the client has gone. A call statement that discards the `Result` hides that.
 :::
 
 <span class="listing-caption"><strong>Listing 21-6</strong>, <code>main.cee</code>: The result of <code>write</code> is not used. The compiler warns.</span>
@@ -336,7 +336,7 @@ A stream is closed when it is destroyed, as in Rust.
 ::: details Coming from Go, Python or JavaScript
 There is no `defer conn.Close()` and no `with` block: the stream is closed where its variable's life ends, on every
 path, including the `?` that returns early. Errors are values in a `Result`, not exceptions, and the compiler
-warns when one is dropped.
+warns when one is discarded.
 :::
 
 ## Summary

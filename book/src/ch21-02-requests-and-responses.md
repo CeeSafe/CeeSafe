@@ -379,7 +379,7 @@ main.cee:5:5: error[N0244]: cannot return a reference to 'buffer', which is loca
 ```
 
 Keep the bytes in the function that uses the request, as `handle` does: `head` lives there, the request is parsed,
-routed and dropped inside `answer`, and only the `Response<static>` comes out.
+routed and destroyed inside `answer`, and only the `Response<static>` comes out.
 
 ::: warning Mistake: an `embedText` path from the package's directory
 The path is relative to the source file, not to `ceesafe.toml` and not to where the compiler is run. From

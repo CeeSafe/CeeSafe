@@ -50,7 +50,7 @@ under [Strings and characters](#strings-and-characters).
 ## Lexical grammar
 
 A source file is UTF-8 text. The lexer turns it into tokens. Whitespace and comments separate tokens and are then
-dropped, except that a `///` comment is kept as documentation for the declaration that follows it.
+discarded, except that a `///` comment is kept as documentation for the declaration that follows it.
 [Comments](./ch03-04-comments) teaches both kinds of comment.
 
 ### Identifiers and keywords

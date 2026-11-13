@@ -192,7 +192,7 @@ busy: someone is reading
 1
 ```
 
-The last two lines each make a guard, use it, and drop it at the `;`. Keeping guards that short is the way to
+The last two lines each make a guard and use it, and the guard is destroyed at the `;`. Keeping guards that short is the way to
 avoid the panic: take the guard, do the work, and let it go before calling code that may use the cell.
 
 `RefCell` has three more operations that need no guard in your hands. `cell.replace(v)` stores `v` and returns

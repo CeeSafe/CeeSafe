@@ -426,7 +426,7 @@ main.cee:3:5: warning[N0402]: the 'Result' of this call is not used, so an error
   |     ^^^^^^^^^^^^^^^
 ```
 
-Write `scores.push(70)!;`. The same warning is given for `resize`, for a `clone` whose value is dropped, and for
+Write `scores.push(70)!;`. The same warning is given for `resize`, for a `clone` whose value is discarded, and for
 any other call statement that returns a `Result`.
 
 ::: warning Mistake: an index that is not a `usize`

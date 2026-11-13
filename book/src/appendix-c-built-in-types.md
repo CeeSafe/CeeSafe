@@ -133,12 +133,12 @@ A slice borrows a run of elements of an array, a vector or another slice: `Slice
 | `[]` | The empty slice, where a `Slice<T>` or a `SliceMut<T>` is expected. | No | – |
 | `s == t`, `s != t` | Whether two slices have the same length and equal elements. The elements are integers, `bool` or an enum without payloads. | No | – |
 | `for (x in s) { }` | Runs the body once for each element of a slice: `x` is a copy of a Copy element, and a borrow of any other. | No | [4.3](./ch04-03-slices-and-views) |
-| `d.copyFrom(s: Slice<T>)` | Copies every element of `s` into a mutable slice of the same length. `T` is Copy. | Panics `slice lengths differ` when the lengths are not equal | – |
-| `d.fill(v: T)` | Sets every element of a mutable slice to `v`. `T` is Copy. | No | – |
-| `d.swap(i: usize, j: usize)` | Exchanges elements `i` and `j` of a mutable slice or a vector. | Panics `index out of bounds` when `i` or `j` is not below the length | [8.1](./ch08-01-vectors) |
+| `d.copyFrom(s: Slice<T>)` | Copies every element of `s` into an exclusive slice of the same length. `T` is Copy. | Panics `slice lengths differ` when the lengths are not equal | – |
+| `d.fill(v: T)` | Sets every element of an exclusive slice to `v`. `T` is Copy. | No | – |
+| `d.swap(i: usize, j: usize)` | Exchanges elements `i` and `j` of an exclusive slice or a vector. | Panics `index out of bounds` when `i` or `j` is not below the length | [8.1](./ch08-01-vectors) |
 | `s.splitAt(mid: usize) -> SliceHalves<T>` | The two parts of a slice as `left` (the elements before `mid`) and `right` (from `mid` on). | Panics `slice range out of bounds` when `mid` is above the length | [16.1](./ch16-01-starting-threads) |
-| `d.splitAtMut(mid: usize) -> SliceHalvesMut<T>` | The two parts of a mutable slice as `left` and `right`, which may both be written, since they do not overlap. | Panics `slice range out of bounds` when `mid` is above the length | – |
-| `d.sortBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts a mutable slice or a vector by a closure that returns a negative number, zero or a positive number for less, equal and greater. The sort is not stable. | No | [8.1](./ch08-01-vectors) |
+| `d.splitAtMut(mid: usize) -> SliceHalvesMut<T>` | The two parts of an exclusive slice as `left` and `right`, which may both be written, since they do not overlap. | Panics `slice range out of bounds` when `mid` is above the length | – |
+| `d.sortBy(cmp: borrow mut fn(borrow T, borrow T) -> i32)` | Sorts an exclusive slice or a vector by a closure that returns a negative number, zero or a positive number for less, equal and greater. The sort is not stable. | No | [8.1](./ch08-01-vectors) |
 | `s.forEach(visit: borrow mut fn(borrow T))` | Calls a closure on each element of a slice, in order. | No | [8.1](./ch08-01-vectors) |
 | `s.any(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for some element of a slice; `false` for an empty slice. | No | [8.1](./ch08-01-vectors) |
 | `s.all(test: borrow mut fn(borrow T) -> bool) -> bool` | Whether a closure returns `true` for every element of a slice; `true` for an empty slice. | No | [8.1](./ch08-01-vectors) |
@@ -151,7 +151,7 @@ A slice of bytes has the methods of every slice, and these. In the rows, `b` is 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|
 | `b.readBE<T>(at: usize) -> T`, `b.readLE<T>(at: usize) -> T` | The integer of type `T` stored in the bytes from index `at` of a byte slice, most significant byte first (`BE`) or last (`LE`). | Panics `index out of bounds` when the integer does not lie inside the slice | – |
-| `d.writeBE(at: usize, x: T)`, `d.writeLE(at: usize, x: T)` | Writes the bytes of the integer `x` into a mutable byte slice from index `at`. The type of `x` gives the width, so a literal needs a suffix (`5u32`). | Panics `index out of bounds` when the integer does not lie inside the slice, and writes nothing | – |
+| `d.writeBE(at: usize, x: T)`, `d.writeLE(at: usize, x: T)` | Writes the bytes of the integer `x` into an exclusive byte slice from index `at`. The type of `x` gives the width, so a literal needs a suffix (`5u32`). | Panics `index out of bounds` when the integer does not lie inside the slice, and writes nothing | – |
 | `b.indexOf(needle: Slice<u8>) -> usize?`, `b.lastIndexOf(needle: Slice<u8>) -> usize?` | The index where `needle` first or last starts in a byte slice. | `null` when `needle` does not occur | – |
 | `b.indexOfByte(x: u8) -> usize?` | The index of the first byte equal to `x` in a byte slice. | `null` when no byte is `x` | – |
 | `b.contains(needle: Slice<u8>) -> bool`, `b.startsWith(prefix: Slice<u8>) -> bool`, `b.endsWith(suffix: Slice<u8>) -> bool` | Whether a byte slice holds the given bytes anywhere, at its start, or at its end. | No | – |
@@ -222,7 +222,7 @@ A `T?` is either `null` or `Some(value)`. In the rows, `o` is an optional of typ
 | `match (o) { Some(v) => { } null => { } }` | Runs one arm for an optional with a value, bound to `v`, and the other for `null`. | No | [6.3](./ch06-03-optionals) |
 | `o.okOr(e: E) -> Result<T, E>` | An optional as a `Result`: `Ok` of the value, or `Err(e)` for `null`. | `Err(e)` when the optional is `null` | [9.2](./ch09-02-result) |
 | `o.asBorrow() -> borrow T?` | An optional borrow of the value inside an optional that stays where it is. | No | – |
-| `o.asBorrowMut() -> (borrow mut T)?` | An optional mutable borrow of the value inside an optional variable, to change the value in place. | No | – |
+| `o.asBorrowMut() -> (borrow mut T)?` | An optional exclusive borrow of the value inside an optional variable, to change the value in place. | No | – |
 
 ## `Result<T, E>`
 
@@ -284,7 +284,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 | `v.reserve(extra: usize) -> Result<void, AllocError>` | Makes room in a vector for `extra` more elements, so that adding them does not allocate. | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | [9.3](./ch09-03-allocation-failure) |
 | `v.clone() -> Result<Vector<T>, AllocError>` | A second vector with a copy of the elements of a vector. `T` is Copy. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.1](./ch08-01-vectors) |
 | `v.view() -> Slice<T>` | The elements of a vector as a slice that borrows the vector. | No | [8.1](./ch08-01-vectors) |
-| `v.viewMut() -> SliceMut<T>` | The elements of a vector as a mutable slice, for `fill` and `copyFrom`. | No | [8.1](./ch08-01-vectors) |
+| `v.viewMut() -> SliceMut<T>` | The elements of a vector as an exclusive slice, for `fill` and `copyFrom`. | No | [8.1](./ch08-01-vectors) |
 | `for (x in v) { }` | Runs the body once for each element of a vector: `x` is a copy of a Copy element, and a borrow of any other. | No | [8.1](./ch08-01-vectors) |
 | `v.pushBE(x: N) -> Result<void, AllocError>`, `v.pushLE(x: N) -> Result<void, AllocError>` | Adds the bytes of the fixed-width integer `x` at the end of a `Vector<u8>`, most significant byte first (`BE`) or last (`LE`). | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | – |
 | `v.appendHex(value: u64, minWidth: u32, upper: bool)`, `v.appendOctal(value: u64)`, `v.appendFixed(value: f64, digits: u32)`, `v.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32)` | The formatting methods of a `String`, on a `Vector<u8>`: each adds the formatted text's bytes and returns a `Result<void, AllocError>`. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
@@ -303,7 +303,7 @@ A `HashMap<K, V>` owns values found by key; it is in lib/std, and a hosted progr
 | `HashMap<K, V>.withSeed(k0: u64, k1: u64) -> HashMap<K, V>` | An empty hash map whose hash is keyed by the two given numbers, not by the process's random key. | No | – |
 | `m.put(key: K, value: V) -> Result<V?, AllocError>` | Puts `value` at `key` in a hash map, and returns the value that was there, if one was. | `Err(AllocError.OutOfMemory)` when the allocation fails; the map is unchanged | [8.3](./ch08-03-maps) |
 | `m.get(key: borrow K) -> borrow V?` | A borrow of the value at `key` in a hash map. | `null` when the key is not there | [8.3](./ch08-03-maps) |
-| `m.getMut(key: borrow K) -> borrow mut V?` | A mutable borrow of the value at `key` in a hash map, to change it. | `null` when the key is not there | [8.3](./ch08-03-maps) |
+| `m.getMut(key: borrow K) -> borrow mut V?` | An exclusive borrow of the value at `key` in a hash map, to change it. | `null` when the key is not there | [8.3](./ch08-03-maps) |
 | `m.contains(key: borrow K) -> bool` | Whether `key` is in a hash map. | No | [8.3](./ch08-03-maps) |
 | `m.remove(key: borrow K) -> V?` | Takes `key` and its value out of a hash map and returns the value. The last entry takes the removed one's place in the order. | `null` when the key is not there | [8.3](./ch08-03-maps) |
 | `m.length() -> usize` | The number of entries in a hash map. It is a method, so it has parentheses. | No | [8.3](./ch08-03-maps) |
@@ -319,7 +319,7 @@ An `OrderedMap<K, V>` owns values found by key and keeps them in the order of th
 | `OrderedMap<K, V>.create() -> OrderedMap<K, V>` | An empty ordered map. | No | [8.3](./ch08-03-maps) |
 | `m.put(key: K, value: V) -> Result<V?, AllocError>` | Puts `value` at `key` in an ordered map, and returns the value that was there, if one was. | `Err(AllocError.OutOfMemory)` when the allocation fails; the map is unchanged | [8.3](./ch08-03-maps) |
 | `m.get(key: borrow K) -> borrow V?` | A borrow of the value at `key` in an ordered map. | `null` when the key is not there | [8.3](./ch08-03-maps) |
-| `m.getMut(key: borrow K) -> borrow mut V?` | A mutable borrow of the value at `key` in an ordered map, to change it. | `null` when the key is not there | [8.3](./ch08-03-maps) |
+| `m.getMut(key: borrow K) -> borrow mut V?` | An exclusive borrow of the value at `key` in an ordered map, to change it. | `null` when the key is not there | [8.3](./ch08-03-maps) |
 | `m.contains(key: borrow K) -> bool` | Whether `key` is in an ordered map. | No | [8.3](./ch08-03-maps) |
 | `m.remove(key: borrow K) -> V?` | Takes `key` and its value out of an ordered map and returns the value. | `null` when the key is not there | [8.3](./ch08-03-maps) |
 | `m.length() -> usize`, `m.isEmpty() -> bool` | The number of entries in an ordered map, and whether there are none. | No | [8.3](./ch08-03-maps) |
@@ -329,7 +329,7 @@ An `OrderedMap<K, V>` owns values found by key and keeps them in the order of th
 | `m.seekAfter(key: borrow K) -> OrderedCursor?` | A cursor at the first entry of an ordered map whose key comes after `key`. | `null` when there is no such entry | [8.3](./ch08-03-maps) |
 | `m.next(at: OrderedCursor) -> OrderedCursor?`, `m.previous(at: OrderedCursor) -> OrderedCursor?` | A cursor at the entry after or before the cursor's entry, in key order. | `null` at the end or the start; panics `ordered map changed under a cursor` for a cursor made before a change | [8.3](./ch08-03-maps) |
 | `m.keyAt(at: OrderedCursor) -> borrow K`, `m.valueAt(at: OrderedCursor) -> borrow V` | The key or the value of the entry a cursor is at. | Panics `ordered map changed under a cursor` for a cursor made before a change | [8.3](./ch08-03-maps) |
-| `m.valueAtMut(at: OrderedCursor) -> borrow mut V` | A mutable borrow of the value of the entry a cursor is at, to change it. | Panics `ordered map changed under a cursor` for a cursor made before a change | – |
+| `m.valueAtMut(at: OrderedCursor) -> borrow mut V` | An exclusive borrow of the value of the entry a cursor is at, to change it. | Panics `ordered map changed under a cursor` for a cursor made before a change | – |
 
 ## Ranges
 

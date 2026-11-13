@@ -57,6 +57,7 @@ Most rows are a change of spelling.
 | `fn f<'a>(a: &'a T, b: &T) -> &'a T` | `fn f(a: borrow T, b: borrow T) -> borrow(a) T`. The result names the parameters it borrows from. | [10.3](./ch10-03-regions) |
 | `struct S<'a> { s: &'a str }` | `struct S<region r> { s: StringView<r>; }` | [10.3](./ch10-03-regions) |
 | `'static`, as in `S<'static>` | `static`, as in `S<static>`. It is written in a result's type or in a body, never in a parameter's type. | [10.3](./ch10-03-regions) |
+| `fn f<'a, 'b: 'a>(…)`: `'b: 'a` | `fn f<region a, region b: a>(…)`: `region b: a`, "`b` outlives `a`". A bound is always declared: none is implied by a type. | [10.3](./ch10-03-regions) |
 | `impl Drop for S { fn drop(&mut self) { … } }` | `drop { … }` in the struct's body | [15.2](./ch15-02-destruction) |
 | `drop(x);` | `let _ = move x;`, which destroys the value of `x` at once | [15.2](./ch15-02-destruction) |
 | `Box::new(v)` | `Box.create(v)!`. `create` returns a `Result`, because it allocates. | [15.1](./ch15-01-box) |

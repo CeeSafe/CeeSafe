@@ -2,9 +2,9 @@
 title: Regions
 summary: A struct that holds a borrow or a view declares a region parameter, which ties each value of the struct to what it borrows from - with functions that return a borrow, borrow(a, b), the diagnostics N0243, N0244, N0245 and N0270, and when to own instead.
 assumes: [ch04-02-borrowing, ch04-03-slices-and-views, ch05-01-defining-structs, ch10-01-generic-types]
-keywords: [region, region parameter, "StringView<r>", "borrow(a, b)", scoped type, lifetime, outlive, static, own]
+keywords: [region, region parameter, region bound, "region b: a", "StringView<r>", "borrow(a, b)", scoped type, lifetime, outlive, static, own]
 diagnostics: [N0243, N0244, N0245, N0270]
-specification: ["type-system.md §25.1", "type-system.md §25.2", "type-system.md §25.4", "type-system.md §25.6", "lifetimes.md §7"]
+specification: ["type-system.md §25.1", "type-system.md §25.2", "type-system.md §25.4", "type-system.md §25.6", "type-system.md §25.8", "lifetimes.md §7"]
 ---
 
 # Regions
@@ -188,6 +188,61 @@ caller keeps the arguments they name borrowed while it uses the result.
 The diagnostics say "reference" for a borrow ([Borrowing](./ch04-02-borrowing) says why) and "scoped type" for a
 type that holds one.
 
+## A region that outlives another
+
+Two regions of one function are unrelated: a view borrowed for one cannot be returned as borrowed for the other.
+
+<span class="listing-caption"><strong>Listing 10-18</strong>, <code>main.cee</code>: The function returns its second parameter under the first one's region. This does not compile.</span>
+
+<!-- ceesafe: fail N0245 -->
+```ceesafe
+fn orDefault<region a, region b>(word: StringView<a>, fallback: StringView<b>) -> StringView<a> =>
+    if (word.length > 0) word else fallback;
+
+fn main() {
+    let fallback = String.from("none")!;
+    let line = String.from("")!;
+    Console.writeLine(orDefault(line.view(), fallback.view()));
+}
+```
+
+```text
+main.cee:2:5: error[N0245]: the returned reference may be derived from parameter 'fallback', which the return type does not list
+  |
+2 |     if (word.length > 0) word else fallback;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+One region for both parameters, as in `longer`, would compile. A **region bound** says more exactly what the
+function does. `region b: a` declares that `b` outlives `a`: a value borrowed for `b` may be used where `a` is
+required, and not the other way round.
+
+```ceesafe
+fn orDefault<region a, region b: a>(word: StringView<a>, fallback: StringView<b>) -> StringView<a> =>
+    if (word.length > 0) word else fallback;
+
+fn main() {
+    let fallback = String.from("none")!;
+    let line = String.from("")!;
+    Console.writeLine(orDefault(line.view(), fallback.view()));
+}
+```
+
+```text
+none
+```
+
+The caller pays for the bound. The result may now hold the borrow of the `fallback` argument, so the caller cannot
+use it after that value is destroyed: the compiler reports `N0243`, with a note that names the bound. A struct or
+an enum bounds its regions in the same way, as in `struct Parser<region scratch, region input: scratch>`.
+
+::: tip Rule
+`region b: a` says that `b` outlives `a`: what is borrowed for `b` may be used where `a` is required. A bound names
+region parameters, joined by `+` when there are several.
+
+*Specification: `type-system.md` §25.8.*
+:::
+
 ## When to own instead
 
 A struct with a region is cheap, because it copies nothing, and short-lived, because it is tied to another value.
@@ -196,7 +251,7 @@ record being read. It does not suit a value that must outlive its source: one re
 made the text, stored for later, or kept after the text changes. Such a struct **owns** its data: a `String`
 where the other holds a `StringView`, a `Vector<T>` for a `Slice<T>`.
 
-<span class="listing-caption"><strong>Listing 10-18</strong>, <code>main.cee</code>: A struct that owns its text needs no region and can be returned from the function that builds the text.</span>
+<span class="listing-caption"><strong>Listing 10-19</strong>, <code>main.cee</code>: A struct that owns its text needs no region and can be returned from the function that builds the text.</span>
 
 ```ceesafe
 struct Greeting {
@@ -229,7 +284,7 @@ Hello, Ada
 A field of type `StringView`, `Slice<T>` or `borrow T` needs the struct to declare a region.
 :::
 
-<span class="listing-caption"><strong>Listing 10-19</strong>, <code>main.cee</code>: The struct holds a view and declares no region. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 10-20</strong>, <code>main.cee</code>: The struct holds a view and declares no region. This does not compile.</span>
 
 <!-- ceesafe: fail N0270 -->
 ```ceesafe
@@ -258,7 +313,7 @@ should own its text.
 A function's locals are destroyed when it returns, so the result cannot borrow from one.
 :::
 
-<span class="listing-caption"><strong>Listing 10-20</strong>, <code>main.cee</code>: The <code>Word</code> would view a string that the function is about to destroy. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 10-21</strong>, <code>main.cee</code>: The <code>Word</code> would view a string that the function is about to destroy. This does not compile.</span>
 
 <!-- ceesafe: fail N0244 -->
 ```ceesafe
@@ -287,14 +342,14 @@ main.cee:9:5: error[N0244]: cannot return a reference to 'line', which is local 
   = note: borrowed here (9:25)
 ```
 
-This is the case for owning: return a struct with a `String` field, as Listing 10-18 does, and move `line` into
+This is the case for owning: return a struct with a `String` field, as Listing 10-19 does, and move `line` into
 it.
 
 ::: warning Mistake: several borrowed parameters and an unnamed result
 With two borrowed parameters, the compiler does not guess which one the result borrows from.
 :::
 
-<span class="listing-caption"><strong>Listing 10-21</strong>, <code>main.cee</code>: The result does not say whether it borrows from <code>a</code> or <code>b</code>. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 10-22</strong>, <code>main.cee</code>: The result does not say whether it borrows from <code>a</code> or <code>b</code>. This does not compile.</span>
 
 <!-- ceesafe: fail N0245 -->
 ```ceesafe
@@ -325,8 +380,9 @@ A region is a lifetime: `struct Word<region src>` is `struct Word<'src>`, `Strin
 - a result names parameters, `borrow(a, b) T`, where Rust would declare a lifetime `'a` and write it three times;
 - a region can be left out of a type in a signature (`-> Word`, not `-> Word<'_>`), and the elision rule is one
   line: one borrowed parameter, or name the sources;
-- there are no bounds between regions (`'a: 'b`), and region arguments do not make different types: `Word<a>` and
-  `Word<b>` are one type.
+- a bound between regions, `'b: 'a`, is written `region b: a`. It is always declared: none is implied by a type
+  such as `&'a &'b T`;
+- region arguments do not make different types: `Word<a>` and `Word<b>` are one type.
 :::
 
 ::: details Coming from C#, Java, TypeScript or Go
@@ -348,6 +404,8 @@ comment "valid only while the line buffer is" turned into something the compiler
   borrows from its own locals (`N0244`).
 - A function with one borrowed parameter returns a borrow of it. With several, the result names its sources:
   `borrow(a, b) T`, or a shared region (`N0245` if it does not).
+- `region b: a` lets what is borrowed for `b` be used where `a` is required, and ties the result to the `b`
+  arguments for the caller.
 - Regions cost nothing at run time.
 - A struct that must outlive its source owns its data: `String`, `Vector<T>`.
 

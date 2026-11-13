@@ -1,11 +1,15 @@
 # ADR 0131 — A value of a type parameter's type is followed as a scoped value is
 
-- Status: **Proposed** by the integrator on 2026-11-13 after an independent soundness review found the hole;
-  implemented on branch `fix/interface-result-loans`; awaits the owner's acceptance; not yet released. Its first
+- Status: **Accepted** by the owner, 2026-11-13 ("Ship 0.42.1 sooner. Follow with 0.42.2"); released in ceesafec 0.42.1.
+  Proposed by the integrator the same day after an independent soundness review found the hole. Its first
   form (flows through interfaces, and a loan "of the function's own storage" kept by such a value) was broken by a
   second independent review the same day; §2 is the second form, which replaces it. A third review broke the
   second form's implementation in three ways, one of them a regression against 0.42.0: §2.9 to §2.11 and §4 are the
-  third round's.
+  third round's. The third review also found three families of programs this ADR does not cover: §10.
+- Released with it: the rule the principle rests on, that a type parameter bounded by `Send` or `Share` holds no loan
+  (`spec/type-system.md` §25.7 rule 5 and §38.1; it has no ADR of its own). 0.42.0 treated every type parameter as a
+  possible reference whatever its bounds, so without the rule a program could not say "this `T` holds no borrow"
+  (§2.4, §5), and `AsyncTasksIn.run` (§2.6) would not check.
 - Scope: the checker (`src/check/references.cee`, `interfaces.cee`, `generics.cee`, `declare.cee`, `members.cee`,
   `closures.cee`), the borrow checker (`src/nir/borrow.cee`, `passes.cee`), `src/types/types.cee`, the NIR builder
   (one guard), three fields of a HIR function; `lib/core/async.cee` (one bound); `spec/type-system.md` §21.1, §21.2,
@@ -167,7 +171,7 @@ a function as a value.
 2.11 **`impl<T: Send> I for S<T>`** (third round). Whether an instance has a generic impl was decided by
 "`checkBounds` reported nothing", and since 2.4 a Send or Share bound met before the fields are known puts itself
 off and reports later: the impl was attached, and N0334 came afterwards with no position. A check that puts itself
-off is now "not yet", as in ADR 0130 §2.6: the instance gets the impl when the question is asked again, once the
+off is now "not yet": the instance gets the impl when the question is asked again, once the
 fields are known. A message never suggests a bound that cannot be written (`C.Out: Send`).
 
 ## 3. Why each program is refused
@@ -236,18 +240,18 @@ rest on A8 plus the existing rules for where a closure may be kept.
 
 ## 6. What was newly refused, measured
 
-On the corpus (now 958 files), `lib/`, `tests/packages`, the guide's and the book's listings, and the compiler's
-own source, which builds itself to a fixed point with the rule:
+Measured again on the released line (0.42.0 with this ADR and the `Send` and `Share` rule, without the features
+the fix was developed beside): the corpus (953 files), `lib/`, `tests/packages`, the guide's and the book's
+listings, and the compiler's own source, which builds itself to a fixed point with the rule:
 
 - `lib/core/async.cee`, `AsyncTasksIn.run`: changed by 2.6.
 - Third round: the interface method whose result is written with the interface's parameters is elided again when
   the interface is given scoped arguments, as in 0.42.0 (the second round had switched that off, which let
   `impl Run<StringView> for Unit {}` inherit a default whose result borrows from a parameter the instance did not
   list). Nothing in the corpus, the libraries, the guide, the book or the compiler is refused by §2.9 to §2.11.
-  The differential against 0.42.0 (every `check-fail` test and every probe of the three reviews and of this
-  branch: what 0.42.0 refuses and this compiler accepts) is eight files, none of which faults: the test of an
-  unreleased feature run without its options (`process-signals-freestanding`), five probes that use the unreleased
-  rule that a `T: Send` holds no loan in a thread's or a closure's result, one probe on which 0.42.0 panics, and
+  The differential against 0.42.0 (every `check-fail` test and every probe of the three reviews and of the fix's
+  branch: what 0.42.0 refuses and 0.42.1 accepts) is three files, none of which faults: two probes that use the
+  rule that a `T: Send` holds no loan in a thread's or a closure's result, and the probe that became
   `run-pass/interface-impl-narrowed-flows`, which 2.3 accepts by design (a direct call of an impl's method has the
   interface's flows, against which the method's body is checked).
 - Corpus expectations changed, each a function that was already refused, which now reports the return as well as
@@ -292,3 +296,24 @@ sound iterator, `for`, collect, callbacks, a with-resource function under `T: Se
 - A way to write, on a signature, that a result of a type parameter's type borrows from a named parameter (the
   `borrow(a, b) T` of reference results), which would let `make` of §5 be written as it stands.
 - A region parameter on an interface.
+
+## 10. Known not to be covered by 0.42.1
+
+The third review found three more families of programs without `unsafe` that pass `check` and read freed memory.
+None needs a type parameter, an interface or a closure: they are in plain code, 0.42.0 accepts them too, and
+0.42.1 was released without their fix so that the fix above was not held back. 0.42.2 follows with it.
+
+1. **A store by a built-in.** `replace(mut a, v)`, `swap(mut a, mut b)`, `fill`, `copyFrom`, `extend` and `resize`
+   put a value into a place and record no store. A program is not refused when it puts a view of a local into a
+   place that outlives the local with one of them and reads it afterwards: `swap(mut outer, mut inner)` for two
+   structs that hold a view, `keep.viewMut().fill(t.view())`, `keep.extend(views[..])`, `keep.resize(2, t.view())`,
+   where `keep` or `outer` outlives `t`. The same store written as an assignment or a `push` is refused (N0243).
+2. **What `replace` returns.** The old value that `replace(mut a, v)` gives back carries no loan, so a view of a
+   local taken out of `a` by `replace` may be kept after the local is gone.
+3. **A `borrow mut` held in a scoped value passed by value.** Only a `borrow mut` parameter is a target of stores
+   (§25.6). A function that takes a struct with a `borrow mut(r) Vector<StringView<r>>` field by value and pushes
+   or assigns through that field stores where no caller sees it: `fn put(s: Sink, v: StringView) { s.out.push(v)!; }`
+   called as `put(Sink { out: borrow mut keep }, t.view())`.
+
+Until 0.42.2: a program that uses none of the six built-ins on values that hold a borrow, and passes no struct that
+holds a `borrow mut` by value to a function that stores through it, is not affected.

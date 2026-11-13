@@ -934,6 +934,22 @@ fn checkReturn(c: borrow mut Checker, valueSyntax: u32, span: Span) -> Result<u3
         }
         return c.hir.addStmt(HirStmt.Return(none()), span.start, span.end);
     }
+    // A block whose result type is its first `return`'s (§38.2), before that `return`: the value is checked with no
+    // expected type, as an expression body is, and gives the type to the `return`s and `?`s around it.
+    let inferring = c.inferReturn == c.function && c.types.isBottom(returnType);
+    if (inferring && valueSyntax == none()) {
+        c.inferredReturns.push(span)?;
+        return c.hir.addStmt(HirStmt.Return(none()), span.start, span.end);
+    }
+    if (inferring) {
+        let value = checkExpr(c, valueSyntax, none())?;
+        let t = c.typeOf(value);
+        if (!c.types.isBottom(t)) {
+            c.hir.functions[c.function as usize].returnType = t;
+            settleInferredReturn(c, t)?;
+        }
+        return c.hir.addStmt(HirStmt.Return(value), span.start, span.end);
+    }
     if (valueSyntax == none()) {
         if (!c.types.is(returnType, TypeKind.Void) && !c.types.isBottom(returnType)) {
             var message = Vector<u8>.create();

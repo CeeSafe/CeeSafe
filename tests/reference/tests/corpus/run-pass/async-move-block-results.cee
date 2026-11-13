@@ -1,0 +1,142 @@
+// Block bodies of `async move` closures where no result type is expected (type-system.md §38.2, §40.4): the result is
+// the block's first `return`'s, and the `?`s and `return`s around it are checked against it. A timeout's body with a
+// `?` before the first `return`, whose error converts by `@from`; `return Ok(…)` and `return Err(…)` after it; a
+// race's and an all's children; the children of a scope and of a task set, whose type is the scope's. Each moves a
+// local it captured. The log has one digit per event: each value's name when it is dropped.
+
+static LOG: AtomicU64 = AtomicU64.constant(0);
+
+fn note(k: u64) { LOG.store(LOG.load() * 10 + k); }
+
+enum Failure {
+    TimedOut,
+    Empty,
+    @from Async(AsyncError),
+}
+
+struct Noisy {
+    name: u64;
+    v: Vector<u8>;
+    drop { note(this.name); }
+}
+
+fn noisy(name: u64) -> Noisy {
+    var v = Vector<u8>.create();
+    match (v.push(1)) { Ok() => {} Err(_) => {} }
+    return Noisy { name: name, v: v };
+}
+
+async fn measure(n: Noisy, ms: u64) -> Result<u32, Failure> {
+    await Timer.sleep(ms)?;
+    return Ok(truncate<u32>(n.v.length) + truncate<u32>(n.name));
+}
+
+async fn plain(n: Noisy, ms: u64) -> Result<u32, AsyncError> {
+    await Timer.sleep(ms)?;
+    return Ok(truncate<u32>(n.name));
+}
+
+fn outcome(r: Result<u32, Failure>) -> u64 => match (r) {
+    Ok(v) => v as u64,
+    Err(Failure.TimedOut) => 7,
+    Err(Failure.Empty) => 8,
+    Err(Failure.Async(_)) => 9,
+};
+
+async fn timeouts() -> Result<void, AsyncError> {
+    let a = noisy(1);
+    // `?` on a `Result<void, AsyncError>` before the first `return`, which makes the block's type
+    // `Result<u32, Failure>`: the error converts through `@from`.
+    let first = await Async.timeout(10000, Failure.TimedOut, async move () => {
+        await Timer.sleep(1)?;
+        let moved = a;
+        let measured = await measure(moved, 1);
+        if (measured is Ok(_)) {
+            return measured;
+        }
+        return Err(Failure.Empty);
+    });
+    note(outcome(first));
+    let b = noisy(2);
+    let second = await Async.timeout(10000, Failure.TimedOut, async move () => {
+        let moved = b;
+        if (moved.v.length == 0) {
+            return await measure(moved, 1);
+        }
+        return Err(Failure.Empty);
+    });
+    note(outcome(second));
+    let c = noisy(3);
+    let third = await Async.timeout(2, Failure.TimedOut, async move () => {
+        await Timer.sleep(200)?;
+        return await measure(c, 1);
+    });
+    note(outcome(third));
+    return Ok();
+}
+
+async fn joins() -> Result<void, AsyncError> {
+    let d = noisy(4);
+    let e = noisy(5);
+    let raced = await Async.race(async move () => {
+        let moved = d;
+        return await plain(moved, 1);
+    }, async move () => {
+        await Timer.sleep(200)?;
+        return await plain(e, 1);
+    });
+    match (raced) { Ok(w) => { note(w.value as u64); } Err(_) => { note(9); } }
+    let f = noisy(6);
+    let g = noisy(7);
+    await Async.all(async move () => {
+        let moved = f;
+        await plain(moved, 2)?;
+        return Ok();
+    }, async move () => {
+        await plain(g, 1)?;
+        return Ok();
+    })?;
+    return Ok();
+}
+
+async fn children() -> Result<void, AsyncError> {
+    let h = noisy(1);
+    let i = noisy(2);
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async move () => {
+            let moved = h;
+            await plain(moved, 2)?;
+            return Ok();
+        });
+        s.spawn(async move () => {
+            let moved = i;
+            await plain(moved, 1)?;
+            return Ok();
+        });
+    })?;
+    await Async.tasks(2, AsyncError.Cancelled, async (set) => {
+        let j = noisy(3);
+        await set.spawn(async move () => {
+            let moved = j;
+            await plain(moved, 1)?;
+            return Ok();
+        })?;
+        return Ok();
+    })?;
+    return Ok();
+}
+
+fn main() {
+    LOG.store(0);
+    match (Async.run(timeouts())) { Ok() => {} Err(_) => { Console.writeLine("cancelled"); } }
+    Console.writeLine(LOG.load());
+    LOG.store(0);
+    match (Async.run(joins())) { Ok() => {} Err(_) => { Console.writeLine("cancelled"); } }
+    Console.writeLine(LOG.load());
+    LOG.store(0);
+    match (Async.run(children())) { Ok() => {} Err(_) => { Console.writeLine("cancelled"); } }
+    Console.writeLine(LOG.load());
+}
+// expect-stdout: 122837
+// expect-stdout: 45476
+// expect-stdout: 213

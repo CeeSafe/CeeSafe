@@ -394,7 +394,28 @@ fn checkClosureWith(
     }
     var body = none();
     if (literal.block != none()) {
+        // A run-once literal's block with no expected type: its result type is its first `return`'s (§38.2).
+        let infers = callable == none() && moveLiteral;
+        let savedInfer = c.inferReturn;
+        let savedTries = c.inferTriesStart;
+        let savedReturns = c.inferReturnsStart;
+        c.inferReturn = if (infers) function else none();
+        c.inferTriesStart = c.inferredTries.length;
+        c.inferReturnsStart = c.inferredReturns.length;
         body = checkBlock(c, literal.block)?;
+        if (infers && c.types.isBottom(c.hir.functions[function as usize].returnType)) {
+            // No `return` gave a type. A block that returns no value is `void`, and what waited is checked against
+            // that; one that does has reported why its values have no type.
+            if (!returnsValue(c, body)) {
+                let voidType = c.types.voidType;
+                settleInferredReturn(c, voidType)?;
+            }
+            c.inferredTries.truncate(c.inferTriesStart);
+            c.inferredReturns.truncate(c.inferReturnsStart);
+        }
+        c.inferReturn = savedInfer;
+        c.inferTriesStart = savedTries;
+        c.inferReturnsStart = savedReturns;
     } else {
         let expression = literal.body;
         let expressionSpan = c.front.ast.exprSpans[expression as usize];

@@ -407,10 +407,30 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
     let returnType = if (c.function == none()) none() else c.hir.functions[c.function as usize].returnType;
     let t = c.typeOf(operand);
     let value = c.types.optionType(t);
-    if (value != none()) {
-        if (c.deferDepth > 0) {
-            tryInDefer(c, span)?;
-        } else if ((returnType == none() || c.types.optionType(returnType) == none()) && (returnType == none() ||
+    let tried = c.expr(
+        HirExpr.Try(operand),
+        if (value != none()) value else resultOk(c, t),
+        span.start,
+        span.end,
+    )?;
+    if (c.deferDepth > 0) {
+        tryInDefer(c, span)?;
+    } else if (c.function != none() && c.inferReturn == c.function && c.types.isBottom(returnType)) {
+        // In a block whose result type is its first `return`'s (§38.2), before that `return`: what `?` returns is
+        // checked once the type is known (settleInferredReturn).
+        c.inferredTries.push(InferredTry { tried: tried, operandType: t, start: span.start, end: span.end })?;
+    } else {
+        settleTry(c, tried, t, returnType, span)?;
+    }
+    return Ok(tried);
+}
+
+/// What `e?`, the HIR expression `tried` with an operand of type `t`, returns from a function that returns
+/// `returnType`: `null` for an optional, else the error, as it is or converted (`@from`, ADR 0075 §2.3; `@into`,
+/// ADR 0128), recorded in Checker.tryConversions. N0261 if the function cannot return it.
+fn settleTry(c: borrow mut Checker, tried: u32, t: u32, returnType: u32, span: Span) -> Result<void, AllocError> {
+    if (c.types.optionType(t) != none()) {
+        if ((returnType == none() || c.types.optionType(returnType) == none()) && (returnType == none() ||
             !c.types.isBottom(returnType))) {
             var message = Vector<u8>.create();
             if (inDropBlock(c)) {
@@ -425,80 +445,110 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
             }
             c.error(tryReturnMismatch(), span.start, span.end, message)?;
         }
-        return c.expr(HirExpr.Try(operand), value, span.start, span.end);
+        return Ok();
     }
-    let ok = resultOk(c, t);
     let err = resultErr(c, t);
-    if (c.deferDepth > 0) {
-        tryInDefer(c, span)?;
-    } else {
-        let returnsResult = returnType != none() && isResultType(c, returnType);
-        let conversion = if (returnsResult) fromVariant(c, resultErr(c, returnType), err) else none();
-        if (conversion != none()) {
-            // `?` wraps the error in the return type's `@from` variant (ADR 0075 §2.3).
-            let tried = c.expr(HirExpr.Try(operand), ok, span.start, span.end)?;
-            c.tryConversions.put(Word { value: tried as u64 }, Word { value: conversion as u64 })?;
-            return Ok(tried);
-        }
-        let into = if (returnsResult) intoMethod(c, err, resultErr(c, returnType)) else none();
-        if (into != none()) {
-            // `?` calls the error type's `@into` method, which returns the function's error type (ADR 0128). The
-            // call is checked as one written on the error would be (visibility, profile, effects at its place); only
-            // its callee is kept, since the error itself exists in the lowering alone.
-            let name = c.hir.functions[into as usize].name;
-            findMethod(c, err, name, span)?;
-            let receiver = c.expr(HirExpr.Error, err, span.start, span.end)?;
-            let noArguments = Range { start: 0, count: 0 };
-            checkUserCallWith(c, into, noArguments, span, receiver)?;
-            let tried = c.expr(HirExpr.Try(operand), ok, span.start, span.end)?;
-            c.tryConversions.put(Word { value: tried as u64 }, Word { value: (into as u64) | 0x100000000 })?;
-            return Ok(tried);
-        }
-        if (!returnsResult || resultErr(c, returnType) != err) {
-            if (returnType == none() || !c.types.isBottom(returnType)) {
-                var message = Vector<u8>.create();
-                if (returnsResult) {
-                    appendText(mut message, "'?' would return 'Err' of type ")?;
+    let returnsResult = returnType != none() && isResultType(c, returnType);
+    let conversion = if (returnsResult) fromVariant(c, resultErr(c, returnType), err) else none();
+    if (conversion != none()) {
+        // `?` wraps the error in the return type's `@from` variant (ADR 0075 §2.3).
+        c.tryConversions.put(Word { value: tried as u64 }, Word { value: conversion as u64 })?;
+        return Ok();
+    }
+    let into = if (returnsResult) intoMethod(c, err, resultErr(c, returnType)) else none();
+    if (into != none()) {
+        // `?` calls the error type's `@into` method, which returns the function's error type (ADR 0128). The
+        // call is checked as one written on the error would be (visibility, profile, effects at its place); only
+        // its callee is kept, since the error itself exists in the lowering alone.
+        let name = c.hir.functions[into as usize].name;
+        findMethod(c, err, name, span)?;
+        let receiver = c.expr(HirExpr.Error, err, span.start, span.end)?;
+        let noArguments = Range { start: 0, count: 0 };
+        checkUserCallWith(c, into, noArguments, span, receiver)?;
+        c.tryConversions.put(Word { value: tried as u64 }, Word { value: (into as u64) | 0x100000000 })?;
+        return Ok();
+    }
+    if (!returnsResult || resultErr(c, returnType) != err) {
+        if (returnType == none() || !c.types.isBottom(returnType)) {
+            var message = Vector<u8>.create();
+            if (returnsResult) {
+                appendText(mut message, "'?' would return 'Err' of type ")?;
+                appendQuotedType(mut message, c, err)?;
+                appendText(mut message, ", but ")?;
+                appendFunctionName(mut message, c)?;
+                appendText(mut message, " returns errors of type ")?;
+                appendQuotedType(mut message, c, resultErr(c, returnType))?;
+                appendText(
+                    mut message,
+                    "; mark a variant of the function's error enum '@from' to convert, as in '@from ",
+                )?;
+                appendText(mut message, "Variant(")?;
+                appendBytes(mut message, c.typeName(err))?;
+                appendText(mut message, ")'")?;
+                let other = intoMethod(c, err, none());
+                if (other != none()) {
+                    // The error converts, but not into this function's error type (ADR 0128).
+                    appendText(mut message, "; ")?;
                     appendQuotedType(mut message, c, err)?;
-                    appendText(mut message, ", but ")?;
-                    appendFunctionName(mut message, c)?;
-                    appendText(mut message, " returns errors of type ")?;
-                    appendQuotedType(mut message, c, resultErr(c, returnType))?;
-                    appendText(
-                        mut message,
-                        "; mark a variant of the function's error enum '@from' to convert, as in '@from ",
-                    )?;
-                    appendText(mut message, "Variant(")?;
-                    appendBytes(mut message, c.typeName(err))?;
-                    appendText(mut message, ")'")?;
-                    let other = intoMethod(c, err, none());
-                    if (other != none()) {
-                        // The error converts, but not into this function's error type (ADR 0128).
-                        appendText(mut message, "; ")?;
-                        appendQuotedType(mut message, c, err)?;
-                        appendText(mut message, " converts into ")?;
-                        appendQuotedType(mut message, c, c.hir.functions[other as usize].returnType)?;
-                        appendText(mut message, " only (its '@into' method ")?;
-                        appendQuotedName(mut message, c, c.hir.functions[other as usize].name)?;
-                        appendText(mut message, "), and '?' converts in one step")?;
-                    }
-                } else if (inDropBlock(c)) {
-                    appendText(
-                        mut message,
-                        "'?' cannot be used in a 'drop' block: it returns 'Err' from the function, and a 'drop' block returns nothing, so the error has nowhere to go; handle it here with 'match', or discard it with 'let _ = …;'",
-                    )?;
-                } else {
-                    appendText(mut message, "'?' returns 'Err' from the function, so ")?;
-                    appendFunctionName(mut message, c)?;
-                    appendText(mut message, " must return 'Result<_, ")?;
-                    appendBytes(mut message, c.typeName(err))?;
-                    appendText(mut message, ">'")?;
+                    appendText(mut message, " converts into ")?;
+                    appendQuotedType(mut message, c, c.hir.functions[other as usize].returnType)?;
+                    appendText(mut message, " only (its '@into' method ")?;
+                    appendQuotedName(mut message, c, c.hir.functions[other as usize].name)?;
+                    appendText(mut message, "), and '?' converts in one step")?;
                 }
-                c.error(tryReturnMismatch(), span.start, span.end, message)?;
+            } else if (inDropBlock(c)) {
+                appendText(
+                    mut message,
+                    "'?' cannot be used in a 'drop' block: it returns 'Err' from the function, and a 'drop' block returns nothing, so the error has nowhere to go; handle it here with 'match', or discard it with 'let _ = …;'",
+                )?;
+            } else {
+                appendText(mut message, "'?' returns 'Err' from the function, so ")?;
+                appendFunctionName(mut message, c)?;
+                appendText(mut message, " must return 'Result<_, ")?;
+                appendBytes(mut message, c.typeName(err))?;
+                appendText(mut message, ">'")?;
             }
+            c.error(tryReturnMismatch(), span.start, span.end, message)?;
         }
     }
-    return c.expr(HirExpr.Try(operand), ok, span.start, span.end);
+    return Ok();
+}
+
+/// A `?` checked before its block's result type was known (Checker.inferredTries).
+struct InferredTry {
+    tried: u32; // the HIR expression
+    operandType: u32;
+    start: u32;
+    end: u32;
+}
+
+/// The result type of the block being inferred (Checker.inferReturn) is now `returnType`, its first `return`'s, or
+/// `void` at the end of a block that returns no value: the `?`s and the bare `return`s before it are checked
+/// against it.
+fn settleInferredReturn(c: borrow mut Checker, returnType: u32) -> Result<void, AllocError> {
+    var k = c.inferTriesStart;
+    while (k < c.inferredTries.length) {
+        let pending = c.inferredTries[k];
+        k += 1;
+        settleTry(c, pending.tried, pending.operandType, returnType, Span { start: pending.start, end: pending.end })?;
+    }
+    c.inferredTries.truncate(c.inferTriesStart);
+    k = c.inferReturnsStart;
+    while (k < c.inferredReturns.length) {
+        let span = c.inferredReturns[k];
+        k += 1;
+        if (!c.types.is(returnType, TypeKind.Void) && !c.types.isBottom(returnType)) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "missing return value: ")?;
+            appendFunctionName(mut message, c)?;
+            appendText(mut message, " returns ")?;
+            appendQuotedType(mut message, c, returnType)?;
+            appendText(mut message, ", the type of its first 'return' with a value (type-system.md §38.2)")?;
+            c.error(returnValueMismatch(), span.start, span.end, message)?;
+        }
+    }
+    c.inferredReturns.truncate(c.inferReturnsStart);
+    return Ok();
 }
 
 fn tryInDefer(c: borrow mut Checker, span: Span) -> Result<void, AllocError> {

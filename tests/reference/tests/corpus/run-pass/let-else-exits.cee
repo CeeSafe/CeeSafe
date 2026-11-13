@@ -1,0 +1,18 @@
+// A `let … else` whose block leaves through a call that does not return (ADR 0117 §2.2): `Process.exit` ends the
+// program there. Apart from run-pass/let-else.cee, which allocates: a program that exits this way writes no
+// allocation report, so the fault sweep could not take it.
+fn parse(r: Result<u32, u32>) -> u32 {
+    let Ok(n) = r else {
+        Console.writeLine("no number");
+        Process.exit(3);
+    };
+    return n + 1;
+}
+
+fn main() {
+    Console.writeLine(parse(Ok(1)));
+    Console.writeLine(parse(Err(2)));
+}
+// expect-stdout: 2
+// expect-stdout: no number
+// expect-exit: 3

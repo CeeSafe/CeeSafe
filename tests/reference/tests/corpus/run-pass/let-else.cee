@@ -120,7 +120,6 @@ fn main() {
     Console.writeLine(nested(Shape.Circle(40)));
     Console.writeLine(nested(Shape.Rect(1, 2)));
     Console.writeLine(nested(null));
-    Console.writeLine(parse(Err(2)));
 }
 // expect-stdout: 12
 // expect-stdout: 0
@@ -142,5 +141,3 @@ fn main() {
 // expect-stdout: 1
 // expect-stdout: 0
 // expect-stdout: 0
-// expect-stdout: no number
-// expect-exit: 3

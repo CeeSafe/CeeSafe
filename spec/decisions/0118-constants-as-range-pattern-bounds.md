@@ -1,7 +1,7 @@
 # ADR 0118 — A constant's name as a range pattern's bound
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-c`;
-  not yet released. Raised while writing the language's book: a range whose limits the program already names had
+  released in ceesafec 0.42.0. Raised while writing the language's book: a range whose limits the program already names had
   to repeat them as literals.
 - Scope: type-system.md §15.2 (`PrimPattern`, "Ranges"); diagnostics.md (N0358's row; N0108's wording); the parser
   (`rangePattern`, `nameBound`) and the checker (`rangeBound` in `src/check/patterns.cee`); the corpus and the

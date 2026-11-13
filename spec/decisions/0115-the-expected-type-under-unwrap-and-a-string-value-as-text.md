@@ -1,7 +1,7 @@
 # ADR 0115 — The expected type under `!` and `?`, and a string value as text
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-b`; not
-  yet released. Raised by the writers of the book's chapters 13 to 22 (gaps B2 and B4 of the second round).
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-b`; released in ceesafec
+  0.42.0. Raised by the writers of the book's chapters 13 to 22 (gaps B2 and B4 of the second round).
 - Scope: the checker (`src/check/options.cee`, `src/check/expr.cee`, `src/check/references.cee`);
   `spec/type-system.md` §17.4 and §23.2; the guide. No new diagnostic code, no new syntax, no change to the libraries,
   the runtime or the interpreter.

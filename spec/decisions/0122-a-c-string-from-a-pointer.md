@@ -1,7 +1,7 @@
 # ADR 0122 — A C string from a pointer: `CStr.fromPtr`
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; not
-  yet released. Raised by the book's authors (gaps2 D13): reading a `const char *` that C returns took three steps,
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; released in ceesafec
+  0.42.0. Raised by the book's authors (gaps2 D13): reading a `const char *` that C returns took three steps,
   a declaration of `strlen`, `Slice.fromRaw` and `StringView.fromUtf8`.
 - Scope: lib/core (`lib/core/cstr.cee`, one function; `src/library/sources.cee` regenerated);
   `spec/type-system.md` §22.3; `guide/unsafe-and-c.md`. No change to the checker, the backends, the runtime or the

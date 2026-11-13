@@ -1,7 +1,7 @@
 # ADR 0105 — A `Result` nothing reads is a warning
 
 - Status: **Accepted** by the owner, 2026-11-12 ("Fix 1 and 2 as you suggested", then "We fix all gaps 1-6 first"),
-  implemented on branch `impl/0105`; not yet released. Raised by the book (Decision 0011): chapters 8, 9 and 11 each
+  implemented on branch `impl/0105`; released in ceesafec 0.42.0. Raised by the book (Decision 0011): chapters 8, 9 and 11 each
   had to teach "the compiler says nothing" as a mistake.
 - Scope: one warning, N0402, in the checker (`src/check/body.cee`, `src/check/unused_results.cee`);
   `spec/diagnostics.md`, `spec/type-system.md` §17.5; the guide. No change to what a program means, to the library or

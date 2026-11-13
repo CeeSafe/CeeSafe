@@ -1,7 +1,7 @@
 # ADR 0107 — Methods on enums
 
 - Status: **Accepted** by the owner, 2026-11-12 ("We fix all gaps 1-6 first"), implemented on branch `impl/0107`;
-  not yet released. Raised while writing the language's book: a newcomer writes `shape.area()` for an enum and is
+  released in ceesafec 0.42.0. Raised while writing the language's book: a newcomer writes `shape.area()` for an enum and is
   refused twice.
 - Scope: type-system.md §21.1 (`impl E { … }`), §15.1, §13.3 (`this = v`), §10 and §2; grammar.md §2 (the
   assignment target); diagnostics.md (N0100, N0228, N0267: wording, no new code); the checker

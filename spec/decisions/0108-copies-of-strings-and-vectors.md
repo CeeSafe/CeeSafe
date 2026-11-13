@@ -1,7 +1,7 @@
 # ADR 0108 — Copies of strings and vectors: `clone` and `String.from`
 
 - Status: **Accepted** by the owner, 2026-11-12 ("We fix all gaps 1-6 first"), implemented on branch `impl/0108`;
-  not yet released. Raised while writing the language's book: two things every chapter with an owned string needs
+  released in ceesafec 0.42.0. Raised while writing the language's book: two things every chapter with an owned string needs
   took a helper each.
 - Scope: two structs in `lib/core` (`VectorCopying<T>` in `slices.cee`, `StringCopying` in `text.cee`); the checker's
   vector and string functions (`src/check/vectors.cee`); `spec/type-system.md` §23.1 and §23.2; the guide. No change

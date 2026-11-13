@@ -1,7 +1,7 @@
 # ADR 0120 — A package's include directories reach the generated C
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; not
-  yet released. Raised by the book's authors (gaps2 D6): a package that binds C through `@header("clock.h")` named the
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; released in ceesafec
+  0.42.0. Raised by the book's authors (gaps2 D6): a package that binds C through `@header("clock.h")` named the
   header's directory in `include-dirs`, and every build still needed `--cflag -Ic`.
 - Scope: the driver (`src/main.cee`, `collectNativeLinks`; `src/host/toolchain.cee`, the compile commands);
   `spec/tooling.md` §4.1 and §8.3; `guide/packages.md`. It amends ADR 0047 §3.3. No change to the manifest's syntax,

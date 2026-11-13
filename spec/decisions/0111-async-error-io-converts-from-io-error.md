@@ -1,7 +1,7 @@
 # ADR 0111 — `AsyncError.Io` converts from `IoError`; `main` is not async
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; not
-  yet released. Raised by the book (Decision 0011): chapter 17's Listings 17-27 and 17-29 each carried a match whose
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; released in ceesafec
+  0.42.0. Raised by the book (Decision 0011): chapter 17's Listings 17-27 and 17-29 each carried a match whose
   only work was to wrap an error, and its first listing could not be written as `async fn main`.
 - Scope: one attribute in `lib/core/async.cee`; one refusal in the checker (`src/check/declare.cee`, N0219);
   `spec/type-system.md` §11 and §40.4; `spec/diagnostics.md`; the guide. No change to the runtime or to either

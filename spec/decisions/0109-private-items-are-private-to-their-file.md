@@ -1,7 +1,7 @@
 # ADR 0109 — Private items are private to their file
 
-- Status: **Accepted** by the owner, 2026-11-12 ("We fix all gaps 1-6 first"), implemented on branch `impl/0109`; not
-  yet released. Raised while writing the language's book: `private fn` at the top level of a file was accepted and
+- Status: **Accepted** by the owner, 2026-11-12 ("We fix all gaps 1-6 first"), implemented on branch `impl/0109`; released in ceesafec
+  0.42.0. Raised while writing the language's book: `private fn` at the top level of a file was accepted and
   another file of the package could call it, though `type-system.md` §2 says `private` keeps an item within its file.
 - Scope: the checker (`src/check/packages.cee` and the places a name is resolved), one condition of the parser
   (`src/syntax/parser.cee`, an `impl` block's modifiers); `spec/type-system.md` §2 and §12, `spec/grammar.md`,

@@ -1,7 +1,7 @@
 # ADR 0114 — What a read through a place needs, and what it carries
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-b`; not
-  yet released. Raised by the writers of the book's chapters 13 to 22 (gaps B1, B3 and B5 of the second round).
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-b`; released in ceesafec
+  0.42.0. Raised by the writers of the book's chapters 13 to 22 (gaps B1, B3 and B5 of the second round).
 - Scope: the move checker (`src/nir/move_check.cee`), the borrow checker's loan edges (`src/nir/borrow.cee`), the
   pointer cast (`src/check/unsafe.cee`); `spec/ownership.md` (O3), `spec/lifetimes.md` §3, `spec/type-system.md`
   §13.5, §14.4 and §27.2; the guide. No new diagnostic code, no new syntax, no change to the libraries, the runtime

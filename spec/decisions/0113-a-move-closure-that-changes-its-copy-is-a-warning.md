@@ -1,7 +1,7 @@
 # ADR 0113 — A `move` closure that changes its own copy is a warning
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; not
-  yet released. Raised by the book (Decision 0011): chapter 16's Listing 16-9 teaches "the compiler says nothing and
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; released in ceesafec
+  0.42.0. Raised by the book (Decision 0011): chapter 16's Listing 16-9 teaches "the compiler says nothing and
   the program prints 0" as a mistake.
 - Scope: one warning, N0403, in the checker (`src/check/closures.cee`, `src/check/expr.cee`,
   `src/check/unused_results.cee`); `spec/diagnostics.md`, `spec/type-system.md` §36.5; the guide. No change to what

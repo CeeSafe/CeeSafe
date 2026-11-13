@@ -1,7 +1,7 @@
 # ADR 0112 — A thread's closure runs once; `Mutex.tryLock`
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; not
-  yet released. Raised by the book (Decision 0011): chapter 16 could not write a thread that gives back what it was
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-a`; released in ceesafec
+  0.42.0. Raised by the book (Decision 0011): chapter 16 could not write a thread that gives back what it was
   given, and had no way to ask for a lock without waiting; chapter 13 met the same message for any closure.
 - Scope: the checker (`src/check/threads.cee`, `src/check/closures.cee`), the move and borrow checks' messages
   (`src/nir/move_check.cee`, `src/nir/borrow.cee`), both backends' thread join (`src/backend/c_dyn.cee`,

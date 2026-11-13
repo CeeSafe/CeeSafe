@@ -1,7 +1,7 @@
 # ADR 0117 — `let PATTERN = e else { … };`: bind or leave
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-c`;
-  not yet released. Raised while writing the language's book: a function that needs a value's payload for the rest
+  released in ceesafec 0.42.0. Raised while writing the language's book: a function that needs a value's payload for the rest
   of its body had to nest that body in an `if`.
 - Scope: grammar.md §2 (`LocalDecl`); type-system.md §15.5 (new), §15.4 (N0404); diagnostics.md (N0100 and N0213:
   wording; N0404: a new warning); formatting.md (nothing new: the statement formats by the existing rules); the

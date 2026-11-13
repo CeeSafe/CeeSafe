@@ -1,7 +1,7 @@
 # ADR 0121 — `--emit obj` writes its user's headers
 
-- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; not
-  yet released. Raised by the book's authors (gaps2 D7): a freestanding environment defines `ceesafe_panic`, whose
+- Status: **Accepted** by the owner, 2026-11-13 ("Fix those new gaps too"), implemented on branch `fix/gaps2-d`; released in ceesafec
+  0.42.0. Raised by the book's authors (gaps2 D7): a freestanding environment defines `ceesafe_panic`, whose
   types are in `ceesafe/rt.h`, and `--emit obj` wrote no header, so the reader ran a second `ceesafec build --emit c`
   only to get it.
 - Scope: the driver (`src/host/build.cee`, `writeHostHeaders`); `spec/profiles.md` §4.3, `spec/tooling.md` §8.3;

@@ -1,7 +1,7 @@
 # ADR 0110 — Literal arithmetic that would panic is an error
 
 - Status: **Accepted** by the owner, 2026-11-12 ("We fix all gaps 1-6 first"), implemented on branch
-  `fix/let-discard-and-constant-overflow`; not yet released. Raised by the book's authors, who read
+  `fix/let-discard-and-constant-overflow`; released in ceesafec 0.42.0. Raised by the book's authors, who read
   `spec/type-system.md` as promising it: `let big: u8 = 200 + 100;` compiled and panicked when run.
 - Scope: the checker (`src/check/expr.cee`, a flag in `checker.cee` and `declare.cee`), which calls the constant
   evaluator it already has (`src/check/consts.cee`, unchanged); `spec/type-system.md` §5, §6, §10;

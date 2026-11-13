@@ -1,7 +1,7 @@
 # ADR 0106 — A line of input and a random number
 
 - Status: **Accepted** by the owner, 2026-11-12 ("Fix 1 and 2 as you suggested", then "We fix all gaps 1-6 first"),
-  implemented on branch `impl/0106`; not yet released. Raised while writing chapter 2 of the book, a number-guessing
+  implemented on branch `impl/0106`; released in ceesafec 0.42.0. Raised while writing chapter 2 of the book, a number-guessing
   game, the first program a newcomer writes.
 - Scope: two functions in `lib/std/host.cee` (`HostServices.readLine`, which the checker names `Console.readLine`,
   and `Random.below`); one C adapter and a buffer for standard input in `runtime/hosted/ceesafe_rt_io.c`; the

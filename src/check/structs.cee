@@ -476,7 +476,7 @@ fn ioErrorVariant(k: usize) -> StringView => match (k) {
     17 => "AddressNotAvailable",
     18 => "Unsupported",
     19 => "HostNotFound",
-    20 => "StorageFull", // ADR 0077
+    20 => "StorageFull",     // ADR 0077
     _ => "TooManyOpenFiles", // ADR 0104
 };
 

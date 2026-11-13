@@ -11,6 +11,7 @@ reference counting; values are destroyed deterministically. The compiler is writ
 the same bytes.
 
 [Documentation](https://ceesafe.github.io/CeeSafe/) ·
+[The book](https://ceesafe.github.io/CeeSafe/book/) ·
 [Getting started](guide/getting-started.md) ·
 [Specification](spec/) ·
 [Releases](https://github.com/CeeSafe/CeeSafe/releases) ·
@@ -132,6 +133,7 @@ Other commands: `ceesafec fix` applies the compiler's sure fixes, `ceesafec expl
 
 | | |
 |---|---|
+| [The book](https://ceesafe.github.io/CeeSafe/book/) | *The CeeSafe Programming Language*: the language taught from the start, chapter by chapter, with projects; every listing a whole program the compiler has checked. The place to start learning |
 | [The guide](guide/) | the language from basics to ownership, memory, collections, generics, closures, threads, [async tasks](guide/async.md), `unsafe` and kernel code, [packages](guide/packages.md) and [testing](guide/testing.md); [coming from Rust, Zig, C, C#, Go](guide/coming-from/) |
 | [The specification](spec/) | the normative rules: grammar, type system, ownership, lifetimes, memory model, the C backend, diagnostics, tooling |
 | [For AI agents](guide/for-agents.md) | how an agent should write and check CeeSafe; `ceesafec new --agent claude` sets one up |
@@ -164,6 +166,7 @@ python3 tools/contract_tests.py --ceesafec out/ceesafec
 | `src/` | the compiler, in CeeSafe: `syntax/` (lexer, parser), `check/` and `types/` (type and borrow checking), `hir/`, `nir/`, `backend/` (C), `interpreter/`, `formatting/`, `tooling/` (lsp, mcp), `packages/`, `support/` |
 | `runtime/` | the C runtime every program links (`ceesafe/rt.h`, `ceesafe_rt_*.c`), embedded by `tools/gen_runtime.py` |
 | `spec/`, `guide/` | the specification and the guide, embedded in `ceesafec` and published on the site |
+| `book/` | *The CeeSafe Programming Language*, the book, published beside the site |
 | `tests/reference/` | the corpus: parse, check, run, C-snapshot and optimisation tests with their expectations |
 | `tests/support/` | the support library's tests against independent oracles |
 | `benchmarks/` | CeeSafe against Rust and C |

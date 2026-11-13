@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vitepress";
 import { appendices, chapters, front, written } from "../toc.mjs";
+import { withVersion } from "../version.mjs";
 
 // The book (Decision 0011): a second site beside the documentation site, in the Rust Book's shape. CeeSafe code is
 // highlighted by the VS Code extension's grammar, as on the documentation site.
@@ -20,7 +21,11 @@ const sidebar = [
       link: written(section) ? link(section.file) : undefined,
     })),
   })),
-  { text: "Appendices", collapsed: true, items: appendices.map((appendix) => ({ text: appendix.title })) },
+  {
+    text: "Appendices",
+    collapsed: !appendices.some((a) => written(a)),
+    items: appendices.map((appendix) => ({ text: appendix.title, link: written(appendix) ? link(appendix.file) : undefined })),
+  },
 ];
 
 export default defineConfig({
@@ -32,12 +37,19 @@ export default defineConfig({
   head: [["link", { rel: "icon", type: "image/svg+xml", href: "/CeeSafe/logo.svg" }]],
   markdown: {
     languages: [{ ...ceesafe, name: "ceesafe", aliases: ["CeeSafe", "cee"] }],
+    // The compiler's version where a page writes %ceesafec-version% (version.mjs).
+    config: (md) => {
+      md.core.ruler.before("normalize", "ceesafec-version", (state) => {
+        state.src = withVersion(state.src);
+      });
+    },
   },
   themeConfig: {
     siteTitle: "The CeeSafe Book",
     nav: [
       { text: "Documentation", link: "https://ceesafe.github.io/CeeSafe/" },
-      { text: "For AI", link: "/llms.txt", target: "_blank" },
+      // VitePress does not put the base before a link to a file that is not a page: it is written out.
+      { text: "For AI", link: "/CeeSafe/book/llms.txt", target: "_blank" },
     ],
     sidebar,
     socialLinks: [{ icon: "github", link: "https://github.com/CeeSafe/CeeSafe" }],
@@ -45,7 +57,7 @@ export default defineConfig({
     outline: { level: [2, 3], label: "In this section" },
     docFooter: { prev: "Previous", next: "Next" },
     footer: {
-      message: "In progress: chapters 1 to 12, the course, are written.",
+      message: "Chapters 1 to 22 are written; the appendices are to come.",
       copyright: "Copyright © 2026 Veeran Puthumkara.",
     },
   },

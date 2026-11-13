@@ -138,6 +138,7 @@ export default defineConfig({
   themeConfig: {
     logo: "/logo.svg",
     nav: [
+      { text: "Book", link: "https://ceesafe.github.io/CeeSafe/book/", target: "_self" },
       { text: "Guide", link: "/guide/introduction", activeMatch: "/guide/" },
       { text: "Specification", link: "/reference/", activeMatch: "/reference/(?!api/|decisions/)" },
       { text: "Library", link: "/reference/api/core", activeMatch: "/reference/api/" },

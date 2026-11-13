@@ -2,11 +2,24 @@ name: docs
 
 # The documentation site (site/README.md): VitePress, published to GitHub Pages at https://ceesafe.github.io/CeeSafe/.
 # Its pages are spec/, guide/ and docs/blog/; the guide's examples are checked by tools/guide_check.py in the contract suite.
+# The book (book/README.md, Decision 0011) is a second VitePress site, built here and published under /book/; its
+# listings are checked by tools/book_check.py in the contract suite. A pull request builds both and deploys nothing.
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
+      - "book/**"
+      - "spec/**"
+      - "guide/**"
+      - "docs/blog/**"
+      - "editors/vscode/syntaxes/**"
+      - "src/backend/c_program.cee" # the version on the book's title page
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "book/**"
       - "spec/**"
       - "guide/**"
       - "docs/blog/**"
@@ -37,19 +50,36 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: site/pnpm-lock.yaml
-      - name: Install
+          cache-dependency-path: |
+            site/pnpm-lock.yaml
+            book/pnpm-lock.yaml
+      - name: Install the site
         working-directory: site
         run: pnpm install --frozen-lockfile
-      - name: Build
+      - name: Build the site
         working-directory: site
         run: pnpm run build
+      - name: Install the book
+        working-directory: book
+        run: pnpm install --frozen-lockfile
+      - name: Build the book # fails on a dead link, or a page without its header
+        working-directory: book
+        run: pnpm run build
+      - name: Put the book under /book/
+        run: |
+          test ! -e site/.vitepress/dist/book
+          cp -R book/.vitepress/dist site/.vitepress/dist/book
+          test -f site/.vitepress/dist/book/index.html
+          test -f site/.vitepress/dist/book/llms.txt
       - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
         with:
           path: site/.vitepress/dist
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-24.04
     environment:

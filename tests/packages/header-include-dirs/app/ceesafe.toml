@@ -1,0 +1,7 @@
+# A program over a library that binds C through a header in its include-dirs (ADR 0120).
+[package]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+meter = { path = "../meter" }

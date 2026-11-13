@@ -62,3 +62,9 @@ Each is reported as passed, failed, panicked, crashed (a signal), exited (it cal
 garbage collector, so memory still allocated at the end is a bug. A failing test's output is shown under its name, and
 a test failing with its own enum names the variant. A `--filter` that matches no test is an error, and `--sweep` runs
 natively only. `ceesafec test --help` lists the options.
+
+Under `--sweep alloc` a run may return an error; it may not panic, crash or leak. One kind of panic is set apart: a
+`!` or `?` that unwraps the failed allocation in a file that has `@test` functions is counted as "unwrapped by the
+test itself", not as a sweep failure, since tests and their helpers may unwrap. That goes by file: a `!` in the code
+under test counts the same when its file holds tests too. `--sweep-strict` makes every such panic a failure; use it
+for code that must return the error.

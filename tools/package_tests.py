@@ -668,6 +668,35 @@ def interface_records(compiler, work, problems):
             problems.append(f"records: {name} has mode {oct(os.stat(os.path.join(records, name)).st_mode & 0o777)}")
 
 
+def header_include_dirs(compiler, work, problems):
+    """33. header-include-dirs (ADR 0120): meter binds C through `@header("meter.h")`, a header in its `include-dirs`;
+    app depends on it. The generated C finds the header in the plain build, `--split`, `--emit obj` and `--emit lib`,
+    and the programs print 15. `--emit c` to a relative directory writes ceesafe_link.txt there."""
+    base = os.path.join(work, "header-include-dirs")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "header-include-dirs"), base)
+    app = os.path.join(base, "app")
+    suffix = ".exe" if WINDOWS else ""
+    for label, extra in (("build", []), ("build --split", ["--split"])):
+        exe = os.path.join(app, "out", "app-" + str(len(extra)) + suffix)
+        p = run([compiler, "build", "-o", exe] + extra, app)
+        if p.returncode != 0:
+            problems.append(f"header-include-dirs: {label} failed: {p.stderr.strip()[-600:]}")
+            continue
+        out = run([exe], app).stdout.strip()
+        if out != "15":
+            problems.append(f"header-include-dirs: {label}: the program printed {out!r}, not 15")
+    if not WINDOWS:
+        for emit, output in (("obj", "app.o"), ("lib", "app.a")):
+            p = run([compiler, "build", "--emit", emit, "-o", os.path.join(app, "out", emit, output)], app)
+            if p.returncode != 0:
+                problems.append(f"header-include-dirs: --emit {emit} failed: {p.stderr.strip()[-600:]}")
+    p = run([compiler, "build", "--emit", "c", "-o", "c-out"], app)
+    link = os.path.join(app, "c-out", "ceesafe_link.txt")
+    if p.returncode != 0 or not os.path.exists(link):
+        problems.append(f"header-include-dirs: --emit c -o c-out wrote no c-out/ceesafe_link.txt: "
+                        f"{p.returncode} {p.stderr.strip()[-300:]}")
+
+
 def driver_messages(compiler, work, problems):
     """32. What the driver says: help for a command, an environment failure without the usage text, a lock written
     with another index, and the places of `publish`'s and `index-check`'s errors."""
@@ -1750,10 +1779,11 @@ def main():
                             f"{p.returncode} {p.stdout!r} {p.stderr[-300:]}")
 
         driver_messages(compiler, work, problems)
+        header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 32 checks; {len(problems)} problems")
+    print(f"package_tests: 33 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

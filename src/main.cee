@@ -1766,6 +1766,15 @@ fn collectNativeLinks(workspace: borrow Workspace, native: borrow mut NativeBuil
                     native.libDirs.push(copyBytes(d.view())?)?;
                 }
             }
+            for (d in manifest.includeDirs.view()) {
+                var seen = false;
+                for (x in native.includeDirs.view()) {
+                    seen = seen || sameBytes(x.view(), d.view());
+                }
+                if (!seen) {
+                    native.includeDirs.push(copyBytes(d.view())?)?;
+                }
+            }
         }
     }
     for (k in 0..links.length) {

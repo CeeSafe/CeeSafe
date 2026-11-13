@@ -37,14 +37,15 @@ kind = "library"
 c = ["c/shim.c"]
 links = ["ssl", "crypto"]                # -lssl -lcrypto (ssl.lib crypto.lib with cl)
 lib-dirs = ["$OPENSSL_DIR/lib"]          # an environment variable, or a literal path
-include-dirs = ["$OPENSSL_DIR/include"]  # for this package's own C files
+include-dirs = ["$OPENSSL_DIR/include"]  # for this package's own C files and its @header files
 
 [target.windows]                         # added on Windows; also [target.macos], [target.linux]
 links = ["libssl", "libcrypto"]
 ```
 
 Nothing runs to find the library: no pkg-config, no scripts. A directory is literal, or starts with an environment
-variable, which must be set. `ceesafec build --emit c` writes the link line to `ceesafe_link.txt`, for building by hand.
+variable, which must be set. The include directories are where the package's C files find their headers, and where
+the program's generated C finds the headers the package names with `@header`. `ceesafec build --emit c` writes the link line to `ceesafe_link.txt`, for building by hand.
 
 ## Embedded files
 

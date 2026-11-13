@@ -247,7 +247,8 @@ link succeeds.
   a build whose members would still share a name (C files differing in case alone) fails rather than lose an object.
   The archive is written under a temporary name and renamed over the output, so a failed archiver keeps the old one.
 - **The host's headers** are written beside the archive: `ceesafe/embed.h` and the exports header under its
-  `--exports-header` name. Not beside `--emit obj`'s object, which stays as it is (below).
+  `--exports-header` name. Not beside `--emit obj`'s object, which stays as it is (below; since ADR 0121 `--emit obj`
+  writes them too).
 - **`main`.** A package with a CeeSafe `main` gets no C `main` in its archive (the host has its own; two do not link);
   `--lib-main` keeps it.
 - **Why an archive, not `-r`.** It is the only form that keeps the host's LTO: with `--cflag -flto=thin` (or `-flto`)

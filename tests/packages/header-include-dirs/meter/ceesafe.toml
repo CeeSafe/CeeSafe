@@ -1,0 +1,7 @@
+# Its header is in a directory of its own: include-dirs names it, for its C file and for the generated C (ADR 0120).
+[package]
+name = "meter"
+version = "0.1.0"
+kind = "library"
+c = ["native/meter.c"]
+include-dirs = ["native/include"]

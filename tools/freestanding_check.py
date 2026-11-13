@@ -111,9 +111,8 @@ def main():
                 problems.append(f"{relative} (host) leaves undefined: {', '.join(sorted(extra))}")
             harness = os.path.join(directory, os.path.splitext(name)[0] + ".c")
             exe = os.path.join(work, "environment")
-            host_c = os.path.join(work, "host-c")  # the harness includes the generated rt.h
-            run([compiler, "build", "--profile", "freestanding", "--emit", "c", "-o", host_c, relative], cwd=args.corpus)
-            linked = run(["clang", "-std=c11", "-Wall", "-Werror", "-I", host_c, harness, obj, "-o", exe, "-lpthread"])
+            # The harness includes ceesafe/rt.h, which --emit obj wrote beside the object (ADR 0121).
+            linked = run(["clang", "-std=c11", "-Wall", "-Werror", "-I", work, harness, obj, "-o", exe, "-lpthread"])
             if linked.returncode != 0:
                 problems.append(f"{relative} (harness): {linked.stderr.strip()[:500]}")
                 continue

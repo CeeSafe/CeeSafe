@@ -1,0 +1,23 @@
+// The unmet cases of impl-bounds-order (ADR 0130 §2.6): an instance of the dependency's struct whose argument has no
+// impl of the bounding interface (this package's `Plain`, the dependency's `Label`), is not Copy (`Owned` of
+// src/later.cee), or is not Send (`Pointer` of src/later.cee) does not have the block's functions: N0268 at the
+// first three uses and the last, N0334 at the fourth.
+fn main() {
+    let plain = shapes.pair<Plain>(Plain { n: 3 }, Plain { n: 4 });
+    Console.writeLine(plain.names());
+    let labels = shapes.pair<shapes.Label>(
+        shapes.Label { text: String.from("a")! },
+        shapes.Label { text: String.from("b")! },
+    );
+    Console.writeLine(labels.names());
+    let owned = shapes.pair<Owned>(Owned { text: String.from("a")! }, Owned { text: String.from("b")! });
+    Console.writeLine(owned.first().text.length);
+    let pointers = shapes.pair<Pointer>(Pointer { p: 0 as *u8 }, Pointer { p: 0 as *u8 });
+    Console.writeLine(pointers.across());
+    let either = shapes.other<Plain>();
+    Console.writeLine(either.name());
+}
+
+struct Plain {
+    n: u32;
+}

@@ -116,6 +116,10 @@
 30. constant-other-file: a static's initialiser calls a generic `@constant` function of another file whose body is
     not a static initialiser for that call: one N0338, in the function's file at its line (the report once
     panicked, reading the calling file's text at the other file's offset).
+34. impl-bounds-order (ADR 0130 §2.6): an instance of a dependency's struct or enum has the functions of the bounded
+    `impl` blocks whose bounds its argument meets, by an impl declared later in the file, in another file of the
+    package and in the dependency, for a bound that is an interface, `Copy` and `Send`: `check` is clean and the
+    program prints what it should, in the interpreter and compiled; the unmet cases are N0268, and N0334 for Send.
 31. private-items (ADR 0109): a private function, generic function, struct, generic struct, enum, interface, constant,
     static, method, static function and associated constant of src/shapes.cee, and an `impl` block's of
     src/more.cee (a struct's and an enum's), named in src/main.cee in a call, a value, a type, a bound, `dyn`, an `impl` header, a literal and
@@ -279,6 +283,42 @@ def oracle_problem(directory, whole, per):
     if sorted(named) != sorted(failed):
         return f"N0364 names {sorted(named)}, but the packages with errors are {sorted(failed)}"
     return None
+
+
+def impl_bounds_order(compiler, work, problems):
+    """Whether an instance meets a bounded `impl` block's bounds is decided once the whole program's impls, fields
+    and Copy types are known (ADR 0130 §2.6): the met cases run, the unmet ones are N0268 (N0334 for Send)."""
+    root = os.path.join(work, "impl-bounds-order")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "impl-bounds-order"), root)
+    app = os.path.join(root, "app")
+    expected = "7\n30\n3\n5\n3\n5\n7\n9"
+    p = run([compiler, "check", "--diagnostics-format=json"], app)
+    try:
+        found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+    except (ValueError, KeyError):
+        found = [p.stdout[:300] + p.stderr[:300]]
+    if p.returncode != 0 or found:
+        problems.append(f"impl-bounds-order: check should be clean: {p.returncode} {found}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.strip() != expected:
+        problems.append(f"impl-bounds-order: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                        f"{p.stderr[-300:]}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0:
+        problems.append(f"impl-bounds-order: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], app).stdout.strip()
+        if out != expected:
+            problems.append(f"impl-bounds-order: the program printed {out!r}")
+    p = run([compiler, "check", "--diagnostics-format=json"], os.path.join(root, "unmet"))
+    try:
+        found = [(d["code"], d["start"]["line"]) for d in json.loads(p.stdout)["diagnostics"]]
+    except (ValueError, KeyError):
+        found = []
+    wanted = [("N0268", 7), ("N0268", 12), ("N0268", 14), ("N0334", 16), ("N0268", 18)]
+    if p.returncode != 1 or sorted(found, key=lambda d: d[1]) != wanted:
+        problems.append(f"impl-bounds-order/unmet: expected {wanted}: {p.returncode} {found} {p.stderr[:300]}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -1783,12 +1823,13 @@ def main():
             problems.append(f"private-items: without the marked lines the program should print 31 and 11: "
                             f"{p.returncode} {p.stdout!r} {p.stderr[-300:]}")
 
+        impl_bounds_order(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 33 checks; {len(problems)} problems")
+    print(f"package_tests: 34 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

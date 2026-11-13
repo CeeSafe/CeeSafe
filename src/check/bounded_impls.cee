@@ -286,11 +286,22 @@ fn attachBoundedFunctions(c: borrow mut Checker, index: u32, isEnum: bool) -> Re
         if (arguments.length != parameters.length) {
             continue;
         }
-        let mark = diagnosticsMark(c);
-        checkBounds(c, parameters.view(), arguments.view(), Span { start: 0, end: 0 })?;
-        let met = diagnosticsMark(c) == mark;
-        dropDiagnosticsSince(c, mark);
-        if (!met) {
+        let decision = decideBounds(c, parameters.view(), arguments.view())?;
+        if (decision == boundsUnknown()) {
+            // ceesafec's own order is wrong: the blocks are attached once the impls, the fields and Copy are known
+            // (attachBoundedToAll), and to a later instance once it is complete (noteBoundedEntry). Said, not
+            // passed over: an answer taken now could give an instance functions it must not have (ADR 0130 §2.6).
+            var message = Vector<u8>.create();
+            appendText(mut message, "ceesafec's internal check: the bounds of this 'impl' block were asked for ")?;
+            appendQuotedType(mut message, c, typ)?;
+            appendText(
+                mut message,
+                " before every impl, field and Copy type was known, so the block's functions were not given to it (ADR 0130 §2.6); please report this",
+            )?;
+            c.error(unsupported(), b.start, b.end, message)?;
+            continue;
+        }
+        if (decision != boundsMet()) {
             continue; // the instance does not have the block's functions
         }
         // The instance a block is checked in reports that block's functions alone: its others, and the functions of
@@ -389,6 +400,10 @@ fn reportUnmetImplBounds(c: borrow mut Checker, typ: u32, name: u32, span: Span)
         var arguments = Vector<u32>.create();
         listTypes(c, entryArguments(c, index, isEnum), mut arguments)?;
         if (arguments.length != parameters.length) {
+            continue;
+        }
+        // Only a decided "unmet" is this error: while the answer is not known, the name is simply not found.
+        if (decideBounds(c, parameters.view(), arguments.view())? != boundsUnmet()) {
             continue;
         }
         let mark = diagnosticsMark(c);

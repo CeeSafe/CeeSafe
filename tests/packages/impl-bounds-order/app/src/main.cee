@@ -1,0 +1,33 @@
+// Whether an instance meets the bounds of a bounded `impl` block is decided once every impl, field and Copy type of
+// the program is known (ADR 0130 §2.6), wherever they are declared: later in this file (`Tail`), in another file of
+// this package (`Local`, `Small`, `Owned` of src/later.cee) and in the dependency (`shapes.Circle`,
+// `shapes.Label`), for a bound that is an interface, `Copy`, and `Send`. The struct and the enum, their blocks and
+// the bounding interfaces are the dependency's.
+fn main() {
+    let tails = shapes.pair<Tail>(Tail { n: 3 }, Tail { n: 4 });
+    Console.writeLine(tails.names());
+    let locals = shapes.pair<Local>(Local { n: 10 }, Local { n: 20 });
+    Console.writeLine(locals.names());
+    let circles = shapes.pair<shapes.Circle>(shapes.Circle { r: 1 }, shapes.Circle { r: 2 });
+    Console.writeLine(circles.names());
+    let small = shapes.pair<Small>(Small { n: 5 }, Small { n: 6 });
+    Console.writeLine(small.first().n);
+    Console.writeLine(tails.first().n);
+    let owned = shapes.pair<Owned>(Owned { text: String.from("ab")! }, Owned { text: String.from("cde")! });
+    Console.writeLine(owned.across());
+    let labels = shapes.pair<shapes.Label>(
+        shapes.Label { text: String.from("abcd")! },
+        shapes.Label { text: String.from("efg")! },
+    );
+    Console.writeLine(labels.across());
+    let either = shapes.one<Local>(Local { n: 9 });
+    Console.writeLine(either.name());
+}
+
+struct Tail {
+    n: u32;
+}
+
+impl shapes.Named for Tail {
+    public fn name(borrow this) -> u32 => this.n;
+}

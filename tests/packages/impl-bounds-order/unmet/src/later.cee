@@ -1,0 +1,13 @@
+// The types of src/main.cee's instances: neither Copy (a `String` field) nor Send (a raw pointer), and `Pointer` has
+// the dependency's `Sized`, so `Send` alone is what its block's bounds lack.
+struct Owned {
+    text: String;
+}
+
+struct Pointer {
+    p: *u8;
+}
+
+impl shapes.Sized for Pointer {
+    public fn size(borrow this) -> usize => 0;
+}

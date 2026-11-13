@@ -1,0 +1,69 @@
+// The unmet cases of run-pass/impl-bounds-order.cee (type-system.md §21.1, ADR 0130 §2.6): the uses come first, and
+// what decides the bounds last. An instance whose argument has no impl of the bounding interface, is not Copy, or is
+// not Send does not have the block's functions, however late that is known: N0268, or N0334 for Send.
+fn main() {
+    let unnamed = Pair<Plain> { left: Plain { n: 3 }, right: Plain { n: 4 } };
+    Console.writeLine(unnamed.names()); // error[N0268]
+    let moved = Pair<Owned> { left: Owned { text: String.from("a")! }, right: Owned { text: String.from("b")! } };
+    Console.writeLine(moved.first().text.length); // error[N0268]
+    let local = Pair<Pointer> { left: Pointer { p: 0 as *u8 }, right: Pointer { p: 0 as *u8 } };
+    Console.writeLine(local.across()); // error[N0334]
+    let state = Either<Plain>.Other;
+    Console.writeLine(state.name()); // error[N0268]
+}
+
+struct Pair<T> {
+    left: T;
+    right: T;
+}
+
+impl<T: Named> Pair<T> {
+    fn names(borrow this) -> u32 => this.left.name() + this.right.name();
+}
+
+impl<T: Copy> Pair<T> {
+    fn first(borrow this) -> T => this.left;
+}
+
+impl<T: Send> Pair<T> {
+    fn across(this) -> usize => Thread.spawn(move () => {
+        let kept = this;
+        return 1usize;
+    })!.join();
+}
+
+enum Either<T> {
+    One(T),
+    Other,
+}
+
+impl<T: Named> Either<T> {
+    fn name(borrow this) -> u32 => match (this) {
+        Self.One(v) => v.name(),
+        Self.Other => 0,
+    };
+}
+
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+struct Plain {
+    n: u32;
+}
+
+struct Owned {
+    text: String;
+}
+
+struct Pointer {
+    p: *u8;
+}
+
+struct Late {
+    n: u32;
+}
+
+impl Named for Late {
+    fn name(borrow this) -> u32 => this.n;
+}

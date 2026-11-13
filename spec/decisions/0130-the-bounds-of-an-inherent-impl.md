@@ -1,7 +1,8 @@
 # ADR 0130 — The bounds of an inherent `impl` block
 
 - Status: **Accepted** by the owner, 2026-11-13 ("Go ahead and tackle those still open"), implemented on branch
-  `fix/open-checker`; not yet released. It completes ADR 0064 §1 and ADR 0107, which let an `impl<T: B> S<T> { … }`
+  `fix/open-checker`; the owner accepted conditional methods (§2.3) on 2026-11-13 ("go"), on the condition that the
+  decision of §2.6 be explicit, which branch `fix/interface-result-loans` implements; not yet released. It completes ADR 0064 §1 and ADR 0107, which let an `impl<T: B> S<T> { … }`
   block write a bound and said nothing of what it means when the struct or enum does not have it.
 - Scope: the checker (`src/check/bounded_impls.cee`, new; `inherent.cee`, `structs.cee`, `generics.cee`,
   `declare.cee`, `members.cee`, `self_types.cee`, `closures.cee`), one flag of a HIR function (`src/hir/hir.cee`);
@@ -71,6 +72,19 @@ declared again for each other instance that meets the bounds, as a generic struc
 (§20.3). The other functions of the instance a block is checked in repeat the declaration's generic version and
 report nothing twice.
 
+2.6 **How the decision is made.** Whether an instance meets a block's bounds has three answers: met, not met, and
+not yet known (`decideBounds`, `src/check/generics.cee`). An interface bound is decided by the program's impls, in
+whatever file or package they are; `Copy` by the argument's fields and drop block; `Send` and `Share` by its fields.
+So there is no answer before every impl is processed, every declared struct and enum has its fields and its Copy
+and drop, and, for a type made later, before its instantiation is complete. Until then the ordinary bound check
+(`checkBounds`) puts itself off and reports nothing, and that silence is never read as "met": the decision asks the
+three conditions first, and takes an answer only from a check that ran and did not put itself off. The blocks'
+functions are given to the declared types after all three hold (`attachBoundedToAll`) and to each later instance
+when it is complete (`noteBoundedEntry`). If ceesafec's own order ever asked earlier, the instance would get no
+function and N0216 would say so ("ceesafec's internal check: the bounds of this 'impl' block were asked for …
+before every impl, field and Copy type was known"), instead of an instance silently having a function it must not
+have. The error for a missing function (§2.3) is given only for a decided "not met".
+
 ## 3. Alternatives
 
 - **Refuse a bound the declaration does not have** (N0267: "write the bound on the struct"). Sound and small, and
@@ -101,3 +115,7 @@ declaration's bounds, one that restates them, a nested instance, generic code wi
 impl beside them); `check-fail/impl-bounds` (every instance that does not meet a bound, N0228 across blocks, N0204);
 `check-fail/impl-bounds-moves` (the reads that stay moves without the `Copy` bound: N0251);
 `run-pass/generic-send-loans` and `check-fail/generic-send-arguments` use a `Send` block.
+`run-pass/impl-bounds-order` and `check-fail/impl-bounds-order` (§2.6: the uses first, the impls and the deciding
+fields last in the file, for an interface bound, `Copy` and `Send`); `tests/packages/impl-bounds-order` (the same
+with the deciding impls in another file of the package and in a dependency, whose struct and enum the blocks are:
+`app` runs, `unmet` is N0268 and N0334).

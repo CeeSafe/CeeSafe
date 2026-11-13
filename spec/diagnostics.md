@@ -115,7 +115,7 @@ Semantic checks run only when every file parsed without errors.
 | N0213 | End of a non-`void` function is reachable (for a `never` function too, type-system §15.3); the end of the `else` block of a `let … else` is reachable (§15.5, ADR 0117) | `fn f() -> i32 { }`, `let Some(n) = v else { log(); };` |
 | N0214 | `break`/`continue` outside a loop | `break;` at function level |
 | N0215 | `return` with or without a value contradicts the return type, or `return` in a `never` function | `return 1;` in a `void` function |
-| N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11); also ceesafec's internal check that an expression with no value, which no diagnostic explains, never reaches code generation (a defect of ceesafec, ADR 0087 §9) | `truncate<i32, u8>(x)` |
+| N0216 | Construct not supported in M1 (string values, member access, qualified types, generic arguments other than `truncate<T>`; floats and `char` until M11); also ceesafec's internal check that an expression with no value, which no diagnostic explains, never reaches code generation (a defect of ceesafec, ADR 0087 §9), and that the bounds of a bounded `impl` block are asked for only once they can be decided (ADR 0130 §2.6) | `truncate<i32, u8>(x)` |
 | N0217 | Not a constant expression, or constant evaluation would panic, in a constant's value or in literal arithmetic anywhere (type-system.md §6, ADR 0110), or a constant `+` of views longer than 16 MiB (ADR 0087 §2.7) | `const C: u8 = 200 + 100;`, `let big: u8 = 200 + 100;` |
 | N0218 | Constant depends on itself | `const A: i32 = A + 1;` |
 | N0219 | Invalid `main` signature | `fn main(args: i32)` |

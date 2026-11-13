@@ -489,6 +489,45 @@ fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
     return Ok();
 }
 
+/// What decideBounds answers.
+fn boundsMet() -> u32 => 0;
+fn boundsUnmet() -> u32 => 1;
+fn boundsUnknown() -> u32 => 2;
+
+/// Do `arguments` meet the bounds of `parameters`, as a decision and not a report (ADR 0130 §2.6)? Met, unmet, or
+/// not yet known: an interface bound is decided by the impls, `Copy` by the fields and drop blocks, `Send` and
+/// `Share` by the fields, so before all of them are known (and inside an instantiation, whose types are not finished)
+/// there is no answer. CheckBounds defers then, reporting nothing, which must never read as "met". Nothing is
+/// reported here.
+fn decideBounds(c: borrow mut Checker, parameters: Slice<u32>, arguments: Slice<u32>) -> Result<u32, AllocError> {
+    var anyBound = false;
+    for (p in parameters) {
+        let info = borrow c.types.typeParameters[c.types.info(p).typeParameter as usize];
+        if (info.copyBound || info.sendBound || info.shareBound || info.bounds.length > 0) {
+            anyBound = true;
+        }
+    }
+    if (!anyBound) {
+        return Ok(boundsMet());
+    }
+    if (!c.implsReady || !c.membersReady || c.instantiating != 0) {
+        return Ok(boundsUnknown());
+    }
+    let mark = diagnosticsMark(c);
+    let pending = c.pendingBounds.length;
+    let pendingThread = c.pendingThreadBounds.length;
+    checkBounds(c, parameters, arguments, Span { start: 0, end: 0 })?;
+    let met = diagnosticsMark(c) == mark;
+    dropDiagnosticsSince(c, mark);
+    if (c.pendingBounds.length != pending || c.pendingThreadBounds.length != pendingThread) {
+        // The check put itself off after all: its silence is no answer, and the question is not asked again.
+        c.pendingBounds.truncate(pending);
+        c.pendingThreadBounds.truncate(pendingThread);
+        return Ok(boundsUnknown());
+    }
+    return Ok(if (met) boundsMet() else boundsUnmet());
+}
+
 /// Do `arguments` satisfy the bounds of `parameters` (CheckBounds, §21.2)? Reported as N0268 (N0334 for Send and
 /// Share); deferred until every impl is known, and Send and Share until every type has its fields.
 fn checkBounds(

@@ -178,6 +178,7 @@ async fn run() -> Result<void, AsyncError> {
 fn main() -> i32 {
     match (Async.run(run())) {
         Ok(_) => { return 0; }
+        Err(AsyncError.Cancelled) => { return 0; } // the cancellation sweep cancels run(): it returns early
         Err(_) => { return 1; }
     }
 }

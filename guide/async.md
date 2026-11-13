@@ -341,6 +341,7 @@ The library's waiting operations are async functions, in the hosted profile:
 | Tasks to tasks | `Channel<T>`: `sendAsync`, `recvAsync`, `close` (`send` and `recv` block, for threads); `trySend` and `tryRecv`, which never wait (a full or empty channel answers at once), and `isClosed()`; `AsyncMutex<T>`: `lock`, whose guard may be held across `await` |
 | Blocking calls | `Async.blocking(() => …)`: any sync code on a worker thread while the task waits |
 | Signals | `AsyncSignal`: one task waits, any thread or interrupt handler raises |
+| Requests to stop | `ProcessSignals.subscribe()` (not async), then `waitAsync()`: Ctrl+C (`SIGINT`) or `SIGTERM` (see below) |
 
 Each returns `Result<T, AsyncError>`, whose cases are `Cancelled`, `TimedOut` and `Io(IoError)`. A socket's address is
 a `SocketAddress`, `V4` or `V6`, made from text by `SocketAddresses.parse("[::1]:8080")` or
@@ -380,6 +381,75 @@ the page cache (`sendfile`, or `TransmitFile` on Windows), and where it cannot, 
 worker thread and writes them, with the same result. The offset is explicit and the file's position stays where it was,
 so one open file can be sent on many connections at once. If the file is shorter than `offset + length`, the result
 is `Io(InvalidInput)`. `sendFile` is one step and returns how many bytes went.
+
+## Stopping at Ctrl+C
+
+By default Ctrl+C (`SIGINT`) and `SIGTERM` end a process at once: nothing is dropped, and a connection in the
+middle of its answer is cut. `ProcessSignals.subscribe()` changes that for as long as its value lives: a request
+to stop is kept for the program, and `await signals.waitAsync()` returns it as `ProcessSignal.Interrupt` or
+`ProcessSignal.Terminate`. A server races its accepting loop against that wait. When the request comes, the race
+cancels the loop, whose `accept` returns `Cancelled`, and waits for the connections in flight, which finish
+behind their shields.
+
+<!-- ceesafe: check -->
+```ceesafe
+enum ServeError {
+    NoMemory,
+    @from Io(IoError),
+    @from Async(AsyncError),
+}
+
+async fn answer(stream: borrow AsyncTcpStream) -> Result<void, ServeError> {
+    await stream.write("hello\n".bytes())?;
+    stream.shutdownWrite()?;
+    return Ok();
+}
+
+/// One connection: the shield lets its answer finish, for at most five seconds, while the server stops.
+async fn connection(stream: AsyncTcpStream) -> Result<void, ServeError> {
+    return await Async.shield(5000, async () => await answer(borrow stream));
+}
+
+async fn acceptLoop(listener: borrow AsyncTcpListener, set: borrow TaskSet<ServeError>) -> Result<void, ServeError> {
+    loop {
+        let stream = await listener.accept()?; // Cancelled when the server is told to stop
+        await set.spawn(async move () => await connection(stream))?;
+    }
+}
+
+async fn serve(listener: borrow AsyncTcpListener) -> Result<bool, ServeError> {
+    await Async.tasks(64, ServeError.NoMemory, async (set) => await acceptLoop(listener, set))?;
+    return Ok(false);
+}
+
+async fn stopAsked(signals: borrow ProcessSignals) -> Result<bool, ServeError> {
+    let asked = await signals.waitAsync()?;
+    return Ok(asked is ProcessSignal.Interrupt);
+}
+
+async fn serveUntilStopped(listener: borrow AsyncTcpListener, signals: borrow ProcessSignals) -> Result<void, ServeError> {
+    await Async.race(async () => await serve(listener), async () => await stopAsked(signals))?;
+    return Ok();
+}
+
+fn main() {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 8080)!;
+    let signals = ProcessSignals.subscribe()!;
+    match (Async.run(serveUntilStopped(borrow listener, borrow signals))) {
+        Ok() => { Console.writeLine("stopped"); }
+        Err(_) => { Process.exit(1); }
+    }
+}
+```
+
+- There is one subscription for the process at a time (`Err(IoError.AlreadyExists)` for a second); tasks and
+  threads share it by reference. `signals.poll()` asks without waiting, and `signals.wait()` blocks a thread
+  ([Threads](threads.md)).
+- Dropping the subscription brings the default back. A program that wants a second Ctrl+C to end it at once drops
+  it when it begins to stop; while the value lives, further requests only queue.
+- No code of yours runs inside a signal handler: the runtime's handler only records the signal, and the program
+  sees it at its next `poll` or wait.
+- An async listener needs no way to be closed early: cancelling the task that awaits `accept` is that way.
 
 ## How it runs
 

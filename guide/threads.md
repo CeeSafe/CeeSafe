@@ -319,6 +319,49 @@ fn main() {
 - The interpreter runs threads one at a time, and reports a thread that waits to send on a full channel as a
   deadlock: there, give the channel room for what is sent before the receiver runs, as above.
 
+## Stopping a thread that waits in `accept`
+
+`listener.accept()` blocks its thread until a client connects. Another thread ends that wait with
+`listener.shutdown()`: every `accept` on the listener, the one being waited in and every later one, returns
+`Err(IoError.ConnectionAborted)`. Both calls borrow the listener, so the threads share it through an `Arc`.
+
+```ceesafe
+fn main() {
+    let listener = Arc<TcpListener>.create(TcpListener.bind("127.0.0.1", 0)!)!;
+    let accepting = listener.clone();
+    let acceptor = Thread.spawn(move () => {
+        var clients: u32 = 0;
+        loop {
+            match (accepting.get().accept()) {
+                Ok(_) => { clients += 1; }
+                Err(IoError.ConnectionAborted) => { break; } // the listener was shut down
+                Err(e) => {
+                    Console.writeLine(e.message());
+                    break;
+                }
+            }
+        }
+        return clients;
+    })!;
+    listener.get().shutdown()!;
+    Console.writeLine(acceptor.join());
+}
+```
+
+```text
+0
+```
+
+- `shutdown` does not close the socket. The listener closes when its last owner drops it, so no thread can use it
+  after the close.
+- `accept` returns `ConnectionAborted` for no other reason: match it to leave the accepting loop.
+- With `ProcessSignals` this is a server's graceful stop: the main thread calls `signals.wait()`, which blocks until
+  Ctrl+C (`SIGINT`) or `SIGTERM`, then `shutdown()`; the accepting thread leaves its loop and joins the threads
+  that are still answering. `ProcessSignals` is described in [Async tasks](async.md#stopping-at-ctrl-c).
+- The interpreter runs threads one at a time. A thread that waits there, in `accept` or in `signals.wait()`, keeps
+  the others from running, so no other thread can wake it: a server of threads is tried compiled, and one of tasks
+  in either.
+
 ## Async tasks on several threads
 
 An `Async.run` uses one thread. To spread a scope's children over several, run it with `Async.runWorkers(4, task)`

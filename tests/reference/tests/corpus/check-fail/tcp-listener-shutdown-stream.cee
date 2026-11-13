@@ -1,0 +1,13 @@
+// `shutdown` is a listener's (ADR 0126). A stream still has only `shutdownRead` and `shutdownWrite` (N0200), the
+// listener's takes no argument (N0209), and its result is an `IoError`'s, to be used (N0402 is a warning; here it is
+// matched).
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1", 0)!;
+    var stream = TcpStream.connect("127.0.0.1", listener.port()!)!;
+    stream.shutdown()!;       // error[N0200]
+    listener.shutdown(true)!; // error[N0209]
+    match (listener.shutdown()) {
+        Ok() => {}
+        Err(_) => {}
+    }
+}

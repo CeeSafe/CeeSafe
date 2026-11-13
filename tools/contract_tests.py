@@ -10,7 +10,8 @@
 - the mutation suite, the fault sweep over the corpus, the cancellation sweep over its async programs, the package
   tests (tools/package_tests.py), the native DNS checks (tools/dns_check.py), a file over 4 GiB sent
   (tools/sendfile_check.py), UDP's ECN, segments and cancellation (tools/udp_check.py), the wall clock (tools/clock_check.py), random bytes
-  (tools/random_check.py), a dialogue on standard input (tools/console_input_check.py, ADR 0106), C's allocations (tools/foreign_alloc_check.py), task frame
+  (tools/random_check.py), a dialogue on standard input (tools/console_input_check.py, ADR 0106), a server
+  stopped by SIGINT and SIGTERM (tools/signal_check.py, ADR 0125 and 0126), C's allocations (tools/foreign_alloc_check.py), task frame
   stacks (tools/frame_stack_check.py), allocation counting (tools/alloc_counting_check.py), embedding in a C host
   (tools/embed_check.py, ADR 0088), the
   cancellation wake count (tools/wake_check.py), `ceesafec test` on its fixture (tools/test_command_check.py),
@@ -153,6 +154,7 @@ def main():
             ("clock", py + [f"{HERE}/clock_check.py", "--compiler", cee]),
             ("random", py + [f"{HERE}/random_check.py", "--compiler", cee]),
             ("console input", py + [f"{HERE}/console_input_check.py", "--compiler", cee]),
+            ("signals", py + [f"{HERE}/signal_check.py", "--compiler", cee]),
             ("window", py + [f"{HERE}/window_check.py", "--compiler", cee]),
             ("foreign alloc", py + [f"{HERE}/foreign_alloc_check.py", "--compiler", cee]),
             ("frame stacks", py + [f"{HERE}/frame_stack_check.py", "--compiler", cee]),

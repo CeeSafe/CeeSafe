@@ -731,6 +731,11 @@ Heap (M3b):
     once. Programs with async link the thread runtime.
   - Channels (ADR 0032 §5): `ceesafe_chan_*`, element-blind, under a spin lock; a task's wait node lives in its frame,
     and every change wakes the queued tasks through their executors.
+  - Process signals (ADR 0125; type-system.md §26.15): `ceesafe_signal_subscribe(channel)` and
+    `ceesafe_signal_unsubscribe()`, beside the channels they send into. POSIX: `sigaction` for `SIGINT` and
+    `SIGTERM`, a handler that only sets a bit and writes a byte to a pipe, and a thread that sends what the bits say
+    into the channel; Windows: `SetConsoleCtrlHandler`, whose handler thread sends. Nothing is installed until a
+    program subscribes.
   - Readiness (A2d): a task waits for a descriptor to be readable or writable (`ceesafe_async_wait_readable`,
     `_wait_writable`); `poll()` is the reactor on every POSIX host, with any number of descriptors. Sockets are
     `ceesafe_async_tcp_*`, `ceesafe_async_read`, `_send`, `_shutdown_write` and `_close` in `ceesafe_rt_io.c`: a value,
@@ -739,7 +744,10 @@ Heap (M3b):
     `CEE_LISTEN_*` flags), `_connect_at`, `ceesafe_async_op_connect_at`, `ceesafe_async_socket_name` (the result
     `(family << 16) | port`), `ceesafe_async_socket_option` (`CEE_SOCKET_OPTION_*`), `ceesafe_async_shutdown_read`
     and `ceesafe_interface_index`; the blocking `TcpStream`'s setters are `ceesafe_tcp_option` and
-    `ceesafe_tcp_shutdown_read`. The text calls parse IPv4 or IPv6 (`ceesafe_endpoint_parse`). IOCP's AcceptEx
+    `ceesafe_tcp_shutdown_read`. A blocking `TcpListener`'s socket does not block either (ADR 0126):
+    `ceesafe_tcp_accept` waits for it and for the listener's wake (a pipe; on Windows an event) together, and
+    `ceesafe_tcp_listener_shutdown` sets the wake for good; the wakes are kept by descriptor from
+    `ceesafe_tcp_listen` to `ceesafe_fd_drop`. The text calls parse IPv4 or IPv6 (`ceesafe_endpoint_parse`). IOCP's AcceptEx
     address buffer, sized for IPv6, shares the operation record with a read's WSABUF, so the record stays 192
     bytes. `ceesafe_async_poll` serves code with its own wait loop (the
     interpreter). Woken tasks run in the order they were woken.

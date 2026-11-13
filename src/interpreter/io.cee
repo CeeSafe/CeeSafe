@@ -43,6 +43,8 @@ struct InterpRuntime {
     mutexOwners: Vector<u32>;        // the owning thread, or none
     onceDepth: u32;                  // how often the owner of OnceLock's lock (ADR 0096) holds it
     channels: Vector<InterpChannel>; // ADR 0032: a channel's handle is its index + 1
+    shutListeners: Vector<u32>;      // ADR 0126: the handles (by index) of the listeners shut down
+    signalChannel: u64;              // ADR 0125: the handle of the subscription's channel, or 0
 }
 
 /// A channel in the interpreter (lib/std/channel.cee over runtime/hosted/ceesafe_rt_async.c's model).
@@ -74,6 +76,8 @@ fn newInterpRuntime() -> InterpRuntime => InterpRuntime {
     mutexOwners: Vector<u32>.create(),
     onceDepth: 0,
     channels: Vector<InterpChannel>.create(),
+    shutListeners: Vector<u32>.create(),
+    signalChannel: 0,
 };
 
 /// ceesafe_init's argv (ADR 0088 §2.2): copied, as the native runtime copies it.
@@ -358,10 +362,24 @@ fn handleIndex(it: borrow Interp, fd: i32) -> usize? {
 /// The drop glue of File, TcpListener and TcpStream: closes the descriptor, ignoring errors.
 fn closeDescriptor(it: borrow mut Interp, fd: i32) -> Result<void, Stop> {
     match (handleIndex(it, fd)) {
-        Some(k) => { it.runtime.handles[k] = HostHandle.Closed; }
+        Some(k) => {
+            it.runtime.handles[k] = HostHandle.Closed;
+            let index = truncate<u32>(k);
+            it.runtime.shutListeners.retain((shut) => shut != index);
+        }
         null => {}
     }
     return Ok();
+}
+
+/// Whether `listener.shutdown()` was called on the listener at handles[k] (ADR 0126).
+fn listenerIsShut(it: borrow Interp, k: usize) -> bool {
+    for (shut in it.runtime.shutListeners.view()) {
+        if (shut as usize == k) {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn descriptorArgument(
@@ -684,6 +702,16 @@ fn ioBuiltin(
         requireHostIo(it)?;
         let fd = descriptorArgument(it, c, n, frame, arguments, 0)?;
         var accepted: Result<TcpStream, IoError> = Err(IoError.Other(9));
+        // ADR 0126: a listener that is shut down accepts nothing (ECONNABORTED). One thread runs at a time (§38),
+        // and it waits in the host's accept: no other thread of the program can shut the listener down meanwhile.
+        match (handleIndex(it, fd)) {
+            Some(k) => {
+                if (listenerIsShut(it, k)) {
+                    return Ok(interpIoResult(c, resultType, 0, errnoFor(hostErrnos(), 103, 53, 106))?);
+                }
+            }
+            null => {}
+        }
         match (handleIndex(it, fd)) {
             Some(k) => {
                 match (borrow mut it.runtime.handles[k]) {
@@ -700,6 +728,28 @@ fn ioBuiltin(
             }
             Err(e) => { return Ok(interpIoResult(c, resultType, 0, errnoOf(e))?); }
         }
+    }
+    if (b == bfTcpListenerShutdown()) {
+        // ADR 0126: the listener's every later `accept` is ECONNABORTED, IoError.ConnectionAborted.
+        requireHostIo(it)?;
+        let fd = descriptorArgument(it, c, n, frame, arguments, 0)?;
+        var listening = none();
+        match (handleIndex(it, fd)) {
+            Some(k) => {
+                match (borrow it.runtime.handles[k]) {
+                    HostHandle.Listener(_) => { listening = truncate<u32>(k); }
+                    _ => {}
+                }
+            }
+            null => {}
+        }
+        if (listening == none()) {
+            return Ok(interpIoResult(c, resultType, 0, 9)?); // EBADF, 9 on every host
+        }
+        if (!listenerIsShut(it, listening as usize)) {
+            it.runtime.shutListeners.push(listening)!;
+        }
+        return Ok(interpIoResult(c, resultType, 0, 0)?);
     }
     if (b == bfTcpShutdownWrite()) {
         requireHostIo(it)?;
@@ -1200,6 +1250,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_open_files")) {
         return "PP:l";
+    }
+    if (sameText(name, "ceesafe_signal_subscribe")) {
+        return "P:l"; // ADR 0125
+    }
+    if (sameText(name, "ceesafe_signal_unsubscribe")) {
+        return ":-";
     }
     if (sameText(name, "ceesafe_host_raise_open_files")) {
         return "sP:l";
@@ -1842,6 +1898,9 @@ fn callC(
     }
     if (n0.length > 13 && sameText(n0[0..13], "ceesafe_chan_")) {
         return channelService(it, c, n, n0, arguments);
+    }
+    if (sameText(n0, "ceesafe_signal_subscribe") || sameText(n0, "ceesafe_signal_unsubscribe")) {
+        return signalService(it, n0, arguments); // ADR 0125
     }
     if (n0.length > 14 && sameText(n0[0..14], "ceesafe_async_")) {
         return asyncService(it, n0, arguments);
@@ -2821,6 +2880,7 @@ fn runTasks(
                 }
             }
         }
+        deliverSignals(it)?; // ADR 0125: a request that arrived wakes the tasks waiting for one
         // Tasks a channel woke (§40.8); another run's stay for it.
         var others = Vector<u32>.create();
         loop {
@@ -2875,6 +2935,9 @@ fn runTasks(
                     }
                     wait = truncate<i64>(it.testDeadline - now);
                 }
+                if (signalTaskWaits(it) && (wait < 0 || wait > 20)) {
+                    wait = 20; // ADR 0125: a signal does not end the poll on every host, so it looks again soon
+                }
                 let woke = AsyncSockets.poll(fds.view(), events.view(), readiness.viewMut(), wait);
                 if (woke > 0) {
                     for (j in 0..owners.length) {
@@ -2916,6 +2979,15 @@ fn runTasks(
                     let me = it.asyncCurrent;
                     runThread(it, c, n, startable)?;
                     it.asyncCurrent = me;
+                    continue;
+                }
+                if (signalTaskWaits(it)) {
+                    // ADR 0125: a signal can wake a task. Real time passes until one comes, or the test's time is up.
+                    if (it.testDeadline != 0 && Timer.now() >= it.testDeadline) {
+                        writeError(it, "ceesafe-test 1 timeout\n".bytes());
+                        return Err(exitWith(124));
+                    }
+                    hostPause(10);
                     continue;
                 }
                 // Nothing can wake a task: one thread, and its tasks all wait (on a channel no one fills, say).
@@ -3298,6 +3370,9 @@ fn channelService(
     }
     if (sameText(name, "ceesafe_chan_begin_send") || sameText(name, "ceesafe_chan_begin_recv")) {
         let sending = sameText(name, "ceesafe_chan_begin_send");
+        if (!sending && k as u64 + 1 == it.runtime.signalChannel) {
+            deliverSignals(it)?; // ADR 0125: the requests that arrived since the program last asked
+        }
         let channel = borrow it.runtime.channels[k];
         var status: u64 = 0;
         var slot: u64 = 0;
@@ -3341,6 +3416,15 @@ fn channelService(
     }
     if (sameText(name, "ceesafe_chan_wait")) {
         let epoch = arguments[1].bits(0, 8)?;
+        if (k as u64 + 1 == it.runtime.signalChannel) {
+            // ProcessSignals.wait (ADR 0125): no thread of the program fills this channel, so this is no deadlock
+            // and no other thread is given the baton: real time passes until a signal comes, and the library's
+            // loop asks again.
+            if (it.runtime.channels[k].epoch == epoch) {
+                hostPause(10);
+            }
+            return Ok(null);
+        }
         if (it.runtime.channels[k].epoch == epoch) {
             waitHere(it, c, n, 3, ((k as u64) << 40) | (epoch & 0xFFFFFFFFFF))?;
         }

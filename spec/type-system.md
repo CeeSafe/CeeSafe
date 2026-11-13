@@ -2682,6 +2682,16 @@ source change of ADR 0104's.
   `SO_REUSEADDR` on POSIX, and an IPv6 socket dual stack (`IPV6_V6ONLY` off).
   `listener.port()`: `Result<u16, IoError>`, the port it is bound to. `listener.accept()`:
   `Result<TcpStream, IoError>`.
+- `listener.shutdown()` (ADR 0126; `borrow this`): `Result<void, IoError>`. Every `accept` on the listener, one that
+  another thread waits in now and every later one, returns `Err(IoError.ConnectionAborted)`; it cannot be undone,
+  and a second call changes nothing. It does not wait and has no effect (§32.1), so a task or a `drop` block may call
+  it. It does not close the socket: the port stays bound until the listener is destroyed. `accept` and `shutdown`
+  both borrow the listener shared, and a `TcpListener` is `Send` and `Share` (§38.1), so threads share it through an
+  `Arc<TcpListener>` or by reference; nothing is closed while a reference exists. `accept` returns
+  `ConnectionAborted` for no other reason: a connection that its client reset before it was accepted is passed over.
+  `Unsupported` where a listener cannot wait for two things (CosmoOS). The interpreter runs one thread at a time
+  (§38): a thread that waits in `accept` there keeps the others from running, so none can shut the listener down
+  meanwhile; `accept` on a listener that is already shut down returns at once, as when compiled.
 - `TcpStream.connect(address, port)`: `Result<TcpStream, IoError>`. `s.read(mut buffer)` and
   `s.write(bytes)` as for files; `s.shutdownWrite()`: `Result<void, IoError>`, so the peer reads
   the end of the stream; `s.shutdownRead()` likewise ends this side's reading.
@@ -2903,6 +2913,35 @@ Diagnostics: none new.
 - The runtime never raises the limit by itself: a program that needs more descriptors, a server, calls
   `raiseOpenFiles` once at start.
 - Hosted only: in freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`.
+
+### 26.15 Process signals (ADR 0125)
+- `ProcessSignal` (lib/std) is a request to end the process: `Interrupt` (POSIX `SIGINT`, Ctrl+C in a terminal;
+  Windows' Ctrl+C and Ctrl+Break) or `Terminate` (POSIX `SIGTERM`; Windows' console close, logoff and shutdown). No
+  other signal is touched.
+- **The default is unchanged.** The runtime installs no handler by itself: until a program subscribes, and after its
+  subscription is destroyed, such a request ends the process at once, as the system's default does.
+- `ProcessSignals.subscribe()`: `Result<ProcessSignals, IoError>`, the process's subscription, a move type that
+  needs drop. There is one at a time: `Err(IoError.AlreadyExists)` while another lives; `Err(IoError.Unsupported)`
+  where the system has no such requests (CosmoOS, the interpreter's sandbox). It is `Send` and `Share`: threads and
+  tasks use it by reference.
+- While it lives, a request does not end the process and is kept in arrival order, up to eight; requests nobody takes
+  beyond that are dropped.
+  - `signals.poll()`: `ProcessSignal?`, the oldest request, or `null` at once. It never waits.
+  - `signals.wait()`: `ProcessSignal`, blocking the thread until there is one (N0295 in async code).
+  - `await signals.waitAsync()`: `Result<ProcessSignal, AsyncError>`, parking the task until there is one;
+    `Err(AsyncError.Cancelled)` if the task is cancelled first (§40.7), and a request is then still there for the
+    next call. `Async.race(server, async () => await signals.waitAsync())` stops a server at a request.
+- **Its destruction restores what the signals did before.** A program that wants a second Ctrl+C to end it at once
+  drops the subscription when it begins to stop; while it keeps it, further requests are only queued.
+- **No code of the program runs in a signal handler.** The runtime's handler sets a bit atomically and writes a byte
+  to a pipe (both async-signal-safe); a thread of the runtime, which lives as long as the subscription, turns that
+  into a message on the subscription's channel (ADR 0032). On Windows the console's own handler thread sends it; for
+  the close, logoff and shutdown events it then does not return, so the process lives until `main` returns or the
+  system's limit (5 s for a close).
+- The interpreter subscribes its own process through the C library's `signal()` and looks at what arrived where the
+  program asks or waits; on Windows it sees Ctrl+C and Ctrl+Break only. It runs one thread at a time (§38): while a
+  thread waits in `signals.wait()`, no other thread runs.
+- Hosted only: in freestanding code these types are not defined (N0200).
 
 ## 27. Raw pointers and `unsafe` (M8a)
 

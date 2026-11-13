@@ -1,0 +1,62 @@
+// `ProcessSignals` (ADR 0125), as far as a program can go without a signal (tools/signal_check.py sends real ones):
+// one subscription for the process, nothing queued at first, a second subscription refused while the first lives
+// and allowed after its drop, and a task waiting for a signal is cancelled like any other wait. The subscription is
+// shared by reference with a thread and with tasks.
+async fn waits(signals: borrow ProcessSignals) -> Result<bool, AsyncError> {
+    let asked = await signals.waitAsync()?;
+    return Ok(asked is ProcessSignal.Interrupt);
+}
+
+async fn soon() -> Result<bool, AsyncError> {
+    await Timer.sleep(5)?;
+    return Ok(true);
+}
+
+async fn raced(signals: borrow ProcessSignals) -> Result<u32, AsyncError> {
+    let first = await Async.race(async () => await waits(signals), async () => await soon())?;
+    return Ok(first.winner);
+}
+
+fn name(signal: ProcessSignal) -> StringView => match (signal) {
+    ProcessSignal.Interrupt => "interrupt",
+    ProcessSignal.Terminate => "terminate",
+};
+
+fn main() {
+    Console.writeLine(name(ProcessSignal.Interrupt));
+    Console.writeLine(name(ProcessSignal.Terminate));
+    {
+        let signals = ProcessSignals.subscribe()!;
+        Console.writeLine(if (signals.poll() is null) "nothing yet" else "a request?");
+        match (ProcessSignals.subscribe()) {
+            Ok(_) => { Console.writeLine("two subscriptions?"); }
+            Err(IoError.AlreadyExists) => { Console.writeLine("one subscription at a time"); }
+            Err(e) => { Console.writeLine(e.message()); }
+        }
+        // A thread asks through a shared reference.
+        var here = false;
+        var there = false;
+        Thread.both(() => { here = signals.poll().isNull(); }, () => { there = signals.poll().isNull(); });
+        Console.writeLine(if (here && there) "nothing in a thread" else "a request?");
+        // The timer wins the race: the task waiting for a signal is cancelled, and nothing is left behind.
+        match (Async.run(raced(borrow signals))) {
+            Ok(winner) => { Console.writeLine(if (winner == 1) "the wait was cancelled" else "a signal?"); }
+            Err(_) => { Console.writeLine("the race failed"); }
+        }
+        Console.writeLine(if (signals.poll() is null) "still nothing" else "a request?");
+    }
+    // The first subscription is dropped: the process may subscribe again.
+    match (ProcessSignals.subscribe()) {
+        Ok(again) => { Console.writeLine(if (again.poll() is null) "subscribed again" else "a request?"); }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+}
+
+// expect-stdout: interrupt
+// expect-stdout: terminate
+// expect-stdout: nothing yet
+// expect-stdout: one subscription at a time
+// expect-stdout: nothing in a thread
+// expect-stdout: the wait was cancelled
+// expect-stdout: still nothing
+// expect-stdout: subscribed again

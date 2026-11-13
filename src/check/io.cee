@@ -225,6 +225,10 @@ fn checkResourceMethod(
         function = bfTcpPort();
         mutable = false;
         ok = c.types.u16;
+    } else if (isListener && sameText(text, "shutdown")) {
+        function = bfTcpListenerShutdown(); // ADR 0126: `borrow this`, so another thread may call it during `accept`
+        mutable = false;
+        ok = c.types.voidType;
     }
     if (function == none()) {
         var message = Vector<u8>.create();

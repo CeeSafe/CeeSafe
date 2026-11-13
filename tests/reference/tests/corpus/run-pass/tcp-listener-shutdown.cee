@@ -1,0 +1,54 @@
+// `listener.shutdown()` (ADR 0126): a thread ends another thread's `accept`, which returns
+// `IoError.ConnectionAborted`, as does every later one. The socket is not closed: the port is still the listener's,
+// a stream accepted before still works, and another listener is not disturbed.
+fn outcome(accepted: Result<TcpStream, IoError>) -> StringView => match (accepted) {
+    Ok(_) => "accepted",
+    Err(IoError.ConnectionAborted) => "shut down",
+    Err(_) => "another error",
+};
+
+fn main() {
+    let listener = Arc<TcpListener>.create(TcpListener.bind("127.0.0.1", 0)!)!;
+    let port = listener.get().port()!;
+    let untouched = TcpListener.bind("127.0.0.1", 0)!;
+
+    // A connection made before the shutdown is accepted before it.
+    var client = TcpStream.connect("127.0.0.1", port)!;
+    var server = listener.get().accept()!;
+    Console.writeLine("accepted one");
+
+    // Another thread accepts; this one shuts the listener down. (Compiled, the other thread may already wait in
+    // `accept`, or come to it after: both end the same way. tools/signal_check.py makes it wait first. The
+    // interpreter runs one thread at a time, and the other thread runs at the join.)
+    let other = listener.clone();
+    let accepting = Thread.spawn(move () => other.get().accept() is Err(IoError.ConnectionAborted))!;
+    Console.writeLine(if (listener.get().shutdown().isOk()) "shutdown ok" else "shutdown failed");
+    Console.writeLine(if (accepting.join()) "shut down" else "not shut down");
+
+    // For good, and again without harm.
+    Console.writeLine(outcome(listener.get().accept()));
+    Console.writeLine(if (listener.get().shutdown().isOk()) "twice ok" else "twice failed");
+    Console.writeLine(outcome(listener.get().accept()));
+
+    // The socket is still open: its port is the same, and the stream it gave still carries bytes.
+    Console.writeLine(if (listener.get().port()! == port) "port kept" else "port lost");
+    client.write("ping".bytes())!;
+    client.shutdownWrite()!;
+    var buffer = [0u8; 8];
+    let n = server.read(mut buffer[..])!;
+    Console.writeLine(StringView.fromUtf8(buffer[0..n]) ?? "?");
+
+    // Another listener still accepts.
+    let second = TcpStream.connect("127.0.0.1", untouched.port()!)!;
+    Console.writeLine(outcome(untouched.accept()));
+}
+
+// expect-stdout: accepted one
+// expect-stdout: shutdown ok
+// expect-stdout: shut down
+// expect-stdout: shut down
+// expect-stdout: twice ok
+// expect-stdout: shut down
+// expect-stdout: port kept
+// expect-stdout: ping
+// expect-stdout: accepted

@@ -1588,7 +1588,7 @@ fn checkFunctionEffects(
     if (anyHolder) {
         liveIn = liveHolders(n, function, holders)?;
     }
-    // A RefCell guard live where the task may suspend is N0402 (ADR 0084 §2.6), in the program's own async code.
+    // A RefCell guard live where the task may suspend is N0405 (ADR 0084 §2.6), in the program's own async code.
     var guards = Vector<bool>.create();
     var anyGuard = false;
     if (isAsyncFunction(c, source) && !c.hir.functions[source as usize].library) {
@@ -1833,7 +1833,7 @@ fn holdsCellGuard(c: borrow Checker, typ: u32, depth: u32) -> bool {
     return false;
 }
 
-/// N0402, a warning: statement `s` may suspend the task while a guard local is live, so another task resumed meanwhile
+/// N0405, a warning: statement `s` may suspend the task while a guard local is live, so another task resumed meanwhile
 /// panics on the same cell ("cell already borrowed").
 fn guardAcrossSuspension(
     c: borrow mut Checker,
@@ -1880,4 +1880,4 @@ fn guardAcrossSuspension(
     return c.front.diagnostics.warning(guardAcrossAwait(), file, span.start, span.end, message);
 }
 
-fn guardAcrossAwait() -> u32 => 402;
+fn guardAcrossAwait() -> u32 => 405; // its own code since ADR 0129 (N0402 is the unused `Result`, ADR 0105)

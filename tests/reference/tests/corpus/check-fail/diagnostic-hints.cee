@@ -1,0 +1,74 @@
+// Mistakes whose messages say what to write instead; each is reported once, where it is.
+// - `break` in a closure inside a `for` (N0214 names `for` and the closure);
+// - an assignment to a `for` variable or to a pattern's binding (N0211 says what the name is, not "use 'var'");
+// - a closure whose parameters have no type (N0236), and no second error where it is called;
+// - `for` over a value that is no sequence (N0205 lists vectors);
+// - `borrow mut T?`, an optional reference, assigned (N0211 says to write `borrow mut (T?)`);
+// - `?` in a `drop` block (N0261 says a `drop` block returns nothing);
+// - a macro call of another language (N0210 says CeeSafe has no macros);
+// - a misspelt constant as a pattern (N0257 at the arm below, with a note at the name that binds).
+const LIMIT: u32 = 10;
+
+struct Node {
+    value: u32;
+    next: Box<Node>?;
+}
+
+struct Resource {
+    n: u32;
+
+    drop {
+        work()?;  // error[N0261]
+        maybe()?; // error[N0261]
+    }
+}
+
+fn work() -> Result<void, AllocError> => Ok();
+
+fn maybe() -> u32? => null;
+
+fn apply(f: fn() -> void) {
+    f();
+}
+
+fn inClosure() {
+    for (i in 0..3) {
+        apply(() => { break; }); // error[N0214]
+    }
+}
+
+fn loopVariable(v: u32?) {
+    for (i in 0..3) {
+        i = 5; // error[N0211]
+    }
+    if (v is Some(n)) {
+        n = 5; // error[N0211]
+    }
+}
+
+fn untyped() {
+    let add = (a, b) => a + b; // error[N0236] // error[N0236]
+    Console.writeLine(add(1, 2));
+}
+
+fn notSequence(n: u32) {
+    for (x in n) { // error[N0205]
+    }
+}
+
+fn clear(n: borrow mut Box<Node>?) {
+    n = null; // error[N0211]
+}
+
+fn macros() {
+    println!("x"); // error[N0210]
+}
+
+fn kind(n: u32) -> u32 {
+    match (n) {
+        LIMT => { return 1; }
+        _ => { return 0; } // error[N0257]
+    }
+}
+
+fn main() {}

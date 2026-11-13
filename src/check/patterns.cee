@@ -596,6 +596,8 @@ fn checkNestedMatch(
     var earlier = Vector<u32>.create(); // the unguarded arms' patterns
     var every = Vector<u32>.create();   // every arm's
     var failed = false;
+    var catchAll = none(); // the first unguarded arm that is a bare name's binding (a pattern of the AST)
+    var catchAllName = none();
     let scrutineeRoot = rootLocalOf(c, scrutinee);
     for (index in 0..arms.count) {
         let pattern = armPattern(c, arms, index, isValue);
@@ -617,13 +619,51 @@ fn checkNestedMatch(
             if (!patternWitness(c, earlier.view(), tree, typ, mut witness)?) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "this arm can never match: earlier arms match every value it does")?;
-                c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
+                if (catchAll == none()) {
+                    c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
+                } else {
+                    // The arm that takes everything is a bare name: a binding, where a constant may have been meant.
+                    let nameSpan = c.front.ast.patternSpans[catchAll as usize];
+                    var note = Vector<u8>.create();
+                    appendText(mut note, "the earlier arm '")?;
+                    appendBytes(mut note, c.name(catchAllName))?;
+                    appendText(
+                        mut note,
+                        "' is a new name, which matches every value: no constant of that name is in scope (a misspelt constant?)",
+                    )?;
+                    var notes = Vector<DiagnosticNote>.create();
+                    let file = c.file;
+                    notes.push(DiagnosticNote { file: file, start: nameSpan.start, end: nameSpan.end, message: note })?;
+                    c.front.diagnostics.errorWithNotes(
+                        unreachableArm(),
+                        file,
+                        patternSpan.start,
+                        patternSpan.end,
+                        message,
+                        notes,
+                    )?;
+                }
             } else {
                 unreachableAlternatives(c, earlier.view(), tree, pattern, typ)?;
             }
         }
         if (guard == none()) {
             earlier.push(tree)?;
+            if (catchAll == none() && !failed) {
+                match (c.front.ast.patterns[pattern as usize]) {
+                    PatternNode.Binding(name, isVar) => {
+                        let isBinding = match (c.hir.patterns[tree as usize]) {
+                            HirPattern.Binding(_) => true,
+                            _ => false,
+                        };
+                        if (isBinding && !isVar) {
+                            catchAll = pattern;
+                            catchAllName = c.front.ast.idents[name as usize].symbol;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         every.push(tree)?;
         let armSpanValue = armSpan(c, arms, index, isValue);
@@ -1576,6 +1616,7 @@ fn declareBinding(
         c.types.info(reference).mutableReference,
     )?;
     let local = c.hir.addLocal(c.function, ident.symbol, bindingType, isMutable, false, ident.start, ident.end)?;
+    c.hir.locals[local as usize].declaredBy = 2; // a pattern's binding
     c.bind(ident.symbol, local)?;
     return Ok(local);
 }

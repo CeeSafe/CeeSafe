@@ -583,6 +583,10 @@ struct File {
   fields that need drop are destroyed **after** it, in declaration order.
 - Moving a field out of a value whose type has a `drop` block is N0252: the `drop` block needs the
   whole value. Moving out of `this` inside `drop` is impossible anyway (§14.3).
+- Only a struct has a `drop` block. An enum has none (`drop` in an enum's body is N0100): destroying an enum value
+  destroys the payloads of the variant it holds, each as its own type says, so an enum is a move type, and needs
+  drop, exactly when one of its payload types does. A variant that owns a resource holds a struct with a `drop`
+  block: `enum Source { File(FileHandle), Memory(Vector<u8>) }`.
 
 ### 14.3 Moves
 - **Using a move-type place by value moves it**:

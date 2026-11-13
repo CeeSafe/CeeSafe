@@ -167,7 +167,15 @@ fn checkInLoop(c: borrow mut Checker, span: Span, keyword: StringView) -> Result
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendText(mut message, keyword)?;
-        appendText(mut message, "' can only be used inside 'while' or 'loop'")?;
+        appendText(mut message, "' can only be used inside a loop ('while', 'for' or 'loop')")?;
+        if (c.closureContexts.length > 0) {
+            appendText(
+                mut message,
+                "; a closure's body is its own function, so it cannot leave a loop around the closure",
+            )?;
+        } else if (c.asyncScopes.length > 0) {
+            appendText(mut message, "; the body of an 'Async.scope' cannot leave a loop around it")?;
+        }
         c.error(loopControlOutsideLoop(), span.start, span.end, message)?;
     }
     return Ok();
@@ -745,6 +753,7 @@ fn checkFor(
     }
     c.pushScope()?;
     let local = c.hir.addLocal(c.function, id.symbol, variableType, false, false, id.start, id.end)?;
+    c.hir.locals[local as usize].declaredBy = 1; // a `for` variable
     c.bind(id.symbol, local)?;
     c.loopDepth += 1;
     let checkedBody = checkBlock(c, body)?;
@@ -830,7 +839,7 @@ fn checkForIterator(
         // Reported already (a `Box<dyn I>` that cannot be borrowed mutably).
     } else if (!shaped) {
         var message = Vector<u8>.create();
-        appendText(mut message, "'for' iterates over an array, a slice, a range 'a..b' or an iterator; ")?;
+        appendText(mut message, "'for' iterates over an array, a slice, a vector, a range 'a..b' or an iterator; ")?;
         if (function == none()) {
             appendQuotedType(mut message, c, structType)?;
             appendText(mut message, " has no method 'next'")?;
@@ -889,6 +898,7 @@ fn checkForIterator(
     }
     c.pushScope()?;
     let local = c.hir.addLocal(c.function, id.symbol, variableType, false, false, id.start, id.end)?;
+    c.hir.locals[local as usize].declaredBy = 1; // a `for` variable
     c.bind(id.symbol, local)?;
     c.loopDepth += 1;
     let checkedBody = checkBlock(c, body)?;

@@ -1,0 +1,17 @@
+// A pattern where a name is expected, and `drop` in an enum: one error each, which says what to write.
+// A parameter and a `for` variable are names (a pattern goes in `match`, after `is` or in a `let … else`); an enum
+// has no `drop` block (type-system.md §14.2).
+enum Source {
+    File(u32),
+    Memory,
+
+    drop { // error[N0100]
+    }
+}
+
+fn parameter(Some(n): u32?) -> u32 => 1; // error[N0100]
+
+fn loopVariable(items: Slice<u32?>) {
+    for (Some(n) in items) { // error[N0100]
+    }
+}

@@ -725,6 +725,13 @@ struct Parser {
             }
             let paramStart = this.current().start;
             let paramName = this.parseIdentifier()?;
+            if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot)) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected ':', found ",
+                    ": a parameter is 'name: Type', not a pattern; take the value and match it in the body, with 'match', 'if (value is PATTERN)' or 'let PATTERN = value else { … };'",
+                )?;
+            }
             this.expect(TokenKind.Colon)?;
             let typ = this.parseType()?;
             this.front.ast.parameters.push(Parameter {
@@ -1305,17 +1312,15 @@ struct Parser {
                 break;
             }
         }
-        if (this.at(TokenKind.FnKeyword)) {
-            // An enum's functions are written in an `impl` block, not in its body (ADR 0107).
+        if (this.at(TokenKind.FnKeyword) || this.at(TokenKind.DropKeyword)) {
+            // An enum's functions are written in an `impl` block, not in its body (ADR 0107); it has no `drop` block
+            // (type-system.md §14.2).
             let token = this.current();
-            this.error(
-                expectedToken(),
-                token.start,
-                token.end,
-                textMessage(
-                    "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)",
-                )?,
-            )?;
+            let text = if (this.at(
+                TokenKind.FnKeyword,
+            )) "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)"
+                else "an enum has no 'drop' block: its payloads are destroyed as their own types say; give the payload that owns a resource a struct type with a 'drop' block (type-system.md §14.2)";
+            this.error(expectedToken(), token.start, token.end, textMessage(text)?)?;
             // One error for the mistake: the rest of the body is passed over, to the enum's closing brace.
             var depth: i32 = 0;
             while (!this.at(TokenKind.EndOfFile)) {
@@ -1777,6 +1782,13 @@ struct Parser {
                 this.advance();
                 this.expect(TokenKind.OpenParen)?;
                 let variable = this.parseIdentifier()?;
+                if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot)) {
+                    this.errorFound(
+                        expectedToken(),
+                        "expected 'in', found ",
+                        ": a 'for' variable is a name, not a pattern; name the item and take it apart in the body, with 'let PATTERN = item else { continue; };', 'if (item is PATTERN)' or 'match'",
+                    )?;
+                }
                 this.expect(TokenKind.InKeyword)?;
                 let first = this.parseExpr()?;
                 let end = if (this.eatRangeDots()?) this.parseExpr()? else none();

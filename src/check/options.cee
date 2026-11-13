@@ -377,9 +377,16 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
         } else if ((returnType == none() || c.types.optionType(returnType) == none()) && (returnType == none() ||
             !c.types.isBottom(returnType))) {
             var message = Vector<u8>.create();
-            appendText(mut message, "'?' on an optional returns 'null' from the function, so ")?;
-            appendFunctionName(mut message, c)?;
-            appendText(mut message, " must return an optional 'T?'")?;
+            if (inDropBlock(c)) {
+                appendText(
+                    mut message,
+                    "'?' cannot be used in a 'drop' block: it returns 'null' from the function, and a 'drop' block returns nothing; test the optional with 'if (… is Some(x))' or 'match'",
+                )?;
+            } else {
+                appendText(mut message, "'?' on an optional returns 'null' from the function, so ")?;
+                appendFunctionName(mut message, c)?;
+                appendText(mut message, " must return an optional 'T?'")?;
+            }
             c.error(tryReturnMismatch(), span.start, span.end, message)?;
         }
         return c.expr(HirExpr.Try(operand), value, span.start, span.end);
@@ -414,6 +421,11 @@ fn checkTry(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span
                     appendText(mut message, "Variant(")?;
                     appendBytes(mut message, c.typeName(err))?;
                     appendText(mut message, ")'")?;
+                } else if (inDropBlock(c)) {
+                    appendText(
+                        mut message,
+                        "'?' cannot be used in a 'drop' block: it returns 'Err' from the function, and a 'drop' block returns nothing, so the error has nowhere to go; handle it here with 'match', or discard it with 'let _ = …;'",
+                    )?;
                 } else {
                     appendText(mut message, "'?' returns 'Err' from the function, so ")?;
                     appendFunctionName(mut message, c)?;

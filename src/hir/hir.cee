@@ -198,6 +198,8 @@ struct HirLocal {
     isUsing: bool;
     /// `var s: T;` of a C type (ADR 0080 §3.4): C's zeroed object on the stack, never moved.
     cLocal: bool;
+    /// What declared it, for messages: 0 a `let`, `var`, `using` or parameter, 1 a `for` loop, 2 a pattern.
+    declaredBy: u32;
     start: u32;
     end: u32;
 }
@@ -410,6 +412,7 @@ struct HirProgram {
             parameter: parameter,
             isUsing: false,
             cLocal: false,
+            declaredBy: 0,
             start: start,
             end: end,
         })?;
@@ -429,6 +432,7 @@ struct HirProgram {
             parameter: false,
             isUsing: false,
             cLocal: false,
+            declaredBy: 0,
             start: start,
             end: end,
         })?;

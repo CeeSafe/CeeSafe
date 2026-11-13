@@ -193,14 +193,14 @@ reads a loan off a type. The argument needs each of these, and each has a test t
 
 | # | Assumption | Enforced by | Tests |
 |---|---|---|---|
-| A1 | An instance's flows include its declaration's | 2.9: flows inherited; ceesafec's internal check (N0216) | `check-fail/instance-flows-default-method`, `-generic-impl`, `-dyn`, `-bound`, `-region-result` |
-| A2 | A function type carries no flows between its arguments | 2.10: N0298; a closure's body cannot store a parameter through a parameter or a capture (N0272) | `check-fail/function-value-flows`, `function-value-flows-generic`, `closure-capture-stores-forms` |
-| A3 | No scoped type is Send or Share, and a bound cannot be evaded | §38.1; 2.4 | `check-fail/interface-parameter-bounds`, `generic-send-arguments`; `run-pass/generic-impl-send-bound` (2.11) |
+| A1 | An instance's flows include its declaration's | 2.9: flows inherited; ceesafec's internal check (N0216) | `check-fail/instance-flows-default-method`, `-default-static`, `-generic-impl`, `-dyn`, `-bound`, `-region-result`, `-region-tagged`, `-region-in-result` |
+| A2 | A function type carries no flows between its arguments | 2.10: N0298; a closure's body cannot store a parameter through a parameter or a capture (N0272) | `check-fail/function-value-flows`, `-generic`, `-feed`, `-argument`, `-bound-instance`, `-closures` |
+| A3 | No scoped type is Send or Share, and a bound cannot be evaded | §38.1; 2.4 | `check-fail/interface-parameter-bounds`, `generic-send-arguments`; `check-fail/closures-threads-sync-loans`; `run-pass/generic-impl-send-bound`, `-share-bound`, `-send-bound-plain-interface` (2.11) |
 | A4 | A boxed closure's result (`dyn fn`) borrows from neither its parameters nor its captures | N0245 in the closure's body (§36.5) | `check-fail/dyn-fn-result-loans` |
 | A5 | An instance that boxes a scoped argument, or borrows it, is refused | N0274, N0246 (§25.4) | `check-fail/scoped-instance-paths` |
 | A6 | A built-in that gives a value of a type parameter's type gives contents, not a borrow of its operand's storage | by kind, 2.1 | `run-pass/container-element-loans`, `check-fail/container-element-loans` |
 | A7 | An impl's body keeps its interface's flows | 2.3 | `check-fail/interface-impl-flows` |
-| A8 | A closure's stores through its captures are the enclosing function's, where the closure is made | 2.5 | `check-fail/closure-capture-stores*` |
+| A8 | A closure's stores through its captures are the enclosing function's, where the closure is made | 2.5 | `check-fail/closure-capture-stores*`, `async-boxed-closure-loans` |
 | A9 | A raw pointer carries no loan: what is read through one is `unsafe` code's | §27.1 | none: a statement about `unsafe` code |
 
 Where it is weakest now: A6, which trusts each built-in by kind and not by a list; A4, an existing rule this ADR
@@ -240,6 +240,16 @@ On the corpus (now 958 files), `lib/`, `tests/packages`, the guide's and the boo
 own source, which builds itself to a fixed point with the rule:
 
 - `lib/core/async.cee`, `AsyncTasksIn.run`: changed by 2.6.
+- Third round: the interface method whose result is written with the interface's parameters is elided again when
+  the interface is given scoped arguments, as in 0.42.0 (the second round had switched that off, which let
+  `impl Run<StringView> for Unit {}` inherit a default whose result borrows from a parameter the instance did not
+  list). Nothing in the corpus, the libraries, the guide, the book or the compiler is refused by §2.9 to §2.11.
+  The differential against 0.42.0 (every `check-fail` test and every probe of the three reviews and of this
+  branch: what 0.42.0 refuses and this compiler accepts) is eight files, none of which faults: the test of an
+  unreleased feature run without its options (`process-signals-freestanding`), five probes that use the unreleased
+  rule that a `T: Send` holds no loan in a thread's or a closure's result, one probe on which 0.42.0 panics, and
+  `run-pass/interface-impl-narrowed-flows`, which 2.3 accepts by design (a direct call of an impl's method has the
+  interface's flows, against which the method's body is checked).
 - Corpus expectations changed, each a function that was already refused, which now reports the return as well as
   the closure: `check-fail/generic-send-loans` (`copyOnly`, `named`: N0244 at `return f();`),
   `check-fail/thread-closure-moves` (`throughClosure`: the same).

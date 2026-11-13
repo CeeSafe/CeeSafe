@@ -44,9 +44,8 @@ Three things in the comments are not part of the form:
   [decisions](https://ceesafe.github.io/CeeSafe/reference/decisions/).
 - `type-system.md §36.1`, or a bare `§21`, names the section of the type system that gives the form its rules.
 
-`EOF` is the end of the file. `StringLiteral` and `CharLiteral` have no production: their forms are described in
-prose under [Strings and characters](#strings-and-characters). `Decimal`, `HexDigits`, `BinDigits` and `OctDigits`
-are runs of digits of the radix, with `_` allowed between two digits.
+`EOF` is the end of the file. `StringLiteral` and `CharLiteral` are tokens: their forms are described in prose
+under [Strings and characters](#strings-and-characters).
 
 ## Lexical grammar
 
@@ -82,6 +81,8 @@ more words have a meaning in one place only and are identifiers everywhere else:
 ```text
 IntLiteral = (Decimal | '0x' HexDigits | '0b' BinDigits | '0o' OctDigits) IntSuffix?
 IntSuffix  = 'i8'|'i16'|'i32'|'i64'|'isize'|'u8'|'u16'|'u32'|'u64'|'usize'
+Decimal    = Digit ('_'? Digit)*                (* HexDigits, BinDigits and OctDigits likewise, with their digits *)
+Digit      = '0'..'9'
 ```
 
 ```text
@@ -139,7 +140,8 @@ QualifiedName   = Identifier ('.' Identifier)*
 ### Items, attributes and the declarations with type parameters
 
 ```text
-Item       = Attribute* Visibility? (FunctionDecl | ConstDecl | StaticDecl | StructDecl | EnumDecl | ExternBlock)
+Item       = Attribute* Visibility? (FunctionDecl | ConstDecl | StaticDecl | StructDecl | EnumDecl | InterfaceDecl
+                                     | ImplDecl | ExternBlock)
 Attribute  = '@' Identifier ('(' AttributeArg (',' AttributeArg)* ')')?   (* M8b; type-system.md §28.1 *)
 AttributeArg = Identifier | StringLiteral | IntLiteral
 ExternBlock = 'extern' StringLiteral '{' (ExternFn | ExternStruct | ExternUnion | ExternEnum | ExternConst | ExternStatic)* '}'  (* M8b; §28.2 *)
@@ -158,13 +160,15 @@ InterfaceConst = 'const' Identifier ':' Type ('=' Expr)? ';'   (* ADR 0086 §2.4
 AssocTypeDecl = 'type' Identifier (':' Type ('+' Type)*)? ';'   (* ADR 0086 §2.5 *)
 MethodSig  = Attribute* 'fn' Identifier TypeParams? '(' ParamList? ')' ('->' Type)? (';' | FunctionBody)
                                             (* attributes: M13 G2, `@effects`, §37.3; a FunctionBody is a default, ADR 0086 §2.1 *)
-ImplDecl   = 'impl' Type 'for' Type '{' (Attribute* 'public'? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
-                                            (* M6b; §21; attributes C7a; ConstDecl and AssocTypeDef: ADR 0086 §2.4, §2.5;
-                                               `public` has no effect, and no other modifier is accepted: ADR 0109 §2.5 *)
+ImplDecl   = 'impl' TypeParams? Type 'for' Type '{' (Attribute* 'public'? FunctionDecl | ConstDecl | AssocTypeDef)* '}'
+                                            (* M6b; §21; TypeParams: ADR 0054; attributes C7a; ConstDecl and
+                                               AssocTypeDef: ADR 0086 §2.4, §2.5; `public` has no effect, and no other
+                                               modifier is accepted: ADR 0109 §2.5 *)
+           | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'
+                                            (* inherent: ADR 0064 §1; §21.1; ConstDecl: ADR 0074 §2.7, and N0216 in an
+                                               impl with TypeParams *)
 AssocTypeDef = 'type' Identifier '=' Type ';'
-           | 'impl' Type '{' (Attribute* Visibility? FunctionDecl | Visibility? ConstDecl)* '}'  (* inherent: ADR 0064 §1; ConstDecl ADR 0074 §2.7 *)
-           | 'impl' TypeParams? Type '{' (Attribute* Visibility? FunctionDecl)* '}'   (* inherent: ADR 0064 §1; §21.1 *)
-MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' Args? ')'   (* type arguments: ADR 0064 §1 *)
+MemberCall = Expr '.' Identifier ('<' GenericArg (',' GenericArg)* '>')? '(' ArgList? ')'   (* type arguments: ADR 0064 §1 *)
 TypeParam  = 'region' Identifier                               (* M6x: a region, before any type parameter; §25.1 *)
            | 'const' Identifier ':' Type                       (* ADR 0083: a const parameter; type-system.md §20.5 *)
            | Identifier (':' Type ('+' Type)*)?                (* bounds: M6b *)
@@ -175,12 +179,6 @@ EnumDecl   = 'enum' Identifier TypeParams? '{' (Variant (',' Variant)* ','?)? '}
 Variant    = ('@' 'from')? Identifier ('(' Type (',' Type)* ','? ')')?   (* `@from`: ADR 0075 §2.3 *)
 Visibility = 'public' | 'internal' | 'private'
 ```
-
-Read two parts of this block with care, because its lines are in the order of the specification:
-
-- The two lines that begin `| 'impl'` under `AssocTypeDef` are the forms of an `impl` block that names no
-  interface, `impl Order { … }` and `impl<T> Pair<T> { … }`. They are not alternatives of an associated type.
-- `InterfaceDecl` and `ImplDecl` are items, at the top level of a file, though `Item` does not list them.
 
 | Form | Taught in |
 |---|---|
@@ -249,19 +247,24 @@ Type = QualifiedName
                                                G8b′: `@effects(…)` before `fn`, §36.3 *)
      | Identifier '<' GenericArg (',' GenericArg)* '>'   (* M6a: an instantiation of a generic struct or enum; also
                                                   Box, Pool, … *)
+     | 'extern' StringLiteral 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M8d: a pointer to a C function,
+                                                  `extern "C" fn(i32) -> i32`; type-system.md §29.5 *)
      | '*' 'mut'? Type                         (* M8a: raw pointer; type-system.md §27 *)
-     | 'dyn' Type                              (* M13 G2: an interface instantiation; only behind `borrow` or in
+     | 'dyn' Type DynMarker*                   (* M13 G2: an interface instantiation; only behind `borrow` or in
                                                   `Box<…>`; type-system.md §37. `dyn` is a keyword only here *)
-     | 'dyn' 'mut'? Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)?   (* M13 G3: an owning closure's type, §36.5 *)
-Sources = '(' Identifier (',' Identifier)* ')'   (* only if a type follows the ')'; else '(' Type ')' *)
+     | 'dyn' 'mut'? Attribute* 'fn' '(' (Type (',' Type)*)? ')' ('->' Type)? DynMarker*
+                                               (* M13 G3: an owning closure's type, §36.5 *)
+DynMarker = '+' ('Send' | 'Share')               (* type-system.md §38.4; `Share`: ADR 0084 §2.5 *)
+Sources = '(' Source (',' Source)* ')'           (* only if a type follows the ')'; else '(' Type ')' *)
+Source  = Identifier | 'this' | 'static'         (* a parameter, the receiver, or a region (type-system.md §25.2) *)
 GenericArg = Type | ConstArg                     (* ADR 0083; type-system.md §20.5 *)
 ConstArg   = 'true' | 'false' | IntLiteral | '(' Expr ')'
            (* a name or `E.V` parses as a Type; the parameter's kind decides (N0354). `'(' Expr ')'` only in a type:
               a `(` that a type follows (`(borrow T)`, `(*T)`, `(fn …)`, `(dyn I)`, `(T?)`, `(T)?`) is a Type *)
 ```
 
-One type that the compiler accepts has no line in this production: `extern "C" fn(A) -> R`, a pointer to a C
-function, which [Calling C and being called by it](./ch20-02-calling-c) teaches.
+The alternative that begins `'extern'` is `extern "C" fn(A) -> R`, a pointer to a C function, which
+[Calling C and being called by it](./ch20-02-calling-c) teaches.
 
 | Form | Taught in |
 |---|---|
@@ -341,7 +344,7 @@ the tightest. Every binary level associates to the left, except that the compari
 | 9 | `* / %` | |
 | 10 | `as` | `Expr 'as' Type`, left-assoc (`x as u32 as u64`). A primitive type name (`u8` … `u64`, `i8` … `i64`, `usize`, `isize`, `f32`, `f64`, `bool`, `char`) takes no type arguments, so `a as u64 < b` is `(a as u64) < b` (ADR 0075 §2.13) |
 | 11 | unary `- !`, `*` (ADR 0075 §2.14: reading through a reference), `borrow`, `borrow mut`, `move`; `await` (L1) | prefix, right-assoc (`- -x`); `await`'s operand: below |
-| 12 | postfix: call `(...)`, member `.name` | |
+| 12 | postfix: call `(...)`, member `.name`, index and slice `[...]`, `?` (propagate), `!` (unwrap) | left to right: `Postfix` below |
 
 The bit operators bind tighter than the comparisons, so `x & 1 == 0` is `(x & 1) == 0`.
 [Data types](./ch03-02-data-types) teaches the arithmetic and comparison operators,
@@ -351,8 +354,9 @@ and [Where patterns go](./ch19-01-where-patterns-go) `is`.
 ### Primary and postfix expressions
 
 ```text
-Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'false'
+Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'false' | 'null'
         | Identifier GenericArgs? | '(' Expr ')' | 'this'
+        | 'Self' | 'Self' '{' FieldInits? '}'               (* ADR 0086 §2.2; §1.3 *)
         | 'unsafe' '{' Expr '}'                              (* M8a: an unsafe expression *)
         | IfExpr | MatchExpr                                 (* M11 (G5): type-system.md §15.3 *)
         | '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)   (* M11 (G8b): a closure, §36.2 *)
@@ -366,6 +370,7 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | '[' Expr ':' Expr (',' Expr ':' Expr)* ','? ']'   (* an array by index, in a static's initialiser:
                                                         type-system.md §39.4, ADR 0091 §2.3 *)
 IsTest  = Operand 'is' Pattern                       (* level 3; Pattern: type-system.md §15.2, §15.4 *)
+Operand = Expr                                       (* of levels 4 to 12: what a level 3 operator takes on its left *)
 ClosureParam = Identifier (':' Type)?             (* a '(' … ')' followed by '=>' is a closure *)
 IfExpr    = 'if' '(' Expr ')' Branch 'else' (IfExpr | Branch)
 MatchExpr = 'match' '(' Expr ')' '{' (ValueArm (',' ValueArm)* ','?)? '}'
@@ -387,8 +392,8 @@ AwaitOperand = Primary ( '(' ArgList? ')' | '.' Identifier | '[' IndexOrRange ']
 PostfixRest  = '(' ArgList? ')' | '.' Identifier | '[' IndexOrRange ']' | '?' | '!'
 ```
 
-`Operand`, in `IsTest`, has no production: it is the expression to the left of `is`, which is an operator of
-level 3 in the table. After a name, `<` begins generic
+`Operand`, in `IsTest`, is the expression to the left of `is`, which is an operator of level 3 in the table.
+After a name, `<` begins generic
 arguments only when the tokens up to the matching `>` can form types or const arguments and the `>` is followed
 by `(`, `.`, `{`, `)`, `,`, `;` or `]`. Otherwise it is the less-than operator. A name followed directly by `{`
 is a struct literal.
@@ -423,19 +428,18 @@ PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | '(' Pattern ')'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
           | Bound '..=' Bound | Bound '..' Bound                  -- ranges: ADR 0085 §2.4
-Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
+Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
 SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)
 ```
 
-Read `PrimPattern` as one list of alternatives: every line that begins with `|`, down to the slice pattern,
-is one of its alternatives, and the line `Bound = …` among them defines the bound of a range. A payload that is a
-single identifier is a binding, unless the name is a constant in scope.
+Every line of `PrimPattern` that begins with `|` is one of its alternatives. A payload that is a single identifier
+is a binding, unless the name is a constant in scope.
 
 | Form | Taught in |
 |---|---|

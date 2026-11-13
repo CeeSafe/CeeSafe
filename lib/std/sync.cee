@@ -8,6 +8,8 @@ extern "C" {
     @effects(sleep)
     fn ceesafe_mutex_lock(m: *mut void);
     @effects()
+    fn ceesafe_mutex_try_lock(m: *mut void) -> bool;
+    @effects()
     fn ceesafe_mutex_unlock(m: *mut void);
     @effects()
     fn ceesafe_mutex_destroy(m: *mut void);
@@ -39,6 +41,16 @@ public struct Mutex<T: Send> {
     public fn lock(borrow this) -> MutexGuard<T> {
         unsafe { ceesafe_mutex_lock(this.raw); }
         return MutexGuard { lock: this };
+    }
+
+    /// The guard if no thread holds the lock, else null, at once: it never waits (ADR 0112). The thread that holds
+    /// the lock gets null too. It has no effect, so async code may call it.
+    /// Safety: as `lock`; the guard exists only when the lock was taken.
+    public fn tryLock(borrow this) -> MutexGuard<T>? {
+        if (!unsafe { ceesafe_mutex_try_lock(this.raw) }) {
+            return null;
+        }
+        return Some(MutexGuard { lock: this });
     }
 
     /// Safety: no guard is live once the mutex can be dropped, so the lock is free.

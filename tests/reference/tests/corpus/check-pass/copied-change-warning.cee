@@ -1,0 +1,87 @@
+// N0403 (ADR 0113): a `move` closure literal whose body changes a captured variable of a Copy type, where the
+// function reads the variable after the literal. The closure took a copy and changes that; the read sees the old
+// value. A warning: the program still checks, builds and runs.
+fn counted() -> i32 {
+    var hits = 0;
+    let t = Thread.spawn(move () => { hits += 1; })!; // warning[N0403]
+    t.join();
+    return hits;
+}
+
+// The closure is the only reader: a counter that lives in its closure.
+fn counter() -> Box<dyn mut fn() -> u64> {
+    var count: u64 = 0;
+    return Box.create(move () => {
+        count += 1;
+        return count;
+    })!;
+}
+
+// Read before the literal only, or only read in the closure.
+fn readBefore() -> i32 {
+    var seen = 4;
+    let before = seen;
+    let t = Thread.spawn(move () => { seen += 1; })!;
+    t.join();
+    return before;
+}
+
+fn onlyRead() -> i32 {
+    var base = 4;
+    base += 1;
+    let t = Thread.spawn(move () => base + 1)!;
+    return t.join() + base;
+}
+
+// A value that is not Copy is moved in: a later use is N0250, not this warning. The thread gives it back.
+fn moved() -> usize {
+    var names = Vector<i32>.create();
+    let t = Thread.spawn(move () => {
+        names.push(1)!;
+        return names;
+    })!;
+    return t.join().length;
+}
+
+// A boxed closure, too.
+fn boxed() -> u64 {
+    var total: u64 = 0;
+    var add: Box<dyn mut fn(u64) -> void> = Box.create(move (n: u64) => { total += n; })!; // warning[N0403]
+    add(3);
+    return total;
+}
+
+// An async move child.
+async fn child() -> Result<void, AsyncError> {
+    var steps = 0;
+    await Async.scope(AsyncError.Cancelled, (s) => {
+        s.spawn(async move () => { // warning[N0403]
+            steps += 1;
+            return Ok();
+        });
+    })?;
+    await AsyncConsole.writeLine(if (steps == 0) "unchanged" else "changed")?;
+    return Ok();
+}
+
+// Once for the literal, whatever the number of instances.
+fn each<T: Copy + Send>(x: T) -> i32 {
+    var count = 0;
+    let t = Thread.spawn(move () => { // warning[N0403]
+        let mine = x;
+        count += 1;
+    })!;
+    t.join();
+    return count;
+}
+
+fn main() {
+    Console.writeLine(counted());
+    var next = counter();
+    Console.writeLine(next() + next());
+    Console.writeLine(readBefore() + onlyRead());
+    Console.writeLine(moved());
+    Console.writeLine(boxed());
+    let _ = Async.run(child());
+    Console.writeLine(each<i32>(1) + each<u8>(2));
+}

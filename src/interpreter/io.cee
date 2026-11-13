@@ -1425,6 +1425,9 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_mutex_lock")) {
         return "P:-";
     }
+    if (sameText(name, "ceesafe_mutex_try_lock")) {
+        return "P:b"; // ADR 0112
+    }
     if (sameText(name, "ceesafe_mutex_once_lock") || sameText(name, "ceesafe_mutex_once_unlock")) {
         return ":-"; // ADR 0096
     }
@@ -1671,6 +1674,18 @@ fn callC(
     if (sameText(n0, "ceesafe_mutex_lock")) {
         mutexLock(it, c, n, arguments[0].bits(0, 8)?)?;
         return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_mutex_try_lock")) {
+        // Mutex.tryLock (ADR 0112): taken only if no thread holds it, its holder included; never a wait.
+        let address = arguments[0].bits(0, 8)?;
+        var taken: u64 = 0;
+        for (k in 0..it.runtime.mutexAddresses.length) {
+            if (it.runtime.mutexAddresses[k] == address && it.runtime.mutexOwners[k] == none()) {
+                it.runtime.mutexOwners[k] = it.runtime.current;
+                taken = 1;
+            }
+        }
+        return Ok(valueOf(taken, 1));
     }
     if (sameText(n0, "ceesafe_mutex_once_lock")) {
         // OnceLock's lock (ADR 0096): a mutex at an address no allocation has, recursive for its owner.
@@ -2162,7 +2177,8 @@ fn threadJoin(
     let data = pointerAt(it, block + 8)?;
     let tableAddress = it.memory.loadBits(block + 16, 8)?;
     let environment = c.dynTables[dynTableAt(c, tableAddress)?].implementation;
-    if (c.types.needsDrop(environment)) {
+    // A run-once environment's body dropped what it did not move (ADR 0112): only its memory is freed.
+    if (c.types.needsDrop(environment) && !isOnceEnvironmentStruct(c, environment)) {
         destroy(it, c, n, environment, data)?;
     }
     it.runtime.recordAddresses[index] = 0;
@@ -2831,12 +2847,18 @@ fn runTasks(
                 for (fd in fds.view()) {
                     readiness.push(0)!;
                 }
-                let woke = AsyncSockets.poll(
-                    fds.view(),
-                    events.view(),
-                    readiness.viewMut(),
-                    if (anyDeadline) 0 else -1,
-                );
+                // A test's timeout (ADR 0049 §3.3) holds while every task waits on a socket too: `step` counts no
+                // statement then, so the wait itself ends at the deadline.
+                var wait: i64 = if (anyDeadline) 0 else -1;
+                if (wait < 0 && it.testDeadline != 0) {
+                    let now = Timer.now();
+                    if (now >= it.testDeadline) {
+                        writeError(it, "ceesafe-test 1 timeout\n".bytes());
+                        return Err(exitWith(124));
+                    }
+                    wait = truncate<i64>(it.testDeadline - now);
+                }
+                let woke = AsyncSockets.poll(fds.view(), events.view(), readiness.viewMut(), wait);
                 if (woke > 0) {
                     for (j in 0..owners.length) {
                         if (readiness[j] != 0) {
@@ -2901,6 +2923,11 @@ fn runTasks(
         }
         let k = ready[head];
         head += 1;
+        // A task that runs waits for nothing. One woken by a cancellation while it waited on a socket would keep the
+        // descriptor otherwise, and the poll above would ask about it (closed by then, perhaps) while the task
+        // waits for something else.
+        tasks[k as usize].fd = -1;
+        tasks[k as usize].deadline = 0xFFFFFFFFFFFFFFFF;
         it.asyncCurrent = first + k;
         it.asyncDeadline = 0xFFFFFFFFFFFFFFFF;
         it.asyncWritable = false;

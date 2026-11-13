@@ -1,0 +1,28 @@
+// `AsyncError.Io` is `@from` (type-system.md §40.4, ADR 0111): in a function that returns `Result<_, AsyncError>`,
+// `?` on the `Result<_, IoError>` of a socket call that does not wait converts by itself. Before, each such call was
+// N0261 and needed a match of its own.
+async fn serve() -> Result<u16, AsyncError> {
+    let listener = AsyncTcpListener.bind("127.0.0.1", 0)?;
+    let port = listener.port()?;
+    return Ok(port);
+}
+
+fn missing() -> Result<void, IoError> => Err(IoError.NotFound);
+
+fn refused() -> Result<void, AsyncError> {
+    missing()?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(serve())) {
+        Ok(port) => { Console.writeLine(port > 0); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+    match (refused()) {
+        Err(AsyncError.Io(IoError.NotFound)) => { Console.writeLine("Io(NotFound)"); }
+        _ => { Console.writeLine("other"); }
+    }
+}
+// expect-stdout: true
+// expect-stdout: Io(NotFound)

@@ -511,6 +511,29 @@ fn checkUse(
         appendQuotedType(mut message, c, nirPlaceType(c, n, locals, place))?;
         var name = Vector<u8>.create();
         nirLocalName(c, n, m, local, mut name)?;
+        // A closure's capture (§36.2, §36.5): `(*env).text`, where `env` is the body's first parameter. The message
+        // names the captured variable, never `env`.
+        var capture = none();
+        let source = n.functions[m.function as usize].source;
+        if (local == 0 && firstIsDeref && p.projections.count > 1 &&
+            c.hir.functions[source as usize].closureEnvironment != none()) {
+            let second = n.projections[(p.projections.start + 1) as usize];
+            if (isFieldProjectionN(second)) {
+                capture = c.types.fields[second.field as usize].name;
+            }
+        }
+        if (capture != none()) {
+            var captured = Vector<u8>.create();
+            appendText(mut captured, "cannot move the captured ")?;
+            appendQuotedName(mut captured, c, capture)?;
+            appendText(mut captured, ", a ")?;
+            appendQuotedType(mut captured, c, nirPlaceType(c, n, locals, place))?;
+            appendText(
+                mut captured,
+                ", out of this closure: the closure may be called again, so the value stays in it; only a Copy capture can be read out. Lend it ('borrow') or return a copy; the body of 'Thread.spawn(move () => …)' or of an 'async move' child runs once and may move it (type-system.md §36.5)",
+            )?;
+            return moveError(c, m, local, moveOutOfReference(), span, captured);
+        }
         if (c.types.is(localType, TypeKind.Box) && firstIsDeref) {
             appendText(mut message, " out of the contents of the box '")?;
             appendBytes(mut message, name.view())?;

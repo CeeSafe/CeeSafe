@@ -147,7 +147,11 @@ fn mutabilityError(c: borrow Checker, place: u32, reason: borrow mut Vector<u8>)
     }
     if (!throughShared && !root.parameter && c.types.isScoped(root.typ) && !c.types.is(root.typ, TypeKind.Reference)) {
         appendQuotedName(reason, c, root.name)?;
-        return appendText(reason, " is not mutable; bind it with 'using' (a scoped value cannot be a 'var')");
+        // A scoped value other than a reference or a slice may be a `var` (§19.1, since M4c).
+        return appendText(
+            reason,
+            " was declared with 'let'; use 'var' for a mutable variable, or bind it with 'using'",
+        );
     }
     if (throughShared) {
         return appendText(

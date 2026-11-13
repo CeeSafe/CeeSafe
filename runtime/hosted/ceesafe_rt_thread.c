@@ -119,6 +119,18 @@ void ceesafe_mutex_lock(void *m) {
 #endif
 }
 
+/* Takes the lock if no thread holds it (ADR 0112): true if taken. It never waits; the thread that holds the lock
+   gets false too (the platform locks are not recursive). */
+bool ceesafe_mutex_try_lock(void *m) {
+#if defined(CEE_COSMOOS)
+    return cosmo_mutex_trylock((cee_mutex_impl *)m) == 0;
+#elif defined(_WIN32)
+    return TryAcquireSRWLockExclusive((cee_mutex_impl *)m) != 0;
+#else
+    return pthread_mutex_trylock((cee_mutex_impl *)m) == 0;
+#endif
+}
+
 void ceesafe_mutex_unlock(void *m) {
 #if defined(CEE_COSMOOS)
     cosmo_mutex_unlock((cee_mutex_impl *)m);

@@ -56,8 +56,7 @@ public struct Channel<T: Send> {
     /// Safety: the runtime's channel is reference counted; this handle holds one count until its drop.
     public fn create(capacity: usize) -> Result<Channel<T>, AllocError> {
         if (capacity == 0) {
-            let refused: usize? = null;
-            let never = refused!; // panics: a channel needs a capacity of at least 1 (ADR 0032 §3.1)
+            panic("a channel needs a capacity of at least 1"); // ADR 0032 §3.1
         }
         let layout = layoutOf<T>();
         let raw = unsafe { ceesafe_chan_create(capacity as u64, layout.size as u64, layout.align as u64) };

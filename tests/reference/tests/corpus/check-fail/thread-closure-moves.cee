@@ -1,0 +1,44 @@
+// What a closure may move out of its captures (type-system.md §36.5, §38.2, ADR 0112). The literal of `Thread.spawn`
+// runs once and may move each capture out, once (N0250 for a second move). A boxed closure, and a closure that is
+// lent, may be called again: N0251, which names the captured variable (never the body's hidden `env`). A closure's
+// result of a type parameter's type is N0245, which does not name `env` either.
+fn apply(f: borrow mut fn() -> String) -> String => f();
+
+fn twice() {
+    let text = String.from("x")!;
+    let t = Thread.spawn(move () => {
+        let first = text;
+        let second = text; // error[N0250]
+        return first;
+    })!;
+    let _ = t.join();
+}
+
+fn boxed() {
+    let text = String.from("x")!;
+    let f: Box<dyn fn() -> String> = Box.create(move () => text)!; // error[N0251]
+    let _ = f();
+}
+
+fn lent() {
+    let text = String.from("x")!;
+    let _ = apply(() => text); // error[N0251]
+}
+
+fn throughBox() {
+    let text = String.from("x")!;
+    let f: Box<dyn mut fn() -> String + Send> = Box.create(move () => text)!; // error[N0251]
+    let _ = Thread.spawn(f)!.join();
+}
+
+fn throughThread<T: Send + Copy>(value: T) -> T {
+    return Thread.spawn(move () => value)!.join(); // error[N0245]
+}
+
+fn main() {
+    twice();
+    boxed();
+    lent();
+    throughBox();
+    Console.writeLine(throughThread<i32>(4));
+}

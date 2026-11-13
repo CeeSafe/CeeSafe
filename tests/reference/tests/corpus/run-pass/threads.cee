@@ -94,18 +94,20 @@ fn main() {
         Err(now) => { Console.writeLine(now); }
     }
 
-    // A value moved into a thread is destroyed when the thread is joined; an unjoined thread is joined by its drop.
+    // A value moved into a thread is destroyed by the thread, as its body returns (ADR 0112: until then, when the
+    // thread was joined); an unjoined thread is joined by its drop, which destroys its result. `later` is that
+    // result since ADR 0112 (it was `later.id`, whose "drop 2" would now come from the thread, at any time).
     let owned = Noisy { id: 1 };
     let keeper = Thread.spawn(move () => owned.id + 1)!;
-    Console.writeLine(keeper.join()); // 2, then "drop 1"
+    Console.writeLine(keeper.join()); // "drop 1", then 2
     let later = Noisy { id: 2 };
-    let unjoined = Thread.spawn(move () => later.id)!;
+    let unjoined = Thread.spawn(move () => later)!;
     // Boxed closures and dyn values that are Send cross to threads.
     let made = Thread.spawn(worker(41))!;
     Console.writeLine(made.join()); // 42
     let job: Box<dyn Job + Send> = Box.create(Double { n: 21 })!;
     let ran = Thread.spawn(move () => job.run())!;
-    Console.writeLine(ran.join()); // 42
+    Console.writeLine(ran.join());                          // 42
     let plain: Box<dyn Job> = Box.create(Double { n: 1 })!; // forgetting `+ Send` is allowed
     Console.writeLine(plain.run());
     Console.writeLine("end");

@@ -1,0 +1,8 @@
+// A channel needs a capacity of at least 1 (ADR 0032 §3.1), and says so: before, the panic was "unwrapped null" at a
+// line of lib/std/channel.cee.
+fn main() {
+    Console.writeLine("before");
+    let channel = Channel<i32>.create(0)!; // expect-library-panic: a channel needs a capacity of at least 1
+    Console.writeLine("after");
+}
+// expect-stdout: before

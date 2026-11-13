@@ -1,0 +1,40 @@
+// `Mutex.tryLock` (type-system.md §38.3, ADR 0112): the guard if no thread holds the lock, else null, at once. The
+// thread that holds the lock gets null too. A guard moved away (`let _ = guard;`) unlocks there, before its block ends.
+fn main() {
+    let m = Arc<Mutex<i32>>.create(Mutex<i32>.create(1)!)!;
+    var first = m.get().lock();
+    let data = first.data();
+    data += 1;
+    match (m.get().tryLock()) {
+        Some(_) => { Console.writeLine("taken twice"); }
+        null => { Console.writeLine("busy"); }
+    }
+
+    // Another thread finds it busy as well, and does not wait.
+    let other = m.clone();
+    let sawBusy = Thread.spawn(move () => other.get().tryLock().isNull())!.join();
+    Console.writeLine(sawBusy);
+
+    let _ = first; // unlocks here
+    match (m.get().tryLock()) {
+        Some(g) => {
+            var guard = g;
+            let held = guard.data();
+            held += 10;
+            Console.writeLine(held);
+        }
+        null => { Console.writeLine("still busy"); }
+    }
+
+    // The guard of the match arm is gone: the lock is free again.
+    let again = m.clone();
+    let sawFree = Thread.spawn(move () => again.get().tryLock().isSome())!.join();
+    Console.writeLine(sawFree);
+    var last = m.get().lock();
+    Console.writeLine(last.data());
+}
+// expect-stdout: busy
+// expect-stdout: true
+// expect-stdout: 12
+// expect-stdout: true
+// expect-stdout: 12

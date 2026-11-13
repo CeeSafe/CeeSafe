@@ -822,7 +822,12 @@ fn finishMoveLiteral(
             appendQuotedName(mut message, c, local.name)?;
             appendText(mut message, ", a ")?;
             appendQuotedType(mut message, c, local.typ)?;
-            appendText(mut message, ", which holds a loan: the box could outlive it (type-system.md §36.5)")?;
+            // `Thread.spawn`'s literal is the one sync literal that runs once (threads.cee): no box is written there.
+            appendText(
+                mut message,
+                if (c.runOnceLiteral) ", which holds a loan: the thread could outlive it; move the value itself in, or share it through an 'Arc' (type-system.md §38.2)"
+                    else ", which holds a loan: the box could outlive it (type-system.md §36.5)",
+            )?;
             c.error(moveCaptureScoped(), span.start, span.end, message)?;
             return c.errorResult(span.start, span.end);
         }
@@ -839,6 +844,18 @@ fn finishMoveLiteral(
                 c.error(closureKind(), span.start, span.end, message)?;
                 return c.errorResult(span.start, span.end);
             }
+        }
+    }
+    // A Copy capture the body changes: the closure changes its own copy (§36.5). Noted for N0403 (ADR 0113), which is
+    // reported if the function reads the variable after the literal.
+    for (capture in captures) {
+        if (isMutableCapture(capture.mode) && c.types.isCopy(c.hir.locals[capture.local as usize].typ)) {
+            c.copiedChanges.push(c.file)?;
+            c.copiedChanges.push(span.start)?;
+            c.copiedChanges.push(span.end)?;
+            c.copiedChanges.push(capture.local)?;
+            c.copiedChanges.push(c.hir.locals[capture.local as usize].name)?;
+            c.copiedChanges.push(0)?;
         }
     }
     var moved = Vector<HirCapture>.create();

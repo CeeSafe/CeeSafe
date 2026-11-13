@@ -916,8 +916,10 @@ int64_t ceesafe_async_poll(const int32_t *fds, const uint32_t *events, uint32_t 
         n = poll(list, (nfds_t)count, timeout < 0 ? -1 : (timeout > INT_MAX ? INT_MAX : (int)timeout));
     } while (n < 0 && errno == EINTR);
     for (uint64_t k = 0; k < count; k++) {
-        ready[k] = (list[k].revents & (POLLIN | POLLHUP | POLLERR)) != 0 ? 1u : 0u;
-        ready[k] |= (list[k].revents & (POLLOUT | POLLHUP | POLLERR)) != 0 ? 2u : 0u;
+        /* POLLNVAL (a descriptor closed meanwhile) is ready too, as on Windows above: the operation then fails at
+           once, where a count with nothing ready would make the caller poll again for ever. */
+        ready[k] = (list[k].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) != 0 ? 1u : 0u;
+        ready[k] |= (list[k].revents & (POLLOUT | POLLHUP | POLLERR | POLLNVAL)) != 0 ? 2u : 0u;
     }
     return n < 0 ? -(int64_t)errno : (int64_t)n;
 #endif
@@ -1042,7 +1044,10 @@ static void cee_child_unlink(cee_task *t) {
 static void *cee_spawn(ceesafe_scope *scope, size_t frame_size, bool (*resume)(void *frame, ceesafe_scope *scope),
                        void *(*allocate)(size_t size, size_t align), void (*release)(void *p, size_t size, size_t align),
                        const ceesafe_frame_info *info, bool send) {
-    if (scope->owner != cee_exec.current) {
+    /* A task set's owner is fixed when it starts (ADR 0053 §3.3): the task that awaits it. A function the set was
+       passed to may spawn from another task (a child of a race in the body); cancelling that task does not reach
+       the set's children. */
+    if (!scope->set && scope->owner != cee_exec.current) {
         cee_scope_disown(scope); /* listed under the task that owned it until now (ADR 0062) */
         scope->owner = cee_exec.current; /* before its first child, which other workers may read it from */
     }

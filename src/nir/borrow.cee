@@ -1822,11 +1822,22 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                 !containsU32(reportedParameters, parameter)) {
                 reportedParameters.push(parameter)?;
                 var message = Vector<u8>.create();
-                appendText(mut message, "the returned reference may be derived from parameter '")?;
-                appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
-                appendText(mut message, "', which the return type does not list")?;
-                if (c.hir.functions[source as usize].returnSources.length == 0) {
-                    appendText(mut message, "; a 'static' result may hold only static data, such as a string literal")?;
+                if (parameter == 0 && c.hir.functions[source as usize].closureEnvironment != none()) {
+                    // A closure's body: its first parameter is its environment, which the user never wrote (§36.2).
+                    appendText(
+                        mut message,
+                        "this closure's result may hold a reference derived from what the closure captures, and a closure's result cannot borrow from the closure; a type parameter may be a reference, so return a value of a type known to own its data (type-system.md §36.2)",
+                    )?;
+                } else {
+                    appendText(mut message, "the returned reference may be derived from parameter '")?;
+                    appendLocalNameOr(c, n, b, parameter, "?", mut message)?;
+                    appendText(mut message, "', which the return type does not list")?;
+                    if (c.hir.functions[source as usize].returnSources.length == 0) {
+                        appendText(
+                            mut message,
+                            "; a 'static' result may hold only static data, such as a string literal",
+                        )?;
+                    }
                 }
                 c.front.diagnostics.error(returnSourceMismatch(), b.file, span.start, span.end, message)?;
             }

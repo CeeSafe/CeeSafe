@@ -452,6 +452,9 @@ fn synthName(c: borrow mut Checker, name: u32, span: Span) -> Result<u32, AllocE
             if (c.asyncScopes.length > 0) {
                 checkUseOfCaptured(c, local, span)?;
             }
+            if (c.copiedChanges.length > 0) {
+                noteUseAfterCopiedChange(c, local, span);
+            }
             let t = c.hir.locals[local as usize].typ;
             return c.expr(HirExpr.LocalRef(local), t, span.start, span.end);
         }

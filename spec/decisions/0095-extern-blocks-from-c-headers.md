@@ -153,6 +153,9 @@ Each was found by running the tool on CosmoOS's headers, and each is the tool de
   typedef. A union with a tag is not declared, and a member or parameter of that type makes its struct opaque or
   its function left out.
 - **A struct by value** as a parameter or result is N0294, so such a function is left out with a comment.
+- **A type whose name C reserves** (`struct __va_list_tag`, which is `va_list` on x86-64) has no CeeSafe spelling
+  either (N0292): it is not declared, and a member or parameter of that type makes its struct opaque or its
+  function left out. Found later, on x86-64, and fixed on 2026-11-13 (ADR 0127 §5 item 1).
 - **A `char` member** is `u8`, and an array of them `[u8; N]`, as the ports already write: §31.1 has no `CChar`
   member.
 - **A pointer to a function pointer's typedef** (`const syscall_fn *table`) is `*syscall_fn`, the typedef's opaque

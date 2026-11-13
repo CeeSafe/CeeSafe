@@ -585,6 +585,7 @@ fn lowerStmt(
             endStatementTemps(n, b, saved)?;
         }
         HirStmt.If(condition, then, otherwise) => { lowerIf(c, n, b, condition, then, otherwise)?; }
+        HirStmt.LetElse(test, otherwise) => { lowerLetElse(c, n, b, test, otherwise)?; }
         HirStmt.While(condition, body) => {
             if (hasIsTest(c, condition)) {
                 lowerIsWhile(c, n, b, condition, body)?; // ADR 0085 §2.8

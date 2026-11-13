@@ -725,6 +725,13 @@ struct Parser {
             }
             let paramStart = this.current().start;
             let paramName = this.parseIdentifier()?;
+            if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot)) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected ':', found ",
+                    ": a parameter is 'name: Type', not a pattern; take the value and match it in the body, with 'match', 'if (value is PATTERN)' or 'let PATTERN = value else { … };'",
+                )?;
+            }
             this.expect(TokenKind.Colon)?;
             let typ = this.parseType()?;
             this.front.ast.parameters.push(Parameter {
@@ -1305,17 +1312,15 @@ struct Parser {
                 break;
             }
         }
-        if (this.at(TokenKind.FnKeyword)) {
-            // An enum's functions are written in an `impl` block, not in its body (ADR 0107).
+        if (this.at(TokenKind.FnKeyword) || this.at(TokenKind.DropKeyword)) {
+            // An enum's functions are written in an `impl` block, not in its body (ADR 0107); it has no `drop` block
+            // (type-system.md §14.2).
             let token = this.current();
-            this.error(
-                expectedToken(),
-                token.start,
-                token.end,
-                textMessage(
-                    "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)",
-                )?,
-            )?;
+            let text = if (this.at(
+                TokenKind.FnKeyword,
+            )) "an enum's body holds its variants; write its functions in an 'impl' block: 'impl Name { fn … }' (type-system.md §21.1)"
+                else "an enum has no 'drop' block: its payloads are destroyed as their own types say; give the payload that owns a resource a struct type with a 'drop' block (type-system.md §14.2)";
+            this.error(expectedToken(), token.start, token.end, textMessage(text)?)?;
             // One error for the mistake: the rest of the body is passed over, to the enum's closing brace.
             var depth: i32 = 0;
             while (!this.at(TokenKind.EndOfFile)) {
@@ -1777,6 +1782,13 @@ struct Parser {
                 this.advance();
                 this.expect(TokenKind.OpenParen)?;
                 let variable = this.parseIdentifier()?;
+                if (this.at(TokenKind.OpenParen) || this.at(TokenKind.Dot)) {
+                    this.errorFound(
+                        expectedToken(),
+                        "expected 'in', found ",
+                        ": a 'for' variable is a name, not a pattern; name the item and take it apart in the body, with 'let PATTERN = item else { continue; };', 'if (item is PATTERN)' or 'match'",
+                    )?;
+                }
                 this.expect(TokenKind.InKeyword)?;
                 let first = this.parseExpr()?;
                 let end = if (this.eatRangeDots()?) this.parseExpr()? else none();
@@ -2131,6 +2143,11 @@ struct Parser {
                     let inner = this.parsePatternLevel()?;
                     return this.front.ast.addPattern(PatternNode.At(name, inner), start, this.endFrom(start));
                 }
+                if (this.peekIs(1, TokenKind.DotDotEquals) || this.peekIs(1, TokenKind.DotDot)) {
+                    // `LOW..=HIGH` (ADR 0118): a range whose lower bound is a constant's name.
+                    let low = this.nameBound()?;
+                    return this.rangePattern(start, low);
+                }
                 if (!this.peekIs(1, TokenKind.Dot) && !this.peekIs(1, TokenKind.OpenParen)) {
                     // A bare name (ADR 0085 §2.6): a constant if one is in scope, else a binding.
                     let name = this.parseIdentifier()?;
@@ -2234,31 +2251,47 @@ struct Parser {
     fn literalPattern(borrow mut this, start: u32, negated: bool) -> Result<u32, AllocError> {
         let literal = if (negated) this.parseUnary()? else this.parsePrimary()?;
         if (this.at(TokenKind.DotDotEquals) || this.at(TokenKind.DotDot)) {
-            // `lo..=hi`, `lo..hi` (ADR 0085 §2.4): the upper bound is a literal too.
-            let inclusive = this.at(TokenKind.DotDotEquals);
-            this.advance();
-            let atBound = match (this.current().kind) {
-                TokenKind.IntLiteral => true,
-                TokenKind.CharLiteral => true,
-                TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
-                _ => false,
-            };
-            if (!atBound) {
-                this.errorFound(
-                    expectedPattern(),
-                    "expected the range's upper bound, an integer or character literal, found ",
-                    "",
-                )?;
-                return this.front.ast.addPattern(PatternNode.Literal(literal), start, this.endFrom(start));
-            }
-            let high = if (this.at(TokenKind.Minus)) this.parseUnary()? else this.parsePrimary()?;
-            return this.front.ast.addPattern(
-                PatternNode.Range(literal, high, inclusive),
-                start,
-                this.endFrom(start),
-            );
+            return this.rangePattern(start, literal);
         }
         return this.front.ast.addPattern(PatternNode.Literal(literal), start, this.endFrom(start));
+    }
+
+    /// A constant's name as a range pattern's bound (ADR 0118): a name expression.
+    fn nameBound(borrow mut this) -> Result<u32, AllocError> {
+        let start = this.current().start;
+        let name = this.parseIdentifier()?;
+        return this.front.ast.addExpr(ExprNode.Name(name, emptyRange()), start, this.endFrom(start));
+    }
+
+    /// At `..=` or `..` after a range pattern's lower bound `low` (ADR 0085 §2.4): the upper bound, a literal or a
+    /// constant's name (ADR 0118).
+    fn rangePattern(borrow mut this, start: u32, low: u32) -> Result<u32, AllocError> {
+        let inclusive = this.at(TokenKind.DotDotEquals);
+        this.advance();
+        let atBound = match (this.current().kind) {
+            TokenKind.IntLiteral => true,
+            TokenKind.CharLiteral => true,
+            TokenKind.Identifier => true,
+            TokenKind.Minus => this.peekIs(1, TokenKind.IntLiteral),
+            _ => false,
+        };
+        if (!atBound) {
+            this.errorFound(
+                expectedPattern(),
+                "expected the range's upper bound, an integer or character literal or a constant's name, found ",
+                "",
+            )?;
+            return this.front.ast.addPattern(PatternNode.Literal(low), start, this.endFrom(start));
+        }
+        var high = none();
+        if (this.at(TokenKind.Identifier)) {
+            high = this.nameBound()?;
+        } else if (this.at(TokenKind.Minus)) {
+            high = this.parseUnary()?;
+        } else {
+            high = this.parsePrimary()?;
+        }
+        return this.front.ast.addPattern(PatternNode.Range(low, high, inclusive), start, this.endFrom(start));
     }
 
     /// The `..` of a range expression; `..=` there is reported (it is a pattern's, ADR 0085 §2.4) and read as `..`.
@@ -2313,6 +2346,11 @@ struct Parser {
             }
             this.expect(TokenKind.Equals)?;
             let value = this.parseExpr()?;
+            if (this.at(TokenKind.ElseKeyword)) {
+                // `let _ = e else { … };` (ADR 0117): a pattern that tests nothing (N0404).
+                let pattern = this.front.ast.addPattern(PatternNode.Wildcard, underscore.start, underscore.end)?;
+                return this.finishLetElse(start, pattern, value);
+            }
             this.expect(TokenKind.Semicolon)?;
             return this.front.ast.addStmt(
                 StmtNode.Local(LocalKind.Let, name, none(), value),
@@ -2320,12 +2358,89 @@ struct Parser {
                 this.endFrom(start),
             );
         }
+        if (this.startsLetPattern()) {
+            // `let P = e else { … };` (ADR 0117): a pattern that can fail, and the block that leaves when it does.
+            if (isMutable) {
+                this.errorFound(
+                    expectedToken(),
+                    "expected a name after 'var', found ",
+                    ": a pattern is written after 'let' ('let PATTERN = e else { … };', ADR 0117), and a binding that changes is 'var x' inside it",
+                )?;
+            }
+            let pattern = this.parsePattern()?;
+            return this.parseLetElse(start, pattern);
+        }
+        let nameStart = this.current().start;
         let name = this.parseIdentifier()?;
         let typ = if (this.eat(TokenKind.Colon)) this.parseType()? else none();
         let initializer = if (this.eat(TokenKind.Equals)) this.parseExpr()? else none();
+        if (this.at(TokenKind.ElseKeyword) && !isMutable && typ == none() && initializer != none()) {
+            // `let x = e else { … };`: a `let … else` whose pattern is a name (a constant, or N0404's binding).
+            let id = this.front.ast.idents[name as usize];
+            let pattern = this.front.ast.addPattern(PatternNode.Binding(name, false), nameStart, id.end)?;
+            return this.finishLetElse(start, pattern, initializer);
+        }
+        if (this.at(TokenKind.ElseKeyword) && initializer != none()) {
+            this.errorFound(
+                expectedToken(),
+                "expected ';', found ",
+                ": 'let PATTERN = e else { … };' takes a pattern after 'let', without 'var' or a type (ADR 0117)",
+            )?;
+            this.advance();
+            this.parseBlock()?; // read past the block, so that it is reported once
+        }
         this.expect(TokenKind.Semicolon)?;
         let kind = if (isMutable) LocalKind.Var else LocalKind.Let;
         return this.front.ast.addStmt(StmtNode.Local(kind, name, typ, initializer), start, this.endFrom(start));
+    }
+
+    /// Whether what follows `let` is a pattern rather than a name (ADR 0117): what startsNestedPattern takes, less
+    /// `name:` and `name =`, which declare a local.
+    fn startsLetPattern(borrow this) -> bool => match (this.current().kind) {
+        TokenKind.Identifier =>
+            this.peekIs(1, TokenKind.OpenParen) || this.peekIs(1, TokenKind.Dot) || this.peekIs(1, TokenKind.At) ||
+                this.peekIs(1, TokenKind.Pipe) || this.peekIs(1, TokenKind.DotDot) || this.peekIs(
+                1,
+                TokenKind.DotDotEquals,
+            ),
+        TokenKind.Pipe => true,
+        // `let (a, b) = …`: a tuple of another language, not a parenthesised pattern; reported as a missing name.
+        TokenKind.OpenParen => !(this.peekIs(1, TokenKind.Identifier) && this.peekIs(2, TokenKind.Comma)),
+        _ => this.startsNestedPattern(),
+    };
+
+    /// The rest of `let P = e else { … };` after the pattern (ADR 0117).
+    fn parseLetElse(borrow mut this, start: u32, pattern: u32) -> Result<u32, AllocError> {
+        if (!this.at(TokenKind.Equals)) {
+            this.errorFound(
+                expectedToken(),
+                "expected '=' after the pattern of 'let PATTERN = e else { … };' (ADR 0117), found ",
+                "",
+            )?;
+        }
+        this.expect(TokenKind.Equals)?;
+        let value = this.parseExpr()?;
+        return this.finishLetElse(start, pattern, value);
+    }
+
+    /// `else { … };` of a `let … else` (ADR 0117). Without the `else`, the statement is reported once, with what to
+    /// write, and read as far as its `;`.
+    fn finishLetElse(borrow mut this, start: u32, pattern: u32, value: u32) -> Result<u32, AllocError> {
+        var otherwise = none();
+        if (this.at(TokenKind.ElseKeyword)) {
+            this.advance();
+            otherwise = this.parseBlock()?;
+        } else {
+            this.errorFound(
+                expectedToken(),
+                "expected 'else', found ",
+                ": 'let' with a pattern that can fail is 'let PATTERN = e else { … };', whose block leaves (return, break, continue, or a call that does not return) when the value does not match (ADR 0117); to test and go on, write 'if (e is PATTERN) { … }' or a 'match'",
+            )?;
+            let at = this.current().start;
+            otherwise = this.front.ast.addStmt(StmtNode.Block(emptyRange()), at, at)?;
+        }
+        this.expect(TokenKind.Semicolon)?;
+        return this.front.ast.addStmt(StmtNode.LetElse(pattern, value, otherwise), start, this.endFrom(start));
     }
 
     /// An `if` statement and its `else if` chain, without recursing for each `else if` (as parseIfExpr).
@@ -3069,6 +3184,7 @@ struct Parser {
                     TokenKind.FalseKeyword => true,
                     TokenKind.BorrowKeyword => true,
                     TokenKind.MutKeyword => true,
+                    TokenKind.StaticKeyword => true, // a region argument: `Vector<StringView<static>>.create()`
                     TokenKind.Star => true,
                     TokenKind.Question => true,
                     TokenKind.QuestionQuestion => true,

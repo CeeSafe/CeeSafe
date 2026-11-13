@@ -931,6 +931,15 @@ fn fmtWalkStmt(l: borrow mut FmtLayout, ast: borrow Ast, s: u32) -> Result<void,
                 fmtWalkExpr(l, ast, initializer)?;
             }
         }
+        StmtNode.LetElse(pattern, value, otherwise) => {
+            // `let P = e else { … };` (ADR 0117): the value breaks as an initialiser does; the block is a block.
+            fmtWalkPattern(l, ast, pattern)?;
+            let first = exprFirst(l, ast, value);
+            let last = exprLast(l, ast, value);
+            l.addContinuation(first - 1, false, last, priorityInitializer())?;
+            fmtWalkExpr(l, ast, value)?;
+            fmtWalkBlock(l, ast, otherwise)?;
+        }
         StmtNode.Defer(body) => { fmtWalkStmt(l, ast, body)?; }
         StmtNode.Match(scrutinee, arms) => {
             fmtWalkExpr(l, ast, scrutinee)?;

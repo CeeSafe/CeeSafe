@@ -31,13 +31,13 @@ def entries():
         with open(os.path.join(ROOT, path), encoding="utf-8") as f:
             text = f.read().replace("\r\n", "\n").replace("\r", "\n")
         for line in text.split("\n"):
-            cells = line.split("|")
+            cells = re.split(r"(?<!\\)\|", line)  # `\|` is a bar inside a cell, as `explain` reads it
             if len(cells) < 4 or not line.startswith("|"):
                 continue
             code = cells[1].strip().strip("`")
             if not CODE.match(code) or code in found:
                 continue
-            found[code] = cells[2].strip()
+            found[code] = cells[2].strip().replace("\\|", "|")
     return found
 
 

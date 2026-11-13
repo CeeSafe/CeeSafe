@@ -1,0 +1,27 @@
+// A parenthesised callee is its content: `(b.onPress)(4)` calls the function in the field, as `b.onPress(4)` does.
+// A generic argument that itself has a region argument starts a type, not a comparison:
+// `Vector<StringView<static>>.create()`.
+struct Button {
+    onPress: fn(u32) -> u32;
+}
+
+fn twice(n: u32) -> u32 => n * 2;
+
+fn main() {
+    let b = Button { onPress: twice };
+    Console.writeLine(b.onPress(4));
+    Console.writeLine((b.onPress)(5));
+    Console.writeLine((twice)(6));
+    Console.writeLine(((b.onPress))(7));
+    var words = Vector<StringView<static>>.create();
+    words.push("a")!;
+    words.push("bc")!;
+    Console.writeLine(words.length);
+    Console.writeLine(words[1]);
+}
+// expect-stdout: 8
+// expect-stdout: 10
+// expect-stdout: 12
+// expect-stdout: 14
+// expect-stdout: 2
+// expect-stdout: bc

@@ -365,6 +365,18 @@ struct AstPrinter {
                 this.text(")")?;
                 this.close()?;
             }
+            StmtNode.LetElse(pattern, value, otherwise) => {
+                this.open()?;
+                this.text("(let-else ")?;
+                this.patternText(ast, symbols, pattern)?;
+                this.text(" = ")?;
+                this.expr(ast, symbols, value)?;
+                this.close()?;
+                this.indent += 1;
+                this.printStmt(ast, symbols, otherwise)?;
+                this.indent -= 1;
+                this.line(")")?;
+            }
             StmtNode.If(_, _, _) => { this.printIfChain(ast, symbols, id)?; }
             StmtNode.While(condition, body) => {
                 this.open()?;

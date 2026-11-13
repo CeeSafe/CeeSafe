@@ -71,6 +71,59 @@ fn checkIsTest(
     patternSyntax: u32,
     binds: bool,
     span: Span,
+) -> Result<u32, AllocError> => checkPatternTest(c, operandSyntax, patternSyntax, binds, false, span);
+
+fn alwaysMatches() -> u32 => 404;
+
+/// `let P = e else { B };` (ADR 0117, type-system.md §15.5): the test of `e is P`, whose bindings go into the
+/// enclosing block's scope for the statements that follow; `B` runs when the test fails, does not see the bindings,
+/// and must not complete (N0213).
+fn checkLetElse(
+    c: borrow mut Checker,
+    patternSyntax: u32,
+    valueSyntax: u32,
+    otherwiseSyntax: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let mark = c.scopes.length;
+    let test = checkPatternTest(c, valueSyntax, patternSyntax, true, true, span)?;
+    // The bindings leave the scope while the `else` block is checked.
+    var bound = Vector<ScopeEntry>.create();
+    var i = mark;
+    while (i < c.scopes.length) {
+        bound.push(ScopeEntry { symbol: c.scopes[i].symbol, local: c.scopes[i].local })?;
+        i += 1;
+    }
+    c.scopes.truncate(mark);
+    let otherwise = checkBlock(c, otherwiseSyntax)?;
+    i = 0;
+    while (i < bound.length) {
+        c.scopes.push(ScopeEntry { symbol: bound[i].symbol, local: bound[i].local })?;
+        i += 1;
+    }
+    var loopExits = Vector<bool>.create();
+    let otherwiseSpan = c.front.ast.stmtSpans[otherwiseSyntax as usize];
+    if (otherwiseSpan.end > otherwiseSpan.start && completes(c, otherwise, mut loopExits)?) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "the 'else' block of 'let ... else' must leave: its end is reachable, where the pattern's names would have no value; end it with 'return', 'break', 'continue' or a call that does not return (ADR 0117)",
+        )?;
+        let at = if (otherwiseSpan.end > otherwiseSpan.start) otherwiseSpan.end - 1 else otherwiseSpan.end;
+        c.error(missingReturn(), at, otherwiseSpan.end, message)?;
+    }
+    return c.hir.addStmt(HirStmt.LetElse(test, otherwise), span.start, span.end);
+}
+
+/// The test of `e is P` and of `let P = e else { … };`. A pattern that matches every value of the type is warning
+/// N0404: the test is always true (the `else` block never runs).
+fn checkPatternTest(
+    c: borrow mut Checker,
+    operandSyntax: u32,
+    patternSyntax: u32,
+    binds: bool,
+    letElse: bool,
+    span: Span,
 ) -> Result<u32, AllocError> {
     let boolType = c.types.boolType;
     let scrutinee = synth(c, operandSyntax, none())?;
@@ -107,6 +160,39 @@ fn checkIsTest(
                 " where the test is not known true; an 'is' pattern binds only before a later '&&' operand, or in the condition of an 'if' or 'while' for its then-branch or body (ADR 0085 §2.8)",
             )?;
             c.error(isBindsNowhere(), patternSpan.start, patternSpan.end, message)?;
+        }
+    }
+    if (!failed) {
+        let testsNothing = match (c.hir.patterns[testedPattern(c, tree) as usize]) {
+            HirPattern.Wildcard => true,
+            HirPattern.Binding(_) => true,
+            _ => false,
+        };
+        let patternSpan = c.front.ast.patternSpans[patternSyntax as usize];
+        // Once for a pattern (a generic function's body is checked for each instance), in the program's own files.
+        var reported = !testsNothing || !isLintedFile(c, c.file);
+        var d: usize = 0;
+        while (d < c.front.diagnostics.items.length && !reported) {
+            reported = c.front.diagnostics.items[d].code == alwaysMatches() && c.front.diagnostics.items[d].file ==
+                c.file && c.front.diagnostics.items[d].start == patternSpan.start;
+            d += 1;
+        }
+        if (testsNothing && !reported) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "this pattern tests nothing: it matches every value")?;
+            if (letElse) {
+                appendText(
+                    mut message,
+                    ", so the 'else' block never runs; write 'let name = value;' (ADR 0117)",
+                )?;
+            } else {
+                appendText(
+                    mut message,
+                    ", so the test is always true; drop the test, and name the value with 'let' (type-system.md §15.4)",
+                )?;
+            }
+            let file = c.file;
+            c.front.diagnostics.warning(alwaysMatches(), file, patternSpan.start, patternSpan.end, message)?;
         }
     }
     let consumes = reference == none() && bindsNonCopy(c, tree);

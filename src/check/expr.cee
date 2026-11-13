@@ -977,6 +977,11 @@ fn synthCall(
                 }
                 Entity.Local(local) => {
                     let t = if (local == unitLocal()) c.types.voidType else c.hir.locals[local as usize].typ;
+                    if (c.types.isBottom(t) && t != c.types.voidType) {
+                        // Its declaration was reported (`let add = (a, b) => a + b;`, N0236): no second error here.
+                        checkArgumentsLoosely(c, arguments)?;
+                        return c.errorResult(span.start, span.end);
+                    }
                     if (c.types.is(t, TypeKind.Function)) {
                         let value = c.expr(HirExpr.LocalRef(local), t, calleeSpan.start, calleeSpan.end)?;
                         return checkFunctionValueCall(c, value, arguments, span);
@@ -1190,13 +1195,58 @@ fn synthCall(
             }
             return checkMethodCall(c, target, member, arguments, span);
         }
+        ExprNode.Paren(inner) => {
+            // `(b.onPress)(4)`: the parentheses change nothing; the callee is what they hold.
+            return synthCall(c, inner, arguments, expected, span);
+        }
         _ => {}
     }
     var message = Vector<u8>.create();
     appendText(mut message, "this expression cannot be called")?;
+    let macroName = macroCallName(c, callee);
+    if (macroName != none()) {
+        // `println!("x")`: `!` applied to a name that is nothing here, then called.
+        appendText(mut message, ": CeeSafe has no macros, and ")?;
+        appendQuotedName(mut message, c, macroName)?;
+        appendText(mut message, " is not declared")?;
+        let text = c.name(macroName);
+        if (sameText(text, "println") || sameText(text, "print") || sameText(text, "eprintln") ||
+            sameText(text, "eprint")) {
+            appendText(mut message, "; print with 'Console.writeLine(value)' or 'Console.write(value)'")?;
+        } else if (sameText(text, "format") || sameText(text, "vec")) {
+            appendText(mut message, "; build text with a 'String' and a vector with 'Vector<T>.create()'")?;
+        } else if (sameText(text, "assert") || sameText(text, "panic")) {
+            appendText(mut message, "; it is a function here: write it without '!'")?;
+        }
+    }
     c.error(notCallable(), calleeSpan.start, calleeSpan.end, message)?;
     checkArgumentsLoosely(c, arguments)?;
     return c.errorResult(span.start, span.end);
+}
+
+/// The name in `name!(…)` when nothing is declared by it or it is a built-in function (a macro call of another
+/// language), or none.
+fn macroCallName(c: borrow Checker, callee: u32) -> u32 {
+    match (c.front.ast.exprs[callee as usize]) {
+        ExprNode.Unwrap(operand) => {
+            match (c.front.ast.exprs[operand as usize]) {
+                ExprNode.Name(name, _) => {
+                    let symbol = c.front.ast.idents[name as usize].symbol;
+                    let text = c.name(symbol);
+                    if (c.findLocal(symbol) == none() && (sameText(text, "println") || sameText(text, "print") ||
+                        sameText(text, "eprintln") || sameText(text, "eprint") || sameText(text, "format") ||
+                        sameText(text, "vec") || sameText(text, "assert") || sameText(text, "panic") ||
+                        sameText(text, "todo") || sameText(text, "unreachable") || sameText(text, "write") ||
+                        sameText(text, "writeln") || sameText(text, "dbg"))) {
+                        return symbol;
+                    }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+    return none();
 }
 
 /// A further argument of a C variadic function (ADR 0041 §3.3): one of the types C's default argument promotions leave

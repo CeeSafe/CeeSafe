@@ -100,6 +100,15 @@ fn isIndexProjection(p: HirProjection) -> bool => match (p.kind) {
     _ => false,
 };
 
+/// Is `typ` an optional `borrow mut` reference, `(borrow mut T)?`, as `borrow mut T?` is read (§22.1)?
+fn isOptionalMutableReference(c: borrow Checker, typ: u32) -> bool {
+    if (!c.types.is(typ, TypeKind.Enum)) {
+        return false;
+    }
+    let payload = c.types.enums[c.types.info(typ).enumDef as usize].optionType;
+    return payload != none() && c.types.is(payload, TypeKind.Reference) && c.types.info(payload).mutableReference;
+}
+
 /// Null (an empty reason) if the place may be written or mutably borrowed; otherwise why not (MutabilityError).
 fn mutabilityError(c: borrow Checker, place: u32, reason: borrow mut Vector<u8>) -> Result<void, AllocError> {
     let p = c.hir.places[place as usize];
@@ -150,7 +159,28 @@ fn mutabilityError(c: borrow Checker, place: u32, reason: borrow mut Vector<u8>)
         return appendText(reason, "'this' is immutable in a by-value method; use 'borrow mut this'");
     }
     if (root.parameter) {
-        return appendText(reason, "parameters are immutable");
+        appendText(reason, "parameters are immutable")?;
+        if (isOptionalMutableReference(c, root.typ)) {
+            // `n: borrow mut Box<Node>?` is an optional reference, `(borrow mut Box<Node>)?` (§22.1).
+            appendText(
+                reason,
+                "; its type is an optional 'borrow mut' reference, not a reference to an optional: write 'borrow mut (T?)' to change the caller's optional through it",
+            )?;
+        }
+        return Ok();
+    }
+    if (root.declaredBy == 1) {
+        appendQuotedName(reason, c, root.name)?;
+        return appendText(
+            reason,
+            " is the variable of a 'for' loop, which sets it on each pass; to change a value, copy it into a 'var'",
+        );
+    }
+    if (root.declaredBy == 2) {
+        appendQuotedName(reason, c, root.name)?;
+        appendText(reason, " is bound by a pattern; write 'var ")?;
+        appendBytes(reason, c.name(root.name))?;
+        return appendText(reason, "' in the pattern for a binding that can change");
     }
     appendQuotedName(reason, c, root.name)?;
     return appendText(reason, " was declared with 'let'; use 'var' for a mutable variable");

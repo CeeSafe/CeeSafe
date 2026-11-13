@@ -114,6 +114,12 @@ fn shadowStmt(
             shadowExpr(front, dependencies, scope, initializer)?;
             shadowBind(front, dependencies, scope, name)?;
         }
+        StmtNode.LetElse(pattern, value, otherwise) => {
+            // ADR 0117: the `else` block does not see the pattern's names; what follows the statement does.
+            shadowExpr(front, dependencies, scope, value)?;
+            shadowStmt(front, dependencies, scope, otherwise)?;
+            shadowPattern(front, dependencies, scope, pattern)?;
+        }
         StmtNode.Defer(body) => { shadowStmt(front, dependencies, scope, body)?; }
         StmtNode.Match(scrutinee, arms) => {
             shadowExpr(front, dependencies, scope, scrutinee)?;

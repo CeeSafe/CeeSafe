@@ -1,0 +1,45 @@
+// `let PATTERN = e else { … };` (ADR 0117): every pattern form after `let`, and the value read as far as `else`.
+fn f(x: u32?, s: Shape, r: Result<u32, u32>, a: [u8; 3]) -> u32 {
+    let Some(v) = x else {
+        return 0;
+    };
+    let Shape.Rect(w, var h) = s else {
+        return 1;
+    };
+    let Ok(n) | Err(n) = r else {
+        return 2;
+    };
+    let [first, .., last] = a else {
+        return 3;
+    };
+    let whole @ 1..=9 = v else {
+        return 4;
+    };
+    let (1 | 2) = w else {
+        return 5;
+    };
+    let null = x else {
+        return 6;
+    };
+    let -1 = offset() else {
+        return 7;
+    };
+    let LIMIT = v else {
+        return 8;
+    };
+    let _ = v else {
+        return 9;
+    };
+    let Some(m) = if (v > 1) x else null else {
+        return 10;
+    };
+    loop {
+        let Some(k) = next() else {
+            break;
+        };
+        let 'a'..='z' = k else {
+            continue;
+        };
+    }
+    return v + w + h + n + m;
+}

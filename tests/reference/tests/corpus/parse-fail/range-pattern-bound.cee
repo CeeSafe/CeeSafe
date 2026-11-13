@@ -1,0 +1,9 @@
+// A range pattern's upper bound is a literal or a constant's name (ADR 0118): anything else is N0108.
+const LOW: u8 = 10;
+
+fn kind(n: u8) -> u32 => match (n) {
+    LOW..= => 0, // error[N0108]
+    _ => 2,
+};
+
+fn main() {}

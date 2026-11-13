@@ -1,0 +1,76 @@
+(unit
+  (fn default f (params (x (optional u32)) (s Shape) (r (Result u32 u32)) (a [u8; 3])) (returns u32)
+    (block
+      (let-else (Some v) = x
+        (block
+          (return 0)
+        )
+      )
+      (let-else (Shape.Rect w var h) = s
+        (block
+          (return 1)
+        )
+      )
+      (let-else (or (Ok n) (Err n)) = r
+        (block
+          (return 2)
+        )
+      )
+      (let-else (slice first .. last) = a
+        (block
+          (return 3)
+        )
+      )
+      (let-else (@ whole (..= 1 9)) = v
+        (block
+          (return 4)
+        )
+      )
+      (let-else (or 1 2) = w
+        (block
+          (return 5)
+        )
+      )
+      (let-else null = x
+        (block
+          (return 6)
+        )
+      )
+      (let-else (neg 1) = (call offset)
+        (block
+          (return 7)
+        )
+      )
+      (let-else LIMIT = v
+        (block
+          (return 8)
+        )
+      )
+      (let-else _ = v
+        (block
+          (return 9)
+        )
+      )
+      (let-else (Some m) = (if-expr (> v 1) x null)
+        (block
+          (return 10)
+        )
+      )
+      (loop
+        (block
+          (let-else (Some k) = (call next)
+            (block
+              (break)
+            )
+          )
+          (let-else (..= 'a' 'z') = k
+            (block
+              (continue)
+            )
+          )
+        )
+      )
+      (return (+ (+ (+ (+ v w) h) n) m))
+    )
+  )
+)

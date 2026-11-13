@@ -1,0 +1,16 @@
+// `let PATTERN = e else { … };` (ADR 0117): one space around `=` and `else`, the block as any block, `;` after `}`.
+fn f(x: u32?, s: Shape) -> u32 {
+    let   Some( v )=x   else{ return 0; }  ;
+    let Shape.Rect(w,var h) = s
+    else
+    {
+        return 1;
+    }
+    ;
+    let Some(longerName) = someFunctionWithALongName(firstArgumentOfTheCall, secondArgumentOfTheCall, thirdArgument) else {
+        return 2;
+    };
+    let 1|2|3 = v else { Console.writeLine("no"); return 3; };
+    loop { let Some(k) = next() else { break; }; }
+    return v + w + h;
+}

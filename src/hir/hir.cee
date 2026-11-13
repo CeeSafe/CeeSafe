@@ -172,6 +172,7 @@ struct HirArm {
 enum HirStmt {
     Block(Range),
     LocalDecl(u32, u32),   // local, initialiser or none
+    LetElse(u32, u32),     // ADR 0117: the test (an `Is`, or `false` after an error), the block that leaves
     Assign(u32, u32, u32), // place, operator (binaryOpIndex + 1, or 0 for '='), value
     If(u32, u32, u32),     // condition, then (a block), else or none
     While(u32, u32),
@@ -197,6 +198,8 @@ struct HirLocal {
     isUsing: bool;
     /// `var s: T;` of a C type (ADR 0080 §3.4): C's zeroed object on the stack, never moved.
     cLocal: bool;
+    /// What declared it, for messages: 0 a `let`, `var`, `using` or parameter, 1 a `for` loop, 2 a pattern.
+    declaredBy: u32;
     start: u32;
     end: u32;
 }
@@ -409,6 +412,7 @@ struct HirProgram {
             parameter: parameter,
             isUsing: false,
             cLocal: false,
+            declaredBy: 0,
             start: start,
             end: end,
         })?;
@@ -428,6 +432,7 @@ struct HirProgram {
             parameter: false,
             isUsing: false,
             cLocal: false,
+            declaredBy: 0,
             start: start,
             end: end,
         })?;

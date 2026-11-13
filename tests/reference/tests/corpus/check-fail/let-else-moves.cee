@@ -1,0 +1,29 @@
+// `let PATTERN = e else { … };` (ADR 0117): a non-Copy payload moves out of the value where the pattern matches, as a
+// consuming `match` moves it (N0250 for a later use of the value); a binding into a temporary of the statement does
+// not outlive the statement (N0243).
+struct Holder {
+    arr: [u64; 3];
+}
+
+fn makeHolder(k: u64) -> Holder => Holder { arr: [k, 2, 3] };
+
+fn three() -> [u64; 3] => [4, 5, 6];
+
+fn keep(v: Vector<u8>?) -> usize {
+    let Some(bytes) = v else {
+        return v.isNull() as usize;
+    };
+    return bytes.length + v.isSome() as usize; // error[N0250]
+}
+
+fn temporaries() -> u64 {
+    let [first, rest @ ..] = three() else { // error[N0243]
+        return 0;
+    };
+    let [a, tail @ ..] = makeHolder(5).arr else { // error[N0243]
+        return 0;
+    };
+    return first + rest[1] + a + tail[0];
+}
+
+fn main() {}

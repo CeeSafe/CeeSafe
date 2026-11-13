@@ -589,6 +589,10 @@ struct File {
   fields that need drop are destroyed **after** it, in declaration order.
 - Moving a field out of a value whose type has a `drop` block is N0252: the `drop` block needs the
   whole value. Moving out of `this` inside `drop` is impossible anyway (§14.3).
+- Only a struct has a `drop` block. An enum has none (`drop` in an enum's body is N0100): destroying an enum value
+  destroys the payloads of the variant it holds, each as its own type says, so an enum is a move type, and needs
+  drop, exactly when one of its payload types does. A variant that owns a resource holds a struct with a `drop`
+  block: `enum Source { File(FileHandle), Memory(Vector<u8>) }`.
 
 ### 14.3 Moves
 - **Using a move-type place by value moves it**:
@@ -710,7 +714,8 @@ AltPattern = (Identifier '@')? PrimPattern                         -- `name @ P`
 PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | '(' Pattern ')'
           | 'var'? Identifier                                      -- a constant in scope, else a binding: ADR 0085 §2.6
-          | Literal '..=' Literal | Literal '..' Literal          -- ranges: ADR 0085 §2.4
+          | Bound '..=' Bound | Bound '..' Bound                  -- ranges: ADR 0085 §2.4
+Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
@@ -752,6 +757,10 @@ and `E.V…` there are patterns.
   expressions do. Both bounds are integer or character literals, typed by the scrutinee (or payload) as §4 types a
   literal, so `'a'..='z'` matches bytes of a `u8`. A range that matches no value (`'z'..='a'`, `5..5`) is N0357.
   Ranges are for integers only: `bool`, floats and other types take none (N0205; a `bool` bound is N0108).
+  A bound may also be the bare name of a constant (ADR 0118): `LOW..=HIGH`, `0..LOW`. The constant's type must be
+  the scrutinee's (N0205), its value is the bound, and the range then follows the rules above (N0357, N0256, N0257
+  by its values). A name that is not a constant in scope (a local, a parameter, a const parameter, a misspelling)
+  is N0358: a value that is not constant is tested in a guard.
 - **String literal patterns** (ADR 0085 §2.7). On a `StringView`, `"get"` matches equal bytes, as `==` does (§22.2).
   On a `Slice<u8>`, the same literal matches its UTF-8 bytes: the literal is typed by the value, as `'k'` is, so a
   byte string is written `"cjs"`. A string pattern on any other type is N0205. String patterns never cover their
@@ -916,6 +925,37 @@ while (parts.next() is Some(part)) { handle(part); }
 - Outside a condition, a chain's bindings are in scope in its later operands only: `let big = x is Some(v) && v > 3;`.
   They end at the end of that statement, with its temporaries: in `let ok = c.tryRead() is Some(g) && g.data() == 5;`
   the guard `g` is released before the next statement, so a `tryWrite()` there succeeds.
+- **A pattern that tests nothing**, `_` or a binding (through `name @` too), makes the test always true: warning
+  N0404 (`if (n is _)`, `if (n is m)`). A pattern that takes the value apart and covers its type
+  (`arr is [first, rest @ ..]` on an array) is not warned about (ADR 0117 §2.3).
+
+### 15.5 `let P = e else { … };`: bind or leave (ADR 0117)
+```text
+LetElse = 'let' Pattern '=' Expr 'else' Block ';'
+```
+```ceesafe
+fn area(s: Shape) -> u32 {
+    let Shape.Rect(w, h) = s else {
+        return 0;
+    };
+    return w * h;
+}
+```
+- **Meaning.** `e` is evaluated once and tested against `P`, as `e is P` tests it (§15.4). Where it matches, the
+  pattern's names are bound, in scope from the end of the statement to the end of the enclosing block, as a `let`'s
+  name is. Where it does not, the block runs.
+- **The block leaves.** Its end must not be reachable (N0213): every path through it ends in `return`, `break`,
+  `continue` or a call that does not return (§15.3's rule for a function that returns a value). It does not see the
+  pattern's names (N0200).
+- **Moves happen only on a match**, as for `is`: a pattern that binds a non-Copy payload of a value consumes the
+  value (§18.4), and in the block the value is whole.
+- **Temporaries** of `e` end with the statement where the pattern matches, as a `let`'s do (§14.5), and before the
+  block runs where it does not. A binding that refers into one (`let [first, rest @ ..] = make() else { … };`) is
+  N0243: bind the value to a local first. (§15.4 keeps such temporaries for a then-branch; this statement has none.)
+- **Drop points.** The bindings, and the hidden locals of a consuming test, are locals of the enclosing block:
+  destroyed at its end, in reverse order of declaration.
+- A pattern that tests nothing (`let x = e else { … };`) is warning N0404, as for `is`. `var` before the pattern
+  and a type annotation are N0100: `var x` inside the pattern makes a binding mutable.
 
 ## 16. Arrays, slices and `for` (M2d)
 

@@ -1,0 +1,32 @@
+// A pattern that tests nothing after `is` (type-system.md §15.4, ADR 0117 §2.3): `_` or a binding, through `name @`
+// too, is warning N0404. A pattern that takes the value apart and covers its type is not warned about, nor is a
+// constant's name.
+const LIMIT: u32 = 4;
+
+enum Wrapper {
+    Only(u32),
+}
+
+fn main() {
+    let n: u32 = 4;
+    if (n is _) { // warning[N0404]
+        Console.writeLine(1);
+    }
+    if (n is m) { // warning[N0404]
+        Console.writeLine(m);
+    }
+    if (n is whole @ _) { // warning[N0404]
+        Console.writeLine(whole);
+    }
+    let same = n is _; // warning[N0404]
+    if (n is LIMIT) {
+        Console.writeLine(same);
+    }
+    let pair: [u32; 2] = [1, 2];
+    if (pair is [first, second]) {
+        Console.writeLine(first + second);
+    }
+    if (Wrapper.Only(3) is Wrapper.Only(x)) {
+        Console.writeLine(x);
+    }
+}

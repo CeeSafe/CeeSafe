@@ -596,6 +596,8 @@ fn checkNestedMatch(
     var earlier = Vector<u32>.create(); // the unguarded arms' patterns
     var every = Vector<u32>.create();   // every arm's
     var failed = false;
+    var catchAll = none(); // the first unguarded arm that is a bare name's binding (a pattern of the AST)
+    var catchAllName = none();
     let scrutineeRoot = rootLocalOf(c, scrutinee);
     for (index in 0..arms.count) {
         let pattern = armPattern(c, arms, index, isValue);
@@ -617,13 +619,51 @@ fn checkNestedMatch(
             if (!patternWitness(c, earlier.view(), tree, typ, mut witness)?) {
                 var message = Vector<u8>.create();
                 appendText(mut message, "this arm can never match: earlier arms match every value it does")?;
-                c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
+                if (catchAll == none()) {
+                    c.error(unreachableArm(), patternSpan.start, patternSpan.end, message)?;
+                } else {
+                    // The arm that takes everything is a bare name: a binding, where a constant may have been meant.
+                    let nameSpan = c.front.ast.patternSpans[catchAll as usize];
+                    var note = Vector<u8>.create();
+                    appendText(mut note, "the earlier arm '")?;
+                    appendBytes(mut note, c.name(catchAllName))?;
+                    appendText(
+                        mut note,
+                        "' is a new name, which matches every value: no constant of that name is in scope (a misspelt constant?)",
+                    )?;
+                    var notes = Vector<DiagnosticNote>.create();
+                    let file = c.file;
+                    notes.push(DiagnosticNote { file: file, start: nameSpan.start, end: nameSpan.end, message: note })?;
+                    c.front.diagnostics.errorWithNotes(
+                        unreachableArm(),
+                        file,
+                        patternSpan.start,
+                        patternSpan.end,
+                        message,
+                        notes,
+                    )?;
+                }
             } else {
                 unreachableAlternatives(c, earlier.view(), tree, pattern, typ)?;
             }
         }
         if (guard == none()) {
             earlier.push(tree)?;
+            if (catchAll == none() && !failed) {
+                match (c.front.ast.patterns[pattern as usize]) {
+                    PatternNode.Binding(name, isVar) => {
+                        let isBinding = match (c.hir.patterns[tree as usize]) {
+                            HirPattern.Binding(_) => true,
+                            _ => false,
+                        };
+                        if (isBinding && !isVar) {
+                            catchAll = pattern;
+                            catchAllName = c.front.ast.idents[name as usize].symbol;
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
         every.push(tree)?;
         let armSpanValue = armSpan(c, arms, index, isValue);
@@ -1357,6 +1397,50 @@ fn constantPattern(
     }
 }
 
+/// A range pattern's bound (ADR 0085 §2.4, ADR 0118): a literal of the value's type, or the name of a constant of
+/// that type, whose value it is. None after an error.
+fn rangeBound(c: borrow mut Checker, bound: u32, typ: u32) -> Result<u32, AllocError> {
+    let span = c.front.ast.exprSpans[bound as usize];
+    var name = none();
+    match (c.front.ast.exprs[bound as usize]) {
+        ExprNode.Name(n, _) => { name = n; }
+        _ => {}
+    }
+    if (name == none()) {
+        return checkExpr(c, bound, typ);
+    }
+    let constant = constantNamed(c, name);
+    if (constant == none()) {
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "a range pattern's bound is an integer or character literal or a constant's name, and ",
+        )?;
+        appendQuotedName(mut message, c, c.front.ast.idents[name as usize].symbol)?;
+        appendText(
+            mut message,
+            " is not a constant (a 'const' item); test a value that is not constant in a guard (ADR 0118)",
+        )?;
+        c.error(constantNotPattern(), span.start, span.end, message)?;
+        return Ok(none());
+    }
+    checkPrivateItem(c, Entity.Constant(constant), span)?; // ADR 0109
+    let constType = c.hir.constants[c.constants[constant as usize].hir as usize].typ;
+    if (c.types.isBottom(constType)) {
+        return Ok(none());
+    }
+    if (constType != typ) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "this constant has type ")?;
+        appendQuotedType(mut message, c, constType)?;
+        appendText(mut message, ", but the value has type ")?;
+        appendQuotedType(mut message, c, typ)?;
+        c.error(typeMismatch(), span.start, span.end, message)?;
+        return Ok(none());
+    }
+    return namedConstantValue(c, constant, span);
+}
+
 /// N0250's number: use of a moved value, here a value `name @ P` would move twice (ADR 0085 §2.5).
 fn atMovesTwice() -> u32 => 250;
 
@@ -1407,8 +1491,12 @@ fn checkRangePattern(
         failed = true;
         return c.hir.addPattern(HirPattern.Wildcard);
     }
-    let lowHir = checkExpr(c, low, typ)?;
-    let highHir = checkExpr(c, high, typ)?;
+    let lowHir = rangeBound(c, low, typ)?;
+    let highHir = rangeBound(c, high, typ)?;
+    if (lowHir == none() || highHir == none()) {
+        failed = true;
+        return c.hir.addPattern(HirPattern.Wildcard);
+    }
     let lowValue = match (c.hir.exprs[lowHir as usize]) {
         HirExpr.IntConst(v) => v,
         _ => {
@@ -1528,6 +1616,7 @@ fn declareBinding(
         c.types.info(reference).mutableReference,
     )?;
     let local = c.hir.addLocal(c.function, ident.symbol, bindingType, isMutable, false, ident.start, ident.end)?;
+    c.hir.locals[local as usize].declaredBy = 2; // a pattern's binding
     c.bind(ident.symbol, local)?;
     return Ok(local);
 }

@@ -1,0 +1,63 @@
+// `let PATTERN = e else { … };` (ADR 0117, type-system.md §15.5): the `else` block must leave (N0213) and does not
+// see the pattern's names (N0200); a pattern that tests nothing is warning N0404; a non-Copy payload moves out of the
+// value on a match (N0250 for a later use), and a binding into a temporary of the statement does not outlive it
+// (N0243).
+fn three() -> [u64; 3] => [4, 5, 6];
+
+fn falls(v: u32?) -> u32 {
+    let Some(n) = v else {
+        Console.writeLine("nothing");
+    }; // error[N0213]
+    return n;
+}
+
+fn fallsOnOnePath(v: u32?, quiet: bool) -> u32 {
+    let Some(n) = v else {
+        if (quiet) {
+            return 0;
+        }
+    }; // error[N0213]
+    return n;
+}
+
+fn uses(v: u32?) -> u32 {
+    let Some(n) = v else {
+        return n; // error[N0200]
+    };
+    return n;
+}
+
+fn always(v: u32) -> u32 {
+    let n = v else { // warning[N0404]
+        return 0;
+    };
+    let _ = v else { // warning[N0404]
+        return 1;
+    };
+    let whole @ _ = v else { // warning[N0404]
+        return 2;
+    };
+    return n + whole;
+}
+
+fn notMatchable(v: f64) -> f64 {
+    let 1 = v else { // error[N0207]
+        return 0.0;
+    };
+    return v;
+}
+
+fn wrongType(v: u32?) -> u32 {
+    let Ok(n) = v else { // error[N0205]
+        return 0;
+    };
+    return 1;
+}
+
+fn outside(v: u32?) {
+    let Some(n) = v else {
+        break; // error[N0214]
+    };
+}
+
+fn main() {}

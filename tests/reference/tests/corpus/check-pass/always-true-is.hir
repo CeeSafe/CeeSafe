@@ -1,0 +1,40 @@
+(program
+  (const LIMIT: u32 = 4:u32)
+  (fn main () -> void
+    (block
+      (let n#0: u32 = 4:u32)
+      (if (is n#0 _)
+        (block
+          (expr (Console.writeLine 1:i32))
+        )
+      )
+      (if (is n#0 (m#1: u32))
+        (block
+          (expr (Console.writeLine m#1))
+        )
+      )
+      (if (is n#0 (whole#2 @ _))
+        (block
+          (expr (Console.writeLine whole#2))
+        )
+      )
+      (let same#3: bool = (is n#0 _))
+      (if (is n#0 4)
+        (block
+          (expr (Console.writeLine same#3))
+        )
+      )
+      (let pair#4: [u32; 2] = (array 1:u32 2:u32):[u32; 2])
+      (if (is pair#4 [(first#5: u32), (second#6: u32)])
+        (block
+          (expr (Console.writeLine (+ first#5 second#6):u32))
+        )
+      )
+      (if (is (Wrapper.Only 3:u32) Only((x#7: u32)))
+        (block
+          (expr (Console.writeLine x#7))
+        )
+      )
+    )
+  )
+)

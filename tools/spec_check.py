@@ -46,6 +46,10 @@ def check_explain(cee, problems):
                if subprocess.run([cee, "explain", f"N{c:04d}"], capture_output=True).returncode != 0]
     for c in missing:
         problems.append(f"explain: N{c:04d} has no entry in the specification")
+    # A bar inside a table cell is written `\|`: `explain` prints the whole cell, with a plain bar.
+    shown = subprocess.run([cee, "explain", "N0356"], capture_output=True, text=True).stdout
+    if "`Some(x) | null =>`" not in shown:
+        problems.append(f"explain: N0356's example is cut at its escaped bar: {shown.strip()[-60:]!r}")
     with tempfile.TemporaryDirectory() as work:
         fresh = os.path.join(work, "documents.cee")
         subprocess.run([sys.executable, os.path.join(HERE, "gen_docs.py"), "-o", fresh], check=True,

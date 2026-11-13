@@ -635,7 +635,113 @@ cee_io_result ceesafe_fd_set_length(int32_t fd, uint64_t length) {
 #endif
 }
 
+/* ---- Listeners that can be shut down (ADR 0126; type-system.md §26.4) --------------------
+ * `listener.shutdown()` makes the `accept` another thread waits in, and every later one, return ECONNABORTED. Closing
+ * the socket under a waiting thread would not do: its number may name another file by the time that thread uses it.
+ * So a blocking listener never waits in accept(2). Its socket does not block, and `accept` waits for it and for the
+ * listener's wake together: a pipe (POSIX: poll) or an event (Windows: WSAEventSelect and WaitForMultipleObjects).
+ * `shutdown` writes the pipe, or sets the event, and nothing ever empties it. The wakes are kept here by descriptor,
+ * from ceesafe_tcp_listen until ceesafe_fd_drop, which safe code reaches only when no thread borrows the listener.
+ * CosmoOS has neither poll nor a descriptor that does not block: its listeners wait in accept as before, and
+ * `shutdown` is EOPNOTSUPP there. */
+#if defined(CEE_COSMOOS) || defined(COSMO_AF_INET)
+#define CEE_NO_LISTENER_SHUTDOWN 1
+#endif
+
+#if !defined(CEE_NO_LISTENER_SHUTDOWN)
+#ifdef _WIN32
+typedef HANDLE cee_wake;
+#else
+#include <poll.h>
+typedef int cee_wake;
+
+static bool cee_listener_would_block(int error) {
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+    if (error == EWOULDBLOCK) return true;
+#endif
+    return error == EAGAIN;
+}
+#endif
+
+typedef struct {
+    int32_t fd;
+    cee_wake shut;  /* POSIX: the pipe's reading end. Windows: a manual-reset event, set by shutdown */
+    cee_wake other; /* POSIX: the pipe's writing end. Windows: the event the socket signals for FD_ACCEPT */
+} cee_listener;
+
+static cee_listener *cee_listeners;
+static uint32_t cee_listener_count; /* read with ceesafe_atomic_*, changed under the lock */
+static uint32_t cee_listener_capacity;
+static uint32_t cee_listener_lock; /* a spin lock (ceesafe_atomic_*): its sections are a short walk, no system call */
+
+static void cee_listener_enter(void) {
+    while (ceesafe_atomic_cas_u32(&cee_listener_lock, 0u, 1u) != 0u) {
+    }
+}
+
+static void cee_listener_leave(void) { ceesafe_atomic_store_u32(&cee_listener_lock, 0u); }
+
+/* Records `fd`'s wakes; false if the table could not grow. */
+static bool cee_listener_add(int32_t fd, cee_wake shut, cee_wake other) {
+    bool added = false;
+    cee_listener_enter();
+    if (cee_listener_count == cee_listener_capacity) {
+        uint32_t capacity = cee_listener_capacity == 0u ? 4u : cee_listener_capacity * 2u;
+        cee_listener *grown = (cee_listener *)ceesafe_platform_realloc(cee_listeners, (size_t)capacity * sizeof *grown);
+        if (grown != NULL) {
+            cee_listeners = grown;
+            cee_listener_capacity = capacity;
+        }
+    }
+    if (cee_listener_count < cee_listener_capacity) {
+        cee_listeners[cee_listener_count] = (cee_listener){fd, shut, other};
+        ceesafe_atomic_store_u32(&cee_listener_count, cee_listener_count + 1u);
+        added = true;
+    }
+    cee_listener_leave();
+    return added;
+}
+
+/* The wakes of `fd`, taken out of the table if `remove`; false if it has none. */
+static bool cee_listener_find(int32_t fd, bool remove, cee_listener *out) {
+    bool found = false;
+    if (ceesafe_atomic_load_u32(&cee_listener_count) == 0u) return false;
+    cee_listener_enter();
+    for (uint32_t k = 0; k < cee_listener_count && !found; k++) {
+        if (cee_listeners[k].fd == fd) {
+            *out = cee_listeners[k];
+            found = true;
+            if (remove) {
+                cee_listeners[k] = cee_listeners[cee_listener_count - 1u];
+                ceesafe_atomic_store_u32(&cee_listener_count, cee_listener_count - 1u);
+            }
+        }
+    }
+    cee_listener_leave();
+    return found;
+}
+
+static void cee_listener_close(const cee_listener *l) {
+#ifdef _WIN32
+    (void)CloseHandle(l->shut);
+    (void)WSACloseEvent(l->other);
+#else
+    (void)close(l->shut);
+    (void)close(l->other);
+#endif
+}
+
+/* Forgets `fd`'s wakes, before it is closed and its number may be given out again. */
+static void cee_listener_forget(int32_t fd) {
+    cee_listener l = {0};
+    if (cee_listener_find(fd, true, &l)) cee_listener_close(&l);
+}
+#endif /* !CEE_NO_LISTENER_SHUTDOWN */
+
 void ceesafe_fd_drop(int32_t *fd) {
+#if !defined(CEE_NO_LISTENER_SHUTDOWN)
+    if (*fd >= 0) cee_listener_forget(*fd);
+#endif
 #ifdef _WIN32
     if (*fd >= CEE_SOCKET_BASE) cee_socket_close(*fd);
     else if (*fd >= 0) (void)_close(*fd);
@@ -1062,7 +1168,38 @@ static cee_io_result cee_socket_open_text(cee_str address, uint16_t port, bool l
     return cee_socket_open(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, listening, nonblocking);
 }
 
-cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) { return cee_socket_open_text(address, port, true, false); }
+/* A blocking listener (ADR 0126): its socket signals an event for FD_ACCEPT, which also makes it nonblocking, and
+   `accept` waits for that event and the listener's shutdown event together. */
+cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
+    cee_io_result made = cee_socket_open_text(address, port, true, false);
+    if (made.error != 0) return made;
+    int32_t id = (int32_t)made.value;
+    SOCKET s = (SOCKET)ceesafe_socket_handle(id);
+    HANDLE shut = CreateEventW(NULL, TRUE, FALSE, NULL);
+    WSAEVENT ready = WSACreateEvent();
+    int32_t failure = 0;
+    if (shut == NULL || ready == WSA_INVALID_EVENT) {
+        failure = ENOMEM;
+    } else if (WSAEventSelect(s, ready, FD_ACCEPT) != 0) {
+        failure = cee_wsa_errno(WSAGetLastError());
+    } else if (!cee_listener_add(id, shut, ready)) {
+        failure = ENOMEM;
+    }
+    if (failure != 0) {
+        if (shut != NULL) (void)CloseHandle(shut);
+        if (ready != WSA_INVALID_EVENT) (void)WSACloseEvent(ready);
+        cee_socket_close(id);
+        return ceesafe_io_fail(failure);
+    }
+    return made;
+}
+
+/* `listener.shutdown()` (ADR 0126): sets the listener's shutdown event, for good. */
+cee_io_result ceesafe_tcp_listener_shutdown(int32_t fd) {
+    cee_listener l = {0};
+    if (!cee_listener_find(fd, false, &l)) return ceesafe_io_fail(EBADF);
+    return SetEvent(l.shut) ? ceesafe_io_ok(0) : ceesafe_io_fail(EIO);
+}
 
 cee_io_result ceesafe_tcp_port(int32_t fd) {
     SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
@@ -1077,8 +1214,26 @@ cee_io_result ceesafe_tcp_port(int32_t fd) {
 static cee_io_result cee_socket_accept(int32_t fd, bool nonblocking) {
     SOCKET s = (SOCKET)ceesafe_socket_handle(fd);
     if (s == INVALID_SOCKET) return ceesafe_io_fail(EBADF);
-    SOCKET peer = accept(s, NULL, NULL);
-    if (peer == INVALID_SOCKET) return cee_wsa_fail();
+    /* A blocking listener (ADR 0126) waits for a connection and for its shutdown together. The event is reset before
+       each try, so a connection that comes after a try found none sets it again; one that was reset before it was
+       accepted (WSAECONNRESET) is passed over, so ECONNABORTED means the shutdown alone. */
+    cee_listener l = {0};
+    bool watched = !nonblocking && cee_listener_find(fd, false, &l);
+    SOCKET peer = INVALID_SOCKET;
+    for (;;) {
+        if (watched) {
+            if (WaitForSingleObject(l.shut, 0) == WAIT_OBJECT_0) return ceesafe_io_fail(ECONNABORTED);
+            (void)WSAResetEvent(l.other);
+        }
+        peer = accept(s, NULL, NULL);
+        if (peer != INVALID_SOCKET) break;
+        int error = WSAGetLastError();
+        if (!watched || (error != WSAEWOULDBLOCK && error != WSAECONNRESET)) return ceesafe_io_fail(cee_wsa_errno(error));
+        if (error == WSAEWOULDBLOCK) {
+            HANDLE both[2] = {l.shut, l.other};
+            if (WaitForMultipleObjects(2, both, FALSE, INFINITE) == WAIT_FAILED) return ceesafe_io_fail(EIO);
+        }
+    }
     /* An accepted socket has the listener's properties, including WSAEventSelect's (which makes it nonblocking):
        undo them for a blocking stream. */
     (void)WSAEventSelect(peer, NULL, 0);
@@ -1321,7 +1476,46 @@ static cee_io_result cee_io_of(int64_t r) { return r < 0 ? ceesafe_io_fail((int3
 cee_io_result ceesafe_tcp_listen(cee_str address, uint16_t port) {
     ceesafe_endpoint e;
     if (!ceesafe_endpoint_parse(address, port, &e)) return ceesafe_io_fail(EINVAL);
+#if defined(CEE_NO_LISTENER_SHUTDOWN)
     return cee_io_of(cee_listen_endpoint(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, false));
+#else
+    /* A blocking listener (ADR 0126): the socket does not block, and `accept` waits for it and for the wake pipe. */
+    int64_t made = cee_listen_endpoint(&e, 0u, CEE_LISTEN_REUSE_ADDRESS, true);
+    if (made < 0) return cee_io_of(made);
+    int wake[2];
+    if (pipe(wake) < 0) {
+        int failure = errno;
+        (void)close((int)made);
+        return ceesafe_io_fail(failure);
+    }
+    (void)fcntl(wake[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(wake[1], F_SETFD, FD_CLOEXEC);
+    if (!cee_nonblocking(wake[1]) || !cee_listener_add((int32_t)made, wake[0], wake[1])) {
+        (void)close(wake[0]);
+        (void)close(wake[1]);
+        (void)close((int)made);
+        return ceesafe_io_fail(ENOMEM);
+    }
+    return ceesafe_io_ok(made);
+#endif
+}
+
+/* `listener.shutdown()` (ADR 0126): a byte in the listener's wake pipe, which nothing reads: every `accept`, waiting
+   or later, sees it. A full pipe (EAGAIN) holds one already. */
+cee_io_result ceesafe_tcp_listener_shutdown(int32_t fd) {
+#if defined(CEE_NO_LISTENER_SHUTDOWN)
+    (void)fd;
+    return ceesafe_io_fail(EOPNOTSUPP);
+#else
+    cee_listener l = {0};
+    if (!cee_listener_find(fd, false, &l)) return ceesafe_io_fail(EBADF);
+    uint8_t byte = 0;
+    ssize_t n;
+    do {
+        n = write(l.other, &byte, 1);
+    } while (n < 0 && errno == EINTR);
+    return n < 0 && !cee_listener_would_block(errno) ? ceesafe_io_errno() : ceesafe_io_ok(0);
+#endif
 }
 
 cee_io_result ceesafe_tcp_port(int32_t fd) {
@@ -1334,10 +1528,36 @@ cee_io_result ceesafe_tcp_port(int32_t fd) {
 
 cee_io_result ceesafe_tcp_accept(int32_t fd) {
     int peer;
+#if defined(CEE_NO_LISTENER_SHUTDOWN)
     do {
         peer = accept(fd, NULL, NULL);
     } while (peer < 0 && errno == EINTR);
     if (peer < 0) return ceesafe_io_errno();
+#else
+    /* ADR 0126: wait for a connection and for the listener's shutdown together. A connection that was reset before
+       it was accepted (ECONNABORTED), or that another thread took (EAGAIN), is passed over, so ECONNABORTED from here
+       means the shutdown alone. */
+    cee_listener l = {0};
+    bool watched = cee_listener_find(fd, false, &l);
+    for (;;) {
+        if (watched) {
+            struct pollfd waits[2] = {{fd, POLLIN, 0}, {l.shut, POLLIN, 0}};
+            if (poll(waits, 2, -1) < 0) {
+                if (errno == EINTR) continue;
+                return ceesafe_io_errno();
+            }
+            if (waits[1].revents != 0) return ceesafe_io_fail(ECONNABORTED);
+        }
+        peer = accept(fd, NULL, NULL);
+        if (peer >= 0) break;
+        if (errno == EINTR) continue;
+        if (watched && (cee_listener_would_block(errno) || errno == ECONNABORTED)) continue;
+        return ceesafe_io_errno();
+    }
+    /* The BSDs give the new socket the listener's O_NONBLOCK: a TcpStream blocks. */
+    int flags = fcntl(peer, F_GETFL, 0);
+    if (flags >= 0 && (flags & O_NONBLOCK) != 0) (void)fcntl(peer, F_SETFL, flags & ~O_NONBLOCK);
+#endif
 #ifdef SO_NOSIGPIPE
     int one = 1;
     (void)setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);

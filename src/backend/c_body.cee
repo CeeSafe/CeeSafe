@@ -1152,7 +1152,7 @@ fn isRvalueBuiltin(b: u32) -> bool =>
         b == bfFileCreate() || b == bfFileRemove() || isDurableFileBuiltin(b) || b == bfResourceRead() ||
         b == bfResourceWrite() ||
         b == bfConsoleRead() || b == bfTcpListen() || b == bfTcpConnect() || b == bfTcpPort() || b == bfTcpAccept() ||
-        b == bfTcpShutdownWrite() || b == bfTcpShutdownRead() || isTcpOptionBuiltin(
+        b == bfTcpShutdownWrite() || b == bfTcpShutdownRead() || b == bfTcpListenerShutdown() || isTcpOptionBuiltin(
         b,
     ) || b == bfArgument() || b == bfArgumentCount() || b == bfProcessRun() ||
         b == bfIoErrorMessage() || b == bfPtrAdd() || b == bfPtrSub() || b == bfPtrOffset() || b == bfPtrIsNull() ||
@@ -2293,10 +2293,13 @@ fn appendBuiltinRvalue(
         call.push(')')?;
         return appendIoCall(c, out, t, call.view());
     }
-    if (b == bfTcpShutdownRead()) {
+    if (b == bfTcpShutdownRead() || b == bfTcpListenerShutdown()) {
         let resource = operandText(e, c, n, sources, f, n.at(arguments, 0))?;
         var call = Vector<u8>.create();
-        appendText(mut call, "ceesafe_tcp_shutdown_read(*")?;
+        appendText(
+            mut call,
+            if (b == bfTcpShutdownRead()) "ceesafe_tcp_shutdown_read(*" else "ceesafe_tcp_listener_shutdown(*",
+        )?;
         appendBytes(mut call, resource.view())?;
         call.push(')')?;
         return appendIoCall(c, out, t, call.view());

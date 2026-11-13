@@ -84,6 +84,10 @@ public struct Channel<T: Send> {
     /// Safety: as `close`.
     public fn isClosed(borrow this) -> bool => unsafe { ceesafe_chan_closed(this.raw) };
 
+    /// The runtime's channel, for lib/std's own use: ProcessSignals gives it to the runtime, which takes a count of
+    /// its own and sends into it (ADR 0125).
+    fn handle(borrow this) -> *mut void => this.raw;
+
     /// Sends `value`, waiting while the channel is full; `Err(value)` if it is closed.
     /// Safety: a slot from begin_send is the channel's, under its lock until end_send, and holds no value.
     public fn send(borrow this, value: T) -> Result<void, T> {

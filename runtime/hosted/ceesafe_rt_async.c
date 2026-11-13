@@ -2926,6 +2926,203 @@ void ceesafe_chan_unpark(void *channel, void *wait) {
     cee_chan_unlock(c);
 }
 
+/* ---- Process signals (ADR 0125; type-system.md §26.15; lib/std's ProcessSignals) ----------
+ * One subscription for the process at a time. While it lasts, the requests to end the process (CEE_SIGNAL_INTERRUPT:
+ * SIGINT, Ctrl+C, Ctrl+Break; CEE_SIGNAL_TERMINATE: SIGTERM, the console's close, logoff and shutdown) do not end it:
+ * each is sent as a u32 into the subscription's channel (ADR 0032), which threads and tasks receive from as from any
+ * channel. A full channel already holds requests nobody has taken, and the new one is dropped. No code of the
+ * program, and nothing that locks or allocates, runs in a signal handler:
+ * - POSIX: the handler sets a bit (atomically) and writes a byte to a pipe; a thread of the runtime, started by the
+ *   subscription and joined at its end, waits on the pipe and sends what the bits say. The pipe is made once and kept
+ *   for the process's life, so a handler that is still running when a subscription ends writes to the same pipe.
+ * - Windows: the console calls the handler on a thread of its own, which sends at once. For the console's close,
+ *   logoff and shutdown the system ends the process when the handler returns, so it does not: the program has until
+ *   it returns from main, or the system's own limit (5 s for a close).
+ * Ending the subscription restores what was there before: the next request ends the process, as before any.
+ * CosmoOS has no signals: a subscription is EOPNOTSUPP there. Hosted only. */
+#if !defined(CEE_FREESTANDING)
+#define CEE_SIGNAL_INTERRUPT 1u
+#define CEE_SIGNAL_TERMINATE 2u
+
+#if !defined(CEE_COSMOOS)
+static uint32_t cee_signal_lock; /* a spin lock (ceesafe_atomic_*): the subscription's start and end, and a send */
+static void *cee_signal_channel; /* the subscription's channel, with a count of its own; NULL when there is none */
+
+static void cee_signal_enter(void) {
+    while (ceesafe_atomic_cas_u32(&cee_signal_lock, 0u, 1u) != 0u) {
+    }
+}
+
+static void cee_signal_leave(void) { ceesafe_atomic_store_u32(&cee_signal_lock, 0u); }
+
+/* Channel.trySend, from C: the value is a u32, so nothing is dropped when the channel is full. */
+static void cee_signal_send(void *channel, uint32_t which) {
+    uint32_t status = 0;
+    uint64_t epoch = 0;
+    uint32_t *slot = (uint32_t *)ceesafe_chan_begin_send(channel, &status, &epoch);
+    if (status == 0u) {
+        *slot = which;
+        ceesafe_chan_end_send(channel);
+    }
+}
+#endif
+
+#if defined(CEE_COSMOOS)
+int64_t ceesafe_signal_subscribe(void *channel) {
+    (void)channel;
+    return -(int64_t)EOPNOTSUPP;
+}
+
+void ceesafe_signal_unsubscribe(void) {}
+#elif defined(_WIN32)
+static BOOL WINAPI cee_signal_handler(DWORD kind) {
+    uint32_t which = kind == CTRL_C_EVENT || kind == CTRL_BREAK_EVENT ? CEE_SIGNAL_INTERRUPT : CEE_SIGNAL_TERMINATE;
+    cee_signal_enter();
+    void *channel = cee_signal_channel;
+    if (channel != NULL) cee_signal_send(channel, which);
+    cee_signal_leave();
+    if (channel == NULL) return FALSE; /* no subscription: the next handler, or the system's default */
+    if (which == CEE_SIGNAL_TERMINATE) Sleep(INFINITE);
+    return TRUE;
+}
+
+int64_t ceesafe_signal_subscribe(void *channel) {
+    cee_signal_enter();
+    if (cee_signal_channel != NULL) {
+        cee_signal_leave();
+        return -(int64_t)EEXIST;
+    }
+    ceesafe_chan_retain(channel);
+    cee_signal_channel = channel;
+    cee_signal_leave();
+    if (!SetConsoleCtrlHandler(cee_signal_handler, TRUE)) {
+        ceesafe_signal_unsubscribe();
+        return -(int64_t)EOPNOTSUPP;
+    }
+    return 0;
+}
+
+void ceesafe_signal_unsubscribe(void) {
+    (void)SetConsoleCtrlHandler(cee_signal_handler, FALSE);
+    cee_signal_enter();
+    void *channel = cee_signal_channel;
+    cee_signal_channel = NULL;
+    cee_signal_leave();
+    if (channel != NULL && ceesafe_chan_release(channel)) ceesafe_chan_free(channel);
+}
+#else
+#include <signal.h>
+
+static int cee_signal_pipe[2] = {-1, -1}; /* made by the first subscription, never closed */
+static uint32_t cee_signal_pending;       /* the CEE_SIGNAL_* bits the handler set (ceesafe_atomic_*) */
+static uint32_t cee_signal_stop;          /* the watching thread ends (ceesafe_atomic_*) */
+static cee_thread *cee_signal_thread;
+static struct sigaction cee_signal_before[2]; /* what SIGINT and SIGTERM did before the subscription */
+
+/* Async-signal-safe: an atomic or, and write(2), with errno kept. */
+static void cee_signal_handler(int number) {
+    int saved = errno;
+    uint8_t byte = 0;
+    (void)ceesafe_atomic_or_u32(&cee_signal_pending, number == SIGINT ? CEE_SIGNAL_INTERRUPT : CEE_SIGNAL_TERMINATE);
+    if (write(cee_signal_pipe[1], &byte, 1) < 0) {
+        /* a full pipe holds a wake already */
+    }
+    errno = saved;
+}
+
+/* Empties the pipe (its reading end does not block). */
+static void cee_signal_drain(void) {
+    uint8_t bytes[64];
+    while (read(cee_signal_pipe[0], bytes, sizeof bytes) > 0) {
+    }
+}
+
+static void *cee_signal_watch(void *arg) {
+    void *channel = arg;
+    for (;;) {
+        struct pollfd wait = {cee_signal_pipe[0], POLLIN, 0};
+        if (poll(&wait, 1, -1) < 0 && errno != EINTR) break;
+        cee_signal_drain();
+        /* The bits are taken after the pipe is emptied: a handler sets its bit before it writes, so every byte
+           read here has its bit taken here, and a later one wakes the next wait. */
+        uint32_t bits = ceesafe_atomic_swap_u32(&cee_signal_pending, 0u);
+        if ((bits & CEE_SIGNAL_INTERRUPT) != 0u) cee_signal_send(channel, CEE_SIGNAL_INTERRUPT);
+        if ((bits & CEE_SIGNAL_TERMINATE) != 0u) cee_signal_send(channel, CEE_SIGNAL_TERMINATE);
+        if (ceesafe_atomic_load_u32(&cee_signal_stop) != 0u) break;
+    }
+    return NULL;
+}
+
+int64_t ceesafe_signal_subscribe(void *channel) {
+    cee_signal_enter();
+    if (cee_signal_channel != NULL) {
+        cee_signal_leave();
+        return -(int64_t)EEXIST;
+    }
+    if (cee_signal_pipe[0] < 0) {
+        int made[2];
+        if (pipe(made) < 0) {
+            int64_t failed = -(int64_t)errno;
+            cee_signal_leave();
+            return failed;
+        }
+        (void)fcntl(made[0], F_SETFD, FD_CLOEXEC);
+        (void)fcntl(made[1], F_SETFD, FD_CLOEXEC);
+        if (fcntl(made[0], F_SETFL, O_NONBLOCK) < 0 || fcntl(made[1], F_SETFL, O_NONBLOCK) < 0) {
+            int64_t failed = -(int64_t)errno;
+            (void)close(made[0]);
+            (void)close(made[1]);
+            cee_signal_leave();
+            return failed;
+        }
+        cee_signal_pipe[0] = made[0];
+        cee_signal_pipe[1] = made[1];
+    }
+    /* What an earlier subscription's last handler may have left. */
+    cee_signal_drain();
+    ceesafe_atomic_store_u32(&cee_signal_pending, 0u);
+    ceesafe_atomic_store_u32(&cee_signal_stop, 0u);
+    cee_signal_thread = ceesafe_thread_start(cee_signal_watch, channel);
+    if (cee_signal_thread == NULL) {
+        cee_signal_leave();
+        return -(int64_t)ENOMEM; /* no memory for the thread, or no thread to be had */
+    }
+    ceesafe_chan_retain(channel);
+    cee_signal_channel = channel;
+    struct sigaction action;
+    memset(&action, 0, sizeof action);
+    action.sa_handler = cee_signal_handler;
+    action.sa_flags = SA_RESTART;
+    (void)sigemptyset(&action.sa_mask);
+    (void)sigaction(SIGINT, &action, &cee_signal_before[0]);
+    (void)sigaction(SIGTERM, &action, &cee_signal_before[1]);
+    cee_signal_leave();
+    return 0;
+}
+
+void ceesafe_signal_unsubscribe(void) {
+    cee_signal_enter();
+    void *channel = cee_signal_channel;
+    if (channel == NULL) {
+        cee_signal_leave();
+        return;
+    }
+    (void)sigaction(SIGINT, &cee_signal_before[0], NULL);
+    (void)sigaction(SIGTERM, &cee_signal_before[1], NULL);
+    ceesafe_atomic_store_u32(&cee_signal_stop, 1u);
+    uint8_t byte = 0;
+    if (write(cee_signal_pipe[1], &byte, 1) < 0) {
+        /* a full pipe wakes the thread too */
+    }
+    ceesafe_thread_join(cee_signal_thread);
+    cee_signal_thread = NULL;
+    cee_signal_channel = NULL;
+    cee_signal_leave();
+    if (ceesafe_chan_release(channel)) ceesafe_chan_free(channel);
+}
+#endif
+#endif /* process signals */
+
 /* ---- ceesafe_async_tasks: the current thread's tasks, for a debugger (editors/debug, `ceesafe-tasks`) ---- */
 
 static char cee_tasks_text[8192];

@@ -1,0 +1,17 @@
+// `ProcessSignals.wait` blocks its thread (ADR 0125): in an async fn it is N0295, as any blocking wait; a task
+// uses `waitAsync`. `poll` never waits, so a task may call it.
+async fn stopAsked(signals: borrow ProcessSignals) -> Result<bool, AsyncError> {
+    if (signals.poll().isSome()) {
+        return Ok(true);
+    }
+    let asked = signals.wait(); // error[N0295]
+    return Ok(asked is ProcessSignal.Terminate);
+}
+
+fn main() {
+    let signals = ProcessSignals.subscribe()!;
+    match (Async.run(stopAsked(borrow signals))) {
+        Ok(_) => {}
+        Err(_) => {}
+    }
+}

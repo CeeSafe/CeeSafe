@@ -1,0 +1,126 @@
+// Process signals for the interpreter (lib/std's ProcessSignals, ADR 0125; type-system.md §26.15): the interpreted
+// program's subscription is the interpreter's own. The compiled runtime's ceesafe_signal_* are newer than the
+// compiler that builds these sources, so the interpreter asks the C library itself: signal(), which every host has.
+// The handler only sets a bit, and the interpreter looks at the bits where the program asks or waits (deliverSignals).
+
+extern "C" {
+    // C's signal(): the handler for `number`, or 0 (SIG_DFL) for the system's default; the handler before.
+    fn signal(number: i32, handler: extern "C" fn(i32)) -> extern "C" fn(i32);
+}
+
+/// The requests that arrived and the interpreter has not yet given to the program: bit 0 an interrupt, bit 1 a
+/// request to terminate (the runtime's CEE_SIGNAL_INTERRUPT and CEE_SIGNAL_TERMINATE).
+static INTERP_SIGNAL_BITS: AtomicU32 = AtomicU32.constant(0);
+
+fn signalInterrupt() -> i32 => 2;  // SIGINT, on every host
+fn signalTerminate() -> i32 => 15; // SIGTERM, on every host
+fn signalBreak() -> i32 => 21;     // SIGBREAK: Windows' Ctrl+Break
+
+/// The handler: an atomic or, and the handler set again (Windows resets it to the default at each signal; POSIX
+/// allows signal() in a handler).
+/// Safety: `number` is the signal the C library calls this for.
+@callback
+fn interpSignalArrived(number: i32) {
+    INTERP_SIGNAL_BITS.fetchOr(if (number == signalTerminate()) 2 else 1);
+    unsafe { signal(number, interpSignalArrived); }
+}
+
+/// The interpreter starts to keep the requests to end it.
+/// Safety: signal() with this file's handler, which is async-signal-safe.
+fn interpSignalsWatch() {
+    INTERP_SIGNAL_BITS.store(0);
+    unsafe {
+        signal(signalInterrupt(), interpSignalArrived);
+        signal(signalTerminate(), interpSignalArrived);
+    }
+    if (hostIsWindows()) {
+        unsafe { signal(signalBreak(), interpSignalArrived); }
+    }
+}
+
+/// The system's default again: a request ends the interpreter.
+/// Safety: signal() with SIG_DFL, the null handler.
+fn interpSignalsRestore() {
+    let byDefault = 0 as extern "C" fn(i32);
+    unsafe {
+        signal(signalInterrupt(), byDefault);
+        signal(signalTerminate(), byDefault);
+    }
+    if (hostIsWindows()) {
+        unsafe { signal(signalBreak(), byDefault); }
+    }
+}
+
+/// Waits about `ms` milliseconds of real time, or less if a signal comes (the host's poll of no descriptor).
+fn hostPause(ms: i64) {
+    let fds = Vector<i32>.create();
+    let events = Vector<u32>.create();
+    var ready = Vector<u32>.create();
+    let woke = AsyncSockets.poll(fds.view(), events.view(), ready.viewMut(), ms);
+    if (woke < 0) {
+        return; // interrupted: the caller looks again
+    }
+}
+
+/// Whether the program has a subscription and a task parked on its channel.
+fn signalTaskWaits(it: borrow Interp) -> bool {
+    if (it.runtime.signalChannel == 0) {
+        return false;
+    }
+    return it.runtime.channels[(it.runtime.signalChannel - 1) as usize].waiters.length > 0;
+}
+
+/// Sends the requests that arrived into the subscription's channel, as the runtime's thread does (a full channel
+/// drops them): true if any was sent, so the tasks and threads waiting on the channel run again.
+fn deliverSignals(it: borrow mut Interp) -> Result<bool, Stop> {
+    if (it.runtime.signalChannel == 0) {
+        return Ok(false);
+    }
+    let bits = INTERP_SIGNAL_BITS.swap(0);
+    if (bits == 0) {
+        return Ok(false);
+    }
+    let k = (it.runtime.signalChannel - 1) as usize;
+    var sent = false;
+    var which: u32 = 1;
+    while (which <= 2) {
+        let count = it.runtime.channels[k].count;
+        let capacity = it.runtime.channels[k].capacity;
+        if ((bits & which) != 0 && count < capacity) {
+            let head = it.runtime.channels[k].head;
+            let slot = it.runtime.channels[k].data + ((head + count) % capacity) * it.runtime.channels[k].stride;
+            it.memory.storeBits(slot, which as u64, 4)?;
+            it.runtime.channels[k].count += 1;
+            sent = true;
+        }
+        which += 1;
+    }
+    if (sent) {
+        channelChanged(it, k);
+    }
+    return Ok(sent);
+}
+
+/// ceesafe_signal_subscribe and ceesafe_signal_unsubscribe (runtime/hosted/ceesafe_rt_async.c): one subscription, which
+/// holds a count of its channel. The sandbox has no signals: EOPNOTSUPP, IoError.Unsupported.
+fn signalService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<Value>) -> Result<Value?, Stop> {
+    if (sameText(name, "ceesafe_signal_subscribe")) {
+        if (it.options.sandboxed) {
+            return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130)));
+        }
+        if (it.runtime.signalChannel != 0) {
+            return Ok(hostFailure(17)); // EEXIST, 17 on every host: IoError.AlreadyExists
+        }
+        let handle = arguments[0].bits(0, 8)?;
+        it.runtime.channels[(handle - 1) as usize].refs += 1;
+        it.runtime.signalChannel = handle;
+        interpSignalsWatch();
+        return Ok(hostResult(0));
+    }
+    if (it.runtime.signalChannel != 0) {
+        interpSignalsRestore();
+        it.runtime.channels[(it.runtime.signalChannel - 1) as usize].refs -= 1;
+        it.runtime.signalChannel = 0;
+    }
+    return Ok(null);
+}

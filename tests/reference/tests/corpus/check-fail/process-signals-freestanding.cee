@@ -1,0 +1,17 @@
+// profile: freestanding
+// `ProcessSignals` is lib/std's (ADR 0125), which a freestanding program does not have: the names are not defined
+// there (N0200), as `ProcessLimits` is not; and a listener to shut down is a hosted-only built-in (N0293).
+
+fn stopAsked() -> bool {
+    let signals = ProcessSignals.subscribe(); // error[N0200]
+    return false;
+}
+
+fn listen() {
+    let listener = TcpListener.bind("127.0.0.1", 0); // error[N0293]
+}
+
+fn start() -> i32 {
+    listen();
+    return if (stopAsked()) 1 else 0;
+}

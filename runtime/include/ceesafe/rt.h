@@ -976,6 +976,15 @@ extern uint64_t ceesafe_test_cancel_at;
 extern bool ceesafe_test_reports;
 void ceesafe_thread_watchdog(uint64_t ms);
 
+/* ---- Process signals (ADR 0125; type-system.md §26.15; runtime/hosted/ceesafe_rt_async.c, with the channels) ----
+ * ceesafe_signal_subscribe starts the process's one subscription: until ceesafe_signal_unsubscribe, a request to end
+ * the process (SIGINT, SIGTERM; Windows' console control events) is sent into `channel`, a ceesafe_chan of u32 the
+ * runtime takes a count of, as 1 (interrupt) or 2 (terminate), and dropped if the channel is full. 0, or a negated
+ * errno: EEXIST while a subscription lasts, EOPNOTSUPP where there are no signals. Unsubscribing restores what the
+ * signals did before, and does nothing when there is no subscription. Both may be called from any thread. */
+int64_t ceesafe_signal_subscribe(void *channel);
+void ceesafe_signal_unsubscribe(void);
+
 /* ---- Threads and mutexes (type-system.md §38; runtime/hosted/ceesafe_rt_thread.c), and atomics (here) ---------- */
 
 typedef struct cee_thread cee_thread;
@@ -1449,6 +1458,9 @@ cee_io_result ceesafe_tcp_shutdown_write(int32_t fd);
 /* ADR 0044: the blocking stream's options (CEE_SOCKET_OPTION_*, below) and its read side's shutdown. */
 cee_io_result ceesafe_tcp_option(int32_t fd, uint32_t option, int64_t value);
 cee_io_result ceesafe_tcp_shutdown_read(int32_t fd);
+/* `listener.shutdown()` (ADR 0126): the listener's `accept`, in any thread now or later, returns ECONNABORTED. The
+ * socket stays open until the listener's drop. EOPNOTSUPP where a listener cannot wait for two things (CosmoOS). */
+cee_io_result ceesafe_tcp_listener_shutdown(int32_t fd);
 
 /* Process.run: starts `program` (searched on PATH) with `arguments`, waits, and returns its exit status
    (128 + the signal number if a signal ended it). Standard output is flushed first. */

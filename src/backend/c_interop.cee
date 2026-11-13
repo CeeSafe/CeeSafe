@@ -790,6 +790,22 @@ fn emitExports(
     return Ok();
 }
 
+/// A `cfg` condition, "X" or "!X", as C's `#if` tests it (ADR 0080 §3.3): `defined(X) && X`, or `!(defined(X) && X)`.
+/// That is `X`, or `!X`, in every build, an undefined macro being 0 in `#if`; it is written out so that a build which
+/// does not define the macro gets no -Wundef warning, which is in the strict set (c-backend.md §1).
+fn appendCfgTest(out: borrow mut Vector<u8>, cfg: Slice<u8>) -> Result<void, AllocError> {
+    let negated = cfg.length > 0 && cfg[0] == '!';
+    let name = if (negated) cfg[1..] else cfg;
+    appendText(out, if (negated) "!(defined(" else "defined(")?;
+    appendBytes(out, name)?;
+    appendText(out, ") && ")?;
+    appendBytes(out, name)?;
+    if (negated) {
+        appendText(out, ")")?;
+    }
+    return Ok();
+}
+
 /// `#if NAME` before an `@cfg("NAME")` export's C (ADR 0043): its symbol is in the builds where the macro is non-zero.
 fn emitCfgOpen(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Result<void, AllocError> {
     let cfg = c.hir.functions[function as usize].cfgName;
@@ -797,7 +813,7 @@ fn emitCfgOpen(e: borrow mut CEmitter, c: borrow Checker, function: u32) -> Resu
         return Ok();
     }
     e.t("#if ")?;
-    e.b(c.hir.textOf(cfg))?;
+    appendCfgTest(mut e.buf, c.hir.textOf(cfg))?;
     return e.emit();
 }
 
@@ -993,7 +1009,7 @@ fn exportsHeader(
         let cfg = c.hir.functions[function as usize].cfgName;
         if (cfg.count != 0) {
             appendText(out, "#if ")?;
-            appendBytes(out, c.hir.textOf(cfg))?;
+            appendCfgTest(out, c.hir.textOf(cfg))?;
             appendText(out, "\n")?;
         }
         appendExportSignature(c, out, function, true)?;

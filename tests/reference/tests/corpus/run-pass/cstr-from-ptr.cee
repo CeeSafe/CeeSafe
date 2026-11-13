@@ -1,0 +1,62 @@
+// `CStr.fromPtr` (ADR 0122): the C string at a `*CChar`, its length counted up to the first NUL. Null for a null
+// pointer and for bytes that are not UTF-8. No C is called, so the interpreter runs it too.
+// expect-stdout: kitchen
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 0
+// expect-stdout: héllo 6
+// expect-stdout: ab
+// expect-stdout: not text
+// expect-stdout: no pointer
+// expect-stdout: true
+
+/// What C would hand back: the address of the first byte of `bytes`.
+fn address(bytes: Slice<u8>) -> *CChar => bytes.ptr as *CChar;
+
+/// Safety: every pointer here is null or the address of bytes that end in a NUL (a `c"…"` literal, or a local array
+/// with a zero byte) and that live, unchanged, until the end of `main`.
+fn main() {
+    let name = c"kitchen";
+    match (unsafe { CStr.fromPtr(name.ptr()) }) {
+        Some(s) => {
+            Console.writeLine(s.view());
+            Console.writeLine(s.length());
+            Console.writeLine(s.bytesWithNul().length);
+        }
+        null => { Console.writeLine("refused"); }
+    }
+    match (unsafe { CStr.fromPtr(c"".ptr()) }) {
+        Some(s) => { Console.writeLine(s.length()); }
+        null => { Console.writeLine("refused"); }
+    }
+    match (unsafe { CStr.fromPtr(c"héllo".ptr()) }) {
+        Some(s) => {
+            Console.write(s.view());
+            Console.write(" ");
+            Console.writeLine(s.length());
+        }
+        null => { Console.writeLine("refused"); }
+    }
+    // The text ends at the first NUL, whatever follows it.
+    let two: [u8; 6] = ['a', 'b', 0, 'c', 'd', 0];
+    match (unsafe { CStr.fromPtr(address(two[..])) }) {
+        Some(s) => { Console.writeLine(s.view()); }
+        null => { Console.writeLine("refused"); }
+    }
+    let latin: [u8; 3] = [0xE9, 'x', 0];
+    match (unsafe { CStr.fromPtr(address(latin[..])) }) {
+        Some(s) => { Console.writeLine(s.view()); }
+        null => { Console.writeLine("not text"); }
+    }
+    let nothing = 0 as *CChar;
+    match (unsafe { CStr.fromPtr(nothing) }) {
+        Some(s) => { Console.writeLine(s.view()); }
+        null => { Console.writeLine("no pointer"); }
+    }
+    // The result points at the same bytes: nothing is copied.
+    let again = unsafe { CStr.fromPtr(name.ptr()) };
+    match (again) {
+        Some(s) => { Console.writeLine(s.ptr() == name.ptr()); }
+        null => { Console.writeLine("refused"); }
+    }
+}

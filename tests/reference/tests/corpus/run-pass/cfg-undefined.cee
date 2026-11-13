@@ -1,0 +1,20 @@
+// `cfg` of a macro no build flag defines (ADR 0080 §3.3): the macro is 0, so the `else` block is the program, in the
+// C as in the interpreter. The C tests `defined(NOTICE_LOUD) && NOTICE_LOUD`, so a build without `-DNOTICE_LOUD=…`
+// compiles without -Wundef's warning, under `--cflag -Werror` too.
+// expect-stdout: quiet
+// expect-stdout: not loud
+
+fn volume() -> StringView {
+    if (cfg("NOTICE_LOUD")) {
+        return "loud";
+    } else {
+        return "quiet";
+    }
+}
+
+fn main() {
+    Console.writeLine(volume());
+    if (cfg("!NOTICE_LOUD")) {
+        Console.writeLine("not loud");
+    }
+}

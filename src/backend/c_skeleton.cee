@@ -1571,7 +1571,7 @@ fn emitImportedFieldChecks(e: borrow mut CEmitter, c: borrow Checker) -> Result<
             if (cfgText.length > 0) {
                 // A configured member (ADR 0080 §3.3): only some builds' struct has it.
                 e.t("#if ")?;
-                e.b(cfgText)?;
+                appendCfgTest(mut e.buf, cfgText)?;
                 e.emit()?;
             }
             var member = Vector<u8>.create();

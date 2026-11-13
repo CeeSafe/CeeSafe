@@ -1967,6 +1967,17 @@ public fn fromBytesWithNul(b: Slice<r, u8>) -> CStr<r>?
 
 Bytes ending in a NUL that is their only one, as valid UTF-8 text before it; else null.
 
+### CStr.fromPtr
+
+```ceesafe
+public unsafe fn fromPtr(p: *CChar) -> CStr<r>?
+```
+
+The C string at `p` (ADR 0122): the bytes up to its first NUL, counted here, when they are UTF-8 text; else
+null. A null `p` gives null too.
+Safety: `p` is null, or points to bytes that end in a NUL and that are neither changed nor freed while the
+result, or a view taken from it, is used.
+
 ### CStr.ptr
 
 ```ceesafe

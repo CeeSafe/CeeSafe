@@ -826,7 +826,7 @@ fn printTree(
             mapTo(e, c, n, sources, node.start, node.end);
             e.t("#if ")?;
             let condition = s.texts[node.text as usize].view();
-            e.b(condition[1..])?;
+            appendCfgTest(mut e.buf, condition[1..])?;
             e.emitNoCode()?;
             printTree(e, c, n, sources, s, node.first, depth)?;
             if (s.lists[node.second as usize].length > 0) {

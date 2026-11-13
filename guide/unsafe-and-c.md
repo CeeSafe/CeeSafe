@@ -110,7 +110,10 @@ fn main() -> i32 {
 `CStr`, a view with `ptr()` for C, `view()` and `length()` for CeeSafe (without the zero byte). It can be a constant or
 a static, and there `PREFIX + c"…"` joins constant text before it (`const RC: CStr = HOME + c"/.bunrc";`).
 `CStr.fromBytesWithNul(bytes)` makes one from bytes that end in their only zero byte, or gives `null`; like
-any view, it cannot outlive those bytes. `"…\0".ptr as *CChar` also works, but nothing checks the `\0` is there.
+any view, it cannot outlive those bytes. For a `*CChar` that C returns, `unsafe { CStr.fromPtr(p) }` is the string
+at `p`, up to its zero byte, or `null` when `p` is null or the bytes are not UTF-8; you promise that the bytes end in
+a zero byte and stay as they are while you use the result, so copy the text (`String.from(s.view())`) before C frees
+it. `"…\0".ptr as *CChar` also works, but nothing checks the `\0` is there.
 
 C files are built with the program: `ceesafec build main.cee helpers.c -o program`, or the `c` list of a package's
 manifest.
@@ -446,7 +449,8 @@ fn digest(out: borrow mut [u8; 32]) {
 }
 ```
 
-**Code only some builds have.** `if (cfg("CONFIG_DEBUG")) { … } else { … }` is C's `#if CONFIG_DEBUG`. A member or a C
+**Code only some builds have.** `if (cfg("CONFIG_DEBUG")) { … } else { … }` is C's `#if CONFIG_DEBUG`: a
+build defines the macro with `--cflag -DCONFIG_DEBUG=1` or in a header, and one that does not takes it as 0. A member or a C
 function that only some builds have is declared `@cfg("CONFIG_DEBUG")` and used only inside such a block, which the
 compiler checks (N0350). Both blocks are checked in every build:
 

@@ -87,7 +87,7 @@ the C compiler's optimiser has nothing to exploit.
 - Call C functions from an `extern "C"` block, inside `unsafe`.
 - Export CeeSafe functions with `@export`; `ceesafec` writes `ceesafe_exports.h` for your C code to include.
 - Use your codebase's own structs from its headers (`@header`, `@ctype`) instead of re-declaring them: the C compiler
-  checks every field CeeSafe uses.
+  checks every field CeeSafe uses. `ceesafec cbind --header <h>` writes the block from the header, with clang.
 - Build a freestanding object with `--profile freestanding --emit obj` and link it with your build.
 
 See [Unsafe code and C](../unsafe-and-c.md) and [Kernel code](../kernel.md).

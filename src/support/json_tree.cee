@@ -1,0 +1,409 @@
+// Reading a large JSON document (clang's AST dump, tens of megabytes; ADR 0127) into a tree of spans: a node is
+// seven numbers, its text stays in the document, and a string is decoded only when it is asked for. With a list of
+// keys, a member with any other key is skipped where it stands and has no node. One pass over the bytes, no
+// recursion, so neither the size nor the depth of the document is limited (but a document of 4 GiB or more is
+// refused: positions are 32 bits). json_reader.cee's tree, which owns three vectors a node, is for small documents.
+
+/// One node: its kind (json_reader.cee's), where its text is in the document (a string's bytes between its quotes,
+/// a number's or a boolean's lexeme), its key's bytes between their quotes (empty in an array and at the root), its
+/// first child and its next sibling, or none.
+struct JsonSpan {
+    kind: u32;
+    start: u32;
+    end: u32;
+    keyStart: u32;
+    keyEnd: u32;
+    first: u32;
+    next: u32;
+    escaped: bool; // a string with a backslash: stringOf decodes it
+}
+
+struct JsonTree {
+    nodes: Vector<JsonSpan>;
+
+    fn kind(borrow this, node: u32) -> u32 => if (node == none()) jsonNull() else this.nodes[node as usize].kind;
+
+    /// The first child of an array or an object, or none.
+    fn first(borrow this, node: u32) -> u32 => if (node == none()) none() else this.nodes[node as usize].first;
+
+    /// The next element or member after `node`, or none.
+    fn next(borrow this, node: u32) -> u32 => this.nodes[node as usize].next;
+
+    /// A member of an object node, or none (the last of that name, as a parsed object keeps one). `text` is the
+    /// document the tree was read from. A key is compared as it is written: one with an escape matches nothing.
+    fn member(borrow this, text: Slice<u8>, node: u32, key: StringView) -> u32 {
+        if (node == none() || this.nodes[node as usize].kind != jsonObject()) {
+            return none();
+        }
+        var found = none();
+        var child = this.nodes[node as usize].first;
+        while (child != none()) {
+            let span = borrow this.nodes[child as usize];
+            if (sameText(text[span.keyStart as usize..span.keyEnd as usize], key)) {
+                found = child;
+            }
+            child = span.next;
+        }
+        return found;
+    }
+
+    /// A string node's value, decoded; null for anything else, and for a string that is not valid JSON (a bad
+    /// escape, a lone surrogate, invalid UTF-8).
+    fn stringOf(borrow this, text: Slice<u8>, node: u32) -> Vector<u8>? {
+        if (node == none() || this.nodes[node as usize].kind != jsonString()) {
+            return null;
+        }
+        let span = borrow this.nodes[node as usize];
+        var p = JsonParser { position: (span.start as usize) - 1, depth: 0, failed: false };
+        return parseJsonString(mut p, text);
+    }
+
+    /// Whether `node` is a string whose value is `value`.
+    fn isString(borrow this, text: Slice<u8>, node: u32, value: StringView) -> bool {
+        if (node == none() || this.nodes[node as usize].kind != jsonString()) {
+            return false;
+        }
+        let span = borrow this.nodes[node as usize];
+        if (!span.escaped) {
+            return sameText(text[span.start as usize..span.end as usize], value);
+        }
+        return match (this.stringOf(text, node)) {
+            Some(decoded) => sameText(decoded.view(), value),
+            null => false,
+        };
+    }
+
+    /// Whether `node` is `true`.
+    fn isTrue(borrow this, text: Slice<u8>, node: u32) -> bool =>
+        node != none() && this.nodes[node as usize].kind == jsonBool() &&
+            text[this.nodes[node as usize].start as usize] == 't';
+
+    /// Where a number's or a boolean's lexeme, or a string's bytes as written (escapes and all), start in the
+    /// document, and where they end.
+    fn start(borrow this, node: u32) -> usize => this.nodes[node as usize].start as usize;
+
+    fn end(borrow this, node: u32) -> usize => this.nodes[node as usize].end as usize;
+}
+
+/// Where the reader is: the next byte, and the key of the value that follows (empty in an array).
+struct JsonTreeCursor {
+    at: usize;
+    keyStart: u32;
+    keyEnd: u32;
+    failed: bool;
+}
+
+fn jsonSpaceEnd(text: Slice<u8>, from: usize) -> usize {
+    var i = from;
+    while (i < text.length && isJsonSpace(text[i])) {
+        i += 1;
+    }
+    return i;
+}
+
+/// The closing quote of the string whose opening quote is at `from`, or the text's length if it has none or holds
+/// a control character; `escaped` is set if it has a backslash.
+fn jsonStringClose(text: Slice<u8>, from: usize, escaped: borrow mut bool) -> usize {
+    var i = from + 1;
+    while (i < text.length) {
+        let c = text[i];
+        if (c == '"') {
+            return i;
+        }
+        if (c == '\\') {
+            escaped = true;
+            i += 2;
+            continue;
+        }
+        if (c < 0x20) {
+            return text.length;
+        }
+        i += 1;
+    }
+    return text.length;
+}
+
+/// The end of the number at `from` (-? (0 | [1-9][0-9]*) (. [0-9]+)? ([eE] [+-]? [0-9]+)?), or `from` if there is
+/// none.
+fn jsonNumberEnd(text: Slice<u8>, from: usize) -> usize {
+    var i = from;
+    if (i < text.length && text[i] == '-') {
+        i += 1;
+    }
+    if (i >= text.length || text[i] < '0' || text[i] > '9') {
+        return from;
+    }
+    if (text[i] == '0') {
+        i += 1;
+    } else {
+        while (i < text.length && text[i] >= '0' && text[i] <= '9') {
+            i += 1;
+        }
+    }
+    if (i < text.length && text[i] == '.') {
+        i += 1;
+        let digits = i;
+        while (i < text.length && text[i] >= '0' && text[i] <= '9') {
+            i += 1;
+        }
+        if (i == digits) {
+            return from;
+        }
+    }
+    if (i < text.length && (text[i] == 'e' || text[i] == 'E')) {
+        i += 1;
+        if (i < text.length && (text[i] == '+' || text[i] == '-')) {
+            i += 1;
+        }
+        let digits = i;
+        while (i < text.length && text[i] >= '0' && text[i] <= '9') {
+            i += 1;
+        }
+        if (i == digits) {
+            return from;
+        }
+    }
+    return i;
+}
+
+/// The end of the value at `from`, which is skipped: its brackets and strings are followed, and nothing else of it
+/// is checked. The text's length plus one if it does not end.
+fn jsonSkipValue(text: Slice<u8>, from: usize) -> usize {
+    var i = from;
+    var depth: usize = 0;
+    var ignored = false;
+    loop {
+        if (i >= text.length) {
+            return text.length + 1;
+        }
+        let c = text[i];
+        if (c == '"') {
+            i = jsonStringClose(text, i, mut ignored);
+            if (i >= text.length) {
+                return text.length + 1;
+            }
+            i += 1;
+        } else if (c == '{' || c == '[') {
+            depth += 1;
+            i += 1;
+        } else if (c == '}' || c == ']') {
+            if (depth == 0) {
+                return if (i > from) i else text.length + 1; // a scalar's end, or no value at all
+            }
+            depth -= 1;
+            i += 1;
+        } else if (depth == 0 && (c == ',' || isJsonSpace(c))) {
+            return if (i > from) i else text.length + 1;
+        } else {
+            i += 1;
+            continue;
+        }
+        if (depth == 0) {
+            return i;
+        }
+    }
+}
+
+fn jsonKeyKept(text: Slice<u8>, start: usize, end: usize, keep: borrow Vector<Vector<u8>>) -> bool {
+    if (keep.length == 0) {
+        return true;
+    }
+    let key = text[start..end];
+    for (k in keep.view()) {
+        if (k.length == key.length && sameBytes(k.view(), key)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Reads members' keys from `c.at`, inside an object, until one whose value is kept: `c` is left at that value, with
+/// its key. A member that is not kept is skipped, comma and all. Returns false when the object closes instead (`c`
+/// at its `}`), which is an error after a comma unless members were skipped.
+fn jsonNextMember(text: Slice<u8>, c: borrow mut JsonTreeCursor, keep: borrow Vector<Vector<u8>>) -> bool {
+    loop {
+        var i = jsonSpaceEnd(text, c.at);
+        if (i >= text.length || text[i] != '"') {
+            c.failed = true;
+            return false;
+        }
+        var escaped = false;
+        let close = jsonStringClose(text, i, mut escaped);
+        if (close >= text.length) {
+            c.failed = true;
+            return false;
+        }
+        let keyStart = i + 1;
+        i = jsonSpaceEnd(text, close + 1);
+        if (i >= text.length || text[i] != ':') {
+            c.failed = true;
+            return false;
+        }
+        i = jsonSpaceEnd(text, i + 1);
+        if (jsonKeyKept(text, keyStart, close, keep)) {
+            c.at = i;
+            c.keyStart = truncate<u32>(keyStart);
+            c.keyEnd = truncate<u32>(close);
+            return true;
+        }
+        i = jsonSkipValue(text, i);
+        if (i > text.length) {
+            c.failed = true;
+            return false;
+        }
+        i = jsonSpaceEnd(text, i);
+        if (i < text.length && text[i] == ',') {
+            c.at = i + 1;
+            continue;
+        }
+        if (i < text.length && text[i] == '}') {
+            c.at = i;
+            return false;
+        }
+        c.failed = true;
+        return false;
+    }
+}
+
+fn addJsonSpan(
+    tree: borrow mut JsonTree,
+    open: borrow Vector<u32>,
+    last: borrow mut Vector<u32>,
+    span: JsonSpan,
+) -> u32 {
+    tree.nodes.push(span)!;
+    let node = truncate<u32>(tree.nodes.length - 1);
+    if (open.length > 0) {
+        let top = open.length - 1;
+        let before = last[top];
+        if (before == none()) {
+            let parent = open[top];
+            tree.nodes[parent as usize].first = node;
+        } else {
+            tree.nodes[before as usize].next = node;
+        }
+        last[top] = node;
+    }
+    return node;
+}
+
+/// The document's tree, its root node 0; null if the text is not one JSON value. With `keep` not empty, only the
+/// members with those keys have nodes, at every depth; the values of the others are skipped (jsonSkipValue).
+fn parseJsonTree(text: Slice<u8>, keep: borrow Vector<Vector<u8>>) -> JsonTree? {
+    if (text.length >= 0xFFFFFFF0) {
+        return null;
+    }
+    var tree = JsonTree { nodes: Vector<JsonSpan>.create() };
+    var open = Vector<u32>.create(); // the arrays and objects not yet closed
+    var last = Vector<u32>.create(); // the last child of each, or none
+    var c = JsonTreeCursor { at: 0, keyStart: 0, keyEnd: 0, failed: false };
+    if (text.length >= 3 && text[0] == 0xEF && text[1] == 0xBB && text[2] == 0xBF) {
+        c.at = 3;
+    }
+    var value = true; // a value is next; else a comma or a closing bracket
+    loop {
+        var i = jsonSpaceEnd(text, c.at);
+        if (!value) {
+            if (open.length == 0) {
+                return if (i == text.length) tree else null;
+            }
+            if (i >= text.length) {
+                return null;
+            }
+            let top = open[open.length - 1];
+            let isObject = tree.nodes[top as usize].kind == jsonObject();
+            if (text[i] == ',') {
+                c.at = i + 1;
+                if (!isObject) {
+                    value = true;
+                    continue;
+                }
+                if (jsonNextMember(text, mut c, keep)) {
+                    value = true;
+                    continue;
+                }
+                if (c.failed) {
+                    return null;
+                }
+                i = c.at; // the object's `}`, after members that were skipped
+            }
+            let close: u8 = if (isObject) '}' else ']';
+            if (text[i] != close) {
+                return null;
+            }
+            tree.nodes[top as usize].end = truncate<u32>(i + 1);
+            open.truncate(open.length - 1);
+            last.truncate(last.length - 1);
+            c.at = i + 1;
+            continue;
+        }
+        if (i >= text.length) {
+            return null;
+        }
+        let b = text[i];
+        var span = JsonSpan {
+            kind: jsonNull(),
+            start: truncate<u32>(i),
+            end: truncate<u32>(i),
+            keyStart: c.keyStart,
+            keyEnd: c.keyEnd,
+            first: none(),
+            next: none(),
+            escaped: false,
+        };
+        c.keyStart = 0;
+        c.keyEnd = 0;
+        value = false;
+        if (b == '{' || b == '[') {
+            span.kind = if (b == '{') jsonObject() else jsonArray();
+            let node = addJsonSpan(mut tree, open, mut last, span);
+            open.push(node)!;
+            last.push(none())!;
+            c.at = i + 1;
+            if (b == '[') {
+                let after = jsonSpaceEnd(text, i + 1);
+                value = !(after < text.length && text[after] == ']');
+                continue;
+            }
+            let after = jsonSpaceEnd(text, i + 1);
+            if (after < text.length && text[after] == '}') {
+                continue;
+            }
+            if (jsonNextMember(text, mut c, keep)) {
+                value = true;
+            } else if (c.failed) {
+                return null;
+            }
+            continue;
+        }
+        if (b == '"') {
+            var escaped = false;
+            let close = jsonStringClose(text, i, mut escaped);
+            if (close >= text.length) {
+                return null;
+            }
+            span.kind = jsonString();
+            span.start = truncate<u32>(i + 1);
+            span.end = truncate<u32>(close);
+            span.escaped = escaped;
+            c.at = close + 1;
+        } else if (startsWithAt(text, i, "true") || startsWithAt(text, i, "false")) {
+            let length: usize = if (b == 't') 4 else 5;
+            span.kind = jsonBool();
+            span.end = truncate<u32>(i + length);
+            c.at = i + length;
+        } else if (startsWithAt(text, i, "null")) {
+            span.end = truncate<u32>(i + 4);
+            c.at = i + 4;
+        } else {
+            let end = jsonNumberEnd(text, i);
+            if (end == i) {
+                return null;
+            }
+            span.kind = jsonNumber();
+            span.end = truncate<u32>(end);
+            c.at = end;
+        }
+        addJsonSpan(mut tree, open, mut last, span);
+    }
+}

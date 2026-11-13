@@ -1,0 +1,3137 @@
+// `ceesafec cbind`: an `extern "C"` block for a C header, written from clang's AST (ADR 0095, ADR 0127;
+// tooling.md §11). It is tools/cbind.py in CeeSafe, statement for statement: that script stays as the oracle of
+// tools/cbind_check.py, which requires the two to write the same bytes. A change of what is written is made in both.
+//
+// The script's regular expressions are written out as functions here, each with its expression in its comment. They
+// read bytes: a space is ASCII's (Python's `\s` also takes Unicode's), and a byte of a UTF-8 sequence counts as a
+// word character (Python's `\w` takes Unicode's letters). C types and names from clang are ASCII.
+
+// ---- text -----------------------------------------------------------------------------------------------------------
+
+fn cbIsSpace(c: u8) -> bool => c == ' ' || (c >= 0x09 && c <= 0x0D) || (c >= 0x1C && c <= 0x1F);
+
+fn cbIsDigit(c: u8) -> bool => c >= '0' && c <= '9';
+
+fn cbIsWord(c: u8) -> bool =>
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || cbIsDigit(c) || c == '_' || c >= 0x80;
+
+fn cbFrom(text: StringView) -> Vector<u8> => copyBytes(text.bytes())!;
+
+/// `text.strip()`.
+fn cbStrip(text: Slice<u8>) -> Slice<u8> {
+    var start: usize = 0;
+    var end = text.length;
+    while (start < end && cbIsSpace(text[start])) {
+        start += 1;
+    }
+    while (end > start && cbIsSpace(text[end - 1])) {
+        end -= 1;
+    }
+    return text[start..end];
+}
+
+/// `re.sub(r"\s+", " ", text).strip()`.
+fn cbCollapse(text: Slice<u8>) -> Vector<u8> {
+    var out = Vector<u8>.create();
+    var space = false;
+    for (c in text) {
+        if (cbIsSpace(c)) {
+            space = true;
+        } else {
+            if (space && out.length > 0) {
+                out.push(' ')!;
+            }
+            space = false;
+            out.push(c)!;
+        }
+    }
+    return out;
+}
+
+fn cbEndsWith(text: Slice<u8>, word: StringView) -> bool =>
+    text.length >= word.length && sameText(text[(text.length - word.length)..], word);
+
+/// The first place of `part` in `text` at or after `from`, or the text's length.
+fn cbFind(text: Slice<u8>, part: StringView, from: usize) -> usize {
+    let p = part.bytes();
+    var i = from;
+    while (i + p.length <= text.length) {
+        if (sameBytes(text[i..i + p.length], p)) {
+            return i;
+        }
+        i += 1;
+    }
+    return text.length;
+}
+
+/// The first place of the byte `c` in `text`, or the text's length.
+fn cbFirst(text: Slice<u8>, c: u8) -> usize {
+    for (i in 0..text.length) {
+        if (text[i] == c) {
+            return i;
+        }
+    }
+    return text.length;
+}
+
+/// `[A-Za-z_]\w*\Z`: the whole text is a name.
+fn cbIsName(text: Slice<u8>) -> bool {
+    if (text.length == 0 || cbIsDigit(text[0])) {
+        return false;
+    }
+    for (c in text) {
+        if (!cbIsWord(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// CeeSafe's keywords: the lexer's own table (the script has a copy, which tools/cbind_check.py compares with it).
+fn cbIsKeyword(name: Slice<u8>) -> bool => keywordOf(name) != null;
+
+fn cbJoin(a: StringView, b: Slice<u8>, c: StringView) -> Vector<u8> {
+    var out = cbFrom(a);
+    appendBytes(mut out, b)!;
+    appendText(mut out, c)!;
+    return out;
+}
+
+fn cbSameLines(a: borrow Vector<Vector<u8>>, b: borrow Vector<Vector<u8>>) -> bool {
+    if (a.length != b.length) {
+        return false;
+    }
+    for (k in 0..a.length) {
+        if (!sameBytes(a[k].view(), b[k].view())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn cbCopyLines(lines: borrow Vector<Vector<u8>>) -> Vector<Vector<u8>> {
+    var out = Vector<Vector<u8>>.create();
+    for (line in lines.view()) {
+        out.push(copyBytes(line.view())!)!;
+    }
+    return out;
+}
+
+/// Sorts `names` by their bytes, which is Python's order of strings.
+fn cbSort(names: borrow mut Vector<Vector<u8>>) {
+    for (i in 1..names.length) {
+        var j = i;
+        while (j > 0 && compareBytes(names[j].view(), names[j - 1].view()) < 0) {
+            names.swap(j, j - 1);
+            j -= 1;
+        }
+    }
+}
+
+/// The first `count` characters of `text` (`text[:count]`).
+fn cbFirstCharacters(text: Slice<u8>, count: usize) -> Slice<u8> {
+    var seen: usize = 0;
+    for (i in 0..text.length) {
+        if ((text[i] & 0xC0) != 0x80) {
+            if (seen == count) {
+                return text[..i];
+            }
+            seen += 1;
+        }
+    }
+    return text;
+}
+
+/// Names in the order they were first put, each with a number and a text: a Python dict, or a set.
+struct CbNames {
+    index: Map<Bytes, u32>;
+    numbers: Vector<u32>;
+    texts: Vector<Vector<u8>>;
+
+    fn create() -> CbNames => CbNames {
+        index: Map<Bytes, u32>.create(),
+        numbers: Vector<u32>.create(),
+        texts: Vector<Vector<u8>>.create(),
+    };
+
+    fn count(borrow this) -> usize => this.numbers.length;
+
+    fn find(borrow this, name: Slice<u8>) -> usize? {
+        let key = Bytes.from(name)!;
+        return this.index.find(key);
+    }
+
+    fn has(borrow this, name: Slice<u8>) -> bool => this.find(name) != null;
+
+    fn name(borrow this, k: usize) -> Slice<u8> => this.index.keys[k].data.view();
+
+    /// `names[name] = (number, text)`: a name already there keeps its place.
+    fn put(borrow mut this, name: Slice<u8>, number: u32, text: Slice<u8>) {
+        match (this.find(name)) {
+            Some(k) => {
+                this.numbers[k] = number;
+                this.texts[k] = copyBytes(text)!;
+            }
+            null => {
+                this.index.put(Bytes.from(name)!, 0)!;
+                this.numbers.push(number)!;
+                this.texts.push(copyBytes(text)!)!;
+            }
+        }
+    }
+
+    fn add(borrow mut this, name: Slice<u8>) {
+        if (!this.has(name)) {
+            this.put(name, 0, "".bytes());
+        }
+    }
+}
+
+// ---- C types as clang spells them ---------------------------------------------------------------------------------------
+
+/// C types and their CeeSafe spelling (type-system.md §28.3): the script's SCALARS, then its NAMED.
+fn cbScalar(c: Slice<u8>) -> StringView? {
+    if (sameText(c, "_Bool") || sameText(c, "bool")) {
+        return "bool";
+    }
+    if (sameText(c, "void")) {
+        return "void";
+    }
+    if (sameText(c, "char")) {
+        return "CChar";
+    }
+    if (sameText(c, "signed char") || sameText(c, "int8_t")) {
+        return "i8";
+    }
+    if (sameText(c, "unsigned char") || sameText(c, "uint8_t")) {
+        return "u8";
+    }
+    if (sameText(c, "short") || sameText(c, "int16_t")) {
+        return "i16";
+    }
+    if (sameText(c, "unsigned short") || sameText(c, "uint16_t")) {
+        return "u16";
+    }
+    if (sameText(c, "int") || sameText(c, "int32_t")) {
+        return "i32";
+    }
+    if (sameText(c, "unsigned int") || sameText(c, "uint32_t") || sameText(c, "unsigned")) {
+        return "u32";
+    }
+    if (sameText(c, "long") || sameText(c, "long long") || sameText(c, "int64_t")) {
+        return "i64";
+    }
+    if (sameText(c, "unsigned long") || sameText(c, "size_t") || sameText(c, "uintptr_t")) {
+        return "usize";
+    }
+    if (sameText(c, "unsigned long long") || sameText(c, "uint64_t")) {
+        return "u64";
+    }
+    if (sameText(c, "float")) {
+        return "f32";
+    }
+    if (sameText(c, "double")) {
+        return "f64";
+    }
+    if (sameText(c, "intptr_t") || sameText(c, "ptrdiff_t") || sameText(c, "ssize_t")) {
+        return "isize";
+    }
+    return null;
+}
+
+/// The script's ATOMICS.
+fn cbAtomic(t: Slice<u8>) -> StringView? {
+    if (sameText(t, "u8")) {
+        return "AtomicU8";
+    }
+    if (sameText(t, "u32")) {
+        return "AtomicU32";
+    }
+    if (sameText(t, "u64")) {
+        return "AtomicU64";
+    }
+    if (sameText(t, "usize")) {
+        return "AtomicUSize";
+    }
+    return null;
+}
+
+/// The script's INTEGERS.
+fn cbIsInteger(t: Slice<u8>) -> bool =>
+    sameText(t, "i8") || sameText(t, "u8") || sameText(t, "i16") || sameText(t, "u16") || sameText(t, "i32") ||
+        sameText(t, "u32") || sameText(t, "i64") || sameText(t, "u64") || sameText(t, "isize") || sameText(t, "usize");
+
+/// `re.search(r"\bvolatile\b", c)`.
+fn cbHasVolatile(c: Slice<u8>) -> bool {
+    var at = cbFind(c, "volatile", 0);
+    while (at < c.length) {
+        let before = at == 0 || !cbIsWord(c[at - 1]);
+        let after = at + 8 == c.length || !cbIsWord(c[at + 8]);
+        if (before && after) {
+            return true;
+        }
+        at = cbFind(c, "volatile", at + 1);
+    }
+    return false;
+}
+
+/// Where a match put its groups.
+struct CbShape {
+    found: bool;
+    resultEnd: usize;  // group 1 is c[..resultEnd]
+    countStart: usize; // the digits of an array's length
+    countEnd: usize;
+    restStart: usize; // the last group is c[restStart..restEnd]
+    restEnd: usize;
+}
+
+fn cbNoShape() -> CbShape =>
+    CbShape { found: false, resultEnd: 0, countStart: 0, countEnd: 0, restStart: 0, restEnd: 0 };
+
+/// `(.*?) ?\(\*(?: ?const)?\)\((.*)\)`, a function pointer, or with `array`
+/// `(.*?) ?\(\*(?: ?const)?\[(\d+)\]\)\((.*)\)`, an array of them: the whole of `c`.
+fn cbFunctionPointer(c: Slice<u8>, array: bool) -> CbShape {
+    let n = c.length;
+    if (n == 0 || c[n - 1] != ')') {
+        return cbNoShape();
+    }
+    for (i in 0..n) {
+        let open = if (c[i] == ' ') i + 1 else i;
+        if (!startsWithAt(c, open, "(*")) {
+            continue;
+        }
+        // ` ?const`, then without it, as the expression tries them.
+        for (choice in 0..3usize) {
+            var q = open + 2;
+            if (choice == 0) {
+                if (!startsWithAt(c, q, " const")) {
+                    continue;
+                }
+                q += 6;
+            } else if (choice == 1) {
+                if (!startsWithAt(c, q, "const")) {
+                    continue;
+                }
+                q += 5;
+            }
+            var countStart: usize = 0;
+            var countEnd: usize = 0;
+            if (array) {
+                if (q >= n || c[q] != '[') {
+                    continue;
+                }
+                countStart = q + 1;
+                countEnd = countStart;
+                while (countEnd < n && cbIsDigit(c[countEnd])) {
+                    countEnd += 1;
+                }
+                if (countEnd == countStart || countEnd >= n || c[countEnd] != ']') {
+                    continue;
+                }
+                q = countEnd + 1;
+            }
+            if (!startsWithAt(c, q, ")(") || q + 2 > n - 1) {
+                continue;
+            }
+            return CbShape {
+                found: true,
+                resultEnd: i,
+                countStart: countStart,
+                countEnd: countEnd,
+                restStart: q + 2,
+                restEnd: n - 1,
+            };
+        }
+    }
+    return cbNoShape();
+}
+
+/// `([^\[\(]*?) ?\[(\d+)\](.*)`, an array: the whole of `c`.
+fn cbArray(c: Slice<u8>) -> CbShape {
+    let bracket = cbFirst(c, '[');
+    if (bracket >= c.length || cbFirst(c, '(') < bracket) {
+        return cbNoShape();
+    }
+    var end = bracket + 1;
+    while (end < c.length && cbIsDigit(c[end])) {
+        end += 1;
+    }
+    if (end == bracket + 1 || end >= c.length || c[end] != ']') {
+        return cbNoShape();
+    }
+    return CbShape {
+        found: true,
+        resultEnd: if (bracket > 0 && c[bracket - 1] == ' ') bracket - 1 else bracket,
+        countStart: bracket + 1,
+        countEnd: end,
+        restStart: end + 1,
+        restEnd: c.length,
+    };
+}
+
+/// `(.*)\*(?: ?(?:const|restrict|volatile|__restrict))*`, a pointer: the whole of `c`; group 1 is c[..resultEnd].
+fn cbPointer(c: Slice<u8>) -> CbShape {
+    var star = c.length;
+    for (i in 0..c.length) {
+        if (c[i] == '*') {
+            star = i;
+        }
+    }
+    if (star >= c.length) {
+        return cbNoShape();
+    }
+    var i = star + 1;
+    while (i < c.length) {
+        if (c[i] == ' ') {
+            i += 1;
+        }
+        if (startsWithAt(c, i, "const")) {
+            i += 5;
+        } else if (startsWithAt(c, i, "restrict") || startsWithAt(c, i, "volatile")) {
+            i += 8;
+        } else if (startsWithAt(c, i, "__restrict")) {
+            i += 10;
+        } else {
+            return cbNoShape();
+        }
+    }
+    return CbShape { found: true, resultEnd: star, countStart: 0, countEnd: 0, restStart: 0, restEnd: 0 };
+}
+
+/// `(.*?) ?\((.*)\)`, a function type: the whole of `c`.
+fn cbCall(c: Slice<u8>) -> CbShape {
+    let open = cbFirst(c, '(');
+    if (open >= c.length || c[c.length - 1] != ')') {
+        return cbNoShape();
+    }
+    return CbShape {
+        found: true,
+        resultEnd: if (open > 0 && c[open - 1] == ' ') open - 1 else open,
+        countStart: 0,
+        countEnd: 0,
+        restStart: open + 1,
+        restEnd: c.length - 1,
+    };
+}
+
+/// `re.sub(r"\b(const|volatile) ", "", c)`, then `re.sub(r" (const|volatile)$", "", c)`.
+fn cbWithoutQualifiers(c: Slice<u8>) -> Vector<u8> {
+    var out = Vector<u8>.create();
+    var i: usize = 0;
+    while (i < c.length) {
+        if (i == 0 || !cbIsWord(c[i - 1])) {
+            if (startsWithAt(c, i, "const ")) {
+                i += 6;
+                continue;
+            }
+            if (startsWithAt(c, i, "volatile ")) {
+                i += 9;
+                continue;
+            }
+        }
+        out.push(c[i])!;
+        i += 1;
+    }
+    if (cbEndsWith(out.view(), " const")) {
+        out.truncate(out.length - 6);
+    } else if (cbEndsWith(out.view(), " volatile")) {
+        out.truncate(out.length - 9);
+    }
+    return out;
+}
+
+/// The script's top_const: is the object itself `const` (`const int`, `char *const`, `const char *const [4]`), not
+/// what it points to (`const char *`)?
+fn cbTopConst(spelled: Slice<u8>) -> bool {
+    let collapsed = cbCollapse(spelled);
+    let whole = collapsed.view();
+    // re.sub(r" ?(\[\d*\])+$", "", c)
+    var end = whole.length;
+    loop {
+        if (end == 0 || whole[end - 1] != ']') {
+            break;
+        }
+        var open = end - 1;
+        while (open > 0 && cbIsDigit(whole[open - 1])) {
+            open -= 1;
+        }
+        if (open == 0 || whole[open - 1] != '[') {
+            break;
+        }
+        end = open - 1;
+    }
+    if (end < whole.length && end > 0 && whole[end - 1] == ' ') {
+        end -= 1;
+    }
+    let c = whole[..end];
+    var star = c.length;
+    for (i in 0..c.length) {
+        if (c[i] == '*') {
+            star = i;
+        }
+    }
+    if (star < c.length) {
+        return cbFind(c[star..], "const", 0) < c.length - star;
+    }
+    return startsWithAt(c, 0, "const ") || cbEndsWith(c, " const");
+}
+
+/// The script's split_params: a parameter list at its top-level commas.
+fn cbSplitParams(text: Slice<u8>) -> Vector<Vector<u8>> {
+    var out = Vector<Vector<u8>>.create();
+    let whole = cbStrip(text);
+    if (whole.length == 0 || sameText(whole, "void")) {
+        return out;
+    }
+    var depth: i32 = 0;
+    var start: usize = 0;
+    for (i in 0..text.length) {
+        let ch = text[i];
+        if (ch == ',' && depth == 0) {
+            out.push(copyBytes(cbStrip(text[start..i]))!)!;
+            start = i + 1;
+            continue;
+        }
+        if (ch == '(' || ch == '[') {
+            depth += 1;
+        }
+        if (ch == ')' || ch == ']') {
+            depth -= 1;
+        }
+    }
+    out.push(copyBytes(cbStrip(text[start..]))!)!;
+    return out;
+}
+
+// ---- integers -------------------------------------------------------------------------------------------------------
+
+/// An enumerator's or a macro's value: C's are within -2^63 .. 2^64-1.
+struct CbInt {
+    found: bool;
+    negative: bool;
+    magnitude: u64;
+}
+
+fn cbNoInt() -> CbInt => CbInt { found: false, negative: false, magnitude: 0 };
+
+/// `int(text)` for what clang writes: an optional `-` and decimal digits. Anything else, or a value outside 64
+/// bits, is not found.
+fn cbParseInt(text: Slice<u8>) -> CbInt {
+    var i: usize = 0;
+    let negative = text.length > 0 && text[0] == '-';
+    if (negative) {
+        i = 1;
+    }
+    if (i >= text.length) {
+        return cbNoInt();
+    }
+    var value: u64 = 0;
+    while (i < text.length) {
+        if (!cbIsDigit(text[i])) {
+            return cbNoInt();
+        }
+        let digit = (text[i] - '0') as u64;
+        if (value > (0xFFFFFFFFFFFFFFFF - digit) / 10) {
+            return cbNoInt();
+        }
+        value = value * 10 + digit;
+        i += 1;
+    }
+    return CbInt { found: true, negative: negative && value != 0, magnitude: value };
+}
+
+fn cbAppendInt(out: borrow mut Vector<u8>, negative: bool, magnitude: u64) {
+    if (negative) {
+        out.push('-')!;
+    }
+    appendDecimal(out, magnitude)!;
+}
+
+/// An enum's enumerators and their values, in order (the script's values_of); `given` is false when clang's dump has
+/// an initialiser without its value.
+struct CbValues {
+    given: bool;
+    names: Vector<Vector<u8>>;
+    negative: Vector<bool>;
+    magnitude: Vector<u64>;
+}
+
+// ---- one configuration's reading of the header ----------------------------------------------------------------------
+
+fn cbForeign() -> u32 => 0;
+fn cbType() -> u32 => 1;
+fn cbConstant() -> u32 => 2;
+fn cbData() -> u32 => 3;
+fn cbFunction() -> u32 => 4;
+
+/// The script's GROUPS, by number.
+fn cbGroupName(group: u32) -> StringView => match (group) {
+    0 => "foreign",
+    1 => "type",
+    2 => "constant",
+    3 => "data",
+    _ => "function",
+};
+
+/// An entry's key, (group, name): the group's digit, then the name.
+fn cbKey(group: u32, name: Slice<u8>) -> Vector<u8> {
+    var key = Vector<u8>.create();
+    key.push('0' + truncate<u8>(group))!;
+    appendBytes(mut key, name)!;
+    return key;
+}
+
+fn cbKeyGroup(key: Slice<u8>) -> u32 => (key[0] - '0') as u32;
+
+fn cbKeyName(key: Slice<u8>) -> Slice<u8> => key[1..];
+
+/// A declaration: the lines of its CeeSafe text, and the types it names.
+struct CbEntry {
+    lines: Vector<Vector<u8>>;
+    mentions: Vector<Vector<u8>>;
+}
+
+struct CbRecord {
+    node: u32;
+    here: bool;
+    ctype: bool;
+    isUnion: bool;
+}
+
+struct CbEnum {
+    node: u32;
+    here: bool;
+    ctype: bool;
+}
+
+/// What one configuration's clang says the header declares (the script's Reading): `entries`, by key, in the order
+/// they were added; `notes`, by name, why a declaration is not written. The rest is the scan's, and is dropped when
+/// the entries are made.
+struct CbReading {
+    header: Vector<u8>;
+    path: Vector<u8>; // the header's real path
+    windows: bool;
+    text: Vector<u8>; // clang's dump
+    tree: JsonTree;
+    keys: CbNames; // an entry's key -> its place in `entries`
+    entries: Vector<CbEntry>;
+    notes: CbNames;
+    records: Map<Bytes, CbRecord>; // a struct's CeeSafe name
+    enums: Map<Bytes, CbEnum>;     // an enum's CeeSafe name
+    typedefs: CbNames;             // a typedef that is another type's name -> that type, as C spells it
+    used: CbNames;                 // the names the type being spelled mentions
+    functions: CbNames;            // name -> node
+    variables: CbNames;
+    probeTypes: CbNames;  // a macro -> its `cee_t_` variable
+    probeValues: CbNames; // a macro -> its `cee_v_` enumerator
+    order: Vector<u32>;   // this header's enums without a name
+    pointerTypedefs: CbNames;
+    byId: CbNames;  // clang's id -> the struct, union or enum declared with it
+    file: u32;      // the dump's current file: a string node, or none
+    files: CbNames; // a file's name -> 1 if it is the header
+    taken: CbNames; // a name -> what declares it
+}
+
+fn cbMember(r: borrow CbReading, node: u32, key: StringView) -> u32 => r.tree.member(r.text.view(), node, key);
+
+/// A string node's value; empty for anything else.
+fn cbText(r: borrow CbReading, node: u32) -> Vector<u8> => match (r.tree.stringOf(r.text.view(), node)) {
+    Some(text) => text,
+    null => Vector<u8>.create(),
+};
+
+/// `node.get(key, "")`.
+fn cbTextOf(r: borrow CbReading, node: u32, key: StringView) -> Vector<u8> => cbText(r, cbMember(r, node, key));
+
+/// `node.get("kind") == kind`.
+fn cbKindIs(r: borrow CbReading, node: u32, kind: StringView) -> bool =>
+    r.tree.isString(r.text.view(), cbMember(r, node, "kind"), kind);
+
+/// `node.get("type", {}).get("qualType", "")`.
+fn cbQualType(r: borrow CbReading, node: u32) -> Vector<u8> => cbTextOf(r, cbMember(r, node, "type"), "qualType");
+
+/// Python's truth of `node.get(key)`.
+fn cbTruthy(r: borrow CbReading, node: u32, key: StringView) -> bool {
+    let value = cbMember(r, node, key);
+    if (value == none()) {
+        return false;
+    }
+    let kind = r.tree.kind(value);
+    if (kind == jsonBool()) {
+        return r.tree.isTrue(r.text.view(), value);
+    }
+    if (kind == jsonArray() || kind == jsonObject()) {
+        return r.tree.first(value) != none();
+    }
+    if (kind == jsonString()) {
+        return r.tree.end(value) > r.tree.start(value);
+    }
+    if (kind == jsonNumber()) {
+        let lexeme = r.text[r.tree.start(value)..r.tree.end(value)];
+        return !sameText(lexeme, "0") && !sameText(lexeme, "-0");
+    }
+    return false;
+}
+
+/// The first of `node.get("inner", []) or []`.
+fn cbInner(r: borrow CbReading, node: u32) -> u32 => r.tree.first(cbMember(r, node, "inner"));
+
+/// The script's Locations.at: clang's JSON gives a location's file only when it changes.
+fn cbAt(r: borrow mut CbReading, location: u32) {
+    if (r.tree.kind(location) != jsonObject() || location == none()) {
+        return;
+    }
+    let spelling = cbMember(r, location, "spellingLoc");
+    let expansion = cbMember(r, location, "expansionLoc");
+    let hasSpelling = spelling != none() && r.tree.kind(spelling) == jsonObject();
+    let hasExpansion = expansion != none() && r.tree.kind(expansion) == jsonObject();
+    if (hasSpelling) {
+        let file = cbMember(r, spelling, "file");
+        if (file != none()) {
+            r.file = file;
+        }
+    }
+    if (hasExpansion) {
+        let file = cbMember(r, expansion, "file");
+        if (file != none()) {
+            r.file = file;
+        }
+    }
+    if (!hasSpelling && !hasExpansion) {
+        let file = cbMember(r, location, "file");
+        if (file != none()) {
+            r.file = file;
+        }
+    }
+}
+
+/// The script's Locations.enter: the file of the node's own location, with the dump's state moved past its range.
+fn cbEnter(r: borrow mut CbReading, node: u32) -> u32 {
+    let location = cbMember(r, node, "loc");
+    cbAt(r, location);
+    let before = r.file;
+    let range = cbMember(r, node, "range");
+    if (range != none() && r.tree.kind(range) == jsonObject()) {
+        let begin = cbMember(r, range, "begin");
+        let end = cbMember(r, range, "end");
+        cbAt(r, begin);
+        cbAt(r, end);
+    }
+    return before;
+}
+
+/// Whether the file named `name` is the header (`Path(name).resolve() == self.path`). The answer is kept by name:
+/// the dump names a file once for many nodes.
+fn cbSameName(r: borrow mut CbReading, name: Slice<u8>) -> bool {
+    if (name.length == 0 || name[0] == '<') {
+        return false;
+    }
+    match (r.files.find(name)) {
+        Some(k) => { return r.files.numbers[k] == 1; }
+        null => {}
+    }
+    let same = match (realPath(name)!) {
+        Some(real) => sameBytes(real.view(), r.path.view()),
+        null => false,
+    };
+    r.files.put(name, if (same) 1 else 0, "".bytes());
+    return same;
+}
+
+/// The script's same_file, of a file's node.
+fn cbSameFile(r: borrow mut CbReading, file: u32) -> bool {
+    if (file == none()) {
+        return false;
+    }
+    let name = cbText(r, file);
+    return cbSameName(r, name.view());
+}
+
+/// Keeps the dump's file state right without reading the subtree.
+fn cbSkip(r: borrow mut CbReading, node: u32) {
+    cbEnter(r, node);
+    var child = cbInner(r, node);
+    while (child != none()) {
+        cbSkip(r, child);
+        child = r.tree.next(child);
+    }
+}
+
+fn cbNoteRecord(r: borrow mut CbReading, name: Slice<u8>, node: u32, here: bool, ctype: bool) {
+    let complete = cbTruthy(r, node, "completeDefinition");
+    let isUnion = r.tree.isString(r.text.view(), cbMember(r, node, "tagUsed"), "union");
+    r.records.put(
+        Bytes.from(name)!,
+        CbRecord { node: node, here: here && complete, ctype: ctype, isUnion: isUnion },
+    )!;
+}
+
+fn cbNoteEnum(r: borrow mut CbReading, name: Slice<u8>, node: u32, here: bool, ctype: bool) {
+    let key = Bytes.from(name)!;
+    if (r.enums.find(key) != null && !cbTruthy(r, node, "inner")) {
+        return;
+    }
+    r.enums.put(key, CbEnum { node: node, here: here, ctype: ctype })!;
+}
+
+/// The script's tag_of: the struct, union or enum a typedef names directly (not through a pointer), or none.
+fn cbTagOf(r: borrow CbReading, typedef: u32) -> u32 {
+    var node = cbInner(r, typedef);
+    while (node != none() && r.tree.kind(node) == jsonObject()) {
+        if (cbKindIs(r, node, "RecordType") || cbKindIs(r, node, "EnumType")) {
+            let id = cbTextOf(r, cbMember(r, node, "decl"), "id");
+            return match (r.byId.find(id.view())) {
+                Some(k) => r.byId.numbers[k],
+                null => none(),
+            };
+        }
+        if (!cbKindIs(r, node, "ElaboratedType")) {
+            return none();
+        }
+        let owned = cbMember(r, node, "ownedTagDecl");
+        if (owned != none() && r.tree.kind(owned) == jsonObject()) {
+            let idNode = cbMember(r, owned, "id");
+            if (idNode != none() && r.tree.kind(idNode) == jsonString()) {
+                let id = cbText(r, idNode);
+                match (r.byId.find(id.view())) {
+                    Some(k) => { return r.byId.numbers[k]; }
+                    null => {}
+                }
+            }
+        }
+        node = cbInner(r, node);
+    }
+    return none();
+}
+
+/// `re.fullmatch(r".*\(\*\)\(.*\)", spelled)`.
+fn cbIsFunctionPointerSpelling(spelled: Slice<u8>) -> bool {
+    let at = cbFind(spelled, "(*)(", 0);
+    return at < spelled.length && spelled[spelled.length - 1] == ')' && at + 4 <= spelled.length - 1;
+}
+
+fn cbNoteTypedef(r: borrow mut CbReading, name: Slice<u8>, node: u32, here: bool) {
+    let spelled = cbQualType(r, node);
+    let target = cbTagOf(r, node);
+    if (target != none() && !cbTruthy(r, target, "name")) {
+        // `typedef struct { … } name;`: the tag has no name of its own, so the typedef's is the type's.
+        if (cbKindIs(r, target, "RecordDecl")) {
+            cbNoteRecord(r, name, target, here, true);
+        } else {
+            cbNoteEnum(r, name, target, here, true);
+            var kept = Vector<u32>.create();
+            for (n in r.order.view()) {
+                if (n != target) {
+                    kept.push(n)!;
+                }
+            }
+            r.order = kept;
+        }
+        return;
+    }
+    r.typedefs.put(name, 0, spelled.view());
+    if (here && cbIsFunctionPointerSpelling(spelled.view())) {
+        r.pointerTypedefs.put(name, 0, "".bytes());
+    }
+}
+
+/// The script's constants_of.
+fn cbConstantsOf(r: borrow CbReading, enumNode: u32) -> Vector<u32> {
+    var out = Vector<u32>.create();
+    var child = cbInner(r, enumNode);
+    while (child != none()) {
+        if (cbKindIs(r, child, "EnumConstantDecl")) {
+            out.push(child)!;
+        }
+        child = r.tree.next(child);
+    }
+    return out;
+}
+
+/// The scan's `tag`: a struct, union or enum, and the tags declared inside a struct.
+fn cbTag(r: borrow mut CbReading, node: u32, here: bool) {
+    let id = cbTextOf(r, node, "id");
+    r.byId.put(id.view(), node, "".bytes());
+    let name = cbTextOf(r, node, "name");
+    if (cbKindIs(r, node, "RecordDecl")) {
+        var child = cbInner(r, node);
+        while (child != none()) {
+            let file = cbEnter(r, child);
+            let innerHere = cbSameFile(r, file);
+            if (cbKindIs(r, child, "RecordDecl") || cbKindIs(r, child, "EnumDecl")) {
+                cbTag(r, child, innerHere);
+            } else {
+                var grand = cbInner(r, child);
+                while (grand != none()) {
+                    cbSkip(r, grand);
+                    grand = r.tree.next(grand);
+                }
+            }
+            child = r.tree.next(child);
+        }
+        if (name.length > 0) {
+            let key = Bytes.from(name.view())!;
+            if (cbTruthy(r, node, "completeDefinition") || r.records.find(key) == null) {
+                cbNoteRecord(r, name.view(), node, here, false);
+            }
+        }
+        return;
+    }
+    var child = cbInner(r, node);
+    while (child != none()) {
+        cbSkip(r, child);
+        child = r.tree.next(child);
+    }
+    if (name.length > 0) {
+        cbNoteEnum(r, name.view(), node, here, false);
+    } else if (here) {
+        r.order.push(node)!;
+    } else {
+        let constants = cbConstantsOf(r, node);
+        for (constant in constants.view()) {
+            let constantName = cbTextOf(r, constant, "name");
+            if (startsWithAt(constantName.view(), 0, "cee_v_")) {
+                r.probeValues.put(constantName[6..], constant, "".bytes());
+            }
+        }
+    }
+}
+
+/// The script's scan: every declaration at file scope, and the tags declared inside structs, with the file each is
+/// written in.
+fn cbScan(r: borrow mut CbReading) {
+    var node = cbInner(r, 0);
+    while (node != none()) {
+        let current = node;
+        node = r.tree.next(current);
+        let file = cbEnter(r, current);
+        let here = cbSameFile(r, file);
+        if (cbKindIs(r, current, "RecordDecl") || cbKindIs(r, current, "EnumDecl")) {
+            cbTag(r, current, here);
+            continue;
+        }
+        var child = cbInner(r, current);
+        while (child != none()) {
+            cbSkip(r, child);
+            child = r.tree.next(child);
+        }
+        if (cbTruthy(r, current, "isImplicit")) {
+            continue;
+        }
+        let name = cbTextOf(r, current, "name");
+        if (cbKindIs(r, current, "TypedefDecl")) {
+            cbNoteTypedef(r, name.view(), current, here);
+        } else if (cbKindIs(r, current, "FunctionDecl")) {
+            if (here && !r.functions.has(name.view())) {
+                r.functions.put(name.view(), current, "".bytes());
+            }
+        } else if (cbKindIs(r, current, "VarDecl")) {
+            if (startsWithAt(name.view(), 0, "cee_t_")) {
+                r.probeTypes.put(name[6..], current, "".bytes());
+            } else if (here && r.tree.isString(r.text.view(), cbMember(r, current, "storageClass"), "extern") &&
+                !r.variables.has(name.view())) {
+                r.variables.put(name.view(), current, "".bytes());
+            }
+        }
+    }
+}
+
+// -- types
+
+/// The script's resolve: a typedef's name followed to what is not one.
+fn cbResolve(r: borrow CbReading, name: Slice<u8>) -> Vector<u8> {
+    var seen = CbNames.create();
+    var current = copyBytes(name)!;
+    loop {
+        if (seen.has(current.view())) {
+            return current;
+        }
+        match (r.typedefs.find(current.view())) {
+            Some(k) => {
+                seen.add(current.view());
+                current = copyBytes(r.typedefs.texts[k].view())!;
+            }
+            null => { return current; }
+        }
+    }
+}
+
+fn cbHasRecord(r: borrow CbReading, name: Slice<u8>) -> bool {
+    let key = Bytes.from(name)!;
+    return r.records.find(key) != null;
+}
+
+fn cbHasEnum(r: borrow CbReading, name: Slice<u8>) -> bool {
+    let key = Bytes.from(name)!;
+    return r.enums.find(key) != null;
+}
+
+/// The script's by_value_ok: may a parameter or a result have this type? An imported struct's size is C's alone
+/// (N0294).
+fn cbByValueOk(r: borrow CbReading, t: Slice<u8>) -> bool =>
+    !cbHasRecord(r, t) && !startsWithAt(t, 0, "[") && !startsWithAt(t, 0, "Atomic");
+
+/// The script's field_ok (type-system.md §31.1): what a member of an imported struct may be.
+fn cbFieldOk(t: Slice<u8>) -> bool {
+    var start: usize = 0;
+    var end = t.length;
+    if (startsWithAt(t, 0, "[")) {
+        start = 1;
+        for (i in 0..t.length) {
+            if (t[i] == ';') {
+                end = i;
+            }
+        }
+    }
+    let element = t[start..end];
+    return !sameText(element, "void") && !sameText(element, "f32") && !sameText(element, "f64") &&
+        !startsWithAt(element, 0, "[");
+}
+
+/// The script's function_type.
+fn cbFunctionType(r: borrow mut CbReading, result: Slice<u8>, params: Slice<u8>, depth: u32) -> Vector<u8>? {
+    var out = cbFrom("extern \"C\" fn(");
+    let parts = cbSplitParams(params);
+    var first = true;
+    for (p in parts.view()) {
+        if (sameText(p.view(), "...")) {
+            return null;
+        }
+        let t = match (cbTypeOf(r, p.view(), depth + 1, false)) {
+            Some(v) => v,
+            null => { return null; }
+        };
+        if (!cbByValueOk(r, t.view())) {
+            return null;
+        }
+        if (!first) {
+            appendText(mut out, ", ")!;
+        }
+        first = false;
+        appendBytes(mut out, t.view())!;
+    }
+    let returned = match (cbTypeOf(r, result, depth + 1, false)) {
+        Some(v) => v,
+        null => { return null; }
+    };
+    if (!cbByValueOk(r, returned.view())) {
+        return null;
+    }
+    out.push(')')!;
+    if (!sameText(returned.view(), "void")) {
+        appendText(mut out, " -> ")!;
+        appendBytes(mut out, returned.view())!;
+    }
+    return out;
+}
+
+/// `[element; count]`.
+fn cbArrayOf(element: Slice<u8>, count: Slice<u8>) -> Vector<u8> {
+    var out = cbFrom("[");
+    appendBytes(mut out, element)!;
+    appendText(mut out, "; ")!;
+    appendBytes(mut out, count)!;
+    out.push(']')!;
+    return out;
+}
+
+/// The script's type_of: a C type's CeeSafe spelling, or null when CeeSafe has none; the names it mentions go to
+/// `r.used`. A struct's member (`member`) that is a `char` or an array of them is `u8`: §31.1 has no `CChar` member.
+fn cbTypeOf(r: borrow mut CbReading, spelled: Slice<u8>, depth: u32, member: bool) -> Vector<u8>? {
+    let collapsed = cbCollapse(spelled);
+    let c = collapsed.view();
+    if (depth > 16 || c.length == 0 || cbHasVolatile(c)) { // CeeSafe has no volatile type
+        return null;
+    }
+    let pointerToFunction = cbFunctionPointer(c, false);
+    if (pointerToFunction.found) {
+        return cbFunctionType(
+            r,
+            c[..pointerToFunction.resultEnd],
+            c[pointerToFunction.restStart..pointerToFunction.restEnd],
+            depth,
+        );
+    }
+    let functions = cbFunctionPointer(c, true);
+    if (functions.found) {
+        return match (cbFunctionType(r, c[..functions.resultEnd], c[functions.restStart..functions.restEnd], depth)) {
+            Some(element) => cbArrayOf(element.view(), c[functions.countStart..functions.countEnd]),
+            null => null,
+        };
+    }
+    let array = cbArray(c);
+    if (array.found) {
+        var inner = copyBytes(c[..array.resultEnd])!;
+        appendBytes(mut inner, c[array.restStart..array.restEnd])!;
+        return match (cbTypeOf(r, inner.view(), depth + 1, member)) {
+            Some(element) => if (element.length > 0 && !sameText(element.view(), "void")) cbArrayOf(
+                element.view(),
+                c[array.countStart..array.countEnd],
+            ) else null,
+            null => null,
+        };
+    }
+    let pointer = cbPointer(c);
+    if (pointer.found) {
+        let pointee = cbStrip(c[..pointer.resultEnd]);
+        var isConst = false;
+        var from: usize = 0;
+        var to = pointee.length;
+        if (cbFirst(pointee, '*') < pointee.length) {
+            // A pointer to a pointer: only a `const` after the last `*` is the pointee's.
+            if (cbEndsWith(pointee, "*const")) {
+                isConst = true;
+                to -= 5;
+            } else if (cbEndsWith(pointee, "* const")) {
+                isConst = true;
+                to -= 6;
+            }
+        } else {
+            isConst = startsWithAt(pointee, 0, "const ") || cbEndsWith(pointee, " const");
+            if (startsWithAt(pointee, 0, "const ")) {
+                from = 6;
+            }
+            if (cbEndsWith(pointee[from..], " const")) {
+                to -= 6;
+            }
+        }
+        let inner = cbStrip(pointee[from..to]);
+        let call = cbCall(inner);
+        if (call.found) { // a pointer to a function type's typedef, spelled out
+            return cbFunctionType(r, inner[..call.resultEnd], inner[call.restStart..call.restEnd], depth);
+        }
+        let isTypedef = r.typedefs.has(inner);
+        let resolved = cbResolve(r, inner);
+        let toPointer = cbFind(resolved.view(), "(*)", 0) < resolved.length;
+        let prefix = if (isConst) "*" else "*mut ";
+        if (isTypedef && toPointer) {
+            // A pointer to a function pointer, such as a table of them: the typedef's name, an opaque C type.
+            r.used.add(inner);
+            return if (cbIsKeyword(inner)) null else cbJoin(prefix, inner, "");
+        }
+        let target = match (cbTypeOf(r, inner, depth + 1, false)) {
+            Some(t) => t,
+            null => { return null; }
+        };
+        if (startsWithAt(target.view(), 0, "extern \"C\" fn") && isTypedef && !toPointer) {
+            return target; // `fn_t *`, fn_t a function type
+        }
+        return cbJoin(prefix, target.view(), "");
+    }
+    var atomicEnd: usize = 0;
+    if (startsWithAt(c, 0, "_Atomic(") && c[c.length - 1] == ')') {
+        // `_Atomic()`, group 1 empty, takes the script to its group 2, which is not there: no type either way.
+        atomicEnd = c.length - 1;
+    } else if (startsWithAt(c, 0, "_Atomic ")) {
+        atomicEnd = c.length;
+    }
+    if (atomicEnd > 0) {
+        let of = match (cbTypeOf(r, c[8..atomicEnd], depth + 1, false)) {
+            Some(t) => t,
+            null => { return null; }
+        };
+        return match (cbAtomic(of.view())) {
+            Some(name) => cbFrom(name),
+            null => null,
+        };
+    }
+    let unqualified = cbWithoutQualifiers(c);
+    let plain = unqualified.view();
+    match (cbScalar(plain)) {
+        Some(t) => { return if (member && t == "CChar") cbFrom("u8") else cbFrom(t); }
+        null => {}
+    }
+    // (struct|union|enum) ([A-Za-z_]\w*)
+    var tag = plain.length;
+    if (startsWithAt(plain, 0, "struct ")) {
+        tag = 7;
+    } else if (startsWithAt(plain, 0, "enum ")) {
+        tag = 5;
+    } else if (startsWithAt(plain, 0, "union ") && cbIsName(plain[6..])) {
+        return null;
+    }
+    let tagged = plain[tag..];
+    if (tagged.length > 0 && cbIsName(tagged)) {
+        r.used.add(tagged);
+        return if (cbIsKeyword(tagged)) null else copyBytes(tagged)!;
+    }
+    if (!cbIsName(plain)) {
+        return null;
+    }
+    if (cbHasRecord(r, plain) || cbHasEnum(r, plain)) { // a typedef that is the type's only name
+        r.used.add(plain);
+        return copyBytes(plain)!;
+    }
+    match (r.typedefs.find(plain)) {
+        Some(k) => {
+            let target = copyBytes(r.typedefs.texts[k].view())!;
+            return cbTypeOf(r, target.view(), depth + 1, false);
+        }
+        null => {}
+    }
+    return null;
+}
+
+// -- declarations
+
+/// The script's value_of: the value clang computed for an initialiser, under casts and parentheses.
+fn cbValueOf(r: borrow CbReading, node: u32) -> CbInt {
+    var child = cbInner(r, node);
+    while (child != none()) {
+        if (cbKindIs(r, child, "ConstantExpr")) {
+            let value = cbMember(r, child, "value");
+            if (value != none()) {
+                if (r.tree.kind(value) == jsonString()) {
+                    let text = cbText(r, value);
+                    return cbParseInt(cbStrip(text.view()));
+                }
+                return cbParseInt(r.text[r.tree.start(value)..r.tree.end(value)]);
+            }
+        }
+        if (cbKindIs(r, child, "ImplicitCastExpr") || cbKindIs(r, child, "ParenExpr")) {
+            let found = cbValueOf(r, child);
+            if (found.found) {
+                return found;
+            }
+        }
+        child = r.tree.next(child);
+    }
+    return cbNoInt();
+}
+
+/// The script's values_of.
+fn cbValuesOf(r: borrow CbReading, enumNode: u32) -> CbValues {
+    var out = CbValues {
+        given: true,
+        names: Vector<Vector<u8>>.create(),
+        negative: Vector<bool>.create(),
+        magnitude: Vector<u64>.create(),
+    };
+    var negative = true; // -1
+    var magnitude: u64 = 1;
+    let constants = cbConstantsOf(r, enumNode);
+    for (constant in constants.view()) {
+        let found = cbValueOf(r, constant);
+        if (found.found) {
+            negative = found.negative;
+            magnitude = found.magnitude;
+        } else {
+            if (cbTruthy(r, constant, "inner")) {
+                out.given = false;
+                return out;
+            }
+            if (negative) { // the one before, plus one
+                magnitude -= 1;
+                negative = magnitude != 0;
+            } else if (magnitude == 0xFFFFFFFFFFFFFFFF) {
+                out.given = false; // past C's largest integer: not a value the script meets either
+                return out;
+            } else {
+                magnitude += 1;
+            }
+        }
+        out.names.push(cbTextOf(r, constant, "name"))!;
+        out.negative.push(negative)!;
+        out.magnitude.push(magnitude)!;
+    }
+    return out;
+}
+
+/// The script's underlying: the integer an enum is.
+fn cbUnderlying(r: borrow mut CbReading, enumNode: u32, values: borrow CbValues) -> Vector<u8> {
+    let fixed = cbTextOf(r, cbMember(r, enumNode, "fixedUnderlyingType"), "qualType");
+    if (fixed.length > 0) {
+        match (cbTypeOf(r, fixed.view(), 0, false)) {
+            Some(t) => {
+                if (cbIsInteger(t.view())) {
+                    return t;
+                }
+            }
+            null => {}
+        }
+    }
+    var below: u64 = 0; // the magnitude of the lowest value, if one is negative
+    var high: u64 = 0;  // the highest value, if one is not negative
+    for (k in 0..values.names.length) {
+        if (values.negative[k]) {
+            if (values.magnitude[k] > below) {
+                below = values.magnitude[k];
+            }
+        } else if (values.magnitude[k] > high) {
+            high = values.magnitude[k];
+        }
+    }
+    if (below > 0x80000000 || high > 0xFFFFFFFF || (below > 0 && high > 0x7FFFFFFF)) {
+        return cbFrom(if (below > 0) "i64" else "u64");
+    }
+    return cbFrom(if (below > 0 || r.windows) "i32" else "u32");
+}
+
+/// `self.entries[(group, name)] = lines`, with the types it mentions.
+fn cbAdd(
+    r: borrow mut CbReading,
+    group: u32,
+    name: Slice<u8>,
+    lines: Vector<Vector<u8>>,
+    mentions: Vector<Vector<u8>>,
+) {
+    let key = cbKey(group, name);
+    match (r.keys.find(key.view())) {
+        Some(k) => {
+            let at = r.keys.numbers[k] as usize;
+            r.entries[at] = CbEntry { lines: lines, mentions: mentions };
+        }
+        null => {
+            r.keys.put(key.view(), truncate<u32>(r.entries.length), "".bytes());
+            r.entries.push(CbEntry { lines: lines, mentions: mentions })!;
+        }
+    }
+}
+
+fn cbNoMentions() -> Vector<Vector<u8>> => Vector<Vector<u8>>.create();
+
+/// `r.used`, without `except`.
+fn cbUsed(r: borrow CbReading, except: Slice<u8>) -> Vector<Vector<u8>> {
+    var out = Vector<Vector<u8>>.create();
+    for (k in 0..r.used.count()) {
+        if (!sameBytes(r.used.name(k), except)) {
+            out.push(copyBytes(r.used.name(k))!)!;
+        }
+    }
+    return out;
+}
+
+/// The script's claim: one declaration of a name, which may be a struct's, an enumerator's, a macro's and so on.
+fn cbClaim(r: borrow mut CbReading, name: Slice<u8>, what: StringView) -> bool {
+    match (r.taken.find(name)) {
+        Some(k) => {
+            if (!sameText(r.taken.texts[k].view(), what)) {
+                var why = cbFrom(what);
+                appendText(mut why, ": the name is already ")!;
+                appendBytes(mut why, r.taken.texts[k].view())!;
+                appendText(mut why, "'s")!;
+                r.notes.put(name, 0, why.view());
+                return false;
+            }
+        }
+        null => {}
+    }
+    r.taken.put(name, 0, what.bytes());
+    return true;
+}
+
+fn cbNote(r: borrow mut CbReading, name: Slice<u8>, why: Slice<u8>) {
+    r.notes.put(name, 0, why);
+}
+
+/// `self.notes.setdefault(name, why)`.
+fn cbNoteOnce(r: borrow mut CbReading, name: Slice<u8>, why: Slice<u8>) {
+    if (!r.notes.has(name)) {
+        r.notes.put(name, 0, why);
+    }
+}
+
+/// `@ctype("name")`, if the type's only name is a typedef's.
+fn cbHead(ctype: bool, name: Slice<u8>) -> Vector<Vector<u8>> {
+    var lines = Vector<Vector<u8>>.create();
+    if (ctype) {
+        lines.push(cbJoin("@ctype(\"", name, "\")"))!;
+    }
+    return lines;
+}
+
+/// `const name: type = value;`.
+fn cbConstantLine(name: Slice<u8>, t: Slice<u8>, negative: bool, magnitude: u64) -> Vector<u8> {
+    var line = cbJoin("const ", name, ": ");
+    appendBytes(mut line, t)!;
+    appendText(mut line, " = ")!;
+    cbAppendInt(mut line, negative, magnitude);
+    line.push(';')!;
+    return line;
+}
+
+/// The types of this header, in the order they are written: structs, enums, typedefs of function pointers.
+fn cbDeclareTypes(r: borrow mut CbReading) {
+    for (k in 0..r.records.count()) {
+        let name = copyBytes(r.records.keys[k].data.view())!;
+        let node = r.records.values[k].node;
+        let ctype = r.records.values[k].ctype;
+        if (!r.records.values[k].here) {
+            continue;
+        }
+        if (r.records.values[k].isUnion) {
+            if (ctype && cbClaim(r, name.view(), "a union")) {
+                var lines = Vector<Vector<u8>>.create();
+                lines.push(cbFrom("// a union: opaque"))!;
+                lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
+                lines.push(cbJoin("struct ", name.view(), ";"))!;
+                cbAdd(r, cbType(), name.view(), lines, cbNoMentions());
+            } else {
+                let why = cbJoin("a union with a tag: CeeSafe has no name for `union ", name.view(), "`");
+                cbNoteOnce(r, name.view(), why.view());
+            }
+            continue;
+        }
+        if (cbIsKeyword(name.view())) {
+            cbNote(r, name.view(), "a struct whose name is a CeeSafe keyword".bytes());
+            continue;
+        }
+        if (!cbClaim(r, name.view(), "a struct")) {
+            continue;
+        }
+        r.used = CbNames.create();
+        var fields = Vector<Vector<u8>>.create();
+        var opaque = Vector<u8>.create();
+        var child = cbInner(r, node);
+        while (child != none() && opaque.length == 0) {
+            let current = child;
+            child = r.tree.next(current);
+            if (!cbKindIs(r, current, "FieldDecl")) {
+                continue;
+            }
+            let field = cbTextOf(r, current, "name");
+            if (field.length == 0) {
+                opaque = cbFrom("an anonymous struct or union member");
+            } else if (cbTruthy(r, current, "isBitfield")) {
+                opaque = cbJoin("the bit-field `", field.view(), "`");
+            } else {
+                let c = cbQualType(r, current);
+                var spelt = Vector<u8>.create();
+                var ok = false;
+                match (cbTypeOf(r, c.view(), 0, true)) {
+                    Some(t) => {
+                        ok = cbFieldOk(t.view());
+                        spelt = t;
+                    }
+                    null => {}
+                }
+                if (!ok) {
+                    opaque = cbJoin("the member `", field.view(), "`, a `");
+                    appendBytes(mut opaque, c.view())!;
+                    appendText(mut opaque, "`")!;
+                } else if (cbIsKeyword(field.view())) {
+                    fields.push(cbJoin("    @cname(\"", field.view(), "\")"))!;
+                    var line = cbJoin("    ", field.view(), "_: ");
+                    appendBytes(mut line, spelt.view())!;
+                    line.push(';')!;
+                    fields.push(line)!;
+                } else {
+                    var line = cbJoin("    ", field.view(), ": ");
+                    appendBytes(mut line, spelt.view())!;
+                    line.push(';')!;
+                    fields.push(line)!;
+                }
+            }
+        }
+        var lines = Vector<Vector<u8>>.create();
+        if (opaque.length > 0) {
+            lines.push(cbJoin("// opaque for ", opaque.view(), ""))!;
+            if (ctype) {
+                lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
+            }
+            lines.push(cbJoin("struct ", name.view(), ";"))!;
+            cbAdd(r, cbType(), name.view(), lines, cbNoMentions());
+        } else if (fields.length == 0) {
+            if (ctype) {
+                lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
+            }
+            lines.push(cbJoin("struct ", name.view(), ";"))!;
+            cbAdd(r, cbType(), name.view(), lines, cbNoMentions());
+        } else {
+            if (ctype) {
+                lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
+            }
+            lines.push(cbJoin("struct ", name.view(), " {"))!;
+            for (f in fields.view()) {
+                lines.push(copyBytes(f.view())!)!;
+            }
+            lines.push(cbFrom("}"))!;
+            let mentions = cbUsed(r, name.view());
+            cbAdd(r, cbType(), name.view(), lines, mentions);
+        }
+    }
+    for (k in 0..r.enums.count()) {
+        let name = copyBytes(r.enums.keys[k].data.view())!;
+        let node = r.enums.values[k].node;
+        let ctype = r.enums.values[k].ctype;
+        if (!r.enums.values[k].here) {
+            continue;
+        }
+        let constants = cbConstantsOf(r, node);
+        if (constants.length == 0) {
+            continue;
+        }
+        let values = cbValuesOf(r, node);
+        if (!values.given || cbIsKeyword(name.view()) || !cbClaim(r, name.view(), "an enum")) {
+            cbNoteOnce(r, name.view(), "an enum whose values clang does not give".bytes());
+            continue;
+        }
+        var lines = cbHead(ctype, name.view());
+        let underlying = cbUnderlying(r, node, values);
+        var first = cbJoin("enum ", name.view(), ": ");
+        appendBytes(mut first, underlying.view())!;
+        first.push(';')!;
+        lines.push(first)!;
+        for (v in 0..values.names.length) {
+            let constant = copyBytes(values.names[v].view())!;
+            if (cbIsKeyword(constant.view()) || !cbClaim(r, constant.view(), "an enumerator")) {
+                continue;
+            }
+            lines.push(cbConstantLine(constant.view(), name.view(), values.negative[v], values.magnitude[v]))!;
+        }
+        cbAdd(r, cbType(), name.view(), lines, cbNoMentions());
+    }
+    for (k in 0..r.pointerTypedefs.count()) {
+        let name = copyBytes(r.pointerTypedefs.name(k))!;
+        if (!cbIsKeyword(name.view()) && cbClaim(r, name.view(), "a typedef")) {
+            var lines = Vector<Vector<u8>>.create();
+            lines.push(cbJoin("@ctype(\"", name.view(), "\")"))!;
+            lines.push(cbJoin("struct ", name.view(), ";"))!;
+            cbAdd(r, cbType(), name.view(), lines, cbNoMentions());
+        }
+    }
+}
+
+/// `re.fullmatch(r"(const )?char ?\[\d+\]", c)`: a string literal's type.
+fn cbIsCharArray(c: Slice<u8>) -> bool {
+    var i: usize = 0;
+    if (startsWithAt(c, 0, "const ")) {
+        i = 6;
+    }
+    if (!startsWithAt(c, i, "char")) {
+        return false;
+    }
+    i += 4;
+    if (i < c.length && c[i] == ' ') {
+        i += 1;
+    }
+    if (i >= c.length || c[i] != '[') {
+        return false;
+    }
+    i += 1;
+    let digits = i;
+    while (i < c.length && cbIsDigit(c[i])) {
+        i += 1;
+    }
+    return i > digits && i + 1 == c.length && c[i] == ']';
+}
+
+/// The constants: the enumerators of enums without a name, then the macros.
+fn cbDeclareConstants(r: borrow mut CbReading, macros: borrow Vector<Vector<u8>>) {
+    for (k in 0..r.order.length) {
+        let values = cbValuesOf(r, r.order[k]);
+        if (!values.given) {
+            continue;
+        }
+        for (v in 0..values.names.length) {
+            let constant = copyBytes(values.names[v].view())!;
+            if (startsWithAt(constant.view(), 0, "cee_v_") || cbIsKeyword(constant.view()) ||
+                !cbClaim(r, constant.view(), "an enumerator")) {
+                continue;
+            }
+            let negative = values.negative[v];
+            let magnitude = values.magnitude[v];
+            let fits = if ((negative && magnitude <= 0x80000000) || (!negative && magnitude < 0x80000000)) "i32"
+                else if (!negative && magnitude <= 0xFFFFFFFF) "u32"
+                else if (negative) "i64"
+                else "u64";
+            var lines = Vector<Vector<u8>>.create();
+            lines.push(cbConstantLine(constant.view(), fits.bytes(), negative, magnitude))!;
+            cbAdd(r, cbConstant(), constant.view(), lines, cbNoMentions());
+        }
+    }
+    for (macro_ in macros.view()) {
+        let name = macro_.view();
+        let typed = match (r.probeTypes.find(name)) {
+            Some(k) => r.probeTypes.numbers[k],
+            null => {
+                cbNote(r, name, "a macro that is not an expression".bytes());
+                continue;
+            }
+        };
+        if (cbIsKeyword(name) || !cbClaim(r, name, "a macro")) {
+            continue;
+        }
+        let typeNode = cbMember(r, typed, "type");
+        var c = cbTextOf(r, typeNode, "desugaredQualType");
+        if (c.length == 0) {
+            c = cbTextOf(r, typeNode, "qualType");
+        }
+        r.used = CbNames.create();
+        if (cbIsCharArray(c.view())) {
+            var lines = Vector<Vector<u8>>.create();
+            lines.push(cbJoin("const ", name, ": *CChar;"))!;
+            cbAdd(r, cbConstant(), name, lines, cbNoMentions());
+            continue;
+        }
+        let spelt = cbTypeOf(r, c.view(), 0, false);
+        let value = match (r.probeValues.find(name)) {
+            Some(k) => cbValueOf(r, r.probeValues.numbers[k]),
+            null => cbNoInt(),
+        };
+        var t = Vector<u8>.create();
+        var ok = false;
+        match (spelt) {
+            Some(s) => {
+                ok = value.found && (cbIsInteger(s.view()) || cbHasEnum(r, s.view()));
+                t = s;
+            }
+            null => {}
+        }
+        if (!ok) {
+            cbNote(r, name, "a macro that is not an integer constant or a string literal".bytes());
+            continue;
+        }
+        var lines = Vector<Vector<u8>>.create();
+        lines.push(cbConstantLine(name, t.view(), value.negative, value.magnitude))!;
+        let mentions = cbUsed(r, "".bytes());
+        cbAdd(r, cbConstant(), name, lines, mentions);
+    }
+}
+
+/// The `extern` data and the functions.
+fn cbDeclareDataAndFunctions(r: borrow mut CbReading) {
+    for (k in 0..r.variables.count()) {
+        let name = copyBytes(r.variables.name(k))!;
+        let node = r.variables.numbers[k];
+        let c = cbQualType(r, node);
+        r.used = CbNames.create();
+        var t = Vector<u8>.create();
+        match (cbTypeOf(r, c.view(), 0, false)) {
+            Some(s) => { t = s; }
+            null => {}
+        }
+        if (t.length == 0 || sameText(t.view(), "void")) {
+            var why = cbJoin("data of a type CeeSafe cannot spell, `", c.view(), "`");
+            cbNote(r, name.view(), why.view());
+            continue;
+        }
+        if (cbIsKeyword(name.view()) || !cbClaim(r, name.view(), "data")) {
+            continue;
+        }
+        let constant = cbTopConst(c.view()) || startsWithAt(t.view(), 0, "Atomic");
+        var line = cbJoin(if (constant) "static " else "static mut ", name.view(), ": ");
+        appendBytes(mut line, t.view())!;
+        line.push(';')!;
+        var lines = Vector<Vector<u8>>.create();
+        lines.push(line)!;
+        let mentions = cbUsed(r, "".bytes());
+        cbAdd(r, cbData(), name.view(), lines, mentions);
+    }
+    for (k in 0..r.functions.count()) {
+        let name = copyBytes(r.functions.name(k))!;
+        let node = r.functions.numbers[k];
+        let c = cbQualType(r, node);
+        r.used = CbNames.create();
+        let call = cbCall(c.view());
+        var result = Vector<u8>.create();
+        if (call.found) {
+            match (cbTypeOf(r, c[..call.resultEnd], 0, false)) {
+                Some(s) => { result = s; }
+                null => {}
+            }
+        }
+        if (result.length == 0 || !cbByValueOk(r, result.view())) {
+            let why = cbJoin("a function whose result CeeSafe cannot take, `", c.view(), "`");
+            cbNote(r, name.view(), why.view());
+            continue;
+        }
+        var params = Vector<u8>.create();
+        var count: usize = 0;
+        var bad = Vector<u8>.create();
+        var stopped = false;
+        var index: u64 = 0;
+        var child = cbInner(r, node);
+        while (child != none() && !stopped) {
+            let current = child;
+            child = r.tree.next(current);
+            if (!cbKindIs(r, current, "ParmVarDecl")) {
+                continue;
+            }
+            let pc = cbQualType(r, current);
+            var t = Vector<u8>.create();
+            match (cbTypeOf(r, pc.view(), 0, false)) {
+                Some(s) => { t = s; }
+                null => {}
+            }
+            if (t.length == 0 || !cbByValueOk(r, t.view())) {
+                bad = copyBytes(pc.view())!;
+                stopped = true;
+                continue;
+            }
+            if (count > 0) {
+                appendText(mut params, ", ")!;
+            }
+            let given = cbTextOf(r, current, "name");
+            if (given.length == 0) {
+                params.push('p')!;
+                appendDecimal(mut params, index)!;
+            } else {
+                appendBytes(mut params, given.view())!;
+                if (cbIsKeyword(given.view())) {
+                    params.push('_')!;
+                }
+            }
+            appendText(mut params, ": ")!;
+            appendBytes(mut params, t.view())!;
+            count += 1;
+            index += 1;
+        }
+        if (bad.length > 0) {
+            let why = cbJoin("a function with a parameter CeeSafe cannot take, `", bad.view(), "`");
+            cbNote(r, name.view(), why.view());
+            continue;
+        }
+        if (!cbClaim(r, name.view(), "a function")) {
+            continue;
+        }
+        if (cbTruthy(r, node, "variadic")) {
+            if (count > 0) {
+                appendText(mut params, ", ")!;
+            }
+            appendText(mut params, "...")!;
+        }
+        var lines = Vector<Vector<u8>>.create();
+        var line = cbJoin("fn ", name.view(), "");
+        if (cbIsKeyword(name.view())) {
+            lines.push(cbJoin("@cname(\"", name.view(), "\")"))!;
+            line.push('_')!;
+        }
+        line.push('(')!;
+        appendBytes(mut line, params.view())!;
+        line.push(')')!;
+        if (!sameText(result.view(), "void")) {
+            appendText(mut line, " -> ")!;
+            appendBytes(mut line, result.view())!;
+        }
+        line.push(';')!;
+        lines.push(line)!;
+        let mentions = cbUsed(r, "".bytes());
+        cbAdd(r, cbFunction(), name.view(), lines, mentions);
+    }
+}
+
+/// Types of other headers that the entries mention: opaque here, unless a --with file declares them.
+fn cbDeclareForeign(r: borrow mut CbReading, known: borrow CbNames) {
+    var mentioned = CbNames.create();
+    for (entry in r.entries.view()) {
+        for (name in entry.mentions.view()) {
+            mentioned.add(name.view());
+        }
+    }
+    var names = Vector<Vector<u8>>.create();
+    for (k in 0..mentioned.count()) {
+        names.push(copyBytes(mentioned.name(k))!)!;
+    }
+    cbSort(mut names);
+    for (n in names.view()) {
+        let name = n.view();
+        let typeKey = cbKey(cbType(), name);
+        if (r.keys.has(typeKey.view()) || known.has(name)) {
+            continue;
+        }
+        let key = Bytes.from(name)!;
+        match (r.enums.find(key)) {
+            Some(k) => {
+                let node = r.enums.values[k].node;
+                var lines = cbHead(r.enums.values[k].ctype, name);
+                var values = cbValuesOf(r, node);
+                if (!values.given) {
+                    values.names.clear();
+                    values.negative.clear();
+                    values.magnitude.clear();
+                }
+                let underlying = cbUnderlying(r, node, values);
+                var line = cbJoin("enum ", name, ": ");
+                appendBytes(mut line, underlying.view())!;
+                line.push(';')!;
+                lines.push(line)!;
+                cbAdd(r, cbForeign(), name, lines, cbNoMentions());
+            }
+            null => {
+                let ctype = match (r.records.find(key)) {
+                    Some(k) => r.records.values[k].ctype,
+                    null => r.typedefs.has(name),
+                };
+                var lines = cbHead(ctype, name);
+                lines.push(cbJoin("struct ", name, ";"))!;
+                cbAdd(r, cbForeign(), name, lines, cbNoMentions());
+            }
+        }
+    }
+}
+
+// -- the C side
+
+/// The C compiler, the flags every run has, and the directory the files it reads are written in.
+struct CbClang {
+    compiler: CCompiler;
+    base: Vector<Vector<u8>>;
+    work: Vector<u8>;
+}
+
+/// Runs clang on `path` with the base flags and up to two more.
+fn cbRunClang(clang: borrow CbClang, first: StringView, second: StringView, path: Slice<u8>) -> ToolOutcome {
+    var arguments = Vector<Vector<u8>>.create();
+    for (flag in clang.base.view()) {
+        arguments.push(copyBytes(flag.view())!)!;
+    }
+    if (first.length > 0) {
+        pushText(mut arguments, first)!;
+    }
+    if (second.length > 0) {
+        pushText(mut arguments, second)!;
+    }
+    pushBytes(mut arguments, path)!;
+    return runCompilerWith(clang.compiler, clang.work.view(), arguments, "cbind.rsp".bytes())!;
+}
+
+/// "cannot run the C compiler 'x': why", as `build` says it.
+fn cbNotStarted(clang: borrow CbClang, outcome: borrow ToolOutcome) -> Vector<u8> {
+    var message = cbJoin("cannot run the C compiler '", clang.compiler.path.view(), "': ");
+    appendText(mut message, outcome.error.message())!;
+    return message;
+}
+
+/// "clang cannot read h:" and the first 4,000 characters of what clang said.
+fn cbClangRefused(what: StringView, header: Slice<u8>, stderr: Slice<u8>) -> Vector<u8> {
+    var message = cbJoin(what, header, ":\n");
+    appendBytes(mut message, cbFirstCharacters(stderr, 4000))!;
+    return message;
+}
+
+/// `text.splitlines()`: the lines of `text`, at Python's line boundaries.
+fn cbSplitLines(text: Slice<u8>) -> Vector<Vector<u8>> {
+    var out = Vector<Vector<u8>>.create();
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < text.length) {
+        let c = text[i];
+        var width: usize = 0;
+        if (c == '\n' || c == 0x0B || c == 0x0C || c == 0x1C || c == 0x1D || c == 0x1E) {
+            width = 1;
+        } else if (c == '\r') {
+            width = if (i + 1 < text.length && text[i + 1] == '\n') 2 else 1;
+        } else if (c == 0xC2 && i + 1 < text.length && text[i + 1] == 0x85) {
+            width = 2;
+        } else if (c == 0xE2 && i + 2 < text.length && text[i + 1] == 0x80 &&
+            (text[i + 2] == 0xA8 || text[i + 2] == 0xA9)) {
+            width = 3;
+        }
+        if (width == 0) {
+            i += 1;
+            continue;
+        }
+        out.push(copyBytes(text[start..i])!)!;
+        i += width;
+        start = i;
+    }
+    if (start < text.length) {
+        out.push(copyBytes(text[start..])!)!;
+    }
+    return out;
+}
+
+/// `re.match(r'# \d+ "(.*)"', line)`: the file a line marker names, as it is written, is line[restStart..restEnd].
+fn cbLineMarker(line: Slice<u8>) -> CbShape {
+    if (!startsWithAt(line, 0, "# ")) {
+        return cbNoShape();
+    }
+    var i: usize = 2;
+    while (i < line.length && cbIsDigit(line[i])) {
+        i += 1;
+    }
+    if (i == 2 || !startsWithAt(line, i, " \"")) {
+        return cbNoShape();
+    }
+    let start = i + 2;
+    var close = line.length;
+    for (k in start..line.length) {
+        if (line[k] == '"') {
+            close = k;
+        }
+    }
+    if (close >= line.length) {
+        return cbNoShape();
+    }
+    return CbShape { found: true, resultEnd: 0, countStart: 0, countEnd: 0, restStart: start, restEnd: close };
+}
+
+/// The script's macros: the header's own object-like macros, in order (`clang -E -dD` keeps each #define where it is
+/// written). Null after an error, which `error` says.
+fn cbMacros(r: borrow mut CbReading, clang: borrow CbClang, error: borrow mut Vector<u8>) -> Vector<Vector<u8>>? {
+    var source = copyBytes(clang.work.view())!;
+    appendText(mut source, "/cbind_macros.c")!;
+    let text = cbJoin("#include \"", r.header.view(), "\"\n");
+    match (writeFile(StringView.fromUtf8(source.view())!, text.view())) {
+        Ok() => {}
+        Err(e) => {
+            error = cbJoin("cannot write '", source.view(), "': ");
+            appendText(error, e.message())!;
+            return null;
+        }
+    }
+    let run = cbRunClang(clang, "-E", "-dD", source.view());
+    if (!run.started) {
+        error = cbNotStarted(clang, run);
+        return null;
+    }
+    if (run.status != 0) {
+        error = cbClangRefused("clang cannot preprocess ", r.header.view(), run.stderr.view());
+        return null;
+    }
+    var here = false;
+    var names = Vector<Vector<u8>>.create();
+    let lines = cbSplitLines(run.stdout.view());
+    for (l in lines.view()) {
+        let line = l.view();
+        let marker = cbLineMarker(line);
+        if (marker.found) {
+            here = cbSameName(r, line[marker.restStart..marker.restEnd]);
+            continue;
+        }
+        if (!here) {
+            continue;
+        }
+        // #define (\w+)(.?)(.*)
+        if (startsWithAt(line, 0, "#define ")) {
+            var end: usize = 8;
+            while (end < line.length && cbIsWord(line[end])) {
+                end += 1;
+            }
+            if (end > 8) {
+                let name = line[8..end];
+                let functionLike = end < line.length && line[end] == '(';
+                // The body is what follows the character after the name (a multi-byte one is one character).
+                var body = end;
+                if (body < line.length) {
+                    body += 1;
+                    while (body < line.length && (line[body] & 0xC0) == 0x80) {
+                        body += 1;
+                    }
+                }
+                var known = false;
+                for (n in names.view()) {
+                    known = known || sameBytes(n.view(), name);
+                }
+                if (!functionLike && cbStrip(line[body..]).length > 0 && !startsWithAt(name, 0, "__") && !known) {
+                    names.push(copyBytes(name)!)!;
+                }
+                continue;
+            }
+        }
+        // #undef (\w+)
+        if (startsWithAt(line, 0, "#undef ")) {
+            var end: usize = 7;
+            while (end < line.length && cbIsWord(line[end])) {
+                end += 1;
+            }
+            if (end > 7) {
+                var kept = Vector<Vector<u8>>.create();
+                for (n in names.view()) {
+                    if (!sameBytes(n.view(), line[7..end])) {
+                        kept.push(copyBytes(n.view())!)!;
+                    }
+                }
+                names = kept;
+            }
+        }
+    }
+    return names;
+}
+
+/// The lines of clang's errors in the probe (`cbind_probe\.c:(\d+):\d+: error:`): `bad[k]` for line k + 1.
+fn cbBadLines(stderr: Slice<u8>, count: usize) -> Vector<bool> {
+    var bad = Vector<bool>.create();
+    for (k in 0..count) {
+        bad.push(false)!;
+    }
+    var at = cbFind(stderr, "cbind_probe.c:", 0);
+    while (at < stderr.length) {
+        var i = at + 14;
+        var line: usize = 0;
+        let digits = i;
+        while (i < stderr.length && cbIsDigit(stderr[i])) {
+            if (line <= count) {
+                line = line * 10 + ((stderr[i] - '0') as usize);
+            }
+            i += 1;
+        }
+        if (i > digits && i < stderr.length && stderr[i] == ':') {
+            i += 1;
+            let column = i;
+            while (i < stderr.length && cbIsDigit(stderr[i])) {
+                i += 1;
+            }
+            if (i > column && startsWithAt(stderr, i, ": error:") && line >= 1 && line <= count) {
+                bad[line - 1] = true;
+            }
+        }
+        at = cbFind(stderr, "cbind_probe.c:", at + 1);
+    }
+    return bad;
+}
+
+/// The members of clang's dump that are read: the rest have no node (json_tree.cee).
+fn cbKeptKeys() -> Vector<Vector<u8>> {
+    var keys = Vector<Vector<u8>>.create();
+    pushText(mut keys, "id")!;
+    pushText(mut keys, "kind")!;
+    pushText(mut keys, "name")!;
+    pushText(mut keys, "inner")!;
+    pushText(mut keys, "loc")!;
+    pushText(mut keys, "range")!;
+    pushText(mut keys, "begin")!;
+    pushText(mut keys, "end")!;
+    pushText(mut keys, "spellingLoc")!;
+    pushText(mut keys, "expansionLoc")!;
+    pushText(mut keys, "file")!;
+    pushText(mut keys, "type")!;
+    pushText(mut keys, "qualType")!;
+    pushText(mut keys, "desugaredQualType")!;
+    pushText(mut keys, "isImplicit")!;
+    pushText(mut keys, "storageClass")!;
+    pushText(mut keys, "variadic")!;
+    pushText(mut keys, "completeDefinition")!;
+    pushText(mut keys, "tagUsed")!;
+    pushText(mut keys, "fixedUnderlyingType")!;
+    pushText(mut keys, "isBitfield")!;
+    pushText(mut keys, "decl")!;
+    pushText(mut keys, "ownedTagDecl")!;
+    pushText(mut keys, "value")!;
+    return keys;
+}
+
+/// The script's Reading: what clang, with `clang`'s flags, says `header` (at `path`) declares. Null after an error,
+/// which `error` says.
+fn cbRead(
+    header: Slice<u8>,
+    path: Slice<u8>,
+    clang: borrow CbClang,
+    known: borrow CbNames,
+    windows: bool,
+    error: borrow mut Vector<u8>,
+) -> CbReading? {
+    var r = CbReading {
+        header: copyBytes(header)!,
+        path: copyBytes(path)!,
+        windows: windows,
+        text: Vector<u8>.create(),
+        tree: JsonTree { nodes: Vector<JsonSpan>.create() },
+        keys: CbNames.create(),
+        entries: Vector<CbEntry>.create(),
+        notes: CbNames.create(),
+        records: Map<Bytes, CbRecord>.create(),
+        enums: Map<Bytes, CbEnum>.create(),
+        typedefs: CbNames.create(),
+        used: CbNames.create(),
+        functions: CbNames.create(),
+        variables: CbNames.create(),
+        probeTypes: CbNames.create(),
+        probeValues: CbNames.create(),
+        order: Vector<u32>.create(),
+        pointerTypedefs: CbNames.create(),
+        byId: CbNames.create(),
+        file: none(),
+        files: CbNames.create(),
+        taken: CbNames.create(),
+    };
+    let macros = match (cbMacros(mut r, clang, error)) {
+        Some(m) => m,
+        null => { return null; }
+    };
+    var probe = copyBytes(clang.work.view())!;
+    appendText(mut probe, "/cbind_probe.c")!;
+    var lines = Vector<Vector<u8>>.create();
+    lines.push(cbJoin("#include \"", header, "\""))!;
+    for (m in macros.view()) {
+        var typed = cbJoin("extern __typeof__((", m.view(), ")) cee_t_");
+        appendBytes(mut typed, m.view())!;
+        typed.push(';')!;
+        lines.push(typed)!;
+        var valued = cbJoin("enum { cee_v_", m.view(), " = (");
+        appendBytes(mut valued, m.view())!;
+        appendText(mut valued, ") };")!;
+        lines.push(valued)!;
+    }
+    var text = Vector<u8>.create();
+    for (line in lines.view()) {
+        appendBytes(mut text, line.view())!;
+        text.push('\n')!;
+    }
+    match (writeFile(StringView.fromUtf8(probe.view())!, text.view())) {
+        Ok() => {}
+        Err(e) => {
+            error = cbJoin("cannot write '", probe.view(), "': ");
+            appendText(error, e.message())!;
+            return null;
+        }
+    }
+    // A macro that is not an expression fails its first line, one that is not an integer constant its second: each
+    // alone, since each has a line of its own. Those lines are removed and the rest is read.
+    let check = cbRunClang(clang, "", "", probe.view());
+    if (!check.started) {
+        error = cbNotStarted(clang, check);
+        return null;
+    }
+    let bad = cbBadLines(check.stderr.view(), lines.length);
+    var any = false;
+    for (b in bad.view()) {
+        any = any || b;
+    }
+    if (bad[0] || (check.status != 0 && !any)) {
+        error = cbClangRefused("clang cannot read ", header, check.stderr.view());
+        return null;
+    }
+    text.clear();
+    for (k in 0..lines.length) {
+        if (!bad[k]) {
+            appendBytes(mut text, lines[k].view())!;
+        }
+        text.push('\n')!;
+    }
+    match (writeFile(StringView.fromUtf8(probe.view())!, text.view())) {
+        Ok() => {}
+        Err(e) => {
+            error = cbJoin("cannot write '", probe.view(), "': ");
+            appendText(error, e.message())!;
+            return null;
+        }
+    }
+    let dump = cbRunClang(clang, "-Xclang", "-ast-dump=json", probe.view());
+    if (!dump.started) {
+        error = cbNotStarted(clang, dump);
+        return null;
+    }
+    if (dump.status != 0) {
+        error = cbClangRefused("clang cannot read ", header, dump.stderr.view());
+        return null;
+    }
+    let keep = cbKeptKeys();
+    r.text = dump.stdout;
+    match (parseJsonTree(r.text.view(), keep)) {
+        Some(tree) => { r.tree = tree; }
+        null => {
+            error = cbJoin("clang's AST of ", header, " is not JSON (-Xclang -ast-dump=json)");
+            return null;
+        }
+    }
+    cbScan(mut r);
+    cbDeclareTypes(mut r);
+    cbDeclareConstants(mut r, macros);
+    cbDeclareDataAndFunctions(mut r);
+    cbDeclareForeign(mut r, known);
+    // The dump is no longer needed: the entries and the notes are text.
+    r.text = Vector<u8>.create();
+    r.tree = JsonTree { nodes: Vector<JsonSpan>.create() };
+    return r;
+}
+
+// ---- the output -----------------------------------------------------------------------------------------------------
+
+/// The script's names_of: the C names a CeeSafe file declares (--with), which are left to it.
+///
+///     ^\s*(?:public )?(?:struct|enum|const|static(?: mut)?|(?:unsafe )?fn) (\w+)     at each line's start
+///     @cname\("(\w+)"\)                                                            anywhere
+fn cbNamesOf(text: Slice<u8>, names: borrow mut CbNames) {
+    var at: usize = 0;
+    while (at < text.length) {
+        if (at > 0 && text[at - 1] != '\n') {
+            at += 1;
+            continue;
+        }
+        var i = at;
+        while (i < text.length && cbIsSpace(text[i])) {
+            i += 1;
+        }
+        if (startsWithAt(text, i, "public ")) {
+            i += 7;
+        }
+        // Each way the keyword can be read, in the expression's order, until a name follows one.
+        var end: usize = 0;
+        for (choice in 0..7usize) {
+            var j = i;
+            let word = match (choice) {
+                0 => "struct",
+                1 => "enum",
+                2 => "const",
+                3 => "static mut",
+                4 => "static",
+                5 => "unsafe fn",
+                _ => "fn",
+            };
+            if (!startsWithAt(text, j, word)) {
+                continue;
+            }
+            j += word.length;
+            if (j >= text.length || text[j] != ' ') {
+                continue;
+            }
+            j += 1;
+            var stop = j;
+            while (stop < text.length && cbIsWord(text[stop])) {
+                stop += 1;
+            }
+            if (stop > j) {
+                names.add(text[j..stop]);
+                end = stop;
+                break;
+            }
+        }
+        at = if (end > 0) end else at + 1;
+    }
+    at = cbFind(text, "@cname(\"", 0);
+    while (at < text.length) {
+        var stop = at + 8;
+        while (stop < text.length && cbIsWord(text[stop])) {
+            stop += 1;
+        }
+        if (stop > at + 8 && startsWithAt(text, stop, "\")")) {
+            names.add(text[(at + 8)..stop]);
+        }
+        at = cbFind(text, "@cname(\"", at + 1);
+    }
+}
+
+/// One header's declarations (the script's Binding): those every configuration gives alike (`same`, their keys), and
+/// the rest by name (`differs`).
+struct CbBinding {
+    header: Vector<u8>;
+    names: Vector<Vector<u8>>; // the configurations
+    readings: Vector<CbReading>;
+    same: Vector<Vector<u8>>;
+    differs: Vector<Vector<u8>>;
+    opaque: CbNames; // a key -> its place in `opaqueLines`
+    opaqueLines: Vector<Vector<Vector<u8>>>;
+    notes: CbNames;
+}
+
+/// The lines of `key` in `r`, or none.
+fn cbEntryAt(r: borrow CbReading, key: Slice<u8>) -> u32 => match (r.keys.find(key)) {
+    Some(k) => r.keys.numbers[k],
+    null => none(),
+};
+
+/// The script's narrow: the entries `only` names, and the types they mention, as a set of keys.
+fn cbNarrow(r: borrow CbReading, only: borrow CbNames) -> CbNames {
+    var keep = CbNames.create();
+    for (k in 0..r.keys.count()) {
+        if (only.has(cbKeyName(r.keys.name(k)))) {
+            keep.add(r.keys.name(k));
+        }
+    }
+    var grew = true;
+    while (grew) {
+        grew = false;
+        var k: usize = 0;
+        while (k < keep.count()) {
+            let at = cbEntryAt(r, keep.name(k));
+            k += 1;
+            if (at == none()) {
+                continue;
+            }
+            for (name in r.entries[at as usize].mentions.view()) {
+                for (choice in 0..2usize) {
+                    let key = cbKey(if (choice == 0) cbType() else cbForeign(), name.view());
+                    if (r.keys.has(key.view()) && !keep.has(key.view())) {
+                        keep.add(key.view());
+                        grew = true;
+                    }
+                }
+            }
+        }
+    }
+    return keep;
+}
+
+/// The script's Binding.common: a type whose members or values differ by configuration, as much of it as every
+/// configuration agrees on: a struct opaque, an enum its integer. Empty when they agree on nothing.
+fn cbCommon(b: borrow CbBinding, key: Slice<u8>) -> Vector<Vector<u8>> {
+    let name = cbKeyName(key);
+    let structPrefix = cbJoin("struct ", name, "");
+    let enumPrefix = cbJoin("enum ", name, ":");
+    var first = Vector<Vector<u8>>.create();
+    for (k in 0..b.readings.length) {
+        let at = cbEntryAt(b.readings[k], key) as usize;
+        let lines = borrow b.readings[k].entries[at].lines;
+        var found = lines.length;
+        for (i in 0..lines.length) {
+            if (found == lines.length && (startsWithBytes(lines[i].view(), structPrefix.view()) ||
+                startsWithBytes(lines[i].view(), enumPrefix.view()))) {
+                found = i;
+            }
+        }
+        if (found == lines.length) {
+            return Vector<Vector<u8>>.create();
+        }
+        var head = Vector<Vector<u8>>.create();
+        for (i in 0..found) {
+            if (startsWithAt(lines[i].view(), 0, "@")) {
+                head.push(copyBytes(lines[i].view())!)!;
+            }
+        }
+        if (startsWithAt(lines[found].view(), 0, "struct")) {
+            head.push(cbJoin("struct ", name, ";"))!;
+        } else {
+            head.push(copyBytes(lines[found].view())!)!;
+        }
+        if (k == 0) {
+            first = head;
+        } else if (!cbSameLines(first, head)) {
+            return Vector<Vector<u8>>.create();
+        }
+    }
+    var out = Vector<Vector<u8>>.create();
+    out.push(cbFrom("// not the same in every configuration: only its name is declared"))!;
+    for (line in first.view()) {
+        out.push(copyBytes(line.view())!)!;
+    }
+    return out;
+}
+
+/// The script's Binding.__init__. `only` is empty when --only was not given.
+fn cbBind(
+    header: Slice<u8>,
+    names: borrow Vector<Vector<u8>>,
+    readings: Vector<CbReading>,
+    only: borrow CbNames,
+) -> CbBinding {
+    var b = CbBinding {
+        header: copyBytes(header)!,
+        names: cbCopyLines(names),
+        readings: readings,
+        same: Vector<Vector<u8>>.create(),
+        differs: Vector<Vector<u8>>.create(),
+        opaque: CbNames.create(),
+        opaqueLines: Vector<Vector<Vector<u8>>>.create(),
+        notes: CbNames.create(),
+    };
+    let narrowed = only.count() > 0;
+    let keep = if (narrowed) cbNarrow(b.readings[0], only) else CbNames.create();
+    var every = CbNames.create();
+    for (r in b.readings.view()) {
+        for (k in 0..r.keys.count()) {
+            every.add(r.keys.name(k));
+        }
+    }
+    for (e in 0..every.count()) {
+        let key = copyBytes(every.name(e))!;
+        if (narrowed && !keep.has(key.view())) {
+            continue;
+        }
+        var alike = true;
+        var absent = Vector<u8>.create();
+        let first = cbEntryAt(b.readings[0], key.view());
+        for (k in 0..b.readings.length) {
+            let at = cbEntryAt(b.readings[k], key.view());
+            if (at == none()) {
+                if (absent.length > 0) {
+                    appendText(mut absent, ", ")!;
+                }
+                appendBytes(mut absent, b.names[k].view())!;
+            }
+            if ((at == none()) != (first == none())) {
+                alike = false;
+            } else if (at != none() && !cbSameLines(
+                b.readings[k].entries[at as usize].lines,
+                b.readings[0].entries[first as usize].lines,
+            )) {
+                alike = false;
+            }
+        }
+        if (alike) {
+            b.same.push(copyBytes(key.view())!)!;
+            continue;
+        }
+        var line = copyBytes(cbKeyName(key.view()))!;
+        if (absent.length > 0) {
+            appendText(mut line, " (absent in ")!;
+            appendBytes(mut line, absent.view())!;
+            appendText(mut line, ")")!;
+        } else {
+            appendText(mut line, " (not the same in each)")!;
+        }
+        b.differs.push(line)!;
+        if (cbKeyGroup(key.view()) == cbType() && absent.length == 0) {
+            // What mentions the type still can: its name is declared, its members are not.
+            let lines = cbCommon(b, key.view());
+            if (lines.length > 0) {
+                b.opaque.put(key.view(), truncate<u32>(b.opaqueLines.length), "".bytes());
+                b.opaqueLines.push(lines)!;
+                b.same.push(copyBytes(key.view())!)!;
+            }
+        }
+    }
+    for (k in 0..b.readings[0].notes.count()) {
+        if (!narrowed || only.has(b.readings[0].notes.name(k))) {
+            let name = copyBytes(b.readings[0].notes.name(k))!;
+            let why = copyBytes(b.readings[0].notes.texts[k].view())!;
+            b.notes.put(name.view(), 0, why.view());
+        }
+    }
+    return b;
+}
+
+/// The script's Binding.render, with the line that names the generator as `generator` gives it.
+fn cbRender(b: borrow CbBinding, generator: StringView) -> Vector<u8> {
+    var out = Vector<u8>.create();
+    appendText(mut out, "// GENERATED by ")!;
+    appendText(mut out, generator)!;
+    appendText(mut out, " (CeeSafe ADR 0095) from ")!;
+    appendBytes(mut out, b.header.view())!;
+    appendText(mut out, ": do not edit, regenerate it.\n")!;
+    if (b.names.length > 1) {
+        appendText(mut out, "// What is declared here is the same in: ")!;
+        for (k in 0..b.names.length) {
+            if (k > 0) {
+                appendText(mut out, ", ")!;
+            }
+            appendBytes(mut out, b.names[k].view())!;
+        }
+        appendText(mut out, ".\n")!;
+    }
+    appendText(mut out, "\n@header(\"")!;
+    appendBytes(mut out, b.header.view())!;
+    appendText(mut out, "\")\nextern \"C\" {\n")!;
+    var body = Vector<Vector<u8>>.create();
+    for (group in 0..5u32) {
+        var keys = Vector<Vector<u8>>.create();
+        for (key in b.same.view()) {
+            if (cbKeyGroup(key.view()) == group) {
+                keys.push(copyBytes(key.view())!)!;
+            }
+        }
+        if (group == cbForeign()) {
+            cbSort(mut keys);
+        }
+        for (key in keys.view()) {
+            match (b.opaque.find(key.view())) {
+                Some(k) => {
+                    for (line in b.opaqueLines[b.opaque.numbers[k] as usize].view()) {
+                        body.push(cbJoin("    ", line.view(), ""))!;
+                    }
+                }
+                null => {
+                    let at = cbEntryAt(b.readings[0], key.view()) as usize;
+                    for (line in b.readings[0].entries[at].lines.view()) {
+                        body.push(cbJoin("    ", line.view(), ""))!;
+                    }
+                }
+            }
+        }
+        if (keys.length > 0) {
+            body.push(Vector<u8>.create())!;
+        }
+    }
+    var count = body.length;
+    while (count > 0 && body[count - 1].length == 0) {
+        count -= 1;
+    }
+    for (k in 0..count) {
+        appendBytes(mut out, body[k].view())!;
+        out.push('\n')!;
+    }
+    appendText(mut out, "}\n")!;
+    var written = CbNames.create();
+    for (key in b.same.view()) {
+        written.add(cbKeyName(key.view()));
+    }
+    var noted = false;
+    for (k in 0..b.notes.count()) {
+        if (written.has(b.notes.name(k))) {
+            continue;
+        }
+        if (!noted) {
+            appendText(mut out, "\n// Not declared:\n")!;
+            noted = true;
+        }
+        appendText(mut out, "//   ")!;
+        appendBytes(mut out, b.notes.name(k))!;
+        appendText(mut out, ": ")!;
+        appendBytes(mut out, b.notes.texts[k].view())!;
+        out.push('\n')!;
+    }
+    if (b.differs.length > 0) {
+        appendText(
+            mut out,
+            "\n// Not the same in every configuration, so not declared: write these by hand, with @cfg (and --leave\n",
+        )!;
+        appendText(mut out, "// a type that is, so that its name is declared once).\n")!;
+        for (d in b.differs.view()) {
+            appendText(mut out, "//   ")!;
+            appendBytes(mut out, d.view())!;
+            out.push('\n')!;
+        }
+    }
+    return out;
+}
+
+/// The script's settle: one declaration of each name among the bindings, which compile as one unit (N0201): a type
+/// belongs to the header that defines it, and anything else that several declare to the first of them. A name in
+/// `known` (--with, --leave) is declared elsewhere, and by none of them.
+fn cbSettle(bindings: borrow mut Vector<CbBinding>, known: borrow CbNames) {
+    for (b in 0..bindings.length) {
+        var kept = Vector<Vector<u8>>.create();
+        for (k in 0..bindings[b].same.length) {
+            let key = copyBytes(bindings[b].same[k].view())!;
+            if (!known.has(cbKeyName(key.view()))) {
+                kept.push(key)!;
+            } else if (cbKeyGroup(key.view()) != cbForeign()) {
+                bindings[b].notes.put(cbKeyName(key.view()), 0, "declared elsewhere (--with or --leave)".bytes());
+            }
+        }
+        bindings[b].same = kept;
+    }
+    // A name's owner: the binding (the number) and the group (the text, its digit) that declares it.
+    var owner = CbNames.create();
+    let wanted = [cbType(), cbForeign(), cbConstant(), cbData(), cbFunction()]; // a definition, then an opaque mention
+    for (w in 0..5usize) {
+        for (b in 0..bindings.length) {
+            for (key in bindings[b].same.view()) {
+                if (cbKeyGroup(key.view()) == wanted[w] && !owner.has(cbKeyName(key.view()))) {
+                    owner.put(cbKeyName(key.view()), truncate<u32>(b), key[0..1]);
+                }
+            }
+        }
+    }
+    for (b in 0..bindings.length) {
+        var kept = Vector<Vector<u8>>.create();
+        for (k in 0..bindings[b].same.length) {
+            let key = copyBytes(bindings[b].same[k].view())!;
+            let at = owner.find(cbKeyName(key.view()))!;
+            let by = owner.numbers[at] as usize;
+            let group = (owner.texts[at][0] - '0') as u32;
+            if (by == b && group == cbKeyGroup(key.view())) {
+                kept.push(key)!;
+            } else if (cbKeyGroup(key.view()) != cbForeign()) {
+                var note = copyBytes(cbKeyName(key.view()))!;
+                appendText(mut note, " (")!;
+                appendText(mut note, cbGroupName(cbKeyGroup(key.view())))!;
+                appendText(mut note, ")")!;
+                var why = cbFrom("the name is a ");
+                appendText(mut why, if (group == cbForeign()) "type" else cbGroupName(group))!;
+                appendText(mut why, "'s, declared for ")!;
+                if (by == b) {
+                    appendText(mut why, "this header")!;
+                } else {
+                    let other = copyBytes(bindings[by].header.view())!;
+                    appendBytes(mut why, other.view())!;
+                }
+                bindings[b].notes.put(note.view(), 0, why.view());
+            }
+        }
+        bindings[b].same = kept;
+    }
+}
+
+// ---- the command ----------------------------------------------------------------------------------------------------
+
+/// What the command line asks for.
+struct CbOptions {
+    headers: Vector<Vector<u8>>;
+    includes: Vector<Vector<u8>>;
+    defines: Vector<Vector<u8>>;
+    target: Vector<u8>;
+    configs: Vector<Vector<u8>>;
+    only: Vector<Vector<u8>>;
+    others: Vector<Vector<u8>>;
+    leave: Vector<Vector<u8>>;
+    cc: Vector<u8>;
+    noFmt: bool;
+    output: Vector<u8>;
+    outDir: Vector<u8>;
+}
+
+/// `ceesafec cbind --help`.
+fn cbindHelp() {
+    Console.writeLine("usage: ceesafec cbind --header <h> [-I <dir>]... [-D <name>[=<value>]]... [--target <triple>]");
+    Console.writeLine(
+        "           [--config <name>=\"<clang flags>\"]... [--only <name>,<name>]... [--with <file.cee>]...",
+    );
+    Console.writeLine("           [--leave <name>,<name>]... [--cc <clang>] [--no-fmt] -o <file.cee>");
+    Console.writeLine("       ceesafec cbind --header <h> --header <h>... --out-dir <directory>");
+    Console.writeLine(
+        "writes an extern \"C\" block for a C header, from clang's AST (tooling.md §11, ADR 0095, ADR 0127):",
+    );
+    Console.writeLine(
+        "the header's own functions, structs, enums, typedefs of structs and of function pointers, integer",
+    );
+    Console.writeLine(
+        "and string macros, and extern data. What CeeSafe cannot spell is left out, or for a struct made",
+    );
+    Console.writeLine("opaque, with a comment that says why. Nothing is compiled or run.");
+    Console.writeLine("  --header <h>          the header, as C code includes it, found through the -I directories;");
+    Console.writeLine("                        repeat it for several, written to --out-dir as one file each, which");
+    Console.writeLine("                        compile together");
+    Console.writeLine("  -I <dir>              an include directory");
+    Console.writeLine("  -D <name>[=<value>]   a macro");
+    Console.writeLine("  --target <triple>     clang's target triple");
+    Console.writeLine("  --config <name>=<flags>");
+    Console.writeLine(
+        "                        a configuration: its name and its clang flags; repeat it, and only what",
+    );
+    Console.writeLine("                        is the same in all of them is written");
+    Console.writeLine("  --only <name>,...     names to write, with the types they mention");
+    Console.writeLine(
+        "  --with <file.cee>     a generated file compiled with this one: the names it declares are left",
+    );
+    Console.writeLine("                        to it");
+    Console.writeLine("  --leave <name>,...    names declared elsewhere, such as by lib/kernel: they are not written");
+    Console.writeLine(
+        "  --cc <clang>          the C compiler, which must be clang; default: $CC, else cc as build finds",
+    );
+    Console.writeLine("                        it, else clang on PATH when that one is not clang");
+    Console.writeLine("  --no-fmt              write the generator's own layout, not ceesafec fmt's");
+    Console.writeLine("  -o <file.cee>         the file to write, for one header");
+    Console.writeLine("  --out-dir <directory> the directory to write <header's name>.cee into, for several headers");
+}
+
+/// A usage error of `cbind`: the message and where the options are listed, on standard error; exit status 2.
+fn cbindUsage(message: Slice<u8>) -> i32 {
+    var out = copyBytes("ceesafec: ".bytes())!;
+    appendBytes(mut out, message)!;
+    appendText(mut out, "\nusage: ceesafec cbind --header <h> [-I <dir>]... [options] -o <file.cee>\n")!;
+    appendText(mut out, "       ceesafec cbind --header <h> --header <h>... [options] --out-dir <directory>\n")!;
+    appendText(mut out, "       ceesafec cbind --help lists the options (tooling.md §11)\n")!;
+    Console.writeError(StringView.fromUtf8(out.view())!);
+    return 2;
+}
+
+/// A failure that is not the command line's (a header that is not found, one clang cannot read): the message on
+/// standard error; exit status 1.
+fn cbindFailure(message: Slice<u8>) -> i32 {
+    var out = copyBytes("ceesafec: ".bytes())!;
+    appendBytes(mut out, message)!;
+    out.push('\n')!;
+    match (StringView.fromUtf8(out.view())) {
+        Some(text) => { Console.writeError(text); }
+        null => { Console.writeError("ceesafec: cbind failed, and what clang said is not UTF-8\n"); }
+    }
+    return 1;
+}
+
+/// `shlex.split(text)`: a configuration's flags as a shell would split them. False if a quote is not closed or a
+/// backslash ends the text.
+fn cbSplitFlags(text: Slice<u8>, out: borrow mut Vector<Vector<u8>>) -> bool {
+    var current = Vector<u8>.create();
+    var inWord = false;
+    var i: usize = 0;
+    while (i < text.length) {
+        let c = text[i];
+        i += 1;
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            if (inWord) {
+                out.push(copyBytes(current.view())!)!;
+                current.clear();
+                inWord = false;
+            }
+        } else if (c == '\\') {
+            if (i >= text.length) {
+                return false;
+            }
+            current.push(text[i])!;
+            i += 1;
+            inWord = true;
+        } else if (c == '\'') {
+            inWord = true;
+            while (i < text.length && text[i] != '\'') {
+                current.push(text[i])!;
+                i += 1;
+            }
+            if (i >= text.length) {
+                return false;
+            }
+            i += 1;
+        } else if (c == '"') {
+            inWord = true;
+            loop {
+                if (i >= text.length) {
+                    return false;
+                }
+                let d = text[i];
+                i += 1;
+                if (d == '"') {
+                    break;
+                }
+                if (d == '\\') {
+                    if (i >= text.length) {
+                        return false;
+                    }
+                    if (text[i] != '"' && text[i] != '\\') {
+                        current.push('\\')!;
+                    }
+                    current.push(text[i])!;
+                    i += 1;
+                } else {
+                    current.push(d)!;
+                }
+            }
+        } else {
+            current.push(c)!;
+            inWord = true;
+        }
+    }
+    if (inWord) {
+        out.push(copyBytes(current.view())!)!;
+    }
+    return true;
+}
+
+/// `Path(header).stem`: the header's file name without its last extension.
+fn cbStem(header: Slice<u8>) -> Slice<u8> {
+    var start: usize = 0;
+    var end = header.length;
+    while (end > 0 && (header[end - 1] == '/' || header[end - 1] == '\\')) {
+        end -= 1;
+    }
+    for (i in 0..end) {
+        if (header[i] == '/' || header[i] == '\\') {
+            start = i + 1;
+        }
+    }
+    let name = header[start..end];
+    var dot = name.length;
+    for (i in 0..name.length) {
+        if (name[i] == '.') {
+            dot = i;
+        }
+    }
+    return if (dot > 0 && dot + 1 < name.length) name[..dot] else name;
+}
+
+/// Whether `path` is a file (`Path.is_file()`).
+fn cbIsFile(path: Slice<u8>) -> bool {
+    let text = match (StringView.fromUtf8(path)) {
+        Some(t) => t,
+        null => { return false; }
+    };
+    return match (File.kind(text)) {
+        Ok(kind) => match (kind) {
+            Some(PathKind.File) => true,
+            _ => false,
+        },
+        Err(_) => false,
+    };
+}
+
+/// The script's find_header: the header's real path, under the first -I directory that has it, else as it is named;
+/// empty if it is not found.
+fn cbFindHeader(header: Slice<u8>, includes: borrow Vector<Vector<u8>>) -> Vector<u8> {
+    for (directory in includes.view()) {
+        var candidate = Vector<u8>.create();
+        if (!isRooted(header)) {
+            appendBytes(mut candidate, directory.view())!;
+            if (candidate.length > 0 && candidate[candidate.length - 1] != '/') {
+                candidate.push('/')!;
+            }
+        }
+        appendBytes(mut candidate, header)!;
+        if (cbIsFile(candidate.view())) {
+            match (realPath(candidate.view())!) {
+                Some(real) => { return real; }
+                null => {}
+            }
+        }
+    }
+    if (cbIsFile(header)) {
+        match (realPath(header)!) {
+            Some(real) => { return real; }
+            null => {}
+        }
+    }
+    return Vector<u8>.create();
+}
+
+/// The names of `groups`, each a comma-separated list, into `names`.
+fn cbAddNames(groups: borrow Vector<Vector<u8>>, names: borrow mut CbNames) {
+    for (group in groups.view()) {
+        var start: usize = 0;
+        for (i in 0..(group.length + 1)) {
+            if (i == group.length || group[i] == ',') {
+                if (i > start) {
+                    names.add(group[start..i]);
+                }
+                start = i + 1;
+            }
+        }
+    }
+}
+
+/// Whether `compiler` is clang: its `--version` says so.
+fn cbIsClang(
+    compiler: borrow CCompiler,
+    work: Slice<u8>,
+    started: borrow mut bool,
+    why: borrow mut Vector<u8>,
+) -> bool {
+    var arguments = Vector<Vector<u8>>.create();
+    pushText(mut arguments, "--version")!;
+    let outcome = runCompilerWith(compiler, work, arguments, "cbind.rsp".bytes())!;
+    started = outcome.started;
+    if (!outcome.started) {
+        why = cbFrom(outcome.error.message());
+        return false;
+    }
+    return outcome.status == 0 && (containsText(outcome.stdout.view(), "clang") ||
+        containsText(outcome.stderr.view(), "clang"));
+}
+
+/// Adds `flags` to clang's; whether one of them is a `--target` for Windows, where an enum is `int`.
+fn cbPushFlags(base: borrow mut Vector<Vector<u8>>, flags: borrow Vector<Vector<u8>>) -> bool {
+    var windows = false;
+    for (flag in flags.view()) {
+        if (startsWithAt(flag.view(), 0, "--target") &&
+            (containsText(flag.view(), "windows") || containsText(flag.view(), "msvc"))) {
+            windows = true;
+        }
+        base.push(copyBytes(flag.view())!)!;
+    }
+    return windows;
+}
+
+/// `ceesafec cbind` (tooling.md §11): the script's main.
+fn cbindCommand() -> i32 {
+    var options = CbOptions {
+        headers: Vector<Vector<u8>>.create(),
+        includes: Vector<Vector<u8>>.create(),
+        defines: Vector<Vector<u8>>.create(),
+        target: Vector<u8>.create(),
+        configs: Vector<Vector<u8>>.create(),
+        only: Vector<Vector<u8>>.create(),
+        others: Vector<Vector<u8>>.create(),
+        leave: Vector<Vector<u8>>.create(),
+        cc: Vector<u8>.create(),
+        noFmt: false,
+        output: Vector<u8>.create(),
+        outDir: Vector<u8>.create(),
+    };
+    var ccGiven = false;
+    var a: usize = 2;
+    while (a < Process.argumentCount()) {
+        let argument = Process.argument(a)!;
+        let arg = argument.bytes();
+        a += 1;
+        if (argument == "--help" || argument == "-h") {
+            cbindHelp();
+            return 0;
+        }
+        if (argument == "--no-fmt") {
+            options.noFmt = true;
+            continue;
+        }
+        // An option and its value: `--name value`, `--name=value`, `-I value` or `-Ivalue`.
+        var split = arg.length; // where the name ends
+        var attached = false;
+        if (arg.length > 2 && arg[0] == '-' && arg[1] != '-') {
+            split = 2;
+            attached = true;
+        } else if (startsWithAt(arg, 0, "--")) {
+            split = cbFirst(arg, '=');
+            attached = split < arg.length;
+        }
+        let name = arg[..split];
+        var value = Vector<u8>.create();
+        if (attached) {
+            value = copyBytes(arg[(if (split == 2) 2 else split + 1)..])!;
+        }
+        let known = sameText(name, "--header") || sameText(name, "-I") || sameText(name, "-D") ||
+            sameText(name, "--target") || sameText(name, "--config") || sameText(name, "--only") ||
+            sameText(name, "--with") || sameText(name, "--leave") || sameText(name, "--cc") || sameText(name, "-o") ||
+            sameText(name, "--out-dir");
+        if (!known) {
+            let message = if (arg.length > 0 && arg[0] == '-') cbJoin("unknown cbind option '", arg, "'") else cbJoin(
+                "cbind takes no file but its options' ('",
+                arg,
+                "'): name the header with --header",
+            );
+            return cbindUsage(message.view());
+        }
+        if (!attached) {
+            match (Process.argument(a)) {
+                Some(next) => { value = copyBytes(next.bytes())!; }
+                null => {
+                    let message = cbJoin("", name, " needs a value");
+                    return cbindUsage(message.view());
+                }
+            }
+            a += 1;
+        }
+        if (sameText(name, "--header")) {
+            options.headers.push(value)!;
+        } else if (sameText(name, "-I")) {
+            options.includes.push(value)!;
+        } else if (sameText(name, "-D")) {
+            options.defines.push(value)!;
+        } else if (sameText(name, "--target")) {
+            options.target = value;
+        } else if (sameText(name, "--config")) {
+            options.configs.push(value)!;
+        } else if (sameText(name, "--only")) {
+            options.only.push(value)!;
+        } else if (sameText(name, "--with")) {
+            options.others.push(value)!;
+        } else if (sameText(name, "--leave")) {
+            options.leave.push(value)!;
+        } else if (sameText(name, "--cc")) {
+            options.cc = value;
+            ccGiven = true;
+        } else if (sameText(name, "-o")) {
+            options.output = value;
+        } else {
+            options.outDir = value;
+        }
+    }
+    if (options.headers.length == 0) {
+        return cbindUsage("cbind needs a header: --header <h>".bytes());
+    }
+    if ((options.output.length > 0) == (options.outDir.length > 0) ||
+        (options.headers.length > 1 && options.outDir.length == 0)) {
+        return cbindUsage("give -o FILE for one header, or --out-dir DIRECTORY".bytes());
+    }
+    var outputs = Vector<Vector<u8>>.create();
+    for (h in 0..options.headers.length) {
+        var output = Vector<u8>.create();
+        if (options.output.length > 0) {
+            output = copyBytes(options.output.view())!;
+        } else {
+            output = copyBytes(options.outDir.view())!;
+            if (output[output.length - 1] != '/') {
+                output.push('/')!;
+            }
+            appendBytes(mut output, cbStem(options.headers[h].view()))!;
+            appendText(mut output, ".cee")!;
+        }
+        for (other in outputs.view()) {
+            if (sameBytes(other.view(), output.view())) {
+                let message = cbJoin("two headers would be written to ", output.view(), "");
+                return cbindUsage(message.view());
+            }
+        }
+        outputs.push(output)!;
+    }
+    // The flags of every configuration, then each configuration's own.
+    var common = Vector<Vector<u8>>.create();
+    for (i in options.includes.view()) {
+        common.push(cbJoin("-I", i.view(), ""))!;
+    }
+    for (d in options.defines.view()) {
+        common.push(cbJoin("-D", d.view(), ""))!;
+    }
+    if (options.target.length > 0) {
+        common.push(cbJoin("--target=", options.target.view(), ""))!;
+    }
+    var configNames = Vector<Vector<u8>>.create();
+    var configFlags = Vector<Vector<Vector<u8>>>.create();
+    for (config in options.configs.view()) {
+        let equals = cbFirst(config.view(), '=');
+        let name = config[..equals];
+        var again = name.length == 0;
+        for (n in configNames.view()) {
+            again = again || sameBytes(n.view(), name);
+        }
+        var flags = Vector<Vector<u8>>.create();
+        let split = equals >= config.length || cbSplitFlags(config[(equals + 1)..], mut flags);
+        if (again || !split) {
+            let message = cbJoin("--config '", config.view(), "': a name, once, then '=' and the flags");
+            return cbindUsage(message.view());
+        }
+        configNames.push(copyBytes(name)!)!;
+        configFlags.push(flags)!;
+    }
+    if (configNames.length == 0) {
+        configNames.push(cbFrom("default"))!;
+        configFlags.push(Vector<Vector<u8>>.create())!;
+    }
+    var known = CbNames.create();
+    for (other in options.others.view()) {
+        match (readFile(StringView.fromUtf8(other.view())!)) {
+            Ok(text) => { cbNamesOf(text.view(), mut known); }
+            Err(ReadError.Io(e)) => {
+                var message = cbJoin("cannot read '", other.view(), "': ");
+                appendText(mut message, e.message())!;
+                return cbindFailure(message.view());
+            }
+            Err(ReadError.Memory) => { return cbindFailure("out of memory".bytes()); }
+        }
+    }
+    cbAddNames(options.leave, mut known);
+    var only = CbNames.create();
+    cbAddNames(options.only, mut only);
+    // The C compiler: --cc, else $CC, else the one `build` finds; it must be clang.
+    if (!ccGiven) {
+        match (Environment.variable("CC")) {
+            Some(v) => { options.cc = copyBytes(v.bytes())!; }
+            null => {}
+        }
+    }
+    var compilerError = Vector<u8>.create();
+    let located = match (locateCompiler(options.cc.view(), mut compilerError)) {
+        Some(c) => c,
+        null => { return failPlain(compilerError.view()); }
+    };
+    let temporary = match (Directory.temporary()) {
+        Ok(d) => d,
+        Err(e) => { return failPlain(e.message().bytes()); }
+    };
+    let work = copyBytes(temporary.view().bytes())!;
+    let status = cbindRun(options, located, work.view(), outputs, common, configNames, configFlags, known, only);
+    removeTree(work.view());
+    return status;
+}
+
+/// The command after its options are read: `work` is its temporary directory, which the caller removes.
+fn cbindRun(
+    options: borrow CbOptions,
+    located: CCompiler,
+    work: Slice<u8>,
+    outputs: borrow Vector<Vector<u8>>,
+    common: borrow Vector<Vector<u8>>,
+    configNames: borrow Vector<Vector<u8>>,
+    configFlags: borrow Vector<Vector<Vector<u8>>>,
+    known: borrow CbNames,
+    only: borrow CbNames,
+) -> i32 {
+    var compiler = located;
+    var started = false;
+    var why = Vector<u8>.create();
+    var isClang = !compiler.msvc && cbIsClang(compiler, work, mut started, mut why);
+    if (!isClang && options.cc.length == 0) {
+        // No compiler was named, and the one `build` uses is not clang, or is not there: clang on PATH, if it is.
+        match (findInPath("clang", hostIsWindows())) {
+            Some(path) => {
+                var found = Vector<u8>.create();
+                match (locateCompiler(path.view(), mut found)) {
+                    Some(c) => {
+                        var startedOther = false;
+                        var whyOther = Vector<u8>.create();
+                        if (cbIsClang(c, work, mut startedOther, mut whyOther)) {
+                            compiler = c;
+                            isClang = true;
+                        }
+                    }
+                    null => {}
+                }
+            }
+            null => {}
+        }
+    }
+    if (!isClang && !compiler.msvc && !started) {
+        var message = cbJoin("cannot run the C compiler '", compiler.path.view(), "': ");
+        appendBytes(mut message, why.view())!;
+        return failPlain(message.view());
+    }
+    if (!isClang) {
+        var message = cbJoin(
+            "cbind reads clang's AST (-Xclang -ast-dump=json), and the C compiler '",
+            compiler.path.view(),
+            "' is not clang: install clang, or name it with --cc (tooling.md §11)",
+        );
+        return failPlain(message.view());
+    }
+    var clang = CbClang { compiler: compiler, base: Vector<Vector<u8>>.create(), work: copyBytes(work)! };
+    var bindings = Vector<CbBinding>.create();
+    for (h in 0..options.headers.length) {
+        let header = options.headers[h].view();
+        let path = cbFindHeader(header, options.includes);
+        if (path.length == 0) {
+            let message = cbJoin("", header, " is not under any -I directory");
+            return cbindFailure(message.view());
+        }
+        var readings = Vector<CbReading>.create();
+        for (c in 0..configNames.length) {
+            var windows = false;
+            clang.base.clear();
+            pushText(mut clang.base, "-std=c11")!;
+            pushText(mut clang.base, "-ffreestanding")!;
+            pushText(mut clang.base, "-fsyntax-only")!;
+            pushText(mut clang.base, "-w")!;
+            pushText(mut clang.base, "-ferror-limit=0")!;
+            pushText(mut clang.base, "-fno-caret-diagnostics")!;
+            windows = cbPushFlags(mut clang.base, common);
+            windows = cbPushFlags(mut clang.base, configFlags[c]) || windows;
+            var error = Vector<u8>.create();
+            match (cbRead(header, path.view(), clang, known, windows, mut error)) {
+                Some(reading) => { readings.push(reading)!; }
+                null => { return cbindFailure(error.view()); }
+            }
+        }
+        bindings.push(cbBind(header, configNames, readings, only))!;
+    }
+    if (only.count() > 0) {
+        var written = CbNames.create();
+        for (b in bindings.view()) {
+            for (key in b.same.view()) {
+                written.add(cbKeyName(key.view()));
+            }
+        }
+        var missing = Vector<Vector<u8>>.create();
+        for (k in 0..only.count()) {
+            if (!written.has(only.name(k))) {
+                missing.push(copyBytes(only.name(k))!)!;
+            }
+        }
+        if (missing.length > 0) {
+            cbSort(mut missing);
+            var message = cbFrom("--only names what is not declared, or not written: ");
+            for (k in 0..missing.length) {
+                if (k > 0) {
+                    appendText(mut message, ", ")!;
+                }
+                appendBytes(mut message, missing[k].view())!;
+            }
+            return cbindFailure(message.view());
+        }
+    }
+    cbSettle(mut bindings, known);
+    for (b in 0..bindings.length) {
+        let output = outputs[b].view();
+        var text = cbRender(bindings[b], "ceesafec cbind");
+        if (!options.noFmt) {
+            // ceesafec fmt's layout, so that the text is the same wherever it is made.
+            let source = SourceText.create(output, text.view())!;
+            var diagnostics = Diagnostics.create();
+            let formatted = formatSource(source, 0, mut diagnostics)!;
+            let problem = copyBytes(formatted.problem.view())!;
+            match (formatted.text) {
+                Some(laid) => { text = copyBytes(laid.view())!; }
+                null => {
+                    var message = cbJoin("ceesafec fmt refused the output (", output, ")");
+                    if (problem.length > 0) {
+                        appendText(mut message, ": ")!;
+                        appendBytes(mut message, problem.view())!;
+                    }
+                    var sources = Vector<SourceText>.create();
+                    sources.push(SourceText.create(output, text.view())!)!;
+                    var shown = Vector<u8>.create();
+                    for (d in diagnostics.items.view()) {
+                        render(mut shown, d, sources[0], sources)!;
+                    }
+                    Console.writeError(StringView.fromUtf8(shown.view())!);
+                    return cbindFailure(message.view());
+                }
+            }
+        }
+        match (slashedPath(directoryOf(output))) {
+            Ok(directory) => {
+                match (makeDirectories(directory.view())) {
+                    Ok() => {}
+                    Err(e) => {
+                        var message = cbJoin("cannot make the directory '", directory.view(), "': ");
+                        appendText(mut message, e.message())!;
+                        return cbindFailure(message.view());
+                    }
+                }
+            }
+            Err(_) => { return cbindFailure("out of memory".bytes()); }
+        }
+        match (writeFile(StringView.fromUtf8(output)!, text.view())) {
+            Ok() => {}
+            Err(e) => {
+                var message = cbJoin("cannot write '", output, "': ");
+                appendText(mut message, e.message())!;
+                return cbindFailure(message.view());
+            }
+        }
+    }
+    return 0;
+}

@@ -718,7 +718,7 @@ def driver_messages(compiler, work, problems):
     write(os.path.join(user, "ceesafe.toml"), '[package]\nname = "user"\n\n[dependencies]\ntally = "^0.1"\n')
     write(os.path.join(user, "src", "main.cee"),
           'fn main() {\n    Console.writeLine(Process.argument(1) ?? "none");\n}\n')
-    for command in ("build", "check", "run", "fetch", "fmt"):
+    for command in ("build", "check", "run", "fetch", "fmt", "cbind"):   # cbind prints its own (tooling.md §11)
         for flag in ("--help", "-h"):
             p = run([compiler, command, flag], user)
             if p.returncode != 0 or not p.stdout.startswith("usage: ceesafec") or p.stderr:

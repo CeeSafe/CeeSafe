@@ -1,0 +1,176 @@
+// src/support/json_tree.cee against Python's json module (tools/oracles/json_tree.py, which reads the documents
+// below from this file and prints the expected lines; run 2026-11-13 with Python 3.9.6): for each document, whether
+// it is JSON, its tree written back (a string as the hex of its decoded bytes, a number as it is written), the
+// tree with only the members `id`, `kind`, `inner` and `name`, and the member `a` of the root, which is the last of
+// that name. Then an array nested 200,000 deep, which the reader takes without recursion.
+// expect-stdout: 0: {a:1,b:[true,false,null],c:{d:"78",e:-0.5e+3}} | kept {} | a 1
+// expect-stdout: 1: [] | kept []
+// expect-stdout: 2: {} | kept {}
+// expect-stdout: 3: [{},[],[[]],{a:{}}] | kept [{},[],[[]],{}]
+// expect-stdout: 4: {id:"307831",kind:"52",loc:{offset:12,file:"612e68",line:3},inner:[{id:"307832",kind:"46",name:"78",type:{qualType:"696e74"}},{id:"307833",kind:"47"}]} | kept {id:"307831",kind:"52",inner:[{id:"307832",kind:"46",name:"78"},{id:"307833",kind:"47"}]}
+// expect-stdout: 5: {a:1,a:2,b:3,a:[4]} | kept {} | a [4]
+// expect-stdout: 6: "6120226220c3a920e282ac20f09f988020090a5c2f" | kept "6120226220c3a920e282ac20f09f988020090a5c2f"
+// expect-stdout: 7: "c3a9e282acf09f9880" | kept "c3a9e282acf09f9880"
+// expect-stdout: 8: [0,-0,1.5,1e5,1E-5,123456789012345678901234567890,-1.0e+10] | kept [0,-0,1.5,1e5,1E-5,123456789012345678901234567890,-1.0e+10]
+// expect-stdout: 9: {name:"",kind:"",skipped:{name:"696e"},inner:[{skipped:[1,2,{kind:"78"}],name:"6c617374"}]} | kept {name:"",kind:"",inner:[{name:"6c617374"}]}
+// expect-stdout: 10: {x:"7d5d2c225c",id:"31"} | kept {id:"31"}
+// expect-stdout: 11: {x:[1,"5d",{y:"7d"}],name:"6e"} | kept {name:"6e"}
+// expect-stdout: 12: true | kept true
+// expect-stdout: 13: null | kept null
+// expect-stdout: 14: -12 | kept -12
+// expect-stdout: 15: [1,2,3] | kept [1,2,3]
+// expect-stdout: 16: {a:[1,2,{b:null}]} | kept {} | a [1,2,{b:null}]
+// expect-stdout: 17: invalid
+// expect-stdout: 18: invalid
+// expect-stdout: 19: invalid
+// expect-stdout: 20: invalid
+// expect-stdout: 21: invalid
+// expect-stdout: 22: invalid
+// expect-stdout: 23: invalid
+// expect-stdout: 24: invalid
+// expect-stdout: 25: invalid
+// expect-stdout: 26: invalid
+// expect-stdout: 27: invalid
+// expect-stdout: 28: invalid
+// expect-stdout: 29: invalid
+// expect-stdout: 30: invalid
+// expect-stdout: 31: invalid
+// expect-stdout: 32: invalid
+// expect-stdout: 33: {id:"?",name:"61"} | kept {id:"?",name:"61"}
+// expect-stdout: deep: 200000 arrays, each in the one before
+
+// One document a line (tools/oracles/json_tree.py reads them between the two marks).
+fn documents() -> StringView => """
+    {"a": 1, "b": [true, false, null], "c": {"d": "x", "e": -0.5e+3}}
+    []
+    {}
+    [{}, [], [[]], {"a": {}}]
+    {"id": "0x1", "kind": "R", "loc": {"offset": 12, "file": "a.h", "line": 3}, "inner": [{"id": "0x2", "kind": "F", "name": "x", "type": {"qualType": "int"}}, {"id": "0x3", "kind": "G"}]}
+    {"a": 1, "a": 2, "b": 3, "a": [4]}
+    "a \"b é € 😀 \t\n\\\/"
+    "é€😀"
+    [0, -0, 1.5, 1e5, 1E-5, 123456789012345678901234567890, -1.0e+10]
+    {"name": "", "kind": "", "skipped": {"name": "in"}, "inner": [{"skipped": [1, 2, {"kind": "x"}], "name": "last"}]}
+    {"x": "}],\"\\", "id": "1"}
+    {"x": [1, "]", {"y": "}"}], "name": "n"}
+     true
+    null
+    -12
+    	[ 1 , 2 ,	3 ]
+    {"a":[1,2,{"b":null}]}
+
+    [1, 2
+    [1, 2,]
+    {"a": 1,}
+    {"a" 1}
+    {a: 1}
+    [01]
+    [1.]
+    [1e]
+    [-]
+    "open
+    [1] 2
+    {"a": tru}
+    ["a	b"]
+    [1 2]
+    }
+    {"id": "\ud800", "name": "a"}
+    """;
+
+fn hex(out: borrow mut Vector<u8>, bytes: Slice<u8>) {
+    let digits = "0123456789abcdef".bytes();
+    for (b in bytes) {
+        out.push(digits[(b >> 4) as usize])!;
+        out.push(digits[(b & 15) as usize])!;
+    }
+}
+
+fn dump(out: borrow mut Vector<u8>, tree: borrow JsonTree, text: Slice<u8>, node: u32) {
+    let kind = tree.kind(node);
+    if (kind == jsonObject() || kind == jsonArray()) {
+        out.push(if (kind == jsonObject()) '{' else '[')!;
+        var child = tree.first(node);
+        var first = true;
+        while (child != none()) {
+            if (!first) {
+                out.push(',')!;
+            }
+            first = false;
+            if (kind == jsonObject()) {
+                let span = borrow tree.nodes[child as usize];
+                appendBytes(out, text[span.keyStart as usize..span.keyEnd as usize])!;
+                out.push(':')!;
+            }
+            dump(out, tree, text, child);
+            child = tree.next(child);
+        }
+        out.push(if (kind == jsonObject()) '}' else ']')!;
+    } else if (kind == jsonString()) {
+        out.push('"')!;
+        match (tree.stringOf(text, node)) {
+            Some(decoded) => { hex(out, decoded.view()); }
+            null => { out.push('?')!; }
+        }
+        out.push('"')!;
+    } else if (kind == jsonNull()) {
+        appendText(out, "null")!;
+    } else {
+        appendBytes(out, text[tree.start(node)..tree.end(node)])!;
+    }
+}
+
+fn deep() {
+    let depth: usize = 200000;
+    var text = Vector<u8>.create();
+    for (k in 0..depth) {
+        text.push('[')!;
+    }
+    for (k in 0..depth) {
+        text.push(']')!;
+    }
+    let all = Vector<Vector<u8>>.create();
+    let tree = parseJsonTree(text.view(), all)!;
+    var chained = tree.nodes.length == depth;
+    for (k in 0..tree.nodes.length) {
+        let expected = if (k + 1 < depth) truncate<u32>(k + 1) else none();
+        chained = chained && tree.kind(truncate<u32>(k)) == jsonArray() && tree.first(truncate<u32>(k)) == expected &&
+            tree.next(truncate<u32>(k)) == none();
+    }
+    var line = copyBytes("deep: ".bytes())!;
+    appendDecimal(mut line, tree.nodes.length as u64)!;
+    appendText(mut line, if (chained) " arrays, each in the one before" else " nodes, not a chain")!;
+    Console.writeLine(StringView.fromUtf8(line.view())!);
+}
+
+fn main() {
+    let all = Vector<Vector<u8>>.create();
+    var keep = Vector<Vector<u8>>.create();
+    keep.push(copyBytes("id".bytes())!)!;
+    keep.push(copyBytes("kind".bytes())!)!;
+    keep.push(copyBytes("inner".bytes())!)!;
+    keep.push(copyBytes("name".bytes())!)!;
+    var index: u64 = 0;
+    for (document in documents().split("\n")) {
+        let text = document.bytes();
+        var line = Vector<u8>.create();
+        appendDecimal(mut line, index)!;
+        appendText(mut line, ": ")!;
+        index += 1;
+        match (parseJsonTree(text, all)) {
+            Some(tree) => {
+                dump(mut line, tree, text, 0);
+                appendText(mut line, " | kept ")!;
+                let kept = parseJsonTree(text, keep)!;
+                dump(mut line, kept, text, 0);
+                let a = tree.member(text, 0, "a");
+                if (a != none()) {
+                    appendText(mut line, " | a ")!;
+                    dump(mut line, tree, text, a);
+                }
+            }
+            null => { appendText(mut line, "invalid")!; }
+        }
+        Console.writeLine(StringView.fromUtf8(line.view())!);
+    }
+    deep();
+}

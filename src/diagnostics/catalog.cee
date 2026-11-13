@@ -34,7 +34,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "Nested more than 1,000 levels deep (grammar.md §2.2: blocks, statements, types, patterns, unary operands, and each link of an operator, call or member chain). The rest of the file is not parsed",
     200 => "Name not found (variable, function, or built-in member)",
     201 =>
-        "Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2)",
+        "Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2); or an item given a reserved built-in name (`type-system.md` §2)",
     202 => "Parameter declared twice",
     203 => "Local redeclares a local or parameter in scope (no shadowing of locals)",
     204 => "Unknown type name",
@@ -48,7 +48,8 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     211 =>
         "Assignment to an immutable binding (`let`, parameter, constant, function), or an assignment or `borrow mut` of a const parameter (ADR 0083 §2.3)",
     212 => "Local read before it is definitely assigned",
-    213 => "End of a non-`void` function is reachable (for a `never` function too, type-system §15.3)",
+    213 =>
+        "End of a non-`void` function is reachable (for a `never` function too, type-system §15.3); the end of the `else` block of a `let … else` is reachable (§15.5, ADR 0117)",
     214 => "`break`/`continue` outside a loop",
     215 => "`return` with or without a value contradicts the return type, or `return` in a `never` function",
     216 =>
@@ -92,7 +93,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     248 => "`borrow mut` (or a `borrow mut this` call) on an immutable place",
     249 => "`mut` argument marker missing or misplaced",
     250 =>
-        "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5)",
+        "Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5). A note says where the value was moved (ADR 0114 §2.2)",
     251 => "Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy",
     252 => "Move of a field out of a value whose type has a `drop` block",
     253 => "Move out of a `using` binding",
@@ -116,7 +117,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     264 =>
         "A type a region cannot hold (R2): one that needs drop, a scoped type, or a non-Copy fill value for `allocArray`",
     265 =>
-        "Type arguments that cannot be inferred: a generic call, struct literal or enum value whose arguments, fields, expected type or unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
+        "Type arguments that cannot be inferred: a generic call whose arguments and unique bound instantiations (ADR 0086 §2.7) do not determine every type parameter (a call's expected type is not used: `let m: Maybe<i32> = make();` needs `make<i32>()`), or a struct literal or enum value whose fields, payloads and expected type do not. Not reported when an argument has an error of its own (ADR 0075 §2.16)",
     266 => "Generic instantiation nested more than 64 deep (polymorphic recursion)",
     267 =>
         "An `impl` that does not match its interface (receiver, parameter or return type, a missing method without a default, or an extra method), a duplicate `impl`, an `impl` for a type parameter or a scoped type other than `S<r>` under `impl<region r>`, a generic impl whose target is not a generic struct or enum or does not name each of its type parameters, overlapping impls, an impl outside the package of its interface and of its type (the orphan rule, ADR 0054), an impl method whose receiver or number of type parameters differs from the interface's (ADR 0086 §2.3), a missing or undeclared constant or associated type, a constant of another type (ADR 0086 §2.4, §2.5), a method call, constant or associated type `T.Name` that two bounds both provide, or an `impl` without `for` that names no struct or enum of its package, or names it without its own parameters in order (ADR 0064 §1, ADR 0107)",
@@ -228,7 +229,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     357 =>
         "An empty range pattern: `lo..=hi` with `lo > hi`, or `lo..hi` with `lo >= hi` (`type-system.md` §15.2, ADR 0085 §2.4)",
     358 =>
-        "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3)",
+        "A constant pattern of a type that cannot be a pattern (anything but an integer or `bool`), or `T.NAME` read through a type parameter, or `Self.NAME` in an interface's default method, or a bare name that names a const parameter (`type-system.md` §15.2, ADR 0085 §2.6, ADR 0083 §2.3); a range pattern's bound that is a name but not a constant's (ADR 0118)",
     359 =>
         "An `e is P` whose pattern binds where the test is not known true: under a negation or a logical or, as a whole `let` initialiser or argument, or as the last operand of an `&&` chain outside an `if` or `while` condition; bindings are seen only by the chain's later operands and the then-branch or body (`type-system.md` §15.4, ADR 0085 §2.8)",
     360 =>
@@ -246,5 +247,9 @@ fn summaryOf(number: u32) -> StringView => match (number) {
         "`name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10)",
     402 =>
         "A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105)",
+    403 =>
+        "A `move` closure literal (a boxed closure's, `Thread.spawn`'s, an `async move` child's) whose body changes a captured variable of a Copy type, where the function names the variable again after the literal: the closure took a copy and changes that, so the later read sees the old value (`type-system.md` §36.5, ADR 0113)",
+    404 =>
+        "A pattern that tests nothing, `_` or a binding (through `name @` too), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3)",
     _ => "",
 };

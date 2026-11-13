@@ -759,6 +759,7 @@ fn newClosureFunction(
         let definition = c.types.info(environmentType).structDef;
         c.types.structs[definition as usize].isClosureEnvironment = true;
         c.types.structs[definition as usize].closureId = id;
+        c.types.structs[definition as usize].inGenericCode = environmentIsGeneric(c, environment);
         c.hir.functions[function as usize].closureEnvironment = environmentType;
         // Named `env`, but in no scope: the body cannot name it (its captures lower to places in it).
         let envName = c.intern("env")?;

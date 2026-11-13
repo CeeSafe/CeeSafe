@@ -1,0 +1,111 @@
+// An owning closure made in generic code (type-system.md §36.5 with §20.4): `Box.create(move …)` in a generic
+// function, and in a method of a generic struct. The C once named a closure environment that was never declared: the
+// generic version's, in the `Result` that `Box.create` returns there. Each instance of the function has its own
+// closure and environment. A closure that captures a `T`, one that captures another local, one that captures
+// nothing; one instance and several; returned, stored in a struct, called at once; a `dyn mut fn` that counts. A
+// closure whose result is a `T` needs `T: Send`, which holds no loan (§25.7).
+// Each expected line follows from the values the program builds.
+struct Holder {
+    step: Box<dyn fn(i32) -> i32>;
+}
+
+struct Scale<T: Copy + Send> {
+    factor: T;
+    offset: i32;
+
+    fn offsetter(borrow this) -> Result<Box<dyn fn(i32) -> i32>, AllocError> {
+        let offset = this.offset;
+        let f: Box<dyn fn(i32) -> i32> = Box.create(move (y: i32) => y + offset)?;
+        return Ok(f);
+    }
+
+    fn keeper(borrow this) -> Result<Box<dyn fn() -> T>, AllocError> {
+        let kept = this.factor;
+        let f: Box<dyn fn() -> T> = Box.create(move () => kept)?;
+        return Ok(f);
+    }
+}
+
+fn adder<T: Copy>(witness: T, n: i32) -> Result<Box<dyn fn(i32) -> i32>, AllocError> {
+    let unused = witness;
+    let f: Box<dyn fn(i32) -> i32> = Box.create(move (y: i32) => y + n)?;
+    return Ok(f);
+}
+
+fn constant<T: Copy + Send>(value: T) -> Result<Box<dyn fn() -> T>, AllocError> {
+    let f: Box<dyn fn() -> T> = Box.create(move () => value)?;
+    return Ok(f);
+}
+
+fn nothing<T: Copy>(witness: T) -> Result<Box<dyn fn(i32) -> i32>, AllocError> {
+    let unused = witness;
+    let f: Box<dyn fn(i32) -> i32> = Box.create(move (y: i32) => y * 2)?;
+    return Ok(f);
+}
+
+fn atOnce<T: Copy + Send>(value: T) -> Result<T, AllocError> {
+    let f: Box<dyn fn() -> T> = Box.create(move () => value)?;
+    return Ok(f());
+}
+
+fn counter<T: Copy>(witness: T, start: i32) -> Result<Box<dyn mut fn() -> i32>, AllocError> {
+    let unused = witness;
+    var count = start;
+    let f: Box<dyn mut fn() -> i32> = Box.create(move () => {
+        count += 1;
+        return count;
+    })?;
+    return Ok(f);
+}
+
+fn run() -> Result<void, AllocError> {
+    let plusTen = adder(1u8, 10)?;
+    Console.writeLine(plusTen(5));
+    let plusTwenty = adder(true, 20)?;
+    Console.writeLine(plusTwenty(5));
+    let plusThirty = adder(2u8, 30)?;
+    Console.writeLine(plusThirty(5));
+    let seven = constant(7u64)?;
+    Console.writeLine(seven());
+    let yes = constant(true)?;
+    Console.writeLine(if (yes()) 1 else 0);
+    let double = nothing(3i64)?;
+    Console.writeLine(double(21));
+    Console.writeLine(atOnce(99u16)?);
+    Console.writeLine(atOnce(-4)?);
+    var next = counter(0u8, 40)?;
+    next();
+    Console.writeLine(next());
+    let holder = Holder { step: adder(0i64, 100)? };
+    Console.writeLine(holder.step(1));
+    let scale = Scale<u32> { factor: 6, offset: 3 };
+    let offsetter = scale.offsetter()?;
+    Console.writeLine(offsetter(4));
+    let keeper = scale.keeper()?;
+    Console.writeLine(keeper());
+    let other = Scale<bool> { factor: true, offset: 8 };
+    let otherOffsetter = other.offsetter()?;
+    Console.writeLine(otherOffsetter(4));
+    let otherKeeper = other.keeper()?;
+    Console.writeLine(if (otherKeeper()) 1 else 0);
+    return Ok();
+}
+
+fn main() {
+    run()!;
+}
+
+// expect-stdout: 15
+// expect-stdout: 25
+// expect-stdout: 35
+// expect-stdout: 7
+// expect-stdout: 1
+// expect-stdout: 42
+// expect-stdout: 99
+// expect-stdout: -4
+// expect-stdout: 42
+// expect-stdout: 101
+// expect-stdout: 7
+// expect-stdout: 6
+// expect-stdout: 12
+// expect-stdout: 1

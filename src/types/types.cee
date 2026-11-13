@@ -184,6 +184,7 @@ struct StructDefinition {
     isMoveEnvironment: bool;
     capturesLoans: bool;     // an `async move` environment that holds a borrow: scoped (ADR 0033 §3.3)
     isOnceEnvironment: bool; // a move environment whose body runs at most once: it may move its captures out (ADR 0074 §2.3)
+    inGenericCode: bool;     // a closure's environment in generic code: never emitted, as a type that names a parameter
     closureId: u32;
     allocateMethod: u32;
     deallocateMethod: u32;
@@ -430,8 +431,10 @@ struct TypeTable {
         if ((t.pointee != none() && this.isGeneric(t.pointee)) || (t.element != none() && this.isGeneric(t.element))) {
             return true;
         }
-        if (t.structDef != none() && this.anyGeneric(this.structs[t.structDef as usize].typeArguments)) {
-            return true;
+        if (t.structDef != none() && (this.structs[t.structDef as usize].inGenericCode || this.anyGeneric(
+            this.structs[t.structDef as usize].typeArguments,
+        ))) {
+            return true; // a closure's environment in generic code holds what its function's parameters stand for
         }
         if (t.enumDef != none()) {
             let e = borrow this.enums[t.enumDef as usize];
@@ -2146,6 +2149,7 @@ fn blankStruct(item: u32, file: u32, hasRegionParameters: bool) -> StructDefinit
     isMoveEnvironment: false,
     capturesLoans: false,
     isOnceEnvironment: false,
+    inGenericCode: false,
     closureId: 0,
     allocateMethod: none(),
     deallocateMethod: none(),

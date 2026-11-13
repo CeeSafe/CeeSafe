@@ -347,7 +347,10 @@ source = "path+../geometry"
 - `ceesafec parse`, `check`, `build`, `run`, `fix`, `doc` and `fmt` without file arguments use the package of the nearest `ceesafe.toml` in
   the current directory or above it. `build` writes `out/<name>` (an executable, or `out/<name>.o` for `object`), the
   C sources in `out/<name>-c/` with `--emit c`, or `out/<name>.a` with `--emit lib` (§8.3); the manifest's profile, `float` and C files apply, and command-line options add to
-  them. `fmt` formats the package's own sources, not its dependencies'.
+  them. `fmt` formats the package's own sources, not its dependencies'. `fmt` and `fix` (§5.3) write each file where
+  they read it, from whatever directory of the package they are run; `fmt --check` lists each file by its path from
+  the working directory (`../src/main.cee` from a directory beside `src`), a path that names the file.
+  `tools/fix_paths_check.py` holds both to it.
 - `ceesafec check` in a package (ADR 0082 §2.7, §8.5) is one check of that package, its tests included, and of every
   package it depends on. A dependency whose **interface record** (§4.4.1) is valid is parsed and its declarations
   resolved, but its bodies are checked again only where a dependent compiles or reads them (generic code, async
@@ -601,6 +604,17 @@ until no fix applies or after 8 rounds. It then prints the remaining diagnostics
 `--diagnostics-format=json`, and exits 1 if errors remain. With `--dry-run` it changes no file and prints the
 edits of the first round. Edits to one file never overlap: when two fixes would, the later one waits for the next
 round.
+
+Each file is written in place: at the path it was read from, as it was given on the command line or found in the
+package, whatever the working directory is and whatever shorter path the diagnostics name it by (`c-backend.md` §7
+names a file outside the working directory by its file name alone). A symbolic link is followed, and stays a link.
+No other file is written or created. `ceesafec fmt` writes the same way (§4.4).
+
+A round that writes prints `ceesafec fix: applied N fix(es) to M file(s)` on standard error (not with
+`--diagnostics-format=json`), so a run prints one such line for each round that changed a file. A fix has taken
+when the file, read again, has the fixed text and that text differs from what the round read. If it has not, `fix`
+prints the round's diagnostics and `the fixes written to 'PATH' did not take`, counts nothing as applied, tries no
+further round and exits 1.
 
 ### 5.4 `ceesafec explain`
 

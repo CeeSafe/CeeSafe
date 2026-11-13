@@ -729,6 +729,7 @@ fn loadFiles(files: borrow Vector<String>, sources: borrow mut Vector<SourceText
         let name = sourcePath(path);
         var source = SourceText.create(name.view(), bytes.view())!;
         source.diskPath = absolutePath(path.bytes());
+        source.readPath = copyBytes(path.bytes())!;
         sources.push(source)!;
     }
     return 0;
@@ -1415,6 +1416,7 @@ fn compileFiles(
                 source.packagePath = inPackage;
                 source.openPath = openPath;
                 source.diskPath = absolutePath(path.bytes());
+                source.readPath = copyBytes(path.bytes())!;
                 sources.push(source)!;
                 filePackage.push(truncate<u32>(p))!;
             }

@@ -183,8 +183,11 @@ fn packageSourceFiles(
     };
     var files = Vector<Vector<u8>>.create();
     manifestSourceFiles(manifest, mut files)?;
+    // From the working directory, `../src/main.cee` when it is below the package's root: the path is read, written
+    // and printed by --check, so it has to name the file (sourcePath would name a file outside by its name alone).
     for (f in files.view()) {
-        out.push(sourcePath(StringView.fromUtf8(f.view())!))?;
+        let slashed = slashedPath(f.view())?;
+        out.push(pathFrom(cwd.view(), slashed.view())?)?;
     }
     return Ok(0);
 }

@@ -436,8 +436,61 @@ fn appendThreadUnsafeField(
     return Ok();
 }
 
+/// Is `argument` Send and Share where `parameter` is bounded so (§38.1)? N0334.
+fn checkThreadBound(c: borrow mut Checker, parameter: u32, argument: u32, span: Span) -> Result<void, AllocError> {
+    let info = borrow c.types.typeParameters[c.types.info(parameter).typeParameter as usize];
+    let sendBound = info.sendBound;
+    let shareBound = info.shareBound;
+    if (sendBound && !c.types.isSendType(argument)?) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, argument)?;
+        appendText(mut message, " is not Send, but ")?;
+        appendQuotedType(mut message, c, parameter)?;
+        appendText(mut message, " must be ('")?;
+        appendBytes(mut message, c.typeName(parameter))?;
+        appendText(
+            mut message,
+            ": Send'): it holds a loan, a raw pointer or another value tied to one thread (type-system.md §38.1)",
+        )?;
+        appendThreadUnsafeField(mut message, c, argument, false)?;
+        c.error(notSend(), span.start, span.end, message)?;
+    }
+    if (shareBound && !c.types.isShare(argument)?) {
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, argument)?;
+        appendText(mut message, " is not Share, but ")?;
+        appendQuotedType(mut message, c, parameter)?;
+        appendText(mut message, " must be ('")?;
+        appendBytes(mut message, c.typeName(parameter))?;
+        appendText(mut message, ": Share'; type-system.md §38.1)")?;
+        appendThreadUnsafeField(mut message, c, argument, true)?;
+        c.error(notSend(), span.start, span.end, message)?;
+    }
+    return Ok();
+}
+
+/// The Send and Share bounds of the types that declarations name, once every struct and enum has its fields: before
+/// that a type looks Send and Share whatever it holds.
+fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
+    c.membersReady = true;
+    let saved = c.file;
+    for (k in 0..c.pendingThreadBounds.length) {
+        let p = c.pendingThreadBounds[k];
+        {
+            let fileToSet = p.file;
+            c.setFile(fileToSet);
+        }
+        let parameter = c.types.listAt(p.parameters, 0);
+        let argument = c.types.listAt(p.arguments, 0);
+        checkThreadBound(c, parameter, argument, Span { start: p.start, end: p.end })?;
+    }
+    c.pendingThreadBounds.truncate(0);
+    c.setFile(saved);
+    return Ok();
+}
+
 /// Do `arguments` satisfy the bounds of `parameters` (CheckBounds, §21.2)? Reported as N0268 (N0334 for Send and
-/// Share); deferred until every impl is known.
+/// Share); deferred until every impl is known, and Send and Share until every type has its fields.
 fn checkBounds(
     c: borrow mut Checker,
     parameters: Slice<u32>,
@@ -492,30 +545,25 @@ fn checkBounds(
             appendText(mut message, ": Copy')")?;
             c.error(boundNotSatisfied(), span.start, span.end, message)?;
         }
-        if (sendBound && !c.types.isSendType(argument)?) {
-            var message = Vector<u8>.create();
-            appendQuotedType(mut message, c, argument)?;
-            appendText(mut message, " is not Send, but ")?;
-            appendQuotedType(mut message, c, parameter)?;
-            appendText(mut message, " must be ('")?;
-            appendBytes(mut message, c.typeName(parameter))?;
-            appendText(
-                mut message,
-                ": Send'): it holds a loan, a raw pointer or another value tied to one thread (type-system.md §38.1)",
+        if ((sendBound || shareBound) && !c.membersReady) {
+            // Send and Share are decided by a type's fields (§38.1), which a declaration's types do not have yet:
+            // checked once they do (checkPendingThreadBounds).
+            let one = [parameter];
+            let other = [argument];
+            let parameterList = c.types.addList(one[..])?;
+            let argumentList = c.types.addList(other[..])?;
+            let file = c.file;
+            c.pendingThreadBounds.push(
+                PendingBounds {
+                    parameters: parameterList,
+                    arguments: argumentList,
+                    start: span.start,
+                    end: span.end,
+                    file: file,
+                },
             )?;
-            appendThreadUnsafeField(mut message, c, argument, false)?;
-            c.error(notSend(), span.start, span.end, message)?;
-        }
-        if (shareBound && !c.types.isShare(argument)?) {
-            var message = Vector<u8>.create();
-            appendQuotedType(mut message, c, argument)?;
-            appendText(mut message, " is not Share, but ")?;
-            appendQuotedType(mut message, c, parameter)?;
-            appendText(mut message, " must be ('")?;
-            appendBytes(mut message, c.typeName(parameter))?;
-            appendText(mut message, ": Share'; type-system.md §38.1)")?;
-            appendThreadUnsafeField(mut message, c, argument, true)?;
-            c.error(notSend(), span.start, span.end, message)?;
+        } else if (sendBound || shareBound) {
+            checkThreadBound(c, parameter, argument, span)?;
         }
         let boundCount = c.types.typeParameters[c.types.info(parameter).typeParameter as usize].bounds.length;
         for (b in 0..boundCount) {

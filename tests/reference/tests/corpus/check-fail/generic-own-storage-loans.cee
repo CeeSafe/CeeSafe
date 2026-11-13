@@ -1,0 +1,95 @@
+// A value of a type parameter's type keeps a loan of the function's own storage (type-system.md §25.7 rule 5,
+// ADR 0131). What it holds of the parameters is in its type; a loan of a local is not: a call gave it one, through a
+// bound's function whose parameter is a view, or through a function value called with a borrow of a local. It keeps
+// that loan when it is copied or moved, so it cannot be returned (N0244) or stored through a parameter (N0272), and
+// in a closure's body a borrow of a capture cannot be the result (N0245). Each of these returned or stored a value
+// that used freed memory in 0.42.0, whose checker dropped the loan at the first copy.
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Source<T> {
+    fn get(borrow this) -> T;
+}
+interface Keep<T> {
+    fn keep(borrow mut this, v: T);
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Buffer {
+    text: String;
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Keep<StringView<r>> for Holder<r> {
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+
+fn rebuild<S: Build<StringView>>(hint: StringView) -> S {
+    let s = String.from("local")!;
+    return S.build(s.view()); // error[N0244]
+}
+fn rebuildMoved<S: Build<StringView>>(hint: StringView) -> S {
+    let s = String.from("local")!;
+    let made = S.build(s.view());
+    let moved = made;
+    return moved; // error[N0244]
+}
+fn rebuildWrapped<S: Build<StringView>>(hint: StringView) -> S? {
+    let s = String.from("local")!;
+    let made: S? = S.build(s.view());
+    return made; // error[N0244]
+}
+fn rebuildThenGet<S: Build<StringView> + Source<StringView>>() -> StringView {
+    let s = String.from("local")!;
+    let made = S.build(s.view());
+    return made.get(); // error[N0244]
+}
+fn keepLocal<S: Keep<StringView>>(into: borrow mut S) {
+    let s = String.from("local")!;
+    into.keep(s.view()); // error[N0272]
+}
+fn keepLocalDyn(into: borrow mut dyn Keep<StringView>) {
+    let s = String.from("local")!;
+    into.keep(s.view()); // error[N0272]
+}
+fn feed<T>(sink: borrow mut dyn Keep<T>, v: T) {
+    sink.keep(v);
+}
+fn feedLocal(into: borrow mut dyn Keep<StringView>) {
+    let s = String.from("local")!;
+    feed<StringView>(into, s.view()); // error[N0272]
+}
+fn storeBuilt<S: Build<StringView>>(out: borrow mut Vector<S>) -> Result<void, AllocError> {
+    let s = String.from("local")!;
+    let made = S.build(s.view());
+    return out.push(made); // error[N0272]
+}
+fn throughClosure<S: Build<StringView>>(hint: StringView) -> S {
+    let s = String.from("local")!;
+    let make = () => S.build(s.view()); // error[N0245]
+    return make();
+}
+fn withBuffer<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local")! };
+    let r = f(buffer);
+    let moved = r;
+    return moved; // error[N0244]
+}
+fn withBufferDirect<T: Copy>(f: fn(borrow Buffer) -> T) -> T {
+    let buffer = Buffer { text: String.from("local")! };
+    return f(buffer); // error[N0244]
+}
+fn textOf(b: borrow Buffer) -> StringView => b.text.view();
+
+fn main() {
+    let dangling = rebuild<Holder>("static");
+    Console.writeLine(dangling.text);
+    Console.writeLine(withBuffer<StringView>(textOf));
+}

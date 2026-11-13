@@ -250,7 +250,7 @@ public struct TaskSet<E: Copy> {
 }
 
 /// `await Async.tasks(limit, oom, async (set) => …)` (ADR 0053): `Async.tasksIn` with the system heap.
-public struct AsyncTasks<E: Copy> {
+public struct AsyncTasks<E: Copy + Send> {
     @effectsOf(body)
     public async fn run(
         limit: u32,
@@ -263,7 +263,7 @@ public struct AsyncTasks<E: Copy> {
 /// set's owner, with the set; then every child it started is waited for. The children's tasks and frames come from
 /// `alloc`'s allocator type. The result is the body's error, else the first child's, else `oom` if a child's frame
 /// could not be allocated, else Ok. The body's error cancels the children; a child's error cancels no sibling.
-public struct AsyncTasksIn<E: Copy, A> {
+public struct AsyncTasksIn<E: Copy + Send, A> {
     /// Safety: the record is this frame's, which outlives every child: the set waits for them before it returns.
     @effectsOf(body)
     public async fn run(

@@ -1,0 +1,154 @@
+// With implementations that keep the interface's flows (type-system.md §21.1, §25.6, ADR 0131), what generic code
+// gets from a bound's method still holds what the implementation holds: through a bound, a `dyn` type, a default
+// method, a static function, an associated type, a generic struct, `T?` and `Result<T, E>`, and `for`. So each
+// caller here that would let the value outlive the text it borrows is refused: N0244, and N0272 where the value is
+// stored through a parameter (`escape14`, which 0.42.0 accepted and which used freed memory).
+interface Source<T> {
+    fn get(borrow this) -> T;
+
+    fn both(borrow this) -> Wrapper<T> => Wrapper<T> { inner: this.get() };
+}
+interface Stream<T> {
+    fn next(borrow mut this) -> T?;
+}
+interface Tried<T> {
+    fn tried(borrow this) -> Result<T, Failure>;
+}
+interface Build<T> {
+    fn build(v: T) -> Self;
+}
+interface Item {
+    type Value;
+    fn value(borrow this) -> Self.Value;
+}
+enum Failure {
+    Empty,
+}
+struct Wrapper<T> {
+    inner: T;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+struct Words<region r> {
+    text: StringView<r>;
+    done: bool;
+}
+struct Adapter<T, S: Source<T>> {
+    inner: S;
+    count: usize;
+
+    fn get(borrow this) -> T => this.inner.get();
+    fn take(this) -> T => this.inner.get();
+}
+impl<region r> Source<StringView<r>> for Holder<r> {
+    fn get(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Tried<StringView<r>> for Holder<r> {
+    fn tried(borrow this) -> Result<StringView<r>, Failure> => Ok(this.text);
+}
+impl<region r> Build<StringView<r>> for Holder<r> {
+    fn build(v: StringView<r>) -> Holder<r> => Holder { text: v };
+}
+impl<region r> Item for Holder<r> {
+    type Value = StringView<r>;
+    fn value(borrow this) -> StringView<r> => this.text;
+}
+impl<region r> Stream<StringView<r>> for Words<r> {
+    fn next(borrow mut this) -> StringView<r>? {
+        if (this.done) {
+            return null;
+        }
+        this.done = true;
+        return this.text;
+    }
+}
+
+fn drain<T, S: Source<T>>(s: S) -> T => s.get();
+fn pick<T, S: Source<T>>(s: borrow S) -> T => s.get();
+fn viaDyn<T>(s: borrow dyn Source<T>) -> T => s.get();
+fn wrapped<T, S: Source<T>>(s: borrow S) -> Wrapper<T> => s.both();
+fn first<T, I: Stream<T>>(it: borrow mut I) -> T? => it.next();
+fn tryGet<T, S: Tried<T>>(s: borrow S) -> Result<T, Failure> => s.tried();
+fn make<T, S: Build<T>>(v: T) -> S => S.build(v);
+fn valueOf<S: Item>(s: borrow S) -> S.Value => s.value();
+fn adapted<T, S: Source<T>>(s: S) -> T {
+    let a = Adapter<T, S> { inner: s, count: 0 };
+    return a.get();
+}
+fn taken<T, S: Source<T>>(s: S) -> T => Adapter<T, S> { inner: s, count: 0 }.take();
+fn looped<T, I: Stream<T>>(it: borrow mut I, out: borrow mut Vector<T>) -> Result<void, AllocError> {
+    for (x in it) {
+        out.push(x)?;
+    }
+    return Ok();
+}
+
+fn escape1() -> StringView {
+    let s = String.from("local")!;
+    return drain<StringView, Holder>(Holder { text: s.view() }); // error[N0244]
+}
+fn escape2() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return pick<StringView, Holder>(h); // error[N0244]
+}
+fn escape3() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return viaDyn<StringView>(h); // error[N0244]
+}
+fn escape4() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return concreteDyn(h); // error[N0244]
+}
+fn escape5() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return wrapped<StringView, Holder>(h).inner; // error[N0244]
+}
+fn escape7() -> StringView {
+    let s = String.from("local")!;
+    var w = Words { text: s.view(), done: false };
+    return first<StringView, Words>(mut w) ?? "none"; // error[N0244]
+}
+fn escape8() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return match (tryGet<StringView, Holder>(h)) { // error[N0244]
+        Ok(v) => v,
+        Err(_) => "none",
+    };
+}
+fn escape10() -> StringView {
+    let s = String.from("local")!;
+    let h = make<StringView, Holder>(s.view());
+    return h.text; // error[N0244]
+}
+fn escape11() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return valueOf<Holder>(h); // error[N0244]
+}
+fn escape12() -> StringView {
+    let s = String.from("local")!;
+    return adapted<StringView, Holder>(Holder { text: s.view() }); // error[N0244]
+}
+fn escape13() -> StringView {
+    let s = String.from("local")!;
+    return taken<StringView, Holder>(Holder { text: s.view() }); // error[N0244]
+}
+fn escape14(out: borrow mut Vector<StringView>) {
+    let s = String.from("local")!;
+    var w = Words { text: s.view(), done: false };
+    looped<StringView, Words>(mut w, out)!; // error[N0272]
+}
+fn escape15() -> StringView {
+    let s = String.from("local")!;
+    let h = Holder { text: s.view() };
+    return h.both().inner; // error[N0244]
+}
+
+fn concreteDyn(d: borrow dyn Source<StringView>) -> StringView => d.get();
+fn main() {}

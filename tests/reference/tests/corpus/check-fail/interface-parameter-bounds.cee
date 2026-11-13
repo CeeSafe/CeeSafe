@@ -1,0 +1,84 @@
+// An interface's own parameters' bounds are checked wherever the interface is given arguments (type-system.md §21.2,
+// ADR 0131): an impl's header, a bound, a `dyn` type, a supertrait. N0268, and N0334 for `Send` and `Share`. A
+// default's body takes the bounds as facts (`T: Send` holds no loan there, §25.7 rule 5), so an argument that does
+// not meet them must never arrive. `Send` and `Share` are decided by a type's fields, so for a type that a
+// declaration names they are checked once the fields are known: `Wrap<Cell<i32>>` as a field's or a parameter's type.
+interface Rank {
+    fn rank(borrow this) -> i32;
+}
+interface Source<T: Send> {
+    fn get(borrow this) -> T;
+}
+interface Twice<T: Copy> {
+    fn twice(borrow this) -> T;
+}
+interface Shared<T: Share> {
+    fn peek(borrow this, v: borrow T) -> i32;
+}
+interface Ranked<T: Rank> {
+    fn best(borrow this) -> T;
+}
+interface Above<T: Send>: Source<T> {
+    fn more(borrow this) -> T;
+}
+interface Loose<T>: Source<T> { // error[N0334]
+    fn less(borrow this) -> T;
+}
+interface Spawned<T: Send> {
+    fn item(borrow this) -> T;
+
+    fn back(borrow this) -> T {
+        let v = this.item();
+        return Thread.spawn(move () => v)!.join();
+    }
+}
+struct Owner {
+    text: String;
+}
+struct Other {
+    n: i32;
+}
+struct Third {
+    n: i32;
+}
+struct Fourth {
+    n: i32;
+}
+struct Fifth {
+    text: String;
+}
+struct Wrap<T: Share> {
+    v: T;
+}
+struct Noisy {
+    c: Cell<i32>;
+}
+struct Holds {
+    w: Wrap<Cell<i32>>; // error[N0334]
+}
+impl Source<StringView> for Owner { // error[N0334]
+    fn get(borrow this) -> StringView<static> => "static";
+}
+impl Twice<String> for Other { // error[N0268]
+    fn twice(borrow this) -> String => String.from("x")!;
+}
+impl Shared<Cell<i32>> for Third { // error[N0334]
+    fn peek(borrow this, v: borrow Cell<i32>) -> i32 => v.get();
+}
+impl Ranked<i32> for Fourth { // error[N0268]
+    fn best(borrow this) -> i32 => 1;
+}
+impl Spawned<StringView> for Fifth { // error[N0334]
+    fn item(borrow this) -> StringView<static> => "static";
+}
+fn bound<S: Source<StringView>>(s: borrow S) -> usize => 0; // error[N0334]
+fn generic<T, S: Source<T>>(s: borrow S) -> usize => 0;     // error[N0334]
+fn generic2<T: Send, S: Source<T>>(s: borrow S) -> usize => 0;
+fn viaDyn(s: borrow dyn Source<StringView>) -> usize => 0; // error[N0334]
+fn boxed(s: Box<dyn Twice<String>>) -> usize => 0;         // error[N0268]
+fn wrapped(x: borrow Wrap<Cell<i32>>) -> i32 => 1;         // error[N0334]
+fn noisy(x: borrow Wrap<Noisy>) -> i32 => 1;               // error[N0334]
+struct Keeps<S: Source<Slice<u8>>> {                       // error[N0334]
+    s: S;
+}
+fn main() {}

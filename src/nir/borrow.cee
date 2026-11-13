@@ -1826,7 +1826,7 @@ fn checkReturns(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borrows) 
                     // A closure's body: its first parameter is its environment, which the user never wrote (§36.2).
                     appendText(
                         mut message,
-                        "this closure's result may hold a reference derived from what the closure captures, and a closure's result cannot borrow from the closure; a type parameter may be a reference, so return a value of a type known to own its data (type-system.md §36.2)",
+                        "this closure's result may hold a reference derived from what the closure captures, and a closure's result cannot borrow from the closure; a type parameter without a 'Send' bound may be a reference, so return a value of a type known to own its data (type-system.md §36.2, §25.7)",
                     )?;
                 } else {
                     appendText(mut message, "the returned reference may be derived from parameter '")?;

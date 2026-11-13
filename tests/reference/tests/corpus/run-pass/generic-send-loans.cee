@@ -1,0 +1,114 @@
+// A type parameter bounded by `Send` or `Share` holds no loan (type-system.md §25.7 rule 5, §38.1): no scoped type is
+// Send. So a closure may return a value of such a type that it captured: a thread's closure (by value) and a lent
+// closure (through its reference to the capture), with the bounds in every order and combination, on functions, on a
+// struct's own parameter and on an `impl` block's. Each expected line is the argument given, or follows from it.
+struct Kept<T: Send + Copy> {
+    value: T;
+
+    fn through(borrow this) -> T {
+        let value = this.value;
+        return Thread.spawn(move () => value)!.join();
+    }
+
+    fn lent(borrow this) -> T {
+        let f = () => this.value;
+        return f();
+    }
+}
+
+struct Open<T> {
+    value: T;
+}
+
+impl<T: Copy + Send> Open<T> {
+    fn through(borrow this) -> T {
+        let value = this.value;
+        return Thread.spawn(move () => value)!.join();
+    }
+
+    fn lent(borrow this) -> T {
+        let f = () => this.value;
+        return f();
+    }
+}
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn send<T: Send>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+fn sendCopy<T: Send + Copy>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+fn copySend<T: Copy + Send>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+fn share<T: Share>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+fn shareCopy<T: Share + Copy>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+fn all<T: Copy + Share + Send>(value: T) -> T => Thread.spawn(move () => value)!.join();
+
+/// A lent closure returns a copy of its capture, read through the closure's reference to it.
+fn lent<T: Send + Copy>(value: T) -> T {
+    let f = () => value;
+    return f();
+}
+
+fn lentShare<T: Copy + Share>(value: T) -> T {
+    let f = () => value;
+    return f();
+}
+
+/// The result holds the parameter inside another type.
+fn wrapped<T: Send + Copy>(value: T) -> T? {
+    let f = () => Some(value);
+    return f();
+}
+
+/// A block body, which returns its capture after a statement.
+fn block<T: Send>(value: T, count: borrow AtomicU32) -> T {
+    let counter = count.load();
+    return Thread.spawn(move () => {
+        let next = counter + 1;
+        if (next == 0) {
+            return value;
+        }
+        return value;
+    })!.join();
+}
+
+fn main() {
+    Console.writeLine(send(String.from("moved")!).view());
+    Console.writeLine(send(1));
+    Console.writeLine(sendCopy(2));
+    Console.writeLine(copySend(3u64));
+    Console.writeLine(share(4));
+    Console.writeLine(shareCopy(5));
+    Console.writeLine(all(6));
+    Console.writeLine(lent(7));
+    Console.writeLine(lentShare(8));
+    Console.writeLine(wrapped(9) ?? 0);
+    let count = AtomicU32.create(0);
+    Console.writeLine(block(String.from("block")!, count).view());
+    let p = sendCopy(Point { x: 10, y: 11 });
+    Console.writeLine(p.x + p.y);
+    let kept = Kept<i32> { value: 12 };
+    Console.writeLine(kept.through() + kept.lent());
+    let open = Open<i32> { value: 13 };
+    Console.writeLine(open.through() + open.lent());
+}
+// expect-stdout: moved
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: 3
+// expect-stdout: 4
+// expect-stdout: 5
+// expect-stdout: 6
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 9
+// expect-stdout: block
+// expect-stdout: 21
+// expect-stdout: 24
+// expect-stdout: 26

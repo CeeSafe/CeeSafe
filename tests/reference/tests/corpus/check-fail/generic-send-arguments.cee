@@ -1,0 +1,56 @@
+// The fact rule 5 of type-system.md §25.7 relies on for a `T: Send` (§38.1): no type that may hold a loan is Send, so
+// none is an argument for such a parameter (N0334), whatever the other bounds and their order, on a function, a struct
+// or an `impl` block. A thread's capture of a type parameter without the bound is N0334 too.
+struct View<region r> {
+    text: StringView<r>;
+}
+
+struct Kept<T: Send + Copy> {
+    value: T;
+}
+
+struct Open<T> {
+    value: T;
+}
+
+impl<T: Copy + Send> Open<T> {
+    fn through(borrow this) -> T {
+        let value = this.value;
+        return Thread.spawn(move () => value)!.join();
+    }
+}
+
+fn send<T: Send>(value: T) -> T => value;
+
+fn sendCopy<T: Send + Copy>(value: T) -> T => value;
+
+fn copySend<T: Copy + Send>(value: T) -> T => value;
+
+fn share<T: Share>(value: T) -> T => value;
+
+fn copyOnly<T: Copy>(value: T) -> u32 {
+    let t = Thread.spawn(move () => { // error[N0334]
+        let kept = value;
+        return 1u32;
+    })!;
+    return t.join();
+}
+
+fn main() {
+    let n = 5;
+    let text = String.from("text")!;
+    let view = text.view();
+    let items = [1, 2, 3];
+    let _ = send(view); // error[N0334]
+    let _ = send(borrow n); // error[N0334]
+    let _ = sendCopy(view); // error[N0334]
+    let _ = sendCopy(items[..]); // error[N0334]
+    let _ = copySend(borrow n); // error[N0334]
+    let _ = share(view); // error[N0334]
+    let _ = send(View { text: view }); // error[N0334]
+    let _ = send(() => n); // error[N0334]
+    let _ = Kept<StringView> { value: view }; // error[N0334]
+    let open = Open<StringView> { value: view };
+    let _ = open.through(); // error[N0334]
+    Console.writeLine(copyOnly(n));
+}

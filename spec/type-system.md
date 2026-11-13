@@ -2608,6 +2608,10 @@ With one loan set per value:
 5. In generic code, values whose type mentions a type parameter carry loans like scoped values, unless it mentions
    it only inside a `dyn` type (an interface's arguments, a `dyn fn`'s signature): a `dyn` value carries no loans of
    its own (§37.2), so `Box<dyn Handler<S>>` is stored where `S` is a type parameter as it is for a concrete `S`.
+   Nor does a type parameter bounded by `Send` or `Share` bring a loan: no scoped type is Send (§38.1), so a value of
+   type `T` under `T: Send` holds none, and a closure may return one it captured (§36.2), as in
+   `fn through<T: Send>(value: T) -> T => Thread.spawn(move () => value)!.join()`. A `T` with other bounds only,
+   `Copy` included, may be a reference.
 6. Destroying a value that is scoped and needs drop is a use of its loans: its `drop` may read
    them, so they must still be live (N0243 otherwise).
 
@@ -4713,7 +4717,8 @@ fn main() {
   - `Box<dyn I + Send>` and `Box<dyn fn(…) -> R + Send>`, and with `+ Share` (§38.4);
   - the library's thread-safe types (§38.3): `Arc<T>`, `Mutex<T>`, the atomics.
 - It fails for:
-  - references, slices, views and every other scoped type (§19.1);
+  - references, slices, views and every other scoped type (§19.1), a scoped `@threadSafe` type included (§38.3):
+    no type that may hold a loan is Send, which §25.7 rule 5 relies on;
   - closures (`borrow fn`), function values aside (`fn(…)` and `extern "C" fn(…)` are `Send`, and `Share`: a code
     address, the same in every thread; ADR 0091 §2.1);
   - raw pointers and imported C types;

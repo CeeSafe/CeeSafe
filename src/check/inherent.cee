@@ -203,6 +203,20 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                             let f = c.front.ast.at(functions, j);
                             c.enumMethods.push(EnumMethod { item: enumItem, function: f, file: file })?;
                         }
+                        if (functions.count > 0 && writesBounds(c, typeParameters)) {
+                            c.boundedImpls.push(BoundedImpl {
+                                item: enumItem,
+                                isEnum: true,
+                                file: file,
+                                typeParameters: typeParameters,
+                                functions: functions,
+                                start: span.start,
+                                end: span.end,
+                                conditional: false,
+                                parameters: emptyRange(),
+                                checkedIn: none(),
+                            })?;
+                        }
                         if (typeParameters.count > 0 || regionParameters.count > 0 || enumIsGeneric(c, enumItem)) {
                             genericConstants(c, constants)?;
                         } else {
@@ -246,6 +260,20 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                     }
                     let list = c.front.ast.list(merged)?;
                     c.front.ast.structs[structIndex as usize].functions = list;
+                    if (functions.count > 0 && writesBounds(c, typeParameters)) {
+                        c.boundedImpls.push(BoundedImpl {
+                            item: structItem,
+                            isEnum: false,
+                            file: file,
+                            typeParameters: typeParameters,
+                            functions: functions,
+                            start: span.start,
+                            end: span.end,
+                            conditional: false,
+                            parameters: emptyRange(),
+                            checkedIn: none(),
+                        })?;
+                    }
                     if (s.typeParameters.count > 0 || s.regionParameters.count > 0) {
                         genericConstants(c, constants)?;
                     } else {
@@ -315,7 +343,21 @@ fn declareEnumMethods(c: borrow mut Checker, index: u32) -> Result<void, AllocEr
         }
         c.setFile(m.file);
         let id = c.front.ast.idents[c.front.ast.functions[m.function as usize].name as usize];
-        if (findVariant(c, definition, id.symbol) != none() || implMethodFor(c, entry.typ, id.symbol) != none()) {
+        // A bounded block's function is declared later, for the instances that meet its bounds (ADR 0130); here it
+        // takes its name, so that an enum has one member of each name whatever the bounds.
+        var named = false;
+        for (earlier in 0..k - 1) {
+            let e = c.enumMethods[earlier];
+            if (e.item == m.item && boundedImplOf(c, e.function) != none() &&
+                c.front.ast.idents[c.front.ast.functions[e.function as usize].name as usize].symbol == id.symbol) {
+                named = true;
+            }
+        }
+        if (named || findVariant(c, definition, id.symbol) != none() || implMethodFor(
+            c,
+            entry.typ,
+            id.symbol,
+        ) != none()) {
             if (entry.template == none()) {
                 var message = Vector<u8>.create();
                 appendQuotedType(mut message, c, entry.typ)?;
@@ -323,6 +365,9 @@ fn declareEnumMethods(c: borrow mut Checker, index: u32) -> Result<void, AllocEr
                 appendQuotedName(mut message, c, id.symbol)?;
                 c.error(duplicateMember(), id.start, id.end, message)?;
             }
+            continue;
+        }
+        if (boundedImplOf(c, m.function) != none()) {
             continue;
         }
         // A function with type parameters of its own is a generic method, instantiated per call (ADR 0064 §1).

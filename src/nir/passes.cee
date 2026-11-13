@@ -115,7 +115,9 @@ fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     if (!c.front.diagnostics.hasErrors()) {
         for (function in n.functions.view()) {
             let f = borrow c.hir.functions[function.source as usize];
-            if (f.hasInstanceError) {
+            // Not a repeat of a generic version in the instance a bounded block is checked in (ADR 0130): with the
+            // block's bounds added it may not check, and it is never compiled.
+            if (f.hasInstanceError && !f.repeatsGeneric) {
                 let message = copyBytes(f.instanceError.view())?;
                 // A method of a struct or enum instance at its first call, if any (§20.4).
                 let file = if (f.callFile != none()) f.callFile else f.siteFile;

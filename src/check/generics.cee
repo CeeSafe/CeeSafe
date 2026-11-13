@@ -96,7 +96,7 @@ fn functionIsGeneric(c: borrow Checker, function: u32) -> bool {
 /// An interface default's instance for an impl that inherits it is one too (ADR 0086 §2.1): its generic version, at
 /// the interface, reports.
 fn functionIsInstantiation(c: borrow Checker, function: u32) -> bool =>
-    c.hir.functions[function as usize].inheritedDefault ||
+    c.hir.functions[function as usize].inheritedDefault || c.hir.functions[function as usize].repeatsGeneric ||
         (c.hir.functions[function as usize].environment.count > 0 && !functionIsGeneric(c, function));
 
 /// The type parameters of a declaration (DeclareTypeParameters): each a new type, with its marker bounds; interface
@@ -106,6 +106,16 @@ fn declareTypeParameters(
     syntax: Range,
     parameters: borrow mut Vector<u32>,
     env: borrow mut Vector<EnvPair>,
+) -> Result<void, AllocError> => declareTypeParametersAs(c, syntax, parameters, env, false);
+
+/// declareTypeParameters; `again` for the parameters of an `impl<T: B> S<T> { … }` block, which name the struct's or
+/// enum's own once more (ADR 0130): a name that is taken was reported where those were declared.
+fn declareTypeParametersAs(
+    c: borrow mut Checker,
+    syntax: Range,
+    parameters: borrow mut Vector<u32>,
+    env: borrow mut Vector<EnvPair>,
+    again: bool,
 ) -> Result<void, AllocError> {
     for (k in 0..syntax.count) {
         let p = c.front.ast.typeParameters[c.front.ast.at(syntax, k) as usize];
@@ -122,7 +132,7 @@ fn declareTypeParameters(
             Entity.None => false,
             _ => true,
         };
-        if (inEnvironment || c.types.lookup(text.view()) != none() || isItem) {
+        if (!again && (inEnvironment || c.types.lookup(text.view()) != none() || isItem)) {
             var message = Vector<u8>.create();
             appendText(mut message, "type parameter '")?;
             appendBytes(mut message, text.view())?;
@@ -630,6 +640,7 @@ fn instantiateStruct(
     if (c.implsReady) {
         attachGenericImpls(c, typ)?; // ADR 0054
     }
+    noteBoundedEntry(c, index, false)?; // ADR 0130
     return Ok(index);
 }
 
@@ -693,6 +704,7 @@ fn instantiateEnum(c: borrow mut Checker, template: u32, arguments: Slice<u32>, 
     if (c.implsReady) {
         attachGenericImpls(c, typ)?; // ADR 0054
     }
+    noteBoundedEntry(c, index, true)?; // ADR 0130
     return Ok(index);
 }
 

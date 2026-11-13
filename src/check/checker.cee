@@ -216,8 +216,13 @@ struct Checker {
     packageSymbols: Map<Word, Word>;  // the names packages declare: a library item of one gets a C name of its own
     uncheckedLibrary: Vector<bool>;   // by HIR function: a library function with an error, left out of the NIR checks
     declaredOrder: Vector<DeclaredEntry>;
-    methodFiles: Vector<MethodFile>;         // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
-    enumMethods: Vector<EnumMethod>;         // the functions of each `impl E { … }` block of an enum (ADR 0107)
+    methodFiles: Vector<MethodFile>;   // the file of each method merged from an `impl S { … }` block (ADR 0064 §1)
+    enumMethods: Vector<EnumMethod>;   // the functions of each `impl E { … }` block of an enum (ADR 0107)
+    boundedImpls: Vector<BoundedImpl>; // the `impl<T: B> S<T> { … }` blocks that write a bound (ADR 0130)
+    conditionalImpls: u32;             // how many of them give their functions to some instances only
+    boundedReady: bool;                // attachBoundedToAll has run: an instance gets its blocks' functions as it is made
+    boundedPending: Vector<u64>;       // the entries still to get them: a struct's index, or an enum's with bit 32
+    boundedDraining: bool;
     memberConstants: Vector<MemberConstant>; // the constants of structs and impls (ADR 0074 §2.7)
     fileImports: Vector<FileImport>;         // where a qualified name was reported unknown (N0310, N0311): file and start // the places N0293 was reported, once each
     // Interface records (ADR 0082 §2.7, src/check/interface_records.cee).

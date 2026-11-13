@@ -1,0 +1,78 @@
+// Reading a field of a type parameter's type through a reference moves it, unless the parameter is Copy (N0251,
+// type-system.md §14, §21.2). The `Copy` bound of an `impl<T: Copy> S<T> { … }` block makes it a copy in that block
+// (ADR 0130; run-pass/impl-bounds); without the bound it stays a move: in the struct's own body, in a block with no
+// bound, in one with another bound, in an interface's impl, in an enum's block, and for a nested instance.
+interface Named {
+    fn name(borrow this) -> u32;
+}
+
+interface First<T> {
+    fn head(borrow this) -> T;
+}
+
+struct InBody<T> {
+    left: T;
+
+    fn mine(borrow this) -> T => this.left; // error[N0251]
+}
+
+struct Unbounded<T> {
+    left: T;
+}
+
+impl<T> Unbounded<T> {
+    fn first(borrow this) -> T => this.left; // error[N0251]
+}
+
+struct Other<T> {
+    left: T;
+    right: T;
+}
+
+impl<T: Named> Other<T> {
+    fn second(borrow this) -> T => this.right; // error[N0251]
+}
+
+impl<T: Send> Other<T> {
+    fn third(borrow this) -> T => this.right; // error[N0251]
+}
+
+impl<T: Copy> Other<T> {
+    fn fourth(borrow this) -> T => this.right;
+}
+
+struct Through<T> {
+    left: T;
+}
+
+// Reported for the impl and again for the struct's own type, which gets the impl too (ADR 0054).
+impl<T> First<T> for Through<T> {
+    fn head(borrow this) -> T => this.left; // error[N0251] // error[N0251]
+}
+
+struct Nest<T> {
+    left: T;
+}
+
+fn deep<T>(p: borrow Nest<Nest<T>>) -> Nest<T> => p.left; // error[N0251]
+
+enum Choice<T> {
+    One(T),
+    Two(T, T),
+}
+
+impl<T> Choice<T> {
+    fn first(borrow this) -> T => match (this) {
+        Choice.One(a) => a, // error[N0251]
+        Choice.Two(a, _) => a, // error[N0251]
+    };
+}
+
+fn main() {
+    Console.writeLine(InBody<i32> { left: 1 }.mine());
+    Console.writeLine(Unbounded<i32> { left: 2 }.first());
+    Console.writeLine(Other<i32> { left: 3, right: 4 }.fourth());
+    Console.writeLine(Through<i32> { left: 5 }.head());
+    Console.writeLine(deep(Nest<Nest<i32>> { left: Nest<i32> { left: 6 } }).left);
+    Console.writeLine(Choice<i32>.One(7).first());
+}

@@ -157,6 +157,8 @@ green
   the type arguments: `Maybe<i32>.empty()`.
 - A function cannot have the name of a variant, and the block is written in the package that declares the enum.
 - A struct takes `impl` blocks too: `impl Point { … }` adds to the functions in its body.
+- A block that bounds its parameter, `impl<T: Copy> Maybe<T> { … }`, gives its functions to the instances that meet
+  the bound alone ([Generics](generics.md)).
 
 ### Deriving equality, hashing and ordering
 

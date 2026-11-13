@@ -1878,6 +1878,21 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   (§20.1). It is written in the package that declares `S`. Its target names `S` with `S`'s own parameters, in order:
   `impl<T: B> S<T> { … }` for `struct S<T: B>`, `impl<region r> V<r> { … }` for `struct V<region r>`. Anything else is
   N0267. It may also hold constants (§10, ADR 0074 §2.7).
+- **Bounds on the block's parameters** (ADR 0130). The block may bound its type parameters, by interfaces and by
+  `Copy`, `Send` and `Share` (§21.2, §38.1): `impl<T: Copy> Pair<T> { … }`. Where `S`'s own parameters have those
+  bounds (`impl<T: B> S<T>` for `struct S<T: B>`), the block restates them and its functions are every instance's.
+  Otherwise the block is **bounded**:
+  - in its functions `T` has `S`'s bounds and the block's: a field of type `T` read through a reference is a copy
+    under `T: Copy` (§14), the methods of `B` are called on a `T` under `T: B`, and a `T: Send` holds no loan
+    (§25.7);
+  - its functions, methods and static functions alike, belong to the instances of `S` whose type arguments meet the
+    block's bounds, and to no other. Using one on another instance is N0268, or N0334 for `Send` and `Share`, and
+    the message gives the bound that fails. `S`'s own generic type is such an instance where its parameter lacks the
+    bound: in `S`'s body, in a block without the bound, and in generic code `fn f<U>(p: borrow S<U>)`;
+  - `S` still has one member of each name: a name that two blocks give is N0228 whatever their bounds;
+  - a bound that names no interface is N0204, as on any type parameter.
+
+  An enum's blocks take bounds in the same way.
 - **`impl E { … }`** for an enum `E` (ADR 0107) is the same block with the same rules, and the only place an enum's
   functions are written (§15.1):
   - methods with `this`, `borrow this` or `borrow mut this`, static functions, generic methods, constants, and

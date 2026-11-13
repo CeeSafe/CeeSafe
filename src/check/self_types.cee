@@ -30,6 +30,10 @@ fn checkTypeCall(
     }
     var function = implMethodFor(c, typ, memberIdent.symbol);
     let enumEntry = enumEntryOfType(c, typ);
+    if (function == none() && enumEntry != none() && reportUnmetImplBounds(c, typ, memberIdent.symbol, memberSpan)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (function == none() && enumEntry != none()) {
         let targetSpan = c.front.ast.exprSpans[target as usize];
         return checkEnumValue(c, enumEntry, member, arguments, emptyRange(), targetSpan, span, expected);

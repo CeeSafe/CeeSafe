@@ -717,6 +717,9 @@ fn newClosureFunction(
     let syntax = truncate<u32>(c.front.ast.functions.length - 1);
     let library = isLibraryFile(c);
     let function = c.hir.addFunction(closureName, none(), returnType, c.file, syntax, library, true)?;
+    if (c.function != none() && c.hir.functions[c.function as usize].repeatsGeneric) {
+        c.hir.functions[function as usize].repeatsGeneric = true; // as the function it is written in (ADR 0130)
+    }
     var pairs = Vector<EnvPair>.create();
     for (pair in c.typeEnvironment.view()) {
         pairs.push(pair)?;

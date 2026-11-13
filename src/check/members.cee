@@ -343,6 +343,15 @@ fn checkStaticCall(
     if (function == none()) {
         function = implMethodFor(c, typ, memberIdent.symbol); // an impl's static function (ADR 0086 §2.3)
     }
+    if (function == none() && reportUnmetImplBounds(
+        c,
+        typ,
+        memberIdent.symbol,
+        Span { start: memberIdent.start, end: memberIdent.end },
+    )?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         appendQuotedType(mut message, c, typ)?;
@@ -588,6 +597,10 @@ fn checkMethodCall(
             return Ok(taken);
         }
     }
+    if (function == none() && reportUnmetImplBounds(c, structType, memberIdent.symbol, memberSpan)?) {
+        checkArgumentsLoosely(c, arguments)?;
+        return c.errorResult(span.start, span.end);
+    }
     if (function == none()) {
         var message = Vector<u8>.create();
         if (definition != none() && findField(c, definition, memberIdent.symbol) != none()) {
@@ -820,6 +833,15 @@ fn checkNonStructMethod(
         return c.errorResult(span.start, span.end);
     }
     if (declarationOf(c, structType) != none() && c.types.is(structType, TypeKind.Enum)) {
+        if (reportUnmetImplBounds(
+            c,
+            structType,
+            memberIdent.symbol,
+            Span { start: memberIdent.start, end: memberIdent.end },
+        )?) {
+            checkArgumentsLoosely(c, arguments)?;
+            return c.errorResult(span.start, span.end);
+        }
         // A declared enum may have methods (an impl's, or its own: ADR 0107), just not this one.
         appendText(mut message, "type ")?;
         appendQuotedType(mut message, c, structType)?;

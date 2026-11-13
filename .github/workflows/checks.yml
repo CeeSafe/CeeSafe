@@ -1,41 +1,21 @@
 name: checks
 
-# What the documents say is what the compiler does: on every pull request and every push to main that touches the
-# book, the guide, the specification, the compiler, the libraries or the checks themselves, ceesafec is built from the
-# tree and the three document checks of the contract suite run against it (spec/testing.md §4):
+# What the documents say is what the compiler does. When a release is tagged (v<version>, as release.yml), and when
+# started by hand, ceesafec is built from the tree and the three document checks of the contract suite run against it
+# (spec/testing.md §4):
 #
-#   tools/book_check.py   every listing of the book, compiled and run or refused as its page says; the packages under
+#   tools/book_check.py   every listing of the book, checked and run or refused as its page says; the packages under
 #                         book/projects/; the appendices against the compiler's own lists
 #   tools/guide_check.py  every example of the guide
 #   tools/spec_check.py   the specification, its links, the diagnostics' explanations, the API pages
 #
-# The site builds (docs.yml) do not compile a listing: this workflow is what stops a pull request whose example the
-# compiler refuses. It is meant to be a required check of the main branch. The whole contract suite
-# (tools/contract_tests.py) is run before a release (docs/release.md), not here.
+# The site builds (docs.yml) do not compile a listing. The owner (2026-11-14) runs this on release tags only, not on
+# pull requests or pushes to main: it reports on the release's commit beside release.yml and does not hold the
+# release back. Run it on a branch from the Actions page ("Run workflow") before merging a change to the book or the
+# compiler. The whole contract suite (tools/contract_tests.py) is run before a release (docs/release.md), not here.
 on:
-  pull_request:
-    paths:
-      - "book/**"
-      - "guide/**"
-      - "spec/**"
-      - "src/**"
-      - "lib/**"
-      - "runtime/**"
-      - "tools/**"
-      - "ceesafe.toml"
-      - ".github/workflows/checks.yml"
   push:
-    branches: [main]
-    paths:
-      - "book/**"
-      - "guide/**"
-      - "spec/**"
-      - "src/**"
-      - "lib/**"
-      - "runtime/**"
-      - "tools/**"
-      - "ceesafe.toml"
-      - ".github/workflows/checks.yml"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -43,7 +23,7 @@ permissions:
 
 concurrency:
   group: checks-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   # The fallback's stage 0 (Decision 0009; the same as release.yml's).

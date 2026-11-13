@@ -123,7 +123,7 @@ Three things about the listings matter to a model:
 - **A listing that fails is there on purpose.** Read `check` before copying code: about a third of the book's
   listings are mistakes, shown with the diagnostic they get.
 - **The output is real.** Each `output` is compared with a run of the listing, or with the compiler's messages,
-  by the book's check, which runs on every change to the book or the compiler.
+  by the book's check, which is part of the tests every release must pass.
 
 The book teaches. For a name's exact signature, use the library's pages and the specification, which are the
 authority where the book and they differ. They have their own files of the same kind:

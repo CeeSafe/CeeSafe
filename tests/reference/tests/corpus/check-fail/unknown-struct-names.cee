@@ -1,0 +1,113 @@
+// A struct literal and a struct pattern of a name that nothing declares are an unknown type (N0204) with the types of
+// a close name, as a type position says it, with or without type arguments (diagnostics.md, "Suggestions").
+// `Vec<i32> { x: 1 }` was "'Vec' is not a struct type", and `p is Pont { x, y }` was N0205 "this pattern names
+// another type than the value's" followed by N0200 for each binding the pattern did not declare.
+// A name that is something keeps what it was told: N0234 in a literal, N0205 in a pattern.
+enum Colour {
+    Red,
+    Green,
+}
+
+interface Shape {
+    fn area(borrow this) -> i32;
+}
+
+struct Pair<T> {
+    a: T;
+    b: T;
+}
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn known(x: i32) -> i32 => x;
+
+const LIMIT: i32 = 3;
+
+fn literals() {
+    let a = Vec<i32> { x: 1 }; // error[N0204]: unknown type 'Vec'; did you mean 'Vector', …
+    let b = Vec { x: 1 }; // error[N0204]: the same
+    let c = Option<i32> { x: 1 }; // error[N0204]: an optional type is written 'T?'
+    let d = Par<i32> { a: 1, b: 2 }; // error[N0204]: did you mean 'Pair'?
+    let e = Pont { x: 1, y: 2 }; // error[N0204]: did you mean 'Point'?
+    let f = Zzzzzzzz { x: 1 }; // error[N0204]: unknown type, nothing close
+    // These name something that is not a struct.
+    let g = Colour { x: 1 }; // error[N0234]: 'Colour' is not a struct type
+    let h = Shape { x: 1 }; // error[N0234]
+    let i = known { x: 1 }; // error[N0234]
+    let j = LIMIT { x: 1 }; // error[N0234]
+    let k = i32 { x: 1 }; // error[N0234]
+    let l = Vector<i32> { x: 1 }; // error[N0234]
+    let m = a { x: 1 }; // error[N0234]: a local
+}
+
+fn typeParameter<T>(t: T) -> i32 {
+    let a = T { x: 1 }; // error[N0204]: 'T' is not a struct type
+    return 0;
+}
+
+// The bindings of a pattern whose name is unknown are declared: the name is the only thing reported.
+fn inIs(p: Point) -> i32 {
+    if (p is Pont { x, y }) { // error[N0204]: did you mean 'Point'?
+        return x + y;
+    }
+    return 0;
+}
+
+fn inIsOfLibraryName(p: Point) -> i32 {
+    if (p is Vec { x, y }) { // error[N0204]: did you mean 'Vector', …
+        return x + y;
+    }
+    return 0;
+}
+
+fn inIsOfGeneric(q: Pair<i32>) -> i32 {
+    if (q is Par { a, b }) { // error[N0204]: did you mean 'Pair'?
+        return a + b;
+    }
+    return 0;
+}
+
+fn inLet(p: Point) -> i32 {
+    let Pnt { x, y } = p; // error[N0204]
+    return x + y;
+}
+
+fn inMatch(p: Point) -> i32 {
+    match (p) {
+        Poit { x, y } => { return x + y; } // error[N0204]
+    }
+}
+
+fn nested(q: Pair<Point>) -> i32 {
+    if (q is Pair { a: Pont { x, y }, b: _ }) { // error[N0204]
+        return x + y;
+    }
+    return 0;
+}
+
+// A name that is something else: the pattern names another type, and binds nothing.
+fn ofEnum(p: Point) -> i32 {
+    if (p is Colour { x: _, y: _ }) { // error[N0205]
+        return 1;
+    }
+    return 0;
+}
+
+fn ofFunction(p: Point) -> i32 {
+    if (p is known { x: _, y: _ }) { // error[N0205]
+        return 1;
+    }
+    return 0;
+}
+
+fn ofOtherStruct(p: Point) -> i32 {
+    if (p is Pair { a: _, b: _ }) { // error[N0205]
+        return 1;
+    }
+    return 0;
+}
+
+fn main() {}

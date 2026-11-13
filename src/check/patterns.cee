@@ -1668,7 +1668,21 @@ fn checkStructPattern(
         return c.hir.addPattern(HirPattern.Wildcard);
     }
     let first = c.front.ast.idents[c.front.ast.at(path.parts, 0) as usize];
-    if (!namesStruct(c, path, typ)) {
+    var same = namesStruct(c, path, typ);
+    if (!same && path.parts.count == 1 && c.types.lookup(c.name(first.symbol)) == none() &&
+        isNoItem(c, first.symbol) && isNone(c.lookup(first.symbol)?)) {
+        // Nothing has this name (`p is Pont { x, y }`): an unknown type, with the types close to it, as a struct
+        // literal and a type position say it. The pattern is then checked as one of the value's type, so that its
+        // bindings exist and the misspelt name is the only thing reported.
+        var message = Vector<u8>.create();
+        appendText(mut message, "unknown type ")?;
+        appendQuotedName(mut message, c, first.symbol)?;
+        appendTypeDidYouMean(c, mut message, first.symbol)?;
+        c.error(unknownType(), path.start, path.end, message)?;
+        failed = true;
+        same = true;
+    }
+    if (!same) {
         var message = Vector<u8>.create();
         appendText(mut message, "this pattern names another type than the value's, ")?;
         appendQuotedType(mut message, c, typ)?;

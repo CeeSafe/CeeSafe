@@ -50,7 +50,7 @@ diagnostics, so any cascade fails the test.
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107) | missing `;`, `(` after `if`, `}` before `fn` |
+| N0100 | Expected a specific token; a `fn` in an enum's body, whose functions are written in an `impl` block (ADR 0107); `::`, which CeeSafe writes `.` (`grammar.md` §1.7) | missing `;`, `(` after `if`, `}` before `fn`, `Colour::Red` |
 | N0101 | Expected an item (`fn` or `const`) at the top level | `let x = 1;`, `struct S {}` (not in M1) |
 | N0102 | Expected an expression | `let a = ;` |
 | N0103 | Comparison operators chained | `a < b < c` |
@@ -69,6 +69,19 @@ up to three it might be: the type's members within a few edits of it, then those
 (`TextWriter.unsigned` gives `signed`, `decimal` or `hex`); for a built-in type (`Process`, `Console`, …) the members
 the built-in types page lists for it, the longest shared start first; and for a small type with no close member, all
 its members. A reserved word where a name goes (N0100) says so.
+
+A method that does not exist on a value that is not a struct (N0234) is treated the same: a number is offered its
+built-in methods, the very names the checker accepts (`n.rotateLef(1)` gives `rotateLeft`), and the methods of its
+impls; an enum, declared or the library's (`IoError`, a generic enum's instance), and any other type with an impl,
+its own methods (ADR 0107) and its impls': the close ones, else all of them when they are at most six
+(`e.zzz()` on an `IoError`: "it has 'message'"). "has no methods" is said only of a type that has none. A type
+parameter with bounds is told that none of its bounds declares the method.
+
+A name that nothing declares, where a type is expected or with type arguments (`Vec<i32>`, `Vec<i32>.new()`), is
+reported as that, N0204 "unknown type" in a type and N0200 in an expression, before anything about its type
+arguments, with up to three types of a close name: the built-in generic types, and the structs and enums the file
+can name (`Vec` gives `Vector`). So is a capitalised name that is not found in an expression (`Vec.new()`). `Option`
+and `Optional` are told how an optional type is written (`T?`).
 
 Semantic checks run only when every file parsed without errors.
 
@@ -375,6 +388,7 @@ error, and the command fails (ADR 0073 §2.4).
 |---|---|---|
 | N0400 | A string literal's text has `{name}`, `name` bound where the literal stands (a local, a parameter, `this`, a constant or a static): CeeSafe has no string interpolation, so it is printed as written. `\{` means the brace and does not warn (`grammar.md` §1.6) | `let x = 3; Console.writeLine("x = {x}");` |
 | N0401 | `name.x` where `name` is a local, parameter, loop variable or binding with the name of a dependency that has a public item `x`: the local hides the dependency there, so this is the local's member and not `name.x`, the item (`type-system.md` §2, ADR 0074 §2.10) | `fn f(tls: Conn) { tls.connect(); }` with a dependency `tls` that has `public fn connect` |
-| N0402 | Two warnings share this code. (1) A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105). (2) A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6) | (1) `v.push(1);` (2) `let g = cell.read(); await pause();` |
+| N0402 | A call used as a statement (an `await` of one too) whose value is a `Result<T, E>`: nothing reads it, so an error it reports is lost. `e?;`, `e!;` and `let _ = e;` do not warn, nor does a statement that has an error of its own (`type-system.md` §17.5, ADR 0105) | `v.push(1);` |
 | N0403 | A `move` closure literal (a boxed closure's, `Thread.spawn`'s, an `async move` child's) whose body changes a captured variable of a Copy type, where the function names the variable again after the literal: the closure took a copy and changes that, so the later read sees the old value (`type-system.md` §36.5, ADR 0113) | `var hits = 0; let t = Thread.spawn(move () => { hits += 1; })!; t.join(); Console.writeLine(hits);` |
 | N0404 | A pattern that tests nothing, `_`, a binding (through `name @` too) or a struct pattern of such field patterns (ADR 0123 §2.4), after `is` or in a `let … else`: it matches every value, so the test is always true and the `else` block never runs (`type-system.md` §15.4, §15.5, ADR 0117 §2.3) | `if (n is m) { … }`, `let x = e else { return; };` |
+| N0405 | A `RefCell` guard (`CellRef`, `CellRefMut`, or a value holding one) live at an `await` or another point where an async fn or async closure may suspend: another task resumed meanwhile panics on the same cell (`type-system.md` §41.3, ADR 0084 §2.6). Until ADR 0129 it was reported as N0402 | `let g = cell.read(); await pause();` |

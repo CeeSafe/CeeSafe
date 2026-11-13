@@ -5429,7 +5429,7 @@ cell captured shared by `Thread.both` (N0334), `Arc<Cell<u32>>` (`Arc`'s `T: Sha
   expression whose branch writes. A `match` scrutinee's temporaries live until the end of the `match` (§18.4), as
   Rust's do. `e is P` (§15.4) follows the same rule: a guard made in its condition ends with the condition, or, when
   a binding borrows from it, with the then-branch or the pass of the `while` body, never in the `else` block.
-- **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0402**:
+- **Across `await`.** A local guard live where an async fn or async closure may suspend is warning **N0405**:
   another task resumed meanwhile panics on the same cell. A local counts if it holds a guard in its own storage or in
   what it owns: a struct or enum field, an optional, an array, a `Box`, a `Vector`, a `StableVector`, a `SlotMap`, or
   a closure's environment. Tasks that cross threads already need `Send` captures, and a guard is not `Send`.

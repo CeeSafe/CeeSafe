@@ -269,7 +269,6 @@ struct HirFunction {
     repeatsGeneric: bool;
     /// A method of an impl of an interface: its flows are narrowed to the interface's method's (ADR 0131).
     keepsInterfaceFlows: bool;
-    interfaceView: u32; // then: the interface's method as generic code sees it, whose flows these are narrowed to
     /// A closure: the captures (by index) through which its body stores what the others hold (ADR 0131), known once
     /// its body is borrow-checked, which is before the function it is written in.
     captureStores: Vector<u32>;
@@ -518,7 +517,6 @@ struct HirProgram {
             inheritedDefault: false,
             repeatsGeneric: false,
             keepsInterfaceFlows: false,
-            interfaceView: 0xFFFFFFFF,
             captureStores: Vector<u32>.create(),
         })?;
         return Ok(truncate<u32>(this.functions.length - 1));

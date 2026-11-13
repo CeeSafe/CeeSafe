@@ -9,8 +9,7 @@
   form (flows through interfaces, and a loan "of the function's own storage" kept by such a value) was broken by a
   second independent review the same day; §2 is the second form, which replaces it. A third review broke the
   second form's implementation in three ways, one of them a regression against 0.42.0: §2.9 to §2.11 and §4 are the
-  third round's. A fourth review found the body check that all of it rests on incomplete, in plain code and in
-  0.42.0: §2.12 and §2.13.
+  third round's.
 - Scope: the checker (`src/check/references.cee`, `interfaces.cee`, `generics.cee`, `declare.cee`, `members.cee`,
   `closures.cee`), the borrow checker (`src/nir/borrow.cee`, `passes.cee`), `src/types/types.cee`, the NIR builder
   (one guard), three fields of a HIR function; `lib/core/async.cee` (one bound); `spec/type-system.md` §21.1, §21.2,
@@ -175,27 +174,6 @@ off and reports later: the impl was attached, and N0334 came afterwards with no 
 off is now "not yet", as in ADR 0130 §2.6: the instance gets the impl when the question is asked again, once the
 fields are known. A message never suggests a bound that cannot be written (`C.Out: Send`).
 
-2.12 **Built-ins: every one classified** (fourth round). A fourth review found the body check itself, on which
-every rule above rests, incomplete in plain code and in 0.42.0: a store was recorded for `push` and the two
-`insert`s only. `replace` and `swap` carried nothing in either direction; `fill`, `copyFrom`, `extend` and `resize`
-stored without a record. Each of this ADR's refusals could be rewritten with `replace` and pass. The rule
-(§25.7 rule 3): every built-in is named in one table, in one class: stores its other operands through its first;
-exchanges what its two operands refer to; reads (stores nothing, its result carries its operands' loans); a call
-through a value; raw. A built-in the table does not name makes the function that uses it N0216: a new built-in
-cannot be added without the decision. The closures' recorded stores (2.5) and the deep flows read the same record
-of writes, so they follow.
-
-2.13 **Store targets, by definition** (fourth round). A `borrow mut` held inside a by-value parameter was no
-target: `fn put(s: Sink) { let t = local(); s.out.push(t.view())!; }` checked. A type is *written through* when a
-write through a value of it can reach memory that outlives the value and can hold a loan: a `borrow mut` or
-`SliceMut` of such a referent, and any struct, enum, optional or array that holds one, at any depth. Every
-parameter of such a type is a target of flows, with its type's flow names; the one predicate
-(`TypeTable.writableThrough`) decides N0272 in the callee, the store the caller records, and N0298. Whether a
-struct holds a `borrow mut` is known once the fields are: the flows into by-value targets of functions declared
-before are added then. And since a by-value argument that holds a `borrow mut` and a loan can have the one stored
-through the other by any callee (`fn put(s: Two) { s.a.push(s.b)!; }`), every call given such an argument, a
-function's, a method's, a function value's or a closure's, is a store of what the argument holds through it.
-
 ## 3. Why each program is refused
 
 | Program | Refused by | With |
@@ -228,8 +206,6 @@ reads a loan off a type. The argument needs each of these, and each has a test t
 | A7 | An impl's body keeps its interface's flows | 2.3 | `check-fail/interface-impl-flows` |
 | A8 | A closure's stores through its captures are the enclosing function's, where the closure is made | 2.5 | `check-fail/closure-capture-stores*`, `async-boxed-closure-loans` |
 | A9 | A raw pointer carries no loan: what is read through one is `unsafe` code's | §27.1 | none: a statement about `unsafe` code |
-| A10 | Every built-in that writes a value records the write through its receiver, and every built-in that returns one carries its operands' loans | 2.12: the table, and N0216 for a built-in it does not name | `check-fail/builtin-stores-*`, `run-pass/builtin-stores-sound` |
-| A11 | Every place a write can reach that outlives the call is a store target | 2.13: one predicate for the callee, the caller and N0298 | `check-fail/store-targets-*`, `run-pass/builtin-stores-sound` |
 
 Where it is weakest now: A6, which trusts each built-in by kind and not by a list; A4, an existing rule this ADR
 relies on and probed but did not redesign; and closures kept in a struct's field or returned in a `Box`, which

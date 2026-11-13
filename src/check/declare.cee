@@ -300,7 +300,6 @@ fn checkProgramWith(
         instanceErrors: false,
         regionImpls: Vector<u32>.create(),
         declaredFlows: Vector<DeclaredFlows>.create(),
-        heldNames: Vector<HeldNames>.create(),
         flowsWaiting: Vector<u32>.create(),
         interfaceOfMethod: Vector<u32>.create(),
         implementationsOf: Map<Word, Vector<u32>>.create(),

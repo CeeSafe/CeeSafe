@@ -763,31 +763,18 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     for (i in 0..parameterCount) {
         let local = c.hir.functions[function as usize].parameters[i];
         let t = c.hir.locals[local as usize].typ;
-        // A store target is every parameter through which a write can reach memory that outlives the call (ADR 0131
-        // §2.13): a `borrow mut` or `SliceMut`, and a value that holds one at any depth (`s: Sink<r>` with a field
-        // `out: borrow mut(r) Vector<StringView<r>>`).
-        let held = !c.types.is(t, TypeKind.Reference) && c.types.writableThrough(t, 0);
-        if (!held && (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference)) {
+        if (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference) {
             continue;
         }
         // What a `borrow mut dyn I` refers to may be a scoped implementation, which is a `dyn` value only behind a
         // reference (§37.2): a method may store a loan in it, as in any other referent that may hold one.
-        let pointeeType = if (held) t else c.types.info(t).pointee;
+        let pointeeType = c.types.info(t).pointee;
         if (!mayHoldLoans(c, pointeeType) && !c.types.isDyn(pointeeType)) {
             continue;
         }
         var target = Vector<u64>.create();
         var targetWritten: usize = 0;
-        let p0 = if (i < receiverOffset) none() else c.front.ast.parameters[c.front.ast.at(
-            decl.parameters,
-            truncate<u32>(i - receiverOffset),
-        ) as usize].typ;
-        let writtenAsReference = p0 != none() && match (c.front.ast.types[p0 as usize]) {
-            TypeNode.Reference(_, _, _, _) => true,
-            _ => false,
-        };
-        // A `SliceMut<T>` is written `SliceMut<…>`, not `borrow mut …`: its names are its type's.
-        if (i < receiverOffset || held || !writtenAsReference) {
+        if (i < receiverOffset) {
             for (n in c.flowNames[i].view()) {
                 target.push(n)?;
             }
@@ -869,28 +856,6 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
         sortU32(mut c.hir.functions[function as usize].returnSources);
     }
     c.hir.functions[function as usize].mutableFlows = flows;
-    // Whether a by-value parameter holds a `borrow mut` is known once the structs and enums have their fields: a
-    // function declared before then keeps its parameters' names for resolveHeldTargets (ADR 0131 §2.13).
-    if (!c.membersReady) {
-        var waits = false;
-        for (i in 0..parameterCount) {
-            let t = c.hir.locals[c.hir.functions[function as usize].parameters[i] as usize].typ;
-            if (!c.types.is(t, TypeKind.Reference) && c.types.isScoped(t)) {
-                waits = true;
-            }
-        }
-        if (waits) {
-            var kept = Vector<Vector<u64>>.create();
-            for (i in 0..parameterCount) {
-                var set = Vector<u64>.create();
-                for (name in c.flowNames[i].view()) {
-                    set.push(name)?;
-                }
-                kept.push(set)?;
-            }
-            c.heldNames.push(HeldNames { function: function, names: kept, written: written })?;
-        }
-    }
     c.flowNames = Vector<Vector<u64>>.create();
     c.flowTypeParameters = Vector<u32>.create();
     // The declaration's flows, once, and every instance has at least those (ADR 0131 §2.9).
@@ -917,95 +882,6 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     } else {
         c.flowsWaiting.push(function)?;
     }
-    return Ok();
-}
-
-/// The parameters' flow names of a function declared before the structs and enums had their fields.
-struct HeldNames {
-    function: u32;
-    names: Vector<Vector<u64>>;
-    written: Vector<usize>;
-}
-
-/// The flows into the by-value parameters that hold a `borrow mut` (ADR 0131 §2.13), for the functions declared
-/// before that could be known; then an impl's method keeps only its interface's, and every instance has its
-/// declaration's (§2.9).
-fn resolveHeldTargets(c: borrow mut Checker) -> Result<void, AllocError> {
-    for (e in 0..c.heldNames.length) {
-        let function = c.heldNames[e].function;
-        let count = c.hir.functions[function as usize].parameters.length;
-        for (i in 0..count) {
-            let t = c.hir.locals[c.hir.functions[function as usize].parameters[i] as usize].typ;
-            if (c.types.is(t, TypeKind.Reference) || !c.types.writableThrough(t, 0)) {
-                continue;
-            }
-            for (j in 0..count) {
-                if (j == i) {
-                    continue;
-                }
-                var shared = false;
-                var direct = false;
-                for (x in 0..c.heldNames[e].names[i].length) {
-                    let name = c.heldNames[e].names[i][x];
-                    if (isElided(name)) {
-                        continue;
-                    }
-                    for (y in 0..c.heldNames[e].names[j].length) {
-                        if (c.heldNames[e].names[j][y] == name) {
-                            shared = true;
-                            if (x < c.heldNames[e].written[i] && y < c.heldNames[e].written[j]) {
-                                direct = true;
-                            }
-                        }
-                    }
-                }
-                if (!shared) {
-                    continue;
-                }
-                let source = c.hir.locals[c.hir.functions[function as usize].parameters[j] as usize].typ;
-                let deep = !direct && isPlainReference(c, source);
-                let plain = (i as u64) << 32 | j as u64;
-                if (!containsU64(c.hir.functions[function as usize].mutableFlows, plain) && !containsU64(
-                    c.hir.functions[function as usize].mutableFlows,
-                    plain | deepFlowBit(),
-                )) {
-                    c.hir.functions[function as usize].mutableFlows.push(if (deep) plain | deepFlowBit() else plain)?;
-                }
-            }
-        }
-    }
-    for (e in 0..c.heldNames.length) {
-        let function = c.heldNames[e].function;
-        let view = c.hir.functions[function as usize].interfaceView;
-        if (view == none()) {
-            continue;
-        }
-        var flows = Vector<u64>.create();
-        for (flow in c.hir.functions[function as usize].mutableFlows.view()) {
-            let plain = flow & (deepFlowBit() ^ 0xFFFFFFFFFFFFFFFF);
-            if (containsU64(c.hir.functions[view as usize].mutableFlows, plain)) {
-                flows.push(flow)?;
-            } else if (containsU64(c.hir.functions[view as usize].mutableFlows, plain | deepFlowBit())) {
-                flows.push(plain | deepFlowBit())?;
-            }
-        }
-        c.hir.functions[function as usize].mutableFlows = flows;
-    }
-    for (e in 0..c.heldNames.length) {
-        let function = c.heldNames[e].function;
-        let f = c.hir.functions[function as usize].syntax;
-        if ((f as usize) < c.declaredFlows.length && c.declaredFlows[f as usize].function == function) {
-            recordDeclaredFlows(c, f, function)?;
-        }
-    }
-    for (e in 0..c.heldNames.length) {
-        let function = c.heldNames[e].function;
-        let f = c.hir.functions[function as usize].syntax;
-        if ((f as usize) < c.declaredFlows.length && c.declaredFlows[f as usize].function != none()) {
-            inheritFlows(c, f, function)?;
-        }
-    }
-    c.heldNames = Vector<HeldNames>.create();
     return Ok();
 }
 
@@ -1120,11 +996,10 @@ fn missingDeclaredFlows(c: borrow mut Checker, f: u32, function: u32, add: bool)
             continue;
         }
         let t = c.hir.locals[c.hir.functions[function as usize].parameters[target as usize] as usize].typ;
-        let held = !c.types.is(t, TypeKind.Reference) && c.types.writableThrough(t, 0);
-        if (!held && (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference)) {
+        if (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference) {
             continue;
         }
-        let pointee = if (held) t else c.types.info(t).pointee;
+        let pointee = c.types.info(t).pointee;
         if (!mayHoldLoans(c, pointee) && !c.types.isDyn(pointee)) {
             continue;
         }

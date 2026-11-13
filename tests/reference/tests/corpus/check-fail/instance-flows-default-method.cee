@@ -4,12 +4,12 @@ struct Owner {
 }
 fn same(x: StringView) -> StringView => x;
 interface Run<U> {
-    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view()); // error[N0245]
 }
 struct Unit {
     n: u32;
 }
-impl Run<StringView> for Unit {} // error[N0267]
+impl Run<StringView> for Unit {}
 fn main() {
     var keep = Vector<StringView>.create();
     let u = Unit { n: 1 };

@@ -51,10 +51,6 @@ struct ThroughWrite {
     sources: Vector<u32>;
     /// By source: the parameter whose outer placeholder it does not carry (a deep flow's source, ADR 0131), or none.
     drops: Vector<u32>;
-    /// A value passed by value that holds a `borrow mut` (ADR 0131 §2.13): the callee may store what the value
-    /// holds through that reference, so the value is written through itself; the loans of what it is written into
-    /// are not stored there.
-    itself: bool;
     shared: bool;
     span: Span;
 }
@@ -149,7 +145,6 @@ struct Borrows {
     pointsToBits: Vector<Vector<u64>>; // by local: membership, sized when every loan is known
     loanAt: Vector<Vector<u32>>;       // by block position and statement: the loan made there, or none
     throughWrites: Vector<ThroughWrite>;
-    unclassified: bool;            // a built-in that builtinLoans does not name was met
     blockOf: Vector<u32>;          // block id to position
     reached: Vector<Vector<bool>>; // by loan: the blocks reachable from where it is made, once asked
     holders: Vector<u64>;          // (scope site << 32) | local: a spawned child's environment (ADR 0033 §3.2)
@@ -485,7 +480,7 @@ fn recordWrite(
     }
     if (throughReference) {
         b.throughWrites.push(
-            ThroughWrite { holder: holder, sources: sources, drops: drops, itself: false, shared: shared, span: span },
+            ThroughWrite { holder: holder, sources: sources, drops: drops, shared: shared, span: span },
         )?;
     }
     return Ok();
@@ -501,142 +496,9 @@ fn hasEdgeDropping(edges: borrow Vector<LoanEdge>, from: u32, to: u32, dropOuter
     return false;
 }
 
-// ---- What each built-in does with loans (type-system.md §25.7 rule 3, ADR 0131 §2.12) ----
-
-/// A built-in the table below does not name: ceesafec's own defect, reported where the built-in is used.
-fn loansUnclassified() -> u32 => 0;
-/// Stores nothing; its result carries the loans of the operands it reads (what a reference operand refers to
-/// holds, for a result that is not a reference, slice or view).
-fn loansRead() -> u32 => 1;
-/// Writes its other operands through its first (`push`, `insert`, `extend`, `resize`, `fill`, `copyFrom`).
-fn loansStoreThroughFirst() -> u32 => 2;
-/// Exchanges what its two operands refer to (`swap`; `replace` is a swap with a temporary): each is written
-/// through the other.
-fn loansExchange() -> u32 => 3;
-/// Writes through, or makes a value from, a raw pointer: no loan is followed (§27.1), the caller's `unsafe` answers.
-fn loansRaw() -> u32 => 4;
-/// A call through a function value, a closure or a C function pointer: its result carries every argument's loans,
-/// and a closure's what its captures hold; it stores nothing, since a function type carries no flows (§36.1).
-fn loansCall() -> u32 => 5;
-
-/// The class of every built-in, each named: a new one is unclassified until it is added here, and a program that
-/// uses it does not check (collectWrites).
-fn builtinLoans(f: u32) -> u32 {
-    if (f == bfVectorPush() || f == bfStableVectorPush() || f == bfSlotMapInsert() || f == bfVectorExtend() ||
-        f == bfVectorResize() || f == bfSliceFill() || f == bfSliceCopy()) {
-        return loansStoreThroughFirst();
-    }
-    if (f == bfSwap() || f == bfReplace()) {
-        return loansExchange();
-    }
-    if (f == bfPtrWrite() || f == bfPtrWriteVolatile() || f == bfPtrWriteUnaligned() || f == bfVectorAdopt() ||
-        f == bfBoxFromRaw() || f == bfSliceFromRaw()) {
-        return loansRaw();
-    }
-    if (f == bfCallFunction() || f == bfCallClosure() || f == bfCallPointer()) {
-        return loansCall();
-    }
-    if (f == bfConsoleWrite() || f == bfConsoleWriteLine() || f == bfProcessExit() || f == bfBoxCreate() ||
-        f == bfFailAfter() || f == bfFailReset() || f == bfArenaCreate() || f == bfArenaAlloc() ||
-        f == bfArenaAllocArray() || f == bfArenaReset() || f == bfFixedBufferOver() || f == bfScratchEnter() ||
-        f == bfScratchNest() || f == bfPoolCreate() || f == bfPoolTake() || f == bfVectorCreate() ||
-        f == bfVectorWithCapacity() || f == bfVectorPop() || f == bfVectorClear() || f == bfVectorTruncate() ||
-        f == bfVectorRetain() || f == bfVectorCapacity() || f == bfStringAppend() || f == bfSlotMapGet() ||
-        f == bfSlotMapRemove() || f == bfSlotMapContains() || f == bfSlotMapLength() || f == bfFileOpen() ||
-        f == bfFileCreate() || f == bfFileRemove() || f == bfResourceRead() || f == bfResourceWrite() ||
-        f == bfConsoleRead() || f == bfConsoleWriteBytes() || f == bfConsoleWriteError() ||
-        f == bfConsoleWriteErrorLine() || f == bfTcpListen() || f == bfTcpPort() || f == bfTcpAccept() ||
-        f == bfTcpConnect() || f == bfTcpShutdownWrite() || f == bfIoErrorMessage() || f == bfArgumentCount() ||
-        f == bfArgument() || f == bfProcessRun() || f == bfPtrRead() || f == bfPtrAdd() || f == bfPtrSub() ||
-        f == bfPtrOffset() || f == bfPtrIsNull() || f == bfSlicePtr() || f == bfStringViewFromUtf8() ||
-        f == bfSliceSwap() || f == bfStringAppendNumber() || f == bfFloatBits() || f == bfFloatFromBits() ||
-        f == bfFloatSqrt() || f == bfFloatAbs() || f == bfFloatFloor() || f == bfFloatCeil() ||
-        f == bfFloatMin() || f == bfFloatMax() || f == bfWrappingAdd() || f == bfWrappingSub() ||
-        f == bfWrappingMul() || f == bfCheckedAdd() || f == bfCheckedSub() || f == bfCheckedMul() ||
-        f == bfSaturatingAdd() || f == bfSaturatingSub() || f == bfSaturatingMul() ||
-        f == bfPtrReadVolatile() || f == bfSpinHint() || f == bfPtrPlace() || f == bfLayoutOf() ||
-        f == bfOffsetOf() || f == bfCallerAddress() || f == bfTargetIsX8664() || f == bfTargetIsAArch64() ||
-        f == bfTargetPointerBits() || f == bfBoxIntoRaw() || f == bfThreadSpawn() || f == bfThreadJoin() ||
-        f == bfThreadSpawnBoxed() || f == bfThreadBoth() || f == bfTcpSetNoDelay() ||
-        f == bfTcpSetKeepAlive() || f == bfTcpSetSendBuffer() || f == bfTcpSetRecvBuffer() ||
-        f == bfTcpSetLinger() || f == bfTcpShutdownRead() || f == bfIntMin() || f == bfIntMax() ||
-        f == bfIntAbs() || f == bfIntUnsignedAbs() || f == bfIntRotateLeft() || f == bfIntRotateRight() ||
-        f == bfIntWrappingShl() || f == bfIntWrappingShr() || f == bfIntLeadingZeros() ||
-        f == bfIntTrailingZeros() || f == bfIntCountOnes() || f == bfIntByteSwap() || f == bfVectorReserve() ||
-        f == bfAssert() || f == bfPanic() || f == bfFileOpenReadWrite() || f == bfFileOpenOrCreate() ||
-        f == bfFileCreateNew() || f == bfFileReadAt() || f == bfFileWriteAt() || f == bfFileSyncData() ||
-        f == bfFileSyncAll() || f == bfFileLength() || f == bfFileSetLength() || f == bfFileOpenAppend() ||
-        f == bfFileOpenRegular() || f == bfDebugAssert() || f == bfVariantIndex() || f == bfVectorSetLength() ||
-        f == bfVectorRelease() || f == bfIntMulHigh() || f == bfPtrReadUnaligned() ||
-        f == bfTcpListenerShutdown()) {
-        return loansRead();
-    }
-    // The async built-ins (src/check/async.cee): a child owns what it captures (§40.4), so none stores a loan, and a
-    // join's result carries what its operands hold.
-    if (f == bfAsyncPark() || f == bfAsyncSpawn() || f == bfAsyncScopeWait() || f == bfAsyncJoin() ||
-        f == bfAsyncJoinResult() || f == bfAsyncBlocking() || f == bfAsyncBoxed() || f == bfAsyncScopeStart() ||
-        f == bfAsyncWorkers() || f == bfAsyncRunWorkers() || f == bfAsyncSetSpawn() || f == bfAsyncSetAllocator()) {
-        return loansRead();
-    }
-    return loansUnclassified();
-}
-
 fn operandPlaceLocal(n: borrow NirProgram, operand: u32) -> u32 {
     let place = operandPlace(n, operand);
     return if (place == none()) none() else n.places[place as usize].local;
-}
-
-/// A write of operand `source` through the reference (or slice) local `receiver`. A source that is itself a
-/// reference or a slice gives what it refers to holds, not its own loan: its elements or its referent are what is
-/// copied in (`extend`, `copyFrom`, `swap`), so the receiver does not come to borrow the source.
-fn storeThrough(
-    c: borrow Checker,
-    n: borrow NirProgram,
-    b: borrow mut Borrows,
-    edges: borrow mut Vector<LoanEdge>,
-    references: borrow Vector<u32>,
-    throughs: borrow Vector<u32>,
-    receiver: u32,
-    source: u32,
-    shared: bool,
-    span: Span,
-) -> Result<void, AllocError> {
-    let given = operandPlaceLocal(n, source);
-    if (given == none() || !mayHoldLoans(c, n.operandTypes[source as usize]) || !holdsLoans(c, n, b, given)) {
-        return Ok();
-    }
-    // What the receiver refers to must be able to hold a loan: bytes copied into a `Vector<u8>` bring none.
-    let receiverType = localType(n, b, receiver);
-    if (isReferenceType(c, receiverType) && !mayHoldLoans(c, c.types.info(receiverType).pointee)) {
-        return Ok();
-    }
-    if (isReferenceType(c, n.operandTypes[source as usize]) && !c.types.isStringView(n.operandTypes[source as usize])) {
-        var deep = Vector<LoanEdge>.create();
-        deepSourceEdge(c, n, b, mut deep, references, throughs, given, receiver, 0)?;
-        var sources = Vector<u32>.create();
-        var drops = Vector<u32>.create();
-        for (edge in deep.view()) {
-            edges.push(LoanEdge { from: edge.from, to: edge.to, dropOuter: edge.dropOuter })?;
-            sources.push(edge.from)?;
-            drops.push(edge.dropOuter)?;
-        }
-        if (sources.length > 0) {
-            b.throughWrites.push(
-                ThroughWrite {
-                    holder: receiver,
-                    sources: sources,
-                    drops: drops,
-                    itself: false,
-                    shared: shared,
-                    span: span,
-                },
-            )?;
-        }
-        return Ok();
-    }
-    var sources = Vector<u32>.create();
-    sources.push(given)?;
-    return recordWrite(b, edges, receiver, sources, true, shared, span);
 }
 
 /// Writes that store loans somewhere other than a fresh local (CollectWrites, §25.7 rules 1–4): into a place of a
@@ -673,34 +535,6 @@ fn collectWrites(
         }
         _ => {}
     }
-    // Any call given, by value, a value that holds a `borrow mut` to something that can hold a loan: the callee may
-    // store what the value holds through that reference (`fn put(s: Two) { s.a.push(s.b)!; }`), whatever it is: a
-    // function, a method, a function value, a closure (ADR 0131 §2.13).
-    var passed = emptyRange();
-    match (n.rvalues[value as usize]) {
-        NirRvalue.Call(_, arguments) => { passed = arguments; }
-        NirRvalue.Builtin(function, arguments) => {
-            if (builtinLoans(function) == loansCall()) {
-                passed = arguments;
-            }
-        }
-        _ => {}
-    }
-    for (k in 0..passed.count) {
-        let operand = n.at(passed, k);
-        let t = n.operandTypes[operand as usize];
-        let local = operandPlaceLocal(n, operand);
-        if (local == none() || isReferenceType(c, t) || !c.types.writableThrough(t, 0)) {
-            continue;
-        }
-        var sources = Vector<u32>.create();
-        sources.push(local)?;
-        var drops = Vector<u32>.create();
-        drops.push(writtenInto())?;
-        b.throughWrites.push(
-            ThroughWrite { holder: local, sources: sources, drops: drops, itself: true, shared: false, span: span },
-        )?;
-    }
     match (n.rvalues[value as usize]) {
         // A closure whose body stores what it captures through one of its captures (`() => into.keep(v)`): the
         // statements are the enclosing function's, so the store is too, where the closure is made (§36.2, ADR 0131).
@@ -730,36 +564,15 @@ fn collectWrites(
                 }
             }
         }
-        // Rule 3: a built-in that writes stores what it is given through its receiver. Every built-in is classified
-        // (builtinLoans): one that is not is ceesafec's defect, said here and not passed over.
+        // Rule 3: collection writes store their argument through the receiver.
         NirRvalue.Builtin(function, arguments) => {
-            let effect = builtinLoans(function);
-            if (effect == loansUnclassified()) {
-                b.unclassified = true;
-            } else if (effect == loansStoreThroughFirst() && arguments.count > 0) {
+            if (function == bfVectorPush() || function == bfSlotMapInsert() || function == bfStableVectorPush()) {
                 let receiver = operandPlaceLocal(n, n.at(arguments, 0));
                 if (receiver != none()) {
-                    for (k in 1..arguments.count) {
-                        storeThrough(
-                            c,
-                            n,
-                            b,
-                            edges,
-                            references,
-                            throughs,
-                            receiver,
-                            n.at(arguments, k),
-                            function == bfStableVectorPush(),
-                            span,
-                        )?;
-                    }
-                }
-            } else if (effect == loansExchange() && arguments.count == 2) {
-                let first = operandPlaceLocal(n, n.at(arguments, 0));
-                let second = operandPlaceLocal(n, n.at(arguments, 1));
-                if (first != none() && second != none()) {
-                    storeThrough(c, n, b, edges, references, throughs, first, n.at(arguments, 1), false, span)?;
-                    storeThrough(c, n, b, edges, references, throughs, second, n.at(arguments, 0), false, span)?;
+                    var operands = Vector<u32>.create();
+                    operands.push(n.at(arguments, 1))?;
+                    let sources = carriers(c, n, b, operands)?;
+                    recordWrite(b, edges, receiver, sources, true, function == bfStableVectorPush(), span)?;
                 }
             }
         }
@@ -791,7 +604,6 @@ fn collectWrites(
                                     holder: receiver,
                                     sources: sources,
                                     drops: drops,
-                                    itself: false,
                                     shared: false,
                                     span: span,
                                 },
@@ -906,10 +718,6 @@ fn noteCaptureStores(c: borrow mut Checker, n: borrow NirProgram, b: borrow Borr
     return Ok();
 }
 
-/// LoanEdge.dropOuter for an edge that does not carry the loans of the local it goes to: what is written into a
-/// place does not come to borrow that place.
-fn writtenInto() -> u32 => 0xFFFFFFFD;
-
 /// LoanEdge.dropOuter for an edge that carries no parameter's own loan (its outer placeholder), whichever it is.
 fn everyOuter() -> u32 => 0xFFFFFFFE;
 
@@ -924,11 +732,7 @@ fn propagate(b: borrow mut Borrows, edges: borrow Vector<LoanEdge>) -> Result<vo
             let count = b.pointsTo[edge.from as usize].length;
             for (k in 0..count) {
                 let loan = b.pointsTo[edge.from as usize][k];
-                if (edge.dropOuter == writtenInto()) {
-                    if (b.loans[loan as usize].hasPlace && b.loans[loan as usize].place.local == edge.to) {
-                        continue;
-                    }
-                } else if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
+                if (edge.dropOuter != none() && b.loans[loan as usize].outer &&
                     (edge.dropOuter == everyOuter() || b.loans[loan as usize].parameterIndex == edge.dropOuter)) {
                     continue;
                 }
@@ -1363,21 +1167,6 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
         var targets = Vector<u32>.create();
         for (id in b.pointsTo[write.holder as usize].view()) {
             let loan = borrow b.loans[id as usize];
-            // A by-value parameter that holds a `borrow mut` (ADR 0131 §2.13): what the write went through was
-            // read out of it (its placeholder), or is a place reached through a reference it holds.
-            var inside: u32 = none();
-            if (!loan.hasPlace && loan.parameterIndex < b.parameterCount) {
-                inside = loan.parameterIndex;
-            } else if (loan.hasPlace && loan.place.local < b.parameterCount && derefsReference(c, n, b, loan.place)) {
-                inside = loan.place.local;
-            }
-            if (inside != none() && !isReferenceType(c, localType(n, b, inside)) &&
-                c.types.writableThrough(localType(n, b, inside), 0)) {
-                if (!containsU32(targets, inside)) {
-                    targets.push(inside)?;
-                }
-                continue;
-            }
             if (!(loan.isMutable || write.shared)) {
                 continue;
             }
@@ -1392,9 +1181,8 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
         var stored = Vector<u32>.create();
         for (k in 0..write.sources.length) {
             for (id in b.pointsTo[write.sources[k] as usize].view()) {
-                let dropped =
-                    write.drops[k] != none() && write.drops[k] != writtenInto() && b.loans[id as usize].outer &&
-                        b.loans[id as usize].parameterIndex == write.drops[k];
+                let dropped = write.drops[k] != none() && b.loans[id as usize].outer &&
+                    b.loans[id as usize].parameterIndex == write.drops[k];
                 if (!dropped && !containsU32(stored, id)) {
                     stored.push(id)?;
                 }
@@ -1414,10 +1202,6 @@ fn checkParameterWrites(c: borrow mut Checker, n: borrow NirProgram, b: borrow B
                 let itself = if (storedLoan.hasPlace) !beyondReference(c, n, b, storedLoan.place) else storedLoan.outer;
                 let allowed = from != none() && (containsU64(c.hir.functions[source as usize].mutableFlows, flow) ||
                     (!itself && containsU64(c.hir.functions[source as usize].mutableFlows, flow | deepFlowBit())));
-                // A value written through itself: what it holds of the target is the reference it writes through.
-                if (write.itself && from == target) {
-                    continue;
-                }
                 if (!ownContents && !allowed) {
                     foreign = id;
                     break;
@@ -2372,7 +2156,6 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
         pointsToBits: Vector<Vector<u64>>.create(),
         loanAt: Vector<Vector<u32>>.create(),
         throughWrites: Vector<ThroughWrite>.create(),
-        unclassified: false,
         blockOf: Vector<u32>.create(),
         reached: Vector<Vector<bool>>.create(),
         holders: Vector<u64>.create(),
@@ -2401,14 +2184,6 @@ fn checkBorrows(c: borrow mut Checker, n: borrow NirProgram, function: u32) -> R
     }
     computeLoans(c, n, mut b)?;
     noteCaptureStores(c, n, b)?;
-    if (b.unclassified) {
-        var message = Vector<u8>.create();
-        appendText(
-            mut message,
-            "ceesafec's internal check: this function uses a built-in whose effect on loans is not classified (builtinLoans, ADR 0131 §2.12), so its borrows cannot be checked; please report this",
-        )?;
-        c.front.diagnostics.error(unsupported(), b.file, 0, 1, message)?;
-    }
     collectHolders(c, n, mut b)?;
     for (k in 0..b.loans.length) {
         b.reached.push(Vector<bool>.create())?;

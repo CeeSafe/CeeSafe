@@ -86,7 +86,7 @@ fn summaryOf(number: u32) -> StringView => match (number) {
     243 => "A place or temporary goes out of scope while borrowed",
     244 => "Returning a reference to a local or temporary (E1)",
     245 =>
-        "Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5)",
+        "Return-source errors (E2): missing or invalid `borrow(...)` list, a result derived from an unlisted parameter, or a deep result (one naming only regions of a parameter's referent, ADR 0074 §2.4) that borrows the referent's own storage; in a method of an impl of an interface, a result with a flow the interface's method lacks (type-system.md §21.1, ADR 0131); a result of a type parameter's type is checked as a scoped one (§25.7 rule 5); in a closure's body, a result that may hold a loan and is made from a capture, since the closure's environment is no source of its result (§36.2)",
     246 =>
         "Reference in a disallowed position: struct field, constant, `var` local, reference to reference, source list outside a return type. Since M4a this covers every scoped type, scoped results included (`type-system.md` §19.1)",
     247 => "`borrow` of something that is not a place",

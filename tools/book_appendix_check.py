@@ -6,6 +6,11 @@ One function for each appendix; each returns its problems, in the form tools/boo
 A list read from the compiler's source that comes back empty, or shorter than it can be, is a problem too
 ("not checked: …"): a check that compares a page with nothing must not pass.
 
+Appendices C, F and H are written by generators (tools/gen_appendix_c.py, gen_appendix_f.py, gen_appendix_h.py, from
+book/appendices/ and the sources each names). Each is also compared with what its generator writes now, so a change
+to the grammar, the catalog, a chapter's `diagnostics:` header or a generator's input without a new page is a problem
+that names the command to run. No compiler is run for that.
+
   A  appendix-a-keywords       reserved words = keywordText (src/syntax/token.cee); contextual words = the parser's
                                nameIs(…, "X") less isPrimitiveTypeName, whose names the page also gives; attributes =
                                the lists the checker gives knownAttributes, with @from, and isAttributeWord's names
@@ -43,6 +48,11 @@ import re
 import subprocess
 import sys
 import tempfile
+
+import book_appendix_gen
+import gen_appendix_c
+import gen_appendix_f
+import gen_appendix_h
 
 
 class Shape(Exception):
@@ -1006,16 +1016,23 @@ def _glossary(root, where):
     return problems
 
 
+# ---------------------------------------------------------------------------------------------------- generated
+
+def generated(root, generator):
+    """The problem of a generated appendix that is not what its generator writes from the tree at `root`."""
+    return book_appendix_gen.stale(generator, root)
+
+
 # ---------------------------------------------------------------------------------------------------- all
 
 APPENDICES = [
     ("appendix-a-keywords", "A", lambda root, cee, written: appendix_a(root)),
     ("appendix-b-operators", "B", lambda root, cee, written: appendix_b(root)),
-    ("appendix-c-built-in-types", "C", lambda root, cee, written: appendix_c(root, cee)),
+    ("appendix-c-built-in-types", "C", lambda root, cee, written: generated(root, gen_appendix_c) + appendix_c(root, cee)),
     ("appendix-d-derives", "D", lambda root, cee, written: appendix_d(root)),
     ("appendix-e-ceesafec", "E", lambda root, cee, written: appendix_e(root, cee)),
-    ("appendix-f-diagnostics", "F", lambda root, cee, written: appendix_f(root, cee, written)),
-    ("appendix-h-grammar", "H", lambda root, cee, written: appendix_h(root)),
+    ("appendix-f-diagnostics", "F", lambda root, cee, written: generated(root, gen_appendix_f) + appendix_f(root, cee, written)),
+    ("appendix-h-grammar", "H", lambda root, cee, written: generated(root, gen_appendix_h) + appendix_h(root)),
     ("appendix-i-for-ai-models", "I", lambda root, cee, written: appendix_i(root)),
     ("appendix-j-versions", "J", lambda root, cee, written: appendix_j(root)),
     ("glossary", "glossary", lambda root, cee, written: glossary(root)),

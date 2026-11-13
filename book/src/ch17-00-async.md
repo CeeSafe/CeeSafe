@@ -21,7 +21,8 @@ another task use the thread. An `async fn` is a function whose call is a task, a
 its result.
 
 CeeSafe's tasks are **structured**. A task is started by `await`, by `Async.run`, or as a child of a scope, and in
-each case the code that started it does not go on until the task has returned. There is no task that runs loose in
+each case the task has an owner that waits for it: the code that awaits it does not go on until it has returned,
+and a scope does not return until every child it started has. There is no task that runs loose in
 the background, and no value that stands for a task still running. Three things follow, and the chapter comes back
 to each:
 

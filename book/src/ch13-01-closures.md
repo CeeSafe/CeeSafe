@@ -226,8 +226,8 @@ fn main() {
 changes the closure's own `count`.
 
 ::: tip Rule
-A move literal is written only as the argument of `Box.create(…)` where a `Box<dyn fn…>` or
-`Box<dyn mut fn…>` is expected. It may not capture a borrow, a view, a slice or another closure: the box
+A move literal is written in two places: as the argument of `Box.create(…)` where a `Box<dyn fn…>` or
+`Box<dyn mut fn…>` is expected, and as the closure a thread runs ([Starting threads](./ch16-01-starting-threads)). It may not capture a borrow, a view, a slice or another closure: the box
 would outlive what they borrow.
 
 *Specification: `type-system.md` §36.5.*

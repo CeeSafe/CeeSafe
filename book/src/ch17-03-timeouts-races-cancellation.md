@@ -159,7 +159,8 @@ Nothing else happens to the task: it runs on from that `Err`, and it ends by ret
 
 A task is cancelled when a sibling in its scope fails, when it loses a race, when its timeout passes, or when the
 task that awaits it is cancelled. The places where it can notice are its **cancellation points**: the library's
-waits (a sleep, a read, a write, a channel receive). Code between two waits is never interrupted.
+waits (a sleep, a read, a write, a channel receive), and `Async.checkpoint`, which is one and nothing else. Code
+between two cancellation points is never interrupted.
 
 So a cancelled task cleans up with ordinary code. `?` returns the error, and the locals of each function are
 destroyed as it returns, as on any error. A task that must do something first matches on the error:
@@ -219,7 +220,7 @@ for at most `ms` milliseconds. After that time the waits inside return `Err(Asyn
 cannot hold a cancelled task for ever. The worker's own error (`Cancelled`) became `TimedOut` in `main`: when the
 deadline has passed, `Async.timeout` reports `timedOut` whatever error the body ended with.
 
-A long computation has no waits, and so no cancellation points. It can ask:
+A long computation has no waits, and so no cancellation points unless it makes some. It can ask:
 
 <span class="listing-caption"><strong>Listing 17-21</strong>, <code>main.cee</code>: The first child fails at once, so the second is cancelled before it begins and stops at its first checkpoint.</span>
 

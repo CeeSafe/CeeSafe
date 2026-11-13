@@ -96,7 +96,7 @@ An entry of `sections`, shortened:
 | To do this | Read this |
 |---|---|
 | Find the page for a subject | `llms.txt` first. It is small, and each line's summary says what the page teaches. Then fetch that page's Markdown. Do not start with `llms-full.txt` unless the whole book fits your context. |
-| Find the page for a diagnostic code | In `index.json`, the sections whose `diagnostics` list holds the code. Each shows the code in a listing that fails with it, beside the fix. Appendix F lists every code. |
+| Find the page for a diagnostic code | In `index.json`, the sections whose `diagnostics` list holds the code. Each shows the code in a listing that fails with it, beside the fix. [Appendix F](./appendix-f-diagnostics) lists every code. |
 | See code that gets a diagnostic | In `index.json`, the listings whose `check` is `fail` with that code. `output` is the exact message, and the page shows the fix after it. |
 | Find the page for a name | In `index.json`, the sections whose `keywords` list holds the name, such as `HashMap`, `borrow mut` or `--emit`. |
 | Get a program to start from | A listing whose `check` is `runs`. Its file is a whole program: save it as `main.cee` and run `ceesafec run --interp main.cee`. |

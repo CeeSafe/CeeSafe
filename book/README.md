@@ -1,8 +1,8 @@
 # The book
 
 The source of *The CeeSafe Programming Language* (Decision 0011): a book in the shape of the Rust Book, for people
-and for AI models, beside the documentation site (`site/`). Chapters 1 to 22 are written (1 to 12 are
-the course); the appendices and the glossary are planned. It is published with the documentation site, at
+and for AI models, beside the documentation site (`site/`). Chapters 1 to 22 (1 to 12 are the course),
+Appendices A to J and the glossary are written. It is published with the documentation site, at
 <https://ceesafe.github.io/CeeSafe/book/> (`.github/workflows/docs.yml`).
 
 | Path | What |

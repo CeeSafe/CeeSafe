@@ -165,7 +165,8 @@ things differ:
 
 - a shared borrow for a parameter is implicit at the call: `show(counter)`, not `show(&counter)`;
 - an exclusive one is written `mut counter`, not `&mut counter`;
-- there is no `*r` to read or write through a borrow: `r += 1` changes the borrowed value.
+- a borrow is used as the value it borrows: `r += 1` changes the borrowed value. `*r` is accepted and means the
+  same, and is seldom written.
 :::
 
 ::: details Coming from C#, Java, TypeScript or Go

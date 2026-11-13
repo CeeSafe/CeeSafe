@@ -92,7 +92,8 @@ $ ceesafec check --diagnostics-format=json main.cee
 Each diagnostic has its `code`, its `severity`, its place (`file`, `start`, and `end`, which is the position after
 the last character), the `message`, the code's one-line `summary`, its `notes` and its `fixes`, each fix a list of
 edits. The specification gives the format in full:
-[Tooling, section 5](https://ceesafe.github.io/CeeSafe/reference/tooling).
+[Tooling, section 5](https://ceesafe.github.io/CeeSafe/reference/tooling). The options of each command are in
+[Appendix E](./appendix-e-ceesafec).
 
 ## How to read the tables
 

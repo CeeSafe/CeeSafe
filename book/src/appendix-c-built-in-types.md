@@ -74,7 +74,7 @@ A scalar type holds one value. Every scalar type is Copy.
 
 ## Integers
 
-The integer types are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64` and `usize`. In the rows, `x` and `y` are two integers of one type `T`. The operators (`+`, `/`, `<<` and the others) are in Appendix B: they panic on overflow, and these methods are how a program asks for something else.
+The integer types are `i8`, `i16`, `i32`, `i64`, `isize`, `u8`, `u16`, `u32`, `u64` and `usize`. In the rows, `x` and `y` are two integers of one type `T`. The operators (`+`, `/`, `<<` and the others) are in [Appendix B](./appendix-b-operators): they panic on overflow, and these methods are how a program asks for something else.
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|

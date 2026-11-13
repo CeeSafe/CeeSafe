@@ -76,7 +76,7 @@ const sections = [];
 const listings = [];
 let full = "";
 for (const page of pages) {
-  const markdown = `# ${page.number ? page.number + ". " : ""}${page.header.title}\n\n${page.body.replace(/^# .*\n/, "").trim()}\n`;
+  const markdown = `# ${page.number ? page.number + ". " : ""}${page.header.title}\n\n${page.body.trim().replace(/^# .*\n/, "").trim()}\n`;
   writeFileSync(join(output, `${page.file}.md`), markdown);
   full += `${markdown}\n---\n\n`;
   const found = listingsOf(page.file, page.body);
@@ -110,6 +110,8 @@ chapters.forEach((chapter, c) => {
   });
 });
 
+const unwritten = [...planned, ...appendices.filter((appendix) => !written(appendix)).map(appendixTitle)];
+
 const lines = [
   "# The CeeSafe Programming Language",
   "",
@@ -124,11 +126,7 @@ const lines = [
   "",
   ...sections.map((s) => `- [${s.number ? s.number + ". " : ""}${s.title}](${s.markdown}): ${s.summary}`),
   "",
-  "## Planned, not written yet",
-  "",
-  ...planned.map((title) => `- ${title}`),
-  ...appendices.filter((appendix) => !written(appendix)).map((appendix) => `- ${appendixTitle(appendix)}`),
-  "",
+  ...(unwritten.length === 0 ? [] : ["## Planned, not written yet", "", ...unwritten.map((title) => `- ${title}`), ""]),
 ];
 writeFileSync(join(output, "llms.txt"), lines.join("\n"));
 writeFileSync(join(output, "llms-full.txt"), full);

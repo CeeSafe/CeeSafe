@@ -215,7 +215,7 @@ job 2 had bad input
 
 The `@from` variant lets `?` turn an `AsyncError` into a `JobError`
 ([Recoverable errors with `Result`](./ch09-02-result)). Job 3's sleep returns `Cancelled`, its `?` returns that as
-`JobError.Async(…)`, and the scope, which already has job 2's error, drops it. The program ends after 50
+`JobError.Async(…)`, and the scope, which already has job 2's error, discards it. The program ends after 50
 milliseconds. [Timeouts, races and cancellation](./ch17-03-timeouts-races-cancellation) says more about what a
 cancelled task may do.
 
@@ -292,7 +292,7 @@ task 3 failed
 Each child needs its own place to write.
 :::
 
-<span class="listing-caption"><strong>Listing 17-13</strong>, <code>main.cee</code>: Both children borrow <code>hits</code> mutably. This does not compile.</span>
+<span class="listing-caption"><strong>Listing 17-13</strong>, <code>main.cee</code>: Both children borrow <code>hits</code> exclusively. This does not compile.</span>
 
 <!-- ceesafe: fail N0241 -->
 ```ceesafe

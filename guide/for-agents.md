@@ -632,7 +632,7 @@ hello
 
 ### `mut` at a call, `borrow mut` anywhere else
 
-A mutable borrow passed as an argument is written `mut x` (or `mut a[lo..hi]`). The same borrow in a `let` or any
+An exclusive borrow passed as an argument is written `mut x` (or `mut a[lo..hi]`). The same borrow in a `let` or any
 other expression is `borrow mut x`.
 
 ```ceesafe

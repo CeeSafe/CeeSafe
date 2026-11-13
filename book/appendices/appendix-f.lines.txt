@@ -77,7 +77,7 @@ N0260	`Ok(…)`, `Err(…)` or `null` stands where nothing fixes its type (`let 
 N0261	`?` is in a function that cannot return what `?` would pass on - the function does not return a `Result` with the same error type, or an error enum with an `@from` variant for it, or `?` is on an optional and the function does not return an optional. Change the return type, convert the error, or handle it with `match`.
 N0262	`?` or `!` is on a value that is not a `Result` or an optional, or the left side of `??` is not an optional. Remove the operator. An `@from` variant without exactly one payload gives this too.
 N0263	An allocator argument is not an allocator type (`Box<i32, Point>`). Use `SystemHeap`, `FailingAllocator`, or a struct without fields that implements `Allocator`.
-N0264	A value that an arena or a scratch frame cannot hold - one that needs a drop, or a scoped value such as a borrow. Allocate only plain data there.
+N0264	A value that an arena or a scratch frame cannot hold - one whose destruction runs code, or a scoped value such as a borrow. Allocate only plain data there.
 N0265	The type arguments of a generic call, a struct literal or an enum value cannot be worked out from its arguments (`let d = Maybe.Nothing;`, `let e = make();`). Write them, `make<i32>()` - the type the call's result goes to is not used.
 N0266	Generic instantiation is nested more than 64 deep, as when a generic function calls itself with a larger type each time. Remove the recursion in the types.
 N0267	An `impl` does not match its interface, or cannot exist - a method is missing, extra, or differs in its receiver, a parameter or the return type, the `impl` is repeated or overlaps another, or it is outside the package of both its interface and its type. Make each method agree with the interface's declaration.
@@ -142,7 +142,7 @@ N0351	A `Cell`, `RefCell` or `RawCell` holds a type that holds borrows (`RefCell
 N0352	A const parameter has a type it cannot have (`fn f<const X: f64>()`). Use `bool`, an integer type or an enum without payloads.
 N0353	A const argument or an array length is not a constant - a local, a parameter, a call, or an expression over a const parameter (`[u8; N + 1]`). Use a literal, a constant, or the const parameter alone.
 N0354	A generic argument of the wrong kind - a type where a const parameter needs a value (`Grouped<u32>`), or a value where a type is needed (`Vector<true>`). Give each parameter its kind.
-N0355	A `match` guard moves, assigns or mutably borrows the matched value or one of the arm's bindings, or awaits. A guard only reads, so do that work in the arm's body.
+N0355	A `match` guard moves, assigns or exclusively borrows the matched value or one of the arm's bindings, or awaits. A guard only reads, so do that work in the arm's body.
 N0356	The alternatives of an or-pattern bind different names, or one name with different types, as `Some(x)` and `null` in one arm do. Make every alternative bind the same names, or write separate arms.
 N0357	A range pattern matches nothing - `lo..=hi` with `lo` above `hi`, or `lo..hi` with `lo` not below `hi`. Put the bounds in order.
 N0358	A pattern names a constant that cannot be a pattern - anything but an integer or a `bool`, such as an `f64` - or a range pattern's bound is a name that is not a constant's. Bind the value and compare it in a guard, `x if (x == HALF) =>`.

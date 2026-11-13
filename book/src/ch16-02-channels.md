@@ -305,7 +305,7 @@ Clone a handle for the thread before the spawn (`let sender = channel.clone();`)
 A `send` to a closed channel does not send. If nothing reads its `Result`, the value is lost without a word.
 :::
 
-<span class="listing-caption"><strong>Listing 16-17</strong>, <code>main.cee</code>: The result of <code>send</code> is dropped. The compiler warns.</span>
+<span class="listing-caption"><strong>Listing 16-17</strong>, <code>main.cee</code>: The result of <code>send</code> is discarded. The compiler warns.</span>
 
 <!-- ceesafe: warns N0402 -->
 ```ceesafe
@@ -332,7 +332,7 @@ channel would be a bug, or `match` on the result where it can happen.
 
 - there is one handle type, not a `Sender` and a `Receiver`, and any handle may do both, so a channel has many
   senders and many receivers;
-- the channel does not close when the last sender is dropped, because no handle is only a sender: call `close()`;
+- the channel does not close when the last sender is destroyed, because no handle is only a sender: call `close()`;
 - `recv()` returns `T?`, not `Result<T, RecvError>`, and `send` returns the value in `Err` as Rust's does;
 - a capacity of 0 (a rendezvous channel) is not available.
 :::

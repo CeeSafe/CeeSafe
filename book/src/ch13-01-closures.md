@@ -1,6 +1,6 @@
 ---
 title: Closures
-summary: Functions as values and closures - the literal (x) => body, capturing by shared borrow, by mutable borrow and by move, the types fn, borrow fn and borrow mut fn, closures in fields, and boxed closures that outlive their function.
+summary: Functions as values and closures - the literal (x) => body, capturing by shared borrow, by exclusive borrow and by move, the types fn, borrow fn and borrow mut fn, closures in fields, and boxed closures that outlive their function.
 assumes: [ch03-03-functions, ch04-02-borrowing, ch10-03-regions]
 keywords: [closure, function value, fn, "borrow fn", "borrow mut fn", capture, move, "dyn fn", Box, environment]
 diagnostics: [N0236, N0240, N0245, N0299]

@@ -103,7 +103,7 @@ build. CeeSafe never wraps silently.
 
 ## When the compiler says no
 
-Errors name a code, the place, and usually the fix. This program keeps a reference to a vector's element and then
+Errors name a code, the place, and usually the fix. This program keeps a borrow of a vector's element and then
 grows the vector, which could move the element:
 
 <!-- ceesafe: fail N0241 -->

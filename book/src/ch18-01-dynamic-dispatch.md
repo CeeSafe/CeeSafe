@@ -305,7 +305,7 @@ struct ShapeTable {
   `Square`'s table.
 - `shape.area()` in the loop is `t.vt->m0(t.data)`: read the function from the table, and call it with the pointer
   to the value. `m0` for `Square` is a small function that calls `Square`'s `area`.
-- Dropping the box calls the table's `drop`, if the type has one, and frees the memory.
+- Destroying the box calls the table's `drop` function, if the type has one, and frees the memory.
 
 The call cannot be inlined, because the C compiler does not know which function it reaches.
 [When to use it](./ch18-02-when-to-use-it) measures what that costs.
@@ -533,7 +533,7 @@ writes the table, fills it, and checks that the pointer and the table always bel
   `borrow mut dyn I`; anywhere else it is N0330.
 - `Box<T>` and `borrow T` convert to the `dyn` forms where the `dyn` type is expected, never by inference, and
   never back (N0205).
-- Only the interface's methods can be called. A `borrow mut this` method needs mutable access (N0248).
+- Only the interface's methods can be called. A `borrow mut this` method needs an exclusive borrow of the value (N0248).
 - An interface has a `dyn` type only if every member is a method on a borrowed `this` without type parameters or
   `Self` elsewhere (N0331).
 - `dyn I` implements `I`, so generic code with a bound takes it; the box around it does not (N0268).

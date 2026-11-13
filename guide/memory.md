@@ -125,7 +125,7 @@ struct Span {
 
 fn main() {
     var storage = [0u8; 1024];
-    let fba = FixedBufferAllocator.over(mut storage);       // borrows `storage` mutably
+    let fba = FixedBufferAllocator.over(mut storage);       // borrows `storage` exclusively
     let spans = fba.allocArray(16usize, Span { start: 0, length: 0 })!;
     spans[3].length = 5;
     Console.writeLine(spans[3].length);

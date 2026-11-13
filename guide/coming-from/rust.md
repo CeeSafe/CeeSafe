@@ -11,9 +11,9 @@ for you. This page assumes you know Rust well.
 | `let x = 1;` / `let mut x = 1;` | `let x = 1;` / `var x = 1;` | |
 | shadowing (`let x = x + 1;`) | not allowed | two locals in scope never share a name |
 | `&T`, `&mut T` | `borrow T`, `borrow mut T` | |
-| `f(&x)`, `f(&mut x)` | `f(x)`, `f(mut x)` | a shared borrow is implicit at the call; a mutable one is marked |
+| `f(&x)`, `f(&mut x)` | `f(x)`, `f(mut x)` | a shared borrow is implicit at the call; an exclusive one is marked |
 | `fn f<'a>(a: &'a T, b: &T) -> &'a T` | `fn f(a: borrow T, b: borrow T) -> borrow(a) T` | the result names its sources; no lifetime parameters |
-| `struct S<'a> { s: &'a str }` | `struct S<region r> { s: StringView<r>; }` | only types that store references declare regions |
+| `struct S<'a> { s: &'a str }` | `struct S<region r> { s: StringView<r>; }` | only types that store borrows declare regions |
 | `Box<T>`, `Vec<T>`, `String`, `&str` | `Box<T>`, `Vector<T>`, `String`, `StringView` | |
 | `Option<T>`: `Some(x)`, `None` | `T?`: `Some(x)`, `null` | a `T` converts to `T?` where one is expected |
 | `Result<T, E>`, `?` | `Result<T, E>`, `?` | the same |
@@ -87,26 +87,26 @@ brownish
 
 The CeeSafe version loops over the `split` iterator where Rust would call `map_or` (there are no adapters), tests
 with a guard, returns explicitly, and its signature says the result views the input through the region `r`. With a
-single reference parameter, as here, the region could also be left out:
+single borrowed parameter, as here, the region could also be left out:
 `fn longestWord(text: StringView) -> StringView?` means the same.
 
 ## Ownership and borrowing: what is the same
 
 Moves, Copy types, "one writer or many readers", borrows ending at their last use, two-phase borrows for
-`v.push(v.length)`, references that cannot outlive their referent, and destruction at scope end in reverse order: all
+`v.push(v.length)`, borrows that cannot outlive what they borrow, and destruction at scope end in reverse order: all
 as in Rust. Error messages name the borrow, where it was made and where it is used later.
 
 ## What is different
 
-**Less annotation.** A function that returns a reference names the parameters it may borrow from,
-`-> borrow(a, b) T`, instead of declaring lifetime parameters. Types that store references declare `region`
-parameters, and so do functions that pass such types through; plain functions over references never do. Regions are
+**Less annotation.** A function that returns a borrow names the parameters it may borrow from,
+`-> borrow(a, b) T`, instead of declaring lifetime parameters. Types that store borrows declare `region`
+parameters, and so do functions that pass such types through; plain functions over borrows never do. Regions are
 erased: `Token<a>` and `Token<b>` are the same type.
 
 **A simpler checker.** CeeSafe's borrow checker is intraprocedural and keeps one set of loans per value, where Rust
 reasons about lifetimes. Borrows end at their last use, as with NLL, but some programs Rust accepts are rejected; the
-usual fixes are to end a borrow earlier, copy a value out, or use an index or a slot-map handle. Reference locals are
-`let`, never `var`: assigning to a reference writes through it.
+usual fixes are to end a borrow earlier, copy a value out, or use an index or a slot-map handle. A local that holds a borrow is a
+`let`, never a `var`: assigning to a borrow writes through it.
 
 **Allocators per allocation.** Every allocating type takes its allocator as a type parameter (`Box<T, A>`,
 `Vector<T, A>`), and every allocation returns a `Result`: there is no infallible `push`. Arenas, pools, fixed buffers
@@ -120,7 +120,7 @@ constants, and supertraits, and `impl<T> I for Wrapper<T>` implements one for a 
 `impl<T: A> B for T` and no `impl Trait` in argument or result position. A collection of different types is an enum or
 holds `Box<dyn I>`.
 
-**Closures borrow, unless they are boxed.** A closure literal borrows what it captures and has a reference type
+**Closures borrow, unless they are boxed.** A closure literal borrows what it captures and has a borrow's type
 (`borrow fn(i32) -> bool`, `borrow mut fn(i32)`), so it cannot be returned or stored. A `move` closure owns its
 captures and is boxed where it is made, where a `Box<dyn fn(…) -> R>` is expected (N0333 anywhere else, a `let`
 without a type included): `let add: Box<dyn fn(u64) -> u64> = Box.create(move (x) => x + n)!;`, and one that changes

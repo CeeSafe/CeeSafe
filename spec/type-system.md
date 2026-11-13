@@ -4735,7 +4735,8 @@ fn main() {
   `Result<Thread<T>, SpawnError>`, where `T` is the body's result type. `SpawnError` is the enum
   `SpawnError.Resources` (the thread or its closure could not be allocated).
   - The literal takes no parameters. Its captures must be `Send` (**N0334**), and so must `T` (**N0334**).
-  - `Thread.spawn` also takes a `Box<dyn fn() -> T + Send>`.
+  - `Thread.spawn` also takes a `Box<dyn mut fn() -> T + Send>` (§38.3); any other argument that is not a move
+    literal, a `Box<dyn fn() -> T + Send>` among them, is **N0333**.
   - A move literal is allowed here as well as in `Box.create` (amending §36.5).
   - The thread calls the literal's body once, so it is a run-once environment (§36.5, ADR 0112): the body may move a
     capture out, as in `Thread.spawn(move () => text)`, whose thread gives the string back through `join`. The body

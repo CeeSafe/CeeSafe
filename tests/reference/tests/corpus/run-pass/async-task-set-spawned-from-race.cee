@@ -1,0 +1,47 @@
+// A task set's owner is the task that awaits it (type-system.md §40.5, ADR 0053 §3.3). A function the set is passed
+// to may spawn from another task, here a child of a race in the body; cancelling that task (it lost the race) does
+// not cancel the set's children. Before, the compiled program made the spawning task the set's owner and cancelled
+// the child with it ("child: cancelled"), where the interpreter did not.
+enum E {
+    NoMemory,
+    @from Async(AsyncError),
+}
+
+async fn child() -> Result<void, E> {
+    match (await Timer.sleep(300)) {
+        Ok() => { await AsyncConsole.writeLine("child: finished")?; }
+        Err(_) => { await Async.shield(100, async () => await AsyncConsole.writeLine("child: cancelled"))?; }
+    }
+    return Ok();
+}
+
+async fn spawner(set: borrow TaskSet<E>) -> Result<bool, E> {
+    await set.spawn(async move () => await child())?;
+    await Timer.sleep(5000)?;
+    return Ok(false);
+}
+
+async fn stopper() -> Result<bool, E> {
+    await Timer.sleep(20)?;
+    return Ok(true);
+}
+
+async fn body(set: borrow TaskSet<E>) -> Result<void, E> {
+    let raced = await Async.race(async () => await spawner(set), async () => await stopper())?;
+    await AsyncConsole.writeLine(if (raced.winner == 1) "body: the stopper won" else "body: the spawner won")?;
+    return Ok();
+}
+
+async fn run() -> Result<void, E> {
+    return await Async.tasks(4, E.NoMemory, async (set) => await body(set));
+}
+
+fn main() {
+    match (Async.run(run())) {
+        Ok() => { Console.writeLine("ok"); }
+        Err(_) => { Console.writeLine("failed"); }
+    }
+}
+// expect-stdout: body: the stopper won
+// expect-stdout: child: finished
+// expect-stdout: ok

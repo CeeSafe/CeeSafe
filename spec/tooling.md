@@ -1055,7 +1055,9 @@ Types: the C integer and floating types and `<stdint.h>`'s names by §28.3's tab
 A declaration that CeeSafe cannot spell is left out, never guessed: a function that takes or returns a struct by
 value or a type with no spelling, `union name`, anything `volatile`, a macro that is not an integer constant or a
 string literal, a function-like macro (silently). Each one but the last is listed after the block, in a comment
-`// Not declared:` with the reason.
+`// Not declared:` with the reason. A type whose name the C standard reserves (`__…`, or `_` and an uppercase
+letter; type-system.md §28.2, N0292) has no spelling: it is not declared, opaque or otherwise, and what needs it is
+left out or, for a struct with such a member, opaque (`struct __va_list_tag`, which is `va_list` on x86-64).
 
 A type of another header that a declaration mentions is declared opaque (`struct kobject;`), unless a `--with`
 file or `--leave` names it. Among several headers given together, a name is declared once: a type by the header

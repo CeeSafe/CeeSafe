@@ -156,8 +156,20 @@ Faults of `tools/cbind.py` that the command reproduces, since it writes the same
    and the four programs over the fixture's bindings do not build (3 to 6). Seen with Apple clang 17 on an x86-64
    Mac (the script alone, on main's files) and with Ubuntu's clang 18.1.3 on x86-64 Linux (this branch: the same 6,
    and all 20 files the same in both generators). Nothing else in the check depends on the platform: not clang's
-   version, not the system's header paths, not `--target`. A fix: a type whose name C reserves (`__…`, `_X…`) has
-   no CeeSafe spelling, so such a function is left out with its comment.
+   version, not the system's header paths, not `--target`.
+
+   **Fixed (2026-11-13), in both.** A type whose name the C standard reserves (`__…`, or `_` and an uppercase
+   letter: the rule of N0292, type-system.md §28.2, `checkCName` in `src/check/ffi.cee`) has no CeeSafe spelling.
+   Neither generator names one any more, whether by its tag (`struct __va_list_tag`), through a typedef of it, or
+   by a typedef that is its only name, so what needs the type is treated as anything else CeeSafe cannot spell: a
+   function is left out with its comment (`a function with a parameter CeeSafe cannot take`), `extern` data
+   likewise, a struct with such a member is opaque for that member, and no opaque `struct __…;` is written for the
+   type. A struct, union, enum or function pointer typedef of that kind that the header itself defines is not
+   declared, and is listed under `// Not declared:` (`a type whose name C reserves`). The fixture has such types
+   of its own (`struct __fx_reserved`, `struct _Fx_reserved`), so the check fails without the fix on every
+   platform (17 problems on an arm64 Mac), not only where `va_list` is a struct. Not changed: a function, datum,
+   member or enumerator whose own name is reserved, and names N0292 refuses for its other reasons (a C keyword,
+   the runtime's `cee_…`), are still written as before.
 2. **Output that is not UTF-8.** The script reads clang's output as text and stops with a Python traceback
    (`UnicodeDecodeError`) when the preprocessed text has a byte that is not UTF-8 (found with a header that includes
    CoreServices from macOS's SDK: a 0xA9 byte). The command reads bytes and writes the binding. The one case found

@@ -261,7 +261,7 @@ ceesafec cbind --header kernel/handle.h --header kernel/socket.h -I kernel/inclu
 - **What it leaves out.** A struct with a bit-field, an anonymous member, a flexible array or a `volatile` member is
   declared opaque, with a comment that names the member. A function that takes or returns a struct by value, or a
   `va_list`, is left out, as is a macro that is not an integer constant or a string. `union name` has no CeeSafe
-  spelling. Each is listed in a comment at the end of the file. The tool never guesses a type.
+  spelling, and neither has a type whose name C reserves (`struct __name`, `struct _Name`). Each is listed in a comment at the end of the file. The tool never guesses a type.
 - **Several configurations.** With `--config`, given once per architecture and build, only what is the same in all
   of them is declared. The rest is listed, to be written by hand with `@cfg`; a struct whose members differ is
   declared by its name alone, and `--leave NAME` drops even that when your own block declares the struct.

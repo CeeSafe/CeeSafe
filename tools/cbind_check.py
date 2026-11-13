@@ -50,6 +50,7 @@ DECLARED = [
     "label: [u8; 16];", '@cname("type")', "type_: u8;", "live: bool;",     # a keyword member
     "struct fx_bits;", "struct fx_anon;", "struct fx_flex;", "struct fx_vol;",   # opaque, each with its reason
     "// opaque for the bit-field `a`", "// opaque for an anonymous struct or union member",
+    "struct fx_holds;", "// opaque for the member `held`, a `struct __fx_reserved *`",   # a type C reserves the name of
     '@ctype("fx_either_t")', "struct fx_either_t;",                        # a union's typedef: opaque
     "enum fx_color: u32;", "const FX_RED: fx_color = 0;", "const FX_GREEN: fx_color = 5;", "const FX_BLUE: fx_color = 6;",
     "enum fx_signed: i32;", "const FX_MINUS: fx_signed = -1;",             # a negative value makes it int
@@ -75,6 +76,14 @@ LEFT_OUT = [
     ("fx_make", "result CeeSafe cannot take"),      # a struct by value
     ("fx_vprint", "parameter CeeSafe cannot take"),
     ("fx_tagged", "a union with a tag"),
+    # Types whose names C reserves, which ceesafec refuses (N0292, type-system.md §28.2), and what needs them: on
+    # every target, where fx_vprint's `va_list` is such a type only where it is a struct (ADR 0127 §5 item 1).
+    ("__fx_reserved", None),                        # only declared: no opaque struct for it
+    ("_Fx_reserved", "a type whose name C reserves"),      # defined here
+    ("fx_takes_reserved", "parameter CeeSafe cannot take"),
+    ("fx_gives_reserved", "result CeeSafe cannot take"),
+    ("fx_takes_alias", "parameter CeeSafe cannot take"),   # through a typedef
+    ("fx_reserved_data", "data of a type CeeSafe cannot spell"),
     ("other_get", None),                            # another header's function
 ]
 

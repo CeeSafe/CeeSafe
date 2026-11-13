@@ -70,6 +70,15 @@ def safe_name(name: str) -> str:
     return name + "_" if name in KEYWORDS else name
 
 
+def reserved(name: str) -> bool:
+    """Does the C standard reserve the name: `__…`, or `_` and an uppercase letter (type-system.md §28.2; the rule of
+    src/check/ffi.cee, checkCName)? ceesafec refuses such a C type's name (N0292), so the type has no CeeSafe spelling:
+    it is not declared, and neither is what needs it. `struct __va_list_tag`, a `va_list` of x86-64, is one."""
+    return name.startswith("__") or (len(name) > 1 and name[0] == "_" and "A" <= name[1] <= "Z")
+
+
+RESERVED = "a type whose name C reserves: CeeSafe has no name for it (N0292)"
+
 def top_const(c: str) -> bool:
     """Is the object itself `const`: `const int`, `char *const`, `const char *const [4]`, not `const char *`?"""
     c = re.sub(r"\s+", " ", c).strip()
@@ -326,6 +335,8 @@ class Reading:
                 return self.function_type(m2.group(1), m2.group(2), depth)
             if inner in self.typedefs and "(*)" in self.resolve(inner):
                 # A pointer to a function pointer, such as a table of them: the typedef's name, an opaque C type.
+                if reserved(inner):
+                    return None
                 self.used.add(inner)
                 return ("*" if const else "*mut ") + inner if inner not in KEYWORDS else None
             target = self.type_of(inner, depth + 1)
@@ -342,13 +353,15 @@ class Reading:
             t = SCALARS.get(c) or NAMED[c]
             return "u8" if member and t == "CChar" else t
         if m := re.fullmatch(r"(struct|union|enum) ([A-Za-z_]\w*)", c):
-            if m.group(1) == "union":
+            if m.group(1) == "union" or reserved(m.group(2)):
                 return None
             self.used.add(m.group(2))
             return safe_name(m.group(2)) if m.group(2) not in KEYWORDS else None
         if not IDENTIFIER.match(c):
             return None
         if c in self.records or c in self.enums:        # a typedef that is the type's only name
+            if reserved(c):
+                return None
             self.used.add(c)
             return c
         if c in self.typedefs:
@@ -438,6 +451,9 @@ class Reading:
         for name, record in self.records.items():
             if not record["here"]:
                 continue
+            if reserved(name):
+                self.notes[name] = RESERVED
+                continue
             if record["union"]:
                 if record["ctype"] and claim(name, "a union"):
                     self.add("type", name, ["// a union: opaque", f'@ctype("{name}")', f"struct {name};"], set())
@@ -480,6 +496,9 @@ class Reading:
         for name, enum in self.enums.items():
             if not enum["here"] or not self.constants_of(enum["node"]):
                 continue
+            if reserved(name):
+                self.notes[name] = RESERVED
+                continue
             values = self.values_of(enum["node"])
             if values is None or name in KEYWORDS or not claim(name, "an enum"):
                 self.notes.setdefault(name, "an enum whose values clang does not give")
@@ -492,7 +511,9 @@ class Reading:
                 lines.append(f"const {constant}: {name} = {value};")
             self.add("type", name, lines, set())
         for name in self.fnptr_typedefs:
-            if name not in KEYWORDS and claim(name, "a typedef"):
+            if reserved(name):
+                self.notes[name] = RESERVED
+            elif name not in KEYWORDS and claim(name, "a typedef"):
                 self.add("type", name, [f'@ctype("{name}")', f"struct {name};"], set())
 
         # Constants: anonymous enums' enumerators, then the macros.

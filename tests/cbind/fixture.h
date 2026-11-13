@@ -83,7 +83,19 @@ struct fx_vol {
     volatile uint32_t status;
 };
 
+/* Types whose names C reserves (`__…`, `_X…`): CeeSafe has no spelling for them (type-system.md §28.2, N0292), so
+   they are not declared, and neither is what needs them. A `va_list` that is a struct is such a type on some targets. */
+struct __fx_reserved; /* declared, never defined */
+struct _Fx_reserved {
+    int a;
+};
+typedef struct __fx_reserved fx_reserved_t;
+struct fx_holds {
+    struct __fx_reserved *held;
+};
+
 extern int fx_count;
+extern struct _Fx_reserved *fx_reserved_data;
 extern const struct fx_point fx_origin;
 extern const char *const fx_names[4];
 extern const char *fx_current;
@@ -95,6 +107,9 @@ int type(int in);
 enum fx_color fx_pick(struct fx_box *box, fx_callback cb, const char *const argv[]);
 void fx_visit(struct fx_node *n, other_cb cb, enum other_mode mode);
 void fx_vprint(const char *fmt, __builtin_va_list ap);
+void fx_takes_reserved(struct __fx_reserved *p);
+struct _Fx_reserved *fx_gives_reserved(void);
+int fx_takes_alias(const fx_reserved_t *p);
 static inline uint32_t fx_twice(uint32_t v) { return v * 2; }
 
 #endif

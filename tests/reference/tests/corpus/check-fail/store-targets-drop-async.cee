@@ -1,0 +1,51 @@
+// Round 4, unreached areas. Every `bad…` must be refused.
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+// a destructor that stores: a hidden call at the end of the scope
+struct Flush<region r> {
+    out: borrow mut(r) Vector<StringView<r>>;
+    last: StringView<r>;
+
+    drop {
+        this.out.push(this.last)!; // error[N0272]
+    }
+}
+fn bad1(keep: borrow mut Vector<StringView>) {
+    let t = String.from("local")!;
+    let f = Flush { out: keep, last: t.view() };
+}
+fn bad2() -> StringView {
+    var keep = Vector<StringView>.create();
+    keep.push("static")!;
+    if (true) {
+        let t = String.from("local")!;
+        let f = Flush { out: borrow mut keep, last: t.view() };
+    }
+    return keep[1];
+}
+// a function value in a struct field
+struct Step {
+    run: fn(borrow mut Holder, StringView) -> void;
+}
+fn keepIt<region r>(h: borrow mut Holder<r>, v: StringView<r>) {
+    h.keep(v);
+}
+// a sort comparator and other callbacks that try to keep what they are given
+// async: a store after a suspension
+async fn pause() {}
+async fn bad5(keep: borrow mut Vector<StringView>) {
+    let t = String.from("local")!;
+    await pause();
+    let old = replace(mut keep[0], t.view()); // error[N0272]
+}
+async fn bad6(keep: borrow mut Vector<StringView>) {
+    let t = String.from("local")!;
+    await pause();
+    keep.viewMut().fill(t.view()); // error[N0272]
+}
+fn main() {}

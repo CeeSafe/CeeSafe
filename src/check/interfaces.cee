@@ -964,6 +964,7 @@ fn inheritDefault(
         let fileToSet = c.interfaces[interfaceEntry as usize].file;
         c.setFile(fileToSet);
     }
+    let mark = diagnosticsMark(c);
     let function = if (c.front.ast.functions[method as usize].typeParameters.count > 0) declareGenericMethod(
         c,
         method,
@@ -972,6 +973,29 @@ fn inheritDefault(
         false,
     )? else declareFunctionIn(c, method, forType, environment)?;
     c.setFile(savedFile);
+    // A default whose signature does not stand for this type (its result, a view here, would need its sources
+    // named): the impl's error, at the impl, not the interface's in its own file, which may be a dependency's.
+    var first = none();
+    for (k in mark..c.front.diagnostics.items.length) {
+        if (first == none() && c.front.diagnostics.items[k].isError) {
+            first = truncate<u32>(k);
+        }
+    }
+    if (first != none()) {
+        var reason = Vector<u8>.create();
+        appendBytes(mut reason, c.front.diagnostics.items[first as usize].message.view())?;
+        dropDiagnosticsSince(c, mark);
+        var message = Vector<u8>.create();
+        appendQuotedType(mut message, c, forType)?;
+        appendText(mut message, " cannot inherit ")?;
+        appendQuotedName(mut message, c, name)?;
+        appendText(mut message, ", the default of ")?;
+        quotedBound(mut message, c, bound)?;
+        appendText(mut message, ": for this type, ")?;
+        appendBytes(mut message, reason.view())?;
+        appendText(mut message, "; define the method in the impl")?;
+        c.error(implMismatch(), span.start, span.end, message)?;
+    }
     let only = [forType];
     let list = c.types.addList(only[..])?;
     c.hir.functions[function as usize].inheritedDefault = true;
@@ -1208,6 +1232,7 @@ fn keepInterfaceFlows(c: borrow mut Checker, declared: u32, actual: u32) -> Resu
     c.hir.functions[actual as usize].deepSources = deep;
     c.hir.functions[actual as usize].mutableFlows = flows;
     c.hir.functions[actual as usize].keepsInterfaceFlows = true;
+    c.hir.functions[actual as usize].interfaceView = declared;
     // The narrowed flows are this method's declaration's (ADR 0131 §2.9): its instances have at least these.
     let syntax = c.hir.functions[actual as usize].syntax;
     if ((syntax as usize) < c.declaredFlows.length && c.declaredFlows[syntax as usize].function == actual) {

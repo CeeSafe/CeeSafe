@@ -599,6 +599,7 @@ fn checkCellContents(
 /// that a type looks Send and Share whatever it holds.
 fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
     c.membersReady = true;
+    resolveHeldTargets(c)?;
     let saved = c.file;
     for (k in 0..c.pendingThreadBounds.length) {
         let p = c.pendingThreadBounds[k];

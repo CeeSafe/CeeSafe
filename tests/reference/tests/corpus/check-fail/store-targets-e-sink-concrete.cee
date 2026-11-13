@@ -1,0 +1,24 @@
+// Store targets that are not a `borrow mut` parameter: a SliceMut, a struct that holds a `borrow mut`; store built-ins.
+struct Sink<region r> {
+    out: borrow mut(r) Vector<StringView<r>>;
+}
+struct SinkT<region r, T> {
+    out: borrow mut(r) Vector<T>;
+}
+fn finish(d: StringView) {
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(d);
+    Console.writeLine(fresh.view());
+}
+fn local() -> String => String.from("local local local local local local local local")!;
+fn put(s: Sink, v: StringView) {
+    s.out.push(v)!; // error[N0272]
+}
+fn main() {
+    var keep = Vector<StringView>.create();
+    if (true) {
+        let t = local();
+        put(Sink { out: borrow mut keep }, t.view());
+    }
+    finish(keep[0]);
+}

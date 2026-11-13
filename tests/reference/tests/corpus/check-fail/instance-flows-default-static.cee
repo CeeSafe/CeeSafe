@@ -1,0 +1,23 @@
+// Smaller forms of the lost widening; raw pointers; lazily declared nested instances.
+struct Owner {
+    text: String;
+}
+fn same(x: StringView) -> StringView => x;
+interface Run<U> {
+    fn run(o: borrow Owner, p: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view()); // error[N0245]
+}
+struct Unit {
+    n: u32;
+}
+impl Run<StringView> for Unit {}
+fn main() {
+    var keep = Vector<StringView>.create();
+    let p = Owner { text: String.from("other")! };
+    if (true) {
+        let o = Owner { text: String.from("local local local local local local local local")! };
+        keep.push(Unit.run(o, p, same))!;
+    }
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(keep[0]);
+    Console.writeLine(fresh.view());
+}

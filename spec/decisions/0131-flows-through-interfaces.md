@@ -3,7 +3,9 @@
 - Status: **Proposed** by the integrator on 2026-11-13 after an independent soundness review found the hole;
   implemented on branch `fix/interface-result-loans`; awaits the owner's acceptance; not yet released. Its first
   form (flows through interfaces, and a loan "of the function's own storage" kept by such a value) was broken by a
-  second independent review the same day; §2 is the second form, which replaces it.
+  second independent review the same day; §2 is the second form, which replaces it. A third review broke the
+  second form's implementation in three ways, one of them a regression against 0.42.0: §2.9 to §2.11 and §4 are the
+  third round's.
 - Scope: the checker (`src/check/references.cee`, `interfaces.cee`, `generics.cee`, `declare.cee`, `members.cee`,
   `closures.cee`), the borrow checker (`src/nir/borrow.cee`, `passes.cee`), `src/types/types.cee`, the NIR builder
   (one guard), three fields of a HIR function; `lib/core/async.cee` (one bound); `spec/type-system.md` §21.1, §21.2,
@@ -127,6 +129,47 @@ with N0351 at the field, parameter or expression that names the instance.
 ends "a value of type 'T' may hold a borrow: if 'T' never holds one, bound it: 'T: Send'". In an impl's method the
 message names the interface's rule and blames only what the body does.
 
+2.9 **Flows are the declaration's** (third round). The second form computed a function's flows again for each
+instance, from the instance's types, and two of its rules look at types: the widening of 2.2 ("takes a function
+value whose result may hold a loan") and the elision it switched off for an interface's method. So a generic body
+was checked with flows that its instance did not have: `interface Run<U> { fn run(borrow this, o: borrow Owner, f:
+fn(StringView) -> U) -> U => f(o.text.view()); }` checks with the result flowing from `o`, and `Run<StringView>`'s
+`run` had no such flow, and no elision either (0.42.0 refused it by elision: a regression). The same with a result
+that names a region, `-> Pair<StringView<r>, U>`.
+
+The rule: **a function's flows are computed once, for its declaration, with every type parameter in scope opaque,
+and every instance of it has at least those**: an instance of a generic function or method, a generic struct's
+method for an instance of the struct, an interface's method for a bound, for a `dyn` type and for the type that
+inherits a default, an instance of a generic impl's method. An instance's own computation (names, and elision
+where its result is scoped) may add flows; it never removes one. Two gates remain, which cannot lose a loan: a
+result whose instance type can hold no loan has no sources, and a `borrow mut` parameter whose instance referent
+can hold none is no target. An impl's method's declaration flows are those narrowed to its interface's (2.3).
+ceesafec checks this of itself: after the declarations, every function whose declaration's flows are known is
+compared with them, and one that lacks a flow is N0216, "ceesafec's internal check", not a silent pass.
+
+2.10 **A function type carries no flows between its arguments** (third round). A call through a function value
+gives its result the loans of every argument (2.1); it models no store. That was assumed and not enforced:
+`fn pushT<T>(out: borrow mut Vector<T>, v: T) { out.push(v)!; }` taken as a value
+`let f: fn(borrow mut Vector<StringView>, StringView) = pushT<StringView>;` stores `v` through `out` at a call the
+checker reads as storing nothing. N0298 already refused a function with region parameters as a value, with this
+very reason. It now refuses, the same way, **any function whose flows let one argument's loans be stored through
+another** (a `borrow mut` parameter that some other parameter flows into, by a region, a type parameter or a
+bound): as a named value, as an argument where a function type is expected, in generic code and out of it.
+`pushT<i32>` has no such flow (a `Vector<i32>` holds no loan) and is a value as before. The other answer, a call
+through a function value storing every argument's loans through every `borrow mut` argument, was rejected: it is
+sound too, but it makes every callback that takes a `borrow mut` state and a view (`visit(mut state, name)`) a
+store of the view, in code whose callee only reads it, and N0272 wherever the state is a parameter; the functions
+it would save, `Vector.push`-like ones taken as values, are few: a closure's body cannot store its parameter
+through another either (N0272 in the closure's body, the existing rule), so a store through a callback is already
+written inline. Measured: nothing in the corpus, the libraries, the guide, the book or the compiler takes such
+a function as a value.
+
+2.11 **`impl<T: Send> I for S<T>`** (third round). Whether an instance has a generic impl was decided by
+"`checkBounds` reported nothing", and since 2.4 a Send or Share bound met before the fields are known puts itself
+off and reports later: the impl was attached, and N0334 came afterwards with no position. A check that puts itself
+off is now "not yet", as in ADR 0130 §2.6: the instance gets the impl when the question is asked again, once the
+fields are known. A message never suggests a bound that cannot be written (`C.Out: Send`).
+
 ## 3. Why each program is refused
 
 | Program | Refused by | With |
@@ -142,30 +185,27 @@ message names the interface's rule and blames only what the body does.
 | F3 `let g = () => s.get(); return g();` and its variants | 2.5: the result holds what `g` captured | N0244; N0272 for `() => out.push(s.get())` |
 | F4 `let g = () => into.keep(v);` | 2.5: a store through `into` of `v`'s loan, where `g` is made | N0272 |
 
-## 4. Why it is sound, and where the argument is weakest
+## 4. Why it is sound: the assumptions, and what enforces each
 
 A body is checked with every value that may hold a loan followed (2.1); what it returns and stores is held to its
-signature's flows; a caller applies the callee's flows. For a bound's or a `dyn` method the flows are the
-interface's, and 2.3 holds every implementation's body to them. A caller of an instance of a generic function
-uses the instance's signature, whose flow names come from the same declaration, plus elision where the instance's
-result is scoped. No step reads a loan off a type.
+declaration's flows; a caller applies the callee's flows, which are at least the declaration's (2.9). No step
+reads a loan off a type. The argument needs each of these, and each has a test that fails without it:
 
-Weakest, in this order:
-1. **The instance's flows against the generic version's.** A generic body is checked with the generic signature's
-   flows and its callers use the instance's. They agree because both are computed from the declaration's syntax;
-   the additions of 2.2 that look at types (does the result mention a parameter, is a parameter scoped) could
-   differ between the two for some instantiation. The cases examined give the instance at least the generic
-   version's flows, or refuse the instance (N0245 by elision, then N0274 at the use); this was reasoned, not proved.
-2. **`dyn fn`.** A `dyn fn`'s call gives its result no loans, on the strength of the existing rule that a boxed
-   closure's result borrows from neither its parameters nor its captures (N0245 in its body). This ADR did not
-   re-examine that rule.
-3. **Built-ins** (2.1) are trusted by kind: any built-in but the three calls through a value is taken to give what
-   its operand holds when its result is not scoped. A built-in that returned a borrow of its operand's storage
-   typed as a bare type parameter would be a hole; none is known.
-4. **Closures stored and called elsewhere** (a closure kept in a struct's field, returned in a `Box`) rely on 2.5's
-   account at creation plus the existing rules for where a closure may be kept; only local closures, closures
-   passed as arguments, nested closures and boxed move closures were probed.
-5. **Raw pointers** carry no loan (2.1): a library that reads a `T` through one is trusted as `unsafe` code is.
+| # | Assumption | Enforced by | Tests |
+|---|---|---|---|
+| A1 | An instance's flows include its declaration's | 2.9: flows inherited; ceesafec's internal check (N0216) | `check-fail/instance-flows-default-method`, `-default-static`, `-generic-impl`, `-dyn`, `-bound`, `-region-result`, `-region-tagged`, `-region-in-result` |
+| A2 | A function type carries no flows between its arguments | 2.10: N0298; a closure's body cannot store a parameter through a parameter or a capture (N0272) | `check-fail/function-value-flows`, `-generic`, `-feed`, `-argument`, `-bound-instance`, `-closures` |
+| A3 | No scoped type is Send or Share, and a bound cannot be evaded | §38.1; 2.4 | `check-fail/interface-parameter-bounds`, `generic-send-arguments`; `check-fail/closures-threads-sync-loans`; `run-pass/generic-impl-send-bound`, `-share-bound`, `-send-bound-plain-interface` (2.11) |
+| A4 | A boxed closure's result (`dyn fn`) borrows from neither its parameters nor its captures | N0245 in the closure's body (§36.5) | `check-fail/dyn-fn-result-loans` |
+| A5 | An instance that boxes a scoped argument, or borrows it, is refused | N0274, N0246 (§25.4) | `check-fail/scoped-instance-paths` |
+| A6 | A built-in that gives a value of a type parameter's type gives contents, not a borrow of its operand's storage | by kind, 2.1 | `run-pass/container-element-loans`, `check-fail/container-element-loans` |
+| A7 | An impl's body keeps its interface's flows | 2.3 | `check-fail/interface-impl-flows` |
+| A8 | A closure's stores through its captures are the enclosing function's, where the closure is made | 2.5 | `check-fail/closure-capture-stores*`, `async-boxed-closure-loans` |
+| A9 | A raw pointer carries no loan: what is read through one is `unsafe` code's | §27.1 | none: a statement about `unsafe` code |
+
+Where it is weakest now: A6, which trusts each built-in by kind and not by a list; A4, an existing rule this ADR
+relies on and probed but did not redesign; and closures kept in a struct's field or returned in a `Box`, which
+rest on A8 plus the existing rules for where a closure may be kept.
 
 ## 5. What sound programs it refuses, and how they are written
 
@@ -200,6 +240,16 @@ On the corpus (now 958 files), `lib/`, `tests/packages`, the guide's and the boo
 own source, which builds itself to a fixed point with the rule:
 
 - `lib/core/async.cee`, `AsyncTasksIn.run`: changed by 2.6.
+- Third round: the interface method whose result is written with the interface's parameters is elided again when
+  the interface is given scoped arguments, as in 0.42.0 (the second round had switched that off, which let
+  `impl Run<StringView> for Unit {}` inherit a default whose result borrows from a parameter the instance did not
+  list). Nothing in the corpus, the libraries, the guide, the book or the compiler is refused by §2.9 to §2.11.
+  The differential against 0.42.0 (every `check-fail` test and every probe of the three reviews and of this
+  branch: what 0.42.0 refuses and this compiler accepts) is eight files, none of which faults: the test of an
+  unreleased feature run without its options (`process-signals-freestanding`), five probes that use the unreleased
+  rule that a `T: Send` holds no loan in a thread's or a closure's result, one probe on which 0.42.0 panics, and
+  `run-pass/interface-impl-narrowed-flows`, which 2.3 accepts by design (a direct call of an impl's method has the
+  interface's flows, against which the method's body is checked).
 - Corpus expectations changed, each a function that was already refused, which now reports the return as well as
   the closure: `check-fail/generic-send-loans` (`copyOnly`, `named`: N0244 at `return f();`),
   `check-fail/thread-closure-moves` (`throughClosure`: the same).

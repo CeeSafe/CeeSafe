@@ -2071,7 +2071,8 @@ InherentImpl  = 'impl' TypeParams? Type '{' (FunctionDecl | ConstDecl)* '}'
   A default's body takes them as facts.
 - `Send` and `Share` are decided by a type's fields (§38.1), so for a type that a declaration names they are checked
   once every struct and enum has its fields (ADR 0131): `struct Wrap<T: Share>` refuses a field or a parameter of
-  type `Wrap<Cell<i32>>`.
+  type `Wrap<Cell<i32>>`. Whether an instance has a generic impl whose parameter is bounded so (`impl<T: Send>
+  Get<T> for V<T>`) is decided then too, and not before (ADR 0131 §2.11).
 - Dispatch is static: an instantiation calls `T`'s `impl` method directly (monomorphisation).
 
 ### 21.3 Slices of move types (correction to §16.1)
@@ -2702,6 +2703,17 @@ parameter without `static`. A function's **flows** are then:
   stays borrowed.
 
 A v0 signature (no regions) has exactly its v0 return sources and no parameter flows.
+
+**The flows are the declaration's** (ADR 0131 §2.9). A function's flows are computed once, for its declaration,
+with every type parameter in scope opaque. Every instance of it has at least those: an instance of a generic
+function or method, a generic struct's or enum's method for an instance of the type, an interface's method for a
+bound, for a `dyn` type and for the type that inherits a default, an instance of a generic impl's method. An
+instance's own signature may add flows (a parameter that its type argument makes scoped; elision where its result
+is scoped) and never removes one: a generic body is checked once with the declaration's flows (§20.3), and its
+callers use the instance's. Two things cannot lose a loan and are per instance: a result whose instance type can
+hold no loan has no sources, and a `borrow mut` parameter whose instance referent can hold none is no target. An
+impl's method's declaration flows are those narrowed to its interface's (§21.1). ceesafec checks this of itself
+after the declarations: a function that lacks a flow of its declaration is N0216.
 
 ### 25.7 Borrow checking (`lifetimes.md` §3)
 With one loan set per value:
@@ -4426,6 +4438,12 @@ fn identity<T>(x: T) -> T => x;
   - `extern` and `unsafe` functions, since a call through a value is safe;
   - functions with region parameters (§25), since their signatures can store an argument's loans in another
     argument, which a function type cannot say;
+  - any function whose flows let one argument's loans be stored through another (§25.6: a `borrow mut` parameter
+    that another parameter flows into, by a type parameter or a bound), for the same reason (ADR 0131 §2.10):
+    `fn pushT<T>(out: borrow mut Vector<T>, v: T)` is no value as `pushT<StringView>`, nor as `pushT<T>` in generic
+    code; `pushT<i32>` is one, since a `Vector<i32>` holds no loan. **A function type carries no flows between its
+    arguments**: a call through a function value stores nothing through them, and gives its result the loans of
+    every argument (§25.7 rule 5);
   - `main`.
 - **Calls.** `f(args)`, with `f` a local, parameter or field of a function type, calls the function it holds. The
   arguments are checked against the parameter types as in any call (§8, §13.2). The call is safe. Its effects are

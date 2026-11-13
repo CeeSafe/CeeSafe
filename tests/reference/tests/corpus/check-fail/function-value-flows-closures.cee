@@ -1,0 +1,27 @@
+// A function type carries no flows between its arguments (ADR 0131 §2.10): closures cannot smuggle one either.
+fn pushT<T>(out: borrow mut Vector<T>, v: T) {
+    out.push(v)!;
+}
+fn call(f: borrow fn(borrow mut Vector<StringView>, StringView) -> void, out: borrow mut Vector<StringView>) {
+    let t = String.from("local")!;
+    f(mut out, t.view());
+}
+fn bad1(out: borrow mut Vector<StringView>) {
+    call((o: borrow mut Vector<StringView>, v: StringView) => pushT<StringView>(o, v), mut out); // error[N0272]
+}
+fn bad2(out: borrow mut Vector<StringView>) {
+    call((o: borrow mut Vector<StringView>, v: StringView) => {
+        o.push(v)!; // error[N0272]
+    }, mut out);
+}
+fn bad3(out: borrow mut Vector<StringView>) {
+    let f = (o: borrow mut Vector<StringView>, v: StringView) => pushT<StringView>(o, v); // error[N0272]
+    let t = String.from("local")!;
+    f(mut out, t.view());
+}
+fn bad4<T>(out: borrow mut Vector<T>, make: fn(StringView) -> T) {
+    let f = (o: borrow mut Vector<T>, v: T) => pushT<T>(o, v); // error[N0272]
+    let t = String.from("local")!;
+    f(mut out, make(t.view()));
+}
+fn main() {}

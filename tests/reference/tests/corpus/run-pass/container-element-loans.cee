@@ -1,0 +1,38 @@
+// An element taken out of a container holds what the container holds, not a borrow of its storage (type-system.md
+// §25.7 rule 5; ADR 0131 §4, A6): the container may change while the element is kept, for an element that is a view
+// and for one of a type parameter's type alike.
+fn lastThenPush(v: borrow mut Vector<StringView>) -> StringView {
+    let x = v[v.length - 1];
+    v.push("more")!;
+    return x;
+}
+fn firstThenPush<T: Copy>(v: borrow mut Vector<T>) -> T {
+    let x = v[0];
+    v.push(x)!;
+    return x;
+}
+fn popThenPush<T: Copy>(v: borrow mut Vector<T>) -> T {
+    let x = v.pop()!;
+    v.push(x)!;
+    v.push(x)!;
+    return x;
+}
+fn main() {
+    let text = String.from("alpha beta")!;
+    var words = Vector<StringView>.create();
+    words.push(text.view()[0..5])!;
+    words.push(text.view()[6..10])!;
+    Console.writeLine(lastThenPush(mut words));
+    Console.writeLine(firstThenPush<StringView>(mut words));
+    Console.writeLine(popThenPush<StringView>(mut words));
+    Console.writeLine(words.length);
+    var numbers = Vector<i32>.create();
+    numbers.push(7)!;
+    Console.writeLine(firstThenPush<i32>(mut numbers) + popThenPush<i32>(mut numbers));
+}
+
+// expect-stdout: beta
+// expect-stdout: alpha
+// expect-stdout: alpha
+// expect-stdout: 5
+// expect-stdout: 14

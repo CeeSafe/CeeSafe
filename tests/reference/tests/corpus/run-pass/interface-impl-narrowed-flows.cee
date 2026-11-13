@@ -1,48 +1,41 @@
-// An impl whose signature names one region for the key and the value, as its interface's arguments make it, but
-// whose body returns only what the receiver holds: no error. And the with-resource function under `T: Send`.
-interface Lookup<K, V> {
-    fn find(borrow this, k: K) -> V?;
+// An impl's method has the interface's flows (type-system.md §21.1, ADR 0131 §2.3): its signature names one region
+// for the value it keeps and for the tag it only reads, as the interface's argument makes it, so by its regions it
+// could keep the tag; its body does not, and that is no error. The caller's tag then dies before the bag does.
+interface Sink<T> {
+    fn put(borrow mut this, v: T, tag: StringView) -> Result<usize, AllocError>;
 }
-struct Table<region r> {
-    keys: Vector<StringView<r>>;
-    values: Vector<StringView<r>>;
+struct Bag<region r> {
+    kept: Vector<StringView<r>>;
+    tagged: usize;
 }
-impl<region r> Lookup<StringView<r>, StringView<r>> for Table<r> {
-    fn find(borrow this, k: StringView<r>) -> StringView<r>? {
-        for (i in 0..this.keys.length) {
-            if (this.keys[i] == k) {
-                return this.values[i];
-            }
-        }
-        return null;
+impl<region r> Sink<StringView<r>> for Bag<r> {
+    fn put(borrow mut this, v: StringView<r>, tag: StringView<r>) -> Result<usize, AllocError> {
+        this.kept.push(v)?;
+        this.tagged += tag.length;
+        return Ok(this.kept.length);
     }
 }
-struct Disk {
-    data: String;
+fn fill<T, K: Sink<T>>(sink: borrow mut K, v: T) -> Result<usize, AllocError> {
+    // The tag is a local: the sink keeps the value, not the tag.
+    let tag = String.from("generic")!;
+    return sink.put(v, tag.view());
 }
-fn withFile<T: Send>(f: fn(borrow Disk) -> T) -> T {
-    let file = Disk { data: String.from("data")! };
-    return f(file);
-}
-fn size(d: borrow Disk) -> usize => d.data.length;
-fn findTwo(table: borrow Table) -> StringView {
-    // The key is a local: the result holds what the table holds, not the key.
-    let key = String.from("two")!;
-    return table.find(key.view()) ?? "none";
+fn direct<region r>(bag: borrow mut Bag<r>, v: StringView<r>) -> Result<usize, AllocError> {
+    let tag = String.from("direct")!;
+    return bag.put(v, tag.view());
 }
 fn main() {
-    let text = String.from("one=1,two=2")!;
-    var table = Table { keys: Vector<StringView>.create(), values: Vector<StringView>.create() };
-    table.keys.push(text.view()[0..3])!;
-    table.values.push(text.view()[4..5])!;
-    table.keys.push(text.view()[6..9])!;
-    table.values.push(text.view()[10..11])!;
-    let found = findTwo(table);
-    Console.writeLine(found);
-    Console.writeLine(table.find("one") ?? "none");
-    Console.writeLine(withFile<usize>(size));
+    let text = String.from("one two")!;
+    var bag = Bag { kept: Vector<StringView>.create(), tagged: 0 };
+    Console.writeLine(fill<StringView, Bag>(mut bag, text.view()[0..3])!);
+    Console.writeLine(direct(mut bag, text.view()[4..7])!);
+    Console.writeLine(bag.tagged);
+    Console.writeLine(bag.kept[0]);
+    Console.writeLine(bag.kept[1]);
 }
 
-// expect-stdout: 2
 // expect-stdout: 1
-// expect-stdout: 4
+// expect-stdout: 2
+// expect-stdout: 13
+// expect-stdout: one
+// expect-stdout: two

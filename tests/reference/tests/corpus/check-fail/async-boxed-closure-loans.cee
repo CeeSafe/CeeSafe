@@ -1,0 +1,37 @@
+// Loans followed through a boxed closure kept in a struct and through async functions (type-system.md §25.7 rule 5,
+// §36.5, §40; ADR 0131): every `bad…` is refused.
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+struct Job<T> {
+    run: Box<dyn fn() -> T>;
+}
+// a boxed closure in a struct, with a T made from a local
+fn bad3<T: Copy>(make: fn(StringView) -> T) -> Job<T> {
+    let t = String.from("local")!;
+    let x = make(t.view());
+    return Job<T> { run: Box.create(move () => x)! }; // error[N0245]
+}
+// an async function that returns a view of its own local, and one that lets a T made from a local out
+async fn bad11() -> StringView {
+    let t = String.from("local")!;
+    return t.view(); // error[N0244]
+}
+async fn bad12<T>(make: fn(StringView) -> T) -> T {
+    let t = String.from("local")!;
+    let x = make(t.view());
+    await pause();
+    return x; // error[N0244]
+}
+// an async function that stores a view of its local through a parameter
+async fn bad13(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    await pause();
+    into.keep(t.view()); // error[N0272]
+}
+async fn pause() {}
+fn main() {}

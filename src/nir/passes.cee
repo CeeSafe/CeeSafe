@@ -88,6 +88,7 @@ fn refuseUncheckedLibraryCalls(c: borrow mut Checker, n: borrow NirProgram) -> R
 fn analyzeProgram(c: borrow mut Checker) -> Result<NirProgram, AllocError> {
     var n = buildNir(c)?;
     refuseUncheckedLibraryCalls(c, n)?;
+    checkDeclaredFlows(c)?; // ADR 0131 §2.9: every instance has its declaration's flows
     // Generic code is checked once, in its generic version; instantiations repeat it (type-system.md §20.3).
     // A closure's body before the function it is written in, an inner closure's before its outer one's: what a
     // closure stores through its captures is a store of the function that makes it (ADR 0131). Closures are made

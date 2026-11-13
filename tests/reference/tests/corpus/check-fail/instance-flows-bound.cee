@@ -1,0 +1,28 @@
+// The widening for a function-value parameter is lost in an interface's instance: through a bound and through dyn.
+struct Owner {
+    text: String;
+}
+fn same(x: StringView) -> StringView => x;
+interface Run<U> {
+    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U; // error[N0245]
+}
+struct W<U> {
+    n: u32;
+}
+impl<U> Run<U> for W<U> {
+    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+}
+fn show<R: Run<StringView>>(r: borrow R) {
+    var keep = Vector<StringView>.create();
+    if (true) {
+        let o = Owner { text: String.from("local local local local local local local local")! };
+        keep.push(r.run(o, same))!;
+    }
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(keep[0]);
+    Console.writeLine(fresh.view());
+}
+fn main() {
+    let w = W<StringView> { n: 1 };
+    show<W<StringView>>(w);
+}

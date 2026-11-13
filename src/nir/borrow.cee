@@ -1958,8 +1958,21 @@ fn appendSendHint(c: borrow Checker, typ: u32, out: borrow mut Vector<u8>) -> Re
     appendBytes(out, c.typeName(parameter))?;
     appendText(out, "' may hold a borrow: if '")?;
     appendBytes(out, c.typeName(parameter))?;
+    // An associated type `P.Item` is bounded where its interface declares it: `P.Item: Send` cannot be written.
+    var dot: usize = 0;
+    let name = c.typeName(parameter);
+    for (k in 0..name.length) {
+        if (name[k] == '.') {
+            dot = k + 1;
+        }
+    }
+    if (dot > 0) {
+        appendText(out, "' never holds one, bound the associated type where its interface declares it: 'type ")?;
+        appendBytes(out, name[dot..])?;
+        return appendText(out, ": Send;' (type-system.md §25.7)");
+    }
     appendText(out, "' never holds one, bound it: '")?;
-    appendBytes(out, c.typeName(parameter))?;
+    appendBytes(out, name)?;
     return appendText(out, ": Send' (type-system.md §25.7)");
 }
 

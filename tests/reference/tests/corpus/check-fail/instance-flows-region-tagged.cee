@@ -1,0 +1,26 @@
+// Instance flows against generic flows: a result that names a region in the instance, so elision does not apply.
+struct Owner {
+    text: String;
+}
+fn same(x: StringView) -> StringView => x;
+struct Tagged<region r, U> {
+    tag: StringView<r>;
+    value: U;
+}
+struct Pair<A, B> {
+    a: A;
+    b: B;
+}
+fn apply<region r, U>(o: borrow Owner, tag: StringView<r>, f: fn(StringView) -> U) -> Tagged<r, U> =>
+    Tagged { tag: tag, value: f(o.text.view()) };
+fn main() {
+    var keep = Vector<StringView>.create();
+    if (true) {
+        let o = Owner { text: String.from("local local local local local local local local")! };
+        let t = apply<StringView>(o, "tag", same);
+        keep.push(t.value)!;
+    } // error[N0243]
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(keep[0]);
+    Console.writeLine(fresh.view());
+}

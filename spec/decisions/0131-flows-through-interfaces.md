@@ -315,5 +315,12 @@ None needs a type parameter, an interface or a closure: they are in plain code, 
    or assigns through that field stores where no caller sees it: `fn put(s: Sink, v: StringView) { s.out.push(v)!; }`
    called as `put(Sink { out: borrow mut keep }, t.view())`.
 
+The first two also reopen, where they are used, what §2 closes, because a body's stores and results are held to
+its flows only where the checker sees a store or a loan: the `get` of §1 written
+`var x = Holder { text: this.text.view() }; let old = replace(mut x, Holder { text: "static" }); return old.text;`
+checks, and so do an impl's method, a closure and a function taken as a value that store with `replace` what
+their flows do not let them store (the probes `q_source_lend_replace`, `q_impl_unlisted_replace`,
+`q_f4_closure_replace`, `q_closure_param_replace`, `q_concrete_param_replace_unrelated`).
+
 Until 0.42.2: a program that uses none of the six built-ins on values that hold a borrow, and passes no struct that
 holds a `borrow mut` by value to a function that stores through it, is not affected.

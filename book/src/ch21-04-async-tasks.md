@@ -248,7 +248,7 @@ ceesafec test: 6 passed, 0 failed
 | The code | ordinary functions | `async fn` and `await` through every function that waits |
 | A time limit for a client | not from outside a blocking call | `Async.timeout` |
 | Long computation in a request | uses its own thread | holds up every task of the thread |
-| Stopping | close the channel and join | cancellation |
+| Stopping | `listener.shutdown()` ends `accept`, then close the channel and join | cancellation |
 
 A server whose requests compute for long wants threads, or both: `Async.blocking` and `Async.runWorkers`
 ([Tasks and threads together](./ch17-05-tasks-and-threads)). This server only waits and copies, so one thread is

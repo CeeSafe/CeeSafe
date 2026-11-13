@@ -169,7 +169,9 @@ curl -s -o /dev/null -w "%{http_code} after %{time_total} s\n" http://127.0.0.1:
 
 The silent client holds one worker, and another worker answers.
 
-This `main` never calls `finish`: it runs until the program is stopped from outside. The test does call it.
+This `main` never calls `finish`: it runs until the program is stopped from outside, with Ctrl+C. The test does
+call it. [Stopping gracefully](./ch21-05-graceful-shutdown) shows how a server of threads catches Ctrl+C, ends its
+`accept` and then calls `finish`.
 
 ## A test that stops the workers
 

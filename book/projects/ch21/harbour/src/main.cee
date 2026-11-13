@@ -87,26 +87,34 @@ async fn serveUntilStopped(listener: borrow AsyncTcpListener, stop: borrow Chann
     return Ok();
 }
 
+/// Closes `stop` when the process is asked to stop: Ctrl+C in its terminal, or `kill`.
+async fn stopOnSignal(signals: borrow ProcessSignals, stop: borrow Channel<bool>) -> Result<void, ServeError> {
+    let _ = await signals.waitAsync()?;
+    stop.close();
+    return Ok();
+}
+
+/// The server, and beside it the wait for a request to stop.
+async fn run(listener: borrow AsyncTcpListener, signals: borrow ProcessSignals) -> Result<void, ServeError> {
+    let stop = Channel<bool>.create(1)?;
+    return await Async.all(
+        async () => await serveUntilStopped(listener, borrow stop),
+        async () => await stopOnSignal(signals, borrow stop),
+    );
+}
+
 fn main() {
     let listener = AsyncTcpListener.bind("127.0.0.1", 7878)!;
-    let stop = Channel<bool>.create(1)!;
-    let closer = stop.clone();
-    let watcher = Thread.spawn(move () => {
-        var line = String.create();
-        if (Console.readLine(mut line) is Ok(true)) {
-            closer.close();
-        }
-    })!;
-    Console.writeLine("listening on http://127.0.0.1:7878, press Enter to stop");
+    let signals = ProcessSignals.subscribe()!;
+    Console.writeLine("listening on http://127.0.0.1:7878, press Ctrl+C to stop");
     Console.flush();
-    match (Async.run(serveUntilStopped(borrow listener, borrow stop))) {
+    match (Async.run(run(borrow listener, borrow signals))) {
         Ok() => { Console.writeLine("stopped"); }
         Err(_) => {
             Console.writeErrorLine("the server failed");
             Process.exit(1);
         }
     }
-    watcher.join();
 }
 
 /// Sends `request` to the server at `port` and puts everything it answers in `reply`.

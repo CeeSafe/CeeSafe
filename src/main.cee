@@ -82,6 +82,11 @@ fn appendUsage(out: borrow mut Vector<u8>) -> Result<void, AllocError> {
     appendText(out, "  explain  print what a diagnostic code means: ceesafec explain N0249 (tooling.md §5.4)\n")?;
     appendText(out, "  doc      write a Markdown page of the files' public items (tooling.md §1): -o <file>,\n")?;
     appendText(out, "           --title <text>; --missing lists the public items without a doc comment\n")?;
+    appendText(out, "  cbind    write an extern \"C\" block for a C header, from clang's AST (tooling.md §11):\n")?;
+    appendText(
+        out,
+        "           ceesafec cbind --header <h> -I <dir> -o <file.cee>; ceesafec cbind --help lists its options\n",
+    )?;
     appendText(out, "options:\n")?;
     appendText(
         out,
@@ -1621,8 +1626,9 @@ fn main() -> i32 {
         Console.writeBytes(out.view());
         return 0;
     }
-    if (command != "test" && helpAsked()) {
-        // `ceesafec <command> --help`: the usage text, which marks each option with its commands; `test` has its own.
+    if (command != "test" && command != "cbind" && helpAsked()) {
+        // `ceesafec <command> --help`: the usage text, which marks each option with its commands; `test` and `cbind`
+        // have their own.
         var out = Vector<u8>.create();
         appendUsage(mut out)!;
         Console.writeBytes(out.view());
@@ -1691,6 +1697,9 @@ fn main() -> i32 {
     }
     if (command == "mcp") {
         return mcpCommand();
+    }
+    if (command == "cbind") {
+        return cbindCommand();
     }
     if (command == "explain") {
         var arguments = Vector<Vector<u8>>.create();

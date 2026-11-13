@@ -18,7 +18,8 @@
   properties, the freestanding checks;
 - CeeSafe's specification and guide (tools/spec_check.py, tools/guide_check.py), the book (tools/book_check.py,
   Decision 0011), the debugger scripts, and the MCP server's name lookup (tools/mcp_api_check.py).
-- `extern "C"` blocks generated from C headers (tools/cbind_check.py; ADR 0095).
+- `extern "C"` blocks generated from C headers, by `ceesafec cbind` and by its oracle tools/cbind.py
+  (tools/cbind_check.py; ADR 0095, ADR 0127).
 - Plain statics of scalar data emitted `const` (tools/const_statics_check.py; ADR 0098).
 Each step's last line is printed.
 

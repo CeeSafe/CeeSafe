@@ -240,16 +240,20 @@ See [C structs from headers](../spec/decisions/0008-c-struct-bindings-from-heade
 
 ### Generating the block from the header
 
-`tools/cbind.py`, in CeeSafe's repository, writes the block for you. It reads the header with clang (nothing is
-compiled or run, so a header for another target is read like any other) and writes one `.cee` file with every
-function, struct, enum, integer or string macro and `extern` variable the header itself declares:
+`ceesafec cbind` writes the block for you. It reads the header with clang (nothing is compiled or run, so a header
+for another target is read like any other) and writes one `.cee` file with every function, struct, enum, integer or
+string macro and `extern` variable the header itself declares:
 
 ```sh
-python3 tools/cbind.py --header kernel/handle.h -I kernel/include -o kernel/bind/handle.cee
-python3 tools/cbind.py --header kernel/handle.h --header kernel/socket.h -I kernel/include --out-dir kernel/bind \
+ceesafec cbind --header kernel/handle.h -I kernel/include -o kernel/bind/handle.cee
+ceesafec cbind --header kernel/handle.h --header kernel/socket.h -I kernel/include --out-dir kernel/bind \
     --config x86_64="--target=x86_64-unknown-none-elf -DCONFIG_DEBUG=1" \
     --config aarch64="--target=aarch64-unknown-none-elf -DCONFIG_DEBUG=1"
 ```
+
+- **Clang.** The command needs clang, the one C compiler that writes its syntax tree out: it uses `--cc`, else
+  `$CC`, else `cc` as `ceesafec build` does, and when that is not clang and you named none, `clang` from `PATH`.
+  With gcc or MSVC alone it stops and says so. `ceesafec cbind --help` lists the options.
 
 - **Use.** Commit the generated files, and name them as extra sources beside the file that uses them
   (`ceesafec build port.cee kernel/bind/handle.cee`): several files compile as one unit. A CI step that generates
@@ -268,7 +272,9 @@ python3 tools/cbind.py --header kernel/handle.h --header kernel/socket.h -I kern
   typedef of one, such as a table, is a pointer to the typedef's name.
 
 The C compiler still checks every generated line against the header when the program is built, exactly as for a
-block written by hand. The rules are [ADR 0095](../spec/decisions/0095-extern-blocks-from-c-headers.md).
+block written by hand. The rules are [tooling](../spec/tooling.md) §11 and
+[ADR 0095](../spec/decisions/0095-extern-blocks-from-c-headers.md); before ceesafec had the command, the generator
+was the script `tools/cbind.py` in CeeSafe's repository, which writes the same file.
 
 ### Arrays, keyword names and tables
 

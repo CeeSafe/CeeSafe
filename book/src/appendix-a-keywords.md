@@ -133,6 +133,7 @@ of declaration the table says. Anything else is `N0290`.
 |---|---|---|---|
 | `@test` | a top-level function with no parameters | `ceesafec test` runs the function as a test. `ceesafec build` leaves it out. | [11.1](./ch11-01-writing-tests) |
 | `@from` | a variant of an enum that has exactly one payload | `?` converts an error of the payload's type into this variant. | [9.2](./ch09-02-result) |
+| `@into` | a method `fn m(this) -> F` of a struct or of an enum's `impl` block, one for each type | `?` converts an error of the method's type into `F` by calling the method. `SendError<T>.reason()` of lib/std is one. | [17.4](./ch17-04-async-io) |
 | `@derive` | a struct or an enum | `@derive(Equal, HashKey, OrderKey)` writes one or more of these for the type: `==` and `!=`, a `HashKey` implementation, an `OrderKey` implementation. | [20.5](./ch20-05-derives-and-macros) |
 | `@noncopy` | a struct | The struct is a move type even if every field is Copy. | [20.5](./ch20-05-derives-and-macros) |
 | `@align` | a struct | `@align(n)` gives the struct an alignment of at least `n` bytes. | [20.5](./ch20-05-derives-and-macros) |

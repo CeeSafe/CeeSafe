@@ -305,6 +305,7 @@ Statement = Block
 LocalDecl = ('let' | 'var') Identifier (':' Type)? ('=' Expr)? ';'
           | 'let' '_' '=' Expr ';'          (* ADR 0072: evaluates Expr and destroys its value, as `Expr;` *)
           | 'let' Pattern '=' Expr 'else' Block ';'   (* ADR 0117; type-system.md §15.5: Block must leave *)
+          | 'let' StructPattern '=' Expr ';'          (* ADR 0123; §15.5: the pattern cannot fail *)
 IfStmt    = 'if' '(' Expr ')' Block ('else' (IfStmt | Block))?
 AssignOp  = '=' | '+=' | '-=' | '*=' | '/=' | '%=' | '&=' | '|=' | '^=' | '<<=' | '>>='
 ```
@@ -433,8 +434,11 @@ PrimPattern = '_' | Literal | 'true' | 'false' | 'null'
           | QualifiedName ('(' Payload (',' Payload)* ')')?        -- E.V, E.V(x, _), Ok(E.A(x)) (M11)
           | StringLiteral                                          -- on a StringView or Slice<u8>: ADR 0085 §2.7
           | '[' (SliceItem (',' SliceItem)* ','?)? ']'             -- slices and arrays: ADR 0085 §2.7
+          | StructPattern                                          -- structs: ADR 0123
 Bound     = Literal | Identifier                                   -- a constant's name: ADR 0118
 SliceItem = Pattern | '..' | Identifier '@' '..'                   -- at most one '..' (N0100)
+StructPattern = QualifiedName '{' (FieldPattern ',')* (FieldPattern | '..' ','?)? '}'   -- '..': the fields not named
+FieldPattern  = Identifier ':' Pattern | 'var'? Identifier         -- `x` is `x: x`, `var x` is `x: var x`
 Literal   = IntLiteral | '-' IntLiteral | CharLiteral
 Payload   = Binding | Pattern                                      -- a nested pattern: M11 (G1)
 Binding   = Identifier | 'var' Identifier | '_'        -- 'var': M3c (§18.4)

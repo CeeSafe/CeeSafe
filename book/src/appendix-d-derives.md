@@ -173,6 +173,7 @@ code. The others change how one declaration is checked or compiled.
 |---|---|---|---|
 | `@test` | a top-level function with no parameters that returns `void` or `Result<void, E>` | Makes the function a test that `ceesafec test` runs. `ceesafec build` leaves it out. | [11.1](./ch11-01-writing-tests) |
 | `@from` | a variant of an enum that has exactly one payload | Lets `?` convert an error of the payload's type into this variant. | [9.2](./ch09-02-result) |
+| `@into` | a method `fn m(this) -> F` of a struct or of an enum's `impl` block, one for each type | Lets `?` convert an error of the method's type into `F` by calling the method. | [17.4](./ch17-04-async-io) |
 | `@export`, `@export("symbol")` | a top-level function that is not generic, a constant, a static | Makes it callable or readable from C under that name. Without an argument the name is the item's own. | [14.3](./ch14-03-libraries-for-other-programs), [20.2](./ch20-02-calling-c) |
 | `@cfg("NAME")` | a function that has `@export` | Gives the function its C symbol only in builds where the C macro `NAME` is not zero. | `type-system.md` §28.4 |
 | `@repr(C)` | a struct that is not generic | Lays the struct out as C lays out a struct with the same fields. | [14.3](./ch14-03-libraries-for-other-programs), [20.2](./ch20-02-calling-c) |

@@ -42,6 +42,7 @@ ceesafec <command> [options] <file.cee>... [<file.c>...] [-- <program arguments>
 | `ceesafec publish` | Checks that the package can be published and prints its entry for the package index. | [14.2](./ch14-02-publishing) |
 | `ceesafec index-check` | Checks the entries of a package index against their commits. It is for an index's own automated checks. | [14.2](./ch14-02-publishing) |
 | `ceesafec doc` | Writes a Markdown page of the public items and their documentation comments. | [3.4](./ch03-04-comments), [14.2](./ch14-02-publishing) |
+| `ceesafec cbind` | Writes an `extern "C"` block for a C header, from clang's syntax tree. | [20.2](./ch20-02-calling-c) |
 | `ceesafec parse` | Lexes and parses the files and reports syntax errors only. | this appendix |
 | `ceesafec agents` | Writes or refreshes the package's instruction files for AI coding agents. | this appendix |
 | `ceesafec lsp` | Serves the Language Server Protocol on standard input and output, for an editor. | this appendix |
@@ -273,6 +274,31 @@ command. Taught in [3.4](./ch03-04-comments) and [14.2](./ch14-02-publishing).
 | `-o` | `<file>` | Writes the page to the file. | standard output |
 | `--title` | `<text>` | Sets the page's title, its first heading. | the first file's name without `.cee`; in a package, the package's name |
 | `--missing` | none | Writes no page. Prints a line `path:line: kind name` for each public item without a documentation comment, and exits with status 1 if there is one. | off |
+
+## `ceesafec cbind`
+
+`ceesafec cbind --header <h> [options] -o <file.cee>` writes an `extern "C"` block for a C header, from the syntax
+tree that clang prints for it: the header's own functions, structs, enums, typedefs of structs and of function
+pointers, integer and string macros, and extern data. What CeeSafe cannot spell is left out, or for a struct made
+opaque, with a comment that says why. Nothing is compiled or run, and the C compiler must be clang. With several
+`--header` options it writes one file for each into `--out-dir`. It has a command line of its own: the options of
+the other commands do not apply to it, and `ceesafec cbind --help` prints these. Taught in
+[20.2](./ch20-02-calling-c).
+
+| Option | Argument | What it does | Default |
+|---|---|---|---|
+| `--header` | `<h>` | Names the header as C code includes it; it is found through the `-I` directories. Repeated, each header is written to `--out-dir` as a file of its own, and the files compile together. | required |
+| `-I` | `<dir>` | Adds an include directory. May be repeated. | none |
+| `-D` | `<name>` or `<name>=<value>` | Defines a macro for the header. May be repeated. | none |
+| `--target` | `<triple>` | Gives clang's target triple. | clang's own |
+| `--config` | `<name>="<clang flags>"` | Names a configuration and its clang flags. Repeated, only what is the same in all the configurations is written. | one configuration without flags |
+| `--only` | `<name>,<name>` | Writes these names only, with the types they mention. May be repeated. | every name of the header |
+| `--with` | `<file.cee>` | Names a generated file that is compiled with this one: the names it declares are left to it. May be repeated. | none |
+| `--leave` | `<name>,<name>` | Leaves out names that are declared elsewhere, such as by lib/kernel. May be repeated. | none |
+| `--cc` | `<clang>` | Names the C compiler, which must be clang. | `$CC`, else `cc` as `build` finds it, else `clang` on `PATH` when that one is not clang |
+| `--no-fmt` | none | Writes the generator's own layout, not that of `ceesafec fmt`. | off |
+| `-o` | `<file.cee>` | Names the file to write, for one header. | required for one header |
+| `--out-dir` | `<directory>` | Names the directory to write `<header's name>.cee` into, for several headers. | required for several headers |
 
 ## `ceesafec lsp` and `ceesafec mcp`
 

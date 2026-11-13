@@ -295,7 +295,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 
 ## `HashMap<K, V>`
 
-A `HashMap<K, V>` owns values found by key; it is in lib/std, and a hosted program uses it without an import. In the rows, `m` is a map. The key type implements `HashKey`: the fixed-width integers, `usize`, `bool`, `String` and `Vector<u8>` do, and `@derive(Equal, HashKey)` gives it to a struct. Reference: [HashMap](https://ceesafe.github.io/CeeSafe/reference/api/std#struct-hashmap).
+A `HashMap<K, V>` owns values found by key; it is in lib/std, and a hosted program uses it without an import. In the rows, `m` is a map. The key type implements `HashKey`: the integer types, `bool`, `String` and `Vector<u8>` do, and `@derive(Equal, HashKey)` gives it to a struct. Reference: [HashMap](https://ceesafe.github.io/CeeSafe/reference/api/std#struct-hashmap).
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|

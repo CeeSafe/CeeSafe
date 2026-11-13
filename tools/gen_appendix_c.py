@@ -533,7 +533,7 @@ TABLES.append(table(
 TABLES.append(table(
     "`HashMap<K, V>`",
     "A `HashMap<K, V>` owns values found by key; it is in lib/std, and a hosted program uses it without an import. "
-    "In the rows, `m` is a map. The key type implements `HashKey`: the fixed-width integers, `usize`, `bool`, "
+    "In the rows, `m` is a map. The key type implements `HashKey`: the integer types, `bool`, "
     "`String` and `Vector<u8>` do, and `@derive(Equal, HashKey)` gives it to a struct. Reference: "
     "[HashMap](https://ceesafe.github.io/CeeSafe/reference/api/std#struct-hashmap).",
     ["ch08-03"],

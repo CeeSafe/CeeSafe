@@ -159,13 +159,16 @@ def catalog(root):
 
 
 def commands_of(root):
-    """The commands ceesafec runs: the names phaseOf knows (src/main.cee)."""
+    """The commands ceesafec runs: the names phaseOf knows, and those main compares its first word with before it
+    asks phaseOf (`cbind`, which has a command line of its own) (src/main.cee)."""
     path = "src/main.cee"
-    body = between(read(root, path), "fn phaseOf(", "\n}\n", path)
-    return at_least(set(re.findall(r'command == "([a-z-]+)"', body)), 10, f"the commands of phaseOf ({path})")
+    text = read(root, path)
+    between(text, "fn phaseOf(", "\n}\n", path)  # the function is still there
+    return at_least(set(re.findall(r'command == "([a-z][a-z-]*)"', text)), 10, f"the commands of {path}")
 
 
 OPTION = r"--?[A-Za-z][A-Za-z0-9-]*"
+CBIND_SOURCE = "src/tooling/cbind.cee"
 OPTION_SOURCES = ("src/main.cee", "src/formatting/fmt_command.cee", "src/documentation/doc_generator.cee",
                   "src/packages/commands.cee")
 
@@ -177,6 +180,13 @@ def source_options(root):
         here = {o.rstrip("=") for o in re.findall(r'"(' + OPTION + r'=?)"', read(root, path))}
         if not here:
             raise Shape(f"{path} has no option literal")
+        found |= here
+    # `ceesafec cbind` has a command line of its own (ADR 0127). Its file also holds clang's flags, so only the
+    # literals its argument loop compares a word with are options: `sameText(name, "--header")`, `argument == "-o"`.
+    if os.path.exists(os.path.join(root, *CBIND_SOURCE.split("/"))):
+        here = set(re.findall(r'(?:sameText\(name, |argument == )"(' + OPTION + r')"', read(root, CBIND_SOURCE)))
+        if len(here) < 8:
+            raise Shape(f"{CBIND_SOURCE} compares its arguments with {len(here)} option literals: its shape changed")
         found |= here
     return at_least(found, 30, "the option literals of the command line's sources")
 
@@ -550,6 +560,8 @@ def _appendix_c(root, ceesafec, where):
         for line in body.split("\n"):
             if line.startswith("| ") and not re.match(r"\| (Member|Function|Operation) ", line) and "enum E" not in line:
                 cell = line.split(" | ")[0]
+                if cell.startswith("| `@"):
+                    continue  # an attribute's row (`@into fn name(this) -> F`): Appendices A and D list attributes
                 names += [n for code in spans(cell)
                           for n in re.findall(r"(?:^|[.\s])([A-Za-z][A-Za-z0-9]*)(?:<[^>]*>)?\(", code)]
         need([n for n in names if n not in C_ELSEWHERE], f"guide/builtins.md, '{heading}'", parts)

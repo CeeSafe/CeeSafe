@@ -24,6 +24,8 @@
 - [struct Environment](#struct-environment)
 - [struct OpenFileLimit](#struct-openfilelimit)
 - [struct ProcessLimits](#struct-processlimits)
+- [enum ProcessSignal](#enum-processsignal)
+- [struct ProcessSignals](#struct-processsignals)
 - [struct VolumeSpace](#struct-volumespace)
 - [struct Directory](#struct-directory)
 - [struct HostServices](#struct-hostservices)
@@ -1373,6 +1375,71 @@ Raises the soft open-file limit to `to`, at most the hard limit (and, on Apple s
 `kern.maxfilesperproc`, or `OPEN_MAX` where an older release refuses more), and returns the soft limit
 afterwards. It never lowers it. A server calls it once at start: `ProcessLimits.raiseOpenFiles(u64.max)`.
 Safety: the runtime writes the value during the call only.
+
+## enum ProcessSignal
+
+```ceesafe
+public enum ProcessSignal {
+    Interrupt,
+    Terminate,
+}
+```
+
+A request to end the process (`ProcessSignals`, type-system.md §26.15, ADR 0125).
+
+## struct ProcessSignals
+
+```ceesafe
+@noncopy
+public struct ProcessSignals {
+    drop { … }
+}
+```
+
+The process's subscription to the requests to end it (type-system.md §26.15, ADR 0125). Before a program
+subscribes, and after the subscription is dropped, such a request ends the process at once, as the system's
+default does. While the subscription lives, each request is kept for the program instead: `poll` asks without
+waiting, `wait` blocks a thread, and `waitAsync` parks a task (so `Async.race(server, signals.waitAsync())` is a
+server's shutdown). There is one subscription for the process at a time; threads and tasks share it by
+reference. Requests that arrive faster than they are taken are merged: up to eight are kept. No other signal is
+touched. Hosted only.
+
+### ProcessSignals.subscribe
+
+```ceesafe
+public fn subscribe() -> Result<ProcessSignals, IoError>
+```
+
+Subscribes. `Err(IoError.AlreadyExists)` while another subscription lives, `Err(IoError.Unsupported)` where
+the system has no such requests.
+Safety: the runtime takes its own count of the channel, and gives it back when the subscription ends, which
+is this value's drop.
+
+### ProcessSignals.poll
+
+```ceesafe
+public fn poll(borrow this) -> ProcessSignal?
+```
+
+The oldest request not yet taken, or `null` at once if there is none. It never waits, so async code may call
+it.
+
+### ProcessSignals.wait
+
+```ceesafe
+public fn wait(borrow this) -> ProcessSignal
+```
+
+Waits for a request, blocking the thread. In async code use `waitAsync` (N0295).
+
+### ProcessSignals.waitAsync
+
+```ceesafe
+public async fn waitAsync(borrow this) -> Result<ProcessSignal, AsyncError>
+```
+
+Waits for a request, parking the task: other tasks run meanwhile. `Err(AsyncError.Cancelled)` if the task is
+cancelled first; a request is then still there for the next call.
 
 ## struct VolumeSpace
 

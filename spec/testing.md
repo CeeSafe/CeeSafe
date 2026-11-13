@@ -38,6 +38,13 @@ pipes, built and with `run --interp`: it reads each prompt before it writes the 
 checks that `Console.flush()` writes through a pipe and that a finished line reaches a terminal (a pty) while the
 program waits for something else.
 
+`tools/signal_check.py` (ADR 0125 and 0126, in the contract suite; POSIX) sends `SIGINT` and `SIGTERM` to programs,
+built and with `run --interp`: a server of tasks with a request half sent stops accepting, answers that request and
+exits 0 (built, with each reactor the host has); a server of threads does the same through `listener.shutdown()`
+(in the interpreter, which runs one thread at a time, with no client); a program takes one signal and, after its
+subscription's drop, is ended by the next; and a program with no subscription is ended at once.
+`--write DIR` writes the programs, to try by hand where there is no `os.kill` (Windows: Ctrl+C in a console).
+
 `tools/test_command_check.py` runs `ceesafec test` (ADR 0049) on `tests/packages/test-command`, whose tests have every
 outcome, and compares each with `expected.tsv` (reviewed by hand), natively and with `--interp`; it also checks
 `--list`, both sweeps against the harness's own counts, and that `build` leaves the tests out.

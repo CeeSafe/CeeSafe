@@ -67,9 +67,14 @@ two things: the socket to have a connection, and the listener's wake.
 ### 2.2 The interpreter
 
 The interpreter marks the listener; `accept` on a marked listener is `ConnectionAborted`. It runs one thread at a
-time (§38), so before it waits in the host's `accept` it runs any thread that has not started, which may be the one
-that calls `shutdown`. A thread already waiting in the host's `accept` cannot be woken by another thread of the
-program there: a known difference of the interpreter's threads (`docs/p8-plan.md`), not a new one.
+time (§38), and a thread that waits in the host's `accept` keeps the others from running, so none can shut the
+listener down meanwhile: a known difference of the interpreter's threads (`docs/p8-plan.md`), not a new one. A
+program in which the listener is shut down before the accepting thread comes to run behaves as when compiled.
+
+Tried and withdrawn: letting `accept` first run the threads that have not started, so that one of them could call
+`shutdown`. A thread started that way and then blocked on the accepting thread (a pool's worker waiting for its
+first connection, as in the book's chapter 21) cannot give the baton back, and the interpreter reported a deadlock
+in a program that ran before.
 
 ## 3. Alternatives considered
 
@@ -97,9 +102,23 @@ program there: a known difference of the interpreter's threads (`docs/p8-plan.md
 ## 5. Tests
 
 - Corpus `run-pass/tcp-listener-shutdown.cee` (compiled, interpreted, `--check-leaks`): a thread shuts the listener
-  down while another waits in `accept`; `accept` after it; twice; a connection made before the shutdown is still
+  down that another accepts on; `accept` after it; twice; a connection made before the shutdown is still
   accepted before it, and the stream it gave still works after it; a second listener is not disturbed.
 - `check-fail/tcp-listener-shutdown-stream.cee`: `shutdown` on a `TcpStream` is still N0200 (it has `shutdownRead`
   and `shutdownWrite`), and `shutdown` takes no argument.
 - `tools/signal_check.py`: the server of threads, with a request in flight when the signal comes.
-- Not run here: Linux and Windows (the report of the branch gives the commands).
+
+## 6. Implementation and evidence
+
+- **Where:** `runtime/hosted/ceesafe_rt_io.c` (the table of wakes before `ceesafe_fd_drop`; `ceesafe_tcp_listen`,
+  `ceesafe_tcp_accept` and `ceesafe_tcp_listener_shutdown`, POSIX and Windows) and `rt.h`; the builtin
+  `TcpListenerShutdown` (`src/hir/builtins.cee`, `src/check/io.cee`, `src/backend/c_body.cee`), with no effect in
+  `src/nir/effect_check.cee`; `src/interpreter/io.cee`.
+- **macOS 27, arm64 (2026-11-13):** the corpus, compiled and interpreted (`run-pass/tcp-listener-shutdown.cee` with
+  `--check-leaks`; every other socket test unchanged); `tools/fault_injection.py --filter tcp-listener-shutdown`:
+  4 failure points, 0 fail; `tools/signal_check.py`: the server of threads answers its request in flight, answers no
+  connection made after the signal, and exits 0.
+- **Linux (Debian 12 in a container, aarch64, gcc 12, 2026-11-13):** the corpus's `tcp` tests compiled and
+  interpreted, and `tools/signal_check.py`.
+- **Not run:** Windows, whose side (`WSAEventSelect`, the two events) is compiled by nothing here; Linux on x86-64;
+  CosmoOS (unchanged: its listeners wait in `accept`, and `shutdown` is `Unsupported`).

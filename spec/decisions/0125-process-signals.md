@@ -81,8 +81,9 @@ channel drops the value.
 library (`signal()`), with a `@callback` handler that sets a bit in a static `AtomicU32` and sets itself again. The
 bits are looked at where the program asks or waits: `tryRecv`/`recv`/`recvAsync` on the subscription's channel, the
 task loop's top, and its waits (a poll of sockets is cut to 20 ms while a task waits for a signal; with nothing else
-to wait for, 10 ms pauses). On Windows the C library gives the interpreter Ctrl+C and Ctrl+Break only. The sandbox
-(the MCP server's `run`) answers `Unsupported`.
+to wait for, 10 ms pauses). A thread in `wait` pauses the same way, and no other thread runs meanwhile (the
+interpreter runs one at a time, §38). On Windows the C library gives the interpreter Ctrl+C and Ctrl+Break only. The
+sandbox (the MCP server's `run`) answers `Unsupported`.
 
 ## 3. Alternatives considered
 
@@ -110,8 +111,25 @@ New names in lib/std (`ProcessSignal`, `ProcessSignals`): a program with its own
 - Corpus `run-pass/process-signals.cee` (compiled, interpreted, `--check-leaks`): no request yet, a second
   subscription refused, a subscription after a drop, a cancelled `waitAsync`.
 - `check-fail/process-signals-wait-in-async.cee`: `wait` in an async fn is N0295.
+- `check-fail/process-signals-freestanding.cee`: the names are not defined in the freestanding profile (N0200).
 
 ## 6. Not in this ADR
 
 - Sending signals, other signals, a child process's signals, signal masks.
 - Windows services' control requests.
+
+## 7. Implementation and evidence
+
+- **Where:** `runtime/hosted/ceesafe_rt_async.c` (after the channels, which it sends into; a program that names
+  `ProcessSignals` links that file and the thread runtime, as any program with a channel does) and `rt.h`;
+  `lib/std/host.cee`; `lib/std/channel.cee` (`handle`, not public); `src/interpreter/signals.cee` and the hooks in
+  `src/interpreter/io.cee` (`channelService`, `runTasks`). The compiler's own sources use nothing newer than the
+  compiler that builds them: the interpreter reaches the C library's `signal()` through an `extern "C"` block.
+- **macOS 27, arm64 (2026-11-13):** `python3 tools/signal_check.py --compiler out/ceesafec`: 18 cases, 0 problems
+  (tasks with kqueue and with `CEESAFE_REACTOR_POLL=1`, threads, one signal then the default, no subscription; built
+  and interpreted; `SIGINT` and `SIGTERM`). The corpus, compiled and interpreted, with `--check-leaks` for the new
+  tests; `tools/cancel_sweep.py --filter process-signals`: 3 cancellation points, 0 fail.
+- **Linux (Debian 12 in a container, aarch64, gcc 12; the compiler built from its generated C, 2026-11-13):**
+  `tools/signal_check.py`: 20 cases, 0 problems (the two more ask for io_uring, which a container may refuse: the
+  runtime then uses epoll); the new corpus tests compiled and interpreted.
+- **Not run:** Windows (the handler, `SetConsoleCtrlHandler`, is compiled by nothing here), Linux on x86-64, CosmoOS.

@@ -1,0 +1,69 @@
+// `ProcessLimits` (ADR 0104): the open-file limit read, raised a little and read back, never lowered; and an open past
+// the limit is `IoError.TooManyOpenFiles`. Windows has no count limit and the interpreter answers Unsupported: both
+// print the same lines, so the expected output holds everywhere.
+fn main() {
+    match (ProcessLimits.openFiles()) {
+        Ok(limit) => {
+            Console.writeLine(if (limit.current <= limit.maximum) "limit ok" else "limit wrong");
+            // Asking for less than the current limit changes nothing.
+            let same = ProcessLimits.raiseOpenFiles(1)!;
+            Console.writeLine(if (same == limit.current) "never lowered" else "lowered");
+            let want = if (limit.maximum - limit.current >= 16) limit.current + 16 else limit.maximum;
+            let raised = ProcessLimits.raiseOpenFiles(want)!;
+            let after = ProcessLimits.openFiles()!;
+            Console.writeLine(
+                if (raised >= limit.current && raised <= want && after.current == raised) "raised ok" else "raise wrong",
+            );
+            exhaust(after.current);
+        }
+        Err(IoError.Unsupported) => {
+            Console.writeLine("limit ok");
+            Console.writeLine("never lowered");
+            Console.writeLine("raised ok");
+            Console.writeLine("exhausted ok");
+        }
+        Err(e) => { Console.writeLine(e.message()); }
+    }
+}
+
+/// Opens one file until the limit is reached, if it is small enough to reach: the error names the shortage.
+fn exhaust(limit: u64) {
+    if (limit > 65536) {
+        Console.writeLine("exhausted ok"); // Windows, or a limit too large to reach here
+        return;
+    }
+    let dir = Directory.temporary()!;
+    var path = String.create();
+    path.append(dir.view())!;
+    path.append("/f")!;
+    { let _ = File.create(path.view())!; }
+    var files = Vector<File>.create();
+    var outcome: u8 = 0; // 0 never ran out, 1 exhausted, 2 a wrong message, 3 another error
+    while (files.length as u64 <= limit) {
+        match (File.open(path.view())) {
+            Ok(f) => { files.push(f)!; }
+            Err(IoError.TooManyOpenFiles) => {
+                let e = IoError.TooManyOpenFiles;
+                outcome = if (e.message() == "Too many open files") 1 else 2;
+                break;
+            }
+            Err(_) => {
+                outcome = 3;
+                break;
+            }
+        }
+    }
+    files.clear();
+    Console.writeLine(match (outcome) {
+        0 => "never ran out",
+        1 => "exhausted ok",
+        2 => "wrong message",
+        _ => "another error",
+    });
+    File.remove(path.view())!;
+    Directory.remove(dir.view())!;
+}
+// expect-stdout: limit ok
+// expect-stdout: never lowered
+// expect-stdout: raised ok
+// expect-stdout: exhausted ok

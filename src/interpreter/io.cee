@@ -151,6 +151,9 @@ fn errnoOfMessage(text: StringView) -> i64 {
     if (sameText(text.bytes(), ioMessage(20))) {
         return 28; // ENOSPC on Linux, macOS and MSVC: IoError.StorageFull (ADR 0077)
     }
+    if (sameText(text.bytes(), ioMessage(21))) {
+        return 24; // EMFILE on Linux, macOS and MSVC: IoError.TooManyOpenFiles (ADR 0104)
+    }
     let system = hostErrnos();
     for (k in 11..19u64) {
         if (sameText(text.bytes(), ioMessage(k))) {
@@ -235,6 +238,9 @@ fn ioKindOf(error: i64) -> u64 {
     }
     if (error == 12) {
         return 9;
+    }
+    if (error == 24 || error == 23) {
+        return 21; // EMFILE, ENFILE, the same on Linux, macOS and MSVC: IoError.TooManyOpenFiles (ADR 0104)
     }
     for (k in 11..19u64) {
         if (error == networkErrno(k, system)) {
@@ -419,6 +425,7 @@ fn ioMessage(kind: u64) -> StringView => match (kind) {
     18 => "Operation not supported",
     19 => "Host not found",
     20 => "No space left on device",
+    21 => "Too many open files",
     _ => "Input/output error",
 };
 
@@ -447,7 +454,7 @@ fn ioBuiltin(
         let errorType = builtinArgumentType(n, arguments, 0);
         let value = argument(it, c, n, frame, arguments, 0)?;
         var kind = value.bits(0, enumTagSize(c, errorType))?;
-        if (kind > 20) {
+        if (kind > 21) {
             kind = 10;
         }
         let text = ioMessage(kind);
@@ -968,6 +975,10 @@ fn hostService(it: borrow mut Interp, name: Slice<u8>, arguments: borrow Vector<
         };
         return Ok(hostResult(kind));
     }
+    if (sameText(name, "ceesafe_host_open_files") || sameText(name, "ceesafe_host_raise_open_files")) {
+        // ADR 0104: the interpreter's limits are its own process's, not the program's, so it answers none.
+        return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
+    }
     if (sameText(name, "ceesafe_host_space")) {
         // ADR 0077: the interpreter describes no volume of its own, so a run stays reproducible.
         return Ok(hostFailure(errnoFor(hostErrnos(), 95, 102, 130))); // EOPNOTSUPP: IoError.Unsupported
@@ -1186,6 +1197,12 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     }
     if (sameText(name, "ceesafe_host_space")) {
         return "PsPPP:l";
+    }
+    if (sameText(name, "ceesafe_host_open_files")) {
+        return "PP:l";
+    }
+    if (sameText(name, "ceesafe_host_raise_open_files")) {
+        return "sP:l";
     }
     if (sameText(name, "ceesafe_host_modified")) {
         return "PsPP:l";

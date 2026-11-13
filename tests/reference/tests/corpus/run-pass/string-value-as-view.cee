@@ -1,0 +1,66 @@
+// A `String` that is a value, not a place (a call's result, `a ?? b`, a field of a call's result), printed and
+// passed for a `StringView` parameter (type-system.md §23.2): the string is held to the end of the statement, its
+// text is lent from it, and it is destroyed there, once.
+struct Named {
+    name: String;
+    other: String;
+}
+
+struct Holder {
+    named: Named;
+}
+
+fn make() -> Named {
+    return Named { name: String.from("name")!, other: String.from("other")! };
+}
+
+fn show(text: StringView) {
+    Console.writeLine(text);
+}
+
+fn length(text: StringView) -> usize => text.length;
+
+fn total(values: Slice<u32>) -> u32 {
+    var sum: u32 = 0;
+    for (v in values) {
+        sum += v;
+    }
+    return sum;
+}
+
+fn numbers() -> Vector<u32> {
+    var v = Vector<u32>.create();
+    v.push(3)!;
+    v.push(4)!;
+    return v;
+}
+
+fn main() {
+    let absent: String? = null;
+    let present: String? = Some(String.from("present")!);
+    Console.writeLine(absent ?? String.from("fallback")!);
+    Console.writeLine(present ?? String.create());
+    Console.writeLine(make().name);
+    Console.writeLine(String.from("made")!);
+    Console.write(make().other);
+    Console.writeLine("");
+    let holder = Arc<Holder>.create(Holder { named: make() })!;
+    Console.writeLine(holder.get().named.name);
+    let missing: String? = null;
+    show(missing ?? String.from("fallback")!);
+    show(make().name);
+    show(String.from("made")!);
+    Console.writeLine(length(String.from("four")!));
+    Console.writeLine(total(numbers()));
+}
+// expect-stdout: fallback
+// expect-stdout: present
+// expect-stdout: name
+// expect-stdout: made
+// expect-stdout: other
+// expect-stdout: name
+// expect-stdout: fallback
+// expect-stdout: name
+// expect-stdout: made
+// expect-stdout: 4
+// expect-stdout: 7

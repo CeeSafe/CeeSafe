@@ -1,0 +1,46 @@
+// A `String` or vector value that is not a place lends its text or elements from a temporary that dies at the end
+// of the statement (ADR 0115 §2.2): a view of it cannot be kept, and a place that is lent cannot be moved.
+struct Named {
+    name: String;
+    items: Vector<i64>;
+}
+
+fn make() -> Named => Named { name: String.from("made")!, items: Vector<i64>.create() };
+
+fn same<region r>(text: StringView<r>) -> StringView<r> => text;
+
+fn sameItems<region r>(items: Slice<r, i64>) -> Slice<r, i64> => items;
+
+fn keptView() {
+    let v = same(String.from("x")!); // error[N0243]
+    Console.writeLine(v);
+}
+
+fn keptFieldView() {
+    let v = same(make().name); // error[N0243]
+    Console.writeLine(v);
+}
+
+fn keptSlice() {
+    let v = sameItems(make().items); // error[N0243]
+    Console.writeLine(v.length);
+}
+
+fn pushed() {
+    var kept = Vector<StringView>.create();
+    kept.push(same(make().name))!; // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn returned(p: StringView) -> StringView {
+    return same(make().name); // error[N0244]
+}
+
+fn movedWhileLent() {
+    let n = make();
+    let v = same(n.name);
+    let m = n; // error[N0240]
+    Console.writeLine(v);
+}
+
+fn main() { }

@@ -1,0 +1,16 @@
+// The names of the types and values the compiler implements are reserved for items (type-system.md §2): a local
+// may have one, an item may not.
+struct Pool { // error[N0201]
+    size: u32;
+}
+
+enum Vector { // error[N0201]
+    One,
+}
+
+fn Box() { } // error[N0201]
+
+fn main() {
+    let Slice = 1;
+    Console.writeLine(Slice);
+}

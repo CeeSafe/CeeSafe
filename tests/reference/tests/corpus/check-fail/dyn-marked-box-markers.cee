@@ -1,0 +1,33 @@
+// Lending a `dyn` box forgets markers and never adds one (type-system.md §38.4), and a shared loan of the box gives
+// no `borrow mut` of its contents.
+interface Shape {
+    fn area(borrow this) -> u32;
+}
+
+struct Square {
+    side: u32;
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+}
+
+interface Other {
+    fn area(borrow this) -> u32;
+}
+
+fn showSend(s: borrow dyn Shape + Send) { }
+fn showShare(s: borrow dyn Shape + Share) { }
+fn showOther(s: borrow dyn Other) { }
+
+fn addsMarker(plain: Box<dyn Shape>, sent: Box<dyn Shape + Send>) {
+    showSend(plain); // error[N0205]
+    showShare(sent); // error[N0205]
+    showOther(sent); // error[N0205]
+}
+
+fn sharedDoesNotChange(sent: borrow Box<dyn Shape + Send>) {
+    let lent: borrow mut dyn Shape = sent; // error[N0205]
+}
+
+fn main() { }

@@ -179,6 +179,11 @@ fn checkNull(c: borrow mut Checker, expected: u32, span: Span) -> Result<u32, Al
             appendText(mut message, "'null' is an absent optional, but ")?;
             appendQuotedType(mut message, c, expected)?;
             appendText(mut message, " is expected here")?;
+            if (c.types.is(expected, TypeKind.RawPointer)) {
+                appendText(mut message, "; the null pointer is written '0 as ")?;
+                appendBytes(mut message, c.typeName(expected))?;
+                appendText(mut message, "' (type-system.md §27.2)")?;
+            }
         }
         c.error(resultTypeUnknown(), span.start, span.end, message)?;
     }
@@ -322,6 +327,31 @@ fn appendQuotedCall(out: borrow mut Vector<u8>, c: borrow Checker, name: u32) ->
     return appendText(out, "(...)'");
 }
 
+/// Is the expression a call of a type's function or of a method, `T.f(…)` or `x.f(…)` (in parentheses or not)?
+fn isMemberCall(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Paren(inner) => isMemberCall(c, inner),
+    ExprNode.Call(callee, _) => match (c.front.ast.exprs[callee as usize]) {
+        ExprNode.Member(_, _) => true,
+        _ => false,
+    },
+    _ => false,
+};
+
+/// Is the expression `null` (in parentheses or not)?
+fn isNullLiteral(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Paren(inner) => isNullLiteral(c, inner),
+    ExprNode.NullLiteral => true,
+    _ => false,
+};
+
+/// Is the expression `e!` or `e?` with such a call as `e`? An expected box type then stays whole for it (§17.4).
+fn unwrapsMemberCall(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
+    ExprNode.Paren(inner) => unwrapsMemberCall(c, inner),
+    ExprNode.Try(operand) => isMemberCall(c, operand),
+    ExprNode.Unwrap(operand) => isMemberCall(c, operand),
+    _ => false,
+};
+
 /// The operand of `e?` or `e!`: a `Result` or optional value (CheckResultOperand, N0262), or none.
 fn checkResultOperand(c: borrow mut Checker, operand: u32, text: StringView, expected: u32) -> Result<u32, AllocError> {
     // `Box.create(move …)!` for an expected `Box<dyn fn…>`: the move literal's type comes from it (§36.5).
@@ -332,6 +362,12 @@ fn checkResultOperand(c: borrow mut Checker, operand: u32, text: StringView, exp
         hint = resultOf(c, expected, allocError)?;
     } else if (expected != none() && c.types.is(expected, TypeKind.Thread)) {
         hint = expected; // Thread.spawn reads the result type from it (§38.2)
+    } else if (expected != none() && (c.types.is(expected, TypeKind.Box) || c.types.is(expected, TypeKind.Vector)) &&
+        isMemberCall(c, operand)) {
+        // An expected box, vector or string type `T` gives the call `Box.create(v)!`, `String.from(text)!` and the
+        // like the expected type `Result<T, AllocError>`, which a `let` of that type would give it (§17.4).
+        let allocError = usedAllocError(c);
+        hint = resultOf(c, expected, allocError)?;
     }
     let value = synth(c, operand, hint)?;
     if (c.isBottom(value)) {
@@ -454,7 +490,7 @@ fn appendFunctionName(out: borrow mut Vector<u8>, c: borrow Checker) -> Result<v
     return appendQuotedName(out, c, c.hir.functions[c.function as usize].name);
 }
 
-/// `e!` (§17.5, §22.1).
+/// `e!` (§17.4, §22.1).
 fn checkUnwrap(c: borrow mut Checker, operandSyntax: u32, expected: u32, span: Span) -> Result<u32, AllocError> {
     let operand = checkResultOperand(c, operandSyntax, "!", expected)?;
     if (operand == none()) {

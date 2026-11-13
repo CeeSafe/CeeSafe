@@ -36,6 +36,9 @@ fn main() {
 100
 ```
 
+The declared type of a box reaches the value under `!` and `?`: `let wide: Box<i64> = Box.create(5)!;` holds an
+`i64`, and `let s: String<FailingAllocator> = String.from("a")!;` allocates from that allocator.
+
 Boxes are how recursive types are built, since a type cannot contain itself directly:
 
 ```ceesafe

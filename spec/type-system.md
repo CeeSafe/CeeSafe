@@ -91,6 +91,12 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` �
     method is as visible as the interface.
 - **Built-in scope** (outside the package scope, so a user item hides a built-in): `Console.write`,
   `Console.writeLine`, `Process.exit`, `truncate`, and the primitive type names.
+- **Reserved names.** The types and values the compiler itself implements are found by name wherever a type or a
+  constructor is written, in the libraries' code as in a package's, so no item may take their names (**N0201**,
+  "is a built-in name"): `Result`, `Ok`, `Err`, `Box`, `Scratch`, `Pool`, `PoolBox`, `Vector`, `String`, `SlotMap`,
+  `StableVector`, `Handle`, `File`, `TcpListener`, `TcpStream`, `Ptr`, `Slice`, `SliceMut`, `Cpu`, `Target`, and
+  `AllocError`, `IoError`, `SystemHeap`, `FailingAllocator`. The reservation is not needed for safety; it keeps one
+  meaning for each of these names in every file. A local may have such a name.
 - **`lib/core`** (and, hosted, `lib/std`) is in scope in every package, unqualified. A package may declare an item with
   one of their names (ADR 0075 §5; before it, N0201): the package's item shadows the library's in that package, while
   the libraries' own code still finds its own. So a name a release adds to a library is not a source change. In C
@@ -561,6 +567,10 @@ N0243 (out of scope or temporary dropped while borrowed).
   `borrow (T?)` is a reference to an optional and `borrow(a) (T?)` names a source.
 - The body may only return references derived from the named parameters (N0245). A reference to
   a local or temporary of the function is N0244.
+- A value read through a local reference made from a parameter (`for (pair in this.pairs) { return pair.value; }`,
+  `for (part in borrow mut this.parts) { return part; }`) is derived from what that parameter's referent holds, as
+  the same read through the parameter is (`this.pairs[i].value`): it may be returned with a region of the
+  referent (`lifetimes.md` §3, ADR 0114 §2.3).
 
 ## 14. Move types, destruction, `using` and `defer` (M2c)
 
@@ -619,7 +629,10 @@ struct File {
 ### 14.4 Initialisation (replaces §9's first bullet)
 The analysis runs on NIR move paths (`intermediate-representation.md`):
 - A place must be **definitely initialised** to be read, borrowed or moved. If it may never have
-  been assigned, that is N0212. If it may have been moved, that is N0250.
+  been assigned, that is N0212. If it may have been moved, that is N0250, with a note of where it was moved.
+  - A place that reads through a reference, into an element or into a string's text (`p.name`'s text in
+    `Console.writeLine(p.name)`, `bag.items[0]`, `*h.count`) needs the longest field path it starts with (`p.name`,
+    `bag.items`, `h.count`), not the whole of `p`: the other fields may have been moved (ADR 0114 §2.1).
 - Assigning a field `p.f` requires the rest of `p` to be initialised (no piecewise construction
   of an uninitialised struct). Re-initialising a moved-out field is allowed.
   - If some enclosing struct of `p.f` has a `drop` block, that whole struct must be initialised,
@@ -1229,6 +1242,11 @@ Postfix = Primary ( … | '?' | '!' )*      -- '!' is postfix only when it follo
   `Err(_)` **panics** with "unwrapped an Err value". Panic is abort, so nothing is destroyed.
 - In both cases `e` is evaluated once and consumed. The payload moves out of it (or is copied);
   nothing else of `e` remains to be destroyed.
+- **The expected type** (ADR 0115 §2.1). Where `e!` or `e?` has an expected `Box`, `Vector` or `String` type `T`
+  and `e` is a call of a type's function or of a method, `e` is checked with the expected type
+  `Result<T, AllocError>`: `let d: Box<i64> = Box.create(5)!;` holds an i64, and
+  `let s: String<A> = String.from("a")!;` allocates from `A`, as under `let r: Result<T, AllocError> = …`. It is a
+  hint for the call, not a conversion: the value of `e!` must still have type `T` (N0205).
 - As an expression statement: `f()?;` and `f()!;` are allowed when the operand is a call, like
   calls themselves (N0225 otherwise).
 - Precedence: postfix, like a call or member access: `parse(a)?.value` and `-x?` work as
@@ -2198,7 +2216,9 @@ fn main() -> i32 {
     `s.bytes()`, and the searches, trims, splits and parsers of §16.6;
   - `==` and `!=` between two strings compare their bytes. A `String` and a `StringView` are different types
     (N0207): compare `s.view()`;
-  - printing: `Console.writeLine(s)` prints the text of a string place.
+  - printing: `Console.writeLine(s)` prints the text of a string, a place or a value. A `String` value that
+    is not a place (`make().name`, `a ?? b`, `String.from(t)!`), printed or given for a `StringView` parameter, is
+    held to the end of the statement, where it is destroyed, and its text is lent from it (ADR 0115 §2.2).
 - Appending a view of the string itself (`s.append(s.view())`) is rejected (N0240): the view is a
   live shared loan of `s` when the call's mutable loan starts.
 - **Layout (v0):** as `Vector<u8, A>`.
@@ -2422,8 +2442,9 @@ methods. Such an impl's methods do not declare regions of their own (N0216, §25
   struct or enum declares at least one region parameter, or the type is a type parameter (its
   instances are scoped then, §25.3). Otherwise: N0270.
 - **Generic instances:** a user generic type or function may be instantiated with scoped type
-  arguments. If the generic needs an unscoped type there (it boxes `T`, makes an array of `T`, …),
-  the instantiation is rejected where it is written: N0274.
+  arguments. If the generic needs an unscoped type there (it boxes `T`, makes an array of `T`, takes a
+  `borrow T`, which for a view would be a reference to a reference, N0246, …), the instantiation is rejected where
+  it is written: N0274. A generic that takes its `T: Copy` by value accepts a view.
 - **Collections:** `Vector`, `StableVector` and `SlotMap` elements may be scoped; so may the value
   passed to a region's `alloc`, except a bare reference (N0264: region memory holds values).
 - **Assignment:** assigning to a reference *local* still writes through it (§13.3). Assigning to a
@@ -2903,7 +2924,9 @@ fn main() -> i32 {
 Making and converting a pointer is safe; only using one is not (§27.3).
 - `r as *T` for a reference `r: borrow T` or `borrow mut T`, and `r as *mut T` for `r: borrow mut T`.
   `borrow x as *T` parses as `(borrow x) as *T` (grammar §2.1). The borrow ends at once: the pointer
-  holds no loan, so later uses of `x` are not checked against it.
+  holds no loan, so later uses of `x` are not checked against it. A `borrow mut` variable or field is
+  **reborrowed** for the cast, as for every other use of one (§13.3), not moved: after
+  `let p = r as *mut T;` the reference `r` is still usable (ADR 0114 §2.4).
 - `s.ptr` for a slice `s`: `*T` for `Slice<T>`, `*mut T` for `SliceMut<T>`; for a `StringView`, `*u8`.
   It is the address of element 0 (of where it would be, for an empty slice).
 - `p as *U` and `p as *mut U` for any raw pointer `p`, whatever its pointee and mutability.

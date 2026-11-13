@@ -330,6 +330,11 @@ fn checkArgument(c: borrow mut Checker, argument: u32, parameterType: u32) -> Re
     if (place != none()) {
         return c.expr(HirExpr.Borrow(false, place), parameterType, span.start, span.end);
     }
+    if (c.types.info(valueType).isStr || c.types.isUnsized(valueType)) {
+        // The text of a `String` value, or the elements of a vector value: they cannot be copied to a temporary, so
+        // the value that owns them is held to the end of the statement and they are lent from it (ADR 0073 §2.1).
+        return borrowReceiver(c, value, false, span);
+    }
     return c.expr(HirExpr.BorrowTemp(false, value), parameterType, span.start, span.end);
 }
 

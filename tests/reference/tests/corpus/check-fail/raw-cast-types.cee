@@ -1,0 +1,17 @@
+// Reborrowing for the cast (type-system.md §27.2) changes no type rule: a shared reference gives no `*mut`, and
+// using the pointer stays unsafe.
+struct Counter {
+    hits: u32;
+}
+
+fn sharedToMut(r: borrow Counter) {
+    let p = r as *mut Counter; // error[N0208]
+}
+
+fn useIsUnsafe(r: borrow mut Counter) {
+    let p = r as *mut Counter;
+    r.hits += 1;
+    let c = p.read(); // error[N0280]
+}
+
+fn main() { }

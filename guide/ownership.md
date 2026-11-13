@@ -35,9 +35,32 @@ main.cee:11:5: error[N0250]: 'b.size' is used here after it was moved (on at lea
    |
 11 |     Console.writeLine(b.size);
    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: the value was moved here (10:5)
 ```
 
 Moves are what make destruction safe: a value has exactly one owner, so it is destroyed exactly once.
+
+A field can be moved out of a struct that has no `drop` block. The other fields stay owned and usable, the struct
+as a whole does not, and at the end of the scope only the fields that are left are destroyed:
+
+```ceesafe
+struct Pair {
+    first: String;
+    second: String;
+}
+
+fn main() {
+    let p = Pair { first: String.from("one")!, second: String.from("two")! };
+    let first = p.first;                // p.first is moved; p.second is still p's
+    Console.writeLine(p.second);
+    Console.writeLine(first);
+}
+```
+
+```text
+two
+one
+```
 
 ## Destruction
 
@@ -79,6 +102,12 @@ drop 2
 At the end of `main`, the locals are destroyed in reverse order of declaration: `moved` (holding 1), `replaced`
 (holding 5), then `second`. `first` was moved, so it is not destroyed again. A value moved on only some paths gets a
 hidden flag, so it is still destroyed exactly once.
+
+A method that takes `this` by value consumes its value, which is destroyed at the end of the method. `this` is
+immutable there, as every parameter is, so a method that must change the value first (to tell its `drop` block that
+it was finished properly, say) moves it to a variable: `var me = this; me.armed = false;`. A field of a struct with a
+`drop` block cannot be moved out, since the block reads the whole value; take it with
+`replace(mut me.name, String.create())`.
 
 A **panic** or `Process.exit` does not run `drop` blocks: a panic stops the program at once (there is no unwinding).
 

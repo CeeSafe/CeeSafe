@@ -156,7 +156,10 @@ fn mutabilityError(c: borrow Checker, place: u32, reason: borrow mut Vector<u8>)
         );
     }
     if (root.name == c.thisSymbol) {
-        return appendText(reason, "'this' is immutable in a by-value method; use 'borrow mut this'");
+        return appendText(
+            reason,
+            "'this' is immutable in a by-value method; use 'borrow mut this', or move it to a variable first ('var me = this;')",
+        );
     }
     if (root.parameter) {
         appendText(reason, "parameters are immutable")?;

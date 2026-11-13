@@ -1,0 +1,73 @@
+// After a move out of one field, the other fields stay owned and usable (ownership.md O3), also where the use reads
+// through one: the text of a string field, the elements of a vector field, what a reference field refers to. Each
+// value is still destroyed exactly once.
+struct Noisy {
+    id: u32;
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.id);
+    }
+}
+
+struct Pair {
+    first: String;
+    second: String;
+}
+
+struct Bag {
+    label: String;
+    items: Vector<u32>;
+    owned: Vector<Noisy>;
+    guard: Noisy;
+}
+
+struct Lender<region r> {
+    name: String;
+    count: borrow(r) u32;
+}
+
+fn consume(text: String) {
+    Console.writeLine(text);
+}
+
+fn main() {
+    let p = Pair { first: String.from("first")!, second: String.from("second")! };
+    let f = p.first;
+    Console.writeLine(p.second); // the text of p.second: p.first is gone, p.second is not
+    Console.writeLine(p.second.length);
+    Console.writeLine(f);
+
+    var items = Vector<u32>.create();
+    items.push(7)!;
+    var owned = Vector<Noisy>.create();
+    owned.push(Noisy { id: 1 })!;
+    var bag = Bag { label: String.from("bag")!, items: move items, owned: move owned, guard: Noisy { id: 2 } };
+    consume(move bag.label);
+    Console.writeLine(bag.items[0]); // an element read
+    bag.items[0] = 8;                // an element write
+    Console.writeLine(bag.items[0]);
+    Console.writeLine(bag.owned[0].id);
+    let guard = bag.guard;
+    Console.writeLine(bag.owned.length);
+    Console.writeLine(guard.id);
+
+    let n: u32 = 5;
+    let lender = Lender { name: String.from("lender")!, count: borrow n };
+    consume(move lender.name);
+    Console.writeLine(*lender.count); // through the reference field
+    Console.writeLine("end");
+}
+// expect-stdout: second
+// expect-stdout: 6
+// expect-stdout: first
+// expect-stdout: bag
+// expect-stdout: 7
+// expect-stdout: 8
+// expect-stdout: 1
+// expect-stdout: 1
+// expect-stdout: 2
+// expect-stdout: lender
+// expect-stdout: 5
+// expect-stdout: end
+// expect-stdout: drop 2
+// expect-stdout: drop 1

@@ -75,7 +75,7 @@ Semantic checks run only when every file parsed without errors.
 | Code | Meaning | Example |
 |---|---|---|
 | N0200 | Name not found (variable, function, or built-in member) | `missing`, `Console.print(1)` |
-| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2) | two `fn twice()`; `fn strlen` in two `extern "C"` blocks |
+| N0201 | Item defined twice in the package (a library item's name is not a clash since ADR 0075 §5: the package's item shadows it), or a C name declared twice by C functions, exports or `@repr` types, even in different packages (`type-system.md` §28.2, §28.5, ADR 0081 §2.2); or an item given a reserved built-in name (`type-system.md` §2) | two `fn twice()`; `fn strlen` in two `extern "C"` blocks; `struct Pool` |
 | N0202 | Parameter declared twice | `fn f(a: i32, a: i32)` |
 | N0203 | Local redeclares a local or parameter in scope (no shadowing of locals) | `let x = 1; let x = 2;` |
 | N0204 | Unknown type name | `fn f(a: int)` |
@@ -137,7 +137,7 @@ programs that type-check. A move while borrowed is reported by the borrow checke
 
 | Code | Meaning | Example |
 |---|---|---|
-| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5) | `consume(r); consume(r);` |
+| N0250 | Use of a value that was moved (on at least one path), including reading a partially moved struct as a whole; a `name @ P` pattern that moves its value while a binding under `P` moves part of it (ADR 0085 §2.5). A note says where the value was moved (ADR 0114 §2.2) | `consume(r); consume(r);` |
 | N0251 | Move out of a place reached through a reference; since ADR 0075 `*r` of a referent that is not Copy | `let a = r.a;` with `r: borrow Pair` and `Pair.a` a move type |
 | N0252 | Move of a field out of a value whose type has a `drop` block | `consume(o.res)` with `struct Owner { res: Res; drop {} }` |
 | N0253 | Move out of a `using` binding | `using u = make(); consume(u);` |

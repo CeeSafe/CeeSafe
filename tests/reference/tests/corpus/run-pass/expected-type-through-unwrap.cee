@@ -1,0 +1,57 @@
+// An expected box, vector or string type reaches the call under `!` and `?` (type-system.md §17.4): the call is
+// checked as for `let r: Result<T, AllocError> = …`, so `Box.create(5)!` for a `Box<i64>` holds an i64, and
+// `String.from(…)!` for a `String<A>` allocates from `A`.
+struct Wide {
+    value: Box<i64>;
+    bytes: Vector<u8, FailingAllocator>;
+}
+
+fn boxed() -> Result<Box<u8>, AllocError> {
+    let b: Box<u8> = Box.create(200)?;
+    return Ok(b);
+}
+
+fn text() -> Result<String<FailingAllocator>, AllocError> {
+    let s: String<FailingAllocator> = String.from("try")?;
+    return Ok(s);
+}
+
+fn takes(b: Box<u16>) -> u16 {
+    let value: u16 = b;
+    return value;
+}
+
+fn main() {
+    let d: Box<i64> = Box.create(5)!;
+    let big: i64 = d + 4000000000;
+    Console.writeLine(big);
+    let a: String<FailingAllocator> = String.from("a")!;
+    Console.writeLine(a);
+    let c: String<FailingAllocator> = String.withCapacity(8)!;
+    Console.writeLine(c.capacity >= 8);
+    let v: Vector<u64, FailingAllocator> = Vector.withCapacity(4)!;
+    Console.writeLine(v.length);
+    let w = Wide { value: Box.create(7)!, bytes: Vector.withCapacity(2)! };
+    Console.writeLine(w.value);
+    Console.writeLine(w.bytes.length);
+    Console.writeLine(boxed()!);
+    Console.writeLine(text()!);
+    Console.writeLine(takes(Box.create(65000)!));
+    var e: Box<i64> = Box.create(1)!;
+    e = Box.create(2)!;
+    Console.writeLine(e);
+    let plain = Box.create(5)!; // no expected type: an i32, as before
+    let n: i32 = plain;
+    Console.writeLine(n);
+}
+// expect-stdout: 4000000005
+// expect-stdout: a
+// expect-stdout: true
+// expect-stdout: 0
+// expect-stdout: 7
+// expect-stdout: 0
+// expect-stdout: 200
+// expect-stdout: try
+// expect-stdout: 65000
+// expect-stdout: 2
+// expect-stdout: 5

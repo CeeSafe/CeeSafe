@@ -1,0 +1,69 @@
+// A `Box<dyn I + Send>` or `Box<dyn I + Share>` lends its contents where a `borrow dyn I` (or one with fewer
+// markers) is expected, as a `Box<dyn I>` does (type-system.md §37.2, §38.4): the box is borrowed, not moved, and
+// is destroyed once at the end.
+interface Shape {
+    fn area(borrow this) -> u32;
+    fn grow(borrow mut this);
+}
+
+struct Square {
+    side: u32;
+    drop {
+        Console.write("drop ");
+        Console.writeLine(this.side);
+    }
+}
+
+impl Shape for Square {
+    fn area(borrow this) -> u32 => this.side * this.side;
+    fn grow(borrow mut this) {
+        this.side += 1;
+    }
+}
+
+fn show(s: borrow dyn Shape) {
+    Console.writeLine(s.area());
+}
+
+fn showSend(s: borrow dyn Shape + Send) {
+    Console.writeLine(s.area());
+}
+
+fn grow(s: borrow mut dyn Shape) {
+    s.grow();
+}
+
+fn make() -> Box<dyn Shape + Send> {
+    let b: Box<dyn Shape + Send> = Box.create(Square { side: 9 })!;
+    return b;
+}
+
+fn main() {
+    var sent: Box<dyn Shape + Send> = Box.create(Square { side: 2 })!;
+    show(sent);
+    show(borrow sent);
+    grow(mut sent);
+    show(sent);
+    let shared: Box<dyn Shape + Share> = Box.create(Square { side: 5 })!;
+    show(shared);
+    showSend(shared);
+    let lent: borrow dyn Shape = borrow shared;
+    Console.writeLine(lent.area());
+    let both: Box<dyn Shape + Send + Share> = Box.create(Square { side: 6 })!;
+    show(both);
+    show(make()); // a temporary box, destroyed after the call
+    Console.writeLine("end");
+}
+// expect-stdout: 4
+// expect-stdout: 4
+// expect-stdout: 9
+// expect-stdout: 25
+// expect-stdout: 25
+// expect-stdout: 25
+// expect-stdout: 36
+// expect-stdout: 81
+// expect-stdout: drop 9
+// expect-stdout: end
+// expect-stdout: drop 6
+// expect-stdout: drop 5
+// expect-stdout: drop 3

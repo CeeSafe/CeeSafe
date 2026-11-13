@@ -1,0 +1,21 @@
+// A function value that stores one argument through another.
+struct Owner {
+    text: String;
+}
+fn pushT<T>(out: borrow mut Vector<T>, v: T) {
+    out.push(v)!;
+}
+fn pushR<region r>(out: borrow mut Vector<StringView<r>>, v: StringView<r>) {
+    out.push(v)!;
+}
+fn main() {
+    var out = Vector<StringView>.create();
+    let f: fn(borrow mut Vector<StringView>, StringView) = pushT<StringView>; // error[N0298]
+    if (true) {
+        let t = String.from("local local local local local local local local")!;
+        f(mut out, t.view());
+    }
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(out[0]);
+    Console.writeLine(fresh.view());
+}

@@ -657,19 +657,9 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 named = true;
             }
         }
-        // An interface's method whose result is written with the interface's type parameters has its flows from
-        // those names, whatever the interface is given for them: `fn find(borrow this, k: K) -> V?` flows from the
-        // receiver for `Lookup<StringView, StringView>` as for `Lookup<K, V>`, and is not elided (ADR 0131).
-        var byName = false;
-        for (n in resultNames.view()) {
-            if (interfaceEntry != none() && isTypeFlowName(n)) {
-                byName = true;
-            }
-        }
         // A result that names only `static` borrows from no parameter, so it is not elided (ADR 0068).
         var resolved = Vector<u32>.create();
-        if (hasSourceList ||
-            (c.types.isScoped(returnType) && !named && !byName && !writesStatic(c, decl.returnType))) {
+        if (hasSourceList || (c.types.isScoped(returnType) && !named && !writesStatic(c, decl.returnType))) {
             resolveReturnSources(c, f, function, mut resolved)?; // v0: `borrow(a, b)`, or elision (§13.5)
             for (i in resolved.view()) {
                 if (!containsU32(sources, i)) {
@@ -868,6 +858,203 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
     c.hir.functions[function as usize].mutableFlows = flows;
     c.flowNames = Vector<Vector<u64>>.create();
     c.flowTypeParameters = Vector<u32>.create();
+    // The declaration's flows, once, and every instance has at least those (ADR 0131 §2.9).
+    while (c.declaredFlows.length <= f as usize) {
+        c.declaredFlows.push(DeclaredFlows {
+            function: none(),
+            sources: Vector<u32>.create(),
+            deep: Vector<u32>.create(),
+            flows: Vector<u64>.create(),
+        })?;
+    }
+    if (c.declaredFlows[f as usize].function != none()) {
+        inheritFlows(c, f, function)?;
+    } else if (isDeclarationVersion(c, f, owner)) {
+        recordDeclaredFlows(c, f, function)?;
+        var k: usize = 0;
+        while (k < c.flowsWaiting.length) {
+            let waiting = c.flowsWaiting[k];
+            k += 1;
+            if (c.hir.functions[waiting as usize].syntax == f) {
+                inheritFlows(c, f, waiting)?;
+            }
+        }
+    } else {
+        c.flowsWaiting.push(function)?;
+    }
+    return Ok();
+}
+
+/// The flows of a function's declaration (ADR 0131 §2.9): computed once, with every type parameter in scope opaque.
+struct DeclaredFlows {
+    function: u32; // the HIR function they were computed for, or none while they are not known
+    sources: Vector<u32>;
+    deep: Vector<u32>;
+    flows: Vector<u64>;
+}
+
+/// Is the function being declared its declaration's own version: every type parameter in scope opaque, and its
+/// owner the declaring type itself (a struct's or an enum's own generic type, an interface's `Self`), not an
+/// instance, a bound's type parameter, a `dyn` type or the type that inherits a default?
+fn isDeclarationVersion(c: borrow Checker, f: u32, owner: u32) -> bool {
+    for (pair in c.typeEnvironment.view()) {
+        if (!c.types.is(pair.typ, TypeKind.TypeParameter)) {
+            return false;
+        }
+    }
+    let interfaceEntry = if ((f as usize) < c.interfaceOfMethod.length) c.interfaceOfMethod[f as usize] else none();
+    if (interfaceEntry != none()) {
+        return owner != none() && owner == c.interfaces[interfaceEntry as usize].selfType;
+    }
+    if (owner == none()) {
+        return true;
+    }
+    let info = c.types.info(owner);
+    var arguments = emptyRange();
+    if (info.structDef != none()) {
+        arguments = c.types.structs[info.structDef as usize].typeArguments;
+    } else if (info.enumDef != none()) {
+        arguments = c.types.enums[info.enumDef as usize].typeArguments;
+    }
+    for (k in 0..arguments.count) {
+        let a = c.types.listAt(arguments, k);
+        if (!c.types.is(a, TypeKind.TypeParameter) && !c.types.is(a, TypeKind.ConstValue)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn recordDeclaredFlows(c: borrow mut Checker, f: u32, function: u32) -> Result<void, AllocError> {
+    var sources = Vector<u32>.create();
+    var deep = Vector<u32>.create();
+    var flows = Vector<u64>.create();
+    for (i in c.hir.functions[function as usize].returnSources.view()) {
+        sources.push(i)?;
+    }
+    for (i in c.hir.functions[function as usize].deepSources.view()) {
+        deep.push(i)?;
+    }
+    for (flow in c.hir.functions[function as usize].mutableFlows.view()) {
+        flows.push(flow)?;
+    }
+    c.declaredFlows[f as usize] = DeclaredFlows { function: function, sources: sources, deep: deep, flows: flows };
+    return Ok();
+}
+
+fn isPlainReference(c: borrow Checker, t: u32) -> bool =>
+    c.types.is(t, TypeKind.Reference) && !c.types.isSlice(t) && !c.types.isStringView(t);
+
+/// What `function`, an instance of declaration `f`, lacks of the declaration's flows (ADR 0131 §2.9): added when
+/// `add`, else only counted. Two gates lose no loan: a result whose instance type can hold none has no sources, and
+/// a `borrow mut` parameter whose instance referent can hold none is no target.
+fn missingDeclaredFlows(c: borrow mut Checker, f: u32, function: u32, add: bool) -> Result<u32, AllocError> {
+    var missing: u32 = 0;
+    let count = c.hir.functions[function as usize].parameters.length;
+    let returnType = c.hir.functions[function as usize].returnType;
+    if (mayHoldLoans(c, returnType)) {
+        for (k in 0..c.declaredFlows[f as usize].sources.length) {
+            let i = c.declaredFlows[f as usize].sources[k];
+            if (i as usize >= count) {
+                continue;
+            }
+            let declaredDeep = containsU32(c.declaredFlows[f as usize].deep, i);
+            if (!containsU32(c.hir.functions[function as usize].returnSources, i)) {
+                missing += 1;
+                if (add) {
+                    c.hir.functions[function as usize].returnSources.push(i)?;
+                    let local = c.hir.functions[function as usize].parameters[i as usize];
+                    if (declaredDeep && isPlainReference(c, c.hir.locals[local as usize].typ)) {
+                        c.hir.functions[function as usize].deepSources.push(i)?;
+                    }
+                }
+            } else if (!declaredDeep && containsU32(c.hir.functions[function as usize].deepSources, i)) {
+                // Deep where the declaration's is not: less than the declaration's.
+                missing += 1;
+                if (add) {
+                    var kept = Vector<u32>.create();
+                    for (d in c.hir.functions[function as usize].deepSources.view()) {
+                        if (d != i) {
+                            kept.push(d)?;
+                        }
+                    }
+                    c.hir.functions[function as usize].deepSources = kept;
+                    if (c.hir.functions[function as usize].resultThrough == i) {
+                        c.hir.functions[function as usize].resultThrough = none();
+                    }
+                }
+            }
+        }
+        if (add) {
+            sortU32(mut c.hir.functions[function as usize].returnSources);
+        }
+    }
+    for (k in 0..c.declaredFlows[f as usize].flows.length) {
+        let flow = c.declaredFlows[f as usize].flows[k];
+        let target = flowTarget(flow);
+        if (target as usize >= count || flowSource(flow) as usize >= count) {
+            continue;
+        }
+        let t = c.hir.locals[c.hir.functions[function as usize].parameters[target as usize] as usize].typ;
+        if (!c.types.is(t, TypeKind.Reference) || !c.types.info(t).mutableReference) {
+            continue;
+        }
+        let pointee = c.types.info(t).pointee;
+        if (!mayHoldLoans(c, pointee) && !c.types.isDyn(pointee)) {
+            continue;
+        }
+        let plain = flow & (deepFlowBit() ^ 0xFFFFFFFFFFFFFFFF);
+        let hasPlain = containsU64(c.hir.functions[function as usize].mutableFlows, plain);
+        let hasDeep = containsU64(c.hir.functions[function as usize].mutableFlows, plain | deepFlowBit());
+        if (hasPlain || (hasDeep && flowIsDeep(flow))) {
+            continue;
+        }
+        missing += 1;
+        if (add) {
+            if (hasDeep) {
+                var kept = Vector<u64>.create();
+                for (mine in c.hir.functions[function as usize].mutableFlows.view()) {
+                    kept.push(if (mine == (plain | deepFlowBit())) plain else mine)?;
+                }
+                c.hir.functions[function as usize].mutableFlows = kept;
+            } else {
+                c.hir.functions[function as usize].mutableFlows.push(flow)?;
+            }
+        }
+    }
+    return Ok(missing);
+}
+
+fn inheritFlows(c: borrow mut Checker, f: u32, function: u32) -> Result<void, AllocError> {
+    if (c.declaredFlows[f as usize].function == function) {
+        return Ok();
+    }
+    let _ = missingDeclaredFlows(c, f, function, true)?;
+    return Ok();
+}
+
+/// ceesafec's own check of §2.9, after the declarations and again before the bodies' loans are followed: a function
+/// that lacks a flow of its declaration is N0216, not a silent pass.
+fn checkDeclaredFlows(c: borrow mut Checker) -> Result<void, AllocError> {
+    for (k in 0..c.hir.functions.length) {
+        let function = truncate<u32>(k);
+        let f = c.hir.functions[k].syntax;
+        if (f == none() || (f as usize) >= c.declaredFlows.length || c.declaredFlows[f as usize].function == none() ||
+            c.declaredFlows[f as usize].function == function) {
+            continue;
+        }
+        if (missingDeclaredFlows(c, f, function, false)? > 0) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "ceesafec's internal check: this instance of '")?;
+            appendBytes(mut message, c.name(c.hir.functions[k].name))?;
+            appendText(
+                mut message,
+                "' lacks a flow of its declaration, so a caller would not know of a loan its body may return or store (ADR 0131 §2.9); please report this",
+            )?;
+            let file = c.hir.functions[k].file;
+            c.front.diagnostics.error(unsupported(), file, 0, 1, message)?;
+        }
+    }
     return Ok();
 }
 

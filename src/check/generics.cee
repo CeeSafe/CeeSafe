@@ -605,7 +605,8 @@ fn checkPendingThreadBounds(c: borrow mut Checker) -> Result<void, AllocError> {
     }
     c.pendingCells.truncate(0);
     c.setFile(saved);
-    return Ok();
+    // The generic impls whose Send and Share bounds waited for the fields (attachGenericImpls).
+    return attachToInstances(c);
 }
 
 /// Do `arguments` satisfy the bounds of `parameters` (CheckBounds, §21.2)? Reported as N0268 (N0334 for Send and

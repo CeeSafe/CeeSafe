@@ -1,0 +1,46 @@
+// Instance flows against generic flows: the widening for a function-value parameter, in methods.
+struct Owner {
+    text: String;
+}
+fn same(x: StringView) -> StringView => x;
+interface Run<U> {
+    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U;
+}
+struct Unit {
+    n: u32;
+}
+struct W<U> {
+    n: u32;
+}
+struct M<U> {
+    n: u32;
+
+    fn go(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+}
+struct S<U> {
+    n: u32;
+
+    fn stat(o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+}
+struct T2<U> {
+    n: u32;
+
+    fn two(o: borrow Owner, p: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+}
+struct Holder<region r> {
+    text: StringView<r>;
+}
+impl<U> Run<U> for W<U> {
+    fn run(borrow this, o: borrow Owner, f: fn(StringView) -> U) -> U => f(o.text.view());
+}
+fn main() {
+    var keep = Vector<StringView>.create();
+    let u = W<StringView> { n: 1 };
+    if (true) {
+        let o = Owner { text: String.from("local local local local local local local local")! };
+        keep.push(u.run(o, same))!;
+    } // error[N0243]
+    let fresh = String.from("FRESH FRESH FRESH FRESH FRESH FRESH FRESH FRESH!")!;
+    Console.writeLine(keep[0]);
+    Console.writeLine(fresh.view());
+}

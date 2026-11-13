@@ -1,0 +1,84 @@
+// Unreached areas, part 2: closures kept in a box or a struct, async functions, threads, synchronised containers.
+// Every `bad…` must be refused.
+struct Owner {
+    text: String;
+}
+struct Holder<region r> {
+    text: StringView<r>;
+
+    fn keep(borrow mut this, v: StringView<r>) {
+        this.text = v;
+    }
+}
+struct Job<T> {
+    run: Box<dyn fn() -> T>;
+}
+struct Step {
+    run: Box<dyn mut fn(StringView) -> usize>;
+}
+// a boxed closure whose result is made from what it owns
+fn bad1() -> Box<dyn fn() -> StringView> { // error[N0245]
+    let t = String.from("local")!;
+    let b: Box<dyn fn() -> StringView> = Box.create(move () => t.view())!; // error[N0245] // error[N0333]
+    return b;
+}
+// a boxed closure that captured a view of a local, returned
+fn bad2() -> Box<dyn fn() -> usize> {
+    let t = String.from("local")!;
+    let v = t.view();
+    let b: Box<dyn fn() -> usize> = Box.create(move () => v.length)!; // error[N0332]
+    return b;
+}
+// a boxed closure in a struct, with a T made from a local
+fn bad3<T: Copy>(make: fn(StringView) -> T) -> Job<T> {
+    let t = String.from("local")!;
+    let x = make(t.view());
+    return Job<T> { run: Box.create(move () => x)! };
+}
+// a boxed closure that stores its argument in what it captured
+fn bad4(into: borrow mut Holder) -> Step {
+    return Step { run: Box.create(move (v: StringView) => { // error[N0332]
+        into.keep(v);
+        return v.length;
+    })! };
+}
+// a thread given a view of a local
+fn bad5() -> usize {
+    let t = String.from("local")!;
+    let v = t.view();
+    return Thread.spawn(move () => v.length)!.join(); // error[N0332]
+}
+// a thread whose result is a T without Send
+fn bad6<T>(x: T) -> T => Thread.spawn(move () => x)!.join(); // error[N0334] // error[N0334]
+// a channel, a mutex and an Arc of views
+fn bad7(t: borrow String) {
+    let c = Channel<StringView>.create(4)!; // error[N0334] // error[N0274]
+}
+fn bad8(t: borrow String) {
+    let m = Mutex<StringView>.create(t.view())!; // error[N0334] // error[N0351]
+}
+fn bad9<T>(x: T) {
+    let m = Mutex<T>.create(x)!; // error[N0334]
+}
+fn bad10<T>(x: T) {
+    let a = Arc<T>.create(x)!; // error[N0334]
+}
+// an async function that returns a view of its own local, and one that lets a T made from a local out
+async fn bad11() -> StringView {
+    let t = String.from("local")!;
+    return t.view();
+}
+async fn bad12<T>(make: fn(StringView) -> T) -> T {
+    let t = String.from("local")!;
+    let x = make(t.view());
+    await pause();
+    return x;
+}
+// an async function that stores a view of its local through a parameter
+async fn bad13(into: borrow mut Holder) {
+    let t = String.from("local")!;
+    await pause();
+    into.keep(t.view());
+}
+async fn pause() {}
+fn main() {}

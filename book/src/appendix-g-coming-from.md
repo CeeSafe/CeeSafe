@@ -46,9 +46,10 @@ Most rows are a change of spelling.
 
 | Rust | CeeSafe | Section |
 |---|---|---|
-| `&T`, `&mut T` | `borrow T`, `borrow mut T` | [4.2](./ch04-02-borrowing) |
+| A reference: `&T`, `&mut T` | A borrow: `borrow T`, a shared borrow, and `borrow mut T`, an exclusive borrow | [4.2](./ch04-02-borrowing) |
 | `f(&x)` | `f(x)`. A shared borrow is implicit at the call. | [4.2](./ch04-02-borrowing) |
 | `f(&mut x)` | `f(mut x)` | [4.2](./ch04-02-borrowing) |
+| `g(r)` for `r: &mut T`, a reborrow | `g(r)`. Passing an exclusive borrow on reborrows it, and `r` is usable again after the call. | [4.2](./ch04-02-borrowing) |
 | `*r += 1;` for `r: &mut i32` | `r += 1;`. A borrow is read and written through with no `*`. `*r += 1;` is accepted and means the same. | [4.2](./ch04-02-borrowing) |
 | `&[T]`, `&mut [T]`, `&str` | `Slice<T>`, `SliceMut<T>`, `StringView` | [4.3](./ch04-03-slices-and-views) |
 | `&a[1..4]` | `a[1..4]` | [4.3](./ch04-03-slices-and-views) |
@@ -57,7 +58,7 @@ Most rows are a change of spelling.
 | `struct S<'a> { s: &'a str }` | `struct S<region r> { s: StringView<r>; }` | [10.3](./ch10-03-regions) |
 | `'static`, as in `S<'static>` | `static`, as in `S<static>`. It is written in a result's type or in a body, never in a parameter's type. | [10.3](./ch10-03-regions) |
 | `impl Drop for S { fn drop(&mut self) { … } }` | `drop { … }` in the struct's body | [15.2](./ch15-02-destruction) |
-| `drop(x);` | `let _ = move x;` | [15.2](./ch15-02-destruction) |
+| `drop(x);` | `let _ = move x;`, which destroys the value of `x` at once | [15.2](./ch15-02-destruction) |
 | `Box::new(v)` | `Box.create(v)!`. `create` returns a `Result`, because it allocates. | [15.1](./ch15-01-box) |
 | `Cell<T>`, `c.get()`, `c.set(v)` | `Cell<T>`, `c.get()`, `c.set(v)` | [15.4](./ch15-04-cells) |
 | `cell.borrow()`, `cell.borrow_mut()` on a `RefCell` | `cell.read()`, `cell.write()`. Each returns a guard, and `guard.data()` lends the value. | [15.4](./ch15-04-cells) |
@@ -269,7 +270,7 @@ looking at it. What it removes is undefined behaviour.
 | `std::string`, `std::string_view` | `String`, `StringView` | [8.2](./ch08-02-strings) |
 | `std::unordered_map<K, V>`, `std::map<K, V>` | `HashMap<K, V>`, `OrderedMap<K, V>` | [8.3](./ch08-03-maps) |
 | `std::optional<T>`, `std::nullopt` | `T?`, `null` | [6.3](./ch06-03-optionals) |
-| `const T &`, `T &` | `borrow T`, `borrow mut T` | [4.2](./ch04-02-borrowing) |
+| A reference: `const T &`, `T &` | A borrow: `borrow T`, a shared borrow, and `borrow mut T`, an exclusive borrow | [4.2](./ch04-02-borrowing) |
 | `auto y = std::move(x);` | `let y = x;`. Assignment moves, and using `x` afterwards is a compile error. | [4.1](./ch04-01-what-ownership-is) |
 | `~S() { … }` | `drop { … }` in the struct's body | [15.2](./ch15-02-destruction) |
 | `template <typename T> T id(T x)` | `fn id<T>(x: T) -> T`, checked once against its bounds | [10.1](./ch10-01-generic-types) |

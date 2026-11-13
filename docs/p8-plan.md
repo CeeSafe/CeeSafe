@@ -83,6 +83,8 @@ a POSIX shell (`env`, `mv`), so on Windows only packages without git dependencie
   ceesafec is a CeeSafe program, so its own runtime honours them too: with CEESAFE_ALLOC_REPORT it adds its own report line
   after the program's, and CEESAFE_FAIL_ALLOC_AT fails ceesafec's own allocation of that number. `tools/compare_interp.py`
   drops ceesafec's line; the fault sweep under the interpreter is the reference's in-process option, not ported.
+  (Since 2026-11-13 ceesafec spends that attempt itself before it starts, so the failure reaches the interpreted
+  program only; the second report line stays: `spec/tooling.md` §12.3.)
 
 - A file that cannot be read: the reference compiler's message is .NET's exception text, which names the absolute path
   ("Could not find file '/…'"); ceesafec's is the C library's. Neither the comparison tools nor the reference's tests

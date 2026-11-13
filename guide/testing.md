@@ -64,16 +64,7 @@ a test failing with its own enum names the variant. A `--filter` that matches no
 natively only. `ceesafec test --help` lists the options.
 
 Under `--sweep alloc` a run may return an error; it may not panic, crash or leak. One kind of panic is set apart: a
-`!` that unwraps the failed allocation in test-only code is counted as "unwrapped by the test itself", not as a
-sweep failure, since a test may unwrap. Test-only code is what `ceesafec build` leaves out: an `@test` function (and
-the closures in it), and every file of the test directory. A `!` anywhere else is the program's, and a sweep
-failure, also when a test called that function and when the function's file holds tests:
-
-```text
-callsProduction: allocation 1 panicked: unwrapped an Err value at src/main.cee:13:13
-```
-
-There are two fixes. If the line is in the code under test, return the error (`Result<…, AllocError>` and `?`). If
-it is in a helper of the tests that sits in a source file, move the helper to the test directory with the tests that
-use it, or let it return the error and write the `!` in the test. `--sweep-strict` makes every such panic a failure,
-the tests' own too; use it for code that must return the error.
+`!` or `?` that unwraps the failed allocation in a file that has `@test` functions is counted as "unwrapped by the
+test itself", not as a sweep failure, since tests and their helpers may unwrap. That goes by file: a `!` in the code
+under test counts the same when its file holds tests too. `--sweep-strict` makes every such panic a failure; use it
+for code that must return the error.

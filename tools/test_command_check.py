@@ -9,10 +9,6 @@
 4. `test --sweep alloc` and `--sweep cancel`: no sweep failure, and as many runs as the harness reports allocation
    attempts or suspension points when run directly (the counts tools/fault_sweep.py and tools/cancel_sweep.py sweep).
 5. `build`: the program runs its own main, and `--emit c` holds no test function.
-6. Which unwraps `--sweep alloc` sets apart (ADR 0129), on tests/packages/sweep-unwraps: a `!` in test-only code (an
-   `@test` function, a closure in one, a file of the test directory) is counted apart; a `!` in production code is a
-   sweep failure at its own position, whichever test reached it and though its file holds tests; `--sweep-strict`
-   fails them all; `--sweep cancel` sets nothing apart.
 
 usage: python3 tools/test_command_check.py --compiler out/ceesafec
 """
@@ -138,77 +134,7 @@ def main():
         if out != "the program":
             problems.append(f"build: the program printed {out!r}: {p.stderr[-300:]}")
 
-        # 6. the sweep's unwraps: test-only code's are set apart, production code's are failures (ADR 0129)
-        unwraps = os.path.join(work, "sweep-unwraps")
-        shutil.copytree(os.path.join(ROOT, "tests", "packages", "sweep-unwraps"), unwraps,
-                        ignore=shutil.ignore_patterns("out"))
-        marks = {}
-        source = open(os.path.join(unwraps, "src", "main.cee"), encoding="utf-8").read().split("\n")
-        for number, text in enumerate(source, 1):
-            if "// sweep: " in text:
-                marks[text.split("// sweep: ")[1].strip()] = f"src/main.cee:{number}:"
-        # test: the production position its sweep failure names, or None when its own unwrap is set apart
-        wanted = {
-            "returnsIt": "handled",
-            "unwrapsItself": None,
-            "unwrapsInItsClosure": None,
-            "unwrapsInExpressionBody": None,
-            "unwrapsInTestDirectory": None,
-            "callsHelperInTests": None,
-            "callsProduction": marks.get("production"),
-            "callsProductionFromTestDirectory": marks.get("production"),
-            "callsGeneric": marks.get("generic"),
-            "callsHelperBeside": marks.get("helper beside"),
-        }
-        apart = sorted(n for n, w in wanted.items() if w is None)
-        failing = {n: w for n, w in wanted.items() if w not in (None, "handled")}
-
-        def sweep(flags):
-            p = run(["test", "--sweep"] + flags + ["--format", "json"], unwraps)
-            try:
-                return p, json.loads(p.stdout)
-            except ValueError:
-                problems.append(f"sweep-unwraps {' '.join(flags)}: no JSON document: {p.stdout[:300]}{p.stderr[-300:]}")
-                return p, None
-
-        p, document = sweep(["alloc"])
-        if document is not None:
-            got = {}
-            for failure in document["sweepFailures"]:
-                got.setdefault(failure.split(":")[0], []).append(failure)
-            if len(marks) != 3 or sorted(got) != sorted(failing) or p.returncode != 1:
-                problems.append(f"sweep-unwraps: failures {document['sweepFailures']}, exit status {p.returncode}; "
-                                f"wanted one each for {sorted(failing)}")
-            for name, position in failing.items():
-                for failure in got.get(name, []):
-                    if f"unwrapped an Err value at {position}" not in failure:
-                        problems.append(f"sweep-unwraps: {name}'s failure is not at {position}: {failure!r}")
-            if document["sweepUnwrappedByTest"] != len(apart) or document["sweepRuns"] != len(wanted):
-                problems.append(f"sweep-unwraps: {document['sweepUnwrappedByTest']} set apart in "
-                                f"{document['sweepRuns']} runs, not {len(apart)} in {len(wanted)}")
-        # a test that unwraps only in test-only code passes the sweep, and fails it under --sweep-strict
-        for name in apart:
-            p, document = sweep(["alloc", "--filter", name])
-            if document is not None and (p.returncode != 0 or document["sweepFailures"]
-                                         or document["sweepUnwrappedByTest"] != 1):
-                problems.append(f"sweep-unwraps: {name} alone: exit status {p.returncode}, {document['sweepFailures']}, "
-                                f"{document['sweepUnwrappedByTest']} set apart")
-            p, document = sweep(["alloc", "--sweep-strict", "--filter", name])
-            if document is not None and (p.returncode != 1 or len(document["sweepFailures"]) != 1
-                                         or document["sweepUnwrappedByTest"] != 0):
-                problems.append(f"sweep-unwraps: {name} under --sweep-strict: exit status {p.returncode}, "
-                                f"{document['sweepFailures']}")
-        p = run(["test", "--sweep", "alloc", "--filter", "unwrapsItself"], unwraps)
-        if "0 sweep failure(s) in 1 sweep run(s) (1 unwrapped by the test itself)" not in p.stdout:
-            problems.append(f"sweep-unwraps: the summary's words: {p.stdout[-200:]!r}")
-        p, document = sweep(["cancel"])
-        if document is not None and (p.returncode != 0 or document["sweepUnwrappedByTest"] != 0):
-            problems.append(f"sweep-unwraps --sweep cancel: exit status {p.returncode}, {document}")
-        p = run(["build"], unwraps)
-        if p.returncode != 0:
-            problems.append(f"sweep-unwraps: build failed: {p.stderr[-300:]}")
-
-    print(f"test_command_check: {len(expected)} tests, 6 checks; {len(problems)} problems")
+    print(f"test_command_check: {len(expected)} tests, 5 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

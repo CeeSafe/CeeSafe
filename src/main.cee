@@ -293,7 +293,6 @@ struct Options {
     entryName: Vector<u8>;      // the program's entry: "main", or the test harness's (ADR 0049)
     testing: bool;              // `test` (ADR 0049)
     includeTests: bool;         // the root package's test directories are sources (`check`, `test`)
-    testFilesFrom: usize;       // with includeTests: where the test directories' files start among the root package's
     harness: Vector<u8>;        // a generated harness file to add to the sources, or empty
     testFilter: Vector<u8>;     // test --filter
     testList: bool;             // test --list
@@ -867,7 +866,6 @@ fn parseCommand() -> i32 {
         entryName: copyBytes("main".bytes())!,
         testing: false,
         includeTests: false,
-        testFilesFrom: 0,
         harness: Vector<u8>.create(),
         testFilter: Vector<u8>.create(),
         testList: false,
@@ -1064,7 +1062,6 @@ fn loadPackage(
         var paths = Vector<Vector<u8>>.create();
         manifestSourceFiles(manifest, mut paths)!;
         if (p == 0 && options.includeTests) {
-            options.testFilesFrom = paths.length;    // what follows is test-only: `build` leaves it out (ADR 0129)
             manifestTestFiles(manifest, mut paths)!; // the root package's tests (ADR 0049 §3.1)
         }
         files.push(paths)!;
@@ -1227,7 +1224,6 @@ fn defaultOptions(building: bool) -> Options => Options {
     entryName: copyBytes("main".bytes())!,
     testing: false,
     includeTests: false,
-    testFilesFrom: 0,
     harness: Vector<u8>.create(),
     testFilter: Vector<u8>.create(),
     testList: false,
@@ -1364,8 +1360,7 @@ fn compileFiles(
         }
     } else {
         for (p in 0..packageFiles.length) {
-            for (k in 0..packageFiles[p].length) {
-                let f = borrow packageFiles[p][k];
+            for (f in packageFiles[p].view()) {
                 let path = StringView.fromUtf8(f.view())!;
                 let bytes = match (readFile(path)) {
                     Ok(b) => b,
@@ -1403,7 +1398,6 @@ fn compileFiles(
                 source.packagePath = inPackage;
                 source.openPath = openPath;
                 source.diskPath = absolutePath(path.bytes());
-                source.testOnly = p == 0 && options.includeTests && k >= options.testFilesFrom;
                 sources.push(source)!;
                 filePackage.push(truncate<u32>(p))!;
             }

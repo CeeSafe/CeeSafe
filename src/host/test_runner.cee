@@ -157,28 +157,6 @@ fn harnessSource(tests: borrow Vector<TestEntry>) -> Result<Vector<u8>, AllocErr
     return Ok(s);
 }
 
-/// One line of test-spans.txt: a path, then the 1-based line and column of a span's first position and of the one
-/// after its last, tab-separated (ADR 0129 §2.3).
-fn appendTestSpan(
-    out: borrow mut Vector<u8>,
-    path: Slice<u8>,
-    firstLine: u64,
-    firstColumn: u64,
-    endLine: u64,
-    endColumn: u64,
-) -> Result<void, AllocError> {
-    appendBytes(mut out, path)?;
-    out.push('\t')?;
-    appendDecimal(mut out, firstLine)?;
-    out.push('\t')?;
-    appendDecimal(mut out, firstColumn)?;
-    out.push('\t')?;
-    appendDecimal(mut out, endLine)?;
-    out.push('\t')?;
-    appendDecimal(mut out, endColumn)?;
-    return out.push('\n');
-}
-
 /// The directory of the harness and the test list: `out/ceesafe-test` beside the package's output.
 fn testDirectory(options: borrow Options) -> Vector<u8> {
     var directory = copyBytes(directoryOf(options.defaultOutput.view()))!;
@@ -200,35 +178,21 @@ fn writeHarness(options: borrow Options, c: borrow Checker, sources: borrow Vect
         appendBytes(mut list, t.name.view())!;
         list.push('\n')!;
     }
-    // Where the test-only code is, so a sweep can tell its unwraps from the production code's (ADR 0129 §2.1): what
-    // `build` leaves out, which is each file of the test directories, whole, and each `@test` function elsewhere.
+    // Where each test function is, so a sweep can tell its own unwraps from the code's (ADR 0075 §2.16).
     var spans = Vector<u8>.create();
-    for (k in 0..sources.length) {
-        let source = borrow sources[k];
-        if (source.testOnly) {
-            appendTestSpan(mut spans, source.path.view(), 1, 1, (source.lineCount() + 1) as u64, 1)!;
-        }
-    }
     for (f in c.testFunctions.view()) {
         let hir = borrow c.hir.functions[f as usize];
         if (packageOfFile(c, hir.file) != 0 || (hir.file as usize) >= sources.length) {
             continue;
         }
         let source = borrow sources[hir.file as usize];
-        if (source.testOnly) {
-            continue;
-        }
         let syntax = borrow c.front.ast.functions[hir.syntax as usize];
-        let first = source.position(syntax.start as usize);
-        let last = source.position(syntax.end as usize);
-        appendTestSpan(
-            mut spans,
-            source.path.view(),
-            first.line as u64,
-            first.column as u64,
-            last.line as u64,
-            last.column as u64,
-        )!;
+        appendBytes(mut spans, source.path.view())!;
+        spans.push('\t')!;
+        appendDecimal(mut spans, (source.lineIndex(syntax.start as usize) + 1) as u64)!;
+        spans.push('\t')!;
+        appendDecimal(mut spans, (source.lineIndex(syntax.end as usize) + 1) as u64)!;
+        spans.push('\n')!;
     }
     let spansPath = joinPath(directory.view(), "test-spans.txt".bytes())!;
     match (writeFile(StringView.fromUtf8(spansPath.view())!, spans.view())) {
@@ -668,7 +632,7 @@ fn testCommand() -> i32 {
                 // Under a failed allocation or a cancellation a test may fail; it may not panic, crash, hang or leak.
                 if (swept.outcome == 2 && options.testSweep == 1 && !options.testSweepStrict &&
                     unwrapInTest(swept.message.view(), testSpans.view())) {
-                    sweepUnwrapped += 1; // a `!` of test-only code met the failure (ADR 0129)
+                    sweepUnwrapped += 1; // the test's own `!` or `?` met the failure (ADR 0075 §2.16)
                     continue;
                 }
                 if (swept.outcome != 0 && swept.outcome != 1) {
@@ -801,25 +765,10 @@ fn testCommand() -> i32 {
     return if (failed == 0 && sweepFailures.length == 0) 0 else 1;
 }
 
-/// The number in the tab-separated field `index` (from 0) of a line of test-spans.txt, or 0 if it has none.
-fn spanNumber(entry: Slice<u8>, index: usize) -> u64 {
-    var field: usize = 0;
-    var n: u64 = 0;
-    for (b in entry) {
-        if (b == '\t') {
-            field += 1;
-        } else if (field == index && b >= '0' && b <= '9') {
-            n = n * 10 + ((b - '0') as u64);
-        }
-    }
-    return n;
-}
-
-/// Whether a sweep's panic `message` ("unwrapped an Err value at f.cee:12:5", or "unwrapped null at …") is at a
-/// position in test-only code (ADR 0129): inside one of the spans of test-spans.txt, which are the `@test` functions and
-/// the files of the test directories, the code `build` leaves out. Then a test's own `!` met the injected failure,
-/// which is the test's business. An unwrap anywhere else is production code's, whoever called it and whatever else
-/// its file holds.
+/// Whether a sweep's panic `message` ("unwrapped an Err value at f.cee:12:5", or "unwrapped null at …") is in a file
+/// that declares a test function (test-spans.txt: each test's path, first and last line, tab-separated): the tests'
+/// own `!` or `?`, in a test or one of its helpers, met the injected failure, which is the tests' business, not a fault
+/// of the code under test (ADR 0075 §2.16).
 fn unwrapInTest(message: Slice<u8>, spans: Slice<u8>) -> bool {
     if (!containsText(message, "unwrapped an Err value") && !containsText(message, "unwrapped null")) {
         return false;
@@ -856,15 +805,6 @@ fn unwrapInTest(message: Slice<u8>, spans: Slice<u8>) -> bool {
         line = line * 10 + ((location[p] - '0') as u64);
         p += 1;
     }
-    var column: u64 = 0;
-    p += 1; // the ':' between them
-    while (p < location.length && location[p] >= '0' && location[p] <= '9') {
-        column = column * 10 + ((location[p] - '0') as u64);
-        p += 1;
-    }
-    if (line == 0 || column == 0) {
-        return false;
-    }
     var start: usize = 0;
     while (start < spans.length) {
         var end = start;
@@ -877,20 +817,15 @@ fn unwrapInTest(message: Slice<u8>, spans: Slice<u8>) -> bool {
         while (tab < entry.length && entry[tab] != '\t') {
             tab += 1;
         }
-        // The same file, by the path the compiler gave it in both places: no other file's, whatever its name ends in.
-        if (tab >= entry.length || !sameBytes(entry[0..tab], path)) {
+        if (tab >= entry.length) {
             continue;
         }
-        let firstLine = spanNumber(entry, 1);
-        let firstColumn = spanNumber(entry, 2);
-        let endLine = spanNumber(entry, 3);
-        let endColumn = spanNumber(entry, 4);
-        if (firstLine == 0 || endColumn == 0) {
-            continue; // not a span this ceesafec wrote
-        }
-        let afterFirst = line > firstLine || (line == firstLine && column >= firstColumn);
-        let beforeEnd = line < endLine || (line == endLine && column < endColumn);
-        if (afterFirst && beforeEnd) {
+        let file = entry[0..tab];
+        let sameFile = sameBytes(file, path) || (file.length > path.length &&
+            sameBytes(file[(file.length - path.length)..], path)) || (path.length > file.length &&
+            sameBytes(path[(path.length - file.length)..], file));
+        if (sameFile && line > 0) {
+            // A file that declares @test functions is test code: its helpers' unwraps are the tests' own too.
             return true;
         }
     }

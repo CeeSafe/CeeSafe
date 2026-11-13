@@ -80,7 +80,6 @@ struct SourceText {
     packagePath: Vector<u8>; // its path in its package (`src/util.cee`), else empty (c-backend.md §2.4)
     openPath: Vector<u8>;    // the path diagnostics name when not `path`: from the working directory (ADR 0082 §2.1)
     diskPath: Vector<u8>;    // the file's absolute path on disk, for `embed` (ADR 0087 §2.8); empty if it is none
-    testOnly: bool;          // a file of the root package's test directories, which `build` leaves out (ADR 0129)
 
     fn create(path: Slice<u8>, bytes: Slice<u8>) -> Result<SourceText, AllocError> {
         var skip: usize = 0;
@@ -113,7 +112,6 @@ struct SourceText {
             packagePath: Vector<u8>.create(),
             openPath: Vector<u8>.create(),
             diskPath: Vector<u8>.create(),
-            testOnly: false,
         });
     }
 

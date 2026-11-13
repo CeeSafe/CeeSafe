@@ -968,20 +968,13 @@ Each test's outcome:
 - **`--sweep alloc`** runs each passing test again once per allocation attempt, the k-th failing. **`--sweep cancel`**
   runs it once per suspension point, the k-th cancelling its root task, sampled past 200 as `tools/cancel_sweep.py`
   is. A run may fail; it may not panic, crash, time out or leak.
-- **A sweep's unwraps** (ADR 0129, which amends ADR 0075 §2.16). Under `--sweep alloc`, a run that panics with
-  "unwrapped an Err value" or "unwrapped null" at a position in **test-only code** is not a sweep failure: it is
-  counted apart, and the summary ends `(N unwrapped by the test itself)` (`sweepUnwrappedByTest` in the JSON).
-  - *Test-only code* is the code of the root package that `build` leaves out (§10.1): an `@test` function, from `fn`
-    to the end of its body, with the closures written in it; and every file of the package's test directories, whole.
-  - Everything else is production code, and its unwrap is a sweep failure reported at its position: any other
-    function, whichever test called it and though its file holds `@test` functions; an instance of a generic
-    function written in production code, whoever instantiated it; a dependency's code and the libraries'.
-  - A test's helper that unwraps is test-only when it is written in a file of a test directory, or as a closure in
-    the test. A helper in a source file is production code, though only tests call it.
-  - The panic's position decides, never the file's having tests. `ceesafec test` writes the spans of the test-only
-    code (path, first line and column, end line and column) to `out/ceesafe-test/test-spans.txt` for the runner.
-  - **`--sweep-strict`** makes every such panic a sweep failure: the sweep for code that must return the error.
-    `--sweep cancel` sets nothing apart.
+- **A sweep's unwraps** (ADR 0075 §2.16 and §7 item 6). Under `--sweep alloc`, a run that panics with "unwrapped an
+  Err value" or "unwrapped null" at a position in a file that declares an `@test` function (of the root package) is
+  not a sweep failure: it is counted apart, and the summary ends `(N unwrapped by the test itself)`
+  (`sweepUnwrappedByTest` in the JSON). The rule is by file, not by function: the tests' helpers count, and so does
+  any other function of such a file, the code under test included when a source file holds its own `@test`s. An
+  unwrap in a file without tests is a sweep failure. **`--sweep-strict`** makes every such panic a sweep failure:
+  the sweep for code that must return the error.
 
 ### 10.3 The harness protocol (version 1)
 

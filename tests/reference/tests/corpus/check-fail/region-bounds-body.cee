@@ -1,0 +1,81 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134): what a body may not do without the bound, or with
+// the bound the other way round. The same bodies with `region b: a` are run-pass/region-bounds.
+
+// No bound: two regions are unrelated.
+fn prefer<region a, region b>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y; // error[N0245]
+
+// The wrong direction: `a` outlives `b` lets an `a` be used as a `b`, not a `b` as an `a`.
+fn preferBack<region a: b, region b>(x: StringView<a>, y: StringView<b>) -> StringView<a> =>
+    if (x.length > 0) x else y; // error[N0245]
+
+fn keep<region a, region b>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!; // error[N0272]
+}
+
+fn keepBack<region a: b, region b>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!; // error[N0272]
+}
+
+// Not transitive backwards, and no sibling relation: `b` and `c` both outlive `a`, and neither the other.
+fn siblings<region a, region b: a, region c: a>(y: StringView<b>, z: StringView<c>) -> StringView<b> => z; // error[N0245]
+
+fn upward<region a, region b: a, region c: b>(x: StringView<a>, z: StringView<c>) -> StringView<c> => x; // error[N0245]
+
+// A reference's own region without the bound.
+fn viewOf<region a, region b>(fallback: StringView<a>, source: borrow(b) String) -> StringView<a> =>
+    if (source.length > 0) source.view() else fallback; // error[N0245]
+
+// A function that forwards its regions to one with a bound, and does not restate it: its own signature has no
+// such flow, so its body may not return what the callee's result may hold.
+fn pick<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y;
+
+fn forward<region a, region b>(x: StringView<a>, y: StringView<b>) -> StringView<a> => pick(x, y); // error[N0245]
+
+fn store<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+fn forwardStore<region a, region b>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    store(out, word); // error[N0272]
+}
+
+// A struct's functions without the struct's bound, and with it the wrong way round.
+struct Parser<region scratch, region input> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note; // error[N0245]
+}
+
+struct Backwards<region scratch: input, region input> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note; // error[N0245]
+
+    // A method's region bounded by the struct's: the other direction is not given.
+    fn label<region l: scratch>(borrow this, name: StringView<l>, out: borrow mut Vector<StringView<l>>) {
+        out.push(this.note)!; // error[N0272]
+    }
+}
+
+enum Source<region a, region b> {
+    Near(StringView<a>),
+    Far(StringView<b>),
+}
+
+impl<region a, region b> Source<a, b> {
+    fn orElse(other: StringView<b>, fallback: StringView<a>) -> StringView<a> =>
+        if (other.length > 0) other else fallback; // error[N0245]
+}
+
+fn main() {
+    Console.writeLine(prefer("a", "b"));
+    // A closure declares no regions and so no bound. One that calls a function with a bound is held to what a
+    // closure may do: it cannot store one parameter through another.
+    var words = Vector<StringView>.create();
+    let wrapped = (out: borrow mut Vector<StringView>, word: StringView) => store(out, word); // error[N0272]
+    wrapped(mut words, "word");
+}

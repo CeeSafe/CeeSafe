@@ -1,0 +1,25 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134): a function type cannot say how loans flow between
+// its arguments, and so not what a region's bound adds. A function with region parameters is no function value
+// (§36.1), with a bound as without one. A closure declares no regions, so it has no bound to write, and one that
+// calls such a function is held to what a closure may do (check-fail/region-bounds-body).
+fn pick<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y;
+
+fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+// One scoped parameter, and a result that flows from it by the bound alone: only the rule for region parameters
+// refuses this one (`pick`'s sources cannot be written in a function type, and `keep` stores through an argument).
+fn one<region a, region b: a>(y: StringView<b>) -> StringView<a> => y;
+
+fn call(f: fn(borrow mut Vector<StringView>, StringView), out: borrow mut Vector<StringView>, word: StringView) {
+    f(out, word);
+}
+
+fn main() {
+    let named = pick; // error[N0298]
+    var words = Vector<StringView>.create();
+    call(keep, mut words, "word"); // error[N0298]
+    let store: fn(borrow mut Vector<StringView>, StringView) = keep; // error[N0298]
+    let single: fn(StringView) -> StringView = one; // error[N0298]
+}

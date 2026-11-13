@@ -1,0 +1,53 @@
+// The refused cases of region-bounds (type-system.md §25.8, ADR 0134): a function of this package forwards its
+// regions without restating the bound (N0245 at line 6), and a caller of a dependency's function keeps what the
+// bound lets it hold after the referent is destroyed (N0243 at lines 13, 23, 32 and 42).
+fn forward<region a, region b>(x: StringView<a>, y: StringView<b>) -> StringView<a> =>
+    // The next line is line 6.
+    views.pick(x, y);
+
+fn result(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(views.pick(long.view(), short.view()))!;
+    }
+    Console.writeLine(kept[0]);
+}
+
+fn store(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    kept.push(long.view())!;
+    {
+        let short = String.from("short")!;
+        views.keep(mut kept, short.view());
+    }
+    Console.writeLine(kept[0]);
+}
+
+fn structFunction(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(views.Parser.orNote(short.view(), long.view()))!;
+    }
+    Console.writeLine(kept[0]);
+}
+
+fn method(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    let parser = views.Parser { text: long.view(), note: "" };
+    {
+        let short = String.from("short")!;
+        kept.push(parser.label(short.view()))!;
+    }
+    Console.writeLine(kept[0]);
+}
+
+fn main() {
+    let long = String.from("long")!;
+    result(long);
+    store(long);
+    structFunction(long);
+    method(long);
+    Console.writeLine(forward(long.view(), "x"));
+}

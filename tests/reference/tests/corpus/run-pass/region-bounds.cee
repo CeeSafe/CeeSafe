@@ -1,0 +1,208 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134): `region b: a` says that `b` outlives `a`, so what
+// is borrowed for `b` may be used where `a` is required. Each function here is N0245 or N0272 without its bound
+// (check-fail/region-bounds-body).
+
+// The longer-lived of two views, as the shorter region.
+fn prefer<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y;
+
+// A store: what is borrowed for `b` goes into a vector of `a`.
+fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+// Transitive: `c` outlives `b`, `b` outlives `a`, so `c` outlives `a`.
+fn deepest<region a, region b: a, region c: b>(x: StringView<a>, y: StringView<b>, z: StringView<c>) -> StringView<a> =>
+    if (z.length > 0) z else if (y.length > 0) y else x;
+
+// Several bounds: `c` outlives both.
+fn either<region a, region b, region c: a + b>(
+    first: borrow mut Vector<StringView<a>>,
+    second: borrow mut Vector<StringView<b>>,
+    word: StringView<c>,
+) {
+    first.push(word)!;
+    second.push(word)!;
+}
+
+// A reference's own region: the borrow of `source` lasts for `b`, which outlives `a`, so a view of the string
+// itself (not only of what it holds) is a result for `a`.
+fn viewOf<region a, region b: a>(fallback: StringView<a>, source: borrow(b) String) -> StringView<a> =>
+    if (source.length > 0) source.view() else fallback;
+
+// The same into a store target.
+fn keepView<region a, region b: a>(out: borrow mut Vector<StringView<a>>, source: borrow(b) String) {
+    out.push(source.view())!;
+}
+
+// A function that forwards its regions restates the bound.
+fn forward<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => prefer(x, y);
+
+// A parser: the input outlives the scratch text, so a token of the input may be reported as scratch.
+struct Parser<region scratch, region input: scratch> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+    position: usize;
+
+    // A function without a receiver sees the struct's bound.
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note;
+
+    // A method's own region may be bounded by the struct's.
+    fn label<region l: scratch>(borrow this, name: StringView<l>) -> StringView<scratch> =>
+        if (this.note.length > 0) this.note else name;
+}
+
+impl<region scratch, region input: scratch> Parser<scratch, input> {
+    fn word(borrow mut this) -> StringView<input> {
+        let start = this.position;
+        while (this.position < this.text.length && this.text.bytes()[this.position] != ' ') {
+            this.position += 1;
+        }
+        let word = this.text[start..this.position];
+        if (this.position < this.text.length) {
+            this.position += 1;
+        }
+        return word;
+    }
+
+    fn remember(borrow mut this, word: StringView<input>) {
+        this.note = word;
+    }
+}
+
+// An iterator over two sources of different regions, giving items for the shorter one.
+struct Chain<region a, region b: a> {
+    first: Slice<a, StringView<a>>;
+    second: Slice<b, StringView<b>>;
+    at: usize;
+
+    fn next(borrow mut this) -> StringView<a>? {
+        let i = this.at;
+        this.at += 1;
+        if (i < this.first.length) {
+            return Some(this.first[i]);
+        }
+        if (i - this.first.length < this.second.length) {
+            return Some(this.second[i - this.first.length]);
+        }
+        return null;
+    }
+
+    // A function of the struct that takes the two kinds of item apart.
+    fn pick(early: StringView<a>, late: StringView<b>, useLate: bool) -> StringView<a> => if (useLate) late else early;
+}
+
+// A generic struct: its instances' functions have the declaration's flows.
+struct Labelled<region a, region b: a, T> {
+    near: StringView<a>;
+    far: StringView<b>;
+    value: T;
+
+    fn choose(early: StringView<a>, late: StringView<b>, value: T) -> StringView<a> =>
+        if (late.length > 0) late else early;
+}
+
+// An impl of an interface declares the regions again, as its own names, and writes no bound (N0216): its methods'
+// flows are the interface's.
+interface Describe<T> {
+    fn describe(borrow this, other: T) -> T;
+}
+
+struct Notes<region a, region b: a> {
+    near: StringView<a>;
+    far: StringView<b>;
+}
+
+impl<region a, region b> Describe<u32> for Notes<a, b> {
+    fn describe(borrow this, other: u32) -> u32 => other + truncate<u32>(this.far.length);
+}
+
+enum Source<region a, region b: a> {
+    Near(StringView<a>),
+    Far(StringView<b>),
+}
+
+impl<region a, region b: a> Source<a, b> {
+    fn orElse(other: StringView<b>, fallback: StringView<a>) -> StringView<a> =>
+        if (other.length > 0) other else fallback;
+}
+
+fn main() {
+    let long = String.from("long-lived")!;
+    var total: usize = 0;
+    {
+        let short = String.from("short")!;
+        // The result is used only while both are alive.
+        Console.writeLine(prefer("", long.view()));
+        Console.writeLine(prefer(short.view(), long.view()));
+        Console.writeLine(deepest(short.view(), "", ""));
+        Console.writeLine(deepest(short.view(), "", long.view()));
+        Console.writeLine(forward("", long.view()));
+        Console.writeLine(viewOf(short.view(), long));
+        var words = Vector<StringView>.create();
+        keep(mut words, long.view());
+        keep(mut words, short.view());
+        keepView(mut words, long);
+        var others = Vector<StringView>.create();
+        either(mut words, mut others, long.view());
+        total = words.length + others.length;
+        for (w in words.view()) {
+            Console.writeLine(w);
+        }
+    }
+    Console.writeLine(total);
+
+    let input = String.from("alpha beta gamma")!;
+    var parser = Parser { text: input.view(), note: "", position: 0 };
+    let first = parser.word();
+    let second = parser.word();
+    parser.remember(second);
+    Console.writeLine(first);
+    Console.writeLine(parser.note);
+    Console.writeLine(parser.label("unused"));
+    Console.writeLine(Parser.orNote("", "note"));
+    Console.writeLine(Parser.orNote(parser.word(), "note"));
+
+    let early = ["one", "two"];
+    let lateText = String.from("three")!;
+    let late = [lateText.view()];
+    var chain = Chain { first: early[..], second: late[..], at: 0 };
+    for (item in chain) {
+        Console.writeLine(item);
+    }
+    Console.writeLine(Chain.pick("early", lateText.view(), true));
+    Console.writeLine(Source.orElse(lateText.view(), "fallback"));
+    Console.writeLine(Labelled<u8>.choose("early", lateText.view(), 1));
+    let notes = Notes { near: "near", far: lateText.view() };
+    Console.writeLine(notes.describe(1));
+    let source: Source = Source.Far(lateText.view());
+    match (source) {
+        Source.Near(s) => { Console.writeLine(s); }
+        Source.Far(s) => { Console.writeLine(s); }
+    }
+}
+
+// expect-stdout: long-lived
+// expect-stdout: short
+// expect-stdout: short
+// expect-stdout: long-lived
+// expect-stdout: long-lived
+// expect-stdout: long-lived
+// expect-stdout: long-lived
+// expect-stdout: short
+// expect-stdout: long-lived
+// expect-stdout: long-lived
+// expect-stdout: 5
+// expect-stdout: alpha
+// expect-stdout: beta
+// expect-stdout: beta
+// expect-stdout: note
+// expect-stdout: gamma
+// expect-stdout: one
+// expect-stdout: two
+// expect-stdout: three
+// expect-stdout: three
+// expect-stdout: three
+// expect-stdout: three
+// expect-stdout: 6
+// expect-stdout: three

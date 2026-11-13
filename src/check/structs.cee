@@ -97,6 +97,7 @@ fn declareStruct(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         _ => { return Ok(); }
     };
     checkRegionParameters(c, s.regionParameters, s.typeParameters)?;
+    checkRegionBounds(c, s.regionParameters, false)?;
     if (!checkTypeItemName(c, ident)?) {
         return Ok();
     }
@@ -144,6 +145,7 @@ fn declareEnum(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         _ => emptyRange(),
     };
     checkRegionParameters(c, regions, parameters)?;
+    checkRegionBounds(c, regions, false)?;
     if (!checkTypeItemName(c, ident)?) {
         return Ok();
     }

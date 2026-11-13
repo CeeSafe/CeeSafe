@@ -1,0 +1,19 @@
+// region-bounds (type-system.md §25.8, ADR 0134): a dependency's functions and struct with bounded regions, used
+// while every borrow they may hold is alive. A function of this package that forwards to one restates the bound.
+fn forward<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => views.pick(x, y);
+
+fn main() {
+    let long = String.from("long")!;
+    {
+        let short = String.from("short")!;
+        Console.writeLine(views.pick(short.view(), long.view()));
+        Console.writeLine(forward("", long.view()));
+        var words = Vector<StringView>.create();
+        views.keep(mut words, long.view());
+        views.keep(mut words, short.view());
+        Console.writeLine(words.length);
+        let parser = views.Parser { text: long.view(), note: "" };
+        Console.writeLine(parser.label(short.view()));
+        Console.writeLine(views.Parser.orNote(long.view(), short.view()));
+    }
+}

@@ -1,0 +1,88 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134): a region is bounded by other region parameters in
+// scope, and by nothing else. Every bound here was accepted, and ignored, up to 0.42.1.
+interface Shape {
+    fn area(borrow this) -> u32;
+}
+
+// Not a region in scope: an undeclared name, a type, an interface, a generic type.
+fn unknown<region a: nosuch>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn aType<region a: u32>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn anInterface<region a: Shape>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn aGeneric<region a: Vector<u8>>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn aTypeParameter<region a: T, T>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0273]
+fn several<
+    region a,
+    region b: a + nosuch // error[N0273]
+        + Copy // error[N0273]
+>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x;
+
+// `static` bounds nothing: no call checks that an argument is static data.
+fn isStatic<region a: static>(x: StringView<a>) -> StringView<static> => "s"; // error[N0273]
+
+// Itself, twice, and a cycle.
+fn itself<region a: a>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+fn twice<region a, region b: a + a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x; // error[N0273]
+fn cycle<region a: b, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x; // error[N0273]
+fn longCycle<region a: c, region b: a, region c: b>(x: StringView<a>) -> StringView<a> => x; // error[N0273]
+
+// A type parameter is not bounded by a region, nor a const parameter's type one.
+fn typeByRegion<region a, T: a>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0204]
+fn typeByStatic<region a, T: Shape + static>(x: StringView<a>, t: T) -> StringView<a> => x; // error[N0204]
+fn constByRegion<region a, const N: a>(x: StringView<a>) -> StringView<a> => x; // error[N0204]
+
+// On a struct, an enum and a method.
+struct Pair<region a, region b: nosuch> { // error[N0273]
+    first: StringView<a>;
+    second: StringView<b>;
+
+    // A method's region may be bounded by the struct's, not the struct's by the method's (there is no place to
+    // write that), and not by a name that is no region.
+    fn label<region l: a + first>(borrow this, name: StringView<l>) -> StringView<a> => this.first; // error[N0273]
+}
+
+enum Either<
+    region a: a, // error[N0273]
+    region b: a + static // error[N0273]
+> {
+    Left(StringView<a>),
+    Right(StringView<b>),
+}
+
+// An inherent impl restates its struct's bounds exactly: no more, no fewer, no others.
+struct Views<region a, region b: a> {
+    first: StringView<a>;
+    second: StringView<b>;
+}
+
+impl<region a, region b> Views<a, b> { // error[N0267]
+    fn one(borrow this) -> StringView<a> => this.first;
+}
+
+struct Plain<region a, region b> {
+    first: StringView<a>;
+    second: StringView<b>;
+}
+
+impl<region a, region b: a> Plain<a, b> { // error[N0267]
+    fn one(borrow this) -> StringView<a> => this.first;
+}
+
+impl<region a: b, region b> Plain<a, b> { // error[N0267]
+    fn two(borrow this) -> StringView<b> => this.second;
+}
+
+enum Tagged<region a, region b: a> {
+    Near(StringView<a>),
+    Far(StringView<b>),
+}
+
+impl<region a, region b> Tagged<a, b> { // error[N0267]
+    fn isNear(borrow this) -> bool => true;
+}
+
+// An impl of an interface writes none.
+impl<region a, region b: a> Shape for Plain<a, b> { // error[N0216]
+    fn area(borrow this) -> u32 => 1;
+}
+
+fn main() {}

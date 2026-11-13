@@ -1,0 +1,20 @@
+// Bounds on region parameters (grammar.md `TypeParam`, type-system.md §25.8): the dump prints a region's bounds
+// after its name, `(region b a)` for `region b: a`.
+fn pick<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => x;
+
+fn either<region a, region b, region c: a + b, T: Copy>(x: StringView<a>, y: StringView<b>, z: StringView<c>, t: T) {}
+
+struct Parser<region scratch, region input: scratch> {
+    text: StringView<input>;
+
+    fn label<region l: scratch>(borrow this, name: StringView<l>) -> StringView<scratch> => name;
+}
+
+enum Source<region a, region b: a> {
+    Near(StringView<a>),
+    Far(StringView<b>),
+}
+
+impl<region scratch, region input: scratch> Parser<scratch, input> {
+    fn first(borrow this) -> StringView<input> => this.text;
+}

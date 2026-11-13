@@ -1,0 +1,7 @@
+[package]
+name = "misuse"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+views = { path = "../views" }

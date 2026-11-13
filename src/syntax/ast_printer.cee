@@ -1087,6 +1087,11 @@ struct AstPrinter {
             if (parameter.isRegion) {
                 this.text("(region ")?;
                 this.name(ast, symbols, parameter.name)?;
+                // Its bounds, the regions it outlives (type-system.md §25.8): `(region b a)` for `region b: a`.
+                for (b in 0..parameter.bounds.count) {
+                    this.text(" ")?;
+                    this.typeText(ast, symbols, ast.at(parameter.bounds, b))?;
+                }
                 this.text(")")?;
             } else if (parameter.valueType != none()) {
                 this.text("(const ")?;

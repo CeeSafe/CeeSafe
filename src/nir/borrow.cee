@@ -1884,6 +1884,7 @@ fn reportConflict(
         appendText(mut second, "the borrow is used later here")?;
         notes.push(DiagnosticNote { file: b.file, start: later.start, end: later.end, message: second })?;
     }
+    noteRegionBounds(c, n, b, loan, mut notes)?; // a callee's region bound that keeps the borrow (§25.8)
     return c.front.diagnostics.errorWithNotes(code, b.file, span.start, span.end, message, notes);
 }
 

@@ -120,6 +120,11 @@
     `impl` blocks whose bounds its argument meets, by an impl declared later in the file, in another file of the
     package and in the dependency, for a bound that is an interface, `Copy` and `Send`: `check` is clean and the
     program prints what it should, in the interpreter and compiled; the unmet cases are N0268, and N0334 for Send.
+35. region-bounds (type-system.md §25.8, ADR 0134): a dependency's functions, struct and method whose region
+    parameters have bounds. Used while every borrow is alive, `check` is clean and the program prints what it
+    should, in the interpreter and compiled. A function that forwards its regions without restating the bound is
+    N0245, and a caller that keeps what the bound lets the callee return or store after the referent is destroyed
+    is N0243, with a note that names the callee and its bound.
 31. private-items (ADR 0109): a private function, generic function, struct, generic struct, enum, interface, constant,
     static, method, static function and associated constant of src/shapes.cee, and an `impl` block's of
     src/more.cee (a struct's and an enum's), named in src/main.cee in a call, a value, a type, a bound, `dyn`, an `impl` header, a literal and
@@ -319,6 +324,51 @@ def impl_bounds_order(compiler, work, problems):
     wanted = [("N0268", 7), ("N0268", 12), ("N0268", 14), ("N0334", 16), ("N0268", 18)]
     if p.returncode != 1 or sorted(found, key=lambda d: d[1]) != wanted:
         problems.append(f"impl-bounds-order/unmet: expected {wanted}: {p.returncode} {found} {p.stderr[:300]}")
+
+
+def region_bounds(compiler, work, problems):
+    """A bound on a region parameter of a dependency's function, struct or method (ADR 0134) is the declaration's
+    flow, so a caller in another package is held to it; the diagnostic names the bound."""
+    root = os.path.join(work, "region-bounds")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "region-bounds"), root)
+    app = os.path.join(root, "app")
+    expected = "short\nlong\n2\nshort\nlong"
+    p = run([compiler, "check", "--diagnostics-format=json"], app)
+    try:
+        found = [d["code"] for d in json.loads(p.stdout)["diagnostics"]]
+    except (ValueError, KeyError):
+        found = [p.stdout[:300] + p.stderr[:300]]
+    if p.returncode != 0 or found:
+        problems.append(f"region-bounds: check should be clean: {p.returncode} {found}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.strip() != expected:
+        problems.append(f"region-bounds: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                        f"{p.stderr[-300:]}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0:
+        problems.append(f"region-bounds: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], app).stdout.strip()
+        if out != expected:
+            problems.append(f"region-bounds: the program printed {out!r}")
+    p = run([compiler, "check", "--diagnostics-format=json"], os.path.join(root, "misuse"))
+    try:
+        diagnostics = json.loads(p.stdout)["diagnostics"]
+    except (ValueError, KeyError):
+        diagnostics = []
+    found = [(d["code"], d["start"]["line"]) for d in diagnostics]
+    wanted = [("N0245", 6), ("N0243", 13), ("N0243", 23), ("N0243", 32), ("N0243", 42)]
+    if p.returncode != 1 or sorted(found, key=lambda d: d[1]) != wanted:
+        problems.append(f"region-bounds/misuse: expected {wanted}: {p.returncode} {found} {p.stderr[:300]}")
+    notes = [n["message"] for d in diagnostics for n in d.get("notes", [])]
+    for text in ("'views.pick' declares 'region b: a' ('b' outlives 'a'), so its result may hold the borrow passed here",
+                 "'views.keep' declares 'region b: a' ('b' outlives 'a'), so it may store the borrow passed here "
+                 "through another argument",
+                 "declares 'region input: scratch' ('input' outlives 'scratch')",
+                 "declares 'region l: scratch' ('l' outlives 'scratch')"):
+        if not any(text in note for note in notes):
+            problems.append(f"region-bounds/misuse: no note says {text!r}: {notes}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -1824,6 +1874,7 @@ def main():
                             f"{p.returncode} {p.stdout!r} {p.stderr[-300:]}")
 
         impl_bounds_order(compiler, work, problems)
+        region_bounds(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)

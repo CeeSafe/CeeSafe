@@ -258,6 +258,7 @@ struct Checker {
     instanceErrors: bool;                      // errors were found by the end of the instances' checks (N0222)
     regionImpls: Vector<u32>;                  // the impls (in c.impls) with region parameters
     declaredFlows: Vector<DeclaredFlows>;      // by AST function: its declaration's flows (ADR 0131 §2.9)
+    regionBoundFlows: Vector<RegionBoundFlow>; // the flows that region bounds alone give (§25.8, ADR 0134)
     flowsWaiting: Vector<u32>;                 // HIR functions declared before their declaration's flows were known
     interfaceOfMethod: Vector<u32>;            // by AST function: the interface (c.interfaces) that declares it, or none
     implementationsOf: Map<Word, Vector<u32>>; // c.implementations by interface entry, in order

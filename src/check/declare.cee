@@ -300,6 +300,7 @@ fn checkProgramWith(
         instanceErrors: false,
         regionImpls: Vector<u32>.create(),
         declaredFlows: Vector<DeclaredFlows>.create(),
+        regionBoundFlows: Vector<RegionBoundFlow>.create(),
         flowsWaiting: Vector<u32>.create(),
         interfaceOfMethod: Vector<u32>.create(),
         implementationsOf: Map<Word, Vector<u32>>.create(),
@@ -747,6 +748,7 @@ fn declareFunctionCore(c: borrow mut Checker, f: u32, owner: u32, environment: R
         c.error(unsupported(), first.start, first.end, message)?;
     }
     checkRegionParameters(c, decl.regionParameters, decl.typeParameters)?;
+    checkRegionBounds(c, decl.regionParameters, true)?;
     if (owner != none()) {
         // A method's region may not reuse a name of its struct's or impl's regions, which are in scope too.
         for (k in 0..decl.regionParameters.count) {

@@ -1,0 +1,233 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134): what a bound demands of a caller. The callee may
+// let what is borrowed for `b` be used as borrowed for `a`, so its result, or what it stores through, holds the
+// borrows of the `b` arguments: a caller that keeps the one after the other's referent is destroyed is refused,
+// in every position a bound may be written.
+fn pick<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => if (x.length > 0) x else y;
+
+fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+fn deepest<region a, region b: a, region c: b>(x: StringView<a>, z: StringView<c>) -> StringView<a> =>
+    if (z.length > 0) z else x;
+
+fn viewOf<region a, region b: a>(fallback: StringView<a>, source: borrow(b) String) -> StringView<a> =>
+    if (source.length > 0) source.view() else fallback;
+
+// A generic function: every instance has the declaration's flows.
+fn pickT<region a, region b: a, T>(x: StringView<a>, y: StringView<b>, unused: T) -> StringView<a> =>
+    if (x.length > 0) x else y;
+
+// A function that forwards its regions and restates the bound: its callers are held to it in turn.
+fn forward<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> => pick(x, y);
+
+struct Parser<region scratch, region input: scratch> {
+    text: StringView<input>;
+    note: StringView<scratch>;
+
+    fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note;
+
+    fn label<region l: scratch>(borrow this, name: StringView<l>) -> StringView<scratch> =>
+        if (this.note.length > 0) this.note else name;
+}
+
+struct Box2<T> {
+    value: T;
+
+    fn pick<region a, region b: a>(borrow this, x: StringView<a>, y: StringView<b>) -> StringView<a> =>
+        if (x.length > 0) x else y;
+}
+
+enum Source<region a, region b: a> {
+    Near(StringView<a>),
+    Far(StringView<b>),
+}
+
+impl<region a, region b: a> Source<a, b> {
+    fn orElse(other: StringView<b>, fallback: StringView<a>) -> StringView<a> =>
+        if (other.length > 0) other else fallback;
+}
+
+struct Labelled<region a, region b: a, T> {
+    near: StringView<a>;
+    far: StringView<b>;
+    value: T;
+
+    fn choose(early: StringView<a>, late: StringView<b>, value: T) -> StringView<a> =>
+        if (late.length > 0) late else early;
+}
+
+fn genericStructFunction(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(Labelled<u8>.choose(long.view(), short.view(), 1))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+// With the bound, the result may be a view of the holder's own storage: the reference's region outlives `a`, so
+// the caller's borrow of the holder itself is in the result. Without it the result is deep: what the holder holds.
+struct Holder<region a> {
+    text: StringView<a>;
+    buffer: String;
+}
+
+fn bufferOf<region a, region b: a>(h: borrow(b) Holder<a>) -> StringView<a> => h.buffer.view();
+
+fn textOf<region a, region b>(h: borrow(b) Holder<a>) -> StringView<a> => h.text;
+
+fn keepView<region a, region b: a>(out: borrow mut Vector<StringView<a>>, source: borrow(b) String) {
+    out.push(source.view())!;
+}
+
+fn ownStorage() {
+    var holder = Holder { text: "held", buffer: String.from("buffer")! };
+    let held = textOf(holder);
+    holder.buffer.append("!")!; // accepted: a deep result does not borrow the holder
+    Console.writeLine(held);
+    let view = bufferOf(holder);
+    holder.buffer.append("!")!; // error[N0241]
+    Console.writeLine(view);
+}
+
+fn referenceStore() {
+    var source = String.from("source")!;
+    var words = Vector<StringView>.create();
+    keepView(mut words, source);
+    source.append("!")!; // error[N0241]
+    Console.writeLine(words[0]);
+}
+
+fn function(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(pick(long.view(), short.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn store(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    kept.push(long.view())!;
+    {
+        let short = String.from("short")!;
+        keep(mut kept, short.view());
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn transitive(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(deepest(long.view(), short.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn reference(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(viewOf(long.view(), short))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn generic(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(pickT(long.view(), short.view(), 1u8))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn forwarded(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(forward(long.view(), short.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn structFunction(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(Parser.orNote(short.view(), long.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn method(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    let parser = Parser { text: long.view(), note: "" };
+    {
+        let short = String.from("short")!;
+        kept.push(parser.label(short.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn genericStructMethod(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    let box = Box2 { value: 1u8 };
+    {
+        let short = String.from("short")!;
+        kept.push(box.pick(long.view(), short.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+fn enumFunction(long: borrow String) {
+    var kept = Vector<StringView>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(Source.orElse(short.view(), long.view()))!;
+    } // error[N0243]
+    Console.writeLine(kept[0]);
+}
+
+// An instance of a struct with a bound holds the borrows of all its fields, as any value does: it is not used
+// after one of them is gone, whichever region the field is written with.
+fn instance(long: borrow String) {
+    var kept = Vector<Parser>.create();
+    {
+        let short = String.from("short")!;
+        kept.push(Parser { text: long.view(), note: short.view() })!;
+    } // error[N0243]
+    Console.writeLine(kept[0].text);
+}
+
+// Mutation of the argument while the result is in use.
+fn mutation() {
+    var text = String.from("text")!;
+    let other = String.from("other")!;
+    let view = pick(other.view(), text.view());
+    text.append("more")!; // error[N0241]
+    Console.writeLine(view);
+}
+
+fn main() {
+    let long = String.from("long")!;
+    genericStructFunction(long);
+    function(long);
+    store(long);
+    transitive(long);
+    reference(long);
+    generic(long);
+    forwarded(long);
+    structFunction(long);
+    method(long);
+    genericStructMethod(long);
+    enumFunction(long);
+    instance(long);
+    mutation();
+    ownStorage();
+    referenceStore();
+}

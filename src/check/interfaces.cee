@@ -396,6 +396,7 @@ fn processImpl(c: borrow mut Checker, item: u32) -> Result<void, AllocError> {
         _ => emptyRange(),
     };
     checkRegionParameters(c, regionSyntax, typeSyntax)?;
+    refuseRegionBounds(c, regionSyntax)?;
     var regionNames = Vector<u32>.create();
     pushRegionNames(c, regionSyntax, mut regionNames)?;
     let savedRegions = swapRegions(c, regionNames)?;

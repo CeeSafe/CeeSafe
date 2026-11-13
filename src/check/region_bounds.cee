@@ -1,0 +1,398 @@
+// Bounds on region parameters (type-system.md §25.8, ADR 0134). `region b: a` says that `b` outlives `a`: what is
+// borrowed for `b` may be used where `a` is required. A bound is a declared flow: it is read where a signature's
+// flows are computed (resolveFlows), into the same record a body is held to and a caller applies, so every instance
+// of the declaration inherits it as it inherits the others (ADR 0131 §2.9).
+
+/// A flow that a signature has by a region's bound alone, kept for a caller's diagnostics: `source` (a parameter)
+/// flows into `target` (a parameter, or none for the result) because its region `region` is declared `region: bound`.
+struct RegionBoundFlow {
+    function: u32; // a HIR function
+    target: u32;
+    source: u32;
+    region: u32;
+    bound: u32;
+}
+
+/// The region parameter lists whose bounds a function sees: its own and, for a struct's or an enum's function, its
+/// type's (an inherent impl restates them, N0267; an impl of an interface that declares regions writes none, N0216,
+/// and its methods see none).
+fn regionBoundLists(c: borrow Checker, f: u32, owner: u32, out: borrow mut Vector<Range>) -> Result<void, AllocError> {
+    let decl = c.front.ast.functions[f as usize];
+    out.push(decl.regionParameters)?;
+    // In an impl of an interface that declares regions, the names are the impl's own, and it writes no bounds.
+    if (owner == none() || implRegionsOf(c, f).count > 0) {
+        return Ok();
+    }
+    let definition = c.types.info(owner).structDef;
+    let item = if (definition == none()) none() else c.types.structs[definition as usize].item;
+    if (item != none()) {
+        match (c.front.ast.items[item as usize].kind) {
+            ItemKind.Struct(k) => { out.push(c.front.ast.structs[k as usize].regionParameters)?; }
+            _ => {}
+        }
+    }
+    let enumItem = enumOfMethod(c, f, owner);
+    if (enumItem != none()) {
+        match (c.front.ast.items[enumItem as usize].kind) {
+            ItemKind.Enum(_, _, enumRegions) => { out.push(enumRegions)?; }
+            _ => {}
+        }
+    }
+    return Ok();
+}
+
+/// Adds to a target's flow names every region that outlives one of them: with `region b: a`, a target that names `a`
+/// takes what is borrowed for `b` too. Never the other way: a target that names `b` gains nothing. The names added
+/// are looked at in turn, so the relation is transitive (`c: b`, `b: a`: `c` flows where `a` is required).
+fn closeRegionBounds(
+    c: borrow Checker,
+    lists: borrow Vector<Range>,
+    names: borrow mut Vector<u64>,
+) -> Result<void, AllocError> {
+    var k: usize = 0;
+    while (k < names.length) {
+        let name = names[k];
+        k += 1;
+        if ((name >> 32) != 1) {
+            continue;
+        }
+        let symbol = truncate<u32>(name & 0xFFFFFFFF);
+        for (list in lists.view()) {
+            for (j in 0..list.count) {
+                let p = c.front.ast.typeParameters[c.front.ast.at(list, j) as usize];
+                for (b in 0..p.bounds.count) {
+                    if (singleName(c, c.front.ast.at(p.bounds, b)) == symbol) {
+                        addName(names, regionFlowName(c.front.ast.idents[p.name as usize].symbol))?;
+                    }
+                }
+            }
+        }
+    }
+    return Ok();
+}
+
+/// The bound of region `region` that put it among `names`: the first of its bounds that is one of them.
+fn regionBoundAmong(c: borrow Checker, lists: borrow Vector<Range>, region: u32, names: borrow Vector<u64>) -> u32 {
+    for (list in lists.view()) {
+        for (j in 0..list.count) {
+            let p = c.front.ast.typeParameters[c.front.ast.at(list, j) as usize];
+            if (c.front.ast.idents[p.name as usize].symbol != region) {
+                continue;
+            }
+            for (b in 0..p.bounds.count) {
+                let bound = singleName(c, c.front.ast.at(p.bounds, b));
+                if (bound == none()) {
+                    continue;
+                }
+                for (n in names.view()) {
+                    if (n == regionFlowName(bound)) {
+                        return bound;
+                    }
+                }
+            }
+        }
+    }
+    return none();
+}
+
+/// closeRegionBounds for the names of a target of function `function`'s flows (parameter `target`, or none for the
+/// result), while its parameters' names are in c.flowNames: the flows that the bounds alone give are recorded.
+fn closeTargetRegions(
+    c: borrow mut Checker,
+    f: u32,
+    function: u32,
+    owner: u32,
+    target: u32,
+    names: borrow mut Vector<u64>,
+) -> Result<void, AllocError> {
+    var lists = Vector<Range>.create();
+    regionBoundLists(c, f, owner, mut lists)?;
+    var plain = Vector<u64>.create();
+    for (n in names.view()) {
+        plain.push(n)?;
+    }
+    closeRegionBounds(c, lists, names)?;
+    if (names.length == plain.length) {
+        return Ok();
+    }
+    let count = c.flowNames.length;
+    for (j in 0..count) {
+        if (truncate<u32>(j) == target || overlaps(c.flowNames[j], plain) || !overlaps(c.flowNames[j], names)) {
+            continue;
+        }
+        var region: u32 = none();
+        for (x in c.flowNames[j].view()) {
+            if (region != none() || (x >> 32) != 1) {
+                continue;
+            }
+            for (y in names.view()) {
+                if (x == y) {
+                    region = truncate<u32>(x & 0xFFFFFFFF);
+                }
+            }
+        }
+        if (region == none()) {
+            continue;
+        }
+        let bound = regionBoundAmong(c, lists, region, names);
+        c.regionBoundFlows.push(
+            RegionBoundFlow {
+                function: function,
+                target: target,
+                source: truncate<u32>(j),
+                region: region,
+                bound: bound,
+            },
+        )?;
+    }
+    return Ok();
+}
+
+fn regionBoundError(c: borrow mut Checker, start: u32, end: u32, message: Vector<u8>) -> Result<void, AllocError> =>
+    c.error(unknownRegion(), start, end, message);
+
+/// A region parameter's bounds are other region parameters in scope (§25.8): not `static`, not a type or an
+/// interface, not the region itself, none twice, and no cycle. `enclosing`: the regions of an enclosing declaration
+/// (a method's struct's) are in scope too, in c.regions.
+fn checkRegionBounds(c: borrow mut Checker, regions: Range, enclosing: bool) -> Result<void, AllocError> {
+    var any = false;
+    for (k in 0..regions.count) {
+        if (c.front.ast.typeParameters[c.front.ast.at(regions, k) as usize].bounds.count > 0) {
+            any = true;
+        }
+    }
+    if (!any) {
+        return Ok();
+    }
+    var scope = Vector<u32>.create();
+    pushRegionNames(c, regions, mut scope)?;
+    if (enclosing) {
+        for (r in c.regions.view()) {
+            if (!containsU32(scope, r)) {
+                scope.push(r)?;
+            }
+        }
+    }
+    for (k in 0..regions.count) {
+        let p = c.front.ast.typeParameters[c.front.ast.at(regions, k) as usize];
+        let declared = c.front.ast.idents[p.name as usize].symbol;
+        var seen = Vector<u32>.create();
+        for (b in 0..p.bounds.count) {
+            let typ = c.front.ast.at(p.bounds, b);
+            let span = c.front.ast.typeSpans[typ as usize];
+            let symbol = singleName(c, typ);
+            var message = Vector<u8>.create();
+            if (symbol == none()) {
+                appendText(
+                    mut message,
+                    "a region is bounded by a region parameter, not by a type: 'region b: a' says that 'b' outlives 'a' (type-system.md §25.8)",
+                )?;
+            } else if (sameText(c.name(symbol), "static")) {
+                appendText(
+                    mut message,
+                    "'static' cannot bound a region: no call checks that an argument is static data, and static data may be used for any region as it is (type-system.md §25.8)",
+                )?;
+            } else if (symbol == declared) {
+                appendText(mut message, "the region ")?;
+                appendQuotedName(mut message, c, symbol)?;
+                appendText(mut message, " is bounded by itself: every region outlives itself (type-system.md §25.8)")?;
+            } else if (!containsU32(scope, symbol)) {
+                appendQuotedName(mut message, c, symbol)?;
+                appendText(
+                    mut message,
+                    " is not a region parameter in scope: a region is bounded by a region, 'region b: a' for \"'b' outlives 'a'\" (type-system.md §25.8)",
+                )?;
+            } else if (containsU32(seen, symbol)) {
+                appendText(mut message, "the bound ")?;
+                appendQuotedName(mut message, c, symbol)?;
+                appendText(mut message, " is written twice")?;
+            } else {
+                seen.push(symbol)?;
+                continue;
+            }
+            regionBoundError(c, span.start, span.end, message)?;
+        }
+    }
+    // A cycle lies within one list: an enclosing declaration's regions cannot be bounded by this one's.
+    for (k in 0..regions.count) {
+        let p = c.front.ast.typeParameters[c.front.ast.at(regions, k) as usize];
+        let ident = c.front.ast.idents[p.name as usize];
+        var reached = Vector<u32>.create();
+        for (b in 0..p.bounds.count) {
+            let symbol = singleName(c, c.front.ast.at(p.bounds, b));
+            if (symbol != none() && symbol != ident.symbol && !containsU32(reached, symbol)) {
+                reached.push(symbol)?;
+            }
+        }
+        var through: u32 = none();
+        var head: usize = 0;
+        while (head < reached.length && through == none()) {
+            let from = reached[head];
+            head += 1;
+            for (j in 0..regions.count) {
+                let q = c.front.ast.typeParameters[c.front.ast.at(regions, j) as usize];
+                if (c.front.ast.idents[q.name as usize].symbol != from) {
+                    continue;
+                }
+                for (b in 0..q.bounds.count) {
+                    let symbol = singleName(c, c.front.ast.at(q.bounds, b));
+                    if (symbol == none() || symbol == from) {
+                        continue; // itself: reported above
+                    }
+                    if (symbol == ident.symbol) {
+                        through = from;
+                    } else if (!containsU32(reached, symbol)) {
+                        reached.push(symbol)?;
+                    }
+                }
+            }
+        }
+        if (through != none()) {
+            var message = Vector<u8>.create();
+            appendText(mut message, "the bounds of region ")?;
+            appendQuotedName(mut message, c, ident.symbol)?;
+            appendText(mut message, " lead back to it through ")?;
+            appendQuotedName(mut message, c, through)?;
+            appendText(
+                mut message,
+                ": regions that outlive each other are one region, so declare one (type-system.md §25.8)",
+            )?;
+            regionBoundError(c, ident.start, ident.end, message)?;
+            break;
+        }
+    }
+    return Ok();
+}
+
+/// An impl of an interface writes no bound on its region parameters (§25.8): its methods' flows are its
+/// interface's (§21.1), which has no regions, so a bound could give a caller through the interface nothing.
+fn refuseRegionBounds(c: borrow mut Checker, regions: Range) -> Result<void, AllocError> {
+    for (k in 0..regions.count) {
+        let p = c.front.ast.typeParameters[c.front.ast.at(regions, k) as usize];
+        if (p.bounds.count == 0) {
+            continue;
+        }
+        let first = c.front.ast.typeSpans[c.front.ast.at(p.bounds, 0) as usize];
+        var message = Vector<u8>.create();
+        appendText(
+            mut message,
+            "an 'impl' of an interface cannot bound its region parameters: its methods' flows are the interface's, which names no region; the bounds of the struct or enum are in scope under its own region names (type-system.md §25.8)",
+        )?;
+        c.error(unsupported(), first.start, first.end, message)?;
+    }
+    return Ok();
+}
+
+/// Does an inherent impl's region list restate its struct's or enum's bounds exactly (§25.8)? The names are already
+/// the same, in order (sameParameters).
+fn sameRegionBounds(c: borrow Checker, implRegions: Range, ownRegions: Range) -> Result<bool, AllocError> {
+    if (implRegions.count != ownRegions.count) {
+        return Ok(false);
+    }
+    for (k in 0..implRegions.count) {
+        let a = c.front.ast.typeParameters[c.front.ast.at(implRegions, k) as usize];
+        let b = c.front.ast.typeParameters[c.front.ast.at(ownRegions, k) as usize];
+        var mine = Vector<u32>.create();
+        var theirs = Vector<u32>.create();
+        for (j in 0..a.bounds.count) {
+            let symbol = singleName(c, c.front.ast.at(a.bounds, j));
+            if (!containsU32(mine, symbol)) {
+                mine.push(symbol)?;
+            }
+        }
+        for (j in 0..b.bounds.count) {
+            let symbol = singleName(c, c.front.ast.at(b.bounds, j));
+            if (!containsU32(theirs, symbol)) {
+                theirs.push(symbol)?;
+            }
+        }
+        if (mine.length != theirs.length) {
+            return Ok(false);
+        }
+        for (s in mine.view()) {
+            if (!containsU32(theirs, s)) {
+                return Ok(false);
+            }
+        }
+    }
+    return Ok(true);
+}
+
+fn regionBoundsNotRestated(c: borrow mut Checker, span: Span) -> Result<void, AllocError> {
+    var message = Vector<u8>.create();
+    appendText(
+        mut message,
+        "an 'impl' block restates the region bounds of its struct or enum exactly, as it does the parameters: 'impl<region a, region b: a> S<a, b>' for 'struct S<region a, region b: a>' (type-system.md §25.8)",
+    )?;
+    return c.error(inherentImplError(), span.start, span.end, message);
+}
+
+/// For a conflict with a loan (N0240 to N0243): the calls of this function that were given a value holding the loan
+/// and whose callee's region bound lets its result, or what it stores through, hold it. Each gets a note that
+/// names the bound, so the reader sees why the borrow is still in use.
+fn noteRegionBounds(
+    c: borrow Checker,
+    n: borrow NirProgram,
+    b: borrow Borrows,
+    loan: u32,
+    notes: borrow mut Vector<DiagnosticNote>,
+) -> Result<void, AllocError> {
+    if (c.regionBoundFlows.length == 0) {
+        return Ok();
+    }
+    let blockCount = n.functions[b.function as usize].blocks.length;
+    for (position in 0..blockCount) {
+        let statementCount = n.functions[b.function as usize].blocks[position].statements.length;
+        for (i in 0..statementCount) {
+            let s = n.functions[b.function as usize].blocks[position].statements[i];
+            let value = match (n.statements[s as usize]) {
+                NirStatement.Assign(_, v) => v,
+                NirStatement.Eval(v) => v,
+                _ => none(),
+            };
+            if (value == none()) {
+                continue;
+            }
+            var callee: u32 = none();
+            var arguments = emptyRange();
+            match (n.rvalues[value as usize]) {
+                NirRvalue.Call(function, operands) => {
+                    callee = function;
+                    arguments = operands;
+                }
+                _ => {}
+            }
+            if (callee == none()) {
+                continue;
+            }
+            for (flow in c.regionBoundFlows.view()) {
+                if (flow.function != callee || flow.source >= arguments.count) {
+                    continue;
+                }
+                let local = operandPlaceLocal(n, n.at(arguments, flow.source));
+                if (local == none() || !loansContain(b, local, loan)) {
+                    continue;
+                }
+                let span = n.statementSpans[s as usize];
+                var message = Vector<u8>.create();
+                appendQuotedName(mut message, c, c.hir.functions[callee as usize].name)?;
+                appendText(mut message, " declares 'region ")?;
+                appendBytes(mut message, c.name(flow.region))?;
+                appendText(mut message, ": ")?;
+                appendBytes(mut message, c.name(flow.bound))?;
+                appendText(mut message, "' (")?;
+                appendQuotedName(mut message, c, flow.region)?;
+                appendText(mut message, " outlives ")?;
+                appendQuotedName(mut message, c, flow.bound)?;
+                appendText(
+                    mut message,
+                    if (flow.target == none()) "), so its result may hold the borrow passed here"
+                        else "), so it may store the borrow passed here through another argument",
+                )?;
+                notes.push(DiagnosticNote { file: b.file, start: span.start, end: span.end, message: message })?;
+                return Ok();
+            }
+        }
+    }
+    return Ok();
+}

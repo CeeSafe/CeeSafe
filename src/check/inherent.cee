@@ -199,6 +199,10 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                             c.error(inherentImplError(), span.start, span.end, message)?;
                             continue;
                         }
+                        if (functions.count > 0 && !sameRegionBounds(c, regionParameters, enumRegions)?) {
+                            regionBoundsNotRestated(c, span)?;
+                            continue;
+                        }
                         for (j in 0..functions.count) {
                             let f = c.front.ast.at(functions, j);
                             c.enumMethods.push(EnumMethod { item: enumItem, function: f, file: file })?;
@@ -245,6 +249,10 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                             "an 'impl' of a struct's methods names the struct with its own parameters, in order: 'impl<T> S<T>' for 'struct S<T>' (ADR 0064 §1)",
                         )?;
                         c.error(inherentImplError(), span.start, span.end, message)?;
+                        continue;
+                    }
+                    if (!sameRegionBounds(c, regionParameters, s.regionParameters)?) {
+                        regionBoundsNotRestated(c, span)?;
                         continue;
                     }
                     // The struct's functions, then the block's: one list in Ast.lists.

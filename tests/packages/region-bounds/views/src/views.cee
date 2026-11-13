@@ -1,0 +1,22 @@
+// The dependency of region-bounds (type-system.md §25.8, ADR 0134): functions and a struct whose region
+// parameters have bounds. `region b: a` says that `b` outlives `a`.
+
+public fn pick<region a, region b: a>(x: StringView<a>, y: StringView<b>) -> StringView<a> =>
+    if (x.length > 0) x else y;
+
+public fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, word: StringView<b>) {
+    out.push(word)!;
+}
+
+public struct Parser<region scratch, region input: scratch> {
+    public text: StringView<input>;
+    public note: StringView<scratch>;
+
+    public fn orNote(word: StringView<input>, note: StringView<scratch>) -> StringView<scratch> =>
+        if (word.length > 0) word else note;
+}
+
+impl<region scratch, region input: scratch> Parser<scratch, input> {
+    public fn label<region l: scratch>(borrow this, name: StringView<l>) -> StringView<scratch> =>
+        if (this.note.length > 0) this.note else name;
+}

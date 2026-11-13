@@ -641,6 +641,8 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
         var resultNames = Vector<u64>.create();
         collectFlowNames(c, decl.returnType, function, true, mut resultNames)?;
         closeFlowNames(c, function, bounded, selfNames, selfRegions, mut resultNames)?;
+        // A region's bound (§25.8, ADR 0134): the result takes what is borrowed for a region that outlives one of its own.
+        closeTargetRegions(c, f, function, owner, none(), mut resultNames)?;
         var sources = Vector<u32>.create();
         for (i in 0..parameterCount) {
             if (overlaps(c.flowNames[i], resultNames)) {
@@ -809,6 +811,9 @@ fn resolveFlows(c: borrow mut Checker, f: u32, function: u32, owner: u32) -> Res
                 }
             }
         }
+        // A region's bound (§25.8, ADR 0134): what is borrowed for a region that outlives a target's may be stored.
+        closeTargetRegions(c, f, function, owner, truncate<u32>(i), mut kept)?;
+        closeTargetRegions(c, f, function, owner, truncate<u32>(i), mut keptWritten)?;
         for (j in 0..parameterCount) {
             if (j != i && overlaps(c.flowNames[j], kept)) {
                 // A flow that only a bound gives (`it: borrow mut I` into `out: borrow mut Vector<T>` under

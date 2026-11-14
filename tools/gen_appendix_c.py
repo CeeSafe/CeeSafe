@@ -358,6 +358,10 @@ TABLES.append(table(
          OOM + "; panics `the fill is not a Unicode scalar value` for such a `fill`"),
         ("`t.view() -> StringView`", "The text of a string as a view that borrows the string.", NO),
         ("`t.clear()`", "Empties a string. The capacity stays.", NO),
+        ("`t.sameAs(other: borrow String) -> bool`, `t.hash(h: borrow mut Hasher)`, "
+         "`t.compareKey(other: borrow String) -> i32`",
+         "The methods of a string as a key: of a `HashMap` (`HashKey`: the same text, and its bytes fed to the "
+         "hasher) and of an `OrderedMap` (`OrderKey`: bytewise order, so code point order, a prefix first).", NO, []),
         ("`t.capacity`", "The number of bytes a string has room for before it must grow, a `usize`.", NO, []),
         ("`t == u`, `t != u`",
          "Whether two strings have the same bytes. A `String` and a `StringView` are compared as `t.view() == s`.",

@@ -508,10 +508,15 @@ fn checkVectorMethod(
         appendQuotedType(mut message, c, typ)?;
         appendText(mut message, " has no method ")?;
         appendQuotedName(mut message, c, ident.symbol)?;
-        appendText(
+        // The built-in methods, then lib/core's impls on this type (`Vector<u8>.appendHex`), which the call would
+        // have found (members.cee's implOnVector); a close one as "did you mean".
+        appendEveryMethodChoice(
+            c,
             mut message,
-            if (isString) "; it has 'append', 'appendNumber', 'clear', 'view', 'bytes', 'clone'"
-                else "; it has 'push', 'pop', 'clear', 'view', 'viewMut', 'retain', 'truncate', 'swap', 'sortBy', 'forEach', 'any', 'all', 'partitionPoint', 'splitAt', 'splitAtMut', 'extend', 'resize', 'reserve', 'setLength', 'insert', 'remove', 'swapRemove', 'clone'",
+            typ,
+            if (isString) "append appendNumber clear view bytes clone"
+                else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut extend resize reserve setLength insert remove swapRemove clone",
+            ident.symbol,
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
         checkArgumentsLoosely(c, arguments)?;

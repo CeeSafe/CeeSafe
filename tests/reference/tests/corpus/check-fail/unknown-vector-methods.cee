@@ -1,0 +1,14 @@
+// A method a Vector or a String does not have is N0200, and the message names the methods the call would have found
+// (diagnostics.md, "Suggestions"): the built-in ones and those of lib/core's impls on the type, such as
+// `Vector<u8>.appendHex`, which an earlier list left out, so it read as complete without them. A close name is
+// "did you mean"; otherwise every method is listed.
+fn main() {
+    var bytes = Vector<u8>.create();
+    bytes.appendHex(255, 2, false)!;
+    bytes.appendHx(1);      // error[N0200]: did you mean 'appendHex'?
+    bytes.appendNumber(42); // error[N0200]: it has 'push', … 'clone', 'appendHex', 'appendOctal', 'appendFixed', …
+    var words = Vector<u32>.create();
+    words.frob(); // error[N0200]: it has 'push', … 'swapRemove' and 'clone'
+    var text = String.create();
+    text.apend("x"); // error[N0200]: did you mean 'append'?
+}

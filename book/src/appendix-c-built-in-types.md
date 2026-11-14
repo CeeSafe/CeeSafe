@@ -204,6 +204,7 @@ A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the r
 | `t.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>` | Adds `text` at the end of a string in a field of `width` characters, filled with the character `fill` on the side that `TextAlign.Left`, `TextAlign.Right` or `TextAlign.Center` leaves. | `Err(AllocError.OutOfMemory)` when the allocation fails; panics `the fill is not a Unicode scalar value` for such a `fill` | [8.2](./ch08-02-strings) |
 | `t.view() -> StringView` | The text of a string as a view that borrows the string. | No | [8.2](./ch08-02-strings) |
 | `t.clear()` | Empties a string. The capacity stays. | No | [8.2](./ch08-02-strings) |
+| `t.sameAs(other: borrow String) -> bool`, `t.hash(h: borrow mut Hasher)`, `t.compareKey(other: borrow String) -> i32` | The methods of a string as a key: of a `HashMap` (`HashKey`: the same text, and its bytes fed to the hasher) and of an `OrderedMap` (`OrderKey`: bytewise order, so code point order, a prefix first). | No | – |
 | `t.capacity` | The number of bytes a string has room for before it must grow, a `usize`. | No | – |
 | `t == u`, `t != u` | Whether two strings have the same bytes. A `String` and a `StringView` are compared as `t.view() == s`. | No | [8.2](./ch08-02-strings) |
 

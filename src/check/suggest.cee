@@ -329,6 +329,36 @@ fn appendMethodChoices(
         return Ok(count > 0);
     }
     // Nothing close: a few methods are short enough to list.
+    appendMethodList(c, message, typ, builtin, count)?;
+    return Ok(true);
+}
+
+/// What follows "'T' has no method 'm'" for a built-in container (`Vector<u8>`, `String`): "; did you mean …?" with
+/// its methods of a close name, else "; it has …" with every one, however many. Both include the methods lib/core's
+/// impls give the type (`Vector<u8>.appendHex`), which the call would have found, not only the built-in ones.
+fn appendEveryMethodChoice(
+    c: borrow Checker,
+    message: borrow mut Vector<u8>,
+    typ: u32,
+    builtin: StringView,
+    wanted: u32,
+) -> Result<void, AllocError> {
+    var close = Vector<Vector<u8>>.create();
+    let count = methodNamesOf(c, typ, builtin, wanted, mut close)?;
+    if (close.length > 0 || count == 0) {
+        return appendNameChoices(message, close);
+    }
+    return appendMethodList(c, message, typ, builtin, count);
+}
+
+/// "; it has 'a', 'b' and 'c'": the `count` names of `builtin` (separated by spaces), then the type's impl methods.
+fn appendMethodList(
+    c: borrow Checker,
+    message: borrow mut Vector<u8>,
+    typ: u32,
+    builtin: StringView,
+    count: usize,
+) -> Result<void, AllocError> {
     appendText(message, "; it has ")?;
     var k: usize = 0;
     let list = builtin.bytes();
@@ -359,7 +389,7 @@ fn appendMethodChoices(
         appendQuotedName(message, c, m.name)?;
         k += 1;
     }
-    return Ok(true);
+    return Ok();
 }
 
 /// "; did you mean …?" for `wanted`, a name used as a type that no type has (`Vec<i32>`): the built-in generic types

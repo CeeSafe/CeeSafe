@@ -1474,6 +1474,18 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
     if (sameText(name, "ceesafe_crc32c_update")) {
         return "uPs:u";
     }
+    if (sameText(name, "ceesafe_aes256gcm_available")) {
+        return ":u";
+    }
+    if (sameText(name, "ceesafe_aes256gcm_expand")) {
+        return "PP:-";
+    }
+    if (sameText(name, "ceesafe_aes256gcm_seal")) {
+        return "PPPsPsP:-";
+    }
+    if (sameText(name, "ceesafe_aes256gcm_open")) {
+        return "PPPsPsP:u";
+    }
     if (sameText(name, "ceesafe_clock_realtime")) {
         return "PP:-";
     }
@@ -1828,6 +1840,19 @@ fn callC(
             k += 1;
         }
         return Ok(valueOf(crc, 4));
+    }
+    if (sameText(n0, "ceesafe_aes256gcm_available")) {
+        // Aes256Gcm (ADR 0135): the interpreter has no AES instructions, so lib/std runs its own constant-time code,
+        // as on such a CPU.
+        return Ok(valueOf(0, 4));
+    }
+    if (sameText(n0, "ceesafe_aes256gcm_expand") || sameText(n0, "ceesafe_aes256gcm_seal")) {
+        // Not reached while ceesafe_aes256gcm_available answers 0: nothing is read or written.
+        return Ok(null);
+    }
+    if (sameText(n0, "ceesafe_aes256gcm_open")) {
+        // Not reached either; a tag that was not checked is not a tag that checked.
+        return Ok(valueOf(0, 4));
     }
     if (sameText(n0, "ceesafe_random_fill")) {
         // Random.fill (ADR 0060): a fixed sequence, SplitMix64 from a fixed seed and continuing from call to call, so

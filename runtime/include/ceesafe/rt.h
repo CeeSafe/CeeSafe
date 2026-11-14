@@ -1676,6 +1676,17 @@ int64_t ceesafe_random_fill(uint8_t *out, uint64_t length);
  * and the reflected register after `length` bytes, by that instruction. Call the second only after a 1. */
 uint32_t ceesafe_crc32c_available(void);
 uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t length);
+
+/* AES-256-GCM on the CPU's instructions (ADR 0135), for lib/std's Aes256Gcm. `available` is 1 when the CPU has AES
+ * and carry-less multiply instructions; the other three are called only then. `schedule` is 304 bytes that `expand`
+ * fills from a 32-byte key; `nonce` is 12 bytes and `tag` 16. Each reads and writes only the lengths it is given,
+ * during the call, and keeps no pointer. `open` answers 1 with the plaintext in place, or 0 with `data` zeroed. */
+uint32_t ceesafe_aes256gcm_available(void);
+void ceesafe_aes256gcm_expand(const uint8_t *key, uint8_t *schedule);
+void ceesafe_aes256gcm_seal(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad, uint64_t aadLength,
+    uint8_t *data, uint64_t length, uint8_t *tag);
+uint32_t ceesafe_aes256gcm_open(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad, uint64_t aadLength,
+    uint8_t *data, uint64_t length, const uint8_t *tag);
 void *ceesafe_dns_start(const uint8_t *host, uint64_t length, uint16_t port);
 int32_t ceesafe_dns_poll(void *lookup);
 uint32_t ceesafe_dns_count(void *lookup);

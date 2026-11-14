@@ -3024,6 +3024,473 @@ uint32_t ceesafe_crc32c_update(uint32_t crc, const uint8_t *bytes, uint64_t leng
     return crc;
 }
 
+/* ---- AES-256-GCM on the CPU's instructions (ADR 0135): AES-NI and PCLMULQDQ on x86-64, the AES extension (AESE,
+ * AESMC, PMULL) on AArch64. lib/std's Aes256Gcm asks ceesafe_aes256gcm_available when a key is made and keeps its
+ * own constant-time code where it says 0. The instructions are reached by the compiler's intrinsics under a target
+ * attribute on the functions that use them, so no file needs a target flag; whether the CPU has them is asked of
+ * the CPU or the system, once. Nothing here branches on, or indexes memory by, a key, a nonce or the data. ---- */
+#if defined(__x86_64__) && (defined(__GNUC__) || defined(__clang__))
+#include <immintrin.h>
+#define CEE_AESGCM_X86 1
+#define CEE_AESGCM_TARGET __attribute__((target("aes,pclmul,ssse3")))
+#elif defined(_MSC_VER) && defined(_M_X64) && !defined(__clang__)
+#include <immintrin.h>
+#define CEE_AESGCM_X86 1
+#define CEE_AESGCM_TARGET
+#elif defined(__aarch64__) && !defined(CEE_COSMOOS) && \
+    (defined(__ARM_FEATURE_AES) || (defined(__clang__) && __clang_major__ >= 16) || \
+     (defined(__GNUC__) && !defined(__clang__)))
+/* clang before 16 declares AESE and PMULL only when the whole file is compiled for them (`-march=…+aes`), not for a
+ * function with a target attribute: there, without that flag, lib/std's own code runs. */
+#include <arm_neon.h>
+#define CEE_AESGCM_ARM 1
+#if defined(__ARM_FEATURE_AES)
+#define CEE_AESGCM_TARGET
+#elif defined(__clang__)
+#define CEE_AESGCM_TARGET __attribute__((target("aes")))
+#else
+/* GCC to 12 declares AESE and PMULL under "+crypto" (later ones under "+aes", which "+crypto" includes). */
+#define CEE_AESGCM_TARGET __attribute__((target("+crypto")))
+#endif
+#elif defined(_MSC_VER) && defined(_M_ARM64) && !defined(__clang__)
+#include <arm64_neon.h>
+#define CEE_AESGCM_ARM 1
+#define CEE_AESGCM_TARGET
+#endif
+
+static uint32_t cee_aesgcm_state; /* 0 not asked, 1 no instructions, 2 the instructions (ceesafe_atomic_*) */
+
+static bool cee_aesgcm_probe(void) {
+#if defined(CEE_AESGCM_X86) && defined(_MSC_VER) && !defined(__clang__)
+    int regs[4];
+    __cpuid(regs, 1);
+    /* CPUID.1:ECX: PCLMULQDQ (1), SSSE3 (9), AES (25) */
+    return ((unsigned)regs[2] & 0x02000202u) == 0x02000202u;
+#elif defined(CEE_AESGCM_X86)
+    uint32_t a = 1u, b, c = 0u, d;
+    __asm__ __volatile__("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    (void)a;
+    (void)b;
+    (void)d;
+    return (c & 0x02000202u) == 0x02000202u; /* CPUID.1:ECX: PCLMULQDQ (1), SSSE3 (9), AES (25) */
+#elif defined(CEE_AESGCM_ARM) && defined(__ARM_FEATURE_AES)
+    return true; /* the compiler's target has them (every Apple arm64 Mac) */
+#elif defined(CEE_AESGCM_ARM) && defined(__APPLE__)
+    int aes = 0, pmull = 0;
+    size_t size = sizeof aes;
+    if (sysctlbyname("hw.optional.arm.FEAT_AES", &aes, &size, NULL, 0) != 0) { return false; }
+    size = sizeof pmull;
+    return sysctlbyname("hw.optional.arm.FEAT_PMULL", &pmull, &size, NULL, 0) == 0 && aes != 0 && pmull != 0;
+#elif defined(CEE_AESGCM_ARM) && defined(CEE_HAVE_GETAUXVAL)
+    return (getauxval(AT_HWCAP) & 0x18ul) == 0x18ul; /* HWCAP_AES (3) and HWCAP_PMULL (4) */
+#elif defined(CEE_AESGCM_ARM) && defined(_MSC_VER) && !defined(__clang__)
+    return IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE) != 0;
+#else
+    return false;
+#endif
+}
+
+uint32_t ceesafe_aes256gcm_available(void) {
+    uint32_t state = ceesafe_atomic_load_u32(&cee_aesgcm_state);
+    if (state == 0u) {
+        state = cee_aesgcm_probe() ? 2u : 1u;
+        ceesafe_atomic_store_u32(&cee_aesgcm_state, state); /* racing threads store the same answer */
+    }
+    return state == 2u ? 1u : 0u;
+}
+
+#if defined(CEE_AESGCM_X86) || defined(CEE_AESGCM_ARM)
+#if defined(CEE_AESGCM_X86)
+typedef __m128i cee_v128;
+#else
+typedef uint8x16_t cee_v128;
+/* The product of two vectors' low halves: PMULL takes two 64-bit polynomials, which MSVC passes as vectors of one. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define CEE_PMULL_LOW(a, b) vmull_p64(vget_low_p64(a), vget_low_p64(b))
+#else
+#define CEE_PMULL_LOW(a, b) vmull_p64(vgetq_lane_p64(a, 0), vgetq_lane_p64(b, 0))
+#endif
+#endif
+
+CEE_AESGCM_TARGET static inline cee_v128 cee_v_load(const uint8_t *p) {
+#if defined(CEE_AESGCM_X86)
+    return _mm_loadu_si128((const __m128i *)(const void *)p);
+#else
+    return vld1q_u8(p);
+#endif
+}
+
+CEE_AESGCM_TARGET static inline void cee_v_store(uint8_t *p, cee_v128 v) {
+#if defined(CEE_AESGCM_X86)
+    _mm_storeu_si128((__m128i *)(void *)p, v);
+#else
+    vst1q_u8(p, v);
+#endif
+}
+
+CEE_AESGCM_TARGET static inline cee_v128 cee_v_xor(cee_v128 a, cee_v128 b) {
+#if defined(CEE_AESGCM_X86)
+    return _mm_xor_si128(a, b);
+#else
+    return veorq_u8(a, b);
+#endif
+}
+
+/* SubWord of the key schedule, by the instruction: no table, so no access that depends on the key. */
+CEE_AESGCM_TARGET static inline uint32_t cee_aes_subword(uint32_t w) {
+#if defined(CEE_AESGCM_X86)
+    /* AESKEYGENASSIST with round constant 0: its low word is SubWord of the source's second word. */
+    return (uint32_t)_mm_cvtsi128_si32(_mm_aeskeygenassist_si128(_mm_set1_epi32((int)w), 0));
+#else
+    /* AESE with a zero key is SubBytes then ShiftRows; with the word in every column ShiftRows changes nothing. */
+    uint8x16_t v = vaeseq_u8(vreinterpretq_u8_u32(vdupq_n_u32(w)), vdupq_n_u8(0));
+    return vgetq_lane_u32(vreinterpretq_u32_u8(v), 0);
+#endif
+}
+
+/* One block through AES-256's fourteen rounds. */
+CEE_AESGCM_TARGET static inline cee_v128 cee_aes_block(const cee_v128 *rk, cee_v128 b) {
+    uint32_t r;
+#if defined(CEE_AESGCM_X86)
+    b = _mm_xor_si128(b, rk[0]);
+    for (r = 1u; r < 14u; r++) { b = _mm_aesenc_si128(b, rk[r]); }
+    return _mm_aesenclast_si128(b, rk[14]);
+#else
+    for (r = 0u; r < 13u; r++) { b = vaesmcq_u8(vaeseq_u8(b, rk[r])); }
+    return veorq_u8(vaeseq_u8(b, rk[13]), rk[14]);
+#endif
+}
+
+/* Eight blocks through AES-256 at once, in place: the rounds of the eight run side by side, which is what the
+ * instruction's latency leaves room for. The eight are named, not an array in a loop: GCC at -O2 does not unroll
+ * such a loop, and the blocks then go through memory one after another (half the speed, measured). */
+#define CEE_AES8(STEP, KEY) \
+    b0 = STEP(b0, KEY); b1 = STEP(b1, KEY); b2 = STEP(b2, KEY); b3 = STEP(b3, KEY); \
+    b4 = STEP(b4, KEY); b5 = STEP(b5, KEY); b6 = STEP(b6, KEY); b7 = STEP(b7, KEY);
+#define CEE_AES_ARM_ROUND(BLOCK, KEY) vaesmcq_u8(vaeseq_u8(BLOCK, KEY))
+CEE_AESGCM_TARGET static inline void cee_aes_block8(const cee_v128 *rk, cee_v128 *b) {
+    cee_v128 b0 = b[0], b1 = b[1], b2 = b[2], b3 = b[3], b4 = b[4], b5 = b[5], b6 = b[6], b7 = b[7];
+    uint32_t r;
+#if defined(CEE_AESGCM_X86)
+    CEE_AES8(_mm_xor_si128, rk[0])
+    for (r = 1u; r < 14u; r++) { CEE_AES8(_mm_aesenc_si128, rk[r]) }
+    CEE_AES8(_mm_aesenclast_si128, rk[14])
+#else
+    for (r = 0u; r < 13u; r++) { CEE_AES8(CEE_AES_ARM_ROUND, rk[r]) }
+    CEE_AES8(vaeseq_u8, rk[13])
+    CEE_AES8(veorq_u8, rk[14])
+#endif
+    b[0] = b0; b[1] = b1; b[2] = b2; b[3] = b3; b[4] = b4; b[5] = b5; b[6] = b6; b[7] = b7;
+}
+#undef CEE_AES8
+#undef CEE_AES_ARM_ROUND
+
+/* GHASH works on a block with its bits in the field's order: byte-swapped on x86-64 (the multiply then shifts the
+ * product one bit, as Intel's carry-less multiplication paper has it), bit-reversed in each byte on AArch64 (the
+ * product is then the plain polynomial one, low coefficient in the low bit). */
+CEE_AESGCM_TARGET static inline cee_v128 cee_gh_load(const uint8_t *p) {
+#if defined(CEE_AESGCM_X86)
+    return _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *)(const void *)p),
+        _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15));
+#else
+    return vrbitq_u8(vld1q_u8(p));
+#endif
+}
+
+CEE_AESGCM_TARGET static inline void cee_gh_store(uint8_t *p, cee_v128 v) {
+#if defined(CEE_AESGCM_X86)
+    _mm_storeu_si128((__m128i *)(void *)p,
+        _mm_shuffle_epi8(v, _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)));
+#else
+    vst1q_u8(p, vrbitq_u8(v));
+#endif
+}
+
+/* A 256-bit carry-less product in three parts, low, middle (to be added 64 bits up) and high, each XORed into its
+ * sum: several products are added before one reduction. */
+CEE_AESGCM_TARGET static inline void cee_gh_wide(cee_v128 a, cee_v128 b, cee_v128 *lo, cee_v128 *mid, cee_v128 *hi) {
+#if defined(CEE_AESGCM_X86)
+    *lo = _mm_xor_si128(*lo, _mm_clmulepi64_si128(a, b, 0x00));
+    *mid = _mm_xor_si128(*mid, _mm_xor_si128(_mm_clmulepi64_si128(a, b, 0x10), _mm_clmulepi64_si128(a, b, 0x01)));
+    *hi = _mm_xor_si128(*hi, _mm_clmulepi64_si128(a, b, 0x11));
+#else
+    poly64x2_t pa = vreinterpretq_p64_u8(a);
+    poly64x2_t pb = vreinterpretq_p64_u8(b);
+    poly64x2_t swapped = vextq_p64(pb, pb, 1); /* b's halves the other way round */
+    *lo = veorq_u8(*lo, vreinterpretq_u8_p128(CEE_PMULL_LOW(pa, pb)));
+    *hi = veorq_u8(*hi, vreinterpretq_u8_p128(vmull_high_p64(pa, pb)));
+    *mid = veorq_u8(*mid, veorq_u8(vreinterpretq_u8_p128(CEE_PMULL_LOW(pa, swapped)),
+        vreinterpretq_u8_p128(vmull_high_p64(pa, swapped))));
+#endif
+}
+
+/* The sum of products, reduced by x^128 + x^7 + x^2 + x + 1. */
+CEE_AESGCM_TARGET static inline cee_v128 cee_gh_reduce(cee_v128 lo, cee_v128 mid, cee_v128 hi) {
+#if defined(CEE_AESGCM_X86)
+    __m128i t2, t3, t4, t5, t6, t7, t8, t9;
+    t5 = _mm_slli_si128(mid, 8);
+    t4 = _mm_srli_si128(mid, 8);
+    t3 = _mm_xor_si128(lo, t5);
+    t6 = _mm_xor_si128(hi, t4);
+    /* the 256-bit sum one bit to the left: the operands' bits are reflected */
+    t7 = _mm_srli_epi32(t3, 31);
+    t8 = _mm_srli_epi32(t6, 31);
+    t3 = _mm_slli_epi32(t3, 1);
+    t6 = _mm_slli_epi32(t6, 1);
+    t9 = _mm_srli_si128(t7, 12);
+    t8 = _mm_slli_si128(t8, 4);
+    t7 = _mm_slli_si128(t7, 4);
+    t3 = _mm_or_si128(t3, t7);
+    t6 = _mm_or_si128(t6, t8);
+    t6 = _mm_or_si128(t6, t9);
+    /* the reduction, in two halves */
+    t7 = _mm_slli_epi32(t3, 31);
+    t8 = _mm_slli_epi32(t3, 30);
+    t9 = _mm_slli_epi32(t3, 25);
+    t7 = _mm_xor_si128(t7, t8);
+    t7 = _mm_xor_si128(t7, t9);
+    t8 = _mm_srli_si128(t7, 4);
+    t7 = _mm_slli_si128(t7, 12);
+    t3 = _mm_xor_si128(t3, t7);
+    t2 = _mm_srli_epi32(t3, 1);
+    t4 = _mm_srli_epi32(t3, 2);
+    t5 = _mm_srli_epi32(t3, 7);
+    t2 = _mm_xor_si128(t2, t4);
+    t2 = _mm_xor_si128(t2, t5);
+    t2 = _mm_xor_si128(t2, t8);
+    t3 = _mm_xor_si128(t3, t2);
+    return _mm_xor_si128(t6, t3);
+#else
+    uint8x16_t zero = vdupq_n_u8(0);
+    poly64x2_t fold = vdupq_n_p64(0x87u);
+    poly64x2_t ph;
+    uint8x16_t t;
+    lo = veorq_u8(lo, vextq_u8(zero, mid, 8)); /* mid << 64 */
+    hi = veorq_u8(hi, vextq_u8(mid, zero, 8)); /* mid >> 64 */
+    /* x^128 = x^7 + x^2 + x + 1: the high half's top word folds into the middle, then its low word into the low
+     * half. */
+    t = vreinterpretq_u8_p128(vmull_high_p64(vreinterpretq_p64_u8(hi), fold));
+    lo = veorq_u8(lo, vextq_u8(zero, t, 8));
+    hi = veorq_u8(hi, vextq_u8(t, zero, 8));
+    ph = vreinterpretq_p64_u8(hi);
+    return veorq_u8(lo, vreinterpretq_u8_p128(CEE_PMULL_LOW(ph, fold)));
+#endif
+}
+
+/* The product of two field elements. */
+CEE_AESGCM_TARGET static inline cee_v128 cee_gh_mul(cee_v128 a, cee_v128 b) {
+    cee_v128 lo = cee_v_xor(a, a);
+    cee_v128 mid = lo;
+    cee_v128 hi = lo;
+    cee_gh_wide(a, b, &lo, &mid, &hi);
+    return cee_gh_reduce(lo, mid, hi);
+}
+
+/* GHASH over `length` bytes, the last block padded with zeros: `y` before, `y` after. `h` holds the key and its
+ * second, third and fourth powers: four blocks are hashed with one reduction. */
+CEE_AESGCM_TARGET static inline cee_v128 cee_gh_update(cee_v128 y, const cee_v128 *h, const uint8_t *bytes,
+    uint64_t length) {
+    uint8_t last[16];
+    while (length >= 64u) {
+        cee_v128 lo = cee_v_xor(y, y);
+        cee_v128 mid = lo;
+        cee_v128 hi = lo;
+        cee_gh_wide(cee_v_xor(y, cee_gh_load(bytes)), h[3], &lo, &mid, &hi);
+        cee_gh_wide(cee_gh_load(bytes + 16), h[2], &lo, &mid, &hi);
+        cee_gh_wide(cee_gh_load(bytes + 32), h[1], &lo, &mid, &hi);
+        cee_gh_wide(cee_gh_load(bytes + 48), h[0], &lo, &mid, &hi);
+        y = cee_gh_reduce(lo, mid, hi);
+        bytes += 64;
+        length -= 64u;
+    }
+    while (length >= 16u) {
+        y = cee_gh_mul(cee_v_xor(y, cee_gh_load(bytes)), h[0]);
+        bytes += 16;
+        length -= 16u;
+    }
+    if (length > 0u) {
+        ceesafe_mem_set(last, 0, sizeof last);
+        ceesafe_mem_copy(last, bytes, (size_t)length);
+        y = cee_gh_mul(cee_v_xor(y, cee_gh_load(last)), h[0]);
+    }
+    return y;
+}
+
+/* The counter block: the 12-byte nonce, then the counter, big-endian. */
+static inline void cee_aesgcm_counter(uint8_t *block, const uint8_t *nonce, uint32_t counter) {
+    ceesafe_mem_copy(block, nonce, 12u);
+    block[12] = (uint8_t)(counter >> 24);
+    block[13] = (uint8_t)(counter >> 16);
+    block[14] = (uint8_t)(counter >> 8);
+    block[15] = (uint8_t)counter;
+}
+
+/* CTR mode from counter 2 on, in place: eight blocks at a time, then one at a time. */
+CEE_AESGCM_TARGET static inline void cee_aesgcm_ctr(const cee_v128 *rk, const uint8_t *nonce, uint8_t *data,
+    uint64_t length) {
+    uint8_t block[16];
+    uint8_t stream[16];
+    cee_v128 b[8];
+    uint32_t counter = 2u;
+    uint32_t i;
+    while (length >= 128u) {
+        for (i = 0u; i < 8u; i++) {
+            cee_aesgcm_counter(block, nonce, counter + i);
+            b[i] = cee_v_load(block);
+        }
+        cee_aes_block8(rk, b);
+        for (i = 0u; i < 8u; i++) { cee_v_store(data + 16u * i, cee_v_xor(cee_v_load(data + 16u * i), b[i])); }
+        counter += 8u;
+        data += 128;
+        length -= 128u;
+    }
+    while (length >= 16u) {
+        cee_aesgcm_counter(block, nonce, counter);
+        cee_v_store(data, cee_v_xor(cee_v_load(data), cee_aes_block(rk, cee_v_load(block))));
+        counter += 1u;
+        data += 16;
+        length -= 16u;
+    }
+    if (length > 0u) {
+        cee_aesgcm_counter(block, nonce, counter);
+        cee_v_store(stream, cee_aes_block(rk, cee_v_load(block)));
+        for (i = 0u; i < (uint32_t)length; i++) { data[i] ^= stream[i]; }
+    }
+}
+
+/* The tag of `aad` and the ciphertext `data`, into `tag`. */
+CEE_AESGCM_TARGET static inline void cee_aesgcm_tag(const cee_v128 *rk, const cee_v128 *h, const uint8_t *nonce,
+    const uint8_t *aad, uint64_t aadLength, const uint8_t *data, uint64_t length, uint8_t *tag) {
+    uint8_t block[16];
+    uint64_t aadBits = aadLength * 8u;
+    uint64_t dataBits = length * 8u;
+    cee_v128 y;
+    uint32_t i;
+    ceesafe_mem_set(block, 0, sizeof block);
+    y = cee_gh_load(block); /* zero */
+    y = cee_gh_update(y, h, aad, aadLength);
+    y = cee_gh_update(y, h, data, length);
+    for (i = 0u; i < 8u; i++) {
+        block[i] = (uint8_t)(aadBits >> (56u - 8u * i));
+        block[8u + i] = (uint8_t)(dataBits >> (56u - 8u * i));
+    }
+    y = cee_gh_mul(cee_v_xor(y, cee_gh_load(block)), h[0]);
+    cee_gh_store(tag, y);
+    cee_aesgcm_counter(block, nonce, 1u);
+    cee_v_store(tag, cee_v_xor(cee_v_load(tag), cee_aes_block(rk, cee_v_load(block))));
+}
+
+CEE_AESGCM_TARGET static void cee_aesgcm_expand(const uint8_t *key, uint8_t *schedule) {
+    static const uint8_t rcon[7] = {0x01u, 0x02u, 0x04u, 0x08u, 0x10u, 0x20u, 0x40u};
+    uint32_t w[60];
+    uint8_t zero[16];
+    cee_v128 rk[15];
+    cee_v128 h;
+    cee_v128 power;
+    uint32_t i, t;
+    ceesafe_mem_copy(w, key, 32u); /* little-endian on both: a word's first byte is its low one */
+    for (i = 8u; i < 60u; i++) {
+        t = w[i - 1u];
+        if (i % 8u == 0u) {
+            t = cee_aes_subword((t >> 8) | (t << 24)) ^ (uint32_t)rcon[i / 8u - 1u];
+        } else if (i % 8u == 4u) {
+            t = cee_aes_subword(t);
+        }
+        w[i] = w[i - 8u] ^ t;
+    }
+    ceesafe_mem_copy(schedule, w, 240u);
+    for (i = 0u; i < 15u; i++) { rk[i] = cee_v_load(schedule + 16u * i); }
+    ceesafe_mem_set(zero, 0, sizeof zero);
+    h = cee_aes_block(rk, cee_v_load(zero));
+    /* The GHASH key, the zero block encrypted, and its second, third and fourth powers, as cee_gh_load reads a
+     * block: 64 bytes after the round keys. */
+    cee_v_store(schedule + 240u, h);
+    h = cee_gh_load(schedule + 240u);
+    power = h;
+    cee_v_store(schedule + 240u, power);
+    for (i = 1u; i < 4u; i++) {
+        power = cee_gh_mul(power, h);
+        cee_v_store(schedule + 240u + 16u * i, power);
+    }
+    ceesafe_mem_set(w, 0, sizeof w);
+}
+
+CEE_AESGCM_TARGET static void cee_aesgcm_seal(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad,
+    uint64_t aadLength, uint8_t *data, uint64_t length, uint8_t *tag) {
+    cee_v128 rk[15];
+    cee_v128 h[4];
+    uint32_t i;
+    for (i = 0u; i < 15u; i++) { rk[i] = cee_v_load(schedule + 16u * i); }
+    for (i = 0u; i < 4u; i++) { h[i] = cee_v_load(schedule + 240u + 16u * i); }
+    cee_aesgcm_ctr(rk, nonce, data, length);
+    cee_aesgcm_tag(rk, h, nonce, aad, aadLength, data, length, tag);
+}
+
+CEE_AESGCM_TARGET static uint32_t cee_aesgcm_open(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad,
+    uint64_t aadLength, uint8_t *data, uint64_t length, const uint8_t *tag) {
+    cee_v128 rk[15];
+    cee_v128 h[4];
+    uint8_t expected[16];
+    uint32_t i, diff = 0u;
+    for (i = 0u; i < 15u; i++) { rk[i] = cee_v_load(schedule + 16u * i); }
+    for (i = 0u; i < 4u; i++) { h[i] = cee_v_load(schedule + 240u + 16u * i); }
+    cee_aesgcm_tag(rk, h, nonce, aad, aadLength, data, length, expected);
+    for (i = 0u; i < 16u; i++) { diff |= (uint32_t)(expected[i] ^ tag[i]); }
+    if (diff != 0u) {
+        ceesafe_mem_set(data, 0, (size_t)length); /* nothing of an unauthenticated text is given back */
+        return 0u;
+    }
+    cee_aesgcm_ctr(rk, nonce, data, length);
+    return 1u;
+}
+#endif
+
+/* Expands a 32-byte key into `schedule` (304 bytes: the 15 round keys, then the GHASH key and three powers of it). Called, as the two
+ * below, only after ceesafe_aes256gcm_available() said 1; elsewhere they do nothing, and open answers 0. */
+void ceesafe_aes256gcm_expand(const uint8_t *key, uint8_t *schedule) {
+#if defined(CEE_AESGCM_X86) || defined(CEE_AESGCM_ARM)
+    cee_aesgcm_expand(key, schedule);
+#else
+    (void)key;
+    (void)schedule;
+#endif
+}
+
+/* Encrypts `data[0..length)` in place under the schedule and the 12-byte `nonce`, and writes the 16-byte tag of
+ * `aad[0..aadLength)` and the ciphertext to `tag`. */
+void ceesafe_aes256gcm_seal(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad, uint64_t aadLength,
+    uint8_t *data, uint64_t length, uint8_t *tag) {
+#if defined(CEE_AESGCM_X86) || defined(CEE_AESGCM_ARM)
+    cee_aesgcm_seal(schedule, nonce, aad, aadLength, data, length, tag);
+#else
+    (void)schedule;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)data;
+    (void)length;
+    (void)tag;
+#endif
+}
+
+/* Checks `tag` against `aad` and the ciphertext `data[0..length)`, in constant time; 1 and the plaintext in place
+ * when it is theirs, 0 and `data` zeroed when it is not. */
+uint32_t ceesafe_aes256gcm_open(const uint8_t *schedule, const uint8_t *nonce, const uint8_t *aad, uint64_t aadLength,
+    uint8_t *data, uint64_t length, const uint8_t *tag) {
+#if defined(CEE_AESGCM_X86) || defined(CEE_AESGCM_ARM)
+    return cee_aesgcm_open(schedule, nonce, aad, aadLength, data, length, tag);
+#else
+    (void)schedule;
+    (void)nonce;
+    (void)aad;
+    (void)aadLength;
+    (void)data;
+    (void)length;
+    (void)tag;
+    return 0u;
+#endif
+}
+
 /* ---- Wall-clock time (ADR 0055). The monotonic clock, for waits, is ceesafe_async_now. ---- */
 #if !defined(_WIN32)
 #include <time.h>

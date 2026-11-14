@@ -2705,7 +2705,8 @@ parameter without `static`. A function's **flows** are then:
   stays borrowed.
 
 A region's **bound** adds flows (§25.8, ADR 0134): where `region b: a` is in scope, a result or a store target
-that names `a` is read, in every rule above, as naming `b` too.
+that names `a` is read, in every rule above, as naming `b` too. A store target is a `borrow mut` parameter, as
+above: a bound makes nothing else one (ADR 0134 §10).
 
 A v0 signature (no regions) has exactly its v0 return sources and no parameter flows.
 
@@ -2816,8 +2817,9 @@ N0272: `fn forward<region a, region b: a>(x: StringView<a>, y: StringView<b>) ->
   its inherent impls, with the meaning above. **An instance is not checked against it**: a value has one loan set,
   so an instance is not used after any borrow it holds is gone, whichever region a field is written with.
 - An inherent impl (`impl<region scratch, region input: scratch> Parser<scratch, input>`) restates its type's region
-  bounds exactly, as it names its parameters in order: N0267 otherwise. A block is not conditional on a region
-  bound, as it may be on a type bound (§21.1).
+  bounds exactly, as it names its parameters in order: N0267 otherwise, for a block with no functions too. The
+  block's own bounds are held to the rule below (N0273), so none is written twice. A block is not conditional on
+  a region bound, as it may be on a type bound (§21.1).
 - An impl of an interface (`impl<region r> I for S<r>`) writes no bound on its region parameters (N0216), and its
   methods see none: their flows are their interface's (§21.1), and an interface has no regions (N0216, §25.1).
 - A function type and a closure have no region parameters. A function with region parameters is no function value

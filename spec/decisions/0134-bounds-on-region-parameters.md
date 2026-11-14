@@ -1,12 +1,15 @@
 # ADR 0134 — Bounds on region parameters: `region b: a` says that `b` outlives `a`
 
-- Status: **Accepted** by the owner, 2026-11-14 ("implement Region bounds"), implemented on branch
-  `impl/region-bounds`; not yet released.
+- Status: **Accepted** by the owner, 2026-11-14 ("implement Region bounds"; "Go ahead with region bounds for the next
+  release"); released in ceesafec 0.44.0.
 - Scope: what a bound written on a region parameter means, where one may be written, and what it gives a body and
   takes from a caller (`src/check/region_bounds.cee`, and the places that call it in `references.cee`,
   `structs.cee`, `declare.cee`, `inherent.cee`, `interfaces.cee`, `src/nir/borrow.cee`; `--dump-ast`);
   `spec/type-system.md` §25.1, §25.6, §25.8 (new), `spec/grammar.md` (`TypeParam`), `spec/diagnostics.md` (N0216,
   N0267, N0273), `spec/lifetimes.md` §8. No new diagnostic code.
+- What 0.44.0 covers: the result of a function, and a store through a `borrow mut` parameter, which are the
+  targets of flows that release has (§25.6). Not covered, because the release does not model the target at all,
+  with a bound or without: a store through a `borrow mut` held in a value passed by value (§10).
 - A breaking change: a program that writes a bound on a region parameter that is not another region parameter in
   scope compiled, and no longer does (§6: none in the tree).
 
@@ -41,6 +44,9 @@ A bound adds flows:
 
 > With `region b: a` in scope, a target of flows that names `a` (the result, a store target) takes the loans of
 > every parameter that names `b`, as if the target named `b` too.
+
+A store target is what §25.6 says it is: a `borrow mut` parameter whose referent may hold a loan. A bound makes
+nothing a target that is not one without it (§10).
 
 The relation is reflexive (every flow name flows to itself: the existing rule) and transitive (`region c: b` and
 `region b: a`: a target that names `a` takes `c`'s). It is not symmetric: a target that names `b` gains nothing
@@ -126,8 +132,10 @@ explains; it decides nothing.
   functions and for its readers, not a constraint on its values.
 - **Inherent impls**: an `impl<region a, region b: a> S<a, b>` block names its struct's or enum's parameters in
   order (N0267, ADR 0064); it **restates the region bounds exactly**: the same bounds on the same parameters, no
-  more and no fewer (N0267). A block cannot be conditional on a region bound, as it can on a type bound (ADR 0130):
-  regions are erased, so there is nothing to select an instance by.
+  more and no fewer (N0267), also in a block with no functions, of a struct or of an enum. The block's own bounds
+  are held to 2.5 like any others: `impl<region a, region b: a + a> S<a, b>` is N0273 ("written twice"), though
+  its bounds, read as a set, are the type's. A block cannot be conditional on a region bound, as it can on a type
+  bound (ADR 0130): regions are erased, so there is nothing to select an instance by.
 - **Impls of an interface**: `impl<region r> I for S<r>` declares the regions again as its own names (ADR 0054). It
   **writes no bound** (N0216), and its methods see none: their flows are their interface's (§21.1, ADR 0131 §2.3),
   and an interface has no regions (N0216), so a bound could give a caller through the interface nothing.
@@ -136,7 +144,8 @@ explains; it decides nothing.
 - **Function types and closures**: a function type has no region parameters and so no bound, and a closure
   declares none. A function with region parameters is no function value (N0298, §36.1: a function type cannot say
   how loans flow between its arguments), with a bound as without one, so no call through a function value has a
-  bound's flow to apply. Unchanged, and tested for a function with a bound.
+  bound's flow to apply. A function without a receiver of a struct or an enum (`Parser.orNote`), which has its
+  type's bounds in scope, is no value at all (N0210). Unchanged, and tested for both with a bound.
 - **`static`**: `region a: static` is refused (N0273). It would say that `a`'s borrows are static data, and no call
   checks that an argument is static data (ADR 0068: `static` in a parameter's type is N0273 for this reason). The
   converse needs no writing: static data holds no loan and passes where any region is required.
@@ -194,9 +203,10 @@ it. Each assumption has a test that fails without it (the mutations are in §8):
 | R1 | The flows a bound gives are in the record that callers apply, not only in what the body is allowed | one computation (`resolveFlows` closes the target's names, then computes sources and flows from them) | `check-fail/region-bounds-callers` (every function of it), `tests/packages/region-bounds/misuse` |
 | R2 | Every instance has them (ADR 0131 A1) | the declaration's flows are inherited; ceesafec's internal check (N0216) | `check-fail/region-bounds-callers`: `generic`, `genericStructFunction`, `genericStructMethod` |
 | R3 | Where the bound makes a reference's own loan a source, the caller records the loan of the argument itself, not only what it refers to | deep and plain are decided from the closed names, once, for both sides | `check-fail/region-bounds-callers`: `reference`, `ownStorage`, `referenceStore` |
-| R4 | A by-value store target whose flows are computed late (ADR 0131 §2.13) has them too | `resolveHeldTargets` closes the target's names the same way | `check-fail/region-bounds-callers`: `byValueTarget`; `run-pass/region-bounds`: `send` |
-| R5 | No function value or closure carries a bound's flow (ADR 0131 A2) | N0298 for a function with region parameters; N0272 in a closure's body | `check-fail/region-bounds-function-values`, `check-fail/region-bounds-body` (the closure) |
-| R6 | An impl block cannot change the bounds its functions are checked with | N0267 (inherent), N0216 (of an interface) | `check-fail/region-bounds-errors` |
+| R4 | A bound makes nothing a store target that is not one without it, so it permits no store that no caller records | the closure is applied to the names of the targets §25.6 already has (the result, a `borrow mut` parameter) and nowhere else; 0.44.0 has no other target (§10) | `check-fail/region-bounds-callers`: `store`, `referenceStore`, `plainStoresDeep` (the targets there are); §10 for the one there is not |
+| R5 | No function value or closure carries a bound's flow (ADR 0131 A2) | N0298 for a function with region parameters; N0210 for a struct's or an enum's function without a receiver; N0272 in a closure's body | `check-fail/region-bounds-function-values`, `check-fail/region-bounds-body` (the closure) |
+| R8 | Plain covers deep at the caller: where a bound makes a reference a plain source (R3), the body may still return or store what the referent holds, so the caller's record of a plain source has the loans held inside the argument too | a reference to a value that holds loans has that value's loans as well as its own (lifetimes.md §3, "Borrowing a loan holder"), and a plain source gives the result all the argument's loans; unchanged | `check-fail/region-bounds-callers`: `plainHoldsDeep`, `plainStoresDeep`, `plainHoldsElements` |
+| R6 | An impl block cannot change the bounds its functions are checked with | N0267 (inherent, with or without functions; its own bounds N0273), N0216 (of an interface) | `check-fail/region-bounds-errors` |
 | R7 | A value has one loan set, so an instance of a type with a bound needs no check | §25.5, unchanged | `check-fail/region-bounds-callers`: `instance` |
 
 Not soundness, but the meaning: the closure goes downward only (`check-fail/region-bounds-body`: `preferBack`,
@@ -226,6 +236,29 @@ Where it is weakest:
 - **No bound through an interface.** A method of an interface cannot take two regions and relate them (N0216). It
   takes type parameters, whose bounds give flows (ADR 0131).
 - **A cycle is not an equation**: `region a: b, region b: a` is refused; write one region.
+- **Two `borrow mut` parameters whose referents name regions that a bound relates** (the review's F1, not fixed):
+
+  ```ceesafe
+  fn both<region a, region b: a>(
+      near: borrow mut Vector<StringView<a>>,
+      far: borrow mut Vector<StringView<b>>,
+      w: StringView<b>,
+  ) {
+      near.push(w)!;
+      far.push(w)!;
+  }
+  ```
+
+  A caller's `far` stays exclusively borrowed for as long as `near` is used after the call (N0242), though the
+  body stores nothing of `far` in `near`. The flow `far` into `near` exists because `far`'s referent names `b`,
+  and the store path of `resolveFlows` makes it a plain flow (a borrow of `far` itself) wherever a name written
+  on the source is one of the target's, where the result path would ask for the reference's own region and make
+  it deep (what `far` holds). This is not the bound's doing: the same function with one region for all three
+  parameters freezes both vectors in 0.43.0 (`near` and `far` each flow into the other), so the bound refuses
+  less than its absence did. Making such a flow deep would change which flows every function with two
+  `borrow mut` parameters has, bound or not, and with it what every such body may store: a change to ADR 0131's
+  rule, to be argued and tested there, not here. Until then such a caller uses `far` again only after its last
+  use of `near`.
 
 ## 6. What was newly refused, measured
 
@@ -269,17 +302,19 @@ the body could not then have returned it; it is N0243 now. None in the tree.
 - `run-pass/region-bounds` (native and `--interp`, `--check-leaks`): the longer-lived of two views as the shorter
   region; a store; transitive and several bounds; a reference's own region; a forwarding function; a parser struct
   with an input region that outlives its scratch region, with a function, an inherent impl and a method's own
-  bounded region; an iterator over two slices of different regions; an enum; a by-value store target; a generic
-  struct; an impl of an interface for a struct with a bound.
+  bounded region; an iterator over two slices of different regions; an enum; a generic struct; an impl of an
+  interface for a struct with a bound.
 - `check-fail/region-bounds-body`: each of those bodies without its bound (N0245, N0272), the bound the wrong way
   round, siblings, upward, forwarding without restating, a closure.
 - `check-fail/region-bounds-callers`: a caller that keeps the result or the store past the referent, for a
   function, a store, a transitive bound, a reference's own region, a generic function, a forwarding function, a
-  struct's function, a method's own region, a generic struct's method and function, an enum's function, a by-value
-  target, the holder's own storage, an instance; and a write while the result is in use.
-- `check-fail/region-bounds-errors`: every error of 2.5.
+  struct's function, a method's own region, a generic struct's method and function, an enum's function, the
+  holder's own storage, an instance; what a plain source's referent holds, returned and stored (R8); and a write
+  while the result is in use.
+- `check-fail/region-bounds-errors`: every error of 2.5; an inherent impl that does not restate the bounds, with
+  and without functions, for a struct and an enum; an inherent impl's own malformed bounds.
 - `check-fail/region-bounds-function-values`: N0298, for a result with two sources, a store, and a function whose
-  one flow the bound gives.
+  one flow the bound gives; N0210 for a struct's functions without a receiver.
 - `tests/packages/region-bounds` (`tools/package_tests.py`, check 35): a dependency's bounded functions, struct and
   method: used well (check, `run --interp`, built), and misused (N0245, four N0243 with the note's text).
 - `parse-pass/region-bounds` (its `.ast` snapshot) and `tests/formatting/region-bounds`
@@ -287,7 +322,9 @@ the body could not then have returned it; it is N0243 now. None in the tree.
 - The guide (`guide/ownership.md`, "One region that outlives another") holds the exact text of the N0245 without
   the bound and of the N0243 with its note; the book (Listing 10-18) the N0245 and the program with the bound.
 
-Mutations, each applied to a copy of the implementation, built, and run against these tests (2026-11-14):
+Mutations, each applied to a copy of the implementation, built, and run against these tests (2026-11-14, on the
+branch `impl/region-bounds`, which had the fourth round of ADR 0131; they were not repeated on the release line,
+where M8 has nothing to mutate, §10):
 
 | # | Mutation | Assumption | Result |
 |---|---|---|---|
@@ -299,7 +336,7 @@ Mutations, each applied to a copy of the implementation, built, and run against 
 | M6 | the closure is skipped for an instance (a non-empty type environment) | R2 | **passes**: the instance inherits the declaration's flows (ADR 0131 §2.9), which is the mechanism R2 relies on |
 | M6b | M6, and an instance does not inherit | R2 | fails: N0216, ceesafec's internal check ("this instance of 'choose' lacks a flow of its declaration"), on `run-pass/region-bounds`; `check-fail/region-bounds-callers` (`generic`, `genericStructFunction`, `genericStructMethod`) |
 | M7 | a bound never makes a deep source plain | R3 | fails `run-pass/region-bounds` (`viewOf`: N0245), `check-fail/region-bounds-callers` (`reference`, `ownStorage`) |
-| M8 | `resolveHeldTargets` does not close the target's names | R4 | fails `run-pass/region-bounds` (`send`: N0272), `check-fail/region-bounds-callers` (`byValueTarget`) |
+| M8 | (the branch only) `resolveHeldTargets` does not close a by-value target's names | the by-value target, not in 0.44.0 (§10) | failed the branch's `run-pass/region-bounds` (`send`: N0272) and `check-fail/region-bounds-callers` (`byValueTarget`), two tests that 0.44.0 does not have |
 | M9 | N0298 not given for having region parameters | R5 | fails `check-fail/region-bounds-function-values` on `one` alone: `pick` and `keep` are still N0298, by the rules for a result's sources and for a store through an argument, and `one` as a value would be sound (a call through a function value gives its result every argument's loans) |
 | M10 | `checkRegionBounds`, `sameRegionBounds`, `refuseRegionBounds` report nothing | R6, 2.5 | fails `check-fail/region-bounds-errors` |
 
@@ -312,3 +349,45 @@ Mutations, each applied to a copy of the implementation, built, and run against 
   present in 0.42.1, reported and not changed here.
 - **Regions written in a body** (`let v: StringView<a> = …`) are not checked, with or without bounds (§25.2).
 - **A `where` clause** that relates two regions declared elsewhere (a struct's by a method's).
+
+## 10. What ceesafec 0.44.0 implements, and what it does not
+
+The feature was written on a branch that had the fourth round of ADR 0131 (the stores of the built-ins, and a
+`borrow mut` held in a value passed by value as a store target). That round was reverted for release 0.43.0 and
+is not in 0.44.0. The bound is implemented on the flows 0.44.0 has, and only on those.
+
+**Covered**, in every position of 2.4 (a function, a method's own region, a struct's and an enum's regions, an
+inherent impl, a generic function's and a generic struct's instances, another package):
+
+- **The result.** A result that names `a` takes what is borrowed for `b`: the body may return it, and every caller
+  records it (N0243, N0240 to N0242 with the note).
+- **A store through a `borrow mut` parameter.**
+  `fn keep<region a, region b: a>(out: borrow mut Vector<StringView<a>>, v: StringView<b>) { out.push(v)!; }`:
+  the body may store, and every caller's `out` argument holds `v`'s loans from the call on.
+- **The errors** of 2.5 and the impl rules of 2.4.
+
+**Not covered: a `borrow mut` held in a value passed by value.**
+
+```ceesafe
+struct Sink<region r> {
+    out: borrow mut(r) Vector<StringView<r>>;
+}
+
+fn send<region a, region b: a>(sink: Sink<a>, word: StringView<b>) {
+    sink.out.push(word)!;
+}
+```
+
+0.44.0, like 0.43.0 and 0.42.0, has no store target here (ADR 0131 §10, item 3): it holds no body to flows
+through `sink.out` and records no store for a caller. So this body checks **with the bound, with two unrelated
+regions and with one region for both parameters**, and a caller that keeps the vector past `word`'s referent is
+not refused and reads freed memory, exactly as in 0.43.0 (measured 2026-11-14 with both compilers on the three
+spellings: each is accepted and faults in the interpreter). The bound changes nothing in this: it is applied only to the names of
+a target that exists, so it adds no flow for `sink`, and it permits no store that was refused before. It also
+does not close the gap. The release that makes such a value a store target (ADR 0131's fourth round) must close
+its names with the region bounds as it does for a `borrow mut` parameter (the branch `impl/region-bounds` did,
+in `resolveHeldTargets`), and restore the branch's tests `send` (`run-pass/region-bounds`) and `byValueTarget`
+(`check-fail/region-bounds-callers`).
+
+The same holds for the stores of the built-ins (`replace`, `swap`, `fill`, `copyFrom`, `extend`, `resize`: ADR
+0131 §10, items 1 and 2): they record no store in 0.44.0, with a bound in the signature or without.

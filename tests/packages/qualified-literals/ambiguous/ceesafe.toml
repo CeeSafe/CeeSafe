@@ -1,0 +1,8 @@
+[package]
+name = "ambiguous"
+version = "0.1.0"
+kind = "executable"
+
+[dependencies]
+boxes = { path = "../boxes" }
+shapes = { path = "../shapes" }

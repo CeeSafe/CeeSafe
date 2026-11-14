@@ -1,0 +1,9 @@
+// shapes and boxes both have public `Item` and `Pair<T>` (package_tests.py §36).
+public struct Item {
+    public x: u32;
+}
+
+public struct Pair<T> {
+    public left: T;
+    public right: T;
+}

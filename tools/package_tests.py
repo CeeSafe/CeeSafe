@@ -133,6 +133,11 @@
     (N0252, ADR 0123 §2.6). Without those
     lines the program runs: a generic of shapes.cee instantiated from main.cee, values of private types held there,
     and locals named like private items are all allowed.
+36. qualified-literals (type-system.md §2): shapes and boxes both have `Item` and `Pair<T>`, and app imports both.
+    Struct literals named with their package, `shapes.Item { … }` and `boxes.Pair<u32> { … }`, as a value, an
+    argument and a field: `check` is clean (0.44.0 gave N0313 at the literal's `Item`, and a parse error for the
+    generic one) and the program prints what it should, in the interpreter and compiled. The simple names in a
+    literal are still N0313.
 
 usage: python3 tools/package_tests.py --compiler out/ceesafec
 """
@@ -369,6 +374,35 @@ def region_bounds(compiler, work, problems):
                  "declares 'region l: scratch' ('l' outlives 'scratch')"):
         if not any(text in note for note in notes):
             problems.append(f"region-bounds/misuse: no note says {text!r}: {notes}")
+
+
+def qualified_literals(compiler, work, problems):
+    """A struct literal named with its package (`dep.Item { … }`, `dep.Pair<u32> { … }`) is not the simple name two
+    imports provide (N0313), which a literal without the package still is."""
+    root = os.path.join(work, "qualified-literals")
+    shutil.copytree(os.path.join(ROOT, "tests", "packages", "qualified-literals"), root)
+    app = os.path.join(root, "app")
+    expected = "21\n10\n11"
+    status, document = json_check(compiler, app)
+    found = [d["code"] for d in document["diagnostics"]] if document else ["no document"]
+    if status != 0 or found:
+        problems.append(f"qualified-literals: check should be clean: {status} {found}")
+    p = run([compiler, "run", "--interp"], app)
+    if p.returncode != 0 or p.stdout.strip() != expected:
+        problems.append(f"qualified-literals: run --interp printed {p.stdout.strip()!r} ({p.returncode}) "
+                        f"{p.stderr[-300:]}")
+    p = run([compiler, "build"], app)
+    exe = os.path.join(app, "out", "app.exe" if WINDOWS else "app")
+    if p.returncode != 0:
+        problems.append(f"qualified-literals: build failed: {p.stderr.strip()[-600:]}")
+    else:
+        out = run([exe], app).stdout.strip()
+        if out != expected:
+            problems.append(f"qualified-literals: the program printed {out!r}")
+    status, document = json_check(compiler, os.path.join(root, "ambiguous"))
+    found = [(d["code"], d["start"]["line"]) for d in document["diagnostics"]] if document else []
+    if status != 1 or found != [("N0313", 6), ("N0313", 7)]:
+        problems.append(f"qualified-literals/ambiguous: expected N0313 at lines 6 and 7: {status} {found}")
 
 
 def check_all_rounds(compiler, work, problems):
@@ -1875,12 +1909,13 @@ def main():
 
         impl_bounds_order(compiler, work, problems)
         region_bounds(compiler, work, problems)
+        qualified_literals(compiler, work, problems)
         driver_messages(compiler, work, problems)
         header_include_dirs(compiler, work, problems)
         interface_records(compiler, work, problems)
         check_all_rounds(compiler, work, problems)
 
-    print(f"package_tests: 35 checks; {len(problems)} problems")
+    print(f"package_tests: 36 checks; {len(problems)} problems")
     for problem in problems:
         print("  FAIL " + problem)
     sys.exit(1 if problems else 0)

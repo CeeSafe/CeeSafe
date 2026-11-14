@@ -310,7 +310,9 @@ Primary = IntLiteral | FloatLiteral | StringLiteral | CharLiteral | 'true' | 'fa
         | 'async' 'move'? '(' (ClosureParam (',' ClosureParam)*)? ')' '=>' (Block | Expr)
                                                      (* L1: an async closure, §40.3; `move`: a child that owns what it
                                                         captures, §40.5, ADR 0033 *)
-        | Identifier GenericArgs? '{' FieldInits? '}'       (* struct literal, M2a; GenericArgs M6a *)
+        | Identifier ('.' Identifier)? GenericArgs? '{' FieldInits? '}'
+                                                     (* struct literal, M2a; GenericArgs M6a; `dep.Point { … }`,
+                                                        `dep.Pair<u8> { … }`: a dependency's type, type-system.md §2 *)
         | '[' Expr (',' Expr)* ','? ']' | '[' Expr ';' IntLiteral ']'   (* array literals, M2d *)
         | '[' ']'                                    (* the empty slice, ADR 0075 §2.9 *)
         | '[' Expr ':' Expr (',' Expr ':' Expr)* ','? ']'   (* an array by index, in a static's initialiser:

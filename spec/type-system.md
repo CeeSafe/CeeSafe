@@ -44,7 +44,8 @@ A **package** is the unit of compilation and of naming (ADR 0013, `tooling.md` ย
   **public** items are reached by qualifying them with the dependency's name:
   - in a type, `geometry.Point`, `geometry.Pair<u8>`;
   - in an expression, `geometry.area(p)`, `geometry.LIMIT`, `geometry.Shape.Circle(2)`, a struct literal
-    `geometry.Point { x: 1, y: 2 }`; in a pattern, `geometry.Shape.Circle(r)`;
+    `geometry.Point { x: 1, y: 2 }` or `geometry.Pair<u8> { left: 1, right: 2 }`; in a pattern,
+    `geometry.Shape.Circle(r)`. A qualified name is not a use of its simple name, so it is never N0313;
   - in an `impl`, as its interface or its target, where the orphan rule allows the impl (ยง21.1):
     `impl geometry.Shape for Tile`, `impl geometry.Scale<u8> for Tile`, `impl Named for geometry.Point`
     (ADR 0097). An impl declares no name, so N0315 does not apply to it.

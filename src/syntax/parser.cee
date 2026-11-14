@@ -3040,14 +3040,19 @@ struct Parser {
             }
             TokenKind.Identifier => {
                 let name = this.parseIdentifier()?;
-                if (this.at(TokenKind.Dot) && this.peekIs(
-                    1,
-                    TokenKind.Identifier,
-                ) && this.peekIs(2, TokenKind.OpenBrace)) {
+                // `dep.Pair<u8> { … }` as `dep.Point { … }`: a generic argument list, then the brace.
+                let genericThenBrace = match (this.genericArgumentListAt(2)) {
+                    Some(close) => this.peekIs(close + 1, TokenKind.OpenBrace),
+                    null => false,
+                };
+                if (this.at(TokenKind.Dot) && this.peekIs(1, TokenKind.Identifier) &&
+                    (this.peekIs(2, TokenKind.OpenBrace) || genericThenBrace)) {
                     // `geometry.Point { … }`: a struct literal of a dependency's type, named as one dotted name that
                     // the type checker resolves (type-system.md §2, M10 T5).
                     this.advance();
                     let member = this.parseIdentifier()?;
+                    let typeArguments =
+                        if (this.isGenericArgumentListAhead()) this.parseGenericArguments()? else emptyRange();
                     let first = this.front.ast.idents[name as usize];
                     let second = this.front.ast.idents[member as usize];
                     var dotted = Vector<u8>.create();
@@ -3061,7 +3066,11 @@ struct Parser {
                         end: second.end,
                         missing: false,
                     })?;
-                    return this.parseStructLiteral(ident, token.start, emptyRange());
+                    // The two parts are no longer in the tree, as PackageNames' joins (ast.cee's replacedIdents): so
+                    // `Item` of `a.Item { … }` is not a use of a name two imports provide (N0313).
+                    this.front.ast.replacedIdents.push(name)?;
+                    this.front.ast.replacedIdents.push(member)?;
+                    return this.parseStructLiteral(ident, token.start, typeArguments);
                 }
                 let typeArguments =
                     if (this.isGenericArgumentListAhead()) this.parseGenericArguments()? else emptyRange();
@@ -3206,9 +3215,13 @@ struct Parser {
 
     /// After an identifier: is the input `'<' Type (',' Type)* '>' '('`? Only then is '<' the start of generic
     /// arguments rather than less-than (grammar.md §2.1).
-    fn isGenericArgumentListAhead(borrow this) -> bool {
-        if (!this.at(TokenKind.Less)) {
-            return false;
+    fn isGenericArgumentListAhead(borrow this) -> bool => this.genericArgumentListAt(0).isSome();
+
+    /// The offset of the `>` that closes a generic argument list starting at `peek(from)`, if one starts there (see
+    /// isGenericArgumentListAhead); null otherwise.
+    fn genericArgumentListAt(borrow this, from: usize) -> usize? {
+        if (!this.peekIs(from, TokenKind.Less)) {
+            return null;
         }
         // Only tokens that can appear in types, with balanced '<' '>' and '[' ']' (§20.2). Parentheses and '->' only
         // after `fn`, in a function type such as `Box<dyn fn(u64) -> u64>` (§36.5): `a < g(b), c > (d)` stays a
@@ -3216,7 +3229,7 @@ struct Parser {
         var depth: i32 = 0;
         var inFunctionType = false;
         var sawDyn = false; // `+ Send` is a type's only after `dyn` (§38.4; bug B14)
-        var i: usize = 0;
+        var i = from;
         loop {
             let kind = this.peek(i).kind;
             if (sameKind(kind, TokenKind.Identifier) && this.nameIs(this.peek(i), "dyn")) {
@@ -3236,9 +3249,9 @@ struct Parser {
                     // Then a call, a member (`Pair<i32>.make`) or a literal (`Pair<u8> { … }`); or a generic
                     // function's instance as a value (`release<T>`, grammar.md §2), which a comparison cannot be.
                     if (!sameKind(kind, TokenKind.Greater)) {
-                        return false;
+                        return null;
                     }
-                    return match (this.peek(i + 1).kind) {
+                    let follows = match (this.peek(i + 1).kind) {
                         TokenKind.OpenParen => true,
                         TokenKind.Dot => true,
                         TokenKind.OpenBrace => true,
@@ -3248,6 +3261,7 @@ struct Parser {
                         TokenKind.CloseBracket => true,
                         _ => false,
                     };
+                    return if (follows) Some(i) else null;
                 }
             } else {
                 let allowed = match (kind) {
@@ -3271,7 +3285,7 @@ struct Parser {
                     _ => false,
                 };
                 if (!allowed) {
-                    return false;
+                    return null;
                 }
             }
             i += 1;

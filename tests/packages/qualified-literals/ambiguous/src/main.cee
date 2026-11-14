@@ -1,0 +1,8 @@
+// A simple name two imports provide is still N0313 in a struct literal (package_tests.py §36), plain and generic.
+import shapes;
+import boxes;
+
+fn main() {
+    let item = Item { x: 1 };
+    let pair = Pair<u32> { left: 2, right: 3 };
+}

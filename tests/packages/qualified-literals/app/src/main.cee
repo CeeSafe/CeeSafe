@@ -1,0 +1,26 @@
+// Struct literals of two dependencies' types that share a name, each named with its package (package_tests.py §36,
+// type-system.md §2): plain and generic, as a value, an argument and a field, beside the same names in types, a
+// static function and a pattern. None is the ambiguous simple name of N0313.
+import shapes;
+import boxes;
+
+struct Both {
+    item: shapes.Item;
+    pair: boxes.Pair<u32>;
+}
+
+fn make(x: u32) -> shapes.Item => shapes.Item { x: x };
+
+fn sum(p: shapes.Pair<u32>) -> u32 => p.left + p.right;
+
+fn main() {
+    let item = make(1);
+    let other = boxes.Item.create();
+    let pair = shapes.Pair<u32> { left: 3, right: 4 };
+    let both = Both { item: shapes.Item { x: 5 }, pair: boxes.Pair<u32> { only: 6 } };
+    match (item) {
+        shapes.Item { x } => { Console.writeLine(x + other.y); }
+    }
+    Console.writeLine(sum(pair) + sum(shapes.Pair<u32> { left: 1, right: 2 }));
+    Console.writeLine(both.item.x + both.pair.only);
+}

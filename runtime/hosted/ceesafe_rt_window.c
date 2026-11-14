@@ -11,6 +11,9 @@
  *
  * Events are queued in the window (a ring of CEE_WINDOW_QUEUE) and handed out one per ceesafe_window_poll, as a kind
  * and four integer and two float fields (lib/std/window.cee decodes them).
+ *
+ * A window opened with the external surface (ADR 0137) is drawn by the program, through the handles that
+ * ceesafe_window_native gives it; the runtime never paints its content, and present is Unsupported.
  */
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE /* dlopen, syscall(SYS_gettid), select, clock_gettime under glibc's strict C11 headers */
@@ -39,6 +42,18 @@
 #define CEE_EVENT_WHEEL 6
 #define CEE_EVENT_KEY 7
 #define CEE_EVENT_TEXT 8
+/* A scripted scale change (`scale:S`, ADR 0137): never queued, it updates the window and queues RESIZED. */
+#define CEE_SCRIPT_SCALE 100
+
+/* WindowSurface's numbers (ADR 0137): who draws the content. */
+#define CEE_SURFACE_FRAMES 0
+#define CEE_SURFACE_EXTERNAL 1
+
+/* WindowHandle's kinds (ceesafe_window_native, ADR 0137). */
+#define CEE_HANDLE_SCRIPTED 0
+#define CEE_HANDLE_APPKIT 1
+#define CEE_HANDLE_WIN32 2
+#define CEE_HANDLE_XLIB 3
 
 /* Key numbers: 1-14 the named keys, 100 + n F(n), 0x10000 + c a character, 0x20000 + code any other key. */
 #define CEE_KEY_TAB 1
@@ -87,6 +102,7 @@ struct cee_window_scripted {
 
 struct cee_window {
     int scripted;
+    int external; /* WindowSurface.External: the program draws the content, the runtime never does (ADR 0137) */
     struct cee_window_event queue[CEE_WINDOW_QUEUE];
     unsigned head, count;
     uint32_t width, height; /* points */
@@ -108,8 +124,10 @@ struct cee_window {
     void *native;
 };
 
-void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width, uint32_t height, int32_t *error);
+void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width, uint32_t height, uint32_t surface,
+                          int32_t *error);
 void ceesafe_window_close(void *window);
+int32_t ceesafe_window_native(void *window, uint64_t *first, uint64_t *second);
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position);
 int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t width, uint32_t height);
 int32_t ceesafe_window_present_changed(void *window, const uint32_t *pixels, uint32_t width, uint32_t height,
@@ -143,6 +161,16 @@ static void cee_window_resized(struct cee_window *w, uint32_t width, uint32_t he
     w->width = width;
     w->height = height;
     cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)width, (int32_t)height, 0, 0, 0.0f, 0.0f);
+}
+
+/* A new scale (pixels per point): the content's pixel size changed, so RESIZED with the size in points, even when that
+   did not change (ADR 0137). */
+static void cee_window_rescaled(struct cee_window *w, float scale) {
+    if (!(scale > 0.0f) || scale == w->scale) {
+        return;
+    }
+    w->scale = scale;
+    cee_window_push(w, CEE_EVENT_RESIZED, (int32_t)w->width, (int32_t)w->height, 0, 0, 0.0f, 0.0f);
 }
 
 static void cee_window_focus(struct cee_window *w, int focused) {
@@ -438,6 +466,12 @@ static int cee_window_script_item(struct cee_window *w, size_t *capacity, const 
         }
         return cee_window_script_add(w, capacity, frame, CEE_EVENT_FOCUS, args[0] == '1', 0, 0, 0, 0.0, 0.0);
     }
+    if (CEE_IS("scale")) {
+        if (cee_window_numbers(args, args_length, v, 3) != 1 || !(v[0] > 0.0) || v[0] > 16.0) {
+            return 0;
+        }
+        return cee_window_script_add(w, capacity, frame, CEE_SCRIPT_SCALE, 0, 0, 0, 0, v[0], 0.0);
+    }
     if (CEE_IS("close")) {
         return args_length == 0 && cee_window_script_add(w, capacity, frame, CEE_EVENT_CLOSED, 0, 0, 0, 0, 0.0, 0.0);
     }
@@ -505,12 +539,15 @@ static int cee_window_script_load(struct cee_window *w, const char *path) {
     return 1;
 }
 
-/* Moves the script's events for the current frame into the queue; a resize and focus also update the window. */
+/* Moves the script's events for the current frame into the queue; a resize, a scale and focus also update the
+   window. */
 static void cee_window_script_pump(struct cee_window *w) {
     while (w->script_next < w->script_count && w->script[w->script_next].frame <= w->frames) {
         struct cee_window_event e = w->script[w->script_next++].event;
         if (e.kind == CEE_EVENT_RESIZED) {
             cee_window_resized(w, (uint32_t)e.fields[0], (uint32_t)e.fields[1]);
+        } else if (e.kind == CEE_SCRIPT_SCALE) {
+            cee_window_rescaled(w, e.x);
         } else if (e.kind == CEE_EVENT_FOCUS) {
             cee_window_focus(w, e.fields[0]);
         } else {
@@ -540,7 +577,8 @@ static int32_t cee_window_dump(struct cee_window *w, const uint32_t *pixels, uin
 /* ---- The system's windows ---------------------------------------------------------------------------------------- */
 /* Each backend defines: cee_native_open (0 or a CEE_WINDOW_* error), cee_native_close, cee_native_pump (moves pending
    system events into the queue), cee_native_present, cee_native_cursor, cee_native_title, cee_native_wait (until an
-   event or `seconds`). */
+   event or `seconds`), cee_native_handles (the system's handles and their CEE_HANDLE_* kind, ADR 0137). With
+   `w->external` set before cee_native_open, the backend never paints the content: cee_native_present is not called. */
 
 #if defined(__APPLE__)
 /* AppKit through the Objective-C runtime. Every call goes through objc_msgSend cast to the method's C type; on x86_64,
@@ -1082,8 +1120,15 @@ static void cee_native_pump(struct cee_window *w) {
         }
     }
     cee_send_v(cee_objc.app, "updateWindows");
-    w->scale = (float)cee_send_double(((struct cee_mac *)w->native)->window, "backingScaleFactor");
+    cee_window_rescaled(w, (float)cee_send_double(((struct cee_mac *)w->native)->window, "backingScaleFactor"));
     cee_objc.pool_pop(pool);
+}
+
+static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
+    struct cee_mac *m = (struct cee_mac *)w->native;
+    *first = (uint64_t)(uintptr_t)m->window;
+    *second = (uint64_t)(uintptr_t)m->view;
+    return CEE_HANDLE_APPKIT;
 }
 
 static void cee_mac_release_pixels(void *info, const void *data, size_t size) {
@@ -1377,7 +1422,7 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     }
     case WM_DPICHANGED: {
         RECT *suggested = (RECT *)lparam;
-        w->scale = (float)HIWORD(wparam) / 96.0f;
+        cee_window_rescaled(w, (float)HIWORD(wparam) / 96.0f);
         SetWindowPos(hwnd, NULL, suggested->left, suggested->top, suggested->right - suggested->left,
                      suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
         return 0;
@@ -1450,7 +1495,9 @@ static LRESULT CALLBACK cee_win32_proc(HWND hwnd, UINT message, WPARAM wparam, L
     case WM_PAINT: {
         PAINTSTRUCT paint;
         HDC dc = BeginPaint(hwnd, &paint);
-        cee_win32_paint(w, dc);
+        if (!w->external) { /* an external window's swap chain owns the pixels: only validate (ADR 0137) */
+            cee_win32_paint(w, dc);
+        }
         EndPaint(hwnd, &paint);
         return 0;
     }
@@ -1539,7 +1586,14 @@ static void cee_native_pump(struct cee_window *w) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-    w->scale = cee_win32_scale(n->hwnd);
+    cee_window_rescaled(w, cee_win32_scale(n->hwnd));
+}
+
+static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
+    struct cee_win32 *n = (struct cee_win32 *)w->native;
+    *first = (uint64_t)(uintptr_t)n->hwnd;
+    *second = (uint64_t)(uintptr_t)GetModuleHandleW(NULL); /* the instance that registered the class */
+    return CEE_HANDLE_WIN32;
 }
 
 static int32_t cee_native_present(struct cee_window *w, const uint32_t *pixels, uint32_t width, uint32_t height) {
@@ -1731,6 +1785,7 @@ static struct {
     cee_xid (*create_font_cursor)(cee_x_display *, unsigned int);
     int (*define_cursor)(cee_x_display *, cee_xid, cee_xid);
     int (*detectable_repeat)(cee_x_display *, int, int *);
+    int (*set_background_pixmap)(cee_x_display *, cee_xid, cee_xid); /* for external windows (ADR 0137) */
 } cee_x;
 
 struct cee_x11 {
@@ -1801,6 +1856,7 @@ static int cee_x_load(void) {
     CEE_X(create_font_cursor, cee_xid(*)(cee_x_display *, unsigned int), "XCreateFontCursor")
     CEE_X(define_cursor, int (*)(cee_x_display *, cee_xid, cee_xid), "XDefineCursor")
     CEE_X(detectable_repeat, int (*)(cee_x_display *, int, int *), "XkbSetDetectableAutoRepeat")
+    CEE_X(set_background_pixmap, int (*)(cee_x_display *, cee_xid, cee_xid), "XSetWindowBackgroundPixmap")
 #undef CEE_X
     cee_x.state = 1;
     return 1;
@@ -1840,12 +1896,23 @@ static int cee_native_open(struct cee_window *w, const char *title) {
     n->delete_atom = cee_x.intern_atom(display, "WM_DELETE_WINDOW", 0);
     cee_x.set_wm_protocols(display, n->window, &n->delete_atom, 1);
     cee_x.detectable_repeat(display, 1, NULL);
+    if (w->external) {
+        /* Background None: the X server leaves an exposed part as the GPU drew it, rather than clearing it. */
+        cee_x.set_background_pixmap(display, n->window, 0);
+    }
     cee_x.store_name(display, n->window, title);
     cee_x.map_window(display, n->window);
     cee_x.flush(display);
     w->native = n;
     w->scale = 1.0f;
     return 0;
+}
+
+static int32_t cee_native_handles(struct cee_window *w, uint64_t *first, uint64_t *second) {
+    struct cee_x11 *n = (struct cee_x11 *)w->native;
+    *first = (uint64_t)(uintptr_t)n->display;
+    *second = (uint64_t)n->window;
+    return CEE_HANDLE_XLIB;
 }
 
 static void cee_native_close(struct cee_window *w) {
@@ -2128,9 +2195,11 @@ static char *cee_window_cstring(const uint8_t *text, uint64_t length) {
     return s;
 }
 
-void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width, uint32_t height, int32_t *error) {
+void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width, uint32_t height, uint32_t surface,
+                          int32_t *error) {
     *error = 0;
-    if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE || height > CEE_WINDOW_MAX_SIDE) {
+    if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE || height > CEE_WINDOW_MAX_SIDE ||
+        (surface != CEE_SURFACE_FRAMES && surface != CEE_SURFACE_EXTERNAL)) {
         *error = CEE_WINDOW_UNSUPPORTED;
         return NULL;
     }
@@ -2148,6 +2217,7 @@ void *ceesafe_window_open(const uint8_t *title, uint64_t length, uint32_t width,
     }
     w->width = width;
     w->height = height;
+    w->external = surface == CEE_SURFACE_EXTERNAL;
     w->scale = 1.0f;
     w->focused = 1;
     w->last_wait = cee_window_now();
@@ -2201,6 +2271,21 @@ void ceesafe_window_close(void *window) {
     ceesafe_platform_free(w);
 }
 
+/* The system's handles for the window, as integers, and their kind (WindowHandle, ADR 0137). */
+int32_t ceesafe_window_native(void *window, uint64_t *first, uint64_t *second) {
+    struct cee_window *w = (struct cee_window *)window;
+    *first = 0;
+    *second = 0;
+    if (w->scripted) {
+        return CEE_HANDLE_SCRIPTED;
+    }
+#if !defined(CEE_WINDOW_NO_NATIVE)
+    return cee_native_handles(w, first, second);
+#else
+    return CEE_HANDLE_SCRIPTED; /* not reached: without a backend, only scripted windows open */
+#endif
+}
+
 int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position) {
     struct cee_window *w = (struct cee_window *)window;
     if (w->count == 0) {
@@ -2227,6 +2312,9 @@ int32_t ceesafe_window_poll(void *window, int32_t *fields, float *position) {
 
 int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t width, uint32_t height) {
     struct cee_window *w = (struct cee_window *)window;
+    if (w->external) {
+        return -CEE_WINDOW_UNSUPPORTED; /* the program draws an external window's content (ADR 0137) */
+    }
     if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE * 4u || height > CEE_WINDOW_MAX_SIDE * 4u) {
         return -CEE_WINDOW_RESOURCES;
     }
@@ -2263,6 +2351,9 @@ int32_t ceesafe_window_present(void *window, const uint32_t *pixels, uint32_t wi
 int32_t ceesafe_window_present_changed(void *window, const uint32_t *pixels, uint32_t width, uint32_t height,
                                        const uint32_t *boxes, uint64_t count) {
     struct cee_window *w = (struct cee_window *)window;
+    if (w->external) {
+        return -CEE_WINDOW_UNSUPPORTED;
+    }
     if (width == 0 || height == 0 || width > CEE_WINDOW_MAX_SIDE * 4u || height > CEE_WINDOW_MAX_SIDE * 4u) {
         return -CEE_WINDOW_RESOURCES;
     }

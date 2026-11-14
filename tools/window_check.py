@@ -9,8 +9,11 @@ that opened a window would open one on the developer's screen:
    the last frame, byte for byte;
 2. the errors: a malformed script and a missing one are Resources, a zero size is Unsupported, an open on a thread
    other than the first is NotMainThread, and the interpreter answers Unsupported;
-3. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
-   least 1, takes frames and closes.
+3. the surfaces (ADR 0137): a scripted window's nativeHandle is Scripted, a Frames window presents, an External
+   one answers Unsupported to present and presentChanged and dumps no frame, and the interpreter answers Unsupported
+   to openWith; the script's `scale` item gives Resized only when it changes the scale (in the trace of 1);
+4. with --display (a machine with a window server, not CI), a real window opens, reports its size and a scale of at
+   least 1, takes frames and closes; and an External one gives this system's handles, not zero.
 
 usage: python3 tools/window_check.py --compiler out/ceesafec [--display]
 """
@@ -141,6 +144,44 @@ fn main() {
 }
 """
 
+# Surfaces and handles (ADR 0137): prints the handle's kind, then what present and presentChanged answer.
+SURFACE = r"""
+fn kind(h: WindowHandle) -> u32 => match (h) {
+    WindowHandle.Scripted => 0,
+    WindowHandle.AppKit(a, b) => if (a != 0 && b != 0) 1 else 9,
+    WindowHandle.Win32(a, b) => if (a != 0 && b != 0) 2 else 9,
+    WindowHandle.Xlib(a, b) => if (a != 0 && b != 0) 3 else 9,
+};
+
+fn code(r: Result<void, WindowError>) -> u32 => match (r) {
+    Ok() => 0,
+    Err(WindowError.Unsupported) => 1,
+    Err(WindowError.NoDisplay) => 2,
+    Err(WindowError.NotMainThread) => 3,
+    Err(WindowError.Resources) => 4,
+};
+
+fn main() -> i32 {
+    let mode = match (Process.argument(1)) {
+        Some(m) => m,
+        null => "frames",
+    };
+    let surface = if (mode == "external") WindowSurface.External else WindowSurface.Frames;
+    var window = match (Window.openWith("window_check surface", 8, 6, surface)) {
+        Ok(w) => w,
+        Err(_) => { Console.writeLine("open failed"); return 1; }
+    };
+    let pixels = [0xff0000ffu32; 48];
+    let one = [WindowBox { x: 1, y: 1, width: 2, height: 2 }];
+    Console.write(kind(window.nativeHandle()));
+    Console.write(" ");
+    Console.write(code(window.present(pixels[..], 8, 6)));
+    Console.write(" ");
+    Console.writeLine(code(window.presentChanged(pixels[..], 8, 6, one[..])));
+    return 0;
+}
+"""
+
 # presentChanged (ADR 0070): step k paints the whole image color k but says only its boxes changed. A scripted window
 # applies only the boxes, so the last dump shows which ones it applied.
 CHANGED = r"""
@@ -256,10 +297,11 @@ fn main() -> i32 {
 }
 """
 
-# Every kind of item, a click across frames, a resize that changes nothing, focus that changes nothing, non-ASCII
-# text, and a close that ends the run.
+# Every kind of item, a click across frames, a resize that changes nothing, focus that changes nothing, a scale that
+# changes nothing and one that does (Resized at the same size, ADR 0137), non-ASCII text, and a close that ends the run.
 SCRIPT = ("0:move:10,20;0:click:5,6;1:key:a;1:keydown:f5;1:keyup:f5;1:type:Hé✓;2:wheel:0,-1;2:wheel:1.5,0;"
-          "3:down:1,7,8;3:up:2,9,10;4:resize:40,30;4:resize:32,24;5:focus:1;5:focus:0;5:key:tab;6:key:enter;"
+          "3:down:1,7,8;3:up:2,9,10;4:resize:40,30;4:resize:32,24;4:scale:1;5:focus:1;5:focus:0;5:scale:2;5:scale:2;"
+          "5:key:tab;6:key:enter;"
           "6:key:pagedown;6:key:f12;6:key:Z;7:type:ok;8:close;9:move:1,1")
 
 NAMED = {"tab": "tab", "enter": "enter", "escape": "escape", "backspace": "backspace", "delete": "delete",
@@ -313,12 +355,14 @@ def expected(script, width, height):
             events.append((frame, order, ("resize", int(nums[0]), int(nums[1]))))
         elif what == "focus":
             events.append((frame, order, ("focus", int(args))))
+        elif what == "scale":
+            events.append((frame, order, ("scale", float(args))))
         elif what == "close":
             events.append((frame, order, "closed"))
         else:
             raise ValueError(item)
     events.sort(key=lambda e: e[0])  # stable: the script's order within a frame
-    lines, size, focused, last = [], (width, height), 1, None
+    lines, size, focused, scale, last = [], (width, height), 1, 1.0, None
     for frame in range(16):
         lines.append(f"frame {frame}")
         closed = False
@@ -328,6 +372,10 @@ def expected(script, width, height):
             if isinstance(e, tuple) and e[0] == "resize":
                 if (e[1], e[2]) != size:
                     size = (e[1], e[2])
+                    lines.append(f"resized {size[0]} {size[1]}")
+            elif isinstance(e, tuple) and e[0] == "scale":
+                if e[1] != scale:
+                    scale = e[1]
                     lines.append(f"resized {size[0]} {size[1]}")
             elif isinstance(e, tuple):
                 if e[1] != focused:
@@ -339,7 +387,7 @@ def expected(script, width, height):
         if closed:
             break
         last = (size, frame)
-    lines.append("scale 1")
+    lines.append(f"scale {number(str(scale))}")
     return lines, last
 
 
@@ -411,6 +459,24 @@ def main():
                 problems.append(f"{what}: expected {answer}, got {r.stdout.strip()!r} (status {r.returncode}) "
                                 f"{r.stderr.strip()}")
 
+        surface_source, surface = build(compiler, SURFACE, work, "surface")
+        surface_cases = [
+            ("a scripted Frames window", [surface, "frames"], "0 0 0", 0, True),
+            ("a scripted External window", [surface, "external"], "0 1 1", 0, False),
+            ("openWith in the interpreter", [compiler, "run", "--interp", surface_source, "--", "external"],
+             "open failed", 1, False),
+        ]
+        for what, command, answer, status, dumps in surface_cases:
+            out = os.path.join(work, "surface.bin")
+            if os.path.exists(out):
+                os.remove(out)
+            r = run(command, {"CEESAFE_WINDOW_SCRIPT": script, "CEESAFE_WINDOW_DUMP": out}, work)
+            if r.returncode != status or r.stdout.strip() != answer:
+                problems.append(f"{what}: expected {answer!r} (status {status}), got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
+            elif os.path.exists(out) != dumps:
+                problems.append(f"{what}: a frame was {'not ' if dumps else ''}dumped")
+
         _, changed = build(compiler, CHANGED, work, "changed")
         empty = os.path.join(work, "empty.txt")
         with open(empty, "w", encoding="utf-8") as f:
@@ -421,8 +487,14 @@ def main():
             if r.returncode != 0 or not os.path.exists(out) or open(out, "rb").read() != changed_expected(steps):
                 problems.append(f"presentChanged, {steps} steps: the frame shown is not the expected one "
                                 f"(status {r.returncode})")
-        checks = 1 + len(cases) + 8
+        checks = 1 + len(cases) + len(surface_cases) + 8
         if args.display:
+            r = run([surface, "external"], {}, work)
+            checks += 1
+            kind = "1" if sys.platform == "darwin" else "2" if os.name == "nt" else "3"
+            if r.returncode != 0 or r.stdout.strip() != f"{kind} 1 1":
+                problems.append(f"a real External window: expected '{kind} 1 1', got {r.stdout.strip()!r} "
+                                f"(status {r.returncode}) {r.stderr.strip()}")
             _, display = build(compiler, DISPLAY, work, "display")
             r = run([display], {}, work)
             checks += 1

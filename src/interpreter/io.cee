@@ -1493,7 +1493,7 @@ fn cLibraryShape(name: Slice<u8>) -> StringView? {
         return ":s";
     }
     if (sameText(name, "ceesafe_window_open")) {
-        return "PsuuP:P";
+        return "PsuuuP:P";
     }
     if (sameText(name, "ceesafe_async_op_sendfile")) {
         return "PiPss:l";
@@ -1901,9 +1901,9 @@ fn callC(
         return Ok(null);
     }
     if (sameText(n0, "ceesafe_window_open")) {
-        // Window.open (type-system.md §26.13, ADR 0069): the interpreter has no window system, so every open is
-        // WindowError.Unsupported, and no other window call can be reached.
-        it.memory.storeBits(arguments[4].bits(0, 8)?, 1, 4)?;
+        // Window.open and openWith (type-system.md §26.13, ADR 0069, ADR 0137): the interpreter has no window system,
+        // so every open is WindowError.Unsupported, and no other window call can be reached.
+        it.memory.storeBits(arguments[5].bits(0, 8)?, 1, 4)?;
         return Ok(valueOf(0, 8));
     }
     if (sameText(n0, "ceesafe_test_begin")) {

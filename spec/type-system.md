@@ -3116,21 +3116,37 @@ Diagnostics: none new.
     two. It is written in CeeSafe; it allocates nothing.
   - In the interpreter it follows `fill`'s fixed sequence, one 64-bit word a draw: the same numbers every run.
 
-### 26.13 Native windows (ADR 0069)
+### 26.13 Native windows (ADR 0069, ADR 0137)
 - **`Window.open(title, width, height)`** (lib/std; `width`, `height: u32` in points) is `Result<Window,
-  WindowError>`.
+  WindowError>`. It is `Window.openWith(title, width, height, WindowSurface.Frames)`.
   - **The window.** It is titled, resizable and visible, and on top of the program's other windows.
   - **`WindowError`:**
-    - `Unsupported`: no backend for this system, the interpreter, or `width`/`height` 0 or over 16384;
+    - `Unsupported`: no backend for this system, the interpreter, `width`/`height` 0 or over 16384, or a `present`
+      or `presentChanged` to an external window;
     - `NoDisplay`: no window server, such as no `DISPLAY` or no X11 library;
     - `NotMainThread`: called on any thread but the program's first, on every system, so that programs stay
       portable to macOS, which allows windows only there;
     - `Resources`: the system refused.
   - **Ownership.** `Window` is a move type, neither `Send` nor `Share`. Its drop closes the window.
+- **Surfaces** (ADR 0137). `Window.openWith(title, width, height, surface: WindowSurface)` says who draws the
+  content:
+  - `WindowSurface.Frames`: the window shows the frames given to `present` and `presentChanged`;
+  - `WindowSurface.External`: the program draws the content itself, through the system's GPU API on
+    `nativeHandle()`. The runtime never paints it, and `present` and `presentChanged` are `Unsupported`.
+- **Native handles** (ADR 0137). `w.nativeHandle()` is a `WindowHandle`:
+  - `AppKit(window, view)`: macOS's `NSWindow` and its content `NSView`, which is layer-backed;
+  - `Win32(window, instance)`: the `HWND` and the `HINSTANCE` that registered its class;
+  - `Xlib(display, window)`: X11's `Display *` and the `Window` XID;
+  - `Scripted`: a scripted window, which has no system window.
+
+  Each handle is a `u64`, which only `unsafe` code can turn back into a pointer. It is valid until the `Window` is
+  dropped, on the program's first thread. A program may draw through it and add layers or child surfaces. It must
+  not close, release or re-parent the window, or replace its delegate (macOS) or window procedure (Windows).
 - **Events.** `w.nextEvent()` is `WindowEvent?`: the next pending event, or null. It never blocks, and the events of
   one window come in order. `WindowEvent`:
   - `Closed`: the user asked to close the window, which stays open until it is dropped;
-  - `Resized(WindowSize)`, in points;
+  - `Resized(WindowSize)`, in points. It is also reported when only the scale changes, with the same size, since the
+    content's size in pixels changed (ADR 0137);
   - `Focus(bool)`;
   - `PointerMoved(x, y)` and `PointerButton(WindowButton, down, x, y)`. `WindowButton` is `Primary`, `Secondary`
     or `Middle`. Positions are `f32` points from the content's top left; a pointer outside the window during a
@@ -3170,8 +3186,8 @@ Diagnostics: none new.
   - `w.setTitle(title)` sets the title.
   - `w.waitFrame()` returns when about 1/60 s has passed since the previous `waitFrame`, or earlier when an event
     arrives, so an idle loop does not spin.
-- **Effects.** `open`, `present`, `presentChanged`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`). `nextEvent`, `size`,
-  `scale`, `setCursor` and the drop have no effect.
+- **Effects.** `open`, `openWith`, `present`, `presentChanged`, `waitFrame` and `setTitle` may sleep (`@effects(sleep)`).
+  `nextEvent`, `size`, `scale`, `nativeHandle`, `setCursor` and the drop have no effect.
 - **Backends** (`runtime/hosted/ceesafe_rt_window.c`):
   - **macOS:** AppKit through the Objective-C runtime, loaded with `dlopen` at the first `open`, so no program
     links it;
@@ -3181,7 +3197,7 @@ Diagnostics: none new.
   The runtime file is part of a build only when the program calls a window function.
 - **Scripted windows** (for tests, ADR 0069 §2.3). When the environment variable `CEESAFE_WINDOW_SCRIPT` names a
   file, `open` makes a window that exists only in memory, on any system:
-  - **Size and scale.** Its size is the requested one, until a `resize`, and its scale is 1.
+  - **Size and scale.** Its size is the requested one, until a `resize`, and its scale is 1, until a `scale`.
   - **Frames.** Frame *n* is the time after the *n*-th `present`. The script's events for frame *n* are what
     `nextEvent` returns then, in the script's order.
   - **Script grammar.** The file holds `;`-separated `FRAME:WHAT` items:
@@ -3191,15 +3207,16 @@ Diagnostics: none new.
     - `wheel:DX,DY`;
     - `key:NAME` (down then up), `keydown:NAME` and `keyup:NAME`;
     - `type:TEXT`: one `Text` per character;
-    - `resize:W,H`, `focus:0|1` and `close`.
+    - `resize:W,H`, `focus:0|1` and `close`;
+    - `scale:S`, with S above 0 and at most 16: a `Resized` at the current size when S is a new scale.
   - **Key names:** `tab`, `enter`, `escape`, `backspace`, `delete`, `left`, `right`, `up`, `down`, `home`, `end`,
     `pageup`, `pagedown`, `space`, `f1`…`f12`, or one character.
-  - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` replaces it with the line
+  - **Frame dump.** When `CEESAFE_WINDOW_DUMP` names a file, each `present` to a frames window replaces it with the line
     `ceesafe-window W H`, then the W×H pixels as RGBA bytes.
   - **Waiting.** `waitFrame` returns at once.
   - **Errors.** A script that cannot be read or parsed makes `open` `Resources`.
 - **Hosted only.** In freestanding code these types are not defined (N0200). The interpreter answers `Unsupported`
-  to `open`.
+  to `open` and `openWith`.
 
 ### 26.14 Process limits (ADR 0104)
 - `ProcessLimits.openFiles()` (lib/std): `Result<OpenFileLimit, IoError>`, the open-file limit: `current` (the soft

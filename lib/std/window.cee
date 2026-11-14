@@ -2,13 +2,23 @@
 // Native windows (type-system.md §26.13, ADR 0069): one window that shows premultiplied RGBA8 frames and reports the
 // pointer, keys, typed text, the wheel, resizes and close requests. Hosted only, over
 // runtime/hosted/ceesafe_rt_window.c: AppKit on macOS, Win32 on Windows, X11 on Linux, or an in-memory window that a
-// script drives when CEESAFE_WINDOW_SCRIPT is set.
+// script drives when CEESAFE_WINDOW_SCRIPT is set. A window the program draws itself, through the system's handles,
+// is `WindowSurface.External` (ADR 0137).
 
 extern "C" {
     @effects(sleep, alloc)
-    fn ceesafe_window_open(title: *u8, length: u64, width: u32, height: u32, error: *mut i32) -> *mut void;
+    fn ceesafe_window_open(
+        title: *u8,
+        length: u64,
+        width: u32,
+        height: u32,
+        surface: u32,
+        error: *mut i32,
+    ) -> *mut void;
     @effects()
     fn ceesafe_window_close(window: *mut void);
+    @effects()
+    fn ceesafe_window_native(window: *mut void, first: *mut u64, second: *mut u64) -> i32;
     @effects()
     fn ceesafe_window_poll(window: *mut void, fields: *mut i32, position: *mut f32) -> i32;
     @effects(sleep)
@@ -36,7 +46,8 @@ extern "C" {
 
 /// Why a window could not be opened or drawn (§26.13).
 public enum WindowError {
-    /// No backend for this system, the interpreter, or a size of 0 or over 16384.
+    /// No backend for this system, the interpreter, a size of 0 or over 16384, or a `present` to a window opened with
+    /// `WindowSurface.External`.
     Unsupported,
     /// No window server: no `DISPLAY`, no X11 library, or a session without one.
     NoDisplay,
@@ -44,6 +55,28 @@ public enum WindowError {
     NotMainThread,
     /// The system refused, or the pixels do not cover the image.
     Resources,
+}
+
+/// Who draws a window's content (§26.13, ADR 0137).
+public enum WindowSurface {
+    /// The window shows the frames given to `present` and `presentChanged`.
+    Frames,
+    /// The program draws the content itself, with the system's GPU API on `nativeHandle()`; the runtime never paints
+    /// it, and `present` and `presentChanged` are `WindowError.Unsupported`.
+    External,
+}
+
+/// The system's own handles for a window (§26.13, ADR 0137), for `extern "C"` code that draws on it. They are
+/// addresses as integers, which safe code cannot use; they are valid until the `Window` is dropped.
+public enum WindowHandle {
+    /// macOS: the `NSWindow` and its content `NSView`, which is layer-backed.
+    AppKit(u64, u64),
+    /// Windows: the `HWND` and the `HINSTANCE` that registered its class.
+    Win32(u64, u64),
+    /// Linux: the X11 `Display *` and the `Window` XID.
+    Xlib(u64, u64),
+    /// A scripted window (`CEESAFE_WINDOW_SCRIPT`), which has no system window.
+    Scripted,
 }
 
 /// A window's content size in points.
@@ -114,6 +147,7 @@ public enum WindowCursor {
 public enum WindowEvent {
     /// The user asked to close the window; it stays open until the `Window` is dropped.
     Closed,
+    /// The content's size in points; also when only the scale changed, so the size in pixels did (ADR 0137).
     Resized(WindowSize),
     Focus(bool),
     /// x, y.
@@ -133,22 +167,59 @@ public enum WindowEvent {
 public struct Window {
     raw: *mut void;
 
-    /// Opens a resizable window of `width` × `height` points titled `title`.
+    /// Opens a resizable window of `width` × `height` points titled `title`, which shows the frames given to
+    /// `present`: `openWith(title, width, height, WindowSurface.Frames)`.
+    public fn open(title: StringView, width: u32, height: u32) -> Result<Window, WindowError> {
+        return Window.openWith(title, width, height, WindowSurface.Frames);
+    }
+
+    /// Opens a resizable window of `width` × `height` points titled `title`, whose content `surface` says who draws
+    /// (ADR 0137).
     /// Safety: the runtime reads the title's bytes during the call only, and the handle it returns is this window's
     /// until the drop closes it.
-    public fn open(title: StringView, width: u32, height: u32) -> Result<Window, WindowError> {
+    public fn openWith(
+        title: StringView,
+        width: u32,
+        height: u32,
+        surface: WindowSurface,
+    ) -> Result<Window, WindowError> {
+        let code: u32 = match (surface) {
+            WindowSurface.Frames => 0,
+            WindowSurface.External => 1,
+        };
         var error: i32 = 0;
         let raw = unsafe { ceesafe_window_open(
             title.ptr,
             title.length as u64,
             width,
             height,
+            code,
             borrow mut error as *mut i32,
         ) };
         if (raw.isNull()) {
             return Err(Window.errorOf(error));
         }
         return Ok(Window { raw: raw });
+    }
+
+    /// The system's handles for this window (ADR 0137), valid until it is dropped. A program may draw through them
+    /// and add layers or child surfaces, but must not close, release or re-parent the window, or replace its delegate
+    /// or window procedure.
+    /// Safety: the runtime writes the two handles, as integers.
+    public fn nativeHandle(borrow this) -> WindowHandle {
+        var first: u64 = 0;
+        var second: u64 = 0;
+        let kind = unsafe { ceesafe_window_native(
+            this.raw,
+            borrow mut first as *mut u64,
+            borrow mut second as *mut u64,
+        ) };
+        return match (kind) {
+            1 => WindowHandle.AppKit(first, second),
+            2 => WindowHandle.Win32(first, second),
+            3 => WindowHandle.Xlib(first, second),
+            _ => WindowHandle.Scripted,
+        };
     }
 
     /// The next pending event, or null; it never blocks.

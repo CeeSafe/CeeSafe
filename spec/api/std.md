@@ -59,6 +59,8 @@
 - [struct CheckResult](#struct-checkresult)
 - [struct TestRun](#struct-testrun)
 - [enum WindowError](#enum-windowerror)
+- [enum WindowSurface](#enum-windowsurface)
+- [enum WindowHandle](#enum-windowhandle)
 - [struct WindowSize](#struct-windowsize)
 - [struct WindowBox](#struct-windowbox)
 - [enum WindowButton](#enum-windowbutton)
@@ -2629,6 +2631,31 @@ public enum WindowError {
 
 Why a window could not be opened or drawn (§26.13).
 
+## enum WindowSurface
+
+```ceesafe
+public enum WindowSurface {
+    Frames,
+    External,
+}
+```
+
+Who draws a window's content (§26.13, ADR 0137).
+
+## enum WindowHandle
+
+```ceesafe
+public enum WindowHandle {
+    AppKit(u64, u64),
+    Win32(u64, u64),
+    Xlib(u64, u64),
+    Scripted,
+}
+```
+
+The system's own handles for a window (§26.13, ADR 0137), for `extern "C"` code that draws on it. They are
+addresses as integers, which safe code cannot use; they are valid until the `Window` is dropped.
+
 ## struct WindowSize
 
 ```ceesafe
@@ -2754,9 +2781,35 @@ thread only.
 public fn open(title: StringView, width: u32, height: u32) -> Result<Window, WindowError>
 ```
 
-Opens a resizable window of `width` × `height` points titled `title`.
+Opens a resizable window of `width` × `height` points titled `title`, which shows the frames given to
+`present`: `openWith(title, width, height, WindowSurface.Frames)`.
+
+### Window.openWith
+
+```ceesafe
+public fn openWith(
+    title: StringView,
+    width: u32,
+    height: u32,
+    surface: WindowSurface,
+) -> Result<Window, WindowError>
+```
+
+Opens a resizable window of `width` × `height` points titled `title`, whose content `surface` says who draws
+(ADR 0137).
 Safety: the runtime reads the title's bytes during the call only, and the handle it returns is this window's
 until the drop closes it.
+
+### Window.nativeHandle
+
+```ceesafe
+public fn nativeHandle(borrow this) -> WindowHandle
+```
+
+The system's handles for this window (ADR 0137), valid until it is dropped. A program may draw through them
+and add layers or child surfaces, but must not close, release or re-parent the window, or replace its delegate
+or window procedure.
+Safety: the runtime writes the two handles, as integers.
 
 ### Window.nextEvent
 

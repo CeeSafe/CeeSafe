@@ -25,10 +25,11 @@ A package can state the oldest compiler it builds with, as `ceesafec = ">=0.42.0
 compiler then refuses it with a message that names the version it needs.
 [Dependencies and the lock file](./ch07-04-dependencies) covers that line.
 
-## Releases 0.25.0 to 0.47.1
+## Releases 0.25.0 to 0.48.0
 
 | Release | Date | Added | Sections |
 |---|---|---|---|
+| 0.48.0 | 2026-11-15 | `ProcessSignal.Hangup`: a program that subscribes to `ProcessSignals` also gets POSIX `SIGHUP`, queued like Ctrl+C and `SIGTERM` instead of ending the process, so a daemon can reload its configuration on `kill -HUP` or systemd's `ExecReload` (ADR 0140). Windows has no such request. A `match` on `ProcessSignal` that names every variant needs the new arm. | [21.5](./ch21-05-graceful-shutdown) |
 | 0.47.1 | 2026-11-15 | `??` takes a borrowed optional on its left, a `borrow (T?)` such as a getter returns, and gives a `borrow T`: `let tls = config.tls() ?? { return Err(e); };` (ADR 0139). A `??` whose left side is not an optional is one error, not two. | [Appendix C](./appendix-c-built-in-types) |
 | 0.47.0 | 2026-11-15 | What porting a SQL Server driver asked for (ADR 0138). The fallback of `??` may be a block that leaves or ends in a value, `let n = find(k) ?? { return Err(e); };`. Two optionals of a Copy type compare with `==` and `!=`, `o == Some(3)`. A `var` may hold a `StringView` or a `Slice<T>`, and assigning to it re-binds it, so a view can be narrowed step by step. `x!;` and `x?;` are statements on any operand. `String` and `Vector<u8>` get `appendChar(c)` and `appendUtf8(bytes)`, and a mutable slice or vector `copyWithin(from, to, count)`, a copy whose ranges may overlap. `r.ok()` on a `Result<void, E>`, which the checker accepted and then failed to compile, is now an error that says to use `isOk()`; `Slice<u8, r>` says that the region comes first. | [Appendix C](./appendix-c-built-in-types) |
 | 0.46.1 | 2026-11-14 | Faster async code, and no new feature. An executor no longer looks through every task waiting to be woken each time it waits: a wake now counts itself, and a wait with no wake since the last one skips the look. A server with many tasks parked on a channel or a drain paid for all of them on every wait (a reverse proxy with 16,384 connection tasks went from 32,000 to 121,000 requests a second, and with 1,024 gained 6 to 8 %). | [17.4](./ch17-04-async-io) |

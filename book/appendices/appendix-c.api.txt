@@ -1,4 +1,5 @@
 AppendFormatted	public interface AppendFormatted { fn appendHex(borrow mut this, value: u64, minWidth: u32, upper: bool) -> Result<void, AllocError>; fn appendOctal(borrow mut this, value: u64) -> Result<void, AllocError>; fn appendFixed(borrow mut this, value: f64, digits: u32) -> Result<void, AllocError>; fn appendPadded(borrow mut this, text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>; }
+AppendText	public interface AppendText { fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError>; fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError>; }
 ByteOrder	public struct ByteOrder
 ByteOrder.readI16BE	public fn readI16BE(s: Slice<u8>, at: usize) -> i16
 ByteOrder.readI16LE	public fn readI16LE(s: Slice<u8>, at: usize) -> i16
@@ -113,6 +114,8 @@ SliceAlgorithms.forEach	@effectsOf(visit) public fn forEach(s: Slice<T>, visit: 
 SliceAlgorithms.partitionPoint	@effectsOf(test) public fn partitionPoint(s: Slice<T>, test: borrow mut fn(borrow T) -> bool) -> usize
 SliceAlgorithms.retain	@effectsOf(keep) public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
 SliceAlgorithms.sortBy	@effectsOf(cmp) public fn sortBy(s: SliceMut<T>, cmp: borrow mut fn(borrow T, borrow T) -> i32)
+SliceCopying	public struct SliceCopying<T: Copy>
+SliceCopying.copyWithin	public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize)
 SliceSplitting	public struct SliceSplitting<region r, T>
 SliceSplitting.splitAt	public fn splitAt(s: Slice<r, T>, mid: usize) -> SliceHalves<r, T>
 SliceSplitting.splitAtMut	public fn splitAtMut(s: SliceMut<r, T>, mid: usize) -> SliceHalvesMut<r, T>

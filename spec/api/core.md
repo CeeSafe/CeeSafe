@@ -37,6 +37,7 @@
 - [enum TextAlign](#enum-textalign)
 - [struct Formatted](#struct-formatted)
 - [interface AppendFormatted](#interface-appendformatted)
+- [interface AppendText](#interface-appendtext)
 - [interface Iterator](#interface-iterator)
 - [struct Volatile](#struct-volatile)
 - [struct MmioPtr](#struct-mmioptr)
@@ -47,6 +48,7 @@
 - [struct SliceHalvesMut](#struct-slicehalvesmut)
 - [struct SliceSplitting](#struct-slicesplitting)
 - [struct SliceAlgorithms](#struct-slicealgorithms)
+- [struct SliceCopying](#struct-slicecopying)
 - [struct VectorEditing](#struct-vectorediting)
 - [struct VectorCopying](#struct-vectorcopying)
 - [struct VectorParts](#struct-vectorparts)
@@ -2229,6 +2231,19 @@ public interface AppendFormatted {
 and in lib/std for a `String`. Each appends ASCII, or for `appendPadded` the text and its fill, so a string stays
 UTF-8.
 
+## interface AppendText
+
+```ceesafe
+public interface AppendText {
+    fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError>;
+    fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError>;
+}
+```
+
+`s.appendChar(c)` and `s.appendUtf8(bytes)` (ADR 0138 §6): text added a character, or a run of bytes, at a time.
+Implemented here for a `Vector<u8>`, and in lib/std for a `String`, which stays UTF-8: a character is encoded
+straight in, and bytes are checked once, with no copy before they are appended.
+
 ## interface Iterator
 
 ```ceesafe
@@ -2672,6 +2687,24 @@ public fn retain(s: SliceMut<T>, keep: borrow mut fn(borrow T) -> bool) -> usize
 
 Moves the elements for which `keep` returns true to the front, in order, calling it once on each element in
 index order; returns how many there are. `v.retain(keep)` then truncates the vector to that length.
+
+## struct SliceCopying
+
+```ceesafe
+public struct SliceCopying<T: Copy>
+```
+
+Copying elements inside one slice (ADR 0138 §5): `s.copyWithin(from, to, count)` is
+`SliceCopying<T>.copyWithin(s, from, to, count)`. The elements are copied, so they must be Copy.
+
+### SliceCopying.copyWithin
+
+```ceesafe
+public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize)
+```
+
+Copies the `count` elements from index `from` to index `to`, as C's `memmove`: the two ranges may overlap, and
+the elements end as the source was before the copy. Panics, copying nothing, if either range passes the end.
 
 ## struct VectorEditing
 

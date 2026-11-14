@@ -135,6 +135,7 @@ A slice borrows a run of elements of an array, a vector or another slice: `Slice
 | `for (x in s) { }` | Runs the body once for each element of a slice: `x` is a copy of a Copy element, and a borrow of any other. | No | [4.3](./ch04-03-slices-and-views) |
 | `d.copyFrom(s: Slice<T>)` | Copies every element of `s` into an exclusive slice of the same length. `T` is Copy. | Panics `slice lengths differ` when the lengths are not equal | – |
 | `d.fill(v: T)` | Sets every element of an exclusive slice to `v`. `T` is Copy. | No | – |
+| `d.copyWithin(from: usize, to: usize, count: usize)` | Copies the `count` elements from index `from` to index `to` of an exclusive slice; the two ranges may overlap, as with C's `memmove`. `T` is Copy. | Panics `slice range out of bounds` when either range passes the end, and copies nothing | – |
 | `d.swap(i: usize, j: usize)` | Exchanges elements `i` and `j` of an exclusive slice or a vector. | Panics `index out of bounds` when `i` or `j` is not below the length | [8.1](./ch08-01-vectors) |
 | `s.splitAt(mid: usize) -> SliceHalves<T>` | The two parts of a slice as `left` (the elements before `mid`) and `right` (from `mid` on). | Panics `slice range out of bounds` when `mid` is above the length | [16.1](./ch16-01-starting-threads) |
 | `d.splitAtMut(mid: usize) -> SliceHalvesMut<T>` | The two parts of an exclusive slice as `left` and `right`, which may both be written, since they do not overlap. | Panics `slice range out of bounds` when `mid` is above the length | – |
@@ -188,7 +189,7 @@ A `StringView` borrows UTF-8 text and cannot change it. A string literal is one.
 
 ## `String`
 
-A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the rows, `t` is a `String`. A `String` also has every member of the `StringView` table (`t.length`, `t[i]`, `t[lo..hi]`, `t.bytes()`, the searches and the parsers), and a `String` argument is accepted where a `StringView` parameter is. The four formatting methods are the interface [AppendFormatted](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendformatted).
+A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the rows, `t` is a `String`. A `String` also has every member of the `StringView` table (`t.length`, `t[i]`, `t[lo..hi]`, `t.bytes()`, the searches and the parsers), and a `String` argument is accepted where a `StringView` parameter is. The four formatting methods are the interface [AppendFormatted](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendformatted), and `appendChar` and `appendUtf8` the interface [AppendText](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendtext).
 
 | Member | What it does | Fails or panics | Taught in |
 |---|---|---|---|
@@ -202,6 +203,8 @@ A `String` owns UTF-8 text on the heap and can grow. It is a move type. In the r
 | `t.appendOctal(value: u64) -> Result<void, AllocError>` | Adds `value` in octal at the end of a string, with no `0o`. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
 | `t.appendFixed(value: f64, digits: u32) -> Result<void, AllocError>` | Adds a float at the end of a string with exactly `digits` digits after the point. | `Err(AllocError.OutOfMemory)` when the allocation fails | [8.2](./ch08-02-strings) |
 | `t.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>` | Adds `text` at the end of a string in a field of `width` characters, filled with the character `fill` on the side that `TextAlign.Left`, `TextAlign.Right` or `TextAlign.Center` leaves. | `Err(AllocError.OutOfMemory)` when the allocation fails; panics `the fill is not a Unicode scalar value` for such a `fill` | [8.2](./ch08-02-strings) |
+| `t.appendChar(c: u32) -> Result<bool, AllocError>` | Adds the character `c` in UTF-8 at the end of a string. `false`, adding nothing, when `c` is not a Unicode scalar value (a surrogate, or past `0x10FFFF`). | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `t.appendUtf8(bytes: Slice<u8>) -> Result<bool, AllocError>` | Adds `bytes` at the end of a string when they are UTF-8, checked once. `false`, adding nothing, when they are not. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
 | `t.view() -> StringView` | The text of a string as a view that borrows the string. | No | [8.2](./ch08-02-strings) |
 | `t.clear()` | Empties a string. The capacity stays. | No | [8.2](./ch08-02-strings) |
 | `t.sameAs(other: borrow String) -> bool`, `t.hash(h: borrow mut Hasher)`, `t.compareKey(other: borrow String) -> i32` | The methods of a string as a key: of a `HashMap` (`HashKey`: the same text, and its bytes fed to the hasher) and of an `OrderedMap` (`OrderKey`: bytewise order, so code point order, a prefix first). | No | – |
@@ -289,6 +292,7 @@ A `Vector<T>` owns a growable list of values on the heap. It is a move type. In 
 | `for (x in v) { }` | Runs the body once for each element of a vector: `x` is a copy of a Copy element, and a borrow of any other. | No | [8.1](./ch08-01-vectors) |
 | `v.pushBE(x: N) -> Result<void, AllocError>`, `v.pushLE(x: N) -> Result<void, AllocError>` | Adds the bytes of the fixed-width integer `x` at the end of a `Vector<u8>`, most significant byte first (`BE`) or last (`LE`). | `Err(AllocError.OutOfMemory)` when the allocation fails; the vector is unchanged | – |
 | `v.appendHex(value: u64, minWidth: u32, upper: bool)`, `v.appendOctal(value: u64)`, `v.appendFixed(value: f64, digits: u32)`, `v.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32)` | The formatting methods of a `String`, on a `Vector<u8>`: each adds the formatted text's bytes and returns a `Result<void, AllocError>`. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
+| `v.appendChar(c: u32)`, `v.appendUtf8(bytes: Slice<u8>)` | The `appendChar` and `appendUtf8` of a `String`, on a `Vector<u8>`: each returns a `Result<bool, AllocError>`, `false` for what is not a character or not UTF-8. | `Err(AllocError.OutOfMemory)` when the allocation fails | – |
 | `Vector.intoRaw(v: Vector<T>) -> VectorParts<T>` | Gives up a vector and returns its `pointer`, `length` and `capacity`. Nothing is freed. | No | – |
 | `Vector.fromRaw(pointer: *mut T, length: usize, capacity: usize) -> Vector<T>` | A vector again from the parts `Vector.intoRaw` returned. It is unsafe, and the expected type names the vector type. | Not checked: other parts are undefined behaviour | – |
 | `v.setLength(n: usize)` | Sets the length of a vector over elements that unsafe code wrote into its spare capacity. It is unsafe. | Panics `index out of bounds` when `n` is above the capacity | – |

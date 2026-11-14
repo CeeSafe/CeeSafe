@@ -340,7 +340,7 @@ the tightest. Every binary level associates to the left, except that the compari
 
 | Level | Operators | Notes |
 |---|---|---|
-| 0 | `??` | right-assoc, short-circuit (ADR 0072; type-system.md §22.1). An unparenthesised `\|\|` or `&&` operand beside it is N0100 |
+| 0 | `??` | right-assoc, short-circuit (ADR 0072; type-system.md §22.1). An unparenthesised `\|\|` or `&&` operand beside it is N0100. The right operand may be a block, `a ?? { … }` (ADR 0138 §2), read as a branch of an `if` is |
 | 1 | `\|\|` | short-circuit |
 | 2 | `&&` | short-circuit |
 | 3 | `== != < <= > >=`, `is` | non-associative. `e is P` (ADR 0085 §2.8; type-system.md §15.4): after `is` the pattern grammar reads as far as it can, so a `\|` there is an or-pattern: `(c is 'a') \| flag` needs the parentheses |

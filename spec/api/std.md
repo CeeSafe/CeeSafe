@@ -15,6 +15,8 @@
 - [struct Md5](#struct-md5)
 - [struct Sha256](#struct-sha256)
 - [struct HmacSha256](#struct-hmacsha256)
+- [struct Aes256Gcm](#struct-aes256gcm)
+- [struct ConstantTime](#struct-constanttime)
 - [interface HashKey](#interface-hashkey)
 - [struct Hasher](#struct-hasher)
 - [fn deriveHash](#fn-derivehash)
@@ -1142,6 +1144,76 @@ public fn of(key: Slice<u8>, bytes: Slice<u8>) -> [u8; 32]
 ```
 
 The code of `bytes` under `key`, in one call.
+
+## struct Aes256Gcm
+
+```ceesafe
+public struct Aes256Gcm {
+    drop { … }
+}
+```
+
+AES-256 in Galois/Counter Mode: `seal` encrypts a buffer in place and returns a 16-byte tag over it and over
+associated data that is authenticated and not encrypted; `open` checks the tag and decrypts, or refuses.
+
+**A nonce must never be used twice with one key.** Two messages sealed under the same key and nonce give away the
+XOR of their texts and let tags be forged. Use a counter that never repeats under the key, or a key made for one
+message; `Random.fill` gives keys. The value holds the expanded key, and wipes it when it is dropped.
+
+### Aes256Gcm.create
+
+```ceesafe
+public fn create(key: Slice<u8>) -> Aes256Gcm?
+```
+
+A cipher for `key`; null unless the key is 32 bytes.
+Safety: the runtime reads 32 bytes of the key and writes the 304 of the schedule, during the call only.
+
+### Aes256Gcm.seal
+
+```ceesafe
+public fn seal(borrow this, nonce: [u8; 12], associated: Slice<u8>, data: SliceMut<u8>) -> [u8; 16]
+```
+
+Encrypts `data` in place under `nonce` and returns the tag of `associated` and the ciphertext. Panics if
+`data` is longer than 2^36 - 32 bytes, GCM's limit for one nonce.
+Safety: the runtime reads the schedule, the nonce's 12 bytes and the associated data, reads and writes
+`data`'s length, and writes the tag's 16 bytes, during the call only.
+
+### Aes256Gcm.open
+
+```ceesafe
+public fn open(
+    borrow this,
+    nonce: [u8; 12],
+    associated: Slice<u8>,
+    data: SliceMut<u8>,
+    tag: [u8; 16],
+) -> bool
+```
+
+Checks `tag` against `associated` and the ciphertext `data`, in time that does not depend on where they
+differ. True, and `data` decrypted in place, when the tag is theirs; false, and `data` zeroed, when it is not:
+nothing of a text that was changed is given back. Panics as `seal` does for a longer `data`.
+Safety: as `seal`; the tag's 16 bytes are read.
+
+## struct ConstantTime
+
+```ceesafe
+public struct ConstantTime
+```
+
+Comparisons for secrets.
+
+### ConstantTime.equal
+
+```ceesafe
+public fn equal(a: Slice<u8>, b: Slice<u8>) -> bool
+```
+
+Whether two slices hold the same bytes, in time that depends on their lengths only: every byte is compared,
+wherever the first difference is. For tags, digests and tokens, where `==` would tell an attacker how much of a
+guess was right. Slices of different lengths are different.
 
 ## interface HashKey
 

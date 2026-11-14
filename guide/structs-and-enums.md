@@ -718,10 +718,12 @@ true
 true
 ```
 
-- `o == null` and `o != null` test for absence; so do `o.isNull()` and `o.isSome()`.
+- `o == null` and `o != null` test for absence; so do `o.isNull()` and `o.isSome()`. Two optionals of a Copy type
+  compare too: `o == Some(3)` is true when `o` holds 3, and two `null`s are equal.
 - `o ?? fallback` is the value, or `fallback` when `o` is `null`. The fallback is evaluated only then, and a chain
-  `a ?? b ?? c` takes the first value present.
-- `o!` is the value; on `null` it stops the program with "unwrapped null".
+  `a ?? b ?? c` takes the first value present. The fallback may be a block that leaves or ends in a value:
+  `let n = parse(text) ?? { return Err(Bad); };`, `?? { continue; }`.
+- `o!` is the value; on `null` it stops the program with "unwrapped null". `o!;` alone just checks.
 - `o?` is the value; on `null` the enclosing function returns `null` (it must return an optional).
 - A borrow can be optional (`borrow T?`), and so can a box (`Box<T>?`); both are one pointer.
 

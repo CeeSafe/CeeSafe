@@ -159,6 +159,7 @@ No such file or directory
 | `String.from(view)`, `t.clone()` | `Result<String, AllocError>`: a new string with a copy of the text |
 | `t.append(view)`, `t.appendNumber(n)` | `Result<void, AllocError>` |
 | `t.appendHex(n, minWidth, upper)`, `t.appendOctal(n)`, `t.appendFixed(f, digits)`, `t.appendPadded(view, width, align, fill)` | `Result<void, AllocError>`: Rust's `{:08x}`, `{:o}`, `{:.3}`, `{:>8}` (also on a `Vector<u8>`, and as `VectorBytes.appendHex(mut v, …)`) |
+| `t.appendChar(c)`, `t.appendUtf8(bytes)` | `Result<bool, AllocError>`: a character (`c: u32`) in UTF-8, or bytes that are UTF-8 (checked once, not copied first); `false`, appending nothing, otherwise (also on a `Vector<u8>`) |
 | `t.view()`, `t.clear()`, `t.length`, `t.capacity` | a `StringView` borrowed from `t`; … |
 | `s.indexOf(t)`, `s.lastIndexOf(t)`, `s.indexOfByte(b)` | `usize?` |
 | `s.contains(t)`, `s.startsWith(t)`, `s.endsWith(t)`, `s.equalsIgnoreAsciiCase(t)` | `bool` |
@@ -213,6 +214,7 @@ hi
 | `v.view()`, `v.viewMut()` | `Slice<T>`, `SliceMut<T>` |
 | `[x; N]`, `[a, b, c]`, `a[lo..hi]`, `borrow mut a[lo..hi]` | an array; a `Slice<T>`; a `SliceMut<T>` |
 | `d.copyFrom(s)`, `d.fill(v)` | bulk writes into a `SliceMut<T>` |
+| `d.copyWithin(from, to, count)` | C's `memmove` inside one `SliceMut<T>` (or a vector, or a mutable array): the ranges may overlap |
 | `v.extend(s)`, `v.resize(n, fill)`, `v.reserve(extra)` | `Result<void, AllocError>`; one growth at most; `extend` and `resize` need Copy elements |
 | `v.clone()` | `Result<Vector<T>, AllocError>`: a new vector with a copy of the elements, which must be Copy |
 | `b.readBE<T>(at)`, `b.readLE<T>(at)` | `T`, an integer from bytes, big- or little-endian |
@@ -434,6 +436,10 @@ fn collections() -> Result<void, AllocError> {
     let back: i16 = bytes.view().readLE<i16>(2);
     bytes.writeLE(0, 7u64);
     dst[..].writeBE(0, 3u16);
+    bytes.copyWithin(0, 2, 2);
+    var text = String.create();
+    let added: bool = text.appendChar(0x263A)?;
+    let valid: bool = text.appendUtf8(src[..])?;
     return Ok();
 }
 fn text() {

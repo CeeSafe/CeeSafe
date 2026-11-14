@@ -218,6 +218,9 @@ TABLES.append(table(
         ("`d.copyFrom(s: Slice<T>)`", "Copies every element of `s` into an exclusive slice of the same length. `T` is Copy.",
          "Panics `slice lengths differ` when the lengths are not equal"),
         ("`d.fill(v: T)`", "Sets every element of an exclusive slice to `v`. `T` is Copy.", NO),
+        ("`d.copyWithin(from: usize, to: usize, count: usize)`",
+         "Copies the `count` elements from index `from` to index `to` of an exclusive slice; the two ranges may overlap, as with C's `memmove`. `T` is Copy.",
+         "Panics `slice range out of bounds` when either range passes the end, and copies nothing"),
         ("`d.swap(i: usize, j: usize)`", "Exchanges elements `i` and `j` of an exclusive slice or a vector.",
          INDEX + " when `i` or `j` is not below the length"),
         ("`s.splitAt(mid: usize) -> SliceHalves<T>`",
@@ -332,7 +335,9 @@ TABLES.append(table(
     "`String` also has every member of the `StringView` table (`t.length`, `t[i]`, `t[lo..hi]`, `t.bytes()`, the "
     "searches and the parsers), and a `String` argument is accepted where a `StringView` parameter is. The four "
     "formatting methods are the interface "
-    "[AppendFormatted](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendformatted).",
+    "[AppendFormatted](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendformatted), and "
+    "`appendChar` and `appendUtf8` the interface "
+    "[AppendText](https://ceesafe.github.io/CeeSafe/reference/api/core#interface-appendtext).",
     ["ch08-02"],
     [
         ("`String.create() -> String`", "An empty string. It allocates nothing.", NO),
@@ -356,6 +361,12 @@ TABLES.append(table(
         ("`t.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32) -> Result<void, AllocError>`",
          "Adds `text` at the end of a string in a field of `width` characters, filled with the character `fill` on the side that `TextAlign.Left`, `TextAlign.Right` or `TextAlign.Center` leaves.",
          OOM + "; panics `the fill is not a Unicode scalar value` for such a `fill`"),
+        ("`t.appendChar(c: u32) -> Result<bool, AllocError>`",
+         "Adds the character `c` in UTF-8 at the end of a string. `false`, adding nothing, when `c` is not a Unicode scalar value (a surrogate, or past `0x10FFFF`).",
+         OOM),
+        ("`t.appendUtf8(bytes: Slice<u8>) -> Result<bool, AllocError>`",
+         "Adds `bytes` at the end of a string when they are UTF-8, checked once. `false`, adding nothing, when they are not.",
+         OOM),
         ("`t.view() -> StringView`", "The text of a string as a view that borrows the string.", NO),
         ("`t.clear()`", "Empties a string. The capacity stays.", NO),
         ("`t.sameAs(other: borrow String) -> bool`, `t.hash(h: borrow mut Hasher)`, "
@@ -519,6 +530,9 @@ TABLES.append(table(
          OOM + "; the vector is unchanged"),
         ("`v.appendHex(value: u64, minWidth: u32, upper: bool)`, `v.appendOctal(value: u64)`, `v.appendFixed(value: f64, digits: u32)`, `v.appendPadded(text: StringView, width: usize, align: TextAlign, fill: u32)`",
          "The formatting methods of a `String`, on a `Vector<u8>`: each adds the formatted text's bytes and returns a `Result<void, AllocError>`.",
+         OOM),
+        ("`v.appendChar(c: u32)`, `v.appendUtf8(bytes: Slice<u8>)`",
+         "The `appendChar` and `appendUtf8` of a `String`, on a `Vector<u8>`: each returns a `Result<bool, AllocError>`, `false` for what is not a character or not UTF-8.",
          OOM),
         ("`Vector.intoRaw(v: Vector<T>) -> VectorParts<T>`",
          "Gives up a vector and returns its `pointer`, `length` and `capacity`. Nothing is freed.", NO, []),
@@ -879,7 +893,7 @@ REST_ROWS = [
 API_PAGES = ["spec/api/core.md", "spec/api/std.md"]
 API_STRUCTS = ["TextSearch", "ByteSearch", "ResultMethods", "OptionalResults", "SliceSplitting", "SliceAlgorithms",
                "VectorEditing", "VectorCopying", "StringCopying", "VectorRaw", "VectorForeign", "VectorBytes",
-               "NumberParsing", "ByteOrder", "AppendFormatted", "HashMap", "OrderedMap"]
+               "NumberParsing", "ByteOrder", "AppendFormatted", "AppendText", "SliceCopying", "HashMap", "OrderedMap"]
 API_REVIEWED = book_appendix_gen.INPUTS + "/appendix-c.api.txt"
 
 

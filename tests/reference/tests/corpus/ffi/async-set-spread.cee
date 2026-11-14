@@ -1,0 +1,54 @@
+// `set.spawnSend` children of `Async.tasks` may run on another worker of `Async.runWorkers` (type-system.md §40.5,
+// ADR 0053 §3.2, ADR 0038), as `s.spawnSend` children of a scope do. The oracle is C (async-set-spread.c): the
+// address of a thread-local byte names the OS thread that runs each child. Each child spins without awaiting until
+// a child on another thread has been seen, so while one spins, its worker is busy and the next child can only run on
+// another worker. With every child kept on the spawning worker, each would spin to its one-second limit, alone.
+// Native only: the interpreter has one worker (§40.8), and ffi programs are not interpreted.
+@header("async-set-spread.types.h")
+extern "C" {
+    @effects()
+    fn thread_tag() -> u64;
+}
+
+/// Safety: thread_tag only takes the address of its thread's own byte.
+fn tag() -> u64 => unsafe { thread_tag() };
+
+/// Spins until `other` names a thread, or for a second.
+fn waitForOther(other: borrow AtomicU64) {
+    let start = Clock.monotonicNanos();
+    while (other.load() == 0 && Clock.monotonicNanos() - start < 1000000000) {}
+}
+
+async fn spread(first: Arc<AtomicU64>, other: Arc<AtomicU64>) -> Result<void, AsyncError> =>
+    await Async.tasks(4, AsyncError.Cancelled, async (set) => {
+        for (k in 0..2u32) {
+            let mine = first.clone();
+            let seen = other.clone();
+            await set.spawnSend(async move () => {
+                let me = tag();
+                match (mine.get().compareExchange(0, me)) {
+                    Ok(_) => {}
+                    Err(earlier) => {
+                        if (earlier != me) {
+                            seen.get().store(me);
+                        }
+                    }
+                }
+                waitForOther(seen.get());
+                return Ok();
+            })?;
+        }
+        return Ok();
+    });
+
+fn main() {
+    let first = Arc<AtomicU64>.create(AtomicU64.create(0))!;
+    let other = Arc<AtomicU64>.create(AtomicU64.create(0))!;
+    match (Async.runWorkers(4, spread(first.clone(), other.clone()))) {
+        Ok() => {}
+        Err(_) => { Console.writeLine("the set failed"); }
+    }
+    let two = other.get().load() != 0 && other.get().load() != first.get().load();
+    Console.writeLine(if (two) "children on two threads" else "children on one thread");
+}
+// expect-stdout: children on two threads

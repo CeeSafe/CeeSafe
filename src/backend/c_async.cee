@@ -1084,6 +1084,13 @@ fn emitTaskStatement(
         let record = operandText(e, c, n, sources, f, n.at(builtinArguments(n, r), 1))?;
         e.t("    ceesafe_async_set_allocator(")?;
         e.b(record.view())?;
+        if (allocator == c.systemHeapType) {
+            // `Async.tasks` (tasksIn with SystemHeap): NULL is the runtime's heap, which SystemHeap's adapters call
+            // anyway, and tells the runtime so: a `spawnSend` child may then run on another worker (§40.5).
+            e.t(", NULL, NULL);")?;
+            e.emit()?;
+            return Ok(true);
+        }
         e.t(", ")?;
         appendAdapterName(c, mut e.buf, "ceeAA_", allocator)?;
         e.t(", ")?;

@@ -556,7 +556,9 @@ static bool ceeAT_<F>(void *frame);                  /* ceeAR_<F> as the runtime
   `spawnSend` calls `ceesafe_async_set_spawn_send`, then `ceesafe_async_publish`. `Async.setAllocator(record, alloc)`
   (lib/core's, for `tasksIn`; `Async.tasks` is `tasksIn` with `SystemHeap`) is `Builtin(AsyncSetAllocator, [A,
   record])`: `ceesafe_async_set_allocator(record, ceeAA_<A>, ceeAD_<A>)`, whose adapters are emitted as a
-  `scopeIn` scope's are. A shared set (spawnSend children) admits and waits for room under the run's lock.
+  `scopeIn` scope's are. For `SystemHeap` it is `ceesafe_async_set_allocator(record, NULL, NULL)`, the runtime's heap
+  as a scope's is, so the runtime may give a `spawnSend` child to another worker; a set with adapters keeps its
+  children on the spawning worker, since a frame is freed where it returns. A shared set (spawnSend children) admits and waits for room under the run's lock.
   The child's thunk copies an `Err` to `ceesafe_async_set_error(scope)` if `ceesafe_async_claim_failure` says it is
   the first. In the runtime a set's child error cancels no sibling, a failed allocation stops nothing, and a returning
   child wakes the task waiting for room (`ceesafe_async_set_admit`), as the last one wakes the task waiting for the

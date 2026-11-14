@@ -1,0 +1,26 @@
+// ADR 0138 §6: `appendChar` and `appendUtf8` on a `String` and a `Vector<u8>`.
+fn main() {
+    var s = String.create();
+    Console.writeLine(s.appendChar(0x48)!);
+    s.appendChar(0xE9)!;
+    s.appendChar(0x4E16)!;
+    s.appendChar(0x1F600)!;
+    Console.writeLine(s.appendChar(0xD800)!);
+    Console.writeLine(s.appendChar(0x110000)!);
+    let good = [0x21u8, 0xC3, 0xA9];
+    let bad = [0xC3u8];
+    Console.writeLine(s.appendUtf8(good[..])!);
+    Console.writeLine(s.appendUtf8(bad[..])!);
+    Console.writeLine(s.view());
+    var v = Vector<u8>.create();
+    v.appendChar(0x263A)!;
+    v.appendUtf8("ok".bytes())!;
+    Console.writeLine(StringView.fromUtf8(v.view())!);
+}
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: false
+// expect-stdout: true
+// expect-stdout: false
+// expect-stdout: Hé世😀!é
+// expect-stdout: ☺ok

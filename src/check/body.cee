@@ -181,14 +181,15 @@ fn checkInLoop(c: borrow mut Checker, span: Span, keyword: StringView) -> Result
     return Ok();
 }
 
-/// Only calls (or `?` and `!` on calls) can be statements (N0225).
+/// Only calls, `?` and `!` (on any operand: `x!;` checks that `x` holds a value, `x?;` returns when it does not), and
+/// awaits can be statements (N0225).
 fn checkExpressionStatement(c: borrow mut Checker, e: u32) -> Result<u32, AllocError> {
     let span = c.front.ast.exprSpans[e as usize];
     var ok = false;
     match (c.front.ast.exprs[e as usize]) {
         ExprNode.Call(_, _) => { ok = true; }
-        ExprNode.Try(operand) => { ok = isCallSyntax(c, operand); }
-        ExprNode.Unwrap(operand) => { ok = isCallSyntax(c, operand); }
+        ExprNode.Try(_) => { ok = true; } // sqlclient's finding 7: not only on a call
+        ExprNode.Unwrap(_) => { ok = true; }
         ExprNode.Await(_) => { ok = true; } // an awaited call (type-system.md §40.2)
         _ => {}
     }
@@ -217,12 +218,6 @@ fn declaresUnit(c: borrow Checker, e: u32) -> bool => match (c.hir.exprs[e as us
     HirExpr.Try(_) => true,
     HirExpr.Unwrap(_) => true,
     _ => isUnitValue(c, e),
-};
-
-fn isCallSyntax(c: borrow Checker, e: u32) -> bool => match (c.front.ast.exprs[e as usize]) {
-    ExprNode.Call(_, _) => true,
-    ExprNode.Await(_) => true,
-    _ => false,
 };
 
 fn checkLocalDecl(
@@ -313,7 +308,7 @@ fn checkLocalDecl(
             }
         }
     }
-    if (c.types.is(localType, TypeKind.Reference) && isMutable) {
+    if (c.types.is(localType, TypeKind.Reference) && isMutable && !isRebindableView(c, localType)) {
         var message = Vector<u8>.create();
         appendText(
             mut message,
@@ -382,6 +377,12 @@ fn binaryOpOf(operator: u32) -> BinaryOp => match (operator - 1) {
     16 => BinaryOp.Divide,
     _ => BinaryOp.Remainder,
 };
+
+/// A shared view, `StringView` or `Slice<T>`, which a `var` may hold (ADR 0138 §4): assigning to such a variable
+/// re-binds it, since nothing can be written through the view. A `SliceMut<T>` and a `borrow` reference stay `let`
+/// locals, whose assignment writes through them (§13.3, §19.1).
+fn isRebindableView(c: borrow Checker, t: u32) -> bool =>
+    c.types.isStringView(t) || (c.types.isSlice(t) && !c.types.info(t).mutableReference);
 
 fn checkAssign(
     c: borrow mut Checker,
@@ -543,8 +544,9 @@ fn resolveAssignmentTarget(c: borrow mut Checker, target: u32) -> Result<u32, Al
     }
     noteMutableUse(c, p.root);
     // Assigning to a reference local writes through it (§13.3); assigning to a reference-typed field or element
-    // replaces the reference stored there (§25.4).
-    if (c.types.is(p.typ, TypeKind.Reference) && isLocal) {
+    // replaces the reference stored there (§25.4), as assigning to a `var` holding a shared view replaces the view
+    // (ADR 0138 §4: nothing can be written through one).
+    if (c.types.is(p.typ, TypeKind.Reference) && isLocal && !(root.mutable && isRebindableView(c, p.typ))) {
         place = project(c, place, derefProjection())?;
     }
     var reason = Vector<u8>.create();

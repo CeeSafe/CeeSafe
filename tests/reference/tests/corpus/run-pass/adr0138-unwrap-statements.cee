@@ -1,0 +1,19 @@
+// ADR 0138 §5: `x!;` and `x?;` are statements, on any operand.
+fn find(v: u32) -> u32? => if (v > 2) Some(v) else null;
+
+fn nested() -> u32?? => Some(Some(3u32));
+
+fn half(v: u32) -> u32? {
+    find(v)?;
+    nested()!!;
+    let present = find(v);
+    present!;
+    return Some(v / 2);
+}
+
+fn main() {
+    Console.writeLine(half(8)!);
+    Console.writeLine(half(1) == null);
+}
+// expect-stdout: 4
+// expect-stdout: true

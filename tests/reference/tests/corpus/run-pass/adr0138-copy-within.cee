@@ -1,0 +1,29 @@
+// ADR 0138 §6: `s.copyWithin(from, to, count)`, a copy inside one slice whose ranges may overlap.
+fn show(s: Slice<u8>) {
+    for (i in 0..s.length) {
+        if (i > 0) {
+            Console.write(" ");
+        }
+        Console.write(s[i]);
+    }
+    Console.writeLine("");
+}
+
+fn main() {
+    var a = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    a.copyWithin(2, 0, 4);
+    show(a[..]);
+    var b = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    b[..].copyWithin(0, 3, 5);
+    show(b[..]);
+    var v = Vector<u32>.create();
+    for (i in 0u32..6) {
+        v.push(i)!;
+    }
+    v.copyWithin(4, 0, 2);
+    v.viewMut().copyWithin(0, 1, 0);
+    Console.writeLine(v[0] + v[1] + v[4] + v[5]);
+}
+// expect-stdout: 3 4 5 6 5 6 7 8
+// expect-stdout: 1 2 3 1 2 3 4 5
+// expect-stdout: 18

@@ -1,0 +1,38 @@
+// ADR 0138 §4: a `var` may hold a shared view, `StringView` or `Slice<T>`; assigning to it re-binds it.
+fn host(text: StringView) -> StringView {
+    var server = text.trim();
+    if (server.startsWith("tcp:")) {
+        server = server[4..].trim();
+    }
+    match (server.indexOf(",")) {
+        Some(comma) => { server = server[0..comma].trim(); }
+        null => {}
+    }
+    return server;
+}
+
+fn total(bytes: Slice<u8>) -> u32 {
+    var rest = bytes;
+    var sum: u32 = 0;
+    while (rest.length > 0) {
+        sum += rest[0] as u32;
+        rest = rest[1..];
+    }
+    return sum;
+}
+
+fn main() {
+    Console.writeLine(host("  tcp: db.example.org ,1433"));
+    let b = [1u8, 2, 3, 4];
+    Console.writeLine(total(b[..]));
+    var longest = "";
+    for (word in "a,bb,ccc,dd".split(",")) {
+        if (word.length > longest.length) {
+            longest = word;
+        }
+    }
+    Console.writeLine(longest);
+}
+// expect-stdout: db.example.org
+// expect-stdout: 10
+// expect-stdout: ccc

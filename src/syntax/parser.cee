@@ -2710,6 +2710,14 @@ struct Parser {
             }
             if (op.precedence == 0) {
                 // `a ?? b` (ADR 0072): right-associative, below every other operator.
+                if (this.at(TokenKind.OpenBrace)) {
+                    // `a ?? { … }` (ADR 0138 §2): a block, as a branch of an `if` is, that ends in its value or
+                    // leaves with `return`, `break` or `continue`.
+                    let fallback = this.parseBranch()?;
+                    this.requireParenthesesAround(left)?;
+                    left = this.front.ast.addExpr(ExprNode.Binary(left, op.op, fallback), start, this.endFrom(start))?;
+                    continue;
+                }
                 if (!this.startsOperand()) {
                     let at = this.current().start;
                     this.error(

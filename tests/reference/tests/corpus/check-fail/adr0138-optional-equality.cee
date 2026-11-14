@@ -1,0 +1,8 @@
+// ADR 0138 §3: `==` compares optionals of a Copy type only.
+fn s() -> String? => null;
+
+fn main() {
+    let x = s();
+    let y = s();
+    Console.writeLine(x == y); // error[N0207]
+}

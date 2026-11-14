@@ -287,6 +287,31 @@ public struct SliceAlgorithms<T> {
     }
 }
 
+/// Copying elements inside one slice (ADR 0138 §5): `s.copyWithin(from, to, count)` is
+/// `SliceCopying<T>.copyWithin(s, from, to, count)`. The elements are copied, so they must be Copy.
+public struct SliceCopying<T: Copy> {
+    /// Copies the `count` elements from index `from` to index `to`, as C's `memmove`: the two ranges may overlap, and
+    /// the elements end as the source was before the copy. Panics, copying nothing, if either range passes the end.
+    public fn copyWithin(s: SliceMut<T>, from: usize, to: usize, count: usize) {
+        let source = s[from..from + count].length; // the range checks, before anything is copied
+        let target = s[to..to + count].length;
+        if (from == to || source == 0 || target == 0) {
+            return;
+        }
+        if (to < from) {
+            for (i in 0..count) {
+                s[to + i] = s[from + i];
+            }
+        } else {
+            var i = count;
+            while (i > 0) {
+                i -= 1;
+                s[to + i] = s[from + i];
+            }
+        }
+    }
+}
+
 /// `v.insert(at, x)`, `v.remove(at)` and `v.swapRemove(at)` (ADR 0075 §2.12). The index is checked at the call, so a
 /// panic names the program's line: `at <= length` for `insert`, `at < length` for the others. The elements move by
 /// `swap`, so they may be of any type. A vector's allocator is `SystemHeap` or `FailingAllocator` (type-system.md

@@ -1,0 +1,29 @@
+// ADR 0138 §2: `a ?? { … }`, a block that ends in its value or leaves the function or the loop.
+fn skip(data: Slice<u8>, at: usize) -> usize? => if (at < data.length) Some(at + 1) else null;
+
+fn walk(data: Slice<u8>) -> Result<usize?, u32> {
+    var pos: usize = 0;
+    pos = skip(data, pos) ?? { return Ok(null); };
+    pos = skip(data, pos) ?? {
+        let fallback = pos * 10;
+        fallback + 1
+    };
+    var total: usize = 0;
+    for (b in data) {
+        let n = skip(data, b as usize) ?? { continue; };
+        total += n;
+    }
+    return Ok(Some(pos + total));
+}
+
+fn main() {
+    let empty: Slice<u8> = [];
+    let some = [0u8, 1, 5];
+    let one = [0u8];
+    Console.writeLine(walk(empty).isOk() && walk(empty)! == null);
+    Console.writeLine(walk(some[..])!!);
+    Console.writeLine(walk(one[..])!!);
+}
+// expect-stdout: true
+// expect-stdout: 5
+// expect-stdout: 12

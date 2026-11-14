@@ -1,0 +1,26 @@
+// ADR 0138 §4: a re-bound view holds the loans of every value it is given (type-system.md §19.1).
+fn dangling() {
+    var v: StringView = "static";
+    {
+        let s = String.from("temporary")!;
+        v = s.view();
+    } // error[N0243]
+    Console.writeLine(v);
+}
+
+fn escaping() -> StringView {
+    let s = String.from("local")!;
+    var v: StringView = "static";
+    v = s.view();
+    return v; // error[N0244]
+}
+
+fn changedWhileViewed() {
+    var owner = String.from("abc")!;
+    var v: StringView = "x";
+    v = owner.view();
+    owner.append("d")!; // error[N0241]
+    Console.writeLine(v);
+}
+
+fn main() {}

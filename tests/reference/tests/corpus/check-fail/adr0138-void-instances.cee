@@ -1,0 +1,12 @@
+// ADR 0138 §7: an instance at `void` that puts `void` where type-system.md §2 allows none is refused at its call.
+fn wrap<T>(v: T) -> Result<T, u32> => Ok(v);
+
+fn unit() {}
+
+fn f() -> Result<void, u32> => Ok();
+
+fn main() {
+    let r = f().ok();     // error[N0226]
+    let w = wrap(unit()); // error[N0226]
+    Console.writeLine(f().isOk());
+}

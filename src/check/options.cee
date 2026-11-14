@@ -140,7 +140,20 @@ fn resolveGenericType(
         return if (c.types.isBottom(result)) Ok(c.types.error) else c.types.threadOf(result); // §38.2
     }
     var message = Vector<u8>.create();
-    if (sameText(n, "Slice") || sameText(n, "SliceMut")) {
+    if ((sameText(n, "Slice") || sameText(n, "SliceMut")) && arguments.count == 2 && isRegionName(
+        c,
+        c.front.ast.at(arguments, 1),
+    )) {
+        // `Slice<u8, r>`: the region written last (sqlclient's finding 4).
+        let element = c.resolveType(c.front.ast.at(arguments, 0), false)?;
+        appendText(mut message, "a slice's region comes first: write '")?;
+        appendBytes(mut message, n)?;
+        appendText(mut message, "<")?;
+        appendRegionArgument(c, mut message, c.front.ast.at(arguments, 1))?;
+        appendText(mut message, ", ")?;
+        appendBytes(mut message, c.typeName(element))?;
+        appendText(mut message, ">' (type-system.md §25.4)")?;
+    } else if (sameText(n, "Slice") || sameText(n, "SliceMut")) {
         appendText(mut message, "'")?;
         appendBytes(mut message, n)?;
         appendText(mut message, "' takes one type argument: '")?;
@@ -707,12 +720,24 @@ fn synthCoalesce(c: borrow mut Checker, leftSyntax: u32, rightSyntax: u32, span:
         checkExpr(c, rightSyntax, none())?;
         return c.errorResult(span.start, span.end);
     }
-    var right = synth(c, rightSyntax, payload)?;
+    let rightIsBlock = match (c.front.ast.exprs[rightSyntax as usize]) {
+        ExprNode.Block(_) => true,
+        _ => false,
+    };
+    var right = none();
+    var blockFallback = none();
     var result = payload;
-    if (c.typeOf(right) == option) {
-        result = option; // a chain that ends in an optional
+    if (rightIsBlock) {
+        // `a ?? { … }` (ADR 0138 §2): the block is a branch of type `T`, a value block or one that cannot complete.
+        var branches = branchType(payload);
+        blockFallback = checkBranch(c, rightSyntax, mut branches, 0)?;
     } else {
-        right = coerce(c, right, payload, rightSpan)?;
+        right = synth(c, rightSyntax, payload)?;
+        if (c.typeOf(right) == option) {
+            result = option; // a chain that ends in an optional
+        } else {
+            right = coerce(c, right, payload, rightSpan)?;
+        }
     }
     let name = c.intern("coalesced")?;
     let local = c.hir.addLocal(c.function, name, option, false, false, leftSpan.start, leftSpan.end)?;
@@ -723,7 +748,7 @@ fn synthCoalesce(c: borrow mut Checker, leftSyntax: u32, rightSyntax: u32, span:
     let borrowed = c.expr(HirExpr.Borrow(false, place), reference, leftSpan.start, leftSpan.end)?;
     let boolType = c.types.boolType;
     let test = c.expr(HirExpr.IsNull(borrowed, true), boolType, leftSpan.start, leftSpan.end)?;
-    let fallback = yieldBlock(c, right, rightSpan)?;
+    let fallback = if (rightIsBlock) blockFallback else yieldBlock(c, right, rightSpan)?;
     let read = c.expr(HirExpr.LocalRef(local), option, leftSpan.start, leftSpan.end)?;
     let present = if (result == option) read else c.expr(
         HirExpr.Unwrap(read),
@@ -844,4 +869,108 @@ fn findJump(c: borrow Checker, stmt: u32) -> u32 {
         StmtNode.Loop(body) => { return findJump(c, body); }
         _ => { return none(); }
     }
+}
+
+/// A region argument's name, as written (`r`), for a message.
+fn appendRegionArgument(c: borrow Checker, out: borrow mut Vector<u8>, typ: u32) -> Result<void, AllocError> {
+    match (c.front.ast.types[typ as usize]) {
+        TypeNode.Named(q) => {
+            if (q.parts.count == 1) {
+                return appendBytes(out, c.name(c.front.ast.idents[c.front.ast.at(q.parts, 0) as usize].symbol));
+            }
+        }
+        _ => {}
+    }
+    return appendText(out, "r");
+}
+
+/// `a == b` and `a != b` on two optionals of one Copy type whose values compare (ADR 0138 §3): equal when both are
+/// `null`, or both hold values that are equal. Lowered to the statement it replaces,
+/// `{ let l = a; let r = b; if (l == null) r == null else r != null && l! == r! }` (for `!=`,
+/// `if (l == null) r != null else r == null || l! != r!`); the second test reads `r!` only when `r` holds a value.
+fn synthOptionalEquality(
+    c: borrow mut Checker,
+    op: BinaryOp,
+    left: u32,
+    right: u32,
+    span: Span,
+) -> Result<u32, AllocError> {
+    let option = c.typeOf(left);
+    let payload = c.types.optionType(option);
+    if (!c.types.isCopy(option)) {
+        var message = Vector<u8>.create();
+        appendText(mut message, "'")?;
+        appendText(mut message, binaryOpText(op))?;
+        appendText(mut message, "' compares optionals of a Copy type, and ")?;
+        appendQuotedType(mut message, c, option)?;
+        appendText(mut message, " is not one: match the two, or compare 'a == null' and the values (ADR 0138 §3)")?;
+        c.error(invalidOperandTypes(), span.start, span.end, message)?;
+        return c.errorResult(span.start, span.end);
+    }
+    let equal = binaryIndex(op) == 2;
+    let boolType = c.types.boolType;
+    let leftSpan = c.spanOf(left);
+    let rightSpan = c.spanOf(right);
+    let name = c.intern("compared")?;
+    let l = c.hir.addLocal(c.function, name, option, false, false, leftSpan.start, leftSpan.end)?;
+    let r = c.hir.addLocal(c.function, name, option, false, false, rightSpan.start, rightSpan.end)?;
+    let leftDeclaration = c.hir.addStmt(HirStmt.LocalDecl(l, left), leftSpan.start, leftSpan.end)?;
+    let rightDeclaration = c.hir.addStmt(HirStmt.LocalDecl(r, right), rightSpan.start, rightSpan.end)?;
+    // l == null: then the answer is whether r is null too (`!=`: whether it is not).
+    let leftNull = nullTestOf(c, l, option, true, leftSpan)?;
+    let rightMatches = nullTestOf(c, r, option, equal, rightSpan)?;
+    let whenNull = yieldBlock(c, rightMatches, rightSpan)?;
+    // Otherwise r must hold a value equal to l's (`!=`: be null, or hold another value).
+    let rightHolds = nullTestOf(c, r, option, !equal, rightSpan)?;
+    let leftRead = c.expr(HirExpr.LocalRef(l), option, leftSpan.start, leftSpan.end)?;
+    let leftValue = c.expr(HirExpr.Unwrap(leftRead), payload, leftSpan.start, leftSpan.end)?;
+    let rightRead = c.expr(HirExpr.LocalRef(r), option, rightSpan.start, rightSpan.end)?;
+    let rightValue = c.expr(HirExpr.Unwrap(rightRead), payload, rightSpan.start, rightSpan.end)?;
+    let values = payloadEquality(c, op, leftValue, rightValue, span)?;
+    if (c.isBottom(values)) {
+        return c.errorResult(span.start, span.end);
+    }
+    let joined = c.expr(
+        HirExpr.Binary(if (equal) BinaryOp.LogicalAnd else BinaryOp.LogicalOr, rightHolds, values),
+        boolType,
+        span.start,
+        span.end,
+    )?;
+    let whenValue = yieldBlock(c, joined, span)?;
+    let choice = c.hir.addStmt(HirStmt.If(leftNull, whenNull, whenValue), span.start, span.end)?;
+    let statements = [leftDeclaration, rightDeclaration, choice];
+    let list = c.hir.list(statements[..])?;
+    let block = c.hir.addStmt(HirStmt.Block(list), span.start, span.end)?;
+    return c.expr(HirExpr.StmtValue(block), boolType, span.start, span.end);
+}
+
+/// `local == null` (`isNull`) or `local != null`, through a shared borrow, as SynthNullTest reads it.
+fn nullTestOf(c: borrow mut Checker, local: u32, option: u32, isNull: bool, span: Span) -> Result<u32, AllocError> {
+    let read = c.expr(HirExpr.LocalRef(local), option, span.start, span.end)?;
+    let reference = c.types.referenceTo(option, false)?;
+    let place = toPlace(c, read)?;
+    let borrowed = c.expr(HirExpr.Borrow(false, place), reference, span.start, span.end)?;
+    let boolType = c.types.boolType;
+    return c.expr(HirExpr.IsNull(borrowed, isNull), boolType, span.start, span.end);
+}
+
+/// Two optionals' values compared by `op`, as `==` compares them elsewhere: an optional again, a view's bytes, the
+/// rules of CheckEquality (enums, derived equality, strings), or a scalar's `==`.
+fn payloadEquality(c: borrow mut Checker, op: BinaryOp, left: u32, right: u32, span: Span) -> Result<u32, AllocError> {
+    let t = c.typeOf(left);
+    let boolType = c.types.boolType;
+    if (c.types.optionType(t) != none()) {
+        return synthOptionalEquality(c, op, left, right, span);
+    }
+    if (c.types.isStringView(t)) {
+        return c.expr(HirExpr.Binary(op, left, right), boolType, span.start, span.end); // compares the bytes
+    }
+    let compared = checkEquality(c, op, left, right, span)?;
+    if (compared != none()) {
+        return Ok(compared);
+    }
+    if (!checkOperatorApplies(c, op, t, span)?) {
+        return c.errorResult(span.start, span.end);
+    }
+    return c.expr(HirExpr.Binary(op, left, right), boolType, span.start, span.end);
 }

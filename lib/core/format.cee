@@ -409,3 +409,35 @@ impl AppendFormatted for Vector<u8> {
     ) -> Result<void, AllocError> =>
         Formatted.padded(this, text, width, align, fill);
 }
+
+/// `s.appendChar(c)` and `s.appendUtf8(bytes)` (ADR 0138 §6): text added a character, or a run of bytes, at a time.
+/// Implemented here for a `Vector<u8>`, and in lib/std for a `String`, which stays UTF-8: a character is encoded
+/// straight in, and bytes are checked once, with no copy before they are appended.
+public interface AppendText {
+    /// The character `c` in UTF-8. False, appending nothing, if `c` is not a Unicode scalar value (a surrogate, from
+    /// 0xD800 to 0xDFFF, or past 0x10FFFF).
+    fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError>;
+    /// `bytes`, when they are UTF-8 (the Unicode Standard's Table 3-7, as `StringView.fromUtf8` checks). False,
+    /// appending nothing, when they are not.
+    fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError>;
+}
+
+impl AppendText for Vector<u8> {
+    fn appendChar(borrow mut this, c: u32) -> Result<bool, AllocError> {
+        if (c >= 0x110000 || (c >= 0xD800 && c <= 0xDFFF)) {
+            return Ok(false);
+        }
+        var encoded = [0u8; 4];
+        let size = Formatted.encode(c, mut encoded[..]);
+        this.extend(encoded[..size])?;
+        return Ok(true);
+    }
+
+    fn appendUtf8(borrow mut this, bytes: Slice<u8>) -> Result<bool, AllocError> {
+        if (StringView.fromUtf8(bytes) == null) {
+            return Ok(false);
+        }
+        this.extend(bytes)?;
+        return Ok(true);
+    }
+}

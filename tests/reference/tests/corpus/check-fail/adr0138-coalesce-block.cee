@@ -1,0 +1,8 @@
+// ADR 0138 §2: the block after `??` ends in its value or cannot complete.
+fn find() -> u32? => null;
+
+fn main() {
+    let n = find() ?? { // error[N0235]
+        let k = 1u32;
+    };
+}

@@ -651,8 +651,13 @@ fn synthBinary(
     } else {
         let l = synth(c, leftSyntax, none())?;
         leftHir = autoDeref(c, l)?;
-        let r = synth(c, rightSyntax, none())?;
-        rightHir = autoDeref(c, r)?;
+        let leftType = c.typeOf(leftHir);
+        if ((index == 2 || index == 3) && c.types.optionType(leftType) != none()) {
+            rightHir = checkExpr(c, rightSyntax, leftType)?; // `o == Some(5)`: the right is an optional too (ADR 0138 §3)
+        } else {
+            let r = synth(c, rightSyntax, none())?;
+            rightHir = autoDeref(c, r)?;
+        }
     }
     if (c.isBottom(leftHir) || c.isBottom(rightHir)) {
         return c.errorResult(span.start, span.end);
@@ -681,6 +686,9 @@ fn synthBinary(
             return c.errorResult(span.start, span.end);
         }
         return c.expr(HirExpr.Binary(op, leftHir, rightHir), boolType, span.start, span.end); // compares the bytes
+    }
+    if ((index == 2 || index == 3) && lt == rt && c.types.optionType(lt) != none()) {
+        return synthOptionalEquality(c, op, leftHir, rightHir, span); // ADR 0138 §3
     }
     if (index == 2 || index == 3) {
         let compared = checkEquality(c, op, leftHir, rightHir, span)?;
@@ -1354,6 +1362,72 @@ fn mentionsErrorType(c: borrow Checker, t: u32, depth: u32) -> bool {
     return false;
 }
 
+/// Does an instance's signature, made by putting `void` for a type parameter, have `void` where §2 allows none: a
+/// parameter, an optional's value (`T?`), a `Result`'s error (written types never do: they are N0226 already)? Its return type may be `void`, and a `Result`'s success
+/// type may be (`Result<void, E>`). A written signature was checked when it was declared; an instance's is not
+/// (§20.3), so its call is where it is refused.
+fn voidMisplacedIn(c: borrow Checker, function: u32) -> bool {
+    let f = borrow c.hir.functions[function as usize];
+    if (voidMisplaced(c, f.returnType, true, 0)) {
+        return true;
+    }
+    for (local in f.parameters.view()) {
+        if (voidMisplaced(c, c.hir.locals[local as usize].typ, false, 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Is `void` in `t` where §2 allows none? `top`: `t` is a return type, which may be `void` itself.
+fn voidMisplaced(c: borrow Checker, t: u32, top: bool, depth: u32) -> bool {
+    if (t == none() || depth > 8) {
+        return false;
+    }
+    if (c.types.is(t, TypeKind.Void)) {
+        return !top;
+    }
+    let option = c.types.optionType(t);
+    if (option != none()) {
+        return voidMisplaced(c, option, false, depth + 1);
+    }
+    let info = c.types.info(t);
+    if (c.types.is(t, TypeKind.Enum) && info.enumDef != none()) {
+        let e = borrow c.types.enums[info.enumDef as usize];
+        if (e.resultOk != none()) {
+            return (e.resultOk != c.types.voidType && voidMisplaced(c, e.resultOk, false, depth + 1)) ||
+                voidMisplaced(c, e.resultErr, false, depth + 1);
+        }
+    }
+    return false; // `*void` is C's pointer to anything (§27.1), and no other type holds a `void` from a parameter
+}
+
+/// N0226 at the call of an instance whose signature has `void` where §2 allows none (`voidMisplacedIn`).
+fn reportVoidInstance(c: borrow mut Checker, function: u32, span: Span) -> Result<u32, AllocError> {
+    let owner = c.hir.functions[function as usize].owner;
+    let name = c.hir.functions[function as usize].name;
+    var message = Vector<u8>.create();
+    appendText(mut message, "'")?;
+    if (owner != none()) {
+        appendBytes(mut message, c.typeName(owner))?;
+        appendText(mut message, ".")?;
+    }
+    appendBytes(mut message, c.name(name))?;
+    appendText(
+        mut message,
+        "' cannot be used here: with 'void' for a type parameter, its signature has 'void' where only a return type or a Result's success type can (type-system.md §2)",
+    )?;
+    let bare = c.name(name);
+    if (sameText(bare, "ok") || sameText(bare, "err")) {
+        appendText(
+            mut message,
+            "; a 'Result<void, E>' has no success value to give: test it with 'isOk()', or drop it with 'let _ = …;'",
+        )?;
+    }
+    c.error(voidNotAllowed(), span.start, span.end, message)?;
+    return c.errorResult(span.start, span.end);
+}
+
 /// CheckUserCall: for a method, `receiver` is the already-checked `this` argument, before the explicit ones.
 fn checkUserCallWith(
     c: borrow mut Checker,
@@ -1381,6 +1455,9 @@ fn checkUserCallWith(
         appendBytes(mut what, c.name(c.hir.functions[function as usize].name))?;
         appendText(mut what, "'")?;
         hostedOnly(c, span, what.view())?;
+    }
+    if (voidMisplacedIn(c, function)) {
+        return reportVoidInstance(c, function, span); // sqlclient's finding 6
     }
     let f = borrow c.hir.functions[function as usize];
     let skip: usize = if (receiver == none()) 0 else 1;

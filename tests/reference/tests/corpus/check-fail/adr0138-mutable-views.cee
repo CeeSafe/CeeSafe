@@ -1,0 +1,5 @@
+// ADR 0138 §4: a `SliceMut<T>` or a `borrow` reference stays a `let`: assigning to one writes through it.
+fn rebound(a: SliceMut<u8>, n: borrow mut u32) {
+    var m = a; // error[N0246]
+    var r = n; // error[N0246]
+}

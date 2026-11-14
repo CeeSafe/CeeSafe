@@ -508,7 +508,8 @@ fn checkMethodCall(
         // methods that write or move elements.
         let name = c.name(memberIdent.symbol);
         let mutable = isByteWriter(name) || sameText(name, "copyFrom") || sameText(name, "fill") ||
-            sameText(name, "swap") || sameText(name, "sortBy") || sameText(name, "splitAtMut");
+            sameText(name, "swap") || sameText(name, "sortBy") || sameText(name, "splitAtMut") ||
+            sameText(name, "copyWithin");
         let slice = sliceOfChecked(c, receiver, targetSpan, none(), none(), mutable, targetSpan)?;
         if (c.isBottom(slice)) {
             checkArgumentsLoosely(c, arguments)?;
@@ -892,7 +893,7 @@ fn isSliceMethodName(name: Slice<u8>) -> bool =>
         name,
         "partitionPoint",
     ) || sameText(name, "any") || sameText(name, "all") || sameText(name, "splitAt") ||
-        sameText(name, "splitAtMut") || isByteWriter(name);
+        sameText(name, "splitAtMut") || sameText(name, "copyWithin") || isByteWriter(name);
 
 /// A string literal for a `[u8; N]` member of an imported struct's literal (ADR 0042 §3.4): its bytes, which C's
 /// initialiser zero-pads to N, as a constant of the array type; none if `value` is not a string literal or the member

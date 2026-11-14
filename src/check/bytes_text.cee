@@ -446,6 +446,9 @@ fn checkLibraryMethodCall(
 
 /// A call of a library function on values already checked, each converted to its parameter's type.
 fn libraryCall(c: borrow mut Checker, function: u32, values: Slice<u32>, span: Span) -> Result<u32, AllocError> {
+    if (voidMisplacedIn(c, function)) {
+        return reportVoidInstance(c, function, span); // `r.ok()` on a `Result<void, E>` (sqlclient's finding 6)
+    }
     var converted = Vector<u32>.create();
     for (k in 0..values.length) {
         let parameter = c.hir.functions[function as usize].parameters[k];

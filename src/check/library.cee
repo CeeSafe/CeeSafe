@@ -27,7 +27,7 @@ fn libraryFunction(
 }
 
 /// `s.swap(i, j)`, and the slice methods written in lib/core (CheckSliceAlgorithm): `sortBy`, `forEach`, `any`, `all`, `partitionPoint`
-/// (SliceAlgorithms<T>), `splitAt`, `splitAtMut` (SliceSplitting<r, T>). `slice` is the receiver, already borrowed.
+/// (SliceAlgorithms<T>), `splitAt`, `splitAtMut` (SliceSplitting<r, T>), `copyWithin` (SliceCopying<T: Copy>). `slice` is the receiver, already borrowed.
 fn checkSliceAlgorithm(
     c: borrow mut Checker,
     member: u32,
@@ -47,7 +47,8 @@ fn checkSliceAlgorithm(
     let sliceType = c.typeOf(slice);
     let element = c.types.info(c.types.info(sliceType).pointee).element;
     let mutable = c.types.info(sliceType).mutableReference;
-    if ((sameText(text, "sortBy") || sameText(text, "swap") || sameText(text, "splitAtMut")) && !mutable) {
+    if ((sameText(text, "sortBy") || sameText(text, "swap") || sameText(text, "splitAtMut") ||
+        sameText(text, "copyWithin")) && !mutable) {
         var message = Vector<u8>.create();
         appendText(mut message, "'")?;
         appendBytes(mut message, text)?;
@@ -82,11 +83,17 @@ fn checkSliceAlgorithm(
         return c.expr(HirExpr.BuiltinCall(bfSliceSwap(), list), voidType, span.start, span.end);
     }
     var receiver = slice;
-    if (!sameText(text, "sortBy") && !sameText(text, "splitAtMut") && mutable) {
+    if (!sameText(text, "sortBy") && !sameText(text, "splitAtMut") && !sameText(text, "copyWithin") && mutable) {
         let shared = c.types.sliceOf(element, false)?;
         receiver = coerce(c, slice, shared, targetSpan)?;
     }
-    let holder = if (sameText(text, "splitAt") || sameText(text, "splitAtMut")) "SliceSplitting" else "SliceAlgorithms";
+    let holder = if (sameText(
+        text,
+        "splitAt",
+    ) || sameText(
+        text,
+        "splitAtMut",
+    )) "SliceSplitting" else (if (sameText(text, "copyWithin")) "SliceCopying" else "SliceAlgorithms");
     let elements = [element];
     let function = libraryFunction(c, holder, elements[..], ident.symbol, span)?;
     if (function == none()) {

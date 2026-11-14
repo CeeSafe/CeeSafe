@@ -1,7 +1,7 @@
 // Vectors, strings and string views (the reference's ResolveVectorType, VectorType, the String case of a named type,
 // CheckVectorCreate, CheckVectorMethod, NumberToFormat, CheckViewMethod, CheckSliceMethod's copyFrom and fill,
 // CheckStringViewFunction, PrintableView, and the vector cases of SynthMember and CheckFor): P3 S3b. The methods that
-// call lib/core (`retain`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`, `splitAtMut`) come with the library
+// call lib/core (`retain`, `swap`, `sortBy`, `forEach`, `any`, `all`, `partitionPoint`, `splitAt`, `splitAtMut`, `copyWithin`) come with the library
 // (S5) and closures (S6); `clone` and `String.from` (ADR 0108) are lib/core's too.
 
 fn builtinVector() -> u32 => 14;
@@ -515,7 +515,7 @@ fn checkVectorMethod(
             mut message,
             typ,
             if (isString) "append appendNumber clear view bytes clone"
-                else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut extend resize reserve setLength insert remove swapRemove clone",
+                else "push pop clear view viewMut retain truncate swap sortBy forEach any all partitionPoint splitAt splitAtMut copyWithin extend resize reserve setLength insert remove swapRemove clone",
             ident.symbol,
         )?;
         c.error(undefinedName(), ident.start, ident.end, message)?;
@@ -542,14 +542,16 @@ fn checkVectorMethod(
         sameText(
             text,
             "all",
-        ) || sameText(text, "splitAt") || sameText(text, "splitAtMut") || sameText(text, "retain"))) {
+        ) || sameText(text, "splitAt") || sameText(text, "splitAtMut") || sameText(text, "retain") ||
+        sameText(text, "copyWithin"))) {
         if (sameText(text, "retain")) {
             return checkVectorRetain(c, member, arguments, vector, targetSpan, span);
         }
         // Through the elements (§36.4): mutably for the methods that move or lend them mutably.
         let s = c.spanOf(vector);
         let elements = c.expr(HirExpr.Deref(vector), pointee, s.start, s.end)?;
-        let mutable = sameText(text, "swap") || sameText(text, "sortBy") || sameText(text, "splitAtMut");
+        let mutable = sameText(text, "swap") || sameText(text, "sortBy") || sameText(text, "splitAtMut") ||
+            sameText(text, "copyWithin");
         let slice = borrowReceiver(c, elements, mutable, targetSpan)?;
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
@@ -642,6 +644,9 @@ fn vectorMethodArity(isString: bool, text: Slice<u8>) -> i32 {
     if (sameText(text, "swap")) {
         return 2;
     }
+    if (sameText(text, "copyWithin")) {
+        return 3;
+    }
     return -1;
 }
 
@@ -715,7 +720,8 @@ fn checkSliceMethod(
         text,
         "forEach",
     ) || sameText(text, "partitionPoint") || sameText(text, "any") || sameText(text, "all") ||
-        sameText(text, "swap") || sameText(text, "splitAt") || sameText(text, "splitAtMut")) {
+        sameText(text, "swap") || sameText(text, "splitAt") || sameText(text, "splitAtMut") ||
+        sameText(text, "copyWithin")) {
         return checkSliceAlgorithm(c, member, arguments, slice, targetSpan, span);
     }
     if (isBytesTextMethod(text)) {

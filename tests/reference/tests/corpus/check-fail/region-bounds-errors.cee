@@ -87,6 +87,18 @@ impl<region a: b, region b> Tagged<a, b> {} // error[N0267]
 
 impl<region a, region b> Views<a, b> {} // error[N0267]
 
+// A block's own bounds are well formed: a region in scope, not `static`, none twice (N0273), also where the
+// bounds, read as a set, are the type's.
+impl<region a: nosuch, region b: static> Tagged<a, b> {} // error[N0273] // error[N0273] // error[N0267]
+
+impl<region a, region b: a + a> Views<a, b> { // error[N0273]
+    fn two(borrow this) -> StringView<a> => this.second;
+}
+
+impl<region a, region b: a + a> Tagged<a, b> { // error[N0273]
+    fn isFar(borrow this) -> bool => false;
+}
+
 // An impl of an interface writes none.
 impl<region a, region b: a> Shape for Plain<a, b> { // error[N0216]
     fn area(borrow this) -> u32 => 1;

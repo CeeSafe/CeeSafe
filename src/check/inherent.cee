@@ -179,6 +179,8 @@ fn mergeInherentImpls(c: borrow mut Checker) -> Result<void, AllocError> {
                         symbol,
                         packageOfFile(c, file),
                     );
+                    // The block's own bounds are well formed (§25.8), whatever they are compared with below.
+                    checkRegionBounds(c, regionParameters, false)?;
                     if (enumItem != none()) {
                         // `impl E { … }`: an enum's functions (ADR 0107) and constants (ADR 0074 §2.7).
                         let enumTypes = match (c.front.ast.items[enumItem as usize].kind) {

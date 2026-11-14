@@ -958,7 +958,11 @@ int64_t ceesafe_async_write(int32_t fd, const uint8_t *bytes, uint64_t length) {
     if (ready < 0) {
         return -(int64_t)errno;
     }
-    if (ready == 0 || (p.revents & POLLOUT) == 0) {
+    /* macOS's poll cannot wait on a character device such as /dev/null: it reports POLLNVAL for a descriptor that is
+       open (F_GETFD succeeds). A write to such a device does not wait for readiness, so it is a step as on CosmoOS;
+       a descriptor that is closed is still EPIPE. */
+    bool unpollable = (p.revents & POLLNVAL) != 0 && fcntl(fd, F_GETFD) != -1;
+    if (!unpollable && (ready == 0 || (p.revents & POLLOUT) == 0)) {
         if ((p.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
             return -(int64_t)EPIPE;
         }

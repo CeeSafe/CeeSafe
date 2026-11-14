@@ -8,7 +8,9 @@ Each case runs natively and with `ceesafec run --interp`, with a deadline for ev
    reads the prompt BEFORE it writes the answer, three times, one answer arriving in two pieces and ending `\\r\\n`;
    then it closes the input and reads the program's last line;
 2. `Console.flush()` writes what the program wrote, through a pipe, while the program waits for something that is not
-   standard input (opening a FIFO), and a finished line reaches a terminal (a pty) without a flush.
+   standard input (opening a FIFO), and a finished line reaches a terminal (a pty) without a flush;
+3. `AsyncConsole` writes to standard output when it is /dev/null, a character device that macOS's poll cannot wait
+   on (it reports POLLNVAL for the open descriptor, which was taken for a closed one: Err(Io(Broken pipe))).
 
 POSIX only (pipes under select, FIFOs, ptys): elsewhere it reports that it was skipped.
 
@@ -53,6 +55,21 @@ fn main() {
     var byte = [0u8; 1];
     let count = gate.read(mut byte[..])!;
     Console.writeLine(count);
+}
+"""
+
+# Writes a line through AsyncConsole and says on standard error whether the write succeeded.
+DISCARDED = """
+async fn say() -> Result<void, AsyncError> {
+    await AsyncConsole.writeLine("discarded")?;
+    return Ok();
+}
+
+fn main() {
+    match (Async.run(say())) {
+        Ok() => { Console.writeError("written"); }
+        Err(_) => { Console.writeError("failed"); }
+    }
 }
 """
 
@@ -162,7 +179,7 @@ def main():
     cases = 0
     with tempfile.TemporaryDirectory(prefix="ceesafe-console-") as work:
         programs = {}
-        for stem, source in (("dialogue", DIALOGUE), ("waiting", WAITING)):
+        for stem, source in (("dialogue", DIALOGUE), ("waiting", WAITING), ("discarded", DISCARDED)):
             path = os.path.join(work, stem + ".cee")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(source)
@@ -179,6 +196,13 @@ def main():
             waiting(argv, problems, f"flush through a pipe ({mode})", work, True, False)
             waiting(argv, problems, f"a line to a terminal ({mode})", work, False, True)
             cases += 2
+        for mode, argv in programs.get("discarded", {}).items():
+            p = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                               timeout=DEADLINE)
+            if p.returncode != 0 or p.stderr != b"written":
+                problems.append(f"output to /dev/null ({mode}): expected 'written', exit 0: {p.returncode} "
+                                f"{p.stderr[:300]!r}")
+            cases += 1
     for problem in problems:
         print(f"FAIL {problem}")
     print(f"console_input_check: {cases} cases: {len(problems)} problems")

@@ -3215,7 +3215,7 @@ struct Parser {
 
     /// After an identifier: is the input `'<' Type (',' Type)* '>' '('`? Only then is '<' the start of generic
     /// arguments rather than less-than (grammar.md §2.1).
-    fn isGenericArgumentListAhead(borrow this) -> bool => this.genericArgumentListAt(0).isSome();
+    fn isGenericArgumentListAhead(borrow this) -> bool => this.genericArgumentListAt(0) != null;
 
     /// The offset of the `>` that closes a generic argument list starting at `peek(from)`, if one starts there (see
     /// isGenericArgumentListAhead); null otherwise.
